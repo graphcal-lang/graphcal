@@ -878,6 +878,11 @@ pub fn check_external_value_expr_type<'t>(
             })
             .map_err(|error| error.to_string())
             .and_then(|bodies| {
+                // The tree runs in the root's scope, whose call targets do
+                // not number it; a closed external value calls no DAG.
+                if !bodies.calls().is_empty() {
+                    return Err("an external value calls a DAG".to_owned());
+                }
                 bodies
                     .executable_value(expr.id())
                     .cloned()

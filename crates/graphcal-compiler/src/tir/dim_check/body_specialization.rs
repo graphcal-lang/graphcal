@@ -18,8 +18,8 @@ use crate::semantic::checked_type::{CheckedType, IndexTypeRef, Symbolic};
 use crate::syntax::span::Span;
 use crate::tir::texpr::map::{SymbolicView, TypeMap};
 use crate::tir::texpr::{
-    CheckedBodies, CheckedBody, ConstructorApplication, ConstructorMatch, NominalObservation,
-    StaticPosition, TBody,
+    CallSlot, CallTargets, CheckedBodies, CheckedBody, ClaimedRoots, ConstructorApplication,
+    ConstructorMatch, NominalObservation, StaticPosition, TBody,
 };
 use crate::tir::typed::model::DagTIR;
 use crate::tir::typed::program::TirRead;
@@ -175,6 +175,11 @@ impl<V: SymbolicView> TypeMap<V, Symbolic> for Specializer<'_> {
             constructor: target.constructor.clone(),
         }
     }
+
+    /// Specialization keeps a tree in the body whose call targets number it.
+    fn call_slot(&mut self, slot: CallSlot) -> CallSlot {
+        slot
+    }
 }
 
 impl Specializer<'_> {
@@ -187,11 +192,13 @@ impl Specializer<'_> {
 }
 
 /// Symbolic trees checked outside a body's canonical check, by root, with the
-/// nominal uses checking observed in each.
+/// nominal uses checking observed in each and the call targets their call
+/// nodes are numbered by.
 #[derive(Default)]
 pub(super) struct DerivedTrees {
     pub(super) bodies: HashMap<ExprId, TBody<Symbolic>>,
     pub(super) nominal_uses: HashMap<ExprId, Arc<[NominalObservation]>>,
+    pub(super) calls: CallTargets,
 }
 
 /// The checked trees of one semantic instance: each root inferred
@@ -200,6 +207,11 @@ pub(super) struct DerivedTrees {
 /// a defaulted dimension port, the tree checked where that port is rigid),
 /// specialized with the instance's Static substitution. Each root keeps the
 /// nominal uses of the tree it came from.
+///
+/// The instance's call targets extend its template's, so every tree taken
+/// from the template keeps its call slots and the instance calls the same
+/// DAGs through them; a tree checked outside the template is renumbered into
+/// the extension.
 pub(super) fn specialize_instance_bodies(
     dag: &DagTIR,
     tir: &dyn TirRead,
@@ -219,16 +231,21 @@ pub(super) fn specialize_instance_bodies(
     let mut seen = std::collections::HashSet::new();
     let mut roots = Vec::new();
     let mut nominal_uses = HashMap::new();
+    let mut calls = template.calls().clone();
     for root in dag.owned_expression_roots() {
         let id = root.id();
         if !seen.insert(id) {
             continue;
         }
         let (body, uses) = if let Some(body) = independent.bodies.remove(id) {
-            (body, independent.nominal_uses.remove(id))
+            (
+                body.rehome_calls(&independent.calls, &mut calls),
+                independent.nominal_uses.remove(id),
+            )
         } else if let Some(body) = port_generic.bodies.get(id) {
             (
-                body.map_types(&mut specializer)?,
+                body.rehome_calls(&port_generic.calls, &mut calls)
+                    .map_types(&mut specializer)?,
                 port_generic.nominal_uses.get(id).cloned(),
             )
         } else {
@@ -246,7 +263,7 @@ pub(super) fn specialize_instance_bodies(
         }
         roots.push((id.clone(), body));
     }
-    CheckedBodies::discharge(roots, nominal_uses, &|index| {
+    CheckedBodies::discharge(ClaimedRoots { roots, calls }, nominal_uses, &|index| {
         checked_index_cardinality(tir, index)
     })
     .map_err(|error| internal(src, error.to_string(), DiagnosticAnchor::WholeFile))

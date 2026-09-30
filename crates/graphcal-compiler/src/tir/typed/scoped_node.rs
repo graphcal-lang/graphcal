@@ -24,12 +24,13 @@ use crate::syntax::span::{Span, Spanned};
 use crate::syntax::type_name::FieldName;
 use crate::tir::texpr::operators::{BExpr, CExpr, DExpr, IExpr, LinearAlgebraCall, QExpr};
 use crate::tir::texpr::{
-    ConstructorApplication, DatetimeLiteral, StaticPosition, TConstRef, TConstructorArm, TExpr,
-    TExprKind, TExternArg, TFieldInit, TIndexArg, TKeyForm, TLabelArm, TMapEntry, TMatchArms,
-    TNodeRef, TParamBinding, visit_tnodes,
+    CallSlot, ConstructorApplication, DatetimeLiteral, StaticPosition, TConstRef, TConstructorArm,
+    TExpr, TExprKind, TExternArg, TFieldInit, TIndexArg, TKeyForm, TLabelArm, TMapEntry,
+    TMatchArms, TNodeRef, TParamBinding, visit_tnodes,
 };
 
 use super::body_scope::Scoped;
+use super::dag_position::DagPosition;
 
 /// One node of an executable tree, in the scope of the DAG that runs it.
 pub type ScopedNode<'t> = Scoped<'t, TExpr>;
@@ -120,7 +121,8 @@ pub enum NodeKind<'t> {
     },
     Variant(&'t IndexVariantRef),
     DagCall {
-        target: &'t Spanned<DagId>,
+        /// The call target, named by its slot in the scope's body.
+        call: ScopedCall<'t>,
         args: Scoped<'t, [TParamBinding]>,
         output: &'t Spanned<ResolvedDeclName>,
     },
@@ -135,6 +137,31 @@ pub enum ConstRef<'t> {
 
 /// A unit expression of a node, whose terms resolve in the node's scope.
 pub type ScopedUnitExpr<'t> = Scoped<'t, ResolvedUnitExpr>;
+
+/// The slot of a call node, together with the scope whose body numbers it:
+/// only that scope gives the slot a target.
+pub type ScopedCall<'t> = Scoped<'t, CallSlot>;
+
+impl<'t> ScopedCall<'t> {
+    /// The DAG this call targets.
+    #[must_use]
+    pub fn target(self) -> &'t DagId {
+        self.scope().dag().call_targets().target(*self.get())
+    }
+
+    /// The position, in the registry of the program running it, of the DAG
+    /// whose body makes this call.
+    #[must_use]
+    pub const fn caller(self) -> DagPosition {
+        self.scope().position()
+    }
+
+    /// The call's slot in the call targets of its caller.
+    #[must_use]
+    pub const fn slot(self) -> CallSlot {
+        *self.get()
+    }
+}
 
 /// The arms of a match node, in the node's scope.
 #[derive(Debug, Clone, Copy)]
@@ -316,12 +343,9 @@ impl<'t> Scoped<'t, TExpr> {
             },
             TExprKind::Variant(variant) => NodeKind::Variant(variant),
             TExprKind::DagCall {
-                target,
-                args,
-                output,
-                ..
+                slot, args, output, ..
             } => NodeKind::DagCall {
-                target,
+                call: Scoped::new(scope, slot),
                 args: Scoped::new(scope, args.as_slice()),
                 output,
             },

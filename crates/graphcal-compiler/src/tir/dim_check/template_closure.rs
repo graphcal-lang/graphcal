@@ -423,10 +423,12 @@ pub(super) fn port_generic_trees(
                 .collect()
         },
     )?;
+    let (bodies, calls) = finished.typed.into_roots();
     Ok(PortGenericTrees {
         trees: super::body_specialization::DerivedTrees {
-            bodies: finished.typed.into_roots(),
+            bodies,
             nominal_uses: finished.nominal_uses,
+            calls,
         },
         plot_channels,
     })

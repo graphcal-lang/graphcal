@@ -3,11 +3,13 @@
 //! Discharging a symbolic tree to a concrete one, specializing a template's
 //! tree into an instance, and binding a generic bound's `Nat` parameters all
 //! keep a tree's shape and rewrite the checked types, constructor
-//! applications, match targets, and static positions it carries. The one
-//! traversal lives here; each use supplies a [`TypeMap`].
+//! applications, match targets, and static positions it carries; moving a
+//! tree into a body with other call targets renumbers its call slots the same
+//! way. The one traversal lives here; each use supplies a [`TypeMap`].
 
 use std::borrow::Cow;
 
+use super::call_targets::{CallSlot, CallTargets};
 use super::nominal::{ConstructorApplication, ConstructorMatch};
 use crate::semantic::checked_type::{CheckedType, Concrete, Concreteness, IndexTypeRef, Symbolic};
 use crate::syntax::span::{Span, Spanned};
@@ -20,9 +22,9 @@ use super::model::{
 /// How a structure-preserving map rewrites the types a tree carries.
 ///
 /// Within one node the map is asked, in order, for the node's type, its
-/// constructor application, the static positions it proves, and its match
-/// targets; the node's children follow in structural order, so failures are
-/// reported for the first offending node in pre-order.
+/// constructor application, the static positions it proves, its match
+/// targets, and its call slot; the node's children follow in structural
+/// order, so failures are reported for the first offending node in pre-order.
 pub trait TypeMap<V: Concreteness, W: Concreteness> {
     type Error;
 
@@ -47,6 +49,66 @@ pub trait TypeMap<V: Concreteness, W: Concreteness> {
 
     /// A constructor match arm's resolved target.
     fn match_target(&mut self, target: &ConstructorMatch) -> ConstructorMatch;
+
+    /// A call node's slot in the call targets of the mapped tree's body.
+    fn call_slot(&mut self, slot: CallSlot) -> CallSlot;
+}
+
+/// Renumber the call nodes of a tree from the call targets of the body it
+/// was checked in to those of the body that publishes it, adding each
+/// target the publishing body does not have yet. Types are kept as they are.
+struct Rehome<'a> {
+    from: &'a CallTargets,
+    into: &'a mut CallTargets,
+}
+
+impl<V: Concreteness> TypeMap<V, V> for Rehome<'_> {
+    type Error = std::convert::Infallible;
+
+    fn node_type(
+        &mut self,
+        ty: &CheckedType<V>,
+        _span: Span,
+    ) -> Result<CheckedType<V>, Self::Error> {
+        Ok(ty.clone())
+    }
+
+    fn application(
+        &mut self,
+        application: &ConstructorApplication<V>,
+        _ty: &CheckedType<V>,
+        _span: Span,
+    ) -> Result<ConstructorApplication<V>, Self::Error> {
+        Ok(application.clone())
+    }
+
+    fn static_position(
+        &mut self,
+        position: &StaticPosition<V>,
+        _span: Span,
+    ) -> Result<StaticPosition<V>, Self::Error> {
+        Ok(position.clone())
+    }
+
+    fn match_target(&mut self, target: &ConstructorMatch) -> ConstructorMatch {
+        target.clone()
+    }
+
+    fn call_slot(&mut self, slot: CallSlot) -> CallSlot {
+        self.into.intern(self.from.target(slot).clone())
+    }
+}
+
+impl<V: Concreteness> TBody<V> {
+    /// This tree with its call nodes numbered by `into` instead of `from`,
+    /// the call targets it was checked with; `into` gains every target it
+    /// lacks.
+    pub(crate) fn rehome_calls(&self, from: &CallTargets, into: &mut CallTargets) -> Self {
+        match self.map_types(&mut Rehome { from, into }) {
+            Ok(body) => body,
+            Err(never) => match never {},
+        }
+    }
 }
 
 /// The symbolic view of a tree's types, whatever its [`Concreteness`].
@@ -156,6 +218,10 @@ impl TypeMap<Symbolic, Concrete> for ToConcrete {
 
     fn match_target(&mut self, target: &ConstructorMatch) -> ConstructorMatch {
         target.clone()
+    }
+
+    fn call_slot(&mut self, slot: CallSlot) -> CallSlot {
+        slot
     }
 }
 
@@ -408,12 +474,12 @@ impl<V: Concreteness> TExpr<V> {
             }
             TExprKind::Variant(variant) => TExprKind::Variant(variant.clone()),
             TExprKind::DagCall {
-                target,
+                slot,
                 args,
                 static_bindings,
                 output,
             } => TExprKind::DagCall {
-                target: target.clone(),
+                slot: map.call_slot(*slot),
                 args: args
                     .iter()
                     .map(|binding| {

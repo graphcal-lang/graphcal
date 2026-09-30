@@ -361,7 +361,7 @@ impl CheckedTir {
         &'t self,
         declaration: &ResolvedDeclName,
     ) -> Option<DeclarationBody<'t>> {
-        let dag = self.dag_registry().get(declaration.owner())?;
+        let (position, dag) = self.dag_registry().get_positioned(declaration.owner())?;
         let entry = dag.decls().get(declaration)?;
         let identity = match entry {
             Decl::Const(entry) => &entry.identity,
@@ -373,7 +373,7 @@ impl CheckedTir {
             Decl::Layer(entry) => &entry.identity,
         };
         Some(DeclarationBody {
-            scope: BodyScope::of(dag),
+            scope: BodyScope::of(position, dag),
             identity,
             declaration: entry,
         })
@@ -382,12 +382,12 @@ impl CheckedTir {
     /// The dynamic scale definition of `unit` in the scope of its owner.
     #[must_use]
     pub fn unit_scale_body(&self, unit: &ResolvedUnitName) -> Option<UnitScaleBody<'_>> {
-        let dag = self.dag_registry().get(unit.owner())?;
+        let (position, dag) = self.dag_registry().get_positioned(unit.owner())?;
         dag.semantic()
             .dynamic_unit_scales
             .get(unit)
             .map(|scale| UnitScaleBody {
-                scope: BodyScope::of(dag),
+                scope: BodyScope::of(position, dag),
                 spelling: &scale.spelling,
                 expression: &scale.expr,
                 declared_dimension: &scale.declared_dimension,
@@ -403,14 +403,14 @@ impl CheckedTir {
         &'t self,
         nominal: &ResolvedStructTypeName,
     ) -> Option<NominalTypeBody<'t>> {
-        let dag = self.dag_registry().get(nominal.owner())?;
+        let (position, dag) = self.dag_registry().get_positioned(nominal.owner())?;
         let (identity, definition) = dag
             .semantic()
             .type_defs
             .struct_types
             .get_key_value(nominal)?;
         Some(NominalTypeBody {
-            scope: BodyScope::of(dag),
+            scope: BodyScope::of(position, dag),
             identity,
             definition,
         })
@@ -419,6 +419,9 @@ impl CheckedTir {
     /// A closed external value tree checked in the root module, in the
     /// root's scope.
     pub(crate) const fn external_value_tree(&self, tree: TExpr) -> ScopedTree<'_, TExpr> {
-        ScopedTree::new(BodyScope::of(self.root()), tree)
+        ScopedTree::new(
+            BodyScope::of(super::dag_position::DagPosition::ROOT, self.root()),
+            tree,
+        )
     }
 }

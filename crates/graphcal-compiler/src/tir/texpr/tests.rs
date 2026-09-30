@@ -61,7 +61,7 @@ fn a_parent_assembles_from_its_recorded_children() {
         .record_value(&expr, dimensionless(), &no_facts(&matches))
         .unwrap();
     let bodies = claim_roots(&[&expr], pending).unwrap();
-    let [(id, TBody::Value(root))] = bodies.as_slice() else {
+    let [(id, TBody::Value(root))] = bodies.roots.as_slice() else {
         panic!("expected one typed value root");
     };
     assert_eq!(id, expr.id());
@@ -414,10 +414,13 @@ fn executable_lookup_distinguishes_missing_deferred_and_contextual_roots() {
         literal.id().clone(),
     );
     let bodies = CheckedBodies::discharge(
-        vec![
-            (ready_id.clone(), TBody::Value(Box::new(ready))),
-            (literal_id.clone(), TBody::Contextual(literal)),
-        ],
+        ClaimedRoots {
+            roots: vec![
+                (ready_id.clone(), TBody::Value(Box::new(ready))),
+                (literal_id.clone(), TBody::Contextual(literal)),
+            ],
+            calls: CallTargets::default(),
+        },
         HashMap::new(),
         &known(3),
     )
@@ -434,7 +437,10 @@ fn executable_lookup_distinguishes_missing_deferred_and_contextual_roots() {
         ExecutableBodyError::Missing(waiting_id.clone())
     );
     let deferred = CheckedBodies::discharge(
-        vec![(waiting_id.clone(), TBody::Value(Box::new(waiting)))],
+        ClaimedRoots {
+            roots: vec![(waiting_id.clone(), TBody::Value(Box::new(waiting)))],
+            calls: CallTargets::default(),
+        },
         HashMap::new(),
         &|_| Ok(None),
     )

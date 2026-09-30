@@ -7,6 +7,7 @@ use crate::hir::expr::{LocalDecl, LocalUnit};
 use crate::resolved_name::{ResolvedDeclName, ResolvedUnitName};
 
 use super::checked_dag::CheckedDag;
+use super::dag_position::DagPosition;
 
 /// The scope a body runs in: the frame of the checked DAG that owns it.
 ///
@@ -16,12 +17,19 @@ use super::checked_dag::CheckedDag;
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct BodyScope<'t> {
     dag: &'t CheckedDag,
+    position: DagPosition,
 }
 
 impl<'t> BodyScope<'t> {
-    /// The scope of `dag`, for the compiler's own selections.
-    pub(crate) const fn of(dag: &'t CheckedDag) -> Self {
-        Self { dag }
+    /// The scope of `dag`, at `position` in its program's registry, for the
+    /// compiler's own selections.
+    pub(crate) const fn of(position: DagPosition, dag: &'t CheckedDag) -> Self {
+        Self { dag, position }
+    }
+
+    /// The position of this scope's DAG in its program's registry.
+    pub(crate) const fn position(self) -> DagPosition {
+        self.position
     }
 
     /// The DAG whose frame this is, for the compiler's own specialization.

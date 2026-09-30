@@ -1,7 +1,6 @@
 //! The typed expression tree data model.
 
 use crate::builtin::AggregationFn;
-use crate::dag_id::DagId;
 use crate::datetime_literal::{CivilDateTimeLiteral, OffsetDateTimeLiteral, ZonedDateTimeLiteral};
 use crate::expression_id::ExprId;
 use crate::function_signature::{FunctionParam, IndexBinder, ParamKind, ScalarValueKind};
@@ -290,8 +289,10 @@ pub enum TExprKind<V: Concreteness = Concrete> {
         arms: TMatchArms<V>,
     },
     Variant(IndexVariantRef),
+    /// An inline call of the DAG `slot` names in the call targets of the
+    /// body that holds this node.
     DagCall {
-        target: Spanned<DagId>,
+        slot: super::call_targets::CallSlot,
         args: Vec<TParamBinding<V>>,
         static_bindings: crate::ir::static_substitution::StaticSubstitution,
         output: Spanned<ResolvedDeclName>,

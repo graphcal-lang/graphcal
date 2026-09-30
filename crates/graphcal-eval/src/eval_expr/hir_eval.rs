@@ -15,7 +15,7 @@ use graphcal_compiler::tir::texpr::{
 use graphcal_compiler::tir::typed::body_scope::Scoped;
 use graphcal_compiler::tir::typed::evaluation_unit::{DeclarationBody, ScopedTree};
 use graphcal_compiler::tir::typed::scoped_node::{
-    ConstRef, NodeKind, ScopedIndexArg, ScopedMatchArms, ScopedNode,
+    ConstRef, NodeKind, ScopedCall, ScopedIndexArg, ScopedMatchArms, ScopedNode,
 };
 use indexmap::IndexMap;
 
@@ -416,12 +416,8 @@ fn eval_texpr_inner(
         NodeKind::Variant(variant) => {
             named_key(&variant.variant, span, ctx).map(EvaluatedRuntimeValue::plain)
         }
-        NodeKind::DagCall {
-            target,
-            args,
-            output,
-        } => eval_dag_call(
-            target,
+        NodeKind::DagCall { call, args, output } => eval_dag_call(
+            call,
             args,
             output,
             values,
@@ -1330,7 +1326,7 @@ fn eval_constructor_match(
 }
 
 fn eval_dag_call(
-    target: &Spanned<graphcal_compiler::dag_id::DagId>,
+    call: ScopedCall<'_>,
     args: Scoped<'_, [TParamBinding]>,
     output: &Spanned<ResolvedDeclName>,
     caller_values: &RuntimeValueMap,
@@ -1339,13 +1335,9 @@ fn eval_dag_call(
     ctx: &EvalSession<'_>,
 ) -> Result<EvaluatedRuntimeValue, GraphcalError> {
     let caller_dag = args.dag_id();
+    let target = call.target();
     let plan = ctx.execution_plan()?;
-    let callable = plan.callable(&target.value).ok_or_else(|| {
-        ctx.internal_error(
-            format!("DAG `{}` has no prepared callable plan", target.value),
-            target.span,
-        )
-    })?;
+    let callable = plan.callee(call);
 
     let mut frame = crate::execution_frame::ExecutionFrame::new(
         plan,
@@ -1406,7 +1398,7 @@ fn eval_dag_call(
         ctx.internal_error(
             format!(
                 "dag `{}` has no projected value `{}` after evaluation (should have been caught by dim-check)",
-                target.value,
+                target,
                 output.value.as_str()
             ),
             output.span,
@@ -1472,7 +1464,7 @@ fn imported_runtime_value(
 fn check_inline_plan_asserts(
     callable: &crate::execution_plan::CallablePlan<'_>,
     values: &RuntimeValueMap,
-    target: &Spanned<graphcal_compiler::dag_id::DagId>,
+    target: &graphcal_compiler::dag_id::DagId,
     span: Span,
     ctx: &EvalSession<'_>,
 ) -> Result<(), GraphcalError> {
@@ -1500,7 +1492,7 @@ fn check_inline_dag_asserts(
     dag_tir: &graphcal_compiler::tir::typed::checked_dag::CheckedDag,
     dag_values: &RuntimeValueMap,
     dag_ctx: &EvalSession<'_>,
-    target: &Spanned<graphcal_compiler::dag_id::DagId>,
+    target: &graphcal_compiler::dag_id::DagId,
     call_span: Span,
     ctx: &EvalSession<'_>,
 ) -> Result<(), GraphcalError> {
@@ -1530,7 +1522,7 @@ fn check_inline_dag_asserts(
                 return Err(ctx.eval_error(
                     format!(
                         "assertion `{name}` failed in inline call of dag `{}` ({message})",
-                        target.value.leaf()
+                        target.leaf()
                     ),
                     call_span,
                 ));
@@ -1546,7 +1538,7 @@ fn check_inline_dag_asserts(
                 return Err(ctx.eval_error(
                     format!(
                         "assertion `{name}` errored in inline call of dag `{}` ({message})",
-                        target.value.leaf()
+                        target.leaf()
                     ),
                     call_span,
                 ));
