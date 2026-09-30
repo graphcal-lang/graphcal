@@ -7,7 +7,7 @@ use miette::NamedSource;
 
 use graphcal_compiler::declaration_category::DeclCategory;
 use graphcal_compiler::desugar::desugared_ast::Expr;
-use graphcal_compiler::ir::resolve::{ImportedValueNames, ScopedName};
+use graphcal_compiler::ir::resolve::collected::ImportedValueNames;
 use graphcal_compiler::ir::static_substitution::StaticSubstitution;
 use graphcal_compiler::resolved_name::ResolvedDeclName;
 use graphcal_compiler::resolved_name::ResolvedIndexName;
@@ -15,7 +15,7 @@ use graphcal_compiler::semantic::index_def::IndexBindingTarget;
 use graphcal_compiler::syntax::decl_name::DeclName;
 use graphcal_compiler::syntax::dimension::UnitName;
 use graphcal_compiler::syntax::module_name::IncludeInstanceId;
-use graphcal_compiler::syntax::module_name::{ModuleAliasName, ScopeSegment};
+use graphcal_compiler::syntax::module_name::{ModuleAliasName, ScopeSegment, ScopedName};
 use graphcal_compiler::syntax::span::Span;
 
 /// One include's Static bindings, resolved once at the include site.
@@ -66,9 +66,10 @@ pub(super) struct HirFile {
 pub(super) struct ModuleArtifact {
     /// Canonical owners of the DAGs this module's file defines.
     pub(super) local_owners: Vec<graphcal_compiler::dag_id::DagId>,
-    pub(super) override_dependencies: graphcal_compiler::tir::dim_check::OverrideDependencySummary,
+    pub(super) override_dependencies:
+        graphcal_compiler::tir::typed::override_dependencies::OverrideDependencySummary,
     /// The module's own bodies, frozen once and shared by every importer.
-    pub(super) dag_store: Arc<graphcal_compiler::tir::typed::DagStore>,
+    pub(super) dag_store: Arc<graphcal_compiler::tir::typed::dag_store::DagStore>,
     pub(super) extern_functions: HashMap<
         graphcal_compiler::plugin_identity::ExternFnKey,
         graphcal_compiler::ir::extern_function::ExternFunctionEntry,
@@ -131,15 +132,6 @@ pub(super) struct ModuleArtifactOwnerConflict {
     owner: graphcal_compiler::dag_id::DagId,
 }
 
-/// Result of checking one file in project context.
-pub struct CompiledFile {
-    pub(crate) program: graphcal_eval::checked_program::CheckedProgram,
-    pub(crate) entry_interface: super::entry_interface::CheckedEntryInterface,
-    pub(crate) imported_source_order: Vec<(ScopedName, DeclCategory)>,
-    pub(crate) output_surface: HashSet<ScopedName>,
-    pub(crate) include_debug_names: IncludeDebugNameMap,
-}
-
 /// One typed dynamic-unit projection requested by a selective include.
 pub(super) struct UnitProjectionAlias {
     pub(super) source: UnitName,
@@ -149,7 +141,7 @@ pub(super) struct UnitProjectionAlias {
 /// Typed request for one concrete file-root or inline-DAG instance.
 pub(super) struct IncludeInstanceRequest<'a> {
     /// Reusable file-root or inline-DAG template module.
-    pub(super) template: crate::loader::LoadedModule<'a>,
+    pub(super) template: crate::loader::loaded_file::LoadedModule<'a>,
     pub(super) instance_scope: ScopeSegment,
     pub(super) debug_scope: ModuleAliasName,
     pub(super) bindings: HashMap<DeclName, Expr>,

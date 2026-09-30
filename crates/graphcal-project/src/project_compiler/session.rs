@@ -1,10 +1,7 @@
 //! Public whole-project checking session and validated continuation.
 
-#[cfg(test)]
-use std::path::Path;
-
 use crate::compile_error::CompileError;
-use crate::loader::LoadedProject;
+use crate::loader::loaded_project::LoadedProject;
 
 pub use super::checked_project::CheckedProject;
 use super::hir_project::HirProject;
@@ -174,16 +171,4 @@ pub fn compile_to_tir(
 ) -> Result<graphcal_compiler::tir::typed::CheckedTir, CompileError> {
     let project = LoadedProject::from_source(source, name)?;
     compile_to_tir_from_project(&project)
-}
-
-/// Test-only convenience projection for a loaded multi-file project.
-#[cfg(test)]
-pub fn compile_to_tir_project<F: graphcal_io::FileSystemReader>(
-    root_path: &Path,
-    project_root: Option<&Path>,
-    fs: &F,
-) -> Result<(graphcal_compiler::tir::typed::CheckedTir, LoadedProject), CompileError> {
-    let project = crate::loader::load_project(root_path, project_root, fs)?;
-    let tir = compile_to_tir_from_project(&project)?;
-    Ok((tir, project))
 }

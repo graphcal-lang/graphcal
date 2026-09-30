@@ -29,15 +29,16 @@ Checking may use provisional interpretation; capability/API tests separately
 ensure that checking cannot invoke native hosts. Production and test-only edges
 are distinct keys, with the same role policy and no blanket test exemption.
 
-Selected HIR/TIR and project data modules retain the contracts role even where
-builders or checker calls are currently colocated. Their upward dependencies
-are debt to split, not a reason to relabel the entire module permissively.
-Public result records, materialized-shape facts, imported-binding records, and
-desugared AST aliases are data rather than their neighboring producers.
+Data modules keep the contracts role; a builder or checker call that would
+give one an upward dependency is split into its own module rather than a reason
+to relabel the data permissively. Public result records, materialized-shape
+facts, imported-binding records, and desugared AST aliases are data rather
+than their neighboring producers. Consumers import such data from its producing
+module: a path through a facade's re-export also counts as an edge to the
+facade.
 
 `baseline.toml` records exact `(source, target, test-only)` exceptions with
-bootstrap file/line/form evidence and proposed deletion seams. These are
-existing source couplings, not proof that the proposed splits are complete.
+file/line/form evidence and proposed deletion seams. It is currently empty.
 `check` rejects both new and stale exceptions. After removing a dependency,
 `prune` deletes stale entries **only**, preserving surviving reviewed reasons;
 it refuses to write if any new forbidden edge exists. Role changes and any new

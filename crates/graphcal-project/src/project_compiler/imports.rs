@@ -114,7 +114,7 @@ fn static_input_is_bindable(
 }
 
 pub(super) struct InlineDagIncludeTarget<'a> {
-    pub(super) module: crate::loader::LoadedModule<'a>,
+    pub(super) module: crate::loader::loaded_file::LoadedModule<'a>,
     pub(super) dag_name: &'a str,
 }
 
@@ -124,8 +124,8 @@ pub(super) struct InlineDagIncludeTarget<'a> {
 /// this path. Keeping import classification here prevents nested instances
 /// from silently dropping their own include graph.
 pub(super) fn process_file_body_declarations<'a>(
-    project: &'a crate::loader::LoadedProject,
-    loaded_file: &crate::loader::LoadedFile,
+    project: &'a crate::loader::loaded_project::LoadedProject,
+    loaded_file: &crate::loader::loaded_file::LoadedFile,
     module_resolver: &graphcal_compiler::resolve::ModuleResolver,
     ctx: &mut ImportContext<'a>,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
@@ -466,12 +466,12 @@ fn validate_include_producers(
 }
 
 fn file_exports_plot(
-    project: &crate::loader::LoadedProject,
+    project: &crate::loader::loaded_project::LoadedProject,
     file_dag_id: &graphcal_compiler::dag_id::DagId,
     name: &NameAtom,
 ) -> bool {
     fn visit(
-        project: &crate::loader::LoadedProject,
+        project: &crate::loader::loaded_project::LoadedProject,
         file_dag_id: &graphcal_compiler::dag_id::DagId,
         name: &NameAtom,
         seen: &mut HashSet<(graphcal_compiler::dag_id::DagId, DeclName)>,
@@ -911,8 +911,8 @@ fn validate_required_param_bindings(
     reason = "binding validation and scope registration form a single cohesive pipeline over one include context"
 )]
 pub(super) fn process_file_include<'a>(
-    project: &'a crate::loader::LoadedProject,
-    target: &crate::loader::ResolvedModuleTarget,
+    project: &'a crate::loader::loaded_project::LoadedProject,
+    target: &crate::loader::module_path::ResolvedModuleTarget,
     include_decl: &graphcal_compiler::desugar::desugared_ast::IncludeDecl,
     decl: &graphcal_compiler::desugar::desugared_ast::Declaration,
     importer: &ModuleInterface,
@@ -1393,8 +1393,8 @@ pub(super) fn process_inline_dag_include<'a>(
     reason = "visibility and capability checks consume the complete import context in one boundary pass"
 )]
 pub(super) fn process_pure_import<'a>(
-    project: &'a crate::loader::LoadedProject,
-    resolved_module: &crate::loader::ResolvedModuleTarget,
+    project: &'a crate::loader::loaded_project::LoadedProject,
+    resolved_module: &crate::loader::module_path::ResolvedModuleTarget,
     import: &graphcal_compiler::desugar::desugared_ast::ImportDecl,
     importer: ModuleDeclarations<'_>,
     file_src: &NamedSource<Arc<String>>,

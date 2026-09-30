@@ -2180,8 +2180,9 @@ role = "contracts"
 
 [[module]]
 package = "project"
+# Visualization export adapter (checked TIR -> graph model -> DOT) for the CLI `graph` command.
 path = ["graph_ir"]
-role = "contracts"
+role = "facade"
 
 [[module]]
 package = "project"
@@ -2196,7 +2197,7 @@ role = "facade"
 [[module]]
 package = "project"
 path = ["graph_ir", "tests"]
-role = "contracts"
+role = "facade"
 
 [[module]]
 package = "eval"
@@ -2589,6 +2590,16 @@ role = "loading"
 [[module]]
 package = "project"
 path = ["loader", "loaded_file"]
+role = "contracts"
+
+[[module]]
+package = "project"
+path = ["loader", "loaded_project"]
+role = "contracts"
+
+[[module]]
+package = "project"
+path = ["loader", "budget_violation"]
 role = "contracts"
 
 [[module]]

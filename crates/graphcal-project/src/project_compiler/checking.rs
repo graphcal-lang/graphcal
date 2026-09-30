@@ -23,7 +23,8 @@ use graphcal_compiler::semantic::checked_type::CheckedType;
 use super::{entry_interface, lowering};
 use crate::compile_error::CompileError;
 
-use super::model::{CompiledFile, HirFile, ModuleArtifactStore};
+use super::checked_project::CompiledFile;
+use super::model::{HirFile, ModuleArtifactStore};
 
 /// Checked value-declaration types of the DAGs in the file being checked.
 type LocalInterfaces = HashMap<graphcal_compiler::resolved_name::ResolvedDeclName, CheckedType>;

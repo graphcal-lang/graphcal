@@ -18,9 +18,10 @@ use super::{checking, imports, lowering};
 use crate::compile_error::CompileError;
 
 use super::checked_project::CheckedProject;
+use super::checked_project::CompiledFile;
 use super::hir_project::HirProject;
 use super::lowering::ProjectSemanticContext;
-use super::model::{CompiledFile, HirFile, ImportContext, ModuleArtifact, ModuleArtifactStore};
+use super::model::{HirFile, ImportContext, ModuleArtifact, ModuleArtifactStore};
 use super::template::ModuleTemplateStore;
 use graphcal_compiler::dag_id::DagId;
 use graphcal_compiler::dependency_graph::Cycle;
@@ -32,7 +33,7 @@ use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
 /// Each template is named by its path inside its file (`outer.inner`), or by
 /// its module identity when it is a file root.
 pub(super) fn recursive_dag_instantiation(
-    project: &crate::loader::LoadedProject,
+    project: &crate::loader::loaded_project::LoadedProject,
     cycle: &Cycle<DagId>,
 ) -> CompileError {
     let names = cycle
@@ -41,10 +42,10 @@ pub(super) fn recursive_dag_instantiation(
         .map(template_name)
         .collect::<Vec<_>>();
     let (src, span) = match project.module(cycle.entry()) {
-        Some(crate::loader::LoadedModule::InlineDag { file, dag }) => {
+        Some(crate::loader::loaded_file::LoadedModule::InlineDag { file, dag }) => {
             (file.named_source(), dag.declaration(file).span)
         }
-        Some(crate::loader::LoadedModule::FileRoot(file)) => (
+        Some(crate::loader::loaded_file::LoadedModule::FileRoot(file)) => (
             file.named_source(),
             Span::new(0, file.named_source().inner().len()),
         ),
@@ -79,7 +80,7 @@ fn template_name(template: &DagId) -> String {
 /// Lower one physical file after every dependency HIR interface is available.
 fn lower_single_file_to_hir(
     semantic: &mut ProjectSemanticContext<'_, '_>,
-    loaded_file: &crate::loader::LoadedFile,
+    loaded_file: &crate::loader::loaded_file::LoadedFile,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<HirFile, CompileError> {
     cancellation.checkpoint()?;
@@ -157,7 +158,7 @@ fn store_module_artifact(
 /// Dependencies contribute HIR interfaces only. No TIR construction, static
 /// body checking, constant evaluation, or host verification occurs here.
 pub(super) fn lower_project_perfile<'project>(
-    project: &'project crate::loader::LoadedProject,
+    project: &'project crate::loader::loaded_project::LoadedProject,
     module_resolver: graphcal_compiler::resolve::ModuleResolver,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<HirProject<'project>, CompileError> {
@@ -343,7 +344,7 @@ pub(super) fn check_hir_project(
 fn verify_host_functions(
     plugins: &HashMap<
         graphcal_compiler::plugin_identity::PluginIdentity,
-        crate::loader::PluginFileEntry,
+        crate::loader::loaded_project::PluginFileEntry,
     >,
     tir: &graphcal_compiler::tir::typed::CheckedTir,
     src: &NamedSource<Arc<String>>,
@@ -395,21 +396,24 @@ fn verify_host_functions(
 fn verify_wasm_plugin(
     plugins: &HashMap<
         graphcal_compiler::plugin_identity::PluginIdentity,
-        crate::loader::PluginFileEntry,
+        crate::loader::loaded_project::PluginFileEntry,
     >,
     function: &graphcal_compiler::ir::extern_function::ExternFunctionEntry,
     src: &NamedSource<Arc<String>>,
     host_metadata: &graphcal_eval::host_fns::HostFunctionMetadata,
 ) -> Result<(), CompileError> {
     match plugins.get(&function.plugin) {
-        Some(Err(crate::loader::PluginFileError::NotPinned)) => {
+        Some(Err(crate::loader::loaded_project::PluginFileError::NotPinned)) => {
             return Err(CompileError::Eval(GraphcalError::PluginNotPinned {
                 plugin: function.plugin.clone(),
                 src: src.clone(),
                 span: function.path_span.into(),
             }));
         }
-        Some(Err(crate::loader::PluginFileError::HashMismatch { expected, actual })) => {
+        Some(Err(crate::loader::loaded_project::PluginFileError::HashMismatch {
+            expected,
+            actual,
+        })) => {
             return Err(CompileError::Eval(GraphcalError::PluginHashMismatch {
                 plugin: function.plugin.clone(),
                 expected: expected.clone(),
