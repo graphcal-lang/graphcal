@@ -6,7 +6,7 @@ use std::sync::Arc;
 use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
 use graphcal_compiler::ir::instance::{
     InstanceAssertionProjection, InstancePlotProjection, InstanceRecord, InstanceValueProjection,
-    template_declaration, template_reference,
+    ProjectionExposure, template_declaration, template_reference,
 };
 use graphcal_compiler::ir::module_interface::ModuleInterface;
 use graphcal_compiler::ir::static_dependencies::{ModuleDeclarations, StaticScope};
@@ -877,19 +877,20 @@ fn semantic_output_projections(
         .surface_outputs
         .iter()
         .map(|exposed_name| {
-            let source_name = request
-                .selective_names
-                .as_ref()
-                .and_then(|aliases| {
-                    aliases
+            let local = exposed_name.leaf();
+            let (source_name, exposure) = request.selective_names.as_ref().map_or_else(
+                || (local.clone(), ProjectionExposure::Member),
+                |aliases| {
+                    let source_name = aliases
                         .iter()
-                        .find(|alias| &alias.local == exposed_name.leaf())
-                        .map(|alias| alias.original.clone())
-                })
-                .unwrap_or_else(|| exposed_name.leaf().clone());
+                        .find(|alias| &alias.local == local)
+                        .map_or_else(|| local.clone(), |alias| alias.original.clone());
+                    (source_name, ProjectionExposure::Selected(local.clone()))
+                },
+            );
             InstanceValueProjection {
                 target: template_reference(instance, source_name),
-                exposed_name: exposed_name.clone(),
+                exposure,
             }
         })
         .collect()
@@ -910,7 +911,7 @@ fn semantic_assertion_projections(
             .map(|(source, exposed)| {
                 Ok(InstanceAssertionProjection {
                     target: template_reference(instance, source.clone()),
-                    exposed_name: ScopedName::local(exposed.clone()),
+                    exposure: ProjectionExposure::Selected(exposed.clone()),
                     expected_fail: resolve_projection_expected_fail(
                         request,
                         source,
@@ -925,8 +926,8 @@ fn semantic_assertion_projections(
             .assertion_names()
             .into_iter()
             .map(|name| InstanceAssertionProjection {
-                target: template_reference(instance, name.clone()),
-                exposed_name: ScopedName::in_scope(request.instance_scope.clone(), name),
+                target: template_reference(instance, name),
+                exposure: ProjectionExposure::Member,
                 expected_fail: None,
             })
             .collect()),
@@ -946,7 +947,7 @@ fn semantic_plot_projections(
                 .plot_projection_target(source)
                 .map(|target| InstancePlotProjection {
                     target,
-                    exposed_name: ScopedName::local(requested.alias.clone()),
+                    alias: requested.alias.clone(),
                     visibility: requested.visibility,
                 })
                 .ok_or_else(|| {

@@ -80,6 +80,19 @@ impl InstanceRecord {
             .then(|| instance_declaration(&self.id, leaf))
     }
 
+    /// The source-level name under which the including DAG exposes
+    /// `projection` of this instance: the name a selective item binds, or
+    /// the template's name qualified by this instance's scope.
+    #[must_use]
+    pub fn exposed_name(&self, projection: &impl InstanceProjection) -> ScopedName {
+        match projection.exposure() {
+            ProjectionExposure::Selected(name) => ScopedName::local(name.clone()),
+            ProjectionExposure::Member => {
+                ScopedName::in_scope(self.id.scope().clone(), projection.target().leaf().clone())
+            }
+        }
+    }
+
     /// Every concrete declaration materializing one of the template's value ports.
     pub fn concrete_value_ports(&self) -> impl Iterator<Item = ResolvedDeclName> + '_ {
         self.value_ports
@@ -123,14 +136,50 @@ impl InstanceRecord {
     }
 }
 
+/// Where an include site exposes one projected value or assertion in the
+/// including DAG.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProjectionExposure {
+    /// A selective include item (`include lib(..)::{x as y}`): the including
+    /// DAG binds the projection directly under this name.
+    Selected(DeclName),
+    /// A member of a whole-module include (`include lib(..) as l`), reached
+    /// through the include's instance scope under the template's own name
+    /// (`l::x`).
+    Member,
+}
+
+impl ProjectionExposure {
+    /// The name a selective include item binds, or `None` for a member
+    /// reached through the include's instance scope.
+    #[must_use]
+    pub const fn selected(&self) -> Option<&DeclName> {
+        match self {
+            Self::Selected(name) => Some(name),
+            Self::Member => None,
+        }
+    }
+}
+
+/// An include-site projection of a value or an assertion: a template
+/// declaration and where the including DAG exposes it.
+pub trait InstanceProjection {
+    /// Template declaration materialized by the instance, as the template
+    /// names it; the instance's frame resolves it.
+    fn target(&self) -> &LocalDecl;
+
+    /// Where the including DAG exposes the projection.
+    fn exposure(&self) -> &ProjectionExposure;
+}
+
 /// One instance value exposed through the including DAG's source interface.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InstanceValueProjection {
     /// Template declaration materialized by the instance, as the template
     /// names it; the instance's frame resolves it.
     pub target: LocalDecl,
-    /// Source-visible name introduced in the including DAG.
-    pub exposed_name: ScopedName,
+    /// Where the including DAG exposes the value.
+    pub exposure: ProjectionExposure,
 }
 
 /// One instance assertion exposed through the including DAG.
@@ -138,18 +187,43 @@ pub struct InstanceValueProjection {
 pub struct InstanceAssertionProjection {
     /// Template assertion, as the template names it.
     pub target: LocalDecl,
-    pub exposed_name: ScopedName,
+    /// Where the including DAG exposes the assertion.
+    pub exposure: ProjectionExposure,
     /// Include-site override resolved in the including DAG's lexical context.
     pub expected_fail: Option<crate::assertion_expectation::ExpectedFail>,
 }
 
+impl InstanceProjection for InstanceValueProjection {
+    fn target(&self) -> &LocalDecl {
+        &self.target
+    }
+
+    fn exposure(&self) -> &ProjectionExposure {
+        &self.exposure
+    }
+}
+
+impl InstanceProjection for InstanceAssertionProjection {
+    fn target(&self) -> &LocalDecl {
+        &self.target
+    }
+
+    fn exposure(&self) -> &ProjectionExposure {
+        &self.exposure
+    }
+}
+
 /// One plot requested from an instance include site.
+///
+/// Only a selective include item requests a plot, so the plot is always
+/// bound directly in the including DAG, under `alias`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InstancePlotProjection {
     /// Template plot (or plot the template forwards from one of its own
     /// instances), as the template names it.
     pub target: LocalDecl,
-    pub exposed_name: ScopedName,
+    /// The name the including DAG binds the plot under.
+    pub alias: DeclName,
     pub visibility: crate::plot_visibility::PlotVisibility,
 }
 
@@ -213,6 +287,39 @@ mod tests {
             owner.clone(),
             crate::syntax::dimension::DimName::expect_valid(name),
         )
+    }
+
+    #[test]
+    fn projections_are_exposed_under_the_selected_name_or_the_instance_scope() {
+        let parent = DagId::root_in_package("test", "main");
+        let template = DagId::root_in_package("test", "lib");
+        let id = InstanceId::new(parent, named("inst"), template);
+        let record = InstanceRecord::new(id.clone(), StaticSubstitution::default(), []);
+        let target = template_reference(&id, DeclName::expect_valid("output"));
+
+        let member = InstanceValueProjection {
+            target: target.clone(),
+            exposure: ProjectionExposure::Member,
+        };
+        assert_eq!(member.exposure.selected(), None);
+        assert_eq!(
+            record.exposed_name(&member),
+            ScopedName::in_scope(named("inst"), DeclName::expect_valid("output"))
+        );
+
+        let selected = InstanceAssertionProjection {
+            target,
+            exposure: ProjectionExposure::Selected(DeclName::expect_valid("renamed")),
+            expected_fail: None,
+        };
+        assert_eq!(
+            selected.exposure.selected(),
+            Some(&DeclName::expect_valid("renamed"))
+        );
+        assert_eq!(
+            record.exposed_name(&selected),
+            ScopedName::local(DeclName::expect_valid("renamed"))
+        );
     }
 
     #[test]

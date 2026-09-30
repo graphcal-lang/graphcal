@@ -76,7 +76,7 @@ impl UnfrozenIR {
                     instance
                         .plot_projections
                         .iter()
-                        .find(|projection| projection.exposed_name.leaf() == name)
+                        .find(|projection| &projection.alias == name)
                         .map(|projection| {
                             LocalDecl::new(instance_declaration(
                                 instance.instance.id(),
@@ -536,7 +536,7 @@ impl UnfrozenIR {
                         record
                             .assertion_projections
                             .iter()
-                            .find(|projection| &projection.exposed_name == name)
+                            .find(|projection| &record.instance.exposed_name(*projection) == name)
                             .map(|projection| {
                                 instance_declaration(
                                     record.instance.id(),
