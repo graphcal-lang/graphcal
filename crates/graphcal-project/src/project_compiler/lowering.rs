@@ -684,16 +684,21 @@ pub(super) fn install_shared_module_artifacts(
                     ))
                 })?;
         }
-        tir.insert_shared_dag_store(&dep_eval.dag_store)
-            .map_err(|error| {
-                CompileError::Eval(GraphcalError::internal_error(
-                    error.to_string(),
-                    src,
-                    DiagnosticAnchor::WholeFile,
-                ))
-            })?;
     }
-    Ok(())
+    // Every loaded module's store is installed at once, so each store's
+    // callees (its own imports' bodies) are installed with it.
+    tir.install_shared_dag_stores(
+        module_artifacts
+            .values()
+            .map(|artifact| artifact.dag_store.as_ref()),
+    )
+    .map_err(|error| {
+        CompileError::Eval(GraphcalError::internal_error(
+            error.to_string(),
+            src,
+            DiagnosticAnchor::WholeFile,
+        ))
+    })
 }
 
 fn resolve_projection_expected_fail(

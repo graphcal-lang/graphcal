@@ -602,7 +602,7 @@ fn callable_plan_fixture() -> (
 }
 
 #[test]
-fn plans_reject_a_call_whose_callee_has_no_callable() {
+fn plans_reject_a_called_dag_without_a_callable() {
     let (tir, src) = callable_plan_fixture();
     let prepared = graphcal_eval::exec_plan::compile(&tir, &src).unwrap();
     let helper = tir
@@ -615,8 +615,7 @@ fn plans_reject_a_call_whose_callee_has_no_callable() {
             .unwrap();
     assert!(matches!(
         assembled,
-        Err(graphcal_eval::execution_plan::ExecPlanError::MissingCallee { caller, target })
-            if &caller == tir.root_dag_id() && &target == helper
+        Err(graphcal_eval::execution_plan::ExecPlanError::MissingCallable(dag)) if &dag == helper
     ));
     let root = tir.root_dag_id().clone();
     assert!(
@@ -672,6 +671,35 @@ fn call_slots_resolve_to_the_callable_of_their_target() {
             .map(|callee| callee.scope().dag().dag_id())
             .collect::<Vec<_>>(),
         targets
+    );
+}
+
+#[test]
+fn frozen_stores_record_the_imported_dags_their_bodies_call() {
+    let (_directory, root) = write_pipeline_project(
+        &[
+            ("leaf.gcl", "pub node out: Dimensionless = 2.0;"),
+            (
+                "mid.gcl",
+                "import pipeline.leaf as leaf; dag local { pub node out: Dimensionless = 1.0; } pub node out: Dimensionless = @leaf()::out + @local()::out;",
+            ),
+        ],
+        "mid.gcl",
+    );
+    let (tir, _) = crate::project_compiler::compile_to_tir_project(&root, None, &fs()).unwrap();
+    let mid = tir.root_dag_id().clone();
+    let leaf = tir
+        .dag_registry()
+        .keys()
+        .find(|owner| owner.leaf().to_string() == "leaf")
+        .unwrap()
+        .clone();
+    let store = tir.freeze_local_dag_store().unwrap();
+    assert_eq!(store.len(), 2, "the root and its inline DAG");
+    assert_eq!(
+        store.external_callees().collect::<Vec<_>>(),
+        [(&leaf, &mid)],
+        "only the call into the imported module leaves the store"
     );
 }
 

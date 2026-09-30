@@ -12,7 +12,6 @@ use std::marker::PhantomData;
 use graphcal_compiler::dag_id::DagId;
 use graphcal_compiler::hir::expr::Expr;
 use graphcal_compiler::resolved_name::ResolvedDeclName;
-use graphcal_compiler::tir::texpr::CallSlot;
 use graphcal_compiler::tir::texpr::{ExecutableBodyError, TExpr};
 use graphcal_compiler::tir::typed::body_scope::Scoped;
 use graphcal_compiler::tir::typed::checked_instance::CheckedInstance;
@@ -66,13 +65,6 @@ impl PlanIndex for StepIdx {
 impl MintedIndex for StepIdx {
     fn new(position: usize) -> Self {
         Self(position)
-    }
-}
-
-/// A call slot indexes the callees of its caller, resolved in slot order.
-impl PlanIndex for CallSlot {
-    fn position(self) -> usize {
-        self.index()
     }
 }
 
@@ -468,8 +460,6 @@ pub struct ExecPlan<'p> {
     callables: IndexVec<CallableIdx, CallablePlan<'p>>,
     /// The callable of each DAG of the program, by registry position.
     at_position: IndexVec<DagPosition, CallableIdx>,
-    /// The callable each call slot of each callable's body targets.
-    callees: IndexVec<CallableIdx, IndexVec<CallSlot, CallableIdx>>,
 }
 
 /// Why prepared callables do not form a plan.
@@ -477,22 +467,20 @@ pub struct ExecPlan<'p> {
 pub enum ExecPlanError {
     #[error("DAG `{0}` has more than one prepared callable plan")]
     DuplicateCallable(DagId),
-    #[error("DAG `{caller}` calls DAG `{target}`, which has no prepared callable plan")]
-    MissingCallee { caller: DagId, target: DagId },
     #[error("DAG `{0}` of the program has no prepared callable plan")]
     MissingCallable(DagId),
 }
 
 impl<'p> ExecPlan<'p> {
     /// Assemble a plan from the root callable and every other callable of
-    /// `program`, resolving the callee of every call slot of every callable
-    /// once.
+    /// `program`: exactly one callable for each DAG of the program's
+    /// registry, so the callee of every inline call, which the registry
+    /// resolved to a position, has a callable.
     ///
     /// # Errors
     ///
-    /// Returns [`ExecPlanError`] when two callables share a body, when a
-    /// body calls a DAG without a callable, or when a DAG of the program has
-    /// no callable.
+    /// Returns [`ExecPlanError`] when two callables share a body, or when a
+    /// DAG of the program has no callable.
     pub(crate) fn new(
         program: &'p CheckedProgram,
         declarations: HashMap<&'p ResolvedDeclName, PlannedDeclaration<'p>>,
@@ -507,27 +495,6 @@ impl<'p> ExecPlan<'p> {
                 return Err(ExecPlanError::DuplicateCallable(owner.clone()));
             }
         }
-        let callees = callables
-            .iter()
-            .map(|callable| {
-                let caller = callable.scope.dag();
-                caller
-                    .call_targets()
-                    .iter()
-                    .map(|(_, target)| {
-                        by_dag
-                            .get(target)
-                            .copied()
-                            .ok_or_else(|| ExecPlanError::MissingCallee {
-                                caller: caller.dag_id().clone(),
-                                target: target.clone(),
-                            })
-                    })
-                    .collect::<Result<Vec<_>, _>>()
-                    .map(IndexVec::from_items)
-            })
-            .collect::<Result<Vec<_>, _>>()
-            .map(IndexVec::from_items)?;
         let at_position = program
             .tir()
             .dag_registry()
@@ -550,7 +517,6 @@ impl<'p> ExecPlan<'p> {
             root: CallableIdx::new(0),
             callables,
             at_position,
-            callees,
         })
     }
 
@@ -583,31 +549,29 @@ impl<'p> ExecPlan<'p> {
         self.callables.iter()
     }
 
-    /// The callables the body of the callable of `owner` calls, by call
-    /// slot, when `owner` has a callable.
+    /// The callables the body of `owner` calls, by call slot, when `owner`
+    /// is a DAG of the program.
     #[cfg(any(test, feature = "test-internals"))]
     #[must_use]
     pub fn callees_of(&self, owner: &DagId) -> Option<Vec<&CallablePlan<'p>>> {
-        self.callables
-            .indices()
-            .find(|index| self.callables[*index].scope.dag().dag_id() == owner)
-            .map(|caller| {
-                self.callees[caller]
-                    .iter()
-                    .map(|callee| &self.callables[*callee])
-                    .collect()
-            })
+        let registry = self.tir().dag_registry();
+        registry.get_positioned(owner).map(|(caller, _)| {
+            registry
+                .callee_positions(caller)
+                .iter()
+                .map(|callee| &self.callables[self.at_position[*callee]])
+                .collect()
+        })
     }
 
-    /// The callable an inline call runs: the one its caller's body resolved
-    /// for the call's slot when the plan was prepared.
+    /// The callable an inline call runs: the callable of the DAG the
+    /// program's registry resolved for the call's slot.
     ///
-    /// The call comes from a tree of this plan's program, so its caller has
-    /// a callable and its slot a resolved callee.
+    /// The call comes from a tree of this plan's program, whose every DAG
+    /// has a callable.
     #[must_use]
     pub fn callee(&self, call: ScopedCall<'_>) -> &CallablePlan<'p> {
-        let caller = self.at_position[call.caller()];
-        &self.callables[self.callees[caller][call.slot()]]
+        &self.callables[self.at_position[call.callee()]]
     }
 
     /// Any value declaration of the program.
