@@ -174,6 +174,71 @@ impl<V> StructValue<V> {
     pub fn fields(&self) -> impl ExactSizeIterator<Item = (&FieldName, &V)> {
         self.fields.iter()
     }
+
+    /// Derive a value of the same application from each owned field value.
+    #[must_use]
+    pub fn map<U>(self, mut field: impl FnMut(V) -> U) -> StructValue<U> {
+        StructValue {
+            type_name: self.type_name,
+            constructor: self.constructor,
+            generic_args: self.generic_args,
+            fields: self
+                .fields
+                .into_iter()
+                .map(|(name, value)| (name, field(value)))
+                .collect(),
+        }
+    }
+
+    /// Derive a value of the same application from each owned field.
+    pub fn try_map<U, E>(
+        self,
+        mut field: impl FnMut(&FieldName, V) -> Result<U, E>,
+    ) -> Result<StructValue<U>, E> {
+        let fields = self
+            .fields
+            .into_iter()
+            .map(|(name, value)| field(&name, value).map(|value| (name, value)))
+            .collect::<Result<_, _>>()?;
+        Ok(StructValue {
+            type_name: self.type_name,
+            constructor: self.constructor,
+            generic_args: self.generic_args,
+            fields,
+        })
+    }
+
+    /// The owned value of `field`, when the constructor declares it.
+    #[must_use]
+    pub fn into_field(mut self, field: &FieldName) -> Option<V> {
+        self.fields.swap_remove(field)
+    }
+}
+
+impl<A, B> StructValue<(A, B)> {
+    /// Split paired fields into two values of the same application.
+    #[must_use]
+    pub fn unzip(self) -> (StructValue<A>, StructValue<B>) {
+        let (left, right) = self
+            .fields
+            .into_iter()
+            .map(|(name, (left, right))| ((name.clone(), left), (name, right)))
+            .unzip();
+        (
+            StructValue {
+                type_name: self.type_name.clone(),
+                constructor: self.constructor.clone(),
+                generic_args: self.generic_args.clone(),
+                fields: left,
+            },
+            StructValue {
+                type_name: self.type_name,
+                constructor: self.constructor,
+                generic_args: self.generic_args,
+                fields: right,
+            },
+        )
+    }
 }
 
 #[cfg(test)]
@@ -281,6 +346,39 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn owned_maps_selection_and_unzip_keep_the_application() {
+        let value = build(vec![("left", 1), ("right", 2)]).unwrap();
+        let mut seen = Vec::new();
+        let mapped = value
+            .clone()
+            .try_map(|name, value| {
+                seen.push(name.clone());
+                Ok::<_, ()>((value, -value))
+            })
+            .unwrap();
+        assert_eq!(seen, vec![field("left"), field("right")]);
+        let (left, right) = mapped.unzip();
+        assert_eq!(left, value);
+        assert_eq!(right.constructor(), value.constructor());
+        assert_eq!(left.field(&field("right")), Some(&2));
+        assert_eq!(right.field(&field("left")), Some(&-1));
+        assert_eq!(
+            value.clone().map(|value| value * 3).field(&field("right")),
+            Some(&6)
+        );
+        assert_eq!(value.clone().into_field(&field("right")), Some(2));
+        assert_eq!(value.clone().into_field(&field("other")), None);
+        let failed = value.try_map(|name, value| {
+            if *name == field("right") {
+                Err(value)
+            } else {
+                Ok(value)
+            }
+        });
+        assert_eq!(failed.unwrap_err(), 2);
     }
 
     #[test]

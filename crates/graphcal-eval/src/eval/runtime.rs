@@ -17,7 +17,7 @@ use graphcal_compiler::tir::typed::{DeclarationBody, Scoped};
 use crate::domain_constraint::ResolvedDomainConstraint;
 use crate::eval_expr::{EvalSession, RuntimeValueMap, eval_root_with_presentation};
 use crate::execution_plan::ExecPlan;
-use crate::presentation_evidence::PresentationInstanceMap;
+use crate::presentation_evidence::{PendingPresentationMap, ResolvedPresentationMap};
 
 use super::types::{EvalResult, NodeUnavailable};
 
@@ -34,7 +34,7 @@ pub(super) use root_outcome::{RootFailure, RootOutcome};
 pub(super) struct EvalLoopResult {
     pub unfinished_calls: std::cell::RefCell<BTreeSet<ResolvedDeclName>>,
     pub values: RuntimeValueMap,
-    pub presentation_instances: PresentationInstanceMap,
+    pub presentations: PendingPresentationMap,
     pub errors: HashMap<ResolvedDeclName, NodeUnavailable>,
 }
 
@@ -45,7 +45,7 @@ pub(super) struct EvalLoopResult {
 /// consumers without running the evaluator a second time.
 pub struct RuntimeEvaluation {
     pub(super) result: EvalResult,
-    pub(super) presentation_instances: PresentationInstanceMap,
+    pub(super) presentations: ResolvedPresentationMap,
     pub(super) values: RuntimeValueMap,
     pub(super) errors: HashMap<ResolvedDeclName, NodeUnavailable>,
 }
@@ -55,7 +55,7 @@ impl std::fmt::Debug for RuntimeEvaluation {
         formatter
             .debug_struct("RuntimeEvaluation")
             .field("result", &self.result)
-            .field("presentation_instances", &self.presentation_instances)
+            .field("presentations", &self.presentations)
             .field("values", &self.values)
             .field("errors", &self.errors)
             .finish()
@@ -118,18 +118,24 @@ pub(super) fn run_eval_loop_with_bindings(
     Ok(EvalLoopResult {
         unfinished_calls,
         values: outcome.values,
-        presentation_instances: outcome.presentations,
+        presentations: outcome.presentations,
         errors: outcome.errors,
     })
 }
 
 /// What one run of the root evaluated: the values of its successful
-/// declarations, its contained failures, and its resolved presentations.
+/// declarations, its contained failures, and its presentations.
 #[derive(Clone, Copy)]
 struct EvaluatedRoot<'a> {
     values: &'a RuntimeValueMap,
     errors: &'a HashMap<ResolvedDeclName, NodeUnavailable>,
-    presentations: &'a PresentationInstanceMap,
+    /// The presentations of the declarations, resolved against the complete
+    /// root frame.
+    presentations: &'a ResolvedPresentationMap,
+    /// The same presentations as the root frame holds them, still pending,
+    /// for an expression evaluated over the root frame (a plot channel),
+    /// whose own presentation is then resolved against `values`.
+    frame_presentations: &'a PendingPresentationMap,
 }
 
 /// Evaluate a plan with one row of runtime parameter bindings, then assemble
@@ -149,18 +155,19 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
     let outcome = RootOutcome::evaluate(plan, bindings, src, host_fns, cancellation)?;
     cancellation.checkpoint()?;
     let ctx = outcome.session(plan, src, host_fns, cancellation);
-    let presentation_instances = outcome
-        .presentation_instances()
+    let presentations = outcome
+        .presentations()
         .iter()
-        .map(|(key, evidence)| {
-            crate::eval_expr::presentation::resolve(evidence.clone(), outcome.values(), &ctx)
-                .map(|evidence| (key.clone(), evidence))
+        .map(|(key, presentation)| {
+            crate::eval_expr::presentation::resolve(presentation.clone(), outcome.values(), &ctx)
+                .map(|presentation| (key.clone(), presentation))
         })
-        .collect::<Result<PresentationInstanceMap, _>>()?;
+        .collect::<Result<ResolvedPresentationMap, _>>()?;
     let evaluated = EvaluatedRoot {
         values: outcome.values(),
         errors: outcome.errors(),
-        presentations: &presentation_instances,
+        presentations: &presentations,
+        frame_presentations: outcome.presentations(),
     };
 
     let value_entries::ValueEntries {
@@ -209,7 +216,7 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
     };
     Ok(RuntimeEvaluation {
         result,
-        presentation_instances,
+        presentations,
         values,
         errors,
     })

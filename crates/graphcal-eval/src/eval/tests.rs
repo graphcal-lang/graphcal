@@ -715,7 +715,7 @@ fn shared_frames_cancel_before_interpretation() {
 #[test]
 fn frame_arguments_are_domain_checked_and_keep_presentation_only_when_bound() {
     use crate::execution_frame::{ExecutionFrame, FailurePolicy};
-    use crate::presentation_evidence::PresentationInstance;
+    use crate::presentation_evidence::{PendingLeaf, Presentation, ResolvedLeaf};
     use crate::runtime_presentation::EvaluatedRuntimeValue;
     use crate::runtime_value::RuntimeValue;
     let source = "param p: Dimensionless(min: 0.0) = 1.0; node n: Dimensionless = @p;";
@@ -732,10 +732,10 @@ fn frame_arguments_are_domain_checked_and_keep_presentation_only_when_bound() {
     let labelled = |value: f64| {
         EvaluatedRuntimeValue::new(
             RuntimeValue::quantity(value).unwrap(),
-            PresentationInstance::Unit {
+            Presentation::Uniform(PendingLeaf::Ready(ResolvedLeaf::Unit {
                 label: "percent".to_owned(),
                 scale: graphcal_compiler::registry::unit::PositiveFiniteScale::new(0.01).unwrap(),
-            },
+            })),
         )
     };
     let span = graphcal_compiler::syntax::span::Span::new(0, 0);
@@ -773,7 +773,6 @@ fn frame_arguments_are_domain_checked_and_keep_presentation_only_when_bound() {
 #[test]
 fn frame_runtime_imports_seed_only_unbound_prepared_imports() {
     use crate::execution_frame::{ExecutionFrame, FailurePolicy};
-    use crate::presentation_evidence::PresentationInstance;
     use crate::runtime_presentation::EvaluatedRuntimeValue;
     use crate::runtime_value::RuntimeValue;
     let source = "dag scaled { param factor: Dimensionless; pub node result: Dimensionless = @factor * 2.0; } node out: Dimensionless = @scaled(factor: 4.0)::result;";
@@ -809,12 +808,7 @@ fn frame_runtime_imports_seed_only_unbound_prepared_imports() {
     )
     .unwrap();
     let expected_imports = vec![import.clone()];
-    let value = |value: f64| {
-        EvaluatedRuntimeValue::new(
-            RuntimeValue::quantity(value).unwrap(),
-            PresentationInstance::None,
-        )
-    };
+    let value = |value: f64| EvaluatedRuntimeValue::plain(RuntimeValue::quantity(value).unwrap());
 
     let mut frame = ExecutionFrame::new(plan, &callable, FailurePolicy::Propagate);
     let mut asked = Vec::new();
@@ -943,9 +937,8 @@ fn shared_frame_dependency_and_fatal_error_policies_are_explicit() {
                     "dependent",
                     "failed dependencies must never be interpreted"
                 );
-                Ok(crate::runtime_presentation::EvaluatedRuntimeValue::new(
+                Ok(crate::runtime_presentation::EvaluatedRuntimeValue::plain(
                     crate::runtime_value::RuntimeValue::quantity(2.0).unwrap(),
-                    crate::presentation_evidence::PresentationInstance::None,
                 ))
             });
             if fatal || matches!(policy, FailurePolicy::Propagate) {

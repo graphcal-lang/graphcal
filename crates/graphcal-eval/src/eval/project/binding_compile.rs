@@ -741,7 +741,7 @@ impl PreparedProject {
         crate::eval_expr::eval_root_with_presentation(
             tree,
             &values,
-            &crate::presentation_evidence::PresentationInstanceMap::new(),
+            &crate::presentation_evidence::PendingPresentationMap::new(),
             &session,
         )
         .map_err(CompileError::from)

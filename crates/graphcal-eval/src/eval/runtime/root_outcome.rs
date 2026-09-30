@@ -20,7 +20,7 @@ use crate::eval::types::{AssertResult, NodeUnavailable};
 use crate::eval_expr::{EvalSession, RuntimeValueMap};
 use crate::execution_plan::ExecPlan;
 use crate::host_fns::HostFunctionRegistry;
-use crate::presentation_evidence::PresentationInstanceMap;
+use crate::presentation_evidence::PendingPresentationMap;
 
 use super::root_names::{instance_member_name, root_source_names};
 use super::{EvalLoopResult, evaluate_assertions, run_eval_loop_with_bindings};
@@ -29,7 +29,7 @@ use super::{EvalLoopResult, evaluate_assertions, run_eval_loop_with_bindings};
 pub(in crate::eval) struct RootOutcome {
     unfinished_calls: RefCell<BTreeSet<ResolvedDeclName>>,
     values: RuntimeValueMap,
-    presentation_instances: PresentationInstanceMap,
+    presentations: PendingPresentationMap,
     errors: HashMap<ResolvedDeclName, NodeUnavailable>,
     assertions: Vec<(ScopedName, AssertResult, Span)>,
 }
@@ -73,14 +73,14 @@ impl RootOutcome {
         let EvalLoopResult {
             unfinished_calls,
             values,
-            presentation_instances,
+            presentations,
             errors,
         } = run_eval_loop_with_bindings(plan, bindings, src, host_fns, cancellation)?;
         cancellation.checkpoint()?;
         let mut outcome = Self {
             unfinished_calls,
             values,
-            presentation_instances,
+            presentations,
             errors,
             assertions: Vec::new(),
         };
@@ -101,7 +101,7 @@ impl RootOutcome {
         cancellation: &graphcal_compiler::cancellation::CancellationToken,
     ) -> EvalSession<'a> {
         EvalSession::checked(plan, src, host_fns, cancellation.clone())
-            .with_roots(&self.values, Some(&self.presentation_instances))
+            .with_roots(&self.values, Some(&self.presentations))
             .with_unavailable(&self.errors)
             .with_unfinished_calls(&self.unfinished_calls)
     }
@@ -116,9 +116,10 @@ impl RootOutcome {
         &self.errors
     }
 
-    /// The presentation evidence of the evaluated declarations, unresolved.
-    pub(in crate::eval) const fn presentation_instances(&self) -> &PresentationInstanceMap {
-        &self.presentation_instances
+    /// The presentations of the evaluated declarations, still pending: the
+    /// result assembly resolves them against the complete root frame.
+    pub(in crate::eval) const fn presentations(&self) -> &PendingPresentationMap {
+        &self.presentations
     }
 
     pub(in crate::eval) fn into_parts(self) -> RootOutcomeParts {

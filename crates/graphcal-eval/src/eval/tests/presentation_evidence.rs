@@ -1,5 +1,7 @@
 use super::*;
-use crate::presentation_evidence::{PendingDisplayUnit, PresentationFailure, PresentationInstance};
+use crate::presentation_evidence::{
+    PendingDisplayUnit, PendingLeaf, Presentation, PresentationFailure, ResolvedLeaf,
+};
 
 fn labels(value: &Value) -> Vec<Option<String>> {
     match value {
@@ -140,67 +142,105 @@ fn conversion_only_failed_dependency_does_not_poison_si_values() {
 }
 
 #[test]
-fn borrowed_evidence_projection_is_sparse_broadcast_and_copy_free() {
+fn borrowed_presentation_reads_follow_the_value_shape_and_are_copy_free() {
+    use crate::runtime_value::{IndexedValue, StructValue};
     use graphcal_compiler::syntax::{index_name::IndexEntryKey, type_name::FieldName};
     let field = FieldName::expect_valid("value");
-    let unit = PresentationInstance::Unit {
+    let unit = Presentation::Uniform(ResolvedLeaf::Unit {
         label: "m".into(),
         scale: graphcal_compiler::registry::unit::PositiveFiniteScale::new(1.0).unwrap(),
-    };
-    let zone = PresentationInstance::Timezone(
+    });
+    let zone = Presentation::Uniform(ResolvedLeaf::Timezone(
         graphcal_compiler::registry::time_zone::TimeZoneRegistry::bundled()
             .parse_iana_id("Asia/Tokyo")
             .unwrap(),
+    ));
+    let reading = Presentation::of_struct(StructValue::for_test(
+        graphcal_compiler::resolved_name::ResolvedStructTypeName::for_test(
+            graphcal_compiler::dag_id::DagId::root_in_package("presentation", "main"),
+            graphcal_compiler::syntax::type_name::StructTypeName::expect_valid("Reading"),
+        ),
+        graphcal_compiler::syntax::type_name::ConstructorName::expect_valid("Reading"),
+        std::iter::once((field.clone(), unit.clone())).collect(),
+    ));
+    let tree = Presentation::of_indexed(IndexedValue::finite_for_test(vec![
+        reading,
+        Presentation::Plain,
+    ]));
+    // A container of plain presentations is plain.
+    assert!(
+        Presentation::<ResolvedLeaf>::of_indexed(IndexedValue::finite_for_test(vec![
+            Presentation::Plain
+        ]))
+        .is_plain()
     );
-    let tree = PresentationInstance::entries([(
-        IndexEntryKey::position(0),
-        PresentationInstance::fields([(field.clone(), unit.clone())]),
-    )]);
     let ((), counts) = crate::pipeline_metrics::measure(|| {
-        let selected = tree
-            .project_indexes_ref(&[IndexEntryKey::position(0)])
-            .unwrap();
-        let PresentationInstance::Indexed { entries } = &tree else {
-            panic!("indexed evidence");
+        let selected = tree.entry_ref(&IndexEntryKey::position(0)).unwrap();
+        let Presentation::Indexed(entries) = &tree else {
+            panic!("indexed presentation");
         };
         assert!(std::ptr::eq(
             selected,
             entries.get(&IndexEntryKey::position(0)).unwrap()
         ));
-        let PresentationInstance::Struct { fields } = selected else {
-            panic!("struct evidence");
+        let Presentation::Struct(fields) = selected else {
+            panic!("struct presentation");
         };
         assert!(std::ptr::eq(
-            selected.project_field_ref(&field).unwrap(),
-            fields.get(&field).unwrap()
+            selected.field_ref(&field).unwrap(),
+            fields.field(&field).unwrap()
         ));
         assert!(
             selected
-                .project_field_ref(&FieldName::expect_valid("missing"))
-                .unwrap()
+                .field_ref(&FieldName::expect_valid("missing"))
                 .is_none()
         );
         assert!(
-            tree.project_indexes_ref(&[IndexEntryKey::position(1)])
+            tree.entry_ref(&IndexEntryKey::position(1))
                 .unwrap()
-                .is_none()
+                .is_plain()
         );
-        assert!(
-            selected
-                .project_indexes_ref(&[IndexEntryKey::position(0)])
-                .is_err()
-        );
-        assert!(unit.project_field_ref(&field).is_err());
-        for scalar in [&unit, &zone, &PresentationInstance::None] {
+        // A struct's presentation presents no entry, an indexed value's no field.
+        assert!(selected.entry_ref(&IndexEntryKey::position(0)).is_none());
+        assert!(tree.field_ref(&field).is_none());
+        // A uniform presentation presents every part alike.
+        for scalar in [&unit, &zone, &Presentation::Plain] {
             assert!(std::ptr::eq(
                 scalar,
-                scalar
-                    .project_indexes_ref(&[IndexEntryKey::position(0), IndexEntryKey::position(2)])
-                    .unwrap()
+                scalar.entry_ref(&IndexEntryKey::position(2)).unwrap()
             ));
+            assert!(std::ptr::eq(scalar, scalar.field_ref(&field).unwrap()));
         }
     });
     assert_eq!(counts.presentation_evidence_copy_nodes, 0);
+    assert_eq!(tree.retained_nodes(), 3);
+    assert!(
+        tree.clone()
+            .into_entry(&IndexEntryKey::position(1))
+            .is_plain()
+    );
+    assert!(matches!(
+        tree.clone()
+            .into_entry(&IndexEntryKey::position(0))
+            .into_field(&field),
+        Presentation::Uniform(ResolvedLeaf::Unit { .. })
+    ));
+    assert!(tree.clone().into_field(&field).is_plain());
+    assert!(
+        tree.entry(&IndexEntryKey::position(0))
+            .into_entry(&IndexEntryKey::position(0))
+            .is_plain()
+    );
+    assert!(matches!(
+        unit.into_field(&field)
+            .into_entry(&IndexEntryKey::position(4)),
+        Presentation::Uniform(ResolvedLeaf::Unit { .. })
+    ));
+    assert!(matches!(
+        tree.entry(&IndexEntryKey::position(0)).field(&field),
+        Presentation::Uniform(ResolvedLeaf::Unit { .. })
+    ));
+    assert!(tree.entry(&IndexEntryKey::position(3)).is_plain());
 }
 
 #[test]
@@ -535,12 +575,12 @@ fn requested_display_unit(
     let (_, presentation) = crate::eval_expr::eval_root_with_presentation(
         &root,
         &crate::constant_pools::RuntimeValueMap::new(),
-        &crate::presentation_evidence::PresentationInstanceMap::new(),
+        &crate::presentation_evidence::PendingPresentationMap::new(),
         &session,
     )
     .unwrap()
     .into_parts();
-    let PresentationInstance::Pending(request) = presentation else {
+    let Presentation::Uniform(PendingLeaf::Requested(request)) = presentation else {
         panic!("conversion requests a display unit: {presentation:?}");
     };
     request.unit
@@ -559,11 +599,11 @@ fn nested_presentation_computation_abort_classification_is_not_contained() {
     let target = requested_display_unit(&tir, declaration, &src);
     let context = |token| crate::eval_expr::EvalSession::provisional_constants(&tir, &src, token);
     let evidence = |unit| {
-        PresentationInstance::Pending(Box::new(PendingDisplayUnit {
+        Presentation::Uniform(PendingLeaf::Requested(Box::new(PendingDisplayUnit {
             owner: tir.root_dag_id().clone(),
             source: src.clone(),
             unit,
-        }))
+        })))
     };
     let mut unknown = target.clone();
     unknown.terms[0].name.value = graphcal_compiler::hir::expr::ResolvedUnitRef::new(
@@ -596,22 +636,59 @@ fn presentation_cancellation_is_never_a_notice() {
         .root()
         .bound_decl_identity(&scoped_name("value"))
         .unwrap();
-    let pending = PresentationInstance::Pending(Box::new(PendingDisplayUnit {
+    let pending = Presentation::Uniform(PendingLeaf::Requested(Box::new(PendingDisplayUnit {
         owner: tir.root_dag_id().clone(),
         source: src.clone(),
         unit: requested_display_unit(&tir, declaration, &src),
-    }));
+    })));
     let values = crate::constant_pools::RuntimeValueMap::new();
     let cancellation = graphcal_compiler::cancellation::CancellationSource::new();
     let context =
         crate::eval_expr::EvalSession::provisional_constants(&tir, &src, cancellation.token());
     assert!(matches!(
         crate::eval_expr::presentation::resolve(pending.clone(), &values, &context),
-        Ok(PresentationInstance::Unit { .. })
+        Ok(Presentation::Uniform(ResolvedLeaf::Unit { .. }))
     ));
     cancellation.cancel();
     assert!(matches!(
         crate::eval_expr::presentation::resolve(pending, &values, &context),
         Err(GraphcalError::Cancelled(_))
     ));
+}
+
+#[test]
+fn plot_channels_display_one_shared_unit_or_keep_si_whole() {
+    let y_values = |source: &str| {
+        let result = compile_and_eval(source).unwrap();
+        assert!(result.plot_errors.is_empty(), "{result:?}");
+        let y = result.plots[0]
+            .encodings
+            .iter()
+            .find(|(channel, _)| *channel == graphcal_compiler::syntax::ast::EncodingChannel::Y)
+            .unwrap()
+            .1
+            .clone();
+        let channel_notices = result
+            .presentation_diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.channel.is_some())
+            .count();
+        (y, channel_notices)
+    };
+    let (shared, notices) = y_values(
+        "plot p = { mark: line, encode: { x: table[Fin(2)] { 1.0; 2.0; }, y: table[Fin(2)] { 1.0 m -> km; 2.0 m -> km; } } };",
+    );
+    assert!(
+        matches!(&shared, super::super::types::PlotFieldValue::Numbers(values) if values == &[0.001, 0.002]),
+        "{shared:?}"
+    );
+    assert_eq!(notices, 0);
+    let (mixed, notices) = y_values(
+        "plot p = { mark: line, encode: { x: table[Fin(2)] { 1.0; 2.0; }, y: table[Fin(2)] { 1.0 m -> km; 2.0 m -> cm; } } };",
+    );
+    assert!(
+        matches!(&mixed, super::super::types::PlotFieldValue::Numbers(values) if values == &[1.0, 2.0]),
+        "{mixed:?}"
+    );
+    assert_eq!(notices, 1);
 }

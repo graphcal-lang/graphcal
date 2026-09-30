@@ -18,7 +18,7 @@ use crate::checked_program::{
     resolve_imported_constant,
 };
 use crate::constant_pools::{ConstPool, ConstPoolBuildError, ConstantPoolError};
-use crate::presentation_evidence::PresentationInstanceMap;
+use crate::presentation_evidence::PendingPresentationMap;
 use crate::project_compiler::compile_to_tir;
 
 fn key(tir: &CheckedTir, name: &str) -> ResolvedDeclName {
@@ -232,7 +232,7 @@ fn sealing_requires_constraints_for_every_scheduled_dag() {
     let evaluated = EvaluatedTir::evaluate(tir, &ExecutionFacts::default(), one()).unwrap();
     let result = evaluated.seal(ScheduledChecks {
         source: NamedSource::new("test.gcl", Arc::new(source.to_owned())),
-        const_presentations: PresentationInstanceMap::new(),
+        const_presentations: PendingPresentationMap::new(),
         domain_constraints: HashMap::new(),
         struct_field_constraints: HashMap::new(),
     });

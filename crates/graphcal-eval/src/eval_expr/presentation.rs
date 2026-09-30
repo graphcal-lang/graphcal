@@ -10,13 +10,16 @@ use graphcal_compiler::syntax::span::Spanned;
 
 use super::context::{EvalContext, EvalSession};
 use crate::constant_pools::RuntimeValueMap;
-use crate::presentation_evidence::{PendingDisplayUnit, PresentationFailure, PresentationInstance};
+use crate::presentation_evidence::{
+    PendingDisplayUnit, PendingLeaf, PendingPresentation, Presentation, PresentationFailure,
+    ResolvedLeaf, ResolvedPresentation,
+};
 
 /// A display request for `unit`, whose terms are resolved now, in the scope
 /// of the tree `ctx` evaluates, and whose scale is computed once the owning
 /// frame is complete.
-pub(super) fn pending(unit: &ResolvedUnitExpr, ctx: &EvalContext<'_>) -> PresentationInstance {
-    PresentationInstance::Pending(Box::new(PendingDisplayUnit {
+pub(super) fn pending(unit: &ResolvedUnitExpr, ctx: &EvalContext<'_>) -> PendingPresentation {
+    Presentation::Uniform(PendingLeaf::Requested(Box::new(PendingDisplayUnit {
         owner: ctx.dag_id().clone(),
         source: ctx.src.clone(),
         unit: ResolvedUnitExpr {
@@ -37,14 +40,14 @@ pub(super) fn pending(unit: &ResolvedUnitExpr, ctx: &EvalContext<'_>) -> Present
                 .collect(),
             span: unit.span,
         },
-    }))
+    })))
 }
 
 pub(super) fn scaled<R: std::fmt::Display>(
     unit: &ResolvedUnitExpr<R>,
     scale: PositiveFiniteScale,
     ctx: &EvalSession<'_>,
-) -> PresentationInstance {
+) -> ResolvedLeaf {
     // Label algebra is display-only, including during immutable
     // constant-evidence capture.
     match format_unit_terms_canonical(
@@ -52,79 +55,69 @@ pub(super) fn scaled<R: std::fmt::Display>(
             .iter()
             .map(|item| (item.op, item.name.value.to_string(), item.power)),
     ) {
-        Ok(label) => PresentationInstance::Unit { label, scale },
-        Err(error) => PresentationInstance::Failed(PresentationFailure::Formatting {
+        Ok(label) => ResolvedLeaf::Unit { label, scale },
+        Err(error) => ResolvedLeaf::Failed(PresentationFailure::Formatting {
             source_name: ctx.src.name().to_owned(),
             error,
         }),
     }
 }
 
+/// Compute every pending display unit of `presentation` against `values`,
+/// the complete values of the root frame.
+///
 /// Future operation-budget accounting belongs here, shared with unit-scale work.
 /// Resolving a subtree never stores the frame or any transient computational value.
 pub fn resolve(
-    evidence: PresentationInstance,
+    presentation: PendingPresentation,
     values: &RuntimeValueMap,
     ctx: &EvalSession<'_>,
-) -> Result<PresentationInstance, GraphcalError> {
-    resolve_selected(evidence, values, ctx, &|_| true)
+) -> Result<ResolvedPresentation, GraphcalError> {
+    presentation.try_map_leaves(&mut |leaf| match leaf {
+        PendingLeaf::Ready(leaf) => Ok(leaf),
+        PendingLeaf::Requested(request) => resolve_request(&request, values, ctx),
+    })
 }
 
 /// Caller-owned requests pass through a child call unchanged. They are resolved
 /// when that caller's frame is complete, not against a child's partial values.
 pub fn resolve_frame(
-    evidence: PresentationInstance,
+    presentation: PendingPresentation,
     values: &RuntimeValueMap,
     ctx: &EvalSession<'_>,
     callable: &crate::execution_plan::CallablePlan<'_>,
-) -> Result<PresentationInstance, GraphcalError> {
-    resolve_selected(evidence, values, ctx, &|owner| callable.executes(owner))
+) -> Result<PendingPresentation, GraphcalError> {
+    presentation.try_map_leaves(&mut |leaf| match leaf {
+        PendingLeaf::Requested(request) if callable.executes(&request.owner) => {
+            resolve_request(&request, values, ctx).map(PendingLeaf::Ready)
+        }
+        leaf @ (PendingLeaf::Ready(_) | PendingLeaf::Requested(_)) => Ok(leaf),
+    })
 }
 
-fn resolve_selected(
-    evidence: PresentationInstance,
+/// Compute the scale of one requested display unit. An ordinary failure is
+/// the leaf's display failure; invariants and cancellation abort.
+fn resolve_request(
+    request: &PendingDisplayUnit,
     values: &RuntimeValueMap,
     ctx: &EvalSession<'_>,
-    owns: &dyn Fn(&graphcal_compiler::dag_id::DagId) -> bool,
-) -> Result<PresentationInstance, GraphcalError> {
-    match evidence {
-        PresentationInstance::Pending(request) if !owns(&request.owner) => {
-            Ok(PresentationInstance::Pending(request))
+) -> Result<ResolvedLeaf, GraphcalError> {
+    ctx.cancellation.checkpoint()?;
+    let context = ctx.with_src(&request.source);
+    crate::pipeline_metrics::record(crate::pipeline_metrics::Event::PresentationEvaluation);
+    match super::resolved_unit_scale(&request.unit, values, &context)
+        .map(|scale| scaled(&request.unit, scale, &context))
+    {
+        Ok(leaf) => Ok(leaf),
+        Err(error @ (GraphcalError::InternalError { .. } | GraphcalError::Cancelled(_))) => {
+            Err(error)
         }
-        PresentationInstance::Pending(request) => {
-            ctx.cancellation.checkpoint()?;
-            let context = ctx.with_src(&request.source);
-            crate::pipeline_metrics::record(crate::pipeline_metrics::Event::PresentationEvaluation);
-            match super::resolved_unit_scale(&request.unit, values, &context)
-                .map(|scale| scaled(&request.unit, scale, &context))
-            {
-                Ok(evidence) => Ok(evidence),
-                Err(
-                    error @ (GraphcalError::InternalError { .. } | GraphcalError::Cancelled(_)),
-                ) => Err(error),
-                Err(error) => Ok(PresentationInstance::Failed(PresentationFailure::Scale {
-                    source_name: match &error {
-                        GraphcalError::EvalError { src, .. } => src.name().to_owned(),
-                        _ => context.src.name().to_owned(),
-                    },
-                    message: error.to_string(),
-                })),
-            }
-        }
-        PresentationInstance::Struct { fields } => fields
-            .into_iter()
-            .map(|(key, evidence)| {
-                resolve_selected(evidence, values, ctx, owns).map(|evidence| (key, evidence))
-            })
-            .collect::<Result<Vec<_>, _>>()
-            .map(PresentationInstance::fields),
-        PresentationInstance::Indexed { entries } => entries
-            .into_iter()
-            .map(|(key, evidence)| {
-                resolve_selected(evidence, values, ctx, owns).map(|evidence| (key, evidence))
-            })
-            .collect::<Result<Vec<_>, _>>()
-            .map(PresentationInstance::entries),
-        resolved => Ok(resolved),
+        Err(error) => Ok(ResolvedLeaf::Failed(PresentationFailure::Scale {
+            source_name: match &error {
+                GraphcalError::EvalError { src, .. } => src.name().to_owned(),
+                _ => context.src.name().to_owned(),
+            },
+            message: error.to_string(),
+        })),
     }
 }
