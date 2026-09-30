@@ -1017,17 +1017,17 @@ fn selective_import_rejects_required_static_inputs() {
         (
             "pub(bind) type Element;",
             "type Element",
-            graphcal_compiler::ir::static_interface::StaticInputKind::Type,
+            graphcal_compiler::static_interface::StaticInputKind::Type,
         ),
         (
             "pub(bind) dim Quantity;",
             "dim Quantity",
-            graphcal_compiler::ir::static_interface::StaticInputKind::Dimension,
+            graphcal_compiler::static_interface::StaticInputKind::Dimension,
         ),
         (
             "pub(bind) index Axis;",
             "index Axis",
-            graphcal_compiler::ir::static_interface::StaticInputKind::Index,
+            graphcal_compiler::static_interface::StaticInputKind::Index,
         ),
     ] {
         let (_directory, root) = write_pipeline_project(
@@ -1095,7 +1095,7 @@ fn qualified_import_rejects_transitive_required_static_dependencies() {
     assert!(matches!(
         error,
         CompileError::Eval(GraphcalError::ImportUnresolvedStaticDependency {
-            dependency_kind: graphcal_compiler::ir::static_interface::StaticInputKind::Type,
+            dependency_kind: graphcal_compiler::static_interface::StaticInputKind::Type,
             ref dependency,
             ..
         }) if dependency == "Element"
@@ -1124,7 +1124,7 @@ fn qualified_import_resolves_ambiguous_static_dependencies_to_their_symbol() {
     assert!(matches!(
         error,
         CompileError::Eval(GraphcalError::ImportUnresolvedStaticDependency {
-            dependency_kind: graphcal_compiler::ir::static_interface::StaticInputKind::Dimension,
+            dependency_kind: graphcal_compiler::static_interface::StaticInputKind::Dimension,
             ref dependency,
             ..
         }) if dependency == "Basis"
@@ -1152,7 +1152,7 @@ fn selective_import_rejects_transitive_required_static_dependencies() {
     assert!(matches!(
         error,
         CompileError::Eval(GraphcalError::ImportUnresolvedStaticDependency {
-            dependency_kind: graphcal_compiler::ir::static_interface::StaticInputKind::Type,
+            dependency_kind: graphcal_compiler::static_interface::StaticInputKind::Type,
             ref dependency,
             ..
         }) if dependency == "Element"
@@ -1704,7 +1704,7 @@ fn include_rejects_required_static_inputs_as_binding_targets() {
     assert!(matches!(
         error,
         CompileError::Eval(GraphcalError::InvalidStaticBindingTarget {
-            kind: graphcal_compiler::ir::static_interface::StaticInputKind::Type,
+            kind: graphcal_compiler::static_interface::StaticInputKind::Type,
             ref name,
             ref target,
             ..
@@ -1717,15 +1717,15 @@ fn include_requires_every_required_static_input_category() {
     for (declaration, expected_kind) in [
         (
             "pub(bind) type Element;",
-            graphcal_compiler::ir::static_interface::StaticInputKind::Type,
+            graphcal_compiler::static_interface::StaticInputKind::Type,
         ),
         (
             "pub(bind) dim Quantity;",
-            graphcal_compiler::ir::static_interface::StaticInputKind::Dimension,
+            graphcal_compiler::static_interface::StaticInputKind::Dimension,
         ),
         (
             "pub(bind) index Axis;",
-            graphcal_compiler::ir::static_interface::StaticInputKind::Index,
+            graphcal_compiler::static_interface::StaticInputKind::Index,
         ),
     ] {
         let (_directory, root) = write_pipeline_project(

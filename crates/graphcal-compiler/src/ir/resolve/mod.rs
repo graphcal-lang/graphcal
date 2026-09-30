@@ -13,11 +13,12 @@ use std::sync::Arc;
 use miette::NamedSource;
 
 use super::required_bindability::{self, InterfaceDecl, Violation as RequiredBindabilityViolation};
-use super::static_interface::{Requirement, StaticInputKind as NominalKind};
+use crate::static_interface::{Requirement, StaticInputKind as NominalKind};
 
 use crate::assertion_expectation::ExpectedFail;
 use crate::dag_id::DagId;
 use crate::declaration_category::{DeclCategory, ValueDeclCategory};
+use crate::declaration_kind::{AttributeTarget, DeclarationKind};
 use crate::desugar::desugared_ast::{
     AssertBody, DeclKind, Declaration, DimExpr, ExprKind, File, IndexExpr, TypeDeclBody, TypeExpr,
     TypeExprKind,
@@ -42,7 +43,7 @@ use crate::syntax::phase::never;
 use crate::syntax::span::{Span, Spanned};
 
 // Re-export declaration-collection data types.
-pub use crate::ir::resolve::collected::{AttributeTarget, DeclarationKind, ImportedValueNames};
+pub use crate::ir::resolve::collected::ImportedValueNames;
 pub use crate::syntax::module_name::ScopedName;
 
 // Re-export items from submodules (crate-internal only).

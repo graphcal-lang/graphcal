@@ -9,7 +9,7 @@ use serde::Deserialize;
 use super::{
     StaticDependency, StaticUseContext, TemplateClosureCheck, TemplateClosureViolation, validate,
 };
-use crate::ir::static_interface::{StaticInputKind, StaticRole};
+use crate::static_interface::{StaticInputKind, StaticRole};
 
 const ORACLE_ENV: &str = "GRAPHCAL_TEMPLATE_CLOSURE_ORACLE";
 const EXPECTED_CASE_COUNT: usize = 36;

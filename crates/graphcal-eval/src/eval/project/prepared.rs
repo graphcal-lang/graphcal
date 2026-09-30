@@ -12,11 +12,11 @@ use graphcal_compiler::graphcal_error::GraphcalError;
 use graphcal_compiler::hir::{
     ExprKind as HirExprKind, ExprLoweringContext, GenericScope, ModuleScope,
 };
-use graphcal_compiler::ir::static_interface::StaticInputKind;
 use graphcal_compiler::resolve::ModuleResolver;
 use graphcal_compiler::semantic::checked_type::CheckedType;
 use graphcal_compiler::semantic::index_def::ConcreteIndexKind;
 use graphcal_compiler::semantic::time_scale::TimeScale;
+use graphcal_compiler::static_interface::StaticInputKind;
 use graphcal_compiler::syntax::decl_name::DeclName;
 use graphcal_compiler::syntax::index_name::{IndexEntryKey, IndexVariantName};
 use graphcal_compiler::syntax::module_name::ScopedName;

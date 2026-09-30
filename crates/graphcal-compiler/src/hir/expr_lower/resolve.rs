@@ -142,7 +142,7 @@ impl<'a> ExprLowerer<'a> {
                     {
                         Ok(resolved) => resolved,
                         Err(ModuleResolveError::UnknownName { .. }) => {
-                            crate::semantic::prelude::prelude_type_scope()
+                            crate::resolve::prelude::prelude_type_scope()
                                 .resolve_unit_ref(reference)
                                 .ok_or_else(|| ExprLowerError::UnknownUnit {
                                     name: reference.clone(),

@@ -1,10 +1,10 @@
 //! Option A template-body closure validation.
 
 use super::{DimCheckContext, check_decl_expr_type, check_hir_assert_body, infer};
+use crate::declaration_kind::DeclarationKind;
 use crate::diagnostic_anchor::DiagnosticAnchor;
 use crate::graphcal_error::GraphcalError;
 use crate::hir;
-use crate::ir::resolve::collected::DeclarationKind;
 use crate::resolved_name::{ResolvedDeclName, ResolvedStructTypeName};
 use crate::semantic::checked_type::{CheckedType, Symbolic};
 use crate::static_interface::StaticRole;

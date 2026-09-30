@@ -6,7 +6,7 @@
 //! because V005 requires consumers that override the input to reconcile those
 //! values.
 
-use crate::ir::static_interface::{StaticInputKind, StaticRole};
+use crate::static_interface::{StaticInputKind, StaticRole};
 
 /// Semantic context in which a Static dependency occurs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

@@ -584,7 +584,7 @@ impl ExprLowerer<'_> {
                     {
                         Ok(value) => value,
                         Err(source @ ModuleResolveError::UnknownName { .. }) => {
-                            crate::semantic::prelude::prelude_type_scope()
+                            crate::resolve::prelude::prelude_type_scope()
                                 .resolve_dimension_path(&value_path)
                                 .ok_or(ExprLowerError::ModuleResolve {
                                     source,

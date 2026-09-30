@@ -8,10 +8,11 @@
 use std::collections::BTreeMap;
 
 use crate::dimension::{BaseDimId, Dimension};
-use crate::syntax::dimension::DimRef;
+use crate::syntax::dimension::{DimName, DimRef};
 
+use crate::ratio::RatioError;
 use crate::semantic::dimension_table::{BaseDimensionInfo, DimensionFormattingRegistry};
-use crate::semantic::prelude::{PreludeDefinitionError, prelude_definitions};
+use crate::semantic::prelude::{prelude_base_dimension_infos, prelude_dimensions};
 use crate::semantic::time_zone::TimeZoneRegistry;
 
 /// Post-resolution services retained by checked TIR and evaluation.
@@ -45,19 +46,14 @@ impl FormattingRegistry {
     /// # Errors
     ///
     /// Returns an error only if the built-in prelude is inconsistent.
-    pub fn graphcal_prelude() -> Result<Self, PreludeDefinitionError> {
-        let prelude = prelude_definitions()?;
+    pub fn graphcal_prelude() -> Result<Self, RatioError> {
         Ok(Self::new(
-            prelude
-                .base_dimensions()
-                .map(|(id, info)| (id.clone(), info.clone()))
+            prelude_base_dimension_infos()
+                .map(|(base, info)| (BaseDimId::Prelude(base), info))
                 .collect(),
-            prelude.dimensions().map(|(identity, dimension)| {
-                (
-                    DimRef::local(identity.to_unowned_def_name()),
-                    dimension.clone(),
-                )
-            }),
+            prelude_dimensions()?
+                .into_iter()
+                .map(|(name, dimension)| (DimRef::local(DimName::expect_valid(name)), dimension)),
         ))
     }
 }

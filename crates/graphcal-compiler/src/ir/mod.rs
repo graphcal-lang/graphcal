@@ -11,6 +11,7 @@ pub mod module_definitions;
 pub mod module_interface;
 mod node_definition;
 pub(crate) mod override_reconciliation;
+pub mod prelude_definitions;
 pub(crate) mod required_bindability;
 pub mod resolve;
 pub mod static_definitions;
@@ -18,4 +19,3 @@ pub mod static_dependencies;
 #[cfg(test)]
 mod static_external_surface_formal_conformance;
 pub mod static_substitution;
-pub use crate::static_interface;

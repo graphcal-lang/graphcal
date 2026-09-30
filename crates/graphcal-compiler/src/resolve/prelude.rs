@@ -7,13 +7,29 @@
 //! other name, obtains its identity from the resolver.
 
 use std::collections::HashSet;
+use std::sync::LazyLock;
 
 use crate::dag_id::DagId;
 use crate::resolved_name::{ResolvedDimName, ResolvedName, ResolvedUnitName};
 use crate::syntax::dimension::{DimName, UnitName, UnitRef};
 use crate::syntax::names::{NameDef, NamePath};
 
+use crate::semantic::prelude::{prelude_dag_id, prelude_dimension_names, prelude_unit_names};
+
 use super::mint::ResolverMint;
+
+/// The built-in Graphcal prelude type scope, built once per process.
+#[must_use]
+pub fn prelude_type_scope() -> &'static PreludeTypeScope {
+    static GRAPHCAL: LazyLock<PreludeTypeScope> = LazyLock::new(|| {
+        PreludeTypeScope::new(
+            prelude_dag_id(),
+            prelude_dimension_names().map(DimName::expect_valid),
+            prelude_unit_names().map(UnitName::expect_valid),
+        )
+    });
+    &GRAPHCAL
+}
 
 /// The dimensions and units a synthetic prelude module declares.
 #[derive(Debug, Clone, PartialEq, Eq)]

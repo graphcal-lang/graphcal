@@ -3,7 +3,7 @@
 //! a value-shaped subtree in the ordinary expression kernel.
 
 use graphcal_compiler::dag_id::DagId;
-use graphcal_compiler::display::number::format_unit_terms_canonical;
+use graphcal_compiler::display::unit_label::format_unit_terms_canonical;
 use graphcal_compiler::graphcal_error::GraphcalError;
 use graphcal_compiler::hir::expr::ResolvedUnitExpr;
 use graphcal_compiler::semantic::unit_scale::PositiveFiniteScale;

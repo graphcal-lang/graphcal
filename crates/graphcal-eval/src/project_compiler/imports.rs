@@ -9,22 +9,22 @@ use super::*;
 use crate::import_surface::{
     import_item_not_found_error, validate_constructor_alias, validate_reserved_alias,
 };
+use graphcal_compiler::declaration_kind::{AttributeTarget, DeclarationKind};
 use graphcal_compiler::desugar::desugared_ast::DeclKind;
 use graphcal_compiler::ir::module_interface::{
     ModuleInterface, PureImportRejection, PureImportTermDisposition,
 };
-use graphcal_compiler::ir::resolve::collected::{AttributeTarget, DeclarationKind};
 use graphcal_compiler::ir::static_dependencies::{
     ModuleDeclarations, StaticImportRejection, StaticScope, declaration_static_references,
     static_import_rejection,
-};
-use graphcal_compiler::ir::static_interface::{
-    StaticInputKind, StaticInterface, StaticRole, static_binding_valid,
 };
 use graphcal_compiler::plot_visibility::PlotVisibility;
 use graphcal_compiler::resolve::category::{DeclSymbolKind, ExportedImportItemKind};
 use graphcal_compiler::resolve::exports::ExportedBindingTarget;
 use graphcal_compiler::resolve::namespace::Namespace;
+use graphcal_compiler::static_interface::{
+    StaticInputKind, StaticInterface, StaticRole, static_binding_valid,
+};
 use graphcal_compiler::syntax::ast::{DeclExposure, ImportItemNamespace, IntroducedKind};
 use graphcal_compiler::syntax::attribute::AttributeName;
 use graphcal_compiler::syntax::dimension::UnitName;
@@ -574,7 +574,7 @@ fn resolve_include_static_bindings(
             .map_err(|error| lowering::module_resolve_compile_error(error, src))?;
         bindings.substitution.types.insert(identity, target);
     }
-    let prelude = graphcal_compiler::semantic::prelude::prelude_type_scope();
+    let prelude = graphcal_compiler::resolve::prelude::prelude_type_scope();
     for (port, target) in dims {
         let identity = resolver
             .resolve_dimension_path(template, &NamePath::local(port.atom().clone()))

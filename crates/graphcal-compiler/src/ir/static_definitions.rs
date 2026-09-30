@@ -26,6 +26,7 @@ use crate::hir::const_lower::{
     UnitScaleSource, classify_unit_scale, lower_coordinate_expr, lower_static_nat_expr,
 };
 use crate::ir::module_definitions::StaticDefinitions;
+use crate::ir::prelude_definitions::PreludeDefinitionError;
 use crate::resolve::ModuleResolver;
 use crate::resolve::prelude::PreludeTypeScope;
 use crate::resolved_name::{ResolvedDimName, ResolvedIndexName, ResolvedUnitName};
@@ -33,7 +34,6 @@ use crate::semantic::dimension_table::{BaseDimensionInfo, DimensionFormattingReg
 use crate::semantic::index_def::{
     ConcreteIndexKind, FiniteIndex, IndexBindingTarget, IndexDef, IndexKind, RequiredIndexKind,
 };
-use crate::semantic::prelude::PreludeDefinitionError;
 use crate::semantic::unit_scale::{
     PositiveFiniteScale, PositiveFiniteScaleError, UnitInfo, UnitResolveError, UnitScale,
     resolve_unit_expr_with,
@@ -239,7 +239,7 @@ impl<'a> StaticDefinitionEvaluator<'a> {
         resolver: &'a ModuleResolver,
         sources: impl IntoIterator<Item = (DagId, DefinitionSource<'a>)>,
     ) -> Result<Self, PreludeDefinitionError> {
-        let prelude_definitions = crate::semantic::prelude::prelude_definitions()?;
+        let prelude_definitions = crate::ir::prelude_definitions::prelude_definitions()?;
         let prelude_dimensions = prelude_definitions
             .dimensions()
             .map(|(identity, _)| {
@@ -251,7 +251,7 @@ impl<'a> StaticDefinitionEvaluator<'a> {
             .collect();
         Ok(Self {
             resolver,
-            prelude: crate::semantic::prelude::prelude_type_scope(),
+            prelude: crate::resolve::prelude::prelude_type_scope(),
             prelude_dimensions,
             modules: sources
                 .into_iter()

@@ -852,7 +852,7 @@ role = "contracts"
 
 [[module]]
 package = "compiler"
-path = ["semantic", "prelude", "tests"]
+path = ["ir", "prelude_definitions", "tests"]
 role = "contracts"
 
 [[module]]
@@ -2463,4 +2463,24 @@ role = "contracts"
 [[module]]
 package = "eval"
 path = ["runtime_presentation", "tests"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["ir", "prelude_definitions"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["declaration_kind"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["display", "unit_label"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["display", "unit_label", "tests"]
 role = "contracts"

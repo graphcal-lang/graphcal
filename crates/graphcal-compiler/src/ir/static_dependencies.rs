@@ -11,11 +11,11 @@ use std::collections::{HashMap, HashSet};
 
 use crate::dag_id::DagId;
 use crate::desugar::desugared_ast::{DeclKind, Declaration, IndexExpr, TypeExpr, TypeExprKind};
-use crate::ir::static_interface::{
-    StaticImportRejections, StaticInputKind, StaticRole, static_interface,
-};
 use crate::resolve::ModuleResolver;
 use crate::resolved_name::ResolvedStaticName;
+use crate::static_interface::{
+    StaticImportRejections, StaticInputKind, StaticRole, static_interface,
+};
 use crate::syntax::ast::{GenericArg, ImportItemNamespace};
 use crate::syntax::names::{NameAtom, NamePath};
 use crate::syntax::phase::never;

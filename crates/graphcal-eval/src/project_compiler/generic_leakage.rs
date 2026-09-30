@@ -13,9 +13,9 @@ use graphcal_compiler::ir::module_interface::ModuleInterface;
 use graphcal_compiler::ir::static_dependencies::{
     StaticReference, StaticScope, declaration_static_references,
 };
-use graphcal_compiler::ir::static_interface::{StaticRole, static_interface};
 use graphcal_compiler::ir::static_substitution::{InstanceIndexBindingTarget, StaticSubstitution};
 use graphcal_compiler::resolved_name::ResolvedStaticName;
+use graphcal_compiler::static_interface::{StaticRole, static_interface};
 use graphcal_compiler::syntax::ast::IntroducedKind;
 use graphcal_compiler::syntax::import_category::ImportItemNamespace;
 use graphcal_compiler::syntax::names::NameAtom;

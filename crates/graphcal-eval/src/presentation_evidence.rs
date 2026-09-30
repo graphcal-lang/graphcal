@@ -43,7 +43,7 @@ pub enum PresentationFailure {
     Formatting {
         source_name: String,
         #[source]
-        error: graphcal_compiler::display::number::CanonicalUnitFormatError,
+        error: graphcal_compiler::display::unit_label::CanonicalUnitFormatError,
     },
     #[error("display projection unavailable: {message}")]
     Projection { message: String },

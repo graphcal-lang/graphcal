@@ -11,6 +11,7 @@ pub mod complex_value;
 pub mod dag_id;
 pub mod datetime_literal;
 pub mod declaration_category;
+pub mod declaration_kind;
 pub mod dependency_graph;
 pub mod desugar;
 pub mod diagnostic;
