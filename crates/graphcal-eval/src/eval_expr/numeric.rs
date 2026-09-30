@@ -1,3 +1,4 @@
+use graphcal_compiler::finite_value::{FiniteArithmeticError, FiniteQuantity};
 use num_rational::BigRational;
 use num_traits::ToPrimitive;
 use thiserror::Error;
@@ -44,21 +45,35 @@ pub enum QuantityValidationError {
     /// A mathematically non-zero computation lost its entire value to zero.
     #[error("{context} underflowed to zero")]
     UnderflowToZero { context: String },
+    /// A quotient had a zero divisor.
+    #[error("division by zero")]
+    DivisionByZero,
+}
+
+impl QuantityValidationError {
+    /// Describe a failed checked finite operation of `context`.
+    pub(super) fn from_arithmetic(error: FiniteArithmeticError, context: &str) -> Self {
+        match error {
+            FiniteArithmeticError::Infinite => Self::InfiniteResult {
+                context: context.to_string(),
+            },
+            FiniteArithmeticError::Underflow => Self::UnderflowToZero {
+                context: context.to_string(),
+            },
+            FiniteArithmeticError::DivisionByZero => Self::DivisionByZero,
+        }
+    }
 }
 
 /// Validate that a quantity value is finite.
 pub(super) fn finite_quantity(
     value: f64,
     context: impl Into<String>,
-) -> Result<f64, QuantityValidationError> {
-    if value.is_finite() {
-        Ok(value)
-    } else {
-        Err(QuantityValidationError::NonFinite {
-            context: context.into(),
-            value,
-        })
-    }
+) -> Result<FiniteQuantity, QuantityValidationError> {
+    FiniteQuantity::try_new(value).map_err(|_| QuantityValidationError::NonFinite {
+        context: context.into(),
+        value,
+    })
 }
 
 /// A finite sum represented as a scale and a compensated sum of normalized
@@ -77,7 +92,7 @@ impl ScaledSum {
     ) -> Result<Self, QuantityValidationError> {
         let context = context.into();
         let scale = values.iter().try_fold(0.0_f64, |scale, value| {
-            finite_quantity(*value, context.clone()).map(|value| scale.max(value.abs()))
+            finite_quantity(*value, context.clone()).map(|value| scale.max(value.get().abs()))
         })?;
         if scale == 0.0 {
             return Ok(Self {
@@ -88,7 +103,7 @@ impl ScaledSum {
         let normalized_sum = compensated_sum(values.iter().map(|value| value / scale));
         computed_finite_quantity(normalized_sum, context).map(|normalized_sum| Self {
             scale,
-            normalized_sum,
+            normalized_sum: normalized_sum.get(),
         })
     }
 
@@ -100,7 +115,7 @@ impl ScaledSum {
         self,
         value: f64,
         context: impl Into<String>,
-    ) -> Result<f64, QuantityValidationError> {
+    ) -> Result<FiniteQuantity, QuantityValidationError> {
         if self.is_zero() {
             return computed_finite_quantity(f64::NAN, context);
         }
@@ -136,7 +151,7 @@ fn compensated_sum(values: impl IntoIterator<Item = f64>) -> f64 {
 pub fn exact_mean(
     values: &[f64],
     context: impl Into<String>,
-) -> Result<f64, QuantityValidationError> {
+) -> Result<FiniteQuantity, QuantityValidationError> {
     let context = context.into();
     if values.is_empty() {
         return Err(QuantityValidationError::NanResult { context });
@@ -176,7 +191,7 @@ mod mean_tests {
             let total: i32 = integers.iter().sum();
             let count = i32::try_from(integers.len()).unwrap();
             let values = integers.into_iter().map(f64::from).collect::<Vec<_>>();
-            prop_assert_eq!(exact_mean(&values, "mean()").unwrap().to_bits(), (f64::from(total) / f64::from(count)).to_bits());
+            prop_assert_eq!(exact_mean(&values, "mean()").unwrap().get().to_bits(), (f64::from(total) / f64::from(count)).to_bits());
         }
     }
 
@@ -191,13 +206,14 @@ mod mean_tests {
             [1.0e-100, 1.0e308, -1.0e308],
         ] {
             assert_eq!(
-                exact_mean(&values, "mean()").unwrap().to_bits(),
+                exact_mean(&values, "mean()").unwrap().get().to_bits(),
                 (1.0e-100_f64 / 3.0).to_bits()
             );
         }
         assert_eq!(
             exact_mean(&[f64::MAX, f64::MAX], "mean()")
                 .unwrap()
+                .get()
                 .to_bits(),
             f64::MAX.to_bits()
         );
@@ -207,6 +223,7 @@ mod mean_tests {
                 "mean()"
             )
             .unwrap()
+            .get()
             .to_bits(),
             (1.0e-100_f64 / 5.0).to_bits()
         );
@@ -217,18 +234,25 @@ mod mean_tests {
         let tiny = f64::from_bits(1);
         for value in [tiny, -tiny, f64::MIN_POSITIVE, f64::MAX] {
             assert_eq!(
-                exact_mean(&[value, value], "mean()").unwrap().to_bits(),
+                exact_mean(&[value, value], "mean()")
+                    .unwrap()
+                    .get()
+                    .to_bits(),
                 value.to_bits()
             );
         }
         assert_eq!(
             exact_mean(&[tiny, f64::from_bits(2)], "mean()")
                 .unwrap()
+                .get()
                 .to_bits(),
             2
         );
         assert_eq!(
-            exact_mean(&[tiny, -tiny], "mean()").unwrap().to_bits(),
+            exact_mean(&[tiny, -tiny], "mean()")
+                .unwrap()
+                .get()
+                .to_bits(),
             0.0_f64.to_bits()
         );
         for value in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
@@ -275,7 +299,10 @@ impl RootSumSquare {
         Ok(())
     }
 
-    pub(super) fn finish(self, context: impl Into<String>) -> Result<f64, QuantityValidationError> {
+    pub(super) fn finish(
+        self,
+        context: impl Into<String>,
+    ) -> Result<FiniteQuantity, QuantityValidationError> {
         let result = if self.scale == 0.0 {
             0.0
         } else {
@@ -290,7 +317,7 @@ impl RootSumSquare {
 pub(super) fn root_sum_square(
     values: impl IntoIterator<Item = f64>,
     context: impl Into<String>,
-) -> Result<f64, QuantityValidationError> {
+) -> Result<FiniteQuantity, QuantityValidationError> {
     let context = context.into();
     let accumulator =
         values
@@ -306,17 +333,15 @@ pub(super) fn root_sum_square(
 pub fn computed_finite_quantity(
     value: f64,
     context: impl Into<String>,
-) -> Result<f64, QuantityValidationError> {
+) -> Result<FiniteQuantity, QuantityValidationError> {
     if value.is_nan() {
         Err(QuantityValidationError::NanResult {
             context: context.into(),
         })
-    } else if value.is_infinite() {
-        Err(QuantityValidationError::InfiniteResult {
+    } else {
+        FiniteQuantity::try_new(value).map_err(|_| QuantityValidationError::InfiniteResult {
             context: context.into(),
         })
-    } else {
-        Ok(value)
     }
 }
 
@@ -328,10 +353,10 @@ pub fn computed_finite_quantity(
 pub fn computed_nonzero_quantity(
     value: f64,
     context: impl Into<String>,
-) -> Result<f64, QuantityValidationError> {
+) -> Result<FiniteQuantity, QuantityValidationError> {
     let context = context.into();
     let value = computed_finite_quantity(value, context.clone())?;
-    if value == 0.0 {
+    if value.get() == 0.0 {
         Err(QuantityValidationError::UnderflowToZero { context })
     } else {
         Ok(value)

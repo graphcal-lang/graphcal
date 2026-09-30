@@ -78,7 +78,7 @@ fn project_runtime_value(
     match (runtime, declared_type) {
         (RuntimeValue::Quantity(si_value), CheckedType::Quantity(dimension)) => {
             Ok(Value::Quantity {
-                si_value: si_value.get(),
+                si_value: *si_value,
                 dimension: dimension.clone(),
                 display_unit: None,
             })

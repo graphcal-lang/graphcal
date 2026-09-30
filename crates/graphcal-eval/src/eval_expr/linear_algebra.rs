@@ -81,11 +81,13 @@ fn dense_operand(
     let RuntimeValue::Indexed(indexed) = value else {
         return Err(OperandInvariant::NotIndexed { context });
     };
-    DenseArray::try_from_indexed(indexed, |leaf| leaf.expect_quantity(context)).map_err(|error| {
-        match error {
-            DenseArrayError::Ragged => OperandInvariant::Ragged { context },
-            DenseArrayError::Element(error) => OperandInvariant::Element(error),
-        }
+    DenseArray::try_from_indexed(indexed, |leaf| {
+        leaf.expect_quantity(context)
+            .map(graphcal_compiler::finite_value::FiniteQuantity::get)
+    })
+    .map_err(|error| match error {
+        DenseArrayError::Ragged => OperandInvariant::Ragged { context },
+        DenseArrayError::Element(error) => OperandInvariant::Element(error),
     })
 }
 
@@ -211,10 +213,12 @@ fn matrix_value(
 fn finite_product(lhs: f64, rhs: f64, context: &'static str) -> Result<f64, LinearAlgebraError> {
     let result = lhs * rhs;
     if lhs != 0.0 && rhs != 0.0 {
-        numeric::computed_nonzero_quantity(result, context).map_err(LinearAlgebraError::from)
+        numeric::computed_nonzero_quantity(result, context)
     } else {
-        numeric::computed_finite_quantity(result, context).map_err(LinearAlgebraError::from)
+        numeric::computed_finite_quantity(result, context)
     }
+    .map(FiniteQuantity::get)
+    .map_err(LinearAlgebraError::from)
 }
 
 fn sum_products(
@@ -222,15 +226,21 @@ fn sum_products(
     rhs: impl IntoIterator<Item = f64>,
     context: &'static str,
     control: &mut KernelCheckpoint<'_>,
-) -> Result<f64, LinearAlgebraError> {
-    lhs.into_iter().zip(rhs).try_fold(0.0, |sum, (lhs, rhs)| {
-        control.step()?;
-        let product = finite_product(lhs, rhs, context)?;
-        numeric::computed_finite_quantity(sum + product, context).map_err(LinearAlgebraError::from)
-    })
+) -> Result<FiniteQuantity, LinearAlgebraError> {
+    lhs.into_iter()
+        .zip(rhs)
+        .try_fold(FiniteQuantity::ZERO, |sum, (lhs, rhs)| {
+            control.step()?;
+            let product = finite_product(lhs, rhs, context)?;
+            numeric::computed_finite_quantity(sum.get() + product, context)
+                .map_err(LinearAlgebraError::from)
+        })
 }
 
-fn norm(values: &[f64], control: &mut KernelCheckpoint<'_>) -> Result<f64, LinearAlgebraError> {
+fn norm(
+    values: &[f64],
+    control: &mut KernelCheckpoint<'_>,
+) -> Result<FiniteQuantity, LinearAlgebraError> {
     let accumulator =
         values
             .iter()
@@ -300,8 +310,7 @@ fn evaluate_dot(
     let rhs = Vector::from_value(&rhs, "dot")?;
     require_matching_axes(function, &lhs.axis, &rhs.axis)?;
     let mut control = kernel_control(function, &[lhs.axis.len()], 1, ctx)?;
-    sum_products(lhs.values, rhs.values, "dot()", &mut control)
-        .and_then(|value| finite_runtime_quantity(value, "dot() result"))
+    sum_products(lhs.values, rhs.values, "dot()", &mut control).map(RuntimeValue::Quantity)
 }
 
 fn evaluate_matmul(
@@ -323,7 +332,7 @@ fn evaluate_matmul(
             for (lhs_value, rhs_row) in lhs_row.iter().zip(&rhs_rows) {
                 control.step()?;
                 let product = finite_product(*lhs_value, rhs_row[column], "matmul()")?;
-                sum = numeric::computed_finite_quantity(sum + product, "matmul()")?;
+                sum = numeric::computed_finite_quantity(sum + product, "matmul()")?.get();
             }
             values.push(sum);
         }
@@ -361,12 +370,12 @@ fn evaluate_trace(
         .row_slices()
         .into_iter()
         .enumerate()
-        .try_fold(0.0, |sum, (diagonal, row)| {
+        .try_fold(FiniteQuantity::ZERO, |sum, (diagonal, row)| {
             control.step()?;
-            numeric::computed_finite_quantity(sum + row[diagonal], "trace()")
+            numeric::computed_finite_quantity(sum.get() + row[diagonal], "trace()")
                 .map_err(LinearAlgebraError::from)
         })
-        .and_then(|value| finite_runtime_quantity(value, "trace()"))
+        .map(RuntimeValue::Quantity)
 }
 
 fn evaluate_norm(
@@ -376,7 +385,7 @@ fn evaluate_norm(
     let function = LinearAlgebraFn::Norm;
     let vector = Vector::from_value(&one_argument(function, arguments)?, "norm")?;
     let mut control = kernel_control(function, &[vector.axis.len()], 1, ctx)?;
-    norm(&vector.values, &mut control).and_then(|value| finite_runtime_quantity(value, "norm()"))
+    norm(&vector.values, &mut control).map(RuntimeValue::Quantity)
 }
 
 fn evaluate_cross(
@@ -400,6 +409,7 @@ fn evaluate_cross(
         let positive = finite_product(a_1, b_1, "cross()")?;
         let negative = finite_product(a_2, b_2, "cross()")?;
         numeric::computed_finite_quantity(positive - negative, "cross()")
+            .map(FiniteQuantity::get)
             .map_err(LinearAlgebraError::from)
     };
     let values = vec![

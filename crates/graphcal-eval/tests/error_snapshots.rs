@@ -41,7 +41,10 @@ fn render_presentation_error(source: &str, name: &str, expected_si: f64) -> Stri
         .1
         .as_ref()
         .unwrap();
-    assert_eq!(value.si_value().unwrap().to_bits(), expected_si.to_bits());
+    assert_eq!(
+        value.si_value().unwrap().get().to_bits(),
+        expected_si.to_bits()
+    );
     assert!(result.has_errors());
     assert!(!result.presentation_diagnostics.is_empty());
     result

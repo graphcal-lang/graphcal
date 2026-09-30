@@ -92,8 +92,24 @@ node qualified_result: Dimensionless = @facade::from_c + 2.0;
     );
     let result = compile_and_eval_project(&root, &HashMap::new(), None, &RealFileSystem::default())
         .expect("three-hop const re-export must preserve its canonical binding");
-    assert!((value_for(&result, "selective_result").si_value().unwrap() - 3.0).abs() < 1e-9);
-    assert!((value_for(&result, "qualified_result").si_value().unwrap() - 4.0).abs() < 1e-9);
+    assert!(
+        (value_for(&result, "selective_result")
+            .si_value()
+            .unwrap()
+            .get()
+            - 3.0)
+            .abs()
+            < 1e-9
+    );
+    assert!(
+        (value_for(&result, "qualified_result")
+            .si_value()
+            .unwrap()
+            .get()
+            - 4.0)
+            .abs()
+            < 1e-9
+    );
 }
 
 #[test]
@@ -127,8 +143,24 @@ node qualified_result: Dimensionless = @namespace::outer_x + 2.0;
     );
     let result = compile_and_eval_project(&root, &HashMap::new(), None, &RealFileSystem::default())
         .expect("nested include re-export must preserve effective value aliases");
-    assert!((value_for(&result, "selective_result").si_value().unwrap() - 3.0).abs() < 1e-9);
-    assert!((value_for(&result, "qualified_result").si_value().unwrap() - 4.0).abs() < 1e-9);
+    assert!(
+        (value_for(&result, "selective_result")
+            .si_value()
+            .unwrap()
+            .get()
+            - 3.0)
+            .abs()
+            < 1e-9
+    );
+    assert!(
+        (value_for(&result, "qualified_result")
+            .si_value()
+            .unwrap()
+            .get()
+            - 4.0)
+            .abs()
+            < 1e-9
+    );
 }
 
 #[test]
@@ -206,7 +238,7 @@ node result: Dimensionless = @helper()::out;
     let result = compile_and_eval_project(&root, &HashMap::new(), None, &RealFileSystem::default())
         .expect("constructor and DAG facade exports must remain usable");
     assert!(matches!(value_for(&result, "choice"), Value::Struct { .. }));
-    assert!((value_for(&result, "result").si_value().unwrap() - 2.0).abs() < 1e-9);
+    assert!((value_for(&result, "result").si_value().unwrap().get() - 2.0).abs() < 1e-9);
 }
 
 #[test]
@@ -490,14 +522,15 @@ fn assert_imported_binding_collision_values(
         let expected = imported_value + (index + 1) as f64;
         let actual = value_for(&result, &format!("{name}::out"))
             .si_value()
-            .unwrap();
+            .unwrap()
+            .get();
         assert!(
             (actual - expected).abs() < 1e-9,
             "include `{name}` read another instance's imported value: expected {expected}, got {actual}"
         );
         expected_total += expected;
     }
-    let total = value_for(&result, "total").si_value().unwrap();
+    let total = value_for(&result, "total").si_value().unwrap().get();
     assert!((total - expected_total).abs() < 1e-9);
 }
 
@@ -564,9 +597,25 @@ fn include_supports_runtime_dependent_unit_namespace() {
 
     let result = compile_and_eval_project(&root, &HashMap::new(), None, &RealFileSystem::default())
         .expect("runtime units must be executable inside concrete include instances");
-    assert!((value_for(&result, "dollars").si_value().unwrap() - 6.0).abs() < 1e-9);
-    assert!((value_for(&result, "namespace_unit").si_value().unwrap() - 1.0).abs() < 1e-9);
-    assert!((value_for(&result, "selective_unit").si_value().unwrap() - 1.0).abs() < 1e-9);
+    assert!((value_for(&result, "dollars").si_value().unwrap().get() - 6.0).abs() < 1e-9);
+    assert!(
+        (value_for(&result, "namespace_unit")
+            .si_value()
+            .unwrap()
+            .get()
+            - 1.0)
+            .abs()
+            < 1e-9
+    );
+    assert!(
+        (value_for(&result, "selective_unit")
+            .si_value()
+            .unwrap()
+            .get()
+            - 1.0)
+            .abs()
+            < 1e-9
+    );
 }
 
 #[test]
@@ -593,8 +642,16 @@ fn repeated_includes_keep_runtime_unit_scales_instance_scoped() {
 
     let result = compile_and_eval_project(&root, &HashMap::new(), None, &RealFileSystem::default())
         .expect("repeated includes must retain independent runtime-unit scales");
-    assert!((value_for(&result, "cheap_usd").si_value().unwrap() - 6.0).abs() < 1e-9);
-    assert!((value_for(&result, "expensive_usd").si_value().unwrap() - 12.0).abs() < 1e-9);
+    assert!((value_for(&result, "cheap_usd").si_value().unwrap().get() - 6.0).abs() < 1e-9);
+    assert!(
+        (value_for(&result, "expensive_usd")
+            .si_value()
+            .unwrap()
+            .get()
+            - 12.0)
+            .abs()
+            < 1e-9
+    );
 }
 
 #[test]
@@ -626,8 +683,8 @@ fn nested_includes_keep_runtime_unit_scales_instance_scoped() {
 
     let result = compile_and_eval_project(&root, &HashMap::new(), None, &RealFileSystem::default())
         .expect("nested repeated includes must retain independent runtime-unit scales");
-    assert!((value_for(&result, "low_usd").si_value().unwrap() - 15.0).abs() < 1e-9);
-    assert!((value_for(&result, "high_usd").si_value().unwrap() - 27.0).abs() < 1e-9);
+    assert!((value_for(&result, "low_usd").si_value().unwrap().get() - 15.0).abs() < 1e-9);
+    assert!((value_for(&result, "high_usd").si_value().unwrap().get() - 27.0).abs() < 1e-9);
 }
 
 #[test]
@@ -818,7 +875,7 @@ node result: Length = @target(
 )::out;
 ";
     let result = compile_and_eval(source).expect("categorized direct DAG call must compile");
-    assert!((value_for(&result, "result").si_value().unwrap() - 1.0).abs() < 1e-9);
+    assert!((value_for(&result, "result").si_value().unwrap().get() - 1.0).abs() < 1e-9);
 }
 
 #[test]
@@ -883,7 +940,7 @@ fn long_operator_chain_compiles_and_evaluates() {
     let x = value_for(&result, "x");
     #[expect(clippy::cast_precision_loss, reason = "small test constant")]
     let expected = terms as f64;
-    assert!((x.si_value().unwrap() - expected).abs() < 1e-9);
+    assert!((x.si_value().unwrap().get() - expected).abs() < 1e-9);
 }
 
 #[test]
@@ -901,7 +958,7 @@ param usd_per_eur: Dimensionless = 2.0;
 ";
     let result = compile_and_eval(source).unwrap();
     let price = value_for(&result, "price");
-    assert!((price.si_value().unwrap() - 6.0).abs() < 1e-9);
+    assert!((price.si_value().unwrap().get() - 6.0).abs() < 1e-9);
 }
 
 #[test]
@@ -1052,7 +1109,7 @@ node midpoint: Length = @lib.mid(a: 1.0 m, b: 3.0 m)::m;
         .unwrap_or_else(|err| panic!("cross-file extern call failed to compile/eval: {err:?}"));
     let value = value_for(&result, "midpoint");
     assert!(
-        (value.si_value().unwrap() - 2.0).abs() < 1e-12,
+        (value.si_value().unwrap().get() - 2.0).abs() < 1e-12,
         "expected lerp midpoint 2 m, got {value:?}"
     );
 }

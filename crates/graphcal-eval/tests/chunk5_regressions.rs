@@ -182,7 +182,10 @@ plot p = { mark: point, encode: { x: 1.0e300 m -> tiny } };
     .unwrap();
 
     let value = result.nodes().next().unwrap().1.as_ref().unwrap();
-    assert_eq!(value.si_value().unwrap().to_bits(), 1.0e300_f64.to_bits());
+    assert_eq!(
+        value.si_value().unwrap().get().to_bits(),
+        1.0e300_f64.to_bits()
+    );
     assert!(matches!(
         value,
         graphcal_eval::eval::Value::Quantity {
@@ -222,7 +225,7 @@ node average: Dimensionless = mean(@values);
         .nodes()
         .find(|(name, _)| name.to_string() == "average")
         .unwrap();
-    let average = average.as_ref().unwrap().si_value().unwrap();
+    let average = average.as_ref().unwrap().si_value().unwrap().get();
     assert!((average / 1.0e308 - 1.0).abs() < f64::EPSILON);
 }
 
@@ -706,7 +709,7 @@ node reversed: Length[Order] = {
     };
     assert!(entries.values().all(|value| match value {
         graphcal_eval::eval::Value::Quantity { si_value, .. } => {
-            (*si_value - 6.0).abs() < f64::EPSILON
+            (si_value.get() - 6.0).abs() < f64::EPSILON
         }
         _ => false,
     }));

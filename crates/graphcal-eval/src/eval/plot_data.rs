@@ -110,13 +110,9 @@ fn plot_datum_from_leaf(
     display_unit: Option<&DisplayUnit>,
 ) -> Result<PlotDatum, String> {
     match rv {
-        RuntimeValue::Quantity(v) => quantity_display_value(v.get(), display_unit)
+        RuntimeValue::Quantity(v) => quantity_display_value(*v, display_unit)
             .map(PlotDatum::Number)
             .map_err(|error| error.to_string()),
-        RuntimeValue::Complex(_) => Err(
-            "Complex values cannot be plotted directly; use re(), im(), abs(), or phase()"
-                .to_string(),
-        ),
         RuntimeValue::Int(i) => crate::eval_expr::numeric::exact_i64_to_f64(*i)
             .map(PlotDatum::Number)
             .map_err(|_| {
@@ -135,7 +131,8 @@ fn plot_datum_from_leaf(
         RuntimeValue::Datetime(epoch) => epoch_to_rfc3339(epoch)
             .map(PlotDatum::Datetime)
             .map_err(|error| error.to_string()),
-        RuntimeValue::Struct(_) | RuntimeValue::Indexed(_) => {
+        // The checker admits no complex or struct plot channel.
+        RuntimeValue::Complex(_) | RuntimeValue::Struct(_) | RuntimeValue::Indexed(_) => {
             Err(format!("{} cannot be plotted", rv.describe()))
         }
     }
@@ -455,10 +452,10 @@ mod tests {
     }
 
     #[test]
-    fn rejects_complex_plot_data_with_projection_guidance() {
+    fn rejects_complex_plot_data() {
         let error =
             channel_data_from_runtime(&RuntimeValue::complex(1.0, 2.0).unwrap()).unwrap_err();
-        assert!(error.contains("use re(), im(), abs(), or phase()"));
+        assert!(error.contains("Complex cannot be plotted"), "{error}");
     }
 
     #[test]

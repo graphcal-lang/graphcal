@@ -1,4 +1,6 @@
+use graphcal_compiler::complex_value::ComplexValue;
 use graphcal_compiler::declaration_category::ValueDeclCategory;
+use graphcal_compiler::finite_value::FiniteQuantity;
 use graphcal_compiler::syntax::index_name::IndexEntryKey;
 use graphcal_eval::eval::{
     AssertResult, DisplayProjectionError, DisplayUnit, EvalOutputView, EvalResult, KeyRendering,
@@ -285,8 +287,7 @@ impl ValueView {
                 display_unit,
                 ..
             } => Self::from_complex(
-                si_value.re(),
-                si_value.im(),
+                *si_value,
                 display_unit.as_ref(),
                 value.display_label(render),
             )?,
@@ -369,7 +370,7 @@ impl ValueView {
     }
 
     fn from_quantity(
-        si_value: f64,
+        si_value: FiniteQuantity,
         display_unit: Option<&DisplayUnit>,
         unit: Option<String>,
     ) -> Result<Self, DisplayProjectionError> {
@@ -378,26 +379,25 @@ impl ValueView {
             display: display_number_with_unit(value, unit.as_deref()),
             literal: quantity_literal(value, unit.as_deref()),
             value,
-            si_value,
+            si_value: si_value.get(),
             unit,
         })
     }
 
     fn from_complex(
-        si_real: f64,
-        si_imaginary: f64,
+        si_value: ComplexValue,
         display_unit: Option<&DisplayUnit>,
         unit: Option<String>,
     ) -> Result<Self, DisplayProjectionError> {
-        let real = quantity_display_value(si_real, display_unit)?;
-        let imaginary = quantity_display_value(si_imaginary, display_unit)?;
+        let real = quantity_display_value(si_value.real_part(), display_unit)?;
+        let imaginary = quantity_display_value(si_value.imaginary_part(), display_unit)?;
         Ok(Self::Complex {
             display: display_complex_with_unit(real, imaginary, unit.as_deref()),
             literal: complex_literal(real, imaginary, unit.as_deref()),
             real,
             imaginary,
-            si_real,
-            si_imaginary,
+            si_real: si_value.re(),
+            si_imaginary: si_value.im(),
             unit,
         })
     }

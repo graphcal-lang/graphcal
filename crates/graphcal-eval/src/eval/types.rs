@@ -10,6 +10,7 @@ use graphcal_compiler::declaration_category::ValueDeclCategory;
 use graphcal_compiler::desugar::desugared_ast::EncodingChannel;
 use graphcal_compiler::diagnostic_render::RenderableDiagnostic;
 use graphcal_compiler::dimension::{BaseDimId, Dimension, Rational};
+use graphcal_compiler::finite_value::FiniteQuantity;
 use graphcal_compiler::ratio::ExponentStyle;
 use graphcal_compiler::registry::checked_type::{CheckedGenericArg, IndexTypeRef, StructTypeRef};
 use graphcal_compiler::registry::time_zone::{IanaTimeZoneId, TimeZoneRegistry};
@@ -46,9 +47,6 @@ impl DisplayUnit {
 /// Failure to project a finite SI quantity into a requested display unit.
 #[derive(Debug, Clone, PartialEq, Error)]
 pub enum DisplayProjectionError {
-    /// Public quantity values must remain finite.
-    #[error("display input must be finite, got {value}")]
-    NonFiniteInput { value: f64 },
     /// Dividing by a tiny valid scale overflowed binary64.
     #[error("display conversion to `{unit}` produced a non-finite value")]
     NonFiniteResult { unit: String },
@@ -88,8 +86,8 @@ pub enum EpochProjectionError {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Value {
     Quantity {
-        /// The value in base SI units.
-        si_value: f64,
+        /// The finite value in base SI units.
+        si_value: FiniteQuantity,
         /// The dimension of this value.
         dimension: Dimension,
         /// Optional display unit for pretty-printing.
@@ -222,7 +220,7 @@ impl Value {
     /// # Errors
     ///
     /// Returns [`ValueError`] if this is not a `Quantity`.
-    pub fn si_value(&self) -> Result<f64, ValueError> {
+    pub fn si_value(&self) -> Result<FiniteQuantity, ValueError> {
         match self {
             Self::Quantity { si_value, .. } => Ok(*si_value),
             other => Err(ValueError {
@@ -373,9 +371,10 @@ impl Value {
                 ..
             } => {
                 let re = graphcal_compiler::registry::format::format_number(
-                    quantity_display_value(si_value.re(), display_unit.as_ref())?,
+                    quantity_display_value(si_value.real_part(), display_unit.as_ref())?,
                 );
-                let displayed_im = quantity_display_value(si_value.im(), display_unit.as_ref())?;
+                let displayed_im =
+                    quantity_display_value(si_value.imaginary_part(), display_unit.as_ref())?;
                 let sign = if displayed_im.is_sign_negative() {
                     "-"
                 } else {
@@ -420,7 +419,7 @@ impl<'a> KeyRendering<'a> {
             },
             KeyElement::Finite(position) => Self::Position(position),
             KeyElement::Coordinate { value, data } => Self::Coordinate(Box::new(Value::Quantity {
-                si_value: value.get(),
+                si_value: value,
                 dimension: data.dimension().clone(),
                 display_unit: data
                     .display()
@@ -496,15 +495,13 @@ impl RenderContext {
 ///
 /// # Errors
 ///
-/// Rejects a non-finite input, an overflowing conversion, or a nonzero value
-/// that underflows to zero in the requested unit.
+/// Rejects an overflowing conversion or a nonzero value that underflows to
+/// zero in the requested unit.
 pub fn quantity_display_value(
-    si_value: f64,
+    si_value: FiniteQuantity,
     display_unit: Option<&DisplayUnit>,
 ) -> Result<f64, DisplayProjectionError> {
-    if !si_value.is_finite() {
-        return Err(DisplayProjectionError::NonFiniteInput { value: si_value });
-    }
+    let si_value = si_value.get();
     let Some(display_unit) = display_unit else {
         return Ok(si_value);
     };
@@ -534,8 +531,8 @@ pub(super) fn validate_display_projection(value: &Value) -> Result<(), DisplayPr
             display_unit,
             ..
         } => {
-            quantity_display_value(si_value.re(), display_unit.as_ref())?;
-            quantity_display_value(si_value.im(), display_unit.as_ref()).map(|_| ())
+            quantity_display_value(si_value.real_part(), display_unit.as_ref())?;
+            quantity_display_value(si_value.imaginary_part(), display_unit.as_ref()).map(|_| ())
         }
         Value::Struct { fields, .. } => fields.values().try_for_each(validate_display_projection),
         Value::Indexed { entries, .. } => {
@@ -1058,7 +1055,7 @@ mod tests {
 
     fn quantity(dimension: Dimension, display_unit: Option<DisplayUnit>) -> Value {
         Value::Quantity {
-            si_value: 1.0,
+            si_value: FiniteQuantity::ONE,
             dimension,
             display_unit,
         }
@@ -1114,7 +1111,10 @@ mod tests {
         let KeyRendering::Coordinate(quantity) = KeyRendering::of(&key) else {
             panic!("expected a coordinate rendering");
         };
-        assert_eq!(quantity.si_value().unwrap().to_bits(), 7200.0_f64.to_bits());
+        assert_eq!(
+            quantity.si_value().unwrap().get().to_bits(),
+            7200.0_f64.to_bits()
+        );
         let value = Value::Key(key);
         assert_eq!(value.display_label(&render()), Some("h".to_string()));
         assert_eq!(
@@ -1147,11 +1147,13 @@ mod tests {
 
     #[test]
     fn display_projection_rejects_overflow_and_underflow() {
+        let q = |value| FiniteQuantity::try_new(value).unwrap();
         let tiny = DisplayUnit::new("tiny", PositiveFiniteScale::new(1.0e-300).unwrap());
-        assert!(quantity_display_value(1.0e300, Some(&tiny)).is_err());
+        assert!(quantity_display_value(q(1.0e300), Some(&tiny)).is_err());
         let huge = DisplayUnit::new("huge", PositiveFiniteScale::new(1.0e300).unwrap());
-        assert!(quantity_display_value(1.0e-300, Some(&huge)).is_err());
-        assert!(quantity_display_value(0.0, Some(&huge)).unwrap().abs() < f64::MIN_POSITIVE);
+        assert!(quantity_display_value(q(1.0e-300), Some(&huge)).is_err());
+        assert!(quantity_display_value(q(0.0), Some(&huge)).unwrap().abs() < f64::MIN_POSITIVE);
+        assert_eq!(quantity_display_value(q(2.5), None), Ok(2.5));
     }
 
     #[test]
@@ -1303,7 +1305,7 @@ mod tests {
         let velocity =
             (Dimension::base(dim_id("Length")) / Dimension::base(dim_id("Time"))).unwrap();
         let value = Value::Quantity {
-            si_value: 2.5,
+            si_value: FiniteQuantity::try_new(2.5).unwrap(),
             dimension: velocity,
             display_unit: None,
         };

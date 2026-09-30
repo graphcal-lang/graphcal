@@ -410,6 +410,7 @@ pub fn format_indexed_table(name: &str, value: &Value, render: &RenderContext) -
 mod tests {
     use super::*;
     use graphcal_compiler::complex_value::ComplexValue;
+    use graphcal_compiler::finite_value::FiniteQuantity;
     use graphcal_compiler::registry::checked_type::IndexTypeRef;
     use graphcal_compiler::registry::prelude::prelude_base_dimension;
     use graphcal_compiler::registry::unit::PositiveFiniteScale;
@@ -427,7 +428,7 @@ mod tests {
 
     fn quantity(si: f64) -> Value {
         Value::Quantity {
-            si_value: si,
+            si_value: FiniteQuantity::try_new(si).unwrap(),
             dimension: Dimension::dimensionless(),
             display_unit: None,
         }
@@ -435,7 +436,7 @@ mod tests {
 
     fn displayed_length(si: f64, label: &str, scale: f64) -> Value {
         Value::Quantity {
-            si_value: si,
+            si_value: FiniteQuantity::try_new(si).unwrap(),
             dimension: prelude_base_dimension("Length").unwrap(),
             display_unit: Some(DisplayUnit::new(
                 label,

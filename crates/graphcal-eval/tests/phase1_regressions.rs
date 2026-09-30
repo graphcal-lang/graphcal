@@ -113,7 +113,8 @@ node total: Dimensionless = @a::result + @b::result;
         .as_ref()
         .unwrap()
         .si_value()
-        .unwrap();
+        .unwrap()
+        .get();
     assert!((total - 5.0).abs() < f64::EPSILON);
 }
 

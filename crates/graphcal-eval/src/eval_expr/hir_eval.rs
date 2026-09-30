@@ -645,7 +645,7 @@ fn eval_binop(
                 .expect_quantity("binary operand")
                 .map_err(|e| ctx.eval_error(e.to_string(), span))?;
             super::arithmetic::eval_quantity_binop(op, lv, rv, ctx, span)
-                .and_then(|value| checked_finite_quantity(value, "quantity operation", span, ctx))
+                .map(RuntimeValue::Quantity)
         }
     }
 }
@@ -686,15 +686,15 @@ fn eval_power(
                 .map(RuntimeValue::Int)
         }
         (RuntimeValue::Quantity(base), PowerExponent::Exact(exact)) => {
-            super::arithmetic::eval_exact_quantity_power(base.get(), exact, ctx, span)
-                .and_then(|value| checked_finite_quantity(value, "quantity power", span, ctx))
+            super::arithmetic::eval_exact_quantity_power(base, exact, ctx, span)
+                .map(RuntimeValue::Quantity)
         }
         (RuntimeValue::Quantity(base), _) => {
             let runtime_exponent = eval_value(exponent_expr, values, local_values, ctx)?
                 .expect_quantity("power exponent")
                 .map_err(|error| ctx.internal_error(error.to_string(), span))?;
-            super::arithmetic::eval_quantity_binop(op, base.get(), runtime_exponent, ctx, span)
-                .and_then(|value| checked_finite_quantity(value, "quantity power", span, ctx))
+            super::arithmetic::eval_quantity_binop(op, base, runtime_exponent, ctx, span)
+                .map(RuntimeValue::Quantity)
         }
         (other, _) => Err(ctx.internal_error(
             format!("non-numeric base reached power evaluation: {other:?}"),
@@ -719,16 +719,11 @@ fn eval_unary(
                     .checked_neg()
                     .map(RuntimeValue::Int)
                     .ok_or_else(|| ctx.eval_error("integer negation overflow", span)),
-                RuntimeValue::Complex(value) => super::complex::negate(value)
-                    .map(RuntimeValue::Complex)
-                    .map_err(|error| ctx.eval_error(error.to_string(), span)),
-                _ => checked_finite_quantity(
-                    -v.expect_quantity("unary negation")
-                        .map_err(|e| ctx.eval_error(e.to_string(), span))?,
-                    "unary negation",
-                    span,
-                    ctx,
-                ),
+                RuntimeValue::Complex(value) => Ok(RuntimeValue::Complex(value.negated())),
+                _ => v
+                    .expect_quantity("unary negation")
+                    .map(|value| RuntimeValue::Quantity(value.negated()))
+                    .map_err(|e| ctx.eval_error(e.to_string(), span)),
             }
         }
         graphcal_compiler::desugar::desugared_ast::UnaryOp::Not => {
@@ -974,7 +969,8 @@ fn eval_key_form(
         KeyFormKind::Floor | KeyFormKind::Ceil | KeyFormKind::Nearest => {
             let quantity = arg_val
                 .expect_quantity("coordinate search argument")
-                .map_err(|e| ctx.eval_error(e.to_string(), arg.span()))?;
+                .map_err(|e| ctx.eval_error(e.to_string(), arg.span()))?
+                .get();
             let keys = KeyValue::all(&axis);
             let mut best: Option<(&KeyValue, f64)> = None;
             for key in &keys {
@@ -1134,7 +1130,8 @@ fn eval_conversion_fn(
             }
             let f = arg
                 .expect_quantity("to_int argument")
-                .map_err(|e| ctx.eval_error(e.to_string(), span))?;
+                .map_err(|e| ctx.eval_error(e.to_string(), span))?
+                .get();
             super::conversions::exact_f64_to_i64(f)
                 .map(RuntimeValue::Int)
                 .map_err(|error| {
@@ -1288,7 +1285,7 @@ fn eval_datetime_constructor(
 }
 
 enum FlattenedExternArrayValues {
-    Quantity(Vec<f64>),
+    Quantity(Vec<graphcal_compiler::finite_value::FiniteQuantity>),
     Bool(Vec<bool>),
     Int(Vec<i64>),
 }
@@ -1321,7 +1318,7 @@ fn flatten_extern_array(
     match (expected, value) {
         (ScalarValueKind::Quantity(_), RuntimeValue::Quantity(value)) => Ok(FlattenedExternArray {
             axes: Vec::new(),
-            values: FlattenedExternArrayValues::Quantity(vec![value.get()]),
+            values: FlattenedExternArrayValues::Quantity(vec![*value]),
         }),
         (ScalarValueKind::Bool, RuntimeValue::Bool(value)) => Ok(FlattenedExternArray {
             axes: Vec::new(),
@@ -1442,7 +1439,7 @@ fn eval_extern_fn(
 
     use crate::host_abi::{
         ValidatedHostArrayValues, ValidatedHostFieldValue, ValidatedHostResult, decode_result,
-        encode_bool, encode_int, validate_quantity,
+        encode_bool, encode_int,
     };
     use crate::host_fns::{HostArray, HostFnValue};
 
@@ -1493,15 +1490,6 @@ fn eval_extern_fn(
                 let value = value
                     .expect_quantity("extern function argument")
                     .map_err(|error| ctx.eval_error(error.to_string(), arg_span))?;
-                let value = validate_quantity(value).map_err(|error| {
-                    ctx.eval_error(
-                        format!(
-                            "extern function `{ext}` received an invalid quantity for parameter `{}`: {error}",
-                            param.name
-                        ),
-                        arg_span,
-                    )
-                })?;
                 HostFnValue::F64(value.get())
             }
             (ParamKind::Scalar(ScalarValueKind::Int), RuntimeValue::Int(value)) => {
@@ -1554,21 +1542,8 @@ fn eval_extern_fn(
                 let encoded_values = match flattened.values {
                     FlattenedExternArrayValues::Quantity(values) => values
                         .into_iter()
-                        .enumerate()
-                        .map(|(index, value)| {
-                            validate_quantity(value)
-                                .map(graphcal_compiler::finite_value::FiniteQuantity::get)
-                                .map_err(|error| {
-                                ctx.eval_error(
-                                    format!(
-                                        "extern function `{ext}` parameter `{}` has an invalid quantity at flat array index {index}: {error}",
-                                        param.name
-                                    ),
-                                    arg_span,
-                                )
-                            })
-                        })
-                        .collect::<Result<Vec<_>, _>>()?,
+                        .map(graphcal_compiler::finite_value::FiniteQuantity::get)
+                        .collect(),
                     FlattenedExternArrayValues::Bool(values) => {
                         values.into_iter().map(encode_bool).collect()
                     }
@@ -1728,18 +1703,14 @@ fn eval_builtin_fn(
         .map(|arg| {
             let rv = eval_value(value_arg(arg, ctx)?, values, local_values, ctx)?;
             rv.expect_quantity("function argument")
+                .map(graphcal_compiler::finite_value::FiniteQuantity::get)
                 .map_err(|e| ctx.eval_error(e.to_string(), arg_span(arg)))
         })
         .collect::<Result<_, _>>()?;
     let result = builtin
         .eval(&arg_values)
         .map_err(|error| ctx.eval_error(format!("builtin function `{name}` {error}"), span))?;
-    checked_finite_quantity(
-        super::arithmetic::check_finite(result, name.as_str(), ctx, span)?,
-        name.as_str(),
-        span,
-        ctx,
-    )
+    super::arithmetic::check_finite(result, name.as_str(), ctx, span).map(RuntimeValue::Quantity)
 }
 
 fn eval_field_access(

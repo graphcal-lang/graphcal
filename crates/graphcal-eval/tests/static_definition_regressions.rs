@@ -55,6 +55,7 @@ fn si_value(result: &EvalResult, name: &str) -> f64 {
         .unwrap_or_else(|error| panic!("declaration `{name}` has error: {error}"))
         .si_value()
         .unwrap()
+        .get()
 }
 
 const BINDABLE_LIBRARY: &str = "pub(bind) dim Q;\n\
