@@ -128,9 +128,11 @@ fn selective_import_records_only_the_canonical_hir_target() {
     let mut imported_bindings = HashMap::new();
     let owner = graphcal_compiler::dag_id::DagId::root_in_package("test", "dep");
 
-    import_selective_item(
-        &owner,
-        &NameAtom::parse("g0").unwrap(),
+    import_selective_resolved_item(
+        graphcal_compiler::resolved_name::ResolvedDeclName::for_test(
+            owner.clone(),
+            DeclName::expect_valid("g0"),
+        ),
         &DeclName::expect_valid("local_g0"),
         Span::new(0, 2),
         &src,

@@ -1,3 +1,8 @@
+use std::sync::Arc;
+
+use graphcal_compiler::ir::module_interface::ModuleInterface;
+use miette::NamedSource;
+
 use super::*;
 
 fn parse_declarations(source: &str) -> Vec<graphcal_compiler::desugar::desugared_ast::Declaration> {
@@ -42,14 +47,17 @@ fn unsubstituted_dependency_name_is_not_probed_in_the_importer() {
 
     let resolver = resolver(&declarations);
     let owner = dependency();
+    let importer_owner = importer();
     check_generics_leakage(
         &declarations,
         StaticScope::new(&owner, &resolver),
         &reexports,
         &StaticSubstitution::default(),
-        &importer(),
-        &importer_interface,
-        &source(),
+        &IncludingModule {
+            interface: &importer_interface,
+            source: &source(),
+            scope: StaticScope::new(&importer_owner, &resolver),
+        },
         Span::new(0, 0),
     )
     .unwrap();
@@ -63,14 +71,17 @@ fn missing_required_substitution_is_an_internal_error() {
 
     let resolver = resolver(&declarations);
     let owner = dependency();
+    let importer_owner = importer();
     let error = check_generics_leakage(
         &declarations,
         StaticScope::new(&owner, &resolver),
         &reexports,
         &StaticSubstitution::default(),
-        &importer(),
-        &ModuleInterface::default(),
-        &source(),
+        &IncludingModule {
+            interface: &ModuleInterface::default(),
+            source: &source(),
+            scope: StaticScope::new(&importer_owner, &resolver),
+        },
         Span::new(0, 0),
     )
     .unwrap_err();

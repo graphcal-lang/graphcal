@@ -24,6 +24,7 @@ use graphcal_compiler::syntax::span::Span;
 use graphcal_compiler::syntax::type_name::StructTypeName;
 
 use super::binding_values::{extract_index_binding_target, extract_type_name_from_binding_expr};
+use super::including_module::IncludingModule;
 use super::module_resolve_errors::module_resolve_compile_error;
 use crate::compile_error::CompileError;
 
@@ -132,6 +133,11 @@ pub(super) fn process_file_body_declarations<'a>(
 ) -> Result<(), CompileError> {
     let file_dag_id = loaded_file.dag_id();
     let file_src = loaded_file.named_source();
+    let including = IncludingModule {
+        interface: loaded_file.interface(),
+        source: file_src,
+        scope: StaticScope::new(file_dag_id, module_resolver),
+    };
 
     for (_declaration, import, target) in loaded_file.imports_with_targets() {
         cancellation.checkpoint()?;
@@ -154,16 +160,7 @@ pub(super) fn process_file_body_declarations<'a>(
         if target.target() != target.source_file() {
             continue;
         }
-        process_file_include(
-            project,
-            target,
-            include,
-            declaration,
-            loaded_file.interface(),
-            file_src,
-            StaticScope::new(file_dag_id, module_resolver),
-            ctx,
-        )?;
+        process_file_include(project, target, include, declaration, &including, ctx)?;
     }
 
     for declaration in &loaded_file.ast().declarations {
@@ -187,9 +184,7 @@ pub(super) fn process_file_body_declarations<'a>(
             },
             include,
             declaration,
-            loaded_file.interface(),
-            file_src,
-            StaticScope::new(file_dag_id, module_resolver),
+            &including,
             ctx,
         )?;
     }
@@ -226,9 +221,7 @@ pub(super) fn process_file_body_declarations<'a>(
             },
             include,
             declaration,
-            loaded_file.interface(),
-            file_src,
-            StaticScope::new(file_dag_id, module_resolver),
+            &including,
             ctx,
         )?;
     }
@@ -906,7 +899,6 @@ fn validate_required_param_bindings(
 /// Process every file-root DAG include, deferring its concrete instance for
 /// post-lowering IR merging.
 #[expect(
-    clippy::too_many_arguments,
     clippy::too_many_lines,
     reason = "binding validation and scope registration form a single cohesive pipeline over one include context"
 )]
@@ -915,11 +907,14 @@ pub(super) fn process_file_include<'a>(
     target: &crate::loader::module_path::ResolvedModuleTarget,
     include_decl: &graphcal_compiler::desugar::desugared_ast::IncludeDecl,
     decl: &graphcal_compiler::desugar::desugared_ast::Declaration,
-    importer: &ModuleInterface,
-    file_src: &NamedSource<Arc<String>>,
-    importer_scope: StaticScope<'_>,
+    including: &IncludingModule<'_>,
     ctx: &mut ImportContext<'a>,
 ) -> Result<(), CompileError> {
+    let IncludingModule {
+        interface: importer,
+        source: file_src,
+        scope: importer_scope,
+    } = *including;
     let module_resolver = importer_scope.resolver();
     let dependency = project.module(target.target()).ok_or_else(|| {
         CompileError::Eval(GraphcalError::InternalError {
@@ -1170,12 +1165,16 @@ pub(super) fn process_inline_dag_include<'a>(
     target: &InlineDagIncludeTarget<'a>,
     include_decl: &graphcal_compiler::desugar::desugared_ast::IncludeDecl,
     decl: &graphcal_compiler::desugar::desugared_ast::Declaration,
-    importer: &ModuleInterface,
-    file_src: &NamedSource<Arc<String>>,
-    importer_scope: StaticScope<'_>,
+    including: &IncludingModule<'_>,
     ctx: &mut ImportContext<'a>,
 ) -> Result<(), CompileError> {
     use graphcal_compiler::desugar::desugared_ast::ImportKind;
+
+    let IncludingModule {
+        interface: importer,
+        source: file_src,
+        scope: importer_scope,
+    } = *including;
 
     let module_resolver = importer_scope.resolver();
 
@@ -1659,35 +1658,6 @@ fn insert_imported_binding(
 }
 
 /// Register a selectively imported constant at the HIR boundary.
-#[expect(
-    clippy::too_many_arguments,
-    reason = "helper mutates imported name/binding/source-order collections together"
-)]
-#[cfg(test)]
-pub(super) fn import_selective_item(
-    source_owner: &graphcal_compiler::dag_id::DagId,
-    orig_name: &NameAtom,
-    local_name: &DeclName,
-    span: Span,
-    src: &NamedSource<Arc<String>>,
-    imported_names: &mut ImportedValueNames,
-    imported_bindings: &mut HashMap<ScopedName, ResolvedDeclName>,
-    imported_source_order: Option<&mut Vec<(ScopedName, DeclCategory)>>,
-) -> Result<(), CompileError> {
-    import_selective_resolved_item(
-        graphcal_compiler::resolved_name::ResolvedDeclName::for_test(
-            source_owner.clone(),
-            DeclName::classify(orig_name.clone()),
-        ),
-        local_name,
-        span,
-        src,
-        imported_names,
-        imported_bindings,
-        imported_source_order,
-    )
-}
-
 fn import_selective_resolved_item(
     canonical: graphcal_compiler::resolved_name::ResolvedDeclName,
     local_name: &DeclName,

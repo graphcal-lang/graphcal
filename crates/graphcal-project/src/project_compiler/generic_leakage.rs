@@ -6,18 +6,16 @@
     reason = "leakage checks consume project compiler model types"
 )]
 use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
-
-use miette::NamedSource;
 
 use graphcal_compiler::graphcal_error::GraphcalError;
 use graphcal_compiler::syntax::span::Span;
 
 use crate::compile_error::CompileError;
 
+use super::including_module::IncludingModule;
+
 use graphcal_compiler::dag_id::DagId;
 use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
-use graphcal_compiler::ir::module_interface::ModuleInterface;
 use graphcal_compiler::ir::static_dependencies::{
     StaticReference, StaticScope, declaration_static_references,
 };
@@ -140,20 +138,20 @@ const fn reexported_declaration_kind(kind: IntroducedKind) -> Option<&'static st
 /// substitution, and check each referenced type/dim/index. If it is bound to
 /// a declaration of the importer itself that the importer does not explicitly
 /// export, the re-export leaks a private symbol.
-#[expect(
-    clippy::too_many_arguments,
-    reason = "the check needs the dep AST, the canonical substitution, and the importer's identity and interface"
-)]
 pub(super) fn check_generics_leakage(
     dep_declarations: &[graphcal_compiler::desugar::desugared_ast::Declaration],
     dep_scope: StaticScope<'_>,
     pub_reexport_items: &HashSet<NameAtom>,
     substitution: &StaticSubstitution,
-    importer: &DagId,
-    importer_interface: &ModuleInterface,
-    importer_src: &NamedSource<Arc<String>>,
+    importer: &IncludingModule<'_>,
     include_span: Span,
 ) -> Result<(), CompileError> {
+    let IncludingModule {
+        interface: importer_interface,
+        source: importer_src,
+        scope: importer_scope,
+    } = *importer;
+    let importer = importer_scope.owner();
     if pub_reexport_items.is_empty() {
         return Ok(());
     }

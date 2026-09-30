@@ -98,13 +98,7 @@ pub enum NodeKind<'t> {
         expr: ScopedNode<'t>,
         args: Scoped<'t, [TIndexArg]>,
     },
-    Scan {
-        source: ScopedNode<'t>,
-        init: ScopedNode<'t>,
-        acc: &'t LocalDef,
-        val: &'t LocalDef,
-        body: ScopedNode<'t>,
-    },
+    Scan(ScopedScan<'t>),
     Unfold {
         recurrence: &'t UnfoldRecurrence,
         init: ScopedNode<'t>,
@@ -126,6 +120,17 @@ pub enum NodeKind<'t> {
         args: Scoped<'t, [TParamBinding]>,
         output: &'t Spanned<ResolvedDeclName>,
     },
+}
+
+/// A `scan` node: its source, initial accumulator, and body in the node's
+/// scope, with the accumulator and element locals the body binds.
+#[derive(Debug, Clone, Copy)]
+pub struct ScopedScan<'t> {
+    pub source: ScopedNode<'t>,
+    pub init: ScopedNode<'t>,
+    pub acc: &'t LocalDef,
+    pub val: &'t LocalDef,
+    pub body: ScopedNode<'t>,
 }
 
 /// A constant-like reference, resolved in its node's scope.
@@ -304,13 +309,13 @@ impl<'t> Scoped<'t, TExpr> {
                 acc,
                 val,
                 body,
-            } => NodeKind::Scan {
+            } => NodeKind::Scan(ScopedScan {
                 source: node(source),
                 init: node(init),
                 acc,
                 val,
                 body: node(body),
-            },
+            }),
             TExprKind::Unfold {
                 recurrence,
                 init,

@@ -288,6 +288,21 @@ fn open_revisions(
 }
 
 impl Backend {
+    /// Shared handles an analysis worker needs, cloned for one pass.
+    fn analysis_worker(&self) -> AnalysisWorker {
+        AnalysisWorker {
+            client: self.client.clone(),
+            documents: Arc::clone(&self.documents),
+            generations: Arc::clone(&self.change_generations),
+            latest_text: Arc::clone(&self.latest_text),
+            filesystem_revisions: Arc::clone(&self.filesystem_revisions),
+            dependency_graph: Arc::clone(&self.dependency_graph),
+            client_features: self.client_features(),
+            plugin_host: Arc::clone(&self.plugin_host),
+            scheduler: Arc::clone(&self.analysis_scheduler),
+        }
+    }
+
     fn client_features(&self) -> ClientFeatureSupport {
         self.client_features.get().copied().unwrap_or_default()
     }
@@ -516,15 +531,7 @@ impl Backend {
         let generation = self.bump_generation(&uri).await;
 
         analyze_store_publish(
-            &self.client,
-            &self.documents,
-            &self.change_generations,
-            &self.latest_text,
-            &self.filesystem_revisions,
-            &self.dependency_graph,
-            self.client_features(),
-            Arc::clone(&self.plugin_host),
-            Arc::clone(&self.analysis_scheduler),
+            &self.analysis_worker(),
             uri,
             text,
             recorded.revision,
@@ -545,40 +552,17 @@ impl Backend {
         root_revision: DocumentRevision,
         generation: u64,
     ) {
-        let client = self.client.clone();
-        let documents = self.documents.clone();
-        let generations = self.change_generations.clone();
-        let latest_text = self.latest_text.clone();
-        let filesystem_revisions = Arc::clone(&self.filesystem_revisions);
-        let dependency_graph = Arc::clone(&self.dependency_graph);
-        let plugin_host = Arc::clone(&self.plugin_host);
-        let analysis_scheduler = Arc::clone(&self.analysis_scheduler);
-        let client_features = self.client_features();
+        let worker = self.analysis_worker();
 
         tokio::spawn(async move {
             tokio::time::sleep(Duration::from_millis(DEBOUNCE_DELAY_MS)).await;
 
             // Check if a newer change has superseded this one.
-            if !is_generation_current(&generations, &uri, generation).await {
+            if !is_generation_current(&worker.generations, &uri, generation).await {
                 return;
             }
 
-            analyze_store_publish(
-                &client,
-                &documents,
-                &generations,
-                &latest_text,
-                &filesystem_revisions,
-                &dependency_graph,
-                client_features,
-                plugin_host,
-                analysis_scheduler,
-                uri,
-                text,
-                root_revision,
-                generation,
-            )
-            .await;
+            analyze_store_publish(&worker, uri, text, root_revision, generation).await;
         });
     }
 
@@ -596,52 +580,42 @@ enum AnalysisCompletion {
     Retry(OpenDocumentSnapshot),
 }
 
-/// Run analysis until it either stores a revision-coherent result or reaches
-/// a terminal cancellation/error. A dependency edit racing the worker returns
-/// the current root snapshot for another bounded pass.
-#[expect(
-    clippy::too_many_arguments,
-    reason = "the arguments are the Backend's shared state"
-)]
-async fn analyze_store_publish(
-    client: &Client,
-    documents: &Arc<RwLock<HashMap<Url, AnalysisResult>>>,
-    generations: &Arc<RwLock<HashMap<Url, u64>>>,
-    latest_text: &Arc<RwLock<HashMap<Url, OpenDocumentSnapshot>>>,
-    filesystem_revisions: &Arc<RwLock<HashMap<DocumentIdentity, DocumentRevision>>>,
-    dependency_graph: &Arc<RwLock<DependencyGraph>>,
+/// The Backend state one analysis worker reads and publishes into.
+///
+/// Every field is a shared handle, so a debounced task owns a cheap clone
+/// while the Backend keeps serving requests.
+#[derive(Clone)]
+struct AnalysisWorker {
+    client: Client,
+    documents: Arc<RwLock<HashMap<Url, AnalysisResult>>>,
+    generations: Arc<RwLock<HashMap<Url, u64>>>,
+    latest_text: Arc<RwLock<HashMap<Url, OpenDocumentSnapshot>>>,
+    filesystem_revisions: Arc<RwLock<HashMap<DocumentIdentity, DocumentRevision>>>,
+    dependency_graph: Arc<RwLock<DependencyGraph>>,
     client_features: ClientFeatureSupport,
     plugin_host: Arc<graphcal_plugin_host::PluginHost>,
     scheduler: Arc<AnalysisScheduler>,
+}
+
+/// Run analysis until it either stores a revision-coherent result or reaches
+/// a terminal cancellation/error. A dependency edit racing the worker returns
+/// the current root snapshot for another bounded pass.
+async fn analyze_store_publish(
+    worker: &AnalysisWorker,
     uri: Url,
     mut text: String,
     mut root_revision: DocumentRevision,
     mut generation: u64,
 ) {
     loop {
-        match analyze_store_publish_once(
-            client,
-            documents,
-            generations,
-            latest_text,
-            filesystem_revisions,
-            dependency_graph,
-            client_features,
-            Arc::clone(&plugin_host),
-            Arc::clone(&scheduler),
-            uri.clone(),
-            text,
-            root_revision,
-            generation,
-        )
-        .await
+        match analyze_store_publish_once(worker, uri.clone(), text, root_revision, generation).await
         {
             AnalysisCompletion::Done => return,
             AnalysisCompletion::Retry(snapshot) => {
                 text = snapshot.text.as_ref().clone();
                 root_revision = snapshot.revision;
-                generation = bump_generation_value(generations, &uri).await;
-                scheduler.cancel_document(&uri);
+                generation = bump_generation_value(&worker.generations, &uri).await;
+                worker.scheduler.cancel_document(&uri);
             }
         }
     }
@@ -650,25 +624,28 @@ async fn analyze_store_publish(
 /// Run one blocking, timeout-guarded analysis pass and store/publish it only
 /// when every consumed open-document revision is still current.
 #[expect(
-    clippy::too_many_arguments,
     clippy::too_many_lines,
-    reason = "one call site per trigger; the arguments are the Backend's shared state"
+    reason = "one call site per trigger; the pass is one gated sequence"
 )]
 async fn analyze_store_publish_once(
-    client: &Client,
-    documents: &Arc<RwLock<HashMap<Url, AnalysisResult>>>,
-    generations: &Arc<RwLock<HashMap<Url, u64>>>,
-    latest_text: &Arc<RwLock<HashMap<Url, OpenDocumentSnapshot>>>,
-    filesystem_revisions: &Arc<RwLock<HashMap<DocumentIdentity, DocumentRevision>>>,
-    dependency_graph: &Arc<RwLock<DependencyGraph>>,
-    client_features: ClientFeatureSupport,
-    plugin_host: Arc<graphcal_plugin_host::PluginHost>,
-    scheduler: Arc<AnalysisScheduler>,
+    worker: &AnalysisWorker,
     uri: Url,
     text: String,
     root_revision: DocumentRevision,
     generation: u64,
 ) -> AnalysisCompletion {
+    let AnalysisWorker {
+        client,
+        documents,
+        generations,
+        latest_text,
+        filesystem_revisions,
+        dependency_graph,
+        client_features,
+        plugin_host,
+        scheduler,
+    } = worker;
+    let client_features = *client_features;
     let registration = scheduler.register(&uri, generation);
     let cancellation = registration.source.token();
     if !is_generation_current(generations, &uri, generation).await {
@@ -754,7 +731,7 @@ async fn analyze_store_publish_once(
 
     let uri_for_analysis = uri.clone();
     let source = registration.source;
-    let worker_plugin_host = Arc::clone(&plugin_host);
+    let worker_plugin_host = Arc::clone(plugin_host);
     let mut task = tokio::task::spawn_blocking(move || {
         // Keep both permits until the synchronous worker truly exits. Dropping
         // the async waiter on timeout must not admit replacement work while a
@@ -788,7 +765,7 @@ async fn analyze_store_publish_once(
         Err(_elapsed) => {
             source.cancel();
             task.abort();
-            let cleanup_scheduler = Arc::clone(&scheduler);
+            let cleanup_scheduler = Arc::clone(scheduler);
             let cleanup_uri = uri.clone();
             tokio::spawn(async move {
                 let _ = task.await;

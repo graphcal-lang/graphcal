@@ -14,7 +14,7 @@ use graphcal_compiler::tir::texpr::{
 use graphcal_compiler::tir::typed::body_scope::Scoped;
 use graphcal_compiler::tir::typed::evaluation_unit::{DeclarationBody, ScopedTree};
 use graphcal_compiler::tir::typed::scoped_node::{
-    ConstRef, NodeKind, ScopedCall, ScopedIndexArg, ScopedMatchArms, ScopedNode,
+    ConstRef, NodeKind, ScopedCall, ScopedIndexArg, ScopedMatchArms, ScopedNode, ScopedScan,
 };
 use indexmap::IndexMap;
 
@@ -364,23 +364,9 @@ fn eval_texpr_inner(
             local_values,
             ctx,
         ),
-        NodeKind::Scan {
-            source,
-            init,
-            acc,
-            val,
-            body,
-        } => eval_scan(
-            source,
-            init,
-            acc,
-            val,
-            body,
-            values,
-            presentation_values,
-            local_values,
-            ctx,
-        ),
+        NodeKind::Scan(scan_node) => {
+            eval_scan(scan_node, values, presentation_values, local_values, ctx)
+        }
         NodeKind::Unfold { .. } => {
             eval_unfold(expr, values, presentation_values, local_values, ctx)
         }
@@ -1129,16 +1115,14 @@ fn eval_index_access(
     Ok(current.to_owned_with(clone_index_access_result))
 }
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "scan evaluation is called from expression destructuring"
-)]
 fn eval_scan(
-    source: ScopedNode<'_>,
-    init: ScopedNode<'_>,
-    acc: &graphcal_compiler::hir::expr::LocalDef,
-    val: &graphcal_compiler::hir::expr::LocalDef,
-    body: ScopedNode<'_>,
+    ScopedScan {
+        source,
+        init,
+        acc,
+        val,
+        body,
+    }: ScopedScan<'_>,
     values: &RuntimeValueMap,
     presentation_values: Option<&PendingPresentedMap>,
     local_values: &HirLocalValueMap<'_>,

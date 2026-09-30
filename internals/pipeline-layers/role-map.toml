@@ -2428,6 +2428,11 @@ role = "checking"
 
 [[module]]
 package = "project"
+path = ["project_compiler", "including_module"]
+role = "checking"
+
+[[module]]
+package = "project"
 path = ["project_compiler", "imports", "tests"]
 role = "checking"
 

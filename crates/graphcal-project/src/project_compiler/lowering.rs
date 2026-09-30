@@ -41,6 +41,7 @@ use graphcal_compiler::syntax::phase::Desugared;
 use graphcal_compiler::syntax::visitor::ExprVisitor;
 
 use super::generic_leakage::check_generics_leakage;
+use super::including_module::IncludingModule;
 
 /// Project-wide semantic services shared by every module lowering pass.
 pub(super) struct ProjectSemanticContext<'project, 'session> {
@@ -626,9 +627,11 @@ fn process_dag_body_include_declarations<'a>(
                 target,
                 include_decl,
                 decl,
-                loaded_dag.interface(),
-                file_src,
-                StaticScope::new(loaded_dag.dag_id(), module_resolver),
+                &IncludingModule {
+                    interface: loaded_dag.interface(),
+                    source: file_src,
+                    scope: StaticScope::new(loaded_dag.dag_id(), module_resolver),
+                },
                 ctx,
             )?;
             continue;
@@ -644,9 +647,11 @@ fn process_dag_body_include_declarations<'a>(
             },
             include_decl,
             decl,
-            loaded_dag.interface(),
-            file_src,
-            StaticScope::new(loaded_dag.dag_id(), module_resolver),
+            &IncludingModule {
+                interface: loaded_dag.interface(),
+                source: file_src,
+                scope: StaticScope::new(loaded_dag.dag_id(), module_resolver),
+            },
             ctx,
         )?;
     }
@@ -1163,9 +1168,11 @@ fn elaborate_include_instances(
             StaticScope::new(&dep_resolution_owner, module_resolver),
             &instance.pub_reexport_items,
             &instance.static_bindings.substitution,
-            importer_dag_id,
-            importer.interface(),
-            importer_src,
+            &IncludingModule {
+                interface: importer.interface(),
+                source: importer_src,
+                scope: StaticScope::new(importer_dag_id, module_resolver),
+            },
             instance.include_span,
         )?;
 

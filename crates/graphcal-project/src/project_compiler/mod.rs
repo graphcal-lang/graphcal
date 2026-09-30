@@ -11,6 +11,7 @@ mod entry_interface;
 mod generic_leakage;
 mod hir_project;
 mod imports;
+mod including_module;
 mod lowering;
 mod model;
 mod module_resolve_errors;
