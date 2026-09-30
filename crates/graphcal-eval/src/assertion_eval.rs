@@ -2,10 +2,12 @@
 
 use crate::eval::types::AssertResult;
 use graphcal_compiler::assertion_expectation::{ExpectedFail, ExpectedFailKey};
+use graphcal_compiler::hir::expr::{AssertBody, Expr};
 use graphcal_compiler::registry::checked_type::IndexTypeRef;
 use graphcal_compiler::registry::error::GraphcalError;
 use graphcal_compiler::registry::runtime_value::RuntimeValue;
 use graphcal_compiler::syntax::index_name::IndexEntryKey;
+use graphcal_compiler::tir::typed::evaluation_unit::{AssertionOperands, Scoped};
 use indexmap::IndexMap;
 
 fn evaluation_error(error: GraphcalError) -> AssertResult {
@@ -26,13 +28,12 @@ fn evaluation_error(error: GraphcalError) -> AssertResult {
 /// For `Some(ExpectedFail::Variants(keys))`: evaluate the expression to get
 /// the raw indexed `RuntimeValue`, invert only the matching variant entries,
 /// then aggregate.
-pub fn evaluate_assert_with_expected_fail(
-    body: &graphcal_compiler::hir::expr::AssertBody,
+pub fn evaluate_assert_with_expected_fail<'t>(
+    body: Scoped<'t, AssertBody>,
     ef: Option<&ExpectedFail>,
-    evaluate_expression: &mut impl FnMut(
-        &graphcal_compiler::hir::expr::Expr,
-    ) -> Result<RuntimeValue, GraphcalError>,
+    evaluate_expression: &mut impl FnMut(Scoped<'t, Expr>) -> Result<RuntimeValue, GraphcalError>,
 ) -> AssertResult {
+    let body = body.operands();
     match ef {
         None => evaluate_assert_body(body, evaluate_expression),
         Some(ExpectedFail::All) => {
@@ -51,13 +52,11 @@ pub fn evaluate_assert_with_expected_fail(
             // expression; for tolerance bodies it is the element-wise
             // pass/fail tree (#809).
             let bool_tree = match body {
-                graphcal_compiler::hir::expr::AssertBody::Expr(body_expr) => {
-                    match evaluate_expression(body_expr) {
-                        Ok(value) => value,
-                        Err(error) => return evaluation_error(error),
-                    }
-                }
-                graphcal_compiler::hir::expr::AssertBody::Tolerance {
+                AssertionOperands::Condition(body_expr) => match evaluate_expression(body_expr) {
+                    Ok(value) => value,
+                    Err(error) => return evaluation_error(error),
+                },
+                AssertionOperands::Tolerance {
                     actual,
                     expected,
                     tolerance,
@@ -334,30 +333,26 @@ fn collect_failing_paths(
 }
 
 /// Evaluate a single assert body and return an `AssertResult`.
-fn evaluate_assert_body(
-    body: &graphcal_compiler::hir::expr::AssertBody,
-    evaluate_expression: &mut impl FnMut(
-        &graphcal_compiler::hir::expr::Expr,
-    ) -> Result<RuntimeValue, GraphcalError>,
+fn evaluate_assert_body<'t>(
+    body: AssertionOperands<'t>,
+    evaluate_expression: &mut impl FnMut(Scoped<'t, Expr>) -> Result<RuntimeValue, GraphcalError>,
 ) -> AssertResult {
     match body {
-        graphcal_compiler::hir::expr::AssertBody::Expr(body_expr) => {
-            match evaluate_expression(body_expr) {
-                Ok(RuntimeValue::Bool(true)) => AssertResult::Pass,
-                Ok(RuntimeValue::Bool(false)) => AssertResult::Fail {
-                    message: "assertion evaluated to false".to_string(),
-                },
-                Ok(RuntimeValue::Indexed {
-                    index_name,
-                    entries,
-                }) => check_indexed_assert(&index_name, &entries),
-                Ok(other) => AssertResult::Error {
-                    message: format!("expected Bool, got {other:?}"),
-                },
-                Err(error) => evaluation_error(error),
-            }
-        }
-        graphcal_compiler::hir::expr::AssertBody::Tolerance {
+        AssertionOperands::Condition(body_expr) => match evaluate_expression(body_expr) {
+            Ok(RuntimeValue::Bool(true)) => AssertResult::Pass,
+            Ok(RuntimeValue::Bool(false)) => AssertResult::Fail {
+                message: "assertion evaluated to false".to_string(),
+            },
+            Ok(RuntimeValue::Indexed {
+                index_name,
+                entries,
+            }) => check_indexed_assert(&index_name, &entries),
+            Ok(other) => AssertResult::Error {
+                message: format!("expected Bool, got {other:?}"),
+            },
+            Err(error) => evaluation_error(error),
+        },
+        AssertionOperands::Tolerance {
             actual,
             expected,
             tolerance,
@@ -371,13 +366,11 @@ fn evaluate_assert_body(
 /// comes from `actual`; `expected` and `tolerance` are each unindexed (applied
 /// to every key) or indexed by the same axes. Failures report each failing
 /// key with its actual/expected/delta detail.
-fn evaluate_tolerance_assert(
-    actual: &graphcal_compiler::hir::expr::Expr,
-    expected: &graphcal_compiler::hir::expr::Expr,
-    tolerance: &graphcal_compiler::hir::expr::Expr,
-    evaluate_expression: &mut impl FnMut(
-        &graphcal_compiler::hir::expr::Expr,
-    ) -> Result<RuntimeValue, GraphcalError>,
+fn evaluate_tolerance_assert<'t>(
+    actual: Scoped<'t, Expr>,
+    expected: Scoped<'t, Expr>,
+    tolerance: Scoped<'t, Expr>,
+    evaluate_expression: &mut impl FnMut(Scoped<'t, Expr>) -> Result<RuntimeValue, GraphcalError>,
 ) -> AssertResult {
     let (actual_val, expected_val, tolerance_val) =
         match eval_tolerance_operands(actual, expected, tolerance, evaluate_expression) {
@@ -397,17 +390,13 @@ fn evaluate_tolerance_assert(
 ///
 /// Returns the raw runtime values (any shape — shape checking happens in
 /// [`eval_tolerance_tree`]), or the `AssertResult::Error` to report.
-fn eval_tolerance_operands(
-    actual: &graphcal_compiler::hir::expr::Expr,
-    expected: &graphcal_compiler::hir::expr::Expr,
-    tolerance: &graphcal_compiler::hir::expr::Expr,
-    evaluate_expression: &mut impl FnMut(
-        &graphcal_compiler::hir::expr::Expr,
-    ) -> Result<RuntimeValue, GraphcalError>,
+fn eval_tolerance_operands<'t>(
+    actual: Scoped<'t, Expr>,
+    expected: Scoped<'t, Expr>,
+    tolerance: Scoped<'t, Expr>,
+    evaluate_expression: &mut impl FnMut(Scoped<'t, Expr>) -> Result<RuntimeValue, GraphcalError>,
 ) -> Result<(RuntimeValue, RuntimeValue, RuntimeValue), AssertResult> {
-    let mut operand = |expr: &graphcal_compiler::hir::expr::Expr| {
-        evaluate_expression(expr).map_err(evaluation_error)
-    };
+    let mut operand = |expr: Scoped<'t, Expr>| evaluate_expression(expr).map_err(evaluation_error);
     Ok((operand(actual)?, operand(expected)?, operand(tolerance)?))
 }
 

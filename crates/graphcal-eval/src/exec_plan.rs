@@ -12,7 +12,7 @@ use graphcal_compiler::resolved_name::ResolvedDeclName;
 
 use crate::checked_program::{CheckedProgram, SealedDag};
 use crate::execution_plan::{
-    CallablePlan, DeclarationBody, ExecPlan, PlannedDeclaration, PreparedConstantImport,
+    CallablePlan, ExecPlan, PlannedBody, PlannedDeclaration, PreparedConstantImport,
     PreparedImports,
 };
 
@@ -109,8 +109,11 @@ fn prepare<'p>(
                 .ok_or_else(|| invalid(format!("DAG `{owner}` has no compiled body"), src))
         })
         .collect::<Result<HashMap<_, _>, _>>()?;
-    let declarations =
-        prepare_declarations(tir.dag_registry().keys().map(|owner| scopes[owner]), src)?;
+    let declarations = prepare_declarations(
+        tir,
+        tir.dag_registry().keys().map(|owner| scopes[owner]),
+        src,
+    )?;
     let root = prepare_callable_plan(
         &scopes,
         scopes[tir.root_dag_id()],
@@ -127,9 +130,10 @@ fn prepare<'p>(
         .map_err(|error| invalid(error.to_string(), src))
 }
 
-/// Plan every value declaration of every DAG once: its body, the
-/// declarations it reads and its domain constraint.
+/// Plan every value declaration of every DAG once: its body (in the scope of
+/// its owner), the declarations it reads and its domain constraint.
 fn prepare_declarations<'p>(
+    tir: &'p graphcal_compiler::tir::typed::CheckedTir,
     scopes: impl IntoIterator<Item = SealedDag<'p>>,
     src: &NamedSource<Arc<String>>,
 ) -> Result<HashMap<&'p ResolvedDeclName, PlannedDeclaration<'p>>, GraphcalError> {
@@ -137,19 +141,25 @@ fn prepare_declarations<'p>(
     for scope in scopes {
         let dag = scope.dag();
         for key in dag.value_declaration_identities() {
-            let body = match (dag.todo(key), dag.runtime_expr(key)) {
-                (Some(_), _) => DeclarationBody::Todo,
-                (None, Some(root)) => DeclarationBody::Expression {
+            let unit = tir.declaration_body(key).ok_or_else(|| {
+                invalid(
+                    format!("checked declaration `{key}` has no body in its owner"),
+                    scope.source(),
+                )
+            })?;
+            let body = match (unit.is_todo(), unit.runtime_expression()) {
+                (true, _) => PlannedBody::Todo,
+                (false, Some(root)) => PlannedBody::Expression {
                     root,
-                    tree: dag.bodies().executable_value(root.id()),
+                    tree: root.executable(),
                 },
                 // Required ports have no default; constants are pooled.
-                (None, None) => DeclarationBody::Supplied,
+                (false, None) => PlannedBody::Supplied,
             };
             let reads = match (&body, dag.runtime_schedule().dependencies_of(key)) {
                 (_, Some(reads)) => reads,
-                (DeclarationBody::Supplied, None) => &[],
-                (DeclarationBody::Todo | DeclarationBody::Expression { .. }, None) => {
+                (PlannedBody::Supplied, None) => &[],
+                (PlannedBody::Todo | PlannedBody::Expression { .. }, None) => {
                     return Err(invalid(
                         format!("checked declaration `{key}` has no dependencies"),
                         scope.source(),
@@ -373,7 +383,7 @@ mod tests {
         assert!(tir.root().runtime_expr(&input).is_none());
         let declaration = prepared.plan().declaration(&input).unwrap();
         assert_eq!(declaration.scope().dag().dag_id(), tir.root_dag_id());
-        assert!(matches!(declaration.body(), DeclarationBody::Supplied));
+        assert!(matches!(declaration.body(), PlannedBody::Supplied));
     }
 
     #[test]

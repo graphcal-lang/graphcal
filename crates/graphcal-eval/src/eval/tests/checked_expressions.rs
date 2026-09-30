@@ -15,7 +15,11 @@ fn field_access_rejects_forged_constructor_in_the_retained_type() {
         .root()
         .bound_decl_identity(&scoped_name("projected"))
         .unwrap();
-    let expr = tir.root().value_expr(projected).unwrap();
+    let expr = tir
+        .declaration_body(projected)
+        .unwrap()
+        .runtime_expression()
+        .unwrap();
     for (constructor, valid) in [("Token", true), ("NotToken", false)] {
         let values = HashMap::from([(
             tir.root()
@@ -35,20 +39,14 @@ fn field_access_rejects_forged_constructor_in_the_retained_type() {
                 )]),
             },
         )]);
-        let context = crate::eval_expr::EvalContext::provisional_constants(
+        let context = crate::eval_expr::EvalSession::provisional_constants(
             &tir,
-            tir.root_dag_id(),
             &src,
             graphcal_compiler::cancellation::CancellationToken::unbounded(),
         )
-        .unwrap()
         .with_roots(&values, None);
-        let result = crate::eval_expr::eval_texpr(
-            context.executable(expr).unwrap(),
-            &values,
-            &crate::eval_expr::HirLocalValueMap::root(),
-            &context,
-        );
+        let result =
+            crate::eval_expr::eval_root(&context.executable(expr).unwrap(), &values, &context);
         if valid {
             assert!(
                 matches!(result, Ok(crate::eval_expr::RuntimeValue::Int(99))),
@@ -74,61 +72,36 @@ fn scalar_prototypes_require_discharge_and_invalid_membership_never_publishes() 
             tir.root_dag_id().clone(),
             StructTypeName::expect_valid("T"),
         );
-        let parameter = tir.root().semantic().type_defs.struct_types[&identity].generic_params()[0]
-            .id()
-            .clone();
-        let key = graphcal_compiler::tir::typed::model::ResolvedStructFieldTypeKey {
-            owning_type: identity,
-            constructor: ConstructorName::expect_valid("T"),
-            field: FieldName::expect_valid("x"),
-        };
-        let bound = &tir
-            .root()
-            .semantic()
-            .type_defs
-            .field(&key)
-            .unwrap()
-            .domain_bounds()[0]
-            .value;
-        let context = crate::eval_expr::EvalContext::provisional_constants(
+        let nominal = tir.nominal_type_body(&identity).unwrap();
+        let parameter = nominal.definition().generic_params()[0].id().clone();
+        let (key, field) = nominal.constrained_fields().next().unwrap();
+        assert_eq!(key.field, FieldName::expect_valid("x"));
+        let bound = field.map(|field| &field.domain_bounds()[0]);
+        let context = crate::eval_expr::EvalSession::provisional_constants(
             &tir,
-            tir.root_dag_id(),
             &src,
             graphcal_compiler::cancellation::CancellationToken::unbounded(),
-        )
-        .unwrap();
+        );
         let values = crate::constant_pools::RuntimeValueMap::new();
-        let locals = crate::eval_expr::HirLocalValueMap::root();
         let result = context
-            .executable(bound)
-            .and_then(|tree| crate::eval_expr::eval_texpr(tree, &values, &locals, &context));
+            .executable(bound.map(|bound| &*bound.value))
+            .and_then(|tree| crate::eval_expr::eval_root(&tree, &values, &context));
         assert!(
             matches!(result, Err(GraphcalError::InternalError { ref message, .. }) if message.contains("undischarged static obligations")),
             "prototype executed: {result:?}"
         );
         for n in [0, 1] {
             assert!(
-                specialize_bound_expression(
-                    &tir,
-                    tir.root(),
-                    bound,
-                    &HashMap::from([(parameter.clone(), n)]),
-                    &src
-                )
-                .is_err(),
+                specialize_bound_expression(&tir, bound, &HashMap::from([(parameter.clone(), n)]))
+                    .is_err(),
                 "invalid N={n} product published"
             );
         }
         for n in 2..=5 {
-            let tree = specialize_bound_expression(
-                &tir,
-                tir.root(),
-                bound,
-                &HashMap::from([(parameter.clone(), n)]),
-                &src,
-            )
-            .unwrap();
-            let result = crate::eval_expr::eval_texpr(&tree, &values, &locals, &context).unwrap();
+            let tree =
+                specialize_bound_expression(&tir, bound, &HashMap::from([(parameter.clone(), n)]))
+                    .unwrap();
+            let result = crate::eval_expr::eval_root(&tree, &values, &context).unwrap();
             assert!(
                 matches!(result, crate::eval_expr::RuntimeValue::Int(1)),
                 "{result:?}"
@@ -170,29 +143,26 @@ fn readiness_is_checked_before_evaluating_an_earlier_sibling() {
     let source = "type T<N: Nat> { T(x: Int(min: 1 / 0 + to_int(key(Fin(N), 1)))) }".to_string();
     let tir = compile_to_tir(&source, "readiness.gcl").unwrap();
     let src = miette::NamedSource::new("readiness.gcl", std::sync::Arc::new(source));
-    let bound = tir
-        .root()
-        .semantic()
-        .type_defs
+    let identity = ResolvedStructTypeName::for_test(
+        tir.root_dag_id().clone(),
+        StructTypeName::expect_valid("T"),
+    );
+    let (_, field) = tir
+        .nominal_type_body(&identity)
+        .unwrap()
         .constrained_fields()
         .next()
-        .unwrap()
-        .1
-        .domain_bounds()
-        .first()
         .unwrap();
-    let context = crate::eval_expr::EvalContext::provisional_constants(
+    let bound = field.map(|field| &*field.domain_bounds()[0].value);
+    let context = crate::eval_expr::EvalSession::provisional_constants(
         &tir,
-        tir.root_dag_id(),
         &src,
         graphcal_compiler::cancellation::CancellationToken::unbounded(),
-    )
-    .unwrap();
-    let result = context.executable(&bound.value).and_then(|tree| {
-        crate::eval_expr::eval_texpr(
-            tree,
+    );
+    let result = context.executable(bound).and_then(|tree| {
+        crate::eval_expr::eval_root(
+            &tree,
             &crate::constant_pools::RuntimeValueMap::new(),
-            &crate::eval_expr::HirLocalValueMap::root(),
             &context,
         )
     });
@@ -243,23 +213,17 @@ node control: Dimensionless = probe::tick() + 1.0;
         .find(|dag| dag.bound_decl_identity(&scoped_name("pending")).is_some())
         .unwrap();
     let values = crate::constant_pools::RuntimeValueMap::new();
-    let locals = crate::eval_expr::HirLocalValueMap::root();
-    let context = |dag: &graphcal_compiler::tir::typed::CheckedDag| {
-        crate::eval_expr::EvalContext::checked(
-            plan,
-            plan.callable(dag.dag_id()).unwrap(),
-            &src,
-            &host,
-            cancellation.clone(),
-        )
+    let context = crate::eval_expr::EvalSession::checked(plan, &src, &host, cancellation);
+    let runtime_expression = |dag: &graphcal_compiler::tir::typed::CheckedDag, name: &str| {
+        tir.declaration_body(dag.bound_decl_identity(&scoped_name(name)).unwrap())
+            .unwrap()
+            .runtime_expression()
+            .unwrap()
     };
-    let pending = worker
-        .value_expr(worker.bound_decl_identity(&scoped_name("pending")).unwrap())
-        .unwrap();
-    let worker_context = context(worker);
-    let result = worker_context
+    let pending = runtime_expression(worker, "pending");
+    let result = context
         .executable(pending)
-        .and_then(|tree| crate::eval_expr::eval_texpr(tree, &values, &locals, &worker_context));
+        .and_then(|tree| crate::eval_expr::eval_root(&tree, &values, &context));
     assert!(
         matches!(result, Err(GraphcalError::InternalError { ref message, .. }) if message.contains("undischarged static obligations")),
         "{result:?}"
@@ -269,22 +233,8 @@ node control: Dimensionless = probe::tick() + 1.0;
         0,
         "host ran before deferred descendant was rejected"
     );
-    let control = tir
-        .root()
-        .value_expr(
-            tir.root()
-                .bound_decl_identity(&scoped_name("control"))
-                .unwrap(),
-        )
-        .unwrap();
-    let root_context = context(tir.root());
-    crate::eval_expr::eval_texpr(
-        root_context.executable(control).unwrap(),
-        &values,
-        &locals,
-        &root_context,
-    )
-    .unwrap();
+    let control = runtime_expression(tir.root(), "control");
+    crate::eval_expr::eval_root(&context.executable(control).unwrap(), &values, &context).unwrap();
     assert_eq!(
         calls.load(Ordering::SeqCst),
         1,

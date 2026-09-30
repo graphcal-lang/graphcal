@@ -13,7 +13,8 @@ use graphcal_compiler::dag_id::DagId;
 use graphcal_compiler::hir::expr::Expr;
 use graphcal_compiler::registry::runtime_value::RuntimeValue;
 use graphcal_compiler::resolved_name::ResolvedDeclName;
-use graphcal_compiler::tir::typed::checked::{CheckedDag, CheckedTir};
+use graphcal_compiler::tir::typed::checked::CheckedTir;
+use graphcal_compiler::tir::typed::evaluation_unit::{DeclarationBody, Scoped};
 use thiserror::Error;
 
 pub type RuntimeValueMap = HashMap<ResolvedDeclName, RuntimeValue>;
@@ -44,10 +45,9 @@ pub enum ConstPoolBuildError<E> {
 pub struct ConstStep<'a> {
     /// The checked TIR being evaluated.
     pub tir: &'a CheckedTir,
-    /// The checked DAG that owns the constant.
-    pub dag: &'a CheckedDag,
     pub key: &'a ResolvedDeclName,
-    pub expression: &'a Expr,
+    /// The constant's expression, in the scope of the DAG that owns it.
+    pub expression: Scoped<'a, Expr>,
     /// Every constant evaluated so far, inherited ones included.
     pub visible: &'a RuntimeValueMap,
 }
@@ -105,18 +105,15 @@ impl ConstPool {
             .map(|(key, value)| (key.clone(), value.clone()))
             .collect::<RuntimeValueMap>();
         for key in schedule.order() {
-            let (Some(dag), Some(pool)) = (
-                tir.dag_registry().get(key.owner()),
+            let (Some(expression), Some(pool)) = (
+                tir.declaration_body(key)
+                    .and_then(DeclarationBody::const_expression),
                 fresh.get_mut(key.owner()),
             ) else {
                 return invalid(ConstantPoolError::MissingDeclaration(key.clone()));
             };
-            let Some(expression) = dag.const_expr(key) else {
-                return invalid(ConstantPoolError::MissingDeclaration(key.clone()));
-            };
             let value = evaluate(ConstStep {
                 tir,
-                dag,
                 key,
                 expression,
                 visible: &visible,

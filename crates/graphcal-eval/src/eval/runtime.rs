@@ -10,12 +10,13 @@ use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
 use graphcal_compiler::resolved_name::ResolvedDeclName;
 use graphcal_compiler::syntax::module_name::{ModuleAliasName, ScopeSegment, ScopedName};
 use graphcal_compiler::syntax::span::Span;
-use graphcal_compiler::tir::typed::{CheckedInstance, ResolvedProjection};
+use graphcal_compiler::tir::typed::{
+    AssertionOperands, CheckedInstance, DeclarationBody, ResolvedProjection, Scoped,
+};
 
 use crate::assertion_eval::evaluate_assert_with_expected_fail;
 use crate::eval_expr::{
-    EvalContext, HirLocalValueMap, RuntimeValue, RuntimeValueMap, eval_texpr,
-    eval_texpr_with_presentation,
+    EvalSession, RuntimeValue, RuntimeValueMap, eval_root, eval_root_with_presentation,
 };
 use crate::execution_frame::eval_failed_node_error;
 use crate::presentation_evidence::{
@@ -117,7 +118,7 @@ fn project_runtime_value(
     runtime: &RuntimeValue,
     declared_type: &CheckedType,
     presentation_instance: Option<&PresentationInstance>,
-    ctx: &EvalContext<'_>,
+    ctx: &EvalSession<'_>,
     diagnostics: &std::cell::RefCell<Vec<PresentationDiagnostic>>,
 ) -> Result<Result<Value, NodeUnavailable>, GraphcalError> {
     let mut value = EvaluatedValue::new(runtime, declared_type).project(ctx.tir, ctx.src)?;
@@ -182,7 +183,6 @@ pub(super) fn run_eval_loop_with_bindings(
 ) -> Result<EvalLoopResult, GraphcalError> {
     use crate::execution_frame::{ExecutionFrame, FailurePolicy};
     cancellation.checkpoint()?;
-    let empty_hir_locals = HirLocalValueMap::root();
     let unfinished_calls = std::cell::RefCell::new(BTreeSet::new());
     let mut frame = ExecutionFrame::new(plan, plan.root(), FailurePolicy::Contain);
     for (key, binding) in bindings {
@@ -199,17 +199,16 @@ pub(super) fn run_eval_loop_with_bindings(
     frame.run(cancellation, |entry, frame| {
         // Root declarations keep their existing work allowance; nested calls
         // share this context's budget through immutable scope reselection.
-        let root = EvalContext::checked(plan, plan.root(), src, host_fns, cancellation.clone())
+        let root = EvalSession::checked(plan, src, host_fns, cancellation.clone())
             .with_roots(frame.values(), Some(frame.presentations()))
             .with_unavailable(frame.errors())
             .with_unfinished_calls(&unfinished_calls);
-        let context = root.for_declaration(&entry);
-        eval_texpr_with_presentation(
+        let session = root.for_declaration(&entry);
+        eval_root_with_presentation(
             entry.body(),
             frame.values(),
             frame.presentations(),
-            &empty_hir_locals,
-            &context,
+            &session,
         )
     })?;
     let outcome = frame.finish();
@@ -266,7 +265,7 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
     } = run_eval_loop_with_bindings(plan, bindings, src, host_fns, cancellation)?;
 
     cancellation.checkpoint()?;
-    let ctx = EvalContext::checked(plan, plan.root(), src, host_fns, cancellation.clone())
+    let ctx = EvalSession::checked(plan, src, host_fns, cancellation.clone())
         .with_roots(&values, Some(&presentation_instances))
         .with_unavailable(&errors)
         .with_unfinished_calls(&unfinished_calls);
@@ -413,7 +412,7 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
                     runtime,
                     declared_type,
                     presentation_instances.get(&key),
-                    &ctx.for_checked_decl(instance_src, &declaration)?,
+                    &ctx.with_src(instance_src).for_decl(&declaration),
                     &presentation_diagnostics,
                 )?
             };
@@ -452,7 +451,7 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
                     runtime,
                     declared_type,
                     presentation_instances.get(&key),
-                    &ctx.for_checked_decl(instance_src, &declaration)?,
+                    &ctx.with_src(instance_src).for_decl(&declaration),
                     &presentation_diagnostics,
                 )?
             };
@@ -494,13 +493,15 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
         .plots()
         .try_fold(Vec::new(), |mut plots, entry| {
             let owner = entry.identity();
-            match evaluate_plot(
-                entry,
-                &values,
-                &presentation_instances,
-                &errors,
-                &ctx.for_decl(&owner),
-            ) {
+            let unit = declaration_body(tir, &owner, src)?;
+            let plot = unit.plot().ok_or_else(|| {
+                GraphcalError::internal_error(
+                    format!("plot `{owner}` has no checked body"),
+                    src,
+                    DiagnosticAnchor::WholeFile,
+                )
+            })?;
+            match evaluate_plot(unit, plot, &values, &presentation_instances, &errors, &ctx) {
                 Ok(plot) => plots.push(plot),
                 Err(PlotEvaluationError::Unavailable(reason)) => {
                     plot_errors.push(super::types::PlotError {
@@ -520,19 +521,15 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
         {
             // The plot runs in the DAG that owns it, which may be an instance
             // nested in this one when the template forwards its own plot.
-            let plot_ctx = ctx.for_checked_decl(src, &owner)?;
-            let entry = plot_ctx
-                .dag()
-                .plots()
-                .find(|entry| entry.identity() == owner)
-                .ok_or_else(|| {
-                    GraphcalError::internal_error(
-                        format!("projected plot `{owner}` is absent from semantic instance"),
-                        src,
-                        DiagnosticAnchor::WholeFile,
-                    )
-                })?;
-            match evaluate_plot(entry, &values, &presentation_instances, &errors, &plot_ctx) {
+            let unit = declaration_body(tir, &owner, src)?;
+            let plot = unit.plot().ok_or_else(|| {
+                GraphcalError::internal_error(
+                    format!("projected plot `{owner}` is absent from semantic instance"),
+                    src,
+                    DiagnosticAnchor::WholeFile,
+                )
+            })?;
+            match evaluate_plot(unit, plot, &values, &presentation_instances, &errors, &ctx) {
                 Ok(mut plot) => {
                     plot.name = projection.exposed_name.clone();
                     plot.visibility = projection.visibility;
@@ -557,17 +554,21 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
         .figures()
         .map(|entry| {
             let owner = entry.identity();
+            let fields = declaration_body(tir, &owner, src)?
+                .figure()
+                .map(|figure| figure.map(|figure| figure.fields.as_slice()))
+                .ok_or_else(|| {
+                    GraphcalError::internal_error(
+                        format!("figure `{owner}` has no checked body"),
+                        src,
+                        DiagnosticAnchor::WholeFile,
+                    )
+                })?;
             Ok(
-                match check_plot_dependencies(&entry.plot_names, &plot_errors, &ctx).and_then(
-                    |()| {
-                        eval_composition_fields(
-                            &entry.fields,
-                            &entry.plot_names,
-                            &values,
-                            &ctx.for_decl(&owner),
-                        )
-                    },
-                ) {
+                match check_plot_dependencies(&entry.plot_names, &plot_errors, tir.root(), &ctx)
+                    .and_then(|()| {
+                        eval_composition_fields(fields, &entry.plot_names, &values, &ctx)
+                    }) {
                     Ok(evaluated) => Some(super::types::FigureSpec {
                         name: ScopedName::local(entry.name().clone()),
                         plot_names: evaluated.plot_names,
@@ -595,17 +596,21 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
         .layers()
         .map(|entry| {
             let owner = entry.identity();
+            let fields = declaration_body(tir, &owner, src)?
+                .layer()
+                .map(|layer| layer.map(|layer| layer.fields.as_slice()))
+                .ok_or_else(|| {
+                    GraphcalError::internal_error(
+                        format!("layer `{owner}` has no checked body"),
+                        src,
+                        DiagnosticAnchor::WholeFile,
+                    )
+                })?;
             Ok(
-                match check_plot_dependencies(&entry.plot_names, &plot_errors, &ctx).and_then(
-                    |()| {
-                        eval_composition_fields(
-                            &entry.fields,
-                            &entry.plot_names,
-                            &values,
-                            &ctx.for_decl(&owner),
-                        )
-                    },
-                ) {
+                match check_plot_dependencies(&entry.plot_names, &plot_errors, tir.root(), &ctx)
+                    .and_then(|()| {
+                        eval_composition_fields(fields, &entry.plot_names, &values, &ctx)
+                    }) {
                     Ok(evaluated) => Some(super::types::LayerSpec {
                         name: ScopedName::local(entry.name().clone()),
                         plot_names: evaluated.plot_names,
@@ -741,6 +746,21 @@ fn semantic_instance<'tir>(
     })
 }
 
+/// The source of `declaration` in the scope of its owner.
+fn declaration_body<'tir>(
+    tir: &'tir graphcal_compiler::tir::typed::CheckedTir,
+    declaration: &ResolvedDeclName,
+    src: &NamedSource<Arc<String>>,
+) -> Result<DeclarationBody<'tir>, GraphcalError> {
+    tir.declaration_body(declaration).ok_or_else(|| {
+        GraphcalError::internal_error(
+            format!("declaration `{declaration}` is absent from its owner's checked body"),
+            src,
+            DiagnosticAnchor::WholeFile,
+        )
+    })
+}
+
 /// Evaluate every assertion reported for the root DAG: root assertions in
 /// source order, then assertions projected from semantic instances. Each
 /// result applies its `expected_fail` inversion.
@@ -751,27 +771,31 @@ fn semantic_instance<'tir>(
 pub(super) fn evaluate_assertions(
     tir: &graphcal_compiler::tir::typed::CheckedTir,
     src: &NamedSource<Arc<String>>,
-    ctx: &EvalContext<'_>,
+    ctx: &EvalSession<'_>,
     values: &RuntimeValueMap,
     errors: &HashMap<ResolvedDeclName, NodeUnavailable>,
 ) -> Result<Vec<(ScopedName, AssertResult, Span)>, GraphcalError> {
-    let empty_hir_locals = HirLocalValueMap::root();
     let mut assertions: Vec<(ScopedName, AssertResult, Span)> = tir
         .root()
         .asserts()
         .map(|entry| {
             let owner = entry.identity();
+            let unit = declaration_body(tir, &owner, src)?;
+            let body = unit
+                .assertion()
+                .ok_or_else(|| {
+                    GraphcalError::internal_error(
+                        format!("assertion `{owner}` has no checked body"),
+                        src,
+                        DiagnosticAnchor::WholeFile,
+                    )
+                })?
+                .map(|entry| &*entry.body);
             let entry_ctx = ctx.for_decl(&owner);
-            let assert_result = assert_dependency_failure(&entry.body, errors, &entry_ctx)
-                .unwrap_or_else(|| {
-                    let ef = tir.root().expected_fail(&owner);
-                    evaluate_assert_with_expected_fail(&entry.body, ef, &mut |expr| {
-                        eval_texpr(
-                            entry_ctx.executable(expr)?,
-                            values,
-                            &empty_hir_locals,
-                            &entry_ctx,
-                        )
+            let assert_result =
+                assert_dependency_failure(body, errors, &entry_ctx).unwrap_or_else(|| {
+                    evaluate_assert_with_expected_fail(body, unit.expected_fail(), &mut |expr| {
+                        eval_root(&entry_ctx.executable(expr)?, values, &entry_ctx)
                     })
                 });
             Ok((
@@ -794,33 +818,24 @@ pub(super) fn evaluate_assertions(
                 projection,
             } in semantic_instance(tir, record, src)?.assertion_projections()
             {
-                let assertion_ctx = ctx.for_checked_decl(src, &owner)?;
-                let assertion_dag = assertion_ctx.dag();
-                let entry = assertion_dag
-                    .asserts()
-                    .find(|entry| entry.identity() == owner)
-                    .ok_or_else(|| {
-                        GraphcalError::internal_error(
-                            format!(
-                                "projected assertion `{owner}` is absent from semantic instance"
-                            ),
-                            src,
-                            DiagnosticAnchor::WholeFile,
-                        )
-                    })?;
+                let unit = declaration_body(tir, &owner, src)?;
+                let entry = unit.assertion().ok_or_else(|| {
+                    GraphcalError::internal_error(
+                        format!("projected assertion `{owner}` is absent from semantic instance"),
+                        src,
+                        DiagnosticAnchor::WholeFile,
+                    )
+                })?;
+                let assertion_ctx = ctx.with_src(src).for_decl(&owner);
                 let expected = projection
                     .expected_fail
                     .as_ref()
-                    .or_else(|| assertion_dag.expected_fail(&owner));
-                let result =
-                    evaluate_assert_with_expected_fail(&entry.body, expected, &mut |expr| {
-                        eval_texpr(
-                            assertion_ctx.executable(expr)?,
-                            values,
-                            &empty_hir_locals,
-                            &assertion_ctx,
-                        )
-                    });
+                    .or_else(|| unit.expected_fail());
+                let result = evaluate_assert_with_expected_fail(
+                    entry.map(|entry| &*entry.body),
+                    expected,
+                    &mut |expr| eval_root(&assertion_ctx.executable(expr)?, values, &assertion_ctx),
+                );
                 assertions.push((
                     root_instance_name(
                         tir.root_dag_id(),
@@ -828,7 +843,7 @@ pub(super) fn evaluate_assertions(
                         &projection.exposed_name,
                     ),
                     result,
-                    entry.span,
+                    entry.get().span,
                 ));
             }
         }
@@ -877,17 +892,16 @@ pub(super) fn root_source_names(
 /// list only the dependency's name (its own failure is reported on that
 /// declaration).
 fn assert_dependency_failure(
-    body: &graphcal_compiler::hir::AssertBody,
+    body: Scoped<'_, graphcal_compiler::hir::AssertBody>,
     errors: &HashMap<ResolvedDeclName, NodeUnavailable>,
-    ctx: &EvalContext<'_>,
+    ctx: &EvalSession<'_>,
 ) -> Option<AssertResult> {
-    let body_exprs: Vec<&graphcal_compiler::hir::Expr> = match body {
-        graphcal_compiler::hir::AssertBody::Expr(expr) => vec![expr],
-        graphcal_compiler::hir::AssertBody::Tolerance {
+    let body_exprs = match body.operands() {
+        AssertionOperands::Condition(expr) => vec![expr],
+        AssertionOperands::Tolerance {
             actual,
             expected,
             tolerance,
-            ..
         } => vec![actual, expected, tolerance],
     };
     match ctx.unavailable_dependencies(body_exprs.iter().copied()) {
@@ -895,7 +909,7 @@ fn assert_dependency_failure(
         Err(error) => Some(AssertResult::Error {
             message: error.to_string(),
         }),
-        _ => dependency_failure_message(body_exprs, errors, ctx)
+        _ => dependency_failure_message(body_exprs, errors)
             .map(|message| AssertResult::Error { message }),
     }
 }
@@ -908,22 +922,14 @@ fn assert_dependency_failure(
 /// declaration is not "undefined", it is unevaluable, and the report must
 /// point at the root cause.
 fn dependency_failure_message<'a>(
-    exprs: impl IntoIterator<Item = &'a graphcal_compiler::hir::Expr>,
+    exprs: impl IntoIterator<Item = Scoped<'a, graphcal_compiler::hir::Expr>>,
     errors: &HashMap<ResolvedDeclName, NodeUnavailable>,
-    ctx: &EvalContext<'_>,
 ) -> Option<String> {
     if errors.is_empty() {
         return None;
     }
-    let deps: std::collections::BTreeSet<_> = exprs
-        .into_iter()
-        .flat_map(|expr| {
-            graphcal_compiler::hir::collect_expr_dependencies(expr)
-                .graph_refs
-                .into_iter()
-        })
-        .map(|reference| ctx.resolve(&reference))
-        .collect();
+    let deps: std::collections::BTreeSet<_> =
+        exprs.into_iter().flat_map(Scoped::graph_refs).collect();
     let failed: Vec<String> =
         deps.iter()
             .filter_map(|dep| {
@@ -947,20 +953,19 @@ fn dependency_failure_message<'a>(
 /// `RuntimeValue`. An evaluation failure aborts the whole plot; the error
 /// message is reported on the plot (#842).
 fn eval_plot_property(
-    expr: &graphcal_compiler::hir::Expr,
+    expr: Scoped<'_, graphcal_compiler::hir::Expr>,
     values: &RuntimeValueMap,
-    ctx: &EvalContext<'_>,
+    ctx: &EvalSession<'_>,
 ) -> Result<PlotFieldValue, PlotEvaluationError> {
     ctx.cancellation.checkpoint().map_err(GraphcalError::from)?;
-    if let graphcal_compiler::hir::ExprKind::StringLiteral(_) = expr.kind() {
+    if let graphcal_compiler::hir::ExprKind::StringLiteral(_) = expr.get().kind() {
         let text = ctx
             .checked_string(expr)
             .map_err(PlotEvaluationError::from)?;
         return Ok(PlotFieldValue::String(text.to_owned()));
     }
-    let empty_locals = HirLocalValueMap::root();
     ctx.executable(expr)
-        .and_then(|tree| eval_texpr(tree, values, &empty_locals, ctx))
+        .and_then(|tree| eval_root(&tree, values, ctx))
         .map_err(PlotEvaluationError::from)
         .and_then(|rv| runtime_to_plot_field_value(&rv).map_err(PlotEvaluationError::from))
 }
@@ -1016,31 +1021,41 @@ impl From<String> for PlotEvaluationError {
 /// cancellation and structural checked/runtime invariant failures abort the
 /// enclosing evaluation.
 fn evaluate_plot(
-    entry: &graphcal_compiler::tir::typed::TypedPlotEntry,
+    unit: DeclarationBody<'_>,
+    entry: Scoped<'_, graphcal_compiler::tir::typed::TypedPlotEntry>,
     values: &RuntimeValueMap,
     presentation_values: &PresentationInstanceMap,
     errors: &HashMap<ResolvedDeclName, NodeUnavailable>,
-    ctx: &EvalContext<'_>,
+    ctx: &EvalSession<'_>,
 ) -> Result<PlotSpec, PlotEvaluationError> {
     // A reference to a failed declaration must report the root cause, not a
     // generic lookup failure on the missing value.
-    let lowered = &entry.body;
-    let body_exprs = lowered
-        .encodings
+    let lowered = entry.map(|entry| &entry.body);
+    let encodings = lowered
+        .map(|lowered| lowered.encodings.as_slice())
         .iter()
-        .map(|(_, expr)| &**expr)
-        .chain(lowered.mark_properties.iter().map(|field| &*field.value))
-        .chain(lowered.properties.iter().map(|field| &*field.value))
+        .map(|encoding| (encoding.get().0, encoding.map(|(_, expr)| &**expr)))
+        .collect::<Vec<_>>();
+    let mark_fields = lowered.map(|lowered| lowered.mark_properties.as_slice());
+    let plot_fields = lowered.map(|lowered| lowered.properties.as_slice());
+    let body_exprs = encodings
+        .iter()
+        .map(|(_, expr)| *expr)
+        .chain(
+            mark_fields
+                .iter()
+                .map(|field| field.map(|field| &*field.value)),
+        )
+        .chain(
+            plot_fields
+                .iter()
+                .map(|field| field.map(|field| &*field.value)),
+        )
         .collect::<Vec<_>>();
     check_plot_expression_dependencies(&body_exprs, errors, ctx)?;
 
-    let owner = ctx.current_decl.as_ref().ok_or_else(|| {
-        PlotEvaluationError::Fatal(ctx.internal_error(
-            "plot evaluation has no canonical declaration owner",
-            DiagnosticAnchor::WholeFile,
-        ))
-    })?;
-    let channel_facts = ctx.dag().plot_channel_presentations(owner).ok_or_else(|| {
+    let owner = unit.identity();
+    let channel_facts = unit.plot_channel_presentations().ok_or_else(|| {
         PlotEvaluationError::Fatal(ctx.internal_error(
             format!("checked presentation facts are missing for plot `{owner}`"),
             DiagnosticAnchor::WholeFile,
@@ -1051,29 +1066,21 @@ fn evaluate_plot(
 
     // Evaluate channels and apply their checked structured presentation before
     // row alignment. Numeric projection and axis labels consume the same fact.
-    let empty_locals = HirLocalValueMap::root();
     let mut channel_data = Vec::new();
-    for (channel, expr) in &lowered.encodings {
-        let fact = channel_facts.get(channel).ok_or_else(|| {
+    for (channel, expr) in encodings {
+        let fact = channel_facts.get(&channel).ok_or_else(|| {
             PlotEvaluationError::Fatal(ctx.internal_error(
                 format!("checked presentation is missing channel `{channel}`"),
-                expr.span,
+                expr.get().span,
             ))
         })?;
-        let (data, unit_label, diagnostics) = evaluate_plot_channel(
-            *channel,
-            expr,
-            fact,
-            values,
-            presentation_values,
-            &empty_locals,
-            ctx,
-        )?;
+        let (data, unit_label, diagnostics) =
+            evaluate_plot_channel(channel, expr, fact, values, presentation_values, ctx)?;
 
         presentation_diagnostics.extend(diagnostics.into_iter().map(|detail| {
             PresentationDiagnostic {
                 declaration: owner.clone(),
-                channel: Some(*channel),
+                channel: Some(channel),
                 detail,
             }
         }));
@@ -1084,24 +1091,25 @@ fn evaluate_plot(
             _ => None,
         };
         encoding_meta.push((
-            *channel,
+            channel,
             AxisMeta {
                 dimension_label,
                 unit_label,
             },
         ));
-        channel_data.push((*channel, data));
+        channel_data.push((channel, data));
     }
     let encodings = super::plot_data::align_encoding_channels(&channel_data)?;
 
     // Evaluate mark properties (e.g., stroke_width, opacity). Unknown names
     // are rejected at check time (#845); one that still reaches evaluation
     // is an internal inconsistency.
-    let mark_properties = evaluate_mark_properties(&lowered.mark_properties, values, ctx)?;
+    let mark_properties = evaluate_mark_properties(mark_fields, values, ctx)?;
 
     // Evaluate top-level properties (e.g., title, width, height)
     let mut properties = Vec::new();
-    for field in &lowered.properties {
+    for scoped_field in plot_fields.iter() {
+        let field = scoped_field.get();
         let graphcal_compiler::ir::lower::LoweredPlotProperty::Plot(plot_prop) = &field.property
         else {
             return Err(PlotEvaluationError::Fatal(ctx.internal_error(
@@ -1112,11 +1120,12 @@ fn evaluate_plot(
                 field.value.span,
             )));
         };
-        let field_value = eval_plot_property(&field.value, values, ctx)
+        let field_value = eval_plot_property(scoped_field.map(|field| &*field.value), values, ctx)
             .map_err(|error| error.with_property(&field.property))?;
         check_positive_property(plot_prop.name(), plot_prop.value_type(), &field_value)?;
         properties.push((*plot_prop, field_value));
     }
+    let entry = entry.get();
 
     Ok(PlotSpec {
         name: ScopedName::local(entry.name().clone()),
@@ -1131,14 +1140,15 @@ fn evaluate_plot(
 }
 
 fn evaluate_mark_properties(
-    fields: &[graphcal_compiler::ir::lower::LoweredPlotField],
+    fields: Scoped<'_, [graphcal_compiler::ir::lower::LoweredPlotField]>,
     values: &RuntimeValueMap,
-    ctx: &EvalContext<'_>,
+    ctx: &EvalSession<'_>,
 ) -> Result<Vec<(graphcal_compiler::plot_props::MarkProperty, PlotFieldValue)>, PlotEvaluationError>
 {
     fields
         .iter()
-        .map(|field| {
+        .map(|scoped_field| {
+            let field = scoped_field.get();
             let graphcal_compiler::ir::lower::LoweredPlotProperty::Mark(mark_prop) =
                 &field.property
             else {
@@ -1150,7 +1160,7 @@ fn evaluate_mark_properties(
                     field.value.span,
                 )));
             };
-            let value = eval_plot_property(&field.value, values, ctx)
+            let value = eval_plot_property(scoped_field.map(|field| &*field.value), values, ctx)
                 .map_err(|error| error.with_property(&field.property))?;
             Ok((*mark_prop, value))
         })
@@ -1159,12 +1169,11 @@ fn evaluate_mark_properties(
 
 fn evaluate_plot_channel(
     channel: graphcal_compiler::syntax::ast::EncodingChannel,
-    expr: &graphcal_compiler::hir::Expr,
+    scoped_expr: Scoped<'_, graphcal_compiler::hir::Expr>,
     fact: &graphcal_compiler::plot_shape::PlotChannelShape,
     values: &RuntimeValueMap,
     presentation_values: &PresentationInstanceMap,
-    locals: &HirLocalValueMap<'_>,
-    ctx: &EvalContext<'_>,
+    ctx: &EvalSession<'_>,
 ) -> Result<
     (
         super::plot_data::ChannelData,
@@ -1173,6 +1182,7 @@ fn evaluate_plot_channel(
     ),
     PlotEvaluationError,
 > {
+    let expr = scoped_expr.get();
     if let graphcal_compiler::hir::ExprKind::StringLiteral(value) = expr.kind() {
         return Ok((
             super::plot_data::ChannelData::unindexed_label(value.clone()),
@@ -1181,10 +1191,8 @@ fn evaluate_plot_channel(
         ));
     }
     let evaluated = ctx
-        .executable(expr)
-        .and_then(|tree| {
-            eval_texpr_with_presentation(tree, values, presentation_values, locals, ctx)
-        })
+        .executable(scoped_expr)
+        .and_then(|tree| eval_root_with_presentation(&tree, values, presentation_values, ctx))
         .map_err(|error| classify_plot_channel_error(channel, error))?;
     let (runtime, presentation_instance) = evaluated.into_parts();
     let presentation_instance =
@@ -1237,7 +1245,7 @@ fn classify_plot_channel_error(
 /// Convert the retained checked plot shape into the public projection type.
 fn plot_declared_type(
     shape: &graphcal_compiler::plot_shape::PlotChannelShape,
-    ctx: &EvalContext<'_>,
+    ctx: &EvalSession<'_>,
     span: Span,
 ) -> Result<CheckedType, GraphcalError> {
     // A contextual string channel has no runtime value type, and a symbolic
@@ -1273,24 +1281,26 @@ fn plot_declared_type(
 mod tests;
 
 fn check_plot_expression_dependencies(
-    expressions: &[&graphcal_compiler::hir::Expr],
+    expressions: &[Scoped<'_, graphcal_compiler::hir::Expr>],
     errors: &HashMap<ResolvedDeclName, NodeUnavailable>,
-    ctx: &EvalContext<'_>,
+    ctx: &EvalSession<'_>,
 ) -> Result<(), PlotEvaluationError> {
     if let Some(reason) = ctx.unavailable_dependencies(expressions.iter().copied())?
         && reason.is_incomplete()
     {
         return Err(PlotEvaluationError::Unavailable(reason));
     }
-    dependency_failure_message(expressions.iter().copied(), errors, ctx)
+    dependency_failure_message(expressions.iter().copied(), errors)
         .map_or(Ok(()), |message| Err(PlotEvaluationError::from(message)))
 }
 
-/// Propagate known plot unavailability without hiding unknown checked references.
+/// Propagate known plot unavailability without hiding unknown checked
+/// references, which `owner` (the DAG declaring the composition) binds.
 fn check_plot_dependencies(
     references: &[graphcal_compiler::syntax::span::Spanned<ScopedName>],
     errors: &[super::types::PlotError],
-    ctx: &EvalContext<'_>,
+    owner: &graphcal_compiler::tir::typed::CheckedDag,
+    ctx: &EvalSession<'_>,
 ) -> Result<(), PlotEvaluationError> {
     let dependencies = references
         .iter()
@@ -1301,7 +1311,7 @@ fn check_plot_dependencies(
                 .map(|error| (reference, error))
         })
         .map(|(reference, error)| {
-            ctx.dag()
+            owner
                 .require_bound_decl_identity(
                     &reference.value,
                     ctx.src,
@@ -1329,16 +1339,19 @@ struct CompositionFields {
 
 /// Evaluate composition fields (properties and plot names) shared by figures and layers.
 fn eval_composition_fields(
-    fields: &[graphcal_compiler::tir::typed::LoweredPlotField],
+    fields: Scoped<'_, [graphcal_compiler::tir::typed::LoweredPlotField]>,
     plot_name_spans: &[graphcal_compiler::syntax::span::Spanned<ScopedName>],
     values: &RuntimeValueMap,
-    ctx: &EvalContext<'_>,
+    ctx: &EvalSession<'_>,
 ) -> Result<CompositionFields, PlotEvaluationError> {
-    if let Some(reason) = ctx.unavailable_dependencies(fields.iter().map(|field| &*field.value))? {
+    if let Some(reason) =
+        ctx.unavailable_dependencies(fields.iter().map(|field| field.map(|field| &*field.value)))?
+    {
         return Err(PlotEvaluationError::Unavailable(reason));
     }
     let mut properties = Vec::new();
-    for field in fields {
+    for scoped_field in fields.iter() {
+        let field = scoped_field.get();
         let graphcal_compiler::ir::lower::LoweredPlotProperty::Composition(comp_prop) =
             &field.property
         else {
@@ -1350,7 +1363,7 @@ fn eval_composition_fields(
                 field.value.span,
             )));
         };
-        let field_value = eval_plot_property(&field.value, values, ctx)
+        let field_value = eval_plot_property(scoped_field.map(|field| &*field.value), values, ctx)
             .map_err(|error| error.with_property(&field.property))?;
         check_positive_property(comp_prop.name(), comp_prop.value_type(), &field_value)?;
         properties.push((*comp_prop, field_value));

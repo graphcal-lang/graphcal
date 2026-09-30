@@ -13,7 +13,8 @@ use crate::resolved_name::ResolvedDeclName;
 /// is the frame of the DAG running the body — inside the compiler through
 /// that DAG's `InstanceFrame`, outside it through the DAG's
 /// [`BodyScope::resolve`](crate::tir::typed::BodyScope::resolve), which an
-/// evaluator obtains only from its execution plan. Since a handle is not a
+/// evaluator obtains only together with the body's source, looked up by the
+/// identity of the unit that owns it. Since a handle is not a
 /// [`ResolvedDeclName`], using it where an identity is required without
 /// resolving it does not compile.
 ///

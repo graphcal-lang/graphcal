@@ -439,13 +439,8 @@ fn context_capabilities_are_phase_selected_and_checked_scopes_fail_closed() {
     let tir = compile_to_tir(source, "capabilities.gcl").unwrap();
     let src = miette::NamedSource::new("capabilities.gcl", std::sync::Arc::new(source.to_string()));
     let cancellation = graphcal_compiler::cancellation::CancellationToken::unbounded();
-    let provisional = crate::eval_expr::EvalContext::provisional_constants(
-        &tir,
-        tir.root_dag_id(),
-        &src,
-        cancellation.clone(),
-    )
-    .unwrap();
+    let provisional =
+        crate::eval_expr::EvalSession::provisional_constants(&tir, &src, cancellation.clone());
     assert!(provisional.host_fns().is_none());
     assert!(provisional.struct_field_constraints().is_none());
     assert!(provisional.execution_plan().is_err());
@@ -453,10 +448,8 @@ fn context_capabilities_are_phase_selected_and_checked_scopes_fail_closed() {
     let prepared = crate::exec_plan::compile_with_cancellation(&tir, &src, &cancellation).unwrap();
     let plan = prepared.plan();
     let host = crate::host_fns::HostFunctionRegistry::new();
-    let context =
-        crate::eval_expr::EvalContext::checked(plan, plan.root(), &src, &host, cancellation);
+    let context = crate::eval_expr::EvalSession::checked(plan, &src, &host, cancellation);
     assert!(std::ptr::eq(context.tir, plan.tir()));
-    assert!(std::ptr::eq(context.dag(), plan.tir().root()));
     assert!(std::ptr::eq(
         context.struct_field_constraints().unwrap(),
         plan.program().facts().struct_field_constraints()
@@ -483,97 +476,43 @@ fn generic_nat_services_cannot_cross_type_owners_with_the_same_parameter_name() 
             StructTypeName::expect_valid(name),
         )
     };
-    let defs = &tir.root().semantic().type_defs;
-    let a = defs.struct_types[&type_id("A")].generic_params()[0]
-        .id()
-        .clone();
-    let b = defs.struct_types[&type_id("B")].generic_params()[0]
+    let nominal_a = tir.nominal_type_body(&type_id("A")).unwrap();
+    let a = nominal_a.definition().generic_params()[0].id().clone();
+    let b = tir
+        .nominal_type_body(&type_id("B"))
+        .unwrap()
+        .definition()
+        .generic_params()[0]
         .id()
         .clone();
     assert_eq!(a.name, b.name);
     assert_ne!(a, b);
-    let key = graphcal_compiler::tir::typed::model::ResolvedStructFieldTypeKey {
-        owning_type: type_id("A"),
-        constructor: ConstructorName::expect_valid("A"),
-        field: FieldName::expect_valid("value"),
-    };
-    let bound = &defs.field(&key).unwrap().domain_bounds()[0].value;
-    let context = crate::eval_expr::EvalContext::provisional_constants(
+    let (key, field) = nominal_a.constrained_fields().next().unwrap();
+    assert_eq!(key.constructor, ConstructorName::expect_valid("A"));
+    assert_eq!(key.field, FieldName::expect_valid("value"));
+    let bound = field.map(|field| &field.domain_bounds()[0]);
+    let context = crate::eval_expr::EvalSession::provisional_constants(
         &tir,
-        tir.root_dag_id(),
         &src,
         graphcal_compiler::cancellation::CancellationToken::unbounded(),
-    )
-    .unwrap();
+    );
     let own = std::collections::HashMap::from([(a, 3)]);
     let foreign = std::collections::HashMap::from([(b, 3)]);
     let values = crate::constant_pools::RuntimeValueMap::new();
-    let locals = crate::eval_expr::HirLocalValueMap::root();
     let tree = graphcal_compiler::tir::dim_check::body_specialization::specialize_bound_expression(
-        &tir,
-        tir.root(),
-        bound,
-        &own,
-        &src,
+        &tir, bound, &own,
     )
     .unwrap();
-    let value = crate::eval_expr::eval_texpr(&tree, &values, &locals, &context).unwrap();
+    let value = crate::eval_expr::eval_root(&tree, &values, &context).unwrap();
     let graphcal_compiler::registry::runtime_value::RuntimeValue::Quantity(value) = value else {
         panic!("expected a quantity bound, got {value:?}");
     };
     assert_eq!(value.get().to_bits(), 3.0_f64.to_bits());
     assert!(
         graphcal_compiler::tir::dim_check::body_specialization::specialize_bound_expression(
-            &tir,
-            tir.root(),
-            bound,
-            &foreign,
-            &src
+            &tir, bound, &foreign,
         )
         .is_err()
-    );
-}
-
-#[test]
-fn checked_runtime_shape_lookup_uses_identity_not_diagnostic_coordinates() {
-    let source = "node values: Dimensionless[Fin(2)] = for p: Fin(2) { 1.0 };";
-    let tir = compile_to_tir(source, "shape-identities.gcl").unwrap();
-    let src = miette::NamedSource::new(
-        "shape-identities.gcl",
-        std::sync::Arc::new(source.to_string()),
-    );
-    let cancellation = graphcal_compiler::cancellation::CancellationToken::unbounded();
-    let prepared = crate::exec_plan::compile_with_cancellation(&tir, &src, &cancellation).unwrap();
-    let plan = prepared.plan();
-    let hosts = crate::host_fns::HostFunctionRegistry::new();
-    let owner = graphcal_compiler::resolved_name::ResolvedDeclName::for_test(
-        tir.root_dag_id().clone(),
-        graphcal_compiler::syntax::decl_name::DeclName::expect_valid("values"),
-    );
-    let context =
-        crate::eval_expr::EvalContext::checked(plan, plan.root(), &src, &hosts, cancellation)
-            .for_decl(&owner);
-    let original = tir
-        .root()
-        .nodes()
-        .next()
-        .unwrap()
-        .definition
-        .formula()
-        .unwrap();
-    let mut shifted = (**original).clone();
-    shifted.span = graphcal_compiler::syntax::span::Span::new(0, 1);
-    assert_ne!(shifted.span, original.span);
-    assert_eq!(shifted.id(), original.id());
-    let value = crate::eval_expr::eval_texpr(
-        context.executable(&shifted).unwrap(),
-        &crate::constant_pools::RuntimeValueMap::new(),
-        &crate::eval_expr::HirLocalValueMap::root(),
-        &context,
-    )
-    .unwrap();
-    assert!(
-        matches!(value, graphcal_compiler::registry::runtime_value::RuntimeValue::Indexed { entries, .. } if entries.len() == 2)
     );
 }
 
@@ -992,7 +931,7 @@ fn shared_frame_dependency_and_fatal_error_policies_are_explicit() {
                         GraphcalError::EvalError {
                             message: "ordinary sentinel".into(),
                             src: src.clone(),
-                            span: entry.body().span().into(),
+                            span: entry.body().tree().span().into(),
                         }
                     });
                 }
@@ -1040,6 +979,7 @@ const _: fn() = || {
     struct Mutable;
     impl<T: ?Sized + std::ops::DerefMut> ReadOnlyUnlessMutable<Mutable> for T {}
     let _ = <crate::eval_expr::EvalContext<'static> as ReadOnlyUnlessMutable<_>>::probe;
+    let _ = <crate::eval_expr::EvalSession<'static> as ReadOnlyUnlessMutable<_>>::probe;
 };
 
 #[test]
@@ -6539,7 +6479,11 @@ fn eval_constructor_match_rejects_runtime_owner_mismatch_with_same_leaf_construc
         .bound_decl_identity(&scoped_name("distance"))
         .unwrap()
         .clone();
-    let expr = tir.root().value_expr(&expr_key).unwrap();
+    let expr = tir
+        .declaration_body(&expr_key)
+        .unwrap()
+        .runtime_expression()
+        .unwrap();
     let b_owner = graphcal_compiler::resolved_name::ResolvedName::for_test(
         loaded_file_dag_id(&project, "b.gcl"),
         graphcal_compiler::syntax::type_name::StructTypeName::expect_valid("Command"),
@@ -6563,21 +6507,17 @@ fn eval_constructor_match_rejects_runtime_owner_mismatch_with_same_leaf_construc
             fields,
         },
     )]);
-    let empty_locals = crate::eval_expr::HirLocalValueMap::root();
     let src = &project.root_file().named_source();
-    let ctx = crate::eval_expr::EvalContext::provisional_constants(
+    let ctx = crate::eval_expr::EvalSession::provisional_constants(
         &tir,
-        tir.root_dag_id(),
         src,
         graphcal_compiler::cancellation::CancellationToken::unbounded(),
     )
-    .unwrap()
     .with_roots(&values, None)
     .for_decl(&expr_key);
 
     let err =
-        crate::eval_expr::eval_texpr(ctx.executable(expr).unwrap(), &values, &empty_locals, &ctx)
-            .unwrap_err();
+        crate::eval_expr::eval_root(&ctx.executable(expr).unwrap(), &values, &ctx).unwrap_err();
     match err {
         GraphcalError::EvalError { message, .. } => {
             assert!(message.contains("no match arm for variant"), "{message}");
@@ -6602,7 +6542,11 @@ fn eval_field_access_rejects_runtime_owner_mismatch_with_same_leaf_type() {
         .bound_decl_identity(&scoped_name("distance"))
         .unwrap()
         .clone();
-    let expr = tir.root().value_expr(&expr_key).unwrap();
+    let expr = tir
+        .declaration_body(&expr_key)
+        .unwrap()
+        .runtime_expression()
+        .unwrap();
     let b_owner = graphcal_compiler::resolved_name::ResolvedName::for_test(
         loaded_file_dag_id(&project, "b.gcl"),
         graphcal_compiler::syntax::type_name::StructTypeName::expect_valid("Item"),
@@ -6626,21 +6570,17 @@ fn eval_field_access_rejects_runtime_owner_mismatch_with_same_leaf_type() {
             fields,
         },
     )]);
-    let empty_locals = crate::eval_expr::HirLocalValueMap::root();
     let src = &project.root_file().named_source();
-    let ctx = crate::eval_expr::EvalContext::provisional_constants(
+    let ctx = crate::eval_expr::EvalSession::provisional_constants(
         &tir,
-        tir.root_dag_id(),
         src,
         graphcal_compiler::cancellation::CancellationToken::unbounded(),
     )
-    .unwrap()
     .with_roots(&values, None)
     .for_decl(&expr_key);
 
     let err =
-        crate::eval_expr::eval_texpr(ctx.executable(expr).unwrap(), &values, &empty_locals, &ctx)
-            .unwrap_err();
+        crate::eval_expr::eval_root(&ctx.executable(expr).unwrap(), &values, &ctx).unwrap_err();
     match err {
         GraphcalError::EvalError { message, .. } => {
             assert!(message.contains("no field `distance`"), "{message}");
@@ -7470,7 +7410,11 @@ fn eval_index_access_rejects_runtime_owner_mismatch_with_same_leaf_variant() {
         .bound_decl_identity(&scoped_name("burn"))
         .unwrap()
         .clone();
-    let expr = tir.root().value_expr(&expr_key).unwrap();
+    let expr = tir
+        .declaration_body(&expr_key)
+        .unwrap()
+        .runtime_expression()
+        .unwrap();
     let b_owner = graphcal_compiler::resolved_name::ResolvedName::for_test(
         loaded_file_dag_id(&project, "b.gcl"),
         graphcal_compiler::syntax::index_name::IndexName::expect_valid("Phase"),
@@ -7500,21 +7444,17 @@ fn eval_index_access_rejects_runtime_owner_mismatch_with_same_leaf_variant() {
             entries,
         },
     )]);
-    let empty_locals = crate::eval_expr::HirLocalValueMap::root();
     let src = &project.root_file().named_source();
-    let ctx = crate::eval_expr::EvalContext::provisional_constants(
+    let ctx = crate::eval_expr::EvalSession::provisional_constants(
         &tir,
-        tir.root_dag_id(),
         src,
         graphcal_compiler::cancellation::CancellationToken::unbounded(),
     )
-    .unwrap()
     .with_roots(&values, None)
     .for_decl(&expr_key);
 
     let err =
-        crate::eval_expr::eval_texpr(ctx.executable(expr).unwrap(), &values, &empty_locals, &ctx)
-            .unwrap_err();
+        crate::eval_expr::eval_root(&ctx.executable(expr).unwrap(), &values, &ctx).unwrap_err();
     match err {
         GraphcalError::EvalError { message, .. } => {
             assert!(message.contains("index argument belongs to"), "{message}");
@@ -7542,8 +7482,13 @@ fn eval_label_match_rejects_runtime_owner_mismatch_with_same_leaf_variant() {
         .bound_decl_identity(&scoped_name("code"))
         .unwrap()
         .clone();
-    let expr = tir.root().value_expr(&expr_key).unwrap();
-    let tree = tir.root().bodies().executable_value(expr.id()).unwrap();
+    let expr = tir
+        .declaration_body(&expr_key)
+        .unwrap()
+        .runtime_expression()
+        .unwrap();
+    let root = expr.executable().unwrap();
+    let tree = root.tree();
     let graphcal_compiler::tir::texpr::TExprKind::For { bindings, body } = tree.kind() else {
         panic!("expected `code` to be a for-comprehension, got {tree:?}");
     };
@@ -7570,17 +7515,17 @@ fn eval_label_match_rejects_runtime_owner_mismatch_with_same_leaf_variant() {
         ),
     )]);
     let src = &project.root_file().named_source();
-    let ctx = crate::eval_expr::EvalContext::provisional_constants(
+    let ctx = crate::eval_expr::EvalSession::provisional_constants(
         &tir,
-        tir.root_dag_id(),
         src,
         graphcal_compiler::cancellation::CancellationToken::unbounded(),
     )
-    .unwrap()
     .with_roots(&values, None)
     .for_decl(&expr_key);
 
-    let err = crate::eval_expr::eval_texpr(match_expr, &values, &local_values, &ctx).unwrap_err();
+    let err =
+        crate::eval_expr::eval_subtree_for_test(&root, match_expr, &values, &local_values, &ctx)
+            .unwrap_err();
     match err {
         GraphcalError::EvalError { message, .. } => {
             assert!(message.contains("no match arm for label"), "{message}");

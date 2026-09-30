@@ -55,10 +55,9 @@ fn const_pools_evaluate_every_constant_once_after_the_constants_it_reads() {
     let mut evaluated = Vec::new();
     let pool = ConstPool::build(&tir, &ConstPool::default(), |step| {
         assert!(std::ptr::eq(step.tir, &raw const tir));
-        assert!(std::ptr::eq(step.dag, tir.root()));
         assert!(std::ptr::eq(
-            step.expression,
-            step.dag.const_expr(step.key).unwrap()
+            step.expression.get(),
+            tir.root().const_expr(step.key).unwrap()
         ));
         assert!(
             evaluated.iter().all(|done| step.visible.contains_key(done)),

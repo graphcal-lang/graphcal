@@ -4,7 +4,7 @@
 //! The interpreter resolves them before the owning invocation is discarded.
 
 use graphcal_compiler::dag_id::DagId;
-use graphcal_compiler::hir::expr::ResolvedUnitExpr;
+use graphcal_compiler::hir::expr::{ResolvedUnitExpr, ResolvedUnitRef};
 use graphcal_compiler::registry::time_zone::IanaTimeZoneId;
 use graphcal_compiler::registry::unit::PositiveFiniteScale;
 use graphcal_compiler::syntax::index_name::IndexEntryKey;
@@ -17,12 +17,17 @@ use thiserror::Error;
 
 use graphcal_compiler::resolved_name::ResolvedDeclName;
 
-/// A display-only computation, to be performed in the selected value's owner frame.
+/// A display-only computation, to be performed once the frame of the selected
+/// value's owner is complete.
 #[derive(Debug, Clone)]
 pub struct PendingDisplayUnit {
+    /// The DAG whose frame computed the value; the request is resolved against
+    /// that frame's values.
     pub owner: DagId,
     pub source: NamedSource<Arc<String>>,
-    pub unit: ResolvedUnitExpr,
+    /// The display unit, each term already resolved in the scope of the tree
+    /// that names it.
+    pub unit: ResolvedUnitExpr<ResolvedUnitRef>,
 }
 
 /// An ordinary presentation failure. Invariants and cancellation never inhabit this type.

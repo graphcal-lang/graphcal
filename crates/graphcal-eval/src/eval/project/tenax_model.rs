@@ -6,10 +6,10 @@ use crate::eval::runtime::{evaluate_assertions, root_source_names};
 use crate::eval::types::NodeUnavailable;
 
 use super::{
-    Arc, AssertResult, CheckedType, CompileError, ConcreteIndexKind, DeclName, Error, EvalContext,
-    EvalLoopResult, GraphcalError, HashSet, IndexKind, IndexVariantName, ModelSchemaGraph,
-    ModelValueSchema, ParameterBindingRow, ParameterPosition, PreparedProject, ResolvedDeclName,
-    Span, TimeScale, Value, index_def_for_ref, remap_include_debug_name,
+    Arc, AssertResult, CheckedType, CompileError, ConcreteIndexKind, DeclName, Error,
+    EvalLoopResult, EvalSession, GraphcalError, HashSet, IndexKind, IndexVariantName,
+    ModelSchemaGraph, ModelValueSchema, ParameterBindingRow, ParameterPosition, PreparedProject,
+    ResolvedDeclName, Span, TimeScale, Value, index_def_for_ref, remap_include_debug_name,
     run_eval_loop_with_bindings,
 };
 
@@ -290,16 +290,10 @@ impl PreparedProject {
             return Ok(ModelRowOutcome::Failure(failure));
         }
 
-        let ctx = EvalContext::checked(
-            self.plan(),
-            self.plan().root(),
-            &self.source,
-            &self.host_fns,
-            cancellation,
-        )
-        .with_roots(&values, None)
-        .with_unavailable(&errors)
-        .with_unfinished_calls(&unfinished_calls);
+        let ctx = EvalSession::checked(self.plan(), &self.source, &self.host_fns, cancellation)
+            .with_roots(&values, None)
+            .with_unavailable(&errors)
+            .with_unfinished_calls(&unfinished_calls);
         let first_failed_assertion =
             evaluate_assertions(self.tir(), &self.source, &ctx, &values, &errors)?
                 .into_iter()

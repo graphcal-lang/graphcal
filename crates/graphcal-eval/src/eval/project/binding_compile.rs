@@ -7,12 +7,12 @@ use graphcal_compiler::syntax::span::Spanned;
 use graphcal_compiler::syntax::token::SourceIdentifier;
 
 use super::{
-    AstExprKind, CheckedEntryInterface, CompileError, DeclName, DiagnosticAnchor, EvalContext,
-    Expr, ExprLoweringContext, GenericScope, GraphcalError, HirExprKind, HirLocalValueMap,
-    ModelIndexKind, ModelIndexSchema, ModelSchemaGraph, ModelSchemaGraphBuilder, ModelTypeId,
-    ModelValueSchema, ModuleScope, ParameterBindingBuilder, ParameterPort, ParameterPosition,
-    ParameterValue, PreparedProject, RuntimeParameterBinding, RuntimeParameterBindings,
-    RuntimeValueMap, Span, parameter_domain,
+    AstExprKind, CheckedEntryInterface, CompileError, DeclName, DiagnosticAnchor, EvalSession,
+    Expr, ExprLoweringContext, GenericScope, GraphcalError, HirExprKind, ModelIndexKind,
+    ModelIndexSchema, ModelSchemaGraph, ModelSchemaGraphBuilder, ModelTypeId, ModelValueSchema,
+    ModuleScope, ParameterBindingBuilder, ParameterPort, ParameterPosition, ParameterValue,
+    PreparedProject, RuntimeParameterBinding, RuntimeParameterBindings, RuntimeValueMap, Span,
+    parameter_domain,
 };
 
 /// One checked browser-editor value. Containers carry stable schema-arena
@@ -472,7 +472,10 @@ impl PreparedProject {
         &self,
         port: &ParameterPort,
         expr: &Expr,
-    ) -> Result<graphcal_compiler::tir::texpr::TExpr, CompileError> {
+    ) -> Result<
+        graphcal_compiler::tir::typed::ScopedTree<'_, graphcal_compiler::tir::texpr::TExpr>,
+        CompileError,
+    > {
         let hir =
             self.lower_closed_binding_expr(expr, &port.value_schema, self.tir().root_dag_id())?;
         let span = hir.span;
@@ -729,25 +732,17 @@ impl PreparedProject {
 
     fn evaluate_closed_binding(
         &self,
-        tree: &graphcal_compiler::tir::texpr::TExpr,
+        tree: &graphcal_compiler::tir::typed::ScopedTree<'_, graphcal_compiler::tir::texpr::TExpr>,
     ) -> Result<crate::runtime_presentation::EvaluatedRuntimeValue, CompileError> {
         let values = RuntimeValueMap::new();
-        let locals = HirLocalValueMap::root();
         let cancellation = graphcal_compiler::cancellation::CancellationToken::unbounded();
-        let context = EvalContext::checked(
-            self.plan(),
-            self.plan().root(),
-            &self.source,
-            &self.host_fns,
-            cancellation,
-        )
-        .with_roots(&values, None);
-        crate::eval_expr::eval_texpr_with_presentation(
+        let session = EvalSession::checked(self.plan(), &self.source, &self.host_fns, cancellation)
+            .with_roots(&values, None);
+        crate::eval_expr::eval_root_with_presentation(
             tree,
             &values,
             &crate::presentation_evidence::PresentationInstanceMap::new(),
-            &locals,
-            &context,
+            &session,
         )
         .map_err(CompileError::from)
     }

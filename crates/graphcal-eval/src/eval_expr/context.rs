@@ -1,26 +1,36 @@
 //! Phase-specific construction of immutable expression environments.
+//!
+//! An [`EvalSession`] carries everything evaluation needs except a scope: it
+//! cannot resolve a body handle. An [`EvalContext`] is a session entered into
+//! the scope of one tree, and is created only by entering a
+//! [`ScopedTree`] — a tree the compiler handed out together with the scope of
+//! the DAG that owns it. Code evaluating a body therefore never chooses the
+//! frame its handles resolve in.
 
 use std::collections::{BTreeSet, HashMap};
 use std::ops::Deref;
 use std::sync::Arc;
 
 use graphcal_compiler::cancellation::CancellationToken;
-use graphcal_compiler::dag_id::DagId;
 use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
+use graphcal_compiler::hir::expr::Expr;
 use graphcal_compiler::registry::error::GraphcalError;
 use graphcal_compiler::registry::types::FormattingRegistry;
 use graphcal_compiler::resolved_name::ResolvedDeclName;
 use graphcal_compiler::syntax::span::Span;
-use graphcal_compiler::tir::typed::{BodyScope, CheckedDag, CheckedTir, StructFieldConstraintKey};
+use graphcal_compiler::tir::texpr::TExpr;
+use graphcal_compiler::tir::typed::{
+    BodyScope, CheckedTir, Scoped, ScopedTree, StructFieldConstraintKey,
+};
 use miette::NamedSource;
 
-use crate::checked_program::SealedDag;
 use crate::constant_pools::RuntimeValueMap;
 use crate::domain_constraint::ResolvedDomainConstraint;
 use crate::execution_frame::ScheduledDeclaration;
-use crate::execution_plan::{CallablePlan, ExecPlan};
+use crate::execution_plan::ExecPlan;
 use crate::host_fns::HostFunctionRegistry;
 use crate::presentation_evidence::PresentationInstanceMap;
+use crate::static_incompleteness::ExpressionDependencies;
 
 use super::work_budget::WorkBudget;
 
@@ -35,10 +45,10 @@ enum Capabilities<'a> {
     },
 }
 
-/// Read-only data exposed by an evaluation context.
+/// Read-only data exposed by an evaluation session.
 ///
-/// There is deliberately no mutable dereference from `EvalContext`: callers
-/// cannot replace a body, registry, or fact store independently after selection.
+/// There is deliberately no mutable dereference from `EvalSession`: callers
+/// cannot replace a registry or fact store independently after selection.
 #[derive(Clone)]
 pub struct EvalEnvironment<'a> {
     pub cancellation: CancellationToken,
@@ -59,18 +69,16 @@ pub struct EvalEnvironment<'a> {
 }
 
 /// An immutable environment whose capabilities can only be selected by phase.
+///
+/// A session has no scope: it evaluates a tree only by entering the scope the
+/// tree was handed out with.
 #[derive(Clone)]
-pub struct EvalContext<'a> {
+pub struct EvalSession<'a> {
     environment: EvalEnvironment<'a>,
-    /// The scope of the DAG whose bodies this context runs, selected only by
-    /// the phase constructors and scope transitions below from the plan (or,
-    /// for provisional constants, from the DAG owning the constants). Its
-    /// frame resolves every body handle this context meets.
-    scope: BodyScope<'a>,
     capabilities: Capabilities<'a>,
 }
 
-impl<'a> Deref for EvalContext<'a> {
+impl<'a> Deref for EvalSession<'a> {
     type Target = EvalEnvironment<'a>;
 
     fn deref(&self) -> &Self::Target {
@@ -78,7 +86,26 @@ impl<'a> Deref for EvalContext<'a> {
     }
 }
 
-impl<'a> EvalContext<'a> {
+/// A session entered into the scope of the tree it evaluates.
+///
+/// Created only by [`EvalSession::enter`], from the scope a [`ScopedTree`]
+/// was handed out with, so every body handle it resolves is resolved in the
+/// frame of the DAG that owns the tree.
+#[derive(Clone)]
+pub struct EvalContext<'a> {
+    session: EvalSession<'a>,
+    scope: BodyScope<'a>,
+}
+
+impl<'a> Deref for EvalContext<'a> {
+    type Target = EvalSession<'a>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.session
+    }
+}
+
+impl<'a> EvalSession<'a> {
     fn environment(
         tir: &'a CheckedTir,
         src: &'a NamedSource<Arc<String>>,
@@ -98,77 +125,64 @@ impl<'a> EvalContext<'a> {
         }
     }
 
-    /// Select a provisional constant scope. DAG/host calls are unavailable and
-    /// field constraints are deferred to mandatory constant-field checking.
+    /// Select provisional constant evaluation. DAG/host calls are unavailable
+    /// and field constraints are deferred to mandatory constant-field
+    /// checking.
+    #[must_use]
     pub fn provisional_constants(
         tir: &'a CheckedTir,
-        owner: &DagId,
         src: &'a NamedSource<Arc<String>>,
         cancellation: CancellationToken,
-    ) -> Result<Self, GraphcalError> {
-        let scope = provisional_scope(tir, owner).ok_or_else(|| {
-            GraphcalError::internal_error(
-                format!("constant scope `{owner}` has no compiled body"),
-                src,
-                DiagnosticAnchor::WholeFile,
-            )
-        })?;
-        Ok(Self {
+    ) -> Self {
+        Self {
             environment: Self::environment(tir, src, cancellation),
-            scope,
             capabilities: Capabilities::ProvisionalConstants,
-        })
+        }
     }
 
-    /// Select the checked runtime scope of `callable`'s own body. Field
-    /// constraints cannot be omitted or supplied independently of the
-    /// selected checked project facts.
+    /// Select checked runtime evaluation of `plan`. Field constraints cannot
+    /// be omitted or supplied independently of the selected checked project
+    /// facts.
     #[must_use]
     pub fn checked(
         plan: &'a ExecPlan<'a>,
-        callable: &'a CallablePlan<'a>,
         src: &'a NamedSource<Arc<String>>,
         host: &'a HostFunctionRegistry,
         cancellation: CancellationToken,
     ) -> Self {
         Self {
             environment: Self::environment(plan.tir(), src, cancellation),
-            scope: callable.scope().body_scope(),
             capabilities: Capabilities::Checked { plan, host },
         }
     }
 
-    /// The executable tree of one of the current body's expression roots.
-    pub fn executable(
-        &self,
-        root: &graphcal_compiler::hir::expr::Expr,
-    ) -> Result<&'a graphcal_compiler::tir::texpr::TExpr, GraphcalError> {
-        self.scope
-            .bodies()
-            .executable_value(root.id())
-            .map_err(|error| self.internal_error(error.to_string(), root.span))
+    /// Enter the scope `root` was handed out with, to evaluate it, preserving
+    /// capabilities and enclosing work.
+    pub(in crate::eval_expr) fn enter<'b, T>(&'b self, root: &ScopedTree<'b, T>) -> EvalContext<'b>
+    where
+        'a: 'b,
+        T: std::borrow::Borrow<TExpr>,
+    {
+        EvalContext {
+            session: self.clone(),
+            scope: root.scope(),
+        }
     }
 
-    /// The text of a root of the current body checked as a contextual string.
-    pub fn checked_string(
+    /// The executable tree of an expression root of an evaluation unit.
+    pub fn executable<'t>(
         &self,
-        root: &graphcal_compiler::hir::expr::Expr,
-    ) -> Result<&'a str, GraphcalError> {
-        use graphcal_compiler::tir::texpr::{CheckedBody, ContextualLiteral, TBody};
-        let message = match self.scope.bodies().get(root.id()) {
-            Some(CheckedBody::Executable(TBody::Contextual(literal))) => match literal.literal() {
-                ContextualLiteral::String(text) => return Ok(text),
-                ContextualLiteral::OffsetDateTime(_)
-                | ContextualLiteral::CivilDateTime(_)
-                | ContextualLiteral::ZonedDateTime(_)
-                | ContextualLiteral::TimeZone(_) => {
-                    "expected checked contextual operand String".to_owned()
-                }
-            },
-            Some(_) => "expected checked contextual operand String".to_owned(),
-            None => format!("missing checked expression: {:?}", root.id()),
-        };
-        Err(self.internal_error(message, root.span))
+        root: Scoped<'t, Expr>,
+    ) -> Result<ScopedTree<'t, &'t TExpr>, GraphcalError> {
+        root.executable()
+            .map_err(|error| self.internal_error(error.to_string(), root.get().span))
+    }
+
+    /// The text of an expression root of an evaluation unit checked as a
+    /// contextual string.
+    pub fn checked_string<'t>(&self, root: Scoped<'t, Expr>) -> Result<&'t str, GraphcalError> {
+        root.checked_string()
+            .map_err(|error| self.internal_error(error.to_string(), root.get().span))
     }
 
     pub fn execution_plan(&self) -> Result<&'a ExecPlan<'a>, GraphcalError> {
@@ -220,12 +234,24 @@ impl<'a> EvalContext<'a> {
         self
     }
 
-    /// Static dependency availability, including references in unselected branches.
-    pub fn unavailable_dependencies<
-        'e,
-        E: crate::static_incompleteness::ExpressionDependencies + 'e,
-    >(
+    /// Static dependency availability of expression roots of evaluation
+    /// units, including references in unselected branches. Each root's
+    /// references are resolved in its own scope.
+    pub fn unavailable_dependencies<'e>(
         &self,
+        roots: impl IntoIterator<Item = Scoped<'e, Expr>>,
+    ) -> Result<Option<graphcal_compiler::node_unavailable::NodeUnavailable>, GraphcalError> {
+        let roots = roots.into_iter().collect::<Vec<_>>();
+        self.unavailable_among(
+            || roots.iter().flat_map(|root| root.graph_refs()).collect(),
+            roots.iter().map(|root| root.get()),
+        )
+    }
+
+    /// Availability of `graph_refs` and of the call outputs of `expressions`.
+    fn unavailable_among<'e, E: ExpressionDependencies + 'e>(
+        &self,
+        graph_refs: impl FnOnce() -> Vec<ResolvedDeclName>,
         expressions: impl IntoIterator<Item = &'e E>,
     ) -> Result<Option<graphcal_compiler::node_unavailable::NodeUnavailable>, GraphcalError> {
         let plan = match self.capabilities {
@@ -237,11 +263,8 @@ impl<'a> EvalContext<'a> {
         {
             return Ok(None);
         }
-        let expressions = expressions.into_iter().collect::<Vec<_>>();
-        let mut dependencies = expressions
-            .iter()
-            .flat_map(|expression| expression.graph_refs())
-            .map(|reference| self.resolve(&reference))
+        let mut dependencies = graph_refs()
+            .into_iter()
             .filter_map(|key| {
                 self.unavailable
                     .and_then(|unavailable| unavailable.get(&key))
@@ -265,58 +288,6 @@ impl<'a> EvalContext<'a> {
         )
     }
 
-    /// The DAG whose bodies this context runs.
-    #[must_use]
-    pub const fn dag(&self) -> &'a CheckedDag {
-        self.scope.dag()
-    }
-
-    /// The declaration `reference` denotes in the DAG this context runs.
-    ///
-    /// The frame is the selected DAG's own; evaluation code cannot pick one.
-    #[must_use]
-    pub fn resolve(&self, reference: &graphcal_compiler::hir::expr::LocalDecl) -> ResolvedDeclName {
-        self.scope.resolve(reference)
-    }
-
-    /// The unit whose scale `unit` has in the DAG this context runs.
-    #[must_use]
-    pub fn resolve_unit(
-        &self,
-        unit: &graphcal_compiler::hir::expr::LocalUnit,
-    ) -> graphcal_compiler::resolved_name::ResolvedUnitName {
-        self.scope.resolve_unit(unit)
-    }
-
-    /// The nominal type `source` stands for in the DAG this context runs,
-    /// after its Static type substitution.
-    #[must_use]
-    pub fn runtime_struct_type(
-        &self,
-        source: &graphcal_compiler::resolved_name::ResolvedStructTypeName,
-    ) -> graphcal_compiler::resolved_name::ResolvedStructTypeName {
-        self.scope.runtime_struct_type(source)
-    }
-
-    /// Determine, once for a whole root tree, whether every dependency it may
-    /// read (including those of unselected branches) is available.
-    pub fn check_dependencies(
-        &self,
-        expression: &graphcal_compiler::tir::texpr::TExpr,
-    ) -> Result<(), GraphcalError> {
-        crate::pipeline_metrics::record(
-            crate::pipeline_metrics::Event::DependencyAvailabilityCheck,
-        );
-        self.unavailable_dependencies(std::iter::once(expression))?
-            .map_or(Ok(()), |reason| {
-                Err(GraphcalError::EvaluationUnavailable {
-                    reason,
-                    src: self.src.clone(),
-                    span: expression.span().into(),
-                })
-            })
-    }
-
     #[must_use]
     pub const fn with_roots(
         mut self,
@@ -329,99 +300,34 @@ impl<'a> EvalContext<'a> {
     }
 
     #[must_use]
-    pub fn with_src<'b>(&'b self, src: &'b NamedSource<Arc<String>>) -> EvalContext<'b>
+    pub fn with_src<'b>(&'b self, src: &'b NamedSource<Arc<String>>) -> EvalSession<'b>
     where
         'a: 'b,
     {
-        let mut context = self.clone();
-        context.environment.src = src;
-        context
+        let mut session = self.clone();
+        session.environment.src = src;
+        session
     }
 
-    /// Re-select the body of the DAG `owner`, preserving capabilities and
-    /// enclosing work. The DAG is taken by identity from the plan (or, for
-    /// provisional constants, from the checked registry).
-    pub fn for_dag<'b>(
-        &'b self,
-        owner: &DagId,
-        src: &'b NamedSource<Arc<String>>,
-    ) -> Result<EvalContext<'b>, GraphcalError>
-    where
-        'a: 'b,
-    {
-        let mut context = self.with_src(src);
-        context.scope = match self.capabilities {
-            Capabilities::ProvisionalConstants => {
-                provisional_scope(self.tir, owner).ok_or_else(|| {
-                    context.internal_error(
-                        format!("constant scope `{owner}` has no compiled body"),
-                        DiagnosticAnchor::WholeFile,
-                    )
-                })?
-            }
-            Capabilities::Checked { plan, .. } => plan
-                .program()
-                .dag(owner)
-                .ok_or_else(|| {
-                    context.internal_error(
-                        format!("DAG `{owner}` has no compiled body"),
-                        DiagnosticAnchor::WholeFile,
-                    )
-                })?
-                .body_scope(),
-        };
-        context.environment.current_decl = None;
-        Ok(context)
-    }
-
-    /// Re-select one of `callable`'s execution DAGs, preserving capabilities
-    /// and enclosing work.
+    /// Select the source and declaration of one scheduled step, preserving
+    /// capabilities and enclosing work. The step's tree carries its own
+    /// scope.
     #[must_use]
-    pub fn for_execution_dag<'b>(&'b self, scope: SealedDag<'b>) -> EvalContext<'b>
+    pub fn for_declaration<'b>(&'b self, step: &ScheduledDeclaration<'b>) -> EvalSession<'b>
     where
         'a: 'b,
     {
-        let mut context = self.with_src(scope.source());
-        context.scope = scope.body_scope();
-        context.environment.current_decl = None;
-        context
+        let mut session = self.with_src(step.source());
+        session.environment.current_decl = Some(step.key().clone());
+        session
     }
 
-    /// Select the scope and declaration of one scheduled step, preserving
-    /// capabilities and enclosing work. The step chooses its own scope.
-    #[must_use]
-    pub fn for_declaration<'b>(&'b self, step: &ScheduledDeclaration<'b>) -> EvalContext<'b>
-    where
-        'a: 'b,
-    {
-        let scope = step.scope();
-        let mut context = self.with_src(scope.source());
-        context.scope = scope.body_scope();
-        context.environment.current_decl = Some(step.key().clone());
-        context
-    }
-
-    /// Select `declaration` and the DAG that owns it, preserving capabilities
-    /// and enclosing work. The declaration's own identity chooses the DAG, so
-    /// its body runs in its owner's frame.
-    pub fn for_checked_decl<'b>(
-        &'b self,
-        src: &'b NamedSource<Arc<String>>,
-        declaration: &ResolvedDeclName,
-    ) -> Result<EvalContext<'b>, GraphcalError>
-    where
-        'a: 'b,
-    {
-        Ok(self
-            .for_dag(declaration.owner(), src)?
-            .for_decl(declaration))
-    }
-
+    /// Select the declaration whose unit is evaluated next, for diagnostics.
     #[must_use]
     pub fn for_decl(&self, declaration: &ResolvedDeclName) -> Self {
-        let mut context = self.clone();
-        context.environment.current_decl = Some(declaration.clone());
-        context
+        let mut session = self.clone();
+        session.environment.current_decl = Some(declaration.clone());
+        session
     }
 
     pub fn eval_error(&self, message: impl Into<String>, span: Span) -> GraphcalError {
@@ -442,12 +348,61 @@ impl<'a> EvalContext<'a> {
     }
 }
 
-/// The scope provisional constant evaluation runs the constants of `owner`
-/// in, before any execution plan exists: the constants' own DAG.
-#[expect(
-    clippy::disallowed_methods,
-    reason = "provisional constants run in the DAG that owns them, selected by identity"
-)]
-fn provisional_scope<'a>(tir: &'a CheckedTir, owner: &DagId) -> Option<BodyScope<'a>> {
-    tir.dag_registry().get(owner).map(CheckedDag::body_scope)
+impl<'a> EvalContext<'a> {
+    /// Identity of the DAG whose tree this context evaluates.
+    #[must_use]
+    pub fn dag_id(&self) -> &'a graphcal_compiler::dag_id::DagId {
+        self.scope.dag_id()
+    }
+
+    /// The declaration `reference` denotes in the scope of the tree this
+    /// context evaluates.
+    #[must_use]
+    pub fn resolve(&self, reference: &graphcal_compiler::hir::expr::LocalDecl) -> ResolvedDeclName {
+        self.scope.resolve(reference)
+    }
+
+    /// The unit whose scale `unit` has in the scope of the tree this context
+    /// evaluates.
+    #[must_use]
+    pub fn resolve_unit(
+        &self,
+        unit: &graphcal_compiler::hir::expr::LocalUnit,
+    ) -> graphcal_compiler::resolved_name::ResolvedUnitName {
+        self.scope.resolve_unit(unit)
+    }
+
+    /// The nominal type `source` stands for in the scope of the tree this
+    /// context evaluates, after its Static type substitution.
+    #[must_use]
+    pub fn runtime_struct_type(
+        &self,
+        source: &graphcal_compiler::resolved_name::ResolvedStructTypeName,
+    ) -> graphcal_compiler::resolved_name::ResolvedStructTypeName {
+        self.scope.runtime_struct_type(source)
+    }
+
+    /// Determine, once for a whole root tree, whether every dependency it may
+    /// read (including those of unselected branches) is available.
+    pub fn check_dependencies(&self, expression: &TExpr) -> Result<(), GraphcalError> {
+        crate::pipeline_metrics::record(
+            crate::pipeline_metrics::Event::DependencyAvailabilityCheck,
+        );
+        self.unavailable_among(
+            || {
+                crate::static_incompleteness::graph_refs(expression)
+                    .iter()
+                    .map(|reference| self.resolve(reference))
+                    .collect()
+            },
+            std::iter::once(expression),
+        )?
+        .map_or(Ok(()), |reason| {
+            Err(GraphcalError::EvaluationUnavailable {
+                reason,
+                src: self.src.clone(),
+                span: expression.span().into(),
+            })
+        })
+    }
 }

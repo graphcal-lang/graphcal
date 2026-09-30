@@ -239,8 +239,9 @@ pub(super) fn specialize_instance_bodies(
     .map_err(|error| internal(src, error.to_string(), DiagnosticAnchor::WholeFile))
 }
 
-/// The executable tree of one generic field bound under one application's
-/// `Nat` arguments, specialized from the tree checked in `dag`, its owner.
+/// The executable tree of one domain bound under one application's `Nat`
+/// arguments, specialized from the tree checked in the scope of the bound's
+/// owner, together with that scope.
 ///
 /// This discharges the bound's retained `Nat`, type, and shape obligations in
 /// its canonical environment; it does not infer the source body.
@@ -254,14 +255,16 @@ pub(super) fn specialize_instance_bodies(
     clippy::implicit_hasher,
     reason = "canonical binding services retain this exact map type"
 )]
-pub fn specialize_bound_expression(
+pub fn specialize_bound_expression<'t>(
     tir: &crate::tir::typed::CheckedTir,
-    dag: &crate::tir::typed::CheckedDag,
-    root: &Expr,
+    bound: crate::tir::typed::Scoped<'t, crate::tir::typed::ResolvedDomainBound>,
     bindings: &HashMap<crate::hir::types::GenericParamId, u64>,
-    src: &NamedSource<Arc<String>>,
-) -> Result<crate::tir::texpr::TExpr, GraphcalError> {
-    specialize_bound_body(tir, dag, dag.bodies(), root, bindings, src)
+) -> Result<crate::tir::typed::ScopedTree<'t, crate::tir::texpr::TExpr>, GraphcalError> {
+    let scope = bound.scope();
+    let dag = scope.dag();
+    let bound = bound.get();
+    specialize_bound_body(tir, dag, dag.bodies(), &bound.value, bindings, &bound.src)
+        .map(|tree| crate::tir::typed::ScopedTree::new(scope, tree))
 }
 
 /// The executable tree of one generic field bound under one application's

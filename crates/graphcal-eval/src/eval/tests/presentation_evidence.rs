@@ -505,6 +505,40 @@ node independent: Length = 3.0 m;
     assert!(result.presentation_diagnostics.is_empty());
 }
 
+/// The display request the conversion `declaration` of `tir`'s root makes
+/// when it is evaluated.
+fn requested_display_unit(
+    tir: &graphcal_compiler::tir::typed::CheckedTir,
+    declaration: &graphcal_compiler::resolved_name::ResolvedDeclName,
+    src: &miette::NamedSource<std::sync::Arc<String>>,
+) -> graphcal_compiler::hir::expr::ResolvedUnitExpr<graphcal_compiler::hir::expr::ResolvedUnitRef> {
+    let session = crate::eval_expr::EvalSession::provisional_constants(
+        tir,
+        src,
+        graphcal_compiler::cancellation::CancellationToken::unbounded(),
+    );
+    let root = session
+        .executable(
+            tir.declaration_body(declaration)
+                .unwrap()
+                .runtime_expression()
+                .unwrap(),
+        )
+        .unwrap();
+    let (_, presentation) = crate::eval_expr::eval_root_with_presentation(
+        &root,
+        &crate::constant_pools::RuntimeValueMap::new(),
+        &crate::presentation_evidence::PresentationInstanceMap::new(),
+        &session,
+    )
+    .unwrap()
+    .into_parts();
+    let PresentationInstance::Pending(request) = presentation else {
+        panic!("conversion requests a display unit: {presentation:?}");
+    };
+    request.unit
+}
+
 #[test]
 fn nested_presentation_computation_abort_classification_is_not_contained() {
     let source = "param rate: Dimensionless = 2.0; unit scaled: Length = (@rate) m; node value: Length = 1.0 m -> scaled;";
@@ -515,15 +549,8 @@ fn nested_presentation_computation_abort_classification_is_not_contained() {
         .root()
         .bound_decl_identity(&scoped_name("value"))
         .unwrap();
-    let graphcal_compiler::hir::ExprKind::Convert { target, .. } =
-        tir.root().value_expr(declaration).unwrap().kind()
-    else {
-        panic!("conversion");
-    };
-    let context = |token| {
-        crate::eval_expr::EvalContext::provisional_constants(&tir, tir.root_dag_id(), &src, token)
-            .unwrap()
-    };
+    let target = requested_display_unit(&tir, declaration, &src);
+    let context = |token| crate::eval_expr::EvalSession::provisional_constants(&tir, &src, token);
     let evidence = |unit| {
         PresentationInstance::Pending(Box::new(PendingDisplayUnit {
             owner: tir.root_dag_id().clone(),
@@ -532,7 +559,7 @@ fn nested_presentation_computation_abort_classification_is_not_contained() {
         }))
     };
     let mut unknown = target.clone();
-    unknown.terms[0].name.value = graphcal_compiler::hir::expr::LocalUnit::for_test(
+    unknown.terms[0].name.value = graphcal_compiler::hir::expr::ResolvedUnitRef::new(
         unknown.terms[0].name.value.spelling().clone(),
         graphcal_compiler::resolved_name::ResolvedUnitName::for_test(
             tir.root_dag_id().clone(),
@@ -549,11 +576,11 @@ fn nested_presentation_computation_abort_classification_is_not_contained() {
         Err(GraphcalError::InternalError { .. })
     ));
     // The outer presentation checkpoint succeeds; the unit-body evaluator cancels.
-    assert!(matches!(crate::eval_expr::presentation::resolve(evidence(target.clone()), &values, &context(graphcal_compiler::cancellation::CancellationToken::cancel_after_successful_checkpoints(1))), Err(GraphcalError::Cancelled(_))));
+    assert!(matches!(crate::eval_expr::presentation::resolve(evidence(target), &values, &context(graphcal_compiler::cancellation::CancellationToken::cancel_after_successful_checkpoints(1))), Err(GraphcalError::Cancelled(_))));
 }
 
 #[test]
-fn presentation_invariants_and_cancellation_are_never_notices() {
+fn presentation_cancellation_is_never_a_notice() {
     let source = "node value: Length = 1.0 m -> km;";
     let tir = compile_to_tir(source, "classification.gcl").unwrap();
     let src =
@@ -562,49 +589,22 @@ fn presentation_invariants_and_cancellation_are_never_notices() {
         .root()
         .bound_decl_identity(&scoped_name("value"))
         .unwrap();
-    let graphcal_compiler::hir::ExprKind::Convert { target, .. } =
-        tir.root().value_expr(declaration).unwrap().kind()
-    else {
-        panic!("conversion");
-    };
-    let pending = |owner| {
-        PresentationInstance::Pending(Box::new(PendingDisplayUnit {
-            owner,
-            source: src.clone(),
-            unit: target.clone(),
-        }))
-    };
+    let pending = PresentationInstance::Pending(Box::new(PendingDisplayUnit {
+        owner: tir.root_dag_id().clone(),
+        source: src.clone(),
+        unit: requested_display_unit(&tir, declaration, &src),
+    }));
     let values = crate::constant_pools::RuntimeValueMap::new();
-    let context = crate::eval_expr::EvalContext::provisional_constants(
-        &tir,
-        tir.root_dag_id(),
-        &src,
-        graphcal_compiler::cancellation::CancellationToken::unbounded(),
-    )
-    .unwrap();
-    let wrong_owner = graphcal_compiler::dag_id::DagId::from_virtual_relative_path(
-        std::path::Path::new("missing.gcl"),
-    )
-    .unwrap();
-    assert!(matches!(
-        crate::eval_expr::presentation::resolve(pending(wrong_owner), &values, &context),
-        Err(GraphcalError::InternalError { .. })
-    ));
     let cancellation = graphcal_compiler::cancellation::CancellationSource::new();
-    let context = crate::eval_expr::EvalContext::provisional_constants(
-        &tir,
-        tir.root_dag_id(),
-        &src,
-        cancellation.token(),
-    )
-    .unwrap();
+    let context =
+        crate::eval_expr::EvalSession::provisional_constants(&tir, &src, cancellation.token());
+    assert!(matches!(
+        crate::eval_expr::presentation::resolve(pending.clone(), &values, &context),
+        Ok(PresentationInstance::Unit { .. })
+    ));
     cancellation.cancel();
     assert!(matches!(
-        crate::eval_expr::presentation::resolve(
-            pending(tir.root_dag_id().clone()),
-            &values,
-            &context
-        ),
+        crate::eval_expr::presentation::resolve(pending, &values, &context),
         Err(GraphcalError::Cancelled(_))
     ));
 }

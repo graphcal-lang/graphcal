@@ -13,6 +13,7 @@ use graphcal_compiler::dag_id::DagId;
 use graphcal_compiler::hir::expr::Expr;
 use graphcal_compiler::resolved_name::ResolvedDeclName;
 use graphcal_compiler::tir::texpr::{ExecutableBodyError, TExpr};
+use graphcal_compiler::tir::typed::evaluation_unit::{Scoped, ScopedTree};
 use thiserror::Error;
 
 use crate::checked_program::{CheckedProgram, SealedDag};
@@ -93,15 +94,16 @@ impl<I: PlanIndex, T> std::ops::Index<I> for IndexVec<I, T> {
 
 /// What running one value declaration does.
 #[derive(Clone)]
-pub enum DeclarationBody<'p> {
+pub enum PlannedBody<'p> {
     /// An unfinished node: running it records the TODO.
     Todo,
-    /// A param default or a node formula.
+    /// A param default or a node formula, in the scope of the DAG that owns
+    /// the declaration.
     Expression {
         /// The HIR root, for its source span and its inline calls.
-        root: &'p Expr,
+        root: Scoped<'p, Expr>,
         /// Its checked tree, or why the tree cannot be executed.
-        tree: Result<&'p TExpr, ExecutableBodyError>,
+        tree: Result<ScopedTree<'p, &'p TExpr>, ExecutableBodyError>,
     },
     /// A constant or a required port: nothing is evaluated at runtime.
     Supplied,
@@ -112,7 +114,7 @@ pub enum DeclarationBody<'p> {
 pub struct PlannedDeclaration<'p> {
     key: &'p ResolvedDeclName,
     scope: SealedDag<'p>,
-    body: DeclarationBody<'p>,
+    body: PlannedBody<'p>,
     reads: &'p [ResolvedDeclName],
     domain: Option<&'p ResolvedDomainConstraint>,
 }
@@ -122,7 +124,7 @@ impl<'p> PlannedDeclaration<'p> {
     pub(crate) const fn new(
         key: &'p ResolvedDeclName,
         scope: SealedDag<'p>,
-        body: DeclarationBody<'p>,
+        body: PlannedBody<'p>,
         reads: &'p [ResolvedDeclName],
         domain: Option<&'p ResolvedDomainConstraint>,
     ) -> Self {
@@ -149,7 +151,7 @@ impl<'p> PlannedDeclaration<'p> {
 
     /// What running it does.
     #[must_use]
-    pub const fn body(&self) -> &DeclarationBody<'p> {
+    pub const fn body(&self) -> &PlannedBody<'p> {
         &self.body
     }
 
@@ -177,10 +179,10 @@ impl std::fmt::Debug for PlannedDeclaration<'_> {
             .field(
                 "kind",
                 &match &self.body {
-                    DeclarationBody::Todo => "todo",
-                    DeclarationBody::Expression { tree: Ok(_), .. } => "executable",
-                    DeclarationBody::Expression { tree: Err(_), .. } => "deferred",
-                    DeclarationBody::Supplied => "supplied",
+                    PlannedBody::Todo => "todo",
+                    PlannedBody::Expression { tree: Ok(_), .. } => "executable",
+                    PlannedBody::Expression { tree: Err(_), .. } => "deferred",
+                    PlannedBody::Supplied => "supplied",
                 },
             )
             .finish_non_exhaustive()
@@ -395,7 +397,7 @@ impl<'p> ExecPlan<'p> {
         }
         let has_unfinished_definitions = declarations
             .values()
-            .any(|declaration| matches!(declaration.body, DeclarationBody::Todo));
+            .any(|declaration| matches!(declaration.body, PlannedBody::Todo));
         Ok(Self {
             program,
             has_unfinished_definitions,

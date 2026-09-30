@@ -32,6 +32,8 @@ pub use checked_instance::*;
 pub mod checked;
 pub(crate) mod frame_mint;
 pub use checked::*;
+pub mod evaluation_unit;
+pub use evaluation_unit::*;
 pub mod model;
 pub use model::*;
 pub mod override_dependencies;

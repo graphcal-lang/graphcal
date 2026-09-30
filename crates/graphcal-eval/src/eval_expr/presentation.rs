@@ -2,27 +2,48 @@
 //! This is not a selector evaluator: branches, locals and keys already selected
 //! a value-shaped subtree in the ordinary expression kernel.
 
-use graphcal_compiler::hir::expr::ResolvedUnitExpr;
+use graphcal_compiler::hir::expr::{ResolvedUnitExpr, ResolvedUnitExprItem, ResolvedUnitRef};
 use graphcal_compiler::registry::error::GraphcalError;
 use graphcal_compiler::registry::format::format_unit_terms_canonical;
 use graphcal_compiler::registry::unit::PositiveFiniteScale;
+use graphcal_compiler::syntax::span::Spanned;
 
-use super::context::EvalContext;
+use super::context::{EvalContext, EvalSession};
 use crate::constant_pools::RuntimeValueMap;
 use crate::presentation_evidence::{PendingDisplayUnit, PresentationFailure, PresentationInstance};
 
+/// A display request for `unit`, whose terms are resolved now, in the scope
+/// of the tree `ctx` evaluates, and whose scale is computed once the owning
+/// frame is complete.
 pub(super) fn pending(unit: &ResolvedUnitExpr, ctx: &EvalContext<'_>) -> PresentationInstance {
     PresentationInstance::Pending(Box::new(PendingDisplayUnit {
-        owner: ctx.dag().dag_id().clone(),
+        owner: ctx.dag_id().clone(),
         source: ctx.src.clone(),
-        unit: unit.clone(),
+        unit: ResolvedUnitExpr {
+            terms: unit
+                .terms
+                .iter()
+                .map(|term| ResolvedUnitExprItem {
+                    op: term.op,
+                    name: Spanned::new(
+                        ResolvedUnitRef::new(
+                            term.name.value.spelling().clone(),
+                            ctx.resolve_unit(&term.name.value),
+                        ),
+                        term.name.span,
+                    ),
+                    power: term.power,
+                })
+                .collect(),
+            span: unit.span,
+        },
     }))
 }
 
-pub(super) fn scaled(
-    unit: &ResolvedUnitExpr,
+pub(super) fn scaled<R: std::fmt::Display>(
+    unit: &ResolvedUnitExpr<R>,
     scale: PositiveFiniteScale,
-    ctx: &EvalContext<'_>,
+    ctx: &EvalSession<'_>,
 ) -> PresentationInstance {
     // Label algebra is display-only, including during immutable
     // constant-evidence capture.
@@ -44,7 +65,7 @@ pub(super) fn scaled(
 pub fn resolve(
     evidence: PresentationInstance,
     values: &RuntimeValueMap,
-    ctx: &EvalContext<'_>,
+    ctx: &EvalSession<'_>,
 ) -> Result<PresentationInstance, GraphcalError> {
     resolve_selected(evidence, values, ctx, &|_| true)
 }
@@ -54,7 +75,7 @@ pub fn resolve(
 pub fn resolve_frame(
     evidence: PresentationInstance,
     values: &RuntimeValueMap,
-    ctx: &EvalContext<'_>,
+    ctx: &EvalSession<'_>,
     callable: &crate::execution_plan::CallablePlan<'_>,
 ) -> Result<PresentationInstance, GraphcalError> {
     resolve_selected(evidence, values, ctx, &|owner| callable.executes(owner))
@@ -63,7 +84,7 @@ pub fn resolve_frame(
 fn resolve_selected(
     evidence: PresentationInstance,
     values: &RuntimeValueMap,
-    ctx: &EvalContext<'_>,
+    ctx: &EvalSession<'_>,
     owns: &dyn Fn(&graphcal_compiler::dag_id::DagId) -> bool,
 ) -> Result<PresentationInstance, GraphcalError> {
     match evidence {
@@ -72,9 +93,9 @@ fn resolve_selected(
         }
         PresentationInstance::Pending(request) => {
             ctx.cancellation.checkpoint()?;
-            let context = ctx.for_dag(&request.owner, &request.source)?;
+            let context = ctx.with_src(&request.source);
             crate::pipeline_metrics::record(crate::pipeline_metrics::Event::PresentationEvaluation);
-            match super::unit_scale::resolve_unit_scale(&request.unit, values, &context)
+            match super::resolved_unit_scale(&request.unit, values, &context)
                 .map(|scale| scaled(&request.unit, scale, &context))
             {
                 Ok(evidence) => Ok(evidence),

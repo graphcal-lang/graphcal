@@ -28,7 +28,7 @@ use crate::domain_constraint::{ResolvedDomainConstraint, ResolvedDomainConstrain
 use crate::eval::bindings::{RuntimeParameterBinding, RuntimeParameterBindings};
 use crate::eval::runtime::{EvalLoopResult, run_eval_loop_with_bindings};
 use crate::eval::types::{AssertResult, CompileError, EvalResult, Value};
-use crate::eval_expr::{EvalContext, HirLocalValueMap, RuntimeValueMap};
+use crate::eval_expr::{EvalSession, RuntimeValueMap};
 use graphcal_compiler::resolved_name::ResolvedDeclName;
 
 use crate::host_fns::HostFunctionRegistry;
