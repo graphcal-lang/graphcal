@@ -490,6 +490,7 @@ fn requested_display_unit(
     .unwrap();
     let PresentedView::Whole {
         leaf: Some(PendingLeaf::Quantity(PendingQuantityDisplay::Requested(request))),
+        ..
     } = presented.view()
     else {
         panic!("conversion requests a display unit: {presented:?}");
@@ -561,7 +562,8 @@ fn presentation_cancellation_is_never_a_notice() {
     assert!(matches!(
         resolved.view(),
         PresentedView::Whole {
-            leaf: Some(ResolvedLeaf::Quantity(QuantityDisplay::Unit { .. }))
+            leaf: Some(ResolvedLeaf::Quantity(QuantityDisplay::Unit { .. })),
+            ..
         }
     ));
     cancellation.cancel();

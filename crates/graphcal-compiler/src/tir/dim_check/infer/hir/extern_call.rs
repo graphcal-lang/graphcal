@@ -220,7 +220,7 @@ impl Infer<'_> {
             // Extern struct returns are non-generic records, so the argument
             // list is empty.
             ResultKind::Struct(result_struct) => Ok(CheckedType::Struct(
-                StructTypeRef::from_resolved(result_struct.resolved.clone()),
+                StructTypeRef::from_resolved(result_struct.record_type().clone()),
                 Vec::new(),
             )),
         }

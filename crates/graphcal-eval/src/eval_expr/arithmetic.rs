@@ -181,7 +181,7 @@ mod tests {
                     StructTypeName::expect_valid("Phase"),
                 ),
                 ConstructorName::expect_valid(constructor),
-                indexmap::IndexMap::new(),
+                Vec::new(),
             ))
         };
         let idle = value("main", "Idle");

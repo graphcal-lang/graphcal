@@ -1720,7 +1720,7 @@ fn build_extern_fn_signatures(
         let rendered = function
             .signature
             .format_with_result(&mut format_dim, &mut |result_struct, _| {
-                result_struct.resolved.as_str().to_string()
+                result_struct.record_type().as_str().to_string()
             });
         let qualified = format!("{}::{}", function.alias, function.name);
         let label = format!("fn {qualified}{rendered}");

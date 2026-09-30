@@ -307,14 +307,9 @@ impl<'s> HostArguments<'s> {
                     };
                     (field.name().clone(), value)
                 });
-                StructValue::try_from_record_shape(
-                    record.resolved.clone(),
-                    record.constructor.clone(),
-                    &record.shape,
-                    fields,
-                )
-                .map(RuntimeValue::Struct)
-                .map_err(|error| Failure::Error(ResultError::MalformedRecord(error)))
+                StructValue::try_from_record(record, fields)
+                    .map(RuntimeValue::Struct)
+                    .map_err(|error| Failure::Error(ResultError::MalformedRecord(error)))
             }
         }
     }

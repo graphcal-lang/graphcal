@@ -20,7 +20,7 @@ use graphcal_compiler::syntax::span::{Span, Spanned};
 use graphcal_compiler::tir::typed::{DeclarationBody, ResolvedProjection, Scoped};
 
 use crate::eval::plot_unavailable::{ComposedPlotsUnavailable, PlotUnavailable};
-use crate::eval::presented_projection;
+use crate::eval::public_projection;
 use crate::eval::types::{
     AxisMeta, CompositionProperty, FigureSpec, LayerSpec, NodeUnavailable, PlotError,
     PlotFieldValue, PlotPropertyType, PlotSpec,
@@ -33,6 +33,7 @@ use crate::presentation_evidence::{
     LeafPresentationDiagnostic, PresentationDiagnostic, PresentationFailure,
 };
 use crate::runtime_presentation::PendingPresentedMap;
+use crate::runtime_presentation::PresentedRef;
 use crate::runtime_value::KeyElement;
 
 use super::{EvaluatedRoot, declaration_body, dependency_failure_message};
@@ -502,11 +503,11 @@ fn evaluate_plot_channel(
         .map_err(|error| classify_plot_channel_error(channel, error))?;
     let declared_type =
         plot_declared_type(fact, ctx, expr.span).map_err(PlotEvaluationError::Fatal)?;
-    let projected = presented_projection::project_si(&presented, &declared_type, ctx.tir, ctx.src)
-        .map_err(PlotEvaluationError::Fatal)?;
-    let mut displayed = projected.clone();
-    let mut diagnostics = presented_projection::display(&mut displayed, &presented, ctx.src)
-        .map_err(PlotEvaluationError::Fatal)?;
+    let project = |value| {
+        public_projection::project(value, &declared_type)
+            .map_err(|invariant| PlotEvaluationError::Fatal(invariant.into_internal_error(ctx.src)))
+    };
+    let (displayed, mut diagnostics) = project(presented.as_ref())?;
     // A numeric channel must use one scale: it is displayed only when every
     // leaf displays and all share one unit. Otherwise it keeps its SI
     // projection whole, rather than mixing converted leaves with SI leaves.
@@ -520,6 +521,7 @@ fn evaluate_plot_channel(
                     failure: PresentationFailure::Projection { message: error },
                 });
             }
+            let (projected, _) = project(PresentedRef::plain(&presented.value()))?;
             (projected, None)
         }
     };

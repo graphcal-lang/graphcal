@@ -3,10 +3,8 @@ use std::collections::HashMap;
 use graphcal_compiler::syntax::decl_name::DeclName;
 
 mod bindings;
-mod display;
 mod plot_data;
 mod plot_unavailable;
-mod presented_projection;
 mod project;
 mod public_projection;
 pub(crate) mod runtime;

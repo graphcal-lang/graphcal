@@ -48,7 +48,10 @@ enum Node<L> {
 pub enum PresentedView<'a, L> {
     /// A value whose every leaf is presented by `leaf`, or not at all; every
     /// leaf of the value is of the leaf's [kind](PresentationLeaf::kind).
-    Whole { leaf: Option<&'a L> },
+    Whole {
+        value: &'a RuntimeValue,
+        leaf: Option<&'a L>,
+    },
     /// A struct value whose fields are presented separately.
     Struct(&'a StructValue<Presented<L>>),
     /// An indexed value whose entries are presented separately.
@@ -181,7 +184,8 @@ impl<L> Presented<L> {
     #[must_use]
     pub const fn view(&self) -> PresentedView<'_, L> {
         match &self.0 {
-            Node::Whole { leaf, .. } => PresentedView::Whole {
+            Node::Whole { value, leaf } => PresentedView::Whole {
+                value,
                 leaf: leaf.as_ref(),
             },
             Node::Struct(fields) => PresentedView::Struct(fields),
@@ -480,6 +484,15 @@ impl<'a, L> PresentedRef<'a, L> {
         Self(RefNode::Whole { value, leaf: None })
     }
 
+    /// The outermost level of this part.
+    #[must_use]
+    pub const fn view(self) -> PresentedView<'a, L> {
+        match self.0 {
+            RefNode::Whole { value, leaf } => PresentedView::Whole { value, leaf },
+            RefNode::Presented(presented) => presented.view(),
+        }
+    }
+
     /// The entries of an indexed value; `None` for any other value.
     #[must_use]
     pub const fn entries(self) -> Option<EntriesRef<'a, L>> {
@@ -620,21 +633,27 @@ mod tests {
     }
 
     fn pair_of<V>(constructor: &str, left: V, right: V) -> StructValue<V> {
+        let quantity = || {
+            graphcal_compiler::registry::checked_type::CheckedType::Quantity(
+                graphcal_compiler::dimension::Dimension::dimensionless(),
+            )
+        };
         StructValue::for_test(
             ResolvedStructTypeName::for_test(
                 DagId::root_in_package("presented", "main"),
                 StructTypeName::expect_valid("Pair"),
             ),
             ConstructorName::expect_valid(constructor),
-            [(field("left"), left), (field("right"), right)]
-                .into_iter()
-                .collect(),
+            vec![
+                (field("left"), quantity(), left),
+                (field("right"), quantity(), right),
+            ],
         )
     }
 
     fn leaf_of(presented: &ResolvedValue) -> Option<&ResolvedLeaf> {
         match presented.view() {
-            PresentedView::Whole { leaf } => leaf,
+            PresentedView::Whole { leaf, .. } => leaf,
             PresentedView::Struct(_) | PresentedView::Indexed(_) => {
                 panic!("expected a whole value")
             }

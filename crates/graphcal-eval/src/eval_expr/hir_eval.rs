@@ -792,7 +792,7 @@ fn eval_constructor_call(
             let key =
                 graphcal_compiler::tir::typed::model::StructFieldConstraintKey::for_application(
                     owning_type.clone(),
-                    application.generic_args.clone(),
+                    application.generic_args().to_vec(),
                     constructor_name.clone(),
                     field_init.name.clone(),
                 );

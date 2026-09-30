@@ -721,7 +721,7 @@ mod tests {
                     graphcal_compiler::registry::checked_type::StructTypeRef::from_resolved(
                         application.definition().clone(),
                     ),
-                    application.generic_args.clone(),
+                    application.generic_args().to_vec(),
                     application.constructor.name(),
                     field.clone(),
                 )

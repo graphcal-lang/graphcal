@@ -620,7 +620,7 @@ mod tests {
                     graphcal_compiler::syntax::type_name::StructTypeName::expect_valid("Vec2"),
                 ),
                 graphcal_compiler::syntax::type_name::ConstructorName::expect_valid("Vec2"),
-                indexmap::IndexMap::new(),
+                Vec::new(),
             ),
         ))
         .unwrap_err();

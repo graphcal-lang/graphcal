@@ -1,8 +1,11 @@
 //! Nominal values: a constructor applied to its complete field set.
 
+use std::sync::Arc;
+
 use indexmap::IndexMap;
 
-use graphcal_compiler::function_signature::StructShape;
+use graphcal_compiler::extern_struct_result::ExternStructResult;
+use graphcal_compiler::registry::applied_constructor::{AppliedConstructor, AppliedField};
 use graphcal_compiler::registry::checked_type::CheckedGenericArg;
 use graphcal_compiler::resolved_name::ResolvedStructTypeName;
 use graphcal_compiler::syntax::type_name::{ConstructorName, FieldName};
@@ -11,20 +14,17 @@ use graphcal_compiler::tir::texpr::ConstructorApplication;
 /// A constructor applied to exactly its declared fields.
 ///
 /// Built only from a checked constructor application or an extern record's
-/// checked field shape, both of which name the constructor's declared fields.
-/// Construction rejects missing, unexpected, and duplicate fields and stores
-/// the fields in declaration order, so a struct value always has exactly the
-/// fields of its constructor.
+/// checked result, both of which carry the constructor's declared fields at
+/// their instantiated types. Construction rejects missing, unexpected, and
+/// duplicate fields and stores one value per declared field, in declaration
+/// order, so a struct value always has exactly the fields of its
+/// constructor, and knows each field's type.
 #[derive(Debug, Clone, PartialEq)]
 pub struct StructValue<V> {
-    /// Canonical nominal identity, independent of source aliases and display spelling.
-    type_name: ResolvedStructTypeName,
-    /// Constructor member identity within `type_name` (not a display leaf).
-    constructor: ConstructorName,
-    /// Concrete generic identity needed by field constraints and equality.
-    generic_args: Vec<CheckedGenericArg>,
-    /// Every declared field, in declaration order.
-    fields: IndexMap<FieldName, V>,
+    /// The nominal application, shared by every value its node builds.
+    application: Arc<AppliedConstructor>,
+    /// One value per field of `application`, in the same order.
+    values: Vec<V>,
 }
 
 /// A field set that does not match its constructor's declared fields.
@@ -58,135 +58,138 @@ impl<V> StructValue<V> {
         application: &ConstructorApplication,
         fields: impl IntoIterator<Item = (FieldName, V)>,
     ) -> Result<Self, StructFieldsError> {
-        Self::try_new(
-            application.runtime_type.clone(),
-            application.constructor.name(),
-            application.generic_args.clone(),
-            application
-                .constructor
-                .variant()
-                .fields()
-                .iter()
-                .map(graphcal_compiler::hir::nominal::NominalField::name),
-            fields,
-        )
+        Self::try_new(Arc::clone(&application.applied), fields)
     }
 
     /// Build the record an extern function returned, whose declaration bound
-    /// the record `constructor` of `type_name` to the plugin field `shape`.
+    /// the record to the plugin field shape of `record`.
     ///
     /// # Errors
     ///
     /// Returns [`StructFieldsError`] when `fields` is not exactly the shape's
     /// field set.
-    pub fn try_from_record_shape(
-        type_name: ResolvedStructTypeName,
-        constructor: ConstructorName,
-        shape: &StructShape,
+    pub fn try_from_record(
+        record: &ExternStructResult,
         fields: impl IntoIterator<Item = (FieldName, V)>,
     ) -> Result<Self, StructFieldsError> {
-        Self::try_new(
-            type_name,
-            constructor,
-            Vec::new(),
-            shape.fields().iter().map(|field| &field.name),
-            fields,
-        )
+        Self::try_new(Arc::clone(record.applied()), fields)
     }
 
-    fn try_new<'a>(
-        type_name: ResolvedStructTypeName,
-        constructor: ConstructorName,
-        generic_args: Vec<CheckedGenericArg>,
-        declared: impl IntoIterator<Item = &'a FieldName>,
+    fn try_new(
+        application: Arc<AppliedConstructor>,
         fields: impl IntoIterator<Item = (FieldName, V)>,
     ) -> Result<Self, StructFieldsError> {
+        let constructor = || application.constructor().clone();
         let mut provided = IndexMap::new();
         for (field, value) in fields {
             if provided.contains_key(&field) {
-                return Err(StructFieldsError::Duplicate { constructor, field });
+                return Err(StructFieldsError::Duplicate {
+                    constructor: constructor(),
+                    field,
+                });
             }
             provided.insert(field, value);
         }
-        let mut ordered = IndexMap::with_capacity(provided.len());
-        for field in declared {
-            let Some(value) = provided.swap_remove(field) else {
+        let mut values = Vec::with_capacity(provided.len());
+        for field in application.fields() {
+            let Some(value) = provided.swap_remove(field.name()) else {
                 return Err(StructFieldsError::Missing {
-                    constructor,
-                    field: field.clone(),
+                    constructor: constructor(),
+                    field: field.name().clone(),
                 });
             };
-            ordered.insert(field.clone(), value);
+            values.push(value);
         }
         if let Some((field, _)) = provided.into_iter().next() {
-            return Err(StructFieldsError::Unexpected { constructor, field });
+            return Err(StructFieldsError::Unexpected {
+                constructor: constructor(),
+                field,
+            });
         }
         Ok(Self {
-            type_name,
-            constructor,
-            generic_args,
-            fields: ordered,
+            application,
+            values,
         })
     }
 
-    /// A struct value built without checking its constructor's fields, for
-    /// tests of the evaluator's defenses against foreign values.
+    /// A struct value of `constructor` of `type_name` whose declared fields
+    /// are exactly `fields`, each at its type, for tests (including of the
+    /// evaluator's defenses against values of a foreign type).
     #[cfg(test)]
     #[must_use]
-    pub const fn for_test(
+    pub fn for_test(
         type_name: ResolvedStructTypeName,
         constructor: ConstructorName,
-        fields: IndexMap<FieldName, V>,
+        fields: Vec<(
+            FieldName,
+            graphcal_compiler::registry::checked_type::CheckedType,
+            V,
+        )>,
     ) -> Self {
+        let (declared, values): (Vec<_>, Vec<_>) = fields
+            .into_iter()
+            .map(|(name, field_type, value)| ((name, field_type), value))
+            .unzip();
         Self {
-            type_name,
-            constructor,
-            generic_args: Vec::new(),
-            fields,
+            application: Arc::new(AppliedConstructor::for_test(
+                type_name,
+                constructor,
+                declared,
+            )),
+            values,
         }
     }
 
     /// Canonical nominal identity.
     #[must_use]
-    pub const fn type_name(&self) -> &ResolvedStructTypeName {
-        &self.type_name
+    pub fn type_name(&self) -> &ResolvedStructTypeName {
+        self.application.runtime_type()
     }
 
     /// The applied constructor.
     #[must_use]
-    pub const fn constructor(&self) -> &ConstructorName {
-        &self.constructor
+    pub fn constructor(&self) -> &ConstructorName {
+        self.application.constructor()
     }
 
     /// Concrete generic arguments of the nominal application.
     #[must_use]
     pub fn generic_args(&self) -> &[CheckedGenericArg] {
-        &self.generic_args
+        self.application.generic_args()
+    }
+
+    fn position(&self, field: &FieldName) -> Option<usize> {
+        self.application
+            .fields()
+            .iter()
+            .position(|declared| declared.name() == field)
     }
 
     /// The value of `field`, when the constructor declares it.
     #[must_use]
     pub fn field(&self, field: &FieldName) -> Option<&V> {
-        self.fields.get(field)
+        self.position(field)
+            .and_then(|index| self.values.get(index))
     }
 
     /// Every field with its value, in declaration order.
     pub fn fields(&self) -> impl ExactSizeIterator<Item = (&FieldName, &V)> {
-        self.fields.iter()
+        self.typed_fields()
+            .map(|(field, value)| (field.name(), value))
+    }
+
+    /// Every declared field, at its instantiated type, with its value, in
+    /// declaration order.
+    pub fn typed_fields(&self) -> impl ExactSizeIterator<Item = (&AppliedField, &V)> {
+        self.application.fields().iter().zip(&self.values)
     }
 
     /// Derive a value of the same application from each owned field value.
     #[must_use]
-    pub fn map<U>(self, mut field: impl FnMut(V) -> U) -> StructValue<U> {
+    pub fn map<U>(self, field: impl FnMut(V) -> U) -> StructValue<U> {
         StructValue {
-            type_name: self.type_name,
-            constructor: self.constructor,
-            generic_args: self.generic_args,
-            fields: self
-                .fields
-                .into_iter()
-                .map(|(name, value)| (name, field(value)))
-                .collect(),
+            application: self.application,
+            values: self.values.into_iter().map(field).collect(),
         }
     }
 
@@ -195,30 +198,36 @@ impl<V> StructValue<V> {
         self,
         mut field: impl FnMut(&FieldName, V) -> Result<U, E>,
     ) -> Result<StructValue<U>, E> {
-        let fields = self
-            .fields
-            .into_iter()
-            .map(|(name, value)| field(&name, value).map(|value| (name, value)))
+        let values = self
+            .application
+            .fields()
+            .iter()
+            .zip(self.values)
+            .map(|(declared, value)| field(declared.name(), value))
             .collect::<Result<_, _>>()?;
         Ok(StructValue {
-            type_name: self.type_name,
-            constructor: self.constructor,
-            generic_args: self.generic_args,
-            fields,
+            application: self.application,
+            values,
         })
     }
 
     /// The owned value of `field`, when the constructor declares it.
     #[must_use]
-    pub fn into_field(mut self, field: &FieldName) -> Option<V> {
-        self.fields.swap_remove(field)
+    pub fn into_field(self, field: &FieldName) -> Option<V> {
+        let index = self.position(field)?;
+        self.values.into_iter().nth(index)
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use graphcal_compiler::dag_id::DagId;
+    use graphcal_compiler::extern_struct_result::ExternStructResult;
     use graphcal_compiler::function_signature::{StructFieldKind, StructShape, StructShapeField};
+    use graphcal_compiler::registry::applied_constructor::AppliedConstructor;
+    use graphcal_compiler::registry::checked_type::CheckedType;
     use graphcal_compiler::resolved_name::ResolvedStructTypeName;
     use graphcal_compiler::syntax::type_name::{ConstructorName, FieldName, StructTypeName};
 
@@ -239,13 +248,20 @@ mod tests {
         ConstructorName::expect_valid("Pair")
     }
 
+    fn pair(module: &str, constructor: ConstructorName) -> AppliedConstructor {
+        AppliedConstructor::for_test(
+            type_name(module),
+            constructor,
+            [
+                (field("left"), CheckedType::Int),
+                (field("right"), CheckedType::Int),
+            ],
+        )
+    }
+
     fn build(fields: Vec<(&str, i64)>) -> Result<StructValue<i64>, StructFieldsError> {
-        let declared = [field("left"), field("right")];
         StructValue::try_new(
-            type_name("main"),
-            constructor(),
-            Vec::new(),
-            declared.iter(),
+            Arc::new(pair("main", constructor())),
             fields.into_iter().map(|(name, value)| (field(name), value)),
         )
     }
@@ -263,6 +279,11 @@ mod tests {
         assert_eq!(value.type_name(), &type_name("main"));
         assert_eq!(value.constructor(), &constructor());
         assert!(value.generic_args().is_empty());
+        let typed = value
+            .typed_fields()
+            .map(|(field, value)| (field.field_type().clone(), *value))
+            .collect::<Vec<_>>();
+        assert_eq!(typed, vec![(CheckedType::Int, 1), (CheckedType::Int, 2)]);
     }
 
     #[test]
@@ -303,23 +324,23 @@ mod tests {
             },
         ])
         .unwrap();
-        let value = StructValue::try_from_record_shape(
-            type_name("main"),
-            constructor(),
-            &shape,
-            [(field("right"), false), (field("left"), true)],
-        )
-        .unwrap();
+        let record = ExternStructResult::for_test(type_name("main"), constructor(), shape);
+        let value =
+            StructValue::try_from_record(&record, [(field("right"), false), (field("left"), true)])
+                .unwrap();
         assert_eq!(value.field(&field("left")), Some(&true));
-        assert!(
-            StructValue::try_from_record_shape(
-                type_name("main"),
-                constructor(),
-                &shape,
-                [(field("left"), true)],
-            )
-            .is_err()
+        let typed = value
+            .typed_fields()
+            .map(|(field, value)| (field.name().clone(), field.field_type().clone(), *value))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            typed,
+            vec![
+                (field("left"), CheckedType::Bool, true),
+                (field("right"), CheckedType::Bool, false),
+            ]
         );
+        assert!(StructValue::try_from_record(&record, [(field("left"), true)]).is_err());
     }
 
     #[test]
@@ -358,7 +379,12 @@ mod tests {
         let value = build(vec![("left", 1), ("right", 2)]).unwrap();
         assert_eq!(value, build(vec![("right", 2), ("left", 1)]).unwrap());
         assert_ne!(value, build(vec![("left", 3), ("right", 2)]).unwrap());
-        let fields = || indexmap::IndexMap::from([(field("left"), 1), (field("right"), 2)]);
+        let fields = || {
+            vec![
+                (field("left"), CheckedType::Int, 1),
+                (field("right"), CheckedType::Int, 2),
+            ]
+        };
         assert_eq!(
             value,
             StructValue::<i64>::for_test(type_name("main"), constructor(), fields())
