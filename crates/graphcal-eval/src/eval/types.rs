@@ -78,7 +78,12 @@ pub enum EpochProjectionError {
 }
 
 /// A user-facing evaluated runtime value.
-#[derive(Debug, Clone)]
+///
+/// Equality is structural over every field, presentation included: two values
+/// are equal only when they carry the same semantic identity *and* the same
+/// display metadata. Registry data needed only to render a value (such as the
+/// time-zone database) lives in [`RenderContext`], never in the value.
+#[derive(Debug, Clone, PartialEq)]
 pub enum Value {
     Quantity {
         /// The value in base SI units.
@@ -135,118 +140,7 @@ pub enum Value {
         time_scale: graphcal_compiler::registry::time_scale::TimeScale,
         /// Optional IANA timezone for display (e.g. `"America/New_York"`).
         display_tz: Option<IanaTimeZoneId>,
-        /// Explicit bundled registry used for timezone-aware display.
-        time_zones: TimeZoneRegistry,
     },
-}
-
-impl PartialEq for Value {
-    fn eq(&self, other: &Self) -> bool {
-        match (self, other) {
-            (
-                Self::Quantity {
-                    si_value: l_si,
-                    dimension: l_dim,
-                    display_unit: l_unit,
-                },
-                Self::Quantity {
-                    si_value: r_si,
-                    dimension: r_dim,
-                    display_unit: r_unit,
-                },
-            ) => l_si == r_si && l_dim == r_dim && l_unit == r_unit,
-            (
-                Self::Complex {
-                    si_value: l_si,
-                    dimension: l_dim,
-                    display_unit: l_unit,
-                },
-                Self::Complex {
-                    si_value: r_si,
-                    dimension: r_dim,
-                    display_unit: r_unit,
-                },
-            ) => l_si == r_si && l_dim == r_dim && l_unit == r_unit,
-            (Self::Bool(l), Self::Bool(r)) => l == r,
-            (Self::Int(l), Self::Int(r)) => l == r,
-            (
-                Self::Label {
-                    index_name: l_index,
-                    variant: l_variant,
-                },
-                Self::Label {
-                    index_name: r_index,
-                    variant: r_variant,
-                },
-            ) => l_index.matches_ref(r_index) && l_variant == r_variant,
-            (
-                Self::Struct {
-                    type_name: l_type,
-                    constructor: l_ctor,
-                    generic_args: l_args,
-                    fields: l_fields,
-                },
-                Self::Struct {
-                    type_name: r_type,
-                    constructor: r_ctor,
-                    generic_args: r_args,
-                    fields: r_fields,
-                },
-            ) => {
-                l_type.matches_ref(r_type)
-                    && l_ctor == r_ctor
-                    && l_args == r_args
-                    && value_field_maps_equal(l_fields, r_fields)
-            }
-            (
-                Self::Indexed {
-                    index_name: l_index,
-                    entries: l_entries,
-                    ..
-                },
-                Self::Indexed {
-                    index_name: r_index,
-                    entries: r_entries,
-                    ..
-                },
-            ) => l_index.matches_ref(r_index) && value_entry_maps_equal(l_entries, r_entries),
-            (
-                Self::Datetime {
-                    epoch: l_epoch,
-                    time_scale: l_scale,
-                    display_tz: l_tz,
-                    ..
-                },
-                Self::Datetime {
-                    epoch: r_epoch,
-                    time_scale: r_scale,
-                    display_tz: r_tz,
-                    ..
-                },
-            ) => l_epoch == r_epoch && l_scale == r_scale && l_tz == r_tz,
-            _ => false,
-        }
-    }
-}
-
-fn value_field_maps_equal(
-    lhs: &IndexMap<FieldName, Value>,
-    rhs: &IndexMap<FieldName, Value>,
-) -> bool {
-    lhs.len() == rhs.len()
-        && lhs
-            .iter()
-            .all(|(field, value)| rhs.get(field).is_some_and(|rhs_value| value == rhs_value))
-}
-
-fn value_entry_maps_equal(
-    lhs: &IndexMap<IndexEntryKey, Value>,
-    rhs: &IndexMap<IndexEntryKey, Value>,
-) -> bool {
-    lhs.len() == rhs.len()
-        && lhs
-            .iter()
-            .all(|(variant, value)| rhs.get(variant).is_some_and(|rhs_value| value == rhs_value))
 }
 
 /// Error returned when a [`Value`] accessor is called on an incompatible variant.
@@ -413,10 +307,11 @@ impl Value {
     /// Get the unit label for display, or `None` for dimensionless values.
     ///
     /// Returns the explicit display unit label if set (e.g., "km", "km/h"),
-    /// otherwise uses registered base-unit symbols (e.g., "m/s", "kg"). If any
-    /// referenced base dimension has no registered symbol, no default label is shown.
+    /// otherwise uses the context's base-unit symbols (e.g., "m/s", "kg"). If
+    /// any referenced base dimension has no registered symbol, no default
+    /// label is shown.
     #[must_use]
-    pub fn display_label(&self, symbols: &BTreeMap<BaseDimId, String>) -> Option<String> {
+    pub fn display_label(&self, render: &RenderContext) -> Option<String> {
         match self {
             Self::Quantity {
                 display_unit,
@@ -428,7 +323,7 @@ impl Value {
                 dimension,
                 ..
             } => display_unit.as_ref().map_or_else(
-                || default_unit_label(dimension, symbols),
+                || default_unit_label(dimension, &render.base_dim_symbols),
                 |du| Some(du.label.clone()),
             ),
             Self::Bool(_)
@@ -442,15 +337,28 @@ impl Value {
 
     /// Format this value as a flat display string (no name prefix, no recursion).
     ///
-    /// If `symbols` is provided, quantity values include their unit label in brackets
-    /// (e.g., `"42.5 [km/h]"`). Without `symbols`, only the numeric value is shown.
+    /// With [`UnitLabel::Inline`], quantity values include their unit label in
+    /// brackets (e.g., `"42.5 [km/h]"`); with [`UnitLabel::Omitted`], only the
+    /// numeric value is shown.
     ///
     /// Composite values (`Struct`, `Indexed`) are shown as their variant name or
     /// a placeholder string, not recursively expanded.
+    ///
+    /// # Errors
+    ///
+    /// Returns the display-unit projection error of a quantity leaf.
     pub fn format_display(
         &self,
-        symbols: Option<&BTreeMap<BaseDimId, String>>,
+        render: &RenderContext,
+        unit_label: UnitLabel,
     ) -> Result<String, DisplayProjectionError> {
+        let labelled = |formatted: String| match unit_label {
+            UnitLabel::Inline => match self.display_label(render) {
+                Some(label) => format!("{formatted} [{label}]"),
+                None => formatted,
+            },
+            UnitLabel::Omitted => formatted,
+        };
         Ok(match self {
             Self::Bool(b) => b.to_string(),
             Self::Int(i) => i.to_string(),
@@ -460,24 +368,15 @@ impl Value {
             } => format!("{index_name}#{variant}"),
             Self::Struct { constructor, .. } => constructor.as_str().to_string(),
             Self::Datetime {
-                epoch,
-                display_tz,
-                time_zones,
-                ..
-            } => format_epoch_with_tz(epoch, display_tz.as_ref(), time_zones),
+                epoch, display_tz, ..
+            } => render.format_datetime(epoch, display_tz.as_ref()),
             Self::Quantity {
                 si_value,
                 display_unit,
                 ..
-            } => {
-                let formatted = graphcal_compiler::registry::format::format_number(
-                    quantity_display_value(*si_value, display_unit.as_ref())?,
-                );
-                match symbols.and_then(|s| self.display_label(s)) {
-                    Some(label) => format!("{formatted} [{label}]"),
-                    None => formatted,
-                }
-            }
+            } => labelled(graphcal_compiler::registry::format::format_number(
+                quantity_display_value(*si_value, display_unit.as_ref())?,
+            )),
             Self::Complex {
                 si_value,
                 display_unit,
@@ -493,35 +392,67 @@ impl Value {
                     "+"
                 };
                 let im = graphcal_compiler::registry::format::format_number(displayed_im.abs());
-                let formatted = format!("{re} {sign} {im}i");
-                match symbols.and_then(|s| self.display_label(s)) {
-                    Some(label) => format!("{formatted} [{label}]"),
-                    None => formatted,
-                }
+                labelled(format!("{re} {sign} {im}i"))
             }
             Self::Indexed { .. } => "[...]".to_string(),
         })
     }
+}
 
-    /// Format a `Datetime` value for display.
-    ///
-    /// If `display_tz` is set, formats the instant in that IANA timezone
-    /// (e.g. `"2024-11-05T10:00:00+09:00[Asia/Tokyo]"`).
-    /// Otherwise, falls back to the hifitime `Epoch` display (e.g. `"2024-11-05T12:00:00 UTC"`).
-    ///
-    /// Returns `None` if this is not a `Datetime` value.
+/// Whether [`Value::format_display`] appends a quantity's unit label.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UnitLabel {
+    /// Append the unit label in brackets (e.g., `"42.5 [km/h]"`).
+    Inline,
+    /// Show only the number; the caller renders the unit elsewhere (e.g., a
+    /// table caption shared by every cell).
+    Omitted,
+}
+
+/// Registry metadata a display boundary needs to render public [`Value`]s.
+///
+/// Values carry only their semantic content and per-declaration presentation
+/// (display units, display time zone); program-wide rendering data lives here
+/// so it is neither cloned into every value nor part of value equality.
+#[derive(Debug, Clone)]
+pub struct RenderContext {
+    /// Base dimension symbols for default unit labels (e.g., prelude `Length` -> `m`).
+    base_dim_symbols: BTreeMap<BaseDimId, String>,
+    /// Time-zone database used to render datetimes in their display zone.
+    time_zones: TimeZoneRegistry,
+}
+
+impl RenderContext {
+    /// Bundle the program's base-unit symbols with the time-zone database.
     #[must_use]
-    pub fn format_datetime(&self) -> Option<String> {
-        let Self::Datetime {
-            epoch,
-            display_tz,
+    pub const fn new(
+        base_dim_symbols: BTreeMap<BaseDimId, String>,
+        time_zones: TimeZoneRegistry,
+    ) -> Self {
+        Self {
+            base_dim_symbols,
             time_zones,
-            ..
-        } = self
-        else {
-            return None;
-        };
-        Some(format_epoch_with_tz(epoch, display_tz.as_ref(), time_zones))
+        }
+    }
+
+    /// Format a datetime instant, in its display time zone when one is set.
+    ///
+    /// With a display zone, formats the instant in that IANA zone (e.g.
+    /// `"2024-11-05T10:00:00+09:00[Asia/Tokyo]"`). Otherwise, or if the instant
+    /// cannot be represented in that zone, falls back to the hifitime `Epoch`
+    /// display (e.g. `"2024-11-05T12:00:00 UTC"`).
+    #[must_use]
+    pub fn format_datetime(
+        &self,
+        epoch: &hifitime::Epoch,
+        display_tz: Option<&IanaTimeZoneId>,
+    ) -> String {
+        if let Some(time_zone_id) = display_tz
+            && let Ok(formatted) = format_epoch_in_timezone(epoch, time_zone_id, &self.time_zones)
+        {
+            return formatted;
+        }
+        format!("{epoch}")
     }
 }
 
@@ -656,25 +587,6 @@ pub fn datetime_literal(
     )
 }
 
-/// Format an `hifitime::Epoch` with an optional IANA timezone.
-///
-/// If `tz` is `Some`, converts to that timezone via jiff and formats as
-/// `"2024-11-05T10:00:00+09:00[Asia/Tokyo]"`.
-/// Otherwise, falls back to hifitime's `Display` (e.g. `"2024-11-05T12:00:00 UTC"`).
-#[must_use]
-pub fn format_epoch_with_tz(
-    epoch: &hifitime::Epoch,
-    tz: Option<&IanaTimeZoneId>,
-    time_zones: &TimeZoneRegistry,
-) -> String {
-    if let Some(time_zone_id) = tz
-        && let Ok(formatted) = format_epoch_in_timezone(epoch, time_zone_id, time_zones)
-    {
-        return formatted;
-    }
-    format!("{epoch}")
-}
-
 /// Convert a `hifitime::Epoch` to a jiff `Zoned` datetime in the given timezone
 /// and format it as an ISO 8601 string.
 fn format_epoch_in_timezone(
@@ -804,9 +716,8 @@ pub struct EvalResult {
     pub layers: Vec<LayerSpec>,
     /// Mapping from assert name to the list of declarations that assume it.
     pub assumes_map: std::collections::HashMap<ScopedName, Vec<ScopedName>>,
-    /// Base dimension symbols for display (e.g., prelude `Length` → `m`).
-    pub base_dim_symbols:
-        std::collections::BTreeMap<graphcal_compiler::dimension::BaseDimId, String>,
+    /// Registry metadata needed to render the values (unit symbols, time zones).
+    pub render: RenderContext,
     /// Domain constraints for params/nodes, for programmatic access (sweeping/sampling).
     pub(crate) domain_constraints:
         std::collections::HashMap<ScopedName, crate::domain_constraint::ResolvedDomainConstraint>,
@@ -1116,11 +1027,14 @@ mod tests {
         }
     }
 
-    fn symbols() -> BTreeMap<BaseDimId, String> {
-        BTreeMap::from([
-            (dim_id("Length"), "m".to_string()),
-            (dim_id("Time"), "s".to_string()),
-        ])
+    fn render() -> RenderContext {
+        RenderContext::new(
+            BTreeMap::from([
+                (dim_id("Length"), "m".to_string()),
+                (dim_id("Time"), "s".to_string()),
+            ]),
+            TimeZoneRegistry::bundled(),
+        )
     }
 
     fn empty_eval_result() -> EvalResult {
@@ -1135,7 +1049,7 @@ mod tests {
             figures: Vec::new(),
             layers: Vec::new(),
             assumes_map: std::collections::HashMap::new(),
-            base_dim_symbols: BTreeMap::new(),
+            render: RenderContext::new(BTreeMap::new(), TimeZoneRegistry::bundled()),
             domain_constraints: std::collections::HashMap::new(),
         }
     }
@@ -1181,7 +1095,7 @@ mod tests {
             (Dimension::base(dim_id("Length")) / Dimension::base(dim_id("Time"))).unwrap();
         let value = quantity(velocity, None);
 
-        assert_eq!(value.display_label(&symbols()), Some("m/s".to_string()));
+        assert_eq!(value.display_label(&render()), Some("m/s".to_string()));
     }
 
     #[test]
@@ -1196,21 +1110,21 @@ mod tests {
             )),
         );
 
-        assert_eq!(value.display_label(&symbols()), Some("km/h".to_string()));
+        assert_eq!(value.display_label(&render()), Some("km/h".to_string()));
     }
 
     #[test]
     fn display_label_omits_dimensionless_default_unit() {
         let value = quantity(Dimension::dimensionless(), None);
 
-        assert_eq!(value.display_label(&symbols()), None);
+        assert_eq!(value.display_label(&render()), None);
     }
 
     #[test]
     fn display_label_omits_default_unit_when_symbol_is_missing() {
         let value = quantity(Dimension::base(dim_id("Mass")), None);
 
-        assert_eq!(value.display_label(&symbols()), None);
+        assert_eq!(value.display_label(&render()), None);
     }
 
     fn struct_value(
@@ -1254,5 +1168,62 @@ mod tests {
         );
 
         assert_ne!(length, time);
+    }
+
+    fn datetime(display_tz: Option<IanaTimeZoneId>) -> Value {
+        Value::Datetime {
+            epoch: hifitime::Epoch::from_unix_seconds(1_730_808_000.0),
+            time_scale: graphcal_compiler::registry::time_scale::TimeScale::UTC,
+            display_tz,
+        }
+    }
+
+    fn tokyo() -> IanaTimeZoneId {
+        TimeZoneRegistry::bundled()
+            .parse_iana_id("Asia/Tokyo")
+            .unwrap()
+    }
+
+    #[test]
+    fn datetime_equality_includes_display_time_zone() {
+        assert_eq!(datetime(Some(tokyo())), datetime(Some(tokyo())));
+        assert_ne!(datetime(None), datetime(Some(tokyo())));
+    }
+
+    #[test]
+    fn render_context_formats_datetimes_in_their_display_zone() {
+        let render = render();
+        assert_eq!(
+            datetime(Some(tokyo()))
+                .format_display(&render, UnitLabel::Inline)
+                .unwrap(),
+            "2024-11-05T21:00:00+09:00[Asia/Tokyo]"
+        );
+        assert_eq!(
+            datetime(None)
+                .format_display(&render, UnitLabel::Inline)
+                .unwrap(),
+            "2024-11-05T12:00:00 UTC"
+        );
+    }
+
+    #[test]
+    fn format_display_places_unit_label_only_when_inline() {
+        let velocity =
+            (Dimension::base(dim_id("Length")) / Dimension::base(dim_id("Time"))).unwrap();
+        let value = Value::Quantity {
+            si_value: 2.5,
+            dimension: velocity,
+            display_unit: None,
+        };
+
+        assert_eq!(
+            value.format_display(&render(), UnitLabel::Inline).unwrap(),
+            "2.5 [m/s]"
+        );
+        assert_eq!(
+            value.format_display(&render(), UnitLabel::Omitted).unwrap(),
+            "2.5"
+        );
     }
 }

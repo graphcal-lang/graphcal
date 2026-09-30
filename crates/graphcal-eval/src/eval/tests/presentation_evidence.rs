@@ -361,10 +361,10 @@ fn prepared_rows_failure_recovery_and_reset_agree_with_fresh_evaluation() {
         );
         assert_eq!(
             find_entry(&result, "out")
-                .format_display(Some(&result.base_dim_symbols))
+                .format_display(&result.render, UnitLabel::Inline)
                 .unwrap(),
             find_entry(&fresh, "out")
-                .format_display(Some(&fresh.base_dim_symbols))
+                .format_display(&fresh.render, UnitLabel::Inline)
                 .unwrap()
         );
     }
@@ -392,7 +392,7 @@ node later: Dimensionless = 3.0;
     assert!(!result.has_errors(), "{result:?}");
     assert_eq!(
         find_entry(&result, "output")
-            .format_display(Some(&result.base_dim_symbols))
+            .format_display(&result.render, UnitLabel::Inline)
             .unwrap(),
         "4 [scaled]"
     );

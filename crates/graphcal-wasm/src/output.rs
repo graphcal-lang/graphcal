@@ -1,11 +1,8 @@
-use std::collections::BTreeMap;
-
 use graphcal_compiler::declaration_category::ValueDeclCategory;
-use graphcal_compiler::dimension::BaseDimId;
 use graphcal_compiler::syntax::index_name::IndexEntryKey;
 use graphcal_eval::eval::{
     AssertResult, DisplayProjectionError, DisplayUnit, EvalOutputView, EvalResult, NodeUnavailable,
-    Value, datetime_literal, format_epoch_with_tz, format_number, quantity_display_value,
+    RenderContext, Value, datetime_literal, format_number, quantity_display_value,
 };
 use serde::Serialize;
 
@@ -44,7 +41,7 @@ impl From<&EvalResult> for EvaluationView {
             .map(|(name, outcome, declaration_kind)| DeclarationView {
                 name: name.to_string(),
                 declaration_kind: DeclarationKindView::from(*declaration_kind),
-                outcome: DeclarationOutcomeView::from_result(outcome, &result.base_dim_symbols),
+                outcome: DeclarationOutcomeView::from_result(outcome, &result.render),
             })
             .collect();
 
@@ -171,14 +168,11 @@ pub enum DeclarationOutcomeView {
 }
 
 impl DeclarationOutcomeView {
-    fn from_result(
-        result: &Result<Value, NodeUnavailable>,
-        symbols: &BTreeMap<BaseDimId, String>,
-    ) -> Self {
+    fn from_result(result: &Result<Value, NodeUnavailable>, render: &RenderContext) -> Self {
         match result {
-            Ok(value) => ValueView::from_value(value, symbols)
+            Ok(value) => ValueView::from_value(value, render)
                 .and_then(|view| {
-                    graphcal_report::value_display::project_value_body(value, symbols)
+                    graphcal_report::value_display::project_value_body(value, render)
                         .map(|body| Self::Value { value: view, body })
                 })
                 .unwrap_or_else(|error| Self::Error {
@@ -259,14 +253,14 @@ impl ValueView {
                 &'a Value,
             ),
         >,
-        symbols: &BTreeMap<BaseDimId, String>,
+        render: &RenderContext,
     ) -> Result<Self, DisplayProjectionError> {
         Ok(Self::Struct {
             display: constructor.to_string(),
             type_name: constructor.to_string(),
             fields: fields
                 .map(|(name, field_value)| {
-                    Self::from_value(field_value, symbols).map(|value| StructFieldView {
+                    Self::from_value(field_value, render).map(|value| StructFieldView {
                         name: name.as_str().to_string(),
                         value,
                     })
@@ -275,10 +269,7 @@ impl ValueView {
         })
     }
 
-    fn from_value(
-        value: &Value,
-        symbols: &BTreeMap<BaseDimId, String>,
-    ) -> Result<Self, DisplayProjectionError> {
+    fn from_value(value: &Value, render: &RenderContext) -> Result<Self, DisplayProjectionError> {
         Ok(match value {
             Value::Quantity {
                 si_value,
@@ -287,7 +278,7 @@ impl ValueView {
             } => Self::from_quantity(
                 *si_value,
                 display_unit.as_ref(),
-                value.display_label(symbols),
+                value.display_label(render),
             )?,
             Value::Complex {
                 si_value,
@@ -297,7 +288,7 @@ impl ValueView {
                 si_value.re(),
                 si_value.im(),
                 display_unit.as_ref(),
-                value.display_label(symbols),
+                value.display_label(render),
             )?,
             Value::Bool(inner) => Self::Bool {
                 display: inner.to_string(),
@@ -329,7 +320,7 @@ impl ValueView {
                 constructor,
                 fields,
                 ..
-            } => Self::from_struct(constructor.as_str(), fields.iter(), symbols)?,
+            } => Self::from_struct(constructor.as_str(), fields.iter(), render)?,
             Value::Indexed {
                 index_name,
                 entries,
@@ -342,7 +333,7 @@ impl ValueView {
                     entries: entries
                         .iter()
                         .map(|(key, entry_value)| {
-                            Self::from_value(entry_value, symbols).map(|entry_value| {
+                            Self::from_value(entry_value, render).map(|entry_value| {
                                 IndexedEntryView {
                                     key: IndexEntryKeyView::from(key),
                                     display_key: value.indexed_entry_display_name(key),
@@ -357,9 +348,8 @@ impl ValueView {
                 epoch,
                 display_tz,
                 time_scale,
-                time_zones,
             } => Self::Datetime {
-                display: format_epoch_with_tz(epoch, display_tz.as_ref(), time_zones),
+                display: render.format_datetime(epoch, display_tz.as_ref()),
                 literal: datetime_literal(epoch, *time_scale),
                 time_scale: time_scale.to_string(),
                 display_timezone: display_tz.as_ref().map(|tz| tz.as_str().to_string()),

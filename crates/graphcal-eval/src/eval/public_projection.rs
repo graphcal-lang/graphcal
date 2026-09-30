@@ -439,7 +439,6 @@ fn project_runtime_value(
             epoch: *epoch,
             time_scale: *time_scale,
             display_tz: None,
-            time_zones: tir.registry().time_zones.clone(),
         }),
         _ => Err(projection_error(
             runtime,

@@ -16,7 +16,7 @@
 )]
 
 use graphcal_compiler::registry::time_zone::IanaTimeZoneId;
-use graphcal_eval::eval::{EvalResult, NodeUnavailable, Value, compile_and_eval};
+use graphcal_eval::eval::{EvalResult, NodeUnavailable, UnitLabel, Value, compile_and_eval};
 use proptest::prelude::*;
 
 // ============================================================================
@@ -287,7 +287,8 @@ node repeated: Key<Hour>[Fin(2)] = for i: Fin(2) { @peak };
     assert_eq!(display_unit.label, "h");
     assert_eq!(display_unit.scale.get().to_bits(), 3600.0_f64.to_bits());
     assert_eq!(
-        peak.format_display(Some(&result.base_dim_symbols)).unwrap(),
+        peak.format_display(&result.render, UnitLabel::Inline)
+            .unwrap(),
         "2 [h]"
     );
 
@@ -297,7 +298,7 @@ node repeated: Key<Hour>[Fin(2)] = for i: Fin(2) { @peak };
     assert_eq!(entries.len(), 2);
     assert!(entries.values().all(|entry| {
         entry
-            .format_display(Some(&result.base_dim_symbols))
+            .format_display(&result.render, UnitLabel::Inline)
             .as_deref()
             == Ok("2 [h]")
     }));

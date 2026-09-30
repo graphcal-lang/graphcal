@@ -156,7 +156,7 @@ pub fn build_report(inputs: ReportInputs<'_>) -> Result<ReportDocument, ReportBu
     for (name, outcome, kind) in result.output_values(EvalOutputView::Surface) {
         let name = name.to_string();
         let body = match outcome {
-            Ok(value) => match project_value_body(value, &result.base_dim_symbols) {
+            Ok(value) => match project_value_body(value, &result.render) {
                 Ok(body) => CardBody::Value(body),
                 Err(error) => CardBody::Error {
                     message: error.to_string(),

@@ -533,7 +533,7 @@ impl PreparedProject {
             figures: eval_result.figures,
             layers: eval_result.layers,
             assumes_map: eval_result.assumes_map,
-            base_dim_symbols: eval_result.base_dim_symbols,
+            render: eval_result.render,
             domain_constraints: eval_result.domain_constraints,
         })
     }

@@ -88,7 +88,7 @@ fn baseline_params(result: &EvalResult) -> Vec<(String, String)> {
             let value = outcome.as_ref().map_or_else(
                 |error| format!("ERROR: {error}"),
                 |value| {
-                    graphcal_report::value_display::scalar_display(value, &result.base_dim_symbols)
+                    graphcal_report::value_display::scalar_display(value, &result.render)
                         .unwrap_or_else(|error| format!("ERROR: {error}"))
                 },
             );

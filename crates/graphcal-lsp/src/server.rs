@@ -1781,7 +1781,7 @@ fn format_eval_values(
     for (name, value_result, _decl_type) in &result.entries {
         cancellation.checkpoint()?;
         let formatted = match value_result {
-            Ok(value) => format_value_inline(value, &result.base_dim_symbols),
+            Ok(value) => format_value_inline(value, &result.render),
             Err(reason) if reason.is_incomplete() => reason.to_string(),
             Err(_) => continue,
         };
@@ -1802,18 +1802,15 @@ const INLAY_HINT_MAX_LEN: usize = 80;
 /// - Constructor value: `"LowThrust(thrust: 0.5 [N], duration: 3600 [s])"`
 /// - Unit constructor value: `"Nominal"`
 /// - Indexed: `"{ Departure: 4.92 [km/s], Correction: 0.24 [km/s], ... }"`
-fn format_value_inline(
-    value: &Value,
-    symbols: &std::collections::BTreeMap<graphcal_compiler::dimension::BaseDimId, String>,
-) -> String {
-    format_value_inline_with_budget(value, symbols, INLAY_HINT_MAX_LEN)
+fn format_value_inline(value: &Value, render: &graphcal_eval::eval::RenderContext) -> String {
+    format_value_inline_with_budget(value, render, INLAY_HINT_MAX_LEN)
 }
 
 /// Format a `Value` with a character budget. When the formatted entries would
 /// exceed `max_len`, remaining entries are replaced with `...`.
 fn format_value_inline_with_budget(
     value: &Value,
-    symbols: &std::collections::BTreeMap<graphcal_compiler::dimension::BaseDimId, String>,
+    render: &graphcal_eval::eval::RenderContext,
     max_len: usize,
 ) -> String {
     match value {
@@ -1824,7 +1821,7 @@ fn format_value_inline_with_budget(
         | Value::Int(_)
         | Value::Label { .. }
         | Value::Datetime { .. } => value
-            .format_display(Some(symbols))
+            .format_display(render, graphcal_eval::eval::UnitLabel::Inline)
             .unwrap_or_else(|error| format!("ERROR: {error}")),
         Value::Struct {
             constructor,
@@ -1836,7 +1833,7 @@ fn format_value_inline_with_budget(
             }
             let entries: Vec<(&str, &Value)> =
                 fields.iter().map(|(k, v)| (k.as_str(), v)).collect();
-            format_parenthesized_entries(constructor.as_str(), &entries, symbols, max_len)
+            format_parenthesized_entries(constructor.as_str(), &entries, render, max_len)
         }
         Value::Indexed { entries, .. } => {
             if entries.is_empty() {
@@ -1849,13 +1846,13 @@ fn format_value_inline_with_budget(
             flatten_indexed_entries(value, &mut Vec::new(), &mut flat);
             let is_multi = flat.first().is_some_and(|(keys, _)| keys.len() > 1);
             if is_multi {
-                format_tuple_keyed_entries("", &flat, symbols, max_len)
+                format_tuple_keyed_entries("", &flat, render, max_len)
             } else {
                 let single: Vec<(String, &Value)> = entries
                     .iter()
                     .map(|(k, v)| (value.indexed_entry_display_name(k), v))
                     .collect();
-                format_entries("", &single, Clone::clone, symbols, max_len)
+                format_entries("", &single, Clone::clone, render, max_len)
             }
         }
     }
@@ -1871,7 +1868,7 @@ fn format_entries<K>(
     prefix: &str,
     entries: &[(K, &Value)],
     render_key: impl Fn(&K) -> String,
-    symbols: &std::collections::BTreeMap<graphcal_compiler::dimension::BaseDimId, String>,
+    render: &graphcal_eval::eval::RenderContext,
     max_len: usize,
 ) -> String {
     format_delimited_entries(
@@ -1883,7 +1880,7 @@ fn format_entries<K>(
         },
         entries,
         render_key,
-        symbols,
+        render,
         max_len,
     )
 }
@@ -1900,7 +1897,7 @@ fn format_delimited_entries<K>(
     layout: EntryListLayout<'_>,
     entries: &[(K, &Value)],
     render_key: impl Fn(&K) -> String,
-    symbols: &std::collections::BTreeMap<graphcal_compiler::dimension::BaseDimId, String>,
+    render: &graphcal_eval::eval::RenderContext,
     max_len: usize,
 ) -> String {
     let mut result = format!("{}{}", layout.prefix, layout.open);
@@ -1911,7 +1908,7 @@ fn format_delimited_entries<K>(
         let entry_str = format!(
             "{}: {}",
             render_key(key),
-            format_value_inline_with_budget(val, symbols, remaining_budget)
+            format_value_inline_with_budget(val, render, remaining_budget)
         );
 
         let separator = if i + 1 < total { ", " } else { "" };
@@ -1935,7 +1932,7 @@ fn format_delimited_entries<K>(
 fn format_parenthesized_entries(
     prefix: &str,
     entries: &[(&str, &Value)],
-    symbols: &std::collections::BTreeMap<graphcal_compiler::dimension::BaseDimId, String>,
+    render: &graphcal_eval::eval::RenderContext,
     max_len: usize,
 ) -> String {
     format_delimited_entries(
@@ -1947,7 +1944,7 @@ fn format_parenthesized_entries(
         },
         entries,
         |k| (*k).to_string(),
-        symbols,
+        render,
         max_len,
     )
 }
@@ -1979,14 +1976,14 @@ fn flatten_indexed_entries<'a>(
 fn format_tuple_keyed_entries(
     prefix: &str,
     entries: &[(Vec<String>, &Value)],
-    symbols: &std::collections::BTreeMap<graphcal_compiler::dimension::BaseDimId, String>,
+    render: &graphcal_eval::eval::RenderContext,
     max_len: usize,
 ) -> String {
     format_entries(
         prefix,
         entries,
         |keys| format!("({})", keys.join(", ")),
-        symbols,
+        render,
         max_len,
     )
 }
@@ -3268,8 +3265,11 @@ mod tests {
         );
     }
 
-    fn empty_symbols() -> BTreeMap<graphcal_compiler::dimension::BaseDimId, String> {
-        BTreeMap::new()
+    fn empty_render_context() -> graphcal_eval::eval::RenderContext {
+        graphcal_eval::eval::RenderContext::new(
+            BTreeMap::new(),
+            graphcal_compiler::registry::time_zone::TimeZoneRegistry::bundled(),
+        )
     }
 
     fn quantity(si_value: f64) -> Value {
@@ -3304,53 +3304,53 @@ mod tests {
 
     #[test]
     fn format_quantity_dimensionless() {
-        let symbols = empty_symbols();
-        assert_eq!(format_value_inline(&quantity(2.72), &symbols), "2.72");
-        assert_eq!(format_value_inline(&quantity(42.0), &symbols), "42");
+        let render = empty_render_context();
+        assert_eq!(format_value_inline(&quantity(2.72), &render), "2.72");
+        assert_eq!(format_value_inline(&quantity(42.0), &render), "42");
     }
 
     #[test]
     fn format_bool() {
-        let symbols = empty_symbols();
-        assert_eq!(format_value_inline(&Value::Bool(true), &symbols), "true");
-        assert_eq!(format_value_inline(&Value::Bool(false), &symbols), "false");
+        let render = empty_render_context();
+        assert_eq!(format_value_inline(&Value::Bool(true), &render), "true");
+        assert_eq!(format_value_inline(&Value::Bool(false), &render), "false");
     }
 
     #[test]
     fn format_int() {
-        let symbols = empty_symbols();
-        assert_eq!(format_value_inline(&Value::Int(7), &symbols), "7");
+        let render = empty_render_context();
+        assert_eq!(format_value_inline(&Value::Int(7), &render), "7");
     }
 
     #[test]
     fn format_struct_with_fields() {
-        let symbols = empty_symbols();
+        let render = empty_render_context();
         let mut fields = IndexMap::new();
         fields.insert(FieldName::expect_valid("dv1"), quantity(100.0));
         fields.insert(FieldName::expect_valid("dv2"), quantity(200.0));
         let val = test_struct(StructTypeName::expect_valid("TransferResult"), fields);
         assert_eq!(
-            format_value_inline(&val, &symbols),
+            format_value_inline(&val, &render),
             "TransferResult(dv1: 100, dv2: 200)"
         );
     }
 
     #[test]
     fn format_struct_empty_fields() {
-        let symbols = empty_symbols();
+        let render = empty_render_context();
         let val = test_struct(StructTypeName::expect_valid("Nominal"), IndexMap::new());
-        assert_eq!(format_value_inline(&val, &symbols), "Nominal");
+        assert_eq!(format_value_inline(&val, &render), "Nominal");
     }
 
     #[test]
     fn format_struct_multi_variant() {
-        let symbols = empty_symbols();
+        let render = empty_render_context();
         let mut fields = IndexMap::new();
         fields.insert(FieldName::expect_valid("thrust"), quantity(0.5));
         fields.insert(FieldName::expect_valid("duration"), quantity(3600.0));
         let val = test_struct(StructTypeName::expect_valid("LowThrust"), fields);
         assert_eq!(
-            format_value_inline(&val, &symbols),
+            format_value_inline(&val, &render),
             "LowThrust(thrust: 0.5, duration: 3600)"
         );
     }
@@ -3558,25 +3558,25 @@ mod tests {
 
     #[test]
     fn format_indexed() {
-        let symbols = empty_symbols();
+        let render = empty_render_context();
         let mut entries = IndexMap::new();
         entries.insert(IndexVariantName::expect_valid("A"), quantity(1.0));
         entries.insert(IndexVariantName::expect_valid("B"), quantity(2.0));
         entries.insert(IndexVariantName::expect_valid("C"), quantity(3.0));
         let val = test_indexed(IndexName::expect_valid("Phase"), entries);
-        assert_eq!(format_value_inline(&val, &symbols), "{ A: 1, B: 2, C: 3 }");
+        assert_eq!(format_value_inline(&val, &render), "{ A: 1, B: 2, C: 3 }");
     }
 
     #[test]
     fn format_indexed_empty() {
-        let symbols = empty_symbols();
+        let render = empty_render_context();
         let val = test_indexed(IndexName::expect_valid("Phase"), IndexMap::new());
-        assert_eq!(format_value_inline(&val, &symbols), "{}");
+        assert_eq!(format_value_inline(&val, &render), "{}");
     }
 
     #[test]
     fn format_indexed_truncation() {
-        let symbols = empty_symbols();
+        let render = empty_render_context();
         let mut entries = IndexMap::new();
         // Create entries with long names to trigger truncation at 80 chars
         entries.insert(
@@ -3596,7 +3596,7 @@ mod tests {
             quantity(4.56789),
         );
         let val = test_indexed(IndexName::expect_valid("Idx"), entries);
-        let result = format_value_inline(&val, &symbols);
+        let result = format_value_inline(&val, &render);
         assert!(
             result.len() <= INLAY_HINT_MAX_LEN + 10,
             "result too long: {result}"
@@ -3606,19 +3606,19 @@ mod tests {
 
     #[test]
     fn format_struct_inside_indexed() {
-        let symbols = empty_symbols();
+        let render = empty_render_context();
         let mut fields = IndexMap::new();
         fields.insert(FieldName::expect_valid("x"), quantity(1.0));
         let struct_val = test_struct(StructTypeName::expect_valid("Point"), fields);
         let mut entries = IndexMap::new();
         entries.insert(IndexVariantName::expect_valid("A"), struct_val);
         let val = test_indexed(IndexName::expect_valid("Idx"), entries);
-        assert_eq!(format_value_inline(&val, &symbols), "{ A: Point(x: 1) }");
+        assert_eq!(format_value_inline(&val, &render), "{ A: Point(x: 1) }");
     }
 
     #[test]
     fn format_nested_indexed_tuple_keyed() {
-        let symbols = empty_symbols();
+        let render = empty_render_context();
         let mut inner_a = IndexMap::new();
         inner_a.insert(IndexVariantName::expect_valid("X"), quantity(1.0));
         inner_a.insert(IndexVariantName::expect_valid("Y"), quantity(2.0));
@@ -3636,14 +3636,14 @@ mod tests {
         );
         let val = test_indexed(IndexName::expect_valid("Row"), entries);
         assert_eq!(
-            format_value_inline(&val, &symbols),
+            format_value_inline(&val, &render),
             "{ (A, X): 1, (A, Y): 2, (B, X): 3, (B, Y): 4 }"
         );
     }
 
     #[test]
     fn format_triple_nested_indexed() {
-        let symbols = empty_symbols();
+        let render = empty_render_context();
         // 3-level nesting: Scenario[Phase[Maneuver[quantity]]]
         let mut inner_most = IndexMap::new();
         inner_most.insert(IndexVariantName::expect_valid("Dep"), quantity(100.0));
@@ -3659,14 +3659,14 @@ mod tests {
         );
         let val = test_indexed(IndexName::expect_valid("Scenario"), outer);
         assert_eq!(
-            format_value_inline(&val, &symbols),
+            format_value_inline(&val, &render),
             "{ (Nom, Launch, Dep): 100 }"
         );
     }
 
     #[test]
     fn format_nested_indexed_truncation() {
-        let symbols = empty_symbols();
+        let render = empty_render_context();
         let mut inner_a = IndexMap::new();
         inner_a.insert(
             IndexVariantName::expect_valid("LongNameAlpha"),
@@ -3703,7 +3703,7 @@ mod tests {
             test_indexed(IndexName::expect_valid("Inner"), inner_b),
         );
         let val = test_indexed(IndexName::expect_valid("Outer"), entries);
-        let result = format_value_inline(&val, &symbols);
+        let result = format_value_inline(&val, &render);
         assert!(
             result.len() <= INLAY_HINT_MAX_LEN + 10,
             "result too long: {result}"

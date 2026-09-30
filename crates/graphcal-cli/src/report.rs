@@ -513,10 +513,8 @@ fn baseline_params(result: &EvalResult) -> Vec<(String, String)> {
         .output_params(graphcal_eval::eval::EvalOutputView::Surface)
         .map(|(name, outcome)| {
             let display = match outcome {
-                Ok(value) => {
-                    graphcal_report::value_display::scalar_display(value, &result.base_dim_symbols)
-                        .unwrap_or_else(|error| format!("ERROR: {error}"))
-                }
+                Ok(value) => graphcal_report::value_display::scalar_display(value, &result.render)
+                    .unwrap_or_else(|error| format!("ERROR: {error}")),
                 Err(error) => format!("ERROR: {error}"),
             };
             (name.to_string(), display)

@@ -698,7 +698,10 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
         figures,
         layers,
         assumes_map,
-        base_dim_symbols: tir.registry().dimensions.base_unit_symbols(),
+        render: super::types::RenderContext::new(
+            tir.registry().dimensions.base_unit_symbols(),
+            tir.registry().time_zones.clone(),
+        ),
         domain_constraints,
     };
     Ok(RuntimeEvaluation {
