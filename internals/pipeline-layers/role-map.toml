@@ -2514,3 +2514,23 @@ role = "checking"
 package = "compiler"
 path = ["ir", "extern_function"]
 role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["tir", "typed", "checked_dag"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["tir", "typed", "dag_store"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["tir", "typed", "program"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["tir", "typed", "freeze"]
+role = "contracts"

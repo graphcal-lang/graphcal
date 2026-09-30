@@ -108,14 +108,6 @@ reason = "Observed compiler::tir::typed::model -> compiler::hir (production) at 
 from_package = "compiler"
 from_path = ["tir", "typed", "model"]
 to_package = "compiler"
-to_path = ["ir", "extern_fns"]
-test_only = false
-reason = "Observed compiler::tir::typed::model -> compiler::ir::extern_fns (production) at ./crates/graphcal-compiler/src/tir/typed/model.rs:1323 (qualified path); roles are contracts -> checking. Planned deletion seam: separate shared data/error definitions from their checking/building producers (Phases B-C)."
-
-[[exception]]
-from_package = "compiler"
-from_path = ["tir", "typed", "model"]
-to_package = "compiler"
 to_path = ["resolve"]
 test_only = false
 reason = "Observed compiler::tir::typed::model -> compiler::resolve (production) at ./crates/graphcal-compiler/src/tir/typed/model.rs:23 (use import); roles are contracts -> checking. Planned deletion seam: separate shared data/error definitions from their checking/building producers (Phases B-C)."

@@ -21,7 +21,8 @@ use crate::tir::texpr::{
     CheckedBodies, CheckedBody, ConstructorApplication, ConstructorMatch, NominalObservation,
     StaticPosition, TBody,
 };
-use crate::tir::typed::model::{DagTIR, TirRead};
+use crate::tir::typed::model::DagTIR;
+use crate::tir::typed::program::TirRead;
 use crate::tir::typed::specialization::{specialize_expression_type, specialize_index_ref};
 
 use super::expression_axes::{check_materializable, checked_index_cardinality};

@@ -14,7 +14,9 @@ use crate::ir::instance::{
 };
 use crate::resolved_name::ResolvedDeclName;
 
-use super::checked::{CheckedDag, CheckedDagRegistry};
+use super::checked::CheckedDagRegistry;
+
+use super::checked_dag::CheckedDag;
 
 /// One semantic include edge together with the checked DAG that runs its
 /// instance.

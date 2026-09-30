@@ -1452,7 +1452,7 @@ fn check_inline_plan_asserts(
 /// the calling expression (fault-isolated to the calling declaration).
 /// `#[expected_fail]` inversion applies as usual.
 fn check_inline_dag_asserts(
-    dag_tir: &graphcal_compiler::tir::typed::checked::CheckedDag,
+    dag_tir: &graphcal_compiler::tir::typed::checked_dag::CheckedDag,
     dag_values: &RuntimeValueMap,
     dag_ctx: &EvalSession<'_>,
     target: &Spanned<graphcal_compiler::dag_id::DagId>,

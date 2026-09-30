@@ -22,125 +22,10 @@ use crate::tir::presentation::DagPresentationFacts;
 use crate::tir::schedule::{ConstSchedule, RuntimeSchedule};
 use crate::tir::texpr::CheckedBodies;
 
-use super::model::{
-    CheckedDeclType, DagRegistry, DagTIR, ProjectTypeStore, TirCore, TirRead, UncheckedTir,
-};
+use super::checked_dag::{CheckedDag, PublishedDag};
+use super::model::{CheckedDeclType, DagTIR, ProjectTypeStore, TirCore};
 
-/// A DAG body together with everything its check published: the checked tree
-/// of every expression root, presentation facts, and its runtime schedule as a
-/// callable.
-///
-/// A canonical body's trees are the ones its inference emitted; a semantic
-/// instance's are its template's, specialized with the instance's Static
-/// substitution (their types differ per instance, so they cannot be shared).
-///
-/// Created only when an [`InstantiatedTir`](super::model::InstantiatedTir) is
-/// checked, so its checked trees are always present and cover exactly this
-/// body's expression roots.
-#[derive(Debug, Clone)]
-pub struct CheckedDag {
-    body: DagTIR,
-    bodies: CheckedBodies,
-    presentation: DagPresentationFacts,
-    runtime_schedule: RuntimeSchedule,
-}
-
-/// The facts one check published for one local body.
-struct PublishedDag {
-    bodies: CheckedBodies,
-    presentation: DagPresentationFacts,
-    runtime_schedule: RuntimeSchedule,
-}
-
-impl CheckedDag {
-    /// Pair a checked body with the facts published for it.
-    fn new(
-        body: DagTIR,
-        published: PublishedDag,
-        src: &NamedSource<Arc<String>>,
-    ) -> Result<Self, GraphcalError> {
-        let internal = |message: String| {
-            GraphcalError::internal_error(
-                format!("DAG `{}`: {message}", body.dag_id()),
-                src,
-                DiagnosticAnchor::WholeFile,
-            )
-        };
-        if !published.bodies.cover(body.owned_expression_roots()) {
-            return Err(internal(
-                "typed bodies do not cover exactly its expression roots".to_owned(),
-            ));
-        }
-        Ok(Self {
-            body,
-            bodies: published.bodies,
-            presentation: published.presentation,
-            runtime_schedule: published.runtime_schedule,
-        })
-    }
-
-    /// The checked tree of every expression root this body owns.
-    #[must_use]
-    pub(crate) const fn bodies(&self) -> &CheckedBodies {
-        &self.bodies
-    }
-
-    /// Every concrete constructor application this body's checked trees
-    /// make; see [`CheckedBodies::concrete_applications`].
-    #[must_use]
-    pub fn concrete_constructor_applications(
-        &self,
-    ) -> Vec<(
-        &ResolvedStructTypeName,
-        Vec<crate::semantic::checked_type::CheckedGenericArg>,
-    )> {
-        self.bodies.concrete_applications()
-    }
-
-    /// The checked tree of every expression root this body owns, for tests
-    /// outside the compiler.
-    #[cfg(any(test, feature = "test-identities"))]
-    #[must_use]
-    pub const fn bodies_for_test(&self) -> &CheckedBodies {
-        &self.bodies
-    }
-
-    /// Runtime schedule of this DAG as a callable.
-    #[must_use]
-    pub const fn runtime_schedule(&self) -> &RuntimeSchedule {
-        &self.runtime_schedule
-    }
-
-    /// Checked structured display and plot-channel presentation facts.
-    #[must_use]
-    pub const fn presentation(&self) -> &DagPresentationFacts {
-        &self.presentation
-    }
-
-    /// Look up checked plot-channel presentation facts.
-    #[must_use]
-    pub fn plot_channel_presentations(
-        &self,
-        plot: &ResolvedDeclName,
-    ) -> Option<&HashMap<crate::syntax::ast::EncodingChannel, crate::plot_shape::PlotChannelShape>>
-    {
-        self.presentation.plot_channels.get(plot)
-    }
-
-    /// Release the body, dropping its facts, to re-resolve it in a derived
-    /// checking view.
-    pub(crate) fn into_body(self) -> DagTIR {
-        self.body
-    }
-}
-
-impl std::ops::Deref for CheckedDag {
-    type Target = DagTIR;
-
-    fn deref(&self) -> &DagTIR {
-        &self.body
-    }
-}
+use super::program::{TirRead, UncheckedTir};
 
 /// Registry of the checked DAGs of one file and every DAG it imports.
 ///
@@ -149,8 +34,8 @@ impl std::ops::Deref for CheckedDag {
 /// insertion, removal, or mutation.
 #[derive(Debug, Clone)]
 pub struct CheckedDagRegistry {
-    root: CheckedDag,
-    other_dags: HashMap<DagId, CheckedDag>,
+    pub(super) root: CheckedDag,
+    pub(super) other_dags: HashMap<DagId, CheckedDag>,
     /// Immutable bodies imported from an already-frozen module store.
     shared_dags: HashMap<DagId, Arc<CheckedDag>>,
 }
@@ -212,40 +97,6 @@ impl CheckedDagRegistry {
     pub const fn is_empty(&self) -> bool {
         false
     }
-
-    /// Consume the local checked bodies into immutable handles.
-    ///
-    /// Imported handles are deliberately not copied into the new store: they
-    /// already belong to another canonical store.
-    fn freeze_local(
-        self,
-        runtime_units: HashMap<ResolvedUnitName, Arc<UnitInfo>>,
-    ) -> Result<DagStore, DagStoreFreezeError> {
-        runtime_units.keys().try_for_each(|identity| {
-            self.get(identity.owner()).map(|_| ()).ok_or_else(|| {
-                DagStoreFreezeError::MissingUnitOwner {
-                    identity: identity.clone(),
-                }
-            })
-        })?;
-        let mut dags = self
-            .other_dags
-            .into_iter()
-            .map(|(id, dag)| (id, Arc::new(dag)))
-            .collect::<HashMap<_, _>>();
-        let root_id = self.root.dag_id().clone();
-        dags.insert(root_id, Arc::new(self.root));
-        // Imported unit definitions stay in their publishing module, just like
-        // imported bodies. Only the final importing TIR needs their lookup index.
-        let runtime_units = runtime_units
-            .into_iter()
-            .filter(|(identity, _)| dags.contains_key(identity.owner()))
-            .collect();
-        Ok(DagStore {
-            dags,
-            runtime_units,
-        })
-    }
 }
 
 impl std::ops::Index<&DagId> for CheckedDagRegistry {
@@ -259,63 +110,6 @@ impl std::ops::Index<&DagId> for CheckedDagRegistry {
                 .get(index)
                 .unwrap_or_else(|| self.shared_dags[index].as_ref())
         }
-    }
-}
-
-/// Failure to freeze the locally owned portion of a checked registry.
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-pub enum DagStoreFreezeError {
-    /// Every runtime unit must have a local or imported defining body.
-    #[error("runtime unit `{identity}` has no defining DAG in the assembly registry")]
-    MissingUnitOwner { identity: ResolvedUnitName },
-}
-
-/// Immutable canonical checked bodies published by one module in a
-/// compilation session.
-///
-/// The store is created by consuming a [`CheckedTir`]. It has no mutation or
-/// completion API. Cloning it shares body and unit handles; project artifacts
-/// share the complete store through `Arc`.
-#[derive(Debug, Clone)]
-pub struct DagStore {
-    pub(super) dags: HashMap<DagId, Arc<CheckedDag>>,
-    pub(super) runtime_units: HashMap<ResolvedUnitName, Arc<UnitInfo>>,
-}
-
-impl DagStore {
-    /// Look up a canonical immutable body.
-    #[must_use]
-    pub fn get(&self, dag_id: &DagId) -> Option<&CheckedDag> {
-        self.dags.get(dag_id).map(AsRef::as_ref)
-    }
-
-    /// Borrow the canonical body handle for pointer-identity checks and sharing.
-    #[must_use]
-    pub fn handle(&self, dag_id: &DagId) -> Option<&Arc<CheckedDag>> {
-        self.dags.get(dag_id)
-    }
-
-    /// Iterate over canonical immutable bodies.
-    pub fn iter(&self) -> impl Iterator<Item = (&DagId, &CheckedDag)> {
-        self.dags.iter().map(|(id, dag)| (id, dag.as_ref()))
-    }
-
-    /// Look up a runtime unit overlay owned by this publishing module.
-    #[must_use]
-    pub fn unit_info(&self, name: &ResolvedUnitName) -> Option<&UnitInfo> {
-        self.runtime_units.get(name).map(AsRef::as_ref)
-    }
-
-    /// Number of canonical bodies in this store.
-    #[must_use]
-    pub fn len(&self) -> usize {
-        self.dags.len()
-    }
-
-    /// Whether this store has no bodies.
-    #[must_use]
-    pub fn is_empty(&self) -> bool {
-        self.dags.is_empty()
     }
 }
 
@@ -394,35 +188,16 @@ pub(crate) struct CheckedParts {
     pub(crate) schedules: CheckedSchedules,
 }
 
-impl DagRegistry {
-    /// Add handles to an immutable module store during assembly.
-    pub(crate) fn insert_shared_store(
-        &mut self,
-        store: &DagStore,
-    ) -> Result<(), super::model::DagRegistryError> {
-        if let Some(dag_id) = store.dags.keys().find(|dag_id| self.contains(dag_id)) {
-            return Err(super::model::DagRegistryError::DuplicateDag {
-                dag_id: dag_id.clone(),
-            });
-        }
-        store
-            .dags
-            .iter()
-            .for_each(|(dag_id, dag)| self.insert_shared(dag_id.clone(), Arc::clone(dag)));
-        Ok(())
-    }
-}
-
 /// The checked project TIR: the final state of the TIR typestate and the only
 /// one evaluation and the language server see.
 ///
-/// Created only by [`InstantiatedTir::check`](super::model::InstantiatedTir::check).
+/// Created only by [`InstantiatedTir::check`](super::program::InstantiatedTir::check).
 /// It is immutable: safe clients can inspect but cannot remove, replace, or
 /// re-key its DAGs, and every DAG carries its checked facts.
 #[derive(Debug, Clone)]
 pub struct CheckedTir {
-    core: TirCore,
-    dags: CheckedDagRegistry,
+    pub(super) core: TirCore,
+    pub(super) dags: CheckedDagRegistry,
     const_schedule: ConstSchedule,
 }
 
@@ -461,16 +236,6 @@ impl CheckedTir {
     #[must_use]
     pub const fn dag_registry(&self) -> &CheckedDagRegistry {
         &self.dags
-    }
-
-    /// Consume this TIR's local bodies into an immutable store. Imported
-    /// bodies and runtime units remain owned by their publishing module.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`DagStoreFreezeError`] if a runtime unit has no defining body.
-    pub fn freeze_local_dag_store(self) -> Result<DagStore, DagStoreFreezeError> {
-        self.dags.freeze_local(self.core.into_runtime_units())
     }
 
     /// Iterate over every DAG owned by this file, including the root and all

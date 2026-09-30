@@ -46,7 +46,7 @@ impl CheckedOverrideDependencies {
     /// refinement is applied to every materialized semantic instance, not only
     /// the entry DAG, because each instance owns its own executable
     /// reconciliation facts.
-    pub(in crate::tir::typed) fn reconcile(&self, tir: &mut super::model::UncheckedTir) {
+    pub(in crate::tir::typed) fn reconcile(&self, tir: &mut super::program::UncheckedTir) {
         for dag in tir.dags.values_mut() {
             dag.semantic
                 .override_reconciliations

@@ -11,7 +11,8 @@ use crate::semantic::checked_type::{
 };
 use crate::syntax::span::Span;
 use crate::tir::texpr::{CheckedBody, TBody, TNodeRef, visit_tnodes};
-use crate::tir::typed::model::{DagTIR, ResolvedStructFieldTypeKey, TirRead};
+use crate::tir::typed::model::{DagTIR, ResolvedStructFieldTypeKey};
+use crate::tir::typed::program::TirRead;
 use miette::NamedSource;
 use std::sync::Arc;
 
