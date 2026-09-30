@@ -1,6 +1,6 @@
 //! The typed expression tree data model.
 
-use crate::builtin::{AggregationFn, LinearAlgebraFn};
+use crate::builtin::AggregationFn;
 use crate::dag_id::DagId;
 use crate::datetime_literal::{CivilDateTimeLiteral, OffsetDateTimeLiteral, ZonedDateTimeLiteral};
 use crate::expression_id::ExprId;
@@ -18,7 +18,7 @@ use crate::syntax::type_name::FieldName;
 use crate::tir::static_index::StaticIndexUse;
 
 use super::nominal::{ConstructorApplication, ConstructorMatch};
-use super::operators::{BExpr, CExpr, DExpr, IExpr, QExpr};
+use super::operators::{BExpr, CExpr, DExpr, IExpr, LinearAlgebraCall, QExpr};
 
 /// One checked value expression.
 #[derive(Debug)]
@@ -124,9 +124,8 @@ impl<V: Concreteness> TExpr<V> {
             | TExprKind::Key { arg: operand, .. } => vec![&**operand],
             TExprKind::DatetimeLiteral(_) => Vec::new(),
             TExprKind::Aggregate { arg, .. } => vec![&**arg],
-            TExprKind::LinearAlgebra { args, .. } | TExprKind::Extern { args, .. } => {
-                args.iter().collect()
-            }
+            TExprKind::LinearAlgebra(call) => unbox(call.operands()),
+            TExprKind::Extern { args, .. } => args.iter().collect(),
             TExprKind::If {
                 condition,
                 then_branch,
@@ -226,10 +225,7 @@ pub enum TExprKind<V: Concreteness = Concrete> {
         arg: Box<TExpr<V>>,
     },
     /// A shape-aware operation on indexed quantities.
-    LinearAlgebra {
-        function: LinearAlgebraFn,
-        args: Vec<TExpr<V>>,
-    },
+    LinearAlgebra(LinearAlgebraCall<Box<TExpr<V>>>),
     /// A plugin function call.
     Extern {
         function: ExternFnRef,

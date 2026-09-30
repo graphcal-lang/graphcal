@@ -4,14 +4,21 @@
 //! construction establishes the rectangular shape, then narrowed to explicit
 //! vector/matrix carriers. Kernels operate on row-major `f64` buffers, and
 //! results are rebuilt over the exact typed axes supplied by the arguments.
+//!
+//! A call arrives with exactly its checked operands ([`LinearAlgebraCall`]).
+//! An operand whose shape contradicts its checked type — not indexed, of
+//! another rank, ragged, with non-quantity entries, or over axes the checker
+//! proved to agree but that differ — is a violated [`Invariant`], raised
+//! where the operand is read as a vector or a matrix.
 
 use graphcal_compiler::builtin::LinearAlgebraFn;
 use graphcal_compiler::finite_value::FiniteQuantity;
 use graphcal_compiler::syntax::non_empty::NonEmpty;
+use graphcal_compiler::tir::texpr::operators::LinearAlgebraCall;
 use thiserror::Error;
 
 use crate::runtime_value::dense_array::{DenseArray, DenseArrayError, DenseShapeError};
-use crate::runtime_value::{IndexAxis, RuntimeValue, RuntimeValueError};
+use crate::runtime_value::{IndexAxis, RuntimeValue};
 
 use graphcal_compiler::outcome::Outcome;
 
@@ -37,15 +44,11 @@ struct Matrix {
 }
 
 impl Vector {
-    fn from_value(value: &RuntimeValue, context: &'static str) -> Result<Self, OperandInvariant> {
+    fn from_value(value: &RuntimeValue, context: &'static str) -> Result<Self, Invariant> {
         let (axes, values) = dense_operand(value, context)?.into_parts();
         let (first, inner) = axes.split_first();
         if !inner.is_empty() {
-            return Err(OperandInvariant::Rank {
-                context,
-                expected: 1,
-                actual: axes.len(),
-            });
+            return Err(rank_invariant(context, 1, axes.len()));
         }
         Ok(Self {
             axis: first.clone(),
@@ -55,14 +58,10 @@ impl Vector {
 }
 
 impl Matrix {
-    fn from_value(value: &RuntimeValue, context: &'static str) -> Result<Self, OperandInvariant> {
+    fn from_value(value: &RuntimeValue, context: &'static str) -> Result<Self, Invariant> {
         let (axes, values) = dense_operand(value, context)?.into_parts();
         let [rows, columns] = axes.as_slice() else {
-            return Err(OperandInvariant::Rank {
-                context,
-                expected: 2,
-                actual: axes.len(),
-            });
+            return Err(rank_invariant(context, 2, axes.len()));
         };
         Ok(Self {
             rows: rows.clone(),
@@ -81,46 +80,35 @@ impl Matrix {
 fn dense_operand(
     value: &RuntimeValue,
     context: &'static str,
-) -> Result<DenseArray<f64>, OperandInvariant> {
+) -> Result<DenseArray<f64>, Invariant> {
     let RuntimeValue::Indexed(indexed) = value else {
-        return Err(OperandInvariant::NotIndexed { context });
+        return Err(operand_invariant(format_args!(
+            "{context} expected an indexed operand"
+        )));
     };
     DenseArray::try_from_indexed(indexed, |leaf| {
         leaf.expect_quantity(context)
             .map(graphcal_compiler::finite_value::FiniteQuantity::get)
     })
     .map_err(|error| match error {
-        DenseArrayError::Ragged => OperandInvariant::Ragged { context },
-        DenseArrayError::Element(error) => OperandInvariant::Element(error),
+        DenseArrayError::Ragged => {
+            operand_invariant(format_args!("{context} received a ragged indexed operand"))
+        }
+        DenseArrayError::Element(error) => operand_invariant(error),
     })
 }
 
-/// An operand combination the type checker rules out.
-///
-/// The value shapes themselves are established by [`DenseArray`]; these are
-/// the remaining type-level facts (arity, rank, axis agreement) that the
-/// untyped kernel entry still re-checks.
-#[derive(Debug, Error)]
-pub(super) enum OperandInvariant {
-    #[error("{function}() received {received} arguments after type checking")]
-    Arity {
-        function: LinearAlgebraFn,
-        received: usize,
-    },
-    #[error("{context} expected an indexed operand")]
-    NotIndexed { context: &'static str },
-    #[error("{context} expected a rank-{expected} operand, got rank {actual}")]
-    Rank {
-        context: &'static str,
-        expected: usize,
-        actual: usize,
-    },
-    #[error("{context} received a ragged indexed operand")]
-    Ragged { context: &'static str },
-    #[error(transparent)]
-    Element(RuntimeValueError),
-    #[error("{function}() received operands over incompatible axes")]
-    AxisMismatch { function: LinearAlgebraFn },
+/// An operand shape the type checker rules out.
+fn operand_invariant(message: impl std::fmt::Display) -> Invariant {
+    Invariant::violated(format_args!(
+        "linear-algebra operand invariant failed: {message}"
+    ))
+}
+
+fn rank_invariant(context: &'static str, expected: usize, actual: usize) -> Invariant {
+    operand_invariant(format_args!(
+        "{context} expected a rank-{expected} operand, got rank {actual}"
+    ))
 }
 
 #[derive(Debug, Error)]
@@ -157,15 +145,6 @@ impl From<QuantityValidationError> for LinearAlgebraFailure {
 impl From<WorkAmountError> for LinearAlgebraFailure {
     fn from(error: WorkAmountError) -> Self {
         LinearAlgebraError::from(error).into()
-    }
-}
-
-impl From<OperandInvariant> for LinearAlgebraFailure {
-    fn from(error: OperandInvariant) -> Self {
-        Invariant::violated(format_args!(
-            "linear-algebra operand invariant failed: {error}"
-        ))
-        .into()
     }
 }
 
@@ -269,37 +248,17 @@ fn norm(
     accumulator.finish("norm()").map_err(Into::into)
 }
 
-fn one_argument(
-    function: LinearAlgebraFn,
-    arguments: Vec<RuntimeValue>,
-) -> Result<RuntimeValue, OperandInvariant> {
-    <[RuntimeValue; 1]>::try_from(arguments)
-        .map(|[argument]| argument)
-        .map_err(|arguments| OperandInvariant::Arity {
-            function,
-            received: arguments.len(),
-        })
-}
-
-fn two_arguments(
-    function: LinearAlgebraFn,
-    arguments: Vec<RuntimeValue>,
-) -> Result<[RuntimeValue; 2], OperandInvariant> {
-    <[RuntimeValue; 2]>::try_from(arguments).map_err(|arguments| OperandInvariant::Arity {
-        function,
-        received: arguments.len(),
-    })
-}
-
 fn require_matching_axes(
     function: LinearAlgebraFn,
     lhs: &IndexAxis,
     rhs: &IndexAxis,
-) -> Result<(), OperandInvariant> {
+) -> Result<(), Invariant> {
     if lhs.matches(rhs) {
         Ok(())
     } else {
-        Err(OperandInvariant::AxisMismatch { function })
+        Err(operand_invariant(format_args!(
+            "{function}() received operands over incompatible axes"
+        )))
     }
 }
 
@@ -318,26 +277,26 @@ fn finite_runtime_quantity(
 }
 
 fn evaluate_dot(
-    arguments: Vec<RuntimeValue>,
+    lhs: &RuntimeValue,
+    rhs: &RuntimeValue,
     ctx: &EvalSession<'_>,
 ) -> Result<RuntimeValue, LinearAlgebraFailure> {
     let function = LinearAlgebraFn::Dot;
-    let [lhs, rhs] = two_arguments(function, arguments)?;
-    let lhs = Vector::from_value(&lhs, "dot")?;
-    let rhs = Vector::from_value(&rhs, "dot")?;
+    let lhs = Vector::from_value(lhs, "dot")?;
+    let rhs = Vector::from_value(rhs, "dot")?;
     require_matching_axes(function, &lhs.axis, &rhs.axis)?;
     let mut control = kernel_control(function, &[lhs.axis.len()], 1, ctx)?;
     sum_products(lhs.values, rhs.values, "dot()", &mut control).map(RuntimeValue::Quantity)
 }
 
 fn evaluate_matmul(
-    arguments: Vec<RuntimeValue>,
+    lhs: &RuntimeValue,
+    rhs: &RuntimeValue,
     ctx: &EvalSession<'_>,
 ) -> Result<RuntimeValue, LinearAlgebraFailure> {
     let function = LinearAlgebraFn::Matmul;
-    let [lhs, rhs] = two_arguments(function, arguments)?;
-    let lhs = Matrix::from_value(&lhs, "matmul")?;
-    let rhs = Matrix::from_value(&rhs, "matmul")?;
+    let lhs = Matrix::from_value(lhs, "matmul")?;
+    let rhs = Matrix::from_value(rhs, "matmul")?;
     require_matching_axes(function, &lhs.columns, &rhs.rows)?;
     let (rows, inner, columns) = (lhs.rows.len(), lhs.columns.len(), rhs.columns.len());
     let mut control = kernel_control(function, &[rows, inner, columns], 1, ctx)?;
@@ -358,11 +317,11 @@ fn evaluate_matmul(
 }
 
 fn evaluate_transpose(
-    arguments: Vec<RuntimeValue>,
+    matrix: &RuntimeValue,
     ctx: &EvalSession<'_>,
 ) -> Result<RuntimeValue, LinearAlgebraFailure> {
     let function = LinearAlgebraFn::Transpose;
-    let matrix = Matrix::from_value(&one_argument(function, arguments)?, "transpose")?;
+    let matrix = Matrix::from_value(matrix, "transpose")?;
     let mut control = kernel_control(function, &[matrix.rows.len(), matrix.columns.len()], 1, ctx)?;
     let rows = matrix.row_slices();
     let values = (0..matrix.columns.len())
@@ -376,11 +335,11 @@ fn evaluate_transpose(
 }
 
 fn evaluate_trace(
-    arguments: Vec<RuntimeValue>,
+    matrix: &RuntimeValue,
     ctx: &EvalSession<'_>,
 ) -> Result<RuntimeValue, LinearAlgebraFailure> {
     let function = LinearAlgebraFn::Trace;
-    let matrix = Matrix::from_value(&one_argument(function, arguments)?, "trace")?;
+    let matrix = Matrix::from_value(matrix, "trace")?;
     require_matching_axes(function, &matrix.rows, &matrix.columns)?;
     let mut control = kernel_control(function, &[matrix.rows.len()], 1, ctx)?;
     matrix
@@ -396,29 +355,32 @@ fn evaluate_trace(
 }
 
 fn evaluate_norm(
-    arguments: Vec<RuntimeValue>,
+    vector: &RuntimeValue,
     ctx: &EvalSession<'_>,
 ) -> Result<RuntimeValue, LinearAlgebraFailure> {
     let function = LinearAlgebraFn::Norm;
-    let vector = Vector::from_value(&one_argument(function, arguments)?, "norm")?;
+    let vector = Vector::from_value(vector, "norm")?;
     let mut control = kernel_control(function, &[vector.axis.len()], 1, ctx)?;
     norm(&vector.values, &mut control).map(RuntimeValue::Quantity)
 }
 
 fn evaluate_cross(
-    arguments: Vec<RuntimeValue>,
+    lhs: &RuntimeValue,
+    rhs: &RuntimeValue,
     ctx: &EvalSession<'_>,
 ) -> Result<RuntimeValue, LinearAlgebraFailure> {
     let function = LinearAlgebraFn::Cross;
-    let [lhs, rhs] = two_arguments(function, arguments)?;
-    let lhs = Vector::from_value(&lhs, "cross")?;
-    let rhs = Vector::from_value(&rhs, "cross")?;
+    let lhs = Vector::from_value(lhs, "cross")?;
+    let rhs = Vector::from_value(rhs, "cross")?;
     require_matching_axes(function, &lhs.axis, &rhs.axis)?;
     let (Ok(a), Ok(b)) = (
         <[f64; 3]>::try_from(lhs.values.as_slice()),
         <[f64; 3]>::try_from(rhs.values.as_slice()),
     ) else {
-        return Err(OperandInvariant::AxisMismatch { function }.into());
+        return Err(operand_invariant(format_args!(
+            "{function}() received vectors that are not three-dimensional"
+        ))
+        .into());
     };
     let control = kernel_control(function, &[6], 1, ctx)?;
     control.boundary()?;
@@ -438,13 +400,13 @@ fn evaluate_cross(
 }
 
 fn evaluate_outer(
-    arguments: Vec<RuntimeValue>,
+    lhs: &RuntimeValue,
+    rhs: &RuntimeValue,
     ctx: &EvalSession<'_>,
 ) -> Result<RuntimeValue, LinearAlgebraFailure> {
     let function = LinearAlgebraFn::Outer;
-    let [lhs, rhs] = two_arguments(function, arguments)?;
-    let lhs = Vector::from_value(&lhs, "outer")?;
-    let rhs = Vector::from_value(&rhs, "outer")?;
+    let lhs = Vector::from_value(lhs, "outer")?;
+    let rhs = Vector::from_value(rhs, "outer")?;
     let mut control = kernel_control(function, &[lhs.axis.len(), rhs.axis.len()], 1, ctx)?;
     let values = lhs
         .values
@@ -459,13 +421,13 @@ fn evaluate_outer(
 }
 
 fn evaluate_solve(
-    arguments: Vec<RuntimeValue>,
+    matrix: &RuntimeValue,
+    rhs: &RuntimeValue,
     ctx: &EvalSession<'_>,
 ) -> Result<RuntimeValue, LinearAlgebraFailure> {
     let function = LinearAlgebraFn::Solve;
-    let [matrix, rhs] = two_arguments(function, arguments)?;
-    let matrix = Matrix::from_value(&matrix, "solve")?;
-    let rhs = Vector::from_value(&rhs, "solve")?;
+    let matrix = Matrix::from_value(matrix, "solve")?;
+    let rhs = Vector::from_value(rhs, "solve")?;
     require_matching_axes(function, &matrix.rows, &matrix.columns)?;
     require_matching_axes(function, &matrix.rows, &rhs.axis)?;
     let mut control = kernel_control(function, &[matrix.rows.len(); 3], 2, ctx)?;
@@ -480,11 +442,11 @@ fn evaluate_solve(
 }
 
 fn evaluate_inverse(
-    arguments: Vec<RuntimeValue>,
+    matrix: &RuntimeValue,
     ctx: &EvalSession<'_>,
 ) -> Result<RuntimeValue, LinearAlgebraFailure> {
     let function = LinearAlgebraFn::Inverse;
-    let matrix = Matrix::from_value(&one_argument(function, arguments)?, "inverse")?;
+    let matrix = Matrix::from_value(matrix, "inverse")?;
     require_matching_axes(function, &matrix.rows, &matrix.columns)?;
     let mut control = kernel_control(function, &[matrix.rows.len(); 3], 3, ctx)?;
     let inverse = super::linear_algebra_lu::inverse_with_control(
@@ -497,11 +459,11 @@ fn evaluate_inverse(
 }
 
 fn evaluate_determinant(
-    arguments: Vec<RuntimeValue>,
+    matrix: &RuntimeValue,
     ctx: &EvalSession<'_>,
 ) -> Result<RuntimeValue, LinearAlgebraFailure> {
     let function = LinearAlgebraFn::Determinant;
-    let matrix = Matrix::from_value(&one_argument(function, arguments)?, "det")?;
+    let matrix = Matrix::from_value(matrix, "det")?;
     require_matching_axes(function, &matrix.rows, &matrix.columns)?;
     let mut control = kernel_control(function, &[matrix.rows.len(); 3], 1, ctx)?;
     super::linear_algebra_lu::determinant_with_control(
@@ -513,23 +475,23 @@ fn evaluate_determinant(
     .and_then(|value| finite_runtime_quantity(value, "det()"))
 }
 
-/// Evaluate a shape-checked built-in linear-algebra operation.
+/// Evaluate a checked built-in linear-algebra call on its evaluated
+/// operands.
 pub(super) fn evaluate(
-    function: LinearAlgebraFn,
-    arguments: Vec<RuntimeValue>,
+    call: &LinearAlgebraCall<RuntimeValue>,
     ctx: &EvalSession<'_>,
 ) -> Result<RuntimeValue, LinearAlgebraFailure> {
-    match function {
-        LinearAlgebraFn::Dot => evaluate_dot(arguments, ctx),
-        LinearAlgebraFn::Matmul => evaluate_matmul(arguments, ctx),
-        LinearAlgebraFn::Transpose => evaluate_transpose(arguments, ctx),
-        LinearAlgebraFn::Trace => evaluate_trace(arguments, ctx),
-        LinearAlgebraFn::Norm => evaluate_norm(arguments, ctx),
-        LinearAlgebraFn::Cross => evaluate_cross(arguments, ctx),
-        LinearAlgebraFn::Outer => evaluate_outer(arguments, ctx),
-        LinearAlgebraFn::Solve => evaluate_solve(arguments, ctx),
-        LinearAlgebraFn::Inverse => evaluate_inverse(arguments, ctx),
-        LinearAlgebraFn::Determinant => evaluate_determinant(arguments, ctx),
+    match call {
+        LinearAlgebraCall::Dot { lhs, rhs } => evaluate_dot(lhs, rhs, ctx),
+        LinearAlgebraCall::Matmul { lhs, rhs } => evaluate_matmul(lhs, rhs, ctx),
+        LinearAlgebraCall::Transpose(matrix) => evaluate_transpose(matrix, ctx),
+        LinearAlgebraCall::Trace(matrix) => evaluate_trace(matrix, ctx),
+        LinearAlgebraCall::Norm(vector) => evaluate_norm(vector, ctx),
+        LinearAlgebraCall::Cross { lhs, rhs } => evaluate_cross(lhs, rhs, ctx),
+        LinearAlgebraCall::Outer { lhs, rhs } => evaluate_outer(lhs, rhs, ctx),
+        LinearAlgebraCall::Solve { matrix, rhs } => evaluate_solve(matrix, rhs, ctx),
+        LinearAlgebraCall::Inverse(matrix) => evaluate_inverse(matrix, ctx),
+        LinearAlgebraCall::Determinant(matrix) => evaluate_determinant(matrix, ctx),
     }
 }
 
@@ -567,14 +529,12 @@ mod tests {
         let parsed = Vector::from_value(&row, "test").unwrap();
         assert_eq!(parsed.values, vec![1.0, 2.0]);
         assert!(parsed.axis.matches(&fin(2)));
-        assert!(matches!(
-            Vector::from_value(&matrix, "test"),
-            Err(OperandInvariant::Rank {
-                expected: 1,
-                actual: 2,
-                ..
-            })
-        ));
+        assert!(
+            Vector::from_value(&matrix, "test")
+                .unwrap_err()
+                .to_string()
+                .contains("expected a rank-1 operand, got rank 2")
+        );
 
         let parsed = Matrix::from_value(&matrix, "test").unwrap();
         assert!(parsed.rows.matches(&fin(3)));
@@ -583,18 +543,18 @@ mod tests {
             parsed.row_slices(),
             vec![&[1.0, 2.0][..], &[3.0, 4.0], &[5.0, 6.0]]
         );
-        assert!(matches!(
-            Matrix::from_value(&row, "test"),
-            Err(OperandInvariant::Rank {
-                expected: 2,
-                actual: 1,
-                ..
-            })
-        ));
-        assert!(matches!(
-            Vector::from_value(&quantity(1.0), "test"),
-            Err(OperandInvariant::NotIndexed { .. })
-        ));
+        assert!(
+            Matrix::from_value(&row, "test")
+                .unwrap_err()
+                .to_string()
+                .contains("expected a rank-2 operand, got rank 1")
+        );
+        assert!(
+            Vector::from_value(&quantity(1.0), "test")
+                .unwrap_err()
+                .to_string()
+                .contains("expected an indexed operand")
+        );
     }
 
     #[test]
@@ -603,18 +563,17 @@ mod tests {
             fin(2),
             vec![vector(&[1.0, 2.0]), vector(&[3.0])],
         ));
-        assert!(matches!(
-            Matrix::from_value(&ragged, "test"),
-            Err(OperandInvariant::Ragged { .. })
-        ));
+        assert!(
+            Matrix::from_value(&ragged, "test")
+                .unwrap_err()
+                .to_string()
+                .contains("ragged")
+        );
         let booleans = RuntimeValue::Indexed(IndexedValue::for_test(
             fin(1),
             vec![RuntimeValue::Bool(true)],
         ));
-        assert!(matches!(
-            Vector::from_value(&booleans, "test"),
-            Err(OperandInvariant::Element(_))
-        ));
+        assert!(Vector::from_value(&booleans, "test").is_err());
     }
 
     #[test]
@@ -634,13 +593,12 @@ mod tests {
                 LinearAlgebraError::Numeric(_)
             )))
         ));
-        assert!(matches!(
-            require_matching_axes(LinearAlgebraFn::Dot, &fin(2), &fin(3)),
-            Err(OperandInvariant::AxisMismatch { .. })
-        ));
-        assert!(matches!(
-            two_arguments(LinearAlgebraFn::Dot, vec![quantity(1.0)]),
-            Err(OperandInvariant::Arity { received: 1, .. })
-        ));
+        assert!(
+            require_matching_axes(LinearAlgebraFn::Dot, &fin(2), &fin(3))
+                .unwrap_err()
+                .to_string()
+                .contains("incompatible axes")
+        );
+        assert!(require_matching_axes(LinearAlgebraFn::Dot, &fin(2), &fin(2)).is_ok());
     }
 }

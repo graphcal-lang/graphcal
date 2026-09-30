@@ -31,8 +31,8 @@ use super::model::{
 };
 use super::nominal::{ConstructorApplication, ConstructorMatch};
 use super::operators::{
-    ArithOp, BExpr, CExpr, ComplexPart, DExpr, EqualityOp, IExpr, IntArithOp, OrderedOperands,
-    OrderingOp, QExpr, ScaleOp, ShiftOp,
+    ArithOp, BExpr, CExpr, ComplexPart, DExpr, EqualityOp, IExpr, IntArithOp, LinearAlgebraCall,
+    OrderedOperands, OrderingOp, QExpr, ScaleOp, ShiftOp,
 };
 use crate::builtin::{BuiltinFn, ComplexFn, ConversionFn, DatetimeConstructorFn, DatetimeFn};
 use crate::hir::expr::FunctionRef;
@@ -718,10 +718,12 @@ fn builtin_call(
             }
             TExprKind::Aggregate { function, arg }
         }
-        BuiltinFn::LinearAlgebra(function) => TExprKind::LinearAlgebra {
-            function,
-            args: args.into_iter().map(|arg| *arg).collect(),
-        },
+        BuiltinFn::LinearAlgebra(function) => {
+            if !args.iter().all(|arg| category(arg) == Category::Indexed) {
+                return None;
+            }
+            TExprKind::LinearAlgebra(LinearAlgebraCall::try_new(function, args)?)
+        }
         BuiltinFn::Conversion(conversion) => {
             let arg = single(args)?;
             match (conversion, category(&arg)) {
@@ -1108,7 +1110,7 @@ mod tests {
             (
                 BuiltinFn::LinearAlgebra(LinearAlgebraFn::Dot),
                 vec![indexed.clone(), indexed],
-                "LinearAlgebra::function",
+                "LinearAlgebra::Dot",
             ),
             (
                 BuiltinFn::Conversion(ConversionFn::ToFloat),

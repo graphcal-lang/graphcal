@@ -2154,6 +2154,11 @@ role = "interpreter"
 
 [[module]]
 package = "eval"
+path = ["assertion_eval", "tests"]
+role = "interpreter"
+
+[[module]]
+package = "eval"
 path = ["dependency_ordered"]
 role = "contracts"
 

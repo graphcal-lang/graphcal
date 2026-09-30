@@ -10,7 +10,7 @@
 
 use std::collections::BTreeSet;
 
-use crate::builtin::{AggregationFn, LinearAlgebraFn};
+use crate::builtin::AggregationFn;
 use crate::dag_id::DagId;
 use crate::expression_id::ExprId;
 use crate::hir::expr::{
@@ -22,7 +22,7 @@ use crate::registry::time_zone::IanaTimeZoneId;
 use crate::resolved_name::{ResolvedDeclName, ResolvedUnitName};
 use crate::syntax::span::{Span, Spanned};
 use crate::syntax::type_name::FieldName;
-use crate::tir::texpr::operators::{BExpr, CExpr, DExpr, IExpr, QExpr};
+use crate::tir::texpr::operators::{BExpr, CExpr, DExpr, IExpr, LinearAlgebraCall, QExpr};
 use crate::tir::texpr::{
     ConstructorApplication, DatetimeLiteral, StaticPosition, TConstRef, TConstructorArm, TExpr,
     TExprKind, TFieldInit, TIndexArg, TKeyForm, TLabelArm, TMapEntry, TMatchArms, TNodeRef,
@@ -60,10 +60,7 @@ pub enum NodeKind<'t> {
         function: AggregationFn,
         arg: ScopedNode<'t>,
     },
-    LinearAlgebra {
-        function: LinearAlgebraFn,
-        args: Scoped<'t, [TExpr]>,
-    },
+    LinearAlgebra(LinearAlgebraCall<ScopedNode<'t>>),
     Extern {
         function: &'t ExternFnRef,
         args: Scoped<'t, [TExpr]>,
@@ -232,10 +229,10 @@ impl<'t> Scoped<'t, TExpr> {
                 function: *function,
                 arg: node(arg),
             },
-            TExprKind::LinearAlgebra { function, args } => NodeKind::LinearAlgebra {
-                function: *function,
-                args: Scoped::new(scope, args.as_slice()),
-            },
+            TExprKind::LinearAlgebra(call) => {
+                let Ok(call) = call.try_map(operand);
+                NodeKind::LinearAlgebra(call)
+            }
             TExprKind::Extern { function, args } => NodeKind::Extern {
                 function,
                 args: Scoped::new(scope, args.as_slice()),
