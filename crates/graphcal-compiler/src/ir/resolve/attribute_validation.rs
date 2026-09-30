@@ -10,9 +10,9 @@ use std::sync::Arc;
 use miette::NamedSource;
 use thiserror::Error;
 
+use crate::declaration_kind::AttributeTarget;
 use crate::desugar::desugared_ast::{Attribute, AttributeArg};
 use crate::graphcal_error::GraphcalError;
-use crate::ir::resolve::collected::AttributeTarget;
 use crate::syntax::attribute::AttributeName;
 use crate::syntax::decl_name::DeclName;
 use crate::syntax::span::{Span, Spanned};
@@ -295,7 +295,7 @@ pub fn attribute_validation_error_to_graphcal(
 
 #[cfg(test)]
 mod tests {
-    use crate::ir::resolve::collected::DeclarationKind;
+    use crate::declaration_kind::DeclarationKind;
     use crate::syntax::parser::Parser;
 
     use super::*;

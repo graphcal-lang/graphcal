@@ -28,7 +28,7 @@ use graphcal_compiler::syntax::type_name::GenericParamName;
 
 use graphcal_compiler::builtin::{BuiltinConst, BuiltinFn};
 use graphcal_compiler::display::formatting_registry::FormattingRegistry;
-use graphcal_compiler::display::number::format_unit_terms_with_config;
+use graphcal_compiler::display::unit_label::format_unit_terms_with_config;
 use graphcal_compiler::semantic::index_def::{ConcreteIndexKind, IndexKind, RequiredIndexKind};
 use graphcal_compiler::semantic::time_zone::TimeZoneRegistry;
 use graphcal_compiler::semantic::unit_scale::UnitScale;

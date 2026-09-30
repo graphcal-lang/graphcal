@@ -830,7 +830,7 @@ fn format_quantity_bound_display(expr: &graphcal_compiler::hir::Expr, si_value: 
         ExprKind::Number(n) => graphcal_compiler::display::number::format_number(*n),
         ExprKind::Integer(n) => format!("{n}"),
         ExprKind::QuantityLiteral { value, unit } => {
-            let unit_str = graphcal_compiler::display::number::format_unit_terms_with_config(
+            let unit_str = graphcal_compiler::display::unit_label::format_unit_terms_with_config(
                 unit.terms
                     .iter()
                     .map(|item| (item.op, item.name.value.to_string(), item.power)),

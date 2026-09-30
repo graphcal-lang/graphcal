@@ -1,6 +1,6 @@
 //! Pure semantic core for required-interface bindability validation (V002).
 
-use crate::ir::static_interface::{Requirement, StaticInputKind as NominalKind};
+use crate::static_interface::{Requirement, StaticInputKind as NominalKind};
 use crate::syntax::ast::BindableVisibility;
 
 /// Declaration-interface states relevant to V002.

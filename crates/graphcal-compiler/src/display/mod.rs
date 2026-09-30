@@ -2,3 +2,4 @@
 
 pub mod formatting_registry;
 pub mod number;
+pub mod unit_label;

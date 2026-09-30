@@ -107,7 +107,7 @@ fn literal_constant_and_conversion_label_overflow_preserve_si() {
             result.presentation_diagnostics[0].detail.failure,
             PresentationFailure::Formatting {
                 error:
-                    graphcal_compiler::display::number::CanonicalUnitFormatError::ExponentOverflow,
+                    graphcal_compiler::display::unit_label::CanonicalUnitFormatError::ExponentOverflow,
                 ..
             }
         ));

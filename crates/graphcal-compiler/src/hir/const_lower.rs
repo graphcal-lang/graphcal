@@ -285,7 +285,7 @@ mod tests {
     fn prelude_unit(
         unit: &ast::UnitExpr,
     ) -> Result<(Dimension, PositiveFiniteScale), UnitResolveError> {
-        let prelude = crate::semantic::prelude::prelude_definitions().unwrap();
+        let prelude = crate::ir::prelude_definitions::prelude_definitions().unwrap();
         crate::semantic::unit_scale::resolve_unit_expr_with(unit, |reference| {
             prelude
                 .units()

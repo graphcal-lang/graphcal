@@ -5,8 +5,8 @@ use thiserror::Error;
 
 use crate::builtin::{AggregationFn, LinearAlgebraFn};
 use crate::datetime_literal::CivilDateTimeLiteral;
+use crate::declaration_kind::{AttributeTarget, DeclarationKind};
 use crate::diagnostic_anchor::DiagnosticAnchor;
-use crate::ir::resolve::collected::{AttributeTarget, DeclarationKind};
 use crate::resolve::category::DeclSymbolKind;
 use crate::semantic::checked_type::IndexDisplayName;
 use crate::semantic::time_scale::TimeScale;
@@ -256,7 +256,7 @@ pub enum GraphcalError {
         help("supply this typed input through `include` or a direct DAG call")
     )]
     ImportRequiredStaticInput {
-        kind: crate::ir::static_interface::StaticInputKind,
+        kind: crate::static_interface::StaticInputKind,
         name: String,
         #[source_code]
         src: NamedSource<Arc<String>>,
@@ -275,7 +275,7 @@ pub enum GraphcalError {
     )]
     ImportUnresolvedStaticDependency {
         name: String,
-        dependency_kind: crate::ir::static_interface::StaticInputKind,
+        dependency_kind: crate::static_interface::StaticInputKind,
         dependency: String,
         #[source_code]
         src: NamedSource<Arc<String>>,
@@ -289,7 +289,7 @@ pub enum GraphcalError {
         help("bind to a fixed declaration or an optional `pub(bind)` declaration with a default")
     )]
     InvalidStaticBindingTarget {
-        kind: crate::ir::static_interface::StaticInputKind,
+        kind: crate::static_interface::StaticInputKind,
         name: String,
         target: String,
         #[source_code]
@@ -1882,7 +1882,7 @@ pub enum GraphcalError {
         )
     )]
     RequiredStaticInputNotBound {
-        kind: crate::ir::static_interface::StaticInputKind,
+        kind: crate::static_interface::StaticInputKind,
         name: String,
         #[source_code]
         src: NamedSource<Arc<String>>,

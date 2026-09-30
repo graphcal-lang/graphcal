@@ -22,7 +22,7 @@ use thiserror::Error;
 
 use crate::builtin::BuiltinConst;
 use crate::dimension::Dimension;
-use crate::display::number::format_unit_expr_with_config;
+use crate::display::unit_label::format_unit_expr_with_config;
 use crate::exact_rational::{ExactPowerError, ExactRational};
 use crate::hir::types::NatExpr;
 use crate::semantic::index_def::{

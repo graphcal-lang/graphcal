@@ -97,8 +97,8 @@ impl ProjectTypeStore {
     /// which would be a compiler bug.
     pub fn insert_graphcal_prelude(
         &mut self,
-    ) -> Result<(), crate::semantic::prelude::PreludeDefinitionError> {
-        let prelude = crate::semantic::prelude::prelude_definitions()?;
+    ) -> Result<(), crate::ir::prelude_definitions::PreludeDefinitionError> {
+        let prelude = crate::ir::prelude_definitions::prelude_definitions()?;
         self.merge_base_dimensions(&prelude);
         for (identity, dimension) in prelude.dimensions() {
             self.dimensions.insert(identity.clone(), dimension.clone());

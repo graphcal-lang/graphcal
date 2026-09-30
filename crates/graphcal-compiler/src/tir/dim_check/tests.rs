@@ -3688,8 +3688,8 @@ node x: Dimensionless = 1.0;";
     let err = check(source).unwrap_err();
     assert!(
         matches!(err, GraphcalError::InvalidHiddenTarget { ref kind, .. }
-        if kind == &crate::ir::resolve::AttributeTarget::declaration(
-            crate::ir::resolve::DeclarationKind::Node,
+        if kind == &crate::declaration_kind::AttributeTarget::declaration(
+            crate::declaration_kind::DeclarationKind::Node,
         )),
         "got: {err:?}"
     );
@@ -3706,8 +3706,8 @@ figure f = { plots: [p] };";
     let err = check(source).unwrap_err();
     assert!(
         matches!(err, GraphcalError::InvalidHiddenTarget { ref kind, .. }
-        if kind == &crate::ir::resolve::AttributeTarget::declaration(
-            crate::ir::resolve::DeclarationKind::Figure,
+        if kind == &crate::declaration_kind::AttributeTarget::declaration(
+            crate::declaration_kind::DeclarationKind::Figure,
         )),
         "got: {err:?}"
     );

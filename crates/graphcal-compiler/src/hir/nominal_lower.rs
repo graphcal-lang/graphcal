@@ -855,7 +855,7 @@ mod tests {
             template_id.clone(),
             crate::syntax::dimension::DimName::expect_valid("Q"),
         );
-        let length = crate::semantic::prelude::prelude_type_scope()
+        let length = crate::resolve::prelude::prelude_type_scope()
             .resolve_dimension_path(&crate::syntax::names::NamePath::expect_local("Length"))
             .unwrap();
         let axis = ResolvedIndexName::for_test(

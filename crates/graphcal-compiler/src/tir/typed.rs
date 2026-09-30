@@ -812,11 +812,11 @@ impl PublicSignatureDependency {
         }
     }
 
-    const fn kind(&self) -> crate::ir::resolve::collected::DeclarationKind {
+    const fn kind(&self) -> crate::declaration_kind::DeclarationKind {
         match self {
-            Self::Dimension(_) => crate::ir::resolve::collected::DeclarationKind::Dimension,
-            Self::Index(_) => crate::ir::resolve::collected::DeclarationKind::Index,
-            Self::Type(_) => crate::ir::resolve::collected::DeclarationKind::Type,
+            Self::Dimension(_) => crate::declaration_kind::DeclarationKind::Dimension,
+            Self::Index(_) => crate::declaration_kind::DeclarationKind::Index,
+            Self::Type(_) => crate::declaration_kind::DeclarationKind::Type,
         }
     }
 
@@ -999,7 +999,7 @@ fn validate_public_generic_defaults(
                     Some(true) => {}
                     Some(false) => {
                         return Err(GraphcalError::PrivateInPublic {
-                            pub_kind: crate::ir::resolve::collected::DeclarationKind::Type,
+                            pub_kind: crate::declaration_kind::DeclarationKind::Type,
                             pub_name: type_name.atom().clone(),
                             ref_kind: dependency.kind(),
                             ref_name: dependency.name(),
