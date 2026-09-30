@@ -762,6 +762,21 @@ role = "contracts"
 
 [[module]]
 package = "compiler"
+path = ["registry", "applied_constructor"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["registry", "applied_constructor", "tests"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["extern_struct_result", "tests"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
 path = ["registry", "builtins"]
 role = "contracts"
 
@@ -1814,22 +1829,12 @@ role = "facade"
 
 [[module]]
 package = "eval"
-path = ["eval", "display"]
-role = "facade"
-
-[[module]]
-package = "eval"
 path = ["eval", "plot_data"]
 role = "facade"
 
 [[module]]
 package = "eval"
 path = ["eval", "plot_data", "tests"]
-role = "facade"
-
-[[module]]
-package = "eval"
-path = ["eval", "presented_projection"]
 role = "facade"
 
 [[module]]

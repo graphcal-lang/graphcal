@@ -16,12 +16,12 @@ use graphcal_compiler::resolved_name::ResolvedDeclName;
 use graphcal_compiler::syntax::module_name::ScopedName;
 use graphcal_compiler::tir::typed::{CheckedDag, ResolvedProjection};
 
-use crate::eval::presented_projection::project_presented;
-use crate::eval::public_projection::EvaluatedValue;
+use crate::eval::public_projection;
 use crate::eval::types::{NodeUnavailable, Value};
 use crate::eval_expr::{EvalSession, RuntimeValue};
 use crate::execution_plan::{ExecPlan, PlannedInstance};
 use crate::presentation_evidence::PresentationDiagnostic;
+use crate::runtime_presentation::PresentedRef;
 
 use super::EvaluatedRoot;
 use super::root_names::instance_member_name;
@@ -273,13 +273,12 @@ fn project_value(
             DiagnosticAnchor::WholeFile,
         )
     })?;
-    let (value, notices) = match evaluated.presentations.get(declaration) {
-        Some(presented) => project_presented(presented, declared_type, ctx.tir, ctx.src)?,
-        None => (
-            EvaluatedValue::new(runtime, declared_type).project(ctx.tir, ctx.src)?,
-            Vec::new(),
-        ),
-    };
+    let presented = evaluated.presentations.get(declaration).map_or_else(
+        || PresentedRef::plain(runtime),
+        |presented| presented.as_ref(),
+    );
+    let (value, notices) = public_projection::project(presented, declared_type)
+        .map_err(|invariant| invariant.into_internal_error(ctx.src))?;
     let diagnostics = notices
         .into_iter()
         .map(|detail| PresentationDiagnostic {

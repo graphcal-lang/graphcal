@@ -125,15 +125,20 @@ impl TypeMap<Symbolic, Concrete> for ToConcrete {
         _ty: &CheckedType<Concrete>,
         _span: Span,
     ) -> Result<ConstructorApplication<Concrete>, NotConcrete> {
+        let applied = &application.applied;
+        let generic_args = applied
+            .generic_args()
+            .iter()
+            .map(crate::registry::checked_type::CheckedGenericArg::to_concrete)
+            .collect::<Option<_>>()
+            .ok_or(NotConcrete)?;
         Ok(ConstructorApplication {
             constructor: application.constructor.clone(),
-            runtime_type: application.runtime_type.clone(),
-            generic_args: application
-                .generic_args
-                .iter()
-                .map(crate::registry::checked_type::CheckedGenericArg::to_concrete)
-                .collect::<Option<_>>()
-                .ok_or(NotConcrete)?,
+            applied: std::sync::Arc::new(applied.try_map_types(
+                applied.runtime_type().clone(),
+                generic_args,
+                |ty| ty.to_concrete().ok_or(NotConcrete),
+            )?),
         })
     }
 

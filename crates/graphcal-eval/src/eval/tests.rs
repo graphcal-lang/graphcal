@@ -6666,11 +6666,13 @@ fn eval_constructor_match_rejects_runtime_owner_mismatch_with_same_leaf_construc
         loaded_file_dag_id(&project, "b.gcl"),
         graphcal_compiler::syntax::type_name::StructTypeName::expect_valid("Command"),
     );
-    let mut fields = indexmap::IndexMap::new();
-    fields.insert(
+    let fields = vec![(
         graphcal_compiler::syntax::type_name::FieldName::expect_valid("distance"),
+        graphcal_compiler::registry::checked_type::CheckedType::Quantity(
+            graphcal_compiler::dimension::Dimension::dimensionless(),
+        ),
         crate::eval_expr::RuntimeValue::quantity(9.0).unwrap(),
-    );
+    )];
     let values = HashMap::from([(
         tir.root()
             .lookup_decl_identity(&scoped_name("action"))

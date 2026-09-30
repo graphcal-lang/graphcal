@@ -470,23 +470,20 @@ impl PreparedProject {
                 continue;
             };
             if let Some(imported) = self.output_assembly.imported_values.get(name) {
-                let (value, diagnostics) =
-                    match evaluation.presentations.get(imported.value().key()) {
-                        Some(presented) => crate::eval::presented_projection::project_presented(
-                            presented,
-                            imported.declared_type(),
-                            self.tir(),
-                            &self.source,
-                        )?,
-                        None => (
-                            crate::eval::public_projection::EvaluatedValue::new(
+                let presented = evaluation
+                    .presentations
+                    .get(imported.value().key())
+                    .map_or_else(
+                        || {
+                            crate::runtime_presentation::PresentedRef::plain(
                                 imported.value().value(),
-                                imported.declared_type(),
                             )
-                            .project(self.tir(), &self.source)?,
-                            Vec::new(),
-                        ),
-                    };
+                        },
+                        |presented| presented.as_ref(),
+                    );
+                let (value, diagnostics) =
+                    crate::eval::public_projection::project(presented, imported.declared_type())
+                        .map_err(|invariant| invariant.into_internal_error(&self.source))?;
                 eval_result
                     .presentation_diagnostics
                     .extend(diagnostics.into_iter().map(|detail| {

@@ -2,7 +2,10 @@
 //! a node applies, the constructor a match arm selects, and the nominal uses a
 //! checked root makes.
 
+use std::sync::Arc;
+
 use crate::hir::nominal::ResolvedConstructor;
+use crate::registry::applied_constructor::AppliedConstructor;
 use crate::registry::checked_type::{
     CheckedGenericArg, Concrete, Concreteness, IndexTypeRef, Symbolic,
 };
@@ -16,8 +19,9 @@ pub struct ConstructorApplication<V: Concreteness = Concrete> {
     /// The applied constructor and its owning definition. The definition's
     /// field annotations are the application's field constraints.
     pub constructor: ResolvedConstructor,
-    pub runtime_type: ResolvedStructTypeName,
-    pub generic_args: Vec<CheckedGenericArg<V>>,
+    /// The application at its runtime type, with each field's instantiated
+    /// type; shared by every value the node builds.
+    pub applied: Arc<AppliedConstructor<V>>,
 }
 
 impl<V: Concreteness> ConstructorApplication<V> {
@@ -25,6 +29,12 @@ impl<V: Concreteness> ConstructorApplication<V> {
     #[must_use]
     pub fn definition(&self) -> &ResolvedStructTypeName {
         self.constructor.owning_type()
+    }
+
+    /// The generic arguments of the application.
+    #[must_use]
+    pub fn generic_args(&self) -> &[CheckedGenericArg<V>] {
+        self.applied.generic_args()
     }
 }
 

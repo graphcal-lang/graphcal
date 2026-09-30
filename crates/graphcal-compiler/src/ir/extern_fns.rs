@@ -523,11 +523,11 @@ pub(super) fn resolve_extern_struct_return(
         })
         .collect::<Result<Vec<_>, GraphcalError>>()?;
     let shape = StructShape::try_new(shape_fields).map_err(|err| invalid(err.to_string()))?;
-    Ok(ResultKind::Struct(ExternStructResult {
-        resolved: resolved_type,
-        constructor: record.name(),
+    Ok(ResultKind::Struct(ExternStructResult::new(
+        resolved_type,
+        record.name(),
         shape,
-    }))
+    )))
 }
 
 /// Resolve one record field to its concrete boundary kind.

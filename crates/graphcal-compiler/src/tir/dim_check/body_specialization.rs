@@ -132,10 +132,22 @@ impl<V: SymbolicView> TypeMap<V, Symbolic> for Specializer<'_> {
                 DiagnosticAnchor::Source(self.span(span)),
             ));
         };
+        let report = self.span(span);
+        let applied = application.applied.try_map_types(
+            self.dag.frame().struct_type(application.definition()),
+            args.clone(),
+            |field_type| {
+                self.substitution.value_type(
+                    &V::symbolic_type(field_type),
+                    self.tir,
+                    self.src,
+                    report,
+                )
+            },
+        )?;
         Ok(ConstructorApplication {
-            runtime_type: self.dag.frame().struct_type(application.definition()),
             constructor: application.constructor.clone(),
-            generic_args: args.clone(),
+            applied: std::sync::Arc::new(applied),
         })
     }
 

@@ -358,9 +358,14 @@ impl PreparedProject {
                         output.name
                     ))
                 })?;
-                crate::eval::public_projection::EvaluatedValue::new(runtime, &output.declared_type)
-                    .project(self.tir(), &self.source)
-                    .map_err(ModelExecutionError::from)
+                crate::eval::public_projection::project(
+                    crate::runtime_presentation::PresentedRef::plain(runtime),
+                    &output.declared_type,
+                )
+                .map(|(value, _)| value)
+                .map_err(|invariant| {
+                    ModelExecutionError::from(invariant.into_internal_error(&self.source))
+                })
             })
             .collect()
     }

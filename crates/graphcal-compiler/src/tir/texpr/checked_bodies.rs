@@ -307,8 +307,10 @@ impl CheckedBodies {
                         if let TNodeRef::Value(expr) = node
                             && let Some(application) = expr.application()
                         {
-                            applications
-                                .push((application.definition(), application.generic_args.clone()));
+                            applications.push((
+                                application.definition(),
+                                application.generic_args().to_vec(),
+                            ));
                         }
                     });
                 }
@@ -321,7 +323,7 @@ impl CheckedBodies {
                             return;
                         };
                         let generic_args = application
-                            .generic_args
+                            .generic_args()
                             .iter()
                             .map(crate::registry::checked_type::CheckedGenericArg::to_concrete)
                             .collect::<Option<Vec<_>>>();

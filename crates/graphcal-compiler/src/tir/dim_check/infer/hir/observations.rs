@@ -25,6 +25,7 @@ use crate::tir::texpr::{
     PendingNodes,
 };
 
+use crate::registry::applied_constructor::{AppliedConstructor, AppliedField};
 use crate::registry::checked_type::{CheckedType, Symbolic};
 
 /// One executable use that observes a nominal type's concrete definition.
@@ -276,10 +277,39 @@ impl BodyObservations {
                     DiagnosticAnchor::Source(expr.span),
                 ));
             };
+            // The field types checking the call resolved, instantiated at
+            // the application's arguments, so a value built here never looks
+            // its constructor up again.
+            let fields = target
+                .variant()
+                .fields()
+                .iter()
+                .map(|field| {
+                    super::generics::resolved_field_type(
+                        &super::generics::resolved_type_field_key(
+                            target.owning_type(),
+                            target.variant(),
+                            field.name(),
+                        ),
+                        target.definition(),
+                        args,
+                        dag,
+                        src,
+                        expr.span,
+                    )
+                    .map(|field_type| {
+                        AppliedField::new(field.name().clone(), field_type.to_symbolic())
+                    })
+                })
+                .collect::<Result<Vec<_>, _>>()?;
             Ok(ConstructorApplication {
-                runtime_type: dag.frame().struct_type(target.owning_type()),
                 constructor: target.clone(),
-                generic_args: args.clone(),
+                applied: Arc::new(AppliedConstructor::new(
+                    dag.frame().struct_type(target.owning_type()),
+                    target.name(),
+                    args.clone(),
+                    fields,
+                )),
             })
         })
         .transpose()?;
