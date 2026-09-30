@@ -13,7 +13,7 @@ use crate::registry::checked_type::{CheckedType, Concrete, Concreteness, IndexTy
 use crate::syntax::span::{Span, Spanned};
 
 use super::model::{
-    StaticPosition, TArg, TBody, TConstRef, TExpr, TExprKind, TFieldInit, TIndexArg, TMapEntry,
+    StaticPosition, TBody, TConstRef, TExpr, TExprKind, TFieldInit, TIndexArg, TMapEntry,
     TMatchArm, TMatchPattern, TParamBinding,
 };
 
@@ -207,16 +207,23 @@ impl<V: Concreteness> TExpr<V> {
                 target.span,
             )),
             TExprKind::Local(local) => TExprKind::Local(local.clone()),
-            TExprKind::Call { callee, args } => TExprKind::Call {
-                callee: callee.clone(),
+            TExprKind::DatetimeLiteral(literal) => TExprKind::DatetimeLiteral(literal.clone()),
+            TExprKind::Aggregate { function, arg } => TExprKind::Aggregate {
+                function: *function,
+                arg: arg.boxed(map)?,
+            },
+            TExprKind::LinearAlgebra { function, args } => TExprKind::LinearAlgebra {
+                function: *function,
                 args: args
                     .iter()
-                    .map(|arg| {
-                        Ok(match arg {
-                            TArg::Value(value) => TArg::Value(value.boxed(map)?),
-                            TArg::Contextual(literal) => TArg::Contextual(literal.clone()),
-                        })
-                    })
+                    .map(|arg| arg.map_types(map))
+                    .collect::<Result<_, M::Error>>()?,
+            },
+            TExprKind::Extern { function, args } => TExprKind::Extern {
+                function: function.clone(),
+                args: args
+                    .iter()
+                    .map(|arg| arg.map_types(map))
                     .collect::<Result<_, M::Error>>()?,
             },
             TExprKind::If {

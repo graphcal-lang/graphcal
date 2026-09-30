@@ -7,6 +7,10 @@
 //! prove: a missing or contextual child in a value position, a constructor
 //! without its application, a match arm without its target, or a static
 //! position that belongs to no selector of the node.
+#![expect(
+    clippy::vec_box,
+    reason = "operand lists are the boxed children the operation families own"
+)]
 
 use std::collections::HashMap;
 
@@ -21,14 +25,16 @@ use crate::syntax::span::Spanned;
 use crate::tir::static_index::StaticIndexRequirement;
 
 use super::model::{
-    ContextualLiteral, StaticPosition, TArg, TConstRef, TContextual, TExpr, TExprKind, TFieldInit,
-    TIndexArg, TMapEntry, TMatchArm, TMatchPattern, TParamBinding,
+    ContextualLiteral, DatetimeLiteral, StaticPosition, TArg, TConstRef, TContextual, TExpr,
+    TExprKind, TFieldInit, TIndexArg, TMapEntry, TMatchArm, TMatchPattern, TParamBinding,
 };
 use super::nominal::{ConstructorApplication, ConstructorMatch};
 use super::operators::{
-    ArithOp, BExpr, CExpr, DExpr, EqualityOp, IExpr, IntArithOp, OrderedOperands, OrderingOp,
-    QExpr, ScaleOp, ShiftOp,
+    ArithOp, BExpr, CExpr, ComplexPart, DExpr, EqualityOp, IExpr, IntArithOp, OrderedOperands,
+    OrderingOp, QExpr, ScaleOp, ShiftOp,
 };
+use crate::builtin::{BuiltinFn, ComplexFn, ConversionFn, DatetimeConstructorFn, DatetimeFn};
+use crate::hir::expr::FunctionRef;
 
 /// Why a checked node could not be assembled into a typed tree.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
@@ -49,7 +55,7 @@ pub enum AssemblyError {
     MissingMatchTarget(ExprId),
     #[error("a static position of {0:?} belongs to none of its selectors")]
     UnplacedStaticPosition(ExprId),
-    #[error("operator {0:?} has no operation for its checked operand types")]
+    #[error("expression {0:?} has no operation for its checked operand types")]
     UncheckedOperands(ExprId),
 }
 
@@ -230,13 +236,13 @@ impl PendingNodes {
             .ok_or_else(|| AssemblyError::UncheckedOperands(id()))?,
             ExprKind::UnaryOp { op, operand } => unary(*op, self.take_boxed(expr, operand)?)
                 .ok_or_else(|| AssemblyError::UncheckedOperands(id()))?,
-            ExprKind::FnCall { callee, args } => TExprKind::Call {
-                callee: callee.clone(),
-                args: args
-                    .iter()
+            ExprKind::FnCall { callee, args } => call(
+                &callee.value,
+                args.iter()
                     .map(|arg| self.take_arg(expr, arg))
                     .collect::<Result<_, _>>()?,
-            },
+            )
+            .ok_or_else(|| AssemblyError::UncheckedOperands(id()))?,
             ExprKind::If {
                 condition,
                 then_branch,
@@ -573,6 +579,212 @@ fn unary(op: UnaryOp, operand: Box<TExpr<Symbolic>>) -> Option<TExprKind<Symboli
     })
 }
 
+/// The typed form of a call of `callee` with checked `args`, if checking
+/// admits their types.
+fn call(callee: &FunctionRef, args: Vec<TArg<Symbolic>>) -> Option<TExprKind<Symbolic>> {
+    let function = match callee {
+        FunctionRef::External(function) => {
+            return Some(TExprKind::Extern {
+                function: function.clone(),
+                args: values(args)?.into_iter().map(|arg| *arg).collect(),
+            });
+        }
+        FunctionRef::Epoch { scale } => {
+            let [TArg::Contextual(civil)] = args.as_slice() else {
+                return None;
+            };
+            let ContextualLiteral::CivilDateTime(civil) = civil.literal() else {
+                return None;
+            };
+            return Some(TExprKind::DatetimeLiteral(DatetimeLiteral::Epoch {
+                civil: *civil,
+                scale: scale.value,
+            }));
+        }
+        FunctionRef::Builtin(builtin) => builtin.function(),
+    };
+    if function == BuiltinFn::Datetime(DatetimeFn::Constructor(DatetimeConstructorFn::Datetime)) {
+        return datetime_literal(&args).map(TExprKind::DatetimeLiteral);
+    }
+    builtin_call(function, values(args)?)
+}
+
+/// The value arguments of a call, if none is a contextual literal.
+fn values(args: Vec<TArg<Symbolic>>) -> Option<Vec<Box<TExpr<Symbolic>>>> {
+    args.into_iter()
+        .map(|arg| match arg {
+            TArg::Value(value) => Some(value),
+            TArg::Contextual(_) => None,
+        })
+        .collect()
+}
+
+/// The datetime `datetime(literal)` or `datetime(literal, timezone)` builds.
+fn datetime_literal(args: &[TArg<Symbolic>]) -> Option<DatetimeLiteral> {
+    match args {
+        [TArg::Contextual(datetime)] => match datetime.literal() {
+            ContextualLiteral::OffsetDateTime(datetime) => Some(DatetimeLiteral::Offset(*datetime)),
+            _ => None,
+        },
+        [TArg::Contextual(datetime), TArg::Contextual(time_zone)] => {
+            match (datetime.literal(), time_zone.literal()) {
+                (ContextualLiteral::ZonedDateTime(datetime), ContextualLiteral::TimeZone(zone))
+                    if datetime.time_zone() == zone =>
+                {
+                    Some(DatetimeLiteral::Zoned(datetime.clone()))
+                }
+                _ => None,
+            }
+        }
+        _ => None,
+    }
+}
+
+/// The single argument of a unary built-in.
+fn single(args: Vec<Box<TExpr<Symbolic>>>) -> Option<Box<TExpr<Symbolic>>> {
+    let [arg] = <[_; 1]>::try_from(args).ok()?;
+    Some(arg)
+}
+
+/// The two arguments of a binary built-in.
+fn pair(args: Vec<Box<TExpr<Symbolic>>>) -> Option<[Box<TExpr<Symbolic>>; 2]> {
+    <[_; 2]>::try_from(args).ok()
+}
+
+/// The value category of a checked argument, as built-ins dispatch on it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Category {
+    Quantity,
+    Complex,
+    Int,
+    Datetime,
+    Key,
+    Indexed,
+    Other,
+}
+
+const fn category(arg: &TExpr<Symbolic>) -> Category {
+    match arg.ty() {
+        CheckedType::Quantity(_) => Category::Quantity,
+        CheckedType::Complex(_) => Category::Complex,
+        CheckedType::Int => Category::Int,
+        CheckedType::Datetime(_) => Category::Datetime,
+        CheckedType::Key(_) => Category::Key,
+        CheckedType::Indexed { .. } => Category::Indexed,
+        CheckedType::Bool | CheckedType::Struct(..) => Category::Other,
+    }
+}
+
+/// The typed form of a value built-in call, if checking admits its argument
+/// types.
+fn builtin_call(
+    function: BuiltinFn,
+    args: Vec<Box<TExpr<Symbolic>>>,
+) -> Option<TExprKind<Symbolic>> {
+    Some(match function {
+        BuiltinFn::Scalar(function) => {
+            if !args.iter().all(|arg| category(arg) == Category::Quantity) {
+                return None;
+            }
+            TExprKind::Quantity(QExpr::Scalar { function, args })
+        }
+        BuiltinFn::Complex(function) => complex_call(function, args)?,
+        BuiltinFn::Aggregation(function) => {
+            let arg = single(args)?;
+            if category(&arg) != Category::Indexed {
+                return None;
+            }
+            TExprKind::Aggregate { function, arg }
+        }
+        BuiltinFn::LinearAlgebra(function) => TExprKind::LinearAlgebra {
+            function,
+            args: args.into_iter().map(|arg| *arg).collect(),
+        },
+        BuiltinFn::Conversion(conversion) => {
+            let arg = single(args)?;
+            match (conversion, category(&arg)) {
+                (ConversionFn::ToFloat, Category::Int) => TExprKind::Quantity(QExpr::FromInt(arg)),
+                (ConversionFn::ToInt, Category::Key) => TExprKind::Int(IExpr::FinPosition(arg)),
+                (ConversionFn::ToInt, Category::Quantity) => {
+                    TExprKind::Int(IExpr::FromQuantity(arg))
+                }
+                (ConversionFn::Coord, Category::Key) => TExprKind::Quantity(QExpr::Coordinate(arg)),
+                _ => return None,
+            }
+        }
+        BuiltinFn::Datetime(function) => {
+            let arg = single(args)?;
+            match (function, category(&arg)) {
+                (DatetimeFn::ScaleConversion(conversion), Category::Datetime) => {
+                    TExprKind::Datetime(DExpr::ToScale { conversion, arg })
+                }
+                (DatetimeFn::Field(field), Category::Datetime) => {
+                    TExprKind::Int(IExpr::DatetimeField { field, arg })
+                }
+                (DatetimeFn::FromNumeric(function), Category::Quantity) => {
+                    TExprKind::Datetime(DExpr::FromQuantity { function, arg })
+                }
+                (DatetimeFn::FromNumeric(function), Category::Int) => {
+                    TExprKind::Datetime(DExpr::FromInt { function, arg })
+                }
+                (DatetimeFn::ToNumeric(function), Category::Datetime) => {
+                    TExprKind::Quantity(QExpr::FromDatetime { function, arg })
+                }
+                _ => return None,
+            }
+        }
+    })
+}
+
+/// The typed form of a complex built-in call, if checking admits its
+/// argument types.
+fn complex_call(
+    function: ComplexFn,
+    args: Vec<Box<TExpr<Symbolic>>>,
+) -> Option<TExprKind<Symbolic>> {
+    let part = |part, arg| TExprKind::Quantity(QExpr::ComplexPart { part, arg });
+    Some(match function {
+        ComplexFn::Rectangular | ComplexFn::Polar => {
+            let [first, second] = pair(args)?;
+            if category(&first) != Category::Quantity || category(&second) != Category::Quantity {
+                return None;
+            }
+            TExprKind::Complex(if function == ComplexFn::Rectangular {
+                CExpr::Rectangular {
+                    re: first,
+                    im: second,
+                }
+            } else {
+                CExpr::Polar {
+                    magnitude: first,
+                    phase: second,
+                }
+            })
+        }
+        _ => {
+            let arg = single(args)?;
+            match (function, category(&arg)) {
+                (ComplexFn::ToComplex, Category::Quantity) => {
+                    TExprKind::Complex(CExpr::FromReal(arg))
+                }
+                (ComplexFn::Real, Category::Complex) => part(ComplexPart::Real, arg),
+                (ComplexFn::Imaginary, Category::Complex) => part(ComplexPart::Imaginary, arg),
+                (ComplexFn::Phase, Category::Complex) => part(ComplexPart::Phase, arg),
+                (ComplexFn::Absolute, Category::Complex) => part(ComplexPart::Magnitude, arg),
+                (ComplexFn::Absolute, Category::Quantity) => TExprKind::Quantity(QExpr::Abs(arg)),
+                (ComplexFn::Conjugate, Category::Complex) => {
+                    TExprKind::Complex(CExpr::Conjugate(arg))
+                }
+                (ComplexFn::Exponential, Category::Complex) => TExprKind::Complex(CExpr::Exp(arg)),
+                (ComplexFn::Exponential, Category::Quantity) => {
+                    TExprKind::Quantity(QExpr::Exp(arg))
+                }
+                _ => return None,
+            }
+        }
+    })
+}
+
 /// The static index proofs of one node, placed on the selectors they prove.
 struct StaticPositions<'a> {
     requirements: &'a [StaticIndexRequirement],
@@ -776,5 +988,310 @@ mod tests {
         assert!(unary(UnaryOp::Not, node(CheckedType::Int)).is_none());
         assert!(unary(UnaryOp::Neg, node(CheckedType::Bool)).is_none());
         assert!(unary(UnaryOp::Neg, node(datetime())).is_none());
+    }
+
+    fn arg(ty: CheckedType<Symbolic>) -> Box<TExpr<Symbolic>> {
+        let mut ids = crate::expression_id::ExprIds::default();
+        Box::new(TExpr::new(
+            ids.allocate().unwrap(),
+            crate::syntax::span::Span::new(0, 1),
+            ty,
+            TExprKind::Bool(BExpr::Literal(true)),
+        ))
+    }
+
+    fn builtin(function: BuiltinFn, args: &[CheckedType<Symbolic>]) -> Option<String> {
+        // The node's variant and the first name inside it.
+        builtin_call(function, args.iter().cloned().map(arg).collect()).map(|kind| {
+            format!("{kind:?}")
+                .split(|c: char| !c.is_alphanumeric())
+                .filter(|word| !word.is_empty())
+                .take(2)
+                .collect::<Vec<_>>()
+                .join("::")
+        })
+    }
+
+    #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one case per built-in family and overload"
+    )]
+    fn built_in_calls_select_their_typed_operation() {
+        use crate::builtin::{
+            AggregationFn, DatetimeField, DatetimeFromNumericFn, DatetimeToNumericFn,
+            LinearAlgebraFn, ScalarFn, TimeScaleConversionFn, ValueAggregation,
+        };
+        let indexed = CheckedType::Indexed {
+            element: Box::new(quantity()),
+            index: IndexTypeRef::from_finite_index_form(crate::nat::NatPolyForm::from_constant(2))
+                .unwrap(),
+        };
+        let cases: Vec<(BuiltinFn, Vec<CheckedType<Symbolic>>, &str)> = vec![
+            (
+                BuiltinFn::Scalar(ScalarFn::Sqrt),
+                vec![quantity()],
+                "Quantity::Scalar",
+            ),
+            (
+                BuiltinFn::Complex(ComplexFn::Rectangular),
+                vec![quantity(), quantity()],
+                "Complex::Rectangular",
+            ),
+            (
+                BuiltinFn::Complex(ComplexFn::Polar),
+                vec![quantity(), quantity()],
+                "Complex::Polar",
+            ),
+            (
+                BuiltinFn::Complex(ComplexFn::ToComplex),
+                vec![quantity()],
+                "Complex::FromReal",
+            ),
+            (
+                BuiltinFn::Complex(ComplexFn::Real),
+                vec![complex()],
+                "Quantity::ComplexPart",
+            ),
+            (
+                BuiltinFn::Complex(ComplexFn::Absolute),
+                vec![complex()],
+                "Quantity::ComplexPart",
+            ),
+            (
+                BuiltinFn::Complex(ComplexFn::Absolute),
+                vec![quantity()],
+                "Quantity::Abs",
+            ),
+            (
+                BuiltinFn::Complex(ComplexFn::Conjugate),
+                vec![complex()],
+                "Complex::Conjugate",
+            ),
+            (
+                BuiltinFn::Complex(ComplexFn::Exponential),
+                vec![complex()],
+                "Complex::Exp",
+            ),
+            (
+                BuiltinFn::Complex(ComplexFn::Exponential),
+                vec![quantity()],
+                "Quantity::Exp",
+            ),
+            (
+                BuiltinFn::Aggregation(AggregationFn::Value(ValueAggregation::Sum)),
+                vec![indexed.clone()],
+                "Aggregate::function",
+            ),
+            (
+                BuiltinFn::LinearAlgebra(LinearAlgebraFn::Dot),
+                vec![indexed.clone(), indexed],
+                "LinearAlgebra::function",
+            ),
+            (
+                BuiltinFn::Conversion(ConversionFn::ToFloat),
+                vec![CheckedType::Int],
+                "Quantity::FromInt",
+            ),
+            (
+                BuiltinFn::Conversion(ConversionFn::ToInt),
+                vec![key()],
+                "Int::FinPosition",
+            ),
+            (
+                BuiltinFn::Conversion(ConversionFn::ToInt),
+                vec![quantity()],
+                "Int::FromQuantity",
+            ),
+            (
+                BuiltinFn::Conversion(ConversionFn::Coord),
+                vec![key()],
+                "Quantity::Coordinate",
+            ),
+            (
+                BuiltinFn::Datetime(DatetimeFn::Field(DatetimeField::Year)),
+                vec![datetime()],
+                "Int::DatetimeField",
+            ),
+            (
+                BuiltinFn::Datetime(DatetimeFn::FromNumeric(DatetimeFromNumericFn::Jd)),
+                vec![quantity()],
+                "Datetime::FromQuantity",
+            ),
+            (
+                BuiltinFn::Datetime(DatetimeFn::FromNumeric(DatetimeFromNumericFn::Unix)),
+                vec![CheckedType::Int],
+                "Datetime::FromInt",
+            ),
+            (
+                BuiltinFn::Datetime(DatetimeFn::ToNumeric(DatetimeToNumericFn::Mjd)),
+                vec![datetime()],
+                "Quantity::FromDatetime",
+            ),
+            (
+                BuiltinFn::Datetime(DatetimeFn::ScaleConversion(TimeScaleConversionFn::ALL[0])),
+                vec![datetime()],
+                "Datetime::ToScale",
+            ),
+        ];
+        for (function, args, expected) in cases {
+            assert_eq!(
+                builtin(function, &args).as_deref(),
+                Some(expected),
+                "{function:?} {args:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn built_in_calls_reject_unchecked_argument_types() {
+        use crate::builtin::{AggregationFn, ScalarFn, ValueAggregation};
+        let cases: Vec<(BuiltinFn, Vec<CheckedType<Symbolic>>)> = vec![
+            (BuiltinFn::Scalar(ScalarFn::Sqrt), vec![CheckedType::Int]),
+            (BuiltinFn::Complex(ComplexFn::Rectangular), vec![quantity()]),
+            (
+                BuiltinFn::Complex(ComplexFn::Polar),
+                vec![complex(), quantity()],
+            ),
+            (BuiltinFn::Complex(ComplexFn::Real), vec![quantity()]),
+            (BuiltinFn::Complex(ComplexFn::Conjugate), vec![quantity()]),
+            (BuiltinFn::Complex(ComplexFn::ToComplex), vec![complex()]),
+            (
+                BuiltinFn::Aggregation(AggregationFn::Value(ValueAggregation::Sum)),
+                vec![quantity()],
+            ),
+            (
+                BuiltinFn::Conversion(ConversionFn::ToFloat),
+                vec![quantity()],
+            ),
+            (BuiltinFn::Conversion(ConversionFn::Coord), vec![quantity()]),
+            (
+                BuiltinFn::Conversion(ConversionFn::ToInt),
+                vec![quantity(), quantity()],
+            ),
+            (
+                BuiltinFn::Datetime(DatetimeFn::Constructor(DatetimeConstructorFn::Epoch)),
+                vec![datetime()],
+            ),
+        ];
+        for (function, args) in cases {
+            assert_eq!(builtin(function, &args), None, "{function:?} {args:?}");
+        }
+    }
+
+    fn contextual(literal: ContextualLiteral) -> TArg<Symbolic> {
+        let mut ids = crate::expression_id::ExprIds::default();
+        TArg::Contextual(TContextual::new(
+            ids.allocate().unwrap(),
+            crate::syntax::span::Span::new(0, 1),
+            literal,
+        ))
+    }
+
+    fn datetime_constructor() -> FunctionRef {
+        let crate::builtin::BuiltinApplication::ScaleFree(builtin) =
+            BuiltinFn::Datetime(DatetimeFn::Constructor(DatetimeConstructorFn::Datetime))
+                .application()
+        else {
+            panic!("datetime() is applied without a time scale");
+        };
+        FunctionRef::Builtin(builtin)
+    }
+
+    fn offset() -> ContextualLiteral {
+        ContextualLiteral::OffsetDateTime(
+            crate::datetime_literal::OffsetDateTimeLiteral::parse("2026-01-01T00:00:00Z").unwrap(),
+        )
+    }
+
+    fn civil() -> crate::datetime_literal::CivilDateTimeLiteral {
+        crate::datetime_literal::CivilDateTimeLiteral::parse("2026-01-01T09:00:00").unwrap()
+    }
+
+    fn zone(name: &str) -> crate::registry::time_zone::IanaTimeZoneId {
+        crate::registry::time_zone::TimeZoneRegistry::bundled()
+            .parse_iana_id(name)
+            .unwrap()
+    }
+
+    fn zoned(name: &str) -> ContextualLiteral {
+        ContextualLiteral::ZonedDateTime(
+            crate::datetime_literal::ZonedDateTimeLiteral::resolve(
+                civil(),
+                zone(name),
+                &crate::registry::time_zone::TimeZoneRegistry::bundled(),
+            )
+            .unwrap(),
+        )
+    }
+
+    #[test]
+    fn datetime_constructors_build_their_parsed_literal() {
+        assert!(matches!(
+            call(&datetime_constructor(), vec![contextual(offset())]),
+            Some(TExprKind::DatetimeLiteral(DatetimeLiteral::Offset(_)))
+        ));
+        let Some(TExprKind::DatetimeLiteral(DatetimeLiteral::Zoned(datetime))) = call(
+            &datetime_constructor(),
+            vec![
+                contextual(zoned("Asia/Tokyo")),
+                contextual(ContextualLiteral::TimeZone(zone("Asia/Tokyo"))),
+            ],
+        ) else {
+            panic!("a zoned literal in its own timezone builds a zoned datetime");
+        };
+        assert_eq!(datetime.time_zone(), &zone("Asia/Tokyo"));
+        let scale = TimeScale::ALL[1];
+        let epoch = FunctionRef::Epoch {
+            scale: Spanned::new(scale, crate::syntax::span::Span::new(0, 1)),
+        };
+        assert!(matches!(
+            call(&epoch, vec![contextual(ContextualLiteral::CivilDateTime(civil()))]),
+            Some(TExprKind::DatetimeLiteral(DatetimeLiteral::Epoch { scale: built, .. }))
+                if built == scale
+        ));
+    }
+
+    #[test]
+    fn datetime_constructors_reject_unchecked_arguments() {
+        let constructor = datetime_constructor();
+        let time_zone = || contextual(ContextualLiteral::TimeZone(zone("Asia/Tokyo")));
+        let rejected = [
+            // A zoned literal resolved in another timezone than its argument.
+            vec![
+                contextual(zoned("Europe/Paris")),
+                contextual(ContextualLiteral::TimeZone(zone("Asia/Tokyo"))),
+            ],
+            // A zoned literal without its timezone argument.
+            vec![contextual(zoned("Asia/Tokyo"))],
+            // An offset literal with a timezone argument.
+            vec![contextual(offset()), time_zone()],
+            // A literal of another kind.
+            vec![contextual(ContextualLiteral::String("2026".to_owned()))],
+            vec![contextual(ContextualLiteral::CivilDateTime(civil()))],
+            // The timezone first.
+            vec![time_zone(), contextual(zoned("Asia/Tokyo"))],
+            // A value argument, or none.
+            vec![TArg::Value(arg(datetime()))],
+            Vec::new(),
+        ];
+        for args in rejected {
+            assert!(call(&constructor, args).is_none());
+        }
+        let epoch = FunctionRef::Epoch {
+            scale: Spanned::new(TimeScale::ALL[0], crate::syntax::span::Span::new(0, 1)),
+        };
+        assert!(call(&epoch, vec![contextual(offset())]).is_none());
+        assert!(call(&epoch, vec![TArg::Value(arg(datetime()))]).is_none());
+        assert!(
+            call(
+                &epoch,
+                vec![
+                    contextual(ContextualLiteral::CivilDateTime(civil())),
+                    contextual(ContextualLiteral::CivilDateTime(civil())),
+                ]
+            )
+            .is_none()
+        );
     }
 }

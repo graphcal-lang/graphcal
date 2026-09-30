@@ -1,13 +1,15 @@
 //! The typed expression tree data model.
 
+use crate::builtin::{AggregationFn, LinearAlgebraFn};
 use crate::dag_id::DagId;
 use crate::datetime_literal::{CivilDateTimeLiteral, OffsetDateTimeLiteral, ZonedDateTimeLiteral};
 use crate::expression_id::ExprId;
 use crate::hir::expr::{
-    ForBinding, ForBindingIndex, FunctionRef, IndexVariantRef, LocalDef, LocalId, MapEntryKey,
+    ExternFnRef, ForBinding, ForBindingIndex, IndexVariantRef, LocalDef, LocalId, MapEntryKey,
     PatternBinding, ResolvedUnitExpr, UnfoldRecurrence,
 };
 use crate::registry::checked_type::{CheckedType, Concrete, Concreteness, IndexTypeRef};
+use crate::registry::time_scale::TimeScale;
 use crate::registry::time_zone::IanaTimeZoneId;
 use crate::resolved_name::ResolvedDeclName;
 use crate::syntax::non_empty::NonEmpty;
@@ -96,6 +98,10 @@ impl<V: Concreteness> TExpr<V> {
     }
 
     /// Visit this node's typed children in structural order.
+    #[expect(
+        clippy::match_same_arms,
+        reason = "each operation family has its own operand type"
+    )]
     pub fn visit_children<'a>(&'a self, visitor: &mut dyn FnMut(TNodeRef<'a, V>)) {
         let unbox =
             |operands: Vec<&'a Box<Self>>| operands.into_iter().map(|operand| &**operand).collect();
@@ -116,14 +122,10 @@ impl<V: Concreteness> TExpr<V> {
             | TExprKind::Field { expr: operand, .. }
             | TExprKind::For { body: operand, .. }
             | TExprKind::Key { arg: operand, .. } => vec![&**operand],
-            TExprKind::Call { args, .. } => {
-                for arg in args {
-                    visitor(match arg {
-                        TArg::Value(arg) => TNodeRef::Value(arg),
-                        TArg::Contextual(arg) => TNodeRef::Contextual(arg),
-                    });
-                }
-                return;
+            TExprKind::DatetimeLiteral(_) => Vec::new(),
+            TExprKind::Aggregate { arg, .. } => vec![&**arg],
+            TExprKind::LinearAlgebra { args, .. } | TExprKind::Extern { args, .. } => {
+                args.iter().collect()
             }
             TExprKind::If {
                 condition,
@@ -214,9 +216,22 @@ pub enum TExprKind<V: Concreteness = Concrete> {
     GraphRef(Spanned<crate::hir::expr::LocalDecl>),
     Const(Spanned<TConstRef<V>>),
     Local(Spanned<LocalId>),
-    Call {
-        callee: Spanned<FunctionRef>,
-        args: Vec<TArg<V>>,
+    /// A datetime built from the literal arguments checking parsed.
+    DatetimeLiteral(DatetimeLiteral),
+    /// A reduction of a rank-one indexed value.
+    Aggregate {
+        function: AggregationFn,
+        arg: Box<TExpr<V>>,
+    },
+    /// A shape-aware operation on indexed quantities.
+    LinearAlgebra {
+        function: LinearAlgebraFn,
+        args: Vec<TExpr<V>>,
+    },
+    /// A plugin function call.
+    Extern {
+        function: ExternFnRef,
+        args: Vec<TExpr<V>>,
     },
     If {
         condition: Box<TExpr<V>>,
@@ -280,6 +295,20 @@ pub enum TExprKind<V: Concreteness = Concrete> {
         args: Vec<TParamBinding<V>>,
         static_bindings: crate::ir::static_substitution::StaticSubstitution,
         output: Spanned<ResolvedDeclName>,
+    },
+}
+
+/// A datetime literal a constructor call builds, as checking parsed it.
+#[derive(Debug, Clone)]
+pub enum DatetimeLiteral {
+    /// `datetime("…Z")` or `datetime("…+hh:mm")`.
+    Offset(OffsetDateTimeLiteral),
+    /// `datetime("…", "Area/City")`, resolved in its timezone.
+    Zoned(ZonedDateTimeLiteral),
+    /// `epoch<S>("…")`.
+    Epoch {
+        civil: CivilDateTimeLiteral,
+        scale: TimeScale,
     },
 }
 

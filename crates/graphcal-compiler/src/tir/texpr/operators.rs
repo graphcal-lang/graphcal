@@ -11,7 +11,10 @@
 //! owns boxed children, and a scoped traversal hands them out in the scope of
 //! the tree that holds them.
 
-use crate::builtin::BuiltinConst;
+use crate::builtin::{
+    BuiltinConst, DatetimeField, DatetimeFromNumericFn, DatetimeToNumericFn, ScalarFn,
+    TimeScaleConversionFn,
+};
 use crate::exact_rational::ExactRational;
 
 /// A real or complex arithmetic operator.
@@ -71,6 +74,19 @@ pub enum OrderedOperands {
     Datetime,
 }
 
+/// The real part of a complex quantity a built-in reads.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ComplexPart {
+    /// `re(z)`.
+    Real,
+    /// `im(z)`.
+    Imaginary,
+    /// `phase(z)`.
+    Phase,
+    /// `abs(z)`.
+    Magnitude,
+}
+
 /// An operation whose checked result is a real quantity.
 #[derive(Debug, Clone)]
 pub enum QExpr<C> {
@@ -102,6 +118,29 @@ pub enum QExpr<C> {
         lhs: C,
         rhs: C,
     },
+    /// A real scalar built-in applied to real quantities.
+    Scalar {
+        function: ScalarFn,
+        args: Vec<C>,
+    },
+    /// A real part of a complex quantity.
+    ComplexPart {
+        part: ComplexPart,
+        arg: C,
+    },
+    /// `abs(x)` of a real quantity.
+    Abs(C),
+    /// `exp(x)` of a dimensionless real quantity.
+    Exp(C),
+    /// `to_float(n)`.
+    FromInt(C),
+    /// `coord(k)`: the coordinate of a coordinate-axis key.
+    Coordinate(C),
+    /// A numeric epoch count of a datetime.
+    FromDatetime {
+        function: DatetimeToNumericFn,
+        arg: C,
+    },
 }
 
 /// An operation whose checked result is an `Int`.
@@ -126,6 +165,15 @@ pub enum IExpr<C> {
         exponent: C,
     },
     Neg(C),
+    /// `to_int(x)` of a dimensionless quantity.
+    FromQuantity(C),
+    /// `to_int(k)`: the position of a `Fin`-axis key.
+    FinPosition(C),
+    /// A Gregorian calendar field of a datetime.
+    DatetimeField {
+        field: DatetimeField,
+        arg: C,
+    },
 }
 
 /// An operation whose checked result is a `Bool`.
@@ -177,6 +225,22 @@ pub enum CExpr<C> {
         complex: C,
     },
     Neg(C),
+    /// `complex(re, im)`.
+    Rectangular {
+        re: C,
+        im: C,
+    },
+    /// `polar(magnitude, phase)`.
+    Polar {
+        magnitude: C,
+        phase: C,
+    },
+    /// `to_complex(x)`.
+    FromReal(C),
+    /// `conj(z)`.
+    Conjugate(C),
+    /// `exp(z)` of a dimensionless complex quantity.
+    Exp(C),
 }
 
 /// An operation whose checked result is a datetime.
@@ -190,6 +254,21 @@ pub enum DExpr<C> {
     },
     /// `duration + datetime`.
     ShiftAfter { duration: C, datetime: C },
+    /// A UTC datetime from a numeric epoch count given as a quantity.
+    FromQuantity {
+        function: DatetimeFromNumericFn,
+        arg: C,
+    },
+    /// A UTC datetime from a numeric epoch count given as an `Int`.
+    FromInt {
+        function: DatetimeFromNumericFn,
+        arg: C,
+    },
+    /// A datetime re-expressed in another time scale.
+    ToScale {
+        conversion: TimeScaleConversionFn,
+        arg: C,
+    },
 }
 
 impl<C> QExpr<C> {
@@ -224,6 +303,22 @@ impl<C> QExpr<C> {
                 lhs: f(lhs)?,
                 rhs: f(rhs)?,
             },
+            Self::Scalar { function, args } => QExpr::Scalar {
+                function: *function,
+                args: args.iter().map(&mut f).collect::<Result<_, _>>()?,
+            },
+            Self::ComplexPart { part, arg } => QExpr::ComplexPart {
+                part: *part,
+                arg: f(arg)?,
+            },
+            Self::Abs(arg) => QExpr::Abs(f(arg)?),
+            Self::Exp(arg) => QExpr::Exp(f(arg)?),
+            Self::FromInt(arg) => QExpr::FromInt(f(arg)?),
+            Self::Coordinate(arg) => QExpr::Coordinate(f(arg)?),
+            Self::FromDatetime { function, arg } => QExpr::FromDatetime {
+                function: *function,
+                arg: f(arg)?,
+            },
         })
     }
 
@@ -239,6 +334,13 @@ impl<C> QExpr<C> {
                 ..
             } => vec![base, exponent_expr],
             Self::Power { base, exponent } => vec![base, exponent],
+            Self::Scalar { args, .. } => args.iter().collect(),
+            Self::ComplexPart { arg, .. }
+            | Self::Abs(arg)
+            | Self::Exp(arg)
+            | Self::FromInt(arg)
+            | Self::Coordinate(arg)
+            | Self::FromDatetime { arg, .. } => vec![arg],
         }
     }
 }
@@ -270,6 +372,12 @@ impl<C> IExpr<C> {
                 exponent: f(exponent)?,
             },
             Self::Neg(operand) => IExpr::Neg(f(operand)?),
+            Self::FromQuantity(arg) => IExpr::FromQuantity(f(arg)?),
+            Self::FinPosition(arg) => IExpr::FinPosition(f(arg)?),
+            Self::DatetimeField { field, arg } => IExpr::DatetimeField {
+                field: *field,
+                arg: f(arg)?,
+            },
         })
     }
 
@@ -285,6 +393,9 @@ impl<C> IExpr<C> {
                 ..
             } => vec![base, exponent_expr],
             Self::Power { base, exponent } => vec![base, exponent],
+            Self::FromQuantity(arg) | Self::FinPosition(arg) | Self::DatetimeField { arg, .. } => {
+                vec![arg]
+            }
         }
     }
 }
@@ -369,6 +480,17 @@ impl<C> CExpr<C> {
                 complex: f(complex)?,
             },
             Self::Neg(operand) => CExpr::Neg(f(operand)?),
+            Self::Rectangular { re, im } => CExpr::Rectangular {
+                re: f(re)?,
+                im: f(im)?,
+            },
+            Self::Polar { magnitude, phase } => CExpr::Polar {
+                magnitude: f(magnitude)?,
+                phase: f(phase)?,
+            },
+            Self::FromReal(arg) => CExpr::FromReal(f(arg)?),
+            Self::Conjugate(arg) => CExpr::Conjugate(f(arg)?),
+            Self::Exp(arg) => CExpr::Exp(f(arg)?),
         })
     }
 
@@ -383,6 +505,9 @@ impl<C> CExpr<C> {
             Self::ScaleLeft {
                 scalar, complex, ..
             } => vec![scalar, complex],
+            Self::Rectangular { re, im } => vec![re, im],
+            Self::Polar { magnitude, phase } => vec![magnitude, phase],
+            Self::FromReal(arg) | Self::Conjugate(arg) | Self::Exp(arg) => vec![arg],
         }
     }
 }
@@ -407,6 +532,18 @@ impl<C> DExpr<C> {
                 duration: f(duration)?,
                 datetime: f(datetime)?,
             },
+            Self::FromQuantity { function, arg } => DExpr::FromQuantity {
+                function: *function,
+                arg: f(arg)?,
+            },
+            Self::FromInt { function, arg } => DExpr::FromInt {
+                function: *function,
+                arg: f(arg)?,
+            },
+            Self::ToScale { conversion, arg } => DExpr::ToScale {
+                conversion: *conversion,
+                arg: f(arg)?,
+            },
         })
     }
 
@@ -417,6 +554,11 @@ impl<C> DExpr<C> {
                 datetime, duration, ..
             } => vec![datetime, duration],
             Self::ShiftAfter { duration, datetime } => vec![duration, datetime],
+            Self::FromQuantity { arg, .. }
+            | Self::FromInt { arg, .. }
+            | Self::ToScale { arg, .. } => {
+                vec![arg]
+            }
         }
     }
 }

@@ -1,11 +1,8 @@
 //! Pure complex arithmetic and built-in kernels.
 
-use crate::invariant::{Failure, Invariant};
-use crate::runtime_value::RuntimeValue;
-use graphcal_compiler::builtin::ComplexFn;
 use graphcal_compiler::complex_value::ComplexValue;
 use graphcal_compiler::finite_value::FiniteQuantity;
-use graphcal_compiler::tir::texpr::operators::{ArithOp, ScaleOp};
+use graphcal_compiler::tir::texpr::operators::{ArithOp, ComplexPart, ScaleOp};
 use num_rational::BigRational;
 use num_traits::{ToPrimitive, Zero};
 use thiserror::Error;
@@ -22,65 +19,45 @@ pub(super) enum ComplexEvalError {
     NonFiniteQuantity { operation: &'static str },
 }
 
-impl From<ComplexEvalError> for Failure<ComplexEvalError> {
-    fn from(error: ComplexEvalError) -> Self {
-        Self::Error(error)
+/// `polar(magnitude, phase)`.
+pub(super) fn polar(
+    magnitude: FiniteQuantity,
+    phase: FiniteQuantity,
+) -> Result<ComplexValue, ComplexEvalError> {
+    let (magnitude, phase) = (magnitude.get(), phase.get());
+    if magnitude < 0.0 {
+        return Err(ComplexEvalError::NegativeMagnitude { value: magnitude });
+    }
+    finite_complex(magnitude * phase.cos(), magnitude * phase.sin(), "polar()")
+}
+
+/// A real part of a complex quantity.
+pub(super) fn part(
+    part: ComplexPart,
+    value: ComplexValue,
+) -> Result<FiniteQuantity, ComplexEvalError> {
+    match part {
+        ComplexPart::Real => Ok(value.real_part()),
+        ComplexPart::Imaginary => Ok(value.imaginary_part()),
+        ComplexPart::Phase => finite_quantity(value.im().atan2(value.re()), "phase()"),
+        ComplexPart::Magnitude => finite_quantity(value.re().hypot(value.im()), "abs()"),
     }
 }
 
-/// Evaluate one complex built-in call.
-///
-/// The caller has already checked the call against the function's static
-/// entry, so `arguments` holds exactly `function.arity()` values.
-pub(super) fn evaluate_builtin(
-    function: ComplexFn,
-    arguments: &[RuntimeValue],
-) -> Result<RuntimeValue, Failure<ComplexEvalError>> {
-    Ok(match function {
-        ComplexFn::Rectangular => {
-            let re = quantity(&arguments[0])?;
-            let im = quantity(&arguments[1])?;
-            RuntimeValue::Complex(ComplexValue::from_parts(re, im))
-        }
-        ComplexFn::Polar => {
-            let magnitude = quantity(&arguments[0])?.get();
-            let phase = quantity(&arguments[1])?.get();
-            if magnitude < 0.0 {
-                return Err(ComplexEvalError::NegativeMagnitude { value: magnitude }.into());
-            }
-            RuntimeValue::Complex(finite_complex(
-                magnitude * phase.cos(),
-                magnitude * phase.sin(),
-                "polar()",
-            )?)
-        }
-        ComplexFn::ToComplex => RuntimeValue::Complex(ComplexValue::from_parts(
-            quantity(&arguments[0])?,
-            FiniteQuantity::ZERO,
-        )),
-        ComplexFn::Real => RuntimeValue::Quantity(complex(&arguments[0])?.real_part()),
-        ComplexFn::Imaginary => RuntimeValue::Quantity(complex(&arguments[0])?.imaginary_part()),
-        ComplexFn::Phase => {
-            let value = complex(&arguments[0])?;
-            finite_quantity(value.im().atan2(value.re()), "phase()")?
-        }
-        ComplexFn::Conjugate => RuntimeValue::Complex(complex(&arguments[0])?.conjugate()),
-        ComplexFn::Absolute => match &arguments[0] {
-            RuntimeValue::Complex(value) => finite_quantity(value.re().hypot(value.im()), "abs()")?,
-            value => finite_quantity(quantity(value)?.get().abs(), "abs()")?,
-        },
-        ComplexFn::Exponential => match &arguments[0] {
-            RuntimeValue::Complex(value) => {
-                let scale = value.re().exp();
-                RuntimeValue::Complex(finite_complex(
-                    scale * value.im().cos(),
-                    scale * value.im().sin(),
-                    "exp()",
-                )?)
-            }
-            value => finite_quantity(quantity(value)?.get().exp(), "exp()")?,
-        },
-    })
+/// `abs(x)` of a real quantity.
+pub(super) fn real_abs(value: FiniteQuantity) -> Result<FiniteQuantity, ComplexEvalError> {
+    finite_quantity(value.get().abs(), "abs()")
+}
+
+/// `exp(x)` of a dimensionless real quantity.
+pub(super) fn real_exp(value: FiniteQuantity) -> Result<FiniteQuantity, ComplexEvalError> {
+    finite_quantity(value.get().exp(), "exp()")
+}
+
+/// `exp(z)` of a dimensionless complex quantity.
+pub(super) fn exp(value: ComplexValue) -> Result<ComplexValue, ComplexEvalError> {
+    let scale = value.re().exp();
+    finite_complex(scale * value.im().cos(), scale * value.im().sin(), "exp()")
 }
 
 /// `lhs op rhs` on two complex quantities.
@@ -201,27 +178,6 @@ fn divide(lhs: ComplexValue, rhs: ComplexValue) -> Result<ComplexValue, ComplexE
     finite_complex(re, im, "complex division")
 }
 
-fn quantity(value: &RuntimeValue) -> Result<FiniteQuantity, Invariant> {
-    match value {
-        RuntimeValue::Quantity(value) => Ok(*value),
-        other => Err(type_mismatch("a quantity", other)),
-    }
-}
-
-fn complex(value: &RuntimeValue) -> Result<ComplexValue, Invariant> {
-    match value {
-        RuntimeValue::Complex(value) => Ok(*value),
-        other => Err(type_mismatch("a complex quantity", other)),
-    }
-}
-
-fn type_mismatch(expected: &str, actual: &RuntimeValue) -> Invariant {
-    Invariant::violated(format_args!(
-        "internal complex operation expected {expected}, got {}",
-        actual.describe()
-    ))
-}
-
 /// The complex value of computed components, when both are finite.
 fn finite_complex(
     re: f64,
@@ -232,10 +188,11 @@ fn finite_complex(
 }
 
 /// The quantity value of a computed real result, when it is finite.
-fn finite_quantity(value: f64, operation: &'static str) -> Result<RuntimeValue, ComplexEvalError> {
-    FiniteQuantity::try_new(value)
-        .map(RuntimeValue::Quantity)
-        .map_err(|_| ComplexEvalError::NonFiniteQuantity { operation })
+fn finite_quantity(
+    value: f64,
+    operation: &'static str,
+) -> Result<FiniteQuantity, ComplexEvalError> {
+    FiniteQuantity::try_new(value).map_err(|_| ComplexEvalError::NonFiniteQuantity { operation })
 }
 
 #[cfg(test)]
@@ -325,14 +282,31 @@ mod tests {
 
     #[test]
     fn absolute_value_uses_stable_hypot() {
-        let result = evaluate_builtin(
-            ComplexFn::Absolute,
-            &[RuntimeValue::complex(3.0, 4.0).unwrap()],
-        );
-        let RuntimeValue::Quantity(magnitude) = result.unwrap() else {
-            panic!("expected quantity magnitude");
-        };
+        let magnitude = part(ComplexPart::Magnitude, c(3.0, 4.0)).unwrap();
         assert!((magnitude.get() - 5.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn parts_and_real_overloads_read_the_expected_component() {
+        let q = |value| FiniteQuantity::try_new(value).unwrap();
+        assert_eq!(part(ComplexPart::Real, c(3.0, 4.0)).unwrap(), q(3.0));
+        assert_eq!(part(ComplexPart::Imaginary, c(3.0, 4.0)).unwrap(), q(4.0));
+        assert_eq!(
+            part(ComplexPart::Phase, c(0.0, 1.0)).unwrap(),
+            q(std::f64::consts::FRAC_PI_2)
+        );
+        assert_eq!(real_abs(q(-2.0)).unwrap(), q(2.0));
+        assert_eq!(real_exp(q(0.0)).unwrap(), q(1.0));
+        assert!(matches!(
+            real_exp(q(1_000.0)),
+            Err(ComplexEvalError::NonFiniteQuantity { .. })
+        ));
+        assert_eq!(exp(c(0.0, 0.0)).unwrap(), c(1.0, 0.0));
+        assert_eq!(polar(q(2.0), q(0.0)).unwrap(), c(2.0, 0.0));
+        assert!(matches!(
+            polar(q(-1.0), q(0.0)),
+            Err(ComplexEvalError::NegativeMagnitude { .. })
+        ));
     }
 
     #[test]
@@ -346,11 +320,8 @@ mod tests {
             Err(ComplexEvalError::NonFinite { .. })
         ));
         assert!(matches!(
-            evaluate_builtin(
-                ComplexFn::Exponential,
-                &[RuntimeValue::complex(1_000.0, 0.0).unwrap()],
-            ),
-            Err(Failure::Error(ComplexEvalError::NonFinite { .. }))
+            exp(c(1_000.0, 0.0)),
+            Err(ComplexEvalError::NonFinite { .. })
         ));
     }
 
@@ -360,25 +331,5 @@ mod tests {
             arith(ArithOp::Div, c(1.0, 2.0), c(0.0, 0.0)),
             Err(ComplexEvalError::DivisionByZero)
         ));
-    }
-
-    #[test]
-    fn checker_guaranteed_operand_kinds_are_invariants() {
-        let invariant = |result: Result<RuntimeValue, Failure<ComplexEvalError>>| match result {
-            Err(Failure::Invariant(invariant)) => invariant.to_string(),
-            other => panic!("expected an invariant, got {other:?}"),
-        };
-        let complex = RuntimeValue::complex(1.0, 2.0).unwrap();
-        assert_eq!(
-            invariant(evaluate_builtin(
-                ComplexFn::Real,
-                &[RuntimeValue::Bool(true)]
-            )),
-            "internal complex operation expected a complex quantity, got Bool"
-        );
-        assert_eq!(
-            invariant(evaluate_builtin(ComplexFn::ToComplex, &[complex])),
-            "internal complex operation expected a quantity, got Complex"
-        );
     }
 }
