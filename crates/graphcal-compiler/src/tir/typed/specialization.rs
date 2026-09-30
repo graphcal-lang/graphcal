@@ -750,7 +750,7 @@ fn add_plot_projections_for_dag(
                 let instance_owner = edge.instance.id().owner().clone();
                 let target =
                     instance_declaration(edge.instance.id(), projection.target.leaf().clone());
-                let exposed = projection_alias(parent, projection.exposed_name.leaf().clone());
+                let exposed = projection_alias(parent, projection.alias.clone());
                 (instance_owner, target, exposed)
             })
         })
@@ -819,21 +819,22 @@ pub fn add_semantic_presentation_facts(
 fn install_semantic_projection_bindings(tir: &mut UncheckedTir) {
     for dag in tir.dags.values_mut() {
         for edge in dag.semantic_instances.clone() {
-            for projection in edge.output_projections {
+            for projection in &edge.output_projections {
+                let exposed_name = edge.instance.exposed_name(projection);
                 let has_local_body = dag
-                    .bound_decl_identity(&projection.exposed_name)
+                    .bound_decl_identity(&exposed_name)
                     .and_then(|identity| dag.value_expr(identity))
                     .is_some();
                 if !has_local_body {
                     dag.semantic.decl_bindings.insert(
-                        projection.exposed_name,
+                        exposed_name,
                         instance_declaration(edge.instance.id(), projection.target.leaf().clone()),
                     );
                 }
             }
-            for projection in edge.assertion_projections {
+            for projection in &edge.assertion_projections {
                 dag.semantic.decl_bindings.insert(
-                    projection.exposed_name,
+                    edge.instance.exposed_name(projection),
                     instance_declaration(edge.instance.id(), projection.target.leaf().clone()),
                 );
             }

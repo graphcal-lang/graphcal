@@ -141,7 +141,7 @@ fn check_decl_expr_type(
         .semantic_instances()
         .iter()
         .flat_map(|instance| &instance.output_projections)
-        .any(|projection| projection.exposed_name.as_bare() == Some(name))
+        .any(|projection| projection.exposure.selected() == Some(name))
     {
         // Projection bodies are generated from the already checked instance
         // interface. Retain that proof rather than treating them as unchecked.

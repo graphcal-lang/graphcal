@@ -368,12 +368,9 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
             projection,
         } in instance.output_projections()
         {
-            if tir
-                .root()
-                .decls()
-                .iter()
-                .any(|entry| projection.exposed_name.as_bare() == Some(entry.name()))
-            {
+            // A selected value is declared by the including DAG itself (a
+            // projection alias), whose own entry reports it.
+            if projection.exposure.selected().is_some() {
                 continue;
             }
             let key = declaration.clone();
@@ -418,7 +415,7 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
             };
             result_values.insert(
                 key,
-                projection.exposed_name.clone(),
+                instance.record().instance.exposed_name(projection),
                 value,
                 decl_type,
                 OutputExposure::Surface,
@@ -531,13 +528,13 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
             })?;
             match evaluate_plot(unit, plot, &values, &presentation_instances, &errors, &ctx) {
                 Ok(mut plot) => {
-                    plot.name = projection.exposed_name.clone();
+                    plot.name = ScopedName::local(projection.alias.clone());
                     plot.visibility = projection.visibility;
                     plots.push(plot);
                 }
                 Err(PlotEvaluationError::Unavailable(reason)) => {
                     plot_errors.push(super::types::PlotError {
-                        name: projection.exposed_name.clone(),
+                        name: ScopedName::local(projection.alias.clone()),
                         reason,
                     });
                 }
@@ -843,7 +840,7 @@ pub(super) fn evaluate_assertions(
                     root_instance_name(
                         tir.root_dag_id(),
                         parent_dag.dag_id(),
-                        &projection.exposed_name,
+                        &record.instance.exposed_name(projection),
                     ),
                     result,
                     entry.get().span,
@@ -875,12 +872,14 @@ pub(super) fn root_source_names(
         names.extend(
             instance
                 .output_projections()
-                .map(|resolved| (resolved.target, resolved.projection.exposed_name.clone()))
-                .chain(
-                    instance.assertion_projections().map(|resolved| {
-                        (resolved.target, resolved.projection.exposed_name.clone())
-                    }),
-                ),
+                .map(|resolved| {
+                    let name = record.instance.exposed_name(resolved.projection);
+                    (resolved.target, name)
+                })
+                .chain(instance.assertion_projections().map(|resolved| {
+                    let name = record.instance.exposed_name(resolved.projection);
+                    (resolved.target, name)
+                })),
         );
     }
     Ok(names)

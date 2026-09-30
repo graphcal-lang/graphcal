@@ -526,7 +526,7 @@ fn resolve_declared_types<'d>(
             record
                 .output_projections
                 .iter()
-                .filter_map(|projection| projection.exposed_name.as_bare())
+                .filter_map(|projection| projection.exposure.selected())
                 .map(|exposed| (exposed, record.instance.substitution()))
         })
         .collect::<HashMap<_, _>>();
