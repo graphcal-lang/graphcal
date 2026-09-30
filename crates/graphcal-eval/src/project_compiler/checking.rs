@@ -10,7 +10,20 @@ use graphcal_compiler::resolve::category::DeclSymbolKind;
     clippy::allow_attributes,
     reason = "project checking consumes the shared internal phase model"
 )]
-use super::*;
+use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
+
+use miette::NamedSource;
+
+use graphcal_compiler::graphcal_error::GraphcalError;
+use graphcal_compiler::ir::imported_binding::ImportedBinding;
+use graphcal_compiler::ir::resolve::ScopedName;
+use graphcal_compiler::semantic::checked_type::CheckedType;
+
+use super::{entry_interface, execution_check, lowering};
+use crate::eval::types::CompileError;
+
+use super::model::{CompiledFile, HirFile, ModuleArtifactStore};
 
 /// Checked value-declaration types of the DAGs in the file being checked.
 type LocalInterfaces = HashMap<graphcal_compiler::resolved_name::ResolvedDeclName, CheckedType>;

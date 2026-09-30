@@ -18,7 +18,24 @@ use graphcal_compiler::resolved_name::{ResolvedDeclName, ResolvedDimName, Resolv
     clippy::allow_attributes,
     reason = "project compiler pass uses the shared internal model"
 )]
-use super::*;
+use miette::NamedSource;
+
+use graphcal_compiler::declaration_category::DeclCategory;
+use graphcal_compiler::graphcal_error::GraphcalError;
+use graphcal_compiler::ir::resolve::{ImportedValueNames, ScopedName};
+use graphcal_compiler::syntax::decl_name::DeclName;
+use graphcal_compiler::syntax::module_name::{ModuleAliasName, ScopeSegment};
+use graphcal_compiler::syntax::span::Span;
+
+use super::imports;
+use super::module_resolve_errors::module_resolve_compile_error;
+use crate::eval::types::CompileError;
+
+use super::model::{
+    HirFile, ImportAlias, ImportContext, IncludeDebugNameMap, IncludeInstanceRequest,
+    IncludeStaticBindings, ModuleArtifactStore, ProjectModuleBinding,
+};
+use super::template::{ElaboratedModuleTemplate, ModuleTemplateStore};
 use graphcal_compiler::desugar::desugared_ast::{DeclKind, Declaration, Expr, ExprKind, GraphRef};
 use graphcal_compiler::syntax::phase::Desugared;
 use graphcal_compiler::syntax::visitor::ExprVisitor;
@@ -257,7 +274,7 @@ fn include_debug_name_map(ctx: &ImportContext<'_>) -> IncludeDebugNameMap {
 /// This phase performs elaboration and canonical reference resolution only.
 /// It does not resolve checked declaration types, evaluate constants, verify
 /// host signatures, or construct TIR.
-pub(in crate::project_compiler) fn lower_file_to_hir(
+pub(super) fn lower_file_to_hir(
     semantic: &mut ProjectSemanticContext<'_, '_>,
     loaded_file: &crate::loader::LoadedFile,
     ctx: ImportContext<'_>,
@@ -333,96 +350,6 @@ pub(in crate::project_compiler) fn lower_file_to_hir(
         include_debug_names,
         module_map: ctx.module_map,
     })
-}
-
-/// N001 for a resolver duplicate, rendered with its spelled name.
-fn duplicate_name(
-    name: String,
-    first: Span,
-    duplicate: Span,
-    src: &NamedSource<Arc<String>>,
-) -> CompileError {
-    CompileError::Eval(GraphcalError::DuplicateName {
-        name,
-        src: src.clone(),
-        duplicate: duplicate.into(),
-        first: first.into(),
-    })
-}
-
-pub(super) fn module_resolve_compile_error(
-    err: graphcal_compiler::resolve::error::ModuleResolveError,
-    src: &NamedSource<Arc<String>>,
-) -> CompileError {
-    match err {
-        graphcal_compiler::resolve::error::ModuleResolveError::PrivateName {
-            owner, name, ..
-        } => CompileError::Eval(GraphcalError::ImportPrivateItem {
-            name: name.to_string(),
-            file_path: owner.to_string(),
-            src: src.clone(),
-            span: Span::new(0, src.inner().len()).into(),
-        }),
-        graphcal_compiler::resolve::error::ModuleResolveError::WrongImportCategory {
-            owner,
-            mismatch,
-            span,
-        } => CompileError::Eval(GraphcalError::ImportCategoryMismatch {
-            file_path: owner.to_string(),
-            mismatch,
-            src: src.clone(),
-            span: span.into(),
-        }),
-        graphcal_compiler::resolve::error::ModuleResolveError::IncludeItemNotProjectable {
-            name,
-            span,
-            ..
-        } => CompileError::Eval(GraphcalError::IncludeItemNotProjectable {
-            name: name.to_string(),
-            src: src.clone(),
-            span: span.into(),
-        }),
-        graphcal_compiler::resolve::error::ModuleResolveError::ConstructorOwnerRebound {
-            constructor,
-            owner_type,
-            span,
-            ..
-        } => CompileError::Eval(GraphcalError::IncludeConstructorOwnerRebound {
-            constructor: constructor.to_string(),
-            owner_type: owner_type.to_string(),
-            src: src.clone(),
-            span: span.into(),
-        }),
-        graphcal_compiler::resolve::error::ModuleResolveError::DuplicateSymbol {
-            name,
-            first,
-            duplicate,
-            ..
-        }
-        | graphcal_compiler::resolve::error::ModuleResolveError::DuplicateImportName {
-            name,
-            first,
-            duplicate,
-            ..
-        } => duplicate_name(name.to_string(), first, duplicate, src),
-        graphcal_compiler::resolve::error::ModuleResolveError::DuplicateIndexVariant {
-            variant,
-            first,
-            duplicate,
-            ..
-        } => duplicate_name(variant.to_string(), first, duplicate, src),
-        graphcal_compiler::resolve::error::ModuleResolveError::DuplicatePluginFunction {
-            function,
-            first,
-            duplicate,
-            ..
-        } => duplicate_name(function.to_string(), first, duplicate, src),
-        other => CompileError::Eval(GraphcalError::EvalError {
-            message: other.to_string(),
-            src: src.clone(),
-            span: Span::new(0, src.inner().len()).into(),
-        }),
-    }
 }
 
 fn lower_inline_dag_modules(
@@ -1531,112 +1458,5 @@ fn add_selective_aliases_inner(
                 import_span,
             );
         }
-    }
-}
-
-/// Resolve the importer-side argument of an index-port binding.
-///
-/// The source expression crosses into the typed include core as either a
-/// declared index name or a validated structural finite identity.
-pub(in crate::project_compiler) fn extract_index_binding_target(
-    expr: &Expr,
-    dep_index_name: &IndexName,
-    file_src: &NamedSource<Arc<String>>,
-) -> Result<IndexBindingTarget, CompileError> {
-    use graphcal_compiler::desugar::desugared_ast::IndexExpr;
-    use graphcal_compiler::semantic::index_def::FiniteIndex;
-
-    let invalid_binding = || {
-        CompileError::Eval(GraphcalError::InvalidTypeLevelBindingValue {
-            name: dep_index_name.to_string(),
-            src: file_src.clone(),
-            span: expr.span.into(),
-        })
-    };
-    match expr.index_binding_arg().ok_or_else(invalid_binding)? {
-        IndexExpr::Name(path) => path
-            .value
-            .as_bare()
-            .map(|name| IndexBindingTarget::Declared(IndexName::classify(name.clone())))
-            .ok_or_else(invalid_binding),
-        IndexExpr::Finite { cardinality, .. } => {
-            let cardinality = closed_binding_cardinality(&cardinality, file_src)?;
-            let finite = FiniteIndex::try_from_u64(cardinality).map_err(|error| {
-                CompileError::Eval(GraphcalError::EvalError {
-                    message: error.describe_finite_index(),
-                    src: file_src.clone(),
-                    span: expr.span.into(),
-                })
-            })?;
-            Ok(IndexBindingTarget::Finite(finite))
-        }
-        IndexExpr::BareNat(_) => Err(invalid_binding()),
-    }
-}
-
-/// Evaluate the cardinality of an importer-side `Fin(...)` binding value.
-///
-/// An include binding has no generic scope, so a name here is an unknown
-/// index and the expression must be closed.
-fn closed_binding_cardinality(
-    expr: &graphcal_compiler::desugar::desugared_ast::NatExpr,
-    file_src: &NamedSource<Arc<String>>,
-) -> Result<u64, GraphcalError> {
-    use graphcal_compiler::desugar::desugared_ast::NatExpr;
-    let overflow = |span: graphcal_compiler::syntax::span::Span| GraphcalError::EvalError {
-        message: graphcal_compiler::nat::NatOverflowError.to_string(),
-        src: file_src.clone(),
-        span: span.into(),
-    };
-    match expr {
-        NatExpr::Literal(value, _) => Ok(*value),
-        NatExpr::Var(ident) => Err(GraphcalError::UnknownIndex {
-            name: IndexName::classify(ident.name.atom().clone()).into(),
-            src: file_src.clone(),
-            span: ident.span.into(),
-        }),
-        NatExpr::Add(operands, span) => operands.iter().try_fold(0_u64, |sum, operand| {
-            sum.checked_add(closed_binding_cardinality(operand, file_src)?)
-                .ok_or_else(|| overflow(*span))
-        }),
-        NatExpr::Mul(operands, span) => operands.iter().try_fold(1_u64, |product, operand| {
-            product
-                .checked_mul(closed_binding_cardinality(operand, file_src)?)
-                .ok_or_else(|| overflow(*span))
-        }),
-    }
-}
-
-/// Extract a `PascalCase` type name from a binding expression.
-///
-/// Type bindings use the form `DepType: ImporterType` — the RHS is a bare
-/// `PascalCase` identifier (an unresolved reference path in the desugared
-/// AST) or a zero-arg `ConstructorCall` for constructor-shaped RHSs.
-pub(in crate::project_compiler) fn extract_type_name_from_binding_expr(
-    expr: &Expr,
-    dep_type_name: &str,
-    file_src: &NamedSource<Arc<String>>,
-) -> Result<String, CompileError> {
-    let invalid_binding = || {
-        CompileError::Eval(GraphcalError::InvalidTypeLevelBindingValue {
-            name: dep_type_name.to_string(),
-            src: file_src.clone(),
-            span: expr.span.into(),
-        })
-    };
-    match &expr.kind {
-        ExprKind::UnresolvedRef(graphcal_compiler::syntax::ast::UnresolvedRef::Path(path)) => path
-            .as_bare()
-            .map(|ident| ident.name.to_string())
-            .ok_or_else(invalid_binding),
-        ExprKind::ConstructorCall {
-            callee,
-            generic_args,
-            fields,
-        } if generic_args.is_empty() && fields.is_empty() => callee
-            .as_bare()
-            .map(|ident| ident.name.to_string())
-            .ok_or_else(invalid_binding),
-        _ => Err(invalid_binding()),
     }
 }

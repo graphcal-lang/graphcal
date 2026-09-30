@@ -18,15 +18,15 @@ use graphcal_compiler::syntax::decl_name::DeclName;
 use graphcal_io::{FileSystemReadError, FileSystemReader};
 use graphcal_package::PackageManifest;
 
+use super::budget::{
+    LoaderArtifact, LoaderBudgetState, LoaderReadError, PackageAuthorityError, io_not_found,
+    loader_manifest_error,
+};
 use super::source_snapshot::{
     FetchedFile, ModuleLocation, ModuleResolution, ParsedFile, ParsedSource, ResolveFailure,
     ResolvedFile, SourceKey, SourceSnapshot,
 };
-use super::{
-    LoaderArtifact, LoaderBudgetState, LoaderReadError, PackageAuthorityError, io_not_found,
-    loader_manifest_error,
-};
-use crate::eval::CompileError;
+use crate::eval::types::CompileError;
 
 /// Read capability and semantic identity of one package's source tree.
 pub(super) struct SourceTree<'a> {

@@ -5,7 +5,32 @@
     clippy::allow_attributes,
     reason = "project compiler pass uses the shared internal model"
 )]
-use super::*;
+use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
+
+use miette::NamedSource;
+
+use graphcal_compiler::declaration_category::{DeclCategory, ValueDeclCategory};
+use graphcal_compiler::desugar::desugared_ast::ModulePath;
+use graphcal_compiler::graphcal_error::GraphcalError;
+use graphcal_compiler::ir::resolve::{ImportedValueNames, ScopedName};
+use graphcal_compiler::resolved_name::ResolvedDeclName;
+use graphcal_compiler::semantic::index_def::IndexBindingTarget;
+use graphcal_compiler::syntax::decl_name::DeclName;
+use graphcal_compiler::syntax::dimension::DimName;
+use graphcal_compiler::syntax::index_name::IndexName;
+use graphcal_compiler::syntax::module_name::{ModuleAliasName, ScopeSegment};
+use graphcal_compiler::syntax::span::Span;
+use graphcal_compiler::syntax::type_name::StructTypeName;
+
+use super::binding_values::{extract_index_binding_target, extract_type_name_from_binding_expr};
+use super::module_resolve_errors::module_resolve_compile_error;
+use crate::eval::types::CompileError;
+
+use super::model::{
+    ImportAlias, ImportContext, IncludeInstanceRequest, IncludeStaticBindings, IndexBindingSite,
+    ProjectModuleBinding, UnitProjectionAlias,
+};
 use crate::import_surface::{
     import_item_not_found_error, validate_constructor_alias, validate_reserved_alias,
 };
@@ -88,9 +113,9 @@ fn static_input_is_bindable(
         .is_some_and(|input| input.role().is_bindable())
 }
 
-pub(in crate::project_compiler) struct InlineDagIncludeTarget<'a> {
-    pub(in crate::project_compiler) module: crate::loader::LoadedModule<'a>,
-    pub(in crate::project_compiler) dag_name: &'a str,
+pub(super) struct InlineDagIncludeTarget<'a> {
+    pub(super) module: crate::loader::LoadedModule<'a>,
+    pub(super) dag_name: &'a str,
 }
 
 /// Populate one file body's pure imports and concrete include requests.
@@ -98,7 +123,7 @@ pub(in crate::project_compiler) struct InlineDagIncludeTarget<'a> {
 /// Both top-level file compilation and recursive file-DAG instantiation use
 /// this path. Keeping import classification here prevents nested instances
 /// from silently dropping their own include graph.
-pub(in crate::project_compiler) fn process_file_body_declarations<'a>(
+pub(super) fn process_file_body_declarations<'a>(
     project: &'a crate::loader::LoadedProject,
     loaded_file: &crate::loader::LoadedFile,
     module_resolver: &graphcal_compiler::resolve::ModuleResolver,
@@ -571,7 +596,7 @@ fn resolve_include_static_bindings(
         let target = resolver
             .resolve_struct_type_path(scope.owner(), &NamePath::local(target.atom().clone()))
             .map(SymbolRef::into_resolved)
-            .map_err(|error| lowering::module_resolve_compile_error(error, src))?;
+            .map_err(|error| module_resolve_compile_error(error, src))?;
         bindings.substitution.types.insert(identity, target);
     }
     let prelude = graphcal_compiler::resolve::prelude::prelude_type_scope();
@@ -588,7 +613,7 @@ fn resolve_include_static_bindings(
             Ok(identity) => identity,
             Err(error) => prelude
                 .resolve_dimension_path(&path)
-                .ok_or_else(|| lowering::module_resolve_compile_error(error, src))?,
+                .ok_or_else(|| module_resolve_compile_error(error, src))?,
         };
         bindings.substitution.dimensions.insert(identity, target);
     }
@@ -625,7 +650,7 @@ fn classify_param_bindings(
             InputBindingCategory::Type
                 if static_input_is_bindable(dep, StaticInputKind::Type, binding_name.atom()) =>
             {
-                let rhs_name = lowering::extract_type_name_from_binding_expr(
+                let rhs_name = extract_type_name_from_binding_expr(
                     &binding.value,
                     binding_name.as_str(),
                     file_src,
@@ -642,7 +667,7 @@ fn classify_param_bindings(
                     binding_name.atom(),
                 ) =>
             {
-                let rhs_name = lowering::extract_type_name_from_binding_expr(
+                let rhs_name = extract_type_name_from_binding_expr(
                     &binding.value,
                     binding_name.as_str(),
                     file_src,
@@ -656,8 +681,7 @@ fn classify_param_bindings(
                 if static_input_is_bindable(dep, StaticInputKind::Index, binding_name.atom()) =>
             {
                 let dep_name = IndexName::classify(binding_name.atom().clone());
-                let target =
-                    lowering::extract_index_binding_target(&binding.value, &dep_name, file_src)?;
+                let target = extract_index_binding_target(&binding.value, &dep_name, file_src)?;
                 out.index_spans.insert(dep_name.clone(), binding.value.span);
                 out.indexes.insert(dep_name, target);
             }
@@ -886,7 +910,7 @@ fn validate_required_param_bindings(
     clippy::too_many_lines,
     reason = "binding validation and scope registration form a single cohesive pipeline over one include context"
 )]
-pub(in crate::project_compiler) fn process_file_include<'a>(
+pub(super) fn process_file_include<'a>(
     project: &'a crate::loader::LoadedProject,
     target: &crate::loader::ResolvedModuleTarget,
     include_decl: &graphcal_compiler::desugar::desugared_ast::IncludeDecl,
@@ -1142,7 +1166,7 @@ pub(in crate::project_compiler) fn process_file_include<'a>(
     clippy::too_many_lines,
     reason = "binding validation, scope registration, and instance request setup form one pipeline"
 )]
-pub(in crate::project_compiler) fn process_inline_dag_include<'a>(
+pub(super) fn process_inline_dag_include<'a>(
     target: &InlineDagIncludeTarget<'a>,
     include_decl: &graphcal_compiler::desugar::desugared_ast::IncludeDecl,
     decl: &graphcal_compiler::desugar::desugared_ast::Declaration,
@@ -1368,7 +1392,7 @@ pub(in crate::project_compiler) fn process_inline_dag_include<'a>(
     clippy::too_many_lines,
     reason = "visibility and capability checks consume the complete import context in one boundary pass"
 )]
-pub(in crate::project_compiler) fn process_pure_import<'a>(
+pub(super) fn process_pure_import<'a>(
     project: &'a crate::loader::LoadedProject,
     resolved_module: &crate::loader::ResolvedModuleTarget,
     import: &graphcal_compiler::desugar::desugared_ast::ImportDecl,
@@ -1640,7 +1664,7 @@ fn insert_imported_binding(
     reason = "helper mutates imported name/binding/source-order collections together"
 )]
 #[cfg(test)]
-pub(in crate::project_compiler) fn import_selective_item(
+pub(super) fn import_selective_item(
     source_owner: &graphcal_compiler::dag_id::DagId,
     orig_name: &NameAtom,
     local_name: &DeclName,
@@ -1732,160 +1756,10 @@ fn import_module_values_from_resolver(
     Ok(())
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn interface(source: &str) -> ModuleInterface {
-        let raw = graphcal_compiler::syntax::parser::Parser::new(source)
-            .parse_file()
-            .unwrap();
-        ModuleInterface::new(
-            &graphcal_compiler::desugar::desugared_ast::File::from(raw).declarations,
-        )
-    }
-
-    #[test]
-    fn dependency_interface_preserves_typed_non_param_categories() {
-        let dep = interface(
-            "const node fixed: Dimensionless = 1.0;\n\
-             node computed: Dimensionless = 2.0;\n\
-             assert check = true;\n\
-             param input: Dimensionless = 1.0;\n\
-             plot chart = { mark: point, encode: { x: 1.0 } };",
-        );
-        let name = |spelling| NameAtom::parse(spelling).unwrap();
-
-        assert_eq!(
-            non_param_binding_kind(&dep, &name("fixed")),
-            Some(DeclarationKind::ConstNode)
-        );
-        assert_eq!(
-            non_param_binding_kind(&dep, &name("computed")),
-            Some(DeclarationKind::Node)
-        );
-        assert_eq!(
-            non_param_binding_kind(&dep, &name("check")),
-            Some(DeclarationKind::Assert)
-        );
-        assert_eq!(non_param_binding_kind(&dep, &name("input")), None);
-        assert_eq!(non_param_binding_kind(&dep, &name("chart")), None);
-        assert!(declares_runtime_value(&dep, &name("input")));
-        assert!(declares_runtime_value(&dep, &name("computed")));
-        assert!(!declares_runtime_value(&dep, &name("fixed")));
-    }
-
-    #[test]
-    fn only_value_declarations_are_graph_values() {
-        let values = [
-            IntroducedKind::Param,
-            IntroducedKind::Node,
-            IntroducedKind::ConstNode,
-        ];
-        let others = [
-            IntroducedKind::Assert,
-            IntroducedKind::Plot,
-            IntroducedKind::Figure,
-            IntroducedKind::Layer,
-            IntroducedKind::Dag,
-            IntroducedKind::Constructor,
-            IntroducedKind::BaseDimension,
-            IntroducedKind::Dimension,
-            IntroducedKind::Unit,
-            IntroducedKind::Type,
-            IntroducedKind::Index,
-        ];
-        assert!(values.into_iter().all(is_graph_value_kind));
-        assert!(!others.into_iter().any(is_graph_value_kind));
-    }
-
-    #[test]
-    fn static_bindability_follows_the_declared_role() {
-        let dep =
-            interface("pub(bind) type Open;\ntype Closed { Closed }\npub(bind) index Axis;\n");
-        let name = |spelling| NameAtom::parse(spelling).unwrap();
-        assert!(static_input_is_bindable(
-            &dep,
-            StaticInputKind::Type,
-            &name("Open")
-        ));
-        assert!(!static_input_is_bindable(
-            &dep,
-            StaticInputKind::Type,
-            &name("Closed")
-        ));
-        assert!(static_input_is_bindable(
-            &dep,
-            StaticInputKind::Index,
-            &name("Axis")
-        ));
-        assert!(!static_input_is_bindable(
-            &dep,
-            StaticInputKind::Dimension,
-            &name("Axis")
-        ));
-    }
-
-    #[test]
-    fn include_surface_outputs_expose_ports_and_exported_values() {
-        let dep = interface(
-            "param input: Dimensionless = 1.0;\n\
-             pub node output: Dimensionless = @input;\n\
-             node helper: Dimensionless = @input;\n\
-             pub const node limit: Dimensionless = 2.0;\n\
-             pub assert ok = true;",
-        );
-        let prefix = ScopeSegment::Named(ModuleAliasName::expect_valid("inst"));
-        let scoped =
-            |spelling: &str| ScopedName::in_scope(prefix.clone(), DeclName::expect_valid(spelling));
-        assert_eq!(
-            include_surface_outputs(&dep, &prefix, None),
-            vec![scoped("input"), scoped("output"), scoped("limit")]
-        );
-        let alias = |original: &str, local: &str| ImportAlias {
-            original: DeclName::expect_valid(original),
-            local: DeclName::expect_valid(local),
-        };
-        assert_eq!(
-            include_surface_outputs(
-                &dep,
-                &prefix,
-                Some(&[
-                    alias("helper", "h"),
-                    alias("ok", "o"),
-                    alias("missing", "m")
-                ]),
-            ),
-            vec![ScopedName::local(DeclName::expect_valid("h"))]
-        );
-    }
-
-    #[test]
-    fn selective_import_records_only_the_canonical_hir_target() {
-        let src = NamedSource::new("test.gcl", Arc::new(String::new()));
-        let mut imported_names = ImportedValueNames::default();
-        let mut imported_bindings = HashMap::new();
-        let owner = graphcal_compiler::dag_id::DagId::root_in_package("test", "dep");
-
-        import_selective_item(
-            &owner,
-            &NameAtom::parse("g0").unwrap(),
-            &DeclName::expect_valid("local_g0"),
-            Span::new(0, 2),
-            &src,
-            &mut imported_names,
-            &mut imported_bindings,
-            None,
-        )
-        .unwrap();
-
-        let lexical = ScopedName::local(DeclName::expect_valid("local_g0"));
-        assert_eq!(
-            &imported_bindings[&lexical],
-            &graphcal_compiler::resolved_name::ResolvedDeclName::for_test(
-                owner,
-                DeclName::expect_valid("g0"),
-            )
-        );
-    }
+/// Derive the source-facing module alias from a module path leaf.
+pub(super) fn derive_module_name_from_import_path(import_path: &ModulePath) -> ModuleAliasName {
+    ModuleAliasName::classify(import_path.leaf().name.atom().clone())
 }
+
+#[cfg(test)]
+mod tests;

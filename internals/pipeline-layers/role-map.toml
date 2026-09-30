@@ -2534,3 +2534,33 @@ role = "contracts"
 package = "compiler"
 path = ["tir", "typed", "freeze"]
 role = "contracts"
+
+[[module]]
+package = "eval"
+path = ["loader", "budget"]
+role = "loading"
+
+[[module]]
+package = "eval"
+path = ["loader", "loaded_file"]
+role = "contracts"
+
+[[module]]
+package = "eval"
+path = ["loader", "module_path"]
+role = "contracts"
+
+[[module]]
+package = "eval"
+path = ["project_compiler", "binding_values"]
+role = "checking"
+
+[[module]]
+package = "eval"
+path = ["project_compiler", "checked_project"]
+role = "checking"
+
+[[module]]
+package = "eval"
+path = ["project_compiler", "module_resolve_errors"]
+role = "checking"

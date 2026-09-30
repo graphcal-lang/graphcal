@@ -15,8 +15,8 @@ use std::sync::Arc;
 
 use miette::NamedSource;
 
-use super::{ModulePathKey, ResolvedModuleTarget};
-use crate::eval::CompileError;
+use super::module_path::{ModulePathKey, ResolvedModuleTarget};
+use crate::eval::types::CompileError;
 use graphcal_compiler::cancellation::{CancellationToken, Cancelled};
 use graphcal_compiler::dag_id::{DagId, DagPackageId};
 use graphcal_compiler::desugar::desugared_ast::{Declaration, File};
@@ -146,6 +146,11 @@ pub(super) struct ParsedFile {
 }
 
 impl ParsedFile {
+    /// The source text, its diagnostic name, and the desugared AST.
+    pub(super) fn into_parts(self) -> (Arc<String>, NamedSource<Arc<String>>, File) {
+        (self.source, self.named_source, self.ast)
+    }
+
     /// Parse and desugar `source` under the diagnostic `name`, rendering a
     /// parse failure against that same named source. This is the loader's
     /// only parse sequence.

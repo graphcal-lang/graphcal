@@ -4,28 +4,19 @@
 //! template checking, and project-wide semantic validation. Runtime planning
 //! and evaluation consume its checked result through [`crate::eval::PreparedProject`].
 
-use std::collections::{HashMap, HashSet};
+#[cfg(test)]
+use std::collections::HashMap;
+#[cfg(test)]
 use std::sync::Arc;
 
+#[cfg(test)]
 use miette::NamedSource;
 
-use graphcal_compiler::declaration_category::{DeclCategory, ValueDeclCategory};
-use graphcal_compiler::desugar::desugared_ast::ModulePath;
+#[cfg(test)]
 use graphcal_compiler::graphcal_error::GraphcalError;
-use graphcal_compiler::ir::imported_binding::ImportedBinding;
-use graphcal_compiler::ir::resolve::{ImportedValueNames, ScopedName};
-use graphcal_compiler::resolved_name::ResolvedDeclName;
-use graphcal_compiler::semantic::checked_type::CheckedType;
-use graphcal_compiler::semantic::index_def::IndexBindingTarget;
-use graphcal_compiler::syntax::decl_name::DeclName;
-use graphcal_compiler::syntax::dimension::DimName;
-use graphcal_compiler::syntax::index_name::IndexName;
-use graphcal_compiler::syntax::module_name::{ModuleAliasName, ScopeSegment};
-use graphcal_compiler::syntax::span::Span;
-use graphcal_compiler::syntax::type_name::StructTypeName;
 
-use crate::eval::types::CompileError;
-
+mod binding_values;
+mod checked_project;
 mod checking;
 mod entry_interface;
 mod execution_check;
@@ -34,11 +25,14 @@ mod hir_project;
 mod imports;
 mod lowering;
 mod model;
+mod module_resolve_errors;
 mod pipeline;
 
 mod session;
 mod template;
 
+pub use checked_project::CheckedProject;
+pub(crate) use checked_project::CheckedProjectRuntimeParts;
 pub(crate) use entry_interface::CheckedEntryInterface;
 /// Test-only sealing of a single checked TIR without checked modules.
 #[cfg(test)]
@@ -70,20 +64,7 @@ pub(crate) fn resolve_struct_field_constraints(
     execution_check::resolve_struct_field_constraints(tir, const_values, src)
 }
 pub use hir_project::HirProject;
-use lowering::ProjectSemanticContext;
 pub(crate) use model::{CompiledFile, IncludeDebugNameMap};
-use model::{
-    HirFile, ImportAlias, ImportContext, IncludeInstanceRequest, IncludeStaticBindings,
-    IndexBindingSite, ModuleArtifact, ModuleArtifactStore, ProjectModuleBinding,
-    UnitProjectionAlias,
-};
-pub(crate) use session::CheckedProjectRuntimeParts;
-pub use session::{CheckedProject, ProjectCompiler, check_project};
+pub use session::{ProjectCompiler, check_project};
 #[cfg(test)]
 pub(crate) use session::{compile_to_tir, compile_to_tir_project};
-use template::{ElaboratedModuleTemplate, ModuleTemplateStore};
-
-/// Derive the source-facing module alias from a module path leaf.
-fn derive_module_name_from_import_path(import_path: &ModulePath) -> ModuleAliasName {
-    ModuleAliasName::classify(import_path.leaf().name.atom().clone())
-}
