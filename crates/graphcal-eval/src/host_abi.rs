@@ -19,6 +19,8 @@ use graphcal_compiler::finite_value::FiniteQuantity;
 
 use crate::host_fns::HostFnValue;
 
+pub(crate) mod marshal;
+
 /// Why one raw scalar cannot represent its declared ABI kind.
 #[derive(Debug, Clone, PartialEq, Error)]
 pub enum HostScalarError {

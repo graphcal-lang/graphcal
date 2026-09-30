@@ -22,6 +22,7 @@ pub mod host_abi;
 pub mod host_fns;
 pub(crate) mod import_surface;
 pub(crate) mod inline_dag;
+pub(crate) mod invariant;
 pub mod loader;
 pub mod package_cache;
 pub mod package_snapshot;

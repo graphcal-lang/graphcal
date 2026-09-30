@@ -21,6 +21,9 @@ use graphcal_compiler::plugin_identity::{ExternFnKey, PluginIdentity};
 use graphcal_compiler::syntax::function_name::FnName;
 use graphcal_compiler::syntax::plugin::PluginPath;
 
+use crate::runtime_value::IndexAxis;
+use crate::runtime_value::dense_array::DenseArray;
+
 /// Error returned by a host function closure.
 ///
 /// The message surfaces verbatim in the per-node `EvalFailed` diagnostic,
@@ -92,6 +95,16 @@ impl HostArray {
             )));
         }
         Ok(Self { shape, values })
+    }
+
+    /// The array of a dense runtime array, whose axes are non-empty and
+    /// match its element count by construction.
+    pub(crate) fn from_dense(array: DenseArray<f64>) -> Self {
+        let (axes, values) = array.into_parts();
+        Self {
+            shape: axes.iter().map(IndexAxis::len).collect(),
+            values,
+        }
     }
 
     /// Convenience constructor for a non-empty rank-one array.

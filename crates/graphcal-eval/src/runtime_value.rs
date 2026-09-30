@@ -12,7 +12,7 @@ mod struct_value;
 pub use index_axis::IndexAxis;
 pub use indexed::IndexedValue;
 pub use key_value::{KeyElement, KeyValue};
-pub use struct_value::StructValue;
+pub use struct_value::{StructFieldsError, StructValue};
 
 /// Error returned when a [`RuntimeValue`] accessor is called on an incompatible variant.
 #[derive(Debug, Clone, PartialEq, Eq)]
