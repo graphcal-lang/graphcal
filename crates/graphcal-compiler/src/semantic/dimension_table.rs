@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 use thiserror::Error;
 
 use crate::dimension::{BaseDimId, Dimension};
-use crate::registry::aliased_table::AliasedTable;
+use crate::semantic::aliased_table::AliasedTable;
 use crate::syntax::dimension::{DimName, DimRef, UnitName};
 
 /// Format a dimension, preferring a registered named alias for compound forms.

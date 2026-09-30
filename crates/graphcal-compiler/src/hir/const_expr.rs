@@ -22,11 +22,15 @@ use thiserror::Error;
 
 use crate::builtin::BuiltinConst;
 use crate::dimension::Dimension;
+use crate::display::number::format_unit_expr_with_config;
 use crate::exact_rational::{ExactPowerError, ExactRational};
 use crate::hir::types::NatExpr;
-use crate::registry::format::format_unit_expr_with_config;
-use crate::registry::index::{CoordinateDisplayUnit, CoordinateIndexData, CoordinateIndexError};
-use crate::registry::unit::{PositiveFiniteScale, PositiveFiniteScaleError, UnitResolveError};
+use crate::semantic::index_def::{
+    CoordinateDisplayUnit, CoordinateIndexData, CoordinateIndexError,
+};
+use crate::semantic::unit_scale::{
+    PositiveFiniteScale, PositiveFiniteScaleError, UnitResolveError,
+};
 use crate::syntax::ast::{BinOp, UnitExpr};
 use crate::syntax::names::NamePath;
 use crate::syntax::span::{Span, Spanned};

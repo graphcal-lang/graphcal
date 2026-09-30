@@ -14,7 +14,7 @@ use crate::hir::const_expr::{
     CoordinateExpr, CoordinatePosition, UnitScaleExpr, UnitScalePosition,
 };
 use crate::hir::types::NatExpr;
-use crate::registry::unit::{PositiveFiniteScale, UnitResolveError};
+use crate::semantic::unit_scale::{PositiveFiniteScale, UnitResolveError};
 use crate::syntax::ast::{PowerExponent, UnresolvedRef};
 use crate::syntax::module_name::ScopedName;
 use crate::syntax::span::Spanned;
@@ -285,8 +285,8 @@ mod tests {
     fn prelude_unit(
         unit: &ast::UnitExpr,
     ) -> Result<(Dimension, PositiveFiniteScale), UnitResolveError> {
-        let prelude = crate::registry::prelude::prelude_definitions().unwrap();
-        crate::registry::unit::resolve_unit_expr_with(unit, |reference| {
+        let prelude = crate::semantic::prelude::prelude_definitions().unwrap();
+        crate::semantic::unit_scale::resolve_unit_expr_with(unit, |reference| {
             prelude
                 .units()
                 .find(|(identity, _)| {

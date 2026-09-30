@@ -241,7 +241,7 @@ pub fn compile_error_to_diagnostics_grouped(
 /// string-convention round trip the project bans. `Diagnostic::data` rides
 /// along with the diagnostic to the `textDocument/codeAction` request.
 fn structured_data(error: &CompileError) -> Option<serde_json::Value> {
-    use graphcal_compiler::registry::error::GraphcalError;
+    use graphcal_compiler::graphcal_error::GraphcalError;
     let CompileError::Eval(e) = error else {
         return None;
     };
@@ -375,7 +375,7 @@ mod tests {
     use std::sync::Arc;
 
     use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
-    use graphcal_compiler::registry::error::GraphcalError;
+    use graphcal_compiler::graphcal_error::GraphcalError;
     use graphcal_compiler::syntax::names::{NameAtom, NamePath};
     use graphcal_compiler::syntax::non_empty::NonEmpty;
     use graphcal_compiler::syntax::parser::Parser;
@@ -626,7 +626,7 @@ mod tests {
 
         use graphcal_compiler::builtin::{AggregationFn, ValueAggregation};
         use graphcal_compiler::datetime_literal::DatetimeLiteralExpectation;
-        use graphcal_compiler::registry::error::GraphcalError;
+        use graphcal_compiler::graphcal_error::GraphcalError;
         use graphcal_compiler::syntax::names::NameAtom;
         use miette::NamedSource;
 

@@ -14,13 +14,13 @@ use miette::NamedSource;
 use crate::desugar::desugared_ast::{DeclKind, Expr, File, TypeExpr};
 use crate::diagnostic_anchor::DiagnosticAnchor;
 use crate::dimension::Dimension;
+use crate::graphcal_error::GraphcalError;
 use crate::ir::instance::InstanceRecord;
 use crate::ir::module_interface::ModuleInterface;
+use crate::ir::resolve::collected::ExternalDeclSurface;
+use crate::ir::resolve::collected::ParsedExpectedFail;
 use crate::ir::resolve::{CollectedFile, ImportedValueNames, resolve_with_imported_values};
 use crate::plot_visibility::PlotVisibility;
-use crate::registry::error::GraphcalError;
-use crate::registry::resolve_types::ExternalDeclSurface;
-use crate::registry::resolve_types::ParsedExpectedFail;
 use crate::resolved_name::{ResolvedDeclName, ResolvedUnitName};
 use crate::syntax::decl_name::DeclName;
 use crate::syntax::dimension::{DimRef, UnitName, UnitRef};
@@ -299,10 +299,10 @@ impl HirDag {
         &self,
         base_dimensions: std::collections::BTreeMap<
             crate::dimension::BaseDimId,
-            crate::registry::types::BaseDimensionInfo,
+            crate::semantic::dimension_table::BaseDimensionInfo,
         >,
-    ) -> crate::registry::types::FormattingRegistry {
-        crate::registry::types::FormattingRegistry::new(
+    ) -> crate::display::formatting_registry::FormattingRegistry {
+        crate::display::formatting_registry::FormattingRegistry::new(
             base_dimensions,
             self.display_dimensions.iter().cloned(),
         )

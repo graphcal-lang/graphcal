@@ -5,7 +5,7 @@ use std::sync::Arc;
 use miette::NamedSource;
 
 use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
-use graphcal_compiler::registry::error::GraphcalError;
+use graphcal_compiler::graphcal_error::GraphcalError;
 use graphcal_compiler::tir::typed::CheckedTir;
 
 use crate::checked_program::{EvaluatedTir, ExecutionFacts};

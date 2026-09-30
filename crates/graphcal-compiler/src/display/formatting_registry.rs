@@ -1,5 +1,4 @@
-//! Post-resolution formatting services and re-exports of the registry value
-//! types.
+//! Post-resolution formatting services.
 //!
 //! Canonical dimensions, units, indexes, and nominal types are keyed by
 //! [`ResolvedName`](crate::resolved_name::ResolvedName) identities in
@@ -11,19 +10,9 @@ use std::collections::BTreeMap;
 use crate::dimension::{BaseDimId, Dimension};
 use crate::syntax::dimension::DimRef;
 
-use super::time_zone::TimeZoneRegistry;
-
-pub use super::dimension_table::{BaseDimensionInfo, DimensionFormattingRegistry};
-pub use super::index::{
-    ConcreteIndexKind, CoordinateDisplayUnit, CoordinateIndexData, CoordinateIndexError,
-    CoordinateSpacing, FiniteIndex, IndexBindingCategory, IndexBindingContract,
-    IndexBindingContractError, IndexBindingTarget, IndexCardinality, IndexCardinalityError,
-    IndexCategory, IndexDef, IndexKind, MAX_INDEX_CARDINALITY, RequiredIndexKind,
-};
-pub use super::unit::{
-    PositiveFiniteScale, PositiveFiniteScaleError, UnitInfo, UnitScale, UnitScaleStepError,
-    UnitScaleTerm, try_fold_unit_scale,
-};
+use crate::semantic::dimension_table::{BaseDimensionInfo, DimensionFormattingRegistry};
+use crate::semantic::prelude::{PreludeDefinitionError, prelude_definitions};
+use crate::semantic::time_zone::TimeZoneRegistry;
 
 /// Post-resolution services retained by checked TIR and evaluation.
 ///
@@ -56,8 +45,8 @@ impl FormattingRegistry {
     /// # Errors
     ///
     /// Returns an error only if the built-in prelude is inconsistent.
-    pub fn graphcal_prelude() -> Result<Self, super::prelude::PreludeDefinitionError> {
-        let prelude = super::prelude::prelude_definitions()?;
+    pub fn graphcal_prelude() -> Result<Self, PreludeDefinitionError> {
+        let prelude = prelude_definitions()?;
         Ok(Self::new(
             prelude
                 .base_dimensions()

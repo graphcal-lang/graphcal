@@ -6,10 +6,10 @@ use crate::ir::static_substitution::StaticSubstitution;
 use crate::resolved_name::ResolvedDeclName;
 use std::collections::HashMap;
 
-use crate::registry::error::GraphcalError;
+use crate::graphcal_error::GraphcalError;
 use crate::tir::typed::specialization::specialize_type;
 
-use crate::registry::checked_type::{CheckedType, Symbolic};
+use crate::semantic::checked_type::{CheckedType, Symbolic};
 use crate::tir::dim_check::helpers::format_checked_type;
 
 use super::context::Infer;

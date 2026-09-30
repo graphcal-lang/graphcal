@@ -27,11 +27,11 @@ use graphcal_compiler::syntax::span::Span;
 use graphcal_compiler::syntax::type_name::GenericParamName;
 
 use graphcal_compiler::builtin::{BuiltinConst, BuiltinFn};
-use graphcal_compiler::registry::format::format_unit_terms_with_config;
-use graphcal_compiler::registry::time_zone::TimeZoneRegistry;
-use graphcal_compiler::registry::types::{
-    ConcreteIndexKind, FormattingRegistry, IndexKind, RequiredIndexKind, UnitScale,
-};
+use graphcal_compiler::display::formatting_registry::FormattingRegistry;
+use graphcal_compiler::display::number::format_unit_terms_with_config;
+use graphcal_compiler::semantic::index_def::{ConcreteIndexKind, IndexKind, RequiredIndexKind};
+use graphcal_compiler::semantic::time_zone::TimeZoneRegistry;
+use graphcal_compiler::semantic::unit_scale::UnitScale;
 use graphcal_compiler::tir::typed::{CheckedTir, ResolvedDeclType, ResolvedDomainBound};
 use graphcal_eval::eval::format_number;
 use tower_lsp::lsp_types::Position;
@@ -2605,12 +2605,12 @@ pub fn enrich_from_tir(table: &mut SymbolTable, tir: &CheckedTir, dag_id: &DagId
                         }
                         IndexKind::Concrete(ConcreteIndexKind::Coordinate(data)) => {
                             def_mut.type_description = Some(match data.spacing() {
-                                graphcal_compiler::registry::types::CoordinateSpacing::Step {
+                                graphcal_compiler::semantic::index_def::CoordinateSpacing::Step {
                                     step,
                                 } => {
                                     format!("range({}, {}, step: {step})", data.start(), data.end())
                                 }
-                                graphcal_compiler::registry::types::CoordinateSpacing::Linspace => {
+                                graphcal_compiler::semantic::index_def::CoordinateSpacing::Linspace => {
                                     format!(
                                         "linspace({}, {}, points: {})",
                                         data.start(),

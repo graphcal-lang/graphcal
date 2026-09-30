@@ -8,8 +8,8 @@
 use crate::builtin::LinearAlgebraFn;
 use crate::dimension::{Dimension, Rational};
 
-use crate::registry::checked_type::IndexTypeRef;
-use crate::registry::checked_type::{CheckedType, Symbolic};
+use crate::semantic::checked_type::IndexTypeRef;
+use crate::semantic::checked_type::{CheckedType, Symbolic};
 
 /// A linear-algebra call cannot be typed from the supplied argument shapes.
 #[derive(Debug, Clone, PartialEq, Eq)]

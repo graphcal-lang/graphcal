@@ -411,9 +411,9 @@ mod tests {
     use super::*;
     use graphcal_compiler::complex_value::ComplexValue;
     use graphcal_compiler::finite_value::FiniteQuantity;
-    use graphcal_compiler::registry::checked_type::IndexTypeRef;
-    use graphcal_compiler::registry::prelude::prelude_base_dimension;
-    use graphcal_compiler::registry::unit::PositiveFiniteScale;
+    use graphcal_compiler::semantic::checked_type::IndexTypeRef;
+    use graphcal_compiler::semantic::prelude::prelude_base_dimension;
+    use graphcal_compiler::semantic::unit_scale::PositiveFiniteScale;
     use graphcal_compiler::syntax::index_name::{IndexEntryKey, IndexName, IndexVariantName};
     use graphcal_compiler::syntax::type_name::{ConstructorName, FieldName, StructTypeName};
     use graphcal_eval::eval::DisplayUnit;
@@ -422,7 +422,7 @@ mod tests {
     fn empty_render_context() -> RenderContext {
         RenderContext::new(
             std::collections::BTreeMap::new(),
-            graphcal_compiler::registry::time_zone::TimeZoneRegistry::bundled(),
+            graphcal_compiler::semantic::time_zone::TimeZoneRegistry::bundled(),
         )
     }
 

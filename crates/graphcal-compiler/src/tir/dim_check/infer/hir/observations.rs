@@ -17,7 +17,7 @@ use miette::NamedSource;
 
 use crate::diagnostic_anchor::DiagnosticAnchor;
 use crate::expression_id::ExprId;
-use crate::registry::error::GraphcalError;
+use crate::graphcal_error::GraphcalError;
 use crate::syntax::span::Span;
 use crate::tir::static_index::StaticIndexRequirement;
 use crate::tir::texpr::{
@@ -25,8 +25,8 @@ use crate::tir::texpr::{
     PendingNodes,
 };
 
-use crate::registry::applied_constructor::{AppliedConstructor, AppliedField};
-use crate::registry::checked_type::{CheckedType, Symbolic};
+use crate::semantic::applied_constructor::{AppliedConstructor, AppliedField};
+use crate::semantic::checked_type::{CheckedType, Symbolic};
 
 /// One executable use that observes a nominal type's concrete definition.
 #[derive(Debug, Clone, PartialEq, Eq)]

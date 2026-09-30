@@ -3,11 +3,11 @@
 use crate::hir::expr::{Expr, ExternFnRef};
 use std::collections::HashMap;
 
-use crate::registry::checked_type::{IndexTypeRef, StructTypeRef, Symbolic};
-use crate::registry::error::GraphcalError;
+use crate::graphcal_error::GraphcalError;
+use crate::semantic::checked_type::{IndexTypeRef, StructTypeRef, Symbolic};
 use crate::syntax::span::Span;
 
-use crate::registry::checked_type::CheckedType;
+use crate::semantic::checked_type::CheckedType;
 use crate::tir::dim_check::helpers::{expect_quantity, format_checked_type};
 
 use super::context::Infer;
@@ -37,7 +37,7 @@ impl Infer<'_> {
         let sig = &function.signature;
         if args.len() != sig.arity() {
             return Err(GraphcalError::WrongArity {
-                name: crate::registry::error::CalledFunction::Extern(ext.name.clone()),
+                name: crate::graphcal_error::CalledFunction::Extern(ext.name.clone()),
                 expected: sig.arity(),
                 got: args.len(),
                 src: self.env.src.clone(),

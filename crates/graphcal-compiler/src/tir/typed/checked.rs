@@ -9,13 +9,15 @@ use miette::NamedSource;
 use crate::dag_id::DagId;
 use crate::diagnostic_anchor::DiagnosticAnchor;
 use crate::dimension::Dimension;
+use crate::display::formatting_registry::FormattingRegistry;
+use crate::graphcal_error::GraphcalError;
 use crate::hir::nominal::NominalTypeDef;
-use crate::registry::checked_type::IndexTypeRef;
-use crate::registry::error::GraphcalError;
-use crate::registry::types::{FormattingRegistry, IndexDef, UnitInfo};
 use crate::resolved_name::{
     ResolvedDeclName, ResolvedDimName, ResolvedIndexName, ResolvedStructTypeName, ResolvedUnitName,
 };
+use crate::semantic::checked_type::IndexTypeRef;
+use crate::semantic::index_def::IndexDef;
+use crate::semantic::unit_scale::UnitInfo;
 use crate::tir::presentation::DagPresentationFacts;
 use crate::tir::schedule::{ConstSchedule, RuntimeSchedule};
 use crate::tir::texpr::CheckedBodies;
@@ -90,7 +92,7 @@ impl CheckedDag {
         &self,
     ) -> Vec<(
         &ResolvedStructTypeName,
-        Vec<crate::registry::checked_type::CheckedGenericArg>,
+        Vec<crate::semantic::checked_type::CheckedGenericArg>,
     )> {
         self.bodies.concrete_applications()
     }
@@ -529,7 +531,7 @@ impl CheckedTir {
 
     /// Resolve a declared axis or derive a structural axis from its cardinality.
     #[must_use]
-    pub fn index_def<V: crate::registry::checked_type::Concreteness>(
+    pub fn index_def<V: crate::semantic::checked_type::Concreteness>(
         &self,
         index: &IndexTypeRef<V>,
     ) -> Option<std::borrow::Cow<'_, IndexDef>> {
@@ -560,7 +562,7 @@ impl CheckedTir {
         self.root().params().any(|param| param.default.is_none())
             || self
                 .root_declared_indexes()
-                .any(crate::registry::types::IndexDef::is_required)
+                .any(crate::semantic::index_def::IndexDef::is_required)
     }
 }
 

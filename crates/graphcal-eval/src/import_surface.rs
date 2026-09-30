@@ -6,11 +6,11 @@
 //! into source diagnostics. Keeping it outside `project_compiler` avoids a
 //! circular module dependency between the two consumers.
 
+use graphcal_compiler::graphcal_error::GraphcalError;
 use graphcal_compiler::ir::module_interface::ModuleInterface;
-use graphcal_compiler::registry::error::GraphcalError;
-use graphcal_compiler::registry::reserved_name::validate_reserved_name;
 use graphcal_compiler::resolve::category::ExportedImportItemKind;
 use graphcal_compiler::resolve::namespace::Namespace;
+use graphcal_compiler::resolve::reserved_name::validate_reserved_name;
 use graphcal_compiler::syntax::ast::{ImportItem, ImportItemNamespace};
 use graphcal_compiler::syntax::import_category::ImportItemCategoryMismatch;
 use graphcal_compiler::syntax::names::NameAtom;

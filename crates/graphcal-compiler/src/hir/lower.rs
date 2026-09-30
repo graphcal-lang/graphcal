@@ -13,10 +13,10 @@ use thiserror::Error;
 
 use crate::dag_id::DagId;
 use crate::desugar::desugared_ast as ast;
-use crate::registry::time_scale::TimeScale;
 use crate::resolve::ModuleResolver;
 use crate::resolve::category::SurfaceNameKind;
 use crate::resolve::error::ModuleResolveError;
+use crate::semantic::time_scale::TimeScale;
 use crate::syntax::ast::GenericConstraint;
 use crate::syntax::index_name::IndexVariantName;
 use crate::syntax::names::{NameAtom, NamePath};
@@ -304,7 +304,7 @@ impl GenericScope {
 ///
 /// Source paths resolve as seen from one owner module, with its lexical
 /// generic parameters, through the module-aware resolver. The implicit
-/// Graphcal prelude ([`crate::registry::prelude::prelude_type_scope`]) is in scope everywhere,
+/// Graphcal prelude ([`crate::semantic::prelude::prelude_type_scope`]) is in scope everywhere,
 /// so it is not a field.
 #[derive(Debug, Clone, Copy)]
 pub struct ModuleScope<'a> {
@@ -697,7 +697,7 @@ fn non_nat_sort_for_ambiguous_arg(
                 .resolve_dimension_path(ctx.owner, &path)
                 .map(crate::resolve::symbols::SymbolRef::into_resolved)
                 .is_ok()
-                || crate::registry::prelude::prelude_type_scope()
+                || crate::semantic::prelude::prelude_type_scope()
                     .resolve_dimension_path(&path)
                     .is_some()
             {
@@ -971,7 +971,7 @@ pub(crate) fn lower_dim_term(
     {
         Ok(resolved) => resolved,
         Err(ModuleResolveError::UnknownName { .. }) => {
-            crate::registry::prelude::prelude_type_scope()
+            crate::semantic::prelude::prelude_type_scope()
                 .resolve_dimension_path(&term.name.value)
                 .ok_or_else(|| HirLowerError::UnknownTypePath {
                     path: term.name.value.clone(),

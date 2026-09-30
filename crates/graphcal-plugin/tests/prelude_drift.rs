@@ -17,7 +17,7 @@
 use std::path::Path;
 
 use graphcal_compiler::dimension::PreludeBaseDimension;
-use graphcal_compiler::registry::error::GraphcalError;
+use graphcal_compiler::graphcal_error::GraphcalError;
 use graphcal_compiler::syntax::plugin::PluginPath;
 use graphcal_eval::eval::CompileError;
 use graphcal_eval::host_fns::HostFunctionRegistry;

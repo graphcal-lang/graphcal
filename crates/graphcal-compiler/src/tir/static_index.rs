@@ -5,8 +5,8 @@
 //! waits for the Static or generic binding that fixes the axis.
 
 use crate::expression_id::ExprId;
-use crate::registry::checked_type::{IndexTypeRef, Symbolic};
-use crate::registry::index::{FiniteIndex, IndexCardinality};
+use crate::semantic::checked_type::{IndexTypeRef, Symbolic};
+use crate::semantic::index_def::{FiniteIndex, IndexCardinality};
 use thiserror::Error;
 
 /// An axis whose definition is unavailable to the checked program.

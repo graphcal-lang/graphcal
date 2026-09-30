@@ -3,10 +3,10 @@
 use std::sync::Arc;
 
 use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
+use graphcal_compiler::graphcal_error::GraphcalError;
 use graphcal_compiler::hir::SourceDeclaration;
-use graphcal_compiler::registry::checked_type::CheckedType;
-use graphcal_compiler::registry::error::GraphcalError;
-use graphcal_compiler::registry::resolve_types::ExternalDeclSurface;
+use graphcal_compiler::ir::resolve::collected::ExternalDeclSurface;
+use graphcal_compiler::semantic::checked_type::CheckedType;
 use graphcal_compiler::syntax::ast::Visibility;
 use graphcal_compiler::syntax::decl_name::DeclName;
 use graphcal_compiler::syntax::index_name::IndexName;

@@ -15,7 +15,7 @@
     reason = "raw strings used for readability of graphcal source"
 )]
 
-use graphcal_compiler::registry::time_zone::IanaTimeZoneId;
+use graphcal_compiler::semantic::time_zone::IanaTimeZoneId;
 use graphcal_eval::eval::{
     EvalResult, KeyRendering, NodeUnavailable, UnitLabel, Value, compile_and_eval,
 };

@@ -557,7 +557,7 @@ impl<'a, L> PresentedRef<'a, L> {
 impl<'a, L> EntriesRef<'a, L> {
     /// The index of the entries.
     #[must_use]
-    pub fn index(self) -> &'a graphcal_compiler::registry::checked_type::IndexTypeRef {
+    pub fn index(self) -> &'a graphcal_compiler::semantic::checked_type::IndexTypeRef {
         match self.0 {
             EntriesNode::Whole { entries, .. } => entries.index(),
             EntriesNode::Presented(entries) => entries.index(),
@@ -590,8 +590,8 @@ impl<'a, L> EntriesRef<'a, L> {
 #[cfg(test)]
 mod tests {
     use graphcal_compiler::dag_id::DagId;
-    use graphcal_compiler::registry::unit::PositiveFiniteScale;
     use graphcal_compiler::resolved_name::ResolvedStructTypeName;
+    use graphcal_compiler::semantic::unit_scale::PositiveFiniteScale;
     use graphcal_compiler::syntax::index_name::IndexEntryKey;
     use graphcal_compiler::syntax::type_name::{ConstructorName, FieldName, StructTypeName};
 
@@ -618,7 +618,7 @@ mod tests {
 
     fn zone() -> ResolvedLeaf {
         ResolvedLeaf::Datetime(
-            graphcal_compiler::registry::time_zone::TimeZoneRegistry::bundled()
+            graphcal_compiler::semantic::time_zone::TimeZoneRegistry::bundled()
                 .parse_iana_id("Asia/Tokyo")
                 .unwrap(),
         )
@@ -634,7 +634,7 @@ mod tests {
 
     fn pair_of<V>(constructor: &str, left: V, right: V) -> StructValue<V> {
         let quantity = || {
-            graphcal_compiler::registry::checked_type::CheckedType::Quantity(
+            graphcal_compiler::semantic::checked_type::CheckedType::Quantity(
                 graphcal_compiler::dimension::Dimension::dimensionless(),
             )
         };
@@ -757,7 +757,7 @@ mod tests {
         );
         let key = KeyValue::at(
             IndexAxis::finite(
-                graphcal_compiler::registry::index::FiniteIndex::try_from_u64(2).unwrap(),
+                graphcal_compiler::semantic::index_def::FiniteIndex::try_from_u64(2).unwrap(),
             )
             .unwrap(),
             0,

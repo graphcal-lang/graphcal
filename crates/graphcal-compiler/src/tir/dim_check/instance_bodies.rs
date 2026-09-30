@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use crate::cancellation::CancellationToken;
 use crate::diagnostic_anchor::DiagnosticAnchor;
-use crate::registry::error::GraphcalError;
+use crate::graphcal_error::GraphcalError;
 use crate::tir::texpr::{CheckedBodies, CheckedBody, NominalObservation, TBody};
 use crate::tir::typed::model::{TirRead, UncheckedTir};
 use crate::tir::typed::specialization::specialize_expression_type;

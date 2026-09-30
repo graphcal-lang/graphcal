@@ -2,7 +2,7 @@
 //!
 //! The host's zoneinfo installation is deliberately never consulted. Every
 //! compiler and evaluator path receives this registry through
-//! [`FormattingRegistry`](crate::registry::types::FormattingRegistry) or
+//! [`FormattingRegistry`](crate::display::formatting_registry::FormattingRegistry) or
 //! [`TimeZoneRegistry::bundled`] and therefore resolves names against the tzdb release pinned in Cargo.
 
 use jiff::tz::{TimeZone, TimeZoneDatabase};

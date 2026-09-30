@@ -4,8 +4,8 @@
 //! are attached when HIR becomes TIR; compile-time values remain in owner
 //! execution-fact stores.
 
-use crate::registry::checked_type::CheckedType;
 use crate::resolved_name::ResolvedDeclName;
+use crate::semantic::checked_type::CheckedType;
 
 /// Whether an imported value comes from checked constants or a runtime frame.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

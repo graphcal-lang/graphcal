@@ -7,12 +7,12 @@ use std::sync::Arc;
 
 use miette::NamedSource;
 
-use crate::registry::checked_type::{IndexTypeRef, Symbolic};
-use crate::registry::error::GraphcalError;
-use crate::registry::types::FormattingRegistry;
+use crate::display::formatting_registry::FormattingRegistry;
+use crate::graphcal_error::GraphcalError;
+use crate::semantic::checked_type::{IndexTypeRef, Symbolic};
 use crate::syntax::type_name::FieldName;
 
-use crate::registry::checked_type::{CheckedGenericArg, CheckedType};
+use crate::semantic::checked_type::{CheckedGenericArg, CheckedType};
 use crate::tir::dim_check::helpers::{format_checked_type, struct_type_def_for_inferred};
 use crate::tir::dim_check::infer::rules;
 
@@ -36,7 +36,7 @@ impl InferEnv<'_> {
         {
             return Err(GraphcalError::UnknownField {
                 type_name: type_def.name(),
-                member: crate::registry::error::NominalMember::Field(field.value.clone()),
+                member: crate::graphcal_error::NominalMember::Field(field.value.clone()),
                 src: self.src.clone(),
                 span: field.span.into(),
             });
@@ -83,11 +83,11 @@ impl Infer<'_> {
                     span: scrutinee.span.into(),
                 })?;
                 let variants = match &index_def.kind {
-                    crate::registry::types::IndexKind::Concrete(
-                        crate::registry::types::ConcreteIndexKind::Named { variants },
+                    crate::semantic::index_def::IndexKind::Concrete(
+                        crate::semantic::index_def::ConcreteIndexKind::Named { variants },
                     ) => variants.as_slice().to_vec(),
-                    crate::registry::types::IndexKind::Required(
-                        crate::registry::types::RequiredIndexKind::Named,
+                    crate::semantic::index_def::IndexKind::Required(
+                        crate::semantic::index_def::RequiredIndexKind::Named,
                     ) => vec![],
                     _ => {
                         return Err(GraphcalError::EvalError {
@@ -195,7 +195,7 @@ impl Infer<'_> {
                     if type_name.resolved() != target.owning_type() {
                         return Err(GraphcalError::UnknownField {
                             type_name: type_name.name().clone(),
-                            member: crate::registry::error::NominalMember::Constructor(
+                            member: crate::graphcal_error::NominalMember::Constructor(
                                 target.name(),
                             ),
                             src: self.env.src.clone(),

@@ -1,7 +1,7 @@
 use super::*;
 use crate::dimension::BaseDimId;
-use crate::registry::checked_type::{CheckedGenericArg, IndexTypeRef, StructTypeRef};
 use crate::resolved_name::{ResolvedDeclName, ResolvedIndexName, ResolvedStructTypeName};
+use crate::semantic::checked_type::{CheckedGenericArg, IndexTypeRef, StructTypeRef};
 use crate::syntax::decl_name::DeclName;
 use crate::syntax::module_name::ScopedName;
 use crate::syntax::parser::Parser;
@@ -3772,7 +3772,7 @@ fn resolved_constructor_carries_owning_definition_and_field_constraints() {
 
 #[test]
 fn check_match_foreign_constructor_names_the_constructor_member() {
-    use crate::registry::error::NominalMember;
+    use crate::graphcal_error::NominalMember;
     use crate::syntax::type_name::ConstructorName;
     let source = "\
 pub type Maybe { Some(value: Length), None }

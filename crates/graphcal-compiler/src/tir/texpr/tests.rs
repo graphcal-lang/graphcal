@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use super::*;
 use crate::dimension::Dimension;
 use crate::hir::expr::{CheckedExpr, Draft, Expr, ExprKind};
-use crate::registry::checked_type::{CheckedType, IndexTypeRef, Symbolic};
+use crate::semantic::checked_type::{CheckedType, IndexTypeRef, Symbolic};
 use crate::syntax::span::Span;
 use crate::tir::static_index::StaticIndexRequirement;
 
@@ -168,8 +168,8 @@ fn a_static_position_must_belong_to_a_selector_of_its_node() {
     }
     let requirement = StaticIndexRequirement {
         operand: children(&expr)[0].id().clone(),
-        axis: IndexTypeRef::from_finite_index(crate::registry::index::FiniteIndex::new(
-            crate::registry::index::IndexCardinality::try_from_u64(2).unwrap(),
+        axis: IndexTypeRef::from_finite_index(crate::semantic::index_def::FiniteIndex::new(
+            crate::semantic::index_def::IndexCardinality::try_from_u64(2).unwrap(),
         ))
         .to_symbolic(),
         position: 1,
@@ -336,7 +336,7 @@ fn key_node(
 
 fn fin(size: u64) -> IndexTypeRef<Symbolic> {
     IndexTypeRef::from_finite_index(
-        crate::registry::index::FiniteIndex::try_from_u64(size).unwrap(),
+        crate::semantic::index_def::FiniteIndex::try_from_u64(size).unwrap(),
     )
 }
 
@@ -345,12 +345,12 @@ fn known(
 ) -> impl Fn(
     &IndexTypeRef<Symbolic>,
 ) -> Result<
-    Option<crate::registry::index::IndexCardinality>,
+    Option<crate::semantic::index_def::IndexCardinality>,
     crate::tir::static_index::UnavailableIndex,
 > {
     move |_| {
         Ok(Some(
-            crate::registry::index::IndexCardinality::try_from_u64(size).unwrap(),
+            crate::semantic::index_def::IndexCardinality::try_from_u64(size).unwrap(),
         ))
     }
 }

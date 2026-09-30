@@ -11,12 +11,12 @@ use miette::NamedSource;
 
 use graphcal_compiler::declaration_category::{DeclCategory, ValueDeclCategory};
 use graphcal_compiler::desugar::desugared_ast::ModulePath;
+use graphcal_compiler::graphcal_error::GraphcalError;
 use graphcal_compiler::ir::imported_binding::ImportedBinding;
 use graphcal_compiler::ir::resolve::{ImportedValueNames, ScopedName};
-use graphcal_compiler::registry::checked_type::CheckedType;
-use graphcal_compiler::registry::error::GraphcalError;
-use graphcal_compiler::registry::types::IndexBindingTarget;
 use graphcal_compiler::resolved_name::ResolvedDeclName;
+use graphcal_compiler::semantic::checked_type::CheckedType;
+use graphcal_compiler::semantic::index_def::IndexBindingTarget;
 use graphcal_compiler::syntax::decl_name::DeclName;
 use graphcal_compiler::syntax::dimension::DimName;
 use graphcal_compiler::syntax::index_name::IndexName;

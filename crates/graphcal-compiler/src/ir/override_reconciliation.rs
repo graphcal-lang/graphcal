@@ -10,8 +10,8 @@ use std::sync::Arc;
 use miette::NamedSource;
 
 use crate::ir::static_substitution::{InstanceIndexBindingTarget, StaticSubstitution};
-use crate::registry::checked_type::IndexTypeRef;
 use crate::resolved_name::{ResolvedDeclName, ResolvedIndexName, ResolvedStructTypeName};
+use crate::semantic::checked_type::IndexTypeRef;
 use crate::syntax::decl_name::DeclName;
 use crate::syntax::index_name::IndexName;
 use crate::syntax::span::Span;
@@ -95,8 +95,8 @@ pub enum OverrideTarget {
 mod tests {
     use super::*;
     use crate::dag_id::DagId;
-    use crate::registry::index::FiniteIndex;
     use crate::resolved_name::ResolvedDimName;
+    use crate::semantic::index_def::FiniteIndex;
     use crate::syntax::dimension::DimName;
 
     #[test]

@@ -5,11 +5,11 @@
 use std::sync::Arc;
 
 use crate::hir::nominal::ResolvedConstructor;
-use crate::registry::applied_constructor::AppliedConstructor;
-use crate::registry::checked_type::{
+use crate::resolved_name::{ResolvedConstructorName, ResolvedStructTypeName};
+use crate::semantic::applied_constructor::AppliedConstructor;
+use crate::semantic::checked_type::{
     CheckedGenericArg, Concrete, Concreteness, IndexTypeRef, Symbolic,
 };
-use crate::resolved_name::{ResolvedConstructorName, ResolvedStructTypeName};
 use crate::syntax::index_name::IndexVariantName;
 use crate::syntax::type_name::{ConstructorName, FieldName};
 

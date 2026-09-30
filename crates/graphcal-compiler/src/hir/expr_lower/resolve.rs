@@ -4,11 +4,11 @@ use crate::resolved_name::{ResolvedDeclName, ResolvedIndexVariant};
 
 use crate::builtin::{BuiltinConst, BuiltinFn};
 use crate::desugar::desugared_ast as ast;
-use crate::registry::time_scale::TimeScale;
 use crate::resolve::category::{DeclSymbolKind, SymbolTable};
 use crate::resolve::error::{ExpectedDeclKind, ModuleResolveError, NameCategory};
 use crate::resolve::namespace::Namespace;
 use crate::resolve::scope::ModuleAliasRole;
+use crate::semantic::time_scale::TimeScale;
 use crate::syntax::ast::{Ident, IdentPath};
 use crate::syntax::decl_name::{DeclName, DeclNameNamespace};
 use crate::syntax::index_name::IndexVariantName;
@@ -142,7 +142,7 @@ impl<'a> ExprLowerer<'a> {
                     {
                         Ok(resolved) => resolved,
                         Err(ModuleResolveError::UnknownName { .. }) => {
-                            crate::registry::prelude::prelude_type_scope()
+                            crate::semantic::prelude::prelude_type_scope()
                                 .resolve_unit_ref(reference)
                                 .ok_or_else(|| ExprLowerError::UnknownUnit {
                                     name: reference.clone(),

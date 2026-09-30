@@ -1,7 +1,7 @@
 use super::*;
 use crate::builtin::{BuiltinConst, BuiltinFn};
-use crate::registry::time_scale::TimeScale;
 use crate::resolved_name::ResolvedDeclName;
+use crate::semantic::time_scale::TimeScale;
 use crate::syntax::parser::Parser;
 
 fn make_src(source: &str) -> NamedSource<Arc<String>> {

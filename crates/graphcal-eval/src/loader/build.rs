@@ -29,8 +29,8 @@ use graphcal_compiler::dag_id::DagId;
 use graphcal_compiler::dependency_graph::DependencyGraph;
 use graphcal_compiler::desugar::desugared_ast::Declaration;
 use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
+use graphcal_compiler::graphcal_error::GraphcalError;
 use graphcal_compiler::import_cycle::ImportCycle;
-use graphcal_compiler::registry::error::GraphcalError;
 use graphcal_compiler::syntax::ast::ModulePath;
 
 /// Build every loaded file reachable from the snapshot root, dependencies

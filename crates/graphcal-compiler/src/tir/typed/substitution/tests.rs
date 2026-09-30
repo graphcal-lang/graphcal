@@ -3,8 +3,8 @@ use crate::dag_id::DagId;
 use crate::dimension::{BaseDimId, PreludeBaseDimension};
 use crate::generic_param::GenericParamOwner;
 use crate::generic_param::test_support::type_param;
-use crate::registry::types::FiniteIndex;
 use crate::resolved_name::{ResolvedIndexName, ResolvedStructTypeName};
+use crate::semantic::index_def::FiniteIndex;
 use crate::syntax::index_name::IndexName;
 use crate::syntax::non_empty::NonEmpty;
 use crate::syntax::type_name::{GenericParamName, StructTypeName};
@@ -255,7 +255,7 @@ fn errors_render_at_their_span() {
     ));
     assert!(matches!(
         SubstitutionError::InvalidFiniteIndex {
-            error: crate::registry::types::IndexCardinalityError::Empty,
+            error: crate::semantic::index_def::IndexCardinalityError::Empty,
             span: span(),
         }
         .into_graphcal(&src),

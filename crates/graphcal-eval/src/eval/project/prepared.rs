@@ -8,15 +8,15 @@ use crate::runtime_value::{IndexAxis, KeyValue, RuntimeValue};
 use graphcal_compiler::declaration_category::DeclCategory;
 use graphcal_compiler::desugar::desugared_ast::{Expr, ExprKind as AstExprKind};
 use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
+use graphcal_compiler::graphcal_error::GraphcalError;
 use graphcal_compiler::hir::{
     ExprKind as HirExprKind, ExprLoweringContext, GenericScope, ModuleScope,
 };
 use graphcal_compiler::ir::static_interface::StaticInputKind;
-use graphcal_compiler::registry::checked_type::CheckedType;
-use graphcal_compiler::registry::error::GraphcalError;
-use graphcal_compiler::registry::time_scale::TimeScale;
-use graphcal_compiler::registry::types::ConcreteIndexKind;
 use graphcal_compiler::resolve::ModuleResolver;
+use graphcal_compiler::semantic::checked_type::CheckedType;
+use graphcal_compiler::semantic::index_def::ConcreteIndexKind;
+use graphcal_compiler::semantic::time_scale::TimeScale;
 use graphcal_compiler::syntax::decl_name::DeclName;
 use graphcal_compiler::syntax::index_name::{IndexEntryKey, IndexVariantName};
 use graphcal_compiler::syntax::module_name::ScopedName;

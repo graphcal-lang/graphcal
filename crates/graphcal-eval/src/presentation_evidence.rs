@@ -10,8 +10,8 @@
 
 use graphcal_compiler::dag_id::DagId;
 use graphcal_compiler::hir::expr::{ResolvedUnitExpr, ResolvedUnitRef};
-use graphcal_compiler::registry::time_zone::IanaTimeZoneId;
-use graphcal_compiler::registry::unit::PositiveFiniteScale;
+use graphcal_compiler::semantic::time_zone::IanaTimeZoneId;
+use graphcal_compiler::semantic::unit_scale::PositiveFiniteScale;
 use graphcal_compiler::syntax::index_name::IndexEntryKey;
 use graphcal_compiler::syntax::type_name::FieldName;
 use miette::NamedSource;
@@ -43,7 +43,7 @@ pub enum PresentationFailure {
     Formatting {
         source_name: String,
         #[source]
-        error: graphcal_compiler::registry::format::CanonicalUnitFormatError,
+        error: graphcal_compiler::display::number::CanonicalUnitFormatError,
     },
     #[error("display projection unavailable: {message}")]
     Projection { message: String },

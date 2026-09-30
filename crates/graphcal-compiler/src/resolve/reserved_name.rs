@@ -7,9 +7,9 @@
 use thiserror::Error;
 
 use crate::builtin::{BuiltinConst, BuiltinFn};
-use crate::registry::prelude::{prelude_dimension_names, prelude_unit_names};
-use crate::registry::time_scale::TimeScale;
 use crate::resolve::namespace::Namespace;
+use crate::semantic::prelude::{prelude_dimension_names, prelude_unit_names};
+use crate::semantic::time_scale::TimeScale;
 use crate::syntax::builtin_type_name::BuiltinTypeName;
 use crate::syntax::names::NameAtom;
 

@@ -3,9 +3,9 @@ use std::sync::Arc;
 
 use miette::NamedSource;
 
+use crate::graphcal_error::GraphcalError;
 use crate::hir;
 use crate::ir::instance::frame::InstanceFrame;
-use crate::registry::error::GraphcalError;
 use crate::resolved_name::{ResolvedConstructorName, ResolvedDeclName, ResolvedStructTypeName};
 use crate::syntax::span::Span;
 

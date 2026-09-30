@@ -6,13 +6,13 @@ use std::sync::Arc;
 
 use miette::NamedSource;
 
-use crate::registry::checked_type::{IndexDisplayName, IndexTypeRef, Symbolic};
-use crate::registry::error::GraphcalError;
+use crate::graphcal_error::GraphcalError;
+use crate::semantic::checked_type::{IndexDisplayName, IndexTypeRef, Symbolic};
 use crate::syntax::index_name::IndexEntryKey;
 use crate::syntax::span::Span;
 use crate::tir::typed::NatPolyForm;
 
-use crate::registry::checked_type::CheckedType;
+use crate::semantic::checked_type::CheckedType;
 use crate::tir::dim_check::helpers::format_checked_type;
 
 use super::context::Infer;

@@ -13,7 +13,7 @@ pub mod presentation;
 mod unit_scale;
 mod work_budget;
 
-use graphcal_compiler::registry::checked_type::IndexTypeRef;
+use graphcal_compiler::semantic::checked_type::IndexTypeRef;
 
 pub use crate::constant_pools::RuntimeValueMap;
 pub use crate::runtime_value::RuntimeValue;

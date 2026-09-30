@@ -5,7 +5,7 @@ use thiserror::Error;
 use crate::builtin::ComplexFn;
 use crate::dimension::{BaseDimId, Dimension, PreludeBaseDimension};
 
-use crate::registry::checked_type::{CheckedType, Symbolic};
+use crate::semantic::checked_type::{CheckedType, Symbolic};
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub(super) enum ComplexTypeError {

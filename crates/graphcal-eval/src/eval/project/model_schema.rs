@@ -9,12 +9,12 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
-use graphcal_compiler::registry::checked_type::{
+use graphcal_compiler::graphcal_error::GraphcalError;
+use graphcal_compiler::semantic::checked_type::{
     CheckedGenericArg, CheckedType, IndexTypeRef, StructTypeRef,
 };
-use graphcal_compiler::registry::error::GraphcalError;
-use graphcal_compiler::registry::time_scale::TimeScale;
-use graphcal_compiler::registry::types::{ConcreteIndexKind, FiniteIndex};
+use graphcal_compiler::semantic::index_def::{ConcreteIndexKind, FiniteIndex};
+use graphcal_compiler::semantic::time_scale::TimeScale;
 
 use crate::runtime_value::IndexAxis;
 use graphcal_compiler::syntax::index_name::IndexVariantName;
@@ -60,7 +60,7 @@ pub enum ModelIndexKind {
         /// Optional source display-unit label.
         display_label: Option<String>,
         /// Display-unit scale to SI.
-        display_scale: graphcal_compiler::registry::unit::PositiveFiniteScale,
+        display_scale: graphcal_compiler::semantic::unit_scale::PositiveFiniteScale,
     },
     /// Structural `Fin(N)` axis.
     Finite {

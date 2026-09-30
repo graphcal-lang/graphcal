@@ -4,8 +4,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use graphcal_compiler::finite_value::FiniteQuantity;
-use graphcal_compiler::registry::checked_type::IndexTypeRef;
-use graphcal_compiler::registry::index::{ConcreteIndexKind, CoordinateIndexData};
+use graphcal_compiler::semantic::checked_type::IndexTypeRef;
+use graphcal_compiler::semantic::index_def::{ConcreteIndexKind, CoordinateIndexData};
 use graphcal_compiler::syntax::index_name::IndexEntryKey;
 use graphcal_compiler::syntax::non_empty::NonEmpty;
 use graphcal_compiler::tir::typed::checked::CheckedTir;
@@ -61,7 +61,7 @@ impl IndexAxis {
     /// The axis of a structural `Fin(N)` index, which needs no registry.
     #[cfg(test)]
     #[must_use]
-    pub fn finite(index: graphcal_compiler::registry::index::FiniteIndex) -> Option<Self> {
+    pub fn finite(index: graphcal_compiler::semantic::index_def::FiniteIndex) -> Option<Self> {
         Self::from_concrete(
             IndexTypeRef::from_finite_index(index),
             ConcreteIndexKind::Finite { index },
@@ -209,7 +209,7 @@ impl IndexAxis {
 #[cfg(test)]
 mod tests {
     use graphcal_compiler::dag_id::DagId;
-    use graphcal_compiler::registry::index::FiniteIndex;
+    use graphcal_compiler::semantic::index_def::FiniteIndex;
     use graphcal_compiler::syntax::index_name::{IndexEntryKey, IndexVariantName};
 
     use super::IndexAxis;
@@ -243,7 +243,7 @@ mod tests {
     #[test]
     fn coordinate_axes_hold_one_finite_coordinate_per_key() {
         use graphcal_compiler::dimension::Dimension;
-        use graphcal_compiler::registry::index::{CoordinateDisplayUnit, CoordinateIndexData};
+        use graphcal_compiler::semantic::index_def::{CoordinateDisplayUnit, CoordinateIndexData};
         let data = CoordinateIndexData::try_range(
             0.0,
             2.0,

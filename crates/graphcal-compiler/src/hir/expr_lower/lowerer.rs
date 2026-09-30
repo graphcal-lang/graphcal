@@ -2,8 +2,8 @@
 
 use std::collections::HashMap;
 
-use crate::registry::reserved_name::validate_reserved_name;
 use crate::resolve::namespace::Namespace;
+use crate::resolve::reserved_name::validate_reserved_name;
 use crate::syntax::local_name::LocalName;
 use crate::syntax::span::Span;
 

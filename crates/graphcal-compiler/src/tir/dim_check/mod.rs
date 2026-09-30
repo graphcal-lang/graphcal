@@ -7,13 +7,13 @@ use miette::NamedSource;
 use crate::assertion_expectation::{ExpectedFail, ExpectedFailKey, ExpectedFailKeyPart};
 use crate::diagnostic_anchor::DiagnosticAnchor;
 use crate::dimension::Dimension;
-use crate::registry::checked_type::{Concrete, Concreteness, IndexTypeRef, Symbolic};
+use crate::semantic::checked_type::{Concrete, Concreteness, IndexTypeRef, Symbolic};
 use crate::syntax::decl_name::DeclName;
 use crate::syntax::index_name::IndexEntryKey;
 use crate::syntax::span::Span;
 
-use crate::registry::error::GraphcalError;
-use crate::registry::types::FormattingRegistry;
+use crate::display::formatting_registry::FormattingRegistry;
+use crate::graphcal_error::GraphcalError;
 
 pub(crate) use helpers::{expect_quantity, format_checked_type};
 
@@ -43,7 +43,7 @@ pub use model_schema::{
 #[cfg(test)]
 mod tests;
 
-pub use crate::registry::checked_type::CheckedType;
+pub use crate::semantic::checked_type::CheckedType;
 pub use crate::tir::typed::override_dependencies::{
     NominalOverrideIdentity, OverrideDependencySummary,
 };
@@ -449,7 +449,7 @@ fn check_hir_assert_body(
             {
                 let found = match value {
                     value if value == 0.0 && value.is_sign_negative() => "-0".to_string(),
-                    value => crate::registry::format::format_number(value),
+                    value => crate::display::number::format_number(value),
                 };
                 return Err(GraphcalError::NegativeTolerance {
                     found,
@@ -990,7 +990,7 @@ enum ExpectedBound {
     /// Bound must be exactly `Int`, preserving the full `i64` range.
     Int,
     /// Bound must be a datetime in exactly this declared time scale.
-    Datetime(crate::registry::time_scale::TimeScale),
+    Datetime(crate::semantic::time_scale::TimeScale),
 }
 
 /// Check that domain constraint bound expressions have the correct type.

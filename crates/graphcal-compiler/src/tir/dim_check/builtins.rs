@@ -12,12 +12,12 @@ use miette::NamedSource;
 
 use crate::diagnostic_anchor::DiagnosticAnchor;
 use crate::dimension::Dimension;
+use crate::display::formatting_registry::FormattingRegistry;
 use crate::function_signature::{
     DimBinder, DimMonomial, DimMonomialEvalError, FunctionSignature, ParamKind, ResultKind,
     ScalarValueKind, StructResult,
 };
-use crate::registry::error::GraphcalError;
-use crate::registry::types::FormattingRegistry;
+use crate::graphcal_error::GraphcalError;
 use crate::syntax::span::{Span, Spanned};
 
 /// Check quantity argument dimensions against `sig` and compute the result
@@ -41,7 +41,7 @@ pub(super) fn infer_fn_dim(
             .or_else(|| args.last())
             .map_or(call_span, |arg| arg.span);
         return Err(GraphcalError::WrongArity {
-            name: crate::registry::error::CalledFunction::Builtin(function),
+            name: crate::graphcal_error::CalledFunction::Builtin(function),
             expected: sig.arity(),
             got: args.len(),
             src: src.clone(),
@@ -227,7 +227,7 @@ mod tests {
             Dimension::dimensionless(),
             Dimension::dimensionless(),
         );
-        let registry = crate::registry::types::FormattingRegistry::new(
+        let registry = crate::display::formatting_registry::FormattingRegistry::new(
             std::collections::BTreeMap::new(),
             Vec::new(),
         );
@@ -274,7 +274,7 @@ mod tests {
             Dimension::dimensionless(),
             Dimension::dimensionless(),
         );
-        let registry = crate::registry::types::FormattingRegistry::new(
+        let registry = crate::display::formatting_registry::FormattingRegistry::new(
             std::collections::BTreeMap::new(),
             Vec::new(),
         );

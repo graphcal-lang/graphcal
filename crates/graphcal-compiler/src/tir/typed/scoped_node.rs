@@ -17,9 +17,9 @@ use crate::hir::expr::{
     ExternFnRef, ForBinding, ForBindingIndex, IndexVariantRef, LocalDef, LocalId, LocalUnit,
     ResolvedUnitExpr, ResolvedUnitExprItem, ResolvedUnitRef, UnfoldRecurrence,
 };
-use crate::registry::checked_type::CheckedType;
-use crate::registry::time_zone::IanaTimeZoneId;
 use crate::resolved_name::{ResolvedDeclName, ResolvedUnitName};
+use crate::semantic::checked_type::CheckedType;
+use crate::semantic::time_zone::IanaTimeZoneId;
 use crate::syntax::span::{Span, Spanned};
 use crate::syntax::type_name::FieldName;
 use crate::tir::texpr::operators::{BExpr, CExpr, DExpr, IExpr, LinearAlgebraCall, QExpr};

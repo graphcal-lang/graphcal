@@ -12,8 +12,8 @@
 use std::sync::Arc;
 
 use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
+use graphcal_compiler::graphcal_error::GraphcalError;
 use graphcal_compiler::outcome::Outcome;
-use graphcal_compiler::registry::error::GraphcalError;
 use miette::NamedSource;
 
 /// A violated evaluator invariant.
@@ -71,7 +71,7 @@ mod tests {
     use graphcal_compiler::cancellation::Cancelled;
 
     use super::{Failure, Invariant, Outcome};
-    use graphcal_compiler::registry::error::GraphcalError;
+    use graphcal_compiler::graphcal_error::GraphcalError;
 
     #[test]
     fn invariants_render_their_description_and_convert_into_failures() {

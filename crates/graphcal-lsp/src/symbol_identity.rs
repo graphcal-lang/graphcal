@@ -9,11 +9,11 @@
 use graphcal_compiler::builtin::{BuiltinConst, BuiltinFn};
 use graphcal_compiler::dag_id::DagId;
 use graphcal_compiler::hir;
-use graphcal_compiler::registry::time_scale::TimeScale;
 use graphcal_compiler::resolved_name::{
     ResolvedConstructorName, ResolvedDeclName, ResolvedDimName, ResolvedIndexName,
     ResolvedIndexVariant, ResolvedStructTypeName, ResolvedUnitName,
 };
+use graphcal_compiler::semantic::time_scale::TimeScale;
 use graphcal_compiler::syntax::function_name::FnName;
 use graphcal_compiler::syntax::index_name::IndexVariantName;
 use graphcal_compiler::syntax::module_name::ModuleAliasName;

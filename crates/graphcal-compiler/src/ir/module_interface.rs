@@ -12,8 +12,8 @@ use std::sync::Arc;
 use miette::NamedSource;
 
 use crate::desugar::desugared_ast::{DeclKind, Declaration, ImportDecl, ImportKind};
-use crate::registry::error::GraphcalError;
-use crate::registry::resolve_types::ExternalDeclSurface;
+use crate::graphcal_error::GraphcalError;
+use crate::ir::resolve::collected::ExternalDeclSurface;
 use crate::static_interface::{StaticInputKind, StaticInterface, StaticRole, static_interface};
 use crate::syntax::ast::{DeclExposure, ImportItemNamespace, IntroducedKind};
 use crate::syntax::decl_name::DeclName;

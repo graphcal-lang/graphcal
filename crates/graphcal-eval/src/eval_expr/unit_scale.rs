@@ -1,12 +1,12 @@
 use crate::runtime_value::RuntimeValue;
+use graphcal_compiler::graphcal_error::GraphcalError;
 use graphcal_compiler::hir::ResolvedUnitExpr;
 use graphcal_compiler::hir::expr::{ResolvedUnitExprItem, ResolvedUnitRef};
-use graphcal_compiler::registry::error::GraphcalError;
-use graphcal_compiler::registry::types::{
+use graphcal_compiler::resolved_name::ResolvedUnitName;
+use graphcal_compiler::semantic::unit_scale::{
     PositiveFiniteScale, PositiveFiniteScaleError, UnitScale, UnitScaleStepError, UnitScaleTerm,
     try_fold_unit_scale,
 };
-use graphcal_compiler::resolved_name::ResolvedUnitName;
 use graphcal_compiler::syntax::dimension::UnitRef;
 use graphcal_compiler::syntax::span::Span;
 use graphcal_compiler::tir::typed::scoped_node::ScopedUnitExpr;

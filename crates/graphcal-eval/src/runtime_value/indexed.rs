@@ -1,6 +1,6 @@
 //! Indexed values: one entry per key of a concrete axis.
 
-use graphcal_compiler::registry::checked_type::IndexTypeRef;
+use graphcal_compiler::semantic::checked_type::IndexTypeRef;
 use graphcal_compiler::syntax::index_name::IndexEntryKey;
 use graphcal_compiler::syntax::non_empty::NonEmpty;
 
@@ -49,7 +49,7 @@ impl<V> IndexedValue<V> {
     pub fn finite_for_test(entries: Vec<V>) -> Self {
         let cardinality = u64::try_from(entries.len()).unwrap();
         let index =
-            graphcal_compiler::registry::index::FiniteIndex::try_from_u64(cardinality).unwrap();
+            graphcal_compiler::semantic::index_def::FiniteIndex::try_from_u64(cardinality).unwrap();
         let axis = IndexAxis::finite(index).unwrap();
         let entries = NonEmpty::try_from_vec(entries).unwrap();
         Self { axis, entries }
@@ -243,7 +243,7 @@ mod tests {
     #[test]
     fn keys_select_entries_of_their_axis_or_a_wider_fin_axis() {
         use crate::runtime_value::KeyValue;
-        use graphcal_compiler::registry::index::FiniteIndex;
+        use graphcal_compiler::semantic::index_def::FiniteIndex;
 
         let named = IndexedValue::for_test(axis(), vec![1, 2, 3]);
         let b = KeyValue::for_entry(axis(), &key("B")).unwrap();

@@ -922,7 +922,7 @@ fn render_quantity_result_dimension(
 mod tests {
     use graphcal_compiler::dimension::Rational;
     use graphcal_compiler::function_signature::{DimMonomial, FunctionParam, StructShapeField};
-    use graphcal_compiler::registry::prelude::prelude_base_dimension;
+    use graphcal_compiler::semantic::prelude::prelude_base_dimension;
     use graphcal_compiler::syntax::dimension::DimVarName;
     use graphcal_compiler::syntax::function_name::FnParamName;
     use graphcal_compiler::syntax::index_name::IndexVarName;

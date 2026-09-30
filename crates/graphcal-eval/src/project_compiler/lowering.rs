@@ -777,7 +777,7 @@ fn resolve_projection_expected_fail(
     src: &NamedSource<Arc<String>>,
 ) -> Result<Option<graphcal_compiler::assertion_expectation::ExpectedFail>, CompileError> {
     use graphcal_compiler::assertion_expectation::{ExpectedFail, ExpectedFailKeyPart};
-    use graphcal_compiler::registry::checked_type::IndexTypeRef;
+    use graphcal_compiler::semantic::checked_type::IndexTypeRef;
     use graphcal_compiler::syntax::attribute::AttributeName;
 
     request
@@ -1302,7 +1302,7 @@ fn validate_index_binding_contracts(
     bindings: &IncludeStaticBindings,
 ) -> Result<(), CompileError> {
     use graphcal_compiler::ir::static_substitution::InstanceIndexBindingTarget;
-    use graphcal_compiler::registry::types::IndexBindingContractError;
+    use graphcal_compiler::semantic::index_def::IndexBindingContractError;
 
     for (port, target) in &bindings.substitution.indexes {
         let site = bindings.index_sites.get(port).ok_or_else(|| {
@@ -1315,7 +1315,7 @@ fn validate_index_binding_contracts(
         let candidate = match target {
             InstanceIndexBindingTarget::Declared(identity) => definitions.index(identity)?,
             InstanceIndexBindingTarget::Finite(finite) => {
-                graphcal_compiler::registry::types::IndexDef::finite(*finite)
+                graphcal_compiler::semantic::index_def::IndexDef::finite(*finite)
             }
         };
         let contract = effective_index_binding_contract(
@@ -1382,10 +1382,10 @@ fn effective_index_binding_contract(
     identity: &ResolvedIndexName,
     dimensions: &std::collections::BTreeMap<ResolvedDimName, ResolvedDimName>,
     binding_span: Span,
-) -> Result<graphcal_compiler::registry::types::IndexBindingContract, CompileError> {
+) -> Result<graphcal_compiler::semantic::index_def::IndexBindingContract, CompileError> {
     use graphcal_compiler::desugar::desugared_ast::{DeclKind, IndexDeclKind};
     use graphcal_compiler::ir::static_definitions::DimExprFailure;
-    use graphcal_compiler::registry::types::{
+    use graphcal_compiler::semantic::index_def::{
         ConcreteIndexKind, IndexBindingContract, IndexKind, RequiredIndexKind,
     };
 
@@ -1544,7 +1544,7 @@ pub(in crate::project_compiler) fn extract_index_binding_target(
     file_src: &NamedSource<Arc<String>>,
 ) -> Result<IndexBindingTarget, CompileError> {
     use graphcal_compiler::desugar::desugared_ast::IndexExpr;
-    use graphcal_compiler::registry::types::FiniteIndex;
+    use graphcal_compiler::semantic::index_def::FiniteIndex;
 
     let invalid_binding = || {
         CompileError::Eval(GraphcalError::InvalidTypeLevelBindingValue {

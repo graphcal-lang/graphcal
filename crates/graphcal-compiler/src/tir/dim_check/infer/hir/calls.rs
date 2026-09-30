@@ -9,10 +9,10 @@ use crate::builtin::{
     AggregationFn, BuiltinArity, BuiltinFn, DatetimeFn, ScalarFn, ValueAggregation,
 };
 use crate::dimension::{Dimension, Rational};
-use crate::registry::error::GraphcalError;
+use crate::graphcal_error::GraphcalError;
 use crate::syntax::span::Span;
 
-use crate::registry::checked_type::{CheckedType, Symbolic};
+use crate::semantic::checked_type::{CheckedType, Symbolic};
 use crate::tir::dim_check::builtins::infer_fn_dim;
 use crate::tir::dim_check::helpers::{expect_quantity, format_checked_type};
 use crate::tir::dim_check::infer::linear_algebra::{
@@ -33,7 +33,7 @@ fn check_builtin_arity(
 ) -> Result<(), GraphcalError> {
     match function.entry().arity() {
         BuiltinArity::Exact(expected) if got != expected => Err(GraphcalError::WrongArity {
-            name: crate::registry::error::CalledFunction::Builtin(function),
+            name: crate::graphcal_error::CalledFunction::Builtin(function),
             expected,
             got,
             src: src.clone(),
@@ -256,7 +256,7 @@ impl Infer<'_> {
                     }
                 }
                 Ok(CheckedType::Datetime(
-                    crate::registry::time_scale::TimeScale::UTC,
+                    crate::semantic::time_scale::TimeScale::UTC,
                 ))
             }
             BuiltinFn::Datetime(DatetimeFn::ToNumeric(_)) => self.infer_hir_datetime_unary(
@@ -351,7 +351,7 @@ impl Infer<'_> {
         callee_span: Span,
         args: &[Expr],
     ) -> Result<CheckedType<Symbolic>, GraphcalError> {
-        let func = crate::registry::builtins::scalar_function(name);
+        let func = crate::semantic::scalar_function::scalar_function(name);
         let dimension_args = args
             .iter()
             .map(|arg| {

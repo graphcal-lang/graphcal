@@ -4,10 +4,10 @@ use std::collections::HashMap;
 
 use crate::dag_id::DagId;
 use crate::desugar::desugared_ast as ast;
-use crate::registry::index::FiniteIndex;
 use crate::resolved_name::{
     ResolvedConstructorName, ResolvedDimName, ResolvedIndexName, ResolvedStructTypeName,
 };
+use crate::semantic::index_def::FiniteIndex;
 use crate::syntax::ast::{
     BindableVisibility, ExprKind, ImportKind, InputBindingCategory, UnresolvedRef,
 };

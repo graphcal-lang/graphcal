@@ -9,7 +9,7 @@
 use std::borrow::Cow;
 
 use super::nominal::{ConstructorApplication, ConstructorMatch};
-use crate::registry::checked_type::{CheckedType, Concrete, Concreteness, IndexTypeRef, Symbolic};
+use crate::semantic::checked_type::{CheckedType, Concrete, Concreteness, IndexTypeRef, Symbolic};
 use crate::syntax::span::{Span, Spanned};
 
 use super::model::{
@@ -129,7 +129,7 @@ impl TypeMap<Symbolic, Concrete> for ToConcrete {
         let generic_args = applied
             .generic_args()
             .iter()
-            .map(crate::registry::checked_type::CheckedGenericArg::to_concrete)
+            .map(crate::semantic::checked_type::CheckedGenericArg::to_concrete)
             .collect::<Option<_>>()
             .ok_or(NotConcrete)?;
         Ok(ConstructorApplication {

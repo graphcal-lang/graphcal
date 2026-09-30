@@ -43,7 +43,7 @@ def count-matches [sources: table, pattern: string]: nothing -> int {
 }
 
 def graphcal-error-variants []: nothing -> int {
-    let text = open --raw crates/graphcal-compiler/src/registry/error.rs
+    let text = open --raw crates/graphcal-compiler/src/graphcal_error.rs
     let body = $text
         | parse --regex '(?s)pub enum GraphcalError \{(?<body>.*?)\n\}'
         | get 0.body

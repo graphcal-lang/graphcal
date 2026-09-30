@@ -3,8 +3,8 @@
 //! The index parameter preserves the distinction between source paths and
 //! resolved identities. Collection and attribute parsing are separate clients.
 
-use crate::registry::checked_type::IndexTypeRef;
 use crate::resolved_name::ResolvedIndexVariant;
+use crate::semantic::checked_type::IndexTypeRef;
 use crate::syntax::index_name::{IndexEntryKey, IndexVariantName};
 use crate::syntax::non_empty::NonEmpty;
 use crate::syntax::span::Span;
@@ -121,7 +121,7 @@ pub enum ExpectedFail<I = IndexTypeRef> {
 mod tests {
     use super::*;
     use crate::dag_id::DagId;
-    use crate::registry::index::FiniteIndex;
+    use crate::semantic::index_def::FiniteIndex;
     use crate::syntax::index_name::IndexName;
     use std::path::Path;
 

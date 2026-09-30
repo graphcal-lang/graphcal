@@ -1,9 +1,9 @@
 use super::*;
 use crate::dimension::{BaseDimId, Dimension, Rational};
+use crate::display::formatting_registry::FormattingRegistry;
 use crate::generic_param::test_support::type_param;
-use crate::registry::time_scale::TimeScale;
-use crate::registry::types::FormattingRegistry;
 use crate::resolved_name::{ResolvedIndexName, ResolvedStructTypeName, ResolvedUnitName};
+use crate::semantic::time_scale::TimeScale;
 use crate::syntax::dimension::UnitName;
 use crate::syntax::index_name::IndexName;
 use crate::syntax::non_empty::NonEmpty;
@@ -451,26 +451,26 @@ fn tir_index_lookup_uses_the_project_store_for_declared_and_finite_indexes() {
     let tir =
         parse_and_type_resolve("index Axis = { A, B };\nparam values: Dimensionless[Fin(3)];\n")
             .unwrap();
-    let declared = crate::registry::checked_type::IndexTypeRef::<Concrete>::from_resolved(
+    let declared = crate::semantic::checked_type::IndexTypeRef::<Concrete>::from_resolved(
         ResolvedIndexName::for_test(
             tir.root_dag_id().clone(),
             crate::syntax::index_name::IndexName::expect_valid("Axis"),
         ),
     );
-    let finite = crate::registry::checked_type::IndexTypeRef::<Concrete>::from_finite_index(
-        crate::registry::types::FiniteIndex::try_from_u64(3).unwrap(),
+    let finite = crate::semantic::checked_type::IndexTypeRef::<Concrete>::from_finite_index(
+        crate::semantic::index_def::FiniteIndex::try_from_u64(3).unwrap(),
     );
 
     assert!(matches!(
         &tir.index_def(&declared).unwrap().kind,
-        crate::registry::types::IndexKind::Concrete(
-            crate::registry::types::ConcreteIndexKind::Named { variants }
+        crate::semantic::index_def::IndexKind::Concrete(
+            crate::semantic::index_def::ConcreteIndexKind::Named { variants }
         ) if variants.len().get() == 2
     ));
     assert_eq!(
         tir.index_def(&finite)
             .and_then(|definition| definition.concrete_cardinality())
-            .map(crate::registry::types::IndexCardinality::get),
+            .map(crate::semantic::index_def::IndexCardinality::get),
         Some(3)
     );
 }
@@ -1085,7 +1085,7 @@ fn type_resolve_default_type_params() {
 
 // --- to_checked_type() tests ---
 
-use crate::registry::checked_type::{CheckedType, Concrete, IndexTypeRef, StructTypeRef};
+use crate::semantic::checked_type::{CheckedType, Concrete, IndexTypeRef, StructTypeRef};
 
 #[test]
 fn generic_index_substitution_preserves_resolved_owner() {
@@ -1380,13 +1380,13 @@ fn nat_leq_zero_leq_anything() {
 
 #[test]
 fn finite_index_concrete_form_to_index_type_ref() -> Result<(), Box<dyn std::error::Error>> {
-    let reference = crate::registry::checked_type::IndexTypeRef::from_finite_index_form(
+    let reference = crate::semantic::checked_type::IndexTypeRef::from_finite_index_form(
         NatPolyForm::from_constant(3),
     )?;
     assert_eq!(
         reference
             .finite_index()
-            .map(crate::registry::types::FiniteIndex::size_u64),
+            .map(crate::semantic::index_def::FiniteIndex::size_u64),
         Some(3)
     );
     assert_eq!(reference.display_name().to_string(), "Fin(3)");
@@ -1396,7 +1396,7 @@ fn finite_index_concrete_form_to_index_type_ref() -> Result<(), Box<dyn std::err
 #[test]
 fn finite_index_symbolic_form_to_display_only_index_type_ref()
 -> Result<(), Box<dyn std::error::Error>> {
-    let reference = crate::registry::checked_type::IndexTypeRef::from_finite_index_form(
+    let reference = crate::semantic::checked_type::IndexTypeRef::from_finite_index_form(
         NatPolyForm::from_var(type_param("N"))
             .add(&NatPolyForm::from_constant(1))
             .unwrap(),

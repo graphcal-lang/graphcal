@@ -6,17 +6,20 @@ use thiserror::Error;
 
 use crate::assertion_expectation::ExpectedFail;
 use crate::dimension::Dimension;
+use crate::display::formatting_registry::FormattingRegistry;
 use crate::generic_param::GenericParamId;
+use crate::graphcal_error::GraphcalError;
 use crate::hir;
 use crate::hir::NominalTypeDef;
-use crate::registry::checked_type::{CheckedType, IndexTypeRef};
-use crate::registry::error::GraphcalError;
-use crate::registry::types::{BaseDimensionInfo, FormattingRegistry, IndexDef, UnitInfo};
 use crate::resolve::ModuleResolver;
 use crate::resolved_name::{
     ResolvedConstructorName, ResolvedDeclName, ResolvedDimName, ResolvedIndexName,
     ResolvedStructTypeName, ResolvedUnitName,
 };
+use crate::semantic::checked_type::{CheckedType, IndexTypeRef};
+use crate::semantic::dimension_table::BaseDimensionInfo;
+use crate::semantic::index_def::IndexDef;
+use crate::semantic::unit_scale::UnitInfo;
 use crate::syntax::decl_name::DeclName;
 use crate::syntax::module_name::ScopedName;
 use crate::syntax::span::Span;
@@ -94,8 +97,8 @@ impl ProjectTypeStore {
     /// which would be a compiler bug.
     pub fn insert_graphcal_prelude(
         &mut self,
-    ) -> Result<(), crate::registry::prelude::PreludeDefinitionError> {
-        let prelude = crate::registry::prelude::prelude_definitions()?;
+    ) -> Result<(), crate::semantic::prelude::PreludeDefinitionError> {
+        let prelude = crate::semantic::prelude::prelude_definitions()?;
         self.merge_base_dimensions(&prelude);
         for (identity, dimension) in prelude.dimensions() {
             self.dimensions.insert(identity.clone(), dimension.clone());
@@ -404,8 +407,8 @@ impl<'a> ModuleTypeContext<'a> {
 /// members can share the same field names with different constraints.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct StructFieldConstraintKey {
-    pub owning_type: crate::registry::checked_type::StructTypeRef,
-    pub generic_args: Vec<crate::registry::checked_type::CheckedGenericArg>,
+    pub owning_type: crate::semantic::checked_type::StructTypeRef,
+    pub generic_args: Vec<crate::semantic::checked_type::CheckedGenericArg>,
     pub constructor: ConstructorName,
     pub field: FieldName,
 }
@@ -414,7 +417,7 @@ impl StructFieldConstraintKey {
     /// Construct a key for a non-generic nominal type.
     #[must_use]
     pub const fn new(
-        owning_type: crate::registry::checked_type::StructTypeRef,
+        owning_type: crate::semantic::checked_type::StructTypeRef,
         constructor: ConstructorName,
         field: FieldName,
     ) -> Self {
@@ -429,8 +432,8 @@ impl StructFieldConstraintKey {
     /// Construct a key for one concrete generic nominal application.
     #[must_use]
     pub const fn for_application(
-        owning_type: crate::registry::checked_type::StructTypeRef,
-        generic_args: Vec<crate::registry::checked_type::CheckedGenericArg>,
+        owning_type: crate::semantic::checked_type::StructTypeRef,
+        generic_args: Vec<crate::semantic::checked_type::CheckedGenericArg>,
         constructor: ConstructorName,
         field: FieldName,
     ) -> Self {
@@ -1002,7 +1005,7 @@ impl TirCore {
 
     /// Resolve a declared axis or derive a structural axis from its cardinality.
     /// Structural `Fin(N)` definitions never depend on a source-registration scan.
-    pub(crate) fn index_def<V: crate::registry::checked_type::Concreteness>(
+    pub(crate) fn index_def<V: crate::semantic::checked_type::Concreteness>(
         &self,
         index: &IndexTypeRef<V>,
     ) -> Option<std::borrow::Cow<'_, IndexDef>> {
@@ -1358,7 +1361,7 @@ impl dyn TirRead + '_ {
     }
 
     /// Resolve a declared axis or derive a structural axis from its cardinality.
-    pub(crate) fn index_def<V: crate::registry::checked_type::Concreteness>(
+    pub(crate) fn index_def<V: crate::semantic::checked_type::Concreteness>(
         &self,
         index: &IndexTypeRef<V>,
     ) -> Option<std::borrow::Cow<'_, IndexDef>> {

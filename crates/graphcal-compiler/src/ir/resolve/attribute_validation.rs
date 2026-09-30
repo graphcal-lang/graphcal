@@ -11,8 +11,8 @@ use miette::NamedSource;
 use thiserror::Error;
 
 use crate::desugar::desugared_ast::{Attribute, AttributeArg};
-use crate::registry::error::GraphcalError;
-use crate::registry::resolve_types::AttributeTarget;
+use crate::graphcal_error::GraphcalError;
+use crate::ir::resolve::collected::AttributeTarget;
 use crate::syntax::attribute::AttributeName;
 use crate::syntax::decl_name::DeclName;
 use crate::syntax::span::{Span, Spanned};
@@ -295,7 +295,7 @@ pub fn attribute_validation_error_to_graphcal(
 
 #[cfg(test)]
 mod tests {
-    use crate::registry::resolve_types::DeclarationKind;
+    use crate::ir::resolve::collected::DeclarationKind;
     use crate::syntax::parser::Parser;
 
     use super::*;

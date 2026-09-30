@@ -15,7 +15,7 @@ use thiserror::Error;
 
 use crate::expression_id::ExprId;
 use crate::hir::expr::Expr;
-use crate::registry::checked_type::{CheckedType, Concrete, Symbolic};
+use crate::semantic::checked_type::{CheckedType, Concrete, Symbolic};
 use crate::tir::static_index::{
     AxisCardinality, Readiness, StaticIndexError, UnavailableIndex, check_static_position,
 };
@@ -141,7 +141,7 @@ fn cardinalities_known(
 }
 
 /// The static positions a node proves, in selector order.
-fn static_positions<V: crate::registry::checked_type::Concreteness>(
+fn static_positions<V: crate::semantic::checked_type::Concreteness>(
     expr: &TExpr<V>,
 ) -> Vec<&StaticPosition<V>> {
     match expr.kind() {
@@ -297,7 +297,7 @@ impl CheckedBodies {
         &self,
     ) -> Vec<(
         &crate::resolved_name::ResolvedStructTypeName,
-        Vec<crate::registry::checked_type::CheckedGenericArg>,
+        Vec<crate::semantic::checked_type::CheckedGenericArg>,
     )> {
         let mut applications = Vec::new();
         for body in self.roots.values() {
@@ -325,7 +325,7 @@ impl CheckedBodies {
                         let generic_args = application
                             .generic_args()
                             .iter()
-                            .map(crate::registry::checked_type::CheckedGenericArg::to_concrete)
+                            .map(crate::semantic::checked_type::CheckedGenericArg::to_concrete)
                             .collect::<Option<Vec<_>>>();
                         if let (Some(_), Some(generic_args)) =
                             (expr.ty().to_concrete(), generic_args)

@@ -12,14 +12,14 @@ use std::sync::Arc;
 use miette::NamedSource;
 
 use crate::dimension::Dimension;
-use crate::registry::checked_type::{IndexTypeRef, StructTypeRef, Symbolic};
-use crate::registry::error::GraphcalError;
+use crate::graphcal_error::GraphcalError;
+use crate::semantic::checked_type::{IndexTypeRef, StructTypeRef, Symbolic};
 use crate::syntax::ast::GenericConstraint;
 use crate::syntax::names::NamePath;
 use crate::syntax::span::Span;
 use crate::syntax::type_name::{FieldName, GenericParamName};
 
-use crate::registry::checked_type::{CheckedGenericArg, CheckedType};
+use crate::semantic::checked_type::{CheckedGenericArg, CheckedType};
 use crate::tir::typed::Substitution;
 
 use super::context::InferEnv;

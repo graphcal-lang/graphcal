@@ -4,7 +4,7 @@ use std::num::NonZeroUsize;
 use thiserror::Error;
 
 use crate::dimension::Dimension;
-use crate::registry::unit::PositiveFiniteScale;
+use crate::semantic::unit_scale::PositiveFiniteScale;
 use crate::syntax::index_name::{IndexEntryKey, IndexName, IndexVariantName};
 use crate::syntax::non_empty::NonEmptyUnique;
 

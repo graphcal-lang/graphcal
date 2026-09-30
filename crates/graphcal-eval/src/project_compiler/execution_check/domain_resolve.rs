@@ -6,8 +6,8 @@ use std::sync::Arc;
 use miette::NamedSource;
 
 use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
-use graphcal_compiler::registry::checked_type::{CheckedGenericArg, CheckedType, StructTypeRef};
-use graphcal_compiler::registry::error::GraphcalError;
+use graphcal_compiler::graphcal_error::GraphcalError;
+use graphcal_compiler::semantic::checked_type::{CheckedGenericArg, CheckedType, StructTypeRef};
 use graphcal_compiler::syntax::span::Span;
 use graphcal_compiler::syntax::type_name::{ConstructorName, FieldName};
 use graphcal_compiler::tir::typed::{
@@ -123,7 +123,7 @@ pub(super) fn resolve_domain_constraints_for_dag(
 enum ConstraintTarget {
     Quantity,
     Int,
-    Datetime(graphcal_compiler::registry::time_scale::TimeScale),
+    Datetime(graphcal_compiler::semantic::time_scale::TimeScale),
 }
 
 /// Checking-only substitution services never enter the interpreter context.
@@ -659,7 +659,7 @@ fn struct_type_ref_from_resolved_type(resolved: &ResolvedDeclType) -> Option<Str
 fn find_struct_field_constraint<'a>(
     field_constraints: &'a HashMap<StructFieldConstraintKey, ResolvedDomainConstraint>,
     owning_type: Option<&StructTypeRef>,
-    generic_args: &[graphcal_compiler::registry::checked_type::CheckedGenericArg],
+    generic_args: &[graphcal_compiler::semantic::checked_type::CheckedGenericArg],
     constructor: &ConstructorName,
     field: &FieldName,
 ) -> Option<&'a ResolvedDomainConstraint> {
@@ -744,7 +744,7 @@ fn check_const_struct_field_constraints(
 /// Format a runtime value for inclusion in a `DomainViolation` error message.
 fn format_runtime_value(rv: &RuntimeValue) -> String {
     match rv {
-        RuntimeValue::Quantity(v) => graphcal_compiler::registry::format::format_number(v.get()),
+        RuntimeValue::Quantity(v) => graphcal_compiler::display::number::format_number(v.get()),
         RuntimeValue::Int(i) => format!("{i}"),
         RuntimeValue::Datetime(epoch) => epoch.to_string(),
         RuntimeValue::Indexed(entries) => {
@@ -827,16 +827,16 @@ fn exact_domain_int_bound(
 fn format_quantity_bound_display(expr: &graphcal_compiler::hir::Expr, si_value: f64) -> String {
     use graphcal_compiler::hir::ExprKind;
     match expr.kind() {
-        ExprKind::Number(n) => graphcal_compiler::registry::format::format_number(*n),
+        ExprKind::Number(n) => graphcal_compiler::display::number::format_number(*n),
         ExprKind::Integer(n) => format!("{n}"),
         ExprKind::QuantityLiteral { value, unit } => {
-            let unit_str = graphcal_compiler::registry::format::format_unit_terms_with_config(
+            let unit_str = graphcal_compiler::display::number::format_unit_terms_with_config(
                 unit.terms
                     .iter()
                     .map(|item| (item.op, item.name.value.to_string(), item.power)),
                 true,
             );
-            let val_str = graphcal_compiler::registry::format::format_number(*value);
+            let val_str = graphcal_compiler::display::number::format_number(*value);
             format!("{val_str} {unit_str}")
         }
         ExprKind::UnaryOp {
@@ -846,7 +846,7 @@ fn format_quantity_bound_display(expr: &graphcal_compiler::hir::Expr, si_value: 
             format!("-{}", format_quantity_bound_display(operand, -si_value))
         }
         // Fallback: display the already-evaluated SI value.
-        _ => graphcal_compiler::registry::format::format_number(si_value),
+        _ => graphcal_compiler::display::number::format_number(si_value),
     }
 }
 

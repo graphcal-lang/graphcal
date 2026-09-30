@@ -8,7 +8,7 @@
 use std::collections::HashMap;
 use std::panic;
 
-use graphcal_compiler::registry::error::GraphcalError;
+use graphcal_compiler::graphcal_error::GraphcalError;
 use graphcal_eval::eval::{
     CompileError, EvalResult, Value, compile_and_eval, compile_and_eval_project,
 };

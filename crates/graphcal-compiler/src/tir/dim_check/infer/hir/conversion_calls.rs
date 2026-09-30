@@ -2,10 +2,10 @@
 
 use crate::builtin::{BuiltinFn, ConversionFn, DatetimeConstructorFn};
 use crate::dimension::Dimension;
+use crate::graphcal_error::GraphcalError;
 use crate::hir::expr::{Expr, ExprKind};
-use crate::registry::error::GraphcalError;
 
-use crate::registry::checked_type::{CheckedType, Symbolic};
+use crate::semantic::checked_type::{CheckedType, Symbolic};
 use crate::tir::dim_check::helpers::{expect_quantity, format_checked_type};
 
 use super::context::Infer;
@@ -111,7 +111,7 @@ impl Infer<'_> {
     pub(super) fn infer_hir_timescale_conversion(
         &self,
         name: BuiltinFn,
-        scale: crate::registry::time_scale::TimeScale,
+        scale: crate::semantic::time_scale::TimeScale,
         args: &[Expr],
     ) -> Result<CheckedType<Symbolic>, GraphcalError> {
         let arg_type = self.infer_arg(&args[0])?;
@@ -130,7 +130,7 @@ impl Infer<'_> {
     pub(super) fn infer_hir_datetime_constructor(
         &self,
         kind: DatetimeConstructorFn,
-        epoch_scale: Option<crate::registry::time_scale::TimeScale>,
+        epoch_scale: Option<crate::semantic::time_scale::TimeScale>,
         span: crate::syntax::span::Span,
         args: &[Expr],
     ) -> Result<CheckedType<Symbolic>, GraphcalError> {
@@ -183,7 +183,7 @@ impl Infer<'_> {
                 }
                 self.record_contextual_args(args)?;
                 Ok(CheckedType::Datetime(
-                    crate::registry::time_scale::TimeScale::UTC,
+                    crate::semantic::time_scale::TimeScale::UTC,
                 ))
             }
             DatetimeConstructorFn::Epoch => {

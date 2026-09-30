@@ -8,7 +8,7 @@ use std::num::NonZeroUsize;
 
 use thiserror::Error;
 
-use crate::registry::types::{IndexCardinality, MAX_INDEX_CARDINALITY};
+use crate::semantic::index_def::{IndexCardinality, MAX_INDEX_CARDINALITY};
 use crate::syntax::non_empty::NonEmpty;
 
 /// Largest number of scalar leaves that one indexed value may materialize.
