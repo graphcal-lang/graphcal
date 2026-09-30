@@ -16,6 +16,7 @@ use graphcal_compiler::tir::texpr::{ExecutableBodyError, TExpr};
 use graphcal_compiler::tir::typed::body_scope::Scoped;
 use graphcal_compiler::tir::typed::checked_instance::CheckedInstance;
 use graphcal_compiler::tir::typed::evaluation_unit::ScopedTree;
+use graphcal_compiler::tir::typed::scoped_node::NodeKind;
 use thiserror::Error;
 
 use crate::checked_program::{CheckedProgram, SealedDag};
@@ -446,6 +447,8 @@ pub struct ExecPlan<'p> {
 pub enum ExecPlanError {
     #[error("DAG `{0}` has more than one prepared callable plan")]
     DuplicateCallable(DagId),
+    #[error("DAG `{caller}` calls DAG `{target}`, which has no prepared callable plan")]
+    MissingCallee { caller: DagId, target: DagId },
 }
 
 impl<'p> ExecPlan<'p> {
@@ -454,7 +457,8 @@ impl<'p> ExecPlan<'p> {
     ///
     /// # Errors
     ///
-    /// Returns [`ExecPlanError`] when two callables share a body.
+    /// Returns [`ExecPlanError`] when two callables share a body, or when a
+    /// planned body calls a DAG without a callable.
     pub(crate) fn new(
         program: &'p CheckedProgram,
         declarations: HashMap<&'p ResolvedDeclName, PlannedDeclaration<'p>>,
@@ -469,6 +473,7 @@ impl<'p> ExecPlan<'p> {
                 return Err(ExecPlanError::DuplicateCallable(owner.clone()));
             }
         }
+        check_callees(declarations.values(), &by_dag)?;
         let has_unfinished_definitions = declarations
             .values()
             .any(|declaration| matches!(declaration.body, PlannedBody::Todo));
@@ -531,6 +536,35 @@ impl<'p> ExecPlan<'p> {
     ) -> Option<&'p ResolvedDomainConstraint> {
         self.declaration(key)?.domain
     }
+}
+
+/// Require that every inline call of every planned body targets a DAG with a
+/// callable, so evaluating a call never meets a missing callee.
+fn check_callees<'a, 'p: 'a>(
+    declarations: impl IntoIterator<Item = &'a PlannedDeclaration<'p>>,
+    by_dag: &HashMap<&'p DagId, CallableIdx>,
+) -> Result<(), ExecPlanError> {
+    for declaration in declarations {
+        let PlannedBody::Expression { tree: Ok(tree), .. } = &declaration.body else {
+            continue;
+        };
+        let mut missing = None;
+        tree.root().visit(&mut |node| {
+            if let NodeKind::DagCall { target, .. } = node.kind()
+                && missing.is_none()
+                && !by_dag.contains_key(&target.value)
+            {
+                missing = Some(target.value.clone());
+            }
+        });
+        if let Some(target) = missing {
+            return Err(ExecPlanError::MissingCallee {
+                caller: declaration.scope.dag().dag_id().clone(),
+                target,
+            });
+        }
+    }
+    Ok(())
 }
 
 impl std::fmt::Debug for ExecPlan<'_> {

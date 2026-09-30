@@ -607,6 +607,32 @@ fn callable_plan_fixture() -> (
 }
 
 #[test]
+fn plans_reject_a_call_whose_callee_has_no_callable() {
+    let (tir, src) = callable_plan_fixture();
+    let prepared = graphcal_eval::exec_plan::compile(&tir, &src).unwrap();
+    let helper = tir
+        .dag_registry()
+        .keys()
+        .find(|owner| *owner != tir.root_dag_id())
+        .unwrap();
+    let assembled =
+        graphcal_eval::exec_plan::assemble_without_callable_for_test(&prepared, helper, &src)
+            .unwrap();
+    assert!(matches!(
+        assembled,
+        Err(graphcal_eval::execution_plan::ExecPlanError::MissingCallee { caller, target })
+            if &caller == tir.root_dag_id() && &target == helper
+    ));
+    let root = tir.root_dag_id().clone();
+    assert!(
+        graphcal_eval::exec_plan::assemble_without_callable_for_test(&prepared, &root, &src)
+            .unwrap()
+            .is_ok(),
+        "omitting only an uncalled body keeps every callee"
+    );
+}
+
+#[test]
 fn every_body_has_one_prepared_callable_with_retained_single_body_pools() {
     let (tir, src) = callable_plan_fixture();
     let (prepared, counts) = graphcal_eval::pipeline_metrics::measure(|| {
