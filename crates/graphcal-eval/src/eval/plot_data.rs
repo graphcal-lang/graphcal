@@ -19,9 +19,9 @@
 //!   numbers and labels in one channel) is an error — variant names are
 //!   never substituted for data.
 
+use crate::runtime_value::RuntimeValue;
 use graphcal_compiler::plot_shape::align_plot_channel_axes;
 use graphcal_compiler::registry::checked_type::IndexTypeRef;
-use graphcal_compiler::registry::runtime_value::RuntimeValue;
 use graphcal_compiler::syntax::ast::EncodingChannel;
 use graphcal_compiler::syntax::index_name::IndexEntryKey;
 
@@ -119,7 +119,7 @@ fn plot_datum_from_leaf(
             .map(PlotDatum::Datetime)
             .map_err(|error| error.to_string()),
         RuntimeValue::Struct { .. } | RuntimeValue::Indexed { .. } => {
-            Err(format!("{} cannot be plotted", rv.kind()))
+            Err(format!("{} cannot be plotted", rv.describe()))
         }
     }
 }

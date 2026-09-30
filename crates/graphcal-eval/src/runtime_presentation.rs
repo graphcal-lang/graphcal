@@ -1,7 +1,7 @@
 //! Atomic value/evidence transport through the expression interpreter.
 
 use crate::presentation_evidence::PresentationInstance;
-use graphcal_compiler::registry::runtime_value::RuntimeValue;
+use crate::runtime_value::RuntimeValue;
 
 #[derive(Debug, Clone)]
 pub struct EvaluatedRuntimeValue {

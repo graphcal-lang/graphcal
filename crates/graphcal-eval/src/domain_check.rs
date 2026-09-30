@@ -1,6 +1,6 @@
 //! Pure runtime-value validation against independently owned domain contracts.
 
-use graphcal_compiler::registry::runtime_value::RuntimeValue;
+use crate::runtime_value::RuntimeValue;
 
 use crate::domain_constraint::{
     DomainInstant, ResolvedDomainBounds, ResolvedDomainConstraint, ResolvedDomainConstraintRef,
@@ -60,7 +60,7 @@ pub fn check_domain_constraint(
             other => Err(constraint_kind_mismatch("Datetime", other)),
         },
         other => Err(constraint_kind_mismatch(
-            &other.kind().to_string(),
+            &other.describe().to_string(),
             constraint.as_ref(),
         )),
     }

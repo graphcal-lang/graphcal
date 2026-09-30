@@ -1,6 +1,6 @@
+use crate::runtime_value::{RuntimeValue, RuntimeValueError};
 use graphcal_compiler::builtin::{AggregationFn, KeyAggregation, ValueAggregation};
 use graphcal_compiler::finite_value::FiniteQuantity;
-use graphcal_compiler::registry::runtime_value::{RuntimeValue, RuntimeValueError};
 use graphcal_compiler::syntax::index_name::IndexEntryKey;
 use indexmap::IndexMap;
 use thiserror::Error;

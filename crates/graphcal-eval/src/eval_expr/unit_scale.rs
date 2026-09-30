@@ -1,7 +1,7 @@
+use crate::runtime_value::RuntimeValue;
 use graphcal_compiler::hir::ResolvedUnitExpr;
 use graphcal_compiler::hir::expr::{LocalUnit, ResolvedUnitRef};
 use graphcal_compiler::registry::error::GraphcalError;
-use graphcal_compiler::registry::runtime_value::RuntimeValue;
 use graphcal_compiler::registry::types::{
     PositiveFiniteScale, PositiveFiniteScaleError, UnitScale, UnitScaleStepError, UnitScaleTerm,
     try_fold_unit_scale,

@@ -4,10 +4,10 @@
 //! kernels operate on row-major `f64` buffers, and results are rebuilt with the
 //! exact typed axis identities and key order supplied by the arguments.
 
+use crate::runtime_value::RuntimeValue;
 use graphcal_compiler::builtin::LinearAlgebraFn;
 use graphcal_compiler::finite_value::FiniteQuantity;
 use graphcal_compiler::registry::checked_type::IndexTypeRef;
-use graphcal_compiler::registry::runtime_value::RuntimeValue;
 use graphcal_compiler::syntax::index_name::IndexEntryKey;
 use indexmap::IndexMap;
 use thiserror::Error;

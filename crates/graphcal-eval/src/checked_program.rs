@@ -21,7 +21,7 @@ use graphcal_compiler::syntax::module_name::ScopedName;
 use graphcal_compiler::tir::typed::checked::{CheckedDag, CheckedTir};
 use graphcal_compiler::tir::typed::model::StructFieldConstraintKey;
 
-use graphcal_compiler::registry::runtime_value::RuntimeValue;
+use crate::runtime_value::RuntimeValue;
 
 use crate::constant_pools::{
     ConstPool, ConstPoolBuildError, ConstStep, ConstantReference, RuntimeValueMap,

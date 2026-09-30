@@ -286,8 +286,8 @@ fn prepare_imports(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::runtime_value::RuntimeValue;
     use graphcal_compiler::ir::lower::lower;
-    use graphcal_compiler::registry::runtime_value::RuntimeValue;
     use graphcal_compiler::resolve::ModuleResolver;
     use graphcal_compiler::resolved_name::ResolvedDeclName;
     use graphcal_compiler::syntax::decl_name::DeclName;
