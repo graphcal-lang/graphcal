@@ -89,14 +89,10 @@ impl PreparedProject {
                     })
                 })?;
         let tree = self.check_closed_binding(port, &normalized)?;
-        let (value, presentation) = self.evaluate_closed_binding(&tree)?.into_parts();
         Ok(ParameterValue {
             plan_id: self.plan_id,
             position,
-            binding: RuntimeParameterBinding {
-                value,
-                presentation,
-            },
+            binding: self.evaluate_closed_binding(&tree)?,
         })
     }
 
@@ -403,7 +399,7 @@ impl ParameterBindingBuilder<'_> {
         let port = self.project.port_at(position)?;
         if let Some(constraint) = self.project.plan().domain_constraint(&port.runtime_key)
             && let Err(violation) =
-                crate::domain_check::check_domain_constraint(&binding.value, constraint)
+                crate::domain_check::check_domain_constraint(&binding.value(), constraint)
         {
             return Err(self.project.binding_value_error(port, &violation.message));
         }
@@ -741,7 +737,7 @@ impl PreparedProject {
         crate::eval_expr::eval_root_with_presentation(
             tree,
             &values,
-            &crate::presentation_evidence::PendingPresentationMap::new(),
+            &crate::runtime_presentation::PendingPresentedMap::new(),
             &session,
         )
         .map_err(CompileError::from)

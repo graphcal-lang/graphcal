@@ -715,7 +715,7 @@ fn shared_frames_cancel_before_interpretation() {
 #[test]
 fn frame_arguments_are_domain_checked_and_keep_presentation_only_when_bound() {
     use crate::execution_frame::{ExecutionFrame, FailurePolicy};
-    use crate::presentation_evidence::{PendingLeaf, Presentation, ResolvedLeaf};
+    use crate::presentation_evidence::{PendingLeaf, PendingQuantityDisplay, QuantityDisplay};
     use crate::runtime_presentation::EvaluatedRuntimeValue;
     use crate::runtime_value::RuntimeValue;
     let source = "param p: Dimensionless(min: 0.0) = 1.0; node n: Dimensionless = @p;";
@@ -730,13 +730,14 @@ fn frame_arguments_are_domain_checked_and_keep_presentation_only_when_bound() {
         .map(graphcal_compiler::tir::typed::TypedParamEntry::identity)
         .unwrap();
     let labelled = |value: f64| {
-        EvaluatedRuntimeValue::new(
+        EvaluatedRuntimeValue::with_leaf(
             RuntimeValue::quantity(value).unwrap(),
-            Presentation::Uniform(PendingLeaf::Ready(ResolvedLeaf::Unit {
+            PendingLeaf::Quantity(PendingQuantityDisplay::Ready(QuantityDisplay::Unit {
                 label: "percent".to_owned(),
                 scale: graphcal_compiler::registry::unit::PositiveFiniteScale::new(0.01).unwrap(),
             })),
         )
+        .unwrap()
     };
     let span = graphcal_compiler::syntax::span::Span::new(0, 0);
 
@@ -759,7 +760,7 @@ fn frame_arguments_are_domain_checked_and_keep_presentation_only_when_bound() {
         Some(NodeUnavailable::EvalFailed { .. })
     ));
     let outcome = frame.finish();
-    assert!(outcome.values.is_empty() && outcome.presentations.is_empty());
+    assert!(outcome.values.is_empty() && outcome.presented.is_empty());
     assert_eq!(outcome.errors.len(), 1);
 
     let mut frame = ExecutionFrame::new(plan, plan.root(), FailurePolicy::Propagate);

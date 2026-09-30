@@ -31,7 +31,7 @@ use crate::execution_frame::ScheduledDeclaration;
 use crate::execution_plan::ExecPlan;
 use crate::host_fns::HostFunctionRegistry;
 use crate::invariant::Failure;
-use crate::presentation_evidence::PendingPresentationMap;
+use crate::runtime_presentation::PendingPresentedMap;
 use crate::static_incompleteness::ExpressionDependencies;
 
 use super::work_budget::WorkBudget;
@@ -67,7 +67,7 @@ pub struct EvalEnvironment<'a> {
         >,
     >,
     pub unfinished_calls: Option<&'a std::cell::RefCell<BTreeSet<ResolvedDeclName>>>,
-    pub root_presentation_instances: Option<&'a PendingPresentationMap>,
+    pub root_presentation_instances: Option<&'a PendingPresentedMap>,
 }
 
 /// An immutable environment whose capabilities can only be selected by phase.
@@ -294,7 +294,7 @@ impl<'a> EvalSession<'a> {
     pub const fn with_roots(
         mut self,
         values: &'a RuntimeValueMap,
-        instances: Option<&'a PendingPresentationMap>,
+        instances: Option<&'a PendingPresentedMap>,
     ) -> Self {
         self.environment.root_values = Some(values);
         self.environment.root_presentation_instances = instances;

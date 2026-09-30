@@ -2,75 +2,109 @@
 //! lookup, host capability, or invocation environment is available here.
 
 use super::types::{DisplayUnit, Value, validate_display_projection};
+use crate::invariant::Invariant;
 use crate::presentation_evidence::{
-    LeafPresentationDiagnostic, Presentation, PresentationFailure, PresentationPathPart,
-    ResolvedLeaf, ResolvedPresentation,
+    LeafPresentationDiagnostic, PresentationFailure, PresentationLeaf, PresentationPathPart,
+    QuantityDisplay, ResolvedLeaf,
 };
+use crate::runtime_presentation::{PresentedView, ResolvedValue};
 use graphcal_compiler::registry::format::format_number;
 use graphcal_compiler::registry::index::CoordinateIndexData;
 
-/// Display `value` as `presentation` says, reporting each quantity leaf whose
+/// Display `value` as `presented` says, reporting each quantity leaf whose
 /// display failed; such a leaf keeps its SI value.
 ///
-/// The presentation is read in the value's shape: a leaf presentation applies
-/// to the leaves of its kind (a unit to quantity leaves, a time zone to
-/// datetime leaves), and a field or an entry it does not describe stays plain.
+/// `value` must be the public projection of `presented`'s runtime value.
+///
+/// # Errors
+///
+/// Returns an [`Invariant`] when `value` does not have the shape and leaf
+/// kinds of `presented`'s runtime value. The public [`Value`] is a second
+/// value model, produced from the runtime value by a separate projection
+/// walk, so this correspondence is checked here rather than carried by a type.
 pub(super) fn attach_presentation(
     value: &mut Value,
-    presentation: Option<&ResolvedPresentation>,
-) -> Vec<LeafPresentationDiagnostic> {
+    presented: &ResolvedValue,
+) -> Result<Vec<LeafPresentationDiagnostic>, Invariant> {
     let mut diagnostics = Vec::new();
-    if let Some(presentation) = presentation {
-        attach(value, presentation, &[], &mut diagnostics);
-    }
-    diagnostics
+    attach(value, presented.view(), &[], &mut diagnostics)?;
+    Ok(diagnostics)
 }
 
 fn attach(
     value: &mut Value,
-    presentation: &ResolvedPresentation,
+    presented: PresentedView<'_, ResolvedLeaf>,
     path: &[PresentationPathPart],
     diagnostics: &mut Vec<LeafPresentationDiagnostic>,
-) {
-    match (presentation, value) {
-        (Presentation::Plain, _) => {}
-        (_, Value::Struct { fields, .. }) => {
-            for (name, field) in fields {
-                if let Some(presentation) = presentation.field_ref(name) {
-                    let path = [path, &[PresentationPathPart::Field(name.clone())]].concat();
-                    attach(field, presentation, &path, diagnostics);
-                }
-            }
+) -> Result<(), Invariant> {
+    match presented {
+        PresentedView::Whole { leaf: None, .. } => Ok(()),
+        PresentedView::Whole {
+            leaf: Some(leaf), ..
+        } => attach_leaf(value, leaf, path, diagnostics),
+        PresentedView::Struct(fields) => {
+            let Value::Struct {
+                fields: projected, ..
+            } = value
+            else {
+                return Err(projection_mismatch("a struct value", value));
+            };
+            fields.fields().try_for_each(|(name, field)| {
+                let projected = projected.get_mut(name).ok_or_else(|| {
+                    Invariant::violated(format_args!(
+                        "the public projection of a struct value lost field `{name}`"
+                    ))
+                })?;
+                let path = [path, &[PresentationPathPart::Field(name.clone())]].concat();
+                attach(projected, field.view(), &path, diagnostics)
+            })
         }
-        (_, Value::Indexed { entries, .. }) => {
-            for (key, entry) in entries {
-                if let Some(presentation) = presentation.entry_ref(key) {
-                    let path = [path, &[PresentationPathPart::Index(key.clone())]].concat();
-                    attach(entry, presentation, &path, diagnostics);
-                }
-            }
+        PresentedView::Indexed(entries) => {
+            let Value::Indexed {
+                entries: projected, ..
+            } = value
+            else {
+                return Err(projection_mismatch("an indexed value", value));
+            };
+            entries.iter().try_for_each(|(key, entry)| {
+                let projected = projected.get_mut(key).ok_or_else(|| {
+                    Invariant::violated(format_args!(
+                        "the public projection of an indexed value lost entry `{key}`"
+                    ))
+                })?;
+                let path = [path, &[PresentationPathPart::Index(key.clone())]].concat();
+                attach(projected, entry.view(), &path, diagnostics)
+            })
         }
-        (Presentation::Uniform(leaf), value) => attach_leaf(value, leaf, path, diagnostics),
-        // A container's presentation presents no scalar leaf.
-        (Presentation::Struct(_) | Presentation::Indexed(_), _) => {}
     }
 }
 
+/// Present every leaf of `value` by `leaf`. The runtime value holds only
+/// leaves of the leaf's kind (checked when the presentation was attached to
+/// it), so its projection does too.
 fn attach_leaf(
     value: &mut Value,
     leaf: &ResolvedLeaf,
     path: &[PresentationPathPart],
     diagnostics: &mut Vec<LeafPresentationDiagnostic>,
-) {
+) -> Result<(), Invariant> {
     match (leaf, value) {
-        (ResolvedLeaf::Failed(failure), Value::Quantity { .. } | Value::Complex { .. }) => {
+        (_, Value::Indexed { entries, .. }) => entries.iter_mut().try_for_each(|(key, entry)| {
+            let path = [path, &[PresentationPathPart::Index(key.clone())]].concat();
+            attach_leaf(entry, leaf, &path, diagnostics)
+        }),
+        (
+            ResolvedLeaf::Quantity(QuantityDisplay::Failed(failure)),
+            Value::Quantity { .. } | Value::Complex { .. },
+        ) => {
             diagnostics.push(LeafPresentationDiagnostic {
                 path: path.to_vec(),
                 failure: failure.clone(),
             });
+            Ok(())
         }
         (
-            ResolvedLeaf::Unit { label, scale },
+            ResolvedLeaf::Quantity(QuantityDisplay::Unit { label, scale }),
             value @ (Value::Quantity { .. } | Value::Complex { .. }),
         ) => {
             set_display_unit(value, Some(DisplayUnit::new(label.clone(), *scale)));
@@ -83,13 +117,34 @@ fn attach_leaf(
                     },
                 });
             }
+            Ok(())
         }
-        (ResolvedLeaf::Timezone(timezone), Value::Datetime { display_tz, .. }) => {
+        (ResolvedLeaf::Datetime(timezone), Value::Datetime { display_tz, .. }) => {
             *display_tz = Some(timezone.clone());
+            Ok(())
         }
-        // A unit presents quantity leaves and a time zone datetime leaves.
-        (ResolvedLeaf::Failed(_) | ResolvedLeaf::Unit { .. } | ResolvedLeaf::Timezone(_), _) => {}
+        (ResolvedLeaf::Quantity(_) | ResolvedLeaf::Datetime(_), value) => Err(projection_mismatch(
+            format_args!("a {:?} leaf", leaf.kind()),
+            value,
+        )),
     }
+}
+
+/// A public projection that does not have the shape of its runtime value.
+fn projection_mismatch(expected: impl std::fmt::Display, value: &Value) -> Invariant {
+    let actual = match value {
+        Value::Quantity { .. } => "a quantity",
+        Value::Complex { .. } => "a complex value",
+        Value::Bool(_) => "a Bool",
+        Value::Int(_) => "an Int",
+        Value::Key(_) => "a key",
+        Value::Struct { .. } => "a struct value",
+        Value::Indexed { .. } => "an indexed value",
+        Value::Datetime { .. } => "a datetime",
+    };
+    Invariant::violated(format_args!(
+        "the public projection of {expected} is {actual}"
+    ))
 }
 
 fn set_display_unit(value: &mut Value, unit: Option<DisplayUnit>) {

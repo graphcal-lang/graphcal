@@ -155,13 +155,7 @@ impl ParameterBindingBuilder<'_> {
             self.project
                 .binding_value_error(port, "quantity must be finite")
         })?;
-        self.insert(
-            position,
-            RuntimeParameterBinding {
-                value,
-                presentation: crate::presentation_evidence::Presentation::Plain,
-            },
-        )
+        self.insert(position, RuntimeParameterBinding::plain(value))
     }
 
     /// Bind one exact signed integer.
@@ -176,10 +170,7 @@ impl ParameterBindingBuilder<'_> {
         }
         self.insert(
             position,
-            RuntimeParameterBinding {
-                value: RuntimeValue::Int(value),
-                presentation: crate::presentation_evidence::Presentation::Plain,
-            },
+            RuntimeParameterBinding::plain(RuntimeValue::Int(value)),
         )
     }
 
@@ -195,10 +186,7 @@ impl ParameterBindingBuilder<'_> {
         }
         self.insert(
             position,
-            RuntimeParameterBinding {
-                value: RuntimeValue::Bool(value),
-                presentation: crate::presentation_evidence::Presentation::Plain,
-            },
+            RuntimeParameterBinding::plain(RuntimeValue::Bool(value)),
         )
     }
 
@@ -230,10 +218,7 @@ impl ParameterBindingBuilder<'_> {
         };
         self.insert(
             position,
-            RuntimeParameterBinding {
-                value: RuntimeValue::Key(key),
-                presentation: crate::presentation_evidence::Presentation::Plain,
-            },
+            RuntimeParameterBinding::plain(RuntimeValue::Key(key)),
         )
     }
 }
@@ -485,16 +470,23 @@ impl PreparedProject {
                 continue;
             };
             if let Some(imported) = self.output_assembly.imported_values.get(name) {
-                let mut value = crate::eval::public_projection::EvaluatedValue::new(
-                    imported.value().value(),
-                    imported.declared_type(),
-                )
-                .project(self.tir(), &self.source)
-                .map_err(CompileError::from)?;
-                let diagnostics = crate::eval::display::attach_presentation(
-                    &mut value,
-                    evaluation.presentations.get(imported.value().key()),
-                );
+                let (value, diagnostics) =
+                    match evaluation.presentations.get(imported.value().key()) {
+                        Some(presented) => crate::eval::presented_projection::project_presented(
+                            presented,
+                            imported.declared_type(),
+                            self.tir(),
+                            &self.source,
+                        )?,
+                        None => (
+                            crate::eval::public_projection::EvaluatedValue::new(
+                                imported.value().value(),
+                                imported.declared_type(),
+                            )
+                            .project(self.tir(), &self.source)?,
+                            Vec::new(),
+                        ),
+                    };
                 eval_result
                     .presentation_diagnostics
                     .extend(diagnostics.into_iter().map(|detail| {
