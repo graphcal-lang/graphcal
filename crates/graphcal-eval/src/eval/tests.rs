@@ -798,6 +798,7 @@ fn frame_runtime_imports_seed_only_unbound_prepared_imports() {
         inline.scope(),
         inline.execution_dags().to_vec(),
         inline.semantic_instances().to_vec(),
+        inline.closure_instances().to_vec(),
         crate::execution_plan::PreparedImports {
             constants: Vec::new(),
             runtime: vec![import.clone()],

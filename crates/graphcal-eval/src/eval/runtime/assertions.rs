@@ -12,7 +12,7 @@ use graphcal_compiler::resolved_name::ResolvedDeclName;
 use graphcal_compiler::syntax::module_name::ScopedName;
 use graphcal_compiler::syntax::span::Span;
 use graphcal_compiler::tir::typed::{
-    AssertionOperands, CheckedInstance, DeclarationBody, ResolvedProjection, Scoped,
+    AssertionOperands, DeclarationBody, ResolvedProjection, Scoped,
 };
 
 use crate::assertion_eval::evaluate_assert_with_expected_fail;
@@ -21,24 +21,6 @@ use crate::eval_expr::{EvalSession, RuntimeValueMap, eval_root};
 
 use super::root_names::{qualified_below, root_source_names};
 use super::{declaration_body, dependency_failure_message};
-
-/// One semantic-instance record paired with the checked DAG it materialized.
-fn semantic_instance<'tir>(
-    tir: &'tir graphcal_compiler::tir::typed::CheckedTir,
-    record: &'tir graphcal_compiler::ir::instance::HirInstanceRecord,
-    src: &NamedSource<Arc<String>>,
-) -> Result<CheckedInstance<'tir>, GraphcalError> {
-    tir.dag_registry().semantic_instance(record).ok_or_else(|| {
-        GraphcalError::internal_error(
-            format!(
-                "semantic instance `{}` is absent from checked TIR",
-                record.instance.id().owner()
-            ),
-            src,
-            DiagnosticAnchor::WholeFile,
-        )
-    })
-}
 
 /// The checked body of the assertion `owner`, in the scope of its owner.
 fn assertion_body<'tir>(
@@ -64,19 +46,20 @@ fn assertion_body<'tir>(
 }
 
 /// Evaluate every assertion reported for the root DAG: root assertions in
-/// source order, then assertions projected from semantic instances. Each
-/// result applies its `expected_fail` inversion.
+/// source order, then assertions projected from the semantic instances the
+/// root's plan includes. Each result applies its `expected_fail` inversion.
 ///
 /// A root assertion whose body references a failed declaration reports the
 /// dependency failure (with its root cause) instead of evaluating over a
 /// value map where the failed name is simply absent (#814).
 pub(in crate::eval) fn evaluate_assertions(
-    tir: &graphcal_compiler::tir::typed::CheckedTir,
+    plan: &crate::execution_plan::ExecPlan<'_>,
     src: &NamedSource<Arc<String>>,
     ctx: &EvalSession<'_>,
     values: &RuntimeValueMap,
     errors: &HashMap<ResolvedDeclName, NodeUnavailable>,
 ) -> Result<Vec<(ScopedName, AssertResult, Span)>, GraphcalError> {
+    let tir = plan.tir();
     let mut assertions: Vec<(ScopedName, AssertResult, Span)> = tir
         .root()
         .asserts()
@@ -98,18 +81,15 @@ pub(in crate::eval) fn evaluate_assertions(
             ))
         })
         .collect::<Result<_, GraphcalError>>()?;
-    let mut semantic_parents = tir
-        .local_dags()
-        .map(|(_, dag)| dag)
-        .filter(|dag| dag.dag_id() == tir.root_dag_id() || dag.is_semantic_instance())
-        .collect::<Vec<_>>();
-    semantic_parents.sort_by(|left, right| left.dag_id().cmp(right.dag_id()));
-    for parent_dag in semantic_parents {
-        for record in parent_dag.semantic_instances() {
+    for (parent, instances) in plan.root().closure_instances() {
+        let parent_dag = parent.dag();
+        for planned in instances {
+            let instance = planned.instance();
+            let record = instance.record();
             for ResolvedProjection {
                 target: owner,
                 projection,
-            } in semantic_instance(tir, record, src)?.assertion_projections()
+            } in instance.assertion_projections()
             {
                 let (unit, entry) = assertion_body(tir, &owner, src)?;
                 let assertion_ctx = ctx.with_src(src).for_decl(&owner);
