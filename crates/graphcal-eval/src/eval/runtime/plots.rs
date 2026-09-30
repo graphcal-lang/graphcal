@@ -693,10 +693,6 @@ fn check_positive_property(
 fn runtime_to_plot_field_value(rv: &RuntimeValue) -> Result<PlotFieldValue, String> {
     match rv {
         RuntimeValue::Quantity(v) => Ok(PlotFieldValue::Number(v.get())),
-        RuntimeValue::Complex(_) => Err(
-            "Complex values cannot be plotted directly; use re(), im(), abs(), or phase()"
-                .to_string(),
-        ),
         RuntimeValue::Int(i) => crate::eval_expr::numeric::exact_i64_to_f64(*i)
             .map(PlotFieldValue::Number)
             .map_err(|_| {
@@ -713,7 +709,10 @@ fn runtime_to_plot_field_value(rv: &RuntimeValue) -> Result<PlotFieldValue, Stri
             }
         },
         RuntimeValue::Indexed(_) => crate::eval::plot_data::flatten_to_field_value(rv),
-        RuntimeValue::Struct(_) => Err(format!("{} cannot be plotted", rv.describe())),
+        // The checker admits no complex or struct plot channel.
+        RuntimeValue::Complex(_) | RuntimeValue::Struct(_) => {
+            Err(format!("{} cannot be plotted", rv.describe()))
+        }
         RuntimeValue::Datetime(epoch) => crate::eval::types::epoch_to_rfc3339(epoch)
             .map(PlotFieldValue::Datetime)
             .map_err(|error| error.to_string()),

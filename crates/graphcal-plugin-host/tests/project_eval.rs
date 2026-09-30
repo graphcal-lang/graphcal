@@ -163,7 +163,10 @@ fn wasm_plugin_evaluates_end_to_end() {
     )
     .unwrap();
     let value = value_for(&result, "mid");
-    assert!((value.si_value().unwrap() - 2.0).abs() < 1e-12, "{value:?}");
+    assert!(
+        (value.si_value().unwrap().get() - 2.0).abs() < 1e-12,
+        "{value:?}"
+    );
 }
 
 #[test]
@@ -213,7 +216,10 @@ node mid: Length = demo::lerp(1.0 m, 3.0 m, 0.5);
     )
     .unwrap();
     let value = value_for(&result, "mid");
-    assert!((value.si_value().unwrap() - 2.0).abs() < 1e-12, "{value:?}");
+    assert!(
+        (value.si_value().unwrap().get() - 2.0).abs() < 1e-12,
+        "{value:?}"
+    );
 }
 
 #[test]
@@ -322,7 +328,10 @@ fn wasm_plugin_imported_inside_a_dag_body_evaluates() {
     )
     .unwrap();
     let value = value_for(&result, "y");
-    assert!((value.si_value().unwrap() - 2.0).abs() < 1e-12, "{value:?}");
+    assert!(
+        (value.si_value().unwrap().get() - 2.0).abs() < 1e-12,
+        "{value:?}"
+    );
 }
 
 #[test]
@@ -389,7 +398,7 @@ node y: Dimensionless = @inner()::a;
         .eval(&HashMap::new())
         .unwrap();
 
-    assert!((value_for(&result, "y").si_value().unwrap() - 0.25).abs() < 1e-12);
+    assert!((value_for(&result, "y").si_value().unwrap().get() - 0.25).abs() < 1e-12);
 }
 
 #[test]
@@ -470,7 +479,7 @@ node dependent: Dimensionless = @bad + 1.0;
     );
 
     let good = value_for(&result, "good");
-    assert!((good.si_value().unwrap() - 0.25).abs() < 1e-12);
+    assert!((good.si_value().unwrap().get() - 0.25).abs() < 1e-12);
 
     let dependent = result
         .entries
@@ -574,7 +583,10 @@ fn correctly_pinned_plugins_evaluate() {
     let sha = sha256_hex(&bytes);
     let result = eval_package_project(dir.path(), &bytes, Some(&sha)).unwrap();
     let value = value_for(&result, "mid");
-    assert!((value.si_value().unwrap() - 2.0).abs() < 1e-12, "{value:?}");
+    assert!(
+        (value.si_value().unwrap().get() - 2.0).abs() < 1e-12,
+        "{value:?}"
+    );
 }
 
 #[test]
@@ -642,7 +654,7 @@ node result: Dimensionless = worker::work(7.0);
         .eval(&HashMap::new())
         .unwrap();
 
-    assert!((value_for(&result, "result").si_value().unwrap() - 7.0).abs() < f64::EPSILON);
+    assert!((value_for(&result, "result").si_value().unwrap().get() - 7.0).abs() < f64::EPSILON);
 }
 
 #[test]
@@ -695,7 +707,7 @@ fn virtual_projects_without_a_manifest_load_unpinned() {
         Some(("plugins/demo.wasm", lerp_plugin())),
     )
     .unwrap();
-    assert!((value_for(&result, "mid").si_value().unwrap() - 2.0).abs() < 1e-12);
+    assert!((value_for(&result, "mid").si_value().unwrap().get() - 2.0).abs() < 1e-12);
 }
 
 #[test]
@@ -728,8 +740,8 @@ node b: Length = wasm::lerp(1.0 m, 3.0 m, 0.5);
         .eval(&HashMap::new())
         .unwrap();
 
-    assert!((value_for(&result, "a").si_value().unwrap() - 0.25).abs() < 1e-12);
-    assert!((value_for(&result, "b").si_value().unwrap() - 2.0).abs() < 1e-12);
+    assert!((value_for(&result, "a").si_value().unwrap().get() - 0.25).abs() < 1e-12);
+    assert!((value_for(&result, "b").si_value().unwrap().get() - 2.0).abs() < 1e-12);
 }
 
 // ---------------------------------------------------------------------------
@@ -828,7 +840,7 @@ node margin_total: Velocity = sum(@margined);
     let value = value_for(&result, "margin_total");
     // (2000 + 500 + 1500) m/s * 1.25 = 5000 m/s.
     assert!(
-        (value.si_value().unwrap() - 5000.0).abs() < 1e-9,
+        (value.si_value().unwrap().get() - 5000.0).abs() < 1e-9,
         "{value:?}"
     );
 }
@@ -1095,7 +1107,7 @@ node spread: Velocity = @span.hi - @span.lo;
     .unwrap();
     let value = value_for(&result, "spread");
     assert!(
-        (value.si_value().unwrap() - 1500.0).abs() < 1e-9,
+        (value.si_value().unwrap().get() - 1500.0).abs() < 1e-9,
         "{value:?}"
     );
 }

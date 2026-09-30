@@ -238,6 +238,7 @@ node delta_v: Velocity = @v_exhaust * ln(@mass_ratio);
             .unwrap()
             .si_value()
             .unwrap()
+            .get()
             - 10.0 / 3.0)
             .abs()
             < 1e-12
@@ -264,6 +265,7 @@ node copied: Length = @todo;
             .unwrap()
             .si_value()
             .unwrap()
+            .get()
             .to_bits(),
         1.0_f64.to_bits()
     );
@@ -378,6 +380,7 @@ node known: Length = @partial()::known;
             .unwrap()
             .si_value()
             .unwrap()
+            .get()
             .to_bits(),
         2.0_f64.to_bits()
     );

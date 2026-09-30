@@ -1,5 +1,6 @@
 use graphcal_compiler::desugar::desugared_ast::BinOp;
 use graphcal_compiler::exact_rational::ExactRational;
+use graphcal_compiler::finite_value::{FiniteArithmeticError, FiniteQuantity};
 use graphcal_compiler::syntax::span::Span;
 
 use crate::runtime_value::RuntimeValue;
@@ -56,7 +57,7 @@ pub(super) fn check_finite(
     context: &str,
     ctx: &EvalContext<'_>,
     span: Span,
-) -> Result<f64, GraphcalError> {
+) -> Result<FiniteQuantity, GraphcalError> {
     super::numeric::computed_finite_quantity(value, context)
         .map_err(|err| ctx.eval_error(err.to_string(), span))
 }
@@ -66,7 +67,7 @@ fn check_nonzero(
     context: &str,
     ctx: &EvalContext<'_>,
     span: Span,
-) -> Result<f64, GraphcalError> {
+) -> Result<FiniteQuantity, GraphcalError> {
     super::numeric::computed_nonzero_quantity(value, context)
         .map_err(|err| ctx.eval_error(err.to_string(), span))
 }
@@ -198,54 +199,69 @@ pub(super) fn eval_int_binop(
 /// denominator makes that rule deterministic instead of relying on `powf`'s
 /// treatment of a rounded exponent.
 pub(super) fn eval_exact_quantity_power(
-    base: f64,
+    base: FiniteQuantity,
     exponent: ExactRational,
     ctx: &EvalContext<'_>,
     span: Span,
-) -> Result<f64, GraphcalError> {
+) -> Result<FiniteQuantity, GraphcalError> {
     let result = exponent
-        .pow_f64(base)
+        .pow_f64(base.get())
         .map_err(|error| ctx.eval_error(error.to_string(), span))?;
-    if base == 0.0 {
+    if base.get() == 0.0 {
         check_finite(result, "power operation", ctx, span)
     } else {
         check_nonzero(result, "power operation", ctx, span)
     }
 }
 
-/// Evaluate an arithmetic binary operator on two f64 values.
+/// Evaluate an arithmetic binary operator on two finite quantities.
 ///
-/// The result must be finite. (The evaluators previously diverged here:
-/// this path only rejected non-finite results when the *inputs* were
-/// finite, which could mask an upstream non-finite value — the strict
-/// policy wins, matching every value-construction site.)
+/// Sums, differences, products, and quotients use the checked finite
+/// arithmetic of [`FiniteQuantity`]; a power of nonzero operands must also
+/// not underflow to zero.
 pub(super) fn eval_quantity_binop(
     op: BinOp,
-    l: f64,
-    r: f64,
+    l: FiniteQuantity,
+    r: FiniteQuantity,
     ctx: &EvalContext<'_>,
     span: Span,
-) -> Result<f64, GraphcalError> {
+) -> Result<FiniteQuantity, GraphcalError> {
+    let context = "arithmetic operation";
     let result = match op {
-        BinOp::Add => l + r,
-        BinOp::Sub => l - r,
-        BinOp::Mul => l * r,
-        BinOp::Div => {
-            if r == 0.0 {
-                return Err(ctx.eval_error("division by zero", span));
-            }
-            l / r
+        BinOp::Add => l.checked_add(r),
+        BinOp::Sub => l.checked_sub(r),
+        BinOp::Mul => l.checked_mul(r),
+        BinOp::Div => l.checked_div(r),
+        BinOp::Pow(_) => {
+            let result = l.get().powf(r.get());
+            return if l.get() != 0.0 && r.get() != 0.0 {
+                check_nonzero(result, context, ctx, span)
+            } else {
+                check_finite(result, context, ctx, span)
+            };
         }
-        BinOp::Pow(_) => l.powf(r),
         _ => {
             return Err(
                 ctx.internal_error(format!("unexpected operator {op:?} in arithmetic"), span)
             );
         }
     };
-    if matches!(op, BinOp::Mul | BinOp::Div | BinOp::Pow(_)) && l != 0.0 && r != 0.0 {
-        check_nonzero(result, "arithmetic operation", ctx, span)
-    } else {
-        check_finite(result, "arithmetic operation", ctx, span)
-    }
+    result.map_err(|error| {
+        let message = match error {
+            FiniteArithmeticError::DivisionByZero => "division by zero".to_string(),
+            FiniteArithmeticError::Infinite => {
+                super::numeric::QuantityValidationError::InfiniteResult {
+                    context: context.to_string(),
+                }
+                .to_string()
+            }
+            FiniteArithmeticError::Underflow => {
+                super::numeric::QuantityValidationError::UnderflowToZero {
+                    context: context.to_string(),
+                }
+                .to_string()
+            }
+        };
+        ctx.eval_error(message, span)
+    })
 }

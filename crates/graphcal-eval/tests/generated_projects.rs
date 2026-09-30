@@ -59,7 +59,7 @@ fn assert_expected(project: &GeneratedProject) -> Result<(), TestCaseError> {
             };
             prop_assert!(dimension.is_dimensionless());
             let expected = value.to_string().parse::<f64>().expect("bounded integer");
-            prop_assert!((*si_value - expected).abs() < f64::EPSILON);
+            prop_assert!((si_value.get() - expected).abs() < f64::EPSILON);
         }
         ExpectedArtifact::PresentedQuantity {
             name,
@@ -86,7 +86,7 @@ fn assert_expected(project: &GeneratedProject) -> Result<(), TestCaseError> {
                 .to_string()
                 .parse::<f64>()
                 .expect("bounded positive integer");
-            prop_assert!((*actual_si - expected_si).abs() < f64::EPSILON);
+            prop_assert!((actual_si.get() - expected_si).abs() < f64::EPSILON);
             prop_assert_eq!(actual_unit.label.as_str(), display_unit.as_str());
             prop_assert!((actual_unit.scale.get() - expected_scale).abs() < f64::EPSILON);
             let projected =

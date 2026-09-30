@@ -37,27 +37,16 @@ pub(super) fn aggregate_indexed_values(
 ) -> Result<RuntimeValue, AggregationError> {
     let entries = indexed.values().as_slice();
     match kind {
-        ValueAggregation::Sum => aggregate_sum(entries).and_then(runtime_quantity),
-        ValueAggregation::Product => aggregate_product(entries).and_then(runtime_quantity),
-        ValueAggregation::Minimum => aggregate_minimum(entries).and_then(runtime_quantity),
-        ValueAggregation::Maximum => aggregate_maximum(entries).and_then(runtime_quantity),
-        ValueAggregation::Mean => aggregate_mean(entries).and_then(runtime_quantity),
+        ValueAggregation::Sum => aggregate_sum(entries).map(RuntimeValue::Quantity),
+        ValueAggregation::Product => aggregate_product(entries).map(RuntimeValue::Quantity),
+        ValueAggregation::Minimum => aggregate_minimum(entries).map(RuntimeValue::Quantity),
+        ValueAggregation::Maximum => aggregate_maximum(entries).map(RuntimeValue::Quantity),
+        ValueAggregation::Mean => aggregate_mean(entries).map(RuntimeValue::Quantity),
         ValueAggregation::RootSumSquare => {
-            aggregate_root_sum_square(entries).and_then(runtime_quantity)
+            aggregate_root_sum_square(entries).map(RuntimeValue::Quantity)
         }
         ValueAggregation::Count => aggregate_count(entries).map(RuntimeValue::Int),
     }
-}
-
-fn runtime_quantity(value: f64) -> Result<RuntimeValue, AggregationError> {
-    FiniteQuantity::try_new(value)
-        .map(RuntimeValue::Quantity)
-        .map_err(|error| {
-            AggregationError::Quantity(numeric::QuantityValidationError::NonFinite {
-                context: "aggregation result".to_string(),
-                value: error.value,
-            })
-        })
 }
 
 /// Key of the extremum element, resolving ties to the first entry in index
@@ -88,65 +77,70 @@ pub(super) fn extremum_key(
     Ok(key.clone())
 }
 
-fn quantity_entry(value: &RuntimeValue, context: &'static str) -> Result<f64, AggregationError> {
-    let quantity = value.expect_quantity(context)?;
-    numeric::finite_quantity(quantity, context).map_err(AggregationError::from)
+fn quantity_entry(
+    value: &RuntimeValue,
+    context: &'static str,
+) -> Result<FiniteQuantity, AggregationError> {
+    Ok(value.expect_quantity(context)?)
 }
 
-fn aggregate_sum(entries: &[RuntimeValue]) -> Result<f64, AggregationError> {
+fn aggregate_sum(entries: &[RuntimeValue]) -> Result<FiniteQuantity, AggregationError> {
+    // The raw total may overflow midway and still be reported once at the end.
     let total =
         entries
             .iter()
             .try_fold(0.0_f64, |acc, value| -> Result<f64, AggregationError> {
-                Ok(acc + quantity_entry(value, "sum element")?)
+                Ok(acc + quantity_entry(value, "sum element")?.get())
             })?;
     numeric::computed_finite_quantity(total, "sum()").map_err(AggregationError::from)
 }
 
-fn aggregate_product(entries: &[RuntimeValue]) -> Result<f64, AggregationError> {
-    entries.iter().try_fold(1.0_f64, |product, value| {
-        let value = quantity_entry(value, "product element")?;
-        let result = product * value;
-        if product != 0.0 && value != 0.0 {
-            numeric::computed_nonzero_quantity(result, "product()").map_err(AggregationError::from)
-        } else {
-            numeric::computed_finite_quantity(result, "product()").map_err(AggregationError::from)
-        }
-    })
+fn aggregate_product(entries: &[RuntimeValue]) -> Result<FiniteQuantity, AggregationError> {
+    entries
+        .iter()
+        .try_fold(FiniteQuantity::ONE, |product, value| {
+            let value = quantity_entry(value, "product element")?;
+            product.checked_mul(value).map_err(|error| {
+                AggregationError::from(numeric::QuantityValidationError::from_arithmetic(
+                    error,
+                    "product()",
+                ))
+            })
+        })
 }
 
-fn aggregate_root_sum_square(entries: &[RuntimeValue]) -> Result<f64, AggregationError> {
+fn aggregate_root_sum_square(entries: &[RuntimeValue]) -> Result<FiniteQuantity, AggregationError> {
     let values = entries
         .iter()
-        .map(|value| quantity_entry(value, "rss element"))
+        .map(|value| quantity_entry(value, "rss element").map(FiniteQuantity::get))
         .collect::<Result<Vec<_>, _>>()?;
     numeric::root_sum_square(values, "rss()").map_err(AggregationError::from)
 }
 
-fn aggregate_minimum(entries: &[RuntimeValue]) -> Result<f64, AggregationError> {
+fn aggregate_minimum(entries: &[RuntimeValue]) -> Result<FiniteQuantity, AggregationError> {
     let minimum = entries.iter().try_fold(
         f64::INFINITY,
         |acc, value| -> Result<f64, AggregationError> {
-            Ok(acc.min(quantity_entry(value, "minimum element")?))
+            Ok(acc.min(quantity_entry(value, "minimum element")?.get()))
         },
     )?;
     numeric::computed_finite_quantity(minimum, "minimum()").map_err(AggregationError::from)
 }
 
-fn aggregate_maximum(entries: &[RuntimeValue]) -> Result<f64, AggregationError> {
+fn aggregate_maximum(entries: &[RuntimeValue]) -> Result<FiniteQuantity, AggregationError> {
     let maximum = entries.iter().try_fold(
         f64::NEG_INFINITY,
         |acc, value| -> Result<f64, AggregationError> {
-            Ok(acc.max(quantity_entry(value, "maximum element")?))
+            Ok(acc.max(quantity_entry(value, "maximum element")?.get()))
         },
     )?;
     numeric::computed_finite_quantity(maximum, "maximum()").map_err(AggregationError::from)
 }
 
-fn aggregate_mean(entries: &[RuntimeValue]) -> Result<f64, AggregationError> {
+fn aggregate_mean(entries: &[RuntimeValue]) -> Result<FiniteQuantity, AggregationError> {
     let values = entries
         .iter()
-        .map(|value| quantity_entry(value, "mean element"))
+        .map(|value| quantity_entry(value, "mean element").map(FiniteQuantity::get))
         .collect::<Result<Vec<_>, _>>()?;
     numeric::exact_mean(&values, "mean()").map_err(AggregationError::from)
 }

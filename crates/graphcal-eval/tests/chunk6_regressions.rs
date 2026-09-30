@@ -76,7 +76,8 @@ node total: Dimensionless = @left + @right;
         .as_ref()
         .expect("total value")
         .si_value()
-        .expect("dimensionless total");
+        .expect("dimensionless total")
+        .get();
     assert!((total - 3.0).abs() < f64::EPSILON);
 }
 

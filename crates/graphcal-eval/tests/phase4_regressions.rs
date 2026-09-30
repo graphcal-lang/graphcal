@@ -52,6 +52,7 @@ fn si_value(result: &EvalResult, name: &str) -> f64 {
         .unwrap_or_else(|error| panic!("declaration `{name}` has error: {error}"))
         .si_value()
         .unwrap()
+        .get()
 }
 
 /// P4-1b (breaking): a file submodule `lib/x.gcl` and an inline `dag x` in

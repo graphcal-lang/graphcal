@@ -49,7 +49,7 @@ fn member_name(owner: &[&str], leaf: &str) -> ScopedName {
 fn find_value(result: &EvalResult, name: &str) -> f64 {
     // Check consts first
     if let Some((_, val)) = result.consts().find(|(n, _)| n.to_string() == name) {
-        return val.as_ref().unwrap().si_value().unwrap();
+        return val.as_ref().unwrap().si_value().unwrap().get();
     }
     // Check params and nodes (wrapped in Result)
     result
@@ -62,6 +62,7 @@ fn find_value(result: &EvalResult, name: &str) -> f64 {
         .unwrap_or_else(|e| panic!("value `{name}` has error: {e}"))
         .si_value()
         .unwrap()
+        .get()
 }
 
 fn assert_quantity_value(result: &EvalResult, name: &str, expected: f64) {
@@ -839,7 +840,8 @@ fn frame_runtime_imports_seed_only_unbound_prepared_imports() {
         frame
             .values()
             .get(&import)
-            .and_then(|value| value.expect_quantity("import").ok()),
+            .and_then(|value| value.expect_quantity("import").ok())
+            .map(graphcal_compiler::finite_value::FiniteQuantity::get),
         Some(7.0)
     );
 }
@@ -3707,7 +3709,7 @@ fn indexed_si_values(value: &Value) -> Vec<(&str, f64)> {
                     k.as_named()
                         .expect("helper is only used with named indexes")
                         .as_str(),
-                    v.si_value().unwrap(),
+                    v.si_value().unwrap().get(),
                 )
             })
             .collect(),
@@ -4145,7 +4147,7 @@ node distance: Length[Step] = unfold(
     };
     let distances = entries
         .values()
-        .map(|value| value.si_value().unwrap())
+        .map(|value| value.si_value().unwrap().get())
         .collect::<Vec<_>>();
     assert_eq!(distances, [1.0, 3.0, 5.0]);
 }
@@ -7685,7 +7687,7 @@ mod prop {
                 .unwrap().1;
             match z_result {
                 Ok(val) => {
-                    let z = val.si_value().unwrap();
+                    let z = val.si_value().unwrap().get();
                     prop_assert!(z.is_finite(), "division produced non-finite: {z}");
                 }
                 Err(NodeUnavailable::EvalFailed { message }) => {
@@ -7779,7 +7781,7 @@ fn include_required_index_accepts_structural_finite_axis() {
     };
     let values = entries
         .values()
-        .map(|value| value.si_value().unwrap())
+        .map(|value| value.si_value().unwrap().get())
         .collect::<Vec<_>>();
     assert_eq!(values, vec![2.0, 4.0, 6.0]);
 }
@@ -9339,7 +9341,7 @@ node distances: Length[Region] = for r: Region { @id_len(v: @dist[r])::result };
         crate::eval::types::Value::Indexed { entries, .. } => {
             let mut seen: std::collections::HashMap<String, f64> = std::collections::HashMap::new();
             for (variant, value) in entries {
-                seen.insert(variant.to_string(), value.si_value().unwrap());
+                seen.insert(variant.to_string(), value.si_value().unwrap().get());
             }
             assert!((seen["A"] - 1.0).abs() < 1e-10);
             assert!((seen["B"] - 2.0).abs() < 1e-10);
@@ -9393,7 +9395,7 @@ node effective: Length[Source, Region] = for s: Source, r: Region {
         for (rvar, rval) in inner {
             cells.insert(
                 (svar.to_string(), rvar.to_string()),
-                rval.si_value().unwrap(),
+                rval.si_value().unwrap().get(),
             );
         }
     }

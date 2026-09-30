@@ -3274,7 +3274,7 @@ mod tests {
 
     fn quantity(si_value: f64) -> Value {
         Value::Quantity {
-            si_value,
+            si_value: graphcal_compiler::finite_value::FiniteQuantity::try_new(si_value).unwrap(),
             dimension: Dimension::dimensionless(),
             display_unit: None,
         }

@@ -20,9 +20,9 @@ pub(in crate::eval_expr) fn checked_finite_quantity(
     span: Span,
     ctx: &EvalContext<'_>,
 ) -> Result<RuntimeValue, GraphcalError> {
-    let value = numeric::finite_quantity(value, context)
-        .map_err(|err| ctx.eval_error(err.to_string(), span))?;
-    RuntimeValue::quantity(value).map_err(|err| ctx.eval_error(err.to_string(), span))
+    numeric::finite_quantity(value, context)
+        .map(RuntimeValue::Quantity)
+        .map_err(|err| ctx.eval_error(err.to_string(), span))
 }
 
 fn unit_scale_error(
@@ -41,9 +41,9 @@ pub(in crate::eval_expr) fn checked_unit_scaled_value(
     span: Span,
     ctx: &EvalContext<'_>,
 ) -> Result<RuntimeValue, GraphcalError> {
-    let value = numeric::finite_quantity(value * scale.get(), "quantity literal value")
-        .map_err(|err| ctx.eval_error(err.to_string(), span))?;
-    RuntimeValue::quantity(value).map_err(|err| ctx.eval_error(err.to_string(), span))
+    numeric::finite_quantity(value * scale.get(), "quantity literal value")
+        .map(RuntimeValue::Quantity)
+        .map_err(|err| ctx.eval_error(err.to_string(), span))
 }
 
 /// Evaluate the scale expression of a dynamic unit in the scope of the DAG

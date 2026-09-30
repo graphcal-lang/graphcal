@@ -82,9 +82,9 @@ impl RuntimeValue {
 
     /// Extract quantity value, returning a structured error if this is not a quantity.
     /// (Type mismatches should be caught by `dim_check`; this is defense-in-depth.)
-    pub fn expect_quantity(&self, context: &str) -> Result<f64, RuntimeValueError> {
+    pub fn expect_quantity(&self, context: &str) -> Result<FiniteQuantity, RuntimeValueError> {
         match self {
-            Self::Quantity(v) => Ok(v.get()),
+            Self::Quantity(v) => Ok(*v),
             other => Err(RuntimeValueError {
                 expected: "quantity",
                 context: context.to_string(),

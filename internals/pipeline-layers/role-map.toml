@@ -107,6 +107,11 @@ role = "contracts"
 
 [[module]]
 package = "compiler"
+path = ["complex_value", "tests"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
 path = ["dag_id"]
 role = "contracts"
 

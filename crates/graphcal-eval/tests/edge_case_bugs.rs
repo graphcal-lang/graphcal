@@ -28,7 +28,7 @@ use proptest::prelude::*;
 /// Find the SI value of a named quantity declaration.
 fn find_value(result: &EvalResult, name: &str) -> f64 {
     if let Some((_, val)) = result.consts().find(|(n, _)| n.to_string() == name) {
-        return val.as_ref().unwrap().si_value().unwrap();
+        return val.as_ref().unwrap().si_value().unwrap().get();
     }
     result
         .params()
@@ -40,6 +40,7 @@ fn find_value(result: &EvalResult, name: &str) -> f64 {
         .unwrap_or_else(|e| panic!("value `{name}` has error: {e}"))
         .si_value()
         .unwrap()
+        .get()
 }
 
 /// Find the Int value of a named declaration.
@@ -240,7 +241,7 @@ node x: Time[TimeIdx] = for t: TimeIdx { coord(t) };
     let values = entries
         .iter()
         .map(|(_, value)| match value {
-            Value::Quantity { si_value, .. } => *si_value,
+            Value::Quantity { si_value, .. } => si_value.get(),
             other => panic!("expected quantity, got {other:?}"),
         })
         .collect::<Vec<_>>();
@@ -263,7 +264,7 @@ node coordinates: Time[Tenths] = for t: Tenths { coord(t) };
     let Value::Quantity { si_value, .. } = last else {
         panic!("expected quantity")
     };
-    assert_eq!(si_value.to_bits(), 0.3_f64.to_bits());
+    assert_eq!(si_value.get().to_bits(), 0.3_f64.to_bits());
 }
 
 #[test]
@@ -291,7 +292,7 @@ node repeated: Key<Hour>[Fin(2)] = for i: Fin(2) { @peak };
     else {
         panic!("expected a coordinate key rendered with its axis display unit, got {peak:?}")
     };
-    assert_eq!(si_value.to_bits(), 7200.0_f64.to_bits());
+    assert_eq!(si_value.get().to_bits(), 7200.0_f64.to_bits());
     assert_eq!(display_unit.label, "h");
     assert_eq!(display_unit.scale.get().to_bits(), 3600.0_f64.to_bits());
     assert_eq!(
@@ -352,7 +353,7 @@ node spaced: Time[ByCount] = for t: ByCount { coord(t) };
         let coordinates = entries
             .iter()
             .map(|(_, value)| match value {
-                Value::Quantity { si_value, .. } => *si_value,
+                Value::Quantity { si_value, .. } => si_value.get(),
                 other => panic!("expected quantity, got {other:?}"),
             })
             .collect::<Vec<_>>();
@@ -480,7 +481,7 @@ node t: Time[Step] = for i: Step { coord(i) };
             let values: Vec<f64> = entries
                 .iter()
                 .map(|(_, v)| match v {
-                    Value::Quantity { si_value, .. } => *si_value,
+                    Value::Quantity { si_value, .. } => si_value.get(),
                     other => panic!("expected quantity entry, got {other:?}"),
                 })
                 .collect();
@@ -597,12 +598,12 @@ node y: Length = @x -> m;
             display_unit,
             ..
         } => {
-            assert!(si_value.is_finite(), "SI value should be finite");
             if let Some(du) = display_unit {
-                let display = si_value / du.scale.get();
+                let display = si_value.get() / du.scale.get();
                 assert!(
                     display.is_finite(),
-                    "display value should be finite: {si_value} / {} = {display}",
+                    "display value should be finite: {} / {} = {display}",
+                    si_value.get(),
                     du.scale.get()
                 );
             }
@@ -1126,7 +1127,7 @@ fn assert_quantity_leaves_use_display_unit(
             ..
         } => {
             assert_eq!(
-                si_value.to_bits(),
+                si_value.get().to_bits(),
                 expected_si_value.to_bits(),
                 "quantity leaf in `{context}` must retain its SI value"
             );

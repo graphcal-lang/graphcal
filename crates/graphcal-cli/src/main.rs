@@ -1219,7 +1219,7 @@ fn print_json(
                 ..
             } => {
                 let mut map = serde_json::Map::new();
-                map.insert("si_value".to_string(), serde_json::json!(si_value));
+                map.insert("si_value".to_string(), serde_json::json!(si_value.get()));
                 if let Some(du) = display_unit {
                     let displayed =
                         graphcal_eval::eval::quantity_display_value(*si_value, Some(du))?;
@@ -1243,10 +1243,14 @@ fn print_json(
                     serde_json::json!({ "re": si_value.re(), "im": si_value.im() }),
                 );
                 if let Some(du) = display_unit {
-                    let real =
-                        graphcal_eval::eval::quantity_display_value(si_value.re(), Some(du))?;
-                    let imaginary =
-                        graphcal_eval::eval::quantity_display_value(si_value.im(), Some(du))?;
+                    let real = graphcal_eval::eval::quantity_display_value(
+                        si_value.real_part(),
+                        Some(du),
+                    )?;
+                    let imaginary = graphcal_eval::eval::quantity_display_value(
+                        si_value.imaginary_part(),
+                        Some(du),
+                    )?;
                     map.insert(
                         "display_value".to_string(),
                         serde_json::json!({ "re": real, "im": imaginary }),

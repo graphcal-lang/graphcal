@@ -343,6 +343,7 @@ const DEMO_PLUGIN_PATH: &str = "graphcal:demo";
 /// ```
 fn checked_demo_result(value: f64, function: &str) -> Result<f64, HostFnError> {
     crate::eval_expr::numeric::computed_finite_quantity(value, function)
+        .map(graphcal_compiler::finite_value::FiniteQuantity::get)
         .map_err(|error| HostFnError::new(error.to_string()))
 }
 
@@ -389,6 +390,7 @@ fn demo_normalize(args: &[HostFnValue]) -> Result<HostFnValue, HostFnError> {
         .map(|value| {
             total
                 .normalized_ratio(*value, "normalize()")
+                .map(graphcal_compiler::finite_value::FiniteQuantity::get)
                 .map_err(|error| HostFnError::new(error.to_string()))
         })
         .collect::<Result<Vec<_>, _>>()?;

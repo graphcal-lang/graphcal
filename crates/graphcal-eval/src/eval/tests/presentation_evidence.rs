@@ -82,7 +82,11 @@ fn literal_constant_and_conversion_label_overflow_preserve_si() {
             "label formatting must not erase SI: {result:?}"
         );
         assert_eq!(
-            find_entry(&result, "value").si_value().unwrap().to_bits(),
+            find_entry(&result, "value")
+                .si_value()
+                .unwrap()
+                .get()
+                .to_bits(),
             1.0_f64.to_bits()
         );
         assert_eq!(result.presentation_diagnostics.len(), 1);
@@ -123,7 +127,7 @@ fn conversion_only_failed_dependency_does_not_poison_si_values() {
             .as_ref()
             .expect("conversion-only dependency must not erase SI");
         assert_eq!(
-            value.si_value().unwrap().to_bits(),
+            value.si_value().unwrap().get().to_bits(),
             1.0_f64.to_bits(),
             "{name}"
         );
@@ -477,7 +481,10 @@ fn imported_constant_outputs_keep_selected_units_and_display_failures() {
         .1
         .as_ref()
         .unwrap();
-    assert_eq!(huge.si_value().unwrap().to_bits(), 1.0e300_f64.to_bits());
+    assert_eq!(
+        huge.si_value().unwrap().get().to_bits(),
+        1.0e300_f64.to_bits()
+    );
     assert!(
         result
             .presentation_diagnostics
