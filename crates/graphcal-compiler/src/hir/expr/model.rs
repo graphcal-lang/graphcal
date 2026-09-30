@@ -165,10 +165,12 @@ impl IndexVariantRef {
     }
 }
 
-/// A unit reference after module-aware resolution.
+/// A unit reference in an IDE tree after module-aware resolution.
 ///
 /// `spelling` preserves the source alias for diagnostics and display labels;
-/// `resolved` is the canonical definition identity used by the compiler core.
+/// `resolved` is the canonical definition identity, for navigation. IDE trees
+/// are never run; a complete tree names units by
+/// [`LocalUnit`](super::LocalUnit) handles instead.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedUnitRef {
     spelling: SyntaxUnitRef,
@@ -200,19 +202,22 @@ impl std::fmt::Display for ResolvedUnitRef {
     }
 }
 
-/// One term in a module-resolved unit expression.
+/// One term in a module-resolved unit expression, naming its unit by `R`.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ResolvedUnitExprItem {
+pub struct ResolvedUnitExprItem<R = super::LocalUnit> {
     pub op: ast::MulDivOp,
-    pub name: Spanned<ResolvedUnitRef>,
+    pub name: Spanned<R>,
     /// Exact semantic exponent, normalized at the AST-to-HIR boundary.
     pub power: crate::dimension::Rational,
 }
 
 /// A unit expression whose terms retain canonical defining-module identities.
+///
+/// Each term names its unit by `R`: [`LocalUnit`](super::LocalUnit) handles
+/// in a complete tree, [`ResolvedUnitRef`] definitions in an IDE tree.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ResolvedUnitExpr {
-    pub terms: Vec<ResolvedUnitExprItem>,
+pub struct ResolvedUnitExpr<R = super::LocalUnit> {
+    pub terms: Vec<ResolvedUnitExprItem<R>>,
     pub span: Span,
 }
 
@@ -262,11 +267,11 @@ pub enum ExprKind<C: Completeness = Strict> {
     },
     QuantityLiteral {
         value: f64,
-        unit: ResolvedUnitExpr,
+        unit: ResolvedUnitExpr<C::UnitRef>,
     },
     Convert {
         expr: Box<Expr<C>>,
-        target: ResolvedUnitExpr,
+        target: ResolvedUnitExpr<C::UnitRef>,
     },
     DisplayTimezone {
         expr: Box<Expr<C>>,

@@ -118,7 +118,7 @@ impl CheckedDag {
 
     /// The unit whose scale `unit` has when this DAG runs the body holding it.
     #[must_use]
-    pub fn resolve_unit(&self, unit: &crate::hir::expr::ResolvedUnitRef) -> ResolvedUnitName {
+    pub fn resolve_unit(&self, unit: &crate::hir::expr::LocalUnit) -> ResolvedUnitName {
         self.body.frame().resolve_unit(unit)
     }
 

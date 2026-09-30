@@ -95,7 +95,7 @@ fn collect_unit_names_from_hir(
             names.extend(
                 unit.terms
                     .iter()
-                    .map(|term| term.name.value.resolved().clone()),
+                    .map(|term| term.name.value.static_definition().clone()),
             );
         }
     });

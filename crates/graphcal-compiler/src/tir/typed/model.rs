@@ -1692,7 +1692,7 @@ impl DagTIR {
     }
 
     /// Visit every source unit reference used by this DAG.
-    pub fn visit_unit_references(&self, visitor: &mut impl FnMut(&hir::ResolvedUnitRef, Span)) {
+    pub fn visit_unit_references(&self, visitor: &mut impl FnMut(&hir::LocalUnit, Span)) {
         self.visit_expressions(&mut |expr| match expr.kind() {
             hir::ExprKind::QuantityLiteral { unit, .. } => unit
                 .terms

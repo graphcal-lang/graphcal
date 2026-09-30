@@ -289,7 +289,7 @@ impl<'a> EvalContext<'a> {
     #[must_use]
     pub fn resolve_unit(
         &self,
-        unit: &graphcal_compiler::hir::expr::ResolvedUnitRef,
+        unit: &graphcal_compiler::hir::expr::LocalUnit,
     ) -> graphcal_compiler::resolved_name::ResolvedUnitName {
         self.dag.resolve_unit(unit)
     }

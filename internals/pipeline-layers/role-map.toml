@@ -382,6 +382,16 @@ role = "contracts"
 
 [[module]]
 package = "compiler"
+path = ["hir", "expr", "local_unit"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["hir", "expr", "local_unit", "tests"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
 path = ["hir", "expr", "local_env"]
 role = "contracts"
 

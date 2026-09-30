@@ -1515,7 +1515,7 @@ impl HirPolicyChecker<'_> {
             return Ok(());
         }
         for term in &unit.terms {
-            let Some(info) = self.ctx.types.get_unit(term.name.value.resolved()) else {
+            let Some(info) = self.ctx.types.get_unit(term.name.value.static_definition()) else {
                 // Missing semantic unit definitions get their own diagnostics
                 // from dimension checking.
                 continue;

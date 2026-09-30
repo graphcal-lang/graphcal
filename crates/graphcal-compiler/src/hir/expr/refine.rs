@@ -8,6 +8,7 @@
 use super::completeness::Completeness;
 use super::model::{
     AssertBody, ConstRef, Expr, ExprKind, FieldInit, IndexArg, MapEntry, MatchArm, ParamBinding,
+    ResolvedUnitExpr, ResolvedUnitExprItem,
 };
 use crate::syntax::span::Spanned;
 
@@ -24,6 +25,9 @@ pub trait Refinement<A: Completeness, B: Completeness> {
 
     /// Translate how a declaration reference names its target.
     fn decl_ref(&mut self, reference: A::DeclRef) -> B::DeclRef;
+
+    /// Translate how a unit reference names its unit.
+    fn unit_ref(&mut self, reference: A::UnitRef) -> B::UnitRef;
 }
 
 /// Rebuild one expression tree under completeness `B`.
@@ -94,6 +98,31 @@ where
         .collect()
 }
 
+fn refine_unit_expr<A, B, R>(
+    unit: ResolvedUnitExpr<A::UnitRef>,
+    refinement: &mut R,
+) -> ResolvedUnitExpr<B::UnitRef>
+where
+    A: Completeness,
+    B: Completeness,
+    R: Refinement<A, B>,
+{
+    ResolvedUnitExpr {
+        terms: unit
+            .terms
+            .into_iter()
+            .map(
+                |ResolvedUnitExprItem { op, name, power }| ResolvedUnitExprItem {
+                    op,
+                    name: Spanned::new(refinement.unit_ref(name.value), name.span),
+                    power,
+                },
+            )
+            .collect(),
+        span: unit.span,
+    }
+}
+
 #[expect(clippy::too_many_lines, reason = "exhaustive ExprKind rebuild")]
 fn refine_kind<A, B, R>(kind: ExprKind<A>, refinement: &mut R) -> Result<ExprKind<B>, R::Failure>
 where
@@ -125,7 +154,10 @@ where
         )),
         ExprKind::LocalRef(value) => ExprKind::LocalRef(value),
         ExprKind::VariantLiteral(value) => ExprKind::VariantLiteral(value),
-        ExprKind::QuantityLiteral { value, unit } => ExprKind::QuantityLiteral { value, unit },
+        ExprKind::QuantityLiteral { value, unit } => ExprKind::QuantityLiteral {
+            value,
+            unit: refine_unit_expr(unit, refinement),
+        },
         ExprKind::BinOp { op, lhs, rhs } => ExprKind::BinOp {
             op,
             lhs: refine_box(lhs, refinement)?,
@@ -150,7 +182,7 @@ where
         },
         ExprKind::Convert { expr, target } => ExprKind::Convert {
             expr: refine_box(expr, refinement)?,
-            target,
+            target: refine_unit_expr(target, refinement),
         },
         ExprKind::DisplayTimezone { expr, timezone } => ExprKind::DisplayTimezone {
             expr: refine_box(expr, refinement)?,

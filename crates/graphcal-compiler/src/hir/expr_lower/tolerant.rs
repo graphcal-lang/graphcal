@@ -11,7 +11,7 @@ use crate::hir::expr::{
 };
 
 use super::error::ExprLowerError;
-use crate::hir::expr::LocalDecl;
+use crate::hir::expr::{LocalDecl, LocalUnit, ResolvedUnitRef};
 use crate::resolved_name::ResolvedDeclName;
 
 /// Tolerant HIR: an unresolved reference becomes an error node that records
@@ -25,6 +25,7 @@ impl Completeness for Tolerant {
     type Id = ();
     type Error = LoweringFailure;
     type DeclRef = crate::resolved_name::ResolvedDeclName;
+    type UnitRef = ResolvedUnitRef;
 
     fn error_children(error: &Self::Error) -> &[Expr<Self>] {
         &error.children
@@ -90,6 +91,10 @@ impl Refinement<Tolerant, Draft> for RejectErrorNodes {
 
     fn decl_ref(&mut self, definition: ResolvedDeclName) -> LocalDecl {
         LocalDecl::new(definition)
+    }
+
+    fn unit_ref(&mut self, reference: ResolvedUnitRef) -> LocalUnit {
+        LocalUnit::new(reference.spelling().clone(), reference.resolved().clone())
     }
 }
 
