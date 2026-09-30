@@ -2,7 +2,7 @@
 
 use tower_lsp::lsp_types::{InlayHint, InlayHintKind, InlayHintLabel, Range};
 
-use crate::server::AnalysisResult;
+use crate::analysis::AnalysisResult;
 
 /// Produce inlay hints for declarations within the given range.
 ///

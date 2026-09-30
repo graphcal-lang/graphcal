@@ -3,10 +3,10 @@
 use graphcal_compiler::desugar::desugared_ast::BindableVisibility;
 use tower_lsp::lsp_types::{Hover, HoverContents, MarkupContent, MarkupKind};
 
+use crate::analysis::AnalysisResult;
 use crate::client_capabilities::HoverFormat;
 use crate::convert::LineIndex;
 use crate::resolve::{SymbolLocation, resolve_symbol_at};
-use crate::server::AnalysisResult;
 use crate::symbol_table::{DefinitionInfo, SymbolCategory};
 
 /// Resolve Markdown hover information for a position in an analyzed document.
@@ -199,7 +199,7 @@ node low: Dimensionless = minimum(@values);
 node high: Dimensionless = maximum(@values);
 ";
         let uri = tower_lsp::lsp_types::Url::parse("untitled:hover.gcl").unwrap();
-        let analysis = crate::server::run_analysis_for_test(&uri, source);
+        let analysis = crate::analysis_pipeline::run_analysis_for_test(&uri, source);
 
         for builtin in ["least", "greatest", "minimum", "maximum"] {
             let result = hover(&analysis, source.find(builtin).unwrap()).unwrap();
@@ -223,7 +223,7 @@ param isp: Dimensionless = 320.0;
 node undocumented: Dimensionless = @isp * 2.0;
 ";
         let uri = tower_lsp::lsp_types::Url::parse("untitled:doc-hover.gcl").unwrap();
-        let analysis = crate::server::run_analysis_for_test(&uri, source);
+        let analysis = crate::analysis_pipeline::run_analysis_for_test(&uri, source);
 
         let result = hover(&analysis, source.find("isp:").unwrap()).unwrap();
         let HoverContents::Markup(markup) = result.contents else {
@@ -252,7 +252,7 @@ node undocumented: Dimensionless = @isp * 2.0;
     fn indexed_recurrence_state_has_clean_analysis_and_multi_axis_hover() {
         let source = include_str!("../../../tests/fixtures/valid/indexed_state_recurrence.gcl");
         let uri = tower_lsp::lsp_types::Url::parse("untitled:indexed-recurrence.gcl").unwrap();
-        let analysis = crate::server::run_analysis_for_test(&uri, source);
+        let analysis = crate::analysis_pipeline::run_analysis_for_test(&uri, source);
         assert!(
             analysis.has_no_diagnostics(),
             "expected clean analysis, got diagnostics: {:?}",

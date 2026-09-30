@@ -4,8 +4,8 @@ use std::collections::HashMap;
 
 use tower_lsp::lsp_types::{DocumentSymbol, Location, SymbolInformation, SymbolKind, Url};
 
+use crate::analysis::AnalysisResult;
 use crate::convert::LineIndex;
-use crate::server::AnalysisResult;
 use crate::symbol_table::{SymbolCategory, SymbolKey};
 
 /// Build document symbols from an analysis result.
@@ -192,7 +192,7 @@ param values: Dimensionless[Mode] = for mode: Mode { 1.0 };
 node total: Dimensionless = sum(@values);
 ";
         let uri = tower_lsp::lsp_types::Url::parse("untitled:document-symbols.gcl").unwrap();
-        let analysis = crate::server::run_analysis_for_test(&uri, source);
+        let analysis = crate::analysis_pipeline::run_analysis_for_test(&uri, source);
         assert!(
             analysis.has_no_diagnostics(),
             "expected clean analysis, got diagnostics: {:?}",
@@ -239,7 +239,7 @@ node total: Dimensionless = sum(@values);
     fn flat_symbols_preserve_children_with_container_names() {
         let source = "index Mode = { Cruise, Landing };\n";
         let uri = tower_lsp::lsp_types::Url::parse("untitled:flat-symbols.gcl").unwrap();
-        let analysis = crate::server::run_analysis_for_test(&uri, source);
+        let analysis = crate::analysis_pipeline::run_analysis_for_test(&uri, source);
 
         let flat = flatten_document_symbols(&uri, build_document_symbols(&analysis));
         assert_eq!(

@@ -2,11 +2,11 @@
 
 use tower_lsp::lsp_types::{Location, Url};
 
+use crate::analysis::AnalysisResult;
 use crate::convert::LineIndex;
 use crate::resolve::{
     SymbolLocation, definition_location, reference_lookup_keys, resolve_symbol_at,
 };
-use crate::server::AnalysisResult;
 
 /// Find all references to the symbol at the given byte offset.
 pub fn references(

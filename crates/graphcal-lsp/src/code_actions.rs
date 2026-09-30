@@ -15,9 +15,9 @@ use tower_lsp::lsp_types::{
     Diagnostic, NumberOrString, Position, Range, TextEdit, Url, WorkspaceEdit,
 };
 
+use crate::analysis::AnalysisResult;
 use crate::convert::LineIndex;
 use crate::diagnostics::AutoImportDiagnosticData;
-use crate::server::AnalysisResult;
 
 /// Produce code actions for the given diagnostics.
 pub fn code_actions(
@@ -324,7 +324,7 @@ mod tests {
     };
 
     use super::*;
-    use crate::server::build_fn_signatures;
+    use crate::fn_signatures::build_fn_signatures;
     use crate::symbol_table;
 
     /// Build a minimal `AnalysisResult` from source text.

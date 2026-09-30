@@ -2,8 +2,8 @@
 
 use tower_lsp::lsp_types::{GotoDefinitionResponse, Url};
 
+use crate::analysis::AnalysisResult;
 use crate::resolve::{definition_location, resolve_symbol_at};
-use crate::server::AnalysisResult;
 
 /// Resolve go-to-definition for a position in an analyzed document.
 pub fn goto_definition(
