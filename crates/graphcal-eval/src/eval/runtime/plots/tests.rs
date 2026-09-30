@@ -1,3 +1,7 @@
+use std::sync::Arc;
+
+use miette::NamedSource;
+
 use super::*;
 
 /// The unit of the only declaration of `tir`'s root named `name`.
@@ -32,7 +36,12 @@ fn plot_properties_preserve_cancellation_classification() {
     let values = RuntimeValueMap::new();
     let presentations = PresentationInstanceMap::new();
     let errors = HashMap::new();
-    assert!(evaluate_plot(unit, plot, &values, &presentations, &errors, &ctx).is_ok());
+    let evaluated = EvaluatedRoot {
+        values: &values,
+        errors: &errors,
+        presentations: &presentations,
+    };
+    assert!(evaluate_plot(unit, plot, evaluated, &ctx).is_ok());
     let cancellation = graphcal_compiler::cancellation::CancellationSource::new();
     let ctx = EvalSession::provisional_constants(&tir, &src, cancellation.token());
     cancellation.cancel();

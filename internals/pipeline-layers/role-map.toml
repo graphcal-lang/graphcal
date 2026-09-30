@@ -538,12 +538,12 @@ role = "checking"
 [[module]]
 package = "compiler"
 path = ["ir", "instance"]
-role = "checking"
+role = "contracts"
 
 [[module]]
 package = "compiler"
 path = ["ir", "instance", "tests"]
-role = "checking"
+role = "contracts"
 
 [[module]]
 package = "compiler"
@@ -1698,9 +1698,9 @@ role = "contracts"
 
 [[module]]
 package = "compiler"
-# Pairs include-edge records (checking data) with their checked DAGs.
+# Pairs include-edge records with their checked DAGs.
 path = ["tir", "typed", "checked_instance"]
-role = "checking"
+role = "contracts"
 
 [[module]]
 package = "compiler"
@@ -1845,6 +1845,21 @@ role = "facade"
 [[module]]
 package = "eval"
 path = ["eval", "runtime"]
+role = "facade"
+
+[[module]]
+package = "eval"
+path = ["eval", "runtime", "assertions"]
+role = "facade"
+
+[[module]]
+package = "eval"
+path = ["eval", "runtime", "plots"]
+role = "facade"
+
+[[module]]
+package = "eval"
+path = ["eval", "runtime", "value_entries"]
 role = "facade"
 
 [[module]]
@@ -2246,7 +2261,7 @@ role = "facade"
 
 [[module]]
 package = "eval"
-path = ["eval", "runtime", "tests"]
+path = ["eval", "runtime", "plots", "tests"]
 role = "facade"
 
 [[module]]

@@ -12,8 +12,8 @@ use graphcal_compiler::resolved_name::ResolvedDeclName;
 
 use crate::checked_program::{CheckedProgram, SealedDag};
 use crate::execution_plan::{
-    CallablePlan, ExecPlan, PlannedBody, PlannedDeclaration, PreparedConstantImport,
-    PreparedImports,
+    CallablePlan, ExecPlan, PlannedBody, PlannedDeclaration, PlannedInstance,
+    PreparedConstantImport, PreparedImports,
 };
 
 self_cell::self_cell!(
@@ -115,6 +115,7 @@ fn prepare<'p>(
         src,
     )?;
     let root = prepare_callable_plan(
+        tir,
         &scopes,
         scopes[tir.root_dag_id()],
         &declarations,
@@ -124,7 +125,9 @@ fn prepare<'p>(
         .dag_registry()
         .keys()
         .filter(|owner| *owner != tir.root_dag_id())
-        .map(|owner| prepare_callable_plan(&scopes, scopes[owner], &declarations, cancellation))
+        .map(|owner| {
+            prepare_callable_plan(tir, &scopes, scopes[owner], &declarations, cancellation)
+        })
         .collect::<Result<Vec<_>, _>>()?;
     ExecPlan::new(program, declarations, root, others)
         .map_err(|error| invalid(error.to_string(), src))
@@ -189,6 +192,7 @@ fn prepare_declarations<'p>(
 }
 
 fn prepare_callable_plan<'p>(
+    tir: &'p graphcal_compiler::tir::typed::CheckedTir,
     scopes: &HashMap<&DagId, SealedDag<'p>>,
     body: SealedDag<'p>,
     declarations: &HashMap<&'p ResolvedDeclName, PlannedDeclaration<'p>>,
@@ -230,8 +234,29 @@ fn prepare_callable_plan<'p>(
             Ok(planned.clone())
         })
         .collect::<Result<Vec<_>, _>>()?;
+    let instances = body
+        .dag()
+        .semantic_instances()
+        .iter()
+        .map(|record| {
+            let owner = record.instance.id().owner();
+            let instance = tir.dag_registry().semantic_instance(record);
+            instance
+                .zip(scopes.get(owner).copied())
+                .ok_or_else(|| {
+                    invalid(
+                        format!("semantic instance `{owner}` has no compiled DAG"),
+                        src,
+                    )
+                })
+                .and_then(|(instance, scope)| {
+                    PlannedInstance::try_new(instance, scope)
+                        .map_err(|error| invalid(error.to_string(), src))
+                })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
     let imports = prepare_imports(&execution_dags, declarations, src)?;
-    CallablePlan::new(body, execution_dags, imports, scheduled)
+    CallablePlan::new(body, execution_dags, instances, imports, scheduled)
         .map_err(|error| invalid(error.to_string(), src))
 }
 
@@ -436,6 +461,7 @@ mod tests {
         CallablePlan::new(
             root.scope(),
             root.execution_dags().to_vec(),
+            root.semantic_instances().to_vec(),
             PreparedImports::default(),
             scheduled,
         )
@@ -496,8 +522,8 @@ mod tests {
                 "outside its callable closure",
             ),
         ] {
-            let error =
-                prepare_callable_plan(&scopes, root, &declarations, &cancellation).unwrap_err();
+            let error = prepare_callable_plan(tir, &scopes, root, &declarations, &cancellation)
+                .unwrap_err();
             assert!(
                 matches!(&error, GraphcalError::InternalError { message, .. } if message.contains(expected)),
                 "{error:?}"
@@ -514,6 +540,7 @@ mod tests {
             CallablePlan::new(
                 plan.root().scope(),
                 plan.root().execution_dags().to_vec(),
+                plan.root().semantic_instances().to_vec(),
                 PreparedImports::default(),
                 Vec::new(),
             )
@@ -625,6 +652,19 @@ mod tests {
         assert!(position("seed") < position("x"));
         assert!(position("x") < position("out"));
         assert!(position("out") < position("result"));
+
+        // The root's include is planned with the sealed DAG that runs it, and
+        // no other DAG can be paired with it.
+        let [planned] = plan.root().semantic_instances() else {
+            panic!("expected one planned instance");
+        };
+        let instance = planned.instance();
+        assert_eq!(
+            planned.scope().dag().dag_id(),
+            instance.record().instance.id().owner()
+        );
+        assert!(PlannedInstance::try_new(instance, planned.scope()).is_ok());
+        assert!(PlannedInstance::try_new(instance, plan.root().scope()).is_err());
     }
 
     #[test]
