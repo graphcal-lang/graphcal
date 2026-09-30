@@ -4,6 +4,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use indexmap::IndexMap;
 use miette::NamedSource;
 
 use crate::dag_id::DagId;
@@ -23,6 +24,7 @@ use crate::tir::schedule::{ConstSchedule, RuntimeSchedule};
 use crate::tir::texpr::CheckedBodies;
 
 use super::checked_dag::{CheckedDag, PublishedDag};
+use super::dag_position::DagPosition;
 use super::model::{CheckedDeclType, DagTIR, ProjectTypeStore, TirCore};
 
 use super::program::{TirRead, UncheckedTir};
@@ -32,15 +34,42 @@ use super::program::{TirRead, UncheckedTir};
 /// The root DAG is stored directly, so its presence is structural. Every other
 /// entry is keyed from its own [`DagTIR::dag_id`]; the API exposes no
 /// insertion, removal, or mutation.
+///
+/// Every DAG has a [`DagPosition`]: the root first, then the local DAGs,
+/// then the imported ones, in insertion order.
 #[derive(Debug, Clone)]
 pub struct CheckedDagRegistry {
     pub(super) root: CheckedDag,
-    pub(super) other_dags: HashMap<DagId, CheckedDag>,
+    pub(super) other_dags: IndexMap<DagId, CheckedDag>,
     /// Immutable bodies imported from an already-frozen module store.
-    shared_dags: HashMap<DagId, Arc<CheckedDag>>,
+    shared_dags: IndexMap<DagId, Arc<CheckedDag>>,
 }
 
 impl CheckedDagRegistry {
+    /// The position and body of one DAG.
+    #[must_use]
+    pub fn get_positioned(&self, dag_id: &DagId) -> Option<(DagPosition, &CheckedDag)> {
+        if dag_id == self.root_id() {
+            return Some((DagPosition::ROOT, &self.root));
+        }
+        let locals = self.other_dags.len();
+        self.other_dags
+            .get_full(dag_id)
+            .map(|(position, _, dag)| (DagPosition::new(1 + position), dag))
+            .or_else(|| {
+                self.shared_dags.get_full(dag_id).map(|(position, _, dag)| {
+                    (DagPosition::new(1 + locals + position), dag.as_ref())
+                })
+            })
+    }
+
+    /// Every DAG with its position, in position order.
+    pub fn positioned(&self) -> impl Iterator<Item = (DagPosition, &CheckedDag)> {
+        self.values()
+            .enumerate()
+            .map(|(position, dag)| (DagPosition::new(position), dag))
+    }
+
     /// Canonical identity of this registry's root DAG.
     #[must_use]
     pub const fn root_id(&self) -> &DagId {
@@ -164,7 +193,7 @@ impl UncheckedTir {
             dags: CheckedDagRegistry {
                 root,
                 other_dags,
-                shared_dags,
+                shared_dags: shared_dags.into_iter().collect(),
             },
             const_schedule: constants,
         })

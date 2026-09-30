@@ -34,6 +34,7 @@ pub use checked_instance::*;
 pub mod checked;
 pub mod checked_dag;
 pub use checked_dag::*;
+pub mod dag_position;
 pub mod dag_store;
 pub use dag_store::*;
 pub mod freeze;

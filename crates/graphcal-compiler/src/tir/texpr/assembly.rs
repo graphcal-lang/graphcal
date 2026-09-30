@@ -24,6 +24,7 @@ use crate::syntax::ast::{BinOp, PowerExponent, UnaryOp};
 use crate::syntax::span::Spanned;
 use crate::tir::static_index::StaticIndexRequirement;
 
+use super::call_targets::CallTargets;
 use super::model::{
     ContextualLiteral, CoordinateSearch, DatetimeLiteral, ExternArgKind, StaticPosition, TArg,
     TConstRef, TConstructorArm, TContextual, TExpr, TExprKind, TExternArg, TFieldInit, TIndexArg,
@@ -72,10 +73,12 @@ pub struct NodeFacts<'a> {
 
 /// Typed nodes recorded so far whose parent has not been recorded yet.
 ///
-/// After a successful pass only the checked roots remain.
+/// After a successful pass only the checked roots remain. The DAGs the
+/// recorded call nodes target are numbered by the pass's [`CallTargets`].
 #[derive(Debug, Default)]
 pub struct PendingNodes {
     nodes: HashMap<ExprId, TArg<Symbolic>>,
+    calls: CallTargets,
 }
 
 impl PendingNodes {
@@ -121,9 +124,11 @@ impl PendingNodes {
         self.nodes.keys().next()
     }
 
-    /// Every node no parent has claimed: the trees of the roots checked.
-    pub fn into_roots(self) -> HashMap<ExprId, super::model::TBody<Symbolic>> {
-        self.nodes
+    /// Every node no parent has claimed: the trees of the roots checked,
+    /// with the call targets their call nodes are numbered by.
+    pub fn into_roots(self) -> (HashMap<ExprId, super::model::TBody<Symbolic>>, CallTargets) {
+        let roots = self
+            .nodes
             .into_iter()
             .map(|(id, node)| {
                 let body = match node {
@@ -132,7 +137,13 @@ impl PendingNodes {
                 };
                 (id, body)
             })
-            .collect()
+            .collect();
+        (roots, self.calls)
+    }
+
+    /// The call targets the recorded call nodes are numbered by.
+    pub(super) fn into_calls(self) -> CallTargets {
+        self.calls
     }
 
     fn insert(&mut self, id: &ExprId, node: TArg<Symbolic>) -> Result<(), AssemblyError> {
@@ -402,7 +413,7 @@ impl PendingNodes {
                 static_bindings,
                 output,
             } => TExprKind::DagCall {
-                target: target.clone(),
+                slot: self.calls.intern(target.value.clone()),
                 args: args
                     .iter()
                     .map(|binding| {

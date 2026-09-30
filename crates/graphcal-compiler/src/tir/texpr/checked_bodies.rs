@@ -21,6 +21,7 @@ use crate::tir::static_index::{
 };
 
 use super::assembly::PendingNodes;
+use super::call_targets::CallTargets;
 use super::map::ToConcrete;
 use super::model::{StaticPosition, TArg, TBody, TContextual, TExpr, TNodeRef};
 use super::nominal::NominalObservation;
@@ -163,28 +164,31 @@ fn static_positions<V: crate::semantic::checked_type::Concreteness>(
 }
 
 /// The checked tree of each expression root of one body, keyed by the root's
-/// occurrence and kept in publication order, with the nominal uses checking
-/// each root observed.
+/// occurrence and kept in publication order.
 ///
+/// Each root keeps the nominal uses checking observed in it, and every call
+/// node of these trees is numbered by one shared table of call targets.
 /// Clones share one immutable publication.
 #[derive(Debug, Clone)]
 pub struct CheckedBodies {
     roots: Arc<IndexMap<ExprId, CheckedBody>>,
     nominal_uses: Arc<HashMap<ExprId, Arc<[NominalObservation]>>>,
+    calls: Arc<CallTargets>,
 }
 
 impl CheckedBodies {
-    /// Classify the typed tree of each root, in order. Nominal uses are kept
-    /// for the published roots only.
+    /// Classify the typed tree of each claimed root, in order. Nominal uses
+    /// are kept for the published roots only.
     ///
     /// # Errors
     ///
     /// Returns the first [`DischargeError`] in root order.
     pub(crate) fn discharge(
-        roots: Vec<(ExprId, TBody<Symbolic>)>,
+        claimed: ClaimedRoots,
         mut nominal_uses: HashMap<ExprId, Arc<[NominalObservation]>>,
         cardinality: &AxisCardinality<'_>,
     ) -> Result<Self, DischargeError> {
+        let ClaimedRoots { roots, calls } = claimed;
         let mut published = IndexMap::with_capacity(roots.len());
         for (id, body) in roots {
             let body = CheckedBody::discharge(body, cardinality)?;
@@ -194,7 +198,14 @@ impl CheckedBodies {
         Ok(Self {
             roots: Arc::new(published),
             nominal_uses: Arc::new(nominal_uses),
+            calls: Arc::new(calls),
         })
+    }
+
+    /// The DAGs the call nodes of these trees target, by slot.
+    #[must_use]
+    pub fn calls(&self) -> &CallTargets {
+        &self.calls
     }
 
     /// Whether these are the trees of exactly `roots`.
@@ -256,6 +267,14 @@ impl CheckedBodies {
     }
 }
 
+/// The typed tree of each claimed root, in root order, with the call targets
+/// their call nodes are numbered by.
+#[derive(Debug)]
+pub struct ClaimedRoots {
+    pub(crate) roots: Vec<(ExprId, TBody<Symbolic>)>,
+    pub(crate) calls: CallTargets,
+}
+
 /// Claim the typed tree of every root, in root order; every recorded node
 /// must belong to one.
 ///
@@ -266,7 +285,7 @@ impl CheckedBodies {
 pub fn claim_roots(
     roots: &[&Expr],
     mut pending: PendingNodes,
-) -> Result<Vec<(ExprId, TBody<Symbolic>)>, TypedBodiesError> {
+) -> Result<ClaimedRoots, TypedBodiesError> {
     let mut claimed = Vec::with_capacity(roots.len());
     let mut seen = std::collections::HashSet::new();
     for root in roots {
@@ -284,7 +303,10 @@ pub fn claim_roots(
     if let Some(unclaimed) = pending.unclaimed() {
         return Err(TypedBodiesError::Unclaimed(unclaimed.clone()));
     }
-    Ok(claimed)
+    Ok(ClaimedRoots {
+        roots: claimed,
+        calls: pending.into_calls(),
+    })
 }
 
 impl CheckedBodies {

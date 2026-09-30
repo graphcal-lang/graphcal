@@ -73,6 +73,13 @@ impl CheckedDag {
         &self.bodies
     }
 
+    /// The DAGs this body's inline calls target, by the slot its call nodes
+    /// carry.
+    #[must_use]
+    pub fn call_targets(&self) -> &crate::tir::texpr::CallTargets {
+        self.bodies.calls()
+    }
+
     /// Every concrete constructor application this body's checked trees
     /// make; see [`CheckedBodies::concrete_applications`].
     #[must_use]

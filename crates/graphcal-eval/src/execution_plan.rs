@@ -12,24 +12,29 @@ use std::marker::PhantomData;
 use graphcal_compiler::dag_id::DagId;
 use graphcal_compiler::hir::expr::Expr;
 use graphcal_compiler::resolved_name::ResolvedDeclName;
+use graphcal_compiler::tir::texpr::CallSlot;
 use graphcal_compiler::tir::texpr::{ExecutableBodyError, TExpr};
 use graphcal_compiler::tir::typed::body_scope::Scoped;
 use graphcal_compiler::tir::typed::checked_instance::CheckedInstance;
+use graphcal_compiler::tir::typed::dag_position::DagPosition;
 use graphcal_compiler::tir::typed::evaluation_unit::ScopedTree;
-use graphcal_compiler::tir::typed::scoped_node::NodeKind;
+use graphcal_compiler::tir::typed::scoped_node::ScopedCall;
 use thiserror::Error;
 
 use crate::checked_program::{CheckedProgram, SealedDag};
 use crate::constant_pools::ConstantReference;
 use crate::domain_constraint::ResolvedDomainConstraint;
 
-/// A plan-internal index into one [`IndexVec`].
-///
-/// Indices are created only by the constructors in this module, from the
-/// position of an element they push.
+/// An index into one [`IndexVec`], whose items are pushed in the order of
+/// their indices.
 trait PlanIndex: Copy {
-    fn new(position: usize) -> Self;
     fn position(self) -> usize;
+}
+
+/// A plan-internal index, created only by the constructors in this module
+/// from the position of an element they push.
+trait MintedIndex: PlanIndex {
+    fn new(position: usize) -> Self;
 }
 
 /// The position of a callable in its [`ExecPlan`].
@@ -41,26 +46,45 @@ struct CallableIdx(usize);
 pub struct StepIdx(usize);
 
 impl PlanIndex for CallableIdx {
-    fn new(position: usize) -> Self {
-        Self(position)
-    }
-
     fn position(self) -> usize {
         self.0
+    }
+}
+
+impl MintedIndex for CallableIdx {
+    fn new(position: usize) -> Self {
+        Self(position)
     }
 }
 
 impl PlanIndex for StepIdx {
-    fn new(position: usize) -> Self {
-        Self(position)
-    }
-
     fn position(self) -> usize {
         self.0
     }
 }
 
-/// A vector indexed only by its own plan-internal index type.
+impl MintedIndex for StepIdx {
+    fn new(position: usize) -> Self {
+        Self(position)
+    }
+}
+
+/// A call slot indexes the callees of its caller, resolved in slot order.
+impl PlanIndex for CallSlot {
+    fn position(self) -> usize {
+        self.index()
+    }
+}
+
+/// A registry position indexes the callables of the program's DAGs, resolved
+/// in position order.
+impl PlanIndex for DagPosition {
+    fn position(self) -> usize {
+        self.index()
+    }
+}
+
+/// A vector indexed only by its own index type.
 struct IndexVec<I, T> {
     items: Vec<T>,
     index: PhantomData<fn(I) -> I>,
@@ -78,7 +102,10 @@ impl<I: PlanIndex, T> IndexVec<I, T> {
         self.items.iter()
     }
 
-    fn indices(&self) -> impl Iterator<Item = I> + use<I, T> {
+    fn indices(&self) -> impl Iterator<Item = I> + use<I, T>
+    where
+        I: MintedIndex,
+    {
         (0..self.items.len()).map(I::new)
     }
 
@@ -439,7 +466,10 @@ pub struct ExecPlan<'p> {
     declarations: HashMap<&'p ResolvedDeclName, PlannedDeclaration<'p>>,
     root: CallableIdx,
     callables: IndexVec<CallableIdx, CallablePlan<'p>>,
-    by_dag: HashMap<&'p DagId, CallableIdx>,
+    /// The callable of each DAG of the program, by registry position.
+    at_position: IndexVec<DagPosition, CallableIdx>,
+    /// The callable each call slot of each callable's body targets.
+    callees: IndexVec<CallableIdx, IndexVec<CallSlot, CallableIdx>>,
 }
 
 /// Why prepared callables do not form a plan.
@@ -449,16 +479,20 @@ pub enum ExecPlanError {
     DuplicateCallable(DagId),
     #[error("DAG `{caller}` calls DAG `{target}`, which has no prepared callable plan")]
     MissingCallee { caller: DagId, target: DagId },
+    #[error("DAG `{0}` of the program has no prepared callable plan")]
+    MissingCallable(DagId),
 }
 
 impl<'p> ExecPlan<'p> {
     /// Assemble a plan from the root callable and every other callable of
-    /// `program`.
+    /// `program`, resolving the callee of every call slot of every callable
+    /// once.
     ///
     /// # Errors
     ///
-    /// Returns [`ExecPlanError`] when two callables share a body, or when a
-    /// planned body calls a DAG without a callable.
+    /// Returns [`ExecPlanError`] when two callables share a body, when a
+    /// body calls a DAG without a callable, or when a DAG of the program has
+    /// no callable.
     pub(crate) fn new(
         program: &'p CheckedProgram,
         declarations: HashMap<&'p ResolvedDeclName, PlannedDeclaration<'p>>,
@@ -473,7 +507,39 @@ impl<'p> ExecPlan<'p> {
                 return Err(ExecPlanError::DuplicateCallable(owner.clone()));
             }
         }
-        check_callees(declarations.values(), &by_dag)?;
+        let callees = callables
+            .iter()
+            .map(|callable| {
+                let caller = callable.scope.dag();
+                caller
+                    .call_targets()
+                    .iter()
+                    .map(|(_, target)| {
+                        by_dag
+                            .get(target)
+                            .copied()
+                            .ok_or_else(|| ExecPlanError::MissingCallee {
+                                caller: caller.dag_id().clone(),
+                                target: target.clone(),
+                            })
+                    })
+                    .collect::<Result<Vec<_>, _>>()
+                    .map(IndexVec::from_items)
+            })
+            .collect::<Result<Vec<_>, _>>()
+            .map(IndexVec::from_items)?;
+        let at_position = program
+            .tir()
+            .dag_registry()
+            .positioned()
+            .map(|(_, dag)| {
+                by_dag
+                    .get(dag.dag_id())
+                    .copied()
+                    .ok_or_else(|| ExecPlanError::MissingCallable(dag.dag_id().clone()))
+            })
+            .collect::<Result<Vec<_>, _>>()
+            .map(IndexVec::from_items)?;
         let has_unfinished_definitions = declarations
             .values()
             .any(|declaration| matches!(declaration.body, PlannedBody::Todo));
@@ -483,7 +549,8 @@ impl<'p> ExecPlan<'p> {
             declarations,
             root: CallableIdx::new(0),
             callables,
-            by_dag,
+            at_position,
+            callees,
         })
     }
 
@@ -516,10 +583,31 @@ impl<'p> ExecPlan<'p> {
         self.callables.iter()
     }
 
-    /// The callable of an inline-call target.
+    /// The callables the body of the callable of `owner` calls, by call
+    /// slot, when `owner` has a callable.
+    #[cfg(any(test, feature = "test-internals"))]
     #[must_use]
-    pub fn callable(&self, owner: &DagId) -> Option<&CallablePlan<'p>> {
-        self.by_dag.get(owner).map(|index| &self.callables[*index])
+    pub fn callees_of(&self, owner: &DagId) -> Option<Vec<&CallablePlan<'p>>> {
+        self.callables
+            .indices()
+            .find(|index| self.callables[*index].scope.dag().dag_id() == owner)
+            .map(|caller| {
+                self.callees[caller]
+                    .iter()
+                    .map(|callee| &self.callables[*callee])
+                    .collect()
+            })
+    }
+
+    /// The callable an inline call runs: the one its caller's body resolved
+    /// for the call's slot when the plan was prepared.
+    ///
+    /// The call comes from a tree of this plan's program, so its caller has
+    /// a callable and its slot a resolved callee.
+    #[must_use]
+    pub fn callee(&self, call: ScopedCall<'_>) -> &CallablePlan<'p> {
+        let caller = self.at_position[call.caller()];
+        &self.callables[self.callees[caller][call.slot()]]
     }
 
     /// Any value declaration of the program.
@@ -536,35 +624,6 @@ impl<'p> ExecPlan<'p> {
     ) -> Option<&'p ResolvedDomainConstraint> {
         self.declaration(key)?.domain
     }
-}
-
-/// Require that every inline call of every planned body targets a DAG with a
-/// callable, so evaluating a call never meets a missing callee.
-fn check_callees<'a, 'p: 'a>(
-    declarations: impl IntoIterator<Item = &'a PlannedDeclaration<'p>>,
-    by_dag: &HashMap<&'p DagId, CallableIdx>,
-) -> Result<(), ExecPlanError> {
-    for declaration in declarations {
-        let PlannedBody::Expression { tree: Ok(tree), .. } = &declaration.body else {
-            continue;
-        };
-        let mut missing = None;
-        tree.root().visit(&mut |node| {
-            if let NodeKind::DagCall { target, .. } = node.kind()
-                && missing.is_none()
-                && !by_dag.contains_key(&target.value)
-            {
-                missing = Some(target.value.clone());
-            }
-        });
-        if let Some(target) = missing {
-            return Err(ExecPlanError::MissingCallee {
-                caller: declaration.scope.dag().dag_id().clone(),
-                target,
-            });
-        }
-    }
-    Ok(())
 }
 
 impl std::fmt::Debug for ExecPlan<'_> {

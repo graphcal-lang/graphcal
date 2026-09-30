@@ -16,6 +16,7 @@
 //! trees directly.
 
 mod assembly;
+mod call_targets;
 mod checked_bodies;
 pub(crate) mod map;
 mod model;
@@ -26,10 +27,11 @@ pub mod operators;
 mod tests;
 
 pub(crate) use assembly::{AssemblyError, NodeFacts, PendingNodes};
-pub(crate) use checked_bodies::claim_roots;
+pub use call_targets::{CallSlot, CallTargets};
 pub use checked_bodies::{
     CheckedBodies, CheckedBody, DischargeError, ExecutableBodyError, TypedBodiesError,
 };
+pub(crate) use checked_bodies::{ClaimedRoots, claim_roots};
 pub use model::{
     ContextualLiteral, CoordinateSearch, DatetimeLiteral, ExternArgKind, StaticPosition, TArg,
     TBody, TConstRef, TConstructorArm, TContextual, TExpr, TExprKind, TExternArg, TFieldInit,

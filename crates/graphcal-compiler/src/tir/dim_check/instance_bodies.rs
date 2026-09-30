@@ -277,15 +277,13 @@ pub(super) fn instance_bodies(
         // Instance bodies are specialized from the template; only the trees
         // of independently checked defaults are the instance's own.
         let finished = observations.finish();
+        let claimed =
+            crate::tir::texpr::claim_roots(&rebound_defaults(template, dag), finished.typed)
+                .map_err(|error| internal(error.to_string()))?;
         let independent = DerivedTrees {
-            bodies: crate::tir::texpr::claim_roots(
-                &rebound_defaults(template, dag),
-                finished.typed,
-            )
-            .map_err(|error| internal(error.to_string()))?
-            .into_iter()
-            .collect(),
+            bodies: claimed.roots.into_iter().collect(),
             nominal_uses: finished.nominal_uses,
+            calls: claimed.calls,
         };
         let bodies = super::body_specialization::specialize_instance_bodies(
             dag,

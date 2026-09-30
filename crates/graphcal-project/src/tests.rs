@@ -485,11 +485,6 @@ fn context_capabilities_are_phase_selected_and_checked_scopes_fail_closed() {
     ));
     assert!(!context.struct_field_constraints().unwrap().is_empty());
     assert!(std::ptr::eq(context.host_fns().unwrap(), &raw const host));
-    let foreign = graphcal_compiler::dag_id::DagId::from_virtual_relative_path(
-        std::path::Path::new("other.gcl"),
-    )
-    .unwrap();
-    assert!(plan.callable(&foreign).is_none());
 }
 
 #[test]
@@ -628,8 +623,123 @@ fn plans_reject_a_call_whose_callee_has_no_callable() {
         graphcal_eval::exec_plan::assemble_without_callable_for_test(&prepared, &root, &src)
             .unwrap()
             .is_ok(),
-        "omitting only an uncalled body keeps every callee"
+        "the root callable is always prepared, so every callee is present"
     );
+}
+
+#[test]
+fn plans_require_a_callable_for_every_dag_of_the_program() {
+    let source =
+        "dag unused { pub node out: Dimensionless = 1.0; } node value: Dimensionless = 2.0;";
+    let tir = compile_to_tir(source, "uncalled.gcl").unwrap();
+    let src = miette::NamedSource::new("uncalled.gcl", std::sync::Arc::new(source.to_string()));
+    let prepared = graphcal_eval::exec_plan::compile(&tir, &src).unwrap();
+    let unused = tir
+        .dag_registry()
+        .keys()
+        .find(|owner| *owner != tir.root_dag_id())
+        .unwrap();
+    let assembled =
+        graphcal_eval::exec_plan::assemble_without_callable_for_test(&prepared, unused, &src)
+            .unwrap();
+    assert!(matches!(
+        assembled,
+        Err(graphcal_eval::execution_plan::ExecPlanError::MissingCallable(dag)) if &dag == unused
+    ));
+}
+
+#[test]
+fn call_slots_resolve_to_the_callable_of_their_target() {
+    let (tir, src) = callable_plan_fixture();
+    let prepared = graphcal_eval::exec_plan::compile(&tir, &src).unwrap();
+    let plan = prepared.plan();
+    let targets = tir
+        .root()
+        .call_targets()
+        .iter()
+        .map(|(_, target)| target)
+        .collect::<Vec<_>>();
+    let helper = tir
+        .dag_registry()
+        .keys()
+        .find(|owner| *owner != tir.root_dag_id())
+        .unwrap();
+    assert_eq!(targets, [helper]);
+    assert_eq!(
+        plan.callees_of(tir.root_dag_id())
+            .unwrap()
+            .iter()
+            .map(|callee| callee.scope().dag().dag_id())
+            .collect::<Vec<_>>(),
+        targets
+    );
+}
+
+#[test]
+fn instances_sharing_a_template_body_keep_its_callees() {
+    let source = "dag helper { pub node out: Dimensionless = 10.0; } \
+                  dag inner { param input: Dimensionless = 2.0; pub node value: Dimensionless = @input * @helper()::out; } \
+                  include inner(input: 3.0) as first; \
+                  include inner(input: 4.0) as second; \
+                  dag other { pub node out: Dimensionless = 5.0; } \
+                  include inner(input: @other()::out) as third; \
+                  node output: Dimensionless = @first::value + @second::value + @third::value;";
+    let tir = compile_to_tir(source, "shared-callees.gcl").unwrap();
+    let src = miette::NamedSource::new(
+        "shared-callees.gcl",
+        std::sync::Arc::new(source.to_string()),
+    );
+    let prepared = graphcal_eval::exec_plan::compile(&tir, &src).unwrap();
+    let plan = prepared.plan();
+    let callees = |dag: &graphcal_compiler::tir::typed::CheckedDag| {
+        plan.callees_of(dag.dag_id())
+            .unwrap()
+            .iter()
+            .map(|callee| callee.scope().dag().dag_id().clone())
+            .collect::<Vec<_>>()
+    };
+    let template = tir
+        .dag_registry()
+        .values()
+        .find(|dag| dag.dag_id().leaf().to_string() == "inner")
+        .unwrap();
+    let template_callees = callees(template);
+    assert_eq!(template_callees.len(), 1);
+    let instances = tir
+        .dag_registry()
+        .values()
+        .filter(|dag| dag.is_semantic_instance())
+        .collect::<Vec<_>>();
+    assert_eq!(instances.len(), 3);
+    let mut extended = 0;
+    for instance in instances {
+        // An instance's call targets extend its template's: every slot of a
+        // shared template tree keeps its callee, and the calls of a rebound
+        // default come after them.
+        let targets = instance.call_targets();
+        for (slot, target) in template.call_targets().iter() {
+            assert_eq!(targets.target(slot), target);
+        }
+        let instance_callees = callees(instance);
+        assert_eq!(
+            instance_callees[..template_callees.len()],
+            template_callees[..]
+        );
+        if targets.len() > template.call_targets().len() {
+            extended += 1;
+            assert_eq!(
+                instance_callees[template_callees.len()..]
+                    .iter()
+                    .map(|dag| dag.leaf().to_string())
+                    .collect::<Vec<_>>(),
+                ["other"]
+            );
+        }
+    }
+    assert_eq!(extended, 1, "only the rebound default calls `other`");
+    let result = compile_and_eval(source).unwrap();
+    assert!(!result.has_errors(), "{result:?}");
+    assert_quantity_value(&result, "output", 120.0);
 }
 
 #[test]
@@ -649,8 +759,10 @@ fn every_body_has_one_prepared_callable_with_retained_single_body_pools() {
         tir.root_dag_id()
     );
     for dag in tir.dag_registry().values() {
-        let callable = plan.callable(dag.dag_id()).unwrap();
-        assert_eq!(callable.scope().dag().dag_id(), dag.dag_id());
+        let callable = plan
+            .callables()
+            .find(|callable| callable.scope().dag().dag_id() == dag.dag_id())
+            .unwrap();
         assert_eq!(
             callable
                 .execution_dags()

@@ -1502,6 +1502,16 @@ role = "contracts"
 
 [[module]]
 package = "compiler"
+path = ["tir", "texpr", "call_targets"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["tir", "texpr", "call_targets", "tests"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
 path = ["tir", "texpr", "map"]
 role = "contracts"
 
@@ -2518,6 +2528,11 @@ role = "contracts"
 [[module]]
 package = "compiler"
 path = ["tir", "typed", "dag_store"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["tir", "typed", "dag_position"]
 role = "contracts"
 
 [[module]]
