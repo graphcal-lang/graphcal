@@ -2089,6 +2089,16 @@ role = "contracts"
 
 [[module]]
 package = "eval"
+path = ["runtime_value", "key_value"]
+role = "contracts"
+
+[[module]]
+package = "eval"
+path = ["runtime_value", "key_value", "tests"]
+role = "contracts"
+
+[[module]]
+package = "eval"
 path = ["runtime_value", "struct_value"]
 role = "contracts"
 

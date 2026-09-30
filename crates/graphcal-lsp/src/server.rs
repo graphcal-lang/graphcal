@@ -1819,7 +1819,7 @@ fn format_value_inline_with_budget(
         | Value::Complex { .. }
         | Value::Bool(_)
         | Value::Int(_)
-        | Value::Label { .. }
+        | Value::Key(_)
         | Value::Datetime { .. } => value
             .format_display(render, graphcal_eval::eval::UnitLabel::Inline)
             .unwrap_or_else(|error| format!("ERROR: {error}")),

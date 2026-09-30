@@ -1,7 +1,9 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use crate::runtime_value::{IndexAxis, IndexedValue, RuntimeValue, StructValue};
+use crate::runtime_value::{
+    IndexAxis, IndexedValue, KeyElement, KeyValue, RuntimeValue, StructValue,
+};
 use graphcal_compiler::builtin::{
     AggregationFn, BuiltinFn, ConversionFn, DatetimeConstructorFn, DatetimeField, DatetimeFn,
     DatetimeFromNumericFn, DatetimeToNumericFn, KeyAggregation, ScalarFn, ValueAggregation,
@@ -11,7 +13,6 @@ use graphcal_compiler::hir::{self, FunctionRef};
 use graphcal_compiler::registry::checked_type::{CheckedType, IndexTypeRef, StructTypeRef};
 use graphcal_compiler::registry::error::GraphcalError;
 use graphcal_compiler::registry::time_scale::TimeScale;
-use graphcal_compiler::registry::types::{ConcreteIndexKind, IndexDef};
 use graphcal_compiler::syntax::index_name::IndexEntryKey;
 use graphcal_compiler::syntax::span::{Span, Spanned};
 use graphcal_compiler::tir::texpr::{
@@ -231,10 +232,15 @@ fn eval_texpr_inner(
             .get(local.value)
             .cloned()
             .ok_or_else(|| ctx.eval_error("undefined local variable", local.span)),
-        TExprKind::Binary { op, lhs, rhs } => {
-            eval_binop(span, *op, lhs, rhs, values, local_values, ctx)
-                .map(EvaluatedRuntimeValue::plain)
-        }
+        TExprKind::Binary { op, lhs, rhs } => match expr.ty() {
+            // Additive Fin-key arithmetic `k + c : Key<Fin(N + c)>`.
+            CheckedType::Key(target) => {
+                eval_key_shift(span, target, lhs, rhs, values, local_values, ctx)
+                    .map(EvaluatedRuntimeValue::plain)
+            }
+            _ => eval_binop(span, *op, lhs, rhs, values, local_values, ctx)
+                .map(EvaluatedRuntimeValue::plain),
+        },
         TExprKind::Unary { op, operand } => {
             eval_unary(span, *op, operand, values, local_values, ctx)
                 .map(EvaluatedRuntimeValue::plain)
@@ -371,9 +377,9 @@ fn eval_texpr_inner(
             local_values,
             ctx,
         ),
-        TExprKind::Variant(variant) => Ok(EvaluatedRuntimeValue::plain(
-            RuntimeValue::resolved_label(&variant.variant),
-        )),
+        TExprKind::Variant(variant) => {
+            named_key(&variant.variant, span, ctx).map(EvaluatedRuntimeValue::plain)
+        }
         TExprKind::DagCall {
             target,
             args,
@@ -501,6 +507,42 @@ fn apply_constructor(
     StructValue::try_from_application(application, fields)
         .map(RuntimeValue::Struct)
         .map_err(|error| ctx.internal_error(error.to_string(), span))
+}
+
+/// Evaluate `k + c` on a `Fin` key: the key at position `k + c` of the wider
+/// target axis `Fin(N + c)`, which the checker derived from the static addend.
+fn eval_key_shift(
+    span: Span,
+    target: &IndexTypeRef,
+    lhs: &TExpr,
+    rhs: &TExpr,
+    values: &RuntimeValueMap,
+    local_values: &HirLocalValueMap<'_>,
+    ctx: &EvalContext<'_>,
+) -> Result<RuntimeValue, GraphcalError> {
+    let (RuntimeValue::Key(key), RuntimeValue::Int(addend)) = (
+        eval_value(lhs, values, local_values, ctx)?,
+        eval_value(rhs, values, local_values, ctx)?,
+    ) else {
+        return Err(ctx.internal_error("key arithmetic needs a key and an Int addend", span));
+    };
+    let axis = index_axis_for_ref(target, ctx).ok_or_else(|| {
+        ctx.internal_error(
+            format!("key axis `{target}` has no concrete definition"),
+            span,
+        )
+    })?;
+    usize::try_from(addend)
+        .ok()
+        .and_then(|addend| key.position().checked_add(addend))
+        .and_then(|position| KeyValue::at(axis, position))
+        .map(RuntimeValue::Key)
+        .ok_or_else(|| {
+            ctx.internal_error(
+                format!("key shifted by {addend} left its checked axis `{target}`"),
+                span,
+            )
+        })
 }
 
 fn eval_binop(
@@ -891,57 +933,63 @@ fn eval_key_form(
     use graphcal_compiler::syntax::ast::KeyFormKind;
 
     let arg_val = eval_value(arg, values, local_values, ctx)?;
+    let axis = index_axis_for_ref(axis_ref, ctx).ok_or_else(|| {
+        ctx.internal_error(
+            format!("key axis `{axis_ref}` has no concrete definition"),
+            span,
+        )
+    })?;
     match kind {
         KeyFormKind::Static => {
             // Bounds were discharged at compile time.
             let RuntimeValue::Int(position) = arg_val else {
                 return Err(ctx.internal_error("key() received a non-Int position", arg.span()));
             };
-            Ok(RuntimeValue::Int(position))
+            usize::try_from(position)
+                .ok()
+                .and_then(|position| KeyValue::at(axis, position))
+                .map(RuntimeValue::Key)
+                .ok_or_else(|| {
+                    ctx.internal_error(
+                        format!("static key position {position} escaped its checked range"),
+                        arg.span(),
+                    )
+                })
         }
         KeyFormKind::Fin => {
             let RuntimeValue::Int(position) = arg_val else {
                 return Err(ctx.internal_error("fin_key() received a non-Int position", arg.span()));
             };
-            let finite = axis_ref.finite_index().ok_or_else(|| {
-                ctx.internal_error("fin_key() has no retained concrete Fin axis", span)
-            })?;
-            let size = finite.cardinality().get() as u64;
-            let in_range = u64::try_from(position).is_ok_and(|position| position < size);
-            if !in_range {
-                return Err(ctx.eval_error(
-                    format!("fin_key: {position} out of bounds for {finite}"),
-                    span,
-                ));
-            }
-            Ok(RuntimeValue::Int(position))
+            usize::try_from(position)
+                .ok()
+                .and_then(|position| KeyValue::at(axis, position))
+                .map(RuntimeValue::Key)
+                .ok_or_else(|| {
+                    ctx.eval_error(
+                        format!("fin_key: {position} out of bounds for {axis_ref}"),
+                        span,
+                    )
+                })
         }
         KeyFormKind::Floor | KeyFormKind::Ceil | KeyFormKind::Nearest => {
             let quantity = arg_val
                 .expect_quantity("coordinate search argument")
                 .map_err(|e| ctx.eval_error(e.to_string(), arg.span()))?;
-            let definition = index_def_for_ref(axis_ref, ctx).ok_or_else(|| {
-                ctx.internal_error(
-                    format!("index `{axis_ref}` has no registered definition"),
-                    span,
-                )
-            })?;
-            let Some(data) = definition.coordinate_data() else {
-                return Err(
-                    ctx.internal_error("coordinate search received a non-coordinate axis", span)
-                );
-            };
-            let count = data.cardinality();
-            let mut best: Option<(usize, f64)> = None;
-            for position in 0..count {
-                let coordinate = data.coordinate_value(position);
+            let keys = KeyValue::all(&axis);
+            let mut best: Option<(&KeyValue, f64)> = None;
+            for key in &keys {
+                let KeyElement::Coordinate { value, .. } = key.element() else {
+                    return Err(ctx
+                        .internal_error("coordinate search received a non-coordinate axis", span));
+                };
+                let coordinate = value.get();
                 let candidate = match kind {
-                    KeyFormKind::Floor if coordinate <= quantity => Some((position, coordinate)),
-                    KeyFormKind::Ceil if coordinate >= quantity => Some((position, coordinate)),
-                    KeyFormKind::Nearest => Some((position, coordinate)),
+                    KeyFormKind::Floor if coordinate <= quantity => Some((key, coordinate)),
+                    KeyFormKind::Ceil if coordinate >= quantity => Some((key, coordinate)),
+                    KeyFormKind::Nearest => Some((key, coordinate)),
                     _ => None,
                 };
-                let Some((position, coordinate)) = candidate else {
+                let Some((key, coordinate)) = candidate else {
                     continue;
                 };
                 let better = match (&best, kind) {
@@ -957,10 +1005,10 @@ fn eval_key_form(
                     (Some((_, incumbent)), _) => coordinate < *incumbent,
                 };
                 if better {
-                    best = Some((position, coordinate));
+                    best = Some((key, coordinate));
                 }
             }
-            let Some((position, _)) = best else {
+            let Some((key, _)) = best else {
                 return Err(ctx.eval_error(
                     format!(
                         "{}: no coordinate of `{axis_ref}` is {} the target",
@@ -974,87 +1022,52 @@ fn eval_key_form(
                     span,
                 ));
             };
-            RuntimeValue::coordinate_label(
-                axis_ref.clone(),
-                position,
-                data.coordinate_value(position),
-            )
-            .map_err(|error| ctx.eval_error(error.to_string(), span))
+            Ok(RuntimeValue::Key(key.clone()))
         }
     }
 }
 
-/// Evaluate `argmin`/`argmax`: find the extremum entry and reify its entry
-/// key as the matching key runtime value for the reduced axis.
+/// Evaluate `argmin`/`argmax`: the key of the extremum entry on the reduced
+/// axis.
 fn eval_extremum_key(
     kind: KeyAggregation,
     indexed: &IndexedValue<RuntimeValue>,
     span: Span,
     ctx: &EvalContext<'_>,
 ) -> Result<RuntimeValue, GraphcalError> {
-    let entry_key = super::aggregations::extremum_entry_key(kind, indexed).map_err(|error| {
-        let message = error.to_string();
-        if error.is_internal_invariant() {
-            ctx.internal_error(message, span)
-        } else {
-            ctx.eval_error(message, span)
-        }
-    })?;
-    runtime_key_for_entry(indexed.index(), &entry_key, span, ctx)
+    super::aggregations::extremum_key(kind, indexed)
+        .map(RuntimeValue::Key)
+        .map_err(|error| {
+            let message = error.to_string();
+            if error.is_internal_invariant() {
+                ctx.internal_error(message, span)
+            } else {
+                ctx.eval_error(message, span)
+            }
+        })
 }
 
-/// Reify an [`IndexEntryKey`] of `index_name` as the key runtime value:
-/// a label for named axes, a coordinate label for coordinate axes, and a
-/// position integer for `Fin` axes.
-fn runtime_key_for_entry(
-    index_name: &IndexTypeRef,
-    entry_key: &IndexEntryKey,
+/// The constant key a qualified label denotes (`Maneuver#Departure`).
+fn named_key(
+    variant: &graphcal_compiler::resolved_name::ResolvedIndexVariant,
     span: Span,
     ctx: &EvalContext<'_>,
 ) -> Result<RuntimeValue, GraphcalError> {
-    match entry_key {
-        IndexEntryKey::Named(variant) => Ok(RuntimeValue::Label {
-            index_name: index_name.clone(),
-            variant: variant.clone(),
-        }),
-        IndexEntryKey::Position(position) => {
-            if index_name.finite_index().is_some() {
-                let position = i64::try_from(*position).map_err(|_| {
-                    ctx.internal_error(
-                        format!("key position {position} cannot be represented as Int"),
-                        span,
-                    )
-                })?;
-                return Ok(RuntimeValue::Int(position));
-            }
-            let index_def = index_def_for_ref(index_name, ctx).ok_or_else(|| {
-                ctx.internal_error(
-                    format!("index `{index_name}` has no registered definition"),
-                    span,
-                )
-            })?;
-            match index_def.coordinate_data() {
-                Some(data) => {
-                    let position = usize::try_from(*position).map_err(|_| {
-                        ctx.internal_error(
-                            format!("coordinate position {position} exceeds the platform range"),
-                            span,
-                        )
-                    })?;
-                    RuntimeValue::coordinate_label(
-                        index_name.clone(),
-                        position,
-                        data.coordinate_value(position),
-                    )
-                    .map_err(|error| ctx.internal_error(error.to_string(), span))
-                }
-                _ => Err(ctx.internal_error(
-                    format!("position key on non-coordinate, non-finite index `{index_name}`"),
-                    span,
-                )),
-            }
-        }
-    }
+    let index = IndexTypeRef::from_resolved(variant.index().clone());
+    index_axis_for_ref(&index, ctx)
+        .and_then(|axis| {
+            KeyValue::for_entry(axis, &IndexEntryKey::named(variant.variant().clone()))
+        })
+        .map(RuntimeValue::Key)
+        .ok_or_else(|| {
+            ctx.internal_error(
+                format!(
+                    "label `{index}#{}` is not an entry of a concrete index",
+                    variant.variant()
+                ),
+                span,
+            )
+        })
 }
 
 fn eval_aggregation_fn(
@@ -1105,10 +1118,19 @@ fn eval_conversion_fn(
         }
         ConversionFn::ToInt => {
             let arg = eval_value(value_arg(&args[0], ctx)?, values, local_values, ctx)?;
-            // A Fin-axis key is represented as its position integer: to_int()
-            // on a key is the identity at runtime, checked at the type level.
-            if let RuntimeValue::Int(position) = arg {
-                return Ok(RuntimeValue::Int(position));
+            // to_int() on a Fin key exposes its position.
+            if let RuntimeValue::Key(key) = &arg {
+                let KeyElement::Finite(position) = key.element() else {
+                    return Err(
+                        ctx.internal_error("to_int() received a non-Fin key", arg_span(&args[0]))
+                    );
+                };
+                return i64::try_from(position).map(RuntimeValue::Int).map_err(|_| {
+                    ctx.internal_error(
+                        format!("Fin position {position} does not fit Int"),
+                        arg_span(&args[0]),
+                    )
+                });
             }
             let f = arg
                 .expect_quantity("to_int argument")
@@ -1129,11 +1151,15 @@ fn eval_conversion_fn(
         }
         ConversionFn::Coord => {
             let arg = eval_value(value_arg(&args[0], ctx)?, values, local_values, ctx)?;
-            let RuntimeValue::CoordinateLabel { value, .. } = arg else {
-                return Err(ctx.internal_error(
-                    "coord() received a non-coordinate-key argument",
-                    arg_span(&args[0]),
-                ));
+            let RuntimeValue::Key(key) = arg else {
+                return Err(
+                    ctx.internal_error("coord() received a non-key argument", arg_span(&args[0]))
+                );
+            };
+            let KeyElement::Coordinate { value, .. } = key.element() else {
+                return Err(
+                    ctx.internal_error("coord() received a non-coordinate key", arg_span(&args[0]))
+                );
             };
             Ok(RuntimeValue::Quantity(value))
         }
@@ -1381,8 +1407,8 @@ fn rebuild_extern_array<T>(
                 );
             }
             let chunks = chunks.collect::<Vec<_>>();
-            IndexedValue::try_from_axis(axis.clone(), |position, _| {
-                rebuild_extern_array(remaining, chunks[position], make_leaf, ctx, span)
+            IndexedValue::try_from_axis(axis.clone(), |key| {
+                rebuild_extern_array(remaining, chunks[key.position()], make_leaf, ctx, span)
             })
             .map(RuntimeValue::Indexed)
         }
@@ -1822,13 +1848,6 @@ fn index_axis_for_ref(index_ref: &IndexTypeRef, ctx: &EvalContext<'_>) -> Option
     IndexAxis::resolve(ctx.tir, index_ref)
 }
 
-fn index_def_for_ref<'a>(
-    index_ref: &IndexTypeRef,
-    ctx: &'a EvalContext<'_>,
-) -> Option<std::borrow::Cow<'a, IndexDef>> {
-    ctx.tir.index_def(index_ref)
-}
-
 fn ensure_index_ref_matches_resolved(
     actual: &IndexTypeRef,
     expected: &graphcal_compiler::resolved_name::ResolvedIndexName,
@@ -1918,7 +1937,8 @@ fn eval_map_literal(
                 eval_texpr_evaluated(value, values, presentation_values, local_values, ctx)?;
             evaluated.insert(variant, value);
         }
-        let result = IndexedValue::try_from_axis(axis, |_, variant| {
+        let result = IndexedValue::try_from_axis(axis, |key| {
+            let variant = key.entry_key();
             let evaluated = evaluated.swap_remove(variant).ok_or_else(|| {
                 ctx.internal_error(
                     format!(
@@ -1939,7 +1959,8 @@ fn eval_map_literal(
         ));
     }
 
-    let outer = IndexedValue::try_from_axis(axis, |_, variant| {
+    let outer = IndexedValue::try_from_axis(axis, |key| {
+        let variant = key.entry_key();
         let mut sub_entries = Vec::new();
         for (first_entry_key, rest, value) in entries {
             if map_entry_variant_for_axis(first_entry_key, &idx_name, ctx)? != *variant {
@@ -2006,39 +2027,9 @@ fn eval_for_comp_bindings(
     let remaining = &bindings[1..];
     let mut presentations = IndexMap::new();
     let mut inner_locals = local_values.child(Vec::new());
-    let entries = IndexedValue::try_from_axis(axis.clone(), |position, variant| {
-        let binding_value = match (axis.kind(), variant) {
-            (ConcreteIndexKind::Named { .. }, IndexEntryKey::Named(name)) => RuntimeValue::Label {
-                index_name: idx_name.clone(),
-                variant: name.clone(),
-            },
-            (ConcreteIndexKind::Coordinate(data), IndexEntryKey::Position(_)) => {
-                RuntimeValue::coordinate_label(
-                    idx_name.clone(),
-                    position,
-                    data.coordinate_value(position),
-                )
-                .map_err(|error| ctx.internal_error(error.to_string(), error_span))?
-            }
-            (ConcreteIndexKind::Finite { .. }, IndexEntryKey::Position(_)) => {
-                RuntimeValue::Int(i64::try_from(position).map_err(|_| {
-                    ctx.internal_error(
-                        format!("Fin position {position} is too large for i64"),
-                        error_span,
-                    )
-                })?)
-            }
-            (ConcreteIndexKind::Named { .. }, IndexEntryKey::Position(_))
-            | (
-                ConcreteIndexKind::Coordinate(_) | ConcreteIndexKind::Finite { .. },
-                IndexEntryKey::Named(_),
-            ) => {
-                return Err(ctx.internal_error(
-                    "registry entry-key category does not match its index kind",
-                    error_span,
-                ));
-            }
-        };
+    let entries = IndexedValue::try_from_axis(axis, |key| {
+        let variant = key.entry_key();
+        let binding_value = RuntimeValue::Key(key.clone());
         inner_locals.bind(
             binding.local.id,
             EvaluatedRuntimeValue::plain(binding_value),
@@ -2069,7 +2060,6 @@ fn eval_for_comp_bindings(
 }
 
 #[expect(
-    clippy::too_many_lines,
     clippy::single_match_else,
     reason = "single pattern dispatch keeps borrowed graph references and every index-argument category explicit"
 )]
@@ -2111,95 +2101,48 @@ fn eval_index_access(
         let RuntimeValue::Indexed(indexed) = current else {
             return Err(ctx.eval_error("indexing a non-indexed value", span));
         };
-        let index_name = indexed.index();
-        let entry_key = match arg {
+        let (entry, entry_key) = match arg {
             TIndexArg::Variant(variant) => {
                 ensure_index_ref_matches_resolved(
-                    index_name,
+                    indexed.index(),
                     variant.variant.index(),
                     variant.path_span(),
                     ctx,
                 )?;
-                IndexEntryKey::named(variant.variant.variant().clone())
+                let entry_key = IndexEntryKey::named(variant.variant.variant().clone());
+                (indexed.get(&entry_key), entry_key)
             }
             TIndexArg::Var(local) => {
                 let var_val = local_values
                     .get(local.value)
                     .ok_or_else(|| ctx.eval_error("undefined loop variable", local.span))?;
-                match var_val.value() {
-                    RuntimeValue::Label {
-                        index_name: label_index,
-                        variant,
-                    } => {
-                        if !index_name.matches_ref(label_index) {
-                            return Err(ctx.eval_error(
-                                "index argument belongs to a different index",
-                                local.span,
-                            ));
-                        }
-                        IndexEntryKey::named(variant.clone())
-                    }
-                    RuntimeValue::CoordinateLabel {
-                        index_name: label_index,
-                        position,
-                        ..
-                    } => {
-                        if !index_name.matches_ref(label_index) {
-                            return Err(ctx.eval_error(
-                                format!(
-                                    "index argument belongs to `{label_index}`, but value is indexed by `{index_name}`"
-                                ),
-                                local.span,
-                            ));
-                        }
-                        IndexEntryKey::position(u64::try_from(*position).map_err(|_| {
-                            ctx.internal_error("coordinate position does not fit u64", local.span)
-                        })?)
-                    }
-                    RuntimeValue::Int(n) => {
-                        if *n < 0 {
-                            return Err(ctx.eval_error(
-                                format!("index variable evaluated to negative value: {n}"),
-                                local.span,
-                            ));
-                        }
-                        IndexEntryKey::position(u64::try_from(*n).map_err(|_| {
-                            ctx.eval_error(format!("index variable is too large: {n}"), local.span)
-                        })?)
-                    }
-                    _ => return Err(ctx.eval_error("value is not a loop variable", local.span)),
-                }
+                let RuntimeValue::Key(key) = var_val.value() else {
+                    return Err(ctx.eval_error("value is not a loop variable", local.span));
+                };
+                (
+                    Some(select_by_key(indexed, key, local.span, ctx)?),
+                    key.entry_key().clone(),
+                )
             }
             TIndexArg::Expr {
                 operand: index_expr,
                 ..
             } => {
-                let val = eval_value(index_expr, values, local_values, ctx)?;
-                match val {
-                    // A key value selects the entry it names; the checker has
-                    // already proven the axis identity.
-                    RuntimeValue::Label { variant, .. } => IndexEntryKey::named(variant),
-                    RuntimeValue::CoordinateLabel { position, .. } => {
-                        IndexEntryKey::position(u64::try_from(position).map_err(|_| {
-                            ctx.internal_error(
-                                format!("coordinate key position {position} is unrepresentable"),
-                                index_expr.span(),
-                            )
-                        })?)
-                    }
+                match eval_value(index_expr, values, local_values, ctx)? {
+                    RuntimeValue::Key(key) => (
+                        Some(select_by_key(indexed, &key, index_expr.span(), ctx)?),
+                        key.entry_key().clone(),
+                    ),
+                    // A static integer position on a `Fin` axis (`@m[0, 1]`).
                     RuntimeValue::Int(n) => {
-                        if n < 0 {
-                            return Err(ctx.eval_error(
+                        let position = u64::try_from(n).map_err(|_| {
+                            ctx.eval_error(
                                 format!("index expression evaluated to negative value: {n}"),
                                 index_expr.span(),
-                            ));
-                        }
-                        IndexEntryKey::position(u64::try_from(n).map_err(|_| {
-                            ctx.eval_error(
-                                format!("index expression is too large: {n}"),
-                                index_expr.span(),
                             )
-                        })?)
+                        })?;
+                        let entry_key = IndexEntryKey::position(position);
+                        (indexed.get(&entry_key), entry_key)
                     }
                     _ => {
                         return Err(ctx.eval_error(
@@ -2210,8 +2153,7 @@ fn eval_index_access(
                 }
             }
         };
-        current = indexed
-            .get(&entry_key)
+        current = entry
             .ok_or_else(|| ctx.eval_error(format!("index entry `{entry_key}` not found"), span))?;
         selected_keys.push(entry_key);
     }
@@ -2222,6 +2164,26 @@ fn eval_index_access(
         clone_index_access_result(current),
         presentation,
     ))
+}
+
+/// The entry of `indexed` that `key` selects, where the checker proved the
+/// key's axis admissible.
+fn select_by_key<'v>(
+    indexed: &'v IndexedValue<RuntimeValue>,
+    key: &KeyValue,
+    span: Span,
+    ctx: &EvalContext<'_>,
+) -> Result<&'v RuntimeValue, GraphcalError> {
+    indexed.get_key(key).ok_or_else(|| {
+        ctx.eval_error(
+            format!(
+                "index argument belongs to `{}`, but value is indexed by `{}`",
+                key.index(),
+                indexed.index()
+            ),
+            span,
+        )
+    })
 }
 
 #[expect(
@@ -2306,14 +2268,14 @@ fn eval_unfold(
             axis.span,
         )
     })?;
-    let coordinate_data = index_axis.coordinate_data().ok_or_else(|| {
-        ctx.eval_error(
+    if index_axis.coordinate_data().is_none() {
+        return Err(ctx.eval_error(
             format!(
                 "unfold requires a coordinate index, but `{index_ref}` is not coordinate-valued"
             ),
             axis.span,
-        )
-    })?;
+        ));
+    }
     let evaluated_init =
         eval_texpr_evaluated(init, values, presentation_values, local_values, ctx)?;
     let mut previous_state = evaluated_init.clone();
@@ -2321,8 +2283,13 @@ fn eval_unfold(
     let mut presentations = IndexMap::new();
 
     let mut unfold_locals = local_values.child(Vec::new());
-    let result_entries = IndexedValue::try_from_axis(index_axis.clone(), |position, variant| {
-        let Some(previous_position) = position.checked_sub(1) else {
+    let result_entries = IndexedValue::try_from_axis(index_axis.clone(), |key| {
+        let variant = key.entry_key();
+        let Some(previous_key) = key
+            .position()
+            .checked_sub(1)
+            .and_then(|previous| KeyValue::at(index_axis.clone(), previous))
+        else {
             if !init_presentation.is_none() {
                 presentations.insert(variant.clone(), init_presentation.clone());
             }
@@ -2331,25 +2298,11 @@ fn eval_unfold(
         unfold_locals.bind(recurrence.previous_state.id, previous_state.clone());
         unfold_locals.bind(
             recurrence.previous_index.id,
-            EvaluatedRuntimeValue::plain(
-                RuntimeValue::coordinate_label(
-                    index_ref.clone(),
-                    previous_position,
-                    coordinate_data.coordinate_value(previous_position),
-                )
-                .map_err(|error| ctx.internal_error(error.to_string(), axis.span))?,
-            ),
+            EvaluatedRuntimeValue::plain(RuntimeValue::Key(previous_key)),
         );
         unfold_locals.bind(
             recurrence.current_index.id,
-            EvaluatedRuntimeValue::plain(
-                RuntimeValue::coordinate_label(
-                    index_ref.clone(),
-                    position,
-                    coordinate_data.coordinate_value(position),
-                )
-                .map_err(|error| ctx.internal_error(error.to_string(), axis.span))?,
-            ),
+            EvaluatedRuntimeValue::plain(RuntimeValue::Key(key.clone())),
         );
         previous_state =
             eval_texpr_evaluated(body, values, presentation_values, &unfold_locals, ctx)?
@@ -2401,15 +2354,15 @@ fn eval_match(
         eval_texpr_evaluated(scrutinee, values, presentation_values, local_values, ctx)?
             .into_parts();
     match &scrutinee_val {
-        RuntimeValue::Label {
-            index_name,
-            variant,
-        } => {
+        RuntimeValue::Key(key) => {
+            let KeyElement::Named(variant) = key.element() else {
+                return Err(ctx.internal_error("match scrutinee is not a named key", span));
+            };
             let matched_arm = arms
                 .iter()
                 .find(|arm| match &arm.pattern {
                     TMatchPattern::IndexLabel(pat) => {
-                        index_ref_matches_resolved(index_name, pat.variant.index())
+                        index_ref_matches_resolved(key.index(), pat.variant.index())
                             && pat.variant.variant() == variant
                     }
                     TMatchPattern::Constructor { .. } => false,

@@ -19,13 +19,15 @@
 //!   numbers and labels in one channel) is an error — variant names are
 //!   never substituted for data.
 
-use crate::runtime_value::RuntimeValue;
+use crate::runtime_value::{KeyElement, RuntimeValue};
 use graphcal_compiler::plot_shape::align_plot_channel_axes;
 use graphcal_compiler::registry::checked_type::IndexTypeRef;
 use graphcal_compiler::syntax::ast::EncodingChannel;
 use graphcal_compiler::syntax::index_name::IndexEntryKey;
 
-use super::types::{DisplayUnit, PlotFieldValue, Value, epoch_to_rfc3339, quantity_display_value};
+use super::types::{
+    DisplayUnit, KeyRendering, PlotFieldValue, Value, epoch_to_rfc3339, quantity_display_value,
+};
 
 /// One leaf datum of an encoding channel.
 #[derive(Debug, Clone, PartialEq)]
@@ -87,6 +89,18 @@ impl ChannelData {
     }
 }
 
+/// The plotted number of a `Fin` key: its position, when exactly representable.
+pub fn fin_position_number(position: usize) -> Result<f64, String> {
+    i64::try_from(position)
+        .ok()
+        .and_then(|position| crate::eval_expr::numeric::exact_i64_to_f64(position).ok())
+        .ok_or_else(|| {
+            format!(
+                "Fin position {position} cannot be plotted exactly; convert it explicitly with to_float(to_int(...))"
+            )
+        })
+}
+
 /// Convert one leaf runtime value to a plot datum.
 ///
 /// Booleans become the labels `"true"`/`"false"`, matching how a quantity
@@ -110,11 +124,14 @@ fn plot_datum_from_leaf(
                     "Int value {i} cannot be plotted exactly; convert it explicitly with to_float()"
                 )
             }),
-        // A coordinate-index loop variable surfacing as a value
-        // (e.g. `x: for t: T { t }`) is numeric data (#839).
-        RuntimeValue::CoordinateLabel { value, .. } => Ok(PlotDatum::Number(value.get())),
+        RuntimeValue::Key(key) => match key.element() {
+            KeyElement::Named(variant) => Ok(PlotDatum::Label(variant.to_string())),
+            // A coordinate key surfacing as a value (e.g. `x: for t: T { t }`)
+            // is numeric data (#839).
+            KeyElement::Coordinate { value, .. } => Ok(PlotDatum::Number(value.get())),
+            KeyElement::Finite(position) => fin_position_number(position).map(PlotDatum::Number),
+        },
         RuntimeValue::Bool(b) => Ok(PlotDatum::Label(b.to_string())),
-        RuntimeValue::Label { variant, .. } => Ok(PlotDatum::Label(variant.to_string())),
         RuntimeValue::Datetime(epoch) => epoch_to_rfc3339(epoch)
             .map(PlotDatum::Datetime)
             .map_err(|error| error.to_string()),
@@ -266,7 +283,11 @@ pub(super) fn uniform_quantity_unit_label(value: &Value) -> Result<Option<String
             Value::Struct { fields, .. } => {
                 fields.values().try_for_each(|field| visit(field, found))?;
             }
-            Value::Bool(_) | Value::Int(_) | Value::Label { .. } | Value::Datetime { .. } => {}
+            Value::Key(key) => match KeyRendering::of(key) {
+                KeyRendering::Coordinate(quantity) => visit(&quantity, found)?,
+                KeyRendering::Label { .. } | KeyRendering::Position(_) => {}
+            },
+            Value::Bool(_) | Value::Int(_) | Value::Datetime { .. } => {}
         }
         Ok(())
     }

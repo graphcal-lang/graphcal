@@ -30,70 +30,22 @@ mod tests {
             ))
         };
         let idle = value("main", "Idle");
-        assert!(semantic_value_equals(&idle, &value("main", "Idle")));
-        assert!(!semantic_value_equals(&idle, &value("main", "Running")));
-        assert!(!semantic_value_equals(&idle, &value("other", "Idle")));
+        assert_eq!(idle, value("main", "Idle"));
+        assert_ne!(idle, value("main", "Running"));
+        assert_ne!(idle, value("other", "Idle"));
     }
-}
 
-fn semantic_value_equals(lhs: &RuntimeValue, rhs: &RuntimeValue) -> bool {
-    match lhs {
-        RuntimeValue::Quantity(lhs) => {
-            matches!(rhs, RuntimeValue::Quantity(rhs) if lhs == rhs)
-        }
-        RuntimeValue::Complex(lhs) => {
-            matches!(rhs, RuntimeValue::Complex(rhs) if lhs == rhs)
-        }
-        RuntimeValue::Bool(lhs) => matches!(rhs, RuntimeValue::Bool(rhs) if lhs == rhs),
-        RuntimeValue::Int(lhs) => matches!(rhs, RuntimeValue::Int(rhs) if lhs == rhs),
-        RuntimeValue::Label {
-            index_name: lhs_index,
-            variant: lhs_variant,
-        } => matches!(
-            rhs,
-            RuntimeValue::Label {
-                index_name: rhs_index,
-                variant: rhs_variant,
-            } if lhs_index.matches_ref(rhs_index) && lhs_variant == rhs_variant
-        ),
-        RuntimeValue::Struct(lhs) => match rhs {
-            // The same constructor application has the same declared fields
-            // in the same order.
-            RuntimeValue::Struct(rhs) => {
-                lhs.same_application(rhs)
-                    && lhs
-                        .fields()
-                        .zip(rhs.fields())
-                        .all(|((_, lhs), (_, rhs))| semantic_value_equals(lhs, rhs))
-            }
-            _ => false,
-        },
-        RuntimeValue::Indexed(lhs) => match rhs {
-            // Equal axes have equal keys, so entries compare positionally.
-            RuntimeValue::Indexed(rhs) => {
-                lhs.axis().matches(rhs.axis())
-                    && lhs
-                        .values()
-                        .iter()
-                        .zip(rhs.values())
-                        .all(|(lhs, rhs)| semantic_value_equals(lhs, rhs))
-            }
-            _ => false,
-        },
-        RuntimeValue::CoordinateLabel {
-            index_name: lhs_index,
-            position: lhs_position,
-            ..
-        } => matches!(
-            rhs,
-            RuntimeValue::CoordinateLabel {
-                index_name: rhs_index,
-                position: rhs_position,
-                ..
-            } if lhs_index.matches_ref(rhs_index) && lhs_position == rhs_position
-        ),
-        RuntimeValue::Datetime(lhs) => {
-            matches!(rhs, RuntimeValue::Datetime(rhs) if lhs == rhs)
+    #[test]
+    fn orderings_follow_the_operator() {
+        let cases = [
+            (OrderingOp::Lt, [true, false, false]),
+            (OrderingOp::Gt, [false, false, true]),
+            (OrderingOp::Le, [true, true, false]),
+            (OrderingOp::Ge, [false, true, true]),
+        ];
+        for (op, expected) in cases {
+            let actual = [(1, 2), (2, 2), (3, 2)].map(|(lhs, rhs)| apply_ordering(op, &lhs, &rhs));
+            assert_eq!(actual, expected, "{op:?}");
         }
     }
 }
@@ -142,10 +94,10 @@ pub(super) enum OrderingOp {
 
 /// Evaluate a comparison on same-typed, unindexed values.
 ///
-/// Equality accepts every unindexed value kind; ordering accepts Int,
-/// Datetime, and Quantity operands. Mismatched operand types are evaluation
-/// errors. Indexed values reaching this function violate the dimension
-/// checker's no-broadcasting invariant.
+/// Equality accepts every unindexed value kind and is the values' structural
+/// equality; ordering accepts Int, Datetime, and Quantity operands. Mismatched
+/// operand types are evaluation errors. Indexed values reaching this function
+/// violate the dimension checker's no-broadcasting invariant.
 pub(super) fn eval_comparison_values(
     op: Comparison,
     l: &RuntimeValue,
@@ -157,24 +109,17 @@ pub(super) fn eval_comparison_values(
         (_, RuntimeValue::Indexed(_), _) | (_, _, RuntimeValue::Indexed(_)) => {
             Err(ctx.internal_error("indexed operand reached comparison evaluation", span))
         }
-        (Comparison::Eq | Comparison::Ne, RuntimeValue::Bool(_), RuntimeValue::Bool(_))
-        | (Comparison::Eq | Comparison::Ne, RuntimeValue::Int(_), RuntimeValue::Int(_))
+        (Comparison::Eq | Comparison::Ne, RuntimeValue::Quantity(_), RuntimeValue::Quantity(_))
         | (Comparison::Eq | Comparison::Ne, RuntimeValue::Complex(_), RuntimeValue::Complex(_))
-        | (
-            Comparison::Eq | Comparison::Ne,
-            RuntimeValue::Label { .. },
-            RuntimeValue::Label { .. },
-        )
+        | (Comparison::Eq | Comparison::Ne, RuntimeValue::Bool(_), RuntimeValue::Bool(_))
+        | (Comparison::Eq | Comparison::Ne, RuntimeValue::Int(_), RuntimeValue::Int(_))
+        | (Comparison::Eq | Comparison::Ne, RuntimeValue::Key(_), RuntimeValue::Key(_))
         | (Comparison::Eq | Comparison::Ne, RuntimeValue::Struct(_), RuntimeValue::Struct(_))
-        | (
-            Comparison::Eq | Comparison::Ne,
-            RuntimeValue::CoordinateLabel { .. },
-            RuntimeValue::CoordinateLabel { .. },
-        )
         | (Comparison::Eq | Comparison::Ne, RuntimeValue::Datetime(_), RuntimeValue::Datetime(_)) => {
-            Ok(RuntimeValue::Bool(
-                semantic_value_equals(l, r) == (op == Comparison::Eq),
-            ))
+            Ok(RuntimeValue::Bool((l == r) == (op == Comparison::Eq)))
+        }
+        (Comparison::Ord(ord_op), RuntimeValue::Quantity(lq), RuntimeValue::Quantity(rq)) => {
+            Ok(RuntimeValue::Bool(apply_ordering(ord_op, lq, rq)))
         }
         (Comparison::Ord(ord_op), RuntimeValue::Int(li), RuntimeValue::Int(ri)) => {
             Ok(RuntimeValue::Bool(apply_ordering(ord_op, li, ri)))
@@ -182,39 +127,21 @@ pub(super) fn eval_comparison_values(
         (Comparison::Ord(ord_op), RuntimeValue::Datetime(le), RuntimeValue::Datetime(re)) => {
             Ok(RuntimeValue::Bool(apply_ordering(ord_op, le, re)))
         }
-        _ => {
-            let lv = l
-                .expect_quantity("comparison operand")
-                .map_err(|e| ctx.eval_error(e.to_string(), span))?;
-            let rv = r
-                .expect_quantity("comparison operand")
-                .map_err(|e| ctx.eval_error(e.to_string(), span))?;
-            Ok(RuntimeValue::Bool(eval_quantity_comparison(op, lv, rv)))
-        }
+        _ => Err(ctx.eval_error(
+            format!("cannot compare {} with {}", l.describe(), r.describe()),
+            span,
+        )),
     }
 }
 
-/// Dispatch an ordering operator (`<`, `>`, `<=`, `>=`) to the `Ord`-derived
-/// comparison on any two homogeneous operands.
-fn apply_ordering<T: Ord + ?Sized>(op: OrderingOp, lhs: &T, rhs: &T) -> bool {
+/// Dispatch an ordering operator (`<`, `>`, `<=`, `>=`) to the
+/// `PartialOrd` comparison on any two homogeneous operands.
+fn apply_ordering<T: PartialOrd + ?Sized>(op: OrderingOp, lhs: &T, rhs: &T) -> bool {
     match op {
         OrderingOp::Lt => lhs < rhs,
         OrderingOp::Gt => lhs > rhs,
         OrderingOp::Le => lhs <= rhs,
         OrderingOp::Ge => lhs >= rhs,
-    }
-}
-
-/// Evaluate a comparison operator on two f64 values.
-#[expect(clippy::float_cmp, reason = "DSL equality uses exact comparison")]
-fn eval_quantity_comparison(op: Comparison, l: f64, r: f64) -> bool {
-    match op {
-        Comparison::Eq => l == r,
-        Comparison::Ne => l != r,
-        Comparison::Ord(OrderingOp::Lt) => l < r,
-        Comparison::Ord(OrderingOp::Gt) => l > r,
-        Comparison::Ord(OrderingOp::Le) => l <= r,
-        Comparison::Ord(OrderingOp::Ge) => l >= r,
     }
 }
 

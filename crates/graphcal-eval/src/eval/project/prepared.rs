@@ -4,7 +4,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use crate::runtime_value::RuntimeValue;
+use crate::runtime_value::{IndexAxis, KeyValue, RuntimeValue};
 use graphcal_compiler::declaration_category::DeclCategory;
 use graphcal_compiler::desugar::desugared_ast::{Expr, ExprKind as AstExprKind};
 use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
@@ -15,10 +15,10 @@ use graphcal_compiler::ir::static_interface::StaticInputKind;
 use graphcal_compiler::registry::checked_type::CheckedType;
 use graphcal_compiler::registry::error::GraphcalError;
 use graphcal_compiler::registry::time_scale::TimeScale;
-use graphcal_compiler::registry::types::{ConcreteIndexKind, IndexKind};
+use graphcal_compiler::registry::types::ConcreteIndexKind;
 use graphcal_compiler::resolve::ModuleResolver;
 use graphcal_compiler::syntax::decl_name::DeclName;
-use graphcal_compiler::syntax::index_name::IndexVariantName;
+use graphcal_compiler::syntax::index_name::{IndexEntryKey, IndexVariantName};
 use graphcal_compiler::syntax::module_name::ScopedName;
 use graphcal_compiler::syntax::span::Span;
 use miette::{NamedSource, SourceSpan};
@@ -38,7 +38,7 @@ use crate::project_compiler::{
 
 use super::model_schema::{
     ModelIndexKind, ModelIndexSchema, ModelSchemaGraph, ModelSchemaGraphBuilder, ModelTypeId,
-    ModelValueSchema, index_def_for_ref,
+    ModelValueSchema,
 };
 use super::output::{apply_include_debug_names, remap_include_debug_name};
 
@@ -212,29 +212,26 @@ impl ParameterBindingBuilder<'_> {
         let CheckedType::Key(index) = &port.declared_type else {
             return Err(self.project.binding_kind_error(port, "Key"));
         };
-        let Some(definition) = index_def_for_ref(index, self.project.tir()) else {
+        let Some(axis) = IndexAxis::resolve(self.project.tir(), index) else {
             return Err(self
                 .project
                 .binding_value_error(port, "index definition is unavailable"));
         };
-        let IndexKind::Concrete(ConcreteIndexKind::Named { variants }) = &definition.kind else {
+        if !matches!(axis.kind(), ConcreteIndexKind::Named { .. }) {
             return Err(self
                 .project
                 .binding_value_error(port, "Tenax v2 requires a concrete named index"));
-        };
-        if !variants.as_slice().contains(variant) {
+        }
+        let Some(key) = KeyValue::for_entry(axis, &IndexEntryKey::named(variant.clone())) else {
             return Err(self.project.binding_value_error(
                 port,
                 &format!("unknown category `{variant}` for index `{index}`"),
             ));
-        }
+        };
         self.insert(
             position,
             RuntimeParameterBinding {
-                value: RuntimeValue::Label {
-                    index_name: index.clone(),
-                    variant: variant.clone(),
-                },
+                value: RuntimeValue::Key(key),
                 presentation: crate::presentation_evidence::PresentationInstance::None,
             },
         )

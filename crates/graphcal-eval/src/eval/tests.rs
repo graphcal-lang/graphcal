@@ -7625,14 +7625,23 @@ fn eval_label_match_rejects_runtime_owner_mismatch_with_same_leaf_variant() {
     let local_values = crate::eval_expr::HirLocalValueMap::from_bindings(vec![(
         binding.local.id,
         crate::runtime_presentation::EvaluatedRuntimeValue::plain(
-            crate::eval_expr::RuntimeValue::Label {
-                index_name: graphcal_compiler::registry::checked_type::IndexTypeRef::from_resolved(
-                    b_owner,
-                ),
-                variant: graphcal_compiler::syntax::index_name::IndexVariantName::expect_valid(
-                    "Burn",
-                ),
-            },
+            crate::eval_expr::RuntimeValue::Key(
+                crate::runtime_value::KeyValue::for_entry(
+                    crate::runtime_value::IndexAxis::resolve(
+                        &tir,
+                        &graphcal_compiler::registry::checked_type::IndexTypeRef::from_resolved(
+                            b_owner,
+                        ),
+                    )
+                    .unwrap(),
+                    &graphcal_compiler::syntax::index_name::IndexEntryKey::named(
+                        graphcal_compiler::syntax::index_name::IndexVariantName::expect_valid(
+                            "Burn",
+                        ),
+                    ),
+                )
+                .unwrap(),
+            ),
         ),
     )]);
     let src = &project.root_file().named_source();

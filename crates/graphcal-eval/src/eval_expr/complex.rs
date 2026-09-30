@@ -254,9 +254,7 @@ fn divide(lhs: RawComplex, rhs: RawComplex) -> Result<RawComplex, ComplexEvalErr
 
 fn quantity(value: &RuntimeValue) -> Result<f64, ComplexEvalError> {
     match value {
-        RuntimeValue::Quantity(value) | RuntimeValue::CoordinateLabel { value, .. } => {
-            Ok(value.get())
-        }
+        RuntimeValue::Quantity(value) => Ok(value.get()),
         other => Err(ComplexEvalError::TypeMismatch {
             expected: "a quantity",
             actual: other.describe().to_string(),
