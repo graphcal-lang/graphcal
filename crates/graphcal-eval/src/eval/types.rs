@@ -671,7 +671,7 @@ pub struct PlotError {
     /// The plot declaration name.
     pub name: ScopedName,
     /// Typed reason the plot was not rendered, including incompleteness.
-    pub reason: NodeUnavailable,
+    pub reason: super::plot_unavailable::PlotUnavailable,
 }
 
 /// The result of evaluating an assertion.
@@ -1176,7 +1176,8 @@ mod tests {
             ),
             reason: NodeUnavailable::EvalFailed {
                 message: "bad plot".to_string(),
-            },
+            }
+            .into(),
         });
 
         assert!(result.has_errors());

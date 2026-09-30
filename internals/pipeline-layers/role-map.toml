@@ -2179,6 +2179,16 @@ role = "interpreter"
 
 [[module]]
 package = "eval"
+path = ["eval", "plot_unavailable"]
+role = "contracts"
+
+[[module]]
+package = "eval"
+path = ["eval", "plot_unavailable", "tests"]
+role = "contracts"
+
+[[module]]
+package = "eval"
 path = ["invariant"]
 role = "contracts"
 

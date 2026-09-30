@@ -5707,7 +5707,9 @@ fn requested_instance_plot_reports_its_failed_instance_dependency() {
         panic!("expected one plot error, got {:?}", result.plot_errors);
     };
     assert_eq!(error.name.to_string(), "chart");
-    let NodeUnavailable::EvalFailed { message } = &error.reason else {
+    let crate::eval::PlotUnavailable::Evaluation(NodeUnavailable::EvalFailed { message }) =
+        &error.reason
+    else {
         panic!("expected an evaluation failure, got {:?}", error.reason);
     };
     assert!(
@@ -5719,9 +5721,10 @@ fn requested_instance_plot_reports_its_failed_instance_dependency() {
 #[test]
 fn composition_of_an_unavailable_requested_instance_plot_reports_the_plot() {
     // A figure names a requested instance plot by its local alias. When that
-    // plot is unavailable, the figure is blocked by the instance's plot
-    // declaration; the alias itself binds no declaration identity, so it must
-    // not be looked up as one (this used to abort evaluation with X001).
+    // plot is unavailable, the figure is blocked by it and reports it by that
+    // alias, not by the instance's plot declaration identity; the alias binds
+    // no declaration identity, so it must not be looked up as one (this used
+    // to abort evaluation with X001).
     let (_directory, root) = write_pipeline_project(
         &[
             (
@@ -5747,16 +5750,62 @@ fn composition_of_an_unavailable_requested_instance_plot_reports_the_plot() {
         .map(|error| error.name.to_string())
         .collect::<Vec<_>>();
     assert_eq!(names, ["ch", "summary"]);
-    let NodeUnavailable::DependencyFailed { failed_deps } = &result.plot_errors[1].reason else {
+    let crate::eval::PlotUnavailable::ComposedPlots(
+        crate::eval::ComposedPlotsUnavailable::Failed { failed_plots },
+    ) = &result.plot_errors[1].reason
+    else {
         panic!(
             "expected the figure to be blocked by its plot, got {:?}",
             result.plot_errors[1].reason
         );
     };
-    let [plot] = failed_deps.as_slice() else {
-        panic!("expected one failed plot, got {failed_deps:?}");
+    let [plot] = failed_plots.as_slice() else {
+        panic!("expected one failed plot, got {failed_plots:?}");
     };
-    assert_eq!(plot.leaf().as_str(), "chart");
+    assert_eq!(plot.as_str(), "ch");
+    assert_eq!(
+        result.plot_errors[1].reason.to_string(),
+        "dependency failed: ch"
+    );
+}
+
+#[test]
+fn compositions_name_unavailable_plots_as_the_root_does() {
+    // Figures and layers report the plots blocking them by their names in the
+    // root, for root plots and requested inline-DAG instance plots alike,
+    // never by declaration identities such as `main.<include@N>.inner`.
+    let result = compile_and_eval_named(
+        "dag lib { pub plot inner = { mark: line { stroke_width: 1.0 / 0.0 }, encode: { x: 1.0, y: 2.0 } }; }\n\
+         include lib()::{ inner as shown };\n\
+         plot broken = { mark: line { stroke_width: 1.0 / 0.0 }, encode: { x: 1.0, y: 2.0 } };\n\
+         node missing: Dimensionless = todo {};\n\
+         plot pending = { mark: point, encode: { y: @missing } };\n\
+         figure comparison = { plots: [broken], title: \"C\" };\n\
+         layer overlay = { plots: [shown, broken] };\n\
+         figure mixed = { plots: [pending, shown] };\n",
+        "main.gcl",
+    )
+    .unwrap();
+    let reasons = result
+        .plot_errors
+        .iter()
+        .map(|error| (error.name.to_string(), error.reason.to_string()))
+        .collect::<HashMap<_, _>>();
+    assert_eq!(reasons["comparison"], "dependency failed: broken");
+    assert_eq!(reasons["overlay"], "dependency failed: broken, shown");
+    assert!(
+        reasons["mixed"].ends_with("; dependency failed: shown"),
+        "{}",
+        reasons["mixed"]
+    );
+    let mixed = &result
+        .plot_errors
+        .iter()
+        .find(|error| error.name.to_string() == "mixed")
+        .unwrap()
+        .reason;
+    assert!(mixed.is_incomplete());
+    assert!(mixed.has_failure());
 }
 
 #[test]
