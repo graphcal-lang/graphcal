@@ -234,30 +234,52 @@ fn prepare_callable_plan<'p>(
             Ok(planned.clone())
         })
         .collect::<Result<Vec<_>, _>>()?;
-    let instances = body
-        .dag()
-        .semantic_instances()
+    let plan_instances = |parent: SealedDag<'p>| {
+        parent
+            .dag()
+            .semantic_instances()
+            .iter()
+            .map(|record| {
+                let owner = record.instance.id().owner();
+                let instance = tir.dag_registry().semantic_instance(record);
+                instance
+                    .zip(scopes.get(owner).copied())
+                    .ok_or_else(|| {
+                        invalid(
+                            format!("semantic instance `{owner}` has no compiled DAG"),
+                            src,
+                        )
+                    })
+                    .and_then(|(instance, scope)| {
+                        PlannedInstance::try_new(instance, scope)
+                            .map_err(|error| invalid(error.to_string(), src))
+                    })
+            })
+            .collect::<Result<Vec<_>, _>>()
+    };
+    let instances = plan_instances(body)?;
+    // The callable's own body and every semantic instance of its closure,
+    // in `DagId` order, each with the instances it includes.
+    let mut parents = execution_dags
         .iter()
-        .map(|record| {
-            let owner = record.instance.id().owner();
-            let instance = tir.dag_registry().semantic_instance(record);
-            instance
-                .zip(scopes.get(owner).copied())
-                .ok_or_else(|| {
-                    invalid(
-                        format!("semantic instance `{owner}` has no compiled DAG"),
-                        src,
-                    )
-                })
-                .and_then(|(instance, scope)| {
-                    PlannedInstance::try_new(instance, scope)
-                        .map_err(|error| invalid(error.to_string(), src))
-                })
-        })
-        .collect::<Result<Vec<_>, _>>()?;
+        .copied()
+        .filter(|scope| std::ptr::eq(scope.dag(), body.dag()) || scope.dag().is_semantic_instance())
+        .collect::<Vec<_>>();
+    parents.sort_by(|left, right| left.dag().dag_id().cmp(right.dag().dag_id()));
+    let closure_instances = parents
+        .into_iter()
+        .map(|parent| Ok((parent, plan_instances(parent)?)))
+        .collect::<Result<Vec<_>, GraphcalError>>()?;
     let imports = prepare_imports(&execution_dags, declarations, src)?;
-    CallablePlan::new(body, execution_dags, instances, imports, scheduled)
-        .map_err(|error| invalid(error.to_string(), src))
+    CallablePlan::new(
+        body,
+        execution_dags,
+        instances,
+        closure_instances,
+        imports,
+        scheduled,
+    )
+    .map_err(|error| invalid(error.to_string(), src))
 }
 
 /// The planned declaration `key` denotes.
@@ -462,6 +484,7 @@ mod tests {
             root.scope(),
             root.execution_dags().to_vec(),
             root.semantic_instances().to_vec(),
+            root.closure_instances().to_vec(),
             PreparedImports::default(),
             scheduled,
         )
@@ -541,6 +564,7 @@ mod tests {
                 plan.root().scope(),
                 plan.root().execution_dags().to_vec(),
                 plan.root().semantic_instances().to_vec(),
+                plan.root().closure_instances().to_vec(),
                 PreparedImports::default(),
                 Vec::new(),
             )

@@ -85,8 +85,7 @@ impl RootOutcome {
             assertions: Vec::new(),
         };
         let ctx = outcome.session(plan, src, host_fns, cancellation);
-        let assertions =
-            evaluate_assertions(plan.tir(), src, &ctx, &outcome.values, &outcome.errors)?;
+        let assertions = evaluate_assertions(plan, src, &ctx, &outcome.values, &outcome.errors)?;
         outcome.assertions = assertions;
         Ok(outcome)
     }

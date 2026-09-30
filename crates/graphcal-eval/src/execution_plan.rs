@@ -293,6 +293,7 @@ pub struct CallablePlan<'p> {
     scope: SealedDag<'p>,
     execution_dags: Vec<SealedDag<'p>>,
     instances: Vec<PlannedInstance<'p>>,
+    closure_instances: Vec<(SealedDag<'p>, Vec<PlannedInstance<'p>>)>,
     imports: PreparedImports,
     steps: IndexVec<StepIdx, Step<'p>>,
 }
@@ -311,6 +312,7 @@ impl<'p> CallablePlan<'p> {
         scope: SealedDag<'p>,
         execution_dags: Vec<SealedDag<'p>>,
         instances: Vec<PlannedInstance<'p>>,
+        closure_instances: Vec<(SealedDag<'p>, Vec<PlannedInstance<'p>>)>,
         imports: PreparedImports,
         scheduled: Vec<PlannedDeclaration<'p>>,
     ) -> Result<Self, StepIndexError> {
@@ -349,6 +351,7 @@ impl<'p> CallablePlan<'p> {
             scope,
             execution_dags,
             instances,
+            closure_instances,
             imports,
             steps: IndexVec::from_items(steps),
         })
@@ -371,6 +374,14 @@ impl<'p> CallablePlan<'p> {
     #[must_use]
     pub fn semantic_instances(&self) -> &[PlannedInstance<'p>] {
         &self.instances
+    }
+
+    /// The callable's own body and every semantic instance of its execution
+    /// closure, in [`DagId`] order, each with the semantic instances it
+    /// includes, in record order.
+    #[must_use]
+    pub fn closure_instances(&self) -> &[(SealedDag<'p>, Vec<PlannedInstance<'p>>)] {
+        &self.closure_instances
     }
 
     /// Whether `dag` is one of this callable's execution DAGs.
