@@ -44,7 +44,6 @@ pub struct EvalEnvironment<'a> {
     pub registry: &'a FormattingRegistry,
     pub src: &'a NamedSource<Arc<String>>,
     pub tir: &'a CheckedTir,
-    pub current_dag: &'a CheckedDag,
     pub current_decl: Option<ResolvedDeclName>,
     pub root_values: Option<&'a RuntimeValueMap>,
     pub unavailable: Option<
@@ -61,6 +60,10 @@ pub struct EvalEnvironment<'a> {
 #[derive(Clone)]
 pub struct EvalContext<'a> {
     environment: EvalEnvironment<'a>,
+    /// The DAG whose bodies this context runs, selected only by the phase
+    /// constructors and scope transitions below. Its frame resolves every
+    /// body handle this context meets.
+    dag: &'a CheckedDag,
     capabilities: Capabilities<'a>,
 }
 
@@ -75,7 +78,6 @@ impl<'a> Deref for EvalContext<'a> {
 impl<'a> EvalContext<'a> {
     fn environment(
         tir: &'a CheckedTir,
-        dag: &'a CheckedDag,
         src: &'a NamedSource<Arc<String>>,
         cancellation: CancellationToken,
     ) -> EvalEnvironment<'a> {
@@ -85,7 +87,6 @@ impl<'a> EvalContext<'a> {
             registry: tir.registry(),
             src,
             tir,
-            current_dag: dag,
             current_decl: None,
             root_values: None,
             unavailable: None,
@@ -110,7 +111,8 @@ impl<'a> EvalContext<'a> {
             )
         })?;
         Ok(Self {
-            environment: Self::environment(tir, dag, src, cancellation),
+            environment: Self::environment(tir, src, cancellation),
+            dag,
             capabilities: Capabilities::ProvisionalConstants,
         })
     }
@@ -135,7 +137,8 @@ impl<'a> EvalContext<'a> {
             )
         })?;
         Ok(Self {
-            environment: Self::environment(plan.tir(), dag.dag(), src, cancellation),
+            environment: Self::environment(plan.tir(), src, cancellation),
+            dag: dag.dag(),
             capabilities: Capabilities::Checked { plan, host },
         })
     }
@@ -145,7 +148,7 @@ impl<'a> EvalContext<'a> {
         &self,
         root: &graphcal_compiler::hir::expr::Expr,
     ) -> Result<&'a graphcal_compiler::tir::texpr::TExpr, GraphcalError> {
-        self.current_dag
+        self.dag
             .bodies()
             .executable_value(root.id())
             .map_err(|error| self.internal_error(error.to_string(), root.span))
@@ -157,7 +160,7 @@ impl<'a> EvalContext<'a> {
         root: &graphcal_compiler::hir::expr::Expr,
     ) -> Result<&'a str, GraphcalError> {
         use graphcal_compiler::tir::texpr::{CheckedBody, ContextualLiteral, TBody};
-        let message = match self.current_dag.bodies().get(root.id()) {
+        let message = match self.dag.bodies().get(root.id()) {
             Some(CheckedBody::Executable(TBody::Contextual(literal))) => match literal.literal() {
                 ContextualLiteral::String(text) => return Ok(text),
                 ContextualLiteral::OffsetDateTime(_)
@@ -268,12 +271,18 @@ impl<'a> EvalContext<'a> {
         )
     }
 
+    /// The DAG whose bodies this context runs.
+    #[must_use]
+    pub const fn dag(&self) -> &'a CheckedDag {
+        self.dag
+    }
+
     /// The declaration `reference` denotes in the DAG this context runs.
     ///
     /// The frame is the selected DAG's own; evaluation code cannot pick one.
     #[must_use]
     pub fn resolve(&self, reference: &graphcal_compiler::hir::expr::LocalDecl) -> ResolvedDeclName {
-        self.current_dag.frame().resolve(reference)
+        self.dag.resolve(reference)
     }
 
     /// The unit whose scale `unit` has in the DAG this context runs.
@@ -282,7 +291,7 @@ impl<'a> EvalContext<'a> {
         &self,
         unit: &graphcal_compiler::hir::expr::ResolvedUnitRef,
     ) -> graphcal_compiler::resolved_name::ResolvedUnitName {
-        self.current_dag.frame().resolve_unit(unit)
+        self.dag.resolve_unit(unit)
     }
 
     pub fn check_dependencies(
@@ -330,7 +339,7 @@ impl<'a> EvalContext<'a> {
         'a: 'b,
     {
         let mut context = self.with_src(src);
-        context.environment.current_dag = match self.capabilities {
+        context.dag = match self.capabilities {
             Capabilities::ProvisionalConstants => {
                 self.tir.dag_registry().get(dag.dag_id()).ok_or_else(|| {
                     context.internal_error(

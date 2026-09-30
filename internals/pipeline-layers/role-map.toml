@@ -1693,6 +1693,11 @@ role = "contracts"
 
 [[module]]
 package = "compiler"
+path = ["tir", "typed", "canonical_frame"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
 path = ["tir", "typed", "checked"]
 role = "contracts"
 

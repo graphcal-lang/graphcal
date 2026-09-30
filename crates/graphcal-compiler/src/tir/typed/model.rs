@@ -1483,8 +1483,9 @@ pub struct DagTIR {
     pub(crate) expected_fail: HashMap<ResolvedDeclName, ResolvedExpectedFailMetadata>,
     pub(crate) imported_bindings: HashMap<ScopedName, crate::ir::imported_binding::ImportedBinding>,
     pub(crate) semantic_instances: Vec<crate::ir::instance::HirInstanceRecord>,
-    /// How this DAG's bodies name its declarations; built with the DAG.
-    pub(crate) frame: crate::ir::instance::frame::InstanceFrame,
+    /// How this DAG's bodies name its declarations; built with the DAG, and
+    /// assigned only by the type resolver and instance specialization.
+    pub(in crate::tir::typed) frame: crate::ir::instance::frame::InstanceFrame,
     pub(crate) projectable_outputs: std::collections::HashSet<DeclName>,
 }
 
@@ -1547,8 +1548,12 @@ impl DagTIR {
     }
 
     /// The frame this DAG runs its bodies in.
+    ///
+    /// Visible only to the checker, which checks each body in the frame of
+    /// the DAG that runs it. Evaluation never sees a frame: it resolves
+    /// handles through the [`CheckedDag`](super::CheckedDag) it runs.
     #[must_use]
-    pub const fn frame(&self) -> &crate::ir::instance::frame::InstanceFrame {
+    pub(in crate::tir) const fn frame(&self) -> &crate::ir::instance::frame::InstanceFrame {
         &self.frame
     }
 

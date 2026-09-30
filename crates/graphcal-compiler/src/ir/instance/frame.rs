@@ -21,6 +21,7 @@ use crate::syntax::names::NameNamespace;
 use super::identity::{instance_declaration, rebased_declaration};
 use super::mint::FrameAccess;
 use crate::ir::static_substitution::StaticSpecializationId;
+use crate::tir::typed::canonical_frame::CanonicalFrameMint;
 
 /// The frame a DAG runs its bodies in: the only way to turn a body handle
 /// into a declaration identity.
@@ -57,8 +58,12 @@ struct InstanceBinding {
 
 impl InstanceFrame {
     /// The frame of a canonical DAG, which runs its bodies as written.
+    ///
+    /// Only the canonical DAG type resolver holds the
+    /// [`CanonicalFrameMint`], so an instance's bodies cannot be run in a
+    /// canonical frame built elsewhere.
     #[must_use]
-    pub(crate) const fn canonical() -> Self {
+    pub(crate) const fn canonical(_: CanonicalFrameMint) -> Self {
         Self {
             kind: FrameKind::Canonical,
         }
@@ -266,7 +271,7 @@ mod tests {
     #[test]
     fn canonical_frames_run_bodies_as_written() {
         let fixture = fixture();
-        let frame = InstanceFrame::canonical();
+        let frame = InstanceFrame::canonical(CanonicalFrameMint::for_test());
         assert!(!frame.is_instance());
         assert!(frame.specialization().is_none());
         assert_eq!(
@@ -279,9 +284,11 @@ mod tests {
     #[test]
     fn instance_frames_reown_template_and_included_instance_declarations() {
         let fixture = fixture();
-        let frame = fixture
-            .inst
-            .frame(&InstanceFrame::canonical(), [&fixture.inner_in_lib], []);
+        let frame = fixture.inst.frame(
+            &InstanceFrame::canonical(CanonicalFrameMint::for_test()),
+            [&fixture.inner_in_lib],
+            [],
+        );
         let owner = fixture.inst.id.owner();
         assert!(frame.is_instance());
         assert_eq!(
@@ -307,9 +314,11 @@ mod tests {
     #[test]
     fn nested_instance_frames_keep_the_enclosing_instances_owners() {
         let fixture = fixture();
-        let outer = fixture
-            .inst
-            .frame(&InstanceFrame::canonical(), [&fixture.inner_in_lib], []);
+        let outer = fixture.inst.frame(
+            &InstanceFrame::canonical(CanonicalFrameMint::for_test()),
+            [&fixture.inner_in_lib],
+            [],
+        );
         let outer_owner = fixture.inst.id.owner().clone();
         let inner = Record::new(
             InstanceId::new(outer_owner.clone(), scope("inner"), fixture.leaf.clone()),
@@ -332,9 +341,11 @@ mod tests {
     fn runtime_units_resolve_to_the_materialized_copy_only() {
         let fixture = fixture();
         let unit = UnitName::expect_valid("tick");
-        let frame = fixture
-            .inst
-            .frame(&InstanceFrame::canonical(), [], [unit.clone()]);
+        let frame = fixture.inst.frame(
+            &InstanceFrame::canonical(CanonicalFrameMint::for_test()),
+            [],
+            [unit.clone()],
+        );
         let definition = ResolvedUnitName::for_test(fixture.lib.clone(), unit.clone());
         let materialized = instance_declaration(&fixture.inst.id, unit);
         let reference = |resolved: ResolvedUnitName| {
@@ -350,7 +361,8 @@ mod tests {
             static_unit
         );
         assert_eq!(
-            InstanceFrame::canonical().resolve_unit(&reference(materialized.clone())),
+            InstanceFrame::canonical(CanonicalFrameMint::for_test())
+                .resolve_unit(&reference(materialized.clone())),
             materialized
         );
     }
@@ -372,8 +384,15 @@ mod tests {
             InstanceId::new(fixture.main.clone(), scope("inst"), fixture.lib),
             substitution,
         );
-        let frame = record.frame(&InstanceFrame::canonical(), [], []);
+        let frame = record.frame(
+            &InstanceFrame::canonical(CanonicalFrameMint::for_test()),
+            [],
+            [],
+        );
         assert_eq!(frame.struct_type(&port), bound);
-        assert_eq!(InstanceFrame::canonical().struct_type(&port), port);
+        assert_eq!(
+            InstanceFrame::canonical(CanonicalFrameMint::for_test()).struct_type(&port),
+            port
+        );
     }
 }

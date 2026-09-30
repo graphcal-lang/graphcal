@@ -13,7 +13,7 @@ use crate::presentation_evidence::{PendingDisplayUnit, PresentationFailure, Pres
 
 pub(super) fn pending(unit: &ResolvedUnitExpr, ctx: &EvalContext<'_>) -> PresentationInstance {
     PresentationInstance::Pending(Box::new(PendingDisplayUnit {
-        owner: ctx.current_dag.dag_id().clone(),
+        owner: ctx.dag().dag_id().clone(),
         source: ctx.src.clone(),
         unit: unit.clone(),
     }))

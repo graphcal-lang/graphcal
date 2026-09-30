@@ -189,12 +189,15 @@ pub(super) fn run_eval_loop_with_bindings(
             GraphcalError::internal_error(error.to_string(), src, DiagnosticAnchor::WholeFile)
         })?;
     for (key, binding) in bindings {
-        frame.bind(key, binding.value.clone(), src, Span::new(0, 0))?;
-        if !binding.presentation.is_none() {
-            frame
-                .presentations
-                .insert(key.clone(), binding.presentation.clone());
-        }
+        frame.bind_argument(
+            key,
+            crate::runtime_presentation::EvaluatedRuntimeValue::new(
+                binding.value.clone(),
+                binding.presentation.clone(),
+            ),
+            src,
+            Span::new(0, 0),
+        )?;
     }
     frame.run(src, cancellation, |entry, frame| {
         // Root declarations keep their existing work allowance; nested calls
@@ -206,23 +209,24 @@ pub(super) fn run_eval_loop_with_bindings(
             host_fns,
             cancellation.clone(),
         )?
-        .with_roots(&frame.values, Some(&frame.presentations))
-        .with_unavailable(&frame.errors)
+        .with_roots(frame.values(), Some(frame.presentations()))
+        .with_unavailable(frame.errors())
         .with_unfinished_calls(&unfinished_calls)
         .for_decl(entry.key);
         eval_texpr_with_presentation(
             context.executable(entry.expression)?,
-            &frame.values,
-            &frame.presentations,
+            frame.values(),
+            frame.presentations(),
             &empty_hir_locals,
             &context,
         )
     })?;
+    let outcome = frame.finish();
     Ok(EvalLoopResult {
         unfinished_calls,
-        values: frame.values,
-        presentation_instances: frame.presentations,
-        errors: frame.errors,
+        values: outcome.values,
+        presentation_instances: outcome.presentations,
+        errors: outcome.errors,
     })
 }
 
@@ -389,7 +393,7 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
             {
                 continue;
             }
-            let declaration = instance_dag.frame().resolve(&projection.target);
+            let declaration = instance_dag.resolve(&projection.target);
             let key = declaration.clone();
             let decl_type = instance_dag
                 .decls()
@@ -540,7 +544,7 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
                 )
             })?;
         for projection in &record.plot_projections {
-            let owner = outer_instance.frame().resolve(&projection.target);
+            let owner = outer_instance.resolve(&projection.target);
             let entry = tir.dag_registry().get(owner.owner()).and_then(|plot_dag| {
                 plot_dag
                     .plots()
@@ -802,7 +806,7 @@ pub(super) fn evaluate_assertions(
         for record in parent_dag.semantic_instances() {
             let instance_dag = semantic_instance_dag(tir, record, src)?;
             for projection in &record.assertion_projections {
-                let owner = instance_dag.frame().resolve(&projection.target);
+                let owner = instance_dag.resolve(&projection.target);
                 let entry = instance_dag
                     .asserts()
                     .find(|entry| entry.identity() == owner)
@@ -872,9 +876,10 @@ pub(super) fn root_source_names(
                     .iter()
                     .map(|projection| (&projection.target, &projection.exposed_name)),
             );
-        names.extend(projections.map(|(target, exposed_name)| {
-            (instance_dag.frame().resolve(target), exposed_name.clone())
-        }));
+        names
+            .extend(projections.map(|(target, exposed_name)| {
+                (instance_dag.resolve(target), exposed_name.clone())
+            }));
     }
     Ok(names)
 }
@@ -1051,15 +1056,12 @@ fn evaluate_plot(
             DiagnosticAnchor::WholeFile,
         ))
     })?;
-    let channel_facts = ctx
-        .current_dag
-        .plot_channel_presentations(owner)
-        .ok_or_else(|| {
-            PlotEvaluationError::Fatal(ctx.internal_error(
-                format!("checked presentation facts are missing for plot `{owner}`"),
-                DiagnosticAnchor::WholeFile,
-            ))
-        })?;
+    let channel_facts = ctx.dag().plot_channel_presentations(owner).ok_or_else(|| {
+        PlotEvaluationError::Fatal(ctx.internal_error(
+            format!("checked presentation facts are missing for plot `{owner}`"),
+            DiagnosticAnchor::WholeFile,
+        ))
+    })?;
     let mut encoding_meta = Vec::new();
     let mut presentation_diagnostics = Vec::new();
 
@@ -1315,7 +1317,7 @@ fn check_plot_dependencies(
                 .map(|error| (reference, error))
         })
         .map(|(reference, error)| {
-            ctx.current_dag
+            ctx.dag()
                 .require_bound_decl_identity(
                     &reference.value,
                     ctx.src,

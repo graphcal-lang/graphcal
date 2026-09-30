@@ -1693,7 +1693,7 @@ fn eval_field_access(
                     inner.span(),
                 ));
             };
-            let expected_runtime = ctx.current_dag.frame().struct_type(expected.resolved());
+            let expected_runtime = ctx.dag().runtime_struct_type(expected.resolved());
             // Validate the actual tag against the retained expected type, never
             // resolve a source name or infer a constructor application here.
             let definition = ctx
@@ -2536,39 +2536,29 @@ fn eval_dag_call(
     )
     .map_err(|error| ctx.internal_error(error.to_string(), call_span))?;
     for binding in args {
-        let key = &binding.target;
-        let (value, evidence) = eval_texpr_evaluated(
+        let evaluated = eval_texpr_evaluated(
             &binding.value,
             caller_values,
             caller_presentations,
             caller_locals,
             ctx,
-        )?
-        .into_parts();
-        frame.bind(key, value, ctx.src, binding.value.span())?;
-        if !evidence.is_none() {
-            frame.presentations.insert(key.clone(), evidence);
-        }
+        )?;
+        frame.bind_argument(&binding.target, evaluated, ctx.src, binding.value.span())?;
     }
-    seed_inline_dag_imported_values(
-        &callable.imports.runtime,
-        &mut frame.values,
-        &mut frame.presentations,
-        caller_values,
-        caller_presentations,
-        ctx,
-    );
+    frame.seed_runtime_imports(|key| {
+        imported_runtime_value(key, caller_values, caller_presentations, ctx)
+    });
 
     let empty_hir_locals = HirLocalValueMap::root();
     let evaluated = frame.run(dag_source, &ctx.cancellation, |entry, frame| {
         let context = ctx
             .for_dag(entry.scope.dag(), entry.scope.source())?
-            .with_unavailable(&frame.errors)
+            .with_unavailable(frame.errors())
             .for_decl(entry.key);
         eval_texpr_with_presentation(
             context.executable(entry.expression)?,
-            &frame.values,
-            &frame.presentations,
+            frame.values(),
+            frame.presentations(),
             &empty_hir_locals,
             &context,
         )
@@ -2579,20 +2569,23 @@ fn eval_dag_call(
             .extend(frame.unfinished_origins().cloned());
     }
     evaluated?;
-    let mut dag_presentations = frame.presentations;
-    let dag_values = frame.values;
+    let crate::execution_frame::FrameOutcome {
+        values: dag_values,
+        presentations: mut dag_presentations,
+        errors,
+    } = frame.finish();
 
     check_inline_plan_asserts(
         &callable.execution_dags,
         &dag_values,
         target,
         output.span,
-        &ctx.clone().with_unavailable(&frame.errors),
+        &ctx.clone().with_unavailable(&errors),
     )?;
 
     let output_key = &output.value;
     let output_value = dag_values.get(output_key).cloned().ok_or_else(|| {
-        if let Some(reason) = frame.errors.get(output_key) {
+        if let Some(reason) = errors.get(output_key) {
             return GraphcalError::EvaluationUnavailable {
                 reason: reason.clone(), src: ctx.src.clone(), span: output.span.into(),
             };
@@ -2637,37 +2630,30 @@ fn record_call_retention(values: &RuntimeValueMap, presentation: &PresentationIn
     );
 }
 
+/// The value a prepared runtime import `key` of a called DAG reads from the
+/// caller's or the root frame, with its presentation.
+///
 /// Only explicit prepared runtime imports may consult the caller or root frame.
-/// Supplied/current values and retained checked constants always win.
-fn seed_inline_dag_imported_values(
-    imports: &[ResolvedDeclName],
-    dag_values: &mut RuntimeValueMap,
-    dag_presentations: &mut PresentationInstanceMap,
+fn imported_runtime_value(
+    key: &ResolvedDeclName,
     caller_values: &RuntimeValueMap,
     caller_presentations: Option<&PresentationInstanceMap>,
     ctx: &EvalContext<'_>,
-) {
-    for key in imports {
-        if dag_values.contains_key(key) {
-            continue;
-        }
-        if let Some(value) = imported_binding_value(key, caller_values, ctx) {
-            dag_values.insert(key.clone(), value.clone());
-            let presentation = if key.owner() == ctx.current_dag.dag_id() {
-                caller_presentations.and_then(|instances| instances.get(key))
-            } else if key.owner() == ctx.tir.root_dag_id() {
-                ctx.root_presentation_instances
-                    .and_then(|instances| instances.get(key))
-            } else {
-                None
-            };
-            if let Some(presentation) = presentation
-                && !presentation.is_none()
-            {
-                dag_presentations.insert(key.clone(), presentation.clone());
-            }
-        }
-    }
+) -> Option<EvaluatedRuntimeValue> {
+    let value = imported_binding_value(key, caller_values, ctx)?;
+    let presentation = if key.owner() == ctx.dag().dag_id() {
+        caller_presentations.and_then(|instances| instances.get(key))
+    } else if key.owner() == ctx.tir.root_dag_id() {
+        ctx.root_presentation_instances
+            .and_then(|instances| instances.get(key))
+    } else {
+        None
+    };
+    let presentation = presentation
+        .filter(|presentation| !presentation.is_none())
+        .cloned()
+        .unwrap_or(PresentationInstance::None);
+    Some(EvaluatedRuntimeValue::new(value.clone(), presentation))
 }
 
 fn check_inline_plan_asserts(

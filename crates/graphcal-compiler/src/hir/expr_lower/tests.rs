@@ -452,7 +452,9 @@ fn collects_canonical_decl_dependencies_from_hir_expr() {
     .unwrap();
     let deps = collect_expr_dependencies(&expr);
 
-    let frame = crate::ir::instance::frame::InstanceFrame::canonical();
+    let frame = crate::ir::instance::frame::InstanceFrame::canonical(
+        crate::tir::typed::canonical_frame::CanonicalFrameMint::for_test(),
+    );
     let graph_refs = deps
         .graph_refs
         .iter()
@@ -829,7 +831,10 @@ fn include_output_ref_resolves_only_through_instance_bindings() {
         panic!("expected a graph reference, got {:?}", lowered.kind());
     };
     assert_eq!(
-        crate::ir::instance::frame::InstanceFrame::canonical().resolve(&reference.value),
+        crate::ir::instance::frame::InstanceFrame::canonical(
+            crate::tir::typed::canonical_frame::CanonicalFrameMint::for_test(),
+        )
+        .resolve(&reference.value),
         target
     );
 
