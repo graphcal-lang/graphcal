@@ -13,8 +13,9 @@ use crate::runtime_value::RuntimeValue;
 use graphcal_compiler::dag_id::DagId;
 use graphcal_compiler::hir::expr::Expr;
 use graphcal_compiler::resolved_name::ResolvedDeclName;
+use graphcal_compiler::tir::typed::body_scope::Scoped;
 use graphcal_compiler::tir::typed::checked::CheckedTir;
-use graphcal_compiler::tir::typed::evaluation_unit::{DeclarationBody, Scoped};
+use graphcal_compiler::tir::typed::evaluation_unit::DeclarationBody;
 use thiserror::Error;
 
 pub type RuntimeValueMap = HashMap<ResolvedDeclName, RuntimeValue>;

@@ -1,5 +1,5 @@
 use super::*;
-use crate::dimension::BaseDimId;
+use crate::dimension::{BaseDimId, Dimension};
 use crate::resolved_name::{ResolvedDeclName, ResolvedIndexName, ResolvedStructTypeName};
 use crate::semantic::checked_type::{CheckedGenericArg, IndexTypeRef, StructTypeRef};
 use crate::syntax::decl_name::DeclName;

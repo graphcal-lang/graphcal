@@ -269,7 +269,7 @@ pub(super) fn specialize_instance_bodies(
 )]
 pub fn specialize_bound_expression<'t>(
     tir: &crate::tir::typed::CheckedTir,
-    bound: crate::tir::typed::Scoped<'t, crate::tir::typed::ResolvedDomainBound>,
+    bound: crate::tir::typed::body_scope::Scoped<'t, crate::tir::typed::ResolvedDomainBound>,
     bindings: &HashMap<crate::hir::types::GenericParamId, u64>,
 ) -> Result<crate::tir::typed::ScopedTree<'t, crate::tir::texpr::TExpr>, GraphcalError> {
     let scope = bound.scope();

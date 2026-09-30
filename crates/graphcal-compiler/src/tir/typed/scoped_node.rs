@@ -29,7 +29,7 @@ use crate::tir::texpr::{
     TParamBinding, visit_tnodes,
 };
 
-use super::evaluation_unit::Scoped;
+use super::body_scope::Scoped;
 
 /// One node of an executable tree, in the scope of the DAG that runs it.
 pub type ScopedNode<'t> = Scoped<'t, TExpr>;

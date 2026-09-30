@@ -13,8 +13,9 @@ use graphcal_compiler::dag_id::DagId;
 use graphcal_compiler::hir::expr::Expr;
 use graphcal_compiler::resolved_name::ResolvedDeclName;
 use graphcal_compiler::tir::texpr::{ExecutableBodyError, TExpr};
+use graphcal_compiler::tir::typed::body_scope::Scoped;
 use graphcal_compiler::tir::typed::checked_instance::CheckedInstance;
-use graphcal_compiler::tir::typed::evaluation_unit::{Scoped, ScopedTree};
+use graphcal_compiler::tir::typed::evaluation_unit::ScopedTree;
 use thiserror::Error;
 
 use crate::checked_program::{CheckedProgram, SealedDag};

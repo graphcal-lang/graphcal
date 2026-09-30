@@ -35,6 +35,7 @@ pub mod node_definition;
 pub mod nominal;
 pub(crate) mod nominal_lower;
 pub mod source_interface;
+pub mod type_annotation;
 pub mod types;
 
 pub use diagnostics::expr_lower_error_to_graphcal;
@@ -61,8 +62,8 @@ pub use nominal::{
     NominalTypeKind, NominalTypeRegistry,
 };
 pub use source_interface::{SourceDeclaration, StaticPort, StaticPortIdentity};
+pub use type_annotation::{DomainBound, TypeAnnotation};
 pub use types::{
-    BuiltinType, DeclType, DimArg, DimExpr, DimExprItem, DimTermRef, DimTermTarget, DomainBound,
-    GenericArg, GenericParamId, GenericParamOwner, IndexRef, NatExpr, TypeAnnotation, ValueType,
-    ValueTypeKind,
+    BuiltinType, DeclType, DimArg, DimExpr, DimExprItem, DimTermRef, DimTermTarget, GenericArg,
+    GenericParamId, GenericParamOwner, IndexRef, NatExpr, ValueType, ValueTypeKind,
 };

@@ -26,7 +26,7 @@
 //!   derive destructures exhaustively, so a new field is compared by default;
 //!   a new span field that is not skipped fails to compile, because [`Span`]
 //!   deliberately has no impl.
-//! - `syntax/ast/format_equivalent.rs`: the hand-written impls whose
+//! - `syntax/ast/value.rs`, next to the types: the hand-written impls whose
 //!   comparison is not structural (the stack-guarded `Expr`, and table
 //!   literals, whose entries have multiset semantics). A future formatter
 //!   transformation that reorders nodes changes the relevant impl there.

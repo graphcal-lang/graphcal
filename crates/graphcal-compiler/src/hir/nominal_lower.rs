@@ -31,9 +31,10 @@ use super::nominal::{
     NominalConstructor, NominalField, NominalGenericParam, NominalTypeDef, NominalTypeError,
     NominalTypeKind,
 };
+use super::type_annotation::TypeAnnotation;
 use super::types::{
     DeclType, DimArg, DimExpr, DimExprItem, DimTermRef, DimTermTarget, GenericArg, GenericParamId,
-    GenericParamOwner, IndexRef, TypeAnnotation, ValueType, ValueTypeKind,
+    GenericParamOwner, IndexRef, ValueType, ValueTypeKind,
 };
 
 /// Services one nominal lowering run needs.
@@ -437,7 +438,7 @@ fn lower_nominal_field(
         .domain_bounds()
         .iter()
         .map(|bound| {
-            Ok(super::types::DomainBound {
+            Ok(super::type_annotation::DomainBound {
                 kind: bound.kind,
                 value: super::expr_lower::lower::lower_expr(&bound.value, expr_ctx).map_err(
                     |error| super::diagnostics::expr_lower_error_to_graphcal(&error, src),

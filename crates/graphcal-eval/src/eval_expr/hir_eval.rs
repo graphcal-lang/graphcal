@@ -12,7 +12,8 @@ use graphcal_compiler::tir::texpr::{
     CoordinateSearch, TConstructorArm, TExpr, TFieldInit, TIndexArg, TKeyForm, TLabelArm,
     TParamBinding,
 };
-use graphcal_compiler::tir::typed::evaluation_unit::{DeclarationBody, Scoped, ScopedTree};
+use graphcal_compiler::tir::typed::body_scope::Scoped;
+use graphcal_compiler::tir::typed::evaluation_unit::{DeclarationBody, ScopedTree};
 use graphcal_compiler::tir::typed::scoped_node::{
     ConstRef, NodeKind, ScopedIndexArg, ScopedMatchArms, ScopedNode,
 };

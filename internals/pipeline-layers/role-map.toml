@@ -967,12 +967,7 @@ role = "contracts"
 
 [[module]]
 package = "compiler"
-path = ["syntax", "ast", "format_equivalent"]
-role = "contracts"
-
-[[module]]
-package = "compiler"
-path = ["syntax", "ast", "format_equivalent", "tests"]
+path = ["syntax", "ast", "value", "format_equivalent_tests"]
 role = "contracts"
 
 [[module]]
@@ -2483,4 +2478,29 @@ role = "contracts"
 [[module]]
 package = "compiler"
 path = ["display", "unit_label", "tests"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["tir", "typed", "body_scope"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["hir", "type_annotation"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["tir", "dim_check", "generic_substitution"]
+role = "checking"
+
+[[module]]
+package = "compiler"
+path = ["tir", "dim_check", "domain_bound_type"]
+role = "checking"
+
+[[module]]
+package = "compiler"
+path = ["syntax", "parser", "nesting_limit"]
 role = "contracts"

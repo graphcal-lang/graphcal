@@ -6,8 +6,7 @@ use miette::NamedSource;
 
 use crate::assertion_expectation::{ExpectedFail, ExpectedFailKey, ExpectedFailKeyPart};
 use crate::diagnostic_anchor::DiagnosticAnchor;
-use crate::dimension::Dimension;
-use crate::semantic::checked_type::{Concrete, Concreteness, IndexTypeRef, Symbolic};
+use crate::semantic::checked_type::{IndexTypeRef, Symbolic};
 use crate::syntax::decl_name::DeclName;
 use crate::syntax::index_name::IndexEntryKey;
 use crate::syntax::span::Span;
@@ -17,12 +16,17 @@ use crate::graphcal_error::GraphcalError;
 
 pub(crate) use helpers::{expect_quantity, format_checked_type};
 
+use domain_bound_type::{
+    ExpectedBound, check_one_bound_with_display_name, expected_bound_from_resolved,
+};
 use helpers::is_bool_type;
 
 pub mod body_specialization;
 mod builtins;
 mod concrete_obligations;
+mod domain_bound_type;
 mod expression_axes;
+mod generic_substitution;
 mod helpers;
 #[expect(
     clippy::too_many_lines,
@@ -983,16 +987,6 @@ fn check_dimensions_dag(
     Ok(plot_shapes)
 }
 
-/// What a domain bound expression must infer to for a given target type.
-enum ExpectedBound {
-    /// Bound must be `Quantity(d)`. `Int` is also accepted when `d` is dimensionless.
-    Quantity(Dimension),
-    /// Bound must be exactly `Int`, preserving the full `i64` range.
-    Int,
-    /// Bound must be a datetime in exactly this declared time scale.
-    Datetime(crate::semantic::time_scale::TimeScale),
-}
-
 /// Check that domain constraint bound expressions have the correct type.
 ///
 /// For each param/node with `(min: ..., max: ...)` constraints whose target type
@@ -1308,36 +1302,6 @@ fn check_field_domain_constraint_dimensions(
     Ok(())
 }
 
-fn expected_bound_from_resolved(
-    resolved: &crate::tir::typed::ResolvedValueType,
-) -> Option<ExpectedBound> {
-    use crate::tir::typed::{ResolvedDim, ResolvedValueType};
-
-    match resolved {
-        ResolvedValueType::Quantity(ResolvedDim::Concrete(dimension)) => {
-            Some(ExpectedBound::Quantity(dimension.clone()))
-        }
-        ResolvedValueType::Int => Some(ExpectedBound::Int),
-        ResolvedValueType::Datetime(scale) => Some(ExpectedBound::Datetime(*scale)),
-        _ => None,
-    }
-}
-
-fn expected_bound_from_inferred<V: Concreteness>(
-    inferred: &CheckedType<V>,
-) -> Option<ExpectedBound> {
-    match inferred {
-        CheckedType::Indexed { element, .. } => expected_bound_from_inferred(element),
-        CheckedType::Quantity(dimension) => Some(ExpectedBound::Quantity(dimension.clone())),
-        CheckedType::Int => Some(ExpectedBound::Int),
-        CheckedType::Datetime(scale) => Some(ExpectedBound::Datetime(*scale)),
-        CheckedType::Complex(_)
-        | CheckedType::Bool
-        | CheckedType::Key(_)
-        | CheckedType::Struct(..) => None,
-    }
-}
-
 fn check_deferred_generic_quantity_bound(
     display_name: &str,
     resolved_target: &crate::tir::typed::ResolvedValueType,
@@ -1356,71 +1320,6 @@ fn check_deferred_generic_quantity_bound(
         src: bound.src.clone(),
         span: bound.span.into(),
     })
-}
-
-/// Variant of [`check_one_bound`] that takes a pre-formatted display name
-/// for the constrained target (e.g. `"SatelliteSpec.mass"`) so a single
-/// helper can serve both top-level decls and struct fields.
-fn check_one_bound_with_display_name<V: Concreteness>(
-    display_name: &str,
-    bound: &crate::tir::typed::ResolvedDomainBound,
-    inferred: &CheckedType<V>,
-    expected: &ExpectedBound,
-    registry: &FormattingRegistry,
-    src: &NamedSource<Arc<String>>,
-) -> Result<(), GraphcalError> {
-    match expected {
-        ExpectedBound::Quantity(target_dim) => {
-            let ok = match inferred {
-                CheckedType::Int => target_dim.is_dimensionless(),
-                other => other.quantity_dimension() == Some(target_dim),
-            };
-            if ok {
-                return Ok(());
-            }
-            let bound_dim_str = inferred.quantity_dimension().map_or_else(
-                || format_checked_type(inferred, registry),
-                |d| registry.dimensions.format_dimension(d),
-            );
-            Err(GraphcalError::DomainDimensionMismatch {
-                name: display_name.to_string(),
-                type_dim: registry.dimensions.format_dimension(target_dim),
-                bound_name: bound.kind.to_string(),
-                bound_dim: bound_dim_str,
-                src: src.clone(),
-                span: bound.span.into(),
-            })
-        }
-        ExpectedBound::Int => {
-            if matches!(inferred, CheckedType::Int) {
-                return Ok(());
-            }
-            Err(GraphcalError::IntDomainBoundTypeMismatch {
-                name: display_name.to_string(),
-                bound_name: bound.kind.to_string(),
-                bound_type: format_checked_type(inferred, registry),
-                src: src.clone(),
-                span: bound.span.into(),
-            })
-        }
-        ExpectedBound::Datetime(target_scale) => {
-            if matches!(inferred, CheckedType::Datetime(bound_scale) if bound_scale == target_scale)
-            {
-                return Ok(());
-            }
-            Err(GraphcalError::DatetimeDomainBoundTypeMismatch {
-                name: display_name.to_string(),
-                target_type: format_checked_type(
-                    &CheckedType::<Concrete>::Datetime(*target_scale),
-                    registry,
-                ),
-                bound_name: bound.kind.to_string(),
-                bound_type: format_checked_type(inferred, registry),
-                src: src.clone(),
-                span: bound.span.into(),
-            })
-        }
-    }
 }
 
 /// Collect DAG-call targets and the first source span for each call edge.

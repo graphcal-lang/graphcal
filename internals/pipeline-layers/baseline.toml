@@ -2,14 +2,6 @@
 
 [[exception]]
 from_package = "compiler"
-from_path = ["hir", "diagnostics"]
-to_package = "compiler"
-to_path = ["hir"]
-test_only = false
-reason = "Observed compiler::hir::diagnostics -> compiler::hir (production) at ./crates/graphcal-compiler/src/hir/diagnostics.rs:10 (use import); roles are checking -> facade. Planned deletion seam: replace facade reach-through with an owned checking interface."
-
-[[exception]]
-from_package = "compiler"
 from_path = ["hir", "lower", "tests"]
 to_package = "compiler"
 to_path = ["hir"]
@@ -23,14 +15,6 @@ to_package = "compiler"
 to_path = ["hir"]
 test_only = false
 reason = "Observed compiler::hir::nominal -> compiler::hir (production) at ./crates/graphcal-compiler/src/hir/nominal.rs:29 (use import); roles are contracts -> facade. Planned deletion seam: replace facade reach-through with a stable contracts API."
-
-[[exception]]
-from_package = "compiler"
-from_path = ["hir", "types"]
-to_package = "compiler"
-to_path = ["hir"]
-test_only = false
-reason = "Observed compiler::hir::types -> compiler::hir (production) at ./crates/graphcal-compiler/src/hir/types.rs:77 (qualified path); roles are contracts -> facade. Planned deletion seam: replace facade reach-through with a stable contracts API."
 
 [[exception]]
 from_package = "compiler"

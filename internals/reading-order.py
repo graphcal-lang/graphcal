@@ -13,6 +13,9 @@ working top-to-bottom always has the full picture of the imported contents.
 Method:
  1. Parse every ``use``/``pub use`` statement, ``mod`` declaration, and inline
     qualified path (``crate::…``, ``graphcal_*::…``, ``super::…``) in each file.
+    A ``super`` written inside an inline ``mod x { .. }`` block (such as a
+    ``tests`` module) first leaves that block, so it names the file's own
+    module; a ``pub(in path)`` visibility scope is not a dependency.
  2. Resolve paths through re-export chains (explicit ``pub use`` items and
     ``pub use …::*`` globs, the latter by checking item definitions) down to
     the file that defines the item. ``mod child;`` declarations create no
@@ -275,6 +278,27 @@ INLINE_RE = re.compile(
     + "|".join(CRATE_NAMES)
     + r")::([A-Za-z_][A-Za-z0-9_]*(?:::[A-Za-z_][A-Za-z0-9_]*)*)"
 )
+INLINE_MOD_RE = re.compile(
+    r"^\s*(?:#\[[^\]]*\]\s*)*(?:pub(?:\([^)]*\))?\s+)?mod\s+[a-z_][a-z0-9_]*\s*\{"
+)
+
+
+def relative_to_inline_modules(segs: list[str], nesting: int) -> list[str]:
+    """Rebase a path written inside ``nesting`` inline ``mod x { .. }`` blocks
+    onto the file's own module.
+
+    A leading ``super`` first leaves an enclosing inline module of the same
+    file, so it names this file's module rather than the parent module file.
+    """
+    if nesting == 0 or not segs or segs[0] != "super":
+        return segs
+    rest = list(segs)
+    while nesting > 0 and rest and rest[0] == "super":
+        rest = rest[1:]
+        nesting -= 1
+    if rest and rest[0] == "super":
+        return rest
+    return ["self", *rest]
 
 
 def parse_file(path: Path) -> tuple[list[list[str]], list[list[str]], list[str]]:
@@ -286,14 +310,23 @@ def parse_file(path: Path) -> tuple[list[list[str]], list[list[str]], list[str]]
     # miette diagnostic codes use paths like `code(graphcal::D001)`, but these
     # are stable error-code identifiers rather than Rust imports.
     text = re.sub(r"code\s*\(\s*graphcal::[A-Za-z0-9_:]+\s*\)", "code(...)", text)
+    text = re.sub(r'r(#*)".*?"\1', '""', text, flags=re.S)
     text = re.sub(r'"(?:\\.|[^"\\])*"', '""', text)
+    text = re.sub(r"'(?:\\.|[^'\\])'", "' '", text)
+    # A visibility scope such as `pub(in crate::resolve)` restricts access; it
+    # does not consume anything from the named module.
+    text = re.sub(r"\bpub\(\s*in\s+[^)]*\)", "pub(crate)", text)
     paths: list[list[str]] = []
     pub_uses: list[list[str]] = []
     mods: list[str] = []
     lines = text.splitlines()
+    # Brace depths at which the enclosing inline `mod x { .. }` blocks opened.
+    inline_mods: list[int] = []
+    depth = 0
     i = 0
     while i < len(lines):
         line = lines[i]
+        nesting = len(inline_mods)
         m = USE_RE.match(line)
         if m:
             is_pub = m.group(1) is not None
@@ -302,17 +335,30 @@ def parse_file(path: Path) -> tuple[list[list[str]], list[list[str]], list[str]]
                 i += 1
                 stmt += " " + lines[i].strip()
             stmt = stmt.split(";")[0]
-            expanded = expand_use(stmt)
+            expanded = [
+                relative_to_inline_modules(segs, nesting) for segs in expand_use(stmt)
+            ]
             paths.extend(expanded)
             if is_pub:
                 pub_uses.extend(expanded)
+            i += 1
+            continue
+        m = MOD_RE.match(line)
+        if m:
+            mods.append(m.group(1))
         else:
-            m = MOD_RE.match(line)
-            if m:
-                mods.append(m.group(1))
-            else:
-                for im in INLINE_RE.finditer(line):
-                    paths.append([im.group(1)] + im.group(2).split("::"))
+            for im in INLINE_RE.finditer(line):
+                segs = [im.group(1)] + im.group(2).split("::")
+                paths.append(relative_to_inline_modules(segs, nesting))
+            if INLINE_MOD_RE.match(line):
+                inline_mods.append(depth)
+        for ch in line:
+            if ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                while inline_mods and depth <= inline_mods[-1]:
+                    inline_mods.pop()
         i += 1
     return paths, pub_uses, mods
 

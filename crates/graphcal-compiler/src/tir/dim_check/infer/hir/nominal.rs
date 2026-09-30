@@ -15,8 +15,8 @@ use crate::tir::dim_check::helpers::{
 };
 
 use super::context::Infer;
-use super::generics::{resolved_field_type, resolved_type_field_key};
 use super::override_deps::TypeNominalUse;
+use crate::tir::dim_check::generic_substitution::{resolved_field_type, resolved_type_field_key};
 
 fn record_member(type_def: &NominalTypeDef) -> Option<&NominalConstructor> {
     let members = type_def.union_members()?;
