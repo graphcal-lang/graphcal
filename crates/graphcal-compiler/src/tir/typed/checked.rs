@@ -105,34 +105,68 @@ impl CheckedDag {
         self.presentation.plot_channels.get(plot)
     }
 
-    /// The declaration `handle` denotes when this DAG runs the body holding
-    /// it.
+    /// The scope an evaluator runs this DAG's bodies in: their checked trees
+    /// together with the frame that resolves their handles.
     ///
-    /// The frame is this DAG's own and never leaves it, so a handle is
-    /// resolved by the DAG selected to run it, not by a frame its caller
-    /// picks.
+    /// This is the only way to resolve a body handle outside the compiler.
+    /// The evaluator obtains a scope only from its execution plan, which
+    /// selects the DAG from the instance being evaluated; the workspace
+    /// `clippy.toml` disallows calling this anywhere else, so code that
+    /// evaluates a body cannot pick the frame its handles resolve in.
     #[must_use]
-    pub fn resolve(&self, handle: &crate::hir::expr::LocalDecl) -> ResolvedDeclName {
-        self.body.frame().resolve(handle)
-    }
-
-    /// The unit whose scale `unit` has when this DAG runs the body holding it.
-    #[must_use]
-    pub fn resolve_unit(&self, unit: &crate::hir::expr::LocalUnit) -> ResolvedUnitName {
-        self.body.frame().resolve_unit(unit)
-    }
-
-    /// The nominal type `source` stands for when this DAG runs a body naming
-    /// it, after the instance's Static type substitution.
-    #[must_use]
-    pub fn runtime_struct_type(&self, source: &ResolvedStructTypeName) -> ResolvedStructTypeName {
-        self.body.frame().struct_type(source)
+    pub const fn body_scope(&self) -> BodyScope<'_> {
+        BodyScope { dag: self }
     }
 
     /// Release the body, dropping its facts, to re-resolve it in a derived
     /// checking view.
     pub(crate) fn into_body(self) -> DagTIR {
         self.body
+    }
+}
+
+/// The bodies of one checked DAG together with the frame they run in.
+///
+/// Obtained only through [`CheckedDag::body_scope`]. Its checked trees and
+/// its handle resolution come from the same DAG, so a body read through a
+/// scope is resolved in the frame of the DAG that runs it.
+#[derive(Debug, Clone, Copy)]
+pub struct BodyScope<'t> {
+    dag: &'t CheckedDag,
+}
+
+impl<'t> BodyScope<'t> {
+    /// The DAG whose bodies this scope runs.
+    #[must_use]
+    pub const fn dag(self) -> &'t CheckedDag {
+        self.dag
+    }
+
+    /// The checked tree of every expression root the DAG owns.
+    #[must_use]
+    pub const fn bodies(self) -> &'t CheckedBodies {
+        &self.dag.bodies
+    }
+
+    /// The declaration `handle` denotes when this scope's DAG runs the body
+    /// holding it.
+    #[must_use]
+    pub fn resolve(self, handle: &crate::hir::expr::LocalDecl) -> ResolvedDeclName {
+        self.dag.body.frame().resolve(handle)
+    }
+
+    /// The unit whose scale `unit` has when this scope's DAG runs the body
+    /// holding it.
+    #[must_use]
+    pub fn resolve_unit(self, unit: &crate::hir::expr::LocalUnit) -> ResolvedUnitName {
+        self.dag.body.frame().resolve_unit(unit)
+    }
+
+    /// The nominal type `source` stands for when this scope's DAG runs a
+    /// body naming it, after the instance's Static type substitution.
+    #[must_use]
+    pub fn runtime_struct_type(self, source: &ResolvedStructTypeName) -> ResolvedStructTypeName {
+        self.dag.body.frame().struct_type(source)
     }
 }
 

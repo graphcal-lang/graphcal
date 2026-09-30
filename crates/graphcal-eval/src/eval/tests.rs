@@ -2665,6 +2665,18 @@ fn checked_tir_records_typed_template_instance_bindings() {
         );
         let output = &tir.root().semantic().decl_bindings[&output_name];
         assert_eq!(output.owner(), instance.id().owner());
+
+        // Projections are read resolved in the instance's own frame.
+        let checked = tir
+            .dag_registry()
+            .semantic_instance(record)
+            .expect("materialized instance");
+        assert_eq!(checked.dag().dag_id(), instance.id().owner());
+        let targets = checked
+            .output_projections()
+            .map(|projection| projection.target)
+            .collect::<Vec<_>>();
+        assert_eq!(targets, vec![concrete.clone(), output.clone()]);
     }
 }
 

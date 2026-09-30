@@ -92,10 +92,15 @@ impl InstanceRecord {
     ///
     /// `template_edges` are the instances the template itself includes, as
     /// the template records them; `runtime_units` are the runtime units this
-    /// instance materializes.
+    /// instance materializes. Only the instance materialization in
+    /// [`crate::tir::typed`] holds the [`InstanceFrameMint`], so no other code
+    /// can build a frame for an instance.
+    ///
+    /// [`InstanceFrameMint`]: crate::tir::typed::frame_mint::InstanceFrameMint
     #[must_use]
     pub(crate) fn frame<'a>(
         &self,
+        _: crate::tir::typed::frame_mint::InstanceFrameMint,
         parent: &frame::InstanceFrame,
         template_edges: impl IntoIterator<Item = &'a InstanceId>,
         runtime_units: impl IntoIterator<Item = UnitName>,
@@ -160,11 +165,15 @@ pub struct HirInstanceRecord {
     /// Runtime-unit definitions materialized under this instance owner.
     pub runtime_unit_names: HashSet<UnitName>,
     /// Runtime values intentionally exposed by this include site.
-    pub output_projections: Vec<InstanceValueProjection>,
+    ///
+    /// The projections' targets are handles for the instance's frame; outside
+    /// the compiler they are read already resolved through
+    /// [`CheckedInstance`](crate::tir::typed::CheckedInstance).
+    pub(crate) output_projections: Vec<InstanceValueProjection>,
     /// Assertions intentionally exposed by this include site.
-    pub assertion_projections: Vec<InstanceAssertionProjection>,
+    pub(crate) assertion_projections: Vec<InstanceAssertionProjection>,
     /// Plot declarations explicitly requested by this include site.
-    pub plot_projections: Vec<InstancePlotProjection>,
+    pub(crate) plot_projections: Vec<InstancePlotProjection>,
     /// V005 obligations retained only for unrebound parameter defaults.
     pub(crate) override_reconciliations:
         HashMap<ResolvedDeclName, Vec<crate::ir::override_reconciliation::OverrideReconciliation>>,

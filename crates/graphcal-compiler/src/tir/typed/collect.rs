@@ -38,7 +38,7 @@ pub(super) fn augment_runtime_deps_for_dynamic_units(dag: &mut DagTIR) {
             entry
                 .default
                 .as_ref()
-                .map(|default| (entry.identity(), collect_unit_names(default)))
+                .map(|default| (entry.identity(), collect_unit_names(&dag.frame, default)))
         })
         .chain(dag.nodes().map(|entry| {
             (
@@ -47,7 +47,7 @@ pub(super) fn augment_runtime_deps_for_dynamic_units(dag: &mut DagTIR) {
                     .definition
                     .formula()
                     .map_or_else(Default::default, |expression| {
-                        collect_unit_names(expression)
+                        collect_unit_names(&dag.frame, expression)
                     }),
             )
         }))
@@ -71,11 +71,14 @@ pub(super) fn augment_runtime_deps_for_dynamic_units(dag: &mut DagTIR) {
     }
 }
 
+/// The runtime units whose scales the quantity literals of `expr` read, as
+/// the DAG running it in `frame` names them.
 fn collect_unit_names(
+    frame: &InstanceFrame,
     expr: &hir::Expr,
 ) -> std::collections::HashSet<crate::resolved_name::ResolvedUnitName> {
     let mut names = std::collections::HashSet::new();
-    collect_unit_names_from_hir(expr, &mut names);
+    collect_unit_names_from_hir(frame, expr, &mut names);
     names
 }
 
@@ -83,6 +86,7 @@ fn collect_unit_names(
 /// select display computations after the frame's SI values exist, including
 /// self/forward references; an unselected display target schedules no work.
 fn collect_unit_names_from_hir(
+    frame: &InstanceFrame,
     expr: &hir::Expr,
     names: &mut std::collections::HashSet<crate::resolved_name::ResolvedUnitName>,
 ) {
@@ -95,7 +99,7 @@ fn collect_unit_names_from_hir(
             names.extend(
                 unit.terms
                     .iter()
-                    .map(|term| term.name.value.static_definition().clone()),
+                    .map(|term| frame.resolve_unit(&term.name.value)),
             );
         }
     });

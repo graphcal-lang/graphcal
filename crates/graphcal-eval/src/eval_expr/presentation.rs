@@ -72,13 +72,7 @@ fn resolve_selected(
         }
         PresentationInstance::Pending(request) => {
             ctx.cancellation.checkpoint()?;
-            let owner = ctx.tir.dag_registry().get(&request.owner).ok_or_else(|| {
-                ctx.internal_error(
-                    "presentation request has no checked owner",
-                    request.unit.span,
-                )
-            })?;
-            let context = ctx.for_dag(owner, &request.source)?;
+            let context = ctx.for_dag(&request.owner, &request.source)?;
             crate::pipeline_metrics::record(crate::pipeline_metrics::Event::PresentationEvaluation);
             match super::unit_scale::resolve_unit_scale(&request.unit, values, &context)
                 .map(|scale| scaled(&request.unit, scale, &context))

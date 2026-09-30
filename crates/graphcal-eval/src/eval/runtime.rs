@@ -10,6 +10,7 @@ use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
 use graphcal_compiler::resolved_name::ResolvedDeclName;
 use graphcal_compiler::syntax::module_name::{ModuleAliasName, ScopeSegment, ScopedName};
 use graphcal_compiler::syntax::span::Span;
+use graphcal_compiler::tir::typed::{CheckedInstance, ResolvedProjection};
 
 use crate::assertion_eval::evaluate_assert_with_expected_fail;
 use crate::eval_expr::{
@@ -356,25 +357,18 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
         },
     );
     for record in tir.root().semantic_instances() {
-        let instance_dag = tir
-            .dag_registry()
-            .get(record.instance.id().owner())
-            .ok_or_else(|| {
-                GraphcalError::internal_error(
-                    format!(
-                        "semantic instance `{}` is absent from checked TIR",
-                        record.instance.id().owner()
-                    ),
-                    src,
-                    DiagnosticAnchor::WholeFile,
-                )
-            })?;
+        let instance = semantic_instance(tir, record, src)?;
+        let instance_dag = instance.dag();
         let instance_src = plan
             .program()
             .facts()
             .source(instance_dag.dag_id())
             .unwrap_or(src);
-        for projection in &record.output_projections {
+        for ResolvedProjection {
+            target: declaration,
+            projection,
+        } in instance.output_projections()
+        {
             if tir
                 .root()
                 .decls()
@@ -383,7 +377,6 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
             {
                 continue;
             }
-            let declaration = instance_dag.resolve(&projection.target);
             let key = declaration.clone();
             let decl_type = instance_dag
                 .decls()
@@ -420,7 +413,7 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
                     runtime,
                     declared_type,
                     presentation_instances.get(&key),
-                    &ctx.for_checked_decl(instance_dag, instance_src, &declaration)?,
+                    &ctx.for_checked_decl(instance_src, &declaration)?,
                     &presentation_diagnostics,
                 )?
             };
@@ -459,7 +452,7 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
                     runtime,
                     declared_type,
                     presentation_instances.get(&key),
-                    &ctx.for_checked_decl(instance_dag, instance_src, &declaration)?,
+                    &ctx.for_checked_decl(instance_src, &declaration)?,
                     &presentation_diagnostics,
                 )?
             };
@@ -520,41 +513,26 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
             Ok(plots)
         })?;
     for record in tir.root().semantic_instances() {
-        let outer_instance = tir
-            .dag_registry()
-            .get(record.instance.id().owner())
-            .ok_or_else(|| {
-                GraphcalError::internal_error(
-                    format!(
-                        "semantic instance `{}` is absent from checked TIR",
-                        record.instance.id().owner()
-                    ),
-                    src,
-                    DiagnosticAnchor::WholeFile,
-                )
-            })?;
-        for projection in &record.plot_projections {
-            let owner = outer_instance.resolve(&projection.target);
-            let entry = tir.dag_registry().get(owner.owner()).and_then(|plot_dag| {
-                plot_dag
-                    .plots()
-                    .find(|entry| entry.identity() == owner)
-                    .map(|entry| (plot_dag, entry))
-            });
-            let (plot_dag, entry) = entry.ok_or_else(|| {
-                GraphcalError::internal_error(
-                    format!("projected plot `{owner}` is absent from semantic instance"),
-                    src,
-                    DiagnosticAnchor::WholeFile,
-                )
-            })?;
-            match evaluate_plot(
-                entry,
-                &values,
-                &presentation_instances,
-                &errors,
-                &ctx.for_checked_decl(plot_dag, src, &owner)?,
-            ) {
+        for ResolvedProjection {
+            target: owner,
+            projection,
+        } in semantic_instance(tir, record, src)?.plot_projections()
+        {
+            // The plot runs in the DAG that owns it, which may be an instance
+            // nested in this one when the template forwards its own plot.
+            let plot_ctx = ctx.for_checked_decl(src, &owner)?;
+            let entry = plot_ctx
+                .dag()
+                .plots()
+                .find(|entry| entry.identity() == owner)
+                .ok_or_else(|| {
+                    GraphcalError::internal_error(
+                        format!("projected plot `{owner}` is absent from semantic instance"),
+                        src,
+                        DiagnosticAnchor::WholeFile,
+                    )
+                })?;
+            match evaluate_plot(entry, &values, &presentation_instances, &errors, &plot_ctx) {
                 Ok(mut plot) => {
                     plot.name = projection.exposed_name.clone();
                     plot.visibility = projection.visibility;
@@ -745,24 +723,22 @@ fn merge_assumes_maps<'a>(
     merged
 }
 
-/// Checked DAG materialized by one semantic-instance record.
-fn semantic_instance_dag<'tir>(
+/// One semantic-instance record paired with the checked DAG it materialized.
+fn semantic_instance<'tir>(
     tir: &'tir graphcal_compiler::tir::typed::CheckedTir,
-    record: &graphcal_compiler::ir::instance::HirInstanceRecord,
+    record: &'tir graphcal_compiler::ir::instance::HirInstanceRecord,
     src: &NamedSource<Arc<String>>,
-) -> Result<&'tir graphcal_compiler::tir::typed::CheckedDag, GraphcalError> {
-    tir.dag_registry()
-        .get(record.instance.id().owner())
-        .ok_or_else(|| {
-            GraphcalError::internal_error(
-                format!(
-                    "semantic instance `{}` is absent from checked TIR",
-                    record.instance.id().owner()
-                ),
-                src,
-                DiagnosticAnchor::WholeFile,
-            )
-        })
+) -> Result<CheckedInstance<'tir>, GraphcalError> {
+    tir.dag_registry().semantic_instance(record).ok_or_else(|| {
+        GraphcalError::internal_error(
+            format!(
+                "semantic instance `{}` is absent from checked TIR",
+                record.instance.id().owner()
+            ),
+            src,
+            DiagnosticAnchor::WholeFile,
+        )
+    })
 }
 
 /// Evaluate every assertion reported for the root DAG: root assertions in
@@ -813,10 +789,14 @@ pub(super) fn evaluate_assertions(
     semantic_parents.sort_by(|left, right| left.dag_id().cmp(right.dag_id()));
     for parent_dag in semantic_parents {
         for record in parent_dag.semantic_instances() {
-            let instance_dag = semantic_instance_dag(tir, record, src)?;
-            for projection in &record.assertion_projections {
-                let owner = instance_dag.resolve(&projection.target);
-                let entry = instance_dag
+            for ResolvedProjection {
+                target: owner,
+                projection,
+            } in semantic_instance(tir, record, src)?.assertion_projections()
+            {
+                let assertion_ctx = ctx.for_checked_decl(src, &owner)?;
+                let assertion_dag = assertion_ctx.dag();
+                let entry = assertion_dag
                     .asserts()
                     .find(|entry| entry.identity() == owner)
                     .ok_or_else(|| {
@@ -831,8 +811,7 @@ pub(super) fn evaluate_assertions(
                 let expected = projection
                     .expected_fail
                     .as_ref()
-                    .or_else(|| instance_dag.expected_fail(&owner));
-                let assertion_ctx = ctx.for_checked_decl(instance_dag, src, &owner)?;
+                    .or_else(|| assertion_dag.expected_fail(&owner));
                 let result =
                     evaluate_assert_with_expected_fail(&entry.body, expected, &mut |expr| {
                         eval_texpr(
@@ -874,21 +853,17 @@ pub(super) fn root_source_names(
         .map(|entry| (entry.identity(), ScopedName::local(entry.name().clone())))
         .collect::<Vec<_>>();
     for record in tir.root().semantic_instances() {
-        let instance_dag = semantic_instance_dag(tir, record, src)?;
-        let projections = record
-            .output_projections
-            .iter()
-            .map(|projection| (&projection.target, &projection.exposed_name))
-            .chain(
-                record
-                    .assertion_projections
-                    .iter()
-                    .map(|projection| (&projection.target, &projection.exposed_name)),
-            );
-        names
-            .extend(projections.map(|(target, exposed_name)| {
-                (instance_dag.resolve(target), exposed_name.clone())
-            }));
+        let instance = semantic_instance(tir, record, src)?;
+        names.extend(
+            instance
+                .output_projections()
+                .map(|resolved| (resolved.target, resolved.projection.exposed_name.clone()))
+                .chain(
+                    instance.assertion_projections().map(|resolved| {
+                        (resolved.target, resolved.projection.exposed_name.clone())
+                    }),
+                ),
+        );
     }
     Ok(names)
 }

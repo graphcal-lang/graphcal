@@ -1,9 +1,9 @@
-internal_error_calls = 220
+internal_error_calls = 218
 resolved_name_from_def_outside_resolver = 0
 expect_valid_format = 0
 too_many_arguments_expects = 6
 build_declared_types_calls = 0
 module_resolve_str_key_lookups = 0
 pipeline_layers_exceptions = 64
-reading_order_sccs = 13
+reading_order_sccs = 11
 graphcal_error_variants = 158

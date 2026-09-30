@@ -454,6 +454,7 @@ fn initialize_instance_identity(
     let owner = edge.instance.id().owner();
     instance.dag_id = owner.clone();
     instance.frame = edge.instance.frame(
+        super::frame_mint::InstanceFrameMint(()),
         parent,
         template
             .semantic_instances
@@ -575,14 +576,16 @@ fn specialize_instance_semantics(
         })
         .collect::<Result<_, _>>()?;
     instance.replace_value_decl_types(specialized);
-    let frame = instance.frame.clone();
-    instance.semantic.decl_bindings = instance
-        .semantic
+    // The instance's own frame, borrowed beside its semantics: the facts are
+    // re-keyed by the DAG that runs them, never by a detached copy.
+    let frame = &instance.frame;
+    let semantic = &mut instance.semantic;
+    semantic.decl_bindings = semantic
         .decl_bindings
         .iter()
         .map(|(name, target)| (name.clone(), frame.rebase(target)))
         .collect();
-    specialize_dependencies(&mut instance.semantic.dependencies, &frame);
+    specialize_dependencies(&mut semantic.dependencies, frame);
     for (template_port, binding) in &edge.value_bindings {
         // A binding is lowered in the including template and runs here, in
         // the frame that also re-owns the including template's declarations.
@@ -591,14 +594,12 @@ fn specialize_instance_semantics(
             .iter()
             .map(|dependency| frame.resolve(dependency))
             .collect();
-        instance
-            .semantic
+        semantic
             .dependencies
             .runtime_deps
             .insert(frame.rebase(template_port), dependencies);
     }
-    instance.semantic.domain_bounds = instance
-        .semantic
+    semantic.domain_bounds = semantic
         .domain_bounds
         .iter()
         .map(|(target, bounds)| (frame.rebase(target), bounds.clone()))
@@ -843,10 +844,10 @@ fn install_semantic_projection_bindings(tir: &mut UncheckedTir) {
 fn instantiate_semantic_edge(
     tir: &mut UncheckedTir,
     edge: &HirInstanceRecord,
-    parent: &InstanceFrame,
     src: &NamedSource<Arc<String>>,
 ) -> Result<(), GraphcalError> {
     let owner = edge.instance.id().owner();
+    let parent = edge.instance.id().parent();
     let template = tir
         .dags
         .get(edge.instance.id().template())
@@ -894,7 +895,21 @@ fn instantiate_semantic_edge(
             Ok((instance_declaration(edge.instance.id(), name), info))
         })
         .collect::<Result<Vec<_>, GraphcalError>>()?;
-    let instance = clone_checked_instance(&template, edge, parent, runtime_unit_names, tir, src)?;
+    // The edge is materialized in the frame of the DAG that includes it: the
+    // instance's parent, whose record list holds the edge.
+    let parent_frame = tir
+        .dags
+        .get(parent)
+        .ok_or_else(|| {
+            GraphcalError::internal_error(
+                format!("semantic instance `{owner}` has no including DAG `{parent}`"),
+                src,
+                DiagnosticAnchor::WholeFile,
+            )
+        })?
+        .frame();
+    let instance =
+        clone_checked_instance(&template, edge, parent_frame, runtime_unit_names, tir, src)?;
     for (unit, info) in runtime_unit_infos {
         tir.insert_runtime_unit(unit, info).map_err(|error| {
             GraphcalError::internal_error(error.to_string(), src, DiagnosticAnchor::WholeFile)
@@ -915,23 +930,18 @@ pub fn instantiate_semantic_edges(
     src: &NamedSource<Arc<String>>,
 ) -> Result<(), GraphcalError> {
     loop {
-        // Each edge is materialized in the frame of the DAG that includes it.
         let edges = tir
             .dags
             .iter()
-            .flat_map(|(_, dag)| {
-                dag.semantic_instances()
-                    .iter()
-                    .map(|edge| (edge.clone(), dag.frame().clone()))
-            })
-            .filter(|(edge, _)| tir.dags.get(edge.instance.id().owner()).is_none())
+            .flat_map(|(_, dag)| dag.semantic_instances().iter().cloned())
+            .filter(|edge| tir.dags.get(edge.instance.id().owner()).is_none())
             .collect::<Vec<_>>();
         if edges.is_empty() {
             install_semantic_projection_bindings(tir);
             return Ok(());
         }
-        for (edge, parent) in edges {
-            instantiate_semantic_edge(tir, &edge, &parent, src)?;
+        for edge in edges {
+            instantiate_semantic_edge(tir, &edge, src)?;
         }
     }
 }

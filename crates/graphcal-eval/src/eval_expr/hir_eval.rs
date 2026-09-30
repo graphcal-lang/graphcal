@@ -1708,7 +1708,7 @@ fn eval_field_access(
                     inner.span(),
                 ));
             };
-            let expected_runtime = ctx.dag().runtime_struct_type(expected.resolved());
+            let expected_runtime = ctx.runtime_struct_type(expected.resolved());
             // Validate the actual tag against the retained expected type, never
             // resolve a source name or infer a constructor application here.
             let definition = ctx

@@ -1551,7 +1551,9 @@ impl DagTIR {
     ///
     /// Visible only to the checker, which checks each body in the frame of
     /// the DAG that runs it. Evaluation never sees a frame: it resolves
-    /// handles through the [`CheckedDag`](super::CheckedDag) it runs.
+    /// handles through the [`BodyScope`](super::BodyScope) its execution plan
+    /// selects, and reads include-site projections already resolved through
+    /// [`CheckedInstance`](super::CheckedInstance).
     #[must_use]
     pub(in crate::tir) const fn frame(&self) -> &crate::ir::instance::frame::InstanceFrame {
         &self.frame

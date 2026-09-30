@@ -1703,8 +1703,14 @@ role = "contracts"
 
 [[module]]
 package = "compiler"
-path = ["tir", "typed", "canonical_frame"]
+path = ["tir", "typed", "frame_mint"]
 role = "contracts"
+
+[[module]]
+package = "compiler"
+# Pairs include-edge records (checking data) with their checked DAGs.
+path = ["tir", "typed", "checked_instance"]
+role = "checking"
 
 [[module]]
 package = "compiler"

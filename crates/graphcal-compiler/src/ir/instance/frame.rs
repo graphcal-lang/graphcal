@@ -21,7 +21,7 @@ use crate::syntax::names::NameNamespace;
 use super::identity::{instance_declaration, rebased_declaration};
 use super::mint::FrameAccess;
 use crate::ir::static_substitution::StaticSpecializationId;
-use crate::tir::typed::canonical_frame::CanonicalFrameMint;
+use crate::tir::typed::frame_mint::CanonicalFrameMint;
 
 /// The frame a DAG runs its bodies in: the only way to turn a body handle
 /// into a declaration identity.
@@ -31,6 +31,11 @@ use crate::tir::typed::canonical_frame::CanonicalFrameMint;
 /// frame from the instance record when a semantic include edge is
 /// materialized. It is never chosen by the code that runs a body; that code
 /// reads the frame of the DAG it runs.
+///
+/// A frame is `Clone` only because the DAG owning it is: a template DAG is
+/// copied to start an instance (whose frame is then replaced), and checked
+/// DAGs are shared by value between stores. No code keeps a frame apart from
+/// its DAG; only the checker in [`crate::tir`] borrows one.
 #[derive(Debug, Clone)]
 pub struct InstanceFrame {
     kind: FrameKind,
@@ -115,7 +120,7 @@ impl InstanceFrame {
     /// The declaration `handle` denotes when this frame's DAG runs the body
     /// holding it.
     #[must_use]
-    pub fn resolve(&self, handle: &LocalDecl) -> ResolvedDeclName {
+    pub(crate) fn resolve(&self, handle: &LocalDecl) -> ResolvedDeclName {
         self.rebase(handle.definition(FrameAccess(())))
     }
 
@@ -123,7 +128,7 @@ impl InstanceFrame {
     /// holding it: the instance's own copy of a runtime unit it materializes,
     /// otherwise the unit definition itself.
     #[must_use]
-    pub fn resolve_unit(&self, unit: &LocalUnit) -> ResolvedUnitName {
+    pub(crate) fn resolve_unit(&self, unit: &LocalUnit) -> ResolvedUnitName {
         let definition = unit.definition(FrameAccess(()));
         match &self.kind {
             FrameKind::Canonical => definition.clone(),
@@ -141,7 +146,7 @@ impl InstanceFrame {
     /// The nominal type `source` stands for in this frame, after the
     /// instance's Static type substitution.
     #[must_use]
-    pub fn struct_type(&self, source: &ResolvedStructTypeName) -> ResolvedStructTypeName {
+    pub(crate) fn struct_type(&self, source: &ResolvedStructTypeName) -> ResolvedStructTypeName {
         self.specialization()
             .and_then(|specialization| specialization.substitution.types.get(source))
             .cloned()
@@ -150,13 +155,13 @@ impl InstanceFrame {
 
     /// Whether this frame belongs to a semantic instance.
     #[must_use]
-    pub const fn is_instance(&self) -> bool {
+    pub(crate) const fn is_instance(&self) -> bool {
         matches!(self.kind, FrameKind::Instance(_))
     }
 
     /// The template and Static substitution of an instance frame.
     #[must_use]
-    pub fn specialization(&self) -> Option<&StaticSpecializationId> {
+    pub(crate) fn specialization(&self) -> Option<&StaticSpecializationId> {
         match &self.kind {
             FrameKind::Canonical => None,
             FrameKind::Instance(binding) => Some(&binding.specialization),

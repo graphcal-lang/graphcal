@@ -11,9 +11,8 @@ use crate::syntax::dimension::UnitRef as SyntaxUnitRef;
 /// template, with its own scale, while the template body naming the unit is
 /// shared. The handle keeps the unit as the defining template names it and
 /// offers no public accessor for it: the unit whose scale applies is obtained
-/// only through
-/// [`InstanceFrame::resolve_unit`](crate::ir::instance::frame::InstanceFrame::resolve_unit)
-/// with the frame of the DAG running the body.
+/// only through the frame of the DAG running the body (outside the compiler,
+/// [`BodyScope::resolve_unit`](crate::tir::typed::BodyScope::resolve_unit)).
 ///
 /// The checker reads the facts every copy of the unit shares (its dimension
 /// and the constness of its scale) from the definition through
