@@ -18,7 +18,7 @@ use crate::resolved_name::ResolvedDeclName;
 use crate::syntax::decl_name::DeclName;
 use crate::syntax::dimension::{UnitName, UnitRef};
 use crate::syntax::index_name::IndexName;
-use crate::syntax::module_name::{ModuleAliasName, ScopedName};
+use crate::syntax::module_name::ScopedName;
 use crate::syntax::span::Span;
 use crate::syntax::type_name::ConstructorName;
 use crate::syntax::visitor::ExprVisitor;
@@ -46,7 +46,6 @@ pub struct IncludeOverrideReconciliations(
 #[derive(Debug, Clone)]
 pub struct SemanticInstanceInput {
     pub instance: InstanceRecord,
-    pub debug_scope: ModuleAliasName,
     pub value_bindings: HashMap<ResolvedDeclName, Expr>,
     pub runtime_unit_names: HashSet<UnitName>,
     pub output_projections: Vec<InstanceValueProjection>,
@@ -138,7 +137,6 @@ impl UnfrozenIR {
         }
         self.semantic_instances.push(UnfrozenSemanticInstance {
             instance: input.instance,
-            debug_scope: input.debug_scope,
             value_bindings: input.value_bindings,
             runtime_unit_names: input.runtime_unit_names,
             output_projections: input.output_projections,
@@ -590,7 +588,6 @@ impl UnfrozenIR {
                     .collect::<Result<HashMap<_, _>, _>>()?;
                 Ok(crate::ir::instance::HirInstanceRecord {
                     instance: record.instance.clone(),
-                    debug_scope: record.debug_scope.clone(),
                     value_bindings,
                     runtime_unit_names: record.runtime_unit_names.clone(),
                     output_projections: record.output_projections.clone(),

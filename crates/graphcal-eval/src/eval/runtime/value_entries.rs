@@ -8,11 +8,12 @@
 
 use std::collections::{HashMap, HashSet};
 
+use graphcal_compiler::dag_id::DagId;
 use graphcal_compiler::declaration_category::{DeclCategory, ValueDeclCategory};
 use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
 use graphcal_compiler::registry::error::GraphcalError;
 use graphcal_compiler::resolved_name::ResolvedDeclName;
-use graphcal_compiler::syntax::module_name::{ModuleAliasName, ScopeSegment, ScopedName};
+use graphcal_compiler::syntax::module_name::ScopedName;
 use graphcal_compiler::tir::typed::{CheckedDag, ResolvedProjection};
 
 use crate::eval::display::attach_presentation;
@@ -23,6 +24,7 @@ use crate::execution_plan::{ExecPlan, PlannedInstance};
 use crate::presentation_evidence::PresentationDiagnostic;
 
 use super::EvaluatedRoot;
+use super::root_names::instance_member_name;
 
 /// Whether an entry belongs to the root's consumer-facing output surface or
 /// only to the debug view.
@@ -104,12 +106,11 @@ pub(super) fn assemble_value_entries(
     ctx: &EvalSession<'_>,
 ) -> Result<ValueEntries, GraphcalError> {
     let root = root_entries(plan, evaluated, ctx)?;
-    let instances = plan.root().semantic_instances();
-    let debug_scopes = DebugScopes::new(instances);
+    let root_id = plan.tir().root_dag_id();
     let mut projected = Vec::new();
-    for planned in instances {
+    for planned in plan.root().semantic_instances() {
         projected.extend(projection_entries(*planned, evaluated, ctx)?);
-        projected.extend(debug_entries(*planned, &debug_scopes, evaluated, ctx)?);
+        projected.extend(debug_entries(*planned, root_id, evaluated, ctx)?);
     }
     ValueEntries::collect(root.into_iter().chain(projected), ctx)
 }
@@ -141,12 +142,7 @@ fn root_entries(
             let key = entry.identity();
             let (result, diagnostics) = match category {
                 ValueDeclCategory::Const => {
-                    let runtime = scope.const_values().get(&key).ok_or_else(|| {
-                        ctx.internal_error(
-                            format!("checked source-order constant `{key}` has no runtime value"),
-                            DiagnosticAnchor::WholeFile,
-                        )
-                    })?;
+                    let runtime = scope.const_values().get(&key);
                     let (value, diagnostics) = project_value(&key, runtime, evaluated, ctx)?;
                     (Ok(value), diagnostics)
                 }
@@ -213,47 +209,14 @@ fn declared_value_category(
         })
 }
 
-/// The display scopes of the root's semantic instances in the debug view:
-/// an instance's debug scope when no other instance shares it, else its
-/// instance scope.
-struct DebugScopes<'p> {
-    counts: HashMap<&'p ModuleAliasName, usize>,
-}
-
-impl<'p> DebugScopes<'p> {
-    fn new(instances: &[PlannedInstance<'p>]) -> Self {
-        let mut counts = HashMap::new();
-        for planned in instances {
-            let count = counts
-                .entry(&planned.instance().record().debug_scope)
-                .or_insert(0_usize);
-            *count = count.saturating_add(1);
-        }
-        Self { counts }
-    }
-
-    fn scope(&self, planned: PlannedInstance<'p>) -> ScopeSegment {
-        let record = planned.instance().record();
-        if self
-            .counts
-            .get(&record.debug_scope)
-            .is_some_and(|count| *count > 1)
-        {
-            record.instance.id().scope().clone()
-        } else {
-            ScopeSegment::Named(record.debug_scope.clone())
-        }
-    }
-}
-
-/// Every value of one root semantic instance, for the debug view.
+/// Every value of one root semantic instance, for the debug view, under its
+/// instance member name (the instance's scope in the root, then its leaf).
 fn debug_entries(
     planned: PlannedInstance<'_>,
-    debug_scopes: &DebugScopes<'_>,
+    root: &DagId,
     evaluated: EvaluatedRoot<'_>,
     ctx: &EvalSession<'_>,
 ) -> Result<Vec<ValueEntry>, GraphcalError> {
-    let debug_scope = debug_scopes.scope(planned);
     let instance_ctx = ctx.with_src(planned.scope().source());
     planned
         .instance()
@@ -263,9 +226,10 @@ fn debug_entries(
         .filter_map(|entry| value_category(entry.category()).map(|category| (entry, category)))
         .map(|(entry, category)| {
             let key = entry.identity();
+            let name = instance_member_name(root, &key, ctx.src)?;
             let (result, diagnostics) = evaluated_value(&key, evaluated, &instance_ctx)?;
             Ok(ValueEntry {
-                name: ScopedName::in_scope(debug_scope.clone(), entry.name().clone()),
+                name,
                 key,
                 result,
                 category,
@@ -286,34 +250,28 @@ fn evaluated_value(
     if let Some(error) = evaluated.errors.get(key) {
         return Ok((Err(error.clone()), Vec::new()));
     }
-    let runtime = evaluated.values.get(key).ok_or_else(|| {
-        ctx.internal_error(
-            format!("successful declaration `{key}` has no runtime value"),
-            DiagnosticAnchor::WholeFile,
-        )
-    })?;
-    let (value, diagnostics) = project_value(key, runtime, evaluated, ctx)?;
+    let (value, diagnostics) = project_value(key, evaluated.values.get(key), evaluated, ctx)?;
     Ok((Ok(value), diagnostics))
 }
 
-/// Project the runtime value of `declaration` to its public value and attach
-/// its resolved presentation.
+/// Project `runtime`, the value of the successfully evaluated `declaration`,
+/// to its public value and attach its resolved presentation.
 fn project_value(
     declaration: &ResolvedDeclName,
-    runtime: &RuntimeValue,
+    runtime: Option<&RuntimeValue>,
     evaluated: EvaluatedRoot<'_>,
     ctx: &EvalSession<'_>,
 ) -> Result<(Value, Vec<PresentationDiagnostic>), GraphcalError> {
     let declared_type = ctx
         .tir
         .decl_type(declaration)
-        .map(graphcal_compiler::tir::typed::CheckedDeclType::declared)
-        .ok_or_else(|| {
-            ctx.internal_error(
-                format!("runtime declaration `{declaration}` is absent from checked TIR"),
-                DiagnosticAnchor::WholeFile,
-            )
-        })?;
+        .map(graphcal_compiler::tir::typed::CheckedDeclType::declared);
+    let (runtime, declared_type) = runtime.zip(declared_type).ok_or_else(|| {
+        ctx.internal_error(
+            format!("successful declaration `{declaration}` has no runtime value or checked type"),
+            DiagnosticAnchor::WholeFile,
+        )
+    })?;
     let mut value = EvaluatedValue::new(runtime, declared_type).project(ctx.tir, ctx.src)?;
     let notices = attach_presentation(&mut value, evaluated.presentations.get(declaration))
         .map_err(|error| ctx.internal_error(error.to_string(), DiagnosticAnchor::WholeFile))?;

@@ -1859,6 +1859,21 @@ role = "facade"
 
 [[module]]
 package = "eval"
+path = ["eval", "runtime", "root_names"]
+role = "facade"
+
+[[module]]
+package = "eval"
+path = ["eval", "runtime", "root_names", "tests"]
+role = "facade"
+
+[[module]]
+package = "eval"
+path = ["eval", "runtime", "root_outcome"]
+role = "facade"
+
+[[module]]
+package = "eval"
 path = ["eval", "runtime", "value_entries"]
 role = "facade"
 

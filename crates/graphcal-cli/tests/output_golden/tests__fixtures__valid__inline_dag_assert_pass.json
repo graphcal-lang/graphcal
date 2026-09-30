@@ -14,9 +14,6 @@
         "also_fine::out": {
           "si_value": 8.0
         },
-        "checked::out": {
-          "si_value": 8.0
-        },
         "y": {
           "si_value": 6.0
         },
@@ -26,9 +23,6 @@
       },
       "param": {
         "also_fine::v": {
-          "si_value": 4.0
-        },
-        "checked::v": {
           "si_value": 4.0
         }
       },

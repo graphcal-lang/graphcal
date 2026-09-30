@@ -26,8 +26,7 @@ use thiserror::Error;
 
 use crate::domain_constraint::{ResolvedDomainConstraint, ResolvedDomainConstraintRef};
 use crate::eval::bindings::{RuntimeParameterBinding, RuntimeParameterBindings};
-use crate::eval::runtime::{EvalLoopResult, run_eval_loop_with_bindings};
-use crate::eval::types::{AssertResult, CompileError, EvalResult, Value};
+use crate::eval::types::{CompileError, EvalResult, Value};
 use crate::eval_expr::{EvalSession, RuntimeValueMap};
 use graphcal_compiler::resolved_name::ResolvedDeclName;
 
@@ -53,9 +52,9 @@ pub use binding_compile::{
     ParameterBindingRow, StructuredBindingError, StructuredBindingPathSegment, StructuredValueExpr,
 };
 pub use tenax_model::{
-    InclusiveBounds, ModelDefinitionError, ModelExecutionError, ModelOutputPort, ModelRowFailure,
-    ModelRowOutcome, ParameterDomain, ParameterPort, PreparedModel, TenaxV2Input, TenaxV2InputKind,
-    TenaxV2Model, TenaxV2Output, TenaxV2RowOutcome,
+    InclusiveBounds, InclusiveBoundsError, ModelDefinitionError, ModelExecutionError,
+    ModelOutputPort, ModelRowFailure, ModelRowOutcome, ParameterDomain, ParameterPort,
+    PreparedModel, TenaxV2Input, TenaxV2InputKind, TenaxV2Model, TenaxV2Output, TenaxV2RowOutcome,
 };
 
 static NEXT_PLAN_ID: AtomicU64 = AtomicU64::new(1);
@@ -562,27 +561,38 @@ fn build_output_ports(
         .collect()
 }
 
-fn parameter_domain(constraint: &ResolvedDomainConstraint) -> ParameterDomain {
-    match constraint.as_ref() {
+/// The sampling domain of a parameter with the resolved domain `constraint`.
+///
+/// # Errors
+///
+/// Returns [`InclusiveBoundsError`] when the bounds do not form an inclusive
+/// interval, which checking rejects.
+fn parameter_domain(
+    constraint: &ResolvedDomainConstraint,
+) -> Result<ParameterDomain, InclusiveBoundsError> {
+    fn inclusive<T, U: PartialOrd>(
+        bounds: &crate::domain_constraint::ResolvedDomainBounds<T>,
+        value: impl Fn(&T) -> U,
+    ) -> Result<InclusiveBounds<U>, InclusiveBoundsError> {
+        InclusiveBounds::try_new(
+            bounds.min().map(|bound| value(bound.value())),
+            bounds.max().map(|bound| value(bound.value())),
+        )
+    }
+    Ok(match constraint.as_ref() {
         ResolvedDomainConstraintRef::Quantity(bounds) => {
-            ParameterDomain::Quantity(InclusiveBounds {
-                lower: bounds.min().map(|bound| *bound.value()),
-                upper: bounds.max().map(|bound| *bound.value()),
-            })
+            ParameterDomain::Quantity(inclusive(bounds, |value| *value)?)
         }
-        ResolvedDomainConstraintRef::Int(bounds) => ParameterDomain::Integer(InclusiveBounds {
-            lower: bounds.min().map(|bound| *bound.value()),
-            upper: bounds.max().map(|bound| *bound.value()),
-        }),
+        ResolvedDomainConstraintRef::Int(bounds) => {
+            ParameterDomain::Integer(inclusive(bounds, |value| *value)?)
+        }
         ResolvedDomainConstraintRef::Datetime { scale, bounds } => ParameterDomain::Datetime {
             scale,
-            bounds: InclusiveBounds {
-                lower: bounds.min().map(|bound| bound.value().duration()),
-                upper: bounds.max().map(|bound| bound.value().duration()),
-            },
+            bounds: inclusive(bounds, |value| value.duration())?,
         },
-    }
+    })
 }
+
 pub(super) fn prepare_checked_project(
     checked: CheckedProject,
     host_fns: &HostFunctionRegistry,

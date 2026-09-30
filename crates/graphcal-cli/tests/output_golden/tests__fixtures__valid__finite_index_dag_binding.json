@@ -20,20 +20,6 @@
           },
           "index": "Fin(3)"
         },
-        "scale::ys": {
-          "entries": {
-            "#0": {
-              "si_value": 2.0
-            },
-            "#1": {
-              "si_value": 4.0
-            },
-            "#2": {
-              "si_value": 6.0
-            }
-          },
-          "index": "Fin(3)"
-        },
         "scaled::ys": {
           "entries": {
             "#0": {
@@ -50,20 +36,6 @@
         }
       },
       "param": {
-        "scale::xs": {
-          "entries": {
-            "#0": {
-              "si_value": 1.0
-            },
-            "#1": {
-              "si_value": 2.0
-            },
-            "#2": {
-              "si_value": 3.0
-            }
-          },
-          "index": "Fin(3)"
-        },
         "scaled::xs": {
           "entries": {
             "#0": {

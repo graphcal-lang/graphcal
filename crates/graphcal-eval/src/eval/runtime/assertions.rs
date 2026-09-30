@@ -1,6 +1,5 @@
 //! The assertion stage of runtime output assembly: every assertion the root
-//! DAG reports, the source names of the root's runtime identities, and the
-//! `#[assumes]` table keyed by those names.
+//! DAG reports, and the `#[assumes]` table keyed by the root's source names.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -13,32 +12,15 @@ use graphcal_compiler::resolved_name::ResolvedDeclName;
 use graphcal_compiler::syntax::module_name::ScopedName;
 use graphcal_compiler::syntax::span::Span;
 use graphcal_compiler::tir::typed::{
-    AssertionOperands, CheckedInstance, ResolvedProjection, Scoped,
+    AssertionOperands, CheckedInstance, DeclarationBody, ResolvedProjection, Scoped,
 };
 
 use crate::assertion_eval::evaluate_assert_with_expected_fail;
 use crate::eval::types::{AssertResult, NodeUnavailable};
 use crate::eval_expr::{EvalSession, RuntimeValueMap, eval_root};
 
+use super::root_names::{qualified_below, root_source_names};
 use super::{declaration_body, dependency_failure_message};
-
-fn root_instance_name(
-    root: &graphcal_compiler::dag_id::DagId,
-    parent: &graphcal_compiler::dag_id::DagId,
-    exposed: &ScopedName,
-) -> ScopedName {
-    // A parent outside the root's subtree contributes no qualifier.
-    let parent_path = parent.scopes_below(root).into_iter().flatten();
-    ScopedName::from_parts(
-        graphcal_compiler::syntax::non_empty::NonEmpty::try_from_vec(
-            parent_path
-                .chain(exposed.qualifier().iter().cloned())
-                .collect(),
-        )
-        .ok(),
-        exposed.leaf().clone(),
-    )
-}
 
 /// One semantic-instance record paired with the checked DAG it materialized.
 fn semantic_instance<'tir>(
@@ -56,6 +38,29 @@ fn semantic_instance<'tir>(
             DiagnosticAnchor::WholeFile,
         )
     })
+}
+
+/// The checked body of the assertion `owner`, in the scope of its owner.
+fn assertion_body<'tir>(
+    tir: &'tir graphcal_compiler::tir::typed::CheckedTir,
+    owner: &ResolvedDeclName,
+    src: &NamedSource<Arc<String>>,
+) -> Result<
+    (
+        DeclarationBody<'tir>,
+        Scoped<'tir, graphcal_compiler::tir::typed::TypedAssertEntry>,
+    ),
+    GraphcalError,
+> {
+    let unit = declaration_body(tir, owner, src)?;
+    let entry = unit.assertion().ok_or_else(|| {
+        GraphcalError::internal_error(
+            format!("assertion `{owner}` has no checked body"),
+            src,
+            DiagnosticAnchor::WholeFile,
+        )
+    })?;
+    Ok((unit, entry))
 }
 
 /// Evaluate every assertion reported for the root DAG: root assertions in
@@ -77,17 +82,8 @@ pub(in crate::eval) fn evaluate_assertions(
         .asserts()
         .map(|entry| {
             let owner = entry.identity();
-            let unit = declaration_body(tir, &owner, src)?;
-            let body = unit
-                .assertion()
-                .ok_or_else(|| {
-                    GraphcalError::internal_error(
-                        format!("assertion `{owner}` has no checked body"),
-                        src,
-                        DiagnosticAnchor::WholeFile,
-                    )
-                })?
-                .map(|entry| &*entry.body);
+            let (unit, body) = assertion_body(tir, &owner, src)?;
+            let body = body.map(|entry| &*entry.body);
             let entry_ctx = ctx.for_decl(&owner);
             let assert_result =
                 assert_dependency_failure(body, errors, &entry_ctx).unwrap_or_else(|| {
@@ -115,14 +111,7 @@ pub(in crate::eval) fn evaluate_assertions(
                 projection,
             } in semantic_instance(tir, record, src)?.assertion_projections()
             {
-                let unit = declaration_body(tir, &owner, src)?;
-                let entry = unit.assertion().ok_or_else(|| {
-                    GraphcalError::internal_error(
-                        format!("projected assertion `{owner}` is absent from semantic instance"),
-                        src,
-                        DiagnosticAnchor::WholeFile,
-                    )
-                })?;
+                let (unit, entry) = assertion_body(tir, &owner, src)?;
                 let assertion_ctx = ctx.with_src(src).for_decl(&owner);
                 let expected = projection
                     .expected_fail
@@ -133,53 +122,15 @@ pub(in crate::eval) fn evaluate_assertions(
                     expected,
                     &mut |expr| eval_root(&assertion_ctx.executable(expr)?, values, &assertion_ctx),
                 );
-                assertions.push((
-                    root_instance_name(
-                        tir.root_dag_id(),
-                        parent_dag.dag_id(),
-                        &record.instance.exposed_name(projection),
-                    ),
-                    result,
-                    entry.get().span,
-                ));
+                // A parent outside the root's subtree contributes no qualifier.
+                let exposed = record.instance.exposed_name(projection);
+                let name = qualified_below(tir.root_dag_id(), parent_dag.dag_id(), &exposed)
+                    .unwrap_or(exposed);
+                assertions.push((name, result, entry.get().span));
             }
         }
     }
     Ok(assertions)
-}
-
-/// Source-level names of the runtime declarations the root DAG exposes, in
-/// deterministic order: root declarations in source order, then the output
-/// and assertion projections of each root semantic instance in record order.
-///
-/// Declarations private to a semantic instance have no root source name and
-/// are absent.
-pub(in crate::eval) fn root_source_names(
-    tir: &graphcal_compiler::tir::typed::CheckedTir,
-    src: &NamedSource<Arc<String>>,
-) -> Result<Vec<(ResolvedDeclName, ScopedName)>, GraphcalError> {
-    let mut names = tir
-        .root()
-        .decls()
-        .iter()
-        .map(|entry| (entry.identity(), ScopedName::local(entry.name().clone())))
-        .collect::<Vec<_>>();
-    for record in tir.root().semantic_instances() {
-        let instance = semantic_instance(tir, record, src)?;
-        names.extend(
-            instance
-                .output_projections()
-                .map(|resolved| {
-                    let name = record.instance.exposed_name(resolved.projection);
-                    (resolved.target, name)
-                })
-                .chain(instance.assertion_projections().map(|resolved| {
-                    let name = record.instance.exposed_name(resolved.projection);
-                    (resolved.target, name)
-                })),
-        );
-    }
-    Ok(names)
 }
 
 /// The `#[assumes]` table of the root DAG and its execution closure, keyed
@@ -188,7 +139,7 @@ pub(super) fn root_assumes_map(
     plan: &crate::execution_plan::ExecPlan<'_>,
     src: &NamedSource<Arc<String>>,
 ) -> Result<HashMap<ScopedName, Vec<ScopedName>>, GraphcalError> {
-    let source_names_by_key = root_source_names(plan.tir(), src)?
+    let source_names_by_key = root_source_names(plan)
         .into_iter()
         .collect::<HashMap<_, _>>();
     let source_name = |key: &ResolvedDeclName, role: &str| {

@@ -7,7 +7,7 @@ use crate::hir::expr::LocalDecl;
 use crate::resolved_name::ResolvedDeclName;
 use crate::syntax::decl_name::DeclName;
 use crate::syntax::dimension::UnitName;
-use crate::syntax::module_name::{ModuleAliasName, ScopedName};
+use crate::syntax::module_name::ScopedName;
 
 use super::static_substitution::{StaticSpecializationId, StaticSubstitution};
 
@@ -232,8 +232,6 @@ pub struct InstancePlotProjection {
 pub struct HirInstanceRecord {
     /// Concrete instance identity and typed Static substitution.
     pub instance: InstanceRecord,
-    /// Display-only scope for private instance implementation values.
-    pub debug_scope: ModuleAliasName,
     /// Explicit value-port bindings lowered in the importer's lexical context.
     pub value_bindings: HashMap<ResolvedDeclName, crate::hir::CheckedExpr>,
     /// Runtime-unit definitions materialized under this instance owner.
@@ -257,7 +255,7 @@ pub struct HirInstanceRecord {
 mod tests {
     use super::*;
     use crate::resolved_name::ResolvedDimName;
-    use crate::syntax::module_name::ScopeSegment;
+    use crate::syntax::module_name::{ModuleAliasName, ScopeSegment};
     use std::collections::BTreeMap;
 
     #[test]
