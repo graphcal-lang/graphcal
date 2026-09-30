@@ -36,7 +36,9 @@ use crate::runtime_presentation::PendingPresentedMap;
 use crate::runtime_presentation::PresentedRef;
 use crate::runtime_value::KeyElement;
 
-use super::{EvaluatedRoot, declaration_body, dependency_failure_message};
+use super::declaration_body::declaration_body;
+use super::dependency_failures::dependency_failure_message;
+use super::evaluated_root::EvaluatedRoot;
 
 /// Everything the plot stage reports.
 pub(super) struct PlotOutputs {
@@ -499,7 +501,7 @@ fn evaluate_plot_channel(
         .executable(scoped_expr)
         .and_then(|tree| eval_root_with_presentation(&tree, values, presentation_values, ctx))
         .map_err(|error| classify_plot_channel_error(channel, error))?;
-    let presented = crate::eval_expr::presentation::resolve(evaluated, values, ctx)
+    let presented = crate::eval_expr::resolve_presentation(evaluated, values, ctx)
         .map_err(|error| classify_plot_channel_error(channel, error))?;
     let declared_type =
         plot_declared_type(fact, ctx, expr.span).map_err(PlotEvaluationError::Fatal)?;

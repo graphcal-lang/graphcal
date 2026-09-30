@@ -19,11 +19,11 @@ use std::path::Path;
 use graphcal_compiler::dimension::PreludeBaseDimension;
 use graphcal_compiler::graphcal_error::GraphcalError;
 use graphcal_compiler::syntax::plugin::PluginPath;
-use graphcal_eval::eval::CompileError;
 use graphcal_eval::host_fns::HostFunctionRegistry;
-use graphcal_eval::loader::load_project;
 use graphcal_io::RealFileSystem;
 use graphcal_plugin_abi::PluginManifest;
+use graphcal_project::compile_error::CompileError;
+use graphcal_project::loader::load_project;
 
 graphcal_plugin::plugin! {
     fn f_length(x: Length) -> Length { x }
@@ -101,7 +101,7 @@ fn compile(dir: &Path, source: &str, registry: &HostFunctionRegistry) -> Result<
     std::fs::write(&entry, source).expect("write test project");
     let fs = RealFileSystem::default();
     let project = load_project(&entry, None, &fs)?;
-    graphcal_eval::eval::ProjectCompiler::new(&project)
+    graphcal_project::project_compiler::ProjectCompiler::new(&project)
         .host_fns(registry)
         .check()?;
     Ok(())

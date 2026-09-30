@@ -69,5 +69,36 @@ class GeneratedRegionTest(unittest.TestCase):
             reading_order.generated_region(guide("") + reading_order.END_MARKER)
 
 
+class InlineModuleTest(unittest.TestCase):
+    def test_relative_paths_inside_inline_modules_are_rebased(self) -> None:
+        rebase = reading_order.relative_to_inline_modules
+        self.assertEqual(rebase(["super", "X"], 0), ["super", "X"])
+        self.assertEqual(rebase(["super", "*"], 1), ["self", "*"])
+        self.assertEqual(rebase(["super", "super", "m", "X"], 1), ["super", "m", "X"])
+        self.assertEqual(rebase(["super", "X"], 2), ["self", "X"])
+        self.assertEqual(rebase(["crate", "X"], 1), ["crate", "X"])
+
+    def test_parse_file_scopes_uses_to_their_inline_module(self) -> None:
+        source = (
+            "use super::parent::Item;\n"
+            "pub use child::Reexport;\n"
+            "#[cfg(test)]\n"
+            "mod tests {\n"
+            "    use super::*;\n"
+            '    const RAW: &str = r#"dag x { "{" }"#;\n'
+            "    const BRACE: char = '{';\n"
+            "    pub use hidden::Inner;\n"
+            "}\n"
+            "use super::after::Other;\n"
+        )
+        with mock.patch.object(Path, "read_text", return_value=source):
+            paths, pub_uses, mods = reading_order.parse_file(Path("unused.rs"))
+        self.assertIn(["super", "parent", "Item"], paths)
+        self.assertIn(["self", "*"], paths)
+        self.assertIn(["super", "after", "Other"], paths)
+        self.assertEqual(pub_uses, [["child", "Reexport"]])
+        self.assertEqual(mods, [])
+
+
 if __name__ == "__main__":
     unittest.main()

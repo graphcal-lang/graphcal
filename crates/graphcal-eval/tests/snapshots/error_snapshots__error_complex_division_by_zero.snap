@@ -1,5 +1,0 @@
----
-source: crates/graphcal-eval/tests/error_snapshots.rs
-expression: rendered
----
-complex division by zero

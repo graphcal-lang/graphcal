@@ -44,7 +44,7 @@ pub(super) fn qualified_below(root: &DagId, dag: &DagId, name: &ScopedName) -> O
 ///
 /// Returns an internal error when the declaration's owner is not below the
 /// root: every declaration the root evaluates is its own or an instance's.
-pub(in crate::eval) fn instance_member_name(
+pub(super) fn instance_member_name(
     root: &DagId,
     declaration: &ResolvedDeclName,
     src: &NamedSource<Arc<String>>,
@@ -71,9 +71,7 @@ fn member_name(root: &DagId, declaration: &ResolvedDeclName) -> Option<ScopedNam
 ///
 /// Declarations private to a semantic instance have no root source name and
 /// are absent; [`instance_member_name`] names them.
-pub(in crate::eval) fn root_source_names(
-    plan: &ExecPlan<'_>,
-) -> Vec<(ResolvedDeclName, ScopedName)> {
+pub(super) fn root_source_names(plan: &ExecPlan<'_>) -> Vec<(ResolvedDeclName, ScopedName)> {
     let root = plan.root();
     let own = root
         .scope()

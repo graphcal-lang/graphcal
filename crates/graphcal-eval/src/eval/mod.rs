@@ -1,71 +1,18 @@
-use std::collections::HashMap;
-
-use graphcal_compiler::syntax::decl_name::DeclName;
-
-mod bindings;
+pub mod bindings;
 mod plot_data;
 mod plot_unavailable;
-mod project;
-mod public_projection;
-pub(crate) mod runtime;
-#[cfg(test)]
-mod tests;
-pub(crate) mod types;
+pub mod public_projection;
+pub mod runtime;
+pub mod types;
 
-pub use crate::project_compiler::{CheckedProject, HirProject, ProjectCompiler, check_project};
-#[cfg(test)]
-pub(crate) use crate::project_compiler::{compile_to_tir, compile_to_tir_project};
 pub use graphcal_compiler::display::number::format_number;
-pub use project::{
-    InclusiveBounds, InclusiveBoundsError, ModelAlgebraicTypeSchema, ModelConstructorSchema,
-    ModelDefinitionError, ModelExecutionError, ModelFieldSchema, ModelIndexKind, ModelIndexSchema,
-    ModelOutputPort, ModelQuantitySchema, ModelRowFailure, ModelRowOutcome, ModelSchemaGraph,
-    ModelTypeId, ModelUnitSchema, ModelValueSchema, ParameterBindingBuilder, ParameterBindingRow,
-    ParameterDomain, ParameterPort, ParameterPosition, ParameterValue, PreparedModel,
-    PreparedProject, StructuredBindingError, StructuredBindingPathSegment, StructuredValueExpr,
-    TenaxV2Input, TenaxV2InputKind, TenaxV2Model, TenaxV2Output, TenaxV2RowOutcome,
-    compile_and_eval_from_project, compile_and_eval_project, prepare_from_project,
-};
 
 pub use crate::runtime_value::KeyValue;
 pub use plot_unavailable::{ComposedPlotsUnavailable, PlotUnavailable};
 pub use runtime::RuntimeEvaluation;
 pub use types::{
-    AssertResult, AxisMeta, CompileError, CompositionProperty, DisplayProjectionError, DisplayUnit,
+    AssertResult, AxisMeta, CompositionProperty, DisplayProjectionError, DisplayUnit,
     DisplayValueError, EvalOutputView, EvalResult, FigureSpec, KeyRendering, LayerSpec,
     MarkProperty, NodeUnavailable, PlotError, PlotFieldValue, PlotProperty, PlotSpec,
     RenderContext, UnitLabel, Value, ValueError, datetime_literal, quantity_display_value,
 };
-
-pub fn compile_and_eval(source: &str) -> Result<EvalResult, CompileError> {
-    compile_and_eval_named(source, "input.gcl")
-}
-
-/// Full pipeline with a custom `.gcl` source name (used for file paths in diagnostics).
-///
-/// # Errors
-///
-/// Returns a [`CompileError`] if parsing or evaluation fails, or if `name` is
-/// not a valid `.gcl` source path.
-pub fn compile_and_eval_named(source: &str, name: &str) -> Result<EvalResult, CompileError> {
-    compile_and_eval_with_overrides(source, name, &HashMap::new())
-}
-
-/// Full pipeline with parameter overrides.
-///
-/// Each entry in `overrides` maps a param name to a replacement expression.
-/// The overrides are validated (must refer to existing params, not consts/nodes)
-/// and then substituted before dimension checking and evaluation.
-///
-/// # Errors
-///
-/// Returns a [`CompileError`] if parsing, validation, or evaluation fails, or
-/// if `name` is not a valid `.gcl` source path.
-fn compile_and_eval_with_overrides(
-    source: &str,
-    name: &str,
-    overrides: &HashMap<DeclName, graphcal_compiler::desugar::desugared_ast::Expr>,
-) -> Result<EvalResult, CompileError> {
-    let project = crate::loader::LoadedProject::from_source(source, name)?;
-    compile_and_eval_from_project(&project, overrides)
-}

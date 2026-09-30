@@ -19,8 +19,9 @@ use crate::assertion_eval::evaluate_assert_with_expected_fail;
 use crate::eval::types::{AssertResult, NodeUnavailable};
 use crate::eval_expr::{EvalSession, RuntimeValueMap, eval_root};
 
+use super::declaration_body::declaration_body;
+use super::dependency_failures::dependency_failure_message;
 use super::root_names::{qualified_below, root_source_names};
-use super::{declaration_body, dependency_failure_message};
 
 /// The checked body of the assertion `owner`, in the scope of its owner.
 fn assertion_body<'tir>(
@@ -52,7 +53,7 @@ fn assertion_body<'tir>(
 /// A root assertion whose body references a failed declaration reports the
 /// dependency failure (with its root cause) instead of evaluating over a
 /// value map where the failed name is simply absent (#814).
-pub(in crate::eval) fn evaluate_assertions(
+pub(super) fn evaluate_assertions(
     plan: &crate::execution_plan::ExecPlan<'_>,
     src: &NamedSource<Arc<String>>,
     ctx: &EvalSession<'_>,

@@ -21,6 +21,7 @@ impl SourceTree {
         let modules = [
             (Package::Compiler, repo.join("crates/graphcal-compiler/src")),
             (Package::Eval, repo.join("crates/graphcal-eval/src")),
+            (Package::Project, repo.join("crates/graphcal-project/src")),
         ]
         .into_iter()
         .try_fold(BTreeMap::new(), |mut all, (package, root)| {
@@ -418,6 +419,9 @@ mod tests {
         let compiler = root.join("crates/graphcal-compiler/src");
         fs::create_dir_all(&eval).expect("create eval fixture");
         fs::create_dir_all(&compiler).expect("create compiler fixture");
+        let project = root.join("crates/graphcal-project/src");
+        fs::create_dir_all(&project).expect("create project fixture");
+        fs::write(project.join("lib.rs"), "").expect("write project fixture");
         fs::write(
             eval.join("lib.rs"),
             "#[cfg_attr(feature = \"x\", path = \"other.rs\")] mod mapped;",
@@ -441,6 +445,9 @@ mod tests {
         let compiler = root.join("crates/graphcal-compiler/src");
         fs::create_dir_all(eval.join("actual")).expect("create eval fixture");
         fs::create_dir_all(&compiler).expect("create compiler fixture");
+        let project = root.join("crates/graphcal-project/src");
+        fs::create_dir_all(&project).expect("create project fixture");
+        fs::write(project.join("lib.rs"), "").expect("write project fixture");
         fs::write(eval.join("lib.rs"), "#[path = \"actual.rs\"] mod semantic;")
             .expect("write root");
         fs::write(eval.join("actual.rs"), "mod nested;").expect("write mapped module");

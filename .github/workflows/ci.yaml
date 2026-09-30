@@ -75,6 +75,7 @@ jobs:
           --exclude-crate graphcal_plugin
           --exclude-crate graphcal_plugin_abi
           --exclude-crate graphcal_plugin_host
+          --exclude-crate graphcal_project
           --exclude-crate graphcal_tenax
           --exclude-crate graphcal_test_support
           --exclude-crate graphcal_wasm

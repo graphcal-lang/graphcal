@@ -1833,33 +1833,33 @@ path = ["eval", "plot_data", "tests"]
 role = "facade"
 
 [[module]]
-package = "eval"
-path = ["eval", "project"]
+package = "project"
+path = ["prepare"]
 role = "facade"
 
 [[module]]
-package = "eval"
-path = ["eval", "project", "model_schema"]
+package = "project"
+path = ["prepare", "model_schema"]
 role = "facade"
 
 [[module]]
-package = "eval"
-path = ["eval", "project", "output"]
+package = "project"
+path = ["prepare", "output"]
 role = "facade"
 
 [[module]]
-package = "eval"
-path = ["eval", "project", "prepared"]
+package = "project"
+path = ["prepare", "prepared"]
 role = "facade"
 
 [[module]]
-package = "eval"
-path = ["eval", "project", "prepared", "binding_compile"]
+package = "project"
+path = ["prepare", "prepared", "binding_compile"]
 role = "facade"
 
 [[module]]
-package = "eval"
-path = ["eval", "project", "prepared", "tenax_model"]
+package = "project"
+path = ["prepare", "prepared", "tenax_model"]
 role = "facade"
 
 [[module]]
@@ -1908,23 +1908,23 @@ path = ["eval", "runtime", "value_entries"]
 role = "facade"
 
 [[module]]
-package = "eval"
-path = ["eval", "tests"]
+package = "project"
+path = ["tests"]
 role = "facade"
 
 [[module]]
-package = "eval"
-path = ["eval", "tests", "checked_expressions"]
+package = "project"
+path = ["tests", "checked_expressions"]
 role = "facade"
 
 [[module]]
-package = "eval"
-path = ["eval", "tests", "sealed_program"]
+package = "project"
+path = ["tests", "sealed_program"]
 role = "facade"
 
 [[module]]
-package = "eval"
-path = ["eval", "tests", "prop"]
+package = "project"
+path = ["tests", "prop"]
 role = "facade"
 
 [[module]]
@@ -2000,11 +2000,6 @@ role = "interpreter"
 [[module]]
 package = "eval"
 path = ["eval_expr", "hir_eval"]
-role = "interpreter"
-
-[[module]]
-package = "eval"
-path = ["eval_expr", "hir_eval", "tests"]
 role = "interpreter"
 
 [[module]]
@@ -2158,32 +2153,32 @@ path = ["assertion_eval", "tests"]
 role = "interpreter"
 
 [[module]]
-package = "eval"
+package = "project"
 path = ["dependency_ordered"]
 role = "contracts"
 
 [[module]]
-package = "eval"
+package = "project"
 path = ["dependency_ordered", "tests"]
 role = "contracts"
 
 [[module]]
-package = "eval"
+package = "project"
 path = ["graph_ir"]
 role = "contracts"
 
 [[module]]
-package = "eval"
+package = "project"
 path = ["graph_ir", "dot"]
 role = "facade"
 
 [[module]]
-package = "eval"
+package = "project"
 path = ["graph_ir", "dot", "tests"]
 role = "facade"
 
 [[module]]
-package = "eval"
+package = "project"
 path = ["graph_ir", "tests"]
 role = "contracts"
 
@@ -2238,97 +2233,97 @@ path = ["host_fns", "tests"]
 role = "interpreter"
 
 [[module]]
-package = "eval"
+package = "project"
 path = ["import_surface"]
 role = "checking"
 
 [[module]]
-package = "eval"
+package = "project"
 path = ["import_surface", "tests"]
 role = "checking"
 
 [[module]]
-package = "eval"
+package = "project"
 path = ["inline_dag"]
 role = "checking"
 
 [[module]]
-package = "eval"
+package = "project"
 path = ["loader"]
 role = "loading"
 
 [[module]]
-package = "eval"
+package = "project"
 path = ["loader", "inline_dags"]
 role = "checking"
 
 [[module]]
-package = "eval"
+package = "project"
 path = ["loader", "tests"]
 role = "loading"
 
 [[module]]
-package = "eval"
+package = "project"
 path = ["loader", "build"]
 role = "loading"
 
 [[module]]
-package = "eval"
+package = "project"
 path = ["loader", "build", "tests"]
 role = "loading"
 
 [[module]]
-package = "eval"
+package = "project"
 path = ["loader", "source_authority"]
 role = "loading"
 
 [[module]]
-package = "eval"
+package = "project"
 path = ["loader", "source_snapshot"]
 role = "loading"
 
 [[module]]
-package = "eval"
+package = "project"
 path = ["package_cache"]
 role = "loading"
 
 [[module]]
-package = "eval"
+package = "project"
 path = ["package_snapshot"]
 role = "loading"
 
 [[module]]
-package = "eval"
+package = "project"
 path = ["package_snapshot", "tests"]
 role = "loading"
 
 [[module]]
-package = "eval"
+package = "project"
 path = ["project_bundle"]
 role = "loading"
 
 [[module]]
-package = "eval"
+package = "project"
 path = ["project_bundle", "package_identity"]
 role = "loading"
 
 [[module]]
-package = "eval"
+package = "project"
 path = ["package_sources"]
 role = "loading"
 
 [[module]]
-package = "eval"
+package = "project"
 path = ["project_bundle", "binary"]
 role = "loading"
 
 [[module]]
-package = "eval"
+package = "project"
 path = ["project_bundle", "tests"]
 role = "loading"
 
 [[module]]
-package = "eval"
+package = "project"
 path = ["package_cache", "tests"]
 role = "loading"
 
@@ -2350,8 +2345,8 @@ path = ["eval_expr", "presentation"]
 role = "interpreter"
 
 [[module]]
-package = "eval"
-path = ["eval", "tests", "presentation_evidence"]
+package = "project"
+path = ["tests", "presentation_evidence"]
 role = "facade"
 
 [[module]]
@@ -2365,83 +2360,83 @@ path = ["pipeline_metrics", "observer"]
 role = "contracts"
 
 [[module]]
-package = "eval"
+package = "project"
 path = ["project_compiler"]
 role = "checking"
 
 [[module]]
-package = "eval"
+package = "project"
 path = ["project_compiler", "checking"]
 role = "checking"
 
 [[module]]
-package = "eval"
+package = "project"
 path = ["project_compiler", "entry_interface"]
 role = "checking"
 
 [[module]]
 package = "eval"
-path = ["project_compiler", "execution_check"]
+path = ["execution_check"]
 role = "checking"
 
 [[module]]
 package = "eval"
-path = ["project_compiler", "execution_check", "const_eval"]
+path = ["execution_check", "const_eval"]
 role = "checking"
 
 [[module]]
 package = "eval"
-path = ["project_compiler", "execution_check", "domain_resolve"]
+path = ["execution_check", "domain_resolve"]
 role = "checking"
 
 [[module]]
-package = "eval"
+package = "project"
 path = ["project_compiler", "generic_leakage"]
 role = "checking"
 
 [[module]]
-package = "eval"
+package = "project"
 path = ["project_compiler", "generic_leakage", "tests"]
 role = "checking"
 
 [[module]]
-package = "eval"
+package = "project"
 path = ["project_compiler", "hir_project"]
 role = "checking"
 
 [[module]]
-package = "eval"
+package = "project"
 path = ["project_compiler", "imports"]
 role = "checking"
 
 [[module]]
-package = "eval"
+package = "project"
 path = ["project_compiler", "imports", "tests"]
 role = "checking"
 
 [[module]]
-package = "eval"
+package = "project"
 path = ["project_compiler", "lowering"]
 role = "checking"
 
 [[module]]
-package = "eval"
+package = "project"
 # Shared checking data; producer reach-through must not grow unnoticed.
 path = ["project_compiler", "model"]
 role = "contracts"
 
 [[module]]
-package = "eval"
+package = "project"
 path = ["project_compiler", "pipeline"]
 role = "checking"
 
 [[module]]
-package = "eval"
+package = "project"
 path = ["project_compiler", "session"]
 role = "checking"
 
 [[module]]
-package = "eval"
+package = "project"
 path = ["project_compiler", "template"]
 role = "checking"
 
@@ -2537,30 +2532,80 @@ role = "contracts"
 
 [[module]]
 package = "eval"
+path = ["test_tir"]
+role = "checking"
+
+[[module]]
+package = "project"
+path = []
+role = "facade"
+
+[[module]]
+package = "project"
+path = ["compile_error"]
+role = "contracts"
+
+[[module]]
+package = "project"
+path = ["tests", "exec_plan"]
+role = "facade"
+
+[[module]]
+package = "project"
+path = ["tests", "plots"]
+role = "facade"
+
+[[module]]
+package = "project"
+path = ["tests", "runtime_clones"]
+role = "facade"
+
+[[module]]
+package = "project"
 path = ["loader", "budget"]
 role = "loading"
 
 [[module]]
-package = "eval"
+package = "project"
 path = ["loader", "loaded_file"]
 role = "contracts"
 
 [[module]]
-package = "eval"
+package = "project"
 path = ["loader", "module_path"]
 role = "contracts"
 
 [[module]]
-package = "eval"
+package = "project"
 path = ["project_compiler", "binding_values"]
 role = "checking"
 
 [[module]]
-package = "eval"
+package = "project"
 path = ["project_compiler", "checked_project"]
 role = "checking"
 
 [[module]]
-package = "eval"
+package = "project"
 path = ["project_compiler", "module_resolve_errors"]
 role = "checking"
+
+[[module]]
+package = "eval"
+path = ["eval", "runtime", "declaration_body"]
+role = "facade"
+
+[[module]]
+package = "eval"
+path = ["eval", "runtime", "dependency_failures"]
+role = "facade"
+
+[[module]]
+package = "eval"
+path = ["eval", "runtime", "evaluated_root"]
+role = "facade"
+
+[[module]]
+package = "eval"
+path = ["eval", "runtime", "root_loop"]
+role = "facade"

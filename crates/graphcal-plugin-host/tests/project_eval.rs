@@ -11,15 +11,16 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use graphcal_compiler::graphcal_error::GraphcalError;
-use graphcal_eval::eval::{CompileError, EvalResult, Value};
+use graphcal_eval::eval::{EvalResult, Value};
 use graphcal_eval::host_fns::HostFunctionRegistry;
-use graphcal_eval::loader::{LoadedProject, load_project};
 use graphcal_io::RealFileSystem;
 use graphcal_plugin_abi::{
     ManifestArrayElementKind, ManifestFunction, ManifestMonomial, ManifestParam, ManifestParamKind,
     ManifestRational, ManifestResultKind, ManifestVarPower, PluginManifest,
 };
 use graphcal_plugin_host::{PluginHost, register_project_plugins};
+use graphcal_project::compile_error::CompileError;
+use graphcal_project::loader::{LoadedProject, load_project};
 
 fn quantity_var(var: &str, num: i32, den: i32) -> ManifestParamKind {
     ManifestParamKind::Quantity(ManifestMonomial {
@@ -128,7 +129,7 @@ fn eval_project_with_plugin(
     let project = load_project(&root, None, &fs)?;
     let mut registry = HostFunctionRegistry::new();
     register_project_plugins(&PluginHost::new(), &project, &mut registry);
-    graphcal_eval::eval::ProjectCompiler::new(&project)
+    graphcal_project::project_compiler::ProjectCompiler::new(&project)
         .host_fns(&registry)
         .eval(&HashMap::new())
 }
@@ -245,7 +246,7 @@ node x: Dimensionless = 1.0;
     let project = load_project(&root, None, &fs).unwrap();
     let mut registry = HostFunctionRegistry::new();
     register_project_plugins(&PluginHost::new(), &project, &mut registry);
-    let err = graphcal_eval::eval::ProjectCompiler::new(&project)
+    let err = graphcal_project::project_compiler::ProjectCompiler::new(&project)
         .host_fns(&registry)
         .check()
         .unwrap_err();
@@ -393,7 +394,7 @@ node y: Dimensionless = @inner()::a;
     let fs = RealFileSystem::default();
     let project = load_project(&root, None, &fs).unwrap();
     let registry = graphcal_eval::host_fns::demo_registry();
-    let result = graphcal_eval::eval::ProjectCompiler::new(&project)
+    let result = graphcal_project::project_compiler::ProjectCompiler::new(&project)
         .host_fns(&registry)
         .eval(&HashMap::new())
         .unwrap();
@@ -422,7 +423,7 @@ fn from_source_projects_report_missing_filesystem() {
     let source = format!("{LERP_IMPORT}\nnode x: Dimensionless = demo::lerp(0.0, 1.0, 0.5);\n");
     let project = LoadedProject::from_source(&source, "buffer.gcl").unwrap();
     let registry = HostFunctionRegistry::new();
-    let err = graphcal_eval::eval::ProjectCompiler::new(&project)
+    let err = graphcal_project::project_compiler::ProjectCompiler::new(&project)
         .host_fns(&registry)
         .eval(&HashMap::new())
         .unwrap_err();
@@ -531,7 +532,7 @@ fn eval_package_project(
     let project = load_project(&root, None, &fs)?;
     let mut registry = HostFunctionRegistry::new();
     register_project_plugins(&PluginHost::new(), &project, &mut registry);
-    graphcal_eval::eval::ProjectCompiler::new(&project)
+    graphcal_project::project_compiler::ProjectCompiler::new(&project)
         .host_fns(&registry)
         .eval(&HashMap::new())
 }
@@ -649,7 +650,7 @@ node result: Dimensionless = worker::work(7.0);
         graphcal_plugin_host::PluginLimits::default().with_fuel_per_call(100),
     );
     register_project_plugins(&host, &project, &mut registry);
-    let result = graphcal_eval::eval::ProjectCompiler::new(&project)
+    let result = graphcal_project::project_compiler::ProjectCompiler::new(&project)
         .host_fns(&registry)
         .eval(&HashMap::new())
         .unwrap();
@@ -735,7 +736,7 @@ node b: Length = wasm::lerp(1.0 m, 3.0 m, 0.5);
     let project = load_project(&root, None, &fs).unwrap();
     let mut registry = graphcal_eval::host_fns::demo_registry();
     register_project_plugins(&PluginHost::new(), &project, &mut registry);
-    let result = graphcal_eval::eval::ProjectCompiler::new(&project)
+    let result = graphcal_project::project_compiler::ProjectCompiler::new(&project)
         .host_fns(&registry)
         .eval(&HashMap::new())
         .unwrap();

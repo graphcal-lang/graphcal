@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use graphcal_compiler::cancellation::{CancellationSource, CancellationToken};
 use graphcal_compiler::outcome::Outcome;
-use graphcal_eval::loader::LoaderArtifactByteLimits;
+use graphcal_project::loader::LoaderArtifactByteLimits;
 use tokio::sync::Semaphore;
 use tower_lsp::lsp_types::TextEdit;
 

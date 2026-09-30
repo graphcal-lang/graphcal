@@ -1,7 +1,7 @@
 //! Closed-value bindings at the browser transport boundary.
 
 use graphcal_compiler::syntax::decl_name::DeclName;
-use graphcal_eval::eval::{StructuredBindingPathSegment, StructuredValueExpr};
+use graphcal_project::prepare::{StructuredBindingPathSegment, StructuredValueExpr};
 use serde::{Deserialize, Serialize};
 
 /// Maximum UTF-8 size of one binding expression string.
@@ -64,7 +64,7 @@ impl BrowserBindingRequest {
 }
 
 pub fn bind_one(
-    builder: &mut graphcal_eval::eval::ParameterBindingBuilder<'_>,
+    builder: &mut graphcal_project::prepare::ParameterBindingBuilder<'_>,
     binding: &BindingRequest,
 ) -> Result<(), String> {
     if binding.expr.len() > MAX_BINDING_EXPR_BYTES {
@@ -104,7 +104,7 @@ fn root_binding_error(message: impl Into<String>) -> BrowserBindingError {
 }
 
 pub fn bind_browser_one(
-    builder: &mut graphcal_eval::eval::ParameterBindingBuilder<'_>,
+    builder: &mut graphcal_project::prepare::ParameterBindingBuilder<'_>,
     binding: &BrowserBindingRequest,
 ) -> Result<(), BrowserBindingError> {
     match binding {

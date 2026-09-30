@@ -12,12 +12,14 @@
 //! worker teardown — terminate the worker and prepare a fresh instance, the
 //! same contract the playground already uses.
 
-use graphcal_eval::eval::{
-    EvalResult, ModelIndexKind, ModelIndexSchema, ModelSchemaGraph, ModelValueSchema,
-    ParameterDomain, ParameterPort, PreparedProject, ProjectCompiler,
-};
+use graphcal_eval::eval::EvalResult;
 use graphcal_eval::host_fns::demo_registry;
-use graphcal_eval::loader::{LoaderBudget, load_project_with_dependency_sources};
+use graphcal_project::loader::{LoaderBudget, load_project_with_dependency_sources};
+use graphcal_project::prepare::{
+    ModelIndexKind, ModelIndexSchema, ModelSchemaGraph, ModelValueSchema, ParameterDomain,
+    ParameterPort, PreparedProject,
+};
+use graphcal_project::project_compiler::ProjectCompiler;
 use serde::Serialize;
 
 use crate::PlaygroundRequest;
@@ -66,7 +68,7 @@ pub fn prepare(request: PlaygroundRequest) -> PrepareOutcome {
 
 /// Prepare an offline report snapshot, including sandboxed Wasm plugins.
 #[must_use]
-pub fn prepare_bundle(bundle: &graphcal_eval::project_bundle::ProjectBundle) -> PrepareOutcome {
+pub fn prepare_bundle(bundle: &graphcal_project::project_bundle::ProjectBundle) -> PrepareOutcome {
     match VirtualProject::from_bundle(bundle) {
         Ok(project) => prepare_virtual(&project, BrowserCapabilities::BundledPlugins),
         Err(error) => PrepareOutcome::Rejected {

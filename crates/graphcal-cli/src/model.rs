@@ -3,8 +3,10 @@
 use std::path::Path;
 
 use graphcal_compiler::syntax::decl_name::DeclName;
-use graphcal_eval::eval::{CompileError, ModelDefinitionError, ProjectCompiler};
-use graphcal_eval::loader::{build_rooted_filesystem, load_project};
+use graphcal_project::compile_error::CompileError;
+use graphcal_project::loader::{build_rooted_filesystem, load_project};
+use graphcal_project::prepare::ModelDefinitionError;
+use graphcal_project::project_compiler::ProjectCompiler;
 use thiserror::Error;
 
 /// Prepare and serve one Graphcal/Tenax model.

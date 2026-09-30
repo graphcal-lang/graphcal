@@ -123,7 +123,8 @@ pub struct PlannedDeclaration<'p> {
 
 impl<'p> PlannedDeclaration<'p> {
     /// Plan one declaration of `scope`.
-    pub(crate) const fn new(
+    #[must_use]
+    pub const fn new(
         key: &'p ResolvedDeclName,
         scope: SealedDag<'p>,
         body: PlannedBody<'p>,
@@ -215,14 +216,14 @@ impl<'p> Step<'p> {
 
 #[derive(Debug)]
 pub struct PreparedConstantImport {
-    pub(crate) destination: ResolvedDeclName,
-    pub(crate) value: ConstantReference,
+    pub destination: ResolvedDeclName,
+    pub value: ConstantReference,
 }
 
 #[derive(Debug, Default)]
 pub struct PreparedImports {
-    pub(crate) constants: Vec<PreparedConstantImport>,
-    pub(crate) runtime: Vec<ResolvedDeclName>,
+    pub constants: Vec<PreparedConstantImport>,
+    pub runtime: Vec<ResolvedDeclName>,
 }
 
 /// Why a callable's steps could not be indexed.
@@ -262,7 +263,7 @@ impl<'p> PlannedInstance<'p> {
     ///
     /// Returns [`PlannedInstanceError`] when `scope` is not the instance's
     /// own DAG.
-    pub(crate) fn try_new(
+    pub fn try_new(
         instance: CheckedInstance<'p>,
         scope: SealedDag<'p>,
     ) -> Result<Self, PlannedInstanceError> {
@@ -309,7 +310,7 @@ impl<'p> CallablePlan<'p> {
     ///
     /// Returns a [`StepIndexError`] when a declaration is scheduled twice or
     /// before a scheduled declaration it reads.
-    pub(crate) fn new(
+    pub fn new(
         scope: SealedDag<'p>,
         execution_dags: Vec<SealedDag<'p>>,
         instances: Vec<PlannedInstance<'p>>,
@@ -482,12 +483,14 @@ impl<'p> ExecPlan<'p> {
     }
 
     /// The sealed program this plan executes.
-    pub(crate) const fn program(&self) -> &'p CheckedProgram {
+    #[must_use]
+    pub const fn program(&self) -> &'p CheckedProgram {
         self.program
     }
 
     /// The checked TIR this plan executes.
-    pub(crate) const fn tir(&self) -> &'p graphcal_compiler::tir::typed::checked::CheckedTir {
+    #[must_use]
+    pub const fn tir(&self) -> &'p graphcal_compiler::tir::typed::checked::CheckedTir {
         self.program.tir()
     }
 
@@ -497,28 +500,32 @@ impl<'p> ExecPlan<'p> {
     }
 
     /// The root DAG's callable.
-    pub(crate) fn root(&self) -> &CallablePlan<'p> {
+    #[must_use]
+    pub fn root(&self) -> &CallablePlan<'p> {
         &self.callables[self.root]
     }
 
     /// Every callable, the root first.
-    #[cfg(test)]
-    pub(crate) fn callables(&self) -> impl Iterator<Item = &CallablePlan<'p>> {
+    #[cfg(any(test, feature = "test-internals"))]
+    pub fn callables(&self) -> impl Iterator<Item = &CallablePlan<'p>> {
         self.callables.iter()
     }
 
     /// The callable of an inline-call target.
-    pub(crate) fn callable(&self, owner: &DagId) -> Option<&CallablePlan<'p>> {
+    #[must_use]
+    pub fn callable(&self, owner: &DagId) -> Option<&CallablePlan<'p>> {
         self.by_dag.get(owner).map(|index| &self.callables[*index])
     }
 
     /// Any value declaration of the program.
-    pub(crate) fn declaration(&self, key: &ResolvedDeclName) -> Option<&PlannedDeclaration<'p>> {
+    #[must_use]
+    pub fn declaration(&self, key: &ResolvedDeclName) -> Option<&PlannedDeclaration<'p>> {
         self.declarations.get(key)
     }
 
     /// The resolved domain constraint of a value declaration, if it has one.
-    pub(crate) fn domain_constraint(
+    #[must_use]
+    pub fn domain_constraint(
         &self,
         key: &ResolvedDeclName,
     ) -> Option<&'p ResolvedDomainConstraint> {

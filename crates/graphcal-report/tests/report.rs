@@ -4,8 +4,8 @@
 
 use std::collections::HashMap;
 
-use graphcal_eval::eval::compile_and_eval_from_project;
-use graphcal_eval::loader::LoadedProject;
+use graphcal_project::loader::LoadedProject;
+use graphcal_project::prepare::compile_and_eval_from_project;
 use graphcal_report::plot_page::VegaScriptSource;
 use graphcal_report::report_html::render_report_html;
 use graphcal_report::report_ir::{
@@ -287,7 +287,7 @@ assert bad_is_finite = @bad < 10.0;
 
 #[test]
 fn hydrated_page_embeds_payload_and_keeps_static_baseline() {
-    use graphcal_eval::project_bundle::{ArtifactContent, BundleArtifact, ProjectBundle};
+    use graphcal_project::project_bundle::{ArtifactContent, BundleArtifact, ProjectBundle};
     use graphcal_report::report_hydrate::{EngineBundle, Hydration};
 
     let document = build_document(DELTA_V);

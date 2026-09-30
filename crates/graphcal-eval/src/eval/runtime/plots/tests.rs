@@ -25,7 +25,7 @@ fn root_unit<'t>(
 #[test]
 fn plot_properties_preserve_cancellation_classification() {
     let source = "plot measurement = { mark: line { stroke_width: 2.0 }, encode: { x: 1.0, y: 2.0 }, width: 100.0 };";
-    let tir = crate::eval::compile_to_tir(source, "plot_property.gcl").unwrap();
+    let tir = crate::test_tir::checked_tir_from_source(source).unwrap().0;
     let src = NamedSource::new("plot_property.gcl", Arc::new(source.to_owned()));
     let unit = root_unit(&tir, tir.root().plots().next().unwrap().name(), &src);
     let plot = unit.plot().unwrap();
@@ -78,7 +78,7 @@ fn internal_errors_abort_plot_evaluation() {
 #[test]
 fn composition_properties_preserve_cancellation_classification() {
     let source = "plot curve = { mark: line { stroke_width: 2.0 }, encode: { x: 1.0, y: 2.0 } }; figure comparison = { plots: [curve], title: \"Comparison\" }; layer overlay = { plots: [curve], title: \"Overlay\", width: 400.0 };";
-    let tir = crate::eval::compile_to_tir(source, "composition.gcl").unwrap();
+    let tir = crate::test_tir::checked_tir_from_source(source).unwrap().0;
     let src = NamedSource::new("composition.gcl", Arc::new(source.to_owned()));
     let values = RuntimeValueMap::new();
     let cancellation = graphcal_compiler::cancellation::CancellationSource::new();
@@ -111,14 +111,4 @@ fn composition_properties_preserve_cancellation_classification() {
             Err(PlotEvaluationError::Fatal(GraphcalError::Cancelled(_)))
         ));
     }
-}
-
-#[test]
-fn ordinary_plot_and_composition_property_failures_remain_contained() {
-    let result = crate::eval::compile_and_eval("node value: Length = 1.0 m; plot good = { mark: line, encode: { x: 1.0, y: 2.0 } }; plot broken = { mark: line { stroke_width: 1.0 / 0.0 }, encode: { x: 1.0, y: 2.0 } }; plot bad_width = { mark: line, encode: { x: 1.0, y: 2.0 }, width: -1.0 }; figure comparison = { plots: [good], title: \"Valid\" }; layer overlay = { plots: [good], width: 1.0 / 0.0 };").unwrap();
-    assert!(result.nodes().next().unwrap().1.is_ok());
-    assert_eq!(result.plots.len(), 1);
-    assert_eq!(result.figures.len(), 1);
-    assert_eq!(result.plot_errors.len(), 3);
-    assert!(result.presentation_diagnostics.is_empty());
 }

@@ -1,0 +1,1455 @@
+//! Tests for error rendering snapshots.
+#![cfg(test)]
+
+use graphcal_eval::eval::NodeUnavailable;
+use graphcal_project::prepare::compile_and_eval_named;
+use miette::{Diagnostic, NarratableReportHandler};
+
+/// Compile the given source and return the rendered error string.
+/// Uses miette's `NarratableReportHandler` for deterministic output.
+fn render_error(source: &str, name: &str) -> String {
+    let err = compile_and_eval_named(source, name).unwrap_err();
+    let diagnostic: &dyn Diagnostic = &err;
+    let mut buf = String::new();
+    NarratableReportHandler::new()
+        .render_report(&mut buf, diagnostic)
+        .unwrap();
+    buf
+}
+
+/// Compile the given source and return the per-node error message for a specific node.
+/// Used for runtime errors that are now contained per-node.
+fn render_node_error(source: &str, name: &str, node_name: &str) -> String {
+    let result = compile_and_eval_named(source, name).unwrap();
+    let (_, node_result, _) = result
+        .entries
+        .iter()
+        .find(|(n, _, _)| n.to_string() == node_name)
+        .unwrap_or_else(|| panic!("node `{node_name}` not found"));
+    match node_result {
+        Err(NodeUnavailable::EvalFailed { message }) => message.clone(),
+        Err(other) => panic!("expected EvalFailed, got {other}"),
+        Ok(val) => panic!("expected error for `{node_name}`, got {val:?}"),
+    }
+}
+
+fn render_presentation_error(source: &str, name: &str, expected_si: f64) -> String {
+    let result = compile_and_eval_named(source, name).unwrap();
+    let value = result
+        .nodes()
+        .find(|(name, _)| name.to_string() == "bad")
+        .unwrap()
+        .1
+        .as_ref()
+        .unwrap();
+    assert_eq!(
+        value.si_value().unwrap().get().to_bits(),
+        expected_si.to_bits()
+    );
+    assert!(result.has_errors());
+    assert!(!result.presentation_diagnostics.is_empty());
+    result
+        .presentation_diagnostics
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+#[test]
+fn error_duplicate_name() {
+    let source = include_str!("../../../tests/fixtures/invalid/duplicate.gcl");
+    let rendered = render_error(source, "duplicate.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_cross_universe_name_collision() {
+    let source = include_str!("../../../tests/fixtures/invalid/cross_universe_name_collision.gcl");
+    let rendered = render_error(source, "cross_universe_name_collision.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_unknown_graph_ref() {
+    let source = include_str!("../../../tests/fixtures/invalid/unknown_ref.gcl");
+    let rendered = render_error(source, "unknown_ref.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_unknown_const_ref() {
+    let source = include_str!("../../../tests/fixtures/invalid/unknown_const_ref.gcl");
+    let rendered = render_error(source, "unknown_const_ref.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_bare_graph_declaration_ref() {
+    let source = include_str!("../../../tests/fixtures/invalid/bare_graph_declaration_ref.gcl");
+    let rendered = render_error(source, "bare_graph_declaration_ref.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_at_in_const() {
+    let source = include_str!("../../../tests/fixtures/invalid/at_in_const.gcl");
+    let rendered = render_error(source, "at_in_const.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_const_unit_graph_ref() {
+    let source = include_str!("../../../tests/fixtures/invalid/const_unit_graph_ref.gcl");
+    let rendered = render_error(source, "const_unit_graph_ref.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_dynamic_unit_scale_type() {
+    let source = include_str!("../../../tests/fixtures/invalid/dynamic_unit_scale_type.gcl");
+    let rendered = render_error(source, "dynamic_unit_scale_type.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_const_node_runtime_unit() {
+    let source = include_str!("../../../tests/fixtures/invalid/const_node_runtime_unit.gcl");
+    let rendered = render_error(source, "const_node_runtime_unit.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_runtime_cycle() {
+    let source = include_str!("../../../tests/fixtures/invalid/cycle.gcl");
+    let rendered = render_error(source, "cycle.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_const_cycle() {
+    let source = include_str!("../../../tests/fixtures/invalid/const_cycle.gcl");
+    let rendered = render_error(source, "const_cycle.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_unknown_function() {
+    let source = include_str!("../../../tests/fixtures/invalid/unknown_function.gcl");
+    let rendered = render_error(source, "unknown_function.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_named_arguments_on_builtin() {
+    let source = include_str!("../../../tests/fixtures/invalid/named_arguments_on_builtin.gcl");
+    let rendered = render_error(source, "named_arguments_on_builtin.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_named_arguments_on_extern() {
+    let source = include_str!("../../../tests/fixtures/invalid/named_arguments_on_extern.gcl");
+    let rendered = render_error(source, "named_arguments_on_extern.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_wrong_arity() {
+    let source = include_str!("../../../tests/fixtures/invalid/wrong_arity.gcl");
+    let rendered = render_error(source, "wrong_arity.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_count_multi_axis() {
+    let source = include_str!("../../../tests/fixtures/invalid/count_multi_axis.gcl");
+    let rendered = render_error(source, "count_multi_axis.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_scan_multi_axis_source() {
+    let source = include_str!("../../../tests/fixtures/invalid/scan_multi_axis_source.gcl");
+    let rendered = render_error(source, "scan_multi_axis_source.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_det_abstract_axis() {
+    let source = include_str!("../../../tests/fixtures/invalid/det_abstract_axis.gcl");
+    let rendered = render_error(source, "det_abstract_axis.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_product_abstract_axis() {
+    let source = include_str!("../../../tests/fixtures/invalid/product_abstract_axis.gcl");
+    let rendered = render_error(source, "product_abstract_axis.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_dim_mismatch_add() {
+    let source = include_str!("../../../tests/fixtures/invalid/dim_mismatch_add.gcl");
+    let rendered = render_error(source, "dim_mismatch_add.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_dim_mismatch_annotation() {
+    let source = include_str!("../../../tests/fixtures/invalid/dim_mismatch_annotation.gcl");
+    let rendered = render_error(source, "dim_mismatch_annotation.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_exp_requires_dimensionless() {
+    let source = include_str!("../../../tests/fixtures/invalid/exp_requires_dimensionless.gcl");
+    let rendered = render_error(source, "exp_requires_dimensionless.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_key_missing_index_argument() {
+    let source = include_str!("../../../tests/fixtures/invalid/key_missing_index_argument.gcl");
+    let rendered = render_error(source, "key_missing_index_argument.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_key_non_index_argument() {
+    let source = include_str!("../../../tests/fixtures/invalid/key_non_index_argument.gcl");
+    let rendered = render_error(source, "key_non_index_argument.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_key_cross_axis_assignment() {
+    let source = include_str!("../../../tests/fixtures/invalid/key_cross_axis_assignment.gcl");
+    let rendered = render_error(source, "key_cross_axis_assignment.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_key_equality_cross_axis() {
+    let source = include_str!("../../../tests/fixtures/invalid/key_equality_cross_axis.gcl");
+    let rendered = render_error(source, "key_equality_cross_axis.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_key_match_fin_axis() {
+    let source = include_str!("../../../tests/fixtures/invalid/key_match_fin_axis.gcl");
+    let rendered = render_error(source, "key_match_fin_axis.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_key_coord_on_named() {
+    let source = include_str!("../../../tests/fixtures/invalid/key_coord_on_named.gcl");
+    let rendered = render_error(source, "key_coord_on_named.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_key_to_int_on_named() {
+    let source = include_str!("../../../tests/fixtures/invalid/key_to_int_on_named.gcl");
+    let rendered = render_error(source, "key_to_int_on_named.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_key_index_cross_axis() {
+    let source = include_str!("../../../tests/fixtures/invalid/key_index_cross_axis.gcl");
+    let rendered = render_error(source, "key_index_cross_axis.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_key_static_out_of_bounds() {
+    let source = include_str!("../../../tests/fixtures/invalid/key_static_out_of_bounds.gcl");
+    let rendered = render_error(source, "key_static_out_of_bounds.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_key_static_runtime_position() {
+    let source = include_str!("../../../tests/fixtures/invalid/key_static_runtime_position.gcl");
+    let rendered = render_error(source, "key_static_runtime_position.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_fin_key_non_fin_axis() {
+    let source = include_str!("../../../tests/fixtures/invalid/fin_key_non_fin_axis.gcl");
+    let rendered = render_error(source, "fin_key_non_fin_axis.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_nearest_key_wrong_dimension() {
+    let source = include_str!("../../../tests/fixtures/invalid/nearest_key_wrong_dimension.gcl");
+    let rendered = render_error(source, "nearest_key_wrong_dimension.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_fin_key_out_of_bounds() {
+    let source = include_str!("../../../tests/fixtures/runtime_error/fin_key_out_of_bounds.gcl");
+    let rendered = render_node_error(source, "fin_key_out_of_bounds.gcl", "k");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_floor_key_below_range() {
+    let source = include_str!("../../../tests/fixtures/runtime_error/floor_key_below_range.gcl");
+    let rendered = render_node_error(source, "floor_key_below_range.gcl", "k");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_key_subtraction() {
+    let source = include_str!("../../../tests/fixtures/invalid/key_subtraction.gcl");
+    let rendered = render_error(source, "key_subtraction.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_key_runtime_addend() {
+    let source = include_str!("../../../tests/fixtures/invalid/key_runtime_addend.gcl");
+    let rendered = render_error(source, "key_runtime_addend.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_complex_aggregation_unsupported() {
+    let source =
+        include_str!("../../../tests/fixtures/invalid/complex_aggregation_unsupported.gcl");
+    let rendered = render_error(source, "complex_aggregation_unsupported.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_complex_component_dimension_mismatch() {
+    let source =
+        include_str!("../../../tests/fixtures/invalid/complex_component_dimension_mismatch.gcl");
+    let rendered = render_error(source, "complex_component_dimension_mismatch.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_complex_mixed_add_requires_conversion() {
+    let source =
+        include_str!("../../../tests/fixtures/invalid/complex_mixed_add_requires_conversion.gcl");
+    let rendered = render_error(source, "complex_mixed_add_requires_conversion.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_complex_is_unordered() {
+    let source = include_str!("../../../tests/fixtures/invalid/complex_is_unordered.gcl");
+    let rendered = render_error(source, "complex_is_unordered.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_complex_exp_requires_dimensionless() {
+    let source =
+        include_str!("../../../tests/fixtures/invalid/complex_exp_requires_dimensionless.gcl");
+    let rendered = render_error(source, "complex_exp_requires_dimensionless.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_complex_invalid_dimension_arg() {
+    let source = include_str!("../../../tests/fixtures/invalid/complex_invalid_dimension_arg.gcl");
+    let rendered = render_error(source, "complex_invalid_dimension_arg.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_complex_unit_is_not_dimension() {
+    let source = include_str!("../../../tests/fixtures/invalid/complex_unit_is_not_dimension.gcl");
+    let rendered = render_error(source, "complex_unit_is_not_dimension.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_complex_requires_dimension_arg() {
+    let source = include_str!("../../../tests/fixtures/invalid/complex_requires_dimension_arg.gcl");
+    let rendered = render_error(source, "complex_requires_dimension_arg.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_complex_domain_constraint() {
+    let source = include_str!("../../../tests/fixtures/invalid/complex_domain_constraint.gcl");
+    let rendered = render_error(source, "complex_domain_constraint.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_complex_extern_unsupported() {
+    let source = include_str!("../../../tests/fixtures/invalid/complex_extern_unsupported.gcl");
+    let rendered = render_error(source, "complex_extern_unsupported.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_rounding_requires_dimensionless() {
+    let source =
+        include_str!("../../../tests/fixtures/invalid/rounding_requires_dimensionless.gcl");
+    let rendered = render_error(source, "rounding_requires_dimensionless.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_unknown_unit() {
+    let source = include_str!("../../../tests/fixtures/invalid/unknown_unit.gcl");
+    let rendered = render_error(source, "unknown_unit.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_conversion_dim_mismatch() {
+    let source = include_str!("../../../tests/fixtures/invalid/conversion_dim_mismatch.gcl");
+    let rendered = render_error(source, "conversion_dim_mismatch.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_conversion_dim_mismatch_alias() {
+    let source = include_str!("../../../tests/fixtures/invalid/conversion_dim_mismatch_alias.gcl");
+    let rendered = render_error(source, "conversion_dim_mismatch_alias.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_arrow_chain_paren() {
+    let source = include_str!("../../../tests/fixtures/invalid/arrow_chain_paren.gcl");
+    let rendered = render_error(source, "arrow_chain_paren.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_unit_zero_exponent() {
+    let source = include_str!("../../../tests/fixtures/invalid/unit_zero_exponent.gcl");
+    let rendered = render_error(source, "unit_zero_exponent.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_convert_in_arithmetic() {
+    let source = include_str!("../../../tests/fixtures/invalid/convert_in_arithmetic.gcl");
+    let rendered = render_error(source, "convert_in_arithmetic.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_convert_in_assert() {
+    let source = include_str!("../../../tests/fixtures/invalid/convert_in_assert.gcl");
+    let rendered = render_error(source, "convert_in_assert.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_base_unit_duplicate() {
+    let source = include_str!("../../../tests/fixtures/invalid/base_unit_duplicate.gcl");
+    let rendered = render_error(source, "base_unit_duplicate.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_base_unit_prelude_dimension() {
+    let source = include_str!("../../../tests/fixtures/invalid/base_unit_prelude_dimension.gcl");
+    let rendered = render_error(source, "base_unit_prelude_dimension.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_base_unit_derived_dimension() {
+    let source = include_str!("../../../tests/fixtures/invalid/base_unit_derived_dimension.gcl");
+    let rendered = render_error(source, "base_unit_derived_dimension.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_base_unit_affine_temperature() {
+    let source = include_str!("../../../tests/fixtures/invalid/base_unit_affine_temperature.gcl");
+    let rendered = render_error(source, "base_unit_affine_temperature.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_affine_temperature_unit() {
+    let source = include_str!("../../../tests/fixtures/invalid/affine_temperature_unit.gcl");
+    let rendered = render_error(source, "affine_temperature_unit.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_convert_int_source() {
+    let source = include_str!("../../../tests/fixtures/invalid/convert_int_source.gcl");
+    let rendered = render_error(source, "convert_int_source.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_unknown_struct_field() {
+    let source = include_str!("../../../tests/fixtures/invalid/unknown_struct_field.gcl");
+    let rendered = render_error(source, "unknown_struct_field.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_struct_field_dim_mismatch() {
+    let source = include_str!("../../../tests/fixtures/invalid/struct_field_dim_mismatch.gcl");
+    let rendered = render_error(source, "struct_field_dim_mismatch.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_missing_struct_field() {
+    let source = include_str!("../../../tests/fixtures/invalid/missing_struct_field.gcl");
+    let rendered = render_error(source, "missing_struct_field.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_match_pattern_missing_fields() {
+    let source = include_str!("../../../tests/fixtures/invalid/match_pattern_missing_fields.gcl");
+    let rendered = render_error(source, "match_pattern_missing_fields.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_match_pattern_empty_fields() {
+    let source = include_str!("../../../tests/fixtures/invalid/match_pattern_empty_fields.gcl");
+    let rendered = render_error(source, "match_pattern_empty_fields.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_match_pattern_no_fields() {
+    let source = include_str!("../../../tests/fixtures/invalid/match_pattern_no_fields.gcl");
+    let rendered = render_error(source, "match_pattern_no_fields.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_recursive_fn() {
+    let source = include_str!("../../../tests/fixtures/invalid/recursive_fn.gcl");
+    let rendered = render_error(source, "recursive_fn.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_unknown_dimension() {
+    let source = include_str!("../../../tests/fixtures/invalid/unknown_dimension.gcl");
+    let rendered = render_error(source, "unknown_dimension.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_extra_struct_fields() {
+    let source = include_str!("../../../tests/fixtures/invalid/extra_struct_fields.gcl");
+    let rendered = render_error(source, "extra_struct_fields.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_not_a_struct() {
+    let source = include_str!("../../../tests/fixtures/invalid/not_a_struct.gcl");
+    let rendered = render_error(source, "not_a_struct.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_bare_nat_index_position() {
+    let source = include_str!("../../../tests/fixtures/invalid/bare_nat_index_position.gcl");
+    let rendered = render_error(source, "bare_nat_index_position.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_bare_nat_for_binding() {
+    let source = include_str!("../../../tests/fixtures/invalid/bare_nat_for_binding.gcl");
+    let rendered = render_error(source, "bare_nat_for_binding.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_bare_nat_table_axis() {
+    let source = include_str!("../../../tests/fixtures/invalid/bare_nat_table_axis.gcl");
+    let rendered = render_error(source, "bare_nat_table_axis.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_obsolete_structural_range() {
+    let source = include_str!("../../../tests/fixtures/invalid/obsolete_structural_range.gcl");
+    let rendered = render_error(source, "obsolete_structural_range.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_unknown_index() {
+    let source = include_str!("../../../tests/fixtures/invalid/unknown_index.gcl");
+    let rendered = render_error(source, "unknown_index.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_unknown_variant() {
+    let source = include_str!("../../../tests/fixtures/invalid/unknown_variant.gcl");
+    let rendered = render_error(source, "unknown_variant.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_missing_variants() {
+    let source = include_str!("../../../tests/fixtures/invalid/missing_variants.gcl");
+    let rendered = render_error(source, "missing_variants.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_missing_multi_axis_combinations() {
+    let source =
+        include_str!("../../../tests/fixtures/invalid/missing_multi_axis_combinations.gcl");
+    let rendered = render_error(source, "missing_multi_axis_combinations.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_extra_variants() {
+    let source = include_str!("../../../tests/fixtures/invalid/extra_variants.gcl");
+    let rendered = render_error(source, "extra_variants.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_index_mismatch() {
+    let source = include_str!("../../../tests/fixtures/invalid/index_mismatch.gcl");
+    let rendered = render_error(source, "index_mismatch.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_finite_index_constant_index_out_of_bounds() {
+    let source = include_str!(
+        "../../../tests/fixtures/invalid/finite_index_constant_index_out_of_bounds.gcl"
+    );
+    let rendered = render_error(source, "finite_index_constant_index_out_of_bounds.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_ambiguous_bare_index_label() {
+    let source = include_str!("../../../tests/fixtures/invalid/ambiguous_bare_index_label.gcl");
+    let rendered = render_error(source, "ambiguous_bare_index_label.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_prelude_dimension_as_value() {
+    let source = include_str!("../../../tests/fixtures/invalid/prelude_dimension_as_value.gcl");
+    let rendered = render_error(source, "prelude_dimension_as_value.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_index_label_as_type() {
+    let source = include_str!("../../../tests/fixtures/invalid/index_label_as_type.gcl");
+    let rendered = render_error(source, "index_label_as_type.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_non_literal_exponent() {
+    let source = include_str!("../../../tests/fixtures/invalid/non_literal_exponent.gcl");
+    let rendered = render_error(source, "non_literal_exponent.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_float_power_exponent() {
+    let source = include_str!("../../../tests/fixtures/invalid/float_power_exponent.gcl");
+    let rendered = render_error(source, "float_power_exponent.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_boolean_dim_error() {
+    let source = include_str!("../../../tests/fixtures/invalid/boolean_dim_error.gcl");
+    let rendered = render_error(source, "boolean_dim_error.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_convert_target_scale_overflow() {
+    let source =
+        include_str!("../../../tests/fixtures/runtime_error/convert_target_scale_overflow.gcl");
+    let rendered = render_presentation_error(source, "convert_target_scale_overflow.gcl", 1.0);
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_convert_dynamic_target_zero_scale() {
+    let source =
+        include_str!("../../../tests/fixtures/runtime_error/convert_dynamic_target_zero_scale.gcl");
+    let rendered =
+        render_presentation_error(source, "convert_dynamic_target_zero_scale.gcl", 100.0);
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_to_int_non_integer_const() {
+    let source = include_str!("../../../tests/fixtures/invalid/to_int_non_integer_const.gcl");
+    let rendered = render_error(source, "to_int_non_integer_const.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_to_int_non_integer_runtime() {
+    let source = include_str!("../../../tests/fixtures/runtime_error/to_int_non_integer.gcl");
+    let rendered = render_node_error(source, "to_int_non_integer.gcl", "invalid");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_division_by_zero() {
+    let source = include_str!("../../../tests/fixtures/runtime_error/division_by_zero.gcl");
+    let rendered = render_node_error(source, "division_by_zero.gcl", "y");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_complex_division_by_zero() {
+    let source = include_str!("../../../tests/fixtures/runtime_error/complex_division_by_zero.gcl");
+    let rendered = render_node_error(source, "complex_division_by_zero.gcl", "invalid");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_complex_polar_negative_magnitude() {
+    let source =
+        include_str!("../../../tests/fixtures/runtime_error/complex_polar_negative_magnitude.gcl");
+    let rendered = render_node_error(source, "complex_polar_negative_magnitude.gcl", "invalid");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_sqrt_negative() {
+    let source = include_str!("../../../tests/fixtures/runtime_error/sqrt_negative.gcl");
+    let rendered = render_node_error(source, "sqrt_negative.gcl", "y");
+    insta::assert_snapshot!(rendered);
+}
+
+// --- Tagged union error tests ---
+
+#[test]
+fn error_non_exhaustive_match() {
+    let source = include_str!("../../../tests/fixtures/invalid/non_exhaustive_match.gcl");
+    let rendered = render_error(source, "non_exhaustive_match.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_duplicate_match_arm() {
+    let source = include_str!("../../../tests/fixtures/invalid/duplicate_match_arm.gcl");
+    let rendered = render_error(source, "duplicate_match_arm.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_match_arm_type_mismatch() {
+    let source = include_str!("../../../tests/fixtures/invalid/match_arm_type_mismatch.gcl");
+    let rendered = render_error(source, "match_arm_type_mismatch.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_field_access_multi_variant() {
+    let source = include_str!("../../../tests/fixtures/invalid/field_access_multi_variant.gcl");
+    let rendered = render_error(source, "field_access_multi_variant.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+// --- Range index error tests ---
+
+#[test]
+fn error_range_index_dim_mismatch() {
+    let source = include_str!("../../../tests/fixtures/invalid/range_index_dim_mismatch.gcl");
+    let rendered = render_error(source, "range_index_dim_mismatch.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_range_index_invalid() {
+    let source = include_str!("../../../tests/fixtures/invalid/range_index_invalid.gcl");
+    let rendered = render_error(source, "range_index_invalid.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+// --- Assertion error tests ---
+
+#[test]
+fn error_at_assert() {
+    let source = include_str!("../../../tests/fixtures/invalid/at_assert.gcl");
+    let rendered = render_error(source, "at_assert.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_assert_not_bool() {
+    let source = include_str!("../../../tests/fixtures/invalid/assert_not_bool.gcl");
+    let rendered = render_error(source, "assert_not_bool.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_indexed_comparison_operand() {
+    let source = include_str!("../../../tests/fixtures/invalid/indexed_comparison_operand.gcl");
+    let rendered = render_error(source, "indexed_comparison_operand.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_indexed_tolerance_axis_mismatch() {
+    let source =
+        include_str!("../../../tests/fixtures/invalid/indexed_tolerance_axis_mismatch.gcl");
+    let rendered = render_error(source, "indexed_tolerance_axis_mismatch.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_expected_fail_finite_position_out_of_bounds() {
+    let source = include_str!(
+        "../../../tests/fixtures/invalid/expected_fail_finite_position_out_of_bounds.gcl"
+    );
+    let rendered = render_error(source, "expected_fail_finite_position_out_of_bounds.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_expected_fail_finite_position_on_named_axis() {
+    let source = include_str!(
+        "../../../tests/fixtures/invalid/expected_fail_finite_position_on_named_axis.gcl"
+    );
+    let rendered = render_error(source, "expected_fail_finite_position_on_named_axis.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_expected_fail_bare_int_key() {
+    let source = include_str!("../../../tests/fixtures/invalid/expected_fail_bare_int_key.gcl");
+    let rendered = render_error(source, "expected_fail_bare_int_key.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_negative_tolerance() {
+    let source = include_str!("../../../tests/fixtures/invalid/negative_tolerance.gcl");
+    let rendered = render_error(source, "negative_tolerance.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_assumes_unknown_assert() {
+    let source = include_str!("../../../tests/fixtures/invalid/assumes_unknown_assert.gcl");
+    let rendered = render_error(source, "assumes_unknown_assert.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_assumes_on_const() {
+    let source = include_str!("../../../tests/fixtures/invalid/assumes_on_const.gcl");
+    let rendered = render_error(source, "assumes_on_const.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_assumes_empty() {
+    let source = include_str!("../../../tests/fixtures/invalid/assumes_empty.gcl");
+    let rendered = render_error(source, "assumes_empty.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_assumes_duplicate() {
+    let source = include_str!("../../../tests/fixtures/invalid/assumes_duplicate.gcl");
+    let rendered = render_error(source, "assumes_duplicate.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_assumes_repeated() {
+    let source = include_str!("../../../tests/fixtures/invalid/assumes_repeated.gcl");
+    let rendered = render_error(source, "assumes_repeated.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_repeated_expected_fail_attribute() {
+    let source =
+        include_str!("../../../tests/fixtures/invalid/repeated_expected_fail_attribute.gcl");
+    let rendered = render_error(source, "repeated_expected_fail_attribute.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_repeated_include_producer() {
+    let source = include_str!("../../../tests/fixtures/invalid/repeated_include_producer.gcl");
+    let rendered = render_error(source, "repeated_include_producer.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_unknown_attribute() {
+    let source = include_str!("../../../tests/fixtures/invalid/unknown_attribute.gcl");
+    let rendered = render_error(source, "unknown_attribute.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_lazy_not_supported() {
+    let source = include_str!("../../../tests/fixtures/invalid/lazy_not_supported.gcl");
+    let rendered = render_error(source, "lazy_not_supported.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+// --- Expected-fail error tests ---
+
+#[test]
+fn error_expected_fail_on_node() {
+    let source = include_str!("../../../tests/fixtures/invalid/expected_fail_on_node.gcl");
+    let rendered = render_error(source, "expected_fail_on_node.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_expected_fail_all_on_indexed() {
+    let source = include_str!("../../../tests/fixtures/invalid/expected_fail_all_on_indexed.gcl");
+    let rendered = render_error(source, "expected_fail_all_on_indexed.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+// --- Index variant match error tests ---
+
+#[test]
+fn error_non_exhaustive_index_match() {
+    let source = include_str!("../../../tests/fixtures/invalid/non_exhaustive_index_match.gcl");
+    let rendered = render_error(source, "non_exhaustive_index_match.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_index_match_with_bindings() {
+    let source = include_str!("../../../tests/fixtures/invalid/index_match_with_bindings.gcl");
+    let rendered = render_error(source, "index_match_with_bindings.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_inline_dag_call_missing_projection() {
+    let source = include_str!(
+        "../../../tests/fixtures/invalid/inline_dag_call_errors/missing_projection.gcl"
+    );
+    let rendered = render_error(source, "missing_projection.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_inline_dag_call_qualified_missing_projection() {
+    let source = include_str!(
+        "../../../tests/fixtures/invalid/inline_dag_call_errors/qualified_missing_projection.gcl"
+    );
+    let rendered = render_error(source, "qualified_missing_projection.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_nested_indexed_map() {
+    let source = include_str!("../../../tests/fixtures/invalid/nested_indexed_map.gcl");
+    let rendered = render_error(source, "nested_indexed_map.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_table_row_mismatch() {
+    let source = include_str!("../../../tests/fixtures/invalid/table_row_mismatch.gcl");
+    let rendered = render_error(source, "table_row_mismatch.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_datetime_scale_mismatch() {
+    let source = include_str!("../../../tests/fixtures/invalid/datetime_scale_mismatch.gcl");
+    let rendered = render_error(source, "datetime_scale_mismatch.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_datetime_conversion_non_datetime() {
+    let source =
+        include_str!("../../../tests/fixtures/invalid/datetime_conversion_non_datetime.gcl");
+    let rendered = render_error(source, "datetime_conversion_non_datetime.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_datetime_extract_non_datetime() {
+    let source = include_str!("../../../tests/fixtures/invalid/datetime_extract_non_datetime.gcl");
+    let rendered = render_error(source, "datetime_extract_non_datetime.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_datetime_timezone_non_datetime() {
+    let source = include_str!("../../../tests/fixtures/invalid/datetime_timezone_non_datetime.gcl");
+    let rendered = render_error(source, "datetime_timezone_non_datetime.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_invalid_timezone() {
+    let source = include_str!("../../../tests/fixtures/invalid/invalid_timezone.gcl");
+    let rendered = render_error(source, "invalid_timezone.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_datetime_invalid_constructor_timezone() {
+    let source =
+        include_str!("../../../tests/fixtures/invalid/datetime_invalid_constructor_timezone.gcl");
+    let rendered = render_error(source, "datetime_invalid_constructor_timezone.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_datetime_dst_gap() {
+    let source = include_str!("../../../tests/fixtures/invalid/datetime_dst_gap.gcl");
+    let rendered = render_error(source, "datetime_dst_gap.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_datetime_dst_fold() {
+    let source = include_str!("../../../tests/fixtures/invalid/datetime_dst_fold.gcl");
+    let rendered = render_error(source, "datetime_dst_fold.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_datetime_invalid_date() {
+    let source = include_str!("../../../tests/fixtures/invalid/datetime_invalid_date.gcl");
+    let rendered = render_error(source, "datetime_invalid_date.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_datetime_positional_epoch_scale() {
+    let source =
+        include_str!("../../../tests/fixtures/invalid/datetime_positional_epoch_scale.gcl");
+    let rendered = render_error(source, "datetime_positional_epoch_scale.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+// --- Domain constraint error tests ---
+
+#[test]
+fn error_domain_violation() {
+    let source = include_str!("../../../tests/fixtures/runtime_error/domain_violation.gcl");
+    let rendered = render_node_error(source, "domain_violation.gcl", "mass");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_domain_min_exceeds_max() {
+    let source = include_str!("../../../tests/fixtures/invalid/domain_min_exceeds_max.gcl");
+    let rendered = render_error(source, "domain_min_exceeds_max.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_domain_on_bool() {
+    let source = include_str!("../../../tests/fixtures/invalid/domain_on_bool.gcl");
+    let rendered = render_error(source, "domain_on_bool.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_domain_invalid_key() {
+    let source = include_str!("../../../tests/fixtures/invalid/domain_invalid_key.gcl");
+    let rendered = render_error(source, "domain_invalid_key.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_datetime_domain_scale_mismatch() {
+    let source = include_str!("../../../tests/fixtures/invalid/datetime_domain_scale_mismatch.gcl");
+    let rendered = render_error(source, "datetime_domain_scale_mismatch.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_datetime_domain_min_exceeds_max() {
+    let source =
+        include_str!("../../../tests/fixtures/invalid/datetime_domain_min_exceeds_max.gcl");
+    let rendered = render_error(source, "datetime_domain_min_exceeds_max.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_datetime_domain_const_violation() {
+    let source =
+        include_str!("../../../tests/fixtures/invalid/datetime_domain_const_violation.gcl");
+    let rendered = render_error(source, "datetime_domain_const_violation.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_datetime_domain_runtime_bound() {
+    let source = include_str!("../../../tests/fixtures/invalid/datetime_domain_runtime_bound.gcl");
+    let rendered = render_error(source, "datetime_domain_runtime_bound.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_datetime_domain_violation() {
+    let source =
+        include_str!("../../../tests/fixtures/runtime_error/datetime_domain_violation.gcl");
+    let rendered = render_node_error(source, "datetime_domain_violation.gcl", "event");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_int_domain_bound_type_mismatch() {
+    let source = include_str!("../../../tests/fixtures/invalid/int_domain_bound_type_mismatch.gcl");
+    let rendered = render_error(source, "int_domain_bound_type_mismatch.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+// --- Struct/union member field domain constraint errors (#450 Pos 1+2) ---
+
+#[test]
+fn error_domain_field_on_bool() {
+    let source = include_str!("../../../tests/fixtures/invalid/domain_field_on_bool.gcl");
+    let rendered = render_error(source, "domain_field_on_bool.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_domain_field_min_exceeds_max() {
+    let source = include_str!("../../../tests/fixtures/invalid/domain_field_min_exceeds_max.gcl");
+    let rendered = render_error(source, "domain_field_min_exceeds_max.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_domain_field_dim_mismatch() {
+    let source = include_str!("../../../tests/fixtures/invalid/domain_field_dim_mismatch.gcl");
+    let rendered = render_error(source, "domain_field_dim_mismatch.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_domain_field_const_violation() {
+    let source = include_str!("../../../tests/fixtures/invalid/domain_field_const_violation.gcl");
+    let rendered = render_error(source, "domain_field_const_violation.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_domain_field_runtime_violation() {
+    let source =
+        include_str!("../../../tests/fixtures/runtime_error/domain_field_runtime_violation.gcl");
+    let rendered = render_node_error(source, "domain_field_runtime_violation.gcl", "SAT");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_domain_union_member_violation() {
+    let source =
+        include_str!("../../../tests/fixtures/runtime_error/domain_union_member_violation.gcl");
+    let rendered = render_node_error(source, "domain_union_member_violation.gcl", "R");
+    insta::assert_snapshot!(rendered);
+}
+
+// --- Position 4: domain constraint on a generic type argument ---
+
+#[test]
+fn error_domain_generic_arg_constraint() {
+    let source = include_str!("../../../tests/fixtures/invalid/domain_generic_arg_constraint.gcl");
+    let rendered = render_error(source, "domain_generic_arg_constraint.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_domain_generic_field_dim_mismatch() {
+    let source =
+        include_str!("../../../tests/fixtures/invalid/domain_generic_field_dim_mismatch.gcl");
+    let rendered = render_error(source, "domain_generic_field_dim_mismatch.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_domain_generic_default_constraint() {
+    let source =
+        include_str!("../../../tests/fixtures/invalid/domain_generic_default_constraint.gcl");
+    let rendered = render_error(source, "domain_generic_default_constraint.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_domain_inline_dag_generic_constraint() {
+    let source =
+        include_str!("../../../tests/fixtures/invalid/domain_inline_dag_generic_constraint.gcl");
+    let rendered = render_error(source, "domain_inline_dag_generic_constraint.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_plot_encoding_non_plottable() {
+    let source = include_str!("../../../tests/fixtures/invalid/plot_encoding_non_plottable.gcl");
+    let rendered = render_error(source, "plot_encoding_non_plottable.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_plot_encoding_axis_mismatch() {
+    let source = include_str!("../../../tests/fixtures/invalid/plot_encoding_axis_mismatch.gcl");
+    let rendered = render_error(source, "plot_encoding_axis_mismatch.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_variant_literal_in_node() {
+    let source = include_str!("../../../tests/fixtures/invalid/variant_literal_in_node.gcl");
+    let rendered = render_error(source, "variant_literal_in_node.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_variant_literal_in_const() {
+    let source = include_str!("../../../tests/fixtures/invalid/variant_literal_in_const.gcl");
+    let rendered = render_error(source, "variant_literal_in_const.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_pub_assert_variant_literal() {
+    let source = include_str!("../../../tests/fixtures/invalid/pub_assert_variant_literal.gcl");
+    let rendered = render_error(source, "pub_assert_variant_literal.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_required_index_standalone() {
+    let source = include_str!("../../../tests/fixtures/invalid/required_index_standalone.gcl");
+    let rendered = render_error(source, "required_index_standalone.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+// --- Visibility errors ---
+
+#[test]
+fn error_required_param_unsatisfied() {
+    let source =
+        include_str!("../../../tests/fixtures/runtime_error/required_param_unsatisfied.gcl");
+    let rendered = render_error(source, "required_param_unsatisfied.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_required_index_not_pub() {
+    let source = include_str!("../../../tests/fixtures/invalid/required_index_not_pub.gcl");
+    let rendered = render_error(source, "required_index_not_pub.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_private_in_public() {
+    let source = include_str!("../../../tests/fixtures/invalid/private_in_public.gcl");
+    let rendered = render_error(source, "private_in_public.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+// ---------------------------------------------------------------------------
+// Extern plugin functions (#943)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn error_extern_arity() {
+    let source = include_str!("../../../tests/fixtures/invalid/extern_arity.gcl");
+    let rendered = render_error(source, "extern_arity.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_extern_dim_var_mismatch() {
+    let source = include_str!("../../../tests/fixtures/invalid/extern_dim_var_mismatch.gcl");
+    let rendered = render_error(source, "extern_dim_var_mismatch.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_extern_unqualified_call() {
+    let source = include_str!("../../../tests/fixtures/invalid/extern_unqualified_call.gcl");
+    let rendered = render_error(source, "extern_unqualified_call.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_extern_unknown_fn() {
+    let source = include_str!("../../../tests/fixtures/invalid/extern_unknown_fn.gcl");
+    let rendered = render_error(source, "extern_unknown_fn.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_extern_unresolved_alias() {
+    let source = include_str!("../../../tests/fixtures/invalid/extern_unresolved_alias.gcl");
+    let rendered = render_error(source, "extern_unresolved_alias.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_extern_in_const() {
+    let source = include_str!("../../../tests/fixtures/invalid/extern_in_const.gcl");
+    let rendered = render_error(source, "extern_in_const.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_extern_use_before_binding() {
+    let source = include_str!("../../../tests/fixtures/invalid/extern_use_before_binding.gcl");
+    let rendered = render_error(source, "extern_use_before_binding.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_extern_duplicate_param() {
+    let source = include_str!("../../../tests/fixtures/invalid/extern_duplicate_param.gcl");
+    let rendered = render_error(source, "extern_duplicate_param.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_index_binding_value_not_index() {
+    let source = include_str!("../../../tests/fixtures/invalid/index_binding_value_not_index.gcl");
+    let rendered = render_error(source, "index_binding_value_not_index.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_duplicate_include_binding() {
+    let source = include_str!("../../../tests/fixtures/invalid/duplicate_include_binding.gcl");
+    let rendered = render_error(source, "duplicate_include_binding.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_duplicate_inline_dag_binding() {
+    let source = include_str!("../../../tests/fixtures/invalid/duplicate_inline_dag_binding.gcl");
+    let rendered = render_error(source, "duplicate_inline_dag_binding.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_extern_unknown_dimension() {
+    let source = include_str!("../../../tests/fixtures/invalid/extern_unknown_dimension.gcl");
+    let rendered = render_error(source, "extern_unknown_dimension.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_extern_conflicting_signature() {
+    let source = include_str!("../../../tests/fixtures/invalid/extern_conflicting_signature.gcl");
+    let rendered = render_error(source, "extern_conflicting_signature.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_extern_array_unbound_result_index() {
+    let source =
+        include_str!("../../../tests/fixtures/invalid/extern_array_unbound_result_index.gcl");
+    let rendered = render_error(source, "extern_array_unbound_result_index.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_extern_array_concrete_index() {
+    let source = include_str!("../../../tests/fixtures/invalid/extern_array_concrete_index.gcl");
+    let rendered = render_error(source, "extern_array_concrete_index.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_extern_array_index_mismatch() {
+    let source = include_str!("../../../tests/fixtures/invalid/extern_array_index_mismatch.gcl");
+    let rendered = render_error(source, "extern_array_index_mismatch.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_extern_struct_union_return() {
+    let source = include_str!("../../../tests/fixtures/invalid/extern_struct_union_return.gcl");
+    let rendered = render_error(source, "extern_struct_union_return.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_extern_struct_generic_return() {
+    let source = include_str!("../../../tests/fixtures/invalid/extern_struct_generic_return.gcl");
+    let rendered = render_error(source, "extern_struct_generic_return.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_extern_array_unindexed_argument() {
+    let source =
+        include_str!("../../../tests/fixtures/invalid/extern_array_unindexed_argument.gcl");
+    let rendered = render_error(source, "extern_array_unindexed_argument.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_extern_missing_host_fn() {
+    let source = include_str!("../../../tests/fixtures/invalid/extern_missing_host_fn.gcl");
+    let rendered = render_error(source, "extern_missing_host_fn.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_extern_fn_failure_is_contained_per_node() {
+    let source = include_str!("../../../tests/fixtures/runtime_error/extern_fn_failure.gcl");
+    let message = render_node_error(source, "extern_fn_failure.gcl", "bad");
+    insta::assert_snapshot!(message);
+}
+
+#[test]
+fn error_extern_fn_failure_dependents_report_dependency_failed() {
+    let source = include_str!("../../../tests/fixtures/runtime_error/extern_fn_failure.gcl");
+    let result = compile_and_eval_named(source, "extern_fn_failure.gcl").unwrap();
+    let (_, ok_result, _) = result
+        .entries
+        .iter()
+        .find(|(n, _, _)| n.to_string() == "ok")
+        .unwrap();
+    assert!(ok_result.is_ok(), "sibling `ok` must still evaluate");
+    let (_, downstream, _) = result
+        .entries
+        .iter()
+        .find(|(n, _, _)| n.to_string() == "downstream")
+        .unwrap();
+    match downstream {
+        Err(NodeUnavailable::DependencyFailed { failed_deps }) => {
+            assert_eq!(failed_deps.len(), 1);
+            assert_eq!(failed_deps[0].as_str(), "bad");
+        }
+        other => panic!("expected DependencyFailed for `downstream`, got {other:?}"),
+    }
+}

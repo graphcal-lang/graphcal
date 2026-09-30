@@ -65,7 +65,8 @@ impl<T> ResolvedDomainBounds<T> {
 pub struct DomainInstant(hifitime::Duration);
 
 impl DomainInstant {
-    pub(crate) const fn duration(self) -> hifitime::Duration {
+    #[must_use]
+    pub const fn duration(self) -> hifitime::Duration {
         self.0
     }
 
@@ -125,19 +126,22 @@ pub enum ResolvedDomainConstraintRef<'constraint> {
 }
 
 impl ResolvedDomainConstraint {
+    #[must_use]
     pub const fn quantity(bounds: ResolvedDomainBounds<f64>) -> Self {
         Self {
             kind: ResolvedDomainConstraintKind::Quantity(bounds),
         }
     }
 
+    #[must_use]
     pub const fn int(bounds: ResolvedDomainBounds<i64>) -> Self {
         Self {
             kind: ResolvedDomainConstraintKind::Int(bounds),
         }
     }
 
-    pub(crate) const fn as_ref(&self) -> ResolvedDomainConstraintRef<'_> {
+    #[must_use]
+    pub const fn as_ref(&self) -> ResolvedDomainConstraintRef<'_> {
         match &self.kind {
             ResolvedDomainConstraintKind::Quantity(bounds) => {
                 ResolvedDomainConstraintRef::Quantity(bounds)

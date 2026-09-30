@@ -79,6 +79,7 @@ impl<'a> ScheduledDeclaration<'a> {
     }
 }
 
+#[must_use]
 pub fn eval_failed_node_error(error: &GraphcalError) -> NodeUnavailable {
     match error {
         GraphcalError::EvaluationUnavailable {
@@ -102,6 +103,7 @@ pub fn eval_failed_node_error(error: &GraphcalError) -> NodeUnavailable {
 
 impl<'a> ExecutionFrame<'a> {
     /// A frame of `callable`, seeded with its constants and constant imports.
+    #[must_use]
     pub fn new(
         plan: &'a ExecPlan<'a>,
         callable: &'a CallablePlan<'a>,

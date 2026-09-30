@@ -11,7 +11,7 @@ use graphcal_compiler::resolved_name::ResolvedDeclName;
 ///
 /// Arrow-originated model values use the model boundary's canonical unit and
 /// therefore carry no authored presentation preference.
-pub(super) type RuntimeParameterBinding = EvaluatedRuntimeValue;
+pub type RuntimeParameterBinding = EvaluatedRuntimeValue;
 
 /// Plan-keyed parameter bindings for one evaluation row.
-pub(super) type RuntimeParameterBindings = HashMap<ResolvedDeclName, RuntimeParameterBinding>;
+pub type RuntimeParameterBindings = HashMap<ResolvedDeclName, RuntimeParameterBinding>;

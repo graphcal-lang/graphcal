@@ -159,6 +159,10 @@ impl IndexAxis {
 
     /// Number of entries (at least one).
     #[must_use]
+    #[expect(
+        clippy::len_without_is_empty,
+        reason = "an index axis has at least one entry, so it is never empty"
+    )]
     pub fn len(&self) -> usize {
         self.0.keys.len()
     }

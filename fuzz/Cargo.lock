@@ -346,10 +346,7 @@ dependencies = [
 name = "graphcal-eval"
 version = "0.0.1-alpha.31"
 dependencies = [
- "base64",
  "graphcal-compiler",
- "graphcal-io",
- "graphcal-package",
  "hifitime",
  "indexmap",
  "jiff",
@@ -357,9 +354,6 @@ dependencies = [
  "num-rational",
  "num-traits",
  "self_cell",
- "serde",
- "serde_json",
- "sha2",
  "thiserror",
 ]
 
@@ -379,11 +373,11 @@ name = "graphcal-fuzz"
 version = "0.0.0"
 dependencies = [
  "graphcal-compiler",
- "graphcal-eval",
  "graphcal-fmt",
  "graphcal-io",
  "graphcal-package",
  "graphcal-plugin-abi",
+ "graphcal-project",
  "graphcal-test-support",
  "libfuzzer-sys",
 ]
@@ -415,6 +409,23 @@ version = "0.0.1-alpha.31"
 dependencies = [
  "serde",
  "serde_json",
+ "thiserror",
+]
+
+[[package]]
+name = "graphcal-project"
+version = "0.0.1-alpha.31"
+dependencies = [
+ "base64",
+ "graphcal-compiler",
+ "graphcal-eval",
+ "graphcal-io",
+ "graphcal-package",
+ "hifitime",
+ "miette",
+ "serde",
+ "serde_json",
+ "sha2",
  "thiserror",
 ]
 

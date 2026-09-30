@@ -225,7 +225,7 @@ fn project_grid(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use graphcal_eval::eval::compile_and_eval;
+    use graphcal_project::prepare::compile_and_eval;
 
     fn body_of(source: &str, name: &str) -> ValueBody {
         let result = compile_and_eval(source).unwrap();

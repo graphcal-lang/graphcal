@@ -115,7 +115,7 @@ impl<V> StructValue<V> {
     /// A struct value of `constructor` of `type_name` whose declared fields
     /// are exactly `fields`, each at its type, for tests (including of the
     /// evaluator's defenses against values of a foreign type).
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-internals"))]
     #[must_use]
     pub fn for_test(
         type_name: ResolvedStructTypeName,
@@ -173,6 +173,7 @@ impl<V> StructValue<V> {
     }
 
     /// Every field with its value, in declaration order.
+    #[must_use]
     pub fn fields(&self) -> impl ExactSizeIterator<Item = (&FieldName, &V)> {
         self.typed_fields()
             .map(|(field, value)| (field.name(), value))
@@ -180,6 +181,7 @@ impl<V> StructValue<V> {
 
     /// Every declared field, at its instantiated type, with its value, in
     /// declaration order.
+    #[must_use]
     pub fn typed_fields(&self) -> impl ExactSizeIterator<Item = (&AppliedField, &V)> {
         self.application.fields().iter().zip(&self.values)
     }

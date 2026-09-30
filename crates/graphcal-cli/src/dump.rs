@@ -13,9 +13,11 @@ use graphcal_compiler::diagnostic_render::RenderableDiagnostic;
 use graphcal_compiler::syntax::ast::File;
 use graphcal_compiler::syntax::lexer::tokenize;
 use graphcal_compiler::syntax::parser::{ParseErrorKind, Parser};
-use graphcal_eval::eval::{CompileError, ParameterBindingRow, PreparedProject, ProjectCompiler};
-use graphcal_eval::loader::{build_rooted_filesystem, load_project};
 use graphcal_io::{ByteLimit, FileSystemReadError, FileSystemReader, NeverCancel};
+use graphcal_project::compile_error::CompileError;
+use graphcal_project::loader::{build_rooted_filesystem, load_project};
+use graphcal_project::prepare::{ParameterBindingRow, PreparedProject};
+use graphcal_project::project_compiler::ProjectCompiler;
 
 use crate::overrides::{
     OverrideParseError, ParameterArgs, ParsedOverrides, parse_overrides_with_sources,

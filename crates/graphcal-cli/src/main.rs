@@ -32,15 +32,15 @@ use std::path::{Path, PathBuf};
 use std::process;
 use thiserror::Error;
 
-use graphcal_eval::eval::{
-    CompileError, EvalOutputView, EvalResult, KeyRendering, ProjectCompiler, format_number,
-};
+use graphcal_eval::eval::{EvalOutputView, EvalResult, KeyRendering, format_number};
 use graphcal_eval::host_fns::HostFunctionRegistry;
-use graphcal_eval::loader::{LoadedProject, build_rooted_filesystem, load_project};
 use graphcal_io::{
     FileSystemEntryKind, FileSystemReader, NeverCancel, ProjectIngestionPolicy, RealFileSystem,
     replace_file_atomically_if_unchanged,
 };
+use graphcal_project::compile_error::CompileError;
+use graphcal_project::loader::{LoadedProject, build_rooted_filesystem, load_project};
+use graphcal_project::project_compiler::ProjectCompiler;
 
 use graphcal::format::{
     FileDiscovery, FormatStatus, TraversalFailures, collect_gcl_files, format_status,
@@ -254,13 +254,13 @@ impl GraphView {
     const fn select(
         self,
         max_depth: Option<NonZeroUsize>,
-    ) -> Result<graphcal_eval::graph_ir::dot::GraphView, GraphViewSelectionError> {
+    ) -> Result<graphcal_project::graph_ir::dot::GraphView, GraphViewSelectionError> {
         match (self, max_depth) {
-            (Self::Flat, None) => Ok(graphcal_eval::graph_ir::dot::GraphView::Flat),
+            (Self::Flat, None) => Ok(graphcal_project::graph_ir::dot::GraphView::Flat),
             (Self::Grouped, max_depth) => {
-                Ok(graphcal_eval::graph_ir::dot::GraphView::Grouped { max_depth })
+                Ok(graphcal_project::graph_ir::dot::GraphView::Grouped { max_depth })
             }
-            (Self::Module, None) => Ok(graphcal_eval::graph_ir::dot::GraphView::Module),
+            (Self::Module, None) => Ok(graphcal_project::graph_ir::dot::GraphView::Module),
             (Self::Flat | Self::Module, Some(_)) => {
                 Err(GraphViewSelectionError::MaxDepthRequiresGrouped)
             }
@@ -929,7 +929,7 @@ fn run_check(paths: &[PathBuf], project_root: Option<&Path>, deny_todo: bool) {
 
 /// `graphcal graph`: compile to TIR, project the dependency graph IR, and
 /// print it in the requested export format. The projection and rendering are
-/// pure (`graphcal_eval::graph_ir`); this shell only does I/O.
+/// pure (`graphcal_project::graph_ir`); this shell only does I/O.
 fn run_graph(
     file: &Path,
     format: &GraphFormat,
@@ -955,10 +955,10 @@ fn run_graph(
         })
     });
     match outcome {
-        Ok(checked) => match graphcal_eval::graph_ir::project_tir(checked.tir()) {
+        Ok(checked) => match graphcal_project::graph_ir::project_tir(checked.tir()) {
             Ok(ir) => match format {
                 GraphFormat::Dot => {
-                    print!("{}", graphcal_eval::graph_ir::dot::render(&ir, view));
+                    print!("{}", graphcal_project::graph_ir::dot::render(&ir, view));
                 }
             },
             Err(error) => {

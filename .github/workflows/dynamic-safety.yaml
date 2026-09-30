@@ -46,6 +46,7 @@ jobs:
             Cargo.toml \
             crates/graphcal-compiler \
             crates/graphcal-eval \
+            crates/graphcal-project \
             crates/graphcal-lsp \
             crates/graphcal-plugin
           diff_status=$?

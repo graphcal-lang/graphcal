@@ -28,6 +28,7 @@ self_cell::self_cell!(
 
 impl PreparedPlan {
     /// The prepared plan.
+    #[must_use]
     pub fn plan(&self) -> &ExecPlan<'_> {
         self.borrow_dependent()
     }
@@ -47,7 +48,7 @@ impl std::fmt::Debug for PreparedPlan {
 /// # Errors
 ///
 /// Returns a [`GraphcalError`] when execution checking or plan selection fails.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-internals"))]
 pub fn compile(
     tir: &graphcal_compiler::tir::typed::CheckedTir,
     src: &NamedSource<Arc<String>>,
@@ -65,13 +66,13 @@ pub fn compile(
 /// # Errors
 ///
 /// Returns a [`GraphcalError`] for an invalid plan or cancellation.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-internals"))]
 pub fn compile_with_cancellation(
     tir: &graphcal_compiler::tir::typed::CheckedTir,
     src: &NamedSource<Arc<String>>,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<PreparedPlan, GraphcalError> {
-    let program = crate::project_compiler::seal_checked_program_with_cancellation(
+    let program = crate::execution_check::seal_checked_program_with_cancellation(
         tir.clone(),
         src,
         cancellation,
@@ -189,6 +190,27 @@ fn prepare_declarations<'p>(
         }
     }
     Ok(declarations)
+}
+
+/// Test-only access to the callable preparation of [`compile_checked_with_cancellation`].
+///
+/// # Errors
+///
+/// Returns a [`GraphcalError`] when a scheduled declaration has no prepared
+/// location in the callable's closure.
+#[cfg(feature = "test-internals")]
+#[expect(
+    clippy::implicit_hasher,
+    reason = "test-only forwarder of the planner's own maps"
+)]
+pub fn prepare_callable_plan_for_test<'p>(
+    tir: &'p graphcal_compiler::tir::typed::CheckedTir,
+    scopes: &HashMap<&DagId, SealedDag<'p>>,
+    body: SealedDag<'p>,
+    declarations: &HashMap<&'p ResolvedDeclName, PlannedDeclaration<'p>>,
+    cancellation: &graphcal_compiler::cancellation::CancellationToken,
+) -> Result<CallablePlan<'p>, GraphcalError> {
+    prepare_callable_plan(tir, scopes, body, declarations, cancellation)
 }
 
 fn prepare_callable_plan<'p>(
@@ -334,17 +356,10 @@ fn prepare_imports(
 mod tests {
     use super::*;
     use crate::runtime_value::RuntimeValue;
-    use graphcal_compiler::ir::lower::lower;
-    use graphcal_compiler::resolve::ModuleResolver;
+    use crate::test_tir::checked_tir_from_source;
     use graphcal_compiler::resolved_name::ResolvedDeclName;
     use graphcal_compiler::syntax::decl_name::DeclName;
-    use graphcal_compiler::syntax::parser::Parser;
-    use graphcal_compiler::tir::typed::ProjectTypeStore;
     use std::collections::HashSet;
-
-    fn make_src(source: &str) -> NamedSource<Arc<String>> {
-        NamedSource::new("test.gcl", Arc::new(source.to_string()))
-    }
 
     fn compile_source(source: &str) -> Result<PreparedPlan, GraphcalError> {
         let (tir, src) = checked_tir_from_source(source)?;
@@ -358,54 +373,6 @@ mod tests {
         NamedSource<Arc<String>>,
     ) {
         checked_tir_from_source(source).unwrap()
-    }
-
-    fn checked_tir_from_source(
-        source: &str,
-    ) -> Result<
-        (
-            graphcal_compiler::tir::typed::CheckedTir,
-            NamedSource<Arc<String>>,
-        ),
-        GraphcalError,
-    > {
-        let raw_file = Parser::new(source).parse_file().unwrap();
-        let desugared = graphcal_compiler::desugar::desugared_ast::File::from(raw_file);
-        let file = desugared;
-        let src = make_src(source);
-        let ir = lower(&file, &src).unwrap();
-        let resolver =
-            ModuleResolver::without_edges([(ir.dag_id().clone(), file.declarations.as_slice())])
-                .unwrap();
-        let mut project_types = ProjectTypeStore::default();
-        project_types.insert_graphcal_prelude().unwrap();
-        project_types.insert_module(ir.definitions()).unwrap();
-        let cancellation = graphcal_compiler::cancellation::CancellationToken::unbounded();
-        let signed =
-            graphcal_compiler::tir::typed::resolve_hir_signature_with_modules_and_cancellation(
-                ir,
-                &src,
-                &resolver,
-                &project_types,
-                &cancellation,
-            )
-            .unwrap();
-        graphcal_compiler::tir::typed::TirDraft::resolve_root(
-            signed,
-            std::collections::HashMap::<_, _, std::hash::RandomState>::new(),
-            &src,
-            &resolver,
-            Arc::new(project_types),
-            &cancellation,
-        )
-        .unwrap()
-        .instantiate(
-            &graphcal_compiler::tir::typed::CheckedOverrideDependencies::default(),
-            &src,
-        )
-        .unwrap()
-        .check(&src, &cancellation)
-        .map(|tir| (tir, src.clone()))
     }
 
     /// The runtime identities of the root callable's steps, in order.
@@ -513,48 +480,6 @@ mod tests {
     }
 
     #[test]
-    fn callables_reject_missing_and_out_of_closure_locations() {
-        let source = "dag helper { pub node out: Dimensionless = 1.0; }\n\
-                      node x: Dimensionless = @helper()::out;";
-        let loaded = crate::loader::LoadedProject::from_source(source, "test.gcl").unwrap();
-        let checked = crate::project_compiler::ProjectCompiler::new(&loaded)
-            .check()
-            .unwrap();
-        let tir = checked.tir();
-        let prepared = compile(tir, &make_src(source)).unwrap();
-        let plan = prepared.plan();
-        let program = plan.program();
-        let scopes = tir
-            .dag_registry()
-            .keys()
-            .map(|owner| (owner, program.dag(owner).unwrap()))
-            .collect::<HashMap<_, _>>();
-        let root = scopes[tir.root_dag_id()];
-        let helper = *scopes
-            .values()
-            .find(|scope| scope.dag().dag_id() != tir.root_dag_id())
-            .unwrap();
-        let cancellation = graphcal_compiler::cancellation::CancellationToken::unbounded();
-        let x = plan.declaration(&resolved_key("x")).unwrap();
-        let misplaced =
-            PlannedDeclaration::new(x.key(), helper, x.body().clone(), x.reads(), x.domain());
-        for (declarations, expected) in [
-            (HashMap::new(), "has no prepared physical location"),
-            (
-                HashMap::from([(x.key(), misplaced)]),
-                "outside its callable closure",
-            ),
-        ] {
-            let error = prepare_callable_plan(tir, &scopes, root, &declarations, &cancellation)
-                .unwrap_err();
-            assert!(
-                matches!(&error, GraphcalError::InternalError { message, .. } if message.contains(expected)),
-                "{error:?}"
-            );
-        }
-    }
-
-    #[test]
     fn plans_reject_two_callables_of_one_body() {
         let (tir, src) = tir_from_source("node a: Dimensionless = 1.0;");
         let prepared = compile(&tir, &src).unwrap();
@@ -636,59 +561,6 @@ mod tests {
             root.domain_constraints().get(&x).unwrap(),
             plan.domain_constraint(&x).unwrap()
         ));
-    }
-
-    #[test]
-    fn callable_plans_use_the_checked_closure_schedule() {
-        let source = "dag lib { param x: Dimensionless; pub node out: Dimensionless = @x + 1.0; }\n\
-                      include lib(x: @seed) as inst;\n\
-                      param seed: Dimensionless = 1.0;\n\
-                      node result: Dimensionless = @inst::out;";
-        let loaded = crate::loader::LoadedProject::from_source(source, "test.gcl").unwrap();
-        let checked = crate::project_compiler::ProjectCompiler::new(&loaded)
-            .check()
-            .unwrap();
-        let tir = checked.tir();
-        let src = make_src(source);
-        let prepared = compile(tir, &src).unwrap();
-        let plan = prepared.plan();
-        let schedule = tir.root().runtime_schedule();
-        assert_eq!(
-            root_order(plan),
-            schedule.order().iter().collect::<Vec<_>>()
-        );
-        assert_eq!(
-            plan.root()
-                .execution_dags()
-                .iter()
-                .map(|scope| scope.dag().dag_id().clone())
-                .collect::<Vec<_>>(),
-            schedule.execution_dags()
-        );
-        assert_eq!(schedule.execution_dags().len(), 2);
-        let position = |name: &str| {
-            schedule
-                .order()
-                .iter()
-                .position(|key| key.as_str() == name)
-                .unwrap()
-        };
-        assert!(position("seed") < position("x"));
-        assert!(position("x") < position("out"));
-        assert!(position("out") < position("result"));
-
-        // The root's include is planned with the sealed DAG that runs it, and
-        // no other DAG can be paired with it.
-        let [planned] = plan.root().semantic_instances() else {
-            panic!("expected one planned instance");
-        };
-        let instance = planned.instance();
-        assert_eq!(
-            planned.scope().dag().dag_id(),
-            instance.record().instance.id().owner()
-        );
-        assert!(PlannedInstance::try_new(instance, planned.scope()).is_ok());
-        assert!(PlannedInstance::try_new(instance, plan.root().scope()).is_err());
     }
 
     #[test]

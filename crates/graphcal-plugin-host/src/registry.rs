@@ -12,7 +12,7 @@
 use std::sync::Arc;
 
 use graphcal_eval::host_fns::{HostFnError, HostFunctionRegistry, PluginRegistrationError};
-use graphcal_eval::loader::{LoadedProject, PluginCallPolicy};
+use graphcal_project::loader::{LoadedProject, PluginCallPolicy};
 
 use crate::host::PluginHost;
 use crate::module::{PluginLoadError, PluginModule};

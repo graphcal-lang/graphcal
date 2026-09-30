@@ -19,8 +19,9 @@ mod project;
 
 use std::collections::HashMap;
 
-use graphcal_eval::eval::{CompileError, compile_and_eval_from_project};
-use graphcal_eval::loader::load_project;
+use graphcal_project::compile_error::CompileError;
+use graphcal_project::loader::load_project;
+use graphcal_project::prepare::compile_and_eval_from_project;
 use serde::Serialize;
 
 pub use bindings::{BindingRequest, MAX_BINDING_EXPR_BYTES};

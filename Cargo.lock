@@ -1878,6 +1878,7 @@ dependencies = [
  "graphcal-package",
  "graphcal-plugin-abi",
  "graphcal-plugin-host",
+ "graphcal-project",
  "graphcal-report",
  "graphcal-tenax",
  "indexmap",
@@ -1929,25 +1930,15 @@ dependencies = [
 name = "graphcal-eval"
 version = "0.0.1-alpha.31"
 dependencies = [
- "base64 0.23.1",
  "graphcal-compiler",
- "graphcal-io",
- "graphcal-package",
- "graphcal-test-support",
  "hifitime",
  "indexmap",
- "insta",
  "jiff",
  "miette",
  "num-rational",
  "num-traits",
  "proptest",
- "rand 0.10.3",
  "self_cell",
- "serde",
- "serde_json",
- "sha2",
- "tempfile",
  "thiserror",
 ]
 
@@ -1987,6 +1978,7 @@ dependencies = [
  "graphcal-io",
  "graphcal-package",
  "graphcal-plugin-host",
+ "graphcal-project",
  "indexmap",
  "loom",
  "miette",
@@ -2019,6 +2011,7 @@ dependencies = [
  "graphcal-plugin-abi",
  "graphcal-plugin-host",
  "graphcal-plugin-macros",
+ "graphcal-project",
  "tempfile",
 ]
 
@@ -2040,6 +2033,7 @@ dependencies = [
  "graphcal-io",
  "graphcal-package",
  "graphcal-plugin-abi",
+ "graphcal-project",
  "sha2",
  "tempfile",
  "thiserror",
@@ -2058,12 +2052,36 @@ dependencies = [
 ]
 
 [[package]]
+name = "graphcal-project"
+version = "0.0.1-alpha.31"
+dependencies = [
+ "base64 0.23.1",
+ "graphcal-compiler",
+ "graphcal-eval",
+ "graphcal-io",
+ "graphcal-package",
+ "graphcal-test-support",
+ "hifitime",
+ "insta",
+ "jiff",
+ "miette",
+ "proptest",
+ "rand 0.10.3",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "thiserror",
+]
+
+[[package]]
 name = "graphcal-report"
 version = "0.0.1-alpha.31"
 dependencies = [
  "base64 0.23.1",
  "graphcal-compiler",
  "graphcal-eval",
+ "graphcal-project",
  "serde",
  "serde_json",
  "thiserror",
@@ -2077,7 +2095,7 @@ dependencies = [
  "arrow-ipc",
  "arrow-schema",
  "graphcal-compiler",
- "graphcal-eval",
+ "graphcal-project",
  "serde_json",
  "thiserror",
 ]
@@ -2099,6 +2117,7 @@ dependencies = [
  "graphcal-io",
  "graphcal-package",
  "graphcal-plugin-host",
+ "graphcal-project",
  "graphcal-report",
  "js-sys",
  "miette",

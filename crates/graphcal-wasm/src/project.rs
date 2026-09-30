@@ -221,7 +221,7 @@ pub struct VirtualProject {
     filesystem: InMemoryFileSystem,
     dependencies: std::collections::BTreeMap<
         graphcal_package::PackageInstanceId,
-        graphcal_eval::package_sources::EmbeddedPackage,
+        graphcal_project::package_sources::EmbeddedPackage,
     >,
 }
 
@@ -285,11 +285,11 @@ impl TryFrom<PlaygroundRequest> for VirtualProject {
 
 impl VirtualProject {
     pub fn from_bundle(
-        bundle: &graphcal_eval::project_bundle::ProjectBundle,
-    ) -> Result<Self, graphcal_eval::project_bundle::BundleError> {
+        bundle: &graphcal_project::project_bundle::ProjectBundle,
+    ) -> Result<Self, graphcal_project::project_bundle::BundleError> {
         let mounted = bundle.mount(Self::root_path())?;
         let entry = ProjectFilePath::parse(bundle.entry.as_str())
-            .map_err(|_| graphcal_eval::project_bundle::BundleError::MissingEntry)?;
+            .map_err(|_| graphcal_project::project_bundle::BundleError::MissingEntry)?;
         Ok(Self {
             entry,
             filesystem: mounted.filesystem,
@@ -299,8 +299,8 @@ impl VirtualProject {
 
     pub const fn dependency_sources(
         &self,
-    ) -> graphcal_eval::package_sources::DependencySources<'_> {
-        graphcal_eval::package_sources::DependencySources::Embedded(&self.dependencies)
+    ) -> graphcal_project::package_sources::DependencySources<'_> {
+        graphcal_project::package_sources::DependencySources::Embedded(&self.dependencies)
     }
 
     pub fn entry_path(&self) -> PathBuf {
@@ -699,7 +699,7 @@ mod tests {
 
     #[test]
     fn report_bundle_cannot_select_the_native_package_cache() {
-        use graphcal_eval::project_bundle::{ArtifactContent, BundleArtifact, ProjectBundle};
+        use graphcal_project::project_bundle::{ArtifactContent, BundleArtifact, ProjectBundle};
         let bundle = ProjectBundle {
             dependencies: vec![],
             entry: "src/demo.gcl".to_string().try_into().unwrap(),

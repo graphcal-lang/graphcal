@@ -140,8 +140,8 @@ impl BoundedJsRequest {
 /// Validate the report's serialized envelope before copying it into linear memory.
 pub fn decode_report_bundle(
     value: JsValue,
-) -> Result<graphcal_eval::project_bundle::ProjectBundle, JsValue> {
-    use graphcal_eval::project_bundle::{MAX_BUNDLE_JSON_BYTES, ProjectBundle};
+) -> Result<graphcal_project::project_bundle::ProjectBundle, JsValue> {
+    use graphcal_project::project_bundle::{MAX_BUNDLE_JSON_BYTES, ProjectBundle};
     let text = value
         .dyn_into::<JsString>()
         .map_err(|_| JsValue::from_str("expected report bundle JSON string"))?;

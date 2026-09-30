@@ -6975,7 +6975,7 @@ fn dependency_plugin_versions_are_scoped_and_binary_changes_are_authenticated() 
     let values: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(values["node"]["first"]["si_value"], 8.0);
     assert_eq!(values["node"]["later_result"]["si_value"], 12.0);
-    let cache_root = graphcal_eval::package_cache::PackageCacheRoot::from_path(&cache).unwrap();
+    let cache_root = graphcal_project::package_cache::PackageCacheRoot::from_path(&cache).unwrap();
     let checkout = cache_root.git_checkout(&sources[0].0, &sources[0].1);
     std::fs::write(checkout.join("plugins/kernel.wasm"), binary(9)).unwrap();
     let output = evaluate();
@@ -7715,7 +7715,7 @@ fn report_build_hydrated_embeds_package_dependencies() {
         .split_once("</script>")
         .unwrap()
         .0;
-    let bundle = graphcal_eval::project_bundle::ProjectBundle::from_json(payload).unwrap();
+    let bundle = graphcal_project::project_bundle::ProjectBundle::from_json(payload).unwrap();
     assert_eq!(bundle.dependencies.len(), 1);
 
     // The same project builds statically: the baseline is computed natively.

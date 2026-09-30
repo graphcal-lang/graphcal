@@ -2,41 +2,35 @@
 //! its public result in stages — values, assertions, plots and their
 //! compositions, and the per-declaration tables.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use miette::NamedSource;
 
-use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
 use graphcal_compiler::graphcal_error::GraphcalError;
 use graphcal_compiler::resolved_name::ResolvedDeclName;
 use graphcal_compiler::syntax::module_name::ScopedName;
-use graphcal_compiler::syntax::span::Span;
-use graphcal_compiler::tir::typed::{DeclarationBody, Scoped};
 
 use crate::domain_constraint::ResolvedDomainConstraint;
-use crate::eval_expr::{EvalSession, RuntimeValueMap, eval_root_with_presentation};
+use crate::eval_expr::RuntimeValueMap;
 use crate::execution_plan::ExecPlan;
-use crate::runtime_presentation::{PendingPresentedMap, ResolvedPresentedMap};
+use crate::runtime_presentation::ResolvedPresentedMap;
 
 use super::types::{EvalResult, NodeUnavailable};
 
 mod assertions;
+mod declaration_body;
+mod dependency_failures;
+mod evaluated_root;
 mod plots;
+mod root_loop;
 mod root_names;
 mod root_outcome;
 mod value_entries;
 
-use assertions::evaluate_assertions;
-pub(super) use root_outcome::{RootFailure, RootOutcome};
-
-/// Result of running the core eval loop: successfully evaluated values and per-node errors.
-pub(super) struct EvalLoopResult {
-    pub unfinished_calls: std::cell::RefCell<BTreeSet<ResolvedDeclName>>,
-    pub values: RuntimeValueMap,
-    pub presentations: PendingPresentedMap,
-    pub errors: HashMap<ResolvedDeclName, NodeUnavailable>,
-}
+use evaluated_root::EvaluatedRoot;
+pub use root_loop::{EvalLoopResult, run_eval_loop_with_bindings};
+pub use root_outcome::{RootFailure, RootOutcome};
 
 /// One completed runtime evaluation before project-level public output assembly.
 ///
@@ -63,6 +57,13 @@ impl std::fmt::Debug for RuntimeEvaluation {
 }
 
 impl RuntimeEvaluation {
+    /// The root result and the resolved presentations of its values, for
+    /// project-level output assembly.
+    #[must_use]
+    pub fn into_result_and_presentations(self) -> (EvalResult, ResolvedPresentedMap) {
+        (self.result, self.presentations)
+    }
+
     /// Whether evaluation produced a node, assertion, or plot failure.
     #[must_use]
     pub fn has_errors(&self) -> bool {
@@ -76,67 +77,13 @@ impl RuntimeEvaluation {
     }
 }
 
-/// Execute the root with ordinary failures contained by the shared machine.
-pub(super) fn run_eval_loop_with_bindings(
-    plan: &ExecPlan<'_>,
-    bindings: &super::bindings::RuntimeParameterBindings,
-    src: &NamedSource<Arc<String>>,
-    host_fns: &crate::host_fns::HostFunctionRegistry,
-    cancellation: &graphcal_compiler::cancellation::CancellationToken,
-) -> Result<EvalLoopResult, GraphcalError> {
-    use crate::execution_frame::{ExecutionFrame, FailurePolicy};
-    cancellation.checkpoint()?;
-    let unfinished_calls = std::cell::RefCell::new(BTreeSet::new());
-    let mut frame = ExecutionFrame::new(plan, plan.root(), FailurePolicy::Contain);
-    for (key, binding) in bindings {
-        frame.bind_argument(key, binding.clone(), src, Span::new(0, 0))?;
-    }
-    frame.run(cancellation, |entry, frame| {
-        // Root declarations keep their existing work allowance; nested calls
-        // share this context's budget through immutable scope reselection.
-        let root = EvalSession::checked(plan, src, host_fns, cancellation.clone())
-            .with_roots(frame.values(), Some(frame.presentations()))
-            .with_unavailable(frame.errors())
-            .with_unfinished_calls(&unfinished_calls);
-        let session = root.for_declaration(&entry);
-        eval_root_with_presentation(
-            entry.body(),
-            frame.values(),
-            frame.presentations(),
-            &session,
-        )
-    })?;
-    let outcome = frame.finish();
-    Ok(EvalLoopResult {
-        unfinished_calls,
-        values: outcome.values,
-        presentations: outcome.presented,
-        errors: outcome.errors,
-    })
-}
-
-/// What one run of the root evaluated: the values of its successful
-/// declarations, its contained failures, and its presentations.
-#[derive(Clone, Copy)]
-struct EvaluatedRoot<'a> {
-    values: &'a RuntimeValueMap,
-    errors: &'a HashMap<ResolvedDeclName, NodeUnavailable>,
-    /// The presented values of the declarations with a presentation,
-    /// resolved against the complete root frame.
-    presentations: &'a ResolvedPresentedMap,
-    /// The same presented values as the root frame holds them, still
-    /// pending, for an expression evaluated over the root frame (a plot
-    /// channel), whose own presentation is then resolved against `values`.
-    frame_presentations: &'a PendingPresentedMap,
-}
-
 /// Evaluate a plan with one row of runtime parameter bindings, then assemble
 /// the root's public result.
 ///
 /// Runtime errors are contained per-node: if a node fails, independent nodes
 /// still evaluate, and dependent nodes receive a `DependencyFailed` error.
 /// Internal invariant violations abort evaluation as `X001`.
-pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
+pub fn evaluate_plan_with_values_and_bindings_and_cancellation(
     plan: &ExecPlan<'_>,
     bindings: &super::bindings::RuntimeParameterBindings,
     src: &NamedSource<Arc<String>>,
@@ -151,7 +98,7 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
         .presentations()
         .iter()
         .map(|(key, presentation)| {
-            crate::eval_expr::presentation::resolve(presentation.clone(), outcome.values(), &ctx)
+            crate::eval_expr::resolve_presentation(presentation.clone(), outcome.values(), &ctx)
                 .map(|presentation| (key.clone(), presentation))
         })
         .collect::<Result<ResolvedPresentedMap, _>>()?;
@@ -227,54 +174,4 @@ fn root_domain_constraints(plan: &ExecPlan<'_>) -> HashMap<ScopedName, ResolvedD
                 .map(|constraint| (ScopedName::local(entry.name().clone()), constraint.clone()))
         })
         .collect()
-}
-
-/// The source of `declaration` in the scope of its owner.
-fn declaration_body<'tir>(
-    tir: &'tir graphcal_compiler::tir::typed::CheckedTir,
-    declaration: &ResolvedDeclName,
-    src: &NamedSource<Arc<String>>,
-) -> Result<DeclarationBody<'tir>, GraphcalError> {
-    tir.declaration_body(declaration).ok_or_else(|| {
-        GraphcalError::internal_error(
-            format!("declaration `{declaration}` is absent from its owner's checked body"),
-            src,
-            DiagnosticAnchor::WholeFile,
-        )
-    })
-}
-
-/// If any declaration referenced by the given expressions failed to
-/// evaluate, render a `dependency failed: ...` message naming each failed
-/// dependency (direct failures carry their root cause inline).
-///
-/// Shared by assertions (#814) and plots (#842): a reference to a failed
-/// declaration is not "undefined", it is unevaluable, and the report must
-/// point at the root cause.
-fn dependency_failure_message<'a>(
-    exprs: impl IntoIterator<Item = Scoped<'a, graphcal_compiler::hir::Expr>>,
-    errors: &HashMap<ResolvedDeclName, NodeUnavailable>,
-) -> Option<String> {
-    if errors.is_empty() {
-        return None;
-    }
-    let deps: std::collections::BTreeSet<_> = exprs
-        .into_iter()
-        .flat_map(Scoped::<'_, graphcal_compiler::hir::Expr>::graph_refs)
-        .collect();
-    let failed: Vec<String> =
-        deps.iter()
-            .filter_map(|dep| {
-                errors.get(dep).map(|err| {
-                    let leaf = dep.atom();
-                    match err {
-                        NodeUnavailable::EvalFailed { message } => format!("{leaf} ({message})"),
-                        NodeUnavailable::DependencyFailed { .. } => leaf.to_string(),
-                        reason @ (NodeUnavailable::Todo { .. }
-                        | NodeUnavailable::Blocked { .. }) => format!("{leaf} ({reason})"),
-                    }
-                })
-            })
-            .collect();
-    (!failed.is_empty()).then(|| format!("dependency failed: {}", failed.join(", ")))
 }

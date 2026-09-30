@@ -34,8 +34,12 @@ impl<V> IndexedValue<V> {
     }
 
     /// An indexed value with its entries given positionally, for tests.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-internals"))]
     #[must_use]
+    #[expect(
+        clippy::unwrap_used,
+        reason = "test-only constructor; a mismatched fixture should panic"
+    )]
     pub fn for_test(axis: IndexAxis, entries: Vec<V>) -> Self {
         assert_eq!(axis.len(), entries.len(), "one entry per axis key");
         let entries = NonEmpty::try_from_vec(entries).unwrap();
@@ -122,6 +126,7 @@ impl<V> IndexedValue<V> {
     }
 
     /// Entries with their keys, in axis order.
+    #[must_use]
     pub fn iter(&self) -> impl ExactSizeIterator<Item = (&IndexEntryKey, &V)> {
         self.axis.keys().iter().zip(self.entries.iter())
     }

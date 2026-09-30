@@ -19,7 +19,7 @@ Counts cover production sources only: `tests.rs`, `tests/` directories, inline
 
 | Metric | What is counted | Goal |
 |---|---|---|
-| `internal_error_calls` | `internal_error(` calls in `graphcal-compiler` and `graphcal-eval` | Invariants carried by types instead of X001 fallbacks |
+| `internal_error_calls` | `internal_error(` calls in `graphcal-compiler`, `graphcal-eval`, and `graphcal-project` | Invariants carried by types instead of X001 fallbacks |
 | `resolved_name_from_def_outside_resolver` | `Resolved*Name::from_def` outside `resolve/` (compiler, eval, LSP) | Resolved names are minted only by the resolver |
 | `expect_valid_format` | `expect_valid(format!(…))` | No names fabricated from formatted strings |
 | `too_many_arguments_expects` | `clippy::too_many_arguments` suppressions (compiler, eval, LSP) | Context structs instead of long positional argument lists |

@@ -20,8 +20,8 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use graphcal_eval::eval::ProjectCompiler;
-use graphcal_eval::loader::{build_rooted_filesystem, load_project};
+use graphcal_project::loader::{build_rooted_filesystem, load_project};
+use graphcal_project::project_compiler::ProjectCompiler;
 use miette::{Diagnostic, SourceSpan};
 use serde_json::{Value, json};
 

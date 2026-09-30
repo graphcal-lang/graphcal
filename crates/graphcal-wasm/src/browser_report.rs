@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 use std::fmt::Write;
 
 use graphcal_eval::eval::{EvalOutputView, EvalResult};
-use graphcal_eval::loader::LoadedProject;
+use graphcal_project::loader::LoadedProject;
 use graphcal_report::report_html::render_host_report_html;
 use graphcal_report::report_ir::{
     Provenance, ReportInputs, SourceDigest, build_report, collect_doc_captions,

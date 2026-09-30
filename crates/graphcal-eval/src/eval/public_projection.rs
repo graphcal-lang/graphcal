@@ -42,7 +42,7 @@ use crate::runtime_value::{IndexedValue, RuntimeValue, StructValue};
 ///
 /// Returns an [`Invariant`] when a runtime variant differs from its checked
 /// type.
-pub(super) fn project(
+pub fn project(
     value: PresentedRef<'_, ResolvedLeaf>,
     declared_type: &CheckedType,
 ) -> Result<(Value, Vec<LeafPresentationDiagnostic>), Invariant> {

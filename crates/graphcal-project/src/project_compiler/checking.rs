@@ -1,0 +1,281 @@
+//! Static checking from authoritative project HIR to checked TIR.
+
+use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
+use graphcal_compiler::ir::imported_binding::ImportedValueKind;
+use graphcal_compiler::resolve::ModuleResolver;
+use graphcal_compiler::resolve::category::DeclSymbolKind;
+
+#[allow(
+    clippy::wildcard_imports,
+    clippy::allow_attributes,
+    reason = "project checking consumes the shared internal phase model"
+)]
+use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
+
+use miette::NamedSource;
+
+use graphcal_compiler::graphcal_error::GraphcalError;
+use graphcal_compiler::ir::imported_binding::ImportedBinding;
+use graphcal_compiler::ir::resolve::ScopedName;
+use graphcal_compiler::semantic::checked_type::CheckedType;
+
+use super::{entry_interface, lowering};
+use crate::compile_error::CompileError;
+
+use super::model::{CompiledFile, HirFile, ModuleArtifactStore};
+
+/// Checked value-declaration types of the DAGs in the file being checked.
+type LocalInterfaces = HashMap<graphcal_compiler::resolved_name::ResolvedDeclName, CheckedType>;
+
+fn declared_type_for_target(
+    target: &graphcal_compiler::resolved_name::ResolvedDeclName,
+    local_interfaces: &LocalInterfaces,
+    module_artifacts: &ModuleArtifactStore,
+) -> Option<CheckedType> {
+    local_interfaces
+        .get(target)
+        .or_else(|| {
+            module_artifacts
+                .for_owner(target.owner())
+                .and_then(|artifact| artifact.dag_store.get(target.owner()))
+                .and_then(|dag| dag.value_decl_type(target))
+                .map(graphcal_compiler::tir::typed::CheckedDeclType::declared)
+        })
+        .cloned()
+}
+
+fn resolve_imported_bindings(
+    hir: &graphcal_compiler::ir::model::HirDag,
+    local_interfaces: &LocalInterfaces,
+    module_artifacts: &ModuleArtifactStore,
+    module_resolver: &ModuleResolver,
+    src: &NamedSource<Arc<String>>,
+) -> Result<HashMap<ScopedName, ImportedBinding>, CompileError> {
+    hir.imported_bindings()
+        .iter()
+        .map(|(lexical, target)| {
+            let declared_type = declared_type_for_target(target, local_interfaces, module_artifacts)
+                .ok_or_else(|| {
+                    CompileError::Eval(GraphcalError::internal_error(
+                        format!(
+                            "checked interface for HIR import `{lexical}` targeting `{target}` is unavailable"
+                        ),
+                        src,
+                        DiagnosticAnchor::WholeFile,
+                    ))
+                })?;
+            let kind = match module_resolver.symbol(target).map(|symbol| *symbol.kind()).ok_or_else(|| {
+                CompileError::Eval(GraphcalError::internal_error(
+                    format!("HIR imported value `{target}` has no declaration"),
+                    src,
+                    DiagnosticAnchor::WholeFile,
+                ))
+            })? {
+                DeclSymbolKind::Const => ImportedValueKind::Constant,
+                DeclSymbolKind::Param | DeclSymbolKind::Node => ImportedValueKind::Runtime,
+                actual => return Err(CompileError::Eval(GraphcalError::internal_error(
+                    format!("HIR imported value `{target}` has non-value category {actual:?}"),
+                    src, DiagnosticAnchor::WholeFile,
+                ))),
+            };
+            let checked = ImportedBinding::new(target.clone(), declared_type, kind);
+            Ok((lexical.clone(), checked))
+        })
+        .collect()
+}
+
+struct ResolvedFileSignatures {
+    root: graphcal_compiler::tir::typed::SignatureResolvedHirDag,
+    inline: Vec<graphcal_compiler::tir::typed::SignatureResolvedHirDag>,
+    interfaces: LocalInterfaces,
+}
+
+/// Resolve every local declaration signature before any body is consumed.
+fn resolve_file_signatures(
+    root: graphcal_compiler::ir::model::HirDag,
+    inline: Vec<graphcal_compiler::ir::model::HirDag>,
+    file_src: &NamedSource<Arc<String>>,
+    module_resolver: &graphcal_compiler::resolve::ModuleResolver,
+    project_types: &graphcal_compiler::tir::typed::ProjectTypeStore,
+    cancellation: &graphcal_compiler::cancellation::CancellationToken,
+) -> Result<ResolvedFileSignatures, CompileError> {
+    let root = graphcal_compiler::tir::typed::resolve_hir_signature_with_modules_and_cancellation(
+        root,
+        file_src,
+        module_resolver,
+        project_types,
+        cancellation,
+    )?;
+    let inline = inline
+        .into_iter()
+        .map(|dag| {
+            graphcal_compiler::tir::typed::resolve_hir_signature_with_modules_and_cancellation(
+                dag,
+                file_src,
+                module_resolver,
+                project_types,
+                cancellation,
+            )
+            .map_err(CompileError::from)
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let interfaces = std::iter::once(&root)
+        .chain(&inline)
+        .flat_map(graphcal_compiler::tir::typed::SignatureResolvedHirDag::decl_types)
+        .map(|(identity, checked)| (identity.clone(), checked.declared().clone()))
+        .collect();
+    Ok(ResolvedFileSignatures {
+        root,
+        inline,
+        interfaces,
+    })
+}
+
+fn checked_dependency_overrides(
+    module_artifacts: &ModuleArtifactStore,
+) -> graphcal_compiler::tir::typed::CheckedOverrideDependencies {
+    let dependencies = module_artifacts
+        .values()
+        .flat_map(|artifact| artifact.override_dependencies.iter())
+        .map(|(declaration, dependencies)| (declaration.clone(), dependencies.clone()))
+        .collect();
+    let checked_owners: HashSet<graphcal_compiler::dag_id::DagId> = module_artifacts
+        .values()
+        .flat_map(|artifact| artifact.local_owners.iter().cloned())
+        .collect();
+    graphcal_compiler::tir::typed::CheckedOverrideDependencies::new(dependencies, checked_owners)
+}
+
+/// Check one physical file's root and inline-DAG HIR modules.
+pub(super) fn check_hir_file(
+    hir: HirFile,
+    module_artifacts: &ModuleArtifactStore,
+    inherited_execution_facts: &graphcal_eval::checked_program::ExecutionFacts,
+    exported_runtime_units: &HashMap<
+        graphcal_compiler::dag_id::DagId,
+        HashSet<graphcal_compiler::syntax::dimension::UnitName>,
+    >,
+    module_resolver: &graphcal_compiler::resolve::ModuleResolver,
+    project_types: &Arc<graphcal_compiler::tir::typed::ProjectTypeStore>,
+    cancellation: &graphcal_compiler::cancellation::CancellationToken,
+) -> Result<CompiledFile, CompileError> {
+    cancellation.checkpoint()?;
+    let file_src = &hir.source;
+    let source_declarations = hir.root.source_declarations().to_vec();
+    let entry_external_surface = hir.root.external_surface.clone();
+
+    // Pass 1 gives same-file inline DAG imports complete checked interfaces.
+    let ResolvedFileSignatures {
+        root: signed_root,
+        inline: signed_inline,
+        interfaces: local_interfaces,
+    } = resolve_file_signatures(
+        hir.root,
+        hir.inline_dags,
+        file_src,
+        module_resolver,
+        project_types.as_ref(),
+        cancellation,
+    )?;
+
+    // Pass 2 resolves bodies using exactly the signatures retained above.
+    let root_bindings = resolve_imported_bindings(
+        signed_root.hir(),
+        &local_interfaces,
+        module_artifacts,
+        module_resolver,
+        file_src,
+    )?;
+    let mut tir = graphcal_compiler::tir::typed::TirDraft::resolve_root(
+        signed_root,
+        root_bindings,
+        file_src,
+        module_resolver,
+        Arc::clone(project_types),
+        cancellation,
+    )?;
+    lowering::validate_imported_runtime_units(
+        tir.root(),
+        &hir.module_map,
+        exported_runtime_units,
+        file_src,
+    )?;
+
+    for signed in signed_inline {
+        cancellation.checkpoint()?;
+        let imported_bindings = resolve_imported_bindings(
+            signed.hir(),
+            &local_interfaces,
+            module_artifacts,
+            module_resolver,
+            file_src,
+        )?;
+        tir.add_inline_dag(
+            signed,
+            imported_bindings,
+            file_src,
+            module_resolver,
+            cancellation,
+        )?;
+    }
+
+    lowering::install_shared_module_artifacts(&mut tir, module_artifacts, file_src)?;
+    let tir = finish_module_assembly(tir, module_artifacts, file_src, cancellation)?;
+    #[cfg(test)]
+    observe_shared_artifacts(&tir, project_types, module_artifacts);
+    let program = graphcal_eval::execution_check::seal_checked_program(
+        tir,
+        inherited_execution_facts,
+        file_src,
+        cancellation,
+    )?;
+    let entry_interface = entry_interface::build_checked_entry_interface(
+        &source_declarations,
+        program.tir(),
+        &entry_external_surface,
+        file_src,
+    )?;
+
+    Ok(CompiledFile {
+        program,
+        entry_interface,
+        imported_source_order: hir.imported_source_order,
+        output_surface: hir.output_surface,
+        include_debug_names: hir.include_debug_names,
+    })
+}
+
+/// Complete local bodies before any execution facts are published.
+fn finish_module_assembly(
+    draft: graphcal_compiler::tir::typed::TirDraft,
+    module_artifacts: &ModuleArtifactStore,
+    src: &NamedSource<Arc<String>>,
+    cancellation: &graphcal_compiler::cancellation::CancellationToken,
+) -> Result<graphcal_compiler::tir::typed::CheckedTir, CompileError> {
+    Ok(draft
+        .instantiate(&checked_dependency_overrides(module_artifacts), src)?
+        .check(src, cancellation)?)
+}
+
+#[cfg(test)]
+fn observe_shared_artifacts(
+    tir: &graphcal_compiler::tir::typed::CheckedTir,
+    project_types: &graphcal_compiler::tir::typed::ProjectTypeStore,
+    module_artifacts: &ModuleArtifactStore,
+) {
+    assert!(
+        std::ptr::eq(project_types, tir.project_type_store()),
+        "module checking must retain the canonical project type store"
+    );
+    module_artifacts
+        .values()
+        .flat_map(|artifact| artifact.dag_store.iter())
+        .for_each(|(owner, canonical)| {
+            let imported = tir
+                .dag_registry()
+                .get(owner)
+                .expect("installed imported body");
+            graphcal_eval::pipeline_metrics::record_imported_body(canonical, imported);
+        });
+}

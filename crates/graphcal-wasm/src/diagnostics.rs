@@ -1,5 +1,5 @@
 use graphcal_compiler::text_position::{Utf16LineIndex, Utf16Position, Utf16Range};
-use graphcal_eval::eval::CompileError;
+use graphcal_project::compile_error::CompileError;
 use serde::Serialize;
 
 use crate::project::VirtualProject;
@@ -89,7 +89,7 @@ pub fn compile_error_view(error: &CompileError, project: &VirtualProject) -> Dia
 
 #[cfg(test)]
 mod tests {
-    use graphcal_eval::eval::compile_and_eval_named;
+    use graphcal_project::prepare::compile_and_eval_named;
 
     use crate::project::{PlaygroundFile, PlaygroundRequest};
 

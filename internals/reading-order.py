@@ -63,6 +63,7 @@ CRATE_ORDER = [
     "graphcal-plugin-macros",
     "graphcal-plugin",
     "graphcal-eval",
+    "graphcal-project",
     "graphcal-report",
     "graphcal-test-support",
     "graphcal-tenax",
@@ -121,13 +122,13 @@ NOTES: dict[str, str] = {
     "crates/graphcal-compiler/src/plugin_identity.rs": (
         "resolved package-owned artifacts versus global host identities"
     ),
-    "crates/graphcal-eval/src/package_snapshot.rs": (
+    "crates/graphcal-project/src/package_snapshot.rs": (
         "capture and authenticate sources plus declared Wasm artifacts"
     ),
-    "crates/graphcal-eval/src/package_sources.rs": (
+    "crates/graphcal-project/src/package_sources.rs": (
         "explicit native-cache versus isolated embedded dependency authority"
     ),
-    "crates/graphcal-eval/src/project_bundle.rs": (
+    "crates/graphcal-project/src/project_bundle.rs": (
         "bounded portable artifacts and virtual mounting; consumed by report"
         " assembly and browser preparation"
     ),
@@ -339,13 +340,16 @@ def parse_file(path: Path) -> tuple[list[list[str]], list[list[str]], list[str]]
                 relative_to_inline_modules(segs, nesting) for segs in expand_use(stmt)
             ]
             paths.extend(expanded)
-            if is_pub:
+            # Only file-level re-exports are items of this file's module.
+            if is_pub and nesting == 0:
                 pub_uses.extend(expanded)
             i += 1
             continue
         m = MOD_RE.match(line)
         if m:
-            mods.append(m.group(1))
+            # A `mod x;` inside an inline module is not a child of this file's module.
+            if nesting == 0:
+                mods.append(m.group(1))
         else:
             for im in INLINE_RE.finditer(line):
                 segs = [im.group(1)] + im.group(2).split("::")
