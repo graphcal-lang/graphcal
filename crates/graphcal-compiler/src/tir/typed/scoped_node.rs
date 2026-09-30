@@ -25,8 +25,8 @@ use crate::syntax::type_name::FieldName;
 use crate::tir::texpr::operators::{BExpr, CExpr, DExpr, IExpr, LinearAlgebraCall, QExpr};
 use crate::tir::texpr::{
     ConstructorApplication, DatetimeLiteral, StaticPosition, TConstRef, TConstructorArm, TExpr,
-    TExprKind, TFieldInit, TIndexArg, TKeyForm, TLabelArm, TMapEntry, TMatchArms, TNodeRef,
-    TParamBinding, visit_tnodes,
+    TExprKind, TExternArg, TFieldInit, TIndexArg, TKeyForm, TLabelArm, TMapEntry, TMatchArms,
+    TNodeRef, TParamBinding, visit_tnodes,
 };
 
 use super::body_scope::Scoped;
@@ -63,7 +63,7 @@ pub enum NodeKind<'t> {
     LinearAlgebra(LinearAlgebraCall<ScopedNode<'t>>),
     Extern {
         function: &'t ExternFnRef,
-        args: Scoped<'t, [TExpr]>,
+        args: Scoped<'t, [TExternArg]>,
     },
     If {
         condition: ScopedNode<'t>,

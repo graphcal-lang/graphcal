@@ -13,8 +13,8 @@ use crate::semantic::checked_type::{CheckedType, Concrete, Concreteness, IndexTy
 use crate::syntax::span::{Span, Spanned};
 
 use super::model::{
-    StaticPosition, TBody, TConstRef, TConstructorArm, TExpr, TExprKind, TFieldInit, TIndexArg,
-    TKeyForm, TLabelArm, TMapEntry, TMatchArms, TParamBinding,
+    StaticPosition, TBody, TConstRef, TConstructorArm, TExpr, TExprKind, TExternArg, TFieldInit,
+    TIndexArg, TKeyForm, TLabelArm, TMapEntry, TMatchArms, TParamBinding,
 };
 
 /// How a structure-preserving map rewrites the types a tree carries.
@@ -250,7 +250,12 @@ impl<V: Concreteness> TExpr<V> {
                 function: function.clone(),
                 args: args
                     .iter()
-                    .map(|arg| arg.map_types(map))
+                    .map(|arg| {
+                        Ok(TExternArg {
+                            kind: arg.kind.clone(),
+                            value: arg.value.map_types(map)?,
+                        })
+                    })
                     .collect::<Result<_, M::Error>>()?,
             },
             TExprKind::If {

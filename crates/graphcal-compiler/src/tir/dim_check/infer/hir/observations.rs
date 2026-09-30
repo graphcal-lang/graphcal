@@ -7,7 +7,8 @@
 //! template-closure validation, override-dependency summaries) read these
 //! observations instead of inferring the body again.
 
-use crate::hir::expr::{ConstRef, Expr, ExprKind, MatchPattern};
+use crate::function_signature::FunctionParam;
+use crate::hir::expr::{ConstRef, Expr, ExprKind, FunctionRef, MatchPattern};
 use crate::resolved_name::{ResolvedConstructorName, ResolvedStructTypeName};
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
@@ -209,11 +210,13 @@ impl BodyObservations {
                 checked_type,
                 constructor,
                 constructor_matches,
+                extern_params,
             } => self.typed.borrow_mut().record_value(
                 expr,
                 checked_type,
                 &NodeFacts {
                     constructor: constructor.as_deref(),
+                    extern_params: extern_params.as_deref(),
                     constructor_matches: &constructor_matches,
                     static_indexes: &static_indexes,
                 },
@@ -334,12 +337,30 @@ impl BodyObservations {
                 .collect::<Result<_, GraphcalError>>()?,
             _ => HashMap::new(),
         };
+        // The declared parameters a plugin call's arguments were checked
+        // against, so its typed node carries each argument's ABI kind. A call
+        // without a resolved signature was not checked, and assembly rejects it.
+        let extern_params = match expr.kind() {
+            ExprKind::FnCall {
+                callee:
+                    crate::syntax::span::Spanned {
+                        value: FunctionRef::External(function),
+                        ..
+                    },
+                ..
+            } => tir
+                .extern_functions()
+                .get(&function.key())
+                .map(|entry| entry.signature.params().to_vec()),
+            _ => None,
+        };
         self.insert(
             expr,
             CheckedNode::Value {
                 checked_type,
                 constructor: constructor.map(Box::new),
                 constructor_matches,
+                extern_params,
             },
             src,
         )
@@ -353,5 +374,6 @@ enum CheckedNode {
         checked_type: CheckedType<Symbolic>,
         constructor: Option<Box<ConstructorApplication<Symbolic>>>,
         constructor_matches: HashMap<ResolvedConstructorName, ConstructorMatch>,
+        extern_params: Option<Vec<FunctionParam>>,
     },
 }

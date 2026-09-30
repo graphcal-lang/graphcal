@@ -4,6 +4,7 @@ use crate::builtin::AggregationFn;
 use crate::dag_id::DagId;
 use crate::datetime_literal::{CivilDateTimeLiteral, OffsetDateTimeLiteral, ZonedDateTimeLiteral};
 use crate::expression_id::ExprId;
+use crate::function_signature::{FunctionParam, IndexBinder, ParamKind, ScalarValueKind};
 use crate::hir::expr::{
     ExternFnRef, ForBinding, ForBindingIndex, IndexVariantRef, LocalDef, LocalId, MapEntryKey,
     PatternBinding, ResolvedUnitExpr, UnfoldRecurrence,
@@ -12,6 +13,7 @@ use crate::resolved_name::ResolvedDeclName;
 use crate::semantic::checked_type::{CheckedType, Concrete, Concreteness, IndexTypeRef};
 use crate::semantic::time_scale::TimeScale;
 use crate::semantic::time_zone::IanaTimeZoneId;
+use crate::syntax::function_name::FnParamName;
 use crate::syntax::non_empty::NonEmpty;
 use crate::syntax::span::{Span, Spanned};
 use crate::syntax::type_name::FieldName;
@@ -125,7 +127,7 @@ impl<V: Concreteness> TExpr<V> {
             TExprKind::DatetimeLiteral(_) => Vec::new(),
             TExprKind::Aggregate { arg, .. } => vec![&**arg],
             TExprKind::LinearAlgebra(call) => unbox(call.operands()),
-            TExprKind::Extern { args, .. } => args.iter().collect(),
+            TExprKind::Extern { args, .. } => args.iter().map(|arg| &arg.value).collect(),
             TExprKind::If {
                 condition,
                 then_branch,
@@ -226,10 +228,11 @@ pub enum TExprKind<V: Concreteness = Concrete> {
     },
     /// A shape-aware operation on indexed quantities.
     LinearAlgebra(LinearAlgebraCall<Box<TExpr<V>>>),
-    /// A plugin function call.
+    /// A plugin function call, each argument paired with the declared
+    /// parameter checking matched it against.
     Extern {
         function: ExternFnRef,
-        args: Vec<TExpr<V>>,
+        args: Vec<TExternArg<V>>,
     },
     If {
         condition: Box<TExpr<V>>,
@@ -412,6 +415,61 @@ pub enum ContextualLiteral {
     CivilDateTime(CivilDateTimeLiteral),
     ZonedDateTime(ZonedDateTimeLiteral),
     TimeZone(IanaTimeZoneId),
+}
+
+/// The declared parameter of one plugin-call argument, by the ABI kind the
+/// argument crosses as.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ExternArgKind {
+    /// A single quantity.
+    Quantity { param: FnParamName },
+    /// A single Boolean.
+    Bool { param: FnParamName },
+    /// A single integer.
+    Int { param: FnParamName },
+    /// A dense array of `element`s whose axes, in order, bind `indexes`.
+    Indexed {
+        param: FnParamName,
+        element: ScalarValueKind,
+        indexes: NonEmpty<IndexBinder>,
+    },
+}
+
+impl ExternArgKind {
+    /// The ABI kind of an argument for `param`.
+    #[must_use]
+    pub fn for_param(param: &FunctionParam) -> Self {
+        let name = param.name.clone();
+        match &param.kind {
+            ParamKind::Scalar(ScalarValueKind::Quantity(_)) => Self::Quantity { param: name },
+            ParamKind::Scalar(ScalarValueKind::Bool) => Self::Bool { param: name },
+            ParamKind::Scalar(ScalarValueKind::Int) => Self::Int { param: name },
+            ParamKind::Indexed { element, indexes } => Self::Indexed {
+                param: name,
+                element: element.clone(),
+                indexes: indexes.clone(),
+            },
+        }
+    }
+
+    /// The declared parameter.
+    #[must_use]
+    pub const fn param(&self) -> &FnParamName {
+        match self {
+            Self::Quantity { param }
+            | Self::Bool { param }
+            | Self::Int { param }
+            | Self::Indexed { param, .. } => param,
+        }
+    }
+}
+
+/// One argument of a plugin call with the declared parameter checking matched
+/// it against; its checked type agrees with that parameter's kind.
+#[derive(Debug, Clone)]
+pub struct TExternArg<V: Concreteness = Concrete> {
+    pub kind: ExternArgKind,
+    pub value: TExpr<V>,
 }
 
 /// A checked constructor field initializer, in written order.
