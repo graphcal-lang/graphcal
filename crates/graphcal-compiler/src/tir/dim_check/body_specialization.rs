@@ -276,8 +276,15 @@ pub fn specialize_bound_expression<'t>(
     let scope = bound.scope();
     let dag = scope.dag();
     let bound = bound.get();
-    specialize_bound_body(tir, dag, dag.bodies(), &bound.value, bindings, &bound.src)
-        .map(|tree| crate::tir::typed::ScopedTree::new(scope, tree))
+    specialize_bound_body(
+        tir,
+        dag.body(),
+        dag.bodies(),
+        &bound.value,
+        bindings,
+        &bound.src,
+    )
+    .map(|tree| crate::tir::typed::ScopedTree::new(scope, tree))
 }
 
 /// The executable tree of one generic field bound under one application's

@@ -72,7 +72,7 @@ impl<'t> CheckedInstance<'t> {
         projections
             .iter()
             .map(move |projection| ResolvedProjection {
-                target: self.dag.frame().resolve(target(projection)),
+                target: self.dag.body().frame().resolve(target(projection)),
                 projection,
             })
     }

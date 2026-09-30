@@ -31,7 +31,7 @@ impl<'t> BodyScope<'t> {
 
     /// Identity of the DAG that runs bodies in this scope.
     #[must_use]
-    pub(crate) fn dag_id(self) -> &'t crate::dag_id::DagId {
+    pub(crate) const fn dag_id(self) -> &'t crate::dag_id::DagId {
         self.dag.dag_id()
     }
 
@@ -39,14 +39,14 @@ impl<'t> BodyScope<'t> {
     /// holding it.
     #[must_use]
     pub(crate) fn resolve(self, handle: &LocalDecl) -> ResolvedDeclName {
-        self.dag.frame().resolve(handle)
+        self.dag.body().frame().resolve(handle)
     }
 
     /// The unit whose scale `unit` has when this scope's DAG runs the body
     /// holding it.
     #[must_use]
     pub(crate) fn resolve_unit(self, unit: &LocalUnit) -> ResolvedUnitName {
-        self.dag.frame().resolve_unit(unit)
+        self.dag.body().frame().resolve_unit(unit)
     }
 }
 
@@ -90,7 +90,7 @@ impl<'t, T: ?Sized> Scoped<'t, T> {
 
     /// Identity of the DAG that runs this part.
     #[must_use]
-    pub fn dag_id(self) -> &'t crate::dag_id::DagId {
+    pub const fn dag_id(self) -> &'t crate::dag_id::DagId {
         self.scope.dag_id()
     }
 

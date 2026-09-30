@@ -122,10 +122,154 @@ impl CheckedDag {
     }
 }
 
-impl std::ops::Deref for CheckedDag {
-    type Target = DagTIR;
-
-    fn deref(&self) -> &DagTIR {
+/// The unchecked body, for the compiler's own passes.
+///
+/// Outside the compiler a checked DAG exposes only the declaration data
+/// below, not its body's HIR expressions, frame, or name lookups.
+impl CheckedDag {
+    /// The unchecked body this DAG was checked from.
+    #[must_use]
+    pub(crate) const fn body(&self) -> &DagTIR {
         &self.body
+    }
+
+    /// The unchecked body, for tests outside the compiler.
+    #[cfg(any(test, feature = "test-identities"))]
+    #[must_use]
+    pub const fn body_for_test(&self) -> &DagTIR {
+        &self.body
+    }
+
+    /// Canonical identity of this DAG.
+    #[must_use]
+    pub const fn dag_id(&self) -> &crate::dag_id::DagId {
+        self.body.dag_id()
+    }
+
+    /// Whether this DAG is a semantic instance of a template.
+    #[must_use]
+    pub const fn is_semantic_instance(&self) -> bool {
+        self.body.is_semantic_instance()
+    }
+
+    /// The semantic include edges this DAG owns.
+    #[must_use]
+    pub fn semantic_instances(&self) -> &[crate::ir::instance::HirInstanceRecord] {
+        self.body.semantic_instances()
+    }
+
+    /// Output names an importer may select from this DAG.
+    #[must_use]
+    pub const fn projectable_outputs(
+        &self,
+    ) -> &std::collections::HashSet<crate::syntax::decl_name::DeclName> {
+        self.body.projectable_outputs()
+    }
+
+    /// Every declaration of this DAG, keyed by canonical identity.
+    #[must_use]
+    pub const fn decls(&self) -> &crate::ir::decl_table::DeclTable<super::model::Typed> {
+        self.body.decls()
+    }
+
+    /// Const declarations, in source order.
+    pub fn consts(&self) -> impl Iterator<Item = &super::model::TypedConstEntry> {
+        self.body.consts()
+    }
+
+    /// Param declarations, in source order.
+    pub fn params(&self) -> impl Iterator<Item = &super::model::TypedParamEntry> {
+        self.body.params()
+    }
+
+    /// Node declarations, in source order.
+    pub fn nodes(&self) -> impl Iterator<Item = &super::model::TypedNodeEntry> {
+        self.body.nodes()
+    }
+
+    /// Assertions, in source order.
+    pub fn asserts(&self) -> impl Iterator<Item = &super::model::TypedAssertEntry> {
+        self.body.asserts()
+    }
+
+    /// Plots, in source order.
+    pub fn plots(&self) -> impl Iterator<Item = &super::model::TypedPlotEntry> {
+        self.body.plots()
+    }
+
+    /// Figures, in source order.
+    pub fn figures(&self) -> impl Iterator<Item = &super::model::TypedFigureEntry> {
+        self.body.figures()
+    }
+
+    /// Layers, in source order.
+    pub fn layers(&self) -> impl Iterator<Item = &super::model::TypedLayerEntry> {
+        self.body.layers()
+    }
+
+    /// Semantic facts of this DAG's body.
+    #[must_use]
+    pub const fn semantic(&self) -> &super::model::DagSemanticBody {
+        self.body.semantic()
+    }
+
+    /// The checked declared type of a value declaration of this DAG.
+    #[must_use]
+    pub fn value_decl_type(
+        &self,
+        key: &ResolvedDeclName,
+    ) -> Option<&super::model::CheckedDeclType> {
+        self.body.value_decl_type(key)
+    }
+
+    /// Every value declaration of this DAG with its checked type annotation.
+    pub fn value_decl_types(
+        &self,
+    ) -> impl Iterator<Item = (ResolvedDeclName, &super::model::CheckedTypeAnnotation)> {
+        self.body.value_decl_types()
+    }
+
+    /// Identities of this DAG's value declarations, in source order.
+    pub fn value_declaration_identities(&self) -> impl Iterator<Item = &ResolvedDeclName> {
+        self.body.value_declaration_identities()
+    }
+
+    /// Whether `key` is a const declaration of this DAG.
+    #[must_use]
+    pub fn is_constant(&self, key: &ResolvedDeclName) -> bool {
+        self.body.const_expr(key).is_some()
+    }
+
+    /// The unfinished-definition marker of a declaration, if it is a TODO.
+    #[must_use]
+    pub fn todo(
+        &self,
+        key: &ResolvedDeclName,
+    ) -> Option<&crate::syntax::span::Spanned<Vec<crate::syntax::span::Spanned<ResolvedDeclName>>>>
+    {
+        self.body.todo(key)
+    }
+
+    /// Each assertion with the declarations that assume it.
+    #[must_use]
+    pub const fn assumes_map(&self) -> &HashMap<ResolvedDeclName, Vec<ResolvedDeclName>> {
+        self.body.assumes_map()
+    }
+
+    /// Imported declarations keyed by their source-visible lexical binding.
+    #[must_use]
+    pub const fn imported_bindings(
+        &self,
+    ) -> &HashMap<
+        crate::syntax::module_name::ScopedName,
+        crate::ir::imported_binding::ImportedBinding,
+    > {
+        self.body.imported_bindings()
+    }
+
+    /// The declaration of this DAG an imported `target` is bound to.
+    #[must_use]
+    pub fn imported_destination(&self, target: &ResolvedDeclName) -> ResolvedDeclName {
+        self.body.imported_destination(target)
     }
 }

@@ -126,7 +126,7 @@ impl DagRegistry {
         } else {
             self.other_dags
                 .get(dag_id)
-                .or_else(|| self.shared_dags.get(dag_id).map(|dag| &***dag))
+                .or_else(|| self.shared_dags.get(dag_id).map(|dag| dag.body()))
         }
     }
 
@@ -161,7 +161,7 @@ impl DagRegistry {
     /// Iterate over canonical identities and DAG bodies.
     pub(crate) fn iter(&self) -> impl Iterator<Item = (&crate::dag_id::DagId, &DagTIR)> {
         self.local_iter()
-            .chain(self.shared_dags.iter().map(|(id, dag)| (id, &***dag)))
+            .chain(self.shared_dags.iter().map(|(id, dag)| (id, dag.body())))
     }
 
     /// Iterate mutably over local DAG bodies while preserving their registry keys.

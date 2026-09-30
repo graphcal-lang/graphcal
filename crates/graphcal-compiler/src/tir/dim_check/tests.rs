@@ -68,7 +68,7 @@ fn check(source: &str) -> Result<HashMap<ScopedName, CheckedType>, GraphcalError
             })?;
     }
     let tir = check_draft(builder, &src)?;
-    Ok(root_declared_types(tir.root()))
+    Ok(root_declared_types(tir.root().body()))
 }
 
 /// Instantiate and check a draft without external override summaries.
