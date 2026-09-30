@@ -7,8 +7,10 @@
 //! compiler, the DAG is never chosen by the code evaluating a body: it is
 //! selected here, from the owner of the typed identity whose unit is looked
 //! up, and every tree of the unit is handed out together with that DAG's
-//! scope ([`Scoped`], [`ScopedTree`]). A [`BodyScope`] exists only inside such
-//! a value.
+//! scope ([`Scoped`], [`ScopedTree`]). A `BodyScope` exists only inside such
+//! a value, and resolves a handle only for the scoped traversal of the tree
+//! that holds it ([`ScopedNode`]): no public API resolves
+//! a handle in a scope chosen apart from its tree.
 
 use std::borrow::Borrow;
 
@@ -22,6 +24,7 @@ use super::model::{
     ResolvedDomainBound, ResolvedStructFieldSemantics, ResolvedStructFieldTypeKey, Typed,
     TypedAssertEntry, TypedFigureEntry, TypedLayerEntry, TypedPlotEntry,
 };
+use super::scoped_node::ScopedNode;
 
 /// The scope a body runs in: the frame of the checked DAG that owns it.
 ///
@@ -29,7 +32,7 @@ use super::model::{
 /// an external value, the root module), and handed out only inside a
 /// [`Scoped`] part or a [`ScopedTree`] of that DAG.
 #[derive(Debug, Clone, Copy)]
-pub struct BodyScope<'t> {
+pub(crate) struct BodyScope<'t> {
     dag: &'t CheckedDag,
 }
 
@@ -46,29 +49,22 @@ impl<'t> BodyScope<'t> {
 
     /// Identity of the DAG that runs bodies in this scope.
     #[must_use]
-    pub fn dag_id(self) -> &'t crate::dag_id::DagId {
+    pub(crate) fn dag_id(self) -> &'t crate::dag_id::DagId {
         self.dag.dag_id()
     }
 
     /// The declaration `handle` denotes when this scope's DAG runs the body
     /// holding it.
     #[must_use]
-    pub fn resolve(self, handle: &LocalDecl) -> ResolvedDeclName {
+    pub(crate) fn resolve(self, handle: &LocalDecl) -> ResolvedDeclName {
         self.dag.frame().resolve(handle)
     }
 
     /// The unit whose scale `unit` has when this scope's DAG runs the body
     /// holding it.
     #[must_use]
-    pub fn resolve_unit(self, unit: &LocalUnit) -> ResolvedUnitName {
+    pub(crate) fn resolve_unit(self, unit: &LocalUnit) -> ResolvedUnitName {
         self.dag.frame().resolve_unit(unit)
-    }
-
-    /// The nominal type `source` stands for when this scope's DAG runs a
-    /// body naming it, after the instance's Static type substitution.
-    #[must_use]
-    pub fn runtime_struct_type(self, source: &ResolvedStructTypeName) -> ResolvedStructTypeName {
-        self.dag.frame().struct_type(source)
     }
 }
 
@@ -93,7 +89,7 @@ impl<T: ?Sized> Clone for Scoped<'_, T> {
 impl<T: ?Sized> Copy for Scoped<'_, T> {}
 
 impl<'t, T: ?Sized> Scoped<'t, T> {
-    const fn new(scope: BodyScope<'t>, part: &'t T) -> Self {
+    pub(super) const fn new(scope: BodyScope<'t>, part: &'t T) -> Self {
         Self { scope, part }
     }
 
@@ -108,6 +104,12 @@ impl<'t, T: ?Sized> Scoped<'t, T> {
     #[must_use]
     pub(crate) const fn scope(self) -> BodyScope<'t> {
         self.scope
+    }
+
+    /// Identity of the DAG that runs this part.
+    #[must_use]
+    pub fn dag_id(self) -> &'t crate::dag_id::DagId {
+        self.scope.dag_id()
     }
 
     /// A sub-part of this part, in the same scope.
@@ -131,9 +133,30 @@ impl<'t, T: ?Sized> Scoped<'t, T> {
 
 impl<'t, T> Scoped<'t, [T]> {
     /// Every element of this part, each in the same scope.
-    pub fn iter(self) -> impl Iterator<Item = Scoped<'t, T>> + use<'t, T> {
+    #[must_use]
+    pub fn iter(self) -> impl ExactSizeIterator<Item = Scoped<'t, T>> + use<'t, T> {
         let scope = self.scope;
         self.part.iter().map(move |part| Scoped::new(scope, part))
+    }
+
+    /// The number of elements of this part.
+    #[must_use]
+    pub const fn len(self) -> usize {
+        self.part.len()
+    }
+
+    /// Whether this part has no elements.
+    #[must_use]
+    pub const fn is_empty(self) -> bool {
+        self.part.is_empty()
+    }
+
+    /// The element at `index`, in the same scope.
+    #[must_use]
+    pub fn nth(self, index: usize) -> Option<Scoped<'t, T>> {
+        self.part
+            .get(index)
+            .map(|part| Scoped::new(self.scope, part))
     }
 }
 
@@ -241,15 +264,15 @@ impl<'t, T: Borrow<TExpr>> ScopedTree<'t, T> {
         Self { scope, tree }
     }
 
-    /// The scope the tree runs in.
+    /// The root node of the tree, in the tree's scope.
     #[must_use]
-    pub const fn scope(&self) -> BodyScope<'t> {
-        self.scope
+    pub fn root(&self) -> ScopedNode<'_> {
+        Scoped::new(self.scope, self.tree.borrow())
     }
 
-    /// The tree.
-    #[must_use]
-    pub fn tree(&self) -> &TExpr {
+    /// The tree, for the compiler's own inspection.
+    #[cfg(test)]
+    pub(crate) fn tree(&self) -> &TExpr {
         self.tree.borrow()
     }
 }

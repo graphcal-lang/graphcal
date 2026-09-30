@@ -258,8 +258,10 @@ fn dependency_failure_message<'a>(
     if errors.is_empty() {
         return None;
     }
-    let deps: std::collections::BTreeSet<_> =
-        exprs.into_iter().flat_map(Scoped::graph_refs).collect();
+    let deps: std::collections::BTreeSet<_> = exprs
+        .into_iter()
+        .flat_map(Scoped::<'_, graphcal_compiler::hir::Expr>::graph_refs)
+        .collect();
     let failed: Vec<String> =
         deps.iter()
             .filter_map(|dep| {

@@ -6,7 +6,7 @@ use graphcal_compiler::syntax::span::Span;
 use crate::runtime_value::RuntimeValue;
 use graphcal_compiler::registry::error::GraphcalError;
 
-use super::EvalContext;
+use super::EvalSession;
 
 // ---------------------------------------------------------------------------
 // Helper functions
@@ -55,7 +55,7 @@ mod tests {
 pub(super) fn check_finite(
     value: f64,
     context: &str,
-    ctx: &EvalContext<'_>,
+    ctx: &EvalSession<'_>,
     span: Span,
 ) -> Result<FiniteQuantity, GraphcalError> {
     super::numeric::computed_finite_quantity(value, context)
@@ -65,7 +65,7 @@ pub(super) fn check_finite(
 fn check_nonzero(
     value: f64,
     context: &str,
-    ctx: &EvalContext<'_>,
+    ctx: &EvalSession<'_>,
     span: Span,
 ) -> Result<FiniteQuantity, GraphcalError> {
     super::numeric::computed_nonzero_quantity(value, context)
@@ -103,7 +103,7 @@ pub(super) fn eval_comparison_values(
     op: Comparison,
     l: &RuntimeValue,
     r: &RuntimeValue,
-    ctx: &EvalContext<'_>,
+    ctx: &EvalSession<'_>,
     span: Span,
 ) -> Result<RuntimeValue, GraphcalError> {
     match (op, l, r) {
@@ -151,7 +151,7 @@ pub(super) fn eval_int_binop(
     op: BinOp,
     l: i64,
     r: i64,
-    ctx: &EvalContext<'_>,
+    ctx: &EvalSession<'_>,
     span: Span,
 ) -> Result<i64, GraphcalError> {
     match op {
@@ -201,7 +201,7 @@ pub(super) fn eval_int_binop(
 pub(super) fn eval_exact_quantity_power(
     base: FiniteQuantity,
     exponent: ExactRational,
-    ctx: &EvalContext<'_>,
+    ctx: &EvalSession<'_>,
     span: Span,
 ) -> Result<FiniteQuantity, GraphcalError> {
     let result = exponent
@@ -223,7 +223,7 @@ pub(super) fn eval_quantity_binop(
     op: BinOp,
     l: FiniteQuantity,
     r: FiniteQuantity,
-    ctx: &EvalContext<'_>,
+    ctx: &EvalSession<'_>,
     span: Span,
 ) -> Result<FiniteQuantity, GraphcalError> {
     let context = "arithmetic operation";

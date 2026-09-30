@@ -40,6 +40,7 @@ pub mod override_dependencies;
 pub use override_dependencies::CheckedOverrideDependencies;
 pub mod resolved_type;
 pub use resolved_type::*;
+pub mod scoped_node;
 
 impl DagTIR {
     /// Populate the values that callers may project from this DAG.

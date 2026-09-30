@@ -1724,6 +1724,11 @@ role = "contracts"
 
 [[module]]
 package = "compiler"
+path = ["tir", "typed", "scoped_node"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
 path = ["tir", "typed", "override_dependencies"]
 role = "contracts"
 

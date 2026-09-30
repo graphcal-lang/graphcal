@@ -2,13 +2,14 @@
 //! This is not a selector evaluator: branches, locals and keys already selected
 //! a value-shaped subtree in the ordinary expression kernel.
 
-use graphcal_compiler::hir::expr::{ResolvedUnitExpr, ResolvedUnitExprItem, ResolvedUnitRef};
+use graphcal_compiler::dag_id::DagId;
+use graphcal_compiler::hir::expr::ResolvedUnitExpr;
 use graphcal_compiler::registry::error::GraphcalError;
 use graphcal_compiler::registry::format::format_unit_terms_canonical;
 use graphcal_compiler::registry::unit::PositiveFiniteScale;
-use graphcal_compiler::syntax::span::Spanned;
+use graphcal_compiler::tir::typed::scoped_node::ScopedUnitExpr;
 
-use super::context::{EvalContext, EvalSession};
+use super::context::EvalSession;
 use crate::constant_pools::RuntimeValueMap;
 use crate::presentation_evidence::{
     PendingDisplayUnit, PendingQuantityDisplay, PresentationFailure, QuantityDisplay,
@@ -16,30 +17,17 @@ use crate::presentation_evidence::{
 use crate::runtime_presentation::{EvaluatedRuntimeValue, ResolvedValue};
 
 /// A display request for `unit`, whose terms are resolved now, in the scope
-/// of the tree `ctx` evaluates, and whose scale is computed once the owning
-/// frame is complete.
-pub(super) fn pending(unit: &ResolvedUnitExpr, ctx: &EvalContext<'_>) -> PendingQuantityDisplay {
+/// of the tree naming it, which `owner` runs, and whose scale is computed
+/// once the owning frame is complete.
+pub(super) fn pending(
+    unit: ScopedUnitExpr<'_>,
+    owner: &DagId,
+    ctx: &EvalSession<'_>,
+) -> PendingQuantityDisplay {
     PendingQuantityDisplay::Requested(Box::new(PendingDisplayUnit {
-        owner: ctx.dag_id().clone(),
+        owner: owner.clone(),
         source: ctx.src.clone(),
-        unit: ResolvedUnitExpr {
-            terms: unit
-                .terms
-                .iter()
-                .map(|term| ResolvedUnitExprItem {
-                    op: term.op,
-                    name: Spanned::new(
-                        ResolvedUnitRef::new(
-                            term.name.value.spelling().clone(),
-                            ctx.resolve_unit(&term.name.value),
-                        ),
-                        term.name.span,
-                    ),
-                    power: term.power,
-                })
-                .collect(),
-            span: unit.span,
-        },
+        unit: unit.resolved(),
     }))
 }
 

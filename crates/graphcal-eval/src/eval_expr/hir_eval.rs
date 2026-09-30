@@ -15,10 +15,12 @@ use graphcal_compiler::registry::time_scale::TimeScale;
 use graphcal_compiler::syntax::index_name::IndexEntryKey;
 use graphcal_compiler::syntax::span::{Span, Spanned};
 use graphcal_compiler::tir::texpr::{
-    ContextualLiteral, TArg, TConstRef, TExpr, TExprKind, TFieldInit, TIndexArg, TMatchArm,
-    TMatchPattern, TParamBinding,
+    ContextualLiteral, TArg, TExpr, TFieldInit, TIndexArg, TMatchArm, TMatchPattern, TParamBinding,
 };
-use graphcal_compiler::tir::typed::evaluation_unit::{DeclarationBody, ScopedTree};
+use graphcal_compiler::tir::typed::evaluation_unit::{DeclarationBody, Scoped, ScopedTree};
+use graphcal_compiler::tir::typed::scoped_node::{
+    ConstRef, NodeKind, ScopedArg, ScopedIndexArg, ScopedNode,
+};
 use indexmap::IndexMap;
 use miette::NamedSource;
 
@@ -31,7 +33,7 @@ use graphcal_compiler::resolved_name::ResolvedDeclName;
 
 use super::arithmetic::{Comparison, OrderingOp};
 use super::{
-    EvalContext, EvalSession, RuntimeValueMap, checked_finite_quantity, checked_unit_scaled_value,
+    EvalSession, RuntimeValueMap, checked_finite_quantity, checked_unit_scaled_value,
     imported_binding_value, index_ref_matches_resolved, resolve_unit_scale,
 };
 
@@ -50,7 +52,7 @@ fn presented_ref<'a>(
 }
 
 /// The diagnostic for a violated presentation invariant.
-fn invariant_error(invariant: Invariant, span: Span, ctx: &EvalContext<'_>) -> GraphcalError {
+fn invariant_error(invariant: Invariant, span: Span, ctx: &EvalSession<'_>) -> GraphcalError {
     ctx.failure_error(
         Failure::<std::convert::Infallible>::Invariant(invariant),
         span,
@@ -64,12 +66,7 @@ pub fn eval_root<T: std::borrow::Borrow<TExpr>>(
     values: &RuntimeValueMap,
     session: &EvalSession<'_>,
 ) -> Result<RuntimeValue, GraphcalError> {
-    eval_texpr(
-        root.tree(),
-        values,
-        &HirLocalValueMap::root(),
-        &session.enter(root),
-    )
+    eval_texpr(root.root(), values, &HirLocalValueMap::root(), session)
 }
 
 /// Evaluate the root tree of an evaluation unit in the scope it was handed
@@ -81,25 +78,24 @@ pub fn eval_root_with_presentation<T: std::borrow::Borrow<TExpr>>(
     session: &EvalSession<'_>,
 ) -> Result<EvaluatedRuntimeValue, GraphcalError> {
     eval_texpr_with_presentation(
-        root.tree(),
+        root.root(),
         values,
         presentation_values,
         &HirLocalValueMap::root(),
-        &session.enter(root),
+        session,
     )
 }
 
-/// Evaluate `subtree`, a subtree of `root`, in `root`'s scope with `locals`
-/// bound, for tests that forge a local binding.
+/// Evaluate `subtree` in its scope with `locals` bound, for tests that forge
+/// a local binding.
 #[cfg(test)]
-pub fn eval_subtree_for_test<T: std::borrow::Borrow<TExpr>>(
-    root: &ScopedTree<'_, T>,
-    subtree: &TExpr,
+pub fn eval_subtree_for_test(
+    subtree: ScopedNode<'_>,
     values: &RuntimeValueMap,
     locals: &HirLocalValueMap<'_>,
     session: &EvalSession<'_>,
 ) -> Result<RuntimeValue, GraphcalError> {
-    eval_texpr(subtree, values, locals, &session.enter(root))
+    eval_texpr(subtree, values, locals, session)
 }
 
 /// Evaluate a checked, executable expression tree.
@@ -113,10 +109,10 @@ pub fn eval_subtree_for_test<T: std::borrow::Borrow<TExpr>>(
 /// the availability of every dependency of the whole tree, including
 /// unselected branches, is determined once before any of it is evaluated.
 fn eval_texpr(
-    expr: &TExpr,
+    expr: ScopedNode<'_>,
     values: &RuntimeValueMap,
     local_values: &HirLocalValueMap<'_>,
-    ctx: &EvalContext<'_>,
+    ctx: &EvalSession<'_>,
 ) -> Result<RuntimeValue, GraphcalError> {
     ctx.check_dependencies(expr)?;
     eval_value(expr, values, local_values, ctx)
@@ -125,10 +121,10 @@ fn eval_texpr(
 /// Evaluate a subtree of a root whose dependency availability has already
 /// been determined by [`eval_texpr`] or [`eval_texpr_with_presentation`].
 fn eval_value(
-    expr: &TExpr,
+    expr: ScopedNode<'_>,
     values: &RuntimeValueMap,
     local_values: &HirLocalValueMap<'_>,
-    ctx: &EvalContext<'_>,
+    ctx: &EvalSession<'_>,
 ) -> Result<RuntimeValue, GraphcalError> {
     eval_texpr_evaluated(expr, values, None, local_values, ctx)
         .map(EvaluatedRuntimeValue::into_value)
@@ -138,22 +134,22 @@ fn eval_value(
 /// identities through value-preserving expression forms. Like [`eval_texpr`],
 /// it determines the availability of the whole tree's dependencies once.
 fn eval_texpr_with_presentation(
-    expr: &TExpr,
+    expr: ScopedNode<'_>,
     values: &RuntimeValueMap,
     presentation_values: &PendingPresentedMap,
     local_values: &HirLocalValueMap<'_>,
-    ctx: &EvalContext<'_>,
+    ctx: &EvalSession<'_>,
 ) -> Result<EvaluatedRuntimeValue, GraphcalError> {
     ctx.check_dependencies(expr)?;
     eval_texpr_evaluated(expr, values, Some(presentation_values), local_values, ctx)
 }
 
 fn eval_texpr_evaluated(
-    expr: &TExpr,
+    expr: ScopedNode<'_>,
     values: &RuntimeValueMap,
     presentation_values: Option<&PendingPresentedMap>,
     local_values: &HirLocalValueMap<'_>,
-    ctx: &EvalContext<'_>,
+    ctx: &EvalSession<'_>,
 ) -> Result<EvaluatedRuntimeValue, GraphcalError> {
     ctx.cancellation.checkpoint()?;
     // Recursion choke point: evaluation recurses once per tree level
@@ -164,10 +160,13 @@ fn eval_texpr_evaluated(
 }
 
 /// A function argument the callee evaluates as a value.
-fn value_arg<'a>(arg: &'a TArg, ctx: &EvalContext<'_>) -> Result<&'a TExpr, GraphcalError> {
-    match arg {
-        TArg::Value(value) => Ok(value),
-        TArg::Contextual(literal) => Err(ctx.internal_error(
+fn value_arg<'t>(
+    arg: Scoped<'t, TArg>,
+    ctx: &EvalSession<'_>,
+) -> Result<ScopedNode<'t>, GraphcalError> {
+    match arg.view() {
+        ScopedArg::Value(value) => Ok(value),
+        ScopedArg::Contextual(literal) => Err(ctx.internal_error(
             format!(
                 "contextual metadata is not an executable value: {:?}",
                 literal.id()
@@ -178,11 +177,8 @@ fn value_arg<'a>(arg: &'a TArg, ctx: &EvalContext<'_>) -> Result<&'a TExpr, Grap
 }
 
 /// The source span of a function argument.
-const fn arg_span(arg: &TArg) -> Span {
-    match arg {
-        TArg::Value(value) => value.span(),
-        TArg::Contextual(literal) => literal.span(),
-    }
+fn arg_span(arg: Scoped<'_, TArg>) -> Span {
+    arg.span()
 }
 
 #[expect(
@@ -190,69 +186,64 @@ const fn arg_span(arg: &TArg) -> Span {
     reason = "exhaustive typed expression evaluation"
 )]
 fn eval_texpr_inner(
-    expr: &TExpr,
+    expr: ScopedNode<'_>,
     values: &RuntimeValueMap,
     presentation_values: Option<&PendingPresentedMap>,
     local_values: &HirLocalValueMap<'_>,
-    ctx: &EvalContext<'_>,
+    ctx: &EvalSession<'_>,
 ) -> Result<EvaluatedRuntimeValue, GraphcalError> {
     let span = expr.span();
     match expr.kind() {
-        TExprKind::Number(n) => checked_finite_quantity(*n, "numeric literal", span, ctx)
+        NodeKind::Number(n) => checked_finite_quantity(n, "numeric literal", span, ctx)
             .map(EvaluatedRuntimeValue::plain),
-        TExprKind::Integer(n) => Ok(EvaluatedRuntimeValue::plain(RuntimeValue::Int(*n))),
-        TExprKind::Bool(b) => Ok(EvaluatedRuntimeValue::plain(RuntimeValue::Bool(*b))),
-        TExprKind::Quantity { value, unit } => {
+        NodeKind::Integer(n) => Ok(EvaluatedRuntimeValue::plain(RuntimeValue::Int(n))),
+        NodeKind::Bool(b) => Ok(EvaluatedRuntimeValue::plain(RuntimeValue::Bool(b))),
+        NodeKind::Quantity { value, unit } => {
             let scale = resolve_unit_scale(unit, values, ctx)?;
-            let value = checked_unit_scaled_value(*value, scale, span, ctx)?;
-            let display = super::presentation::scaled(unit, scale, ctx);
+            let value = checked_unit_scaled_value(value, scale, span, ctx)?;
+            let display = super::presentation::scaled(unit.get(), scale, ctx);
             EvaluatedRuntimeValue::with_leaf(
                 value,
                 PendingLeaf::Quantity(PendingQuantityDisplay::Ready(display)),
             )
             .map_err(|invariant| invariant_error(invariant, span, ctx))
         }
-        TExprKind::GraphRef(target) => {
-            let key = ctx.resolve(&target.value);
-            let value = resolve_graph_ref(&target.value, target.span, values, ctx)?;
-            Ok(
-                presented_ref(presentation_values, &key, value)
-                    .to_owned_with(clone_graph_ref_value),
-            )
+        NodeKind::GraphRef(target) => {
+            let value = resolve_graph_ref(&target, values, ctx)?;
+            Ok(presented_ref(presentation_values, &target.value, value)
+                .to_owned_with(clone_graph_ref_value))
         }
-        TExprKind::Const(target) => {
-            let value = eval_const_ref(target, values, ctx)?;
+        NodeKind::Const(target) => {
+            let value = eval_const_ref(&target, values, ctx)?;
             Ok(match &target.value {
-                TConstRef::Decl(target) => presentation_values
-                    .and_then(|presented| presented.get(&ctx.resolve(target)))
+                ConstRef::Decl(target) => presentation_values
+                    .and_then(|presented| presented.get(target))
                     .map_or_else(|| EvaluatedRuntimeValue::plain(value), Clone::clone),
-                TConstRef::Builtin(_) | TConstRef::Constructor(_) => {
+                ConstRef::Builtin(_) | ConstRef::Constructor(_) => {
                     EvaluatedRuntimeValue::plain(value)
                 }
             })
         }
-        TExprKind::Local(local) => local_values
+        NodeKind::Local(local) => local_values
             .get(local.value)
             .cloned()
             .ok_or_else(|| ctx.eval_error("undefined local variable", local.span)),
-        TExprKind::Binary { op, lhs, rhs } => match expr.ty() {
+        NodeKind::Binary { op, lhs, rhs } => match expr.ty() {
             // Additive Fin-key arithmetic `k + c : Key<Fin(N + c)>`.
             CheckedType::Key(target) => {
                 eval_key_shift(span, target, lhs, rhs, values, local_values, ctx)
                     .map(EvaluatedRuntimeValue::plain)
             }
-            _ => eval_binop(span, *op, lhs, rhs, values, local_values, ctx)
+            _ => eval_binop(span, op, lhs, rhs, values, local_values, ctx)
                 .map(EvaluatedRuntimeValue::plain),
         },
-        TExprKind::Unary { op, operand } => {
-            eval_unary(span, *op, operand, values, local_values, ctx)
-                .map(EvaluatedRuntimeValue::plain)
-        }
-        TExprKind::Call { callee, args } => {
+        NodeKind::Unary { op, operand } => eval_unary(span, op, operand, values, local_values, ctx)
+            .map(EvaluatedRuntimeValue::plain),
+        NodeKind::Call { callee, args } => {
             eval_fn_call(span, callee, args, values, local_values, ctx)
                 .map(EvaluatedRuntimeValue::plain)
         }
-        TExprKind::If {
+        NodeKind::If {
             condition,
             then_branch,
             else_branch,
@@ -266,18 +257,18 @@ fn eval_texpr_inner(
                 eval_texpr_evaluated(else_branch, values, presentation_values, local_values, ctx)
             }
         }
-        TExprKind::Convert {
+        NodeKind::Convert {
             expr: inner,
             target,
         } => {
             let value = eval_value(inner, values, local_values, ctx)?;
             EvaluatedRuntimeValue::with_leaf(
                 value,
-                PendingLeaf::Quantity(super::presentation::pending(target, ctx)),
+                PendingLeaf::Quantity(super::presentation::pending(target, expr.dag_id(), ctx)),
             )
             .map_err(|invariant| invariant_error(invariant, span, ctx))
         }
-        TExprKind::DisplayTimezone {
+        NodeKind::DisplayTimezone {
             expr: inner,
             timezone,
         } => {
@@ -285,12 +276,12 @@ fn eval_texpr_inner(
             EvaluatedRuntimeValue::with_leaf(value, PendingLeaf::Datetime(timezone.clone()))
                 .map_err(|invariant| invariant_error(invariant, span, ctx))
         }
-        TExprKind::Field { expr: inner, field } => {
+        NodeKind::Field { expr: inner, field } => {
             let inner_val =
                 eval_texpr_evaluated(inner, values, presentation_values, local_values, ctx)?;
             eval_field_access(inner_val.into_fields(), inner, field, ctx)
         }
-        TExprKind::Construct {
+        NodeKind::Construct {
             application,
             fields,
         } => eval_constructor_call(
@@ -302,12 +293,12 @@ fn eval_texpr_inner(
             local_values,
             ctx,
         ),
-        TExprKind::Map { entries } => {
+        NodeKind::Map { entries } => {
             let entries = entries
                 .iter()
                 .map(|entry| {
-                    let (first, rest) = entry.keys.split_first();
-                    (first, rest, &entry.value)
+                    let (first, rest) = entry.get().keys.split_first();
+                    (first, rest, entry.map(|entry| &entry.value))
                 })
                 .collect::<Vec<_>>();
             eval_map_literal(
@@ -320,7 +311,7 @@ fn eval_texpr_inner(
                 ctx,
             )
         }
-        TExprKind::For { bindings, body } => eval_for_comp_bindings(
+        NodeKind::For { bindings, body } => eval_for_comp_bindings(
             expr.ty(),
             bindings,
             body,
@@ -329,16 +320,16 @@ fn eval_texpr_inner(
             local_values,
             ctx,
         ),
-        TExprKind::Index { expr: inner, args } => eval_index_access(
+        NodeKind::Index { expr: inner, args } => eval_index_access(
             span,
             inner,
-            args.as_slice(),
+            args,
             values,
             presentation_values,
             local_values,
             ctx,
         ),
-        TExprKind::Scan {
+        NodeKind::Scan {
             source,
             init,
             acc,
@@ -355,17 +346,17 @@ fn eval_texpr_inner(
             local_values,
             ctx,
         ),
-        TExprKind::Unfold { .. } => {
+        NodeKind::Unfold { .. } => {
             eval_unfold(expr, values, presentation_values, local_values, ctx)
         }
-        TExprKind::Key { kind, arg, .. } => {
+        NodeKind::Key { kind, arg, .. } => {
             let CheckedType::Key(axis) = expr.ty() else {
                 return Err(ctx.internal_error("key expression has no retained axis", span));
             };
-            eval_key_form(*kind, axis, arg, span, values, local_values, ctx)
+            eval_key_form(kind, axis, arg, span, values, local_values, ctx)
                 .map(EvaluatedRuntimeValue::plain)
         }
-        TExprKind::Match { scrutinee, arms } => eval_match(
+        NodeKind::Match { scrutinee, arms } => eval_match(
             span,
             scrutinee,
             arms,
@@ -374,14 +365,13 @@ fn eval_texpr_inner(
             local_values,
             ctx,
         ),
-        TExprKind::Variant(variant) => {
+        NodeKind::Variant(variant) => {
             named_key(&variant.variant, span, ctx).map(EvaluatedRuntimeValue::plain)
         }
-        TExprKind::DagCall {
+        NodeKind::DagCall {
             target,
             args,
             output,
-            ..
         } => eval_dag_call(
             target,
             args,
@@ -395,16 +385,14 @@ fn eval_texpr_inner(
 }
 
 fn resolve_graph_ref<'a>(
-    target: &hir::LocalDecl,
-    target_span: Span,
+    target: &Spanned<ResolvedDeclName>,
     values: &'a RuntimeValueMap,
-    ctx: &EvalContext<'_>,
+    ctx: &EvalSession<'_>,
 ) -> Result<&'a RuntimeValue, GraphcalError> {
-    let runtime_target = ctx.resolve(target);
-    values.get(&runtime_target).ok_or_else(|| {
+    values.get(&target.value).ok_or_else(|| {
         ctx.eval_error(
-            format!("undefined graph reference `@{target}`"),
-            target_span,
+            format!("undefined graph reference `@{}`", target.value),
+            target.span,
         )
     })
 }
@@ -466,17 +454,17 @@ fn take_cloned_runtime_node_count() -> usize {
 }
 
 fn eval_const_ref(
-    target: &Spanned<TConstRef>,
+    target: &Spanned<ConstRef<'_>>,
     values: &RuntimeValueMap,
-    ctx: &EvalContext<'_>,
+    ctx: &EvalSession<'_>,
 ) -> Result<RuntimeValue, GraphcalError> {
     match &target.value {
-        TConstRef::Decl(resolved) => values
-            .get(&ctx.resolve(resolved))
+        ConstRef::Decl(resolved) => values
+            .get(resolved)
             .cloned()
             .ok_or_else(|| ctx.eval_error(format!("undefined constant `{resolved}`"), target.span)),
-        TConstRef::Constructor(application) => nullary_constructor(application, target.span, ctx),
-        TConstRef::Builtin(builtin) => {
+        ConstRef::Constructor(application) => nullary_constructor(application, target.span, ctx),
+        ConstRef::Builtin(builtin) => {
             checked_finite_quantity(builtin.value(), "built-in constant", target.span, ctx)
         }
     }
@@ -485,7 +473,7 @@ fn eval_const_ref(
 fn nullary_constructor(
     application: &graphcal_compiler::tir::texpr::ConstructorApplication,
     span: Span,
-    ctx: &EvalContext<'_>,
+    ctx: &EvalSession<'_>,
 ) -> Result<RuntimeValue, GraphcalError> {
     crate::pipeline_metrics::record(crate::pipeline_metrics::Event::ConstructorFactConsumption);
     apply_constructor(application, Vec::new(), span, ctx)
@@ -499,7 +487,7 @@ fn apply_constructor(
         RuntimeValue,
     )>,
     span: Span,
-    ctx: &EvalContext<'_>,
+    ctx: &EvalSession<'_>,
 ) -> Result<RuntimeValue, GraphcalError> {
     StructValue::try_from_application(application, fields)
         .map(RuntimeValue::Struct)
@@ -511,11 +499,11 @@ fn apply_constructor(
 fn eval_key_shift(
     span: Span,
     target: &IndexTypeRef,
-    lhs: &TExpr,
-    rhs: &TExpr,
+    lhs: ScopedNode<'_>,
+    rhs: ScopedNode<'_>,
     values: &RuntimeValueMap,
     local_values: &HirLocalValueMap<'_>,
-    ctx: &EvalContext<'_>,
+    ctx: &EvalSession<'_>,
 ) -> Result<RuntimeValue, GraphcalError> {
     let (RuntimeValue::Key(key), RuntimeValue::Int(addend)) = (
         eval_value(lhs, values, local_values, ctx)?,
@@ -545,11 +533,11 @@ fn eval_key_shift(
 fn eval_binop(
     span: Span,
     op: graphcal_compiler::desugar::desugared_ast::BinOp,
-    lhs: &TExpr,
-    rhs: &TExpr,
+    lhs: ScopedNode<'_>,
+    rhs: ScopedNode<'_>,
     values: &RuntimeValueMap,
     local_values: &HirLocalValueMap<'_>,
-    ctx: &EvalContext<'_>,
+    ctx: &EvalSession<'_>,
 ) -> Result<RuntimeValue, GraphcalError> {
     use graphcal_compiler::desugar::desugared_ast::BinOp;
     let compare = |comparison| {
@@ -645,11 +633,11 @@ fn eval_binop(
 fn eval_power(
     span: Span,
     exponent: graphcal_compiler::syntax::ast::PowerExponent,
-    base: &TExpr,
-    exponent_expr: &TExpr,
+    base: ScopedNode<'_>,
+    exponent_expr: ScopedNode<'_>,
     values: &RuntimeValueMap,
     local_values: &HirLocalValueMap<'_>,
-    ctx: &EvalContext<'_>,
+    ctx: &EvalSession<'_>,
 ) -> Result<RuntimeValue, GraphcalError> {
     use graphcal_compiler::desugar::desugared_ast::BinOp;
     use graphcal_compiler::syntax::ast::PowerExponent;
@@ -698,10 +686,10 @@ fn eval_power(
 fn eval_unary(
     span: Span,
     op: graphcal_compiler::desugar::desugared_ast::UnaryOp,
-    operand: &TExpr,
+    operand: ScopedNode<'_>,
     values: &RuntimeValueMap,
     local_values: &HirLocalValueMap<'_>,
-    ctx: &EvalContext<'_>,
+    ctx: &EvalSession<'_>,
 ) -> Result<RuntimeValue, GraphcalError> {
     match op {
         graphcal_compiler::desugar::desugared_ast::UnaryOp::Neg => {
@@ -729,9 +717,9 @@ fn eval_unary(
 
 fn expect_builtin_arity(
     function: BuiltinFn,
-    args: &[TArg],
+    args: Scoped<'_, [TArg]>,
     span: Span,
-    ctx: &EvalContext<'_>,
+    ctx: &EvalSession<'_>,
 ) -> Result<(), GraphcalError> {
     let expected = function.entry().arity();
     if expected.accepts(args.len()) {
@@ -753,10 +741,10 @@ fn expect_builtin_arity(
 fn eval_fn_call(
     span: Span,
     callee: &Spanned<FunctionRef>,
-    args: &[TArg],
+    args: Scoped<'_, [TArg]>,
     values: &RuntimeValueMap,
     local_values: &HirLocalValueMap<'_>,
-    ctx: &EvalContext<'_>,
+    ctx: &EvalSession<'_>,
 ) -> Result<RuntimeValue, GraphcalError> {
     let (name, epoch_scale) = match &callee.value {
         FunctionRef::Builtin(builtin) => (builtin.function(), None),
@@ -768,6 +756,11 @@ fn eval_fn_call(
     // The single arity re-check for every built-in family; family kernels
     // below rely on the accepted argument count.
     expect_builtin_arity(name, args, callee.span, ctx)?;
+    // The accepted arity guarantees the first argument of every unary family.
+    let first = || {
+        args.nth(0)
+            .ok_or_else(|| ctx.internal_error(format!("{name}() received no argument"), span))
+    };
     match name {
         BuiltinFn::Complex(function) => {
             let arguments = args
@@ -778,11 +771,12 @@ fn eval_fn_call(
                 .map_err(|failure| ctx.failure_error(failure, span))
         }
         BuiltinFn::Aggregation(kind) => {
-            let arg_val = eval_value(value_arg(&args[0], ctx)?, values, local_values, ctx)?;
+            let arg = first()?;
+            let arg_val = eval_value(value_arg(arg, ctx)?, values, local_values, ctx)?;
             let RuntimeValue::Indexed(indexed) = arg_val else {
                 return Err(ctx.internal_error(
                     format!("{}() received a non-indexed argument", name.as_str()),
-                    arg_span(&args[0]),
+                    arg_span(arg),
                 ));
             };
             match kind {
@@ -802,14 +796,15 @@ fn eval_fn_call(
                 .map_err(|outcome| ctx.outcome_error(outcome, span))
         }
         BuiltinFn::Conversion(kind) => {
-            eval_conversion_fn(kind, span, args, values, local_values, ctx)
+            eval_conversion_fn(kind, span, first()?, values, local_values, ctx)
         }
         BuiltinFn::Datetime(DatetimeFn::ScaleConversion(conversion)) => {
-            let arg = eval_value(value_arg(&args[0], ctx)?, values, local_values, ctx)?;
+            let first = first()?;
+            let arg = eval_value(value_arg(first, ctx)?, values, local_values, ctx)?;
             let RuntimeValue::Datetime(epoch) = arg else {
                 return Err(ctx.internal_error(
                     format!("{}() received non-Datetime argument", name.as_str()),
-                    arg_span(&args[0]),
+                    arg_span(first),
                 ));
             };
             Ok(RuntimeValue::Datetime(
@@ -820,17 +815,18 @@ fn eval_fn_call(
             eval_datetime_constructor(kind, epoch_scale, span, args, ctx.src)
         }
         BuiltinFn::Datetime(DatetimeFn::Field(kind)) => {
-            let arg_val = eval_value(value_arg(&args[0], ctx)?, values, local_values, ctx)?;
+            let arg = first()?;
+            let arg_val = eval_value(value_arg(arg, ctx)?, values, local_values, ctx)?;
             let RuntimeValue::Datetime(epoch) = arg_val else {
                 return Err(ctx.internal_error(
                     format!("{}() received non-Datetime argument", name.as_str()),
-                    arg_span(&args[0]),
+                    arg_span(arg),
                 ));
             };
             let fields = super::datetime::GregorianFields::from_epoch(epoch).map_err(|error| {
                 ctx.internal_error(
                     format!("invalid declared-scale Gregorian fields: {error}"),
-                    arg_span(&args[0]),
+                    arg_span(arg),
                 )
             })?;
             let result = match kind {
@@ -846,16 +842,17 @@ fn eval_fn_call(
             Ok(RuntimeValue::Int(result))
         }
         BuiltinFn::Datetime(DatetimeFn::FromNumeric(kind)) => {
-            let arg_val = eval_value(value_arg(&args[0], ctx)?, values, local_values, ctx)?;
+            let arg = first()?;
+            let arg_val = eval_value(value_arg(arg, ctx)?, values, local_values, ctx)?;
             let num = match arg_val {
                 RuntimeValue::Quantity(v) => v.get(),
                 RuntimeValue::Int(v) => {
-                    exact_numeric_datetime_arg(v, name.as_str(), arg_span(&args[0]), ctx)?
+                    exact_numeric_datetime_arg(v, name.as_str(), arg_span(arg), ctx)?
                 }
                 _ => {
                     return Err(ctx.internal_error(
                         format!("{}() received non-numeric argument", name.as_str()),
-                        arg_span(&args[0]),
+                        arg_span(arg),
                     ));
                 }
             };
@@ -866,14 +863,15 @@ fn eval_fn_call(
             };
             super::datetime::checked_epoch_from_numeric(num, kind)
                 .map(RuntimeValue::Datetime)
-                .map_err(|error| ctx.eval_error(error.to_string(), arg_span(&args[0])))
+                .map_err(|error| ctx.eval_error(error.to_string(), arg_span(arg)))
         }
         BuiltinFn::Datetime(DatetimeFn::ToNumeric(kind)) => {
-            let arg_val = eval_value(value_arg(&args[0], ctx)?, values, local_values, ctx)?;
+            let arg = first()?;
+            let arg_val = eval_value(value_arg(arg, ctx)?, values, local_values, ctx)?;
             let RuntimeValue::Datetime(epoch) = arg_val else {
                 return Err(ctx.internal_error(
                     format!("{}() received non-Datetime argument", name.as_str()),
-                    arg_span(&args[0]),
+                    arg_span(arg),
                 ));
             };
             let result = match kind {
@@ -881,7 +879,7 @@ fn eval_fn_call(
                 DatetimeToNumericFn::Mjd => epoch.to_mjd_utc_days(),
                 DatetimeToNumericFn::Unix => epoch.to_unix_seconds(),
             };
-            checked_finite_quantity(result, "datetime conversion", arg_span(&args[0]), ctx)
+            checked_finite_quantity(result, "datetime conversion", arg_span(arg), ctx)
         }
         BuiltinFn::Scalar(function) => {
             eval_builtin_fn(span, function, args, values, local_values, ctx)
@@ -897,11 +895,11 @@ fn eval_fn_call(
 fn eval_key_form(
     kind: graphcal_compiler::syntax::ast::KeyFormKind,
     axis_ref: &IndexTypeRef,
-    arg: &TExpr,
+    arg: ScopedNode<'_>,
     span: Span,
     values: &RuntimeValueMap,
     local_values: &HirLocalValueMap<'_>,
-    ctx: &EvalContext<'_>,
+    ctx: &EvalSession<'_>,
 ) -> Result<RuntimeValue, GraphcalError> {
     use graphcal_compiler::syntax::ast::KeyFormKind;
 
@@ -1007,7 +1005,7 @@ fn eval_extremum_key(
     kind: KeyAggregation,
     indexed: &IndexedValue<RuntimeValue>,
     span: Span,
-    ctx: &EvalContext<'_>,
+    ctx: &EvalSession<'_>,
 ) -> Result<RuntimeValue, GraphcalError> {
     super::aggregations::extremum_key(kind, indexed)
         .map(RuntimeValue::Key)
@@ -1018,7 +1016,7 @@ fn eval_extremum_key(
 fn named_key(
     variant: &graphcal_compiler::resolved_name::ResolvedIndexVariant,
     span: Span,
-    ctx: &EvalContext<'_>,
+    ctx: &EvalSession<'_>,
 ) -> Result<RuntimeValue, GraphcalError> {
     let index = IndexTypeRef::from_resolved(variant.index().clone());
     index_axis_for_ref(&index, ctx)
@@ -1040,42 +1038,42 @@ fn named_key(
 fn eval_conversion_fn(
     kind: ConversionFn,
     span: Span,
-    args: &[TArg],
+    arg: Scoped<'_, TArg>,
     values: &RuntimeValueMap,
     local_values: &HirLocalValueMap<'_>,
-    ctx: &EvalContext<'_>,
+    ctx: &EvalSession<'_>,
 ) -> Result<RuntimeValue, GraphcalError> {
     match kind {
         ConversionFn::ToFloat => {
-            let arg = eval_value(value_arg(&args[0], ctx)?, values, local_values, ctx)?;
-            let RuntimeValue::Int(i) = arg else {
+            let value = eval_value(value_arg(arg, ctx)?, values, local_values, ctx)?;
+            let RuntimeValue::Int(i) = value else {
                 return Err(
-                    ctx.internal_error("to_float() received non-Int argument", arg_span(&args[0]))
+                    ctx.internal_error("to_float() received non-Int argument", arg_span(arg))
                 );
             };
             #[expect(
                 clippy::cast_precision_loss,
                 reason = "explicit Int to float conversion"
             )]
-            checked_finite_quantity(i as f64, "to_float()", arg_span(&args[0]), ctx)
+            checked_finite_quantity(i as f64, "to_float()", arg_span(arg), ctx)
         }
         ConversionFn::ToInt => {
-            let arg = eval_value(value_arg(&args[0], ctx)?, values, local_values, ctx)?;
+            let value = eval_value(value_arg(arg, ctx)?, values, local_values, ctx)?;
             // to_int() on a Fin key exposes its position.
-            if let RuntimeValue::Key(key) = &arg {
+            if let RuntimeValue::Key(key) = &value {
                 let KeyElement::Finite(position) = key.element() else {
                     return Err(
-                        ctx.internal_error("to_int() received a non-Fin key", arg_span(&args[0]))
+                        ctx.internal_error("to_int() received a non-Fin key", arg_span(arg))
                     );
                 };
                 return i64::try_from(position).map(RuntimeValue::Int).map_err(|_| {
                     ctx.internal_error(
                         format!("Fin position {position} does not fit Int"),
-                        arg_span(&args[0]),
+                        arg_span(arg),
                     )
                 });
             }
-            let f = arg
+            let f = value
                 .expect_quantity("to_int argument")
                 .map_err(|e| ctx.eval_error(e.to_string(), span))?
                 .get();
@@ -1094,15 +1092,15 @@ fn eval_conversion_fn(
                 })
         }
         ConversionFn::Coord => {
-            let arg = eval_value(value_arg(&args[0], ctx)?, values, local_values, ctx)?;
-            let RuntimeValue::Key(key) = arg else {
+            let value = eval_value(value_arg(arg, ctx)?, values, local_values, ctx)?;
+            let RuntimeValue::Key(key) = value else {
                 return Err(
-                    ctx.internal_error("coord() received a non-key argument", arg_span(&args[0]))
+                    ctx.internal_error("coord() received a non-key argument", arg_span(arg))
                 );
             };
             let KeyElement::Coordinate { value, .. } = key.element() else {
                 return Err(
-                    ctx.internal_error("coord() received a non-coordinate key", arg_span(&args[0]))
+                    ctx.internal_error("coord() received a non-coordinate key", arg_span(arg))
                 );
             };
             Ok(RuntimeValue::Quantity(value))
@@ -1114,7 +1112,7 @@ fn exact_numeric_datetime_arg(
     value: i64,
     fn_name: &str,
     span: Span,
-    ctx: &EvalContext<'_>,
+    ctx: &EvalSession<'_>,
 ) -> Result<f64, GraphcalError> {
     super::numeric::exact_i64_to_f64(value).map_err(|_| {
         ctx.eval_error(
@@ -1125,8 +1123,8 @@ fn exact_numeric_datetime_arg(
 }
 
 /// The contextual literal a function argument consists of, if it is one.
-const fn contextual_literal(arg: &TArg) -> Option<&ContextualLiteral> {
-    match arg {
+const fn contextual_literal(arg: Scoped<'_, TArg>) -> Option<&ContextualLiteral> {
+    match arg.get() {
         TArg::Contextual(literal) => Some(literal.literal()),
         TArg::Value(_) => None,
     }
@@ -1136,41 +1134,43 @@ fn eval_datetime_constructor(
     kind: DatetimeConstructorFn,
     epoch_scale: Option<TimeScale>,
     span: Span,
-    args: &[TArg],
+    args: Scoped<'_, [TArg]>,
     src: &NamedSource<Arc<String>>,
 ) -> Result<RuntimeValue, GraphcalError> {
+    let args = args.iter().collect::<Vec<_>>();
     match kind {
         DatetimeConstructorFn::Datetime => {
-            let epoch = match args {
+            let epoch = match args.as_slice() {
                 [arg] => {
-                    let Some(ContextualLiteral::OffsetDateTime(datetime)) = contextual_literal(arg)
+                    let Some(ContextualLiteral::OffsetDateTime(datetime)) =
+                        contextual_literal(*arg)
                     else {
                         return Err(GraphcalError::InternalError {
                             message: "datetime() received an unparsed offset literal".to_string(),
                             src: src.clone(),
-                            span: arg_span(arg).into(),
+                            span: arg_span(*arg).into(),
                         });
                     };
                     super::datetime::datetime_from_offset(*datetime)
                 }
                 [datetime_arg, timezone_arg] => {
                     let Some(ContextualLiteral::ZonedDateTime(datetime)) =
-                        contextual_literal(datetime_arg)
+                        contextual_literal(*datetime_arg)
                     else {
                         return Err(GraphcalError::InternalError {
                             message: "datetime() received an unresolved zoned literal".to_string(),
                             src: src.clone(),
-                            span: arg_span(datetime_arg).into(),
+                            span: arg_span(*datetime_arg).into(),
                         });
                     };
                     let Some(ContextualLiteral::TimeZone(time_zone_id)) =
-                        contextual_literal(timezone_arg)
+                        contextual_literal(*timezone_arg)
                     else {
                         return Err(GraphcalError::InternalError {
                             message: "datetime() received an unvalidated timezone argument"
                                 .to_string(),
                             src: src.clone(),
-                            span: arg_span(timezone_arg).into(),
+                            span: arg_span(*timezone_arg).into(),
                         });
                     };
                     if datetime.time_zone() != time_zone_id {
@@ -1178,7 +1178,7 @@ fn eval_datetime_constructor(
                             message: "resolved datetime timezone does not match its argument"
                                 .to_string(),
                             src: src.clone(),
-                            span: arg_span(timezone_arg).into(),
+                            span: arg_span(*timezone_arg).into(),
                         });
                     }
                     super::datetime::datetime_from_zoned(datetime)
@@ -1194,7 +1194,7 @@ fn eval_datetime_constructor(
             Ok(RuntimeValue::Datetime(epoch))
         }
         DatetimeConstructorFn::Epoch => {
-            let [arg] = args else {
+            let [arg] = args.as_slice() else {
                 return Err(GraphcalError::InternalError {
                     message: format!(
                         "epoch() received {} argument(s) after dim-check accepted arity 1",
@@ -1204,11 +1204,11 @@ fn eval_datetime_constructor(
                     span: span.into(),
                 });
             };
-            let Some(ContextualLiteral::CivilDateTime(datetime)) = contextual_literal(arg) else {
+            let Some(ContextualLiteral::CivilDateTime(datetime)) = contextual_literal(*arg) else {
                 return Err(GraphcalError::InternalError {
                     message: "epoch() received an unparsed civil literal".to_string(),
                     src: src.clone(),
-                    span: arg_span(arg).into(),
+                    span: arg_span(*arg).into(),
                 });
             };
             let Some(scale) = epoch_scale else {
@@ -1223,7 +1223,7 @@ fn eval_datetime_constructor(
                     GraphcalError::InternalError {
                         message: format!("validated epoch literal failed evaluation: {error}"),
                         src: src.clone(),
-                        span: arg_span(arg).into(),
+                        span: arg_span(*arg).into(),
                     }
                 })?;
             Ok(RuntimeValue::Datetime(epoch))
@@ -1244,10 +1244,10 @@ fn eval_datetime_constructor(
 fn eval_extern_fn(
     span: Span,
     ext: &hir::ExternFnRef,
-    args: &[TArg],
+    args: Scoped<'_, [TArg]>,
     values: &RuntimeValueMap,
     local_values: &HirLocalValueMap<'_>,
-    ctx: &EvalContext<'_>,
+    ctx: &EvalSession<'_>,
 ) -> Result<RuntimeValue, GraphcalError> {
     use crate::host_abi::marshal::{EncodeError, HostArguments};
     use crate::invariant::Failure;
@@ -1289,7 +1289,7 @@ fn eval_extern_fn(
         ),
         EncodeError::Value(error) => error,
         EncodeError::Argument { position, failure } => {
-            let span = args.get(position).map_or(span, arg_span);
+            let span = args.nth(position).map_or(span, arg_span);
             match failure {
                 Failure::Error(error) => ctx.eval_error(error.describe(ext), span),
                 Failure::Invariant(error) => invariant(error, span),
@@ -1316,10 +1316,10 @@ fn eval_extern_fn(
 fn eval_builtin_fn(
     span: Span,
     name: ScalarFn,
-    args: &[TArg],
+    args: Scoped<'_, [TArg]>,
     values: &RuntimeValueMap,
     local_values: &HirLocalValueMap<'_>,
-    ctx: &EvalContext<'_>,
+    ctx: &EvalSession<'_>,
 ) -> Result<RuntimeValue, GraphcalError> {
     let builtin = graphcal_compiler::registry::builtins::scalar_function(name);
     let arg_values: Vec<f64> = args
@@ -1339,58 +1339,48 @@ fn eval_builtin_fn(
 
 /// The value of `field` of `inner_val`, the struct value `inner` evaluated
 /// to (`None` when it is not a struct value).
+///
+/// The checker proved the operand's nominal application, and a struct value
+/// carries exactly its constructor's declared fields.
 fn eval_field_access<V>(
     inner_val: Option<StructValue<V>>,
-    inner: &TExpr,
+    inner: ScopedNode<'_>,
     field: &Spanned<graphcal_compiler::syntax::type_name::FieldName>,
-    ctx: &EvalContext<'_>,
+    ctx: &EvalSession<'_>,
 ) -> Result<V, GraphcalError> {
-    match inner_val {
-        Some(value) => {
-            let type_name = value.type_name();
-            let constructor = value.constructor();
-            let CheckedType::Struct(expected, expected_args) = inner.ty() else {
-                return Err(ctx.internal_error(
-                    "field access has no retained struct operand type",
-                    inner.span(),
-                ));
-            };
-            let expected_runtime = ctx.runtime_struct_type(expected.resolved());
-            // A struct value carries exactly its constructor's declared fields,
-            // so only the nominal application is compared with the retained
-            // type; never resolve a source name or infer a constructor here.
-            let same_type = *type_name == expected_runtime;
-            let same_arguments = value.generic_args() == expected_args.as_slice();
-            let same_application = same_type && same_arguments;
+    inner_val.map_or_else(
+        || Err(ctx.eval_error("field access on non-struct value", inner.span())),
+        |value| {
             let missing = format!(
-                "no field `{}` on `{type_name}::{constructor}`; expected `{expected_runtime}`",
-                field.value
+                "no field `{}` on `{}::{}`",
+                field.value,
+                value.type_name(),
+                value.constructor()
             );
             value
                 .into_field(&field.value)
-                .filter(|_| same_application)
                 .ok_or_else(|| ctx.eval_error(missing, field.span))
-        }
-        None => Err(ctx.eval_error("field access on non-struct value", inner.span())),
-    }
+        },
+    )
 }
 
 fn eval_constructor_call(
     span: Span,
     application: &graphcal_compiler::tir::texpr::ConstructorApplication,
-    fields: &[TFieldInit],
+    fields: Scoped<'_, [TFieldInit]>,
     values: &RuntimeValueMap,
     presentation_values: Option<&PendingPresentedMap>,
     local_values: &HirLocalValueMap<'_>,
-    ctx: &EvalContext<'_>,
+    ctx: &EvalSession<'_>,
 ) -> Result<EvaluatedRuntimeValue, GraphcalError> {
     crate::pipeline_metrics::record(crate::pipeline_metrics::Event::ConstructorFactConsumption);
     let constructor_name = application.constructor.name();
     let owning_type = StructTypeRef::from_resolved(application.definition().clone());
     let mut field_values = Vec::with_capacity(fields.len());
-    for field_init in fields {
+    for scoped_init in fields.iter() {
+        let field_init = scoped_init.get();
         let evaluated = eval_texpr_evaluated(
-            &field_init.value,
+            scoped_init.map(|init| &init.value),
             values,
             presentation_values,
             local_values,
@@ -1436,7 +1426,7 @@ fn eval_constructor_call(
 }
 
 /// The concrete axis of `index_ref`, when it has one.
-fn index_axis_for_ref(index_ref: &IndexTypeRef, ctx: &EvalContext<'_>) -> Option<IndexAxis> {
+fn index_axis_for_ref(index_ref: &IndexTypeRef, ctx: &EvalSession<'_>) -> Option<IndexAxis> {
     IndexAxis::resolve(ctx.tir, index_ref)
 }
 
@@ -1444,7 +1434,7 @@ fn ensure_index_ref_matches_resolved(
     actual: &IndexTypeRef,
     expected: &graphcal_compiler::resolved_name::ResolvedIndexName,
     span: Span,
-    ctx: &EvalContext<'_>,
+    ctx: &EvalSession<'_>,
 ) -> Result<(), GraphcalError> {
     if index_ref_matches_resolved(actual, expected) {
         return Ok(());
@@ -1462,7 +1452,7 @@ fn ensure_index_ref_matches_resolved(
 fn map_entry_variant_for_axis(
     key: &hir::expr::MapEntryKey,
     axis: &IndexTypeRef,
-    ctx: &EvalContext<'_>,
+    ctx: &EvalSession<'_>,
 ) -> Result<IndexEntryKey, GraphcalError> {
     match key {
         hir::expr::MapEntryKey::IndexVariant(variant) => {
@@ -1492,7 +1482,7 @@ fn map_entry_key_span(key: &hir::expr::MapEntryKey) -> Span {
 type MapLiteralEntry<'a> = (
     &'a hir::expr::MapEntryKey,
     &'a [hir::expr::MapEntryKey],
-    &'a TExpr,
+    ScopedNode<'a>,
 );
 
 fn eval_map_literal(
@@ -1502,7 +1492,7 @@ fn eval_map_literal(
     values: &RuntimeValueMap,
     presentation_values: Option<&PendingPresentedMap>,
     local_values: &HirLocalValueMap<'_>,
-    ctx: &EvalContext<'_>,
+    ctx: &EvalSession<'_>,
 ) -> Result<EvaluatedRuntimeValue, GraphcalError> {
     let first = entries
         .first()
@@ -1524,7 +1514,7 @@ fn eval_map_literal(
         for (key, _, value) in entries {
             let variant = map_entry_variant_for_axis(key, &idx_name, ctx)?;
             let value =
-                eval_texpr_evaluated(value, values, presentation_values, local_values, ctx)?;
+                eval_texpr_evaluated(*value, values, presentation_values, local_values, ctx)?;
             evaluated.insert(variant, value);
         }
         let result = IndexedValue::try_from_axis(axis, |key| {
@@ -1580,11 +1570,11 @@ fn eval_map_literal(
 fn eval_for_comp_bindings(
     checked_type: &CheckedType,
     bindings: &[hir::expr::ForBinding],
-    body: &TExpr,
+    body: ScopedNode<'_>,
     values: &RuntimeValueMap,
     presentation_values: Option<&PendingPresentedMap>,
     local_values: &HirLocalValueMap<'_>,
-    ctx: &EvalContext<'_>,
+    ctx: &EvalSession<'_>,
 ) -> Result<EvaluatedRuntimeValue, GraphcalError> {
     let binding = &bindings[0];
     let CheckedType::Indexed { element, index } = checked_type else {
@@ -1630,22 +1620,22 @@ fn eval_for_comp_bindings(
 )]
 fn eval_index_access(
     span: Span,
-    inner: &TExpr,
-    args: &[TIndexArg],
+    inner: ScopedNode<'_>,
+    args: Scoped<'_, [TIndexArg]>,
     values: &RuntimeValueMap,
     presentation_values: Option<&PendingPresentedMap>,
     local_values: &HirLocalValueMap<'_>,
-    ctx: &EvalContext<'_>,
+    ctx: &EvalSession<'_>,
 ) -> Result<EvaluatedRuntimeValue, GraphcalError> {
     let evaluated;
     let base = match inner.kind() {
-        TExprKind::GraphRef(target) => {
+        NodeKind::GraphRef(target) => {
             // This replaces the checkpoint normally performed by
             // `eval_value(inner, ...)` while retaining a reference to the
             // stored value instead of deep-cloning it before traversal.
             ctx.cancellation.checkpoint()?;
-            let value = resolve_graph_ref(&target.value, target.span, values, ctx)?;
-            presented_ref(presentation_values, &ctx.resolve(&target.value), value)
+            let value = resolve_graph_ref(&target, values, ctx)?;
+            presented_ref(presentation_values, &target.value, value)
         }
         _ => {
             evaluated =
@@ -1654,12 +1644,12 @@ fn eval_index_access(
         }
     };
     let mut current = base;
-    for arg in args {
+    for arg in args.iter() {
         let Some(indexed) = current.entries() else {
             return Err(ctx.eval_error("indexing a non-indexed value", span));
         };
-        let (entry, entry_key) = match arg {
-            TIndexArg::Variant(variant) => {
+        let (entry, entry_key) = match arg.view() {
+            ScopedIndexArg::Variant(variant) => {
                 ensure_index_ref_matches_resolved(
                     indexed.index(),
                     variant.variant.index(),
@@ -1669,7 +1659,7 @@ fn eval_index_access(
                 let entry_key = IndexEntryKey::named(variant.variant.variant().clone());
                 (indexed.get(&entry_key), entry_key)
             }
-            TIndexArg::Var(local) => {
+            ScopedIndexArg::Var(local) => {
                 let var_val = local_values
                     .get(local.value)
                     .ok_or_else(|| ctx.eval_error("undefined loop variable", local.span))?;
@@ -1682,7 +1672,7 @@ fn eval_index_access(
                     key.entry_key().clone(),
                 )
             }
-            TIndexArg::Expr {
+            ScopedIndexArg::Expr {
                 operand: index_expr,
                 ..
             } => {
@@ -1723,7 +1713,7 @@ fn select_by_key<'v>(
     indexed: EntriesRef<'v, PendingLeaf>,
     key: &KeyValue,
     span: Span,
-    ctx: &EvalContext<'_>,
+    ctx: &EvalSession<'_>,
 ) -> Result<PresentedRef<'v, PendingLeaf>, GraphcalError> {
     indexed.get_key(key).ok_or_else(|| {
         ctx.eval_error(
@@ -1742,15 +1732,15 @@ fn select_by_key<'v>(
     reason = "scan evaluation is called from expression destructuring"
 )]
 fn eval_scan(
-    source: &TExpr,
-    init: &TExpr,
+    source: ScopedNode<'_>,
+    init: ScopedNode<'_>,
     acc: &hir::LocalDef,
     val: &hir::LocalDef,
-    body: &TExpr,
+    body: ScopedNode<'_>,
     values: &RuntimeValueMap,
     presentation_values: Option<&PendingPresentedMap>,
     local_values: &HirLocalValueMap<'_>,
-    ctx: &EvalContext<'_>,
+    ctx: &EvalSession<'_>,
 ) -> Result<EvaluatedRuntimeValue, GraphcalError> {
     let Some(source_entries) =
         eval_texpr_evaluated(source, values, presentation_values, local_values, ctx)?
@@ -1784,13 +1774,13 @@ fn eval_scan(
 }
 
 fn eval_unfold(
-    expr: &TExpr,
+    expr: ScopedNode<'_>,
     values: &RuntimeValueMap,
     presentation_values: Option<&PendingPresentedMap>,
     local_values: &HirLocalValueMap<'_>,
-    ctx: &EvalContext<'_>,
+    ctx: &EvalSession<'_>,
 ) -> Result<EvaluatedRuntimeValue, GraphcalError> {
-    let TExprKind::Unfold {
+    let NodeKind::Unfold {
         recurrence,
         init,
         body,
@@ -1854,7 +1844,7 @@ fn evaluated_match_field(
     >,
     type_name: &graphcal_compiler::resolved_name::ResolvedStructTypeName,
     scrutinee: &EvaluatedRuntimeValue,
-    ctx: &EvalContext<'_>,
+    ctx: &EvalSession<'_>,
 ) -> Result<EvaluatedRuntimeValue, GraphcalError> {
     scrutinee
         .as_ref()
@@ -1870,12 +1860,12 @@ fn evaluated_match_field(
 
 fn eval_match(
     span: Span,
-    scrutinee: &TExpr,
-    arms: &[TMatchArm],
+    scrutinee: ScopedNode<'_>,
+    arms: Scoped<'_, [TMatchArm]>,
     values: &RuntimeValueMap,
     presentation_values: Option<&PendingPresentedMap>,
     local_values: &HirLocalValueMap<'_>,
-    ctx: &EvalContext<'_>,
+    ctx: &EvalSession<'_>,
 ) -> Result<EvaluatedRuntimeValue, GraphcalError> {
     let scrutinee_presented =
         eval_texpr_evaluated(scrutinee, values, presentation_values, local_values, ctx)?;
@@ -1887,7 +1877,7 @@ fn eval_match(
             };
             let matched_arm = arms
                 .iter()
-                .find(|arm| match &arm.pattern {
+                .find(|arm| match &arm.get().pattern {
                     TMatchPattern::IndexLabel(pat) => {
                         index_ref_matches_resolved(key.index(), pat.variant.index())
                             && pat.variant.variant() == variant
@@ -1898,7 +1888,7 @@ fn eval_match(
                     ctx.eval_error(format!("no match arm for label `{variant}`"), span)
                 })?;
             eval_texpr_evaluated(
-                &matched_arm.body,
+                matched_arm.map(|arm| &arm.body),
                 values,
                 presentation_values,
                 local_values,
@@ -1910,7 +1900,7 @@ fn eval_match(
             let value_constructor = scrutinee_struct.constructor();
             let matched_arm = arms
                 .iter()
-                .find(|arm| match &arm.pattern {
+                .find(|arm| match &arm.get().pattern {
                     TMatchPattern::Constructor { target, .. } => {
                         *value_constructor == target.constructor
                             && *type_name == target.runtime_type
@@ -1921,10 +1911,11 @@ fn eval_match(
                     ctx.eval_error(format!("no match arm for variant `{type_name}`"), span)
                 })?;
             let mut arm_locals = local_values.child(Vec::new());
-            let TMatchPattern::Constructor { bindings, .. } = &matched_arm.pattern else {
-                return Err(
-                    ctx.internal_error("matched non-constructor arm for struct", matched_arm.span)
-                );
+            let TMatchPattern::Constructor { bindings, .. } = &matched_arm.get().pattern else {
+                return Err(ctx.internal_error(
+                    "matched non-constructor arm for struct",
+                    matched_arm.get().span,
+                ));
             };
             for binding in bindings {
                 match binding {
@@ -1938,7 +1929,7 @@ fn eval_match(
                 }
             }
             eval_texpr_evaluated(
-                &matched_arm.body,
+                matched_arm.map(|arm| &arm.body),
                 values,
                 presentation_values,
                 &arm_locals,
@@ -1954,13 +1945,14 @@ fn eval_match(
 
 fn eval_dag_call(
     target: &Spanned<graphcal_compiler::dag_id::DagId>,
-    args: &[TParamBinding],
+    args: Scoped<'_, [TParamBinding]>,
     output: &Spanned<ResolvedDeclName>,
     caller_values: &RuntimeValueMap,
     caller_presentations: Option<&PendingPresentedMap>,
     caller_locals: &HirLocalValueMap,
-    ctx: &EvalContext<'_>,
+    ctx: &EvalSession<'_>,
 ) -> Result<EvaluatedRuntimeValue, GraphcalError> {
+    let caller_dag = args.dag_id();
     let plan = ctx.execution_plan()?;
     let callable = plan.callable(&target.value).ok_or_else(|| {
         ctx.internal_error(
@@ -1974,9 +1966,10 @@ fn eval_dag_call(
         callable,
         crate::execution_frame::FailurePolicy::Propagate,
     );
-    for binding in args {
+    for scoped_binding in args.iter() {
+        let binding = scoped_binding.get();
         let evaluated = eval_texpr_evaluated(
-            &binding.value,
+            scoped_binding.map(|binding| &binding.value),
             caller_values,
             caller_presentations,
             caller_locals,
@@ -1985,7 +1978,7 @@ fn eval_dag_call(
         frame.bind_argument(&binding.target, evaluated, ctx.src, binding.value.span())?;
     }
     frame.seed_runtime_imports(|key| {
-        imported_runtime_value(key, caller_values, caller_presentations, ctx)
+        imported_runtime_value(key, caller_dag, caller_values, caller_presentations, ctx)
     });
 
     let evaluated = frame.run(&ctx.cancellation, |entry, frame| {
@@ -2014,7 +2007,7 @@ fn eval_dag_call(
         &dag_values,
         target,
         output.span,
-        &(**ctx).clone().with_unavailable(&errors),
+        &ctx.clone().with_unavailable(&errors),
     )?;
 
     let output_key = &output.value;
@@ -2069,12 +2062,13 @@ fn record_call_retention(values: &RuntimeValueMap, presentation: &EvaluatedRunti
 /// Only explicit prepared runtime imports may consult the caller or root frame.
 fn imported_runtime_value(
     key: &ResolvedDeclName,
+    caller_dag: &graphcal_compiler::dag_id::DagId,
     caller_values: &RuntimeValueMap,
     caller_presentations: Option<&PendingPresentedMap>,
-    ctx: &EvalContext<'_>,
+    ctx: &EvalSession<'_>,
 ) -> Option<EvaluatedRuntimeValue> {
-    let value = imported_binding_value(key, caller_values, ctx)?;
-    let presented = if key.owner() == ctx.dag_id() {
+    let value = imported_binding_value(key, caller_dag, caller_values, ctx)?;
+    let presented = if key.owner() == caller_dag {
         caller_presentations
     } else if key.owner() == ctx.tir.root_dag_id() {
         ctx.root_presentation_instances

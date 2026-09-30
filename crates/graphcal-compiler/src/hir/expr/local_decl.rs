@@ -11,10 +11,10 @@ use crate::resolved_name::ResolvedDeclName;
 /// handle keeps the reference as the defining template spells it and offers
 /// no public accessor for it: the only way to obtain the declaration identity
 /// is the frame of the DAG running the body — inside the compiler through
-/// that DAG's `InstanceFrame`, outside it through the DAG's
-/// [`BodyScope::resolve`](crate::tir::typed::BodyScope::resolve), which an
-/// evaluator obtains only together with the body's source, looked up by the
-/// identity of the unit that owns it. Since a handle is not a
+/// that DAG's `InstanceFrame`, outside it only as a reference of a
+/// [`ScopedNode`](crate::tir::typed::scoped_node::ScopedNode), which resolves it in the
+/// scope of the DAG its tree was handed out with (the owner of the unit the
+/// tree was looked up by). Since a handle is not a
 /// [`ResolvedDeclName`], using it where an identity is required without
 /// resolving it does not compile.
 ///

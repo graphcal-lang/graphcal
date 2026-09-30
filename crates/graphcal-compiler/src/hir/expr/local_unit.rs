@@ -12,7 +12,7 @@ use crate::syntax::dimension::UnitRef as SyntaxUnitRef;
 /// shared. The handle keeps the unit as the defining template names it and
 /// offers no public accessor for it: the unit whose scale applies is obtained
 /// only through the frame of the DAG running the body (outside the compiler,
-/// [`BodyScope::resolve_unit`](crate::tir::typed::BodyScope::resolve_unit)).
+/// as a term of a [`ScopedUnitExpr`](crate::tir::typed::scoped_node::ScopedUnitExpr)).
 ///
 /// The checker reads the facts every copy of the unit shares (its dimension
 /// and the constness of its scale) from the definition through

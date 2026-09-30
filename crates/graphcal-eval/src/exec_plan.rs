@@ -676,7 +676,7 @@ mod tests {
         let field_constraints = prepared.plan().program().facts().struct_field_constraints();
         assert_eq!(field_constraints.len(), 1);
         let mut applications = Vec::new();
-        for (_, body) in tir.root().bodies().roots() {
+        for (_, body) in tir.root().bodies_for_test().roots() {
             if let graphcal_compiler::tir::texpr::CheckedBody::Executable(body) = body {
                 graphcal_compiler::tir::texpr::visit_tnodes(body.as_node(), &mut |node| {
                     if let graphcal_compiler::tir::texpr::TNodeRef::Value(expr) = node

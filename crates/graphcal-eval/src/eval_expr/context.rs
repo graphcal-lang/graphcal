@@ -1,11 +1,10 @@
 //! Phase-specific construction of immutable expression environments.
 //!
 //! An [`EvalSession`] carries everything evaluation needs except a scope: it
-//! cannot resolve a body handle. An [`EvalContext`] is a session entered into
-//! the scope of one tree, and is created only by entering a
-//! [`ScopedTree`] — a tree the compiler handed out together with the scope of
-//! the DAG that owns it. Code evaluating a body therefore never chooses the
-//! frame its handles resolve in.
+//! cannot resolve a body handle. The kernel reads trees only as
+//! [`ScopedNode`]s, whose children and resolved references come out in the
+//! scope the compiler handed the tree out with, so code evaluating a body
+//! never chooses the frame its handles resolve in.
 
 use std::collections::{BTreeSet, HashMap};
 use std::ops::Deref;
@@ -20,9 +19,8 @@ use graphcal_compiler::registry::types::FormattingRegistry;
 use graphcal_compiler::resolved_name::ResolvedDeclName;
 use graphcal_compiler::syntax::span::Span;
 use graphcal_compiler::tir::texpr::TExpr;
-use graphcal_compiler::tir::typed::{
-    BodyScope, CheckedTir, Scoped, ScopedTree, StructFieldConstraintKey,
-};
+use graphcal_compiler::tir::typed::scoped_node::ScopedNode;
+use graphcal_compiler::tir::typed::{CheckedTir, Scoped, ScopedTree, StructFieldConstraintKey};
 use miette::NamedSource;
 
 use crate::constant_pools::RuntimeValueMap;
@@ -88,25 +86,6 @@ impl<'a> Deref for EvalSession<'a> {
     }
 }
 
-/// A session entered into the scope of the tree it evaluates.
-///
-/// Created only by [`EvalSession::enter`], from the scope a [`ScopedTree`]
-/// was handed out with, so every body handle it resolves is resolved in the
-/// frame of the DAG that owns the tree.
-#[derive(Clone)]
-pub struct EvalContext<'a> {
-    session: EvalSession<'a>,
-    scope: BodyScope<'a>,
-}
-
-impl<'a> Deref for EvalContext<'a> {
-    type Target = EvalSession<'a>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.session
-    }
-}
-
 impl<'a> EvalSession<'a> {
     fn environment(
         tir: &'a CheckedTir,
@@ -155,19 +134,6 @@ impl<'a> EvalSession<'a> {
         Self {
             environment: Self::environment(plan.tir(), src, cancellation),
             capabilities: Capabilities::Checked { plan, host },
-        }
-    }
-
-    /// Enter the scope `root` was handed out with, to evaluate it, preserving
-    /// capabilities and enclosing work.
-    pub(in crate::eval_expr) fn enter<'b, T>(&'b self, root: &ScopedTree<'b, T>) -> EvalContext<'b>
-    where
-        'a: 'b,
-        T: std::borrow::Borrow<TExpr>,
-    {
-        EvalContext {
-            session: self.clone(),
-            scope: root.scope(),
         }
     }
 
@@ -251,10 +217,10 @@ impl<'a> EvalSession<'a> {
     }
 
     /// Availability of `graph_refs` and of the call outputs of `expressions`.
-    fn unavailable_among<'e, E: ExpressionDependencies + 'e>(
+    fn unavailable_among<E: ExpressionDependencies>(
         &self,
         graph_refs: impl FnOnce() -> Vec<ResolvedDeclName>,
-        expressions: impl IntoIterator<Item = &'e E>,
+        expressions: impl IntoIterator<Item = E>,
     ) -> Result<Option<graphcal_compiler::node_unavailable::NodeUnavailable>, GraphcalError> {
         let plan = match self.capabilities {
             Capabilities::ProvisionalConstants => None,
@@ -276,7 +242,7 @@ impl<'a> EvalSession<'a> {
         if let Some(plan) = plan {
             for expression in expressions {
                 dependencies.extend(crate::static_incompleteness::collect(
-                    expression,
+                    &expression,
                     plan,
                     self.src,
                     &self.cancellation,
@@ -375,61 +341,20 @@ impl<'a> EvalSession<'a> {
     }
 }
 
-impl<'a> EvalContext<'a> {
-    /// Identity of the DAG whose tree this context evaluates.
-    #[must_use]
-    pub fn dag_id(&self) -> &'a graphcal_compiler::dag_id::DagId {
-        self.scope.dag_id()
-    }
-
-    /// The declaration `reference` denotes in the scope of the tree this
-    /// context evaluates.
-    #[must_use]
-    pub fn resolve(&self, reference: &graphcal_compiler::hir::expr::LocalDecl) -> ResolvedDeclName {
-        self.scope.resolve(reference)
-    }
-
-    /// The unit whose scale `unit` has in the scope of the tree this context
-    /// evaluates.
-    #[must_use]
-    pub fn resolve_unit(
-        &self,
-        unit: &graphcal_compiler::hir::expr::LocalUnit,
-    ) -> graphcal_compiler::resolved_name::ResolvedUnitName {
-        self.scope.resolve_unit(unit)
-    }
-
-    /// The nominal type `source` stands for in the scope of the tree this
-    /// context evaluates, after its Static type substitution.
-    #[must_use]
-    pub fn runtime_struct_type(
-        &self,
-        source: &graphcal_compiler::resolved_name::ResolvedStructTypeName,
-    ) -> graphcal_compiler::resolved_name::ResolvedStructTypeName {
-        self.scope.runtime_struct_type(source)
-    }
-
+impl EvalSession<'_> {
     /// Determine, once for a whole root tree, whether every dependency it may
     /// read (including those of unselected branches) is available.
-    pub fn check_dependencies(&self, expression: &TExpr) -> Result<(), GraphcalError> {
+    pub fn check_dependencies(&self, expression: ScopedNode<'_>) -> Result<(), GraphcalError> {
         crate::pipeline_metrics::record(
             crate::pipeline_metrics::Event::DependencyAvailabilityCheck,
         );
-        self.unavailable_among(
-            || {
-                crate::static_incompleteness::graph_refs(expression)
-                    .iter()
-                    .map(|reference| self.resolve(reference))
-                    .collect()
-            },
-            std::iter::once(expression),
-        )?
-        .map_or(Ok(()), |reason| {
-            Err(GraphcalError::EvaluationUnavailable {
-                reason,
-                src: self.src.clone(),
-                span: expression.span().into(),
+        self.unavailable_among(|| expression.graph_refs(), std::iter::once(expression))?
+            .map_or(Ok(()), |reason| {
+                Err(GraphcalError::EvaluationUnavailable {
+                    reason,
+                    src: self.src.clone(),
+                    span: expression.span().into(),
+                })
             })
-        })
     }
 }

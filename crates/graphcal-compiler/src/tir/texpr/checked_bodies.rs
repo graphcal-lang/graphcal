@@ -289,3 +289,54 @@ pub fn claim_roots(
     }
     Ok(claimed)
 }
+
+impl CheckedBodies {
+    /// Every concrete constructor application these trees make, in root and
+    /// pre-order: each of an executable tree, and each concretely typed one
+    /// of a tree that still awaits bindings (only such an application is one
+    /// a value can have).
+    #[must_use]
+    pub fn concrete_applications(
+        &self,
+    ) -> Vec<(
+        &crate::resolved_name::ResolvedStructTypeName,
+        Vec<crate::registry::checked_type::CheckedGenericArg>,
+    )> {
+        let mut applications = Vec::new();
+        for body in self.roots.values() {
+            match body {
+                CheckedBody::Executable(body) => {
+                    super::model::visit_tnodes(body.as_node(), &mut |node| {
+                        if let TNodeRef::Value(expr) = node
+                            && let Some(application) = expr.application()
+                        {
+                            applications
+                                .push((application.definition(), application.generic_args.clone()));
+                        }
+                    });
+                }
+                CheckedBody::Deferred(body) => {
+                    super::model::visit_tnodes(body.as_node(), &mut |node| {
+                        let TNodeRef::Value(expr) = node else {
+                            return;
+                        };
+                        let Some(application) = expr.application() else {
+                            return;
+                        };
+                        let generic_args = application
+                            .generic_args
+                            .iter()
+                            .map(crate::registry::checked_type::CheckedGenericArg::to_concrete)
+                            .collect::<Option<Vec<_>>>();
+                        if let (Some(_), Some(generic_args)) =
+                            (expr.ty().to_concrete(), generic_args)
+                        {
+                            applications.push((application.definition(), generic_args));
+                        }
+                    });
+                }
+            }
+        }
+        applications
+    }
+}

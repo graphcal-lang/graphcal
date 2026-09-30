@@ -250,11 +250,13 @@ fn instance_trees_are_their_templates_specialized_by_the_instance_bindings() {
     };
     // The template's axis awaits its binding; the instance's is `Fin(2)`.
     assert!(matches!(
-        template.bodies().executable_value(&formula(template)),
+        template
+            .bodies_for_test()
+            .executable_value(&formula(template)),
         Err(graphcal_compiler::tir::texpr::ExecutableBodyError::Deferred(_))
     ));
     let tree = instance
-        .bodies()
+        .bodies_for_test()
         .executable_value(&formula(instance))
         .unwrap();
     assert!(

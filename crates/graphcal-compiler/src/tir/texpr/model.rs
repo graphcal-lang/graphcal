@@ -78,7 +78,7 @@ impl<V: Concreteness> TExpr<V> {
     }
 
     #[must_use]
-    pub const fn kind(&self) -> &TExprKind<V> {
+    pub(crate) const fn kind(&self) -> &TExprKind<V> {
         &self.kind
     }
 
