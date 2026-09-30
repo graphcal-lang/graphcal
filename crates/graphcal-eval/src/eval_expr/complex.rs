@@ -4,8 +4,8 @@ use crate::invariant::{Failure, Invariant};
 use crate::runtime_value::RuntimeValue;
 use graphcal_compiler::builtin::ComplexFn;
 use graphcal_compiler::complex_value::ComplexValue;
-use graphcal_compiler::desugar::desugared_ast::BinOp;
 use graphcal_compiler::finite_value::FiniteQuantity;
+use graphcal_compiler::tir::texpr::operators::{ArithOp, ScaleOp};
 use num_rational::BigRational;
 use num_traits::{ToPrimitive, Zero};
 use thiserror::Error;
@@ -26,12 +26,6 @@ impl From<ComplexEvalError> for Failure<ComplexEvalError> {
     fn from(error: ComplexEvalError) -> Self {
         Self::Error(error)
     }
-}
-
-fn unsupported_operands(operator: BinOp) -> Invariant {
-    Invariant::violated(format_args!(
-        "internal complex arithmetic received unsupported operands for {operator:?}"
-    ))
 }
 
 /// Evaluate one complex built-in call.
@@ -89,67 +83,73 @@ pub(super) fn evaluate_builtin(
     })
 }
 
-pub(super) fn evaluate_binary(
-    operator: BinOp,
-    lhs: &RuntimeValue,
-    rhs: &RuntimeValue,
-) -> Result<RuntimeValue, Failure<ComplexEvalError>> {
-    let value = match (lhs, rhs) {
-        (RuntimeValue::Complex(lhs), RuntimeValue::Complex(rhs)) => {
-            complex_binary(operator, *lhs, *rhs)?
-        }
-        (RuntimeValue::Complex(lhs), RuntimeValue::Quantity(rhs)) => match operator {
-            BinOp::Mul => finite_complex(
-                lhs.re() * rhs.get(),
-                lhs.im() * rhs.get(),
-                "complex scalar multiplication",
-            )?,
-            BinOp::Div => {
-                if rhs.get() == 0.0 {
-                    return Err(ComplexEvalError::DivisionByZero.into());
-                }
-                finite_complex(
-                    lhs.re() / rhs.get(),
-                    lhs.im() / rhs.get(),
-                    "complex scalar division",
-                )?
-            }
-            _ => return Err(unsupported_operands(operator).into()),
-        },
-        (RuntimeValue::Quantity(lhs), RuntimeValue::Complex(rhs)) => match operator {
-            BinOp::Mul => finite_complex(
-                lhs.get() * rhs.re(),
-                lhs.get() * rhs.im(),
-                "scalar complex multiplication",
-            )?,
-            BinOp::Div => divide(ComplexValue::from_parts(*lhs, FiniteQuantity::ZERO), *rhs)?,
-            _ => return Err(unsupported_operands(operator).into()),
-        },
-        _ => return Err(unsupported_operands(operator).into()),
-    };
-    Ok(RuntimeValue::Complex(value))
-}
-
-fn complex_binary(
-    operator: BinOp,
+/// `lhs op rhs` on two complex quantities.
+pub(super) fn arith(
+    op: ArithOp,
     lhs: ComplexValue,
     rhs: ComplexValue,
-) -> Result<ComplexValue, Failure<ComplexEvalError>> {
-    Ok(match operator {
-        BinOp::Add => finite_complex(lhs.re() + rhs.re(), lhs.im() + rhs.im(), "complex addition")?,
-        BinOp::Sub => finite_complex(
+) -> Result<ComplexValue, ComplexEvalError> {
+    match op {
+        ArithOp::Add => {
+            finite_complex(lhs.re() + rhs.re(), lhs.im() + rhs.im(), "complex addition")
+        }
+        ArithOp::Sub => finite_complex(
             lhs.re() - rhs.re(),
             lhs.im() - rhs.im(),
             "complex subtraction",
-        )?,
-        BinOp::Mul => finite_complex(
+        ),
+        ArithOp::Mul => finite_complex(
             lhs.im().mul_add(-rhs.im(), lhs.re() * rhs.re()),
             lhs.im().mul_add(rhs.re(), lhs.re() * rhs.im()),
             "complex multiplication",
-        )?,
-        BinOp::Div => divide(lhs, rhs)?,
-        _ => return Err(unsupported_operands(operator).into()),
-    })
+        ),
+        ArithOp::Div => divide(lhs, rhs),
+    }
+}
+
+/// `complex op scalar`: a complex quantity scaled by a real one.
+pub(super) fn scale_right(
+    op: ScaleOp,
+    complex: ComplexValue,
+    scalar: FiniteQuantity,
+) -> Result<ComplexValue, ComplexEvalError> {
+    match op {
+        ScaleOp::Mul => finite_complex(
+            complex.re() * scalar.get(),
+            complex.im() * scalar.get(),
+            "complex scalar multiplication",
+        ),
+        ScaleOp::Div => {
+            if scalar.get() == 0.0 {
+                return Err(ComplexEvalError::DivisionByZero);
+            }
+            finite_complex(
+                complex.re() / scalar.get(),
+                complex.im() / scalar.get(),
+                "complex scalar division",
+            )
+        }
+    }
+}
+
+/// `scalar op complex`: a real quantity multiplied or divided by a complex
+/// one.
+pub(super) fn scale_left(
+    op: ScaleOp,
+    scalar: FiniteQuantity,
+    complex: ComplexValue,
+) -> Result<ComplexValue, ComplexEvalError> {
+    match op {
+        ScaleOp::Mul => finite_complex(
+            scalar.get() * complex.re(),
+            scalar.get() * complex.im(),
+            "scalar complex multiplication",
+        ),
+        ScaleOp::Div => divide(
+            ComplexValue::from_parts(scalar, FiniteQuantity::ZERO),
+            complex,
+        ),
+    }
 }
 
 /// Divide the exact binary input components and round each final component once.
@@ -273,40 +273,52 @@ mod tests {
 
     #[test]
     fn multiplication_and_division_round_trip() {
-        let lhs = RuntimeValue::complex(3.0, 4.0).unwrap();
-        let rhs = RuntimeValue::complex(5.0, 6.0).unwrap();
-        let product = evaluate_binary(BinOp::Mul, &lhs, &rhs).unwrap();
-        let RuntimeValue::Complex(product_value) = product else {
-            panic!("expected complex product");
-        };
-        assert_eq!(product_value, ComplexValue::try_new(-9.0, 38.0).unwrap());
-        let product = RuntimeValue::Complex(product_value);
-        let RuntimeValue::Complex(quotient) = evaluate_binary(BinOp::Div, &product, &rhs).unwrap()
-        else {
-            panic!("expected complex quotient");
-        };
+        let lhs = c(3.0, 4.0);
+        let rhs = c(5.0, 6.0);
+        let product = arith(ArithOp::Mul, lhs, rhs).unwrap();
+        assert_eq!(product, c(-9.0, 38.0));
+        let quotient = arith(ArithOp::Div, product, rhs).unwrap();
         assert!((quotient.re() - 3.0).abs() < 1e-12);
         assert!((quotient.im() - 4.0).abs() < 1e-12);
     }
 
     #[test]
+    fn scaling_by_a_real_quantity_follows_the_operand_order() {
+        let two = FiniteQuantity::try_new(2.0).unwrap();
+        assert_eq!(
+            scale_right(ScaleOp::Mul, c(1.0, 2.0), two).unwrap(),
+            c(2.0, 4.0)
+        );
+        assert_eq!(
+            scale_right(ScaleOp::Div, c(2.0, 4.0), two).unwrap(),
+            c(1.0, 2.0)
+        );
+        assert_eq!(
+            scale_left(ScaleOp::Mul, two, c(1.0, 2.0)).unwrap(),
+            c(2.0, 4.0)
+        );
+        assert_eq!(
+            scale_left(ScaleOp::Div, two, c(0.0, 1.0)).unwrap(),
+            c(0.0, -2.0)
+        );
+        assert!(matches!(
+            scale_right(ScaleOp::Div, c(1.0, 2.0), FiniteQuantity::ZERO),
+            Err(ComplexEvalError::DivisionByZero)
+        ));
+    }
+
+    #[test]
     fn division_avoids_overflow_for_large_equal_operands() {
-        let large = RuntimeValue::complex(f64::MAX, f64::MAX).unwrap();
-        let RuntimeValue::Complex(quotient) = evaluate_binary(BinOp::Div, &large, &large).unwrap()
-        else {
-            panic!("expected complex quotient");
-        };
+        let large = c(f64::MAX, f64::MAX);
+        let quotient = arith(ArithOp::Div, large, large).unwrap();
         assert_eq!(quotient, ComplexValue::try_new(1.0, 0.0).unwrap());
     }
 
     #[test]
     fn division_preserves_large_finite_quotient() {
-        let lhs = RuntimeValue::complex(1.0e208, 0.0).unwrap();
-        let rhs = RuntimeValue::complex(1.0e-100, 1.0e-100).unwrap();
-        let RuntimeValue::Complex(quotient) = evaluate_binary(BinOp::Div, &lhs, &rhs).unwrap()
-        else {
-            panic!("expected complex quotient");
-        };
+        let lhs = c(1.0e208, 0.0);
+        let rhs = c(1.0e-100, 1.0e-100);
+        let quotient = arith(ArithOp::Div, lhs, rhs).unwrap();
         assert!((quotient.re() / 5.0e307 - 1.0).abs() < 1.0e-15);
         assert!((quotient.im() / -5.0e307 - 1.0).abs() < 1.0e-15);
     }
@@ -325,10 +337,13 @@ mod tests {
 
     #[test]
     fn non_finite_result_is_rejected() {
-        let value = RuntimeValue::complex(f64::MAX, 0.0).unwrap();
         assert!(matches!(
-            evaluate_binary(BinOp::Mul, &value, &RuntimeValue::quantity(2.0).unwrap()),
-            Err(Failure::Error(ComplexEvalError::NonFinite { .. }))
+            scale_right(
+                ScaleOp::Mul,
+                c(f64::MAX, 0.0),
+                FiniteQuantity::try_new(2.0).unwrap()
+            ),
+            Err(ComplexEvalError::NonFinite { .. })
         ));
         assert!(matches!(
             evaluate_builtin(
@@ -342,12 +357,8 @@ mod tests {
     #[test]
     fn zero_divisor_is_rejected() {
         assert!(matches!(
-            evaluate_binary(
-                BinOp::Div,
-                &RuntimeValue::complex(1.0, 2.0).unwrap(),
-                &RuntimeValue::complex(0.0, 0.0).unwrap(),
-            ),
-            Err(Failure::Error(ComplexEvalError::DivisionByZero))
+            arith(ArithOp::Div, c(1.0, 2.0), c(0.0, 0.0)),
+            Err(ComplexEvalError::DivisionByZero)
         ));
     }
 
@@ -358,22 +369,6 @@ mod tests {
             other => panic!("expected an invariant, got {other:?}"),
         };
         let complex = RuntimeValue::complex(1.0, 2.0).unwrap();
-        assert_eq!(
-            invariant(evaluate_binary(
-                BinOp::Add,
-                &complex,
-                &RuntimeValue::Bool(true)
-            )),
-            "internal complex arithmetic received unsupported operands for Add"
-        );
-        assert_eq!(
-            invariant(evaluate_binary(
-                BinOp::Sub,
-                &complex,
-                &RuntimeValue::quantity(1.0).unwrap()
-            )),
-            "internal complex arithmetic received unsupported operands for Sub"
-        );
         assert_eq!(
             invariant(evaluate_builtin(
                 ComplexFn::Real,

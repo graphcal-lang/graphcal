@@ -10,7 +10,6 @@
 
 use std::collections::BTreeSet;
 
-use crate::builtin::BuiltinConst;
 use crate::dag_id::DagId;
 use crate::expression_id::ExprId;
 use crate::hir::expr::{
@@ -20,9 +19,10 @@ use crate::hir::expr::{
 use crate::registry::checked_type::CheckedType;
 use crate::registry::time_zone::IanaTimeZoneId;
 use crate::resolved_name::{ResolvedDeclName, ResolvedUnitName};
-use crate::syntax::ast::{BinOp, KeyFormKind, UnaryOp};
+use crate::syntax::ast::KeyFormKind;
 use crate::syntax::span::{Span, Spanned};
 use crate::syntax::type_name::FieldName;
+use crate::tir::texpr::operators::{BExpr, CExpr, DExpr, IExpr, QExpr};
 use crate::tir::texpr::{
     ConstructorApplication, StaticPosition, TArg, TConstRef, TContextual, TExpr, TExprKind,
     TFieldInit, TIndexArg, TMapEntry, TMatchArm, TNodeRef, TParamBinding, visit_tnodes,
@@ -37,26 +37,23 @@ pub type ScopedNode<'t> = Scoped<'t, TExpr>;
 /// body handles resolved in that scope.
 #[derive(Debug, Clone)]
 pub enum NodeKind<'t> {
-    Number(f64),
-    Integer(i64),
-    Bool(bool),
-    Quantity {
+    QuantityLiteral {
         value: f64,
         unit: ScopedUnitExpr<'t>,
+    },
+    Quantity(QExpr<ScopedNode<'t>>),
+    Int(IExpr<ScopedNode<'t>>),
+    Bool(BExpr<ScopedNode<'t>>),
+    Complex(CExpr<ScopedNode<'t>>),
+    Datetime(DExpr<ScopedNode<'t>>),
+    KeyShift {
+        key: ScopedNode<'t>,
+        addend: ScopedNode<'t>,
     },
     /// `@name`: the declaration it denotes in the node's scope.
     GraphRef(Spanned<ResolvedDeclName>),
     Const(Spanned<ConstRef<'t>>),
     Local(&'t Spanned<LocalId>),
-    Binary {
-        op: BinOp,
-        lhs: ScopedNode<'t>,
-        rhs: ScopedNode<'t>,
-    },
-    Unary {
-        op: UnaryOp,
-        operand: ScopedNode<'t>,
-    },
     Call {
         callee: &'t Spanned<FunctionRef>,
         args: Scoped<'t, [TArg]>,
@@ -127,7 +124,6 @@ pub enum NodeKind<'t> {
 #[derive(Debug, Clone)]
 pub enum ConstRef<'t> {
     Decl(ResolvedDeclName),
-    Builtin(BuiltinConst),
     Constructor(&'t ConstructorApplication),
 }
 
@@ -180,14 +176,36 @@ impl<'t> Scoped<'t, TExpr> {
     pub fn kind(self) -> NodeKind<'t> {
         let scope = self.scope();
         let node = |child: &'t TExpr| Scoped::new(scope, child);
+        let operand = |child: &'t Box<_>| Ok::<_, std::convert::Infallible>(node(child));
         let resolve = |handle| scope.resolve(handle);
         match self.get().kind() {
-            TExprKind::Number(value) => NodeKind::Number(*value),
-            TExprKind::Integer(value) => NodeKind::Integer(*value),
-            TExprKind::Bool(value) => NodeKind::Bool(*value),
-            TExprKind::Quantity { value, unit } => NodeKind::Quantity {
+            TExprKind::QuantityLiteral { value, unit } => NodeKind::QuantityLiteral {
                 value: *value,
                 unit: Scoped::new(scope, unit),
+            },
+            TExprKind::Quantity(operation) => {
+                let Ok(operation) = operation.try_map(operand);
+                NodeKind::Quantity(operation)
+            }
+            TExprKind::Int(operation) => {
+                let Ok(operation) = operation.try_map(operand);
+                NodeKind::Int(operation)
+            }
+            TExprKind::Bool(operation) => {
+                let Ok(operation) = operation.try_map(operand);
+                NodeKind::Bool(operation)
+            }
+            TExprKind::Complex(operation) => {
+                let Ok(operation) = operation.try_map(operand);
+                NodeKind::Complex(operation)
+            }
+            TExprKind::Datetime(operation) => {
+                let Ok(operation) = operation.try_map(operand);
+                NodeKind::Datetime(operation)
+            }
+            TExprKind::KeyShift { key, addend } => NodeKind::KeyShift {
+                key: node(key),
+                addend: node(addend),
             },
             TExprKind::GraphRef(target) => {
                 NodeKind::GraphRef(Spanned::new(resolve(&target.value), target.span))
@@ -195,21 +213,11 @@ impl<'t> Scoped<'t, TExpr> {
             TExprKind::Const(target) => NodeKind::Const(Spanned::new(
                 match &target.value {
                     TConstRef::Decl(handle) => ConstRef::Decl(resolve(handle)),
-                    TConstRef::Builtin(constant) => ConstRef::Builtin(*constant),
                     TConstRef::Constructor(application) => ConstRef::Constructor(application),
                 },
                 target.span,
             )),
             TExprKind::Local(local) => NodeKind::Local(local),
-            TExprKind::Binary { op, lhs, rhs } => NodeKind::Binary {
-                op: *op,
-                lhs: node(lhs),
-                rhs: node(rhs),
-            },
-            TExprKind::Unary { op, operand } => NodeKind::Unary {
-                op: *op,
-                operand: node(operand),
-            },
             TExprKind::Call { callee, args } => NodeKind::Call {
                 callee,
                 args: Scoped::new(scope, args.as_slice()),

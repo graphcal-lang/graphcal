@@ -31,7 +31,6 @@ use crate::runtime_presentation::{
 };
 use graphcal_compiler::resolved_name::ResolvedDeclName;
 
-use super::arithmetic::{Comparison, OrderingOp};
 use super::{
     EvalSession, RuntimeValueMap, checked_finite_quantity, checked_unit_scaled_value,
     imported_binding_value, index_ref_matches_resolved, resolve_unit_scale,
@@ -193,12 +192,28 @@ fn eval_texpr_inner(
     ctx: &EvalSession<'_>,
 ) -> Result<EvaluatedRuntimeValue, GraphcalError> {
     let span = expr.span();
+    let evaluate = |node| eval_value(node, values, local_values, ctx);
+    let operands = super::operations::Operands::new(&evaluate, ctx);
+    let plain = EvaluatedRuntimeValue::plain;
     match expr.kind() {
-        NodeKind::Number(n) => checked_finite_quantity(n, "numeric literal", span, ctx)
-            .map(EvaluatedRuntimeValue::plain),
-        NodeKind::Integer(n) => Ok(EvaluatedRuntimeValue::plain(RuntimeValue::Int(n))),
-        NodeKind::Bool(b) => Ok(EvaluatedRuntimeValue::plain(RuntimeValue::Bool(b))),
-        NodeKind::Quantity { value, unit } => {
+        NodeKind::Quantity(operation) => super::operations::quantity(&operation, span, &operands)
+            .map(|value| plain(RuntimeValue::Quantity(value))),
+        NodeKind::Int(operation) => super::operations::int(&operation, span, &operands)
+            .map(|value| plain(RuntimeValue::Int(value))),
+        NodeKind::Bool(operation) => super::operations::boolean(&operation, &operands)
+            .map(|value| plain(RuntimeValue::Bool(value))),
+        NodeKind::Complex(operation) => super::operations::complex(&operation, span, &operands)
+            .map(|value| plain(RuntimeValue::Complex(value))),
+        NodeKind::Datetime(operation) => super::operations::datetime(&operation, span, &operands)
+            .map(|value| plain(RuntimeValue::Datetime(value))),
+        NodeKind::KeyShift { key, addend } => {
+            let CheckedType::Key(target) = expr.ty() else {
+                return Err(ctx.internal_error("key shift has no retained key type", span));
+            };
+            super::operations::key_shift(target, key, addend, span, &operands)
+                .map(|value| plain(RuntimeValue::Key(value)))
+        }
+        NodeKind::QuantityLiteral { value, unit } => {
             let scale = resolve_unit_scale(unit, values, ctx)?;
             let value = checked_unit_scaled_value(value, scale, span, ctx)?;
             let display = super::presentation::scaled(unit.get(), scale, ctx);
@@ -219,26 +234,13 @@ fn eval_texpr_inner(
                 ConstRef::Decl(target) => presentation_values
                     .and_then(|presented| presented.get(target))
                     .map_or_else(|| EvaluatedRuntimeValue::plain(value), Clone::clone),
-                ConstRef::Builtin(_) | ConstRef::Constructor(_) => {
-                    EvaluatedRuntimeValue::plain(value)
-                }
+                ConstRef::Constructor(_) => EvaluatedRuntimeValue::plain(value),
             })
         }
         NodeKind::Local(local) => local_values
             .get(local.value)
             .cloned()
             .ok_or_else(|| ctx.eval_error("undefined local variable", local.span)),
-        NodeKind::Binary { op, lhs, rhs } => match expr.ty() {
-            // Additive Fin-key arithmetic `k + c : Key<Fin(N + c)>`.
-            CheckedType::Key(target) => {
-                eval_key_shift(span, target, lhs, rhs, values, local_values, ctx)
-                    .map(EvaluatedRuntimeValue::plain)
-            }
-            _ => eval_binop(span, op, lhs, rhs, values, local_values, ctx)
-                .map(EvaluatedRuntimeValue::plain),
-        },
-        NodeKind::Unary { op, operand } => eval_unary(span, op, operand, values, local_values, ctx)
-            .map(EvaluatedRuntimeValue::plain),
         NodeKind::Call { callee, args } => {
             eval_fn_call(span, callee, args, values, local_values, ctx)
                 .map(EvaluatedRuntimeValue::plain)
@@ -248,10 +250,7 @@ fn eval_texpr_inner(
             then_branch,
             else_branch,
         } => {
-            let cond = eval_value(condition, values, local_values, ctx)?
-                .expect_bool("if condition")
-                .map_err(|e| ctx.eval_error(e.to_string(), span))?;
-            if cond {
+            if operands.bool(condition)? {
                 eval_texpr_evaluated(then_branch, values, presentation_values, local_values, ctx)
             } else {
                 eval_texpr_evaluated(else_branch, values, presentation_values, local_values, ctx)
@@ -464,9 +463,6 @@ fn eval_const_ref(
             .cloned()
             .ok_or_else(|| ctx.eval_error(format!("undefined constant `{resolved}`"), target.span)),
         ConstRef::Constructor(application) => nullary_constructor(application, target.span, ctx),
-        ConstRef::Builtin(builtin) => {
-            checked_finite_quantity(builtin.value(), "built-in constant", target.span, ctx)
-        }
     }
 }
 
@@ -492,227 +488,6 @@ fn apply_constructor(
     StructValue::try_from_application(application, fields)
         .map(RuntimeValue::Struct)
         .map_err(|error| ctx.internal_error(error.to_string(), span))
-}
-
-/// Evaluate `k + c` on a `Fin` key: the key at position `k + c` of the wider
-/// target axis `Fin(N + c)`, which the checker derived from the static addend.
-fn eval_key_shift(
-    span: Span,
-    target: &IndexTypeRef,
-    lhs: ScopedNode<'_>,
-    rhs: ScopedNode<'_>,
-    values: &RuntimeValueMap,
-    local_values: &HirLocalValueMap<'_>,
-    ctx: &EvalSession<'_>,
-) -> Result<RuntimeValue, GraphcalError> {
-    let (RuntimeValue::Key(key), RuntimeValue::Int(addend)) = (
-        eval_value(lhs, values, local_values, ctx)?,
-        eval_value(rhs, values, local_values, ctx)?,
-    ) else {
-        return Err(ctx.internal_error("key arithmetic needs a key and an Int addend", span));
-    };
-    let axis = index_axis_for_ref(target, ctx).ok_or_else(|| {
-        ctx.internal_error(
-            format!("key axis `{target}` has no concrete definition"),
-            span,
-        )
-    })?;
-    usize::try_from(addend)
-        .ok()
-        .and_then(|addend| key.position().checked_add(addend))
-        .and_then(|position| KeyValue::at(axis, position))
-        .map(RuntimeValue::Key)
-        .ok_or_else(|| {
-            ctx.internal_error(
-                format!("key shifted by {addend} left its checked axis `{target}`"),
-                span,
-            )
-        })
-}
-
-fn eval_binop(
-    span: Span,
-    op: graphcal_compiler::desugar::desugared_ast::BinOp,
-    lhs: ScopedNode<'_>,
-    rhs: ScopedNode<'_>,
-    values: &RuntimeValueMap,
-    local_values: &HirLocalValueMap<'_>,
-    ctx: &EvalSession<'_>,
-) -> Result<RuntimeValue, GraphcalError> {
-    use graphcal_compiler::desugar::desugared_ast::BinOp;
-    let compare = |comparison| {
-        let l = eval_value(lhs, values, local_values, ctx)?;
-        let r = eval_value(rhs, values, local_values, ctx)?;
-        super::arithmetic::eval_comparison_values(comparison, &l, &r, ctx, span)
-    };
-    match op {
-        BinOp::And => {
-            let l = eval_value(lhs, values, local_values, ctx)?
-                .expect_bool("AND operand")
-                .map_err(|e| ctx.eval_error(e.to_string(), span))?;
-            let r = eval_value(rhs, values, local_values, ctx)?
-                .expect_bool("AND operand")
-                .map_err(|e| ctx.eval_error(e.to_string(), span))?;
-            Ok(RuntimeValue::Bool(l && r))
-        }
-        BinOp::Or => {
-            let l = eval_value(lhs, values, local_values, ctx)?
-                .expect_bool("OR operand")
-                .map_err(|e| ctx.eval_error(e.to_string(), span))?;
-            let r = eval_value(rhs, values, local_values, ctx)?
-                .expect_bool("OR operand")
-                .map_err(|e| ctx.eval_error(e.to_string(), span))?;
-            Ok(RuntimeValue::Bool(l || r))
-        }
-        BinOp::Eq => compare(Comparison::Eq),
-        BinOp::Ne => compare(Comparison::Ne),
-        BinOp::Lt => compare(Comparison::Ord(OrderingOp::Lt)),
-        BinOp::Gt => compare(Comparison::Ord(OrderingOp::Gt)),
-        BinOp::Le => compare(Comparison::Ord(OrderingOp::Le)),
-        BinOp::Ge => compare(Comparison::Ord(OrderingOp::Ge)),
-        BinOp::Pow(exponent) => eval_power(span, exponent, lhs, rhs, values, local_values, ctx),
-        _ => {
-            let l = eval_value(lhs, values, local_values, ctx)?;
-            let r = eval_value(rhs, values, local_values, ctx)?;
-            if let (RuntimeValue::Int(li), RuntimeValue::Int(ri)) = (&l, &r) {
-                return super::arithmetic::eval_int_binop(op, *li, *ri, ctx, span)
-                    .map(RuntimeValue::Int);
-            }
-            match (&l, &r) {
-                (RuntimeValue::Datetime(le), RuntimeValue::Datetime(re)) if op == BinOp::Sub => {
-                    let seconds = super::datetime::checked_epoch_difference_seconds(*le, *re)
-                        .map_err(|error| ctx.eval_error(error.to_string(), span))?;
-                    return checked_finite_quantity(seconds, "datetime difference", span, ctx);
-                }
-                (RuntimeValue::Datetime(_), RuntimeValue::Datetime(_)) => {
-                    return Err(ctx.eval_error("cannot add two datetimes", span));
-                }
-                (RuntimeValue::Datetime(e), RuntimeValue::Quantity(secs)) => {
-                    let result = match op {
-                        BinOp::Add => super::datetime::checked_epoch_add_seconds(*e, secs.get()),
-                        BinOp::Sub => {
-                            super::datetime::checked_epoch_subtract_seconds(*e, secs.get())
-                        }
-                        _ => {
-                            return Err(ctx.eval_error(
-                                format!("unsupported operator {op:?} for Datetime and quantity"),
-                                span,
-                            ));
-                        }
-                    };
-                    return result
-                        .map(RuntimeValue::Datetime)
-                        .map_err(|error| ctx.eval_error(error.to_string(), span));
-                }
-                (RuntimeValue::Quantity(secs), RuntimeValue::Datetime(e)) if op == BinOp::Add => {
-                    return super::datetime::checked_epoch_add_seconds(*e, secs.get())
-                        .map(RuntimeValue::Datetime)
-                        .map_err(|error| ctx.eval_error(error.to_string(), span));
-                }
-                (RuntimeValue::Quantity(_), RuntimeValue::Datetime(_)) => {
-                    return Err(ctx.eval_error("cannot subtract a Datetime from a quantity", span));
-                }
-                _ => {}
-            }
-            if matches!(l, RuntimeValue::Complex(_)) || matches!(r, RuntimeValue::Complex(_)) {
-                return super::complex::evaluate_binary(op, &l, &r)
-                    .map_err(|failure| ctx.failure_error(failure, span));
-            }
-            let lv = l
-                .expect_quantity("binary operand")
-                .map_err(|e| ctx.eval_error(e.to_string(), span))?;
-            let rv = r
-                .expect_quantity("binary operand")
-                .map_err(|e| ctx.eval_error(e.to_string(), span))?;
-            super::arithmetic::eval_quantity_binop(op, lv, rv, ctx, span)
-                .map(RuntimeValue::Quantity)
-        }
-    }
-}
-
-fn eval_power(
-    span: Span,
-    exponent: graphcal_compiler::syntax::ast::PowerExponent,
-    base: ScopedNode<'_>,
-    exponent_expr: ScopedNode<'_>,
-    values: &RuntimeValueMap,
-    local_values: &HirLocalValueMap<'_>,
-    ctx: &EvalSession<'_>,
-) -> Result<RuntimeValue, GraphcalError> {
-    use graphcal_compiler::desugar::desugared_ast::BinOp;
-    use graphcal_compiler::syntax::ast::PowerExponent;
-
-    let base = eval_value(base, values, local_values, ctx)?;
-    let op = BinOp::Pow(exponent);
-    match (base, exponent) {
-        (RuntimeValue::Int(base), PowerExponent::Exact(exact)) => {
-            if !exact.is_integer() {
-                return Err(ctx.internal_error(
-                    "fractional exact exponent reached Int power evaluation",
-                    span,
-                ));
-            }
-            super::arithmetic::eval_int_binop(op, base, exact.num(), ctx, span)
-                .map(RuntimeValue::Int)
-        }
-        (RuntimeValue::Int(base), _) => {
-            let runtime_exponent = eval_value(exponent_expr, values, local_values, ctx)?;
-            let RuntimeValue::Int(runtime_exponent) = runtime_exponent else {
-                return Err(
-                    ctx.internal_error("non-Int exponent reached Int power evaluation", span)
-                );
-            };
-            super::arithmetic::eval_int_binop(op, base, runtime_exponent, ctx, span)
-                .map(RuntimeValue::Int)
-        }
-        (RuntimeValue::Quantity(base), PowerExponent::Exact(exact)) => {
-            super::arithmetic::eval_exact_quantity_power(base, exact, ctx, span)
-                .map(RuntimeValue::Quantity)
-        }
-        (RuntimeValue::Quantity(base), _) => {
-            let runtime_exponent = eval_value(exponent_expr, values, local_values, ctx)?
-                .expect_quantity("power exponent")
-                .map_err(|error| ctx.internal_error(error.to_string(), span))?;
-            super::arithmetic::eval_quantity_binop(op, base, runtime_exponent, ctx, span)
-                .map(RuntimeValue::Quantity)
-        }
-        (other, _) => Err(ctx.internal_error(
-            format!("non-numeric base reached power evaluation: {other:?}"),
-            span,
-        )),
-    }
-}
-
-fn eval_unary(
-    span: Span,
-    op: graphcal_compiler::desugar::desugared_ast::UnaryOp,
-    operand: ScopedNode<'_>,
-    values: &RuntimeValueMap,
-    local_values: &HirLocalValueMap<'_>,
-    ctx: &EvalSession<'_>,
-) -> Result<RuntimeValue, GraphcalError> {
-    match op {
-        graphcal_compiler::desugar::desugared_ast::UnaryOp::Neg => {
-            let v = eval_value(operand, values, local_values, ctx)?;
-            match v {
-                RuntimeValue::Int(i) => i
-                    .checked_neg()
-                    .map(RuntimeValue::Int)
-                    .ok_or_else(|| ctx.eval_error("integer negation overflow", span)),
-                RuntimeValue::Complex(value) => Ok(RuntimeValue::Complex(value.negated())),
-                _ => v
-                    .expect_quantity("unary negation")
-                    .map(|value| RuntimeValue::Quantity(value.negated()))
-                    .map_err(|e| ctx.eval_error(e.to_string(), span)),
-            }
-        }
-        graphcal_compiler::desugar::desugared_ast::UnaryOp::Not => {
-            let v = eval_value(operand, values, local_values, ctx)?
-                .expect_bool("logical NOT")
-                .map_err(|e| ctx.eval_error(e.to_string(), span))?;
-            Ok(RuntimeValue::Bool(!v))
-        }
-    }
 }
 
 fn expect_builtin_arity(

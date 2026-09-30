@@ -20,6 +20,7 @@ mod checked_bodies;
 pub(crate) mod map;
 mod model;
 mod nominal;
+pub mod operators;
 
 #[cfg(test)]
 mod tests;
