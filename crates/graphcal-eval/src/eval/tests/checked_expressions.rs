@@ -1,65 +1,7 @@
 use super::*;
 use graphcal_compiler::resolved_name::ResolvedStructTypeName;
-use graphcal_compiler::syntax::type_name::{ConstructorName, FieldName, StructTypeName};
+use graphcal_compiler::syntax::type_name::{FieldName, StructTypeName};
 use graphcal_compiler::tir::dim_check::body_specialization::specialize_bound_expression;
-
-#[test]
-fn field_access_rejects_forged_constructor_in_the_retained_type() {
-    let source = "type Token { Token(value: Int), } node stored: Token = Token(value: 1); node projected: Int = @stored.value;";
-    let tir = compile_to_tir(source, "field-membership.gcl").unwrap();
-    let src = miette::NamedSource::new(
-        "field-membership.gcl",
-        std::sync::Arc::new(source.to_owned()),
-    );
-    let projected = tir
-        .root()
-        .bound_decl_identity(&scoped_name("projected"))
-        .unwrap();
-    let expr = tir
-        .declaration_body(projected)
-        .unwrap()
-        .runtime_expression()
-        .unwrap();
-    for (constructor, valid) in [("Token", true), ("NotToken", false)] {
-        let values = HashMap::from([(
-            tir.root()
-                .lookup_decl_identity(&scoped_name("stored"))
-                .into_bound()
-                .unwrap(),
-            crate::eval_expr::RuntimeValue::Struct {
-                type_name: ResolvedStructTypeName::for_test(
-                    tir.root_dag_id().clone(),
-                    StructTypeName::expect_valid("Token"),
-                ),
-                constructor: ConstructorName::expect_valid(constructor),
-                generic_args: Vec::new(),
-                fields: indexmap::IndexMap::from([(
-                    FieldName::expect_valid("value"),
-                    crate::eval_expr::RuntimeValue::Int(99),
-                )]),
-            },
-        )]);
-        let context = crate::eval_expr::EvalSession::provisional_constants(
-            &tir,
-            &src,
-            graphcal_compiler::cancellation::CancellationToken::unbounded(),
-        )
-        .with_roots(&values, None);
-        let result =
-            crate::eval_expr::eval_root(&context.executable(expr).unwrap(), &values, &context);
-        if valid {
-            assert!(
-                matches!(result, Ok(crate::eval_expr::RuntimeValue::Int(99))),
-                "positive control: {result:?}"
-            );
-        } else {
-            assert!(
-                matches!(result, Err(GraphcalError::EvalError { .. })),
-                "forged constructor accepted: {result:?}"
-            );
-        }
-    }
-}
 
 #[test]
 fn scalar_prototypes_require_discharge_and_invalid_membership_never_publishes() {

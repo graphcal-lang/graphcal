@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use crate::runtime_value::{IndexAxis, IndexedValue, RuntimeValue};
+use crate::runtime_value::{IndexAxis, IndexedValue, RuntimeValue, StructValue};
 use graphcal_compiler::builtin::{
     AggregationFn, BuiltinFn, ConversionFn, DatetimeConstructorFn, DatetimeField, DatetimeFn,
     DatetimeFromNumericFn, DatetimeToNumericFn, KeyAggregation, ScalarFn, ValueAggregation,
@@ -291,6 +291,7 @@ fn eval_texpr_inner(
             application,
             fields,
         } => eval_constructor_call(
+            expr.span(),
             application,
             fields,
             values,
@@ -438,9 +439,9 @@ std::thread_local! {
 #[cfg(test)]
 fn runtime_value_tree_node_count(value: &RuntimeValue) -> usize {
     match value {
-        RuntimeValue::Struct { fields, .. } => fields
-            .values()
-            .map(runtime_value_tree_node_count)
+        RuntimeValue::Struct(value) => value
+            .fields()
+            .map(|(_, field)| runtime_value_tree_node_count(field))
             .fold(1, usize::saturating_add),
         RuntimeValue::Indexed(entries) => entries
             .values()
@@ -471,7 +472,7 @@ fn eval_const_ref(
             .get(&ctx.resolve(resolved))
             .cloned()
             .ok_or_else(|| ctx.eval_error(format!("undefined constant `{resolved}`"), target.span)),
-        TConstRef::Constructor(application) => Ok(nullary_constructor(application)),
+        TConstRef::Constructor(application) => nullary_constructor(application, target.span, ctx),
         TConstRef::Builtin(builtin) => {
             checked_finite_quantity(builtin.value(), "built-in constant", target.span, ctx)
         }
@@ -480,14 +481,26 @@ fn eval_const_ref(
 
 fn nullary_constructor(
     application: &graphcal_compiler::tir::texpr::ConstructorApplication,
-) -> RuntimeValue {
+    span: Span,
+    ctx: &EvalContext<'_>,
+) -> Result<RuntimeValue, GraphcalError> {
     crate::pipeline_metrics::record(crate::pipeline_metrics::Event::ConstructorFactConsumption);
-    RuntimeValue::Struct {
-        type_name: application.runtime_type.clone(),
-        constructor: application.constructor.name(),
-        generic_args: application.generic_args.clone(),
-        fields: IndexMap::new(),
-    }
+    apply_constructor(application, Vec::new(), span, ctx)
+}
+
+/// Apply a checked constructor to its evaluated fields.
+fn apply_constructor(
+    application: &graphcal_compiler::tir::texpr::ConstructorApplication,
+    fields: Vec<(
+        graphcal_compiler::syntax::type_name::FieldName,
+        RuntimeValue,
+    )>,
+    span: Span,
+    ctx: &EvalContext<'_>,
+) -> Result<RuntimeValue, GraphcalError> {
+    StructValue::try_from_application(application, fields)
+        .map(RuntimeValue::Struct)
+        .map_err(|error| ctx.internal_error(error.to_string(), span))
 }
 
 fn eval_binop(
@@ -1657,12 +1670,19 @@ fn eval_extern_fn(
                     };
                     (field.name().clone(), value)
                 })
-                .collect::<indexmap::IndexMap<_, _>>();
-            Ok(RuntimeValue::Struct {
-                type_name: result_struct.resolved.clone(),
-                constructor: result_struct.constructor.clone(),
-                generic_args: Vec::new(),
+                .collect::<Vec<_>>();
+            StructValue::try_from_record_shape(
+                result_struct.resolved.clone(),
+                result_struct.constructor.clone(),
+                &result_struct.shape,
                 fields,
+            )
+            .map(RuntimeValue::Struct)
+            .map_err(|error| {
+                ctx.eval_error(
+                    format!("extern function `{ext}` returned a malformed record: {error}"),
+                    span,
+                )
             })
         }
     }
@@ -1703,12 +1723,9 @@ fn eval_field_access(
     ctx: &EvalContext<'_>,
 ) -> Result<RuntimeValue, GraphcalError> {
     match inner_val {
-        RuntimeValue::Struct {
-            type_name,
-            constructor,
-            generic_args,
-            fields,
-        } => {
+        RuntimeValue::Struct(value) => {
+            let type_name = value.type_name();
+            let constructor = value.constructor();
             let CheckedType::Struct(expected, expected_args) = inner.ty() else {
                 return Err(ctx.internal_error(
                     "field access has no retained struct operand type",
@@ -1716,29 +1733,15 @@ fn eval_field_access(
                 ));
             };
             let expected_runtime = ctx.runtime_struct_type(expected.resolved());
-            // Validate the actual tag against the retained expected type, never
-            // resolve a source name or infer a constructor application here.
-            let definition = ctx
-                .tir
-                .struct_type_def(expected.resolved())
-                .ok_or_else(|| {
-                    ctx.internal_error(
-                        "retained field operand has no nominal definition",
-                        inner.span(),
-                    )
-                })?;
-            let exposes_field = definition.union_members().is_some_and(|members| {
-                members.iter().any(|member| {
-                    member.name() == constructor
-                        && member
-                            .fields()
-                            .iter()
-                            .any(|declared| declared.name() == &field.value)
-                })
-            });
-            fields
-                .get(&field.value)
-                .filter(|_| type_name == expected_runtime && generic_args == *expected_args && exposes_field)
+            // A struct value carries exactly its constructor's declared fields,
+            // so only the nominal application is compared with the retained
+            // type; never resolve a source name or infer a constructor here.
+            let same_type = *type_name == expected_runtime;
+            let same_arguments = value.generic_args() == expected_args.as_slice();
+            let same_application = same_type && same_arguments;
+            value
+                .field(&field.value)
+                .filter(|_| same_application)
                 .cloned()
                 .ok_or_else(|| {
                     ctx.eval_error(
@@ -1752,6 +1755,7 @@ fn eval_field_access(
 }
 
 fn eval_constructor_call(
+    span: Span,
     application: &graphcal_compiler::tir::texpr::ConstructorApplication,
     fields: &[TFieldInit],
     values: &RuntimeValueMap,
@@ -1762,7 +1766,7 @@ fn eval_constructor_call(
     crate::pipeline_metrics::record(crate::pipeline_metrics::Event::ConstructorFactConsumption);
     let constructor_name = application.constructor.name();
     let owning_type = StructTypeRef::from_resolved(application.definition().clone());
-    let mut field_map = IndexMap::new();
+    let mut field_values = Vec::with_capacity(fields.len());
     let mut field_presentations = HashMap::new();
     for field_init in fields {
         let evaluated = eval_texpr_evaluated(
@@ -1802,18 +1806,13 @@ fn eval_constructor_call(
                 ));
             }
         }
-        field_map.insert(field_init.name.clone(), val);
+        field_values.push((field_init.name.clone(), val));
         if !presentation.is_none() {
             field_presentations.insert(field_init.name.clone(), presentation);
         }
     }
     Ok(EvaluatedRuntimeValue::new(
-        RuntimeValue::Struct {
-            type_name: application.runtime_type.clone(),
-            constructor: constructor_name,
-            generic_args: application.generic_args.clone(),
-            fields: field_map,
-        },
+        apply_constructor(application, field_values, span, ctx)?,
         PresentationInstance::fields(field_presentations),
     ))
 }
@@ -2372,11 +2371,11 @@ fn evaluated_match_field(
         graphcal_compiler::syntax::type_name::FieldName,
     >,
     type_name: &graphcal_compiler::resolved_name::ResolvedStructTypeName,
-    fields: &IndexMap<graphcal_compiler::syntax::type_name::FieldName, RuntimeValue>,
+    scrutinee: &StructValue<RuntimeValue>,
     presentation: &PresentationInstance,
     ctx: &EvalContext<'_>,
 ) -> Result<EvaluatedRuntimeValue, GraphcalError> {
-    let value = fields.get(&field.value).ok_or_else(|| {
+    let value = scrutinee.field(&field.value).ok_or_else(|| {
         ctx.eval_error(
             format!("no field `{}` on type `{type_name}`", field.value),
             field.span,
@@ -2426,12 +2425,9 @@ fn eval_match(
                 ctx,
             )
         }
-        RuntimeValue::Struct {
-            type_name,
-            constructor: value_constructor,
-            fields: scrutinee_fields,
-            ..
-        } => {
+        RuntimeValue::Struct(scrutinee_struct) => {
+            let type_name = scrutinee_struct.type_name();
+            let value_constructor = scrutinee_struct.constructor();
             let matched_arm = arms
                 .iter()
                 .find(|arm| match &arm.pattern {
@@ -2458,7 +2454,7 @@ fn eval_match(
                             evaluated_match_field(
                                 field,
                                 type_name,
-                                scrutinee_fields,
+                                scrutinee_struct,
                                 &scrutinee_presentation,
                                 ctx,
                             )?,

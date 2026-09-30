@@ -1,20 +1,19 @@
 //! Runtime value types used during evaluation.
 
-use indexmap::IndexMap;
-
 use graphcal_compiler::complex_value::ComplexValue;
 use graphcal_compiler::finite_value::{FiniteQuantity, NonFiniteQuantity};
-use graphcal_compiler::registry::checked_type::{CheckedGenericArg, IndexTypeRef};
-use graphcal_compiler::resolved_name::{ResolvedIndexVariant, ResolvedStructTypeName};
+use graphcal_compiler::registry::checked_type::IndexTypeRef;
+use graphcal_compiler::resolved_name::ResolvedIndexVariant;
 use graphcal_compiler::syntax::index_name::IndexVariantName;
-use graphcal_compiler::syntax::type_name::{ConstructorName, FieldName};
 
 pub mod dense_array;
 mod index_axis;
 mod indexed;
+mod struct_value;
 
 pub use index_axis::IndexAxis;
 pub use indexed::IndexedValue;
+pub use struct_value::StructValue;
 
 /// Error returned when a [`RuntimeValue`] accessor is called on an incompatible variant.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -54,15 +53,8 @@ pub enum RuntimeValue {
         index_name: IndexTypeRef,
         variant: IndexVariantName,
     },
-    Struct {
-        /// Canonical nominal identity, independent of source aliases and display spelling.
-        type_name: ResolvedStructTypeName,
-        /// Constructor member identity within `type_name` (not a display leaf).
-        constructor: ConstructorName,
-        /// Concrete generic identity needed by field constraints and equality.
-        generic_args: Vec<CheckedGenericArg>,
-        fields: IndexMap<FieldName, Self>,
-    },
+    /// A constructor applied to exactly its declared fields.
+    Struct(StructValue<Self>),
     /// One entry per key of a concrete index axis.
     Indexed(IndexedValue<Self>),
     /// A coordinate label during coordinate-index iteration.
@@ -110,23 +102,6 @@ impl RuntimeValue {
         Self::Label {
             index_name: IndexTypeRef::from_resolved(resolved.index().clone()),
             variant: resolved.variant().clone(),
-        }
-    }
-
-    /// Construct a struct value whose type is named directly, for tests.
-    #[cfg(test)]
-    #[must_use]
-    pub const fn struct_with_owner(
-        owner: graphcal_compiler::dag_id::DagId,
-        type_name: graphcal_compiler::syntax::type_name::StructTypeName,
-        constructor: ConstructorName,
-        fields: IndexMap<FieldName, Self>,
-    ) -> Self {
-        Self::Struct {
-            type_name: ResolvedStructTypeName::for_test(owner, type_name),
-            constructor,
-            generic_args: Vec::new(),
-            fields,
         }
     }
 
@@ -179,7 +154,7 @@ impl std::fmt::Display for RuntimeValueDescription<'_> {
                 index_name,
                 variant,
             } => write!(f, "label `{index_name}#{variant}`"),
-            RuntimeValue::Struct { constructor, .. } => write!(f, "struct `{constructor}`"),
+            RuntimeValue::Struct(value) => write!(f, "struct `{}`", value.constructor()),
             RuntimeValue::Indexed(indexed) => {
                 write!(f, "indexed value `{}[...]`", indexed.index())
             }

@@ -118,7 +118,7 @@ fn plot_datum_from_leaf(
         RuntimeValue::Datetime(epoch) => epoch_to_rfc3339(epoch)
             .map(PlotDatum::Datetime)
             .map_err(|error| error.to_string()),
-        RuntimeValue::Struct { .. } | RuntimeValue::Indexed(_) => {
+        RuntimeValue::Struct(_) | RuntimeValue::Indexed(_) => {
             Err(format!("{} cannot be plotted", rv.describe()))
         }
     }
@@ -415,7 +415,6 @@ fn incompatible_axes_message(channels: &[(EncodingChannel, ChannelData)]) -> Str
 mod tests {
     use super::*;
     use graphcal_compiler::dag_id::DagId;
-    use indexmap::IndexMap;
 
     fn indexed(index: &str, entries: Vec<(&str, RuntimeValue)>) -> RuntimeValue {
         let (variants, values): (Vec<_>, Vec<_>) = entries.into_iter().unzip();
@@ -616,11 +615,15 @@ mod tests {
 
     #[test]
     fn rejects_struct_values() {
-        let err = channel_data_from_runtime(&RuntimeValue::struct_with_owner(
-            DagId::root_in_package("test", "main"),
-            graphcal_compiler::syntax::type_name::StructTypeName::expect_valid("Vec2"),
-            graphcal_compiler::syntax::type_name::ConstructorName::expect_valid("Vec2"),
-            IndexMap::new(),
+        let err = channel_data_from_runtime(&RuntimeValue::Struct(
+            crate::runtime_value::StructValue::for_test(
+                graphcal_compiler::resolved_name::ResolvedStructTypeName::for_test(
+                    DagId::root_in_package("test", "main"),
+                    graphcal_compiler::syntax::type_name::StructTypeName::expect_valid("Vec2"),
+                ),
+                graphcal_compiler::syntax::type_name::ConstructorName::expect_valid("Vec2"),
+                indexmap::IndexMap::new(),
+            ),
         ))
         .unwrap_err();
         assert!(err.contains("cannot be plotted"), "unexpected: {err}");

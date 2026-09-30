@@ -6497,14 +6497,11 @@ fn eval_constructor_match_rejects_runtime_owner_mismatch_with_same_leaf_construc
             .lookup_decl_identity(&scoped_name("action"))
             .into_bound()
             .unwrap(),
-        crate::eval_expr::RuntimeValue::Struct {
-            type_name: b_owner,
-            constructor: graphcal_compiler::syntax::type_name::ConstructorName::expect_valid(
-                "Pick",
-            ),
-            generic_args: Vec::new(),
+        crate::eval_expr::RuntimeValue::Struct(crate::runtime_value::StructValue::for_test(
+            b_owner,
+            graphcal_compiler::syntax::type_name::ConstructorName::expect_valid("Pick"),
             fields,
-        },
+        )),
     )]);
     let src = &project.root_file().named_source();
     let ctx = crate::eval_expr::EvalSession::provisional_constants(
@@ -6560,14 +6557,11 @@ fn eval_field_access_rejects_runtime_owner_mismatch_with_same_leaf_type() {
             .lookup_decl_identity(&scoped_name("item"))
             .into_bound()
             .unwrap(),
-        crate::eval_expr::RuntimeValue::Struct {
-            type_name: b_owner,
-            constructor: graphcal_compiler::syntax::type_name::ConstructorName::expect_valid(
-                "Item",
-            ),
-            generic_args: Vec::new(),
+        crate::eval_expr::RuntimeValue::Struct(crate::runtime_value::StructValue::for_test(
+            b_owner,
+            graphcal_compiler::syntax::type_name::ConstructorName::expect_valid("Item"),
             fields,
-        },
+        )),
     )]);
     let src = &project.root_file().named_source();
     let ctx = crate::eval_expr::EvalSession::provisional_constants(

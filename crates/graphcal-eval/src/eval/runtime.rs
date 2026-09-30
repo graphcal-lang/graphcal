@@ -1417,7 +1417,7 @@ fn runtime_to_plot_field_value(rv: &RuntimeValue) -> Result<PlotFieldValue, Stri
         RuntimeValue::Bool(b) => Ok(PlotFieldValue::String(b.to_string())),
         RuntimeValue::Label { variant, .. } => Ok(PlotFieldValue::String(variant.to_string())),
         RuntimeValue::Indexed(_) => super::plot_data::flatten_to_field_value(rv),
-        RuntimeValue::Struct { .. } => Err(format!("{} cannot be plotted", rv.describe())),
+        RuntimeValue::Struct(_) => Err(format!("{} cannot be plotted", rv.describe())),
         RuntimeValue::Datetime(epoch) => super::types::epoch_to_rfc3339(epoch)
             .map(PlotFieldValue::Datetime)
             .map_err(|error| error.to_string()),

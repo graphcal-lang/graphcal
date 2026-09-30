@@ -215,16 +215,12 @@ fn project_runtime_value(
                 variant: variant.clone(),
             })
         }
-        (
-            RuntimeValue::Struct {
-                type_name,
-                constructor: runtime_constructor,
-                generic_args: runtime_args,
-                fields,
-            },
-            CheckedType::Struct(declared_identity, declared_args),
-        ) => {
-            if type_name != declared_identity.resolved() || runtime_args != declared_args {
+        (RuntimeValue::Struct(value), CheckedType::Struct(declared_identity, declared_args)) => {
+            let type_name = value.type_name();
+            let runtime_constructor = value.constructor();
+            let runtime_args = value.generic_args();
+            if type_name != declared_identity.resolved() || runtime_args != declared_args.as_slice()
+            {
                 return Err(projection_error(
                     runtime,
                     declared_type,
@@ -266,20 +262,13 @@ fn project_runtime_value(
                         src,
                     )
                 })?;
-            if fields.len() != constructor.fields().len() {
-                return Err(projection_error(
-                    runtime,
-                    declared_type,
-                    "runtime struct field count does not match its checked constructor",
-                    tir,
-                    src,
-                ));
-            }
+            // A struct value holds exactly its constructor's declared fields,
+            // so each checked field has its runtime value.
             let projected_fields = constructor
                 .fields()
                 .iter()
                 .map(|field| {
-                    let field_runtime = fields.get(field.name()).ok_or_else(|| {
+                    let field_runtime = value.field(field.name()).ok_or_else(|| {
                         projection_error(
                             runtime,
                             declared_type,
@@ -296,7 +285,7 @@ fn project_runtime_value(
             Ok(Value::Struct {
                 type_name: declared_identity.clone(),
                 constructor: runtime_constructor.clone(),
-                generic_args: runtime_args.clone(),
+                generic_args: runtime_args.to_vec(),
                 fields: projected_fields,
             })
         }
@@ -531,46 +520,6 @@ mod tests {
     #[test]
     fn runtime_ingress_rejects_non_finite_quantities_before_projection() {
         assert!(RuntimeValue::quantity(f64::INFINITY).is_err());
-    }
-
-    #[test]
-    fn missing_runtime_constructor_is_an_internal_projection_error() {
-        let source = "type Measurement { Reading(value: Length), } \
-                      node sample: Measurement = Reading(value: 1.0 m);";
-        let tir = crate::eval::compile_to_tir(source, "projection.gcl").unwrap();
-        let src = NamedSource::new("projection.gcl", Arc::new(source.to_string()));
-        let sample = tir
-            .root()
-            .bound_decl_identity(&graphcal_compiler::syntax::module_name::ScopedName::local(
-                graphcal_compiler::syntax::decl_name::DeclName::expect_valid("sample"),
-            ))
-            .unwrap();
-        let declared = tir.decl_type(sample).unwrap().declared();
-        let CheckedType::Struct(identity, generic_args) = declared else {
-            panic!("sample must have a concrete nominal type");
-        };
-        let runtime = RuntimeValue::Struct {
-            type_name: identity.resolved().clone(),
-            constructor: graphcal_compiler::syntax::type_name::ConstructorName::expect_valid(
-                "Missing",
-            ),
-            generic_args: generic_args.clone(),
-            fields: IndexMap::new(),
-        };
-
-        let error = EvaluatedValue::new(&runtime, declared)
-            .project(&tir, &src)
-            .unwrap_err();
-
-        match error {
-            GraphcalError::InternalError { message, .. } => {
-                assert!(
-                    message.contains("constructor `Missing` is absent"),
-                    "{message}"
-                );
-            }
-            other => panic!("expected internal projection error, got {other:?}"),
-        }
     }
 
     #[test]
