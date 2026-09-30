@@ -10,7 +10,6 @@ use crate::display::formatting_registry::FormattingRegistry;
 use crate::generic_param::GenericParamId;
 use crate::graphcal_error::GraphcalError;
 use crate::hir::nominal::NominalTypeDef;
-use crate::resolve::ModuleResolver;
 use crate::resolved_name::{
     ResolvedConstructorName, ResolvedDeclName, ResolvedDimName, ResolvedIndexName,
     ResolvedStructTypeName, ResolvedUnitName,
@@ -48,7 +47,8 @@ pub fn nat_overflow_error(
 /// [`ModuleDefinitions`](crate::ir::module_definitions::ModuleDefinitions)
 /// fill this store directly. Checked TIR retains a [`FormattingRegistry`] for
 /// diagnostics and input boundaries; every canonical type-system lookup reads
-/// this store. Source spellings are resolved through [`ModuleResolver`], and
+/// this store. Source spellings are resolved through
+/// [`ModuleResolver`](crate::resolve::ModuleResolver), and
 /// imported aliases are never installed as additional canonical definitions.
 #[derive(Debug, Default, Clone)]
 pub struct ProjectTypeStore {
@@ -368,34 +368,6 @@ impl ProjectTypeStore {
         constructor: &ResolvedConstructorName,
     ) -> Option<&crate::hir::nominal::ResolvedConstructor> {
         self.constructors.get(constructor)
-    }
-}
-
-/// Module-aware type-resolution context for one DAG body.
-#[derive(Debug, Clone, Copy)]
-pub struct ModuleTypeContext<'a> {
-    pub(in crate::tir::typed) owner: &'a crate::dag_id::DagId,
-    pub(in crate::tir::typed) resolver: &'a ModuleResolver,
-    pub(in crate::tir::typed) types: &'a ProjectTypeStore,
-}
-
-impl<'a> ModuleTypeContext<'a> {
-    #[must_use]
-    pub(crate) const fn new(
-        owner: &'a crate::dag_id::DagId,
-        resolver: &'a ModuleResolver,
-        types: &'a ProjectTypeStore,
-    ) -> Self {
-        Self {
-            owner,
-            resolver,
-            types,
-        }
-    }
-
-    #[must_use]
-    pub const fn owner(self) -> &'a crate::dag_id::DagId {
-        self.owner
     }
 }
 

@@ -8,7 +8,8 @@ use crate::ir::instance::frame::InstanceFrame;
 use crate::resolved_name::{ResolvedConstructorName, ResolvedDeclName, ResolvedStructTypeName};
 use crate::syntax::span::Span;
 
-use super::model::{DagTIR, ModuleTypeContext, ResolvedDagDependencies};
+use super::model::{DagTIR, ResolvedDagDependencies};
+use super::module_type_context::ModuleTypeContext;
 use super::type_expr::{internal_error, module_resolve_error};
 
 pub(super) fn augment_runtime_deps_for_dynamic_units(dag: &mut DagTIR) {

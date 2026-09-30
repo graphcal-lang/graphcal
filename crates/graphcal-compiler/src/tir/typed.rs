@@ -46,6 +46,8 @@ pub mod evaluation_unit;
 pub use evaluation_unit::*;
 pub mod model;
 pub use model::*;
+pub mod module_type_context;
+pub use module_type_context::ModuleTypeContext;
 pub mod override_dependencies;
 pub use override_dependencies::CheckedOverrideDependencies;
 pub mod resolved_type;

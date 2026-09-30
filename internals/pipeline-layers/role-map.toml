@@ -602,13 +602,14 @@ role = "checking"
 
 [[module]]
 package = "compiler"
+# Pure export/import summary folded from desugared declarations; consumed as loader data.
 path = ["ir", "module_interface"]
-role = "checking"
+role = "contracts"
 
 [[module]]
 package = "compiler"
 path = ["ir", "module_interface", "tests"]
-role = "checking"
+role = "contracts"
 
 [[module]]
 package = "compiler"
@@ -1727,9 +1728,14 @@ role = "checking"
 
 [[module]]
 package = "compiler"
-# Selected data boundary; its colocated builder dependencies are explicit debt.
+# Selected data boundary for the project type store and checked TIR records.
 path = ["tir", "typed", "model"]
 role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["tir", "typed", "module_type_context"]
+role = "checking"
 
 [[module]]
 package = "compiler"

@@ -4,6 +4,6 @@ expect_valid_format = 0
 too_many_arguments_expects = 6
 build_declared_types_calls = 0
 module_resolve_str_key_lookups = 0
-pipeline_layers_exceptions = 22
+pipeline_layers_exceptions = 19
 reading_order_sccs = 0
 graphcal_error_variants = 158
