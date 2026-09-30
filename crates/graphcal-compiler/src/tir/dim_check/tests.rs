@@ -3906,7 +3906,7 @@ fn call_arguments_prechecked_for_override_reconciliation_are_inferred_once() {
 
 #[test]
 fn inference_emits_typed_trees_carrying_node_facts() {
-    use crate::tir::texpr::{DatetimeLiteral, TConstRef, TExprKind, TIndexArg, TMatchPattern};
+    use crate::tir::texpr::{DatetimeLiteral, TConstRef, TExprKind, TIndexArg, TMatchArms};
 
     let source = "type Maneuver { Impulsive(delta_v: Dimensionless), Coast }\n\
                   node burn: Maneuver = Impulsive(delta_v: 2.0);\n\
@@ -3953,15 +3953,16 @@ fn inference_emits_typed_trees_carrying_node_facts() {
     };
     assert_eq!(coast.constructor.name().as_str(), "Coast");
 
-    let TExprKind::Match { arms, .. } = root("picked").kind() else {
-        panic!("expected a match");
+    let TExprKind::Match {
+        arms: TMatchArms::Constructors(arms),
+        ..
+    } = root("picked").kind()
+    else {
+        panic!("expected a constructor match");
     };
     let targets: Vec<_> = arms
         .iter()
-        .map(|arm| match &arm.pattern {
-            TMatchPattern::Constructor { target, .. } => target.constructor.as_str().to_string(),
-            TMatchPattern::IndexLabel(_) => panic!("expected constructor arms"),
-        })
+        .map(|arm| arm.target.constructor.as_str().to_string())
         .collect();
     assert_eq!(targets, ["Impulsive", "Coast"]);
 
@@ -3970,10 +3971,7 @@ fn inference_emits_typed_trees_carrying_node_facts() {
     };
     assert!(matches!(
         args.first(),
-        TIndexArg::Expr {
-            static_position: Some(position),
-            ..
-        } if position.position == 1
+        TIndexArg::Position { position, .. } if position.position == 1
     ));
 
     assert!(matches!(

@@ -58,18 +58,23 @@ impl<'o, 't> Operands<'o, 't> {
         })
     }
 
+    /// The session operands are evaluated in.
+    pub(super) const fn ctx(&self) -> &'o EvalSession<'o> {
+        self.ctx
+    }
+
     fn value(&self, node: ScopedNode<'t>) -> Result<RuntimeValue, GraphcalError> {
         (self.evaluate)(node)
     }
 
-    fn quantity(&self, node: ScopedNode<'t>) -> Result<FiniteQuantity, GraphcalError> {
+    pub(super) fn quantity(&self, node: ScopedNode<'t>) -> Result<FiniteQuantity, GraphcalError> {
         self.read(node, "a quantity", |value| match value {
             RuntimeValue::Quantity(value) => Ok(value),
             other => Err(other),
         })
     }
 
-    fn int(&self, node: ScopedNode<'t>) -> Result<i64, GraphcalError> {
+    pub(super) fn int(&self, node: ScopedNode<'t>) -> Result<i64, GraphcalError> {
         self.read(node, "an Int", |value| match value {
             RuntimeValue::Int(value) => Ok(value),
             other => Err(other),
@@ -97,7 +102,7 @@ impl<'o, 't> Operands<'o, 't> {
         })
     }
 
-    fn key(&self, node: ScopedNode<'t>) -> Result<KeyValue, GraphcalError> {
+    pub(super) fn key(&self, node: ScopedNode<'t>) -> Result<KeyValue, GraphcalError> {
         self.read(node, "a key", |value| match value {
             RuntimeValue::Key(value) => Ok(value),
             other => Err(other),

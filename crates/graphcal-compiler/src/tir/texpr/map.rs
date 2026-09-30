@@ -13,8 +13,8 @@ use crate::registry::checked_type::{CheckedType, Concrete, Concreteness, IndexTy
 use crate::syntax::span::{Span, Spanned};
 
 use super::model::{
-    StaticPosition, TBody, TConstRef, TExpr, TExprKind, TFieldInit, TIndexArg, TMapEntry,
-    TMatchArm, TMatchPattern, TParamBinding,
+    StaticPosition, TBody, TConstRef, TConstructorArm, TExpr, TExprKind, TFieldInit, TIndexArg,
+    TKeyForm, TLabelArm, TMapEntry, TMatchArms, TParamBinding,
 };
 
 /// How a structure-preserving map rewrites the types a tree carries.
@@ -72,6 +72,32 @@ impl SymbolicView for Concrete {
 
     fn symbolic_index(index: &IndexTypeRef<Self>) -> Cow<'_, IndexTypeRef<Symbolic>> {
         Cow::Owned(index.to_symbolic())
+    }
+}
+
+/// An index argument whose static position is already mapped, awaiting its
+/// operand.
+enum PreparedIndexArg<'a, V: Concreteness, W: Concreteness> {
+    Variant(&'a crate::hir::expr::IndexVariantRef),
+    Var(&'a Spanned<crate::hir::expr::LocalId>),
+    Key(&'a TExpr<V>),
+    Position(&'a TExpr<V>, StaticPosition<W>),
+}
+
+impl<'a, V: Concreteness, W: Concreteness> PreparedIndexArg<'a, V, W> {
+    fn new<M: TypeMap<V, W>>(
+        arg: &'a TIndexArg<V>,
+        map: &mut M,
+        span: Span,
+    ) -> Result<Self, M::Error> {
+        Ok(match arg {
+            TIndexArg::Position { operand, position } => {
+                Self::Position(operand, map.static_position(position, span)?)
+            }
+            TIndexArg::Key(operand) => Self::Key(operand),
+            TIndexArg::Variant(variant) => Self::Variant(variant),
+            TIndexArg::Var(local) => Self::Var(local),
+        })
     }
 }
 
@@ -279,28 +305,22 @@ impl<V: Concreteness> TExpr<V> {
             },
             TExprKind::Index { expr, args } => {
                 // The node's own proofs precede its children.
-                let mut positions = args
+                let (first, rest) = args.split_first();
+                let first = PreparedIndexArg::new(first, map, span)?;
+                let rest = rest
                     .iter()
-                    .map(|arg| match arg {
-                        TIndexArg::Expr {
-                            static_position: Some(position),
-                            ..
-                        } => map.static_position(position, span).map(Some),
-                        TIndexArg::Expr { .. } | TIndexArg::Variant(_) | TIndexArg::Var(_) => {
-                            Ok(None)
-                        }
-                    })
-                    .collect::<Result<Vec<_>, M::Error>>()?
-                    .into_iter();
+                    .map(|arg| PreparedIndexArg::new(arg, map, span))
+                    .collect::<Result<Vec<_>, M::Error>>()?;
+                let prepared = crate::syntax::non_empty::NonEmpty::new(first, rest);
                 let expr = expr.boxed(map)?;
-                let args = args.try_map_ref(|arg| {
-                    let static_position = positions.next().flatten();
+                let args = prepared.try_map(|arg| {
                     Ok(match arg {
-                        TIndexArg::Variant(variant) => TIndexArg::Variant(variant.clone()),
-                        TIndexArg::Var(local) => TIndexArg::Var(local.clone()),
-                        TIndexArg::Expr { operand, .. } => TIndexArg::Expr {
+                        PreparedIndexArg::Variant(variant) => TIndexArg::Variant(variant.clone()),
+                        PreparedIndexArg::Var(local) => TIndexArg::Var(local.clone()),
+                        PreparedIndexArg::Key(operand) => TIndexArg::Key(operand.boxed(map)?),
+                        PreparedIndexArg::Position(operand, position) => TIndexArg::Position {
                             operand: operand.boxed(map)?,
-                            static_position,
+                            position,
                         },
                     })
                 })?;
@@ -328,50 +348,56 @@ impl<V: Concreteness> TExpr<V> {
                 init: init.boxed(map)?,
                 body: body.boxed(map)?,
             },
-            TExprKind::Key {
-                kind,
-                axis,
-                arg,
-                static_position,
-            } => {
-                let static_position = static_position
-                    .as_ref()
-                    .map(|position| map.static_position(position, span))
-                    .transpose()?;
+            TExprKind::Key { form, axis, arg } => {
+                let form = match form {
+                    TKeyForm::Static(position) => {
+                        TKeyForm::Static(map.static_position(position, span)?)
+                    }
+                    TKeyForm::Fin => TKeyForm::Fin,
+                    TKeyForm::Search(search) => TKeyForm::Search(*search),
+                };
                 TExprKind::Key {
-                    kind: *kind,
+                    form,
                     axis: axis.clone(),
                     arg: arg.boxed(map)?,
-                    static_position,
                 }
             }
             TExprKind::Match { scrutinee, arms } => {
-                let patterns = arms
-                    .iter()
-                    .map(|arm| match &arm.pattern {
-                        TMatchPattern::Constructor { target, bindings } => {
-                            TMatchPattern::Constructor {
-                                target: map.match_target(target),
-                                bindings: bindings.clone(),
-                            }
-                        }
-                        TMatchPattern::IndexLabel(variant) => {
-                            TMatchPattern::IndexLabel(variant.clone())
-                        }
-                    })
-                    .collect::<Vec<_>>();
+                // The node's own match targets precede its children.
+                let targets = match arms {
+                    TMatchArms::Labels(_) => Vec::new(),
+                    TMatchArms::Constructors(arms) => arms
+                        .iter()
+                        .map(|arm| map.match_target(&arm.target))
+                        .collect(),
+                };
                 let scrutinee = scrutinee.boxed(map)?;
-                let arms = arms
-                    .iter()
-                    .zip(patterns)
-                    .map(|(arm, pattern)| {
-                        Ok(TMatchArm {
-                            pattern,
-                            body: arm.body.map_types(map)?,
-                            span: arm.span,
-                        })
-                    })
-                    .collect::<Result<_, M::Error>>()?;
+                let arms = match arms {
+                    TMatchArms::Labels(arms) => TMatchArms::Labels(
+                        arms.iter()
+                            .map(|arm| {
+                                Ok(TLabelArm {
+                                    label: arm.label.clone(),
+                                    body: arm.body.map_types(map)?,
+                                    span: arm.span,
+                                })
+                            })
+                            .collect::<Result<_, M::Error>>()?,
+                    ),
+                    TMatchArms::Constructors(arms) => TMatchArms::Constructors(
+                        arms.iter()
+                            .zip(targets)
+                            .map(|(arm, target)| {
+                                Ok(TConstructorArm {
+                                    target,
+                                    bindings: arm.bindings.clone(),
+                                    body: arm.body.map_types(map)?,
+                                    span: arm.span,
+                                })
+                            })
+                            .collect::<Result<_, M::Error>>()?,
+                    ),
+                };
                 TExprKind::Match { scrutinee, arms }
             }
             TExprKind::Variant(variant) => TExprKind::Variant(variant.clone()),
