@@ -1462,12 +1462,22 @@ role = "contracts"
 
 [[module]]
 package = "compiler"
+path = ["tir", "texpr", "assembly", "tests"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
 path = ["tir", "texpr", "model"]
 role = "contracts"
 
 [[module]]
 package = "compiler"
 path = ["tir", "texpr", "nominal"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["tir", "texpr", "operators"]
 role = "contracts"
 
 [[module]]
@@ -2020,6 +2030,11 @@ role = "interpreter"
 [[module]]
 package = "eval"
 path = ["eval_expr", "numeric"]
+role = "interpreter"
+
+[[module]]
+package = "eval"
+path = ["eval_expr", "operations"]
 role = "interpreter"
 
 [[module]]

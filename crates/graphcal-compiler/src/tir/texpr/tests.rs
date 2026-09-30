@@ -64,11 +64,22 @@ fn a_parent_assembles_from_its_recorded_children() {
         panic!("expected one typed value root");
     };
     assert_eq!(id, expr.id());
-    let TExprKind::Binary { lhs, rhs, .. } = root.kind() else {
-        panic!("expected a binary node, got {:?}", root.kind());
+    let TExprKind::Quantity(operators::QExpr::Arith {
+        op: operators::ArithOp::Add,
+        lhs,
+        rhs,
+    }) = root.kind()
+    else {
+        panic!("expected a real sum, got {:?}", root.kind());
     };
-    assert!(matches!(lhs.kind(), TExprKind::Integer(1)));
-    assert!(matches!(rhs.kind(), TExprKind::Integer(2)));
+    assert!(matches!(
+        lhs.kind(),
+        TExprKind::Int(operators::IExpr::Literal(1))
+    ));
+    assert!(matches!(
+        rhs.kind(),
+        TExprKind::Int(operators::IExpr::Literal(2))
+    ));
     let mut ids = Vec::new();
     visit_tnodes(TNodeRef::Value(root), &mut |node| {
         ids.push(node.id().clone());
@@ -213,17 +224,14 @@ fn deep_typed_trees_clone_and_drop_without_overflow() {
         ids.allocate().unwrap(),
         Span::new(0, 1),
         dimensionless(),
-        TExprKind::Number(1.0),
+        TExprKind::Quantity(operators::QExpr::Number(1.0)),
     );
     for _ in 0..depth {
         node = TExpr::new(
             ids.allocate().unwrap(),
             Span::new(0, 1),
             dimensionless(),
-            TExprKind::Unary {
-                op: crate::syntax::ast::UnaryOp::Neg,
-                operand: Box::new(node),
-            },
+            TExprKind::Quantity(operators::QExpr::Neg(Box::new(node))),
         );
     }
     let copy = node.clone();
@@ -302,7 +310,7 @@ fn key_node(
         ids.allocate().unwrap(),
         Span::new(4, 1),
         CheckedType::Int,
-        TExprKind::Integer(i64::try_from(position).unwrap()),
+        TExprKind::Int(operators::IExpr::Literal(i64::try_from(position).unwrap())),
     );
     TExpr::new(
         ids.allocate().unwrap(),

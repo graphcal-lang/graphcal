@@ -173,18 +173,33 @@ impl<V: Concreteness> TExpr<V> {
     ) -> Result<TExprKind<W>, M::Error> {
         let span = self.span();
         Ok(match self.kind() {
-            TExprKind::Number(value) => TExprKind::Number(*value),
-            TExprKind::Integer(value) => TExprKind::Integer(*value),
-            TExprKind::Bool(value) => TExprKind::Bool(*value),
-            TExprKind::Quantity { value, unit } => TExprKind::Quantity {
+            TExprKind::QuantityLiteral { value, unit } => TExprKind::QuantityLiteral {
                 value: *value,
                 unit: unit.clone(),
+            },
+            TExprKind::Quantity(operation) => {
+                TExprKind::Quantity(operation.try_map(|operand| operand.boxed(map))?)
+            }
+            TExprKind::Int(operation) => {
+                TExprKind::Int(operation.try_map(|operand| operand.boxed(map))?)
+            }
+            TExprKind::Bool(operation) => {
+                TExprKind::Bool(operation.try_map(|operand| operand.boxed(map))?)
+            }
+            TExprKind::Complex(operation) => {
+                TExprKind::Complex(operation.try_map(|operand| operand.boxed(map))?)
+            }
+            TExprKind::Datetime(operation) => {
+                TExprKind::Datetime(operation.try_map(|operand| operand.boxed(map))?)
+            }
+            TExprKind::KeyShift { key, addend } => TExprKind::KeyShift {
+                key: key.boxed(map)?,
+                addend: addend.boxed(map)?,
             },
             TExprKind::GraphRef(target) => TExprKind::GraphRef(target.clone()),
             TExprKind::Const(target) => TExprKind::Const(Spanned::new(
                 match &target.value {
                     TConstRef::Decl(declaration) => TConstRef::Decl(declaration.clone()),
-                    TConstRef::Builtin(constant) => TConstRef::Builtin(*constant),
                     TConstRef::Constructor(application) => {
                         TConstRef::Constructor(map.application(application, ty, span)?)
                     }
@@ -192,15 +207,6 @@ impl<V: Concreteness> TExpr<V> {
                 target.span,
             )),
             TExprKind::Local(local) => TExprKind::Local(local.clone()),
-            TExprKind::Binary { op, lhs, rhs } => TExprKind::Binary {
-                op: *op,
-                lhs: lhs.boxed(map)?,
-                rhs: rhs.boxed(map)?,
-            },
-            TExprKind::Unary { op, operand } => TExprKind::Unary {
-                op: *op,
-                operand: operand.boxed(map)?,
-            },
             TExprKind::Call { callee, args } => TExprKind::Call {
                 callee: callee.clone(),
                 args: args

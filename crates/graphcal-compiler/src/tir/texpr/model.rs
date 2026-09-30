@@ -1,6 +1,5 @@
 //! The typed expression tree data model.
 
-use crate::builtin::BuiltinConst;
 use crate::dag_id::DagId;
 use crate::datetime_literal::{CivilDateTimeLiteral, OffsetDateTimeLiteral, ZonedDateTimeLiteral};
 use crate::expression_id::ExprId;
@@ -17,6 +16,7 @@ use crate::syntax::type_name::FieldName;
 use crate::tir::static_index::StaticIndexUse;
 
 use super::nominal::{ConstructorApplication, ConstructorMatch};
+use super::operators::{BExpr, CExpr, DExpr, IExpr, QExpr};
 
 /// One checked value expression.
 #[derive(Debug)]
@@ -45,7 +45,7 @@ impl<V: Concreteness> Drop for TExpr<V> {
     fn drop(&mut self) {
         // Move the recursive kind out under a leaf placeholder so only the
         // placeholder is dropped after this impl returns.
-        let kind = std::mem::replace(&mut self.kind, TExprKind::Bool(false));
+        let kind = std::mem::replace(&mut self.kind, TExprKind::Bool(BExpr::Literal(false)));
         crate::stack::with_stack_growth(|| drop(kind));
     }
 }
@@ -97,18 +97,21 @@ impl<V: Concreteness> TExpr<V> {
 
     /// Visit this node's typed children in structural order.
     pub fn visit_children<'a>(&'a self, visitor: &mut dyn FnMut(TNodeRef<'a, V>)) {
+        let unbox =
+            |operands: Vec<&'a Box<Self>>| operands.into_iter().map(|operand| &**operand).collect();
         let values: Vec<&'a Self> = match &self.kind {
-            TExprKind::Number(_)
-            | TExprKind::Integer(_)
-            | TExprKind::Bool(_)
-            | TExprKind::Quantity { .. }
+            TExprKind::QuantityLiteral { .. }
             | TExprKind::GraphRef(_)
             | TExprKind::Const(_)
             | TExprKind::Local(_)
             | TExprKind::Variant(_) => Vec::new(),
-            TExprKind::Binary { lhs, rhs, .. } => vec![&**lhs, &**rhs],
-            TExprKind::Unary { operand, .. }
-            | TExprKind::Convert { expr: operand, .. }
+            TExprKind::Quantity(operation) => unbox(operation.operands()),
+            TExprKind::Int(operation) => unbox(operation.operands()),
+            TExprKind::Bool(operation) => unbox(operation.operands()),
+            TExprKind::Complex(operation) => unbox(operation.operands()),
+            TExprKind::Datetime(operation) => unbox(operation.operands()),
+            TExprKind::KeyShift { key, addend } => vec![&**key, &**addend],
+            TExprKind::Convert { expr: operand, .. }
             | TExprKind::DisplayTimezone { expr: operand, .. }
             | TExprKind::Field { expr: operand, .. }
             | TExprKind::For { body: operand, .. }
@@ -186,27 +189,31 @@ pub fn visit_tnodes<'a, V: Concreteness>(
 }
 
 /// The typed form of each HIR expression kind a checked value can have.
+///
+/// Operators are recorded as the operation their operand types select
+/// ([`QExpr`], [`IExpr`], [`BExpr`], [`CExpr`], [`DExpr`], and the Fin-key
+/// shift), grouped by the checked result type.
 #[derive(Debug, Clone)]
 pub enum TExprKind<V: Concreteness = Concrete> {
-    Number(f64),
-    Integer(i64),
-    Bool(bool),
-    Quantity {
+    /// A quantity literal with its unit.
+    QuantityLiteral {
         value: f64,
         unit: ResolvedUnitExpr,
+    },
+    Quantity(QExpr<Box<TExpr<V>>>),
+    Int(IExpr<Box<TExpr<V>>>),
+    Bool(BExpr<Box<TExpr<V>>>),
+    Complex(CExpr<Box<TExpr<V>>>),
+    Datetime(DExpr<Box<TExpr<V>>>),
+    /// `k + c` on a `Fin` key: the key `c` positions later, on the wider
+    /// axis the node's type names.
+    KeyShift {
+        key: Box<TExpr<V>>,
+        addend: Box<TExpr<V>>,
     },
     GraphRef(Spanned<crate::hir::expr::LocalDecl>),
     Const(Spanned<TConstRef<V>>),
     Local(Spanned<LocalId>),
-    Binary {
-        op: crate::syntax::ast::BinOp,
-        lhs: Box<TExpr<V>>,
-        rhs: Box<TExpr<V>>,
-    },
-    Unary {
-        op: crate::syntax::ast::UnaryOp,
-        operand: Box<TExpr<V>>,
-    },
     Call {
         callee: Spanned<FunctionRef>,
         args: Vec<TArg<V>>,
@@ -280,7 +287,6 @@ pub enum TExprKind<V: Concreteness = Concrete> {
 #[derive(Debug, Clone)]
 pub enum TConstRef<V: Concreteness = Concrete> {
     Decl(crate::hir::expr::LocalDecl),
-    Builtin(BuiltinConst),
     /// A field-less constructor used as a value, with its checked application.
     Constructor(ConstructorApplication<V>),
 }

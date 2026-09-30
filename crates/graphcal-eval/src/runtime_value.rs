@@ -92,19 +92,6 @@ impl RuntimeValue {
             }),
         }
     }
-
-    /// Extract boolean value, returning a structured error if this is not a Bool.
-    /// (Type mismatches should be caught by `dim_check`; this is defense-in-depth.)
-    pub fn expect_bool(&self, context: &str) -> Result<bool, RuntimeValueError> {
-        match self {
-            Self::Bool(b) => Ok(*b),
-            other => Err(RuntimeValueError {
-                expected: "Bool",
-                context: context.to_string(),
-                actual: other.describe().to_string(),
-            }),
-        }
-    }
 }
 
 /// Diagnostic rendering of a [`RuntimeValue`]'s variant, from
