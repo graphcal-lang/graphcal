@@ -138,7 +138,9 @@ impl<V: Concreteness> TExpr<V> {
             TExprKind::Map { entries } => entries.iter().map(|entry| &entry.value).collect(),
             TExprKind::Index { expr, args } => std::iter::once(&**expr)
                 .chain(args.iter().filter_map(|arg| match arg {
-                    TIndexArg::Expr { operand, .. } => Some(&**operand),
+                    TIndexArg::Key(operand) | TIndexArg::Position { operand, .. } => {
+                        Some(&**operand)
+                    }
                     TIndexArg::Variant(_) | TIndexArg::Var(_) => None,
                 }))
                 .collect(),
@@ -146,9 +148,9 @@ impl<V: Concreteness> TExpr<V> {
                 source, init, body, ..
             } => vec![&**source, &**init, &**body],
             TExprKind::Unfold { init, body, .. } => vec![&**init, &**body],
-            TExprKind::Match { scrutinee, arms } => std::iter::once(&**scrutinee)
-                .chain(arms.iter().map(|arm| &arm.body))
-                .collect(),
+            TExprKind::Match { scrutinee, arms } => {
+                std::iter::once(&**scrutinee).chain(arms.bodies()).collect()
+            }
             TExprKind::DagCall { args, .. } => args.iter().map(|arg| &arg.value).collect(),
         };
         for value in values {
@@ -278,16 +280,15 @@ pub enum TExprKind<V: Concreteness = Concrete> {
         init: Box<TExpr<V>>,
         body: Box<TExpr<V>>,
     },
-    /// A key introduction; a `static` key carries its checked position.
+    /// A key introduction of the axis `axis` from `arg`.
     Key {
-        kind: crate::syntax::ast::KeyFormKind,
+        form: TKeyForm<V>,
         axis: ForBindingIndex,
         arg: Box<TExpr<V>>,
-        static_position: Option<StaticPosition<V>>,
     },
     Match {
         scrutinee: Box<TExpr<V>>,
-        arms: Vec<TMatchArm<V>>,
+        arms: TMatchArms<V>,
     },
     Variant(IndexVariantRef),
     DagCall {
@@ -310,6 +311,40 @@ pub enum DatetimeLiteral {
         civil: CivilDateTimeLiteral,
         scale: TimeScale,
     },
+}
+
+/// How a key introduction selects its key.
+#[derive(Debug, Clone)]
+pub enum TKeyForm<V: Concreteness = Concrete> {
+    /// `key(Axis, position)`: the position, proved in range of the axis.
+    Static(StaticPosition<V>),
+    /// `fin_key(Fin(N), position)`: a runtime position, range-checked.
+    Fin,
+    /// A search of a coordinate axis for a quantity.
+    Search(CoordinateSearch),
+}
+
+/// A search of a coordinate axis for a quantity.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CoordinateSearch {
+    /// `floor_key`: the last coordinate at or before the target.
+    Floor,
+    /// `ceil_key`: the first coordinate at or after the target.
+    Ceil,
+    /// `nearest_key`: the closest coordinate, ties toward the axis start.
+    Nearest,
+}
+
+impl CoordinateSearch {
+    /// The key form that spells this search.
+    #[must_use]
+    pub const fn kind(self) -> crate::syntax::ast::KeyFormKind {
+        match self {
+            Self::Floor => crate::syntax::ast::KeyFormKind::Floor,
+            Self::Ceil => crate::syntax::ast::KeyFormKind::Ceil,
+            Self::Nearest => crate::syntax::ast::KeyFormKind::Nearest,
+        }
+    }
 }
 
 /// A checked constant-like reference.
@@ -402,10 +437,13 @@ pub struct TMapEntry<V: Concreteness = Concrete> {
 pub enum TIndexArg<V: Concreteness = Concrete> {
     Variant(IndexVariantRef),
     Var(Spanned<LocalId>),
-    /// A computed selector; an `Int` position carries its checked proof.
-    Expr {
+    /// A computed key of the indexed axis.
+    Key(Box<TExpr<V>>),
+    /// A static `Int` position on a `Fin` axis (`@m[0, 1]`), proved in range;
+    /// the operand stays as the position's source.
+    Position {
         operand: Box<TExpr<V>>,
-        static_position: Option<StaticPosition<V>>,
+        position: StaticPosition<V>,
     },
 }
 
@@ -418,22 +456,41 @@ pub struct StaticPosition<V: Concreteness = Concrete> {
     pub usage: StaticIndexUse,
 }
 
-/// One checked match arm.
+/// The checked arms of a match, by what its scrutinee's type selects on.
 #[derive(Debug, Clone)]
-pub struct TMatchArm<V: Concreteness = Concrete> {
-    pub pattern: TMatchPattern,
+pub enum TMatchArms<V: Concreteness = Concrete> {
+    /// A key scrutinee, matched by the label of its entry.
+    Labels(Vec<TLabelArm<V>>),
+    /// A union scrutinee, matched by its constructor.
+    Constructors(Vec<TConstructorArm<V>>),
+}
+
+impl<V: Concreteness> TMatchArms<V> {
+    /// Every arm's body, in written order.
+    #[must_use]
+    pub fn bodies(&self) -> Box<dyn Iterator<Item = &TExpr<V>> + '_> {
+        match self {
+            Self::Labels(arms) => Box::new(arms.iter().map(|arm| &arm.body)),
+            Self::Constructors(arms) => Box::new(arms.iter().map(|arm| &arm.body)),
+        }
+    }
+}
+
+/// One checked arm matching an index label.
+#[derive(Debug, Clone)]
+pub struct TLabelArm<V: Concreteness = Concrete> {
+    pub label: IndexVariantRef,
     pub body: TExpr<V>,
     pub span: Span,
 }
 
-/// A checked match pattern; a constructor pattern carries its resolved target.
+/// One checked arm matching a constructor, with its resolved target.
 #[derive(Debug, Clone)]
-pub enum TMatchPattern {
-    Constructor {
-        target: ConstructorMatch,
-        bindings: crate::desugar::desugared_ast::PatternBindings<PatternBinding>,
-    },
-    IndexLabel(IndexVariantRef),
+pub struct TConstructorArm<V: Concreteness = Concrete> {
+    pub target: ConstructorMatch,
+    pub bindings: crate::desugar::desugared_ast::PatternBindings<PatternBinding>,
+    pub body: TExpr<V>,
+    pub span: Span,
 }
 
 /// A checked inline-DAG parameter binding.

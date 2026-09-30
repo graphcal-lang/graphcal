@@ -148,17 +148,14 @@ fn static_positions<V: crate::registry::checked_type::Concreteness>(
         super::model::TExprKind::Index { args, .. } => args
             .iter()
             .filter_map(|arg| match arg {
-                super::model::TIndexArg::Expr {
-                    static_position: Some(position),
-                    ..
-                } => Some(position),
-                super::model::TIndexArg::Expr { .. }
+                super::model::TIndexArg::Position { position, .. } => Some(position),
+                super::model::TIndexArg::Key(_)
                 | super::model::TIndexArg::Variant(_)
                 | super::model::TIndexArg::Var(_) => None,
             })
             .collect(),
         super::model::TExprKind::Key {
-            static_position: Some(position),
+            form: super::model::TKeyForm::Static(position),
             ..
         } => vec![position],
         _ => Vec::new(),

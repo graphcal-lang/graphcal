@@ -9,17 +9,18 @@ use graphcal_compiler::registry::error::GraphcalError;
 use graphcal_compiler::syntax::index_name::IndexEntryKey;
 use graphcal_compiler::syntax::span::{Span, Spanned};
 use graphcal_compiler::tir::texpr::{
-    TExpr, TFieldInit, TIndexArg, TMatchArm, TMatchPattern, TParamBinding,
+    CoordinateSearch, TConstructorArm, TExpr, TFieldInit, TIndexArg, TKeyForm, TLabelArm,
+    TParamBinding,
 };
 use graphcal_compiler::tir::typed::evaluation_unit::{DeclarationBody, Scoped, ScopedTree};
-use graphcal_compiler::tir::typed::scoped_node::{ConstRef, NodeKind, ScopedIndexArg, ScopedNode};
+use graphcal_compiler::tir::typed::scoped_node::{
+    ConstRef, NodeKind, ScopedIndexArg, ScopedMatchArms, ScopedNode,
+};
 use indexmap::IndexMap;
 
 use crate::invariant::{Failure, Invariant};
 use crate::presentation_evidence::{PendingLeaf, PendingQuantityDisplay};
-use crate::runtime_presentation::{
-    EntriesRef, EvaluatedRuntimeValue, PendingPresentedMap, PresentedRef,
-};
+use crate::runtime_presentation::{EvaluatedRuntimeValue, PendingPresentedMap, PresentedRef};
 use graphcal_compiler::resolved_name::ResolvedDeclName;
 
 use super::{
@@ -47,6 +48,16 @@ fn invariant_error(invariant: Invariant, span: Span, ctx: &EvalSession<'_>) -> G
         Failure::<std::convert::Infallible>::Invariant(invariant),
         span,
     )
+}
+
+/// The diagnostic for a value whose shape contradicts the checked type of
+/// the node that produced it.
+fn type_invariant(
+    message: impl std::fmt::Display,
+    span: Span,
+    ctx: &EvalSession<'_>,
+) -> GraphcalError {
+    invariant_error(Invariant::violated(message), span, ctx)
 }
 
 /// Evaluate the root tree of an evaluation unit in the scope it was handed
@@ -345,22 +356,34 @@ fn eval_texpr_inner(
         NodeKind::Unfold { .. } => {
             eval_unfold(expr, values, presentation_values, local_values, ctx)
         }
-        NodeKind::Key { kind, arg, .. } => {
+        NodeKind::Key { form, arg, .. } => {
             let CheckedType::Key(axis) = expr.ty() else {
                 return Err(ctx.internal_error("key expression has no retained axis", span));
             };
-            eval_key_form(kind, axis, arg, span, values, local_values, ctx)
-                .map(EvaluatedRuntimeValue::plain)
+            eval_key_form(form, axis, arg, span, &operands)
+                .map(|key| EvaluatedRuntimeValue::plain(RuntimeValue::Key(key)))
         }
-        NodeKind::Match { scrutinee, arms } => eval_match(
-            span,
-            scrutinee,
-            arms,
-            values,
-            presentation_values,
-            local_values,
-            ctx,
-        ),
+        NodeKind::Match { scrutinee, arms } => match arms {
+            ScopedMatchArms::Labels(arms) => {
+                let arm = match_label(span, &operands.key(scrutinee)?, arms, ctx)?;
+                eval_texpr_evaluated(
+                    arm.map(|arm| &arm.body),
+                    values,
+                    presentation_values,
+                    local_values,
+                    ctx,
+                )
+            }
+            ScopedMatchArms::Constructors(arms) => eval_constructor_match(
+                span,
+                scrutinee,
+                arms,
+                values,
+                presentation_values,
+                local_values,
+                ctx,
+            ),
+        },
         NodeKind::Variant(variant) => {
             named_key(&variant.variant, span, ctx).map(EvaluatedRuntimeValue::plain)
         }
@@ -492,49 +515,40 @@ fn apply_constructor(
 /// `key` positions are proven in bounds by the checker; `fin_key` performs
 /// its runtime range check here; the coordinate searches scan the axis's
 /// coordinates with the documented policies.
-fn eval_key_form(
-    kind: graphcal_compiler::syntax::ast::KeyFormKind,
+fn eval_key_form<'t>(
+    form: &TKeyForm,
     axis_ref: &IndexTypeRef,
-    arg: ScopedNode<'_>,
+    arg: ScopedNode<'t>,
     span: Span,
-    values: &RuntimeValueMap,
-    local_values: &HirLocalValueMap<'_>,
-    ctx: &EvalSession<'_>,
-) -> Result<RuntimeValue, GraphcalError> {
-    use graphcal_compiler::syntax::ast::KeyFormKind;
-
-    let arg_val = eval_value(arg, values, local_values, ctx)?;
+    operands: &super::operations::Operands<'_, 't>,
+) -> Result<KeyValue, GraphcalError> {
+    let ctx = operands.ctx();
     let axis = index_axis_for_ref(axis_ref, ctx).ok_or_else(|| {
         ctx.internal_error(
             format!("key axis `{axis_ref}` has no concrete definition"),
             span,
         )
     })?;
-    match kind {
-        KeyFormKind::Static => {
-            // Bounds were discharged at compile time.
-            let RuntimeValue::Int(position) = arg_val else {
-                return Err(ctx.internal_error("key() received a non-Int position", arg.span()));
-            };
+    match form {
+        // The position was proved in range at compile time.
+        TKeyForm::Static(position) => usize::try_from(position.position)
+            .ok()
+            .and_then(|position| KeyValue::at(axis, position))
+            .ok_or_else(|| {
+                type_invariant(
+                    format_args!(
+                        "static key position {} escaped its checked range",
+                        position.position
+                    ),
+                    arg.span(),
+                    ctx,
+                )
+            }),
+        TKeyForm::Fin => {
+            let position = operands.int(arg)?;
             usize::try_from(position)
                 .ok()
                 .and_then(|position| KeyValue::at(axis, position))
-                .map(RuntimeValue::Key)
-                .ok_or_else(|| {
-                    ctx.internal_error(
-                        format!("static key position {position} escaped its checked range"),
-                        arg.span(),
-                    )
-                })
-        }
-        KeyFormKind::Fin => {
-            let RuntimeValue::Int(position) = arg_val else {
-                return Err(ctx.internal_error("fin_key() received a non-Int position", arg.span()));
-            };
-            usize::try_from(position)
-                .ok()
-                .and_then(|position| KeyValue::at(axis, position))
-                .map(RuntimeValue::Key)
                 .ok_or_else(|| {
                     ctx.eval_error(
                         format!("fin_key: {position} out of bounds for {axis_ref}"),
@@ -542,61 +556,71 @@ fn eval_key_form(
                     )
                 })
         }
-        KeyFormKind::Floor | KeyFormKind::Ceil | KeyFormKind::Nearest => {
-            let quantity = arg_val
-                .expect_quantity("coordinate search argument")
-                .map_err(|e| ctx.eval_error(e.to_string(), arg.span()))?
-                .get();
-            let keys = KeyValue::all(&axis);
-            let mut best: Option<(&KeyValue, f64)> = None;
-            for key in &keys {
-                let KeyElement::Coordinate { value, .. } = key.element() else {
-                    return Err(ctx
-                        .internal_error("coordinate search received a non-coordinate axis", span));
-                };
-                let coordinate = value.get();
-                let candidate = match kind {
-                    KeyFormKind::Floor if coordinate <= quantity => Some((key, coordinate)),
-                    KeyFormKind::Ceil if coordinate >= quantity => Some((key, coordinate)),
-                    KeyFormKind::Nearest => Some((key, coordinate)),
-                    _ => None,
-                };
-                let Some((key, coordinate)) = candidate else {
-                    continue;
-                };
-                let better = match (&best, kind) {
-                    (None, _) => true,
-                    // Nearest: strictly closer wins, so midpoint ties keep
-                    // the earlier position (toward the axis start).
-                    (Some((_, incumbent)), KeyFormKind::Nearest) => {
-                        (coordinate - quantity).abs() < (incumbent - quantity).abs()
-                    }
-                    // Floor: the greatest coordinate at or below the target.
-                    (Some((_, incumbent)), KeyFormKind::Floor) => coordinate > *incumbent,
-                    // Ceil: the smallest coordinate at or above the target.
-                    (Some((_, incumbent)), _) => coordinate < *incumbent,
-                };
-                if better {
-                    best = Some((key, coordinate));
-                }
-            }
-            let Some((key, _)) = best else {
-                return Err(ctx.eval_error(
-                    format!(
-                        "{}: no coordinate of `{axis_ref}` is {} the target",
-                        kind.as_str(),
-                        if kind == KeyFormKind::Floor {
-                            "at or below"
-                        } else {
-                            "at or above"
-                        },
-                    ),
-                    span,
-                ));
-            };
-            Ok(RuntimeValue::Key(key.clone()))
+        TKeyForm::Search(search) => {
+            let quantity = operands.quantity(arg)?.get();
+            coordinate_search(*search, &axis, quantity, axis_ref, span, ctx)
         }
     }
+}
+
+/// The key a coordinate search of `axis` for `quantity` selects.
+fn coordinate_search(
+    search: CoordinateSearch,
+    axis: &IndexAxis,
+    quantity: f64,
+    axis_ref: &IndexTypeRef,
+    span: Span,
+    ctx: &EvalSession<'_>,
+) -> Result<KeyValue, GraphcalError> {
+    let keys = KeyValue::all(axis);
+    let mut best: Option<(&KeyValue, f64)> = None;
+    for key in &keys {
+        let KeyElement::Coordinate { value, .. } = key.element() else {
+            return Err(type_invariant(
+                "coordinate search received a non-coordinate axis",
+                span,
+                ctx,
+            ));
+        };
+        let coordinate = value.get();
+        let candidate = match search {
+            CoordinateSearch::Floor => coordinate <= quantity,
+            CoordinateSearch::Ceil => coordinate >= quantity,
+            CoordinateSearch::Nearest => true,
+        };
+        if !candidate {
+            continue;
+        }
+        let better = match (&best, search) {
+            (None, _) => true,
+            // Nearest: strictly closer wins, so midpoint ties keep
+            // the earlier position (toward the axis start).
+            (Some((_, incumbent)), CoordinateSearch::Nearest) => {
+                (coordinate - quantity).abs() < (incumbent - quantity).abs()
+            }
+            // Floor: the greatest coordinate at or below the target.
+            (Some((_, incumbent)), CoordinateSearch::Floor) => coordinate > *incumbent,
+            // Ceil: the smallest coordinate at or above the target.
+            (Some((_, incumbent)), CoordinateSearch::Ceil) => coordinate < *incumbent,
+        };
+        if better {
+            best = Some((key, coordinate));
+        }
+    }
+    best.map(|(key, _)| key.clone()).ok_or_else(|| {
+        ctx.eval_error(
+            format!(
+                "{}: no coordinate of `{axis_ref}` is {} the target",
+                search.kind().as_str(),
+                if search == CoordinateSearch::Floor {
+                    "at or below"
+                } else {
+                    "at or above"
+                },
+            ),
+            span,
+        )
+    })
 }
 
 /// Evaluate `argmin`/`argmax`: the key of the extremum entry on the reduced
@@ -728,20 +752,19 @@ fn eval_field_access<V>(
     field: &Spanned<graphcal_compiler::syntax::type_name::FieldName>,
     ctx: &EvalSession<'_>,
 ) -> Result<V, GraphcalError> {
-    inner_val.map_or_else(
-        || Err(ctx.eval_error("field access on non-struct value", inner.span())),
-        |value| {
-            let missing = format!(
-                "no field `{}` on `{}::{}`",
-                field.value,
-                value.type_name(),
-                value.constructor()
-            );
-            value
-                .into_field(&field.value)
-                .ok_or_else(|| ctx.eval_error(missing, field.span))
-        },
-    )
+    inner_val
+        .and_then(|value| value.into_field(&field.value))
+        .ok_or_else(|| {
+            type_invariant(
+                format_args!(
+                    "field `{}` read from a value without it, of checked type {:?}",
+                    field.value,
+                    inner.ty()
+                ),
+                field.span,
+                ctx,
+            )
+        })
 }
 
 fn eval_constructor_call(
@@ -1023,88 +1046,54 @@ fn eval_index_access(
             evaluated.as_ref()
         }
     };
+    let evaluate = |node| eval_value(node, values, local_values, ctx);
+    let operands = super::operations::Operands::new(&evaluate, ctx);
     let mut current = base;
     for arg in args.iter() {
-        let Some(indexed) = current.entries() else {
-            return Err(ctx.eval_error("indexing a non-indexed value", span));
-        };
+        let indexed = current
+            .entries()
+            .ok_or_else(|| type_invariant("indexed a non-indexed value", span, ctx))?;
         let (entry, entry_key) = match arg.view() {
+            // A label selects only on its own axis, never by its leaf name.
             ScopedIndexArg::Variant(variant) => {
-                ensure_index_ref_matches_resolved(
-                    indexed.index(),
-                    variant.variant.index(),
-                    variant.path_span(),
-                    ctx,
-                )?;
                 let entry_key = IndexEntryKey::named(variant.variant.variant().clone());
-                (indexed.get(&entry_key), entry_key)
+                let entry = index_ref_matches_resolved(indexed.index(), variant.variant.index())
+                    .then(|| indexed.get(&entry_key))
+                    .flatten();
+                (entry, entry_key)
             }
             ScopedIndexArg::Var(local) => {
-                let var_val = local_values
+                let key = local_values
                     .get(local.value)
-                    .ok_or_else(|| ctx.eval_error("undefined loop variable", local.span))?;
-                let var_value = var_val.value();
-                let RuntimeValue::Key(key) = &*var_value else {
-                    return Err(ctx.eval_error("value is not a loop variable", local.span));
-                };
-                (
-                    Some(select_by_key(indexed, key, local.span, ctx)?),
-                    key.entry_key().clone(),
-                )
+                    .and_then(|bound| match &*bound.value() {
+                        RuntimeValue::Key(key) => Some(key.clone()),
+                        _ => None,
+                    })
+                    .ok_or_else(|| {
+                        type_invariant("loop variable is not a bound key", local.span, ctx)
+                    })?;
+                (indexed.get_key(&key), key.entry_key().clone())
             }
-            ScopedIndexArg::Expr {
-                operand: index_expr,
-                ..
-            } => {
-                match eval_value(index_expr, values, local_values, ctx)? {
-                    RuntimeValue::Key(key) => (
-                        Some(select_by_key(indexed, &key, index_expr.span(), ctx)?),
-                        key.entry_key().clone(),
-                    ),
-                    // A static integer position on a `Fin` axis (`@m[0, 1]`).
-                    RuntimeValue::Int(n) => {
-                        let position = u64::try_from(n).map_err(|_| {
-                            ctx.eval_error(
-                                format!("index expression evaluated to negative value: {n}"),
-                                index_expr.span(),
-                            )
-                        })?;
-                        let entry_key = IndexEntryKey::position(position);
-                        (indexed.get(&entry_key), entry_key)
-                    }
-                    _ => {
-                        return Err(ctx.eval_error(
-                            "index expression must evaluate to an integer or an index key",
-                            index_expr.span(),
-                        ));
-                    }
-                }
+            ScopedIndexArg::Key(operand) => {
+                let key = operands.key(operand)?;
+                (indexed.get_key(&key), key.entry_key().clone())
+            }
+            // A static integer position on a `Fin` axis (`@m[0, 1]`), proved
+            // in range.
+            ScopedIndexArg::Position(position) => {
+                let entry_key = IndexEntryKey::position(position.position);
+                (indexed.get(&entry_key), entry_key)
             }
         };
-        current = entry
-            .ok_or_else(|| ctx.eval_error(format!("index entry `{entry_key}` not found"), span))?;
+        current = entry.ok_or_else(|| {
+            type_invariant(
+                format_args!("checked index entry `{entry_key}` is missing"),
+                span,
+                ctx,
+            )
+        })?;
     }
     Ok(current.to_owned_with(clone_index_access_result))
-}
-
-/// The entry of `indexed` that `key` selects, where the checker proved the
-/// key's axis admissible.
-fn select_by_key<'v>(
-    indexed: EntriesRef<'v, PendingLeaf>,
-    key: &KeyValue,
-    span: Span,
-    ctx: &EvalSession<'_>,
-) -> Result<PresentedRef<'v, PendingLeaf>, GraphcalError> {
-    indexed.get_key(key).ok_or_else(|| {
-        ctx.eval_error(
-            format!(
-                "index argument belongs to `{}`, but value is indexed by `{}`",
-                key.index(),
-                indexed.index()
-            ),
-            span,
-        )
-    })
 }
 
 #[expect(
@@ -1122,21 +1111,10 @@ fn eval_scan(
     local_values: &HirLocalValueMap<'_>,
     ctx: &EvalSession<'_>,
 ) -> Result<EvaluatedRuntimeValue, GraphcalError> {
-    let Some(source_entries) =
+    let source_entries =
         eval_texpr_evaluated(source, values, presentation_values, local_values, ctx)?
             .into_entries()
-    else {
-        return Err(ctx.eval_error("scan source must be an indexed value", source.span()));
-    };
-    if matches!(
-        *source_entries.values().first().value(),
-        RuntimeValue::Indexed(_)
-    ) {
-        return Err(ctx.internal_error(
-            "multi-axis source reached scan evaluation after rank-one type checking",
-            source.span(),
-        ));
-    }
+            .ok_or_else(|| type_invariant("scan source is not indexed", source.span(), ctx))?;
     let evaluated_init =
         eval_texpr_evaluated(init, values, presentation_values, local_values, ctx)?;
     let initial = evaluated_init.clone();
@@ -1218,109 +1196,99 @@ fn eval_unfold(
     Ok(EvaluatedRuntimeValue::from_indexed(result_entries))
 }
 
-fn evaluated_match_field(
-    field: &graphcal_compiler::syntax::span::Spanned<
-        graphcal_compiler::syntax::type_name::FieldName,
-    >,
-    type_name: &graphcal_compiler::resolved_name::ResolvedStructTypeName,
-    scrutinee: &EvaluatedRuntimeValue,
+/// The arm matching the label of `key`; the checker proved the arms
+/// exhaustive over its axis.
+fn match_label<'t>(
+    span: Span,
+    key: &KeyValue,
+    arms: Scoped<'t, [TLabelArm]>,
     ctx: &EvalSession<'_>,
-) -> Result<EvaluatedRuntimeValue, GraphcalError> {
-    scrutinee
-        .as_ref()
-        .field(&field.value)
-        .map(|value| value.to_owned_with(RuntimeValue::clone))
+) -> Result<Scoped<'t, TLabelArm>, GraphcalError> {
+    let KeyElement::Named(variant) = key.element() else {
+        return Err(type_invariant(
+            "match scrutinee is not a named key",
+            span,
+            ctx,
+        ));
+    };
+    arms.iter()
+        .find(|arm| {
+            let label = &arm.get().label.variant;
+            index_ref_matches_resolved(key.index(), label.index()) && label.variant() == variant
+        })
         .ok_or_else(|| {
-            ctx.eval_error(
-                format!("no field `{}` on type `{type_name}`", field.value),
-                field.span,
+            type_invariant(
+                format_args!("no match arm for label `{variant}`"),
+                span,
+                ctx,
             )
         })
 }
 
-fn eval_match(
+/// Evaluate the arm matching the constructor of the union value
+/// `scrutinee` evaluates to, with its field bindings; the checker proved the
+/// arms exhaustive over the union.
+fn eval_constructor_match(
     span: Span,
     scrutinee: ScopedNode<'_>,
-    arms: Scoped<'_, [TMatchArm]>,
+    arms: Scoped<'_, [TConstructorArm]>,
     values: &RuntimeValueMap,
     presentation_values: Option<&PendingPresentedMap>,
     local_values: &HirLocalValueMap<'_>,
     ctx: &EvalSession<'_>,
 ) -> Result<EvaluatedRuntimeValue, GraphcalError> {
-    let scrutinee_presented =
+    let presented =
         eval_texpr_evaluated(scrutinee, values, presentation_values, local_values, ctx)?;
-    let scrutinee_val = scrutinee_presented.value();
-    match &*scrutinee_val {
-        RuntimeValue::Key(key) => {
-            let KeyElement::Named(variant) = key.element() else {
-                return Err(ctx.internal_error("match scrutinee is not a named key", span));
-            };
-            let matched_arm = arms
-                .iter()
-                .find(|arm| match &arm.get().pattern {
-                    TMatchPattern::IndexLabel(pat) => {
-                        index_ref_matches_resolved(key.index(), pat.variant.index())
-                            && pat.variant.variant() == variant
-                    }
-                    TMatchPattern::Constructor { .. } => false,
-                })
-                .ok_or_else(|| {
-                    ctx.eval_error(format!("no match arm for label `{variant}`"), span)
-                })?;
-            eval_texpr_evaluated(
-                matched_arm.map(|arm| &arm.body),
-                values,
-                presentation_values,
-                local_values,
+    let arm = {
+        let value = presented.value();
+        let RuntimeValue::Struct(union) = &*value else {
+            return Err(type_invariant(
+                "match scrutinee is not a union value",
+                scrutinee.span(),
                 ctx,
-            )
-        }
-        RuntimeValue::Struct(scrutinee_struct) => {
-            let type_name = scrutinee_struct.type_name();
-            let value_constructor = scrutinee_struct.constructor();
-            let matched_arm = arms
-                .iter()
-                .find(|arm| match &arm.get().pattern {
-                    TMatchPattern::Constructor { target, .. } => {
-                        *value_constructor == target.constructor
-                            && *type_name == target.runtime_type
-                    }
-                    TMatchPattern::IndexLabel(_) => false,
-                })
-                .ok_or_else(|| {
-                    ctx.eval_error(format!("no match arm for variant `{type_name}`"), span)
-                })?;
-            let mut arm_locals = local_values.child(Vec::new());
-            let TMatchPattern::Constructor { bindings, .. } = &matched_arm.get().pattern else {
-                return Err(ctx.internal_error(
-                    "matched non-constructor arm for struct",
-                    matched_arm.get().span,
-                ));
-            };
-            for binding in bindings {
-                match binding {
-                    hir::expr::PatternBinding::Bind { field, local } => {
-                        arm_locals.bind(
-                            local.id,
-                            evaluated_match_field(field, type_name, &scrutinee_presented, ctx)?,
-                        );
-                    }
-                    hir::expr::PatternBinding::Wildcard { .. } => {}
-                }
+            ));
+        };
+        arms.iter()
+            .find(|arm| {
+                let target = &arm.get().target;
+                *union.constructor() == target.constructor
+                    && *union.type_name() == target.runtime_type
+            })
+            .ok_or_else(|| {
+                type_invariant(
+                    format_args!("no match arm for variant `{}`", union.type_name()),
+                    span,
+                    ctx,
+                )
+            })?
+    };
+    let mut arm_locals = local_values.child(Vec::new());
+    for binding in &arm.get().bindings {
+        match binding {
+            hir::expr::PatternBinding::Bind { field, local } => {
+                let value = presented
+                    .as_ref()
+                    .field(&field.value)
+                    .map(|value| value.to_owned_with(RuntimeValue::clone))
+                    .ok_or_else(|| {
+                        type_invariant(
+                            format_args!("matched union value has no field `{}`", field.value),
+                            field.span,
+                            ctx,
+                        )
+                    })?;
+                arm_locals.bind(local.id, value);
             }
-            eval_texpr_evaluated(
-                matched_arm.map(|arm| &arm.body),
-                values,
-                presentation_values,
-                &arm_locals,
-                ctx,
-            )
+            hir::expr::PatternBinding::Wildcard { .. } => {}
         }
-        _ => Err(ctx.eval_error(
-            "match scrutinee must be a label or tagged union",
-            scrutinee.span(),
-        )),
     }
+    eval_texpr_evaluated(
+        arm.map(|arm| &arm.body),
+        values,
+        presentation_values,
+        &arm_locals,
+        ctx,
+    )
 }
 
 fn eval_dag_call(

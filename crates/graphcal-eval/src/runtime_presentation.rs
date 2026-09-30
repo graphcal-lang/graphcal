@@ -24,7 +24,6 @@ use crate::presentation_evidence::{
     LeafKind, PendingLeaf, PendingQuantityDisplay, PresentationLeaf, QuantityDisplay, ResolvedLeaf,
 };
 use crate::runtime_value::{IndexedValue, KeyValue, RuntimeValue, StructValue};
-use graphcal_compiler::registry::checked_type::IndexTypeRef;
 use graphcal_compiler::syntax::index_name::IndexEntryKey;
 
 /// A runtime value together with its presentation, in the value's shape.
@@ -545,7 +544,7 @@ impl<'a, L> PresentedRef<'a, L> {
 impl<'a, L> EntriesRef<'a, L> {
     /// The index of the entries.
     #[must_use]
-    pub fn index(self) -> &'a IndexTypeRef {
+    pub fn index(self) -> &'a graphcal_compiler::registry::checked_type::IndexTypeRef {
         match self.0 {
             EntriesNode::Whole { entries, .. } => entries.index(),
             EntriesNode::Presented(entries) => entries.index(),

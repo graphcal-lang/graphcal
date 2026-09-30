@@ -25,8 +25,9 @@ use crate::syntax::span::Spanned;
 use crate::tir::static_index::StaticIndexRequirement;
 
 use super::model::{
-    ContextualLiteral, DatetimeLiteral, StaticPosition, TArg, TConstRef, TContextual, TExpr,
-    TExprKind, TFieldInit, TIndexArg, TMapEntry, TMatchArm, TMatchPattern, TParamBinding,
+    ContextualLiteral, CoordinateSearch, DatetimeLiteral, StaticPosition, TArg, TConstRef,
+    TConstructorArm, TContextual, TExpr, TExprKind, TFieldInit, TIndexArg, TKeyForm, TLabelArm,
+    TMapEntry, TMatchArms, TParamBinding,
 };
 use super::nominal::{ConstructorApplication, ConstructorMatch};
 use super::operators::{
@@ -303,10 +304,17 @@ impl PendingNodes {
                     Ok::<_, AssemblyError>(match arg {
                         IndexArg::Variant(variant) => TIndexArg::Variant(variant.clone()),
                         IndexArg::Var(local) => TIndexArg::Var(local.clone()),
-                        IndexArg::Expr(operand) => TIndexArg::Expr {
-                            static_position: positions.take(operand.id()),
-                            operand: self.take_boxed(expr, operand)?,
-                        },
+                        IndexArg::Expr(operand) => {
+                            let position = positions.take(operand.id());
+                            let operand = self.take_boxed(expr, operand)?;
+                            match (operand.ty(), position) {
+                                (CheckedType::Key(_), None) => TIndexArg::Key(operand),
+                                (CheckedType::Int, Some(position)) => {
+                                    TIndexArg::Position { operand, position }
+                                }
+                                _ => return Err(AssemblyError::UncheckedOperands(id())),
+                            }
+                        }
                     })
                 })?,
             },
@@ -334,42 +342,56 @@ impl PendingNodes {
             },
             ExprKind::KeyForm {
                 kind, axis, arg, ..
-            } => TExprKind::Key {
-                kind: *kind,
-                axis: axis.clone(),
-                static_position: positions.take(arg.id()),
-                arg: self.take_boxed(expr, arg)?,
-            },
-            ExprKind::Match { scrutinee, arms } => TExprKind::Match {
-                scrutinee: self.take_boxed(expr, scrutinee)?,
-                arms: arms
-                    .iter()
-                    .map(|arm| {
-                        let pattern = match &arm.pattern {
-                            MatchPattern::Constructor {
-                                constructor,
-                                bindings,
-                                ..
-                            } => TMatchPattern::Constructor {
-                                target: facts
-                                    .constructor_matches
-                                    .get(&constructor.value)
-                                    .cloned()
-                                    .ok_or_else(|| AssemblyError::MissingMatchTarget(id()))?,
-                                bindings: bindings.clone(),
-                            },
-                            MatchPattern::IndexLabel { variant, .. } => {
-                                TMatchPattern::IndexLabel(variant.clone())
-                            }
-                        };
-                        Ok(TMatchArm {
-                            pattern,
+            } => {
+                use crate::syntax::ast::KeyFormKind;
+                let form = match (kind, positions.take(arg.id())) {
+                    (KeyFormKind::Static, Some(position)) => TKeyForm::Static(position),
+                    (KeyFormKind::Fin, None) => TKeyForm::Fin,
+                    (KeyFormKind::Floor, None) => TKeyForm::Search(CoordinateSearch::Floor),
+                    (KeyFormKind::Ceil, None) => TKeyForm::Search(CoordinateSearch::Ceil),
+                    (KeyFormKind::Nearest, None) => TKeyForm::Search(CoordinateSearch::Nearest),
+                    _ => return Err(AssemblyError::UncheckedOperands(id())),
+                };
+                TExprKind::Key {
+                    form,
+                    axis: axis.clone(),
+                    arg: self.take_boxed(expr, arg)?,
+                }
+            }
+            ExprKind::Match { scrutinee, arms } => {
+                let scrutinee = self.take_boxed(expr, scrutinee)?;
+                let mut labels = Vec::new();
+                let mut constructors = Vec::new();
+                for arm in arms {
+                    match &arm.pattern {
+                        MatchPattern::Constructor {
+                            constructor,
+                            bindings,
+                            ..
+                        } => constructors.push(TConstructorArm {
+                            target: facts
+                                .constructor_matches
+                                .get(&constructor.value)
+                                .cloned()
+                                .ok_or_else(|| AssemblyError::MissingMatchTarget(id()))?,
+                            bindings: bindings.clone(),
                             body: self.take_value(expr, &arm.body)?,
                             span: arm.span,
-                        })
-                    })
-                    .collect::<Result<_, AssemblyError>>()?,
-            },
+                        }),
+                        MatchPattern::IndexLabel { variant, .. } => labels.push(TLabelArm {
+                            label: variant.clone(),
+                            body: self.take_value(expr, &arm.body)?,
+                            span: arm.span,
+                        }),
+                    }
+                }
+                let arms = match (scrutinee.ty(), labels.is_empty(), constructors.is_empty()) {
+                    (CheckedType::Key(_), _, true) => TMatchArms::Labels(labels),
+                    (CheckedType::Struct(..), true, _) => TMatchArms::Constructors(constructors),
+                    _ => return Err(AssemblyError::UncheckedOperands(id())),
+                };
+                TExprKind::Match { scrutinee, arms }
+            }
             ExprKind::DagCall {
                 target,
                 args,

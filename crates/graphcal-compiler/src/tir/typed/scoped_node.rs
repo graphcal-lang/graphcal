@@ -20,13 +20,13 @@ use crate::hir::expr::{
 use crate::registry::checked_type::CheckedType;
 use crate::registry::time_zone::IanaTimeZoneId;
 use crate::resolved_name::{ResolvedDeclName, ResolvedUnitName};
-use crate::syntax::ast::KeyFormKind;
 use crate::syntax::span::{Span, Spanned};
 use crate::syntax::type_name::FieldName;
 use crate::tir::texpr::operators::{BExpr, CExpr, DExpr, IExpr, QExpr};
 use crate::tir::texpr::{
-    ConstructorApplication, DatetimeLiteral, StaticPosition, TConstRef, TExpr, TExprKind,
-    TFieldInit, TIndexArg, TMapEntry, TMatchArm, TNodeRef, TParamBinding, visit_tnodes,
+    ConstructorApplication, DatetimeLiteral, StaticPosition, TConstRef, TConstructorArm, TExpr,
+    TExprKind, TFieldInit, TIndexArg, TKeyForm, TLabelArm, TMapEntry, TMatchArms, TNodeRef,
+    TParamBinding, visit_tnodes,
 };
 
 use super::evaluation_unit::Scoped;
@@ -113,14 +113,13 @@ pub enum NodeKind<'t> {
         body: ScopedNode<'t>,
     },
     Key {
-        kind: KeyFormKind,
+        form: &'t TKeyForm,
         axis: &'t ForBindingIndex,
         arg: ScopedNode<'t>,
-        static_position: Option<&'t StaticPosition>,
     },
     Match {
         scrutinee: ScopedNode<'t>,
-        arms: Scoped<'t, [TMatchArm]>,
+        arms: ScopedMatchArms<'t>,
     },
     Variant(&'t IndexVariantRef),
     DagCall {
@@ -140,15 +139,22 @@ pub enum ConstRef<'t> {
 /// A unit expression of a node, whose terms resolve in the node's scope.
 pub type ScopedUnitExpr<'t> = Scoped<'t, ResolvedUnitExpr>;
 
+/// The arms of a match node, in the node's scope.
+#[derive(Debug, Clone, Copy)]
+pub enum ScopedMatchArms<'t> {
+    Labels(Scoped<'t, [TLabelArm]>),
+    Constructors(Scoped<'t, [TConstructorArm]>),
+}
+
 /// An index-access argument of a node, in the node's scope.
 #[derive(Debug, Clone, Copy)]
 pub enum ScopedIndexArg<'t> {
     Variant(&'t IndexVariantRef),
     Var(&'t Spanned<LocalId>),
-    Expr {
-        operand: ScopedNode<'t>,
-        static_position: Option<&'t StaticPosition>,
-    },
+    /// A key of the indexed axis.
+    Key(ScopedNode<'t>),
+    /// A static position proved in range of the indexed `Fin` axis.
+    Position(&'t StaticPosition),
 }
 
 impl<'t> Scoped<'t, TExpr> {
@@ -295,20 +301,21 @@ impl<'t> Scoped<'t, TExpr> {
                 init: node(init),
                 body: node(body),
             },
-            TExprKind::Key {
-                kind,
-                axis,
-                arg,
-                static_position,
-            } => NodeKind::Key {
-                kind: *kind,
+            TExprKind::Key { form, axis, arg } => NodeKind::Key {
+                form,
                 axis,
                 arg: node(arg),
-                static_position: static_position.as_ref(),
             },
             TExprKind::Match { scrutinee, arms } => NodeKind::Match {
                 scrutinee: node(scrutinee),
-                arms: Scoped::new(scope, arms.as_slice()),
+                arms: match arms {
+                    TMatchArms::Labels(arms) => {
+                        ScopedMatchArms::Labels(Scoped::new(scope, arms.as_slice()))
+                    }
+                    TMatchArms::Constructors(arms) => {
+                        ScopedMatchArms::Constructors(Scoped::new(scope, arms.as_slice()))
+                    }
+                },
             },
             TExprKind::Variant(variant) => NodeKind::Variant(variant),
             TExprKind::DagCall {
@@ -362,13 +369,8 @@ impl<'t> Scoped<'t, TIndexArg> {
         match self.get() {
             TIndexArg::Variant(variant) => ScopedIndexArg::Variant(variant),
             TIndexArg::Var(local) => ScopedIndexArg::Var(local),
-            TIndexArg::Expr {
-                operand,
-                static_position,
-            } => ScopedIndexArg::Expr {
-                operand: Scoped::new(self.scope(), operand),
-                static_position: static_position.as_ref(),
-            },
+            TIndexArg::Key(operand) => ScopedIndexArg::Key(Scoped::new(self.scope(), operand)),
+            TIndexArg::Position { position, .. } => ScopedIndexArg::Position(position),
         }
     }
 }

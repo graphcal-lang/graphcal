@@ -317,7 +317,11 @@ fn key_node(
         Span::new(0, 6),
         CheckedType::Key(axis.clone()),
         TExprKind::Key {
-            kind: crate::syntax::ast::KeyFormKind::Static,
+            form: TKeyForm::Static(StaticPosition {
+                axis,
+                position,
+                usage: crate::tir::static_index::StaticIndexUse::Key,
+            }),
             axis: crate::hir::expr::ForBindingIndex::Finite {
                 cardinality: crate::syntax::span::Spanned::new(
                     crate::nat::NatPolyForm::from_constant(3),
@@ -326,11 +330,6 @@ fn key_node(
                 span: Span::new(0, 1),
             },
             arg: Box::new(arg),
-            static_position: Some(StaticPosition {
-                axis,
-                position,
-                usage: crate::tir::static_index::StaticIndexUse::Key,
-            }),
         },
     )
 }
@@ -453,12 +452,12 @@ fn type_maps_keep_structure_and_rewrite_every_carried_type() {
     assert_eq!(concrete.id(), tree.id());
     let (
         TExprKind::Key {
-            static_position: Some(before),
+            form: TKeyForm::Static(before),
             arg: before_arg,
             ..
         },
         TExprKind::Key {
-            static_position: Some(after),
+            form: TKeyForm::Static(after),
             arg: after_arg,
             ..
         },

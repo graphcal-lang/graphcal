@@ -6692,11 +6692,13 @@ fn eval_constructor_match_rejects_runtime_owner_mismatch_with_same_leaf_construc
 
     let err =
         crate::eval_expr::eval_root(&ctx.executable(expr).unwrap(), &values, &ctx).unwrap_err();
+    // A value of another owner contradicts the checked type: no arm is
+    // selected by leaf name, and the violation is an internal error.
     match err {
-        GraphcalError::EvalError { message, .. } => {
+        GraphcalError::InternalError { message, .. } => {
             assert!(message.contains("no match arm for variant"), "{message}");
         }
-        other => panic!("expected EvalError, got {other:?}"),
+        other => panic!("expected InternalError, got {other:?}"),
     }
 }
 
@@ -7560,11 +7562,13 @@ fn eval_index_access_rejects_runtime_owner_mismatch_with_same_leaf_variant() {
 
     let err =
         crate::eval_expr::eval_root(&ctx.executable(expr).unwrap(), &values, &ctx).unwrap_err();
+    // A key of another owner contradicts the checked type: no entry is
+    // selected by leaf name, and the violation is an internal error.
     match err {
-        GraphcalError::EvalError { message, .. } => {
-            assert!(message.contains("index argument belongs to"), "{message}");
+        GraphcalError::InternalError { message, .. } => {
+            assert!(message.contains("checked index entry"), "{message}");
         }
-        other => panic!("expected EvalError, got {other:?}"),
+        other => panic!("expected InternalError, got {other:?}"),
     }
 }
 
@@ -7642,11 +7646,13 @@ fn eval_label_match_rejects_runtime_owner_mismatch_with_same_leaf_variant() {
 
     let err = crate::eval_expr::eval_subtree_for_test(match_expr, &values, &local_values, &ctx)
         .unwrap_err();
+    // A value of another owner contradicts the checked type: no arm is
+    // selected by leaf name, and the violation is an internal error.
     match err {
-        GraphcalError::EvalError { message, .. } => {
+        GraphcalError::InternalError { message, .. } => {
             assert!(message.contains("no match arm for label"), "{message}");
         }
-        other => panic!("expected EvalError, got {other:?}"),
+        other => panic!("expected InternalError, got {other:?}"),
     }
 }
 
