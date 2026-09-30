@@ -5,6 +5,7 @@ use graphcal_compiler::syntax::decl_name::DeclName;
 mod bindings;
 mod display;
 mod plot_data;
+mod plot_unavailable;
 mod project;
 mod public_projection;
 pub(crate) mod runtime;
@@ -28,6 +29,7 @@ pub use project::{
 };
 
 pub use crate::runtime_value::KeyValue;
+pub use plot_unavailable::{ComposedPlotsUnavailable, PlotUnavailable};
 pub use runtime::RuntimeEvaluation;
 pub use types::{
     AssertResult, AxisMeta, CompileError, CompositionProperty, DisplayProjectionError, DisplayUnit,

@@ -20,6 +20,7 @@ use graphcal_compiler::syntax::span::{Span, Spanned};
 use graphcal_compiler::tir::typed::{DeclarationBody, ResolvedProjection, Scoped};
 
 use crate::eval::display::attach_presentation;
+use crate::eval::plot_unavailable::{ComposedPlotsUnavailable, PlotUnavailable};
 use crate::eval::public_projection::EvaluatedValue;
 use crate::eval::types::{
     AxisMeta, CompositionProperty, FigureSpec, LayerSpec, NodeUnavailable, PlotError,
@@ -79,8 +80,8 @@ fn root_plots<'p>(plan: &'p crate::execution_plan::ExecPlan<'p>) -> Vec<RootPlot
 }
 
 /// The root plots that could not be rendered, by their name in the root's
-/// namespace, with their identity and reason.
-type UnavailablePlots<'p> = HashMap<&'p DeclName, (&'p ResolvedDeclName, NodeUnavailable)>;
+/// namespace, with the reason.
+type UnavailablePlots<'p> = HashMap<&'p DeclName, NodeUnavailable>;
 
 /// Evaluate every root plot, figure and layer.
 ///
@@ -112,8 +113,11 @@ pub(super) fn evaluate_root_plots(
         match evaluate_plot(unit, entry, evaluated, ctx) {
             Ok(evaluated) => plots.push(evaluated.into_spec(name, plot.visibility)),
             Err(PlotEvaluationError::Unavailable(reason)) => {
-                unavailable.insert(plot.name, (&plot.identity, reason.clone()));
-                plot_errors.push(PlotError { name, reason });
+                unavailable.insert(plot.name, reason.clone());
+                plot_errors.push(PlotError {
+                    name,
+                    reason: reason.into(),
+                });
             }
             Err(PlotEvaluationError::Fatal(error)) => return Err(error),
         }
@@ -199,23 +203,21 @@ impl Compositions<'_, '_> {
                 DiagnosticAnchor::WholeFile,
             )
         })?;
-        match evaluate_composition(
-            fields,
-            references,
-            self.unavailable,
-            self.evaluated,
-            self.ctx,
-        ) {
-            Ok(composed) => Ok(Some(composed)),
-            Err(PlotEvaluationError::Fatal(error)) => Err(error),
-            Err(PlotEvaluationError::Unavailable(reason)) => {
-                self.plot_errors.push(PlotError {
-                    name: ScopedName::local(name.clone()),
-                    reason,
-                });
-                Ok(None)
+        let reason = match composed_plots_unavailable(references, self.unavailable) {
+            Some(reason) => PlotUnavailable::from(reason),
+            None => {
+                match eval_composition_fields(fields, references, self.evaluated.values, self.ctx) {
+                    Ok(composed) => return Ok(Some(composed)),
+                    Err(PlotEvaluationError::Fatal(error)) => return Err(error),
+                    Err(PlotEvaluationError::Unavailable(reason)) => PlotUnavailable::from(reason),
+                }
             }
-        }
+        };
+        self.plot_errors.push(PlotError {
+            name: ScopedName::local(name.clone()),
+            reason,
+        });
+        Ok(None)
     }
 }
 
@@ -600,31 +602,22 @@ struct CompositionFields {
     plot_names: Vec<ScopedName>,
 }
 
-/// Evaluate one figure or layer: blocked by an unavailable plot it composes,
-/// otherwise its fields.
+/// The plots a figure or layer composes that could not be rendered, by the
+/// names the root gives them.
 ///
 /// `unavailable` holds the root plots that could not be rendered, by their
-/// name in the root's namespace, with their identity and reason.
-fn evaluate_composition(
-    fields: Scoped<'_, [graphcal_compiler::tir::typed::LoweredPlotField]>,
+/// name in the root's namespace.
+fn composed_plots_unavailable(
     references: &[Spanned<ScopedName>],
     unavailable: &UnavailablePlots<'_>,
-    evaluated: EvaluatedRoot<'_>,
-    ctx: &EvalSession<'_>,
-) -> Result<CompositionFields, PlotEvaluationError> {
-    let blocked_by = references
-        .iter()
-        .filter_map(|reference| {
-            reference
-                .value
-                .as_bare()
-                .and_then(|name| unavailable.get(name))
-        })
-        .map(|(identity, reason)| (*identity, reason));
-    if let Some(reason) = NodeUnavailable::blocked_by(blocked_by) {
-        return Err(PlotEvaluationError::Unavailable(reason));
-    }
-    eval_composition_fields(fields, references, evaluated.values, ctx)
+) -> Option<ComposedPlotsUnavailable> {
+    ComposedPlotsUnavailable::blocked_by(references.iter().filter_map(|reference| {
+        reference
+            .value
+            .as_bare()
+            .and_then(|name| unavailable.get_key_value(name))
+            .map(|(name, reason)| (*name, reason))
+    }))
 }
 
 /// Evaluate composition fields (properties and plot names) shared by figures and layers.
