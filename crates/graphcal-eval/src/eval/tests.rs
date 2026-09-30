@@ -450,16 +450,11 @@ fn context_capabilities_are_phase_selected_and_checked_scopes_fail_closed() {
     assert!(provisional.struct_field_constraints().is_none());
     assert!(provisional.execution_plan().is_err());
 
-    let plan = crate::exec_plan::compile_with_cancellation(&tir, &src, &cancellation).unwrap();
+    let prepared = crate::exec_plan::compile_with_cancellation(&tir, &src, &cancellation).unwrap();
+    let plan = prepared.plan();
     let host = crate::host_fns::HostFunctionRegistry::new();
-    let context = crate::eval_expr::EvalContext::checked(
-        &plan,
-        tir.root_dag_id(),
-        &src,
-        &host,
-        cancellation.clone(),
-    )
-    .unwrap();
+    let context =
+        crate::eval_expr::EvalContext::checked(plan, plan.root(), &src, &host, cancellation);
     assert!(std::ptr::eq(context.tir, plan.tir()));
     assert!(std::ptr::eq(context.dag(), plan.tir().root()));
     assert!(std::ptr::eq(
@@ -472,9 +467,7 @@ fn context_capabilities_are_phase_selected_and_checked_scopes_fail_closed() {
         std::path::Path::new("other.gcl"),
     )
     .unwrap();
-    assert!(
-        crate::eval_expr::EvalContext::checked(&plan, &foreign, &src, &host, cancellation).is_err()
-    );
+    assert!(plan.callable(&foreign).is_none());
 }
 
 #[test]
@@ -550,21 +543,16 @@ fn checked_runtime_shape_lookup_uses_identity_not_diagnostic_coordinates() {
         std::sync::Arc::new(source.to_string()),
     );
     let cancellation = graphcal_compiler::cancellation::CancellationToken::unbounded();
-    let plan = crate::exec_plan::compile_with_cancellation(&tir, &src, &cancellation).unwrap();
+    let prepared = crate::exec_plan::compile_with_cancellation(&tir, &src, &cancellation).unwrap();
+    let plan = prepared.plan();
     let hosts = crate::host_fns::HostFunctionRegistry::new();
     let owner = graphcal_compiler::resolved_name::ResolvedDeclName::for_test(
         tir.root_dag_id().clone(),
         graphcal_compiler::syntax::decl_name::DeclName::expect_valid("values"),
     );
-    let context = crate::eval_expr::EvalContext::checked(
-        &plan,
-        tir.root_dag_id(),
-        &src,
-        &hosts,
-        cancellation,
-    )
-    .unwrap()
-    .for_decl(&owner);
+    let context =
+        crate::eval_expr::EvalContext::checked(plan, plan.root(), &src, &hosts, cancellation)
+            .for_decl(&owner);
     let original = tir
         .root()
         .nodes()
@@ -586,28 +574,6 @@ fn checked_runtime_shape_lookup_uses_identity_not_diagnostic_coordinates() {
     .unwrap();
     assert!(
         matches!(value, graphcal_compiler::registry::runtime_value::RuntimeValue::Indexed { entries, .. } if entries.len() == 2)
-    );
-}
-
-#[test]
-fn root_execution_does_not_fall_back_when_a_prepared_location_is_missing() {
-    let source = "node x: Dimensionless = 1.0;";
-    let tir = compile_to_tir(source, "locations.gcl").unwrap();
-    let src = miette::NamedSource::new("locations.gcl", std::sync::Arc::new(source.to_string()));
-    let mut plan = crate::exec_plan::compile(&tir, &src).unwrap();
-    // Deliberately corrupt only the prepared index: the declaration still exists
-    // in TIR, so an accidental fallback search would let evaluation succeed.
-    plan.declaration_locations =
-        crate::declaration_locations::DeclarationLocations::try_new([]).unwrap();
-    let result = super::runtime::run_eval_loop_with_bindings(
-        &plan,
-        &super::bindings::RuntimeParameterBindings::new(),
-        &src,
-        &crate::host_fns::HostFunctionRegistry::new(),
-        &graphcal_compiler::cancellation::CancellationToken::unbounded(),
-    );
-    assert!(
-        matches!(result, Err(GraphcalError::InternalError { message, .. }) if message.contains("has no prepared physical location"))
     );
 }
 
@@ -675,55 +641,36 @@ fn callable_plan_fixture() -> (
 #[test]
 fn every_body_has_one_prepared_callable_with_retained_single_body_pools() {
     let (tir, src) = callable_plan_fixture();
-    let (plan, counts) =
+    let (prepared, counts) =
         crate::pipeline_metrics::measure(|| crate::exec_plan::compile(&tir, &src).unwrap());
+    let plan = prepared.plan();
     assert_eq!(
         counts.plan_constructions,
         u64::try_from(tir.dag_registry().len()).unwrap()
     );
-    assert_eq!(plan.callables.len() + 1, tir.dag_registry().len());
+    assert_eq!(plan.callables().count(), tir.dag_registry().len());
+    assert_eq!(
+        plan.callables().next().unwrap().scope().dag().dag_id(),
+        tir.root_dag_id()
+    );
     for dag in tir.dag_registry().values() {
         let callable = plan.callable(dag.dag_id()).unwrap();
-        assert_eq!(&callable.owner, dag.dag_id());
-        assert_eq!(callable.execution_dags, [dag.dag_id().clone()]);
+        assert_eq!(callable.scope().dag().dag_id(), dag.dag_id());
+        assert_eq!(
+            callable
+                .execution_dags()
+                .iter()
+                .map(|scope| scope.dag().dag_id())
+                .collect::<Vec<_>>(),
+            [dag.dag_id()]
+        );
         let sealed = plan.program().dag(dag.dag_id()).unwrap();
         assert!(!sealed.const_values().is_empty());
-        for (key, value) in sealed.const_values().iter() {
-            assert!(std::ptr::eq(value, callable.const_values.get(key).unwrap()));
-        }
+        assert!(std::ptr::eq(
+            sealed.const_values(),
+            callable.scope().const_values()
+        ));
     }
-}
-
-#[test]
-fn callable_lookup_rejects_another_bodys_plan() {
-    let (tir, src) = callable_plan_fixture();
-    let mut plan = crate::exec_plan::compile(&tir, &src).unwrap();
-    let owner = plan.callables.keys().next().unwrap().clone();
-    plan.callables.get_mut(&owner).unwrap().owner = plan.root.owner.clone();
-    assert!(matches!(
-        plan.callable(&owner),
-        Err(crate::execution_plan::CallablePlanError::WrongOwner { .. })
-    ));
-}
-
-#[test]
-fn calls_require_prepared_plans_even_when_bodies_and_facts_exist() {
-    let source = "dag helper { pub node out: Dimensionless = 1.0; } node value: Dimensionless = @helper()::out;";
-    let tir = compile_to_tir(source, "call-plans.gcl").unwrap();
-    let src = miette::NamedSource::new("call-plans.gcl", std::sync::Arc::new(source.to_string()));
-    let mut plan = crate::exec_plan::compile(&tir, &src).unwrap();
-    assert!(!plan.callables.is_empty());
-    plan.callables.clear();
-    let result = super::runtime::run_eval_loop_with_bindings(
-        &plan,
-        &super::bindings::RuntimeParameterBindings::new(),
-        &src,
-        &crate::host_fns::HostFunctionRegistry::new(),
-        &graphcal_compiler::cancellation::CancellationToken::unbounded(),
-    );
-    assert!(
-        matches!(result, Err(GraphcalError::InternalError { message, .. }) if message.contains("has no prepared callable plan"))
-    );
 }
 
 #[test]
@@ -789,12 +736,13 @@ fn shared_frames_reject_dynamic_parameter_domain_violations_without_losing_indep
 fn shared_frames_cancel_before_interpretation() {
     use crate::execution_frame::{ExecutionFrame, FailurePolicy};
     let (tir, src) = callable_plan_fixture();
-    let plan = crate::exec_plan::compile(&tir, &src).unwrap();
+    let prepared = crate::exec_plan::compile(&tir, &src).unwrap();
+    let plan = prepared.plan();
     for policy in [FailurePolicy::Contain, FailurePolicy::Propagate] {
-        let mut frame = ExecutionFrame::new(&plan, tir.root_dag_id(), policy).unwrap();
+        let mut frame = ExecutionFrame::new(plan, plan.root(), policy);
         let cancellation = graphcal_compiler::cancellation::CancellationSource::new();
         cancellation.cancel();
-        let outcome = frame.run(&src, &cancellation.token(), |_, _| {
+        let outcome = frame.run(&cancellation.token(), |_, _| {
             panic!("cancelled frame must not invoke its expression adapter")
         });
         assert!(matches!(outcome, Err(GraphcalError::Cancelled(_))));
@@ -810,7 +758,8 @@ fn frame_arguments_are_domain_checked_and_keep_presentation_only_when_bound() {
     let source = "param p: Dimensionless(min: 0.0) = 1.0; node n: Dimensionless = @p;";
     let tir = compile_to_tir(source, "frame.gcl").unwrap();
     let src = miette::NamedSource::new("frame.gcl", std::sync::Arc::new(source.to_string()));
-    let plan = crate::exec_plan::compile(&tir, &src).unwrap();
+    let prepared = crate::exec_plan::compile(&tir, &src).unwrap();
+    let plan = prepared.plan();
     let key = tir
         .root()
         .params()
@@ -828,7 +777,7 @@ fn frame_arguments_are_domain_checked_and_keep_presentation_only_when_bound() {
     };
     let span = graphcal_compiler::syntax::span::Span::new(0, 0);
 
-    let mut frame = ExecutionFrame::new(&plan, tir.root_dag_id(), FailurePolicy::Contain).unwrap();
+    let mut frame = ExecutionFrame::new(plan, plan.root(), FailurePolicy::Contain);
     frame
         .bind_argument(&key, labelled(2.0), &src, span)
         .unwrap();
@@ -836,7 +785,7 @@ fn frame_arguments_are_domain_checked_and_keep_presentation_only_when_bound() {
     assert!(frame.presentations().contains_key(&key));
     assert!(frame.errors().is_empty());
 
-    let mut frame = ExecutionFrame::new(&plan, tir.root_dag_id(), FailurePolicy::Contain).unwrap();
+    let mut frame = ExecutionFrame::new(plan, plan.root(), FailurePolicy::Contain);
     frame
         .bind_argument(&key, labelled(-1.0), &src, span)
         .unwrap();
@@ -850,8 +799,7 @@ fn frame_arguments_are_domain_checked_and_keep_presentation_only_when_bound() {
     assert!(outcome.values.is_empty() && outcome.presentations.is_empty());
     assert_eq!(outcome.errors.len(), 1);
 
-    let mut frame =
-        ExecutionFrame::new(&plan, tir.root_dag_id(), FailurePolicy::Propagate).unwrap();
+    let mut frame = ExecutionFrame::new(plan, plan.root(), FailurePolicy::Propagate);
     assert!(
         frame
             .bind_argument(&key, labelled(-1.0), &src, span)
@@ -868,26 +816,34 @@ fn frame_runtime_imports_seed_only_unbound_prepared_imports() {
     let source = "dag scaled { param factor: Dimensionless; pub node result: Dimensionless = @factor * 2.0; } node out: Dimensionless = @scaled(factor: 4.0)::result;";
     let tir = compile_to_tir(source, "frame.gcl").unwrap();
     let src = miette::NamedSource::new("frame.gcl", std::sync::Arc::new(source.to_string()));
-    let mut plan = crate::exec_plan::compile(&tir, &src).unwrap();
-    // Runtime imports are prepared from checked import bindings; seed one
+    let prepared = crate::exec_plan::compile(&tir, &src).unwrap();
+    let plan = prepared.plan();
+    // Runtime imports are prepared from checked import bindings; prepare one
     // directly so the frame's contract is exercised on its own.
-    let (owner, callable) = plan
-        .callables
-        .iter_mut()
-        .next()
+    let inline = plan
+        .callables()
+        .find(|callable| callable.scope().dag().dag_id() != tir.root_dag_id())
         .expect("the inline DAG is callable");
-    let owner = owner.clone();
-    let import = tir
-        .dag_registry()
-        .get(&owner)
-        .unwrap()
+    let import = inline
+        .scope()
+        .dag()
         .params()
         .next()
         .map(graphcal_compiler::tir::typed::TypedParamEntry::identity)
         .unwrap();
-    callable.imports.runtime = vec![import.clone()];
-    let plan = plan;
-    let owner = &owner;
+    let callable = crate::execution_plan::CallablePlan::new(
+        inline.scope(),
+        inline.execution_dags().to_vec(),
+        crate::execution_plan::PreparedImports {
+            constants: Vec::new(),
+            runtime: vec![import.clone()],
+        },
+        inline
+            .steps()
+            .map(|step| step.declaration().clone())
+            .collect(),
+    )
+    .unwrap();
     let expected_imports = vec![import.clone()];
     let value = |value: f64| {
         EvaluatedRuntimeValue::new(
@@ -896,7 +852,7 @@ fn frame_runtime_imports_seed_only_unbound_prepared_imports() {
         )
     };
 
-    let mut frame = ExecutionFrame::new(&plan, owner, FailurePolicy::Propagate).unwrap();
+    let mut frame = ExecutionFrame::new(plan, &callable, FailurePolicy::Propagate);
     let mut asked = Vec::new();
     frame.seed_runtime_imports(|key| {
         asked.push(key.clone());
@@ -908,7 +864,7 @@ fn frame_runtime_imports_seed_only_unbound_prepared_imports() {
 
     // An import already bound keeps its value.
     let span = graphcal_compiler::syntax::span::Span::new(0, 0);
-    let mut frame = ExecutionFrame::new(&plan, owner, FailurePolicy::Propagate).unwrap();
+    let mut frame = ExecutionFrame::new(plan, &callable, FailurePolicy::Propagate);
     frame
         .bind_argument(&import, value(7.0), &src, span)
         .unwrap();
@@ -930,26 +886,29 @@ fn prepared_imports_and_instance_constant_pools_borrow_canonical_values() {
     let source = "pub const node OUTER: Dimensionless = 2.0; dag helper { import pools::{OUTER}; const node LOCAL: Dimensionless = 3.0; pub node value: Dimensionless = @OUTER + @LOCAL; } include helper() as one; include helper() as two; node output: Dimensionless = @one::value + @two::value + @helper()::value;";
     let tir = compile_to_tir(source, "pools.gcl").unwrap();
     let src = miette::NamedSource::new("pools.gcl", std::sync::Arc::new(source.to_string()));
-    let (plan, preparation) =
+    let (prepared, preparation) =
         crate::pipeline_metrics::measure(|| crate::exec_plan::compile(&tir, &src).unwrap());
+    let plan = prepared.plan();
     assert!(preparation.imported_source_resolutions > 0);
-    assert!(plan.root.execution_dags.len() > 1);
+    assert!(plan.root().execution_dags().len() > 1);
     let mut constants = 0;
     let mut imports = 0;
-    for callable in std::iter::once(&plan.root).chain(plan.callables.values()) {
-        for (key, value) in callable.const_values.iter() {
-            let body = plan.declaration_locations.body_for(key).unwrap();
-            let canonical = plan
-                .program()
-                .dag(body)
-                .unwrap()
-                .const_values()
-                .get(key)
-                .unwrap();
-            assert!(std::ptr::eq(value, canonical));
-            constants += 1;
+    for callable in plan.callables() {
+        for scope in callable.execution_dags() {
+            for (key, value) in scope.const_values().iter() {
+                let body = plan.declaration(key).unwrap().scope();
+                let canonical = plan
+                    .program()
+                    .dag(body.dag().dag_id())
+                    .unwrap()
+                    .const_values()
+                    .get(key)
+                    .unwrap();
+                assert!(std::ptr::eq(value, canonical));
+                constants += 1;
+            }
         }
-        for import in &callable.imports.constants {
+        for import in &callable.imports().constants {
             let value = import.value.value();
             assert!(plan.tir().dag_registry().keys().any(|dag_id| {
                 plan.program()
@@ -965,7 +924,7 @@ fn prepared_imports_and_instance_constant_pools_borrow_canonical_values() {
     assert!(constants > 2 && imports > 0);
     let (runtime, counts) = crate::pipeline_metrics::measure(|| {
         super::runtime::run_eval_loop_with_bindings(
-            &plan,
+            plan,
             &super::bindings::RuntimeParameterBindings::new(),
             &src,
             &crate::host_fns::HostFunctionRegistry::new(),
@@ -992,13 +951,14 @@ fn shared_frame_dependency_and_fatal_error_policies_are_explicit() {
     let source = "node a: Dimensionless = 1.0; node dependent: Dimensionless = @a; node independent: Dimensionless = 2.0;";
     let tir = compile_to_tir(source, "frame.gcl").unwrap();
     let src = miette::NamedSource::new("frame.gcl", std::sync::Arc::new(source.to_string()));
-    let plan = crate::exec_plan::compile(&tir, &src).unwrap();
+    let prepared = crate::exec_plan::compile(&tir, &src).unwrap();
+    let plan = prepared.plan();
     let token = graphcal_compiler::cancellation::CancellationToken::unbounded();
     for policy in [FailurePolicy::Contain, FailurePolicy::Propagate] {
         for fatal in [false, true] {
-            let mut frame = ExecutionFrame::new(&plan, tir.root_dag_id(), policy).unwrap();
-            let outcome = frame.run(&src, &token, |entry, _| {
-                if entry.key.as_str() == "a" {
+            let mut frame = ExecutionFrame::new(plan, plan.root(), policy);
+            let outcome = frame.run(&token, |entry, _| {
+                if entry.key().as_str() == "a" {
                     return Err(if fatal {
                         GraphcalError::internal_error(
                             "fatal sentinel",
@@ -1009,12 +969,12 @@ fn shared_frame_dependency_and_fatal_error_policies_are_explicit() {
                         GraphcalError::EvalError {
                             message: "ordinary sentinel".into(),
                             src: src.clone(),
-                            span: entry.expression.span.into(),
+                            span: entry.body().span().into(),
                         }
                     });
                 }
                 assert_ne!(
-                    entry.key.as_str(),
+                    entry.key().as_str(),
                     "dependent",
                     "failed dependencies must never be interpreted"
                 );

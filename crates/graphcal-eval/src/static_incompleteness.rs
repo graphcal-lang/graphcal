@@ -14,10 +14,9 @@ use graphcal_compiler::registry::error::GraphcalError;
 use graphcal_compiler::resolved_name::ResolvedDeclName;
 use graphcal_compiler::syntax::non_empty::NonEmpty;
 use graphcal_compiler::tir::texpr::{TExpr, TExprKind, TNodeRef, visit_tnodes};
-use graphcal_compiler::tir::typed::checked::CheckedTir;
 use miette::NamedSource;
 
-use crate::execution_plan::ExecPlan;
+use crate::execution_plan::{DeclarationBody, ExecPlan};
 
 type BoundParameters = BTreeSet<ResolvedDeclName>;
 /// A call output and the parameters its call binds explicitly.
@@ -73,16 +72,14 @@ impl ExpressionDependencies for TExpr {
 
 pub fn collect(
     expression: &(impl ExpressionDependencies + ?Sized),
-    tir: &CheckedTir,
-    plan: &ExecPlan,
+    plan: &ExecPlan<'_>,
     source: &NamedSource<Arc<String>>,
     cancellation: &CancellationToken,
 ) -> Result<Vec<(ResolvedDeclName, NodeUnavailable)>, GraphcalError> {
-    if !plan.has_unfinished_definitions {
+    if !plan.has_unfinished_definitions() {
         return Ok(Vec::new());
     }
     let mut analysis = Analysis {
-        tir,
         plan,
         source,
         cancellation,
@@ -123,8 +120,7 @@ fn calls(expression: &Expr, bound: &BoundParameters) -> Vec<Query> {
 }
 
 struct Analysis<'a> {
-    tir: &'a CheckedTir,
-    plan: &'a ExecPlan,
+    plan: &'a ExecPlan<'a>,
     source: &'a NamedSource<Arc<String>>,
     cancellation: &'a CancellationToken,
     memo: HashMap<Query, Origins>,
@@ -160,38 +156,27 @@ impl Analysis<'_> {
         if !self.active.insert(query.clone()) {
             return Err(self.invalid(format!("cyclic checked call dependency at `{name}`")));
         }
-        let owner = self
-            .plan
-            .declaration_locations
-            .body_for(name)
-            .map_err(|error| self.invalid(error.to_string()))?;
-        let dag = self
-            .tir
-            .dag_registry()
-            .get(owner)
-            .ok_or_else(|| self.invalid(format!("checked declaration `{name}` has no body")))?;
+        let plan = self.plan;
+        let declaration = plan.declaration(name).ok_or_else(|| {
+            self.invalid(format!(
+                "declaration `{name}` has no prepared physical location"
+            ))
+        })?;
         let mut origins = Origins::new();
-        match (dag.todo(name), dag.runtime_expr(name)) {
-            (Some(_), _) => {
+        match declaration.body() {
+            DeclarationBody::Todo => {
                 origins.insert(name.clone());
             }
-            (None, Some(expression)) => {
-                let callable = self
-                    .plan
-                    .callable(owner)
-                    .map_err(|error| self.invalid(error.to_string()))?;
-                let dependencies = callable.schedule.dependencies_of(name).ok_or_else(|| {
-                    self.invalid(format!("checked declaration `{name}` has no dependencies"))
-                })?;
-                for dependency in dependencies {
+            DeclarationBody::Expression { root, .. } => {
+                for dependency in declaration.reads() {
                     origins.extend(self.declaration(dependency, bound)?);
                 }
-                for (output, parameters) in calls(expression, bound) {
+                for (output, parameters) in calls(root, bound) {
                     origins.extend(self.declaration(&output, &parameters)?);
                 }
             }
             // Required ports have no default; constants cannot contain TODOs.
-            (None, None) => {}
+            DeclarationBody::Supplied => {}
         }
         self.active.remove(&query);
         self.memo.insert(query, origins.clone());

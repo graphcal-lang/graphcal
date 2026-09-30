@@ -279,7 +279,7 @@ impl PreparedProject {
             unfinished_calls,
             ..
         } = run_eval_loop_with_bindings(
-            &self.plan,
+            self.plan(),
             &row.bindings,
             &self.source,
             &self.host_fns,
@@ -291,18 +291,17 @@ impl PreparedProject {
         }
 
         let ctx = EvalContext::checked(
-            &self.plan,
-            self.tir().root_dag_id(),
+            self.plan(),
+            self.plan().root(),
             &self.source,
             &self.host_fns,
             cancellation,
         )
-        .map_err(CompileError::from)?
         .with_roots(&values, None)
         .with_unavailable(&errors)
         .with_unfinished_calls(&unfinished_calls);
         let first_failed_assertion =
-            evaluate_assertions(self.tir(), &self.plan, &self.source, &ctx, &values, &errors)?
+            evaluate_assertions(self.tir(), &self.source, &ctx, &values, &errors)?
                 .into_iter()
                 .find_map(|(name, result, _)| match result {
                     AssertResult::Pass => None,

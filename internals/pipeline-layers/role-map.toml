@@ -2023,16 +2023,6 @@ role = "interpreter"
 
 [[module]]
 package = "eval"
-path = ["declaration_locations"]
-role = "contracts"
-
-[[module]]
-package = "eval"
-path = ["declaration_locations", "tests"]
-role = "contracts"
-
-[[module]]
-package = "eval"
 path = ["dependency_ordered"]
 role = "contracts"
 

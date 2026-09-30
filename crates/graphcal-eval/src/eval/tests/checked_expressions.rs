@@ -235,7 +235,8 @@ node control: Dimensionless = probe::tick() + 1.0;
     let tir = checked.tir();
     let src = miette::NamedSource::new("host-readiness.gcl", Arc::new(source.to_string()));
     let cancellation = graphcal_compiler::cancellation::CancellationToken::unbounded();
-    let plan = crate::exec_plan::compile_with_cancellation(tir, &src, &cancellation).unwrap();
+    let prepared = crate::exec_plan::compile_with_cancellation(tir, &src, &cancellation).unwrap();
+    let plan = prepared.plan();
     let worker = tir
         .dag_registry()
         .values()
@@ -245,13 +246,12 @@ node control: Dimensionless = probe::tick() + 1.0;
     let locals = crate::eval_expr::HirLocalValueMap::root();
     let context = |dag: &graphcal_compiler::tir::typed::CheckedDag| {
         crate::eval_expr::EvalContext::checked(
-            &plan,
-            dag.dag_id(),
+            plan,
+            plan.callable(dag.dag_id()).unwrap(),
             &src,
             &host,
             cancellation.clone(),
         )
-        .unwrap()
     };
     let pending = worker
         .value_expr(worker.bound_decl_identity(&scoped_name("pending")).unwrap())

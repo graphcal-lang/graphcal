@@ -1,65 +1,211 @@
 //! Immutable execution-plan data, independent of preparation algorithms.
+//!
+//! An [`ExecPlan`] borrows the [`CheckedProgram`] it was prepared from. Every
+//! body a frame runs, every dependency between scheduled declarations and
+//! every callable is selected once, when the plan is prepared: running a
+//! [`CallablePlan`] walks its [`Step`]s by plan-internal index and never looks
+//! a declaration or a DAG up again.
 
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::marker::PhantomData;
 
-use graphcal_compiler::assertion_expectation::ExpectedFail;
 use graphcal_compiler::dag_id::DagId;
+use graphcal_compiler::hir::expr::Expr;
+use graphcal_compiler::resolved_name::ResolvedDeclName;
+use graphcal_compiler::tir::texpr::{ExecutableBodyError, TExpr};
 use thiserror::Error;
 
-use crate::checked_program::CheckedProgram;
-use crate::constant_pools::{ConstantPools, ConstantReference};
-use crate::declaration_locations::DeclarationLocations;
+use crate::checked_program::{CheckedProgram, SealedDag};
+use crate::constant_pools::ConstantReference;
 use crate::domain_constraint::ResolvedDomainConstraint;
-use graphcal_compiler::resolved_name::ResolvedDeclName;
 
-/// A compiled execution plan ready for runtime evaluation.
-#[derive(Debug)]
-pub struct ExecPlan {
-    pub(crate) has_unfinished_definitions: bool,
-    /// Physical bodies selected from completed declaration indexes at preparation.
-    pub(crate) declaration_locations: DeclarationLocations,
-    pub(crate) root: CallablePlan,
-    /// Non-root bodies; the root has the same callable contract without a copy.
-    pub(crate) callables: HashMap<DagId, CallablePlan>,
-    /// The sealed program every callable plan was prepared from.
-    pub(crate) program: CheckedProgram,
+/// A plan-internal index into one [`IndexVec`].
+///
+/// Indices are created only by the constructors in this module, from the
+/// position of an element they push.
+trait PlanIndex: Copy {
+    fn new(position: usize) -> Self;
+    fn position(self) -> usize;
 }
 
-#[derive(Debug, Error)]
-pub enum CallablePlanError {
-    #[error("DAG `{0}` has no prepared callable plan")]
-    Missing(DagId),
-    #[error("prepared callable plan for `{expected}` belongs to `{actual}`")]
-    WrongOwner { expected: DagId, actual: DagId },
+/// The position of a callable in its [`ExecPlan`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+struct CallableIdx(usize);
+
+/// The position of a step in its [`CallablePlan`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct StepIdx(usize);
+
+impl PlanIndex for CallableIdx {
+    fn new(position: usize) -> Self {
+        Self(position)
+    }
+
+    fn position(self) -> usize {
+        self.0
+    }
 }
 
-impl ExecPlan {
-    /// The sealed program this plan executes.
-    pub(crate) const fn program(&self) -> &CheckedProgram {
-        &self.program
+impl PlanIndex for StepIdx {
+    fn new(position: usize) -> Self {
+        Self(position)
     }
 
-    /// The checked TIR this plan executes.
-    pub(crate) const fn tir(&self) -> &graphcal_compiler::tir::typed::checked::CheckedTir {
-        self.program.tir()
+    fn position(self) -> usize {
+        self.0
     }
+}
 
-    pub(crate) fn callable(&self, owner: &DagId) -> Result<&CallablePlan, CallablePlanError> {
-        let plan = if owner == &self.root.owner {
-            &self.root
-        } else {
-            self.callables
-                .get(owner)
-                .ok_or_else(|| CallablePlanError::Missing(owner.clone()))?
-        };
-        if &plan.owner != owner {
-            return Err(CallablePlanError::WrongOwner {
-                expected: owner.clone(),
-                actual: plan.owner.clone(),
-            });
+/// A vector indexed only by its own plan-internal index type.
+struct IndexVec<I, T> {
+    items: Vec<T>,
+    index: PhantomData<fn(I) -> I>,
+}
+
+impl<I: PlanIndex, T> IndexVec<I, T> {
+    fn from_items(items: Vec<T>) -> Self {
+        Self {
+            items,
+            index: PhantomData,
         }
-        Ok(plan)
+    }
+
+    fn iter(&self) -> std::slice::Iter<'_, T> {
+        self.items.iter()
+    }
+
+    fn indices(&self) -> impl Iterator<Item = I> + use<I, T> {
+        (0..self.items.len()).map(I::new)
+    }
+
+    const fn len(&self) -> usize {
+        self.items.len()
+    }
+}
+
+impl<I: PlanIndex, T> std::ops::Index<I> for IndexVec<I, T> {
+    type Output = T;
+
+    fn index(&self, index: I) -> &T {
+        &self.items[index.position()]
+    }
+}
+
+/// What running one value declaration does.
+#[derive(Clone)]
+pub enum DeclarationBody<'p> {
+    /// An unfinished node: running it records the TODO.
+    Todo,
+    /// A param default or a node formula.
+    Expression {
+        /// The HIR root, for its source span and its inline calls.
+        root: &'p Expr,
+        /// Its checked tree, or why the tree cannot be executed.
+        tree: Result<&'p TExpr, ExecutableBodyError>,
+    },
+    /// A constant or a required port: nothing is evaluated at runtime.
+    Supplied,
+}
+
+/// One value declaration of the program, with everything running it needs.
+#[derive(Clone)]
+pub struct PlannedDeclaration<'p> {
+    key: &'p ResolvedDeclName,
+    scope: SealedDag<'p>,
+    body: DeclarationBody<'p>,
+    reads: &'p [ResolvedDeclName],
+    domain: Option<&'p ResolvedDomainConstraint>,
+}
+
+impl<'p> PlannedDeclaration<'p> {
+    /// Plan one declaration of `scope`.
+    pub(crate) const fn new(
+        key: &'p ResolvedDeclName,
+        scope: SealedDag<'p>,
+        body: DeclarationBody<'p>,
+        reads: &'p [ResolvedDeclName],
+        domain: Option<&'p ResolvedDomainConstraint>,
+    ) -> Self {
+        Self {
+            key,
+            scope,
+            body,
+            reads,
+            domain,
+        }
+    }
+
+    /// The declaration's runtime identity.
+    #[must_use]
+    pub const fn key(&self) -> &'p ResolvedDeclName {
+        self.key
+    }
+
+    /// The sealed DAG whose body declares it.
+    #[must_use]
+    pub const fn scope(&self) -> SealedDag<'p> {
+        self.scope
+    }
+
+    /// What running it does.
+    #[must_use]
+    pub const fn body(&self) -> &DeclarationBody<'p> {
+        &self.body
+    }
+
+    /// Everything its expression reads, in runtime identity, including reads
+    /// of unscheduled constants and imports. Empty for a declaration without
+    /// a runtime expression.
+    #[must_use]
+    pub const fn reads(&self) -> &'p [ResolvedDeclName] {
+        self.reads
+    }
+
+    /// Its resolved domain constraint, if it has one.
+    #[must_use]
+    pub const fn domain(&self) -> Option<&'p ResolvedDomainConstraint> {
+        self.domain
+    }
+}
+
+impl std::fmt::Debug for PlannedDeclaration<'_> {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("PlannedDeclaration")
+            .field("key", self.key)
+            .field("body", &self.scope.dag().dag_id())
+            .field(
+                "kind",
+                &match &self.body {
+                    DeclarationBody::Todo => "todo",
+                    DeclarationBody::Expression { tree: Ok(_), .. } => "executable",
+                    DeclarationBody::Expression { tree: Err(_), .. } => "deferred",
+                    DeclarationBody::Supplied => "supplied",
+                },
+            )
+            .finish_non_exhaustive()
+    }
+}
+
+/// One scheduled declaration of a callable: its planned body and the steps
+/// of the same callable it depends on.
+#[derive(Debug)]
+pub struct Step<'p> {
+    declaration: PlannedDeclaration<'p>,
+    deps: Vec<StepIdx>,
+}
+
+impl<'p> Step<'p> {
+    /// The declaration this step runs.
+    #[must_use]
+    pub const fn declaration(&self) -> &PlannedDeclaration<'p> {
+        &self.declaration
+    }
+
+    /// The earlier steps of the same callable whose declarations it reads.
+    #[must_use]
+    pub fn deps(&self) -> &[StepIdx] {
+        &self.deps
     }
 }
 
@@ -75,26 +221,249 @@ pub struct PreparedImports {
     pub(crate) runtime: Vec<ResolvedDeclName>,
 }
 
+/// Why a callable's steps could not be indexed.
+#[derive(Debug, Error)]
+pub enum StepIndexError {
+    #[error("declaration `{0}` is scheduled twice")]
+    Duplicate(ResolvedDeclName),
+    #[error(
+        "scheduled declaration `{dependent}` reads `{dependency}`, which is scheduled after it"
+    )]
+    Unordered {
+        dependent: ResolvedDeclName,
+        dependency: ResolvedDeclName,
+    },
+}
+
 /// One body and its included-instance closure, prepared before evaluation.
-#[derive(Debug)]
-pub struct CallablePlan {
-    pub(crate) owner: DagId,
-    pub(crate) execution_dags: Vec<DagId>,
-    /// Evaluated const values (in base SI units).
-    /// Key-lookup only, order irrelevant.
-    pub(crate) const_values: ConstantPools,
-    /// Retained constant references and explicit runtime imports, selected once
-    /// from lexical bindings during preparation.
-    pub(crate) imports: PreparedImports,
-    /// The checker's runtime schedule of this body and its instance closure.
-    pub(crate) schedule: graphcal_compiler::tir::schedule::RuntimeSchedule,
-    /// Mapping from assert name to the list of declarations that assume it.
-    /// Key-lookup only, order irrelevant.
-    pub(crate) assumes_map: HashMap<ResolvedDeclName, Vec<ResolvedDeclName>>,
-    /// Mapping from assert name to its expected-fail configuration.
-    /// Key-lookup only, order irrelevant.
-    pub(crate) expected_fail: HashMap<ResolvedDeclName, ExpectedFail>,
-    /// Resolved domain constraints for runtime validation, keyed by declaration name.
-    /// Key-lookup only, order irrelevant.
-    pub(crate) domain_constraints: Arc<HashMap<ResolvedDeclName, ResolvedDomainConstraint>>,
+pub struct CallablePlan<'p> {
+    scope: SealedDag<'p>,
+    execution_dags: Vec<SealedDag<'p>>,
+    imports: PreparedImports,
+    steps: IndexVec<StepIdx, Step<'p>>,
+}
+
+impl<'p> CallablePlan<'p> {
+    /// Index `scheduled` declarations, in their evaluation order, as the
+    /// steps of the callable `scope`. Each step depends on the earlier steps
+    /// among the declarations it reads; reads of declarations this callable
+    /// does not schedule (constants and imports) have no step.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`StepIndexError`] when a declaration is scheduled twice or
+    /// before a scheduled declaration it reads.
+    pub(crate) fn new(
+        scope: SealedDag<'p>,
+        execution_dags: Vec<SealedDag<'p>>,
+        imports: PreparedImports,
+        scheduled: Vec<PlannedDeclaration<'p>>,
+    ) -> Result<Self, StepIndexError> {
+        let mut positions = HashMap::with_capacity(scheduled.len());
+        for (position, declaration) in scheduled.iter().enumerate() {
+            if positions
+                .insert(declaration.key, StepIdx::new(position))
+                .is_some()
+            {
+                return Err(StepIndexError::Duplicate(declaration.key.clone()));
+            }
+        }
+        let steps = scheduled
+            .into_iter()
+            .enumerate()
+            .map(|(position, declaration)| {
+                let deps = declaration
+                    .reads
+                    .iter()
+                    .filter_map(|read| positions.get(read).map(|step| (read, *step)))
+                    .map(|(read, step)| {
+                        if step.position() < position {
+                            Ok(step)
+                        } else {
+                            Err(StepIndexError::Unordered {
+                                dependent: declaration.key.clone(),
+                                dependency: read.clone(),
+                            })
+                        }
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(Step { declaration, deps })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(Self {
+            scope,
+            execution_dags,
+            imports,
+            steps: IndexVec::from_items(steps),
+        })
+    }
+
+    /// The callable's own body.
+    #[must_use]
+    pub const fn scope(&self) -> SealedDag<'p> {
+        self.scope
+    }
+
+    /// The callable followed by its instance closure in [`DagId`] order.
+    #[must_use]
+    pub fn execution_dags(&self) -> &[SealedDag<'p>] {
+        &self.execution_dags
+    }
+
+    /// Whether `dag` is one of this callable's execution DAGs.
+    #[must_use]
+    pub fn executes(&self, dag: &DagId) -> bool {
+        self.execution_dags
+            .iter()
+            .any(|scope| scope.dag().dag_id() == dag)
+    }
+
+    /// Retained constant references and explicit runtime imports.
+    #[must_use]
+    pub const fn imports(&self) -> &PreparedImports {
+        &self.imports
+    }
+
+    /// Every step, in evaluation order.
+    pub fn steps(&self) -> impl Iterator<Item = &Step<'p>> {
+        self.steps.iter()
+    }
+
+    /// One step of this callable.
+    #[must_use]
+    pub fn step(&self, index: StepIdx) -> &Step<'p> {
+        &self.steps[index]
+    }
+}
+
+impl std::fmt::Debug for CallablePlan<'_> {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("CallablePlan")
+            .field("owner", self.scope.dag().dag_id())
+            .field(
+                "execution_dags",
+                &self
+                    .execution_dags
+                    .iter()
+                    .map(|scope| scope.dag().dag_id())
+                    .collect::<Vec<_>>(),
+            )
+            .field("imports", &self.imports)
+            .field("steps", &self.steps.items)
+            .finish()
+    }
+}
+
+/// A compiled execution plan ready for runtime evaluation.
+pub struct ExecPlan<'p> {
+    program: &'p CheckedProgram,
+    has_unfinished_definitions: bool,
+    declarations: HashMap<&'p ResolvedDeclName, PlannedDeclaration<'p>>,
+    root: CallableIdx,
+    callables: IndexVec<CallableIdx, CallablePlan<'p>>,
+    by_dag: HashMap<&'p DagId, CallableIdx>,
+}
+
+/// Why prepared callables do not form a plan.
+#[derive(Debug, Error)]
+pub enum ExecPlanError {
+    #[error("DAG `{0}` has more than one prepared callable plan")]
+    DuplicateCallable(DagId),
+}
+
+impl<'p> ExecPlan<'p> {
+    /// Assemble a plan from the root callable and every other callable of
+    /// `program`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ExecPlanError`] when two callables share a body.
+    pub(crate) fn new(
+        program: &'p CheckedProgram,
+        declarations: HashMap<&'p ResolvedDeclName, PlannedDeclaration<'p>>,
+        root: CallablePlan<'p>,
+        others: Vec<CallablePlan<'p>>,
+    ) -> Result<Self, ExecPlanError> {
+        let callables = IndexVec::from_items(std::iter::once(root).chain(others).collect());
+        let mut by_dag = HashMap::with_capacity(callables.len());
+        for index in callables.indices() {
+            let owner = callables[index].scope.dag().dag_id();
+            if by_dag.insert(owner, index).is_some() {
+                return Err(ExecPlanError::DuplicateCallable(owner.clone()));
+            }
+        }
+        let has_unfinished_definitions = declarations
+            .values()
+            .any(|declaration| matches!(declaration.body, DeclarationBody::Todo));
+        Ok(Self {
+            program,
+            has_unfinished_definitions,
+            declarations,
+            root: CallableIdx::new(0),
+            callables,
+            by_dag,
+        })
+    }
+
+    /// The sealed program this plan executes.
+    pub(crate) const fn program(&self) -> &'p CheckedProgram {
+        self.program
+    }
+
+    /// The checked TIR this plan executes.
+    pub(crate) const fn tir(&self) -> &'p graphcal_compiler::tir::typed::checked::CheckedTir {
+        self.program.tir()
+    }
+
+    /// Whether any declaration of the program is unfinished.
+    pub(crate) const fn has_unfinished_definitions(&self) -> bool {
+        self.has_unfinished_definitions
+    }
+
+    /// The root DAG's callable.
+    pub(crate) fn root(&self) -> &CallablePlan<'p> {
+        &self.callables[self.root]
+    }
+
+    /// Every callable, the root first.
+    #[cfg(test)]
+    pub(crate) fn callables(&self) -> impl Iterator<Item = &CallablePlan<'p>> {
+        self.callables.iter()
+    }
+
+    /// The callable of an inline-call target.
+    pub(crate) fn callable(&self, owner: &DagId) -> Option<&CallablePlan<'p>> {
+        self.by_dag.get(owner).map(|index| &self.callables[*index])
+    }
+
+    /// Any value declaration of the program.
+    pub(crate) fn declaration(&self, key: &ResolvedDeclName) -> Option<&PlannedDeclaration<'p>> {
+        self.declarations.get(key)
+    }
+
+    /// The resolved domain constraint of a value declaration, if it has one.
+    pub(crate) fn domain_constraint(
+        &self,
+        key: &ResolvedDeclName,
+    ) -> Option<&'p ResolvedDomainConstraint> {
+        self.declaration(key)?.domain
+    }
+}
+
+impl std::fmt::Debug for ExecPlan<'_> {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut declarations = self.declarations.values().collect::<Vec<_>>();
+        declarations.sort_by_key(|declaration| declaration.key);
+        formatter
+            .debug_struct("ExecPlan")
+            .field("program", self.program)
+            .field(
+                "has_unfinished_definitions",
+                &self.has_unfinished_definitions,
+            )
+            .field("declarations", &declarations)
+            .field("callables", &self.callables.items)
+            .finish()
+    }
 }

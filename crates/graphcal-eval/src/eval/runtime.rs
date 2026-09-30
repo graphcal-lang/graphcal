@@ -173,7 +173,7 @@ impl RuntimeEvaluation {
 
 /// Execute the root with ordinary failures contained by the shared machine.
 pub(super) fn run_eval_loop_with_bindings(
-    plan: &crate::execution_plan::ExecPlan,
+    plan: &crate::execution_plan::ExecPlan<'_>,
     bindings: &super::bindings::RuntimeParameterBindings,
     src: &NamedSource<Arc<String>>,
     host_fns: &crate::host_fns::HostFunctionRegistry,
@@ -181,13 +181,9 @@ pub(super) fn run_eval_loop_with_bindings(
 ) -> Result<EvalLoopResult, GraphcalError> {
     use crate::execution_frame::{ExecutionFrame, FailurePolicy};
     cancellation.checkpoint()?;
-    let tir = plan.tir();
     let empty_hir_locals = HirLocalValueMap::root();
     let unfinished_calls = std::cell::RefCell::new(BTreeSet::new());
-    let mut frame =
-        ExecutionFrame::new(plan, tir.root_dag_id(), FailurePolicy::Contain).map_err(|error| {
-            GraphcalError::internal_error(error.to_string(), src, DiagnosticAnchor::WholeFile)
-        })?;
+    let mut frame = ExecutionFrame::new(plan, plan.root(), FailurePolicy::Contain);
     for (key, binding) in bindings {
         frame.bind_argument(
             key,
@@ -199,22 +195,16 @@ pub(super) fn run_eval_loop_with_bindings(
             Span::new(0, 0),
         )?;
     }
-    frame.run(src, cancellation, |entry, frame| {
+    frame.run(cancellation, |entry, frame| {
         // Root declarations keep their existing work allowance; nested calls
         // share this context's budget through immutable scope reselection.
-        let context = EvalContext::checked(
-            plan,
-            entry.scope.dag().dag_id(),
-            entry.scope.source(),
-            host_fns,
-            cancellation.clone(),
-        )?
-        .with_roots(frame.values(), Some(frame.presentations()))
-        .with_unavailable(frame.errors())
-        .with_unfinished_calls(&unfinished_calls)
-        .for_decl(entry.key);
+        let root = EvalContext::checked(plan, plan.root(), src, host_fns, cancellation.clone())
+            .with_roots(frame.values(), Some(frame.presentations()))
+            .with_unavailable(frame.errors())
+            .with_unfinished_calls(&unfinished_calls);
+        let context = root.for_declaration(&entry);
         eval_texpr_with_presentation(
-            context.executable(entry.expression)?,
+            entry.body(),
             frame.values(),
             frame.presentations(),
             &empty_hir_locals,
@@ -258,7 +248,7 @@ fn checked_declared_type<'a>(
     reason = "linear evaluation pipeline is clearest as a single function"
 )]
 pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
-    plan: &crate::execution_plan::ExecPlan,
+    plan: &crate::execution_plan::ExecPlan<'_>,
     bindings: &super::bindings::RuntimeParameterBindings,
     src: &NamedSource<Arc<String>>,
     host_fns: &crate::host_fns::HostFunctionRegistry,
@@ -275,7 +265,7 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
     } = run_eval_loop_with_bindings(plan, bindings, src, host_fns, cancellation)?;
 
     cancellation.checkpoint()?;
-    let ctx = EvalContext::checked(plan, tir.root_dag_id(), src, host_fns, cancellation.clone())?
+    let ctx = EvalContext::checked(plan, plan.root(), src, host_fns, cancellation.clone())
         .with_roots(&values, Some(&presentation_instances))
         .with_unavailable(&errors)
         .with_unfinished_calls(&unfinished_calls);
@@ -332,7 +322,7 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
         };
         let key = entry.identity().clone();
         let value = match decl_type {
-            ValueDeclCategory::Const => plan.root.const_values.get(&key).map_or_else(
+            ValueDeclCategory::Const => plan.root().scope().const_values().get(&key).map_or_else(
                 || {
                     Err(GraphcalError::internal_error(
                         format!("checked source-order constant `{key}` has no runtime value"),
@@ -499,7 +489,7 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
         identities: _,
     } = result_values;
 
-    let assertions = evaluate_assertions(tir, plan, src, &ctx, &values, &errors)?;
+    let assertions = evaluate_assertions(tir, src, &ctx, &values, &errors)?;
     cancellation.checkpoint()?;
 
     // Evaluate plot declarations. Evaluation is per-plot best-effort, but a
@@ -668,9 +658,7 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
         .decls()
         .iter()
         .filter_map(|entry| {
-            plan.root
-                .domain_constraints
-                .get(&entry.identity())
+            plan.domain_constraint(&entry.identity())
                 .map(|constraint| (ScopedName::local(entry.name().clone()), constraint.clone()))
         })
         .collect();
@@ -678,35 +666,38 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
     let source_names_by_key = root_source_names(tir, src)?
         .into_iter()
         .collect::<HashMap<_, _>>();
-    let assumes_map = plan
-        .root
-        .assumes_map
-        .iter()
-        .map(|(assertion, assumers)| {
-            let assertion_name = source_names_by_key.get(assertion).cloned().ok_or_else(|| {
-                GraphcalError::internal_error(
-                    format!("assertion `{assertion}` is missing from checked source order"),
-                    src,
-                    DiagnosticAnchor::WholeFile,
-                )
-            })?;
-            let assumer_names = assumers
-                .iter()
-                .map(|assumer| {
-                    source_names_by_key.get(assumer).cloned().ok_or_else(|| {
-                        GraphcalError::internal_error(
-                            format!(
-                                "assertion assumer `{assumer}` is missing from checked source order"
-                            ),
-                            src,
-                            DiagnosticAnchor::WholeFile,
-                        )
-                    })
+    let assumes_map = merge_assumes_maps(
+        plan.root()
+            .execution_dags()
+            .iter()
+            .map(|scope| scope.dag().assumes_map()),
+    )
+    .iter()
+    .map(|(assertion, assumers)| {
+        let assertion_name = source_names_by_key.get(assertion).cloned().ok_or_else(|| {
+            GraphcalError::internal_error(
+                format!("assertion `{assertion}` is missing from checked source order"),
+                src,
+                DiagnosticAnchor::WholeFile,
+            )
+        })?;
+        let assumer_names = assumers
+            .iter()
+            .map(|assumer| {
+                source_names_by_key.get(assumer).cloned().ok_or_else(|| {
+                    GraphcalError::internal_error(
+                        format!(
+                            "assertion assumer `{assumer}` is missing from checked source order"
+                        ),
+                        src,
+                        DiagnosticAnchor::WholeFile,
+                    )
                 })
-                .collect::<Result<Vec<_>, GraphcalError>>()?;
-            Ok((assertion_name, assumer_names))
-        })
-        .collect::<Result<HashMap<_, _>, GraphcalError>>()?;
+            })
+            .collect::<Result<Vec<_>, GraphcalError>>()?;
+        Ok((assertion_name, assumer_names))
+    })
+    .collect::<Result<HashMap<_, _>, GraphcalError>>()?;
 
     presentation_diagnostics.borrow_mut().extend(
         plots
@@ -733,6 +724,25 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
         values,
         errors,
     })
+}
+
+/// Merge per-DAG `#[assumes]` tables keyed by runtime identity.
+///
+/// One assertion can be assumed both inside its semantic instance and by the
+/// importer through a projection, so tables of different DAGs share keys.
+fn merge_assumes_maps<'a>(
+    maps: impl IntoIterator<Item = &'a HashMap<ResolvedDeclName, Vec<ResolvedDeclName>>>,
+) -> HashMap<ResolvedDeclName, Vec<ResolvedDeclName>> {
+    let mut merged = HashMap::<ResolvedDeclName, Vec<ResolvedDeclName>>::new();
+    for (assertion, assumers) in maps.into_iter().flatten() {
+        let entry = merged.entry(assertion.clone()).or_default();
+        for assumer in assumers {
+            if !entry.contains(assumer) {
+                entry.push(assumer.clone());
+            }
+        }
+    }
+    merged
 }
 
 /// Checked DAG materialized by one semantic-instance record.
@@ -764,7 +774,6 @@ fn semantic_instance_dag<'tir>(
 /// value map where the failed name is simply absent (#814).
 pub(super) fn evaluate_assertions(
     tir: &graphcal_compiler::tir::typed::CheckedTir,
-    plan: &crate::execution_plan::ExecPlan,
     src: &NamedSource<Arc<String>>,
     ctx: &EvalContext<'_>,
     values: &RuntimeValueMap,
@@ -779,7 +788,7 @@ pub(super) fn evaluate_assertions(
             let entry_ctx = ctx.for_decl(&owner);
             let assert_result = assert_dependency_failure(&entry.body, errors, &entry_ctx)
                 .unwrap_or_else(|| {
-                    let ef = plan.root.expected_fail.get(&owner);
+                    let ef = tir.root().expected_fail(&owner);
                     evaluate_assert_with_expected_fail(&entry.body, ef, &mut |expr| {
                         eval_texpr(
                             entry_ctx.executable(expr)?,
@@ -822,7 +831,7 @@ pub(super) fn evaluate_assertions(
                 let expected = projection
                     .expected_fail
                     .as_ref()
-                    .or_else(|| plan.root.expected_fail.get(&owner));
+                    .or_else(|| instance_dag.expected_fail(&owner));
                 let assertion_ctx = ctx.for_checked_decl(instance_dag, src, &owner)?;
                 let result =
                     evaluate_assert_with_expected_fail(&entry.body, expected, &mut |expr| {

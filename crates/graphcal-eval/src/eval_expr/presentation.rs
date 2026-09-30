@@ -55,9 +55,9 @@ pub fn resolve_frame(
     evidence: PresentationInstance,
     values: &RuntimeValueMap,
     ctx: &EvalContext<'_>,
-    owners: &[graphcal_compiler::dag_id::DagId],
+    callable: &crate::execution_plan::CallablePlan<'_>,
 ) -> Result<PresentationInstance, GraphcalError> {
-    resolve_selected(evidence, values, ctx, &|owner| owners.contains(owner))
+    resolve_selected(evidence, values, ctx, &|owner| callable.executes(owner))
 }
 
 fn resolve_selected(

@@ -318,7 +318,6 @@ fn eval_texpr_inner(
             output,
             ..
         } => eval_dag_call(
-            span,
             target,
             args,
             output,
@@ -2500,12 +2499,7 @@ fn eval_match(
     }
 }
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "inline-call evaluation keeps the checked DAG environment, semantic values, and presentation sidecars in one transaction"
-)]
 fn eval_dag_call(
-    call_span: Span,
     target: &Spanned<graphcal_compiler::dag_id::DagId>,
     args: &[TParamBinding],
     output: &Spanned<ResolvedDeclName>,
@@ -2515,26 +2509,18 @@ fn eval_dag_call(
     ctx: &EvalContext<'_>,
 ) -> Result<EvaluatedRuntimeValue, GraphcalError> {
     let plan = ctx.execution_plan()?;
-    let callable = plan
-        .callable(&target.value)
-        .map_err(|error| ctx.internal_error(error.to_string(), target.span))?;
-    let dag_source = plan
-        .program()
-        .dag(&target.value)
-        .ok_or_else(|| {
-            ctx.internal_error(
-                format!("DAG `{}` has no compiled body", target.value),
-                target.span,
-            )
-        })?
-        .source();
+    let callable = plan.callable(&target.value).ok_or_else(|| {
+        ctx.internal_error(
+            format!("DAG `{}` has no prepared callable plan", target.value),
+            target.span,
+        )
+    })?;
 
     let mut frame = crate::execution_frame::ExecutionFrame::new(
         plan,
-        &target.value,
+        callable,
         crate::execution_frame::FailurePolicy::Propagate,
-    )
-    .map_err(|error| ctx.internal_error(error.to_string(), call_span))?;
+    );
     for binding in args {
         let evaluated = eval_texpr_evaluated(
             &binding.value,
@@ -2550,13 +2536,10 @@ fn eval_dag_call(
     });
 
     let empty_hir_locals = HirLocalValueMap::root();
-    let evaluated = frame.run(dag_source, &ctx.cancellation, |entry, frame| {
-        let context = ctx
-            .for_dag(entry.scope.dag(), entry.scope.source())?
-            .with_unavailable(frame.errors())
-            .for_decl(entry.key);
+    let evaluated = frame.run(&ctx.cancellation, |entry, frame| {
+        let context = ctx.for_declaration(&entry).with_unavailable(frame.errors());
         eval_texpr_with_presentation(
-            context.executable(entry.expression)?,
+            entry.body(),
             frame.values(),
             frame.presentations(),
             &empty_hir_locals,
@@ -2576,7 +2559,7 @@ fn eval_dag_call(
     } = frame.finish();
 
     check_inline_plan_asserts(
-        &callable.execution_dags,
+        callable,
         &dag_values,
         target,
         output.span,
@@ -2600,12 +2583,8 @@ fn eval_dag_call(
         )
     })?;
     let output_presentation = take_presentation_instance(&mut dag_presentations, output_key);
-    let presentation = super::presentation::resolve_frame(
-        output_presentation,
-        &dag_values,
-        ctx,
-        &callable.execution_dags,
-    )?;
+    let presentation =
+        super::presentation::resolve_frame(output_presentation, &dag_values, ctx, callable)?;
     #[cfg(test)]
     record_call_retention(&dag_values, &presentation);
     Ok(EvaluatedRuntimeValue::new(output_value, presentation))
@@ -2657,18 +2636,14 @@ fn imported_runtime_value(
 }
 
 fn check_inline_plan_asserts(
-    owners: &[graphcal_compiler::dag_id::DagId],
+    callable: &crate::execution_plan::CallablePlan<'_>,
     values: &RuntimeValueMap,
     target: &Spanned<graphcal_compiler::dag_id::DagId>,
     span: Span,
     ctx: &EvalContext<'_>,
 ) -> Result<(), GraphcalError> {
-    let program = ctx.execution_plan()?.program();
-    owners.iter().try_for_each(|owner| {
-        let scope = program.dag(owner).ok_or_else(|| {
-            ctx.internal_error(format!("DAG `{owner}` has no compiled body"), span)
-        })?;
-        let context = ctx.for_dag(scope.dag(), scope.source())?;
+    callable.execution_dags().iter().try_for_each(|scope| {
+        let context = ctx.for_execution_dag(*scope);
         check_inline_dag_asserts(scope.dag(), values, &context, target, span, ctx)
     })
 }
@@ -2690,10 +2665,6 @@ fn check_inline_dag_asserts(
     ctx: &EvalContext<'_>,
 ) -> Result<(), GraphcalError> {
     let empty_hir_locals = HirLocalValueMap::root();
-    let callable = ctx
-        .execution_plan()?
-        .callable(dag_tir.dag_id())
-        .map_err(|error| ctx.internal_error(error.to_string(), call_span))?;
     for entry in dag_tir.decls().iter() {
         if !matches!(entry.category(), DeclCategory::Assert) {
             continue;
@@ -2706,7 +2677,7 @@ fn check_inline_dag_asserts(
                 call_span,
             )
         })?;
-        let ef = callable.expected_fail.get(&key);
+        let ef = dag_tir.expected_fail(&key);
         let result =
             crate::assertion_eval::evaluate_assert_with_expected_fail(body, ef, &mut |expr| {
                 let context = dag_ctx.for_decl(&key);

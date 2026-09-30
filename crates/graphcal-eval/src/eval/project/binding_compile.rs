@@ -401,12 +401,7 @@ impl ParameterBindingBuilder<'_> {
         binding: RuntimeParameterBinding,
     ) -> Result<(), CompileError> {
         let port = self.project.port_at(position)?;
-        if let Some(constraint) = self
-            .project
-            .plan
-            .root
-            .domain_constraints
-            .get(&port.runtime_key)
+        if let Some(constraint) = self.project.plan().domain_constraint(&port.runtime_key)
             && let Err(violation) =
                 crate::domain_check::check_domain_constraint(&binding.value, constraint)
         {
@@ -740,12 +735,12 @@ impl PreparedProject {
         let locals = HirLocalValueMap::root();
         let cancellation = graphcal_compiler::cancellation::CancellationToken::unbounded();
         let context = EvalContext::checked(
-            &self.plan,
-            self.tir().root_dag_id(),
+            self.plan(),
+            self.plan().root(),
             &self.source,
             &self.host_fns,
             cancellation,
-        )?
+        )
         .with_roots(&values, None);
         crate::eval_expr::eval_texpr_with_presentation(
             tree,
@@ -780,7 +775,7 @@ impl PreparedProject {
 pub(super) fn build_parameter_ports(
     plan_id: u64,
     entry_interface: &CheckedEntryInterface,
-    plan: &crate::execution_plan::ExecPlan,
+    plan: &crate::execution_plan::ExecPlan<'_>,
     schemas: &mut ModelSchemaGraphBuilder<'_>,
 ) -> Result<Vec<ParameterPort>, CompileError> {
     entry_interface
@@ -793,11 +788,7 @@ pub(super) fn build_parameter_ports(
                 .value_schema(&declared_type)
                 .map_err(CompileError::Eval)?;
             let runtime_key = parameter.runtime_key().clone();
-            let domain = plan
-                .root
-                .domain_constraints
-                .get(&runtime_key)
-                .map(parameter_domain);
+            let domain = plan.domain_constraint(&runtime_key).map(parameter_domain);
             Ok(ParameterPort {
                 name: parameter.name().clone(),
                 position: ParameterPosition { plan_id, index },
