@@ -1,16 +1,22 @@
+//! Value expressions and the inline type expressions they are mutually
+//! recursive with (generic arguments carry type expressions, whose domain
+//! bounds carry value expressions).
+
 use graphcal_compiler::syntax::ast::{
-    BinOp, Expr, ExprKind, FieldInit, ForBinding, IndexArg, MapEntry, MapEntryKey, MatchArm,
-    MatchPattern, ModulePath, ParamBinding, PatternBinding, PatternBindings, TableIndexSpec,
-    UnaryOp,
+    BinOp, DomainBound, Expr, ExprKind, FieldInit, ForBinding, GenericArg, IndexArg, MapEntry,
+    MapEntryKey, MatchArm, MatchPattern, ModulePath, ParamBinding, PatternBinding, PatternBindings,
+    TableIndexSpec, TypeExpr, TypeExprKind, UnaryOp,
 };
 use graphcal_compiler::syntax::local_name::LocalName;
 use graphcal_compiler::syntax::span::Spanned;
 use pretty::RcDoc;
 
-use super::{
-    Formatter, INDENT, display_width, flat_alt_group, format_unit_expr_inline, pad_left_to_width,
-    prepend_comments, render_doc_to_string, soft_parenthesized, soft_parenthesized_list,
+use super::doc::{
+    INDENT, display_width, flat_alt_group, pad_left_to_width, prepend_comments,
+    render_doc_to_string, soft_parenthesized, soft_parenthesized_list,
 };
+use super::formatter::Formatter;
+use super::unit_dim::{format_dim_expr_inline, format_unit_expr_inline};
 
 // ---------------------------------------------------------------------------
 // Expressions
@@ -236,7 +242,7 @@ fn format_expr_inner(fmt: &mut Formatter<'_>, expr: &Expr) -> RcDoc<'static> {
         ExprKind::QuantityLiteral { value: _, unit } => {
             // Recover the full literal from source to preserve number formatting
             let unit_start = unit.span.offset();
-            let lit_source = &fmt.source[expr.span.offset()..unit_start];
+            let lit_source = fmt.source_range(expr.span.offset()..unit_start);
             let lit_text = lit_source.trim_end();
             RcDoc::text(lit_text.to_string())
                 .append(RcDoc::text(" "))
@@ -501,7 +507,7 @@ fn format_generic_args(
 ) -> RcDoc<'static> {
     let docs: Vec<RcDoc<'static>> = generic_args
         .iter()
-        .map(|arg| super::type_expr::format_generic_arg_inline(fmt, arg))
+        .map(|arg| format_generic_arg_inline(fmt, arg))
         .collect();
     let sep = RcDoc::text(", ");
     RcDoc::text("<")
@@ -1172,4 +1178,130 @@ fn format_inline_dag_ref(
         .append(soft_parenthesized_list(binding_docs, false))
         .append(RcDoc::text("::"))
         .append(RcDoc::text(output.to_string()))
+}
+
+// ---------------------------------------------------------------------------
+// Type expressions
+// ---------------------------------------------------------------------------
+
+/// Format a type expression.
+pub fn format_type_expr_inline(fmt: &mut Formatter<'_>, te: &TypeExpr) -> RcDoc<'static> {
+    let base = match &te.kind {
+        TypeExprKind::Dimensionless => RcDoc::text("Dimensionless"),
+        TypeExprKind::Bool => RcDoc::text("Bool"),
+        TypeExprKind::Int => RcDoc::text("Int"),
+        TypeExprKind::Datetime => RcDoc::text("Datetime"),
+        TypeExprKind::DimExpr(de) => format_dim_expr_inline(de),
+        TypeExprKind::Indexed { base, indexes } => {
+            let idx_docs: Vec<RcDoc<'static>> = indexes
+                .iter()
+                .map(|i| match i {
+                    graphcal_compiler::syntax::ast::IndexExpr::Name(name) => {
+                        RcDoc::text(name.value.display_path())
+                    }
+                    graphcal_compiler::syntax::ast::IndexExpr::Finite { cardinality, .. } => {
+                        RcDoc::text(format!("Fin({cardinality})"))
+                    }
+                    graphcal_compiler::syntax::ast::IndexExpr::BareNat(nat_expr) => {
+                        RcDoc::text(nat_expr.to_string())
+                    }
+                })
+                .collect();
+            format_type_expr_inline(fmt, base)
+                .append(RcDoc::text("["))
+                .append(RcDoc::intersperse(idx_docs, RcDoc::text(", ")))
+                .append(RcDoc::text("]"))
+        }
+        TypeExprKind::TypeApplication { name, generic_args } => {
+            let arg_docs: Vec<RcDoc<'static>> = generic_args
+                .iter()
+                .map(|arg| format_generic_arg_inline(fmt, arg))
+                .collect();
+            RcDoc::text(name.value.display_path())
+                .append(RcDoc::text("<"))
+                .append(RcDoc::intersperse(arg_docs, RcDoc::text(", ")))
+                .append(RcDoc::text(">"))
+        }
+        TypeExprKind::DatetimeApplication { type_args } => {
+            let arg_docs: Vec<RcDoc<'static>> = type_args
+                .iter()
+                .map(|a| format_type_expr_inline(fmt, a))
+                .collect();
+            RcDoc::text("Datetime")
+                .append(RcDoc::text("<"))
+                .append(RcDoc::intersperse(arg_docs, RcDoc::text(", ")))
+                .append(RcDoc::text(">"))
+        }
+        TypeExprKind::ComplexApplication { generic_args } => {
+            let arg_docs: Vec<RcDoc<'static>> = generic_args
+                .iter()
+                .map(|arg| format_generic_arg_inline(fmt, arg))
+                .collect();
+            RcDoc::text("Complex")
+                .append(RcDoc::text("<"))
+                .append(RcDoc::intersperse(arg_docs, RcDoc::text(", ")))
+                .append(RcDoc::text(">"))
+        }
+        TypeExprKind::IndexLabel { index, label } => {
+            RcDoc::text(format!("{}#{}", index.display_path(), label.value))
+        }
+        TypeExprKind::KeyApplication { generic_args } => {
+            // Bare `Key` (a parse-level arity error) keeps its spelling so the
+            // formatter never fabricates an empty `<>` argument list.
+            let mut doc = RcDoc::text("Key");
+            if !generic_args.is_empty() {
+                let arg_docs: Vec<RcDoc<'static>> = generic_args
+                    .iter()
+                    .map(|arg| format_generic_arg_inline(fmt, arg))
+                    .collect();
+                doc = doc
+                    .append(RcDoc::text("<"))
+                    .append(RcDoc::intersperse(arg_docs, RcDoc::text(", ")))
+                    .append(RcDoc::text(">"));
+            }
+            doc
+        }
+    };
+
+    if te.constraints.is_empty() {
+        base
+    } else {
+        base.append(format_domain_constraints(fmt, &te.constraints))
+    }
+}
+
+/// Format one unresolved generic argument at either a type or call site.
+pub fn format_generic_arg_inline(fmt: &mut Formatter<'_>, arg: &GenericArg) -> RcDoc<'static> {
+    match arg {
+        GenericArg::Type(type_expr) => format_type_expr_inline(fmt, type_expr),
+        GenericArg::Index(index) => match index {
+            graphcal_compiler::syntax::ast::IndexExpr::Finite { cardinality, .. } => {
+                RcDoc::text(format!("Fin({cardinality})"))
+            }
+            graphcal_compiler::syntax::ast::IndexExpr::Name(name) => {
+                RcDoc::text(name.value.display_path())
+            }
+            graphcal_compiler::syntax::ast::IndexExpr::BareNat(nat) => RcDoc::text(nat.to_string()),
+        },
+        GenericArg::Nat(nat_expr) => RcDoc::text(nat_expr.to_string()),
+        GenericArg::Ambiguous(ambiguous) => RcDoc::text(ambiguous.to_string()),
+    }
+}
+
+/// Format domain constraints: `(min: expr, max: expr)`.
+fn format_domain_constraints(
+    fmt: &mut Formatter<'_>,
+    constraints: &[DomainBound],
+) -> RcDoc<'static> {
+    let docs: Vec<RcDoc<'static>> = constraints
+        .iter()
+        .map(|bound| {
+            RcDoc::text(bound.kind.to_string())
+                .append(RcDoc::text(": "))
+                .append(format_expr(fmt, &bound.value))
+        })
+        .collect();
+    RcDoc::text("(")
+        .append(RcDoc::intersperse(docs, RcDoc::text(", ")))
+        .append(RcDoc::text(")"))
 }

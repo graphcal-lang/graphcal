@@ -7,12 +7,14 @@ use graphcal_compiler::syntax::ast::{
 };
 use pretty::RcDoc;
 
-use super::{
-    Formatter, INDENT, display_width, flat_alt_group, format_dim_expr_inline, format_expr,
-    format_type_expr_inline, format_unit_expr_inline, multiline_parenthesized_list,
-    pad_left_to_width, pad_right_to_width, render_doc_to_string, soft_parenthesized,
+use super::doc::{
+    INDENT, display_width, flat_alt_group, multiline_parenthesized_list, pad_left_to_width,
+    pad_right_to_width, prepend_comments, render_doc_to_string, soft_parenthesized,
     soft_parenthesized_list, text_with_hardlines,
 };
+use super::expr::{format_expr, format_generic_arg_inline, format_type_expr_inline};
+use super::formatter::Formatter;
+use super::unit_dim::{format_dim_expr_inline, format_unit_expr_inline};
 
 // ---------------------------------------------------------------------------
 // Declarations
@@ -200,7 +202,7 @@ fn format_todo(
                 None
             };
             commented |= leading.is_some() || trailing.is_some();
-            super::prepend_comments(leading, RcDoc::text(format!("@{},", reference.value)))
+            prepend_comments(leading, RcDoc::text(format!("@{},", reference.value)))
                 .append(trailing.unwrap_or_else(RcDoc::nil))
         })
         .collect::<Vec<_>>();
@@ -456,7 +458,7 @@ fn format_generic_params(fmt: &mut Formatter<'_>, params: &[GenericParam]) -> Rc
             if let Some(ref default) = p.default {
                 doc = doc
                     .append(RcDoc::text(" = "))
-                    .append(super::type_expr::format_generic_arg_inline(fmt, default));
+                    .append(format_generic_arg_inline(fmt, default));
             }
             doc
         })
@@ -570,7 +572,7 @@ fn format_dag_decl(fmt: &mut Formatter<'_>, d: &DagDecl) -> RcDoc<'static> {
     if d.body.is_empty() {
         return RcDoc::text(format!("dag {} {{}}", d.name.value.as_str()));
     }
-    let body = RcDoc::concat(super::format_decl_sequence(fmt, &d.body));
+    let body = RcDoc::concat(format_decl_sequence(fmt, &d.body));
     header
         .append(RcDoc::hardline().append(body).nest(INDENT))
         .append(RcDoc::hardline())
@@ -1137,4 +1139,53 @@ fn header_cell_text(cell: &MultiHeaderCell) -> String {
         MultiHeaderCell::Underscore { .. } => "_".to_string(),
         MultiHeaderCell::Variant { variant, .. } => variant.value.to_string(),
     }
+}
+
+// ---------------------------------------------------------------------------
+// Declaration sequences
+// ---------------------------------------------------------------------------
+
+/// Format a declaration list (file body or `dag` body) into doc parts.
+///
+/// Handles leading comments, blank-line preservation, trailing comments, and
+/// the comment-preservation fallback: when a declaration contains comments
+/// in positions the formatter does not drain (multi-decl bodies, `if`
+/// branches, `scan`/`unfold` lambdas, …), reformatting would silently drop
+/// or relocate them. In that case the declaration's original source is
+/// emitted verbatim — a formatter must never lose user content.
+pub(super) fn format_decl_sequence(
+    fmt: &mut Formatter<'_>,
+    declarations: &[Declaration],
+) -> Vec<RcDoc<'static>> {
+    let mut docs: Vec<RcDoc<'static>> = Vec::new();
+    let mut prev_end: usize = 0;
+    for (i, decl) in declarations.iter().enumerate() {
+        let emit_start = decl.span.offset();
+        let emit_end = emit_start + decl.span.len();
+
+        // Emit leading comments before this declaration
+        let leading = fmt.drain_comments_before(emit_start);
+        let has_leading_comments = leading.is_some();
+
+        if i > 0 {
+            docs.push(RcDoc::hardline());
+            // Extra blank line before comments or when original had a blank line
+            if has_leading_comments || fmt.has_blank_line_between(prev_end, emit_start) {
+                docs.push(RcDoc::hardline());
+            }
+        }
+        if let Some(leading) = leading {
+            docs.push(leading);
+        }
+
+        // Format, then verify every comment inside the span was drained by
+        // some drain point; otherwise emit the original source verbatim.
+        let decl_doc = fmt.format_or_verbatim(decl.span, |fmt| format_decl(fmt, decl));
+        let trailing = fmt
+            .drain_trailing_comment(emit_end)
+            .unwrap_or_else(RcDoc::nil);
+        docs.push(decl_doc.append(trailing));
+        prev_end = emit_end;
+    }
+    docs
 }
