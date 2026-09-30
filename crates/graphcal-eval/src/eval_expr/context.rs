@@ -11,9 +11,10 @@ use std::collections::{BTreeSet, HashMap};
 use std::ops::Deref;
 use std::sync::Arc;
 
-use graphcal_compiler::cancellation::CancellationToken;
+use graphcal_compiler::cancellation::{CancellationToken, Cancelled};
 use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
 use graphcal_compiler::hir::expr::Expr;
+use graphcal_compiler::outcome::Outcome;
 use graphcal_compiler::registry::error::GraphcalError;
 use graphcal_compiler::registry::types::FormattingRegistry;
 use graphcal_compiler::resolved_name::ResolvedDeclName;
@@ -29,6 +30,7 @@ use crate::domain_constraint::ResolvedDomainConstraint;
 use crate::execution_frame::ScheduledDeclaration;
 use crate::execution_plan::ExecPlan;
 use crate::host_fns::HostFunctionRegistry;
+use crate::invariant::Failure;
 use crate::presentation_evidence::PresentationInstanceMap;
 use crate::static_incompleteness::ExpressionDependencies;
 
@@ -345,6 +347,31 @@ impl<'a> EvalSession<'a> {
         anchor: impl Into<DiagnosticAnchor>,
     ) -> GraphcalError {
         GraphcalError::internal_error(message, self.src, anchor.into())
+    }
+
+    /// The diagnostic for a failed runtime operation: a user-facing failure
+    /// is an evaluation error, a violated invariant an internal error.
+    pub fn failure_error(
+        &self,
+        failure: Failure<impl std::fmt::Display>,
+        span: Span,
+    ) -> GraphcalError {
+        match failure {
+            Failure::Error(error) => self.eval_error(error.to_string(), span),
+            Failure::Invariant(invariant) => self.internal_error(invariant.to_string(), span),
+        }
+    }
+
+    /// Like [`Self::failure_error`], keeping cancellation as control flow.
+    pub fn outcome_error(
+        &self,
+        outcome: Outcome<Failure<impl std::fmt::Display>>,
+        span: Span,
+    ) -> GraphcalError {
+        match outcome {
+            Outcome::Cancelled => GraphcalError::from(Cancelled),
+            Outcome::Failed(failure) => self.failure_error(failure, span),
+        }
     }
 }
 

@@ -1,5 +1,6 @@
 //! Pure complex arithmetic and built-in kernels.
 
+use crate::invariant::{Failure, Invariant};
 use crate::runtime_value::RuntimeValue;
 use graphcal_compiler::builtin::ComplexFn;
 use graphcal_compiler::complex_value::ComplexValue;
@@ -19,23 +20,18 @@ pub(super) enum ComplexEvalError {
     NonFinite { operation: &'static str },
     #[error("{operation} produced a non-finite (NaN or infinite) quantity")]
     NonFiniteQuantity { operation: &'static str },
-    #[error("internal complex operation expected {expected}, got {actual}")]
-    TypeMismatch {
-        expected: &'static str,
-        actual: String,
-    },
-    #[error("internal complex arithmetic received unsupported operands for {operator:?}")]
-    UnsupportedOperands { operator: BinOp },
 }
 
-impl ComplexEvalError {
-    #[must_use]
-    pub(super) const fn is_internal_invariant(&self) -> bool {
-        matches!(
-            self,
-            Self::TypeMismatch { .. } | Self::UnsupportedOperands { .. }
-        )
+impl From<ComplexEvalError> for Failure<ComplexEvalError> {
+    fn from(error: ComplexEvalError) -> Self {
+        Self::Error(error)
     }
+}
+
+fn unsupported_operands(operator: BinOp) -> Invariant {
+    Invariant::violated(format_args!(
+        "internal complex arithmetic received unsupported operands for {operator:?}"
+    ))
 }
 
 /// Evaluate one complex built-in call.
@@ -45,115 +41,115 @@ impl ComplexEvalError {
 pub(super) fn evaluate_builtin(
     function: ComplexFn,
     arguments: &[RuntimeValue],
-) -> Result<RuntimeValue, ComplexEvalError> {
-    match function {
+) -> Result<RuntimeValue, Failure<ComplexEvalError>> {
+    Ok(match function {
         ComplexFn::Rectangular => {
             let re = quantity(&arguments[0])?;
             let im = quantity(&arguments[1])?;
-            Ok(RuntimeValue::Complex(ComplexValue::from_parts(re, im)))
+            RuntimeValue::Complex(ComplexValue::from_parts(re, im))
         }
         ComplexFn::Polar => {
             let magnitude = quantity(&arguments[0])?.get();
             let phase = quantity(&arguments[1])?.get();
             if magnitude < 0.0 {
-                return Err(ComplexEvalError::NegativeMagnitude { value: magnitude });
+                return Err(ComplexEvalError::NegativeMagnitude { value: magnitude }.into());
             }
-            finite_complex(magnitude * phase.cos(), magnitude * phase.sin(), "polar()")
-                .map(RuntimeValue::Complex)
+            RuntimeValue::Complex(finite_complex(
+                magnitude * phase.cos(),
+                magnitude * phase.sin(),
+                "polar()",
+            )?)
         }
-        ComplexFn::ToComplex => quantity(&arguments[0]).map(|value| {
-            RuntimeValue::Complex(ComplexValue::from_parts(value, FiniteQuantity::ZERO))
-        }),
-        ComplexFn::Real => {
-            complex(&arguments[0]).map(|value| RuntimeValue::Quantity(value.real_part()))
+        ComplexFn::ToComplex => RuntimeValue::Complex(ComplexValue::from_parts(
+            quantity(&arguments[0])?,
+            FiniteQuantity::ZERO,
+        )),
+        ComplexFn::Real => RuntimeValue::Quantity(complex(&arguments[0])?.real_part()),
+        ComplexFn::Imaginary => RuntimeValue::Quantity(complex(&arguments[0])?.imaginary_part()),
+        ComplexFn::Phase => {
+            let value = complex(&arguments[0])?;
+            finite_quantity(value.im().atan2(value.re()), "phase()")?
         }
-        ComplexFn::Imaginary => {
-            complex(&arguments[0]).map(|value| RuntimeValue::Quantity(value.imaginary_part()))
-        }
-        ComplexFn::Phase => complex(&arguments[0])
-            .and_then(|value| finite_quantity(value.im().atan2(value.re()), "phase()")),
-        ComplexFn::Conjugate => {
-            complex(&arguments[0]).map(|value| RuntimeValue::Complex(value.conjugate()))
-        }
+        ComplexFn::Conjugate => RuntimeValue::Complex(complex(&arguments[0])?.conjugate()),
         ComplexFn::Absolute => match &arguments[0] {
-            RuntimeValue::Complex(value) => finite_quantity(value.re().hypot(value.im()), "abs()"),
-            value => quantity(value).and_then(|value| finite_quantity(value.get().abs(), "abs()")),
+            RuntimeValue::Complex(value) => finite_quantity(value.re().hypot(value.im()), "abs()")?,
+            value => finite_quantity(quantity(value)?.get().abs(), "abs()")?,
         },
         ComplexFn::Exponential => match &arguments[0] {
             RuntimeValue::Complex(value) => {
                 let scale = value.re().exp();
-                finite_complex(scale * value.im().cos(), scale * value.im().sin(), "exp()")
-                    .map(RuntimeValue::Complex)
+                RuntimeValue::Complex(finite_complex(
+                    scale * value.im().cos(),
+                    scale * value.im().sin(),
+                    "exp()",
+                )?)
             }
-            value => quantity(value).and_then(|value| finite_quantity(value.get().exp(), "exp()")),
+            value => finite_quantity(quantity(value)?.get().exp(), "exp()")?,
         },
-    }
+    })
 }
 
 pub(super) fn evaluate_binary(
     operator: BinOp,
     lhs: &RuntimeValue,
     rhs: &RuntimeValue,
-) -> Result<RuntimeValue, ComplexEvalError> {
-    match (lhs, rhs) {
+) -> Result<RuntimeValue, Failure<ComplexEvalError>> {
+    let value = match (lhs, rhs) {
         (RuntimeValue::Complex(lhs), RuntimeValue::Complex(rhs)) => {
-            complex_binary(operator, *lhs, *rhs).map(RuntimeValue::Complex)
+            complex_binary(operator, *lhs, *rhs)?
         }
         (RuntimeValue::Complex(lhs), RuntimeValue::Quantity(rhs)) => match operator {
             BinOp::Mul => finite_complex(
                 lhs.re() * rhs.get(),
                 lhs.im() * rhs.get(),
                 "complex scalar multiplication",
-            )
-            .map(RuntimeValue::Complex),
+            )?,
             BinOp::Div => {
                 if rhs.get() == 0.0 {
-                    return Err(ComplexEvalError::DivisionByZero);
+                    return Err(ComplexEvalError::DivisionByZero.into());
                 }
                 finite_complex(
                     lhs.re() / rhs.get(),
                     lhs.im() / rhs.get(),
                     "complex scalar division",
-                )
-                .map(RuntimeValue::Complex)
+                )?
             }
-            _ => Err(ComplexEvalError::UnsupportedOperands { operator }),
+            _ => return Err(unsupported_operands(operator).into()),
         },
         (RuntimeValue::Quantity(lhs), RuntimeValue::Complex(rhs)) => match operator {
             BinOp::Mul => finite_complex(
                 lhs.get() * rhs.re(),
                 lhs.get() * rhs.im(),
                 "scalar complex multiplication",
-            )
-            .map(RuntimeValue::Complex),
-            BinOp::Div => divide(ComplexValue::from_parts(*lhs, FiniteQuantity::ZERO), *rhs)
-                .map(RuntimeValue::Complex),
-            _ => Err(ComplexEvalError::UnsupportedOperands { operator }),
+            )?,
+            BinOp::Div => divide(ComplexValue::from_parts(*lhs, FiniteQuantity::ZERO), *rhs)?,
+            _ => return Err(unsupported_operands(operator).into()),
         },
-        _ => Err(ComplexEvalError::UnsupportedOperands { operator }),
-    }
+        _ => return Err(unsupported_operands(operator).into()),
+    };
+    Ok(RuntimeValue::Complex(value))
 }
 
 fn complex_binary(
     operator: BinOp,
     lhs: ComplexValue,
     rhs: ComplexValue,
-) -> Result<ComplexValue, ComplexEvalError> {
-    match operator {
-        BinOp::Add => finite_complex(lhs.re() + rhs.re(), lhs.im() + rhs.im(), "complex addition"),
+) -> Result<ComplexValue, Failure<ComplexEvalError>> {
+    Ok(match operator {
+        BinOp::Add => finite_complex(lhs.re() + rhs.re(), lhs.im() + rhs.im(), "complex addition")?,
         BinOp::Sub => finite_complex(
             lhs.re() - rhs.re(),
             lhs.im() - rhs.im(),
             "complex subtraction",
-        ),
+        )?,
         BinOp::Mul => finite_complex(
             lhs.im().mul_add(-rhs.im(), lhs.re() * rhs.re()),
             lhs.im().mul_add(rhs.re(), lhs.re() * rhs.im()),
             "complex multiplication",
-        ),
-        BinOp::Div => divide(lhs, rhs),
-        _ => Err(ComplexEvalError::UnsupportedOperands { operator }),
-    }
+        )?,
+        BinOp::Div => divide(lhs, rhs)?,
+        _ => return Err(unsupported_operands(operator).into()),
+    })
 }
 
 /// Divide the exact binary input components and round each final component once.
@@ -205,24 +201,25 @@ fn divide(lhs: ComplexValue, rhs: ComplexValue) -> Result<ComplexValue, ComplexE
     finite_complex(re, im, "complex division")
 }
 
-fn quantity(value: &RuntimeValue) -> Result<FiniteQuantity, ComplexEvalError> {
+fn quantity(value: &RuntimeValue) -> Result<FiniteQuantity, Invariant> {
     match value {
         RuntimeValue::Quantity(value) => Ok(*value),
-        other => Err(ComplexEvalError::TypeMismatch {
-            expected: "a quantity",
-            actual: other.describe().to_string(),
-        }),
+        other => Err(type_mismatch("a quantity", other)),
     }
 }
 
-fn complex(value: &RuntimeValue) -> Result<ComplexValue, ComplexEvalError> {
+fn complex(value: &RuntimeValue) -> Result<ComplexValue, Invariant> {
     match value {
         RuntimeValue::Complex(value) => Ok(*value),
-        other => Err(ComplexEvalError::TypeMismatch {
-            expected: "a complex quantity",
-            actual: other.describe().to_string(),
-        }),
+        other => Err(type_mismatch("a complex quantity", other)),
     }
+}
+
+fn type_mismatch(expected: &str, actual: &RuntimeValue) -> Invariant {
+    Invariant::violated(format_args!(
+        "internal complex operation expected {expected}, got {}",
+        actual.describe()
+    ))
 }
 
 /// The complex value of computed components, when both are finite.
@@ -331,14 +328,14 @@ mod tests {
         let value = RuntimeValue::complex(f64::MAX, 0.0).unwrap();
         assert!(matches!(
             evaluate_binary(BinOp::Mul, &value, &RuntimeValue::quantity(2.0).unwrap()),
-            Err(ComplexEvalError::NonFinite { .. })
+            Err(Failure::Error(ComplexEvalError::NonFinite { .. }))
         ));
         assert!(matches!(
             evaluate_builtin(
                 ComplexFn::Exponential,
                 &[RuntimeValue::complex(1_000.0, 0.0).unwrap()],
             ),
-            Err(ComplexEvalError::NonFinite { .. })
+            Err(Failure::Error(ComplexEvalError::NonFinite { .. }))
         ));
     }
 
@@ -350,7 +347,43 @@ mod tests {
                 &RuntimeValue::complex(1.0, 2.0).unwrap(),
                 &RuntimeValue::complex(0.0, 0.0).unwrap(),
             ),
-            Err(ComplexEvalError::DivisionByZero)
+            Err(Failure::Error(ComplexEvalError::DivisionByZero))
         ));
+    }
+
+    #[test]
+    fn checker_guaranteed_operand_kinds_are_invariants() {
+        let invariant = |result: Result<RuntimeValue, Failure<ComplexEvalError>>| match result {
+            Err(Failure::Invariant(invariant)) => invariant.to_string(),
+            other => panic!("expected an invariant, got {other:?}"),
+        };
+        let complex = RuntimeValue::complex(1.0, 2.0).unwrap();
+        assert_eq!(
+            invariant(evaluate_binary(
+                BinOp::Add,
+                &complex,
+                &RuntimeValue::Bool(true)
+            )),
+            "internal complex arithmetic received unsupported operands for Add"
+        );
+        assert_eq!(
+            invariant(evaluate_binary(
+                BinOp::Sub,
+                &complex,
+                &RuntimeValue::quantity(1.0).unwrap()
+            )),
+            "internal complex arithmetic received unsupported operands for Sub"
+        );
+        assert_eq!(
+            invariant(evaluate_builtin(
+                ComplexFn::Real,
+                &[RuntimeValue::Bool(true)]
+            )),
+            "internal complex operation expected a complex quantity, got Bool"
+        );
+        assert_eq!(
+            invariant(evaluate_builtin(ComplexFn::ToComplex, &[complex])),
+            "internal complex operation expected a quantity, got Complex"
+        );
     }
 }

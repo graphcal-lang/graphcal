@@ -13,9 +13,13 @@ use thiserror::Error;
 use crate::runtime_value::dense_array::{DenseArray, DenseArrayError, DenseShapeError};
 use crate::runtime_value::{IndexAxis, RuntimeValue, RuntimeValueError};
 
+use graphcal_compiler::outcome::Outcome;
+
 use super::EvalContext;
+use super::linear_algebra_lu::LuFailure;
 use super::numeric::{self, QuantityValidationError};
 use super::work_budget::{KernelCheckpoint, WorkAmount, WorkAmountError, WorkBudgetError};
+use crate::invariant::{Failure, Invariant};
 
 /// A rank-one operand: one value per key of `axis`.
 #[derive(Debug)]
@@ -121,10 +125,6 @@ pub(super) enum OperandInvariant {
 
 #[derive(Debug, Error)]
 pub(super) enum LinearAlgebraError {
-    #[error("linear-algebra operand invariant failed: {0}")]
-    Operand(#[from] OperandInvariant),
-    #[error("linear-algebra result invariant failed: {0}")]
-    ResultShape(#[from] DenseShapeError),
     #[error(transparent)]
     Numeric(#[from] QuantityValidationError),
     #[error(transparent)]
@@ -137,33 +137,50 @@ pub(super) enum LinearAlgebraError {
         #[source]
         source: WorkBudgetError,
     },
-    #[error(transparent)]
-    Cancelled(#[from] graphcal_compiler::cancellation::Cancelled),
 }
 
-impl LinearAlgebraError {
-    pub(super) const fn is_internal_invariant(&self) -> bool {
-        match self {
-            Self::Operand(_) | Self::ResultShape(_) => true,
-            Self::Algorithm(error) => error.is_internal_invariant(),
-            Self::Numeric(_)
-            | Self::WorkAmount(_)
-            | Self::WorkBudget { .. }
-            | Self::Cancelled(_) => false,
-        }
-    }
+/// Why a linear-algebra operation did not produce a value.
+pub(super) type LinearAlgebraFailure = Outcome<Failure<LinearAlgebraError>>;
 
-    pub(super) const fn cancellation(&self) -> Option<graphcal_compiler::cancellation::Cancelled> {
-        match self {
-            Self::Cancelled(cancelled) => Some(*cancelled),
-            Self::Algorithm(error) => error.cancellation(),
-            Self::Operand(_)
-            | Self::ResultShape(_)
-            | Self::Numeric(_)
-            | Self::WorkAmount(_)
-            | Self::WorkBudget { .. } => None,
-        }
+impl From<LinearAlgebraError> for LinearAlgebraFailure {
+    fn from(error: LinearAlgebraError) -> Self {
+        Self::Failed(Failure::Error(error))
     }
+}
+
+impl From<QuantityValidationError> for LinearAlgebraFailure {
+    fn from(error: QuantityValidationError) -> Self {
+        LinearAlgebraError::from(error).into()
+    }
+}
+
+impl From<WorkAmountError> for LinearAlgebraFailure {
+    fn from(error: WorkAmountError) -> Self {
+        LinearAlgebraError::from(error).into()
+    }
+}
+
+impl From<OperandInvariant> for LinearAlgebraFailure {
+    fn from(error: OperandInvariant) -> Self {
+        Invariant::violated(format_args!(
+            "linear-algebra operand invariant failed: {error}"
+        ))
+        .into()
+    }
+}
+
+impl From<DenseShapeError> for LinearAlgebraFailure {
+    fn from(error: DenseShapeError) -> Self {
+        Invariant::violated(format_args!(
+            "linear-algebra result invariant failed: {error}"
+        ))
+        .into()
+    }
+}
+
+/// Re-type an LU failure as the failure of the builtin that ran it.
+fn algorithm_failure(failure: LuFailure) -> LinearAlgebraFailure {
+    failure.map_failed(|failure| failure.map_error(LinearAlgebraError::Algorithm))
 }
 
 fn kernel_control<'a>(
@@ -171,7 +188,7 @@ fn kernel_control<'a>(
     factors: &[usize],
     multiplier: u64,
     ctx: &'a EvalContext<'_>,
-) -> Result<KernelCheckpoint<'a>, LinearAlgebraError> {
+) -> Result<KernelCheckpoint<'a>, LinearAlgebraFailure> {
     let amount = WorkAmount::checked_product(factors, multiplier)?;
     ctx.work_budget
         .consume(amount)
@@ -184,13 +201,13 @@ fn indexed_result(
     axes: NonEmpty<IndexAxis>,
     values: Vec<f64>,
     context: &'static str,
-) -> Result<RuntimeValue, LinearAlgebraError> {
+) -> Result<RuntimeValue, LinearAlgebraFailure> {
     DenseArray::try_new(axes, values)?
         .try_to_indexed(|value| finite_runtime_quantity(*value, context))
         .map(RuntimeValue::Indexed)
 }
 
-fn vector_value(axis: IndexAxis, values: Vec<f64>) -> Result<RuntimeValue, LinearAlgebraError> {
+fn vector_value(axis: IndexAxis, values: Vec<f64>) -> Result<RuntimeValue, LinearAlgebraFailure> {
     indexed_result(
         NonEmpty::singleton(axis),
         values,
@@ -202,7 +219,7 @@ fn matrix_value(
     rows: IndexAxis,
     columns: IndexAxis,
     values: Vec<f64>,
-) -> Result<RuntimeValue, LinearAlgebraError> {
+) -> Result<RuntimeValue, LinearAlgebraFailure> {
     indexed_result(
         NonEmpty::new(rows, vec![columns]),
         values,
@@ -210,7 +227,7 @@ fn matrix_value(
     )
 }
 
-fn finite_product(lhs: f64, rhs: f64, context: &'static str) -> Result<f64, LinearAlgebraError> {
+fn finite_product(lhs: f64, rhs: f64, context: &'static str) -> Result<f64, LinearAlgebraFailure> {
     let result = lhs * rhs;
     if lhs != 0.0 && rhs != 0.0 {
         numeric::computed_nonzero_quantity(result, context)
@@ -218,7 +235,7 @@ fn finite_product(lhs: f64, rhs: f64, context: &'static str) -> Result<f64, Line
         numeric::computed_finite_quantity(result, context)
     }
     .map(FiniteQuantity::get)
-    .map_err(LinearAlgebraError::from)
+    .map_err(LinearAlgebraFailure::from)
 }
 
 fn sum_products(
@@ -226,28 +243,28 @@ fn sum_products(
     rhs: impl IntoIterator<Item = f64>,
     context: &'static str,
     control: &mut KernelCheckpoint<'_>,
-) -> Result<FiniteQuantity, LinearAlgebraError> {
+) -> Result<FiniteQuantity, LinearAlgebraFailure> {
     lhs.into_iter()
         .zip(rhs)
         .try_fold(FiniteQuantity::ZERO, |sum, (lhs, rhs)| {
             control.step()?;
             let product = finite_product(lhs, rhs, context)?;
             numeric::computed_finite_quantity(sum.get() + product, context)
-                .map_err(LinearAlgebraError::from)
+                .map_err(LinearAlgebraFailure::from)
         })
 }
 
 fn norm(
     values: &[f64],
     control: &mut KernelCheckpoint<'_>,
-) -> Result<FiniteQuantity, LinearAlgebraError> {
+) -> Result<FiniteQuantity, LinearAlgebraFailure> {
     let accumulator =
         values
             .iter()
             .try_fold(numeric::RootSumSquare::new(), |mut accumulator, value| {
                 control.step()?;
                 accumulator.add(*value, "norm()")?;
-                Ok::<_, LinearAlgebraError>(accumulator)
+                Ok::<_, LinearAlgebraFailure>(accumulator)
             })?;
     accumulator.finish("norm()").map_err(Into::into)
 }
@@ -289,11 +306,11 @@ fn require_matching_axes(
 fn finite_runtime_quantity(
     value: f64,
     context: &'static str,
-) -> Result<RuntimeValue, LinearAlgebraError> {
+) -> Result<RuntimeValue, LinearAlgebraFailure> {
     FiniteQuantity::try_new(value)
         .map(RuntimeValue::Quantity)
         .map_err(|error| {
-            LinearAlgebraError::Numeric(QuantityValidationError::NonFinite {
+            LinearAlgebraFailure::from(QuantityValidationError::NonFinite {
                 context: context.to_string(),
                 value: error.value,
             })
@@ -303,7 +320,7 @@ fn finite_runtime_quantity(
 fn evaluate_dot(
     arguments: Vec<RuntimeValue>,
     ctx: &EvalContext<'_>,
-) -> Result<RuntimeValue, LinearAlgebraError> {
+) -> Result<RuntimeValue, LinearAlgebraFailure> {
     let function = LinearAlgebraFn::Dot;
     let [lhs, rhs] = two_arguments(function, arguments)?;
     let lhs = Vector::from_value(&lhs, "dot")?;
@@ -316,7 +333,7 @@ fn evaluate_dot(
 fn evaluate_matmul(
     arguments: Vec<RuntimeValue>,
     ctx: &EvalContext<'_>,
-) -> Result<RuntimeValue, LinearAlgebraError> {
+) -> Result<RuntimeValue, LinearAlgebraFailure> {
     let function = LinearAlgebraFn::Matmul;
     let [lhs, rhs] = two_arguments(function, arguments)?;
     let lhs = Matrix::from_value(&lhs, "matmul")?;
@@ -343,7 +360,7 @@ fn evaluate_matmul(
 fn evaluate_transpose(
     arguments: Vec<RuntimeValue>,
     ctx: &EvalContext<'_>,
-) -> Result<RuntimeValue, LinearAlgebraError> {
+) -> Result<RuntimeValue, LinearAlgebraFailure> {
     let function = LinearAlgebraFn::Transpose;
     let matrix = Matrix::from_value(&one_argument(function, arguments)?, "transpose")?;
     let mut control = kernel_control(function, &[matrix.rows.len(), matrix.columns.len()], 1, ctx)?;
@@ -352,7 +369,7 @@ fn evaluate_transpose(
         .flat_map(|column| rows.iter().map(move |row| row[column]))
         .map(|value| {
             control.step()?;
-            Ok::<_, LinearAlgebraError>(value)
+            Ok::<_, LinearAlgebraFailure>(value)
         })
         .collect::<Result<Vec<_>, _>>()?;
     matrix_value(matrix.columns, matrix.rows, values)
@@ -361,7 +378,7 @@ fn evaluate_transpose(
 fn evaluate_trace(
     arguments: Vec<RuntimeValue>,
     ctx: &EvalContext<'_>,
-) -> Result<RuntimeValue, LinearAlgebraError> {
+) -> Result<RuntimeValue, LinearAlgebraFailure> {
     let function = LinearAlgebraFn::Trace;
     let matrix = Matrix::from_value(&one_argument(function, arguments)?, "trace")?;
     require_matching_axes(function, &matrix.rows, &matrix.columns)?;
@@ -373,7 +390,7 @@ fn evaluate_trace(
         .try_fold(FiniteQuantity::ZERO, |sum, (diagonal, row)| {
             control.step()?;
             numeric::computed_finite_quantity(sum.get() + row[diagonal], "trace()")
-                .map_err(LinearAlgebraError::from)
+                .map_err(LinearAlgebraFailure::from)
         })
         .map(RuntimeValue::Quantity)
 }
@@ -381,7 +398,7 @@ fn evaluate_trace(
 fn evaluate_norm(
     arguments: Vec<RuntimeValue>,
     ctx: &EvalContext<'_>,
-) -> Result<RuntimeValue, LinearAlgebraError> {
+) -> Result<RuntimeValue, LinearAlgebraFailure> {
     let function = LinearAlgebraFn::Norm;
     let vector = Vector::from_value(&one_argument(function, arguments)?, "norm")?;
     let mut control = kernel_control(function, &[vector.axis.len()], 1, ctx)?;
@@ -391,7 +408,7 @@ fn evaluate_norm(
 fn evaluate_cross(
     arguments: Vec<RuntimeValue>,
     ctx: &EvalContext<'_>,
-) -> Result<RuntimeValue, LinearAlgebraError> {
+) -> Result<RuntimeValue, LinearAlgebraFailure> {
     let function = LinearAlgebraFn::Cross;
     let [lhs, rhs] = two_arguments(function, arguments)?;
     let lhs = Vector::from_value(&lhs, "cross")?;
@@ -410,7 +427,7 @@ fn evaluate_cross(
         let negative = finite_product(a_2, b_2, "cross()")?;
         numeric::computed_finite_quantity(positive - negative, "cross()")
             .map(FiniteQuantity::get)
-            .map_err(LinearAlgebraError::from)
+            .map_err(LinearAlgebraFailure::from)
     };
     let values = vec![
         component(a[1], b[2], a[2], b[1])?,
@@ -423,7 +440,7 @@ fn evaluate_cross(
 fn evaluate_outer(
     arguments: Vec<RuntimeValue>,
     ctx: &EvalContext<'_>,
-) -> Result<RuntimeValue, LinearAlgebraError> {
+) -> Result<RuntimeValue, LinearAlgebraFailure> {
     let function = LinearAlgebraFn::Outer;
     let [lhs, rhs] = two_arguments(function, arguments)?;
     let lhs = Vector::from_value(&lhs, "outer")?;
@@ -444,7 +461,7 @@ fn evaluate_outer(
 fn evaluate_solve(
     arguments: Vec<RuntimeValue>,
     ctx: &EvalContext<'_>,
-) -> Result<RuntimeValue, LinearAlgebraError> {
+) -> Result<RuntimeValue, LinearAlgebraFailure> {
     let function = LinearAlgebraFn::Solve;
     let [matrix, rhs] = two_arguments(function, arguments)?;
     let matrix = Matrix::from_value(&matrix, "solve")?;
@@ -457,14 +474,15 @@ fn evaluate_solve(
         matrix.rows.len(),
         &rhs.values,
         &mut control,
-    )?;
+    )
+    .map_err(algorithm_failure)?;
     vector_value(matrix.rows, solution)
 }
 
 fn evaluate_inverse(
     arguments: Vec<RuntimeValue>,
     ctx: &EvalContext<'_>,
-) -> Result<RuntimeValue, LinearAlgebraError> {
+) -> Result<RuntimeValue, LinearAlgebraFailure> {
     let function = LinearAlgebraFn::Inverse;
     let matrix = Matrix::from_value(&one_argument(function, arguments)?, "inverse")?;
     require_matching_axes(function, &matrix.rows, &matrix.columns)?;
@@ -473,14 +491,15 @@ fn evaluate_inverse(
         &matrix.values,
         matrix.rows.len(),
         &mut control,
-    )?;
+    )
+    .map_err(algorithm_failure)?;
     matrix_value(matrix.rows, matrix.columns, inverse)
 }
 
 fn evaluate_determinant(
     arguments: Vec<RuntimeValue>,
     ctx: &EvalContext<'_>,
-) -> Result<RuntimeValue, LinearAlgebraError> {
+) -> Result<RuntimeValue, LinearAlgebraFailure> {
     let function = LinearAlgebraFn::Determinant;
     let matrix = Matrix::from_value(&one_argument(function, arguments)?, "det")?;
     require_matching_axes(function, &matrix.rows, &matrix.columns)?;
@@ -490,7 +509,7 @@ fn evaluate_determinant(
         matrix.rows.len(),
         &mut control,
     )
-    .map_err(LinearAlgebraError::from)
+    .map_err(algorithm_failure)
     .and_then(|value| finite_runtime_quantity(value, "det()"))
 }
 
@@ -499,7 +518,7 @@ pub(super) fn evaluate(
     function: LinearAlgebraFn,
     arguments: Vec<RuntimeValue>,
     ctx: &EvalContext<'_>,
-) -> Result<RuntimeValue, LinearAlgebraError> {
+) -> Result<RuntimeValue, LinearAlgebraFailure> {
     match function {
         LinearAlgebraFn::Dot => evaluate_dot(arguments, ctx),
         LinearAlgebraFn::Matmul => evaluate_matmul(arguments, ctx),
@@ -607,11 +626,13 @@ mod tests {
         assert!(result.axis().matches(&fin(2)));
         assert!(matches!(
             vector_value(fin(2), vec![1.0]),
-            Err(LinearAlgebraError::ResultShape(_))
+            Err(Outcome::Failed(Failure::Invariant(_)))
         ));
         assert!(matches!(
             indexed_result(NonEmpty::singleton(fin(1)), vec![f64::INFINITY], "test"),
-            Err(LinearAlgebraError::Numeric(_))
+            Err(Outcome::Failed(Failure::Error(
+                LinearAlgebraError::Numeric(_)
+            )))
         ));
         assert!(matches!(
             require_matching_axes(LinearAlgebraFn::Dot, &fin(2), &fin(3)),
