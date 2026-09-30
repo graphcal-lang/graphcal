@@ -23,7 +23,7 @@ use crate::execution_plan::{ExecPlan, PlannedInstance};
 use crate::presentation_evidence::PresentationDiagnostic;
 use crate::runtime_presentation::PresentedRef;
 
-use super::EvaluatedRoot;
+use super::evaluated_root::EvaluatedRoot;
 use super::root_names::instance_member_name;
 
 /// Whether an entry belongs to the root's consumer-facing output surface or

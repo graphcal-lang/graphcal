@@ -62,10 +62,10 @@ test = false
 
 [dependencies]
 graphcal-compiler = { path = "../crates/graphcal-compiler" }
-graphcal-eval = { path = "../crates/graphcal-eval" }
 graphcal-fmt = { path = "../crates/graphcal-fmt" }
 graphcal-io = { path = "../crates/graphcal-io" }
 graphcal-package = { path = "../crates/graphcal-package" }
 graphcal-plugin-abi = { path = "../crates/graphcal-plugin-abi" }
+graphcal-project = { path = "../crates/graphcal-project" }
 graphcal-test-support = { path = "../crates/graphcal-test-support" }
 libfuzzer-sys = "0.4"

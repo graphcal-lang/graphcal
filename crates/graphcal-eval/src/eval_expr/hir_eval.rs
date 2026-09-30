@@ -24,12 +24,33 @@ use crate::presentation_evidence::{PendingLeaf, PendingQuantityDisplay};
 use crate::runtime_presentation::{EvaluatedRuntimeValue, PendingPresentedMap, PresentedRef};
 use graphcal_compiler::resolved_name::ResolvedDeclName;
 
-use super::{
-    EvalSession, RuntimeValueMap, checked_unit_scaled_value, imported_binding_value,
-    index_ref_matches_resolved, resolve_unit_scale,
-};
+use super::context::EvalSession;
+use super::unit_scale::{checked_unit_scaled_value, resolve_unit_scale};
+use crate::constant_pools::RuntimeValueMap;
 
 pub type HirLocalValueMap<'a> = hir::LocalEnv<'a, EvaluatedRuntimeValue>;
+
+fn index_ref_matches_resolved(
+    actual: &IndexTypeRef,
+    expected: &graphcal_compiler::resolved_name::ResolvedIndexName,
+) -> bool {
+    actual.declared_resolved() == Some(expected)
+}
+
+fn imported_binding_value<'a>(
+    target: &graphcal_compiler::resolved_name::ResolvedDeclName,
+    caller_dag: &graphcal_compiler::dag_id::DagId,
+    caller_values: &'a RuntimeValueMap,
+    ctx: &'a EvalSession<'_>,
+) -> Option<&'a RuntimeValue> {
+    if target.owner() == caller_dag {
+        caller_values.get(target)
+    } else if target.owner() == ctx.tir.root_dag_id() {
+        ctx.root_values.and_then(|values| values.get(target))
+    } else {
+        None
+    }
+}
 
 /// The value of declaration `key`, `value`, borrowed with its presentation:
 /// the frame keeps a presented value only for a value with a presentation.
@@ -71,6 +92,16 @@ pub fn eval_root<T: std::borrow::Borrow<TExpr>>(
     eval_texpr(root.root(), values, &HirLocalValueMap::root(), session)
 }
 
+/// [`eval_root`] for the executable trees of unit-scale bodies, as the
+/// kernel handed to unit-scale and presentation resolution.
+pub(super) fn eval_executable(
+    root: &ScopedTree<'_, &TExpr>,
+    values: &RuntimeValueMap,
+    session: &EvalSession<'_>,
+) -> Result<RuntimeValue, GraphcalError> {
+    eval_root(root, values, session)
+}
+
 /// Evaluate the root tree of an evaluation unit in the scope it was handed
 /// out with, preserving concrete presentation-call identities.
 pub fn eval_root_with_presentation<T: std::borrow::Borrow<TExpr>>(
@@ -90,7 +121,7 @@ pub fn eval_root_with_presentation<T: std::borrow::Borrow<TExpr>>(
 
 /// Evaluate `subtree` in its scope with `locals` bound, for tests that forge
 /// a local binding.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-internals"))]
 pub fn eval_subtree_for_test(
     subtree: ScopedNode<'_>,
     values: &RuntimeValueMap,
@@ -195,7 +226,7 @@ fn eval_texpr_inner(
                 .map(|value| plain(RuntimeValue::Key(value)))
         }
         NodeKind::QuantityLiteral { value, unit } => {
-            let scale = resolve_unit_scale(unit, values, ctx)?;
+            let scale = resolve_unit_scale(unit, values, ctx, eval_executable)?;
             let value = checked_unit_scaled_value(value, scale, span, ctx)?;
             let display = super::presentation::scaled(unit.get(), scale, ctx);
             EvaluatedRuntimeValue::with_leaf(
@@ -415,18 +446,18 @@ fn resolve_graph_ref<'a>(
 }
 
 fn clone_graph_ref_value(value: &RuntimeValue) -> RuntimeValue {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-internals"))]
     record_cloned_runtime_nodes(value);
     value.clone()
 }
 
 fn clone_index_access_result(value: &RuntimeValue) -> RuntimeValue {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-internals"))]
     record_cloned_runtime_nodes(value);
     value.clone()
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-internals"))]
 fn record_cloned_runtime_nodes(value: &RuntimeValue) {
     CLONED_RUNTIME_NODES.with(|count| {
         count.set(
@@ -437,14 +468,14 @@ fn record_cloned_runtime_nodes(value: &RuntimeValue) {
     });
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-internals"))]
 std::thread_local! {
     static CLONED_RUNTIME_NODES: std::cell::Cell<usize> = const {
         std::cell::Cell::new(0)
     };
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-internals"))]
 fn runtime_value_tree_node_count(value: &RuntimeValue) -> usize {
     match value {
         RuntimeValue::Struct(value) => value
@@ -460,13 +491,17 @@ fn runtime_value_tree_node_count(value: &RuntimeValue) -> usize {
     }
 }
 
-#[cfg(test)]
-fn reset_cloned_runtime_node_count() {
+/// Test-only: reset the count of runtime value nodes cloned by graph
+/// references and index accesses.
+#[cfg(any(test, feature = "test-internals"))]
+pub fn reset_cloned_runtime_node_count() {
     CLONED_RUNTIME_NODES.with(|count| count.set(0));
 }
 
-#[cfg(test)]
-fn take_cloned_runtime_node_count() -> usize {
+/// Test-only: take the count of cloned runtime value nodes.
+#[cfg(any(test, feature = "test-internals"))]
+#[must_use]
+pub fn take_cloned_runtime_node_count() -> usize {
     CLONED_RUNTIME_NODES.with(|count| count.replace(0))
 }
 
@@ -1376,14 +1411,19 @@ fn eval_dag_call(
     let output_presented = dag_presented
         .remove(output_key)
         .unwrap_or_else(|| EvaluatedRuntimeValue::plain(output_value.clone()));
-    let presented =
-        super::presentation::resolve_frame(output_presented, &dag_values, ctx, callable)?;
-    #[cfg(test)]
+    let presented = super::presentation::resolve_frame(
+        output_presented,
+        &dag_values,
+        ctx,
+        callable,
+        eval_executable,
+    )?;
+    #[cfg(any(test, feature = "test-internals"))]
     record_call_retention(&dag_values, &presented);
     Ok(presented)
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-internals"))]
 fn record_call_retention(values: &RuntimeValueMap, presentation: &EvaluatedRuntimeValue) {
     use crate::pipeline_metrics::{Event, record_many};
     record_many(
@@ -1509,42 +1549,4 @@ fn check_inline_dag_asserts(
         }
     }
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::eval::compile_and_eval;
-
-    #[test]
-    fn indexed_graph_ref_borrows_collection_before_selecting_entry() {
-        reset_cloned_runtime_node_count();
-        let direct_copy = r"
-node source: Int[Fin(4), Fin(4)] = for row: Fin(4), column: Fin(4) {
-    to_int(row) * 4 + to_int(column)
-};
-node copied: Int[Fin(4), Fin(4)] = @source;
-";
-        compile_and_eval(direct_copy).unwrap();
-        assert_eq!(
-            take_cloned_runtime_node_count(),
-            21,
-            "the clone observer must count the root, four rows, and 16 leaves"
-        );
-
-        let elementwise_copy = r"
-node source: Int[Fin(4), Fin(4)] = for row: Fin(4), column: Fin(4) {
-    to_int(row) * 4 + to_int(column)
-};
-node copied: Int[Fin(4), Fin(4)] = for row: Fin(4), column: Fin(4) {
-    @source[row, column]
-};
-";
-        compile_and_eval(elementwise_copy).unwrap();
-        assert_eq!(
-            take_cloned_runtime_node_count(),
-            16,
-            "index traversal must clone only the 16 selected leaves"
-        );
-    }
 }

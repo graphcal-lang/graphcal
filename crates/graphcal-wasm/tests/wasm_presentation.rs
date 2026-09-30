@@ -93,9 +93,9 @@ plot measurement = { mark: point, encode: { x: @chosen } };
 
 #[wasm_bindgen_test]
 fn node_boundary_preserves_literal_and_constant_si_on_label_overflow() {
-    let literal = include_str!("../../graphcal-eval/src/eval/tests/display-label-overflow.gcl");
+    let literal = include_str!("../../graphcal-project/src/tests/display-label-overflow.gcl");
     let constant =
-        include_str!("../../graphcal-eval/src/eval/tests/constant-display-label-overflow.gcl");
+        include_str!("../../graphcal-project/src/tests/constant-display-label-overflow.gcl");
     let converted = literal.replace("= 1.0 identity_scale", "= 1.0 -> identity_scale");
     for source in [literal, constant, &converted] {
         let result = evaluate(source);

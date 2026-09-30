@@ -1,4 +1,4 @@
-//! Graphcal evaluation engine
+//! Graphcal interpreter: seals checked programs and executes them.
 #![warn(clippy::arithmetic_side_effects)]
 #![expect(
     clippy::result_large_err,
@@ -7,30 +7,26 @@
 
 // Modules owned by graphcal-eval.
 pub(crate) mod assertion_eval;
-pub(crate) mod checked_program;
-pub(crate) mod constant_pools;
-pub mod dependency_ordered;
-pub(crate) mod domain_check;
-pub(crate) mod domain_constraint;
+pub mod checked_program;
+pub mod constant_pools;
+pub mod domain_check;
+pub mod domain_constraint;
 pub mod eval;
-pub(crate) mod eval_expr;
-pub(crate) mod exec_plan;
+pub mod eval_expr;
+pub mod exec_plan;
+pub mod execution_check;
+#[cfg(any(test, feature = "test-internals"))]
+pub mod execution_frame;
+#[cfg(not(any(test, feature = "test-internals")))]
 pub(crate) mod execution_frame;
-pub(crate) mod execution_plan;
-pub mod graph_ir;
+pub mod execution_plan;
 pub mod host_abi;
 pub mod host_fns;
-pub(crate) mod import_surface;
-pub(crate) mod inline_dag;
-pub(crate) mod invariant;
-pub mod loader;
-pub mod package_cache;
-pub mod package_snapshot;
-pub mod package_sources;
-mod pipeline_metrics;
+pub mod invariant;
+pub mod pipeline_metrics;
 pub mod presentation_evidence;
-pub mod project_bundle;
-pub mod project_compiler;
-pub(crate) mod runtime_presentation;
-pub(crate) mod runtime_value;
+pub mod runtime_presentation;
+pub mod runtime_value;
 mod static_incompleteness;
+#[cfg(test)]
+mod test_tir;

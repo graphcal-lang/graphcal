@@ -6,8 +6,6 @@ use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 
-use graphcal_eval::loader::discover_project_root;
-use graphcal_eval::package_cache::{PackageCacheRoot, PackageCacheRootError};
 use graphcal_io::{
     ByteLimit, EntryLimit, FileSystemEntryKind, FileSystemReadError, FileSystemReader, NeverCancel,
     ProjectIngestionPolicy, RealFileSystem, SourceTreeHash, SourceTreeHashLimits,
@@ -20,6 +18,8 @@ use graphcal_package::{
     PluginArtifactPathError, STDLIB_VERSION, Sha256Digest, Sha256DigestError, SourceTreeHashes,
     parse_lockfile_str_with_limits, parse_manifest_str,
 };
+use graphcal_project::loader::discover_project_root;
+use graphcal_project::package_cache::{PackageCacheRoot, PackageCacheRootError};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
@@ -1092,7 +1092,7 @@ fn hash_source_tree(
         path: root.to_path_buf(),
         source,
     })?;
-    let hash = graphcal_eval::package_snapshot::capture_package(
+    let hash = graphcal_project::package_snapshot::capture_package(
         &fs,
         root,
         &source_dir.to_path_buf(),
@@ -1100,7 +1100,7 @@ fn hash_source_tree(
         &NeverCancel,
     )
     .map_err(|error| match error {
-        graphcal_eval::package_snapshot::PackageSnapshotError::Tree(error) => {
+        graphcal_project::package_snapshot::PackageSnapshotError::Tree(error) => {
             DepsError::SourceTreeHash(error)
         }
         other => DepsError::PackageSnapshot(other),
@@ -1122,7 +1122,7 @@ fn hex_string(bytes: &[u8]) -> String {
 #[derive(Debug, Error)]
 pub enum DepsError {
     #[error(transparent)]
-    PackageSnapshot(graphcal_eval::package_snapshot::PackageSnapshotError),
+    PackageSnapshot(graphcal_project::package_snapshot::PackageSnapshotError),
     /// Could not read the current directory.
     #[error("could not determine current directory: {0}")]
     CurrentDir(std::io::Error),

@@ -1,13 +1,15 @@
 # Pipeline cost observations
 
 `crates/graphcal-eval/src/pipeline_metrics.rs` observes selected expensive
-boundaries in unit-test builds. Production observation is a no-op. Counters are
+boundaries in unit-test builds and in cross-crate test builds that enable its
+`test-internals` feature (as `graphcal-project`'s tests do). Production
+observation is a no-op. Counters are
 thread-local and measure deltas without resetting enclosing measurements.
 
 Run the fixtures with:
 
 ```sh
-cargo test --locked -p graphcal-eval --lib pipeline_cost_baseline -- --nocapture
+cargo test --locked -p graphcal-project --lib pipeline_cost_baseline -- --nocapture
 ```
 
 | Event | Instrumented boundary |

@@ -1,24 +1,19 @@
 use std::collections::BTreeMap;
-use std::sync::Arc;
 
 use indexmap::IndexMap;
-use miette::{Diagnostic, NamedSource, SourceSpan};
 use thiserror::Error;
 
 use graphcal_compiler::complex_value::ComplexValue;
 use graphcal_compiler::declaration_category::ValueDeclCategory;
 use graphcal_compiler::desugar::desugared_ast::EncodingChannel;
-use graphcal_compiler::diagnostic_render::RenderableDiagnostic;
 use graphcal_compiler::dimension::{BaseDimId, Dimension, Rational};
 use graphcal_compiler::finite_value::FiniteQuantity;
 use graphcal_compiler::ratio::ExponentStyle;
 use graphcal_compiler::semantic::checked_type::{CheckedGenericArg, IndexTypeRef, StructTypeRef};
 use graphcal_compiler::semantic::time_zone::{IanaTimeZoneId, TimeZoneRegistry};
 use graphcal_compiler::semantic::unit_scale::PositiveFiniteScale;
-use graphcal_compiler::syntax::decl_name::DeclName;
 use graphcal_compiler::syntax::index_name::{IndexEntryKey, IndexVariantName};
 use graphcal_compiler::syntax::module_name::ScopedName;
-use graphcal_compiler::syntax::parser::{ParseError, ParseErrorKind};
 use graphcal_compiler::syntax::span::Span;
 use graphcal_compiler::syntax::type_name::{ConstructorName, FieldName};
 
@@ -267,8 +262,8 @@ impl Value {
     /// # Errors
     ///
     /// Returns [`ValueError`] if this is not a `Quantity`.
-    #[cfg(test)]
-    pub(crate) fn display_value(&self) -> Result<f64, DisplayValueError> {
+    #[cfg(any(test, feature = "test-internals"))]
+    pub fn display_value(&self) -> Result<f64, DisplayValueError> {
         match self {
             Self::Quantity {
                 si_value,
@@ -553,7 +548,7 @@ pub(super) fn validate_display_projection(value: &Value) -> Result<(), DisplayPr
 /// `Dimension`: dimensions describe physical semantics; unit labels are a
 /// presentation concern derived from registry metadata.
 #[must_use]
-pub(super) fn default_unit_label(
+pub fn default_unit_label(
     dimension: &Dimension,
     symbols: &BTreeMap<BaseDimId, String>,
 ) -> Option<String> {
@@ -759,6 +754,81 @@ pub struct EvalResult {
 }
 
 impl EvalResult {
+    /// Names of the values on the entry DAG's consumer-facing output surface.
+    #[must_use]
+    pub const fn output_surface(&self) -> &std::collections::HashSet<ScopedName> {
+        &self.output_surface
+    }
+
+    /// Present `imported` entries (values imported from other modules) before
+    /// the evaluated ones and replace the consumer-facing output surface.
+    #[must_use]
+    pub fn with_imported_entries(
+        mut self,
+        mut imported: Vec<(
+            ScopedName,
+            Result<Value, NodeUnavailable>,
+            ValueDeclCategory,
+        )>,
+        output_surface: std::collections::HashSet<ScopedName>,
+    ) -> Self {
+        imported.append(&mut self.entries);
+        self.entries = imported;
+        self.output_surface = output_surface;
+        self
+    }
+
+    /// Rename every scoped name this result reports, e.g. to replace private
+    /// synthetic include scopes with readable names at a presentation boundary.
+    pub fn rename_scoped_names(&mut self, rename: impl Fn(&ScopedName) -> ScopedName) {
+        self.entries
+            .iter_mut()
+            .for_each(|(name, _, _)| *name = rename(name));
+        self.output_surface = std::mem::take(&mut self.output_surface)
+            .into_iter()
+            .map(|name| rename(&name))
+            .collect();
+        self.assertions
+            .iter_mut()
+            .for_each(|(name, _, _)| *name = rename(name));
+        self.plots
+            .iter_mut()
+            .for_each(|plot| plot.name = rename(&plot.name));
+        self.plot_errors
+            .iter_mut()
+            .for_each(|plot| plot.name = rename(&plot.name));
+        self.figures.iter_mut().for_each(|figure| {
+            figure.name = rename(&figure.name);
+            figure
+                .plot_names
+                .iter_mut()
+                .for_each(|name| *name = rename(name));
+        });
+        self.layers.iter_mut().for_each(|layer| {
+            layer.name = rename(&layer.name);
+            layer
+                .plot_names
+                .iter_mut()
+                .for_each(|name| *name = rename(name));
+        });
+        self.assumes_map = std::mem::take(&mut self.assumes_map)
+            .into_iter()
+            .map(|(name, assumers)| {
+                (
+                    rename(&name),
+                    assumers
+                        .into_iter()
+                        .map(|assumer| rename(&assumer))
+                        .collect(),
+                )
+            })
+            .collect();
+        self.domain_constraints = std::mem::take(&mut self.domain_constraints)
+            .into_iter()
+            .map(|(name, constraint)| (rename(&name), constraint))
+            .collect();
+    }
+
     fn should_output(
         &self,
         name: &ScopedName,
@@ -962,85 +1032,6 @@ pub enum PlotFieldValue {
     Number(f64),
     /// A single datetime instant as an RFC 3339 / ISO 8601 string (#846).
     Datetime(String),
-}
-
-/// Top-level compile error for parsing, semantic evaluation, and external
-/// parameter binding.
-#[derive(Debug, Error, Diagnostic)]
-pub enum CompileError {
-    /// A source file failed to parse; rendered against the text it indexes.
-    #[error(transparent)]
-    #[diagnostic(transparent)]
-    Parse(RenderableDiagnostic<ParseErrorKind>),
-
-    #[error(transparent)]
-    #[diagnostic(transparent)]
-    Eval(#[from] graphcal_compiler::graphcal_error::GraphcalError),
-
-    /// A value supplied through an external binding format failed semantic
-    /// validation. The boundary source and parameter span deliberately replace
-    /// synthetic expression offsets in the underlying error.
-    #[error("invalid binding for `{name}`: {reason}")]
-    #[diagnostic(code(graphcal::O004))]
-    ExternalBinding {
-        /// Entry-DAG parameter receiving the value.
-        name: DeclName,
-        /// Original compiler/evaluator error rendered at the boundary.
-        reason: String,
-        /// External parameter source, such as inline JSON, stdin, or a file.
-        #[source_code]
-        src: NamedSource<Arc<String>>,
-        /// Span identifying the parameter in the external document.
-        #[label("value for parameter `{name}`")]
-        span: SourceSpan,
-    },
-}
-
-impl From<graphcal_compiler::cancellation::Cancelled> for CompileError {
-    fn from(cancelled: graphcal_compiler::cancellation::Cancelled) -> Self {
-        Self::Eval(graphcal_compiler::graphcal_error::GraphcalError::from(
-            cancelled,
-        ))
-    }
-}
-
-impl CompileError {
-    /// Attach the named source a parse error was produced from.
-    #[must_use]
-    pub fn parse(error: ParseError, source: NamedSource<Arc<String>>) -> Self {
-        Self::Parse(RenderableDiagnostic::in_source(
-            error.kind, error.span, source,
-        ))
-    }
-
-    /// Whether this outcome represents cooperative cancellation rather than a
-    /// Graphcal source error.
-    #[must_use]
-    pub const fn is_cancelled(&self) -> bool {
-        matches!(self, Self::Eval(error) if error.is_cancelled())
-    }
-
-    /// Return the `NamedSource` embedded in this error, if any.
-    ///
-    /// Forwards to the parse diagnostic's attached source or
-    /// [`GraphcalError::named_source`](graphcal_compiler::graphcal_error::GraphcalError::named_source).
-    /// When present, the returned
-    /// `NamedSource` pairs the file's name with the exact source text whose
-    /// byte offsets the error's labels index into — so diagnostic emitters
-    /// can build a line index over the right text without having to look it
-    /// up by name.
-    ///
-    /// Parse and external-binding diagnostics always carry a source;
-    /// `GraphcalError` may return `None` for a few variants representing
-    /// source-less errors (e.g. `FileNotFound`, `CircularImport`).
-    #[must_use]
-    pub const fn named_source(&self) -> Option<&NamedSource<Arc<String>>> {
-        match self {
-            Self::Parse(e) => Some(e.named_source()),
-            Self::Eval(e) => e.named_source(),
-            Self::ExternalBinding { src, .. } => Some(src),
-        }
-    }
 }
 
 #[cfg(test)]

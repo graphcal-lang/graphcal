@@ -5,6 +5,7 @@ use std::path::PathBuf;
 pub enum Package {
     Compiler,
     Eval,
+    Project,
 }
 
 impl Package {
@@ -12,7 +13,18 @@ impl Package {
         match name {
             "compiler" | "graphcal_compiler" => Some(Self::Compiler),
             "eval" | "graphcal_eval" => Some(Self::Eval),
+            "project" | "graphcal_project" => Some(Self::Project),
             _ => None,
+        }
+    }
+
+    /// Resolve the first segment of a Rust path. The project crate is named
+    /// only by its crate name: a bare `project` is an ordinary local binding
+    /// (for example, a projection closure) in the analyzed sources.
+    pub fn from_path_root(segment: &str) -> Option<Self> {
+        match segment {
+            "project" => None,
+            other => Self::from_name(other),
         }
     }
 
@@ -20,6 +32,7 @@ impl Package {
         match self {
             Self::Compiler => "compiler",
             Self::Eval => "eval",
+            Self::Project => "project",
         }
     }
 }
@@ -123,5 +136,22 @@ pub struct Edge {
 impl fmt::Display for ModuleId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(&self.display())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Package;
+
+    #[test]
+    fn project_is_named_by_its_crate_name_in_paths() {
+        assert_eq!(Package::from_name("project"), Some(Package::Project));
+        assert_eq!(Package::from_path_root("project"), None);
+        assert_eq!(
+            Package::from_path_root("graphcal_project"),
+            Some(Package::Project)
+        );
+        assert_eq!(Package::from_path_root("eval"), Some(Package::Eval));
+        assert_eq!(Package::Project.name(), "project");
     }
 }

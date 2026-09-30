@@ -22,11 +22,12 @@ use crate::execution_plan::ExecPlan;
 use crate::host_fns::HostFunctionRegistry;
 use crate::runtime_presentation::PendingPresentedMap;
 
+use super::assertions::evaluate_assertions;
+use super::root_loop::{EvalLoopResult, run_eval_loop_with_bindings};
 use super::root_names::{instance_member_name, root_source_names};
-use super::{EvalLoopResult, evaluate_assertions, run_eval_loop_with_bindings};
 
 /// One evaluation of the root DAG with one row of bindings.
-pub(in crate::eval) struct RootOutcome {
+pub struct RootOutcome {
     unfinished_calls: RefCell<BTreeSet<ResolvedDeclName>>,
     values: RuntimeValueMap,
     presentations: PendingPresentedMap,
@@ -35,7 +36,7 @@ pub(in crate::eval) struct RootOutcome {
 }
 
 /// The parts of a [`RootOutcome`], for the result assembly that consumes it.
-pub(in crate::eval) struct RootOutcomeParts {
+pub struct RootOutcomeParts {
     pub unfinished_calls: BTreeSet<ResolvedDeclName>,
     pub values: RuntimeValueMap,
     pub errors: HashMap<ResolvedDeclName, NodeUnavailable>,
@@ -45,7 +46,7 @@ pub(in crate::eval) struct RootOutcomeParts {
 /// The first failure of a root evaluation, in the order a model row reports
 /// it.
 #[derive(Debug)]
-pub(in crate::eval) enum RootFailure<'o> {
+pub enum RootFailure<'o> {
     /// A declaration failed, or is unavailable, under its root name.
     Declaration {
         name: ScopedName,
@@ -63,7 +64,7 @@ pub(in crate::eval) enum RootFailure<'o> {
 impl RootOutcome {
     /// Run the root's plan with `bindings`, then evaluate every assertion the
     /// root reports.
-    pub(in crate::eval) fn evaluate(
+    pub fn evaluate(
         plan: &ExecPlan<'_>,
         bindings: &crate::eval::bindings::RuntimeParameterBindings,
         src: &NamedSource<Arc<String>>,
@@ -92,7 +93,7 @@ impl RootOutcome {
 
     /// A session over this outcome, for further root-level evaluation; calls
     /// that reach unfinished formulas are recorded in this outcome.
-    pub(in crate::eval) fn session<'a>(
+    pub fn session<'a>(
         &'a self,
         plan: &'a ExecPlan<'a>,
         src: &'a NamedSource<Arc<String>>,
@@ -106,22 +107,22 @@ impl RootOutcome {
     }
 
     /// The values of the declarations that evaluated successfully.
-    pub(in crate::eval) const fn values(&self) -> &RuntimeValueMap {
+    pub const fn values(&self) -> &RuntimeValueMap {
         &self.values
     }
 
     /// The declarations that failed or are unavailable.
-    pub(in crate::eval) const fn errors(&self) -> &HashMap<ResolvedDeclName, NodeUnavailable> {
+    pub const fn errors(&self) -> &HashMap<ResolvedDeclName, NodeUnavailable> {
         &self.errors
     }
 
     /// The presentations of the evaluated declarations, still pending: the
     /// result assembly resolves them against the complete root frame.
-    pub(in crate::eval) const fn presentations(&self) -> &PendingPresentedMap {
+    pub const fn presentations(&self) -> &PendingPresentedMap {
         &self.presentations
     }
 
-    pub(in crate::eval) fn into_parts(self) -> RootOutcomeParts {
+    pub fn into_parts(self) -> RootOutcomeParts {
         RootOutcomeParts {
             unfinished_calls: self.unfinished_calls.into_inner(),
             values: self.values,
@@ -141,7 +142,7 @@ impl RootOutcome {
     /// # Errors
     ///
     /// Returns an internal error when a failed declaration has neither name.
-    pub(in crate::eval) fn first_failure(
+    pub fn first_failure(
         &self,
         plan: &ExecPlan<'_>,
         src: &NamedSource<Arc<String>>,

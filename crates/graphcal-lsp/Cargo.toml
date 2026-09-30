@@ -16,6 +16,7 @@ graphcal-eval = { workspace = true }
 graphcal-fmt = { workspace = true }
 graphcal-io = { workspace = true }
 graphcal-plugin-host.workspace = true
+graphcal-project = { workspace = true }
 indexmap = { workspace = true }
 miette = { workspace = true }
 serde = { workspace = true, features = ["derive"] }

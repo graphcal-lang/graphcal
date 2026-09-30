@@ -12,10 +12,14 @@ use clap::{Args, Subcommand};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
-use graphcal_eval::eval::{CompileError, EvalResult, ProjectCompiler};
-use graphcal_eval::loader::{LoadedProject, build_rooted_filesystem, discover_project_root};
-use graphcal_eval::project_bundle::{ArtifactContent, BundleArtifact, BundleError, ProjectBundle};
+use graphcal_eval::eval::EvalResult;
 use graphcal_io::FileSystemReader as _;
+use graphcal_project::compile_error::CompileError;
+use graphcal_project::loader::{LoadedProject, build_rooted_filesystem, discover_project_root};
+use graphcal_project::project_bundle::{
+    ArtifactContent, BundleArtifact, BundleError, ProjectBundle,
+};
+use graphcal_project::project_compiler::ProjectCompiler;
 use graphcal_report::plot_page::VegaScriptSource;
 use graphcal_report::report_html::render_report_html;
 use graphcal_report::report_hydrate::{EngineBundle, Hydration};
@@ -415,7 +419,7 @@ fn hydration_project(
         .into_iter()
         .flat_map(|closure| &closure.dependencies)
         .map(|(id, dependency)| {
-            graphcal_eval::project_bundle::BundlePackage::from_snapshot(
+            graphcal_project::project_bundle::BundlePackage::from_snapshot(
                 id.clone(),
                 &dependency.snapshot,
             )

@@ -13,12 +13,12 @@ categories.workspace = true
 [features]
 # Cross-crate tests may name declarations directly (`Value::*_with_owner`).
 test-identities = ["graphcal-compiler/test-identities"]
+# Cross-crate tests (`graphcal-project`) observe pipeline metrics and use
+# test-only interpreter constructors.
+test-internals = []
 
 [dependencies]
-base64.workspace = true
 graphcal-compiler = { workspace = true }
-graphcal-io = { workspace = true }
-graphcal-package = { workspace = true }
 hifitime.workspace = true
 indexmap.workspace = true
 jiff.workspace = true
@@ -26,20 +26,11 @@ miette.workspace = true
 num-rational = "0.4.2"
 num-traits = "0.2.19"
 self_cell.workspace = true
-serde = { workspace = true, features = ["derive"] }
-serde_json.workspace = true
-sha2.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
 graphcal-compiler = { workspace = true, features = ["test-cancellation", "test-identities"] }
-graphcal-test-support.workspace = true
-insta.workspace = true
 proptest.workspace = true
-rand.workspace = true
-serde = { workspace = true, features = ["derive"] }
-serde_json.workspace = true
-tempfile.workspace = true
 
 [lints]
 workspace = true

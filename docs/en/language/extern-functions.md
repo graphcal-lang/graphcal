@@ -436,13 +436,15 @@ loads a project's vendored modules into the registry), so the evaluator
 itself stays WASM-free:
 
 ```rust
-use graphcal_eval::eval::compile_and_eval_from_project_with_host_fns;
 use graphcal_eval::host_fns::demo_registry;
 use graphcal_plugin_host::{PluginHost, register_project_plugins};
+use graphcal_project::ProjectCompiler;
 
 let mut registry = demo_registry();
 register_project_plugins(&PluginHost::new(), &project, &mut registry);
-let result = compile_and_eval_from_project_with_host_fns(&project, &overrides, &registry)?;
+let result = ProjectCompiler::new(&project)
+    .host_fns(&registry)
+    .eval(&overrides)?;
 ```
 
 Native registry entries carry no manifest, so their declarations are

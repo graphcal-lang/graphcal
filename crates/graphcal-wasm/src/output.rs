@@ -593,7 +593,7 @@ pub enum NoticeView {
 
 #[cfg(test)]
 mod tests {
-    use graphcal_eval::eval::compile_and_eval;
+    use graphcal_project::prepare::compile_and_eval;
 
     use super::*;
 

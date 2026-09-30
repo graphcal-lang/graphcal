@@ -1,5 +1,0 @@
----
-source: crates/graphcal-eval/tests/error_snapshots.rs
-expression: rendered
----
-convert_target_scale_overflow.bad: display scale unavailable in convert_target_scale_overflow.gcl: compound unit scale must be finite, got inf (SI value retained)

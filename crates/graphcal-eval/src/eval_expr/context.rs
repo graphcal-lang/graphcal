@@ -52,7 +52,7 @@ enum Capabilities<'a> {
 #[derive(Clone)]
 pub struct EvalEnvironment<'a> {
     pub cancellation: CancellationToken,
-    pub(in crate::eval_expr) work_budget: WorkBudget,
+    pub(super) work_budget: WorkBudget,
     pub registry: &'a FormattingRegistry,
     pub src: &'a NamedSource<Arc<String>>,
     pub tir: &'a CheckedTir,
@@ -163,6 +163,7 @@ impl<'a> EvalSession<'a> {
         }
     }
 
+    #[must_use]
     pub fn struct_field_constraints(
         &self,
     ) -> Option<&'a HashMap<StructFieldConstraintKey, ResolvedDomainConstraint>> {
@@ -174,6 +175,7 @@ impl<'a> EvalSession<'a> {
         }
     }
 
+    #[must_use]
     pub const fn host_fns(&self) -> Option<&'a HostFunctionRegistry> {
         match self.capabilities {
             Capabilities::ProvisionalConstants => None,

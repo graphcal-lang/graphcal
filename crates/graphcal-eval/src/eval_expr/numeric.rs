@@ -107,6 +107,7 @@ impl ScaledSum {
         })
     }
 
+    #[must_use]
     pub fn is_zero(self) -> bool {
         self.scale == 0.0 || self.normalized_sum == 0.0
     }

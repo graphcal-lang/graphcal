@@ -225,22 +225,19 @@ pub struct HostFunctionMetadata {
 impl HostFunctionMetadata {
     /// Whether an implementation is expected to exist for `key` at runtime.
     #[must_use]
-    pub(crate) fn contains(&self, key: &ExternFnKey) -> bool {
+    pub fn contains(&self, key: &ExternFnKey) -> bool {
         self.signatures.contains_key(key)
     }
 
     /// Manifest-provided signature for a plugin-backed implementation.
     #[must_use]
-    pub(crate) fn provided_signature(&self, key: &ExternFnKey) -> Option<&FunctionSignature> {
+    pub fn provided_signature(&self, key: &ExternFnKey) -> Option<&FunctionSignature> {
         self.signatures.get(key).and_then(Option::as_ref)
     }
 
     /// Plugin registration failure captured by the embedding shell.
     #[must_use]
-    pub(crate) fn plugin_failure(
-        &self,
-        plugin: &PluginIdentity,
-    ) -> Option<&PluginRegistrationError> {
+    pub fn plugin_failure(&self, plugin: &PluginIdentity) -> Option<&PluginRegistrationError> {
         self.failed_plugins.get(plugin)
     }
 }
@@ -291,6 +288,18 @@ impl HostFunctionRegistry {
         };
         self.metadata.signatures.insert(key.clone(), None);
         self.fns.insert(key, Arc::new(function));
+    }
+
+    /// Test-only: register a trusted host-native closure with no provided
+    /// signature, as the built-in demo registry does.
+    #[cfg(feature = "test-internals")]
+    pub fn register_for_test(
+        &mut self,
+        plugin: PluginPath,
+        name: FnName,
+        function: impl Fn(&[HostFnValue]) -> Result<HostFnValue, HostFnError> + Send + Sync + 'static,
+    ) {
+        self.register(plugin, name, function);
     }
 
     /// Register a plugin-backed closure together with the signature its
@@ -576,129 +585,5 @@ mod tests {
         ])
         .unwrap_err();
         assert!(err.message.contains("not a single quantity slot"), "{err}");
-    }
-
-    #[test]
-    fn evaluator_and_cli_boundary_share_scalar_and_composite_abi_policy() {
-        let plugin = PluginPath::new("graphcal:test-abi-policy");
-        let mut registry = HostFunctionRegistry::new();
-        for (name, value) in [
-            ("signed_zero_bool", HostFnValue::F64(-0.0)),
-            ("signed_zero_int", HostFnValue::F64(-0.0)),
-            ("invalid_bool", HostFnValue::F64(0.5)),
-            ("non_finite_quantity", HostFnValue::F64(f64::NAN)),
-            (
-                "non_finite_record",
-                HostFnValue::Record(vec![f64::INFINITY]),
-            ),
-        ] {
-            registry.register(plugin.clone(), FnName::expect_valid(name), move |_| {
-                Ok(value.clone())
-            });
-        }
-        registry.register(plugin, FnName::expect_valid("non_finite_array"), |_| {
-            Ok(HostFnValue::Array(
-                HostArray::vector(vec![1.0, f64::NEG_INFINITY]).unwrap(),
-            ))
-        });
-        let source = r#"
-pub index Axis = { A, B };
-type QuantityResult {
-    QuantityResult(value: Dimensionless),
-}
-import plugin "graphcal:test-abi-policy" as test {
-    fn signed_zero_bool() -> Bool;
-    fn signed_zero_int() -> Int;
-    fn invalid_bool() -> Bool;
-    fn non_finite_quantity() -> Dimensionless;
-    fn non_finite_array<D: Dim, I: Index>(values: D[I]) -> D[I];
-    fn non_finite_record() -> QuantityResult;
-}
-param values: Dimensionless[Axis] = { Axis#A: 1.0, Axis#B: 2.0 };
-node valid_bool: Bool = test::signed_zero_bool();
-node valid_int: Int = test::signed_zero_int();
-node bad_bool: Bool = test::invalid_bool();
-node bad_quantity: Dimensionless = test::non_finite_quantity();
-node bad_array: Dimensionless[Axis] = test::non_finite_array(@values);
-node bad_record: QuantityResult = test::non_finite_record();
-"#;
-        let project = crate::loader::LoadedProject::from_source(source, "test.gcl").unwrap();
-        let result = crate::eval::ProjectCompiler::new(&project)
-            .host_fns(&registry)
-            .eval(&HashMap::new())
-            .unwrap();
-        let outcome = |name: &str| {
-            result
-                .nodes()
-                .find(|(candidate, _)| candidate.to_string() == name)
-                .unwrap_or_else(|| panic!("{name} node should exist"))
-                .1
-                .as_ref()
-        };
-
-        assert!(matches!(
-            outcome("valid_bool"),
-            Ok(crate::eval::Value::Bool(false))
-        ));
-        assert!(matches!(
-            outcome("valid_int"),
-            Ok(crate::eval::Value::Int(0))
-        ));
-        for (name, expected) in [
-            ("bad_bool", "Bool slot must be 0.0 or 1.0"),
-            ("bad_quantity", "quantity must be finite"),
-            ("bad_array", "array element #1"),
-            ("bad_record", "field `value`"),
-        ] {
-            let error = outcome(name).expect_err("invalid ABI result should fail");
-            let crate::eval::NodeUnavailable::EvalFailed { message } = error else {
-                panic!("expected EvalFailed, got {error:?}");
-            };
-            assert!(message.contains(expected), "{message}");
-        }
-    }
-
-    #[test]
-    fn evaluator_rejects_fractional_host_int_results() {
-        let plugin = PluginPath::new("graphcal:test-exact-int");
-        let mut registry = HostFunctionRegistry::new();
-        registry.register(
-            plugin.clone(),
-            FnName::expect_valid("fractional_scalar"),
-            |_| Ok(HostFnValue::F64(3.7)),
-        );
-        registry.register(plugin, FnName::expect_valid("fractional_record"), |_| {
-            Ok(HostFnValue::Record(vec![3.7]))
-        });
-        let source = r#"
-type IntResult {
-    IntResult(value: Int),
-}
-import plugin "graphcal:test-exact-int" as test {
-    fn fractional_scalar() -> Int;
-    fn fractional_record() -> IntResult;
-}
-node invalid_scalar: Int = test::fractional_scalar();
-node invalid_record: IntResult = test::fractional_record();
-"#;
-        let project = crate::loader::LoadedProject::from_source(source, "test.gcl").unwrap();
-        let result = crate::eval::ProjectCompiler::new(&project)
-            .host_fns(&registry)
-            .eval(&HashMap::new())
-            .unwrap();
-
-        for name in ["invalid_scalar", "invalid_record"] {
-            let error = result
-                .nodes()
-                .find(|(candidate, _)| candidate.to_string() == name)
-                .unwrap_or_else(|| panic!("{name} node should exist"))
-                .1
-                .as_ref()
-                .expect_err("fractional Int result should fail");
-            let crate::eval::NodeUnavailable::EvalFailed { message } = error else {
-                panic!("expected EvalFailed, got {error:?}");
-            };
-            assert!(message.contains("is not integer-valued"), "{message}");
-        }
     }
 }

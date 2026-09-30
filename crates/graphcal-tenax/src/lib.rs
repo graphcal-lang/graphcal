@@ -16,7 +16,7 @@ use arrow_array::{
 use arrow_ipc::reader::StreamReader;
 use arrow_ipc::writer::StreamWriter;
 use arrow_schema::{ArrowError, DataType, Field, Schema, SchemaRef};
-use graphcal_eval::eval::{
+use graphcal_project::prepare::{
     ModelExecutionError, ParameterBindingBuilder, PreparedProject, TenaxV2Input, TenaxV2InputKind,
     TenaxV2Model, TenaxV2RowOutcome,
 };
@@ -269,7 +269,7 @@ fn bind_request_row(
     model: &TenaxV2Model,
     request: &arrow_array::RecordBatch,
     row: usize,
-) -> Result<graphcal_eval::eval::ParameterBindingRow, String> {
+) -> Result<graphcal_project::prepare::ParameterBindingRow, String> {
     let request_schema = request.schema();
     for (position, input) in model.inputs().iter().enumerate() {
         let field = request_schema.field(position);
@@ -836,8 +836,8 @@ mod tests {
     use arrow_ipc::reader::StreamReader;
     use arrow_ipc::writer::StreamWriter;
     use graphcal_compiler::syntax::decl_name::DeclName;
-    use graphcal_eval::eval::prepare_from_project;
-    use graphcal_eval::loader::LoadedProject;
+    use graphcal_project::loader::LoadedProject;
+    use graphcal_project::prepare::prepare_from_project;
 
     use super::*;
 

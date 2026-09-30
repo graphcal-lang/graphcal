@@ -1,0 +1,6 @@
+---
+source: crates/graphcal-project/tests/error_snapshots.rs
+assertion_line: 504
+expression: rendered
+---
+field `Burn.dv` above maximum (10 km/s)

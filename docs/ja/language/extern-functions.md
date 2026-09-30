@@ -234,13 +234,15 @@ extern 関数は実行時に失敗することがあります（プラグイン�
 埋め込み側は `HostFunctionRegistry` を注入することでネイティブ実装を提供します。これは `(plugin path, function name)` から、`fn(&[HostFnValue]) -> Result<HostFnValue, HostFnError>` という形の関数へのマップです。`HostFnValue` は、単一の `f64`、形状を持つ行優先の `HostArray`、または固定レイアウトのレコードスロットです。WASM プラグインも同じインターフェースを通じて登録されます（`graphcal-plugin-host` クレートが、プロジェクトにベンダリングされたモジュールをレジストリに読み込みます）。そのため、評価器自体は WASM に依存しません。
 
 ```rust
-use graphcal_eval::eval::compile_and_eval_from_project_with_host_fns;
 use graphcal_eval::host_fns::demo_registry;
 use graphcal_plugin_host::{PluginHost, register_project_plugins};
+use graphcal_project::ProjectCompiler;
 
 let mut registry = demo_registry();
 register_project_plugins(&PluginHost::new(), &project, &mut registry);
-let result = compile_and_eval_from_project_with_host_fns(&project, &overrides, &registry)?;
+let result = ProjectCompiler::new(&project)
+    .host_fns(&registry)
+    .eval(&overrides)?;
 ```
 
 ネイティブのレジストリエントリーにはマニフェストがないため、その宣言はそのまま信頼されます。これは埋め込み側が管理する関数に適した扱いです。CLI と言語サーバーは組み込みのデモプラグイン（`"graphcal:demo"`: `lerp`、`inverse`、`geometric_mean`、`normalize`、`matrix_transpose`、`dv_range`）を注入するため、配列や struct を返すものを含め、プラグインファイルなしで extern 宣言を試せます。

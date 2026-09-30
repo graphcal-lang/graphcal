@@ -503,7 +503,7 @@ mod tests {
 
     #[test]
     fn vega_data_preserves_exact_int_boundary_and_datetime_nanoseconds() {
-        let result = graphcal_eval::eval::compile_and_eval(
+        let result = graphcal_project::prepare::compile_and_eval(
             r#"
 node instant: Datetime = datetime("2026-01-01T00:00:00.000000001Z");
 plot p = {

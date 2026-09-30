@@ -7,7 +7,7 @@ use tower_lsp::lsp_types::{
     Url,
 };
 
-use graphcal_eval::eval::CompileError;
+use graphcal_project::compile_error::CompileError;
 
 use crate::convert::LineIndex;
 use crate::symbol_table::SymbolTable;
@@ -380,8 +380,8 @@ mod tests {
     use graphcal_compiler::syntax::non_empty::NonEmpty;
     use graphcal_compiler::syntax::parser::Parser;
     use graphcal_compiler::syntax::span::Span;
-    use graphcal_eval::eval::{compile_and_eval_named, compile_and_eval_project};
     use graphcal_io::RealFileSystem;
+    use graphcal_project::prepare::{compile_and_eval_named, compile_and_eval_project};
     use miette::NamedSource;
     use tower_lsp::lsp_types::Position;
 

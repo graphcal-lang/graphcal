@@ -58,8 +58,8 @@
     },
     {
       "path": "language/extern-functions.md",
-      "english_sha256": "b525bb2dba4321dc77c485770ecf131ba4dcb763f7120494614081de9c797adf",
-      "japanese_sha256": "443c0301002d8ee1d6a3ecfc100b55b90010f1dd630ed048882568cdc9128f44"
+      "english_sha256": "bab652d5d35febc6c3a718a6b618e8e2b46651893d9314016949942bcdd67c8f",
+      "japanese_sha256": "80ce3c6727e0b99c9e43c0759adb773c7b1ffc040f2e09e45e8485ed2f772a01"
     },
     {
       "path": "language/functions.md",

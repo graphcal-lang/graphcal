@@ -46,8 +46,10 @@ use graphcal_compiler::graphcal_error::GraphcalError;
 use graphcal_compiler::semantic::scalar_function::scalar_function;
 use graphcal_compiler::syntax::module_name::ScopedName;
 use graphcal_compiler::syntax::names::NameAtom;
-use graphcal_eval::eval::{CheckedProject, CompileError, EvalResult, ProjectCompiler, Value};
-use graphcal_eval::loader::LoadedProject;
+use graphcal_eval::eval::{EvalResult, Value};
+use graphcal_project::compile_error::CompileError;
+use graphcal_project::loader::LoadedProject;
+use graphcal_project::project_compiler::{CheckedProject, ProjectCompiler};
 
 /// A definition from an imported file, for cross-file go-to-definition and hover.
 pub(crate) struct ImportedDefinition {
@@ -1310,7 +1312,7 @@ fn build_project(
     // buffers are below a base-authorized canonical parent. The analyzed
     // snapshot comes first so it wins over any newer latest-text entry for the
     // same file.
-    let base = match graphcal_eval::loader::build_rooted_filesystem(&path, None) {
+    let base = match graphcal_project::loader::build_rooted_filesystem(&path, None) {
         Ok(base) => base,
         Err(error) => return ProjectBuild::failed(error),
     };
@@ -1339,7 +1341,7 @@ fn build_project(
         }
     };
     let tracking_fs = TrackingFileSystem::new(fs);
-    let project = graphcal_eval::loader::load_project_with_cancellation(
+    let project = graphcal_project::loader::load_project_with_cancellation(
         &path,
         None,
         &tracking_fs,
@@ -1376,7 +1378,7 @@ fn project_dependency_identities(project: &LoadedProject) -> HashSet<DocumentIde
 }
 
 fn dependency_artifact_identities(
-    closure: &graphcal_eval::loader::LoadedPackageClosure,
+    closure: &graphcal_project::loader::LoadedPackageClosure,
 ) -> impl Iterator<Item = DocumentIdentity> + '_ {
     closure.dependencies.values().flat_map(|dependency| {
         dependency
@@ -1990,7 +1992,7 @@ fn format_tuple_keyed_entries(
 
 /// Collect canonical export surfaces for every import path in the root file.
 fn collect_import_surfaces(
-    project: &graphcal_eval::loader::LoadedProject,
+    project: &graphcal_project::loader::LoadedProject,
     module_resolver: &graphcal_compiler::resolve::ModuleResolver,
     cancellation: &CancellationToken,
 ) -> std::result::Result<
@@ -2039,7 +2041,7 @@ struct BuiltProjectDocument {
 
 fn build_project_symbol_documents(
     root_uri: &Url,
-    project: &graphcal_eval::loader::LoadedProject,
+    project: &graphcal_project::loader::LoadedProject,
     tir: Option<&graphcal_compiler::tir::typed::CheckedTir>,
     module_resolver: &graphcal_compiler::resolve::ModuleResolver,
     cancellation: &CancellationToken,
@@ -2116,7 +2118,7 @@ impl<'a> ImportedNames<'a> {
 
 fn collect_file_imported_symbols(
     file_id: &graphcal_compiler::dag_id::DagId,
-    loaded_file: &graphcal_eval::loader::LoadedFile,
+    loaded_file: &graphcal_project::loader::LoadedFile,
     documents: &HashMap<graphcal_compiler::dag_id::DagId, BuiltProjectDocument>,
     module_resolver: &graphcal_compiler::resolve::ModuleResolver,
     cancellation: &CancellationToken,
@@ -2183,7 +2185,7 @@ fn collect_file_imported_symbols(
 
 fn collect_imported_definitions(
     root_uri: &Url,
-    project: &graphcal_eval::loader::LoadedProject,
+    project: &graphcal_project::loader::LoadedProject,
     tir: Option<&graphcal_compiler::tir::typed::CheckedTir>,
     module_resolver: &graphcal_compiler::resolve::ModuleResolver,
     cancellation: &CancellationToken,
@@ -2295,7 +2297,7 @@ fn resolve_selective_binding(
     Some(VisibleBinding::new(target, SourceSymbolPath::local(local)))
 }
 
-fn loaded_file_uri(loaded_file: &graphcal_eval::loader::LoadedFile, root_uri: &Url) -> Url {
+fn loaded_file_uri(loaded_file: &graphcal_project::loader::LoadedFile, root_uri: &Url) -> Url {
     Url::from_file_path(loaded_file.path()).unwrap_or_else(|()| {
         #[expect(
             clippy::print_stderr,
@@ -4859,11 +4861,11 @@ node momentum: Force * Time = @mass * @velocity;
                 &NeverCancel,
             )
             .unwrap();
-        let closure = graphcal_eval::loader::LoadedPackageClosure {
+        let closure = graphcal_project::loader::LoadedPackageClosure {
             lockfile: String::new(),
             dependencies: std::collections::BTreeMap::from([(
                 graphcal_package::PackageInstanceId::new("dependency").unwrap(),
-                graphcal_eval::loader::LoadedDependency {
+                graphcal_project::loader::LoadedDependency {
                     root: root.to_path_buf(),
                     snapshot,
                 },

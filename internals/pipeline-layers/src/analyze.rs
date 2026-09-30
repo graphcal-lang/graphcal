@@ -248,7 +248,7 @@ impl Analyzer {
             }]);
         };
 
-        if let Some(package) = Package::from_name(first) {
+        if let Some(package) = Package::from_path_root(first) {
             return self.apply_segments(ModuleId::new(package, Vec::new()), &segments[1..], stack);
         }
         if first == "crate" {
@@ -1046,7 +1046,7 @@ fn collect_extern_binding(
         .rename
         .as_ref()
         .map_or_else(|| item.ident.to_string(), |rename| rename.1.to_string());
-    if Package::from_name(&item.ident.to_string()).is_some() {
+    if Package::from_path_root(&item.ident.to_string()).is_some() {
         let binding = Binding {
             owner: owner.clone(),
             name: name.clone(),

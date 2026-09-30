@@ -9,10 +9,24 @@ use graphcal_compiler::semantic::unit_scale::{
 };
 use graphcal_compiler::syntax::dimension::UnitRef;
 use graphcal_compiler::syntax::span::Span;
+use graphcal_compiler::tir::texpr::TExpr;
+use graphcal_compiler::tir::typed::evaluation_unit::ScopedTree;
 use graphcal_compiler::tir::typed::scoped_node::ScopedUnitExpr;
 
+use super::context::EvalSession;
 use super::numeric;
-use super::{EvalSession, RuntimeValueMap, hir_eval::eval_root};
+use crate::constant_pools::RuntimeValueMap;
+
+/// The expression kernel, evaluating one executable tree with no locals.
+///
+/// A dynamic unit's scale is an ordinary expression, so resolving a unit
+/// scale re-enters the kernel. Callers hand the kernel in rather than this
+/// module naming it, so the kernel stays the only module that recurses.
+pub(super) type EvaluateExecutable = for<'a, 't, 's> fn(
+    &'a ScopedTree<'t, &'t TExpr>,
+    &'a RuntimeValueMap,
+    &'a EvalSession<'s>,
+) -> Result<RuntimeValue, GraphcalError>;
 
 fn unit_scale_error(
     context: &str,
@@ -24,7 +38,7 @@ fn unit_scale_error(
 }
 
 /// Apply a unit scale to a literal value and validate that the SI value is finite.
-pub(in crate::eval_expr) fn checked_unit_scaled_value(
+pub(super) fn checked_unit_scaled_value(
     value: f64,
     scale: PositiveFiniteScale,
     span: Span,
@@ -44,6 +58,7 @@ fn resolve_dynamic_unit_scale(
     span: Span,
     values: &RuntimeValueMap,
     session: &EvalSession<'_>,
+    evaluate: EvaluateExecutable,
 ) -> Result<PositiveFiniteScale, GraphcalError> {
     let scale = session.tir.unit_scale_body(unit).ok_or_else(|| {
         session.internal_error(
@@ -62,7 +77,7 @@ fn resolve_dynamic_unit_scale(
         ));
     }
     let expression = scale.expression();
-    let scale_val = eval_root(
+    let scale_val = evaluate(
         &scale_session.executable(expression)?,
         values,
         &scale_session,
@@ -94,6 +109,7 @@ fn fold_unit_scale<'u, R: 'u>(
     values: &RuntimeValueMap,
     session: &EvalSession<'_>,
     spelling: fn(&R) -> &UnitRef,
+    evaluate: EvaluateExecutable,
 ) -> Result<PositiveFiniteScale, GraphcalError> {
     try_fold_unit_scale(
         terms,
@@ -113,6 +129,7 @@ fn fold_unit_scale<'u, R: 'u>(
                     item.name.span,
                     values,
                     session,
+                    evaluate,
                 )?,
             };
             Ok(UnitScaleTerm {
@@ -146,10 +163,11 @@ fn fold_unit_scale<'u, R: 'u>(
 ///
 /// Returns a [`GraphcalError`] if a unit is unknown or a dynamic scale expression
 /// fails to evaluate to a quantity.
-pub(in crate::eval_expr) fn resolve_unit_scale(
+pub(super) fn resolve_unit_scale(
     unit: ScopedUnitExpr<'_>,
     values: &RuntimeValueMap,
     ctx: &EvalSession<'_>,
+    evaluate: EvaluateExecutable,
 ) -> Result<PositiveFiniteScale, GraphcalError> {
     fold_unit_scale(
         unit.get().span,
@@ -157,6 +175,7 @@ pub(in crate::eval_expr) fn resolve_unit_scale(
         values,
         ctx,
         graphcal_compiler::hir::expr::LocalUnit::spelling,
+        evaluate,
     )
 }
 
@@ -167,10 +186,11 @@ pub(in crate::eval_expr) fn resolve_unit_scale(
 ///
 /// Returns a [`GraphcalError`] if a unit is unknown or a dynamic scale expression
 /// fails to evaluate to a quantity.
-pub(in crate::eval_expr) fn resolved_unit_scale(
+pub(super) fn resolved_unit_scale(
     unit: &ResolvedUnitExpr<ResolvedUnitRef>,
     values: &RuntimeValueMap,
     session: &EvalSession<'_>,
+    evaluate: EvaluateExecutable,
 ) -> Result<PositiveFiniteScale, GraphcalError> {
     fold_unit_scale(
         unit.span,
@@ -180,5 +200,6 @@ pub(in crate::eval_expr) fn resolved_unit_scale(
         values,
         session,
         ResolvedUnitRef::spelling,
+        evaluate,
     )
 }

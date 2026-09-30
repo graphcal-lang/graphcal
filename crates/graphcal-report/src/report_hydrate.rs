@@ -9,7 +9,7 @@
 //! results, and unit checking as the CLI, end to end.
 
 use base64::Engine as _;
-use graphcal_eval::project_bundle::ProjectBundle;
+use graphcal_project::project_bundle::ProjectBundle;
 use serde_json::json;
 
 use crate::escape::escape_json_for_script;
@@ -55,7 +55,7 @@ impl<'a> Hydration<'a> {
         engine: EngineBundle<'a>,
         project: &ProjectBundle,
         baseline_bindings: Vec<(String, String)>,
-    ) -> Result<Self, graphcal_eval::project_bundle::BundleError> {
+    ) -> Result<Self, graphcal_project::project_bundle::BundleError> {
         let project_json = escape_json_for_script(&project.to_json()?);
         ProjectBundle::check_json_size(project_json.len())?;
         Ok(Self {
@@ -121,9 +121,9 @@ mod tests {
             &ProjectBundle {
                 dependencies: vec![],
                 entry: "main.gcl".to_string().try_into().unwrap(),
-                files: vec![graphcal_eval::project_bundle::BundleArtifact {
+                files: vec![graphcal_project::project_bundle::BundleArtifact {
                     path: "main.gcl".to_string().try_into().unwrap(),
-                    content: graphcal_eval::project_bundle::ArtifactContent::Source(
+                    content: graphcal_project::project_bundle::ArtifactContent::Source(
                         "// </script><script>alert(1)</script>\nparam x: Dimensionless = 1.0;"
                             .to_string(),
                     ),
@@ -140,7 +140,7 @@ mod tests {
 
     #[test]
     fn html_escaping_cannot_exceed_the_browser_envelope_budget() {
-        use graphcal_eval::project_bundle::{
+        use graphcal_project::project_bundle::{
             ArtifactContent, BundleArtifact, BundleError, MAX_BUNDLE_JSON_BYTES,
         };
         let project = ProjectBundle {

@@ -58,8 +58,8 @@ def reading-order-sccs []: nothing -> int {
 }
 
 def measure []: nothing -> record {
-    let core = production-sources [graphcal-compiler graphcal-eval]
-    let consumers = production-sources [graphcal-compiler graphcal-eval graphcal-lsp]
+    let core = production-sources [graphcal-compiler graphcal-eval graphcal-project]
+    let consumers = production-sources [graphcal-compiler graphcal-eval graphcal-project graphcal-lsp]
     let outside_resolver = $consumers
         | where {|source| not ($source.path | str contains "graphcal-compiler/src/resolve/") }
     let resolver = $core | where {|source| $source.path | str contains "graphcal-compiler/src/resolve/" }

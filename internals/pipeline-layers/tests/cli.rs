@@ -16,18 +16,19 @@ fn pruning_only_deletes_stale_debt_and_preserves_reviewed_reasons() {
     let root = directory.path();
     let compiler = root.join("crates/graphcal-compiler/src");
     let eval = root.join("crates/graphcal-eval/src");
+    let project = root.join("crates/graphcal-project/src");
     let config = root.join("internals/pipeline-layers");
-    for path in [&compiler, &eval, &config] {
+    for path in [&compiler, &eval, &project, &config] {
         fs::create_dir_all(path).expect("fixture directory");
     }
     fs::write(compiler.join("lib.rs"), "").expect("compiler root");
+    fs::write(project.join("lib.rs"), "").expect("project root");
     let source = format!(
         "{}\nmod loading {{ pub fn load() {{}} }}\n",
         include_str!("../fixtures/negative.rs")
     );
     fs::write(eval.join("lib.rs"), &source).expect("eval root");
-    let mut roles =
-        "[[module]]\npackage = \"compiler\"\npath = []\nrole = \"contracts\"\n".to_string();
+    let mut roles = "[[module]]\npackage = \"compiler\"\npath = []\nrole = \"contracts\"\n\n[[module]]\npackage = \"project\"\npath = []\nrole = \"facade\"\n".to_string();
     for (path, role) in [
         ("", "facade"),
         ("contracts", "contracts"),

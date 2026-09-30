@@ -1,0 +1,5 @@
+---
+source: crates/graphcal-project/tests/error_snapshots.rs
+expression: message
+---
+extern function `demo::inverse` (plugin "graphcal:demo") failed: division by zero

@@ -6,9 +6,9 @@
 
 #[derive(Debug, Clone, Copy)]
 pub enum Event {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-internals"))]
     ImportedBodyReference,
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-internals"))]
     UnsharedImportedBody,
     PlanConstruction,
     ImportedSourceResolution,
@@ -16,28 +16,28 @@ pub enum Event {
     ConstructorFactConsumption,
     PresentationEvaluation,
     DependencyAvailabilityCheck,
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-internals"))]
     CallFrameValueNodes,
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-internals"))]
     CallOutputEvidenceNodes,
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-internals"))]
     PresentationEvidenceCopyNode,
 }
 
-#[cfg(not(test))]
+#[cfg(not(any(test, feature = "test-internals")))]
 #[inline]
 pub const fn record(_event: Event) {}
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-internals"))]
 pub fn record(event: Event) {
     record_many(event, 1);
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-internals"))]
 pub use observer::{measure, record_many};
 
 /// Observe the actual canonical/importer addresses, not an inactive clone hook.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-internals"))]
 pub fn record_imported_body<T>(canonical: &T, imported: &T) {
     record(Event::ImportedBodyReference);
     if !std::ptr::eq(canonical, imported) {
@@ -45,7 +45,7 @@ pub fn record_imported_body<T>(canonical: &T, imported: &T) {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-internals"))]
 mod observer {
     use super::Event;
     use std::cell::Cell;

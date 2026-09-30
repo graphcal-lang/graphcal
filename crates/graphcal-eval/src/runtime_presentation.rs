@@ -86,7 +86,7 @@ pub type ResolvedPresentedMap = PresentedMap<ResolvedLeaf>;
 
 impl<L: Clone> Clone for Presented<L> {
     fn clone(&self) -> Self {
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-internals"))]
         crate::pipeline_metrics::record(
             crate::pipeline_metrics::Event::PresentationEvidenceCopyNode,
         );
@@ -125,7 +125,7 @@ fn leaves_are(value: &RuntimeValue, kind: LeafKind) -> bool {
 impl<L> Presented<L> {
     /// A value without a presentation.
     #[must_use]
-    pub(crate) const fn plain(value: RuntimeValue) -> Self {
+    pub const fn plain(value: RuntimeValue) -> Self {
         Self(Node::Whole { value, leaf: None })
     }
 
@@ -136,7 +136,7 @@ impl<L> Presented<L> {
     /// Returns an [`Invariant`] when a leaf of `value` is not of the leaf's
     /// kind: the checker admits a display unit only on quantities and a
     /// display time zone only on datetimes.
-    pub(crate) fn with_leaf(value: RuntimeValue, leaf: L) -> Result<Self, Invariant>
+    pub fn with_leaf(value: RuntimeValue, leaf: L) -> Result<Self, Invariant>
     where
         L: PresentationLeaf,
     {
@@ -205,7 +205,7 @@ impl<L> Presented<L> {
 
     /// The runtime value, borrowed when the value is whole.
     #[must_use]
-    pub(crate) fn value(&self) -> Cow<'_, RuntimeValue>
+    pub fn value(&self) -> Cow<'_, RuntimeValue>
     where
         L: Clone,
     {
@@ -366,7 +366,7 @@ impl<L> Presented<L> {
     }
 
     /// Active retention metric: presentation nodes, excluding plain values.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-internals"))]
     #[must_use]
     pub fn retained_nodes(&self) -> usize {
         match &self.0 {

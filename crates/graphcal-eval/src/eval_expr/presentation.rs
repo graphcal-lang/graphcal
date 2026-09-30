@@ -1,4 +1,5 @@
 //! Presentation computations executed while the selected invocation is alive.
+//!
 //! This is not a selector evaluator: branches, locals and keys already selected
 //! a value-shaped subtree in the ordinary expression kernel.
 
@@ -10,6 +11,7 @@ use graphcal_compiler::semantic::unit_scale::PositiveFiniteScale;
 use graphcal_compiler::tir::typed::scoped_node::ScopedUnitExpr;
 
 use super::context::EvalSession;
+use super::unit_scale::{EvaluateExecutable, resolved_unit_scale};
 use crate::constant_pools::RuntimeValueMap;
 use crate::presentation_evidence::{
     PendingDisplayUnit, PendingQuantityDisplay, PresentationFailure, QuantityDisplay,
@@ -56,28 +58,32 @@ pub(super) fn scaled<R: std::fmt::Display>(
 ///
 /// Future operation-budget accounting belongs here, shared with unit-scale work.
 /// Resolving a subtree never stores the frame or any transient computational value.
-pub fn resolve(
+pub(super) fn resolve(
     presented: EvaluatedRuntimeValue,
     values: &RuntimeValueMap,
     ctx: &EvalSession<'_>,
+    evaluate: EvaluateExecutable,
 ) -> Result<ResolvedValue, GraphcalError> {
     presented.try_resolve(|display| match display {
         PendingQuantityDisplay::Ready(display) => Ok(display),
-        PendingQuantityDisplay::Requested(request) => resolve_request(&request, values, ctx),
+        PendingQuantityDisplay::Requested(request) => {
+            resolve_request(&request, values, ctx, evaluate)
+        }
     })
 }
 
 /// Caller-owned requests pass through a child call unchanged. They are resolved
 /// when that caller's frame is complete, not against a child's partial values.
-pub fn resolve_frame(
+pub(super) fn resolve_frame(
     presented: EvaluatedRuntimeValue,
     values: &RuntimeValueMap,
     ctx: &EvalSession<'_>,
     callable: &crate::execution_plan::CallablePlan<'_>,
+    evaluate: EvaluateExecutable,
 ) -> Result<EvaluatedRuntimeValue, GraphcalError> {
     presented.try_map_quantity_displays(|display| match display {
         PendingQuantityDisplay::Requested(request) if callable.executes(&request.owner) => {
-            resolve_request(&request, values, ctx).map(PendingQuantityDisplay::Ready)
+            resolve_request(&request, values, ctx, evaluate).map(PendingQuantityDisplay::Ready)
         }
         display @ (PendingQuantityDisplay::Ready(_) | PendingQuantityDisplay::Requested(_)) => {
             Ok(display)
@@ -91,11 +97,12 @@ fn resolve_request(
     request: &PendingDisplayUnit,
     values: &RuntimeValueMap,
     ctx: &EvalSession<'_>,
+    evaluate: EvaluateExecutable,
 ) -> Result<QuantityDisplay, GraphcalError> {
     ctx.cancellation.checkpoint()?;
     let context = ctx.with_src(&request.source);
     crate::pipeline_metrics::record(crate::pipeline_metrics::Event::PresentationEvaluation);
-    match super::resolved_unit_scale(&request.unit, values, &context)
+    match resolved_unit_scale(&request.unit, values, &context, evaluate)
         .map(|scale| scaled(&request.unit, scale, &context))
     {
         Ok(leaf) => Ok(leaf),

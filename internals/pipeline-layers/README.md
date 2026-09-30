@@ -70,5 +70,5 @@ proof**. It does not expand procedural/declarative macros, infer hygiene beyond
 literal `$crate`, inspect build-script-generated sources, or infer method/UFCS
 dependencies whose producer is not syntactically named. Macro token scanning is
 conservative and can miss interpolated or concatenated paths. External crates
-other than the two analyzed Graphcal crates are outside the role map. Negative
+other than the three analyzed Graphcal crates are outside the role map. Negative
 compile-time API assertions and native/Wasm semantic tests remain necessary.
