@@ -796,6 +796,7 @@ fn frame_runtime_imports_seed_only_unbound_prepared_imports() {
     let callable = crate::execution_plan::CallablePlan::new(
         inline.scope(),
         inline.execution_dags().to_vec(),
+        inline.semantic_instances().to_vec(),
         crate::execution_plan::PreparedImports {
             constants: Vec::new(),
             runtime: vec![import.clone()],
@@ -5621,6 +5622,49 @@ fn requested_instance_plot_reports_its_failed_instance_dependency() {
         message.starts_with("dependency failed: inv (") && message.contains("division by zero"),
         "expected the failed instance dependency with its root cause: {message}"
     );
+}
+
+#[test]
+fn composition_of_an_unavailable_requested_instance_plot_reports_the_plot() {
+    // A figure names a requested instance plot by its local alias. When that
+    // plot is unavailable, the figure is blocked by the instance's plot
+    // declaration; the alias itself binds no declaration identity, so it must
+    // not be looked up as one (this used to abort evaluation with X001).
+    let (_directory, root) = write_pipeline_project(
+        &[
+            (
+                "leaf.gcl",
+                "param input: Dimensionless;\n\
+                 node reciprocal: Dimensionless = 1.0 / @input;\n\
+                 pub plot chart = { mark: point, encode: { x: @input, y: @reciprocal } };\n",
+            ),
+            (
+                "main.gcl",
+                "include pipeline.leaf(input: 0.0)::{ chart as ch };\n\
+                 figure summary = { plots: [ch] };\n",
+            ),
+        ],
+        "main.gcl",
+    );
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap();
+    assert!(result.plots.is_empty());
+    assert!(result.figures.is_empty());
+    let names = result
+        .plot_errors
+        .iter()
+        .map(|error| error.name.to_string())
+        .collect::<Vec<_>>();
+    assert_eq!(names, ["ch", "summary"]);
+    let NodeUnavailable::DependencyFailed { failed_deps } = &result.plot_errors[1].reason else {
+        panic!(
+            "expected the figure to be blocked by its plot, got {:?}",
+            result.plot_errors[1].reason
+        );
+    };
+    let [plot] = failed_deps.as_slice() else {
+        panic!("expected one failed plot, got {failed_deps:?}");
+    };
+    assert_eq!(plot.leaf().as_str(), "chart");
 }
 
 #[test]

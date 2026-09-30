@@ -46,7 +46,7 @@ from_path = ["ir", "instance"]
 to_package = "compiler"
 to_path = ["hir"]
 test_only = false
-reason = "Observed compiler::ir::instance -> compiler::hir (production) at ./crates/graphcal-compiler/src/ir/instance.rs:113 (qualified path); roles are checking -> facade. Planned deletion seam: replace facade reach-through with an owned checking interface."
+reason = "Observed compiler::ir::instance -> compiler::hir (production) at ./crates/graphcal-compiler/src/ir/instance.rs:113 (qualified path); roles are contracts -> facade. Planned deletion seam: replace facade reach-through with an owned checking interface."
 
 [[exception]]
 from_package = "compiler"
@@ -167,14 +167,6 @@ to_package = "compiler"
 to_path = ["ir", "extern_fns"]
 test_only = false
 reason = "Observed compiler::tir::typed::model -> compiler::ir::extern_fns (production) at ./crates/graphcal-compiler/src/tir/typed/model.rs:1323 (qualified path); roles are contracts -> checking. Planned deletion seam: separate shared data/error definitions from their checking/building producers (Phases B-C)."
-
-[[exception]]
-from_package = "compiler"
-from_path = ["tir", "typed", "model"]
-to_package = "compiler"
-to_path = ["ir", "instance"]
-test_only = false
-reason = "Observed compiler::tir::typed::model -> compiler::ir::instance (production) at ./crates/graphcal-compiler/src/tir/typed/model.rs:1758 (qualified path); roles are contracts -> checking. Planned deletion seam: separate shared data/error definitions from their checking/building producers (Phases B-C)."
 
 [[exception]]
 from_package = "compiler"

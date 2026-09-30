@@ -13,6 +13,7 @@ use graphcal_compiler::dag_id::DagId;
 use graphcal_compiler::hir::expr::Expr;
 use graphcal_compiler::resolved_name::ResolvedDeclName;
 use graphcal_compiler::tir::texpr::{ExecutableBodyError, TExpr};
+use graphcal_compiler::tir::typed::checked_instance::CheckedInstance;
 use graphcal_compiler::tir::typed::evaluation_unit::{Scoped, ScopedTree};
 use thiserror::Error;
 
@@ -237,10 +238,61 @@ pub enum StepIndexError {
     },
 }
 
+/// One semantic instance a callable's body includes, with the sealed DAG
+/// that runs it.
+#[derive(Debug, Clone, Copy)]
+pub struct PlannedInstance<'p> {
+    instance: CheckedInstance<'p>,
+    scope: SealedDag<'p>,
+}
+
+/// Why a sealed DAG cannot run a semantic instance.
+#[derive(Debug, Error)]
+#[error("semantic instance `{instance}` is run by DAG `{actual}`")]
+pub struct PlannedInstanceError {
+    instance: DagId,
+    actual: DagId,
+}
+
+impl<'p> PlannedInstance<'p> {
+    /// Pair `instance` with `scope`, the sealed DAG that runs it.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PlannedInstanceError`] when `scope` is not the instance's
+    /// own DAG.
+    pub(crate) fn try_new(
+        instance: CheckedInstance<'p>,
+        scope: SealedDag<'p>,
+    ) -> Result<Self, PlannedInstanceError> {
+        if std::ptr::eq(instance.dag(), scope.dag()) {
+            Ok(Self { instance, scope })
+        } else {
+            Err(PlannedInstanceError {
+                instance: instance.dag().dag_id().clone(),
+                actual: scope.dag().dag_id().clone(),
+            })
+        }
+    }
+
+    /// The include edge and the checked DAG that runs its instance.
+    #[must_use]
+    pub const fn instance(self) -> CheckedInstance<'p> {
+        self.instance
+    }
+
+    /// The instance's sealed DAG, with the source its diagnostics point into.
+    #[must_use]
+    pub const fn scope(self) -> SealedDag<'p> {
+        self.scope
+    }
+}
+
 /// One body and its included-instance closure, prepared before evaluation.
 pub struct CallablePlan<'p> {
     scope: SealedDag<'p>,
     execution_dags: Vec<SealedDag<'p>>,
+    instances: Vec<PlannedInstance<'p>>,
     imports: PreparedImports,
     steps: IndexVec<StepIdx, Step<'p>>,
 }
@@ -258,6 +310,7 @@ impl<'p> CallablePlan<'p> {
     pub(crate) fn new(
         scope: SealedDag<'p>,
         execution_dags: Vec<SealedDag<'p>>,
+        instances: Vec<PlannedInstance<'p>>,
         imports: PreparedImports,
         scheduled: Vec<PlannedDeclaration<'p>>,
     ) -> Result<Self, StepIndexError> {
@@ -295,6 +348,7 @@ impl<'p> CallablePlan<'p> {
         Ok(Self {
             scope,
             execution_dags,
+            instances,
             imports,
             steps: IndexVec::from_items(steps),
         })
@@ -310,6 +364,13 @@ impl<'p> CallablePlan<'p> {
     #[must_use]
     pub fn execution_dags(&self) -> &[SealedDag<'p>] {
         &self.execution_dags
+    }
+
+    /// The semantic instances the callable's own body includes, in record
+    /// order.
+    #[must_use]
+    pub fn semantic_instances(&self) -> &[PlannedInstance<'p>] {
+        &self.instances
     }
 
     /// Whether `dag` is one of this callable's execution DAGs.
