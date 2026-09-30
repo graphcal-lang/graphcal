@@ -1,4 +1,5 @@
 pub mod attribute_validation;
+pub mod collected;
 #[cfg(test)]
 mod formal_conformance;
 pub mod include_selection;
@@ -21,17 +22,17 @@ use crate::desugar::desugared_ast::{
     AssertBody, DeclKind, Declaration, DimExpr, ExprKind, File, IndexExpr, TypeDeclBody, TypeExpr,
     TypeExprKind,
 };
+use crate::graphcal_error::GraphcalError;
 use crate::ir::entry::{
     AssertEntry, ConstEntry, Decl, FigureEntry, InScope, LayerEntry, NodeEntry, ParamEntry,
     PlotEntry, PlotSyntax, Syntax,
 };
+use crate::ir::resolve::collected::{CollectedExpectedFail, ExternalDeclSurface};
 use crate::plot_visibility::PlotVisibility;
-use crate::registry::error::GraphcalError;
-use crate::registry::reserved_name::validate_reserved_name;
-use crate::registry::resolve_types::{CollectedExpectedFail, ExternalDeclSurface};
 use crate::resolve::ModuleResolver;
 use crate::resolve::error::ModuleResolveError;
 use crate::resolve::namespace::Namespace;
+use crate::resolve::reserved_name::validate_reserved_name;
 use crate::resolved_name::ResolvedDeclName;
 use crate::syntax::ast::{DeclExposure, ImportItemNamespace, IntroducedKind};
 use crate::syntax::attribute::AttributeName;
@@ -40,8 +41,8 @@ use crate::syntax::names::NameAtom;
 use crate::syntax::phase::never;
 use crate::syntax::span::{Span, Spanned};
 
-// Re-export types and constants from graphcal-registry's resolve_types module.
-pub use crate::registry::resolve_types::{AttributeTarget, DeclarationKind, ImportedValueNames};
+// Re-export declaration-collection data types.
+pub use crate::ir::resolve::collected::{AttributeTarget, DeclarationKind, ImportedValueNames};
 pub use crate::syntax::module_name::ScopedName;
 
 // Re-export items from submodules (crate-internal only).

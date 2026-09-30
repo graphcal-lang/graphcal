@@ -4,8 +4,8 @@ use std::collections::HashMap;
 
 use crate::dag_id::DagId;
 use crate::desugar::desugared_ast as ast;
-use crate::registry::index::FiniteIndex;
 use crate::resolved_name::ResolvedName;
+use crate::semantic::index_def::FiniteIndex;
 use crate::syntax::ast::{BindableVisibility, UnitConstness};
 use crate::syntax::decl_name::{DeclName, DeclNameNamespace};
 use crate::syntax::dimension::{DimName, DimNameNamespace, UnitName, UnitNameNamespace};

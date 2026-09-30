@@ -6,11 +6,11 @@ use thiserror::Error;
 use crate::builtin::{AggregationFn, LinearAlgebraFn};
 use crate::datetime_literal::CivilDateTimeLiteral;
 use crate::diagnostic_anchor::DiagnosticAnchor;
-use crate::registry::checked_type::IndexDisplayName;
-use crate::registry::resolve_types::{AttributeTarget, DeclarationKind};
-use crate::registry::time_scale::TimeScale;
-use crate::registry::time_zone::IanaTimeZoneId;
+use crate::ir::resolve::collected::{AttributeTarget, DeclarationKind};
 use crate::resolve::category::DeclSymbolKind;
+use crate::semantic::checked_type::IndexDisplayName;
+use crate::semantic::time_scale::TimeScale;
+use crate::semantic::time_zone::IanaTimeZoneId;
 use crate::syntax::attribute::AttributeName;
 use crate::syntax::decl_name::DeclName;
 use crate::syntax::dimension::{DimName, UnitName, UnitRef};
@@ -2585,7 +2585,7 @@ mod tests {
     use crate::diagnostic_anchor::DiagnosticAnchor;
 
     fn diagnostic_code_catalog() -> BTreeMap<String, String> {
-        let source = include_str!("error.rs");
+        let source = include_str!("graphcal_error.rs");
         let prefix = concat!("code(", "graphcal::");
         let mut pending_code = None;
         let mut catalog = BTreeMap::new();

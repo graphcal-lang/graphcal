@@ -6,9 +6,9 @@ use miette::NamedSource;
 use thiserror::Error;
 
 use crate::diagnostic_anchor::DiagnosticAnchor;
+use crate::graphcal_error::GraphcalError;
 use crate::hir::{NominalConstructor, NominalTypeDef, NominalTypeKind};
-use crate::registry::checked_type::{CheckedGenericArg, CheckedType, IndexTypeRef, StructTypeRef};
-use crate::registry::error::GraphcalError;
+use crate::semantic::checked_type::{CheckedGenericArg, CheckedType, IndexTypeRef, StructTypeRef};
 use crate::syntax::ast::GenericConstraint;
 use crate::syntax::type_name::{ConstructorName, FieldName, GenericParamName};
 
@@ -427,7 +427,7 @@ fn validate_bound_index(
 fn index_definition<'tir>(
     tir: &'tir dyn crate::tir::typed::TirRead,
     index: &IndexTypeRef,
-) -> Result<Option<&'tir crate::registry::types::IndexDef>, ConcreteModelTypeError> {
+) -> Result<Option<&'tir crate::semantic::index_def::IndexDef>, ConcreteModelTypeError> {
     if index.finite_index().is_some() {
         return Ok(None);
     }

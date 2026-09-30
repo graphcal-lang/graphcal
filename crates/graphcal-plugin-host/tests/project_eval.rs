@@ -10,7 +10,7 @@
 use std::collections::HashMap;
 use std::path::Path;
 
-use graphcal_compiler::registry::error::GraphcalError;
+use graphcal_compiler::graphcal_error::GraphcalError;
 use graphcal_eval::eval::{CompileError, EvalResult, Value};
 use graphcal_eval::host_fns::HostFunctionRegistry;
 use graphcal_eval::loader::{LoadedProject, load_project};

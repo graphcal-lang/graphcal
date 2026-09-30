@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 use std::fmt::Write as _;
 
-use graphcal_compiler::registry::error::GraphcalError;
+use graphcal_compiler::graphcal_error::GraphcalError;
 use graphcal_eval::eval::{CompileError, EvalResult, compile_and_eval, compile_and_eval_project};
 use graphcal_io::RealFileSystem;
 
@@ -264,7 +264,7 @@ node grid: Dimensionless[Fin(1000000), Fin(1000000)] =
     assert!(matches!(
         error,
         graphcal_eval::eval::CompileError::Eval(
-            graphcal_compiler::registry::error::GraphcalError::MaterializedShapeTooLarge {
+            graphcal_compiler::graphcal_error::GraphcalError::MaterializedShapeTooLarge {
                 maximum: 1_000_000,
                 ..
             }
@@ -287,7 +287,7 @@ param matrix: Matrix<1000000>;
     assert!(matches!(
         error,
         graphcal_eval::eval::CompileError::Eval(
-            graphcal_compiler::registry::error::GraphcalError::MaterializedShapeTooLarge {
+            graphcal_compiler::graphcal_error::GraphcalError::MaterializedShapeTooLarge {
                 maximum: 1_000_000,
                 ..
             }
@@ -314,7 +314,7 @@ node unreachable: Dimensionless = count(@giant::values);
     assert!(matches!(
         error,
         graphcal_eval::eval::CompileError::Eval(
-            graphcal_compiler::registry::error::GraphcalError::MaterializedShapeTooLarge {
+            graphcal_compiler::graphcal_error::GraphcalError::MaterializedShapeTooLarge {
                 maximum: 1_000_000,
                 ..
             }
@@ -344,7 +344,7 @@ node unreachable: Dimensionless = count(@giant::values);
         matches!(
             error,
             graphcal_eval::eval::CompileError::Eval(
-                graphcal_compiler::registry::error::GraphcalError::MaterializedShapeTooLarge {
+                graphcal_compiler::graphcal_error::GraphcalError::MaterializedShapeTooLarge {
                     maximum: 1_000_000,
                     ..
                 }

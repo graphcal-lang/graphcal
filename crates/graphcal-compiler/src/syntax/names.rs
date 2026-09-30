@@ -7,7 +7,7 @@
 //! name shapes live in the modules that own their semantics, such as
 //! [`crate::syntax::index_name`], [`crate::syntax::dimension`],
 //! [`crate::syntax::type_name`], [`crate::syntax::module_name`], and
-//! [`crate::registry::time_scale`].
+//! [`crate::semantic::time_scale`].
 //!
 //! # Core building blocks
 //!

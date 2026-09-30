@@ -3,7 +3,7 @@
 
 use crate::dag_id::DagId;
 use crate::diagnostic_anchor::DiagnosticAnchor;
-use crate::registry::error::GraphcalError;
+use crate::graphcal_error::GraphcalError;
 use crate::tir::presentation::DagPresentationFacts;
 use crate::tir::typed::UncheckedTir;
 use miette::NamedSource;

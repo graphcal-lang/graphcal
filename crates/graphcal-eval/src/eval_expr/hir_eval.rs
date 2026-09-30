@@ -3,9 +3,9 @@ use crate::runtime_value::{
 };
 use graphcal_compiler::builtin::{AggregationFn, KeyAggregation};
 use graphcal_compiler::declaration_category::DeclCategory;
+use graphcal_compiler::graphcal_error::GraphcalError;
 use graphcal_compiler::hir;
-use graphcal_compiler::registry::checked_type::{CheckedType, IndexTypeRef, StructTypeRef};
-use graphcal_compiler::registry::error::GraphcalError;
+use graphcal_compiler::semantic::checked_type::{CheckedType, IndexTypeRef, StructTypeRef};
 use graphcal_compiler::syntax::index_name::IndexEntryKey;
 use graphcal_compiler::syntax::span::{Span, Spanned};
 use graphcal_compiler::tir::texpr::{

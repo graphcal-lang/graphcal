@@ -20,24 +20,24 @@ use crate::desugar::desugared_ast::{
     UnitExpr,
 };
 use crate::dimension::{BaseDimId, Dimension};
+use crate::graphcal_error::GraphcalError;
 use crate::hir::const_expr::{ConstExprError, CoordinateAxisError, CoordinateAxisExpr};
 use crate::hir::const_lower::{
     UnitScaleSource, classify_unit_scale, lower_coordinate_expr, lower_static_nat_expr,
 };
 use crate::ir::module_definitions::StaticDefinitions;
-use crate::registry::dimension_table::{BaseDimensionInfo, DimensionFormattingRegistry};
-use crate::registry::error::GraphcalError;
-use crate::registry::index::{
-    ConcreteIndexKind, FiniteIndex, IndexBindingTarget, IndexDef, IndexKind, RequiredIndexKind,
-};
-use crate::registry::prelude::PreludeDefinitionError;
-use crate::registry::unit::{
-    PositiveFiniteScale, PositiveFiniteScaleError, UnitInfo, UnitResolveError, UnitScale,
-    resolve_unit_expr_with,
-};
 use crate::resolve::ModuleResolver;
 use crate::resolve::prelude::PreludeTypeScope;
 use crate::resolved_name::{ResolvedDimName, ResolvedIndexName, ResolvedUnitName};
+use crate::semantic::dimension_table::{BaseDimensionInfo, DimensionFormattingRegistry};
+use crate::semantic::index_def::{
+    ConcreteIndexKind, FiniteIndex, IndexBindingTarget, IndexDef, IndexKind, RequiredIndexKind,
+};
+use crate::semantic::prelude::PreludeDefinitionError;
+use crate::semantic::unit_scale::{
+    PositiveFiniteScale, PositiveFiniteScaleError, UnitInfo, UnitResolveError, UnitScale,
+    resolve_unit_expr_with,
+};
 use crate::syntax::ast::{BindableVisibility, UnitConstness};
 use crate::syntax::dimension::{DimName, DimRef, UnitName, UnitRef};
 use crate::syntax::index_name::IndexName;
@@ -239,7 +239,7 @@ impl<'a> StaticDefinitionEvaluator<'a> {
         resolver: &'a ModuleResolver,
         sources: impl IntoIterator<Item = (DagId, DefinitionSource<'a>)>,
     ) -> Result<Self, PreludeDefinitionError> {
-        let prelude_definitions = crate::registry::prelude::prelude_definitions()?;
+        let prelude_definitions = crate::semantic::prelude::prelude_definitions()?;
         let prelude_dimensions = prelude_definitions
             .dimensions()
             .map(|(identity, _)| {
@@ -251,7 +251,7 @@ impl<'a> StaticDefinitionEvaluator<'a> {
             .collect();
         Ok(Self {
             resolver,
-            prelude: crate::registry::prelude::prelude_type_scope(),
+            prelude: crate::semantic::prelude::prelude_type_scope(),
             prelude_dimensions,
             modules: sources
                 .into_iter()

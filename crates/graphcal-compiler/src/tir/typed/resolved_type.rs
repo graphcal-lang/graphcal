@@ -15,15 +15,16 @@ use miette::NamedSource;
 
 use crate::desugar::desugared_ast::MulDivOp;
 use crate::dimension::{Dimension, Rational};
+use crate::display::formatting_registry::FormattingRegistry;
 use crate::generic_param::GenericParamId;
+use crate::graphcal_error::GraphcalError;
 use crate::nat::NatPolyForm;
-use crate::registry::checked_type::{
+use crate::resolved_name::{ResolvedIndexName, ResolvedStructTypeName};
+use crate::semantic::checked_type::{
     CheckedGenericArg, CheckedType, IndexDisplayName, IndexTypeRef, StructTypeRef,
 };
-use crate::registry::error::GraphcalError;
-use crate::registry::time_scale::TimeScale;
-use crate::registry::types::{FiniteIndex, FormattingRegistry};
-use crate::resolved_name::{ResolvedIndexName, ResolvedStructTypeName};
+use crate::semantic::index_def::FiniteIndex;
+use crate::semantic::time_scale::TimeScale;
 use crate::syntax::non_empty::NonEmpty;
 use crate::syntax::span::Span;
 

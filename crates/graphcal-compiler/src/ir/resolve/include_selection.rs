@@ -7,7 +7,7 @@ use miette::NamedSource;
 use thiserror::Error;
 
 use crate::desugar::desugared_ast::ImportItem;
-use crate::registry::error::GraphcalError;
+use crate::graphcal_error::GraphcalError;
 use crate::syntax::import_category::ImportItemNamespace;
 use crate::syntax::names::NameAtom;
 use crate::syntax::span::Span;

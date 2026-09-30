@@ -18,9 +18,9 @@ use std::collections::HashSet;
 
 use indexmap::IndexMap;
 
-use graphcal_compiler::registry::checked_type::CheckedType;
-use graphcal_compiler::registry::format::format_number;
-use graphcal_compiler::registry::index::CoordinateIndexData;
+use graphcal_compiler::display::number::format_number;
+use graphcal_compiler::semantic::checked_type::CheckedType;
+use graphcal_compiler::semantic::index_def::CoordinateIndexData;
 use graphcal_compiler::syntax::index_name::IndexEntryKey;
 use graphcal_compiler::syntax::non_empty::NonEmpty;
 use graphcal_compiler::syntax::type_name::FieldName;
@@ -340,10 +340,10 @@ fn format_coordinate_exact(data: &CoordinateIndexData, position: usize) -> Strin
 mod tests {
     use graphcal_compiler::dag_id::DagId;
     use graphcal_compiler::dimension::{BaseDimId, Dimension, PreludeBaseDimension};
-    use graphcal_compiler::registry::checked_type::{CheckedType, IndexTypeRef, StructTypeRef};
-    use graphcal_compiler::registry::types::FiniteIndex;
-    use graphcal_compiler::registry::unit::PositiveFiniteScale;
     use graphcal_compiler::resolved_name::ResolvedStructTypeName;
+    use graphcal_compiler::semantic::checked_type::{CheckedType, IndexTypeRef, StructTypeRef};
+    use graphcal_compiler::semantic::index_def::FiniteIndex;
+    use graphcal_compiler::semantic::unit_scale::PositiveFiniteScale;
     use graphcal_compiler::syntax::index_name::IndexEntryKey;
     use graphcal_compiler::syntax::type_name::{ConstructorName, FieldName, StructTypeName};
 
@@ -461,7 +461,7 @@ mod tests {
             Value::Complex { dimension, display_unit: None, .. } if dimension == length()
         ));
         let epoch = hifitime::Epoch::from_gregorian_utc_at_midnight(2026, 1, 1);
-        let scale = graphcal_compiler::registry::time_scale::TimeScale::TAI;
+        let scale = graphcal_compiler::semantic::time_scale::TimeScale::TAI;
         assert_eq!(
             plain(
                 &RuntimeValue::Datetime(epoch),
@@ -545,11 +545,11 @@ mod tests {
         };
         assert_eq!(display_label(&fields[&field("left")]), Some("km"));
 
-        let zone = graphcal_compiler::registry::time_zone::TimeZoneRegistry::bundled()
+        let zone = graphcal_compiler::semantic::time_zone::TimeZoneRegistry::bundled()
             .parse_iana_id("Asia/Tokyo")
             .unwrap();
         let epoch = hifitime::Epoch::from_gregorian_utc_at_midnight(2026, 1, 1);
-        let scale = graphcal_compiler::registry::time_scale::TimeScale::UTC;
+        let scale = graphcal_compiler::semantic::time_scale::TimeScale::UTC;
         let zoned = Presented::with_leaf(
             RuntimeValue::Datetime(epoch),
             ResolvedLeaf::Datetime(zone.clone()),

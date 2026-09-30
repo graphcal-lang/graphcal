@@ -11,12 +11,12 @@ pub(super) mod hir;
 mod linear_algebra;
 mod rules;
 
-use crate::registry::checked_type::{IndexTypeRef, Symbolic};
+use crate::semantic::checked_type::{IndexTypeRef, Symbolic};
 /// Look up an inferred index through the project-wide semantic authority.
 fn index_def_for_inferred<'a>(
     index: &IndexTypeRef<Symbolic>,
     tir: &'a dyn crate::tir::typed::TirRead,
-) -> Option<std::borrow::Cow<'a, crate::registry::types::IndexDef>> {
+) -> Option<std::borrow::Cow<'a, crate::semantic::index_def::IndexDef>> {
     tir.index_def(index)
 }
 
@@ -27,5 +27,5 @@ fn concrete_cardinality_for_inferred(
 ) -> Option<usize> {
     index_def_for_inferred(index, tir)
         .and_then(|definition| definition.concrete_cardinality())
-        .map(crate::registry::index::IndexCardinality::get)
+        .map(crate::semantic::index_def::IndexCardinality::get)
 }

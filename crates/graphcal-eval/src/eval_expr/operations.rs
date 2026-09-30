@@ -9,8 +9,8 @@
 use graphcal_compiler::builtin::{DatetimeField, DatetimeFromNumericFn, DatetimeToNumericFn};
 use graphcal_compiler::complex_value::ComplexValue;
 use graphcal_compiler::finite_value::FiniteQuantity;
-use graphcal_compiler::registry::checked_type::IndexTypeRef;
-use graphcal_compiler::registry::error::GraphcalError;
+use graphcal_compiler::graphcal_error::GraphcalError;
+use graphcal_compiler::semantic::checked_type::IndexTypeRef;
 use graphcal_compiler::syntax::span::Span;
 use graphcal_compiler::tir::texpr::DatetimeLiteral;
 use graphcal_compiler::tir::texpr::operators::{
@@ -152,7 +152,7 @@ pub(super) fn quantity<'t>(
                 .iter()
                 .map(|arg| operands.quantity(*arg).map(FiniteQuantity::get))
                 .collect::<Result<Vec<_>, _>>()?;
-            let result = graphcal_compiler::registry::builtins::scalar_function(function)
+            let result = graphcal_compiler::semantic::scalar_function::scalar_function(function)
                 .eval(&arguments)
                 .map_err(|error| {
                     ctx.eval_error(format!("builtin function `{function}` {error}"), span)

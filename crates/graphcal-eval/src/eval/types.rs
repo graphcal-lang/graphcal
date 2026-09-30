@@ -12,9 +12,9 @@ use graphcal_compiler::diagnostic_render::RenderableDiagnostic;
 use graphcal_compiler::dimension::{BaseDimId, Dimension, Rational};
 use graphcal_compiler::finite_value::FiniteQuantity;
 use graphcal_compiler::ratio::ExponentStyle;
-use graphcal_compiler::registry::checked_type::{CheckedGenericArg, IndexTypeRef, StructTypeRef};
-use graphcal_compiler::registry::time_zone::{IanaTimeZoneId, TimeZoneRegistry};
-use graphcal_compiler::registry::unit::PositiveFiniteScale;
+use graphcal_compiler::semantic::checked_type::{CheckedGenericArg, IndexTypeRef, StructTypeRef};
+use graphcal_compiler::semantic::time_zone::{IanaTimeZoneId, TimeZoneRegistry};
+use graphcal_compiler::semantic::unit_scale::PositiveFiniteScale;
 use graphcal_compiler::syntax::decl_name::DeclName;
 use graphcal_compiler::syntax::index_name::{IndexEntryKey, IndexVariantName};
 use graphcal_compiler::syntax::module_name::ScopedName;
@@ -133,7 +133,7 @@ pub enum Value {
         /// The hifitime epoch (internal representation).
         epoch: hifitime::Epoch,
         /// The time scale for display purposes.
-        time_scale: graphcal_compiler::registry::time_scale::TimeScale,
+        time_scale: graphcal_compiler::semantic::time_scale::TimeScale,
         /// Optional IANA timezone for display (e.g. `"America/New_York"`).
         display_tz: Option<IanaTimeZoneId>,
     },
@@ -362,7 +362,7 @@ impl Value {
                 si_value,
                 display_unit,
                 ..
-            } => labelled(graphcal_compiler::registry::format::format_number(
+            } => labelled(graphcal_compiler::display::number::format_number(
                 quantity_display_value(*si_value, display_unit.as_ref())?,
             )),
             Self::Complex {
@@ -370,9 +370,10 @@ impl Value {
                 display_unit,
                 ..
             } => {
-                let re = graphcal_compiler::registry::format::format_number(
-                    quantity_display_value(si_value.real_part(), display_unit.as_ref())?,
-                );
+                let re = graphcal_compiler::display::number::format_number(quantity_display_value(
+                    si_value.real_part(),
+                    display_unit.as_ref(),
+                )?);
                 let displayed_im =
                     quantity_display_value(si_value.imaginary_part(), display_unit.as_ref())?;
                 let sign = if displayed_im.is_sign_negative() {
@@ -380,7 +381,7 @@ impl Value {
                 } else {
                     "+"
                 };
-                let im = graphcal_compiler::registry::format::format_number(displayed_im.abs());
+                let im = graphcal_compiler::display::number::format_number(displayed_im.abs());
                 labelled(format!("{re} {sign} {im}i"))
             }
             Self::Indexed { .. } => "[...]".to_string(),
@@ -608,7 +609,7 @@ fn push_unit_factor(
 #[must_use]
 pub fn datetime_literal(
     epoch: &hifitime::Epoch,
-    scale: graphcal_compiler::registry::time_scale::TimeScale,
+    scale: graphcal_compiler::semantic::time_scale::TimeScale,
 ) -> String {
     let (year, month, day, hour, minute, second, nanos) = epoch.to_gregorian(scale.to_hifitime());
     let fractional = if nanos == 0 {
@@ -974,7 +975,7 @@ pub enum CompileError {
 
     #[error(transparent)]
     #[diagnostic(transparent)]
-    Eval(#[from] graphcal_compiler::registry::error::GraphcalError),
+    Eval(#[from] graphcal_compiler::graphcal_error::GraphcalError),
 
     /// A value supplied through an external binding format failed semantic
     /// validation. The boundary source and parameter span deliberately replace
@@ -997,7 +998,7 @@ pub enum CompileError {
 
 impl From<graphcal_compiler::cancellation::Cancelled> for CompileError {
     fn from(cancelled: graphcal_compiler::cancellation::Cancelled) -> Self {
-        Self::Eval(graphcal_compiler::registry::error::GraphcalError::from(
+        Self::Eval(graphcal_compiler::graphcal_error::GraphcalError::from(
             cancelled,
         ))
     }
@@ -1022,7 +1023,7 @@ impl CompileError {
     /// Return the `NamedSource` embedded in this error, if any.
     ///
     /// Forwards to the parse diagnostic's attached source or
-    /// [`GraphcalError::named_source`](graphcal_compiler::registry::error::GraphcalError::named_source).
+    /// [`GraphcalError::named_source`](graphcal_compiler::graphcal_error::GraphcalError::named_source).
     /// When present, the returned
     /// `NamedSource` pairs the file's name with the exact source text whose
     /// byte offsets the error's labels index into — so diagnostic emitters
@@ -1074,7 +1075,7 @@ mod tests {
     #[test]
     fn keys_render_as_label_position_or_coordinate() {
         use crate::runtime_value::IndexAxis;
-        use graphcal_compiler::registry::index::{CoordinateDisplayUnit, CoordinateIndexData};
+        use graphcal_compiler::semantic::index_def::{CoordinateDisplayUnit, CoordinateIndexData};
 
         let owner = graphcal_compiler::dag_id::DagId::root_in_package("key-render", "main");
         let named = IndexAxis::named_for_test(owner.clone(), "Phase", &["Launch", "Cruise"]);
@@ -1090,7 +1091,7 @@ mod tests {
         );
         assert_eq!(value.display_label(&render()), None);
 
-        let finite = graphcal_compiler::registry::types::FiniteIndex::try_from_u64(3).unwrap();
+        let finite = graphcal_compiler::semantic::index_def::FiniteIndex::try_from_u64(3).unwrap();
         let key = KeyValue::at(IndexAxis::finite(finite).unwrap(), 2).unwrap();
         assert_eq!(KeyRendering::of(&key), KeyRendering::Position(2));
         assert_eq!(
@@ -1267,7 +1268,7 @@ mod tests {
     fn datetime(display_tz: Option<IanaTimeZoneId>) -> Value {
         Value::Datetime {
             epoch: hifitime::Epoch::from_unix_seconds(1_730_808_000.0),
-            time_scale: graphcal_compiler::registry::time_scale::TimeScale::UTC,
+            time_scale: graphcal_compiler::semantic::time_scale::TimeScale::UTC,
             display_tz,
         }
     }

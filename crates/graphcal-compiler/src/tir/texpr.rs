@@ -38,4 +38,4 @@ pub use model::{
 pub use nominal::{ConstructorApplication, ConstructorMatch, NominalObservation};
 
 #[cfg(doc)]
-use crate::registry::checked_type::CheckedType;
+use crate::semantic::checked_type::CheckedType;

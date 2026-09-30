@@ -8,8 +8,8 @@
 
 use crate::dimension::Rational;
 use crate::nat::NatPolyForm;
-use crate::registry::time_scale::TimeScale;
 use crate::resolved_name::{ResolvedDimName, ResolvedIndexName, ResolvedStructTypeName};
+use crate::semantic::time_scale::TimeScale;
 use crate::syntax::ast::MulDivOp;
 use crate::syntax::non_empty::{AtLeastTwo, NonEmpty};
 use crate::syntax::span::{Span, Spanned};

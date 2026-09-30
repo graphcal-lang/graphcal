@@ -7,7 +7,7 @@
 //! (`Pressure`, not `Mass * Length^-1 * Time^-2`); they expand to base
 //! exponents before anything reaches the manifest.
 //!
-//! Both tables mirror the graphcal prelude (`registry::prelude` in
+//! Both tables mirror the graphcal prelude (`semantic::prelude` in
 //! `graphcal-compiler`). The compiler cannot be a dependency of a
 //! proc-macro crate plugin authors build, so the mirror is verified from
 //! the other side: `graphcal-plugin`'s integration tests compile `.gcl`

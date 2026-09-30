@@ -3,11 +3,11 @@ use std::sync::Arc;
 use miette::NamedSource;
 
 use crate::dimension::Dimension;
+use crate::display::formatting_registry::FormattingRegistry;
+use crate::graphcal_error::GraphcalError;
 use crate::hir::NominalTypeDef;
-use crate::registry::error::GraphcalError;
-use crate::registry::types::FormattingRegistry;
 
-use crate::registry::checked_type::{CheckedType, Concreteness, StructTypeRef, Symbolic};
+use crate::semantic::checked_type::{CheckedType, Concreteness, StructTypeRef, Symbolic};
 
 pub(super) fn is_bool_type(ty: &CheckedType<Symbolic>) -> bool {
     match ty {

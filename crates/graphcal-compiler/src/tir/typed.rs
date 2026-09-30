@@ -20,9 +20,9 @@ use crate::syntax::decl_name::DeclName;
 use crate::syntax::span::{Span, Spanned};
 use miette::NamedSource;
 
+use crate::graphcal_error::GraphcalError;
 use crate::ir::lower::HirDag;
-use crate::registry::error::GraphcalError;
-use crate::registry::resolve_types::ExternalDeclSurface;
+use crate::ir::resolve::collected::ExternalDeclSurface;
 use crate::resolve::ModuleResolver;
 use crate::resolve::symbols::SymbolRef;
 use crate::syntax::module_name::ScopedName;
@@ -375,7 +375,7 @@ fn type_resolve_impl(
         cancellation,
     )?;
     Ok(TirDraft::new(
-        crate::registry::types::FormattingRegistry::new(
+        crate::display::formatting_registry::FormattingRegistry::new(
             project_types.base_dimensions().clone(),
             ir.display_dimensions,
         ),
@@ -812,11 +812,11 @@ impl PublicSignatureDependency {
         }
     }
 
-    const fn kind(&self) -> crate::registry::resolve_types::DeclarationKind {
+    const fn kind(&self) -> crate::ir::resolve::collected::DeclarationKind {
         match self {
-            Self::Dimension(_) => crate::registry::resolve_types::DeclarationKind::Dimension,
-            Self::Index(_) => crate::registry::resolve_types::DeclarationKind::Index,
-            Self::Type(_) => crate::registry::resolve_types::DeclarationKind::Type,
+            Self::Dimension(_) => crate::ir::resolve::collected::DeclarationKind::Dimension,
+            Self::Index(_) => crate::ir::resolve::collected::DeclarationKind::Index,
+            Self::Type(_) => crate::ir::resolve::collected::DeclarationKind::Type,
         }
     }
 
@@ -992,14 +992,14 @@ fn validate_public_generic_defaults(
                 &mut dependencies,
             );
             for dependency in dependencies {
-                if dependency.owner() == &crate::registry::prelude::prelude_dag_id() {
+                if dependency.owner() == &crate::semantic::prelude::prelude_dag_id() {
                     continue;
                 }
                 match dependency.is_public(ctx.resolver) {
                     Some(true) => {}
                     Some(false) => {
                         return Err(GraphcalError::PrivateInPublic {
-                            pub_kind: crate::registry::resolve_types::DeclarationKind::Type,
+                            pub_kind: crate::ir::resolve::collected::DeclarationKind::Type,
                             pub_name: type_name.atom().clone(),
                             ref_kind: dependency.kind(),
                             ref_name: dependency.name(),
@@ -1027,28 +1027,28 @@ fn validate_public_generic_defaults(
 }
 
 fn collect_struct_type_defs_from_declared_type(
-    declared: &crate::registry::checked_type::CheckedType,
+    declared: &crate::semantic::checked_type::CheckedType,
     ctx: ModuleTypeContext<'_>,
     defs: &mut ResolvedTypeDefs,
 ) -> Result<(), GraphcalError> {
     match declared {
-        crate::registry::checked_type::CheckedType::Struct(name, generic_args) => {
+        crate::semantic::checked_type::CheckedType::Struct(name, generic_args) => {
             record_resolved_struct_type_def(name.resolved(), ctx, defs)?;
             for arg in generic_args {
-                if let crate::registry::checked_type::CheckedGenericArg::Type(type_expr) = arg {
+                if let crate::semantic::checked_type::CheckedGenericArg::Type(type_expr) = arg {
                     collect_struct_type_defs_from_declared_type(type_expr, ctx, defs)?;
                 }
             }
         }
-        crate::registry::checked_type::CheckedType::Indexed { element, .. } => {
+        crate::semantic::checked_type::CheckedType::Indexed { element, .. } => {
             collect_struct_type_defs_from_declared_type(element, ctx, defs)?;
         }
-        crate::registry::checked_type::CheckedType::Quantity(_)
-        | crate::registry::checked_type::CheckedType::Complex(_)
-        | crate::registry::checked_type::CheckedType::Bool
-        | crate::registry::checked_type::CheckedType::Int
-        | crate::registry::checked_type::CheckedType::Datetime(_)
-        | crate::registry::checked_type::CheckedType::Key(_) => {}
+        crate::semantic::checked_type::CheckedType::Quantity(_)
+        | crate::semantic::checked_type::CheckedType::Complex(_)
+        | crate::semantic::checked_type::CheckedType::Bool
+        | crate::semantic::checked_type::CheckedType::Int
+        | crate::semantic::checked_type::CheckedType::Datetime(_)
+        | crate::semantic::checked_type::CheckedType::Key(_) => {}
     }
     Ok(())
 }

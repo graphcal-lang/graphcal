@@ -42,8 +42,8 @@ use graphcal_compiler::builtin::{BuiltinEntry, BuiltinFn};
 use graphcal_compiler::cancellation::{CancellationSource, CancellationToken, Cancelled};
 use graphcal_compiler::dimension::Dimension;
 use graphcal_compiler::function_signature::FunctionSignature;
-use graphcal_compiler::registry::builtins::scalar_function;
-use graphcal_compiler::registry::error::GraphcalError;
+use graphcal_compiler::graphcal_error::GraphcalError;
+use graphcal_compiler::semantic::scalar_function::scalar_function;
 use graphcal_compiler::syntax::module_name::ScopedName;
 use graphcal_compiler::syntax::names::NameAtom;
 use graphcal_eval::eval::{CheckedProject, CompileError, EvalResult, ProjectCompiler, Value};
@@ -3268,7 +3268,7 @@ mod tests {
     fn empty_render_context() -> graphcal_eval::eval::RenderContext {
         graphcal_eval::eval::RenderContext::new(
             BTreeMap::new(),
-            graphcal_compiler::registry::time_zone::TimeZoneRegistry::bundled(),
+            graphcal_compiler::semantic::time_zone::TimeZoneRegistry::bundled(),
         )
     }
 

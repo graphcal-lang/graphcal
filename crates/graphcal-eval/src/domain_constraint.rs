@@ -1,6 +1,6 @@
 //! Evaluated domain-bound data, independent of runtime-value interpretation.
 
-use graphcal_compiler::registry::time_scale::TimeScale;
+use graphcal_compiler::semantic::time_scale::TimeScale;
 
 /// One evaluated inclusive domain bound plus its user-facing diagnostic text.
 #[derive(Debug, Clone)]

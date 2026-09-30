@@ -1,6 +1,6 @@
 use graphcal_compiler::exact_rational::ExactRational;
 use graphcal_compiler::finite_value::{FiniteArithmeticError, FiniteQuantity};
-use graphcal_compiler::registry::error::GraphcalError;
+use graphcal_compiler::graphcal_error::GraphcalError;
 use graphcal_compiler::syntax::span::Span;
 use graphcal_compiler::tir::texpr::operators::{ArithOp, IntArithOp, OrderingOp};
 

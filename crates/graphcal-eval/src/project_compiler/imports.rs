@@ -13,6 +13,7 @@ use graphcal_compiler::desugar::desugared_ast::DeclKind;
 use graphcal_compiler::ir::module_interface::{
     ModuleInterface, PureImportRejection, PureImportTermDisposition,
 };
+use graphcal_compiler::ir::resolve::collected::{AttributeTarget, DeclarationKind};
 use graphcal_compiler::ir::static_dependencies::{
     ModuleDeclarations, StaticImportRejection, StaticScope, declaration_static_references,
     static_import_rejection,
@@ -21,7 +22,6 @@ use graphcal_compiler::ir::static_interface::{
     StaticInputKind, StaticInterface, StaticRole, static_binding_valid,
 };
 use graphcal_compiler::plot_visibility::PlotVisibility;
-use graphcal_compiler::registry::resolve_types::{AttributeTarget, DeclarationKind};
 use graphcal_compiler::resolve::category::{DeclSymbolKind, ExportedImportItemKind};
 use graphcal_compiler::resolve::exports::ExportedBindingTarget;
 use graphcal_compiler::resolve::namespace::Namespace;
@@ -574,7 +574,7 @@ fn resolve_include_static_bindings(
             .map_err(|error| lowering::module_resolve_compile_error(error, src))?;
         bindings.substitution.types.insert(identity, target);
     }
-    let prelude = graphcal_compiler::registry::prelude::prelude_type_scope();
+    let prelude = graphcal_compiler::semantic::prelude::prelude_type_scope();
     for (port, target) in dims {
         let identity = resolver
             .resolve_dimension_path(template, &NamePath::local(port.atom().clone()))

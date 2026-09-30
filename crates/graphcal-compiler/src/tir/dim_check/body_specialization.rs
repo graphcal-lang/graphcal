@@ -12,9 +12,9 @@ use miette::NamedSource;
 
 use crate::diagnostic_anchor::DiagnosticAnchor;
 use crate::expression_id::ExprId;
+use crate::graphcal_error::GraphcalError;
 use crate::hir::expr::Expr;
-use crate::registry::checked_type::{CheckedType, IndexTypeRef, Symbolic};
-use crate::registry::error::GraphcalError;
+use crate::semantic::checked_type::{CheckedType, IndexTypeRef, Symbolic};
 use crate::syntax::span::Span;
 use crate::tir::texpr::map::{SymbolicView, TypeMap};
 use crate::tir::texpr::{

@@ -6,12 +6,12 @@ use std::sync::Arc;
 use miette::NamedSource;
 
 use crate::diagnostic_anchor::DiagnosticAnchor;
-use crate::registry::checked_type::{IndexDisplayName, IndexTypeRef, Symbolic};
-use crate::registry::error::GraphcalError;
+use crate::graphcal_error::GraphcalError;
+use crate::semantic::checked_type::{IndexDisplayName, IndexTypeRef, Symbolic};
 use crate::syntax::span::Span;
 use crate::tir::typed::NatPolyForm;
 
-use crate::registry::checked_type::CheckedType;
+use crate::semantic::checked_type::CheckedType;
 use crate::tir::dim_check::helpers::{expect_quantity, format_checked_type};
 
 use super::context::Infer;
@@ -154,7 +154,7 @@ impl Infer<'_> {
                 );
                 let dimension = match idx_def
                     .as_deref()
-                    .and_then(crate::registry::types::IndexDef::coordinate_dimension)
+                    .and_then(crate::semantic::index_def::IndexDef::coordinate_dimension)
                 {
                     Some(dimension) => dimension.clone(),
                     None => {
@@ -239,7 +239,7 @@ impl Infer<'_> {
 
 fn finite_axis_form(
     index: &IndexTypeRef<Symbolic>,
-    declared_definition: Option<&crate::registry::types::IndexDef>,
+    declared_definition: Option<&crate::semantic::index_def::IndexDef>,
     src: &NamedSource<Arc<String>>,
     span: Span,
 ) -> Result<Option<NatPolyForm>, GraphcalError> {

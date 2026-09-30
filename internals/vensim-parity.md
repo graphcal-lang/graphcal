@@ -1009,7 +1009,7 @@ Vensim language or product semantics in this revision.
 
 Graphcal facts use this repository at `bdb597a`: `grammar.ebnf`,
 `docs/en/language/*`, `crates/graphcal-compiler/src/builtin.rs`,
-`registry/builtins.rs`, `tir/dim_check/infer/hir.rs`,
+`semantic/scalar_function.rs`, `tir/dim_check/infer/hir.rs`,
 `crates/graphcal-eval/src/{exec_plan.rs,eval_expr/hir_eval.rs,host_fns.rs}`,
 `crates/graphcal-cli/src/{main.rs,overrides.rs,json_input.rs,plot.rs}`,
 `crates/graphcal-plugin-host/src/host.rs`, `tests/fixtures/`, the issue tracker,

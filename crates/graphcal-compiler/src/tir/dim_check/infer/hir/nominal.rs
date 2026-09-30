@@ -5,11 +5,11 @@ use crate::hir::nominal::{NominalConstructor, NominalField, NominalTypeDef};
 use crate::hir::types::GenericArg;
 use crate::resolved_name::ResolvedConstructorName;
 
-use crate::registry::checked_type::{StructTypeRef, Symbolic};
-use crate::registry::error::GraphcalError;
+use crate::graphcal_error::GraphcalError;
+use crate::semantic::checked_type::{StructTypeRef, Symbolic};
 use crate::syntax::type_name::FieldName;
 
-use crate::registry::checked_type::CheckedType;
+use crate::semantic::checked_type::CheckedType;
 use crate::tir::dim_check::helpers::{
     format_checked_type, format_distinct_types, struct_type_def_for_inferred,
 };
@@ -76,7 +76,7 @@ impl Infer<'_> {
         {
             return Err(GraphcalError::UnknownField {
                 type_name: type_name.name().clone(),
-                member: crate::registry::error::NominalMember::Field(field.value.clone()),
+                member: crate::graphcal_error::NominalMember::Field(field.value.clone()),
                 src: self.env.src.clone(),
                 span: field.span.into(),
             });

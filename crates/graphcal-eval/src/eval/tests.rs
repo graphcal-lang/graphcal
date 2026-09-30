@@ -5,7 +5,7 @@ mod sealed_program;
 use std::collections::HashSet;
 
 use super::*;
-use graphcal_compiler::registry::error::GraphcalError;
+use graphcal_compiler::graphcal_error::GraphcalError;
 use graphcal_compiler::syntax::attribute::AttributeName;
 use graphcal_compiler::syntax::index_name::IndexVariantName;
 use graphcal_compiler::syntax::module_name::ScopedName;
@@ -96,7 +96,7 @@ fn write_pipeline_project(
 /// is executable and the node is a value.
 type CheckedNodeSummary = (
     graphcal_compiler::syntax::span::Span,
-    Option<graphcal_compiler::registry::checked_type::CheckedType>,
+    Option<graphcal_compiler::semantic::checked_type::CheckedType>,
     bool,
 );
 
@@ -734,7 +734,8 @@ fn frame_arguments_are_domain_checked_and_keep_presentation_only_when_bound() {
             RuntimeValue::quantity(value).unwrap(),
             PendingLeaf::Quantity(PendingQuantityDisplay::Ready(QuantityDisplay::Unit {
                 label: "percent".to_owned(),
-                scale: graphcal_compiler::registry::unit::PositiveFiniteScale::new(0.01).unwrap(),
+                scale: graphcal_compiler::semantic::unit_scale::PositiveFiniteScale::new(0.01)
+                    .unwrap(),
             })),
         )
         .unwrap()
@@ -1924,7 +1925,7 @@ fn repeated_hidden_is_rejected_on_plots_and_include_items() {
 
 #[test]
 fn time_scale_spellings_are_disjoint_from_graph_value_namespaces() {
-    for scale in graphcal_compiler::registry::time_scale::TimeScale::ALL {
+    for scale in graphcal_compiler::semantic::time_scale::TimeScale::ALL {
         for declaration in [
             format!("param {scale}: Dimensionless = 1.0;"),
             format!("node {scale}: Dimensionless = 1.0;"),
@@ -3858,7 +3859,7 @@ node zoned_delta: Time = @zoned - @utc;
         else {
             panic!("expected datetime value for {name}");
         };
-        let expected = graphcal_compiler::registry::time_scale::TimeScale::UTC;
+        let expected = graphcal_compiler::semantic::time_scale::TimeScale::UTC;
         assert_eq!(time_scale, expected);
         assert_eq!(epoch.time_scale, expected.to_hifitime());
     }
@@ -3868,7 +3869,7 @@ node zoned_delta: Time = @zoned - @utc;
 fn every_datetime_extractor_uses_each_supported_declared_scale() {
     use std::fmt::Write as _;
 
-    let scales = graphcal_compiler::registry::time_scale::TimeScale::ALL;
+    let scales = graphcal_compiler::semantic::time_scale::TimeScale::ALL;
     let source = scales.iter().fold(String::new(), |mut source, scale| {
         let id = scale.to_string().to_ascii_lowercase();
         write!(
@@ -3967,7 +3968,7 @@ node bdt: Datetime<BDT> = epoch<BDT>("2024-11-05T12:00:00");
 node qzsst: Datetime<QZSST> = epoch<QZSST>("2024-11-05T12:00:00");
 "#;
     let result = compile_and_eval(source).unwrap();
-    for expected_scale in graphcal_compiler::registry::time_scale::TimeScale::ALL {
+    for expected_scale in graphcal_compiler::semantic::time_scale::TimeScale::ALL {
         let name = expected_scale.to_string().to_ascii_lowercase();
         let Value::Datetime {
             epoch, time_scale, ..
@@ -6668,7 +6669,7 @@ fn eval_constructor_match_rejects_runtime_owner_mismatch_with_same_leaf_construc
     );
     let fields = vec![(
         graphcal_compiler::syntax::type_name::FieldName::expect_valid("distance"),
-        graphcal_compiler::registry::checked_type::CheckedType::Quantity(
+        graphcal_compiler::semantic::checked_type::CheckedType::Quantity(
             graphcal_compiler::dimension::Dimension::dimensionless(),
         ),
         crate::eval_expr::RuntimeValue::quantity(9.0).unwrap(),
@@ -6750,7 +6751,7 @@ fn project_declared_type_preserves_same_leaf_index_owner() {
     let (tir, project) = compile_to_tir_project(&root, None, &fs()).unwrap();
     let a_id = loaded_file_dag_id(&project, "a.gcl");
 
-    let graphcal_compiler::registry::checked_type::CheckedType::Indexed { index, .. } =
+    let graphcal_compiler::semantic::checked_type::CheckedType::Indexed { index, .. } =
         root_decl_type(&tir, "series").declared()
     else {
         panic!("expected indexed declared type for `series`");
@@ -6777,12 +6778,12 @@ fn project_declared_type_preserves_same_leaf_struct_owner() {
     let a_id = loaded_file_dag_id(&project, "a.gcl");
     let b_id = loaded_file_dag_id(&project, "b.gcl");
 
-    let graphcal_compiler::registry::checked_type::CheckedType::Struct(item, _) =
+    let graphcal_compiler::semantic::checked_type::CheckedType::Struct(item, _) =
         root_decl_type(&tir, "item").declared()
     else {
         panic!("expected struct declared type for `item`");
     };
-    let graphcal_compiler::registry::checked_type::CheckedType::Struct(other, _) =
+    let graphcal_compiler::semantic::checked_type::CheckedType::Struct(other, _) =
         root_decl_type(&tir, "other").declared()
     else {
         panic!("expected struct declared type for `other`");
@@ -7537,7 +7538,7 @@ fn eval_index_access_rejects_runtime_owner_mismatch_with_same_leaf_variant() {
     );
     let b_axis = crate::runtime_value::IndexAxis::resolve(
         &tir,
-        &graphcal_compiler::registry::checked_type::IndexTypeRef::from_resolved(b_owner),
+        &graphcal_compiler::semantic::checked_type::IndexTypeRef::from_resolved(b_owner),
     )
     .unwrap();
     let entries = crate::runtime_value::IndexedValue::for_test(
@@ -7623,7 +7624,7 @@ fn eval_label_match_rejects_runtime_owner_mismatch_with_same_leaf_variant() {
                 crate::runtime_value::KeyValue::for_entry(
                     crate::runtime_value::IndexAxis::resolve(
                         &tir,
-                        &graphcal_compiler::registry::checked_type::IndexTypeRef::from_resolved(
+                        &graphcal_compiler::semantic::checked_type::IndexTypeRef::from_resolved(
                             b_owner,
                         ),
                     )
@@ -9618,7 +9619,7 @@ param converted_bound: Datetime<TT>(
 fn every_supported_datetime_scale_accepts_matching_domain_bounds() {
     use std::fmt::Write as _;
 
-    let source = graphcal_compiler::registry::time_scale::TimeScale::ALL
+    let source = graphcal_compiler::semantic::time_scale::TimeScale::ALL
         .iter()
         .fold(String::new(), |mut source, scale| {
             let name = scale.to_string().to_ascii_lowercase();
@@ -9633,7 +9634,7 @@ fn every_supported_datetime_scale_accepts_matching_domain_bounds() {
             source
         });
     let result = compile_and_eval(&source).unwrap();
-    for scale in graphcal_compiler::registry::time_scale::TimeScale::ALL {
+    for scale in graphcal_compiler::semantic::time_scale::TimeScale::ALL {
         let name = scale.to_string().to_ascii_lowercase();
         let (_, value, _) = result
             .entries
@@ -10221,7 +10222,7 @@ fn assumes_targets_resolve_through_semantic_instances() {
 #[test]
 fn index_axis_resolves_concrete_definitions_from_checked_tir() {
     use crate::runtime_value::IndexAxis;
-    use graphcal_compiler::registry::checked_type::IndexTypeRef;
+    use graphcal_compiler::semantic::checked_type::IndexTypeRef;
     use graphcal_compiler::syntax::index_name::IndexName;
 
     let source = "index Mode = { Idle, Run }; index Step = range(0.0 s, 2.0 s, step: 1.0 s);";
@@ -10235,7 +10236,7 @@ fn index_axis_resolves_concrete_definitions_from_checked_tir() {
     assert_eq!(axis.len(), 2);
     assert!(matches!(
         axis.kind(),
-        graphcal_compiler::registry::index::ConcreteIndexKind::Named { .. }
+        graphcal_compiler::semantic::index_def::ConcreteIndexKind::Named { .. }
     ));
 
     let axis = IndexAxis::resolve(&tir, &index("Step")).unwrap();

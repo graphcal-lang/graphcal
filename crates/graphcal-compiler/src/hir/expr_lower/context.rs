@@ -5,7 +5,7 @@ use crate::syntax::dimension::UnitRef as SyntaxUnitRef;
 use std::collections::HashMap;
 
 use crate::dag_id::DagId;
-use crate::registry::time_zone::TimeZoneRegistry;
+use crate::semantic::time_zone::TimeZoneRegistry;
 use crate::syntax::module_name::ScopedName;
 
 use crate::hir::lower::ModuleScope;

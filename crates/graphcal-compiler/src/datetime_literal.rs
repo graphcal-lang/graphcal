@@ -6,8 +6,8 @@
 //! those forms distinct makes contradictory interpretation sources impossible
 //! after HIR lowering.
 
-use crate::registry::time_scale::TimeScale;
-use crate::registry::time_zone::{IanaTimeZoneId, TimeZoneRegistry};
+use crate::semantic::time_scale::TimeScale;
+use crate::semantic::time_zone::{IanaTimeZoneId, TimeZoneRegistry};
 use thiserror::Error;
 
 /// Error returned when parsing an offset-bearing datetime literal.

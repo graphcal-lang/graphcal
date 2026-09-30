@@ -20,10 +20,10 @@ use miette::NamedSource;
 use crate::desugar::desugared_ast::MulDivOp;
 use crate::dimension::{Dimension, Rational};
 use crate::generic_param::GenericParamId;
+use crate::graphcal_error::GraphcalError;
 use crate::hir::nominal::NominalGenericParam;
 use crate::nat::{NatOverflowError, NatPolyForm};
-use crate::registry::checked_type::{CheckedType, IndexTypeRef, InstantiationError, Symbolic};
-use crate::registry::error::GraphcalError;
+use crate::semantic::checked_type::{CheckedType, IndexTypeRef, InstantiationError, Symbolic};
 use crate::syntax::span::Span;
 
 use super::{
@@ -49,7 +49,7 @@ pub enum SubstitutionError {
     DimensionOverflow { span: Span },
     /// A substituted `Fin(...)` cardinality is not a valid finite index.
     InvalidFiniteIndex {
-        error: crate::registry::types::IndexCardinalityError,
+        error: crate::semantic::index_def::IndexCardinalityError,
         span: Span,
     },
     /// A declared type still names a Nat parameter the substitution does not

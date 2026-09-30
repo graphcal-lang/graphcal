@@ -7,11 +7,11 @@ use std::sync::Arc;
 
 use miette::NamedSource;
 
-use crate::registry::error::GraphcalError;
+use crate::graphcal_error::GraphcalError;
 use crate::syntax::span::Span;
 
 pub(super) fn finite_index_error(
-    err: crate::registry::types::IndexCardinalityError,
+    err: crate::semantic::index_def::IndexCardinalityError,
     src: &NamedSource<Arc<String>>,
     span: Span,
 ) -> GraphcalError {

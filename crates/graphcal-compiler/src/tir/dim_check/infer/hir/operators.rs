@@ -5,10 +5,10 @@ use std::sync::Arc;
 
 use miette::NamedSource;
 
-use crate::registry::error::GraphcalError;
+use crate::graphcal_error::GraphcalError;
 use crate::syntax::ast::UnaryOp;
 
-use crate::registry::checked_type::{CheckedType, Symbolic};
+use crate::semantic::checked_type::{CheckedType, Symbolic};
 use crate::tir::dim_check::helpers::{expect_quantity, format_checked_type};
 use crate::tir::dim_check::infer::rules::{self, Operand};
 
@@ -187,7 +187,7 @@ impl Infer<'_> {
     pub(super) fn infer_hir_display_timezone(
         &self,
         inner: &Expr,
-        timezone: &crate::registry::time_zone::IanaTimeZoneId,
+        timezone: &crate::semantic::time_zone::IanaTimeZoneId,
     ) -> Result<CheckedType<Symbolic>, GraphcalError> {
         reject_nested_conversion(inner, self.env.src)?;
         let inner_type = self.infer_hir_type(inner)?;

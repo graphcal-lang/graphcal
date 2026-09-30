@@ -9,11 +9,11 @@
 use std::collections::HashMap;
 
 use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
+use graphcal_compiler::graphcal_error::GraphcalError;
 use graphcal_compiler::plot_shape::PlotLeafKind;
 use graphcal_compiler::plot_visibility::PlotVisibility;
-use graphcal_compiler::registry::checked_type::{CheckedType, Symbolic};
-use graphcal_compiler::registry::error::GraphcalError;
 use graphcal_compiler::resolved_name::ResolvedDeclName;
+use graphcal_compiler::semantic::checked_type::{CheckedType, Symbolic};
 use graphcal_compiler::syntax::decl_name::DeclName;
 use graphcal_compiler::syntax::module_name::ScopedName;
 use graphcal_compiler::syntax::span::{Span, Spanned};

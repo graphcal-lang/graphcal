@@ -15,14 +15,14 @@ use miette::NamedSource;
 
 use crate::desugar::desugared_ast::{self as ast, TypeDecl, TypeDeclBody};
 use crate::diagnostic_anchor::DiagnosticAnchor;
+use crate::graphcal_error::GraphcalError;
 use crate::ir::static_substitution::{InstanceIndexBindingTarget, StaticSubstitution};
 use crate::nat::{NatOverflowError, NatPolyForm};
-use crate::registry::error::GraphcalError;
-use crate::registry::reserved_name::validate_reserved_name;
-use crate::registry::time_zone::TimeZoneRegistry;
 use crate::resolve::ModuleResolver;
 use crate::resolve::namespace::Namespace;
+use crate::resolve::reserved_name::validate_reserved_name;
 use crate::resolved_name::ResolvedStructTypeName;
+use crate::semantic::time_zone::TimeZoneRegistry;
 use crate::syntax::names::NameAtom;
 use crate::syntax::span::{Span, Spanned};
 use crate::syntax::type_name::GenericParamName;
@@ -702,9 +702,9 @@ impl Specializer<'_> {
 mod tests {
     use super::*;
     use crate::dag_id::DagId;
-    use crate::registry::index::FiniteIndex;
     use crate::resolve::builder::TestModules;
     use crate::resolved_name::{ResolvedDimName, ResolvedIndexName};
+    use crate::semantic::index_def::FiniteIndex;
     use crate::syntax::parser::Parser;
     use crate::syntax::type_name::StructTypeName;
     use std::collections::BTreeMap;
@@ -855,7 +855,7 @@ mod tests {
             template_id.clone(),
             crate::syntax::dimension::DimName::expect_valid("Q"),
         );
-        let length = crate::registry::prelude::prelude_type_scope()
+        let length = crate::semantic::prelude::prelude_type_scope()
             .resolve_dimension_path(&crate::syntax::names::NamePath::expect_local("Length"))
             .unwrap();
         let axis = ResolvedIndexName::for_test(

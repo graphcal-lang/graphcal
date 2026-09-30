@@ -15,7 +15,7 @@ pub(crate) mod types;
 pub use crate::project_compiler::{CheckedProject, HirProject, ProjectCompiler, check_project};
 #[cfg(test)]
 pub(crate) use crate::project_compiler::{compile_to_tir, compile_to_tir_project};
-pub use graphcal_compiler::registry::format::format_number;
+pub use graphcal_compiler::display::number::format_number;
 pub use project::{
     InclusiveBounds, InclusiveBoundsError, ModelAlgebraicTypeSchema, ModelConstructorSchema,
     ModelDefinitionError, ModelExecutionError, ModelFieldSchema, ModelIndexKind, ModelIndexSchema,

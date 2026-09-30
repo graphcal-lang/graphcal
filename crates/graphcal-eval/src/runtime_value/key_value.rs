@@ -1,8 +1,8 @@
 //! Index keys: one entry of a concrete axis, identified by its position.
 
 use graphcal_compiler::finite_value::FiniteQuantity;
-use graphcal_compiler::registry::checked_type::IndexTypeRef;
-use graphcal_compiler::registry::index::{ConcreteIndexKind, CoordinateIndexData};
+use graphcal_compiler::semantic::checked_type::IndexTypeRef;
+use graphcal_compiler::semantic::index_def::{ConcreteIndexKind, CoordinateIndexData};
 use graphcal_compiler::syntax::index_name::{IndexEntryKey, IndexVariantName};
 use graphcal_compiler::syntax::non_empty::NonEmpty;
 
@@ -101,7 +101,7 @@ impl KeyValue {
 #[cfg(test)]
 mod tests {
     use graphcal_compiler::dag_id::DagId;
-    use graphcal_compiler::registry::index::FiniteIndex;
+    use graphcal_compiler::semantic::index_def::FiniteIndex;
     use graphcal_compiler::syntax::index_name::{IndexEntryKey, IndexVariantName};
 
     use super::{IndexAxis, KeyElement, KeyValue};

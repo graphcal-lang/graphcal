@@ -4,11 +4,11 @@
 use super::infer::hir::concrete_generic_substitutions;
 use crate::cancellation::CancellationToken;
 use crate::diagnostic_anchor::DiagnosticAnchor;
+use crate::graphcal_error::GraphcalError;
 use crate::hir::nominal::{NominalConstructor, NominalTypeDef};
-use crate::registry::checked_type::{
+use crate::semantic::checked_type::{
     CheckedGenericArg, CheckedType, IndexTypeRef, StructTypeRef, Symbolic,
 };
-use crate::registry::error::GraphcalError;
 use crate::syntax::span::Span;
 use crate::tir::texpr::{CheckedBody, TBody, TNodeRef, visit_tnodes};
 use crate::tir::typed::model::{DagTIR, ResolvedStructFieldTypeKey, TirRead};

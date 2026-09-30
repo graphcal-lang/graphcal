@@ -3,8 +3,8 @@
 use crate::hir::types::{GenericArg, IndexRef, ValueType, ValueTypeKind};
 use crate::resolved_name::{ResolvedConstructorName, ResolvedStructTypeName};
 
-use crate::registry::checked_type::{IndexTypeRef, Symbolic};
-use crate::registry::error::GraphcalError;
+use crate::graphcal_error::GraphcalError;
+use crate::semantic::checked_type::{IndexTypeRef, Symbolic};
 use crate::syntax::span::Span;
 use crate::syntax::type_name::FieldName;
 use crate::tir::texpr::NominalObservation;

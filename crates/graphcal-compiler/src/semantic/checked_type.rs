@@ -8,10 +8,9 @@ use crate::syntax::non_empty::NonEmpty;
 use crate::syntax::type_name::StructTypeNameNamespace;
 
 use crate::nat::NatPolyForm;
-use crate::registry::time_scale::TimeScale;
-use crate::registry::types::{
-    DimensionFormattingRegistry, FiniteIndex, IndexCardinality, IndexCardinalityError,
-};
+use crate::semantic::dimension_table::DimensionFormattingRegistry;
+use crate::semantic::index_def::{FiniteIndex, IndexCardinality, IndexCardinalityError};
+use crate::semantic::time_scale::TimeScale;
 use crate::tir::materialized_shape::{MaterializedShape, MaterializedShapeError};
 
 /// A type-level reference to a named compiler entity.
@@ -681,7 +680,7 @@ mod tests {
         assert_eq!(bound.to_symbolic().to_concrete(), Some(bound.clone()));
         assert_eq!(
             bound.format(
-                &crate::registry::types::FormattingRegistry::graphcal_prelude()
+                &crate::display::formatting_registry::FormattingRegistry::graphcal_prelude()
                     .unwrap()
                     .dimensions
             ),

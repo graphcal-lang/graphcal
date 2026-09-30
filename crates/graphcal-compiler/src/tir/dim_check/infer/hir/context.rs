@@ -6,12 +6,12 @@ use std::sync::Arc;
 
 use miette::NamedSource;
 
+use crate::display::formatting_registry::FormattingRegistry;
 use crate::expression_id::ExprId;
-use crate::registry::checked_type::{IndexTypeRef, Symbolic};
-use crate::registry::error::GraphcalError;
-use crate::registry::types::FormattingRegistry;
+use crate::graphcal_error::GraphcalError;
+use crate::semantic::checked_type::{IndexTypeRef, Symbolic};
 
-use crate::registry::checked_type::CheckedType;
+use crate::semantic::checked_type::CheckedType;
 
 use super::observations::BodyObservations;
 

@@ -4,9 +4,9 @@ use miette::NamedSource;
 use std::sync::Arc;
 
 use crate::diagnostic_anchor::DiagnosticAnchor;
-use crate::registry::checked_type::{CheckedType, IndexTypeRef, Symbolic};
-use crate::registry::error::GraphcalError;
-use crate::registry::index::IndexCardinality;
+use crate::graphcal_error::GraphcalError;
+use crate::semantic::checked_type::{CheckedType, IndexTypeRef, Symbolic};
+use crate::semantic::index_def::IndexCardinality;
 use crate::syntax::span::Span;
 use crate::tir::materialized_shape::MaterializedShapeError;
 use crate::tir::static_index::UnavailableIndex;

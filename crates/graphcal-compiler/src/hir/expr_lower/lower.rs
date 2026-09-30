@@ -584,7 +584,7 @@ impl ExprLowerer<'_> {
                     {
                         Ok(value) => value,
                         Err(source @ ModuleResolveError::UnknownName { .. }) => {
-                            crate::registry::prelude::prelude_type_scope()
+                            crate::semantic::prelude::prelude_type_scope()
                                 .resolve_dimension_path(&value_path)
                                 .ok_or(ExprLowerError::ModuleResolve {
                                     source,
@@ -624,7 +624,7 @@ impl ExprLowerer<'_> {
                         Some(ast::IndexExpr::Finite {
                             cardinality: ast::NatExpr::Literal(cardinality, _),
                             ..
-                        }) => crate::registry::types::FiniteIndex::try_from_u64(cardinality)
+                        }) => crate::semantic::index_def::FiniteIndex::try_from_u64(cardinality)
                             .map(InstanceIndexBindingTarget::Finite)
                             .map_err(|_| ExprLowerError::InvalidStaticBindingValue {
                                 name: binding.name.name.atom().clone(),

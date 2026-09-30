@@ -5,8 +5,8 @@ use crate::dimension::{BaseDimId, Dimension, PreludeBaseDimension};
 use crate::ratio::RatioError;
 use crate::syntax::dimension::{DimName, UnitName};
 
-use crate::registry::types::PositiveFiniteScale;
 use crate::resolve::prelude::PreludeTypeScope;
+use crate::semantic::unit_scale::PositiveFiniteScale;
 
 /// Canonical synthetic owner for Graphcal prelude type-system symbols.
 ///
@@ -227,9 +227,9 @@ pub enum PreludeDefinitionError {
 /// which would be a compiler bug.
 pub fn prelude_definitions()
 -> Result<crate::ir::module_definitions::StaticDefinitions, PreludeDefinitionError> {
-    use crate::registry::dimension_table::BaseDimensionInfo;
-    use crate::registry::unit::{UnitInfo, UnitScale};
     use crate::resolved_name::{ResolvedDimName, ResolvedUnitName};
+    use crate::semantic::dimension_table::BaseDimensionInfo;
+    use crate::semantic::unit_scale::{UnitInfo, UnitScale};
 
     let scope = prelude_type_scope();
     let mut definitions = crate::ir::module_definitions::StaticDefinitions::new(prelude_dag_id());
@@ -278,7 +278,7 @@ pub fn prelude_definitions()
 mod tests {
     use super::*;
     use crate::dimension::Rational;
-    use crate::registry::types::UnitScale;
+    use crate::semantic::unit_scale::UnitScale;
     use crate::syntax::dimension::{DimRef, UnitRef};
 
     /// The prelude as source-spelled lookups, mirroring the implicit scope.
@@ -302,7 +302,7 @@ mod tests {
                 .map(|(_, dimension)| dimension)
         }
 
-        fn unit(&self, reference: &UnitRef) -> Option<&crate::registry::unit::UnitInfo> {
+        fn unit(&self, reference: &UnitRef) -> Option<&crate::semantic::unit_scale::UnitInfo> {
             self.definitions
                 .units()
                 .find(|(identity, _)| {

@@ -18,8 +18,8 @@ use thiserror::Error;
 
 use crate::expression_id::ExprId;
 use crate::hir::expr::{ConstRef, Expr, ExprKind, IndexArg, MatchPattern};
-use crate::registry::checked_type::{CheckedType, Symbolic};
 use crate::resolved_name::ResolvedConstructorName;
+use crate::semantic::checked_type::{CheckedType, Symbolic};
 use crate::syntax::ast::{BinOp, PowerExponent, UnaryOp};
 use crate::syntax::span::Spanned;
 use crate::tir::static_index::StaticIndexRequirement;
@@ -845,8 +845,8 @@ impl<'a> StaticPositions<'a> {
 mod tests {
     use super::*;
     use crate::dimension::Dimension;
-    use crate::registry::checked_type::IndexTypeRef;
-    use crate::registry::time_scale::TimeScale;
+    use crate::semantic::checked_type::IndexTypeRef;
+    use crate::semantic::time_scale::TimeScale;
 
     fn quantity() -> CheckedType<Symbolic> {
         CheckedType::Quantity(Dimension::dimensionless())
@@ -1232,8 +1232,8 @@ mod tests {
         crate::datetime_literal::CivilDateTimeLiteral::parse("2026-01-01T09:00:00").unwrap()
     }
 
-    fn zone(name: &str) -> crate::registry::time_zone::IanaTimeZoneId {
-        crate::registry::time_zone::TimeZoneRegistry::bundled()
+    fn zone(name: &str) -> crate::semantic::time_zone::IanaTimeZoneId {
+        crate::semantic::time_zone::TimeZoneRegistry::bundled()
             .parse_iana_id(name)
             .unwrap()
     }
@@ -1243,7 +1243,7 @@ mod tests {
             crate::datetime_literal::ZonedDateTimeLiteral::resolve(
                 civil(),
                 zone(name),
-                &crate::registry::time_zone::TimeZoneRegistry::bundled(),
+                &crate::semantic::time_zone::TimeZoneRegistry::bundled(),
             )
             .unwrap(),
         )

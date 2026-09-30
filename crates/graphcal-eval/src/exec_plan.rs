@@ -7,7 +7,7 @@ use miette::NamedSource;
 
 use graphcal_compiler::dag_id::DagId;
 use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
-use graphcal_compiler::registry::error::GraphcalError;
+use graphcal_compiler::graphcal_error::GraphcalError;
 use graphcal_compiler::resolved_name::ResolvedDeclName;
 
 use crate::checked_program::{CheckedProgram, SealedDag};
@@ -718,7 +718,7 @@ mod tests {
             .constrained_fields()
             .map(|field| {
                 graphcal_compiler::tir::typed::model::StructFieldConstraintKey::for_application(
-                    graphcal_compiler::registry::checked_type::StructTypeRef::from_resolved(
+                    graphcal_compiler::semantic::checked_type::StructTypeRef::from_resolved(
                         application.definition().clone(),
                     ),
                     application.generic_args().to_vec(),

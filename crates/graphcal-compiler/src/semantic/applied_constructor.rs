@@ -6,8 +6,8 @@
 //! built from either knows every field's type without looking the
 //! constructor up again.
 
-use crate::registry::checked_type::{CheckedGenericArg, CheckedType, Concrete, Concreteness};
 use crate::resolved_name::ResolvedStructTypeName;
+use crate::semantic::checked_type::{CheckedGenericArg, CheckedType, Concrete, Concreteness};
 use crate::syntax::type_name::{ConstructorName, FieldName};
 
 /// A constructor of `runtime_type` applied to `generic_args`, with its
@@ -148,8 +148,8 @@ mod tests {
     use super::{AppliedConstructor, AppliedField};
     use crate::dag_id::DagId;
     use crate::dimension::Dimension;
-    use crate::registry::checked_type::{CheckedType, Concrete, Symbolic};
     use crate::resolved_name::ResolvedStructTypeName;
+    use crate::semantic::checked_type::{CheckedType, Concrete, Symbolic};
     use crate::syntax::type_name::{ConstructorName, FieldName, StructTypeName};
 
     fn pair() -> AppliedConstructor<Symbolic> {

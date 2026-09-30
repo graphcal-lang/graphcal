@@ -6,10 +6,10 @@ use crate::syntax::dimension::UnitRef as SyntaxUnitRef;
 use thiserror::Error;
 
 use crate::datetime_literal::{CivilDateTimeLiteral, DatetimeLiteralExpectation};
-use crate::registry::time_scale::TimeScale;
-use crate::registry::time_zone::IanaTimeZoneId;
 use crate::resolve::category::DeclSymbolKind;
 use crate::resolve::error::ModuleResolveError;
+use crate::semantic::time_scale::TimeScale;
+use crate::semantic::time_zone::IanaTimeZoneId;
 use crate::syntax::index_name::{IndexName, IndexVariantName};
 use crate::syntax::local_name::LocalName;
 use crate::syntax::module_name::{ModuleAliasName, ScopedName};

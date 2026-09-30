@@ -6,8 +6,8 @@
 use std::collections::BTreeMap;
 
 use crate::dag_id::DagId;
-use crate::registry::index::FiniteIndex;
 use crate::resolved_name::{ResolvedDimName, ResolvedIndexName, ResolvedStructTypeName};
+use crate::semantic::index_def::FiniteIndex;
 
 /// Canonical importer-side target of one instance index binding.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]

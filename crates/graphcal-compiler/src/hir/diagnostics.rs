@@ -5,8 +5,8 @@ use std::sync::Arc;
 use miette::NamedSource;
 
 use crate::desugar::desugared_ast::{TypeExpr, TypeExprKind};
+use crate::graphcal_error::GraphcalError;
 use crate::hir;
-use crate::registry::error::GraphcalError;
 use crate::resolve::category::SymbolTable;
 use crate::resolve::error::{ModuleResolveError, NameCategory};
 use crate::syntax::index_name::IndexName;
@@ -142,7 +142,7 @@ pub fn expr_lower_error_to_graphcal(
             span,
         } => {
             return GraphcalError::WrongArity {
-                name: crate::registry::error::CalledFunction::Builtin(*name),
+                name: crate::graphcal_error::CalledFunction::Builtin(*name),
                 expected: *expected,
                 got: *got,
                 src: src.clone(),
@@ -272,7 +272,7 @@ pub fn expr_lower_error_to_graphcal(
         }
         hir::ExprLowerError::InvalidEpochTimeScaleArgument { span } => {
             return GraphcalError::InvalidEpochTimeScaleArgument {
-                expected: crate::registry::time_scale::TimeScale::expected_names(),
+                expected: crate::semantic::time_scale::TimeScale::expected_names(),
                 src: src.clone(),
                 span: (*span).into(),
             };
@@ -280,7 +280,7 @@ pub fn expr_lower_error_to_graphcal(
         hir::ExprLowerError::UnsupportedEpochTimeScale { name, span } => {
             return GraphcalError::UnsupportedEpochTimeScale {
                 name: name.clone(),
-                expected: crate::registry::time_scale::TimeScale::expected_names(),
+                expected: crate::semantic::time_scale::TimeScale::expected_names(),
                 src: src.clone(),
                 span: (*span).into(),
             };

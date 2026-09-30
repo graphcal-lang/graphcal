@@ -12,10 +12,10 @@ use std::sync::Arc;
 
 use graphcal_compiler::cancellation::{CancellationToken, Cancelled};
 use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
+use graphcal_compiler::display::formatting_registry::FormattingRegistry;
+use graphcal_compiler::graphcal_error::GraphcalError;
 use graphcal_compiler::hir::expr::Expr;
 use graphcal_compiler::outcome::Outcome;
-use graphcal_compiler::registry::error::GraphcalError;
-use graphcal_compiler::registry::types::FormattingRegistry;
 use graphcal_compiler::resolved_name::ResolvedDeclName;
 use graphcal_compiler::syntax::span::Span;
 use graphcal_compiler::tir::texpr::TExpr;

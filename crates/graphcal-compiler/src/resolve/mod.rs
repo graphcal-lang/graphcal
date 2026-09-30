@@ -41,6 +41,7 @@ pub(crate) mod mint;
 pub mod namespace;
 pub mod prelude;
 mod projection;
+pub mod reserved_name;
 pub mod scope;
 pub mod symbols;
 pub mod tables;

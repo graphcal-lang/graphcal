@@ -3,7 +3,7 @@
 
 use std::collections::HashMap;
 
-use graphcal_compiler::registry::error::GraphcalError;
+use graphcal_compiler::graphcal_error::GraphcalError;
 use graphcal_eval::eval::{CompileError, compile_and_eval, compile_and_eval_project};
 use graphcal_io::RealFileSystem;
 

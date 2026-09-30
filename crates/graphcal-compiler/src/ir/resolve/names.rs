@@ -2,8 +2,8 @@ use std::sync::Arc;
 
 use crate::assertion_expectation::{ExpectedFail, ExpectedFailKeyPart};
 use crate::desugar::desugared_ast::AttributeArg;
-use crate::registry::error::GraphcalError;
-use crate::registry::resolve_types::{ParsedExpectedFail, ParsedExpectedFailKey};
+use crate::graphcal_error::GraphcalError;
+use crate::ir::resolve::collected::{ParsedExpectedFail, ParsedExpectedFailKey};
 use crate::syntax::non_empty::NonEmpty;
 use miette::NamedSource;
 

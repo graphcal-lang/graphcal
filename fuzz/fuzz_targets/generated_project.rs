@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 use std::sync::LazyLock;
 
-use graphcal_compiler::registry::error::GraphcalError;
+use graphcal_compiler::graphcal_error::GraphcalError;
 use graphcal_eval::eval::{CompileError, compile_and_eval_project};
 use graphcal_io::{InMemoryFileSystem, VirtualAbsolutePath};
 use graphcal_test_support::bytes::project_from_bytes;

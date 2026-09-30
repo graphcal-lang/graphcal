@@ -6,7 +6,7 @@
 //! [`BuiltinFn::parse`]; downstream phases dispatch on the typed families of
 //! [`BuiltinFn`] instead of matching raw names.
 
-use crate::registry::time_scale::TimeScale;
+use crate::semantic::time_scale::TimeScale;
 
 /// Define a closed set of built-in names: the enum, the boundary parse, the
 /// canonical `as_str` rendering, and an `ALL` listing — all generated from a
@@ -192,7 +192,7 @@ impl BuiltinFn {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BuiltinEntry {
     /// A scalar kernel; its dimension signature lives in the scalar catalog
-    /// (`registry::builtins`), which is checked against [`ScalarFn::arity`].
+    /// (`semantic::scalar_function`), which is checked against [`ScalarFn::arity`].
     Kernel(ScalarFn),
     /// A custom type rule documented by a static source-like signature.
     Signature(&'static DisplaySignature),
@@ -1191,7 +1191,7 @@ mod tests {
         ComplexFn, DatetimeConstructorFn, DatetimeFn, LinearAlgebraFn, ScalarFn,
         TimeScaleConversionFn,
     };
-    use crate::registry::time_scale::TimeScale;
+    use crate::semantic::time_scale::TimeScale;
 
     #[test]
     fn every_builtin_function_round_trips_through_its_spelling() {

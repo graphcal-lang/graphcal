@@ -12,12 +12,12 @@ use thiserror::Error;
 use crate::dag_id::DagId;
 use crate::dimension::{BaseDimId, Dimension};
 use crate::hir::nominal::NominalTypeRegistry;
-use crate::registry::dimension_table::BaseDimensionInfo;
-use crate::registry::index::IndexDef;
-use crate::registry::unit::UnitInfo;
 use crate::resolved_name::{
     ResolvedDimName, ResolvedIndexName, ResolvedStructTypeName, ResolvedUnitName,
 };
+use crate::semantic::dimension_table::BaseDimensionInfo;
+use crate::semantic::index_def::IndexDef;
+use crate::semantic::unit_scale::UnitInfo;
 
 /// A definition presented to a module it is not owned by.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]

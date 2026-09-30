@@ -5,9 +5,9 @@ use std::sync::Arc;
 use indexmap::IndexMap;
 
 use graphcal_compiler::extern_struct_result::ExternStructResult;
-use graphcal_compiler::registry::applied_constructor::{AppliedConstructor, AppliedField};
-use graphcal_compiler::registry::checked_type::CheckedGenericArg;
 use graphcal_compiler::resolved_name::ResolvedStructTypeName;
+use graphcal_compiler::semantic::applied_constructor::{AppliedConstructor, AppliedField};
+use graphcal_compiler::semantic::checked_type::CheckedGenericArg;
 use graphcal_compiler::syntax::type_name::{ConstructorName, FieldName};
 use graphcal_compiler::tir::texpr::ConstructorApplication;
 
@@ -122,7 +122,7 @@ impl<V> StructValue<V> {
         constructor: ConstructorName,
         fields: Vec<(
             FieldName,
-            graphcal_compiler::registry::checked_type::CheckedType,
+            graphcal_compiler::semantic::checked_type::CheckedType,
             V,
         )>,
     ) -> Self {
@@ -226,9 +226,9 @@ mod tests {
     use graphcal_compiler::dag_id::DagId;
     use graphcal_compiler::extern_struct_result::ExternStructResult;
     use graphcal_compiler::function_signature::{StructFieldKind, StructShape, StructShapeField};
-    use graphcal_compiler::registry::applied_constructor::AppliedConstructor;
-    use graphcal_compiler::registry::checked_type::CheckedType;
     use graphcal_compiler::resolved_name::ResolvedStructTypeName;
+    use graphcal_compiler::semantic::applied_constructor::AppliedConstructor;
+    use graphcal_compiler::semantic::checked_type::CheckedType;
     use graphcal_compiler::syntax::type_name::{ConstructorName, FieldName, StructTypeName};
 
     use crate::runtime_value::struct_value::{StructFieldsError, StructValue};

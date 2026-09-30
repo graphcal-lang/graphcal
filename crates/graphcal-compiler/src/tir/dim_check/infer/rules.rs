@@ -13,14 +13,14 @@ use miette::NamedSource;
 
 use crate::desugar::desugared_ast::{BinOp, UnaryOp};
 use crate::dimension::{BaseDimId, Dimension, PreludeBaseDimension, Rational};
+use crate::display::formatting_registry::FormattingRegistry;
 use crate::exact_rational::ExactRational;
-use crate::registry::error::GraphcalError;
-use crate::registry::types::FormattingRegistry;
+use crate::graphcal_error::GraphcalError;
 use crate::syntax::ast::PowerExponent;
 use crate::syntax::span::Span;
 
 use super::super::helpers::{expect_quantity, format_checked_type};
-use crate::registry::checked_type::{CheckedType, Symbolic};
+use crate::semantic::checked_type::{CheckedType, Symbolic};
 
 /// A typed operand with the span diagnostics should point at.
 pub(super) struct Operand {
@@ -56,7 +56,7 @@ fn exact_float_replacement(exact: Option<ExactRational>) -> Option<String> {
 /// `k : Key<Fin(N)>` plus a static Nat constant `c` yields `Key<Fin(N + c)>`.
 fn fin_key_additive_rule(
     op: BinOp,
-    key_index: &crate::registry::checked_type::IndexTypeRef<Symbolic>,
+    key_index: &crate::semantic::checked_type::IndexTypeRef<Symbolic>,
     rhs: &Operand,
     rhs_const_int: Option<i64>,
     registry: &FormattingRegistry,
@@ -102,7 +102,7 @@ fn fin_key_additive_rule(
             src: src.clone(),
             span: rhs.span.into(),
         })?;
-    crate::registry::checked_type::IndexTypeRef::from_finite_index_form(shifted)
+    crate::semantic::checked_type::IndexTypeRef::from_finite_index_form(shifted)
         .map(CheckedType::Key)
         .map_err(|err| GraphcalError::EvalError {
             message: err.describe_finite_index(),

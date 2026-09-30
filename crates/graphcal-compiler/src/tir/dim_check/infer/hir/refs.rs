@@ -7,12 +7,12 @@ use std::sync::Arc;
 use miette::NamedSource;
 
 use crate::dimension::Dimension;
-use crate::registry::checked_type::{StructTypeRef, Symbolic};
-use crate::registry::error::GraphcalError;
+use crate::graphcal_error::GraphcalError;
+use crate::semantic::checked_type::{StructTypeRef, Symbolic};
 use crate::syntax::module_name::ScopedName;
 use crate::syntax::span::Span;
 
-use crate::registry::checked_type::CheckedType;
+use crate::semantic::checked_type::CheckedType;
 use crate::tir::dim_check::infer::rules;
 
 use super::context::{Infer, InferEnv};

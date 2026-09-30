@@ -1,10 +1,10 @@
 //! Inference of `scan` and `unfold` recurrences.
 
+use crate::graphcal_error::GraphcalError;
 use crate::hir::expr::{Expr, LocalDef};
-use crate::registry::checked_type::{IndexTypeRef, Symbolic};
-use crate::registry::error::GraphcalError;
+use crate::semantic::checked_type::{IndexTypeRef, Symbolic};
 
-use crate::registry::checked_type::CheckedType;
+use crate::semantic::checked_type::CheckedType;
 use crate::tir::dim_check::helpers::format_checked_type;
 
 use super::context::Infer;

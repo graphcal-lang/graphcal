@@ -7,8 +7,8 @@
 use thiserror::Error;
 
 use crate::dimension::Dimension;
-use crate::registry::checked_type::{Concreteness, IndexTypeRef, Symbolic};
-use crate::registry::time_scale::TimeScale;
+use crate::semantic::checked_type::{Concreteness, IndexTypeRef, Symbolic};
+use crate::semantic::time_scale::TimeScale;
 
 /// A leaf value that can be represented by a plot encoding channel.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

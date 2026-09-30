@@ -7,7 +7,7 @@ use miette::NamedSource;
 
 use crate::desugar::desugared_ast::TypeExpr;
 pub use crate::extern_struct_result::ExternStructResult;
-use crate::registry::error::GraphcalError;
+use crate::graphcal_error::GraphcalError;
 use crate::syntax::names::NamePath;
 use crate::syntax::span::Span;
 

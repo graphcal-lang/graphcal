@@ -4,9 +4,9 @@ use miette::NamedSource;
 
 use crate::desugar::desugared_ast::MulDivOp;
 use crate::dimension::Dimension;
+use crate::graphcal_error::GraphcalError;
 use crate::hir;
 use crate::hir::{NominalGenericParam, NominalTypeDef};
-use crate::registry::error::GraphcalError;
 use crate::resolve::error::ModuleResolveError;
 use crate::resolved_name::{ResolvedDimName, ResolvedIndexName, ResolvedStructTypeName};
 use crate::syntax::ast::GenericConstraint;

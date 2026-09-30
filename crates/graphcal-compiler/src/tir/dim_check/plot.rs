@@ -6,14 +6,14 @@
 //! the typed registry in [`crate::plot_props`], and property values are
 //! type-checked (string literal vs. dimensionless number vs. boolean).
 
-use crate::registry::checked_type::Symbolic;
+use crate::semantic::checked_type::Symbolic;
 use std::collections::HashMap;
 
+use crate::graphcal_error::GraphcalError;
 use crate::hir::ExprKind;
 use crate::ir::lower::{LoweredPlotField, LoweredPlotProperty};
 use crate::plot_props::{CompositionProperty, MarkProperty, PlotProperty, PlotPropertyType};
 use crate::plot_shape::{PlotChannelShape, PlotLeafKind, align_plot_channel_axes};
-use crate::registry::error::GraphcalError;
 
 use super::{
     CheckedType, DimCheckContext, check_ineffective_conversions, helpers::format_checked_type,
@@ -255,7 +255,7 @@ fn plot_channel_shape(inferred: &CheckedType<Symbolic>) -> Option<PlotChannelSha
 
 fn plot_leaf_kind(
     inferred: &CheckedType<Symbolic>,
-    axes: &mut Vec<crate::registry::checked_type::IndexTypeRef<Symbolic>>,
+    axes: &mut Vec<crate::semantic::checked_type::IndexTypeRef<Symbolic>>,
 ) -> Option<PlotLeafKind> {
     match inferred {
         CheckedType::Indexed { element, index } => {

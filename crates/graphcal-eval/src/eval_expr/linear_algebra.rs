@@ -497,7 +497,7 @@ pub(super) fn evaluate(
 
 #[cfg(test)]
 mod tests {
-    use graphcal_compiler::registry::index::FiniteIndex;
+    use graphcal_compiler::semantic::index_def::FiniteIndex;
     use graphcal_compiler::syntax::non_empty::NonEmpty;
 
     use super::*;

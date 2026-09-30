@@ -262,7 +262,7 @@ fn instance_trees_are_their_templates_specialized_by_the_instance_bindings() {
     assert!(
         matches!(
             tree.ty(),
-            graphcal_compiler::registry::checked_type::CheckedType::Indexed { index, .. }
+            graphcal_compiler::semantic::checked_type::CheckedType::Indexed { index, .. }
                 if index.finite_index().is_some_and(|axis| axis.cardinality().get() == 2)
         ),
         "{:?}",

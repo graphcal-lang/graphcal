@@ -8,12 +8,12 @@ use miette::NamedSource;
 use crate::declaration_category::DeclCategory;
 use crate::desugar::desugared_ast::{Expr, ExprKind, TypeExpr};
 use crate::diagnostic_anchor::DiagnosticAnchor;
+use crate::graphcal_error::GraphcalError;
 use crate::hir::expr::LocalDecl;
 use crate::ir::instance::identity::{instance_declaration, projection_alias};
 use crate::ir::instance::{
     InstanceAssertionProjection, InstancePlotProjection, InstanceRecord, InstanceValueProjection,
 };
-use crate::registry::error::GraphcalError;
 use crate::resolved_name::ResolvedDeclName;
 use crate::syntax::decl_name::DeclName;
 use crate::syntax::dimension::{UnitName, UnitRef};
@@ -261,7 +261,7 @@ impl UnfrozenIR {
     ) -> Result<HirDag, GraphcalError> {
         cancellation.checkpoint()?;
         let resolver = definitions.resolver();
-        let time_zones = crate::registry::time_zone::TimeZoneRegistry::bundled();
+        let time_zones = crate::semantic::time_zone::TimeZoneRegistry::bundled();
         // Entries already visible in this IR (including prefixed include
         // instances and dag self-imports) bind their written names to
         // canonical identities for the lowering below.

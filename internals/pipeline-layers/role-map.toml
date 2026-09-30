@@ -747,27 +747,32 @@ role = "contracts"
 
 [[module]]
 package = "compiler"
-path = ["registry"]
-role = "facade"
-
-[[module]]
-package = "compiler"
-path = ["registry", "aliased_table"]
+path = ["semantic"]
 role = "contracts"
 
 [[module]]
 package = "compiler"
-path = ["registry", "aliased_table", "tests"]
+path = ["display"]
 role = "contracts"
 
 [[module]]
 package = "compiler"
-path = ["registry", "applied_constructor"]
+path = ["semantic", "aliased_table"]
 role = "contracts"
 
 [[module]]
 package = "compiler"
-path = ["registry", "applied_constructor", "tests"]
+path = ["semantic", "aliased_table", "tests"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["semantic", "applied_constructor"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["semantic", "applied_constructor", "tests"]
 role = "contracts"
 
 [[module]]
@@ -777,132 +782,132 @@ role = "contracts"
 
 [[module]]
 package = "compiler"
-path = ["registry", "builtins"]
+path = ["semantic", "scalar_function"]
 role = "contracts"
 
 [[module]]
 package = "compiler"
-path = ["registry", "builtins", "tests"]
+path = ["semantic", "scalar_function", "tests"]
 role = "contracts"
 
 [[module]]
 package = "compiler"
-path = ["registry", "checked_type"]
+path = ["semantic", "checked_type"]
 role = "contracts"
 
 [[module]]
 package = "compiler"
-path = ["registry", "checked_type", "sealed"]
+path = ["semantic", "checked_type", "sealed"]
 role = "contracts"
 
 [[module]]
 package = "compiler"
-path = ["registry", "checked_type", "tests"]
+path = ["semantic", "checked_type", "tests"]
 role = "contracts"
 
 [[module]]
 package = "compiler"
-path = ["registry", "dimension_table"]
+path = ["semantic", "dimension_table"]
 role = "contracts"
 
 [[module]]
 package = "compiler"
-path = ["registry", "dimension_table", "tests"]
+path = ["semantic", "dimension_table", "tests"]
 role = "contracts"
 
 [[module]]
 package = "compiler"
-path = ["registry", "error"]
+path = ["graphcal_error"]
 role = "contracts"
 
 [[module]]
 package = "compiler"
-path = ["registry", "error", "tests"]
+path = ["graphcal_error", "tests"]
 role = "contracts"
 
 [[module]]
 package = "compiler"
-path = ["registry", "format"]
+path = ["display", "number"]
 role = "contracts"
 
 [[module]]
 package = "compiler"
-path = ["registry", "format", "tests"]
+path = ["display", "number", "tests"]
 role = "contracts"
 
 [[module]]
 package = "compiler"
-path = ["registry", "index"]
+path = ["semantic", "index_def"]
 role = "contracts"
 
 [[module]]
 package = "compiler"
-path = ["registry", "index", "tests"]
+path = ["semantic", "index_def", "tests"]
 role = "contracts"
 
 [[module]]
 package = "compiler"
-path = ["registry", "prelude"]
+path = ["semantic", "prelude"]
 role = "contracts"
 
 [[module]]
 package = "compiler"
-path = ["registry", "prelude", "tests"]
+path = ["semantic", "prelude", "tests"]
 role = "contracts"
 
 [[module]]
 package = "compiler"
-path = ["registry", "reserved_name"]
+path = ["resolve", "reserved_name"]
 role = "contracts"
 
 [[module]]
 package = "compiler"
-path = ["registry", "reserved_name", "tests"]
+path = ["resolve", "reserved_name", "tests"]
 role = "contracts"
 
 [[module]]
 package = "compiler"
-path = ["registry", "resolve_types"]
+path = ["ir", "resolve", "collected"]
 role = "checking"
 
 [[module]]
 package = "compiler"
-path = ["registry", "time_scale"]
+path = ["semantic", "time_scale"]
 role = "contracts"
 
 [[module]]
 package = "compiler"
-path = ["registry", "time_scale", "tests"]
+path = ["semantic", "time_scale", "tests"]
 role = "contracts"
 
 [[module]]
 package = "compiler"
-path = ["registry", "time_zone"]
+path = ["semantic", "time_zone"]
 role = "contracts"
 
 [[module]]
 package = "compiler"
-path = ["registry", "time_zone", "tests"]
+path = ["semantic", "time_zone", "tests"]
 role = "contracts"
 
 [[module]]
 package = "compiler"
-path = ["registry", "types"]
+path = ["display", "formatting_registry"]
 role = "contracts"
 
 [[module]]
 package = "compiler"
-path = ["registry", "types", "tests"]
+path = ["display", "formatting_registry", "tests"]
 role = "contracts"
 
 [[module]]
 package = "compiler"
-path = ["registry", "unit"]
+path = ["semantic", "unit_scale"]
 role = "contracts"
 
 [[module]]
 package = "compiler"
-path = ["registry", "unit", "tests"]
+path = ["semantic", "unit_scale", "tests"]
 role = "contracts"
 
 [[module]]

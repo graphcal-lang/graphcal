@@ -3,7 +3,7 @@
 use graphcal_compiler::datetime_literal::{
     CivilDateTimeLiteral, OffsetDateTimeLiteral, ZonedDateTimeLiteral,
 };
-use graphcal_compiler::registry::time_scale::TimeScale;
+use graphcal_compiler::semantic::time_scale::TimeScale;
 use thiserror::Error;
 
 /// Failure to transfer validated civil coordinates into hifitime.
@@ -417,7 +417,7 @@ fn epoch_from_civil(
 
 #[cfg(test)]
 mod tests {
-    use graphcal_compiler::registry::time_scale::TimeScale;
+    use graphcal_compiler::semantic::time_scale::TimeScale;
 
     use crate::eval_expr::datetime::{
         GregorianFields, NumericEpochKind, checked_epoch_add_seconds,

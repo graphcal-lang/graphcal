@@ -1,11 +1,11 @@
 //! The recursive expression-kind dispatch of HIR inference.
 
 use crate::dimension::Dimension;
+use crate::graphcal_error::GraphcalError;
 use crate::hir::expr::{Expr, ExprKind};
-use crate::registry::checked_type::{IndexTypeRef, Symbolic};
-use crate::registry::error::GraphcalError;
+use crate::semantic::checked_type::{IndexTypeRef, Symbolic};
 
-use crate::registry::checked_type::CheckedType;
+use crate::semantic::checked_type::CheckedType;
 
 use super::context::{Infer, PrecheckedArgs};
 use super::override_deps::IndexNominalUse;

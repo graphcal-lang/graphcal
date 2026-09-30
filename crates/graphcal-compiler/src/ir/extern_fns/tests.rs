@@ -3,8 +3,8 @@ use std::sync::Arc;
 use miette::NamedSource;
 
 use crate::function_signature::FunctionSignature;
+use crate::graphcal_error::GraphcalError;
 use crate::ir::lower::{HirDag, LoweredTestFile, lower_file_with_inline_dags_for_test};
-use crate::registry::error::GraphcalError;
 
 use super::ExternStructResult;
 

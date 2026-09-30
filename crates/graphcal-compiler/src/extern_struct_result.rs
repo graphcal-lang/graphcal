@@ -3,9 +3,9 @@
 use std::sync::Arc;
 
 use crate::function_signature::{StructFieldKind, StructResult, StructShape};
-use crate::registry::applied_constructor::{AppliedConstructor, AppliedField};
-use crate::registry::checked_type::CheckedType;
 use crate::resolved_name::ResolvedStructTypeName;
+use crate::semantic::applied_constructor::{AppliedConstructor, AppliedField};
+use crate::semantic::checked_type::CheckedType;
 use crate::syntax::type_name::ConstructorName;
 
 /// The record type a struct-returning extern function was declared with.
@@ -97,8 +97,8 @@ mod tests {
     use crate::dag_id::DagId;
     use crate::dimension::Dimension;
     use crate::function_signature::{StructFieldKind, StructShape, StructShapeField};
-    use crate::registry::checked_type::CheckedType;
     use crate::resolved_name::ResolvedStructTypeName;
+    use crate::semantic::checked_type::CheckedType;
     use crate::syntax::type_name::{ConstructorName, FieldName, StructTypeName};
 
     #[test]

@@ -11,6 +11,7 @@ use super::{
 };
 use crate::diagnostic_anchor::DiagnosticAnchor;
 use crate::dimension::{BaseDimId, Dimension};
+use crate::graphcal_error::GraphcalError;
 use crate::ir::instance::HirInstanceRecord;
 use crate::ir::instance::frame::InstanceFrame;
 use crate::ir::instance::identity::{instance_declaration, projection_alias, template_declaration};
@@ -19,11 +20,10 @@ use crate::ir::static_substitution::{
 };
 use crate::nat::NatPolyForm;
 use crate::plot_shape::PlotChannelShape;
-use crate::registry::checked_type::{Concreteness, IndexTypeRef, StructTypeRef};
-use crate::registry::error::GraphcalError;
 use crate::resolved_name::{
     ResolvedDeclName, ResolvedDimName, ResolvedIndexName, ResolvedStructTypeName, ResolvedUnitName,
 };
+use crate::semantic::checked_type::{Concreteness, IndexTypeRef, StructTypeRef};
 use crate::syntax::dimension::UnitName;
 use crate::tir::presentation::DagPresentationFacts;
 
@@ -243,12 +243,12 @@ fn specialize_struct_ref(
 }
 
 pub fn specialize_expression_type<V: Concreteness>(
-    ty: &crate::registry::checked_type::CheckedType<V>,
+    ty: &crate::semantic::checked_type::CheckedType<V>,
     substitution: &StaticSubstitution,
     tir: &dyn super::TirRead,
     src: &NamedSource<Arc<String>>,
-) -> Result<crate::registry::checked_type::CheckedType<V>, GraphcalError> {
-    use crate::registry::checked_type::{CheckedGenericArg, CheckedType};
+) -> Result<crate::semantic::checked_type::CheckedType<V>, GraphcalError> {
+    use crate::semantic::checked_type::{CheckedGenericArg, CheckedType};
     let recurse = |ty: &CheckedType<V>| specialize_expression_type(ty, substitution, tir, src);
     Ok(match ty {
         CheckedType::Quantity(dimension) => CheckedType::Quantity(specialize_dimension(
