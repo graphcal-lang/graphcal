@@ -4,7 +4,7 @@ use std::collections::{HashMap, HashSet};
 
 use graphcal_compiler::{dag_id::DagId, syntax::dimension::UnitName};
 
-use super::HirFile;
+use super::model::HirFile;
 use crate::dependency_ordered::DependencyOrdered;
 
 /// A complete canonically resolved project before static checking.

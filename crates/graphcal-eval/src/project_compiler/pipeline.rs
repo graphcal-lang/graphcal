@@ -5,7 +5,23 @@
     clippy::allow_attributes,
     reason = "project compiler pass uses the shared internal model"
 )]
-use super::*;
+use std::collections::HashMap;
+use std::sync::Arc;
+
+use miette::NamedSource;
+
+use graphcal_compiler::graphcal_error::GraphcalError;
+use graphcal_compiler::ir::resolve::ImportedValueNames;
+use graphcal_compiler::syntax::span::Span;
+
+use super::{checking, imports, lowering};
+use crate::eval::types::CompileError;
+
+use super::checked_project::CheckedProject;
+use super::hir_project::HirProject;
+use super::lowering::ProjectSemanticContext;
+use super::model::{CompiledFile, HirFile, ImportContext, ModuleArtifact, ModuleArtifactStore};
+use super::template::ModuleTemplateStore;
 use graphcal_compiler::dag_id::DagId;
 use graphcal_compiler::dependency_graph::Cycle;
 use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
@@ -15,7 +31,7 @@ use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
 ///
 /// Each template is named by its path inside its file (`outer.inner`), or by
 /// its module identity when it is a file root.
-pub(in crate::project_compiler) fn recursive_dag_instantiation(
+pub(super) fn recursive_dag_instantiation(
     project: &crate::loader::LoadedProject,
     cycle: &Cycle<DagId>,
 ) -> CompileError {
@@ -140,7 +156,7 @@ fn store_module_artifact(
 ///
 /// Dependencies contribute HIR interfaces only. No TIR construction, static
 /// body checking, constant evaluation, or host verification occurs here.
-pub(in crate::project_compiler) fn lower_project_perfile<'project>(
+pub(super) fn lower_project_perfile<'project>(
     project: &'project crate::loader::LoadedProject,
     module_resolver: graphcal_compiler::resolve::ModuleResolver,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
@@ -246,7 +262,7 @@ fn build_project_type_store(
 }
 
 /// Consume a complete HIR project and perform all mandatory static checks.
-pub(in crate::project_compiler) fn check_hir_project(
+pub(super) fn check_hir_project(
     hir: HirProject<'_>,
     host_metadata: &crate::host_fns::HostFunctionMetadata,
 ) -> Result<CheckedProject, CompileError> {

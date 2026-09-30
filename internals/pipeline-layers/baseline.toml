@@ -282,11 +282,11 @@ reason = "Observed eval::inline_dag -> eval::loader (production) at ./crates/gra
 
 [[exception]]
 from_package = "eval"
-from_path = ["loader", "inline_dags"]
-to_package = "eval"
-to_path = ["loader"]
+from_path = ["loader", "loaded_file"]
+to_package = "compiler"
+to_path = ["ir", "module_interface"]
 test_only = false
-reason = "Observed eval::loader::inline_dags -> eval::loader (production) at ./crates/graphcal-eval/src/loader/inline_dags.rs:7 (use import); roles are checking -> loading. Planned deletion seam: split checking from source/project loading and pass a typed input boundary."
+reason = "Observed eval::loader::loaded_file -> compiler::ir::module_interface (production) at ./crates/graphcal-eval/src/loader/loaded_file.rs:11 (use import); roles are contracts -> checking. Split out of the loading-role loader.rs (P10-3a0), which computes each module's declared interface at load. Planned deletion seam: move the declared ModuleInterface data into compiler contracts (P10-2)."
 
 [[exception]]
 from_package = "eval"
@@ -367,14 +367,6 @@ to_package = "eval"
 to_path = ["loader"]
 test_only = false
 reason = "Observed eval::project_compiler::model -> eval::loader (production) at ./crates/graphcal-eval/src/project_compiler/model.rs:191 (qualified path); roles are contracts -> loading. Planned deletion seam: remove loader knowledge from shared contracts and inject a boundary adapter."
-
-[[exception]]
-from_package = "eval"
-from_path = ["project_compiler", "model"]
-to_package = "eval"
-to_path = ["project_compiler"]
-test_only = false
-reason = "Observed eval::project_compiler::model -> eval::project_compiler (production) at ./crates/graphcal-eval/src/project_compiler/model.rs:181 (qualified path); roles are contracts -> checking. Planned deletion seam: separate shared data/error definitions from their checking/building producers (Phases B-C)."
 
 [[exception]]
 from_package = "eval"
