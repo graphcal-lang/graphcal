@@ -73,7 +73,7 @@ impl DimCheckContext<'_> {
     }
 
     /// Look up the module-aware HIR expression for a local declaration.
-    fn hir_expr_for_decl(&self, declaration: &ResolvedDeclName) -> Option<&crate::hir::Expr> {
+    fn hir_expr_for_decl(&self, declaration: &ResolvedDeclName) -> Option<&crate::hir::expr::Expr> {
         self.env.dag.value_expr(declaration)
     }
 
@@ -83,7 +83,7 @@ impl DimCheckContext<'_> {
         name: &DeclName,
         declaration: &ResolvedDeclName,
         span: crate::syntax::span::Span,
-    ) -> Result<&crate::hir::AssertBody, GraphcalError> {
+    ) -> Result<&crate::hir::expr::AssertBody, GraphcalError> {
         self.env
             .dag
             .assert_body(declaration)
@@ -98,7 +98,7 @@ impl DimCheckContext<'_> {
     /// context's sink.
     fn infer_hir(
         &self,
-        expr: &crate::hir::Expr,
+        expr: &crate::hir::expr::Expr,
         owner: Option<&ResolvedDeclName>,
     ) -> Result<CheckedType<Symbolic>, GraphcalError> {
         self.env
@@ -227,7 +227,7 @@ fn check_dynamic_unit_scale_type(
 /// the conversion evaluates to the unchanged SI value and its display target
 /// is silently dropped, so it is either a typo or dead code.
 fn check_ineffective_conversions(
-    expr: &crate::hir::Expr,
+    expr: &crate::hir::expr::Expr,
     display_position: bool,
     src: &NamedSource<Arc<String>>,
 ) -> Result<(), GraphcalError> {
@@ -238,11 +238,11 @@ fn check_ineffective_conversions(
 }
 
 fn check_ineffective_conversions_inner(
-    expr: &crate::hir::Expr,
+    expr: &crate::hir::expr::Expr,
     display_position: bool,
     src: &NamedSource<Arc<String>>,
 ) -> Result<(), GraphcalError> {
-    use crate::hir::ExprKind;
+    use crate::hir::expr::ExprKind;
     match expr.kind() {
         ExprKind::Convert { expr: inner, .. } | ExprKind::DisplayTimezone { expr: inner, .. } => {
             if !display_position {
@@ -372,13 +372,13 @@ impl AssertionIndexShape {
 fn check_hir_assert_body(
     ctx: &DimCheckContext<'_>,
     owner: &ResolvedDeclName,
-    body: &crate::hir::AssertBody,
+    body: &crate::hir::expr::AssertBody,
     span: crate::syntax::span::Span,
 ) -> Result<AssertionIndexShape, GraphcalError> {
     let registry = ctx.env.registry;
     let src = ctx.env.src;
     match body {
-        crate::hir::AssertBody::Expr(body_expr) => {
+        crate::hir::expr::AssertBody::Expr(body_expr) => {
             let inferred = ctx.infer_hir(body_expr, Some(owner))?;
             if !is_bool_type(&inferred) {
                 return Err(GraphcalError::AssertBodyNotBool {
@@ -389,7 +389,7 @@ fn check_hir_assert_body(
             }
             Ok(AssertionIndexShape::from_bool_type(&inferred))
         }
-        crate::hir::AssertBody::Tolerance {
+        crate::hir::expr::AssertBody::Tolerance {
             actual,
             expected,
             tolerance,
@@ -509,16 +509,16 @@ fn broadcast_operand_element<'a>(
 /// `0.1 m` — unit scales are always positive, so the written value carries
 /// the sign), optionally under unary negation. Returns `None` for anything
 /// computed at runtime; those are sign-checked by the evaluator instead.
-fn statically_known_tolerance(expr: &crate::hir::Expr) -> Option<f64> {
+fn statically_known_tolerance(expr: &crate::hir::expr::Expr) -> Option<f64> {
     match expr.kind() {
-        crate::hir::ExprKind::Number(n) => Some(*n),
+        crate::hir::expr::ExprKind::Number(n) => Some(*n),
         #[expect(
             clippy::cast_precision_loss,
             reason = "tolerance literals are small integers"
         )]
-        crate::hir::ExprKind::Integer(i) => Some(*i as f64),
-        crate::hir::ExprKind::QuantityLiteral { value, .. } => Some(*value),
-        crate::hir::ExprKind::UnaryOp {
+        crate::hir::expr::ExprKind::Integer(i) => Some(*i as f64),
+        crate::hir::expr::ExprKind::QuantityLiteral { value, .. } => Some(*value),
+        crate::hir::expr::ExprKind::UnaryOp {
             op: crate::syntax::ast::UnaryOp::Neg,
             operand,
         } => statically_known_tolerance(operand).map(|v| -v),
@@ -845,7 +845,7 @@ fn is_bindable_nominal(
 /// executable.
 pub fn check_external_value_expr_type<'t>(
     tir: &'t crate::tir::typed::CheckedTir,
-    expr: &crate::hir::Expr,
+    expr: &crate::hir::expr::Expr,
     expected: &CheckedType,
     src: &NamedSource<Arc<String>>,
 ) -> Result<crate::tir::typed::ScopedTree<'t, crate::tir::texpr::TExpr>, GraphcalError> {
@@ -1158,7 +1158,7 @@ fn check_field_domain_constraint_targets(
 fn field_type_annotation<'a>(
     dag: &'a crate::tir::typed::DagTIR,
     key: &crate::tir::typed::ResolvedStructFieldTypeKey,
-) -> Option<&'a crate::hir::NominalField> {
+) -> Option<&'a crate::hir::nominal::NominalField> {
     dag.semantic
         .type_defs
         .struct_types
@@ -1333,7 +1333,7 @@ fn collect_dag_call_targets_from_dag(
     out: &mut std::collections::BTreeMap<crate::dag_id::DagId, Span>,
 ) {
     dag.visit_expressions(&mut |expr| {
-        if let crate::hir::ExprKind::DagCall { target, .. } = expr.kind() {
+        if let crate::hir::expr::ExprKind::DagCall { target, .. } = expr.kind() {
             out.entry(target.value.clone()).or_insert(target.span);
         }
     });

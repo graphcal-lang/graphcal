@@ -16,7 +16,7 @@ use crate::eval::types::NodeUnavailable;
 /// declaration is not "undefined", it is unevaluable, and the report must
 /// point at the root cause.
 pub(super) fn dependency_failure_message<'a>(
-    exprs: impl IntoIterator<Item = Scoped<'a, graphcal_compiler::hir::Expr>>,
+    exprs: impl IntoIterator<Item = Scoped<'a, graphcal_compiler::hir::expr::Expr>>,
     errors: &HashMap<ResolvedDeclName, NodeUnavailable>,
 ) -> Option<String> {
     if errors.is_empty() {
@@ -24,7 +24,7 @@ pub(super) fn dependency_failure_message<'a>(
     }
     let deps: std::collections::BTreeSet<_> = exprs
         .into_iter()
-        .flat_map(Scoped::<'_, graphcal_compiler::hir::Expr>::graph_refs)
+        .flat_map(Scoped::<'_, graphcal_compiler::hir::expr::Expr>::graph_refs)
         .collect();
     let failed: Vec<String> =
         deps.iter()

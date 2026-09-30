@@ -42,26 +42,30 @@ impl NominalTypeIndex {
     /// the declared types are keyed by.
     pub fn expression_constructor(
         &self,
-        expr: &hir::Expr<hir::Tolerant>,
+        expr: &hir::expr::Expr<hir::Tolerant>,
     ) -> Option<ResolvedConstructorName> {
         match expr.kind() {
-            hir::ExprKind::GraphRef(target) => self.declaration_types.get(&target.value).cloned(),
-            hir::ExprKind::ConstRef(target) => match &target.value {
-                hir::ConstRef::Decl(name) => self.declaration_types.get(name).cloned(),
-                hir::ConstRef::Constructor(constructor) => Some(constructor.clone()),
-                hir::ConstRef::Builtin(_) => None,
+            hir::expr::ExprKind::GraphRef(target) => {
+                self.declaration_types.get(&target.value).cloned()
+            }
+            hir::expr::ExprKind::ConstRef(target) => match &target.value {
+                hir::expr::ConstRef::Decl(name) => self.declaration_types.get(name).cloned(),
+                hir::expr::ConstRef::Constructor(constructor) => Some(constructor.clone()),
+                hir::expr::ConstRef::Builtin(_) => None,
             },
-            hir::ExprKind::ConstructorCall { callee, .. } => Some(callee.value.clone()),
-            hir::ExprKind::IndexAccess { expr, .. }
-            | hir::ExprKind::Convert { expr, .. }
-            | hir::ExprKind::DisplayTimezone { expr, .. } => self.expression_constructor(expr),
-            hir::ExprKind::FieldAccess { expr, field } => {
+            hir::expr::ExprKind::ConstructorCall { callee, .. } => Some(callee.value.clone()),
+            hir::expr::ExprKind::IndexAccess { expr, .. }
+            | hir::expr::ExprKind::Convert { expr, .. }
+            | hir::expr::ExprKind::DisplayTimezone { expr, .. } => {
+                self.expression_constructor(expr)
+            }
+            hir::expr::ExprKind::FieldAccess { expr, field } => {
                 let owner = self.expression_constructor(expr)?;
                 self.field_types
                     .get(&FieldId::new(owner, field.value.clone()))
                     .cloned()
             }
-            hir::ExprKind::If {
+            hir::expr::ExprKind::If {
                 then_branch,
                 else_branch,
                 ..

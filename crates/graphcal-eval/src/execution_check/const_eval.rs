@@ -57,7 +57,7 @@ fn reject_constant_call(
     expr: &graphcal_compiler::hir::expr::Expr,
     src: &NamedSource<Arc<String>>,
 ) -> Result<(), GraphcalError> {
-    match graphcal_compiler::hir::find_dag_call(expr) {
+    match graphcal_compiler::hir::expr::find_dag_call(expr) {
         Some((target, span)) => Err(GraphcalError::DagCallInCompileTime {
             name: target.to_string(),
             src: src.clone(),

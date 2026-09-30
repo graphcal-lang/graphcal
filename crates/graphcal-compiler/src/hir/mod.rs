@@ -39,29 +39,8 @@ pub mod type_annotation;
 pub mod types;
 
 pub use diagnostics::expr_lower_error_to_graphcal;
-pub use expr::{
-    AssertBody, CheckedAssertBody, CheckedExpr, Completeness, ConstRef, Draft, Expr,
-    ExprDependencies, ExprKind, ExternFnRef, FunctionRef, LocalDecl, LocalDef, LocalEnv, LocalId,
-    LocalUnit, ResolvedUnitExpr, ResolvedUnitExprItem, ResolvedUnitRef, Strict,
-    UnappliedFunctionRef, collect_expr_dependencies, find_dag_call,
-};
-pub(crate) use expr::{find_extern_call, visit_expr};
 pub use expr_lower::context::ExprLoweringContext;
 pub use expr_lower::context::{BindingOverlay, FrozenBindings};
 pub use expr_lower::error::ExprLowerError;
 pub use expr_lower::lower::{lower_expr_draft, lower_expr_tolerant};
 pub use expr_lower::tolerant::{LoweringFailure, Tolerant};
-pub use lower::{
-    GenericApplicationTarget, GenericArgArity, GenericParamBinding, GenericScope, HirLowerError,
-    ModuleScope, TypePathSlot,
-};
-pub use nominal::{
-    NominalConstructor, NominalField, NominalGenericParam, NominalTypeDef, NominalTypeError,
-    NominalTypeKind, NominalTypeRegistry,
-};
-pub use source_interface::{SourceDeclaration, StaticPort, StaticPortIdentity};
-pub use type_annotation::{DomainBound, TypeAnnotation};
-pub use types::{
-    BuiltinType, DeclType, DimArg, DimExpr, DimExprItem, DimTermRef, DimTermTarget, GenericArg,
-    GenericParamId, GenericParamOwner, IndexRef, NatExpr, ValueType, ValueTypeKind,
-};

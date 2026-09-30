@@ -8,9 +8,9 @@ use graphcal_compiler::declaration_category::DeclCategory;
 use graphcal_compiler::desugar::desugared_ast::{Expr, ExprKind as AstExprKind};
 use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
 use graphcal_compiler::graphcal_error::GraphcalError;
-use graphcal_compiler::hir::{
-    ExprKind as HirExprKind, ExprLoweringContext, GenericScope, ModuleScope,
-};
+use graphcal_compiler::hir::ExprLoweringContext;
+use graphcal_compiler::hir::expr::ExprKind as HirExprKind;
+use graphcal_compiler::hir::lower::{GenericScope, ModuleScope};
 use graphcal_compiler::resolve::ModuleResolver;
 use graphcal_compiler::semantic::checked_type::CheckedType;
 use graphcal_compiler::semantic::index_def::ConcreteIndexKind;

@@ -5,8 +5,7 @@ use miette::NamedSource;
 use crate::desugar::desugared_ast::MulDivOp;
 use crate::dimension::Dimension;
 use crate::graphcal_error::GraphcalError;
-use crate::hir;
-use crate::hir::{NominalGenericParam, NominalTypeDef};
+use crate::hir::nominal::{NominalGenericParam, NominalTypeDef};
 use crate::resolve::error::ModuleResolveError;
 use crate::resolved_name::{ResolvedDimName, ResolvedIndexName, ResolvedStructTypeName};
 use crate::syntax::ast::GenericConstraint;
@@ -61,7 +60,7 @@ struct HirTypeResolutionContext<'a> {
 /// `ResolvedName<Ns>` and lexical generic IDs from HIR instead of performing
 /// source-path lookup itself.
 pub fn resolve_hir_decl_type(
-    decl_type: &hir::DeclType,
+    decl_type: &crate::hir::types::DeclType,
     src: &NamedSource<Arc<String>>,
     module_ctx: ModuleTypeContext<'_>,
 ) -> Result<ResolvedDeclType, GraphcalError> {
@@ -69,16 +68,16 @@ pub fn resolve_hir_decl_type(
 }
 
 pub(super) fn resolve_hir_decl_type_with_project_types(
-    decl_type: &hir::DeclType,
+    decl_type: &crate::hir::types::DeclType,
     src: &NamedSource<Arc<String>>,
     project_types: &ProjectTypeStore,
 ) -> Result<ResolvedDeclType, GraphcalError> {
     let ctx = HirTypeResolutionContext { src, project_types };
     match decl_type {
-        hir::DeclType::Value(value_type) => {
+        crate::hir::types::DeclType::Value(value_type) => {
             resolve_hir_value_type(value_type, ctx).map(ResolvedDeclType::Value)
         }
-        hir::DeclType::Indexed {
+        crate::hir::types::DeclType::Indexed {
             element, indexes, ..
         } => Ok(ResolvedDeclType::Indexed {
             element: resolve_hir_value_type(element, ctx)?,
@@ -88,23 +87,25 @@ pub(super) fn resolve_hir_decl_type_with_project_types(
 }
 
 fn resolve_hir_value_type(
-    value_type: &hir::ValueType,
+    value_type: &crate::hir::types::ValueType,
     ctx: HirTypeResolutionContext<'_>,
 ) -> Result<ResolvedValueType, GraphcalError> {
     match &value_type.kind {
-        hir::ValueTypeKind::Builtin(builtin) => Ok(resolve_hir_builtin_type(*builtin)),
-        hir::ValueTypeKind::DimExpr(dim_expr) => {
+        crate::hir::types::ValueTypeKind::Builtin(builtin) => {
+            Ok(resolve_hir_builtin_type(*builtin))
+        }
+        crate::hir::types::ValueTypeKind::DimExpr(dim_expr) => {
             resolve_hir_dim_expr(dim_expr, ctx).map(ResolvedValueType::Quantity)
         }
-        hir::ValueTypeKind::Complex(dimension) => Ok(ResolvedValueType::Complex {
+        crate::hir::types::ValueTypeKind::Complex(dimension) => Ok(ResolvedValueType::Complex {
             dimension: resolve_hir_dim_arg(dimension, ctx)?,
             span: value_type.span,
         }),
-        hir::ValueTypeKind::Key(index) => Ok(ResolvedValueType::Key {
+        crate::hir::types::ValueTypeKind::Key(index) => Ok(ResolvedValueType::Key {
             index: resolve_hir_index_ref(index, ctx)?,
             span: value_type.span,
         }),
-        hir::ValueTypeKind::Struct(name) => {
+        crate::hir::types::ValueTypeKind::Struct(name) => {
             hir_struct_type_def(&name.value, name.span, ctx)?;
             Ok(ResolvedValueType::Struct {
                 name: name.value.clone(),
@@ -112,24 +113,23 @@ fn resolve_hir_value_type(
                 span: name.span,
             })
         }
-        hir::ValueTypeKind::GenericTypeParam(param) => Ok(ResolvedValueType::GenericTypeParam(
-            param.value.clone(),
-            param.span,
-        )),
-        hir::ValueTypeKind::TypeApplication { name, generic_args } => {
+        crate::hir::types::ValueTypeKind::GenericTypeParam(param) => Ok(
+            ResolvedValueType::GenericTypeParam(param.value.clone(), param.span),
+        ),
+        crate::hir::types::ValueTypeKind::TypeApplication { name, generic_args } => {
             resolve_hir_type_application(value_type, name, generic_args, ctx)
         }
     }
 }
 
-const fn resolve_hir_builtin_type(builtin: hir::BuiltinType) -> ResolvedValueType {
+const fn resolve_hir_builtin_type(builtin: crate::hir::types::BuiltinType) -> ResolvedValueType {
     match builtin {
-        hir::BuiltinType::Dimensionless => {
+        crate::hir::types::BuiltinType::Dimensionless => {
             ResolvedValueType::Quantity(ResolvedDim::dimensionless())
         }
-        hir::BuiltinType::Bool => ResolvedValueType::Bool,
-        hir::BuiltinType::Int => ResolvedValueType::Int,
-        hir::BuiltinType::Datetime(scale) => ResolvedValueType::Datetime(scale),
+        crate::hir::types::BuiltinType::Bool => ResolvedValueType::Bool,
+        crate::hir::types::BuiltinType::Int => ResolvedValueType::Int,
+        crate::hir::types::BuiltinType::Datetime(scale) => ResolvedValueType::Datetime(scale),
     }
 }
 
@@ -179,7 +179,7 @@ fn hir_struct_type_def<'a>(
 }
 
 fn resolve_hir_dim_expr(
-    dim_expr: &hir::DimExpr,
+    dim_expr: &crate::hir::types::DimExpr,
     ctx: HirTypeResolutionContext<'_>,
 ) -> Result<ResolvedDim, GraphcalError> {
     let terms = dim_expr
@@ -224,38 +224,40 @@ fn resolve_hir_dim_expr(
 }
 
 fn resolve_hir_dim_expr_item(
-    item: &hir::DimExprItem,
+    item: &crate::hir::types::DimExprItem,
     ctx: HirTypeResolutionContext<'_>,
 ) -> Result<ResolvedDimTerm, GraphcalError> {
     let power = item.term.power;
     match &item.term.target {
-        hir::DimTermTarget::Dimension(name) => Ok(ResolvedDimTerm::Concrete {
+        crate::hir::types::DimTermTarget::Dimension(name) => Ok(ResolvedDimTerm::Concrete {
             dim: hir_dimension(&name.value, name.span, ctx)?,
             power,
             op: item.op,
         }),
-        hir::DimTermTarget::GenericParam(param) => Ok(ResolvedDimTerm::GenericParam {
-            name: param.value.clone(),
-            power,
-            op: item.op,
-            span: item.term.span,
-        }),
+        crate::hir::types::DimTermTarget::GenericParam(param) => {
+            Ok(ResolvedDimTerm::GenericParam {
+                name: param.value.clone(),
+                power,
+                op: item.op,
+                span: item.term.span,
+            })
+        }
     }
 }
 
 fn resolve_hir_index_ref(
-    index: &hir::IndexRef,
+    index: &crate::hir::types::IndexRef,
     ctx: HirTypeResolutionContext<'_>,
 ) -> Result<ResolvedIndex, GraphcalError> {
     match index {
-        hir::IndexRef::Concrete(name) => {
+        crate::hir::types::IndexRef::Concrete(name) => {
             hir_index_name(&name.value, name.span, ctx)?;
             Ok(ResolvedIndex::Concrete(name.value.clone(), name.span))
         }
-        hir::IndexRef::GenericParam(param) => {
+        crate::hir::types::IndexRef::GenericParam(param) => {
             Ok(ResolvedIndex::GenericParam(param.value.clone(), param.span))
         }
-        hir::IndexRef::Finite(cardinality) => Ok(ResolvedIndex::Finite(
+        crate::hir::types::IndexRef::Finite(cardinality) => Ok(ResolvedIndex::Finite(
             cardinality.value.clone(),
             cardinality.span,
         )),
@@ -296,9 +298,9 @@ fn check_type_application_arity(
 }
 
 fn resolve_hir_type_application(
-    type_ann: &hir::ValueType,
+    type_ann: &crate::hir::types::ValueType,
     name: &crate::syntax::span::Spanned<ResolvedStructTypeName>,
-    generic_args: &[hir::GenericArg],
+    generic_args: &[crate::hir::types::GenericArg],
     ctx: HirTypeResolutionContext<'_>,
 ) -> Result<ResolvedValueType, GraphcalError> {
     let type_def = hir_struct_type_def(&name.value, name.span, ctx)?;
@@ -342,7 +344,7 @@ fn resolve_hir_type_application(
 
 pub(super) fn resolve_hir_generic_arg(
     param: &NominalGenericParam,
-    arg: &hir::GenericArg,
+    arg: &crate::hir::types::GenericArg,
     src: &NamedSource<Arc<String>>,
     module_ctx: ModuleTypeContext<'_>,
 ) -> Result<ResolvedGenericArg, GraphcalError> {
@@ -358,20 +360,20 @@ pub(super) fn resolve_hir_generic_arg(
 
 fn resolve_hir_generic_arg_for_param(
     param: &NominalGenericParam,
-    arg: &hir::GenericArg,
+    arg: &crate::hir::types::GenericArg,
     ctx: HirTypeResolutionContext<'_>,
 ) -> Result<ResolvedGenericArg, GraphcalError> {
     match (param.constraint(), arg) {
-        (GenericConstraint::Dim, hir::GenericArg::Dim(dim)) => {
+        (GenericConstraint::Dim, crate::hir::types::GenericArg::Dim(dim)) => {
             resolve_hir_dim_arg(dim, ctx).map(ResolvedGenericArg::Dim)
         }
-        (GenericConstraint::Index, hir::GenericArg::Index(index)) => {
+        (GenericConstraint::Index, crate::hir::types::GenericArg::Index(index)) => {
             resolve_hir_index_ref(index, ctx).map(ResolvedGenericArg::Index)
         }
-        (GenericConstraint::Nat, hir::GenericArg::Nat(nat)) => {
+        (GenericConstraint::Nat, crate::hir::types::GenericArg::Nat(nat)) => {
             Ok(ResolvedGenericArg::Nat(nat.value.clone(), nat.span))
         }
-        (GenericConstraint::Type, hir::GenericArg::Type(value_type)) => {
+        (GenericConstraint::Type, crate::hir::types::GenericArg::Type(value_type)) => {
             resolve_hir_value_type(value_type, ctx).map(ResolvedGenericArg::Type)
         }
         _ => Err(internal_error(
@@ -386,11 +388,11 @@ fn resolve_hir_generic_arg_for_param(
 }
 
 fn resolve_hir_dim_arg(
-    arg: &hir::DimArg,
+    arg: &crate::hir::types::DimArg,
     ctx: HirTypeResolutionContext<'_>,
 ) -> Result<ResolvedDim, GraphcalError> {
     match arg {
-        hir::DimArg::Dimensionless(_) => Ok(ResolvedDim::dimensionless()),
-        hir::DimArg::Expr(dim_expr) => resolve_hir_dim_expr(dim_expr, ctx),
+        crate::hir::types::DimArg::Dimensionless(_) => Ok(ResolvedDim::dimensionless()),
+        crate::hir::types::DimArg::Expr(dim_expr) => resolve_hir_dim_expr(dim_expr, ctx),
     }
 }

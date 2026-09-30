@@ -1,6 +1,6 @@
 use crate::runtime_value::RuntimeValue;
 use graphcal_compiler::graphcal_error::GraphcalError;
-use graphcal_compiler::hir::ResolvedUnitExpr;
+use graphcal_compiler::hir::expr::ResolvedUnitExpr;
 use graphcal_compiler::hir::expr::{ResolvedUnitExprItem, ResolvedUnitRef};
 use graphcal_compiler::resolved_name::ResolvedUnitName;
 use graphcal_compiler::semantic::unit_scale::{

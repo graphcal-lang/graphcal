@@ -229,12 +229,12 @@ impl Compositions<'_, '_> {
 /// `RuntimeValue`. An evaluation failure aborts the whole plot; the error
 /// message is reported on the plot (#842).
 fn eval_plot_property(
-    expr: Scoped<'_, graphcal_compiler::hir::Expr>,
+    expr: Scoped<'_, graphcal_compiler::hir::expr::Expr>,
     values: &RuntimeValueMap,
     ctx: &EvalSession<'_>,
 ) -> Result<PlotFieldValue, PlotEvaluationError> {
     ctx.cancellation.checkpoint().map_err(GraphcalError::from)?;
-    if let graphcal_compiler::hir::ExprKind::StringLiteral(_) = expr.get().kind() {
+    if let graphcal_compiler::hir::expr::ExprKind::StringLiteral(_) = expr.get().kind() {
         let text = ctx
             .checked_string(expr)
             .map_err(PlotEvaluationError::from)?;
@@ -476,7 +476,7 @@ fn evaluate_mark_properties(
 
 fn evaluate_plot_channel(
     channel: graphcal_compiler::syntax::ast::EncodingChannel,
-    scoped_expr: Scoped<'_, graphcal_compiler::hir::Expr>,
+    scoped_expr: Scoped<'_, graphcal_compiler::hir::expr::Expr>,
     fact: &graphcal_compiler::plot_shape::PlotChannelShape,
     values: &RuntimeValueMap,
     presentation_values: &PendingPresentedMap,
@@ -490,7 +490,7 @@ fn evaluate_plot_channel(
     PlotEvaluationError,
 > {
     let expr = scoped_expr.get();
-    if let graphcal_compiler::hir::ExprKind::StringLiteral(value) = expr.kind() {
+    if let graphcal_compiler::hir::expr::ExprKind::StringLiteral(value) = expr.kind() {
         return Ok((
             crate::eval::plot_data::ChannelData::unindexed_label(value.clone()),
             None,
@@ -581,7 +581,7 @@ fn plot_declared_type(
 }
 
 fn check_plot_expression_dependencies(
-    expressions: &[Scoped<'_, graphcal_compiler::hir::Expr>],
+    expressions: &[Scoped<'_, graphcal_compiler::hir::expr::Expr>],
     errors: &HashMap<ResolvedDeclName, NodeUnavailable>,
     ctx: &EvalSession<'_>,
 ) -> Result<(), PlotEvaluationError> {

@@ -4,7 +4,6 @@ use crate::runtime_value::{
 use graphcal_compiler::builtin::{AggregationFn, KeyAggregation};
 use graphcal_compiler::declaration_category::DeclCategory;
 use graphcal_compiler::graphcal_error::GraphcalError;
-use graphcal_compiler::hir;
 use graphcal_compiler::semantic::checked_type::{CheckedType, IndexTypeRef, StructTypeRef};
 use graphcal_compiler::syntax::index_name::IndexEntryKey;
 use graphcal_compiler::syntax::span::{Span, Spanned};
@@ -28,7 +27,7 @@ use super::context::EvalSession;
 use super::unit_scale::{checked_unit_scaled_value, resolve_unit_scale};
 use crate::constant_pools::RuntimeValueMap;
 
-pub type HirLocalValueMap<'a> = hir::LocalEnv<'a, EvaluatedRuntimeValue>;
+pub type HirLocalValueMap<'a> = graphcal_compiler::hir::expr::LocalEnv<'a, EvaluatedRuntimeValue>;
 
 fn index_ref_matches_resolved(
     actual: &IndexTypeRef,
@@ -705,7 +704,7 @@ fn argument_node(arg: Scoped<'_, TExternArg>) -> Scoped<'_, TExpr> {
 /// isolation.
 fn eval_extern_fn(
     span: Span,
-    ext: &hir::ExternFnRef,
+    ext: &graphcal_compiler::hir::expr::ExternFnRef,
     args: Scoped<'_, [TExternArg]>,
     values: &RuntimeValueMap,
     local_values: &HirLocalValueMap<'_>,
@@ -887,12 +886,12 @@ fn ensure_index_ref_matches_resolved(
 }
 
 fn map_entry_variant_for_axis(
-    key: &hir::expr::MapEntryKey,
+    key: &graphcal_compiler::hir::expr::MapEntryKey,
     axis: &IndexTypeRef,
     ctx: &EvalSession<'_>,
 ) -> Result<IndexEntryKey, GraphcalError> {
     match key {
-        hir::expr::MapEntryKey::IndexVariant(variant) => {
+        graphcal_compiler::hir::expr::MapEntryKey::IndexVariant(variant) => {
             ensure_index_ref_matches_resolved(
                 axis,
                 variant.variant.index(),
@@ -901,24 +900,24 @@ fn map_entry_variant_for_axis(
             )?;
             Ok(IndexEntryKey::named(variant.variant.variant().clone()))
         }
-        hir::expr::MapEntryKey::FinitePosition { position, .. } => {
+        graphcal_compiler::hir::expr::MapEntryKey::FinitePosition { position, .. } => {
             Ok(IndexEntryKey::position(position.value))
         }
     }
 }
 
-fn map_entry_key_span(key: &hir::expr::MapEntryKey) -> Span {
+fn map_entry_key_span(key: &graphcal_compiler::hir::expr::MapEntryKey) -> Span {
     match key {
-        hir::expr::MapEntryKey::IndexVariant(variant) => variant.path_span(),
-        hir::expr::MapEntryKey::FinitePosition { position, .. } => position.span,
+        graphcal_compiler::hir::expr::MapEntryKey::IndexVariant(variant) => variant.path_span(),
+        graphcal_compiler::hir::expr::MapEntryKey::FinitePosition { position, .. } => position.span,
     }
 }
 
 /// One map-literal entry still to place: its key on the current axis, its
 /// keys on the remaining axes, and its value.
 type MapLiteralEntry<'a> = (
-    &'a hir::expr::MapEntryKey,
-    &'a [hir::expr::MapEntryKey],
+    &'a graphcal_compiler::hir::expr::MapEntryKey,
+    &'a [graphcal_compiler::hir::expr::MapEntryKey],
     ScopedNode<'a>,
 );
 
@@ -1006,7 +1005,7 @@ fn eval_map_literal(
 
 fn eval_for_comp_bindings(
     checked_type: &CheckedType,
-    bindings: &[hir::expr::ForBinding],
+    bindings: &[graphcal_compiler::hir::expr::ForBinding],
     body: ScopedNode<'_>,
     values: &RuntimeValueMap,
     presentation_values: Option<&PendingPresentedMap>,
@@ -1137,8 +1136,8 @@ fn eval_index_access(
 fn eval_scan(
     source: ScopedNode<'_>,
     init: ScopedNode<'_>,
-    acc: &hir::LocalDef,
-    val: &hir::LocalDef,
+    acc: &graphcal_compiler::hir::expr::LocalDef,
+    val: &graphcal_compiler::hir::expr::LocalDef,
     body: ScopedNode<'_>,
     values: &RuntimeValueMap,
     presentation_values: Option<&PendingPresentedMap>,
@@ -1299,7 +1298,7 @@ fn eval_constructor_match(
     let mut arm_locals = local_values.child(Vec::new());
     for binding in &arm.get().bindings {
         match binding {
-            hir::expr::PatternBinding::Bind { field, local } => {
+            graphcal_compiler::hir::expr::PatternBinding::Bind { field, local } => {
                 let value = presented
                     .as_ref()
                     .field(&field.value)
@@ -1313,7 +1312,7 @@ fn eval_constructor_match(
                     })?;
                 arm_locals.bind(local.id, value);
             }
-            hir::expr::PatternBinding::Wildcard { .. } => {}
+            graphcal_compiler::hir::expr::PatternBinding::Wildcard { .. } => {}
         }
     }
     eval_texpr_evaluated(

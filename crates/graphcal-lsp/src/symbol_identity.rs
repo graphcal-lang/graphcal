@@ -114,12 +114,12 @@ impl GenericParamId {
 pub struct LocalSymbolId {
     owner: DagId,
     body_span: Span,
-    local: hir::LocalId,
+    local: hir::expr::LocalId,
 }
 
 impl LocalSymbolId {
     #[must_use]
-    pub const fn new(owner: DagId, body_span: Span, local: hir::LocalId) -> Self {
+    pub const fn new(owner: DagId, body_span: Span, local: hir::expr::LocalId) -> Self {
         Self {
             owner,
             body_span,

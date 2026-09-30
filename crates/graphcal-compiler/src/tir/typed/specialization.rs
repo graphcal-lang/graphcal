@@ -589,7 +589,7 @@ fn specialize_instance_semantics(
     for (template_port, binding) in &edge.value_bindings {
         // A binding is lowered in the including template and runs here, in
         // the frame that also re-owns the including template's declarations.
-        let dependencies = crate::hir::collect_expr_dependencies(binding)
+        let dependencies = crate::hir::expr::collect_expr_dependencies(binding)
             .graph_refs
             .iter()
             .map(|dependency| frame.resolve(dependency))

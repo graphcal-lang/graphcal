@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
 use graphcal_compiler::graphcal_error::GraphcalError;
-use graphcal_compiler::hir::SourceDeclaration;
+use graphcal_compiler::hir::source_interface::SourceDeclaration;
 use graphcal_compiler::ir::resolve::collected::ExternalDeclSurface;
 use graphcal_compiler::semantic::checked_type::CheckedType;
 use graphcal_compiler::syntax::ast::Visibility;

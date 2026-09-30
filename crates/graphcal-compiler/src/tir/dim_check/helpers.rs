@@ -5,7 +5,7 @@ use miette::NamedSource;
 use crate::dimension::Dimension;
 use crate::display::formatting_registry::FormattingRegistry;
 use crate::graphcal_error::GraphcalError;
-use crate::hir::NominalTypeDef;
+use crate::hir::nominal::NominalTypeDef;
 
 use crate::semantic::checked_type::{CheckedType, Concreteness, StructTypeRef, Symbolic};
 

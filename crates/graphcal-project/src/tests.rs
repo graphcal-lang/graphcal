@@ -3939,7 +3939,7 @@ node meeting: Datetime = datetime("2024-11-05T10:00", "asia/tokyo");
 node displayed: Datetime = @meeting -> "america/new_york";
 "#;
     let tir = compile_to_tir(source, "test.gcl").unwrap();
-    let graphcal_compiler::hir::ExprKind::FnCall { args, .. } = tir
+    let graphcal_compiler::hir::expr::ExprKind::FnCall { args, .. } = tir
         .root()
         .nodes()
         .next()
@@ -3951,13 +3951,15 @@ node displayed: Datetime = @meeting -> "america/new_york";
     else {
         panic!("expected datetime function call");
     };
-    let graphcal_compiler::hir::ExprKind::ZonedDateTimeLiteral(datetime) = args[0].kind() else {
+    let graphcal_compiler::hir::expr::ExprKind::ZonedDateTimeLiteral(datetime) = args[0].kind()
+    else {
         panic!(
             "expected a resolved zoned datetime literal, got {:?}",
             args[0]
         );
     };
-    let graphcal_compiler::hir::ExprKind::IanaTimeZoneLiteral(time_zone_id) = args[1].kind() else {
+    let graphcal_compiler::hir::expr::ExprKind::IanaTimeZoneLiteral(time_zone_id) = args[1].kind()
+    else {
         panic!("expected a typed IANA timezone literal, got {:?}", args[1]);
     };
     assert_eq!(time_zone_id.as_str(), "Asia/Tokyo");

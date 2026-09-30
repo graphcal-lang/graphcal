@@ -410,7 +410,7 @@ fn materialized_shape_identity_survives_equal_and_shifted_source_coordinates() {
         "node result: Dimensionless = sum(for p: Fin(2) { 1.0 }) + sum(for q: Fin(3) { 1.0 });";
     let (mut draft, src) = module_aware_tir(source);
     let mut ids = Vec::new();
-    crate::hir::visit_expr(
+    crate::hir::expr::visit_expr(
         draft
             .root()
             .nodes()
@@ -420,7 +420,7 @@ fn materialized_shape_identity_survives_equal_and_shifted_source_coordinates() {
             .formula()
             .unwrap(),
         &mut |expr| {
-            if matches!(expr.kind(), crate::hir::ExprKind::ForComp { .. }) {
+            if matches!(expr.kind(), crate::hir::expr::ExprKind::ForComp { .. }) {
                 ids.push(expr.id().clone());
             }
         },
@@ -500,7 +500,7 @@ fn node_entry_body_is_authoritative_for_hir_dimension_check() {
                 .definition
                 .formula_mut()
                 .unwrap()
-                .replace_kind_for_test(crate::hir::ExprKind::StringLiteral(
+                .replace_kind_for_test(crate::hir::expr::ExprKind::StringLiteral(
                     "not dimensionless".to_string(),
                 ));
         }
@@ -521,7 +521,7 @@ fn indexed_node_entry_body_is_authoritative_for_hir_dimension_check() {
                 .definition
                 .formula_mut()
                 .unwrap()
-                .replace_kind_for_test(crate::hir::ExprKind::StringLiteral(
+                .replace_kind_for_test(crate::hir::expr::ExprKind::StringLiteral(
                     "not indexed".to_string(),
                 ));
         }
@@ -535,9 +535,9 @@ fn assert_entry_body_is_authoritative_for_hir_dimension_check() {
     let (mut tir, src) = module_aware_tir("assert ok = sqrt(4.0) == 2.0;");
     edit_root_decls(&mut tir, |decl| {
         if let crate::ir::entry::Decl::Assert(entry) = decl {
-            entry.body = crate::hir::CheckedAssertBody::from_assert_body_for_test(
-                crate::hir::AssertBody::Expr(Box::new(crate::hir::Expr::new(
-                    crate::hir::ExprKind::StringLiteral("not bool".to_string()),
+            entry.body = crate::hir::expr::CheckedAssertBody::from_assert_body_for_test(
+                crate::hir::expr::AssertBody::Expr(Box::new(crate::hir::expr::Expr::new(
+                    crate::hir::expr::ExprKind::StringLiteral("not bool".to_string()),
                     entry.span,
                 ))),
             );
@@ -1449,8 +1449,8 @@ node bad: Dimensionless = @x ^ @n;";
 fn hir_normalizes_omitted_dimension_and_unit_powers() {
     let (tir, _) = module_aware_tir("param distance: Length = 1.0 m;");
     let param = tir.root().params().next().unwrap();
-    let crate::hir::DeclType::Value(crate::hir::ValueType {
-        kind: crate::hir::ValueTypeKind::DimExpr(dimension),
+    let crate::hir::types::DeclType::Value(crate::hir::types::ValueType {
+        kind: crate::hir::types::ValueTypeKind::DimExpr(dimension),
         ..
     }) = &param.type_ann.decl_type
     else {
@@ -1462,7 +1462,7 @@ fn hir_normalizes_omitted_dimension_and_unit_powers() {
     );
 
     let expression = param.default.as_ref().unwrap();
-    let crate::hir::ExprKind::QuantityLiteral { unit, .. } = expression.kind() else {
+    let crate::hir::expr::ExprKind::QuantityLiteral { unit, .. } = expression.kind() else {
         panic!("expected quantity literal");
     };
     assert_eq!(unit.terms[0].power, crate::dimension::Rational::ONE);
@@ -1481,7 +1481,7 @@ fn hir_preserves_exact_power_metadata() {
         .unwrap();
     assert!(matches!(
         expression.kind(),
-        crate::hir::ExprKind::BinOp {
+        crate::hir::expr::ExprKind::BinOp {
             op: crate::syntax::ast::BinOp::Pow(
                 crate::syntax::ast::PowerExponent::Exact(exponent)
             ),
@@ -3985,7 +3985,7 @@ fn inference_emits_typed_trees_carrying_node_facts() {
         .encodings
         .iter()
         .map(|(_, expr)| expr)
-        .find(|expr| matches!(expr.kind(), crate::hir::ExprKind::StringLiteral(_)))
+        .find(|expr| matches!(expr.kind(), crate::hir::expr::ExprKind::StringLiteral(_)))
         .unwrap();
     assert!(bodies.contextual(color.id()).is_some());
 }
