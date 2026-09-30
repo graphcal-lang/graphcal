@@ -1,7 +1,7 @@
 //! Discharge concrete nominal applications using retained bound proofs.
 //! This pass follows expression publication; it never infers bound source HIR.
 
-use super::infer::hir::concrete_generic_substitutions;
+use super::generic_substitution::concrete_generic_substitutions;
 use crate::cancellation::CancellationToken;
 use crate::diagnostic_anchor::DiagnosticAnchor;
 use crate::graphcal_error::GraphcalError;
@@ -223,13 +223,14 @@ fn check_bound(
     nats: &std::collections::HashMap<crate::hir::types::GenericParamId, u64>,
     ctx: &Context<'_>,
 ) -> Result<(), GraphcalError> {
-    let expected = super::expected_bound_from_inferred(target).ok_or_else(|| {
-        GraphcalError::InvalidDomainTarget {
-            type_kind: super::format_checked_type(target, ctx.tir.registry()),
-            src: bound.src.clone(),
-            span: bound.span.into(),
-        }
-    })?;
+    let expected =
+        super::domain_bound_type::expected_bound_from_inferred(target).ok_or_else(|| {
+            GraphcalError::InvalidDomainTarget {
+                type_kind: super::format_checked_type(target, ctx.tir.registry()),
+                src: bound.src.clone(),
+                span: bound.span.into(),
+            }
+        })?;
     let display = if member.name().as_str() == definition.name().as_str() {
         format!("{}.{}", definition.name(), key.field)
     } else {
@@ -253,7 +254,7 @@ fn check_bound(
         nats,
         &bound.src,
     )?;
-    super::check_one_bound_with_display_name(
+    super::domain_bound_type::check_one_bound_with_display_name(
         &display,
         bound,
         tree.ty(),

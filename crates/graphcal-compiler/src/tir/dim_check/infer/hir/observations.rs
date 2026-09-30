@@ -285,8 +285,8 @@ impl BodyObservations {
                 .fields()
                 .iter()
                 .map(|field| {
-                    super::generics::resolved_field_type(
-                        &super::generics::resolved_type_field_key(
+                    crate::tir::dim_check::generic_substitution::resolved_field_type(
+                        &crate::tir::dim_check::generic_substitution::resolved_type_field_key(
                             target.owning_type(),
                             target.variant(),
                             field.name(),

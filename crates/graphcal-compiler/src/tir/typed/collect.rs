@@ -9,9 +9,8 @@ use crate::ir::instance::frame::InstanceFrame;
 use crate::resolved_name::{ResolvedConstructorName, ResolvedDeclName, ResolvedStructTypeName};
 use crate::syntax::span::Span;
 
-use super::{
-    DagTIR, ModuleTypeContext, ResolvedDagDependencies, internal_error, module_resolve_error,
-};
+use super::model::{DagTIR, ModuleTypeContext, ResolvedDagDependencies};
+use super::type_expr::{internal_error, module_resolve_error};
 
 pub(super) fn augment_runtime_deps_for_dynamic_units(dag: &mut DagTIR) {
     if dag.semantic.dynamic_unit_scales.is_empty() {
@@ -117,7 +116,7 @@ fn resolve_all<'a>(
 }
 
 pub(super) fn collect_resolved_dag_dependencies(
-    decls: &crate::ir::decl_table::DeclTable<super::Typed>,
+    decls: &crate::ir::decl_table::DeclTable<super::model::Typed>,
     frame: &InstanceFrame,
     ctx: ModuleTypeContext<'_>,
     src: &NamedSource<Arc<String>>,

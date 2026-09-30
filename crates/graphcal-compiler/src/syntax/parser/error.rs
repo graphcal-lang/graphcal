@@ -19,8 +19,8 @@ use crate::syntax::names::{NameAtom, NamePath};
 use crate::syntax::span::Span;
 use crate::syntax::token::SourceIdentifier;
 
-use super::MAX_NESTING_DEPTH;
 use super::expected::{Expected, Found};
+use super::nesting_limit::MAX_NESTING_DEPTH;
 
 /// A parse failure located in the parsed source.
 #[derive(Debug, Clone)]

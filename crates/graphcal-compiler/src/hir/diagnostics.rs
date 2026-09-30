@@ -6,7 +6,8 @@ use miette::NamedSource;
 
 use crate::desugar::desugared_ast::{TypeExpr, TypeExprKind};
 use crate::graphcal_error::GraphcalError;
-use crate::hir;
+use crate::hir::expr_lower::error::ExprLowerError;
+use crate::hir::lower::{HirLowerError, TypePathSlot};
 use crate::resolve::category::SymbolTable;
 use crate::resolve::error::{ModuleResolveError, NameCategory};
 use crate::syntax::index_name::IndexName;
@@ -69,19 +70,19 @@ fn validate_generic_args<'a>(
 /// An unknown path in an index axis or a dimension term is reported as the
 /// missing index or dimension; its slot says which namespace was searched.
 pub fn type_lower_error_to_graphcal(
-    err: &hir::HirLowerError,
+    err: &HirLowerError,
     src: &NamedSource<Arc<String>>,
 ) -> GraphcalError {
-    if let hir::HirLowerError::UnknownTypePath { path, slot, span } = err
+    if let HirLowerError::UnknownTypePath { path, slot, span } = err
         && let Some(atom) = path.as_bare()
     {
         return match slot {
-            hir::TypePathSlot::IndexAxis => GraphcalError::UnknownIndex {
+            TypePathSlot::IndexAxis => GraphcalError::UnknownIndex {
                 name: IndexName::classify(atom.clone()).into(),
                 src: src.clone(),
                 span: (*span).into(),
             },
-            hir::TypePathSlot::DimensionTerm => GraphcalError::UnknownDimension {
+            TypePathSlot::DimensionTerm => GraphcalError::UnknownDimension {
                 name: NamePath::local(atom.clone()),
                 src: src.clone(),
                 span: (*span).into(),
@@ -98,18 +99,18 @@ pub fn type_lower_error_to_graphcal(
 )]
 #[must_use]
 pub fn expr_lower_error_to_graphcal(
-    err: &hir::ExprLowerError,
+    err: &ExprLowerError,
     src: &NamedSource<Arc<String>>,
 ) -> GraphcalError {
     match err {
-        hir::ExprLowerError::UnknownFunction { path, span } => {
+        ExprLowerError::UnknownFunction { path, span } => {
             return GraphcalError::UnknownFunction {
                 name: path.clone(),
                 src: src.clone(),
                 span: (*span).into(),
             };
         }
-        hir::ExprLowerError::UnknownExternFunction { alias, name, span } => {
+        ExprLowerError::UnknownExternFunction { alias, name, span } => {
             return GraphcalError::UnknownExternFunction {
                 alias: alias.clone(),
                 name: name.clone(),
@@ -117,7 +118,7 @@ pub fn expr_lower_error_to_graphcal(
                 span: (*span).into(),
             };
         }
-        hir::ExprLowerError::NamedArgumentsOnFunction {
+        ExprLowerError::NamedArgumentsOnFunction {
             function,
             argument_names,
             span,
@@ -135,7 +136,7 @@ pub fn expr_lower_error_to_graphcal(
                 span: (*span).into(),
             };
         }
-        hir::ExprLowerError::WrongArity {
+        ExprLowerError::WrongArity {
             name,
             expected,
             got,
@@ -149,28 +150,28 @@ pub fn expr_lower_error_to_graphcal(
                 span: (*span).into(),
             };
         }
-        hir::ExprLowerError::InvalidStaticBindingValue { name, span } => {
+        ExprLowerError::InvalidStaticBindingValue { name, span } => {
             return GraphcalError::InvalidTypeLevelBindingValue {
                 name: name.to_string(),
                 src: src.clone(),
                 span: (*span).into(),
             };
         }
-        hir::ExprLowerError::UnknownLocalRef { name, span } => {
+        ExprLowerError::UnknownLocalRef { name, span } => {
             return GraphcalError::UnknownLocalRef {
                 name: name.to_string(),
                 src: src.clone(),
                 span: (*span).into(),
             };
         }
-        hir::ExprLowerError::UnknownGraphRef { name, span } => {
+        ExprLowerError::UnknownGraphRef { name, span } => {
             return GraphcalError::UnknownGraphRef {
                 name: name.clone(),
                 src: src.clone(),
                 span: (*span).into(),
             };
         }
-        hir::ExprLowerError::BareGraphDeclarationRef { name, kind, span } => {
+        ExprLowerError::BareGraphDeclarationRef { name, kind, span } => {
             return GraphcalError::BareGraphDeclarationRef {
                 name: name.clone(),
                 kind: *kind,
@@ -178,21 +179,21 @@ pub fn expr_lower_error_to_graphcal(
                 span: (*span).into(),
             };
         }
-        hir::ExprLowerError::TimeScaleInValuePosition { scale, span } => {
+        ExprLowerError::TimeScaleInValuePosition { scale, span } => {
             return GraphcalError::TimeScaleInValuePosition {
                 scale: *scale,
                 src: src.clone(),
                 span: (*span).into(),
             };
         }
-        hir::ExprLowerError::UnknownUnit { name, span } => {
+        ExprLowerError::UnknownUnit { name, span } => {
             return GraphcalError::UnknownUnit {
                 name: name.clone(),
                 src: src.clone(),
                 span: (*span).into(),
             };
         }
-        hir::ExprLowerError::InvalidTimezone {
+        ExprLowerError::InvalidTimezone {
             timezone,
             tzdb_version,
             span,
@@ -204,7 +205,7 @@ pub fn expr_lower_error_to_graphcal(
                 span: (*span).into(),
             };
         }
-        hir::ExprLowerError::InvalidDatetimeLiteral {
+        ExprLowerError::InvalidDatetimeLiteral {
             expectation,
             reason,
             span,
@@ -216,7 +217,7 @@ pub fn expr_lower_error_to_graphcal(
                 span: (*span).into(),
             };
         }
-        hir::ExprLowerError::NonexistentCivilDateTime {
+        ExprLowerError::NonexistentCivilDateTime {
             datetime,
             time_zone,
             before,
@@ -234,7 +235,7 @@ pub fn expr_lower_error_to_graphcal(
                 time_zone_span: (*time_zone_span).into(),
             };
         }
-        hir::ExprLowerError::RepeatedCivilDateTime {
+        ExprLowerError::RepeatedCivilDateTime {
             datetime,
             time_zone,
             before,
@@ -252,7 +253,7 @@ pub fn expr_lower_error_to_graphcal(
                 time_zone_span: (*time_zone_span).into(),
             };
         }
-        hir::ExprLowerError::TimeZoneRegistryInvariant {
+        ExprLowerError::TimeZoneRegistryInvariant {
             time_zone,
             reason,
             span,
@@ -263,21 +264,21 @@ pub fn expr_lower_error_to_graphcal(
                 span: (*span).into(),
             };
         }
-        hir::ExprLowerError::EpochTimeScaleArgumentCount { got, span } => {
+        ExprLowerError::EpochTimeScaleArgumentCount { got, span } => {
             return GraphcalError::EpochTimeScaleArgumentCount {
                 got: *got,
                 src: src.clone(),
                 span: (*span).into(),
             };
         }
-        hir::ExprLowerError::InvalidEpochTimeScaleArgument { span } => {
+        ExprLowerError::InvalidEpochTimeScaleArgument { span } => {
             return GraphcalError::InvalidEpochTimeScaleArgument {
                 expected: crate::semantic::time_scale::TimeScale::expected_names(),
                 src: src.clone(),
                 span: (*span).into(),
             };
         }
-        hir::ExprLowerError::UnsupportedEpochTimeScale { name, span } => {
+        ExprLowerError::UnsupportedEpochTimeScale { name, span } => {
             return GraphcalError::UnsupportedEpochTimeScale {
                 name: name.clone(),
                 expected: crate::semantic::time_scale::TimeScale::expected_names(),
@@ -285,7 +286,7 @@ pub fn expr_lower_error_to_graphcal(
                 span: (*span).into(),
             };
         }
-        hir::ExprLowerError::ExtraMapVariant {
+        ExprLowerError::ExtraMapVariant {
             index_name,
             variant_name,
             span,
@@ -299,7 +300,7 @@ pub fn expr_lower_error_to_graphcal(
                 span: (*span).into(),
             };
         }
-        hir::ExprLowerError::ModuleResolve {
+        ExprLowerError::ModuleResolve {
             source: ModuleResolveError::UnknownModuleAlias { alias, .. },
             span,
         } => {
@@ -309,7 +310,7 @@ pub fn expr_lower_error_to_graphcal(
                 span: (*span).into(),
             };
         }
-        hir::ExprLowerError::ModuleResolve {
+        ExprLowerError::ModuleResolve {
             source:
                 ModuleResolveError::UnexpectedDeclKind {
                     name,
@@ -324,7 +325,7 @@ pub fn expr_lower_error_to_graphcal(
                 span: (*span).into(),
             };
         }
-        hir::ExprLowerError::ModuleResolve {
+        ExprLowerError::ModuleResolve {
             source: ModuleResolveError::PrivateName { owner, name, .. },
             span,
         } => {
@@ -335,7 +336,7 @@ pub fn expr_lower_error_to_graphcal(
                 span: (*span).into(),
             };
         }
-        hir::ExprLowerError::ModuleResolve {
+        ExprLowerError::ModuleResolve {
             source: ModuleResolveError::UnknownIndexVariant { index, variant },
             span,
         } => {
@@ -346,7 +347,7 @@ pub fn expr_lower_error_to_graphcal(
                 span: (*span).into(),
             };
         }
-        hir::ExprLowerError::ModuleResolve {
+        ExprLowerError::ModuleResolve {
             source:
                 ModuleResolveError::UnknownName {
                     category: NameCategory::Table(SymbolTable::Index),
@@ -361,7 +362,7 @@ pub fn expr_lower_error_to_graphcal(
                 span: (*span).into(),
             };
         }
-        hir::ExprLowerError::ModuleResolve {
+        ExprLowerError::ModuleResolve {
             source:
                 ModuleResolveError::UnknownName {
                     category: NameCategory::Table(SymbolTable::Decl),
@@ -376,7 +377,7 @@ pub fn expr_lower_error_to_graphcal(
                 span: (*span).into(),
             };
         }
-        hir::ExprLowerError::EmptyParenthesizedConstructor { constructor, span } => {
+        ExprLowerError::EmptyParenthesizedConstructor { constructor, span } => {
             return GraphcalError::EmptyParenthesizedConstructor {
                 constructor: constructor.to_unowned_def_name(),
                 src: src.clone(),
@@ -386,36 +387,36 @@ pub fn expr_lower_error_to_graphcal(
         _ => {}
     }
     let span = match err {
-        hir::ExprLowerError::Type(err) => return hir_lower_error_to_graphcal(err, src),
-        hir::ExprLowerError::ModuleResolve { span, .. }
-        | hir::ExprLowerError::InvalidStaticBindingValue { span, .. }
-        | hir::ExprLowerError::UnknownLocalRef { span, .. }
-        | hir::ExprLowerError::UnknownGraphRef { span, .. }
-        | hir::ExprLowerError::BareGraphDeclarationRef { span, .. }
-        | hir::ExprLowerError::TimeScaleInValuePosition { span, .. }
-        | hir::ExprLowerError::UnknownUnit { span, .. }
-        | hir::ExprLowerError::TooManyLocals { span }
-        | hir::ExprLowerError::ExpressionIdentity { span, .. }
-        | hir::ExprLowerError::EmptyMapEntry { span }
-        | hir::ExprLowerError::ExtraMapVariant { span, .. }
-        | hir::ExprLowerError::UnknownPattern { span, .. }
-        | hir::ExprLowerError::UnknownFunction { span, .. }
-        | hir::ExprLowerError::UnknownExternFunction { span, .. }
-        | hir::ExprLowerError::NamedArgumentsOnFunction { span, .. }
-        | hir::ExprLowerError::PositionalArgumentsOnConstructor { span, .. }
-        | hir::ExprLowerError::EmptyParenthesizedConstructor { span, .. }
-        | hir::ExprLowerError::UnsupportedFunctionGenericArgs { span, .. }
-        | hir::ExprLowerError::WrongArity { span, .. }
-        | hir::ExprLowerError::InvalidTimezone { span, .. }
-        | hir::ExprLowerError::EpochTimeScaleArgumentCount { span, .. }
-        | hir::ExprLowerError::InvalidEpochTimeScaleArgument { span }
-        | hir::ExprLowerError::UnsupportedEpochTimeScale { span, .. }
-        | hir::ExprLowerError::InvalidDatetimeLiteral { span, .. }
-        | hir::ExprLowerError::TimeZoneRegistryInvariant { span, .. } => *span,
-        hir::ExprLowerError::NonexistentCivilDateTime { datetime_span, .. }
-        | hir::ExprLowerError::RepeatedCivilDateTime { datetime_span, .. } => *datetime_span,
-        hir::ExprLowerError::DuplicateLocalBinding { duplicate, .. }
-        | hir::ExprLowerError::LocalBindingShadowsTerm { duplicate, .. } => *duplicate,
+        ExprLowerError::Type(err) => return hir_lower_error_to_graphcal(err, src),
+        ExprLowerError::ModuleResolve { span, .. }
+        | ExprLowerError::InvalidStaticBindingValue { span, .. }
+        | ExprLowerError::UnknownLocalRef { span, .. }
+        | ExprLowerError::UnknownGraphRef { span, .. }
+        | ExprLowerError::BareGraphDeclarationRef { span, .. }
+        | ExprLowerError::TimeScaleInValuePosition { span, .. }
+        | ExprLowerError::UnknownUnit { span, .. }
+        | ExprLowerError::TooManyLocals { span }
+        | ExprLowerError::ExpressionIdentity { span, .. }
+        | ExprLowerError::EmptyMapEntry { span }
+        | ExprLowerError::ExtraMapVariant { span, .. }
+        | ExprLowerError::UnknownPattern { span, .. }
+        | ExprLowerError::UnknownFunction { span, .. }
+        | ExprLowerError::UnknownExternFunction { span, .. }
+        | ExprLowerError::NamedArgumentsOnFunction { span, .. }
+        | ExprLowerError::PositionalArgumentsOnConstructor { span, .. }
+        | ExprLowerError::EmptyParenthesizedConstructor { span, .. }
+        | ExprLowerError::UnsupportedFunctionGenericArgs { span, .. }
+        | ExprLowerError::WrongArity { span, .. }
+        | ExprLowerError::InvalidTimezone { span, .. }
+        | ExprLowerError::EpochTimeScaleArgumentCount { span, .. }
+        | ExprLowerError::InvalidEpochTimeScaleArgument { span }
+        | ExprLowerError::UnsupportedEpochTimeScale { span, .. }
+        | ExprLowerError::InvalidDatetimeLiteral { span, .. }
+        | ExprLowerError::TimeZoneRegistryInvariant { span, .. } => *span,
+        ExprLowerError::NonexistentCivilDateTime { datetime_span, .. }
+        | ExprLowerError::RepeatedCivilDateTime { datetime_span, .. } => *datetime_span,
+        ExprLowerError::DuplicateLocalBinding { duplicate, .. }
+        | ExprLowerError::LocalBindingShadowsTerm { duplicate, .. } => *duplicate,
     };
     GraphcalError::EvalError {
         message: err.to_string(),
@@ -426,10 +427,10 @@ pub fn expr_lower_error_to_graphcal(
 
 /// Convert a HIR type-lowering failure into a spanned diagnostic.
 pub fn hir_lower_error_to_graphcal(
-    err: &hir::HirLowerError,
+    err: &HirLowerError,
     src: &NamedSource<Arc<String>>,
 ) -> GraphcalError {
-    if let hir::HirLowerError::ExpectedIndexFoundNat { expression, span } = err {
+    if let HirLowerError::ExpectedIndexFoundNat { expression, span } = err {
         return GraphcalError::ExpectedIndexFoundNat {
             expression: expression.clone(),
             src: src.clone(),
@@ -437,22 +438,22 @@ pub fn hir_lower_error_to_graphcal(
         };
     }
     let span = match &err {
-        hir::HirLowerError::ModuleResolve { span, .. }
-        | hir::HirLowerError::UnknownTypePath { span, .. }
-        | hir::HirLowerError::IndexLabelAsType { span, .. }
-        | hir::HirLowerError::NestedIndexedType { span }
-        | hir::HirLowerError::GenericConstraintMismatch { span, .. }
-        | hir::HirLowerError::ExpectedIndexFoundNat { span, .. }
-        | hir::HirLowerError::UnknownGenericParam { span, .. }
-        | hir::HirLowerError::NatOverflow { span, .. }
-        | hir::HirLowerError::WrongGenericArgCount { span, .. }
-        | hir::HirLowerError::GenericArgumentSortMismatch { span, .. }
-        | hir::HirLowerError::ExpectedTimeScale { span }
-        | hir::HirLowerError::UnknownTimeScale { span, .. }
-        | hir::HirLowerError::WrongDatetimeArgCount { span, .. } => *span,
-        hir::HirLowerError::IndexAsType { index } => index.span(),
-        hir::HirLowerError::DuplicateGenericParam { duplicate, .. }
-        | hir::HirLowerError::GenericParamShadowsStatic { duplicate, .. } => *duplicate,
+        HirLowerError::ModuleResolve { span, .. }
+        | HirLowerError::UnknownTypePath { span, .. }
+        | HirLowerError::IndexLabelAsType { span, .. }
+        | HirLowerError::NestedIndexedType { span }
+        | HirLowerError::GenericConstraintMismatch { span, .. }
+        | HirLowerError::ExpectedIndexFoundNat { span, .. }
+        | HirLowerError::UnknownGenericParam { span, .. }
+        | HirLowerError::NatOverflow { span, .. }
+        | HirLowerError::WrongGenericArgCount { span, .. }
+        | HirLowerError::GenericArgumentSortMismatch { span, .. }
+        | HirLowerError::ExpectedTimeScale { span }
+        | HirLowerError::UnknownTimeScale { span, .. }
+        | HirLowerError::WrongDatetimeArgCount { span, .. } => *span,
+        HirLowerError::IndexAsType { index } => index.span(),
+        HirLowerError::DuplicateGenericParam { duplicate, .. }
+        | HirLowerError::GenericParamShadowsStatic { duplicate, .. } => *duplicate,
     };
     GraphcalError::EvalError {
         message: err.to_string(),
@@ -468,9 +469,9 @@ mod tests {
     use crate::syntax::non_empty::NonEmpty;
     use crate::syntax::span::Span;
 
-    fn unknown(path: NamePath, slot: hir::TypePathSlot) -> GraphcalError {
+    fn unknown(path: NamePath, slot: TypePathSlot) -> GraphcalError {
         let src = NamedSource::new("main.gcl", Arc::new(String::new()));
-        let error = hir::HirLowerError::UnknownTypePath {
+        let error = HirLowerError::UnknownTypePath {
             path,
             slot,
             span: Span::new(2, 3),
@@ -486,11 +487,11 @@ mod tests {
     fn unknown_type_path_is_reported_by_its_slot() {
         let path = NamePath::local(atom("Foo"));
         assert!(matches!(
-            unknown(path.clone(), hir::TypePathSlot::IndexAxis),
+            unknown(path.clone(), TypePathSlot::IndexAxis),
             GraphcalError::UnknownIndex { name, .. } if name.to_string() == "Foo"
         ));
         assert!(matches!(
-            unknown(path.clone(), hir::TypePathSlot::DimensionTerm),
+            unknown(path.clone(), TypePathSlot::DimensionTerm),
             GraphcalError::UnknownDimension { name, .. } if name == path
         ));
     }
@@ -498,10 +499,7 @@ mod tests {
     #[test]
     fn qualified_unknown_type_path_keeps_the_generic_diagnostic() {
         let path = NamePath::qualified(NonEmpty::singleton(atom("lib")), atom("Foo"));
-        for slot in [
-            hir::TypePathSlot::IndexAxis,
-            hir::TypePathSlot::DimensionTerm,
-        ] {
+        for slot in [TypePathSlot::IndexAxis, TypePathSlot::DimensionTerm] {
             assert!(matches!(
                 unknown(path.clone(), slot),
                 GraphcalError::EvalError { message, .. }

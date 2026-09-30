@@ -1,3 +1,4 @@
+use super::type_expr::internal_error;
 use super::*;
 use crate::dimension::{BaseDimId, Dimension, Rational};
 use crate::display::formatting_registry::FormattingRegistry;

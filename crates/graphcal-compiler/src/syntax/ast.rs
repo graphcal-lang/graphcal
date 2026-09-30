@@ -4,7 +4,6 @@ use crate::syntax::phase::{Desugared, Phase, Raw};
 
 mod common;
 mod decl;
-mod format_equivalent;
 mod introduced_name;
 mod multi_decl;
 mod plot_props;

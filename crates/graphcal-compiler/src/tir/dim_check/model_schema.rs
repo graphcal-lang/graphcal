@@ -143,8 +143,8 @@ impl<'tir> ValidatedModelType<'tir> {
                     .fields()
                     .iter()
                     .map(|field| {
-                        super::infer::hir::resolved_field_type(
-                            &super::infer::hir::resolved_type_field_key(
+                        super::generic_substitution::resolved_field_type(
+                            &super::generic_substitution::resolved_type_field_key(
                                 self.identity.resolved(),
                                 constructor,
                                 field.name(),

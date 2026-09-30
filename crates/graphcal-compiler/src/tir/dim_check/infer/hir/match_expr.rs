@@ -17,8 +17,8 @@ use crate::tir::dim_check::helpers::{format_checked_type, struct_type_def_for_in
 use crate::tir::dim_check::infer::rules;
 
 use super::context::{Infer, InferEnv};
-use super::generics::{resolved_field_type, resolved_type_field_key};
 use super::override_deps::{IndexNominalUse, TypeNominalUse};
+use crate::tir::dim_check::generic_substitution::{resolved_field_type, resolved_type_field_key};
 
 impl InferEnv<'_> {
     fn constructor_field_type(

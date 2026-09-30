@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::marker::PhantomData;
 
 use graphcal_ast_derive::PhaseLift;
@@ -1076,6 +1077,109 @@ impl std::fmt::Display for NatExpr {
         self.fmt_with_min_precedence(f, 0)
     }
 }
+
+// Hand-written `FormatEquivalent` impls for the nodes whose equivalence is
+// not structural; every other node derives the relation. `Expr` routes each
+// tree level through the stack-growth guard, like its manual `Clone` and
+// `Drop`. A table literal compares its entries as a multiset: table entries
+// have no semantic order, so a formatter that reorders them keeps the program.
+
+impl FormatEquivalent for RawExprSugar {
+    fn format_equivalent(&self, other: &Self) -> bool {
+        let Self::TableLiteral { indexes, entries } = self;
+        let Self::TableLiteral {
+            indexes: other_indexes,
+            entries: other_entries,
+        } = other;
+        indexes.format_equivalent(other_indexes)
+            && table_entries_format_equivalent(entries, other_entries)
+    }
+}
+
+#[derive(PartialEq, Eq, Hash)]
+enum SpanFreeMapEntryKey<'a> {
+    Named {
+        index: &'a NamePath,
+        variant: &'a IndexVariantName,
+    },
+    Finite(FinPosition),
+}
+
+fn span_free_table_entry_key(entry: &MapEntry) -> Vec<SpanFreeMapEntryKey<'_>> {
+    entry
+        .keys
+        .iter()
+        .map(|key| match key {
+            MapEntryKey::Named { index, variant, .. } => SpanFreeMapEntryKey::Named {
+                index: &index.value,
+                variant: &variant.value,
+            },
+            MapEntryKey::Finite { position, .. } => SpanFreeMapEntryKey::Finite(position.value),
+        })
+        .collect()
+}
+
+fn table_entries_format_equivalent(lhs: &[MapEntry], rhs: &[MapEntry]) -> bool {
+    table_entries_format_equivalent_by(lhs, rhs, MapEntry::format_equivalent)
+}
+
+fn table_entries_format_equivalent_by(
+    lhs: &[MapEntry],
+    rhs: &[MapEntry],
+    mut entries_equivalent: impl FnMut(&MapEntry, &MapEntry) -> bool,
+) -> bool {
+    if lhs.len() != rhs.len() {
+        return false;
+    }
+
+    // Formatting normally preserves table order. Keep that common case linear
+    // and allocation-free.
+    if lhs
+        .iter()
+        .zip(rhs)
+        .all(|(entry, candidate)| entries_equivalent(entry, candidate))
+    {
+        return true;
+    }
+
+    // Reordered entries still have multiset semantics. Index by the typed,
+    // span-free key so each entry searches only the values for its exact key,
+    // rather than rescanning the whole right-hand table.
+    let mut rhs_by_key: HashMap<Vec<SpanFreeMapEntryKey<'_>>, Vec<&MapEntry>> = rhs.iter().fold(
+        HashMap::with_capacity(rhs.len()),
+        |mut entries_by_key, entry| {
+            entries_by_key
+                .entry(span_free_table_entry_key(entry))
+                .or_default()
+                .push(entry);
+            entries_by_key
+        },
+    );
+
+    lhs.iter().all(|entry| {
+        rhs_by_key
+            .get_mut(&span_free_table_entry_key(entry))
+            .and_then(|candidates| {
+                candidates
+                    .iter()
+                    .position(|candidate| entries_equivalent(entry, candidate))
+                    .map(|position| candidates.swap_remove(position))
+            })
+            .is_some()
+    })
+}
+
+impl FormatEquivalent for Expr {
+    fn format_equivalent(&self, other: &Self) -> bool {
+        // Mirrors the manual `Clone`: route each tree level through the
+        // stack-growth guard so deep left-nested operator chains do not
+        // overflow. The span is ignored — that is the whole point.
+        crate::stack::with_stack_growth(|| self.kind.format_equivalent(&other.kind))
+    }
+}
+
+#[cfg(test)]
+mod format_equivalent_tests;
 
 #[cfg(test)]
 mod nat_expr_display_tests {

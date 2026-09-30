@@ -27,6 +27,8 @@ use crate::resolve::ModuleResolver;
 use crate::resolve::symbols::SymbolRef;
 use crate::syntax::module_name::ScopedName;
 
+pub mod body_scope;
+pub use body_scope::Scoped;
 pub mod checked_instance;
 pub use checked_instance::*;
 pub mod checked;
@@ -1764,7 +1766,7 @@ mod substitution;
 mod type_expr;
 pub use substitution::{Substitution, SubstitutionError};
 pub use type_expr::resolve_hir_decl_type;
-use type_expr::{internal_error, module_resolve_error, resolve_hir_generic_arg};
+use type_expr::resolve_hir_generic_arg;
 
 #[cfg(test)]
 mod tests;

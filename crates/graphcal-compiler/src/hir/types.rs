@@ -37,22 +37,6 @@ impl BuiltinType {
     }
 }
 
-/// A canonically resolved declaration type and its HIR domain bounds.
-#[derive(Debug, Clone)]
-pub struct TypeAnnotation {
-    pub decl_type: DeclType,
-    pub domain_bounds: Vec<DomainBound>,
-    pub span: Span,
-}
-
-/// One declaration domain bound lowered to HIR at the same boundary as its type.
-#[derive(Debug, Clone)]
-pub struct DomainBound {
-    pub kind: crate::syntax::ast::DomainBoundKind,
-    pub value: crate::hir::CheckedExpr,
-    pub span: Span,
-}
-
 /// The type of a declaration or struct field: a value type, optionally
 /// indexed by one or more axes (`T[I, J]`).
 ///
