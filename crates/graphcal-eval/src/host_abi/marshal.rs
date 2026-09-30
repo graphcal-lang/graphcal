@@ -1,9 +1,10 @@
 //! Marshalling of runtime values across the host-function ABI.
 //!
 //! Arguments are encoded in parameter order against the declared extern
-//! signature: scalars become one `f64` slot, and indexed arguments are
-//! flattened through [`DenseArray`] into row-major host arrays, recording the
-//! typed axis each index variable binds. A host result is validated by
+//! signature into validated [`HostArgument`]s: scalars become one
+//! [`HostScalar`], and indexed arguments are flattened through [`DenseArray`]
+//! into row-major host arrays, recording the typed axis each index variable
+//! binds. A host result is validated by
 //! [`decode_result`] and rebuilt over those recorded axes, so an indexed result
 //! can only range over axes that some argument supplied.
 
@@ -19,11 +20,12 @@ use graphcal_compiler::function_signature::{
 use graphcal_compiler::syntax::function_name::FnParamName;
 use graphcal_compiler::syntax::non_empty::NonEmpty;
 
+use super::argument::{HostArgument, HostArgumentArray, HostArrayElements};
 use super::{
-    HostResultDecodeError, HostScalarError, ValidatedHostArrayValues, ValidatedHostFieldValue,
-    ValidatedHostResult, decode_result, encode_bool, encode_int,
+    HostInt, HostResultDecodeError, HostScalar, HostScalarError, ValidatedHostArrayValues,
+    ValidatedHostFieldValue, ValidatedHostResult, decode_result,
 };
-use crate::host_fns::{HostArray, HostFnValue};
+use crate::host_fns::HostFnValue;
 use crate::invariant::{Failure, Invariant};
 use crate::runtime_value::dense_array::{DenseArray, DenseArrayError};
 use crate::runtime_value::{
@@ -38,7 +40,7 @@ pub type ExternSignature = FunctionSignature<ExternStructResult>;
 #[derive(Debug)]
 pub struct HostArguments<'s> {
     signature: &'s ExternSignature,
-    values: Vec<HostFnValue>,
+    values: Vec<HostArgument>,
     bound: HashMap<IndexBinder, IndexAxis>,
 }
 
@@ -182,7 +184,7 @@ impl<'s> HostArguments<'s> {
     }
 
     /// The encoded arguments, in parameter order.
-    pub fn values(&self) -> &[HostFnValue] {
+    pub fn values(&self) -> &[HostArgument] {
         &self.values
     }
 
@@ -191,22 +193,24 @@ impl<'s> HostArguments<'s> {
         parameter: &FnParamName,
         kind: &ParamKind,
         value: &RuntimeValue,
-    ) -> Result<HostFnValue, Failure<ArgumentError>> {
+    ) -> Result<HostArgument, Failure<ArgumentError>> {
         match (kind, value) {
             (ParamKind::Scalar(ScalarValueKind::Quantity(_)), value) => value
                 .expect_quantity("extern function argument")
-                .map(|value| HostFnValue::F64(value.get()))
+                .map(|value| HostArgument::Scalar(HostScalar::Quantity(value)))
                 .map_err(|error| Failure::Error(ArgumentError::NotQuantity(error))),
             (ParamKind::Scalar(ScalarValueKind::Int), RuntimeValue::Int(value)) => {
-                encode_int(*value).map(HostFnValue::F64).map_err(|error| {
-                    Failure::Error(ArgumentError::InexactInt {
-                        parameter: parameter.clone(),
-                        error,
+                HostInt::try_new(*value)
+                    .map(|value| HostArgument::Scalar(HostScalar::Int(value)))
+                    .map_err(|error| {
+                        Failure::Error(ArgumentError::InexactInt {
+                            parameter: parameter.clone(),
+                            error,
+                        })
                     })
-                })
             }
             (ParamKind::Scalar(ScalarValueKind::Bool), RuntimeValue::Bool(value)) => {
-                Ok(HostFnValue::F64(encode_bool(*value)))
+                Ok(HostArgument::Scalar(HostScalar::Bool(*value)))
             }
             (ParamKind::Scalar(_), _) => Err(Invariant::violated(format_args!(
                 "parameter `{parameter}` received a value of the wrong kind after dimension checking"
@@ -216,9 +220,9 @@ impl<'s> HostArguments<'s> {
                 let RuntimeValue::Indexed(indexed) = value else {
                     return Err(rank_invariant(parameter, 0, indexes.len()).into());
                 };
-                let array = encode_array(parameter, element, indexed)?;
-                self.bind_axes(parameter, indexes, array.axes())?;
-                Ok(HostFnValue::Array(HostArray::from_dense(array)))
+                let (axes, array) = encode_array(parameter, element, indexed)?;
+                self.bind_axes(parameter, indexes, &axes)?;
+                Ok(HostArgument::Array(array))
             }
         }
     }
@@ -315,21 +319,36 @@ impl<'s> HostArguments<'s> {
     }
 }
 
-/// Flatten an indexed argument into encoded `f64` slots.
+/// Flatten an indexed argument into its typed axes and validated
+/// row-major elements.
 fn encode_array(
     parameter: &FnParamName,
     element: &ScalarValueKind,
     indexed: &IndexedValue<RuntimeValue>,
-) -> Result<DenseArray<f64>, Failure<ArgumentError>> {
-    let flattened = match element {
+) -> Result<(NonEmpty<IndexAxis>, HostArgumentArray), Failure<ArgumentError>> {
+    match element {
         ScalarValueKind::Quantity(_) => DenseArray::try_from_indexed(indexed, |leaf| match leaf {
-            RuntimeValue::Quantity(value) => Ok(value.get()),
+            RuntimeValue::Quantity(value) => Ok(*value),
             _ => Err(ElementKind::Quantity),
-        }),
+        })
+        .map(|array| {
+            (
+                array.axes().clone(),
+                HostArgumentArray::from_dense(array, HostArrayElements::Quantity),
+            )
+        })
+        .map_err(|error| array_error(&error)),
         ScalarValueKind::Bool => DenseArray::try_from_indexed(indexed, |leaf| match leaf {
-            RuntimeValue::Bool(value) => Ok(encode_bool(*value)),
+            RuntimeValue::Bool(value) => Ok(*value),
             _ => Err(ElementKind::Bool),
-        }),
+        })
+        .map(|array| {
+            (
+                array.axes().clone(),
+                HostArgumentArray::from_dense(array, HostArrayElements::Bool),
+            )
+        })
+        .map_err(|error| array_error(&error)),
         ScalarValueKind::Int => {
             let integers = DenseArray::try_from_indexed(indexed, |leaf| match leaf {
                 RuntimeValue::Int(value) => Ok(*value),
@@ -337,19 +356,22 @@ fn encode_array(
             })
             .map_err(|error| array_error(&error))?;
             let mut positions = 0_usize..;
-            return integers.try_map(|value| {
+            let integers = integers.try_map(|value| {
                 let index = positions.next().unwrap_or(usize::MAX);
-                encode_int(value).map_err(|error| {
+                HostInt::try_new(value).map_err(|error| {
                     Failure::Error(ArgumentError::InexactIntElement {
                         parameter: parameter.clone(),
                         index,
                         error,
                     })
                 })
-            });
+            })?;
+            Ok((
+                integers.axes().clone(),
+                HostArgumentArray::from_dense(integers, HostArrayElements::Int),
+            ))
         }
-    };
-    flattened.map_err(|error| array_error(&error))
+    }
 }
 
 const fn array_error(error: &DenseArrayError<ElementKind>) -> Failure<ArgumentError> {
@@ -386,6 +408,7 @@ mod tests {
     use graphcal_compiler::syntax::index_name::IndexVarName;
 
     use super::*;
+    use crate::host_fns::HostArray;
 
     type NamedKind = ParamKind<DimVarName, IndexVarName>;
 
@@ -491,11 +514,11 @@ mod tests {
             ],
         );
         let arguments = encode(&signature, vec![matrix]).unwrap();
-        let [HostFnValue::Array(array)] = arguments.values() else {
+        let [HostArgument::Array(array)] = arguments.values() else {
             panic!("expected one array argument");
         };
         assert_eq!(array.shape(), [2, 3]);
-        assert_eq!(array.values(), [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
+        assert_eq!(array.elements().abi_slots(), [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
 
         let transposed =
             HostArray::try_new(vec![3, 2], vec![1.0, 4.0, 2.0, 5.0, 3.0, 6.0]).unwrap();
@@ -557,18 +580,25 @@ mod tests {
         )
         .unwrap();
         let [
-            HostFnValue::F64(quantity),
-            HostFnValue::F64(int),
-            HostFnValue::F64(flag),
-            HostFnValue::Array(ints),
-            HostFnValue::Array(flags),
+            HostArgument::Scalar(quantity @ HostScalar::Quantity(_)),
+            HostArgument::Scalar(int @ HostScalar::Int(_)),
+            HostArgument::Scalar(flag @ HostScalar::Bool(true)),
+            HostArgument::Array(ints),
+            HostArgument::Array(flags),
         ] = arguments.values()
         else {
             panic!("unexpected encoded arguments");
         };
-        assert_eq!([*quantity, *int, *flag], [2.5, -3.0, 1.0]);
-        assert_eq!(ints.values(), [7.0, 8.0]);
-        assert_eq!(flags.values(), [0.0, 1.0, 0.0]);
+        assert_eq!(
+            [quantity.abi_slot(), int.abi_slot(), flag.abi_slot()],
+            [2.5, -3.0, 1.0]
+        );
+        assert!(matches!(ints.elements(), HostArrayElements::Int(values) if values.len() == 2));
+        assert_eq!(ints.elements().abi_slots(), [7.0, 8.0]);
+        assert_eq!(
+            flags.elements(),
+            &HostArrayElements::Bool(vec![false, true, false])
+        );
         assert!(matches!(
             arguments.decode(&HostFnValue::F64(4.0)),
             Ok(RuntimeValue::Int(4))

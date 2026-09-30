@@ -12,10 +12,10 @@
 use std::{marker::PhantomData, num::NonZeroU32};
 
 use graphcal_compiler::function_signature::{
-    FunctionSignature, IndexBinder, ParamKind, ResultKind, ScalarValueKind,
+    FunctionSignature, IndexBinder, ParamKind, ResultKind,
 };
 use graphcal_compiler::syntax::function_name::{FnName, FnParamName};
-use graphcal_eval::host_abi::{decode_bool, decode_int, validate_quantity};
+use graphcal_eval::host_abi::argument::HostArgument;
 use graphcal_eval::host_fns::{HostArray, HostFnValue};
 use graphcal_plugin_abi::{
     ALLOC_EXPORT, BUFFER_ALIGN, FAIL_IMPORT_MODULE, FAIL_IMPORT_NAME, FREE_EXPORT,
@@ -248,7 +248,7 @@ impl PluginModule {
     pub fn call(
         &self,
         function: &FnName,
-        args: &[HostFnValue],
+        args: &[HostArgument],
     ) -> Result<HostFnValue, PluginCallError> {
         self.call_with_fuel_per_call(function, args, self.limits.fuel_per_call())
     }
@@ -267,7 +267,7 @@ impl PluginModule {
     pub fn call_with_fuel_per_call(
         &self,
         function: &FnName,
-        args: &[HostFnValue],
+        args: &[HostArgument],
         fuel_per_call: u64,
     ) -> Result<HostFnValue, PluginCallError> {
         let signature =
@@ -319,7 +319,7 @@ impl PluginModule {
         live: &mut CallInstance<'_>,
         function: &FnName,
         signature: &FunctionSignature,
-        args: &[HostFnValue],
+        args: &[HostArgument],
         fuel_per_call: u64,
     ) -> Result<HostFnValue, PluginCallError> {
         if args.len() != signature.arity() {
@@ -411,7 +411,7 @@ impl PluginModule {
         live: &mut CallInstance<'_>,
         function: &FnName,
         signature: &FunctionSignature,
-        args: &[HostFnValue],
+        args: &[HostArgument],
         buffers: &mut Option<BufferProtocol>,
         fuel_per_call: u64,
     ) -> Result<(Vec<wasmi::Val>, Option<OutBuffer>), PluginCallError> {
@@ -426,26 +426,14 @@ impl PluginModule {
             std::collections::HashMap::new();
         for (param, arg) in signature.params().iter().zip(args) {
             match (&param.kind, arg) {
-                (ParamKind::Scalar(kind), HostFnValue::F64(value)) => {
-                    validate_scalar_argument(kind, *value).map_err(|message| {
-                        PluginCallError::InvalidArgument {
-                            parameter: param.name.clone(),
-                            location: PluginArgumentLocation::Scalar,
-                            message,
-                        }
-                    })?;
-                    params.push(wasmi::Val::F64((*value).into()));
+                (ParamKind::Scalar(kind), HostArgument::Scalar(scalar))
+                    if scalar.has_kind(kind) =>
+                {
+                    params.push(wasmi::Val::F64(scalar.abi_slot().into()));
                 }
-                (ParamKind::Indexed { element, indexes }, HostFnValue::Array(array)) => {
-                    for (index, value) in array.values().iter().copied().enumerate() {
-                        validate_scalar_argument(element, value).map_err(|message| {
-                            PluginCallError::InvalidArgument {
-                                parameter: param.name.clone(),
-                                location: PluginArgumentLocation::ArrayElement(index),
-                                message,
-                            }
-                        })?;
-                    }
+                (ParamKind::Indexed { element, indexes }, HostArgument::Array(array))
+                    if array.elements().have_kind(element) =>
+                {
                     if array.shape().len() != indexes.len() {
                         return Err(PluginCallError::Internal {
                             message: format!(
@@ -475,7 +463,8 @@ impl PluginModule {
                         }
                     }
                     let buffers = buffers.as_mut().ok_or_else(protocol_missing)?;
-                    let pointer = buffers.write_buffer(live, fuel_per_call, array.values())?;
+                    let pointer =
+                        buffers.write_buffer(live, fuel_per_call, &array.elements().abi_slots())?;
                     params.push(wasmi::Val::I32(pointer.as_abi_i32()));
                     for extent in array.shape() {
                         let extent = u32::try_from(*extent)
@@ -484,11 +473,8 @@ impl PluginModule {
                     }
                 }
                 _ => {
-                    return Err(PluginCallError::Internal {
-                        message: format!(
-                            "function `{function}` parameter `{}` received a value of the wrong shape",
-                            param.name
-                        ),
+                    return Err(PluginCallError::MismatchedArgument {
+                        parameter: param.name.clone(),
                     });
                 }
             }
@@ -790,15 +776,6 @@ impl BufferProtocol {
         }
         Ok(())
     }
-}
-
-fn validate_scalar_argument(kind: &ScalarValueKind, value: f64) -> Result<(), String> {
-    match kind {
-        ScalarValueKind::Quantity(_) => validate_quantity(value).map(|_| ()),
-        ScalarValueKind::Bool => decode_bool(value).map(|_| ()),
-        ScalarValueKind::Int => decode_int(value).map(|_| ()),
-    }
-    .map_err(|error| error.to_string())
 }
 
 /// Whether any parameter or the result of `signature` crosses as a buffer.
@@ -1175,24 +1152,6 @@ pub enum PluginLoadError {
     },
 }
 
-/// Typed location of a malformed plugin argument slot.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum PluginArgumentLocation {
-    /// A standalone scalar parameter.
-    Scalar,
-    /// One row-major array element.
-    ArrayElement(usize),
-}
-
-impl std::fmt::Display for PluginArgumentLocation {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Scalar => formatter.write_str("scalar slot"),
-            Self::ArrayElement(index) => write!(formatter, "flat array element #{index}"),
-        }
-    }
-}
-
 /// Error from calling a plugin function.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum PluginCallError {
@@ -1222,15 +1181,12 @@ pub enum PluginCallError {
         /// The unknown function.
         function: FnName,
     },
-    /// A raw argument slot violates its declared scalar kind.
-    #[error("plugin argument `{parameter}` has an invalid {location}: {message}")]
-    InvalidArgument {
+    /// An argument does not have the scalar or array kind its parameter
+    /// declares. Argument values themselves are valid by construction.
+    #[error("plugin argument `{parameter}` does not have the kind its declaration requires")]
+    MismatchedArgument {
         /// Declared parameter identity.
         parameter: FnParamName,
-        /// Scalar or row-major array location.
-        location: PluginArgumentLocation,
-        /// Scalar ABI validation error.
-        message: String,
     },
     /// An array argument exceeds the plugin's 32-bit address space.
     #[error("an array of {elements} element(s) cannot fit in plugin memory")]

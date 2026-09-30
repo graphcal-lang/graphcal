@@ -6,12 +6,14 @@
 //! `(plugin path, function name)` identity to a host closure; the WASM
 //! plugin host registers module-backed closures through the same interface.
 //!
-//! The host ABI carries SI-flat numbers: each value crosses as a
-//! [`HostFnValue`] — one `f64` slot for quantities, `Int`, and `Bool` (using
+//! The host ABI carries SI-flat numbers. A closure receives validated
+//! [`HostArgument`]s — finite quantities, Booleans, exactly representable
+//! integers, or shaped row-major arrays of one of them — and returns a raw
+//! [`HostFnValue`]: one `f64` slot for quantities, `Int`, and `Bool` (using
 //! exactly-representable integers and `1.0`/`0.0` respectively), a shaped
-//! row-major array, or fixed-layout record slots. The evaluator does all typed
-//! interpretation against the declared signature; closures never see
-//! dimensions, units, or index identities beyond ordered axis extents.
+//! row-major array, or fixed-layout record slots. The evaluator validates that
+//! result against the declared signature; closures never see dimensions, units,
+//! or index identities beyond ordered axis extents.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -21,8 +23,10 @@ use graphcal_compiler::plugin_identity::{ExternFnKey, PluginIdentity};
 use graphcal_compiler::syntax::function_name::FnName;
 use graphcal_compiler::syntax::plugin::PluginPath;
 
-use crate::runtime_value::IndexAxis;
-use crate::runtime_value::dense_array::DenseArray;
+use crate::host_abi::HostScalar;
+use crate::host_abi::argument::{
+    DenseShapeError, HostArgument, HostArrayElements, check_dense_shape,
+};
 
 /// Error returned by a host function closure.
 ///
@@ -58,13 +62,19 @@ impl From<String> for HostFnError {
     }
 }
 
+impl From<DenseShapeError> for HostFnError {
+    fn from(error: DenseShapeError) -> Self {
+        Self::new(error.to_string())
+    }
+}
+
 impl From<&str> for HostFnError {
     fn from(message: &str) -> Self {
         Self::new(message)
     }
 }
 
-/// Dense row-major array crossing the host-function boundary.
+/// Dense row-major array returned across the host-function boundary.
 #[derive(Debug, Clone, PartialEq)]
 pub struct HostArray {
     shape: Vec<usize>,
@@ -79,32 +89,8 @@ impl HostArray {
     /// Returns [`HostFnError`] for invalid axes, cardinality overflow, or a
     /// mismatched value count.
     pub fn try_new(shape: Vec<usize>, values: Vec<f64>) -> Result<Self, HostFnError> {
-        if shape.is_empty() || shape.contains(&0) {
-            return Err(HostFnError::new(
-                "array shapes require one or more non-empty axes",
-            ));
-        }
-        let expected = shape.iter().try_fold(1_usize, |size, extent| {
-            size.checked_mul(*extent)
-                .ok_or_else(|| HostFnError::new("array shape cardinality overflowed usize"))
-        })?;
-        if expected != values.len() {
-            return Err(HostFnError::new(format!(
-                "array shape {shape:?} requires {expected} values, found {}",
-                values.len()
-            )));
-        }
+        check_dense_shape(&shape, values.len())?;
         Ok(Self { shape, values })
-    }
-
-    /// The array of a dense runtime array, whose axes are non-empty and
-    /// match its element count by construction.
-    pub(crate) fn from_dense(array: DenseArray<f64>) -> Self {
-        let (axes, values) = array.into_parts();
-        Self {
-            shape: axes.iter().map(IndexAxis::len).collect(),
-            values,
-        }
     }
 
     /// Convenience constructor for a non-empty rank-one array.
@@ -135,14 +121,14 @@ impl HostArray {
     }
 }
 
-/// One value crossing the host-function boundary, SI-flat in both directions.
+/// One raw value a host function returns, SI-flat.
 ///
-/// Quantities, `Bool`, and `Int` each cross inside one [`Self::F64`] slot; the
+/// Quantities, `Bool`, and `Int` each return inside one [`Self::F64`] slot; the
 /// declared signature determines its semantic kind and therefore its encoding
 /// (`1.0`/`0.0` for `Bool`, exactly-representable integers for `Int`). Arrays
-/// cross as shaped, row-major dense values. The evaluator
-/// converts to and from typed runtime values per the declared signature — a
-/// closure returning the wrong shape is reported as a plugin failure, never
+/// return as shaped, row-major dense values. The evaluator validates the
+/// result against the declared signature — a closure returning the wrong
+/// shape or an invalid slot is reported as a plugin failure, never
 /// reinterpreted.
 #[derive(Debug, Clone, PartialEq)]
 pub enum HostFnValue {
@@ -155,37 +141,22 @@ pub enum HostFnValue {
 }
 
 impl HostFnValue {
-    /// The quantity payload, or an error naming the parameter position.
-    ///
-    /// # Errors
-    ///
-    /// Returns a [`HostFnError`] when this value is a buffer.
-    fn expect_quantity(&self, position: usize) -> Result<f64, HostFnError> {
-        match self {
-            Self::F64(value) => Ok(*value),
-            Self::Array(_) | Self::Record(_) => Err(HostFnError::new(format!(
-                "argument {position} is not a single quantity slot"
-            ))),
-        }
-    }
-
-    /// The buffer payload, or an error naming the parameter position.
-    ///
-    /// # Errors
-    ///
-    /// Returns a [`HostFnError`] when this value is a quantity.
-    fn expect_array(&self, position: usize) -> Result<&HostArray, HostFnError> {
-        match self {
-            Self::Array(array) => Ok(array),
-            Self::F64(_) | Self::Record(_) => Err(HostFnError::new(format!(
-                "argument {position} is not an array"
-            ))),
+    /// The raw wire form of a validated argument, as a function that returns
+    /// its input would produce it.
+    #[must_use]
+    pub fn from_argument(argument: &HostArgument) -> Self {
+        match argument {
+            HostArgument::Scalar(scalar) => Self::F64(scalar.abi_slot()),
+            HostArgument::Array(array) => Self::Array(HostArray {
+                shape: array.shape().to_vec(),
+                values: array.elements().abi_slots(),
+            }),
         }
     }
 }
 
 /// A host-native extern function implementation.
-pub type HostFn = Arc<dyn Fn(&[HostFnValue]) -> Result<HostFnValue, HostFnError> + Send + Sync>;
+pub type HostFn = Arc<dyn Fn(&[HostArgument]) -> Result<HostFnValue, HostFnError> + Send + Sync>;
 
 /// Why a plugin failed to register its functions.
 ///
@@ -280,7 +251,7 @@ impl HostFunctionRegistry {
         &mut self,
         plugin: PluginPath,
         name: FnName,
-        function: impl Fn(&[HostFnValue]) -> Result<HostFnValue, HostFnError> + Send + Sync + 'static,
+        function: impl Fn(&[HostArgument]) -> Result<HostFnValue, HostFnError> + Send + Sync + 'static,
     ) {
         let key = ExternFnKey {
             plugin: PluginIdentity::Host(plugin),
@@ -297,7 +268,7 @@ impl HostFunctionRegistry {
         &mut self,
         plugin: PluginPath,
         name: FnName,
-        function: impl Fn(&[HostFnValue]) -> Result<HostFnValue, HostFnError> + Send + Sync + 'static,
+        function: impl Fn(&[HostArgument]) -> Result<HostFnValue, HostFnError> + Send + Sync + 'static,
     ) {
         self.register(plugin, name, function);
     }
@@ -309,7 +280,7 @@ impl HostFunctionRegistry {
         plugin: PluginIdentity,
         name: FnName,
         signature: FunctionSignature,
-        function: impl Fn(&[HostFnValue]) -> Result<HostFnValue, HostFnError> + Send + Sync + 'static,
+        function: impl Fn(&[HostArgument]) -> Result<HostFnValue, HostFnError> + Send + Sync + 'static,
     ) {
         let key = ExternFnKey { plugin, name };
         self.metadata
@@ -363,17 +334,48 @@ const DEMO_PLUGIN_PATH: &str = "graphcal:demo";
 ///     fn dv_range<I: Index>(xs: Velocity[I]) -> DvRange;
 /// }
 /// ```
+/// The quantity argument at `position`.
+fn quantity_argument(args: &[HostArgument], position: usize) -> Result<f64, HostFnError> {
+    match args.get(position) {
+        Some(HostArgument::Scalar(HostScalar::Quantity(value))) => Ok(value.get()),
+        _ => Err(HostFnError::new(format!(
+            "argument {position} is not a single quantity slot"
+        ))),
+    }
+}
+
+/// The quantity array argument at `position`: its extents and SI values.
+fn quantity_array_argument(
+    args: &[HostArgument],
+    position: usize,
+) -> Result<(&[usize], Vec<f64>), HostFnError> {
+    match args.get(position) {
+        Some(HostArgument::Array(array)) => match array.elements() {
+            HostArrayElements::Quantity(values) => Ok((
+                array.shape(),
+                values.iter().map(|value| value.get()).collect(),
+            )),
+            HostArrayElements::Bool(_) | HostArrayElements::Int(_) => Err(HostFnError::new(
+                format!("argument {position} is not a quantity array"),
+            )),
+        },
+        _ => Err(HostFnError::new(format!(
+            "argument {position} is not an array"
+        ))),
+    }
+}
+
 fn checked_demo_result(value: f64, function: &str) -> Result<f64, HostFnError> {
     crate::eval_expr::numeric::computed_finite_quantity(value, function)
         .map(graphcal_compiler::finite_value::FiniteQuantity::get)
         .map_err(|error| HostFnError::new(error.to_string()))
 }
 
-fn demo_lerp(args: &[HostFnValue]) -> Result<HostFnValue, HostFnError> {
+fn demo_lerp(args: &[HostArgument]) -> Result<HostFnValue, HostFnError> {
     let (a, b, t) = (
-        args[0].expect_quantity(0)?,
-        args[1].expect_quantity(1)?,
-        args[2].expect_quantity(2)?,
+        quantity_argument(args, 0)?,
+        quantity_argument(args, 1)?,
+        quantity_argument(args, 2)?,
     );
     let interpolated = (1.0 - t).mul_add(a, t * b);
     Ok(HostFnValue::F64(checked_demo_result(
@@ -382,9 +384,9 @@ fn demo_lerp(args: &[HostFnValue]) -> Result<HostFnValue, HostFnError> {
     )?))
 }
 
-fn demo_geometric_mean(args: &[HostFnValue]) -> Result<HostFnValue, HostFnError> {
-    let x = args[0].expect_quantity(0)?;
-    let y = args[1].expect_quantity(1)?;
+fn demo_geometric_mean(args: &[HostArgument]) -> Result<HostFnValue, HostFnError> {
+    let x = quantity_argument(args, 0)?;
+    let y = quantity_argument(args, 1)?;
     if x.is_sign_negative() != y.is_sign_negative() && x != 0.0 && y != 0.0 {
         return Err(HostFnError::new(
             "geometric mean of a negative product is undefined",
@@ -397,17 +399,16 @@ fn demo_geometric_mean(args: &[HostFnValue]) -> Result<HostFnValue, HostFnError>
     )?))
 }
 
-fn demo_normalize(args: &[HostFnValue]) -> Result<HostFnValue, HostFnError> {
-    let xs = args[0].expect_array(0)?;
-    let total = crate::eval_expr::numeric::ScaledSum::from_values(xs.values(), "normalize() input")
+fn demo_normalize(args: &[HostArgument]) -> Result<HostFnValue, HostFnError> {
+    let (shape, values) = quantity_array_argument(args, 0)?;
+    let total = crate::eval_expr::numeric::ScaledSum::from_values(&values, "normalize() input")
         .map_err(|error| HostFnError::new(error.to_string()))?;
     if total.is_zero() {
         return Err(HostFnError::new(
             "cannot normalize: the elements sum to zero",
         ));
     }
-    let normalized = xs
-        .values()
+    let normalized = values
         .iter()
         .map(|value| {
             total
@@ -417,7 +418,7 @@ fn demo_normalize(args: &[HostFnValue]) -> Result<HostFnValue, HostFnError> {
         })
         .collect::<Result<Vec<_>, _>>()?;
     Ok(HostFnValue::Array(HostArray::try_new(
-        xs.shape().to_vec(),
+        shape.to_vec(),
         normalized,
     )?))
 }
@@ -428,7 +429,7 @@ pub fn demo_registry() -> HostFunctionRegistry {
     let mut registry = HostFunctionRegistry::new();
     registry.register(plugin.clone(), FnName::expect_valid("lerp"), demo_lerp);
     registry.register(plugin.clone(), FnName::expect_valid("inverse"), |args| {
-        let x = args[0].expect_quantity(0)?;
+        let x = quantity_argument(args, 0)?;
         if x == 0.0 {
             return Err(HostFnError::new("division by zero"));
         }
@@ -448,8 +449,9 @@ pub fn demo_registry() -> HostFunctionRegistry {
         plugin.clone(),
         FnName::expect_valid("matrix_transpose"),
         |args| {
-            let matrix = args[0].expect_array(0)?;
-            let [rows, columns] = matrix.shape() else {
+            let (shape, matrix) = quantity_array_argument(args, 0)?;
+            let matrix = matrix.as_slice();
+            let [rows, columns] = shape else {
                 return Err(HostFnError::new(
                     "matrix_transpose expects a rank-two array",
                 ));
@@ -463,7 +465,7 @@ pub fn demo_registry() -> HostFunctionRegistry {
                             .ok_or_else(|| {
                                 HostFnError::new("matrix_transpose offset overflowed usize")
                             })?;
-                        matrix.values().get(offset).copied().ok_or_else(|| {
+                        matrix.get(offset).copied().ok_or_else(|| {
                             HostFnError::new("matrix_transpose input shape is inconsistent")
                         })
                     })
@@ -476,9 +478,9 @@ pub fn demo_registry() -> HostFunctionRegistry {
         },
     );
     registry.register(plugin, FnName::expect_valid("dv_range"), |args| {
-        let xs = args[0].expect_array(0)?;
+        let (_, xs) = quantity_array_argument(args, 0)?;
         let (mut min, mut max) = (f64::INFINITY, f64::NEG_INFINITY);
-        for x in xs.values() {
+        for x in &xs {
             min = min.min(*x);
             max = max.max(*x);
         }
@@ -491,6 +493,7 @@ pub fn demo_registry() -> HostFunctionRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::host_abi::argument::HostArgumentArray;
 
     fn key(name: &str) -> ExternFnKey {
         ExternFnKey {
@@ -499,8 +502,25 @@ mod tests {
         }
     }
 
-    fn quantities(values: &[f64]) -> Vec<HostFnValue> {
-        values.iter().map(|v| HostFnValue::F64(*v)).collect()
+    fn quantity(value: f64) -> HostArgument {
+        HostArgument::Scalar(HostScalar::Quantity(
+            graphcal_compiler::finite_value::FiniteQuantity::try_new(value).unwrap(),
+        ))
+    }
+
+    fn quantities(values: &[f64]) -> Vec<HostArgument> {
+        values.iter().copied().map(quantity).collect()
+    }
+
+    fn quantity_vector(values: &[f64]) -> HostArgument {
+        let elements = values
+            .iter()
+            .map(|value| graphcal_compiler::finite_value::FiniteQuantity::try_new(*value).unwrap())
+            .collect();
+        HostArgument::Array(
+            HostArgumentArray::try_new(vec![values.len()], HostArrayElements::Quantity(elements))
+                .unwrap(),
+        )
     }
 
     #[test]
@@ -545,9 +565,8 @@ mod tests {
         );
 
         let normalize = registry.get(&key("normalize")).unwrap();
-        let input = HostArray::vector(vec![1.0e308, 1.0e308]).unwrap();
         assert_eq!(
-            normalize(&[HostFnValue::Array(input)]).unwrap(),
+            normalize(&[quantity_vector(&[1.0e308, 1.0e308])]).unwrap(),
             HostFnValue::Array(HostArray::vector(vec![0.5, 0.5]).unwrap())
         );
     }
@@ -566,8 +585,7 @@ mod tests {
     fn demo_normalize_divides_by_the_sum() {
         let registry = demo_registry();
         let normalize = registry.get(&key("normalize")).unwrap();
-        let input = HostArray::vector(vec![1.0, 3.0]).unwrap();
-        let result = normalize(&[HostFnValue::Array(input)]).unwrap();
+        let result = normalize(&[quantity_vector(&[1.0, 3.0])]).unwrap();
         assert_eq!(
             result,
             HostFnValue::Array(HostArray::vector(vec![0.25, 0.75]).unwrap())
@@ -575,15 +593,22 @@ mod tests {
     }
 
     #[test]
+    fn arguments_have_the_raw_wire_form_a_function_would_return() {
+        assert_eq!(
+            HostFnValue::from_argument(&HostArgument::Scalar(HostScalar::Bool(true))),
+            HostFnValue::F64(1.0)
+        );
+        assert_eq!(
+            HostFnValue::from_argument(&quantity_vector(&[1.5, -2.0])),
+            HostFnValue::Array(HostArray::vector(vec![1.5, -2.0]).unwrap())
+        );
+    }
+
+    #[test]
     fn shape_mismatches_are_reported_not_reinterpreted() {
         let registry = demo_registry();
         let lerp = registry.get(&key("lerp")).unwrap();
-        let err = lerp(&[
-            HostFnValue::Array(HostArray::vector(vec![1.0]).unwrap()),
-            HostFnValue::F64(1.0),
-            HostFnValue::F64(0.5),
-        ])
-        .unwrap_err();
+        let err = lerp(&[quantity_vector(&[1.0]), quantity(1.0), quantity(0.5)]).unwrap_err();
         assert!(err.message.contains("not a single quantity slot"), "{err}");
     }
 }

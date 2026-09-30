@@ -428,9 +428,12 @@ evaluation starts (P003, P005–P010 depending on the cause).
 
 Embedders provide native implementations by injecting a
 `HostFunctionRegistry` — a map from `(plugin path, function name)` to a
-function of shape `fn(&[HostFnValue]) -> Result<HostFnValue, HostFnError>`,
-where a `HostFnValue` is a single `f64`, a shaped row-major `HostArray`, or
-fixed-layout record slots. WASM plugins
+function of shape `fn(&[HostArgument]) -> Result<HostFnValue, HostFnError>`.
+A `HostArgument` is an already validated scalar (a finite quantity, a `Bool`,
+or an `Int` exactly representable as `f64`) or a shaped row-major array of
+them; the returned `HostFnValue` is a single `f64`, a shaped row-major
+`HostArray`, or fixed-layout record slots, which the evaluator validates
+against the declaration. WASM plugins
 register through the same interface (the `graphcal-plugin-host` crate
 loads a project's vendored modules into the registry), so the evaluator
 itself stays WASM-free:
