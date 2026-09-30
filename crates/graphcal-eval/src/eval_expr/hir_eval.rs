@@ -241,12 +241,9 @@ fn eval_texpr_inner(
             }
             .map(plain)
         }
-        NodeKind::LinearAlgebra { function, args } => {
-            let arguments = args
-                .iter()
-                .map(|argument| eval_value(argument, values, local_values, ctx))
-                .collect::<Result<Vec<_>, _>>()?;
-            super::linear_algebra::evaluate(function, arguments, ctx)
+        NodeKind::LinearAlgebra(call) => {
+            let call = call.try_map(|operand| eval_value(*operand, values, local_values, ctx))?;
+            super::linear_algebra::evaluate(&call, ctx)
                 .map_err(|outcome| ctx.outcome_error(outcome, span))
                 .map(plain)
         }

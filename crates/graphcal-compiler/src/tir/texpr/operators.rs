@@ -12,8 +12,8 @@
 //! the tree that holds them.
 
 use crate::builtin::{
-    BuiltinConst, DatetimeField, DatetimeFromNumericFn, DatetimeToNumericFn, ScalarFn,
-    TimeScaleConversionFn,
+    BuiltinConst, DatetimeField, DatetimeFromNumericFn, DatetimeToNumericFn, LinearAlgebraFn,
+    ScalarFn, TimeScaleConversionFn,
 };
 use crate::exact_rational::ExactRational;
 
@@ -559,6 +559,144 @@ impl<C> DExpr<C> {
             | Self::ToScale { arg, .. } => {
                 vec![arg]
             }
+        }
+    }
+}
+
+/// A shape-aware operation on indexed quantities, with its operands.
+#[derive(Debug, Clone)]
+pub enum LinearAlgebraCall<C> {
+    /// `dot(u, v)` of two vectors over one axis.
+    Dot {
+        lhs: C,
+        rhs: C,
+    },
+    /// `matmul(a, b)` of two matrices sharing their inner axis.
+    Matmul {
+        lhs: C,
+        rhs: C,
+    },
+    Transpose(C),
+    /// `trace(a)` of a square matrix.
+    Trace(C),
+    Norm(C),
+    /// `cross(u, v)` of two vectors over one axis of three entries.
+    Cross {
+        lhs: C,
+        rhs: C,
+    },
+    Outer {
+        lhs: C,
+        rhs: C,
+    },
+    /// `solve(a, b)` of a square matrix and a vector over its axis.
+    Solve {
+        matrix: C,
+        rhs: C,
+    },
+    Inverse(C),
+    Determinant(C),
+}
+
+impl<C> LinearAlgebraCall<C> {
+    /// The function this call applies.
+    #[must_use]
+    pub const fn function(&self) -> LinearAlgebraFn {
+        match self {
+            Self::Dot { .. } => LinearAlgebraFn::Dot,
+            Self::Matmul { .. } => LinearAlgebraFn::Matmul,
+            Self::Transpose(_) => LinearAlgebraFn::Transpose,
+            Self::Trace(_) => LinearAlgebraFn::Trace,
+            Self::Norm(_) => LinearAlgebraFn::Norm,
+            Self::Cross { .. } => LinearAlgebraFn::Cross,
+            Self::Outer { .. } => LinearAlgebraFn::Outer,
+            Self::Solve { .. } => LinearAlgebraFn::Solve,
+            Self::Inverse(_) => LinearAlgebraFn::Inverse,
+            Self::Determinant(_) => LinearAlgebraFn::Determinant,
+        }
+    }
+
+    /// The call of `function` on `args`, if they are as many as it takes.
+    #[must_use]
+    pub fn try_new(function: LinearAlgebraFn, args: Vec<C>) -> Option<Self> {
+        let one = |args: Vec<C>| <[C; 1]>::try_from(args).ok().map(|[arg]| arg);
+        let two = |args: Vec<C>| <[C; 2]>::try_from(args).ok();
+        Some(match function {
+            LinearAlgebraFn::Dot => {
+                let [lhs, rhs] = two(args)?;
+                Self::Dot { lhs, rhs }
+            }
+            LinearAlgebraFn::Matmul => {
+                let [lhs, rhs] = two(args)?;
+                Self::Matmul { lhs, rhs }
+            }
+            LinearAlgebraFn::Transpose => Self::Transpose(one(args)?),
+            LinearAlgebraFn::Trace => Self::Trace(one(args)?),
+            LinearAlgebraFn::Norm => Self::Norm(one(args)?),
+            LinearAlgebraFn::Cross => {
+                let [lhs, rhs] = two(args)?;
+                Self::Cross { lhs, rhs }
+            }
+            LinearAlgebraFn::Outer => {
+                let [lhs, rhs] = two(args)?;
+                Self::Outer { lhs, rhs }
+            }
+            LinearAlgebraFn::Solve => {
+                let [matrix, rhs] = two(args)?;
+                Self::Solve { matrix, rhs }
+            }
+            LinearAlgebraFn::Inverse => Self::Inverse(one(args)?),
+            LinearAlgebraFn::Determinant => Self::Determinant(one(args)?),
+        })
+    }
+
+    /// This call with every operand mapped by `f`, in argument order.
+    pub fn try_map<'a, D, E>(
+        &'a self,
+        mut f: impl FnMut(&'a C) -> Result<D, E>,
+    ) -> Result<LinearAlgebraCall<D>, E> {
+        Ok(match self {
+            Self::Dot { lhs, rhs } => LinearAlgebraCall::Dot {
+                lhs: f(lhs)?,
+                rhs: f(rhs)?,
+            },
+            Self::Matmul { lhs, rhs } => LinearAlgebraCall::Matmul {
+                lhs: f(lhs)?,
+                rhs: f(rhs)?,
+            },
+            Self::Transpose(arg) => LinearAlgebraCall::Transpose(f(arg)?),
+            Self::Trace(arg) => LinearAlgebraCall::Trace(f(arg)?),
+            Self::Norm(arg) => LinearAlgebraCall::Norm(f(arg)?),
+            Self::Cross { lhs, rhs } => LinearAlgebraCall::Cross {
+                lhs: f(lhs)?,
+                rhs: f(rhs)?,
+            },
+            Self::Outer { lhs, rhs } => LinearAlgebraCall::Outer {
+                lhs: f(lhs)?,
+                rhs: f(rhs)?,
+            },
+            Self::Solve { matrix, rhs } => LinearAlgebraCall::Solve {
+                matrix: f(matrix)?,
+                rhs: f(rhs)?,
+            },
+            Self::Inverse(arg) => LinearAlgebraCall::Inverse(f(arg)?),
+            Self::Determinant(arg) => LinearAlgebraCall::Determinant(f(arg)?),
+        })
+    }
+
+    /// Every operand, in argument order.
+    pub(crate) fn operands(&self) -> Vec<&C> {
+        match self {
+            Self::Dot { lhs, rhs }
+            | Self::Matmul { lhs, rhs }
+            | Self::Cross { lhs, rhs }
+            | Self::Outer { lhs, rhs }
+            | Self::Solve { matrix: lhs, rhs } => vec![lhs, rhs],
+            Self::Transpose(arg)
+            | Self::Trace(arg)
+            | Self::Norm(arg)
+            | Self::Inverse(arg)
+            | Self::Determinant(arg) => vec![arg],
         }
     }
 }
