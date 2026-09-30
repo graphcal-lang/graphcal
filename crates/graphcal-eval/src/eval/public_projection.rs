@@ -8,15 +8,14 @@ use miette::NamedSource;
 
 use crate::runtime_value::RuntimeValue;
 use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
-use graphcal_compiler::registry::checked_type::{CheckedType, IndexTypeRef};
+use graphcal_compiler::registry::checked_type::CheckedType;
 use graphcal_compiler::registry::error::GraphcalError;
 use graphcal_compiler::registry::index::CoordinateIndexData;
-use graphcal_compiler::registry::types::{FiniteIndex, IndexDef};
 use graphcal_compiler::syntax::index_name::IndexEntryKey;
 use graphcal_compiler::syntax::non_empty::NonEmpty;
 
 use super::display::{format_coordinate, format_coordinate_exact};
-use super::types::{DisplayUnit, Value};
+use super::types::Value;
 
 /// Atomic runtime/public projection input: semantic value plus its checked type.
 #[derive(Debug, Clone, Copy)]
@@ -63,76 +62,13 @@ fn projection_error(
     )
 }
 
-#[derive(Debug, Clone, Copy)]
-enum ProjectionIndex<'a> {
-    Declared(&'a IndexDef),
-    Finite(FiniteIndex),
-}
-
-impl<'a> ProjectionIndex<'a> {
-    fn entry_keys(self) -> Vec<IndexEntryKey> {
-        match self {
-            Self::Declared(definition) => definition.entry_keys(),
-            Self::Finite(finite) => (0..finite.cardinality().get())
-                .map(|position| IndexEntryKey::position(position as u64))
-                .collect(),
-        }
-    }
-
-    const fn declared_definition(self) -> Option<&'a IndexDef> {
-        match self {
-            Self::Declared(definition) => Some(definition),
-            Self::Finite(_) => None,
-        }
-    }
-}
-
-fn projection_index_for_ref<'a>(
-    index: &IndexTypeRef,
-    tir: &'a graphcal_compiler::tir::typed::CheckedTir,
-) -> Option<ProjectionIndex<'a>> {
-    match index.finite_index() {
-        Some(finite) => Some(ProjectionIndex::Finite(finite)),
-        None => tir
-            .declared_index_def(index.declared_resolved()?)
-            .map(ProjectionIndex::Declared),
-    }
-}
-
-fn require_matching_index<'a>(
-    runtime: &RuntimeValue,
-    runtime_index: &IndexTypeRef,
-    declared_type: &CheckedType,
-    declared_index: &IndexTypeRef,
-    tir: &'a graphcal_compiler::tir::typed::CheckedTir,
-    src: &NamedSource<Arc<String>>,
-) -> Result<ProjectionIndex<'a>, GraphcalError> {
-    if !runtime_index.matches_ref(declared_index) {
-        return Err(projection_error(
-            runtime,
-            declared_type,
-            format!(
-                "runtime index `{runtime_index}` does not match checked index `{declared_index}`"
-            ),
-            tir,
-            src,
-        ));
-    }
-    projection_index_for_ref(runtime_index, tir).ok_or_else(|| {
-        projection_error(
-            runtime,
-            declared_type,
-            format!("checked index `{runtime_index}` has no concrete definition"),
-            tir,
-            src,
-        )
-    })
-}
-
-#[expect(
-    clippy::too_many_lines,
-    reason = "exhaustive runtime/declared-type pairing keeps every public projection invariant visible"
-)]
+/// Pair a runtime value with its checked type and project it.
+///
+/// Keys and indexed values carry their own axes, so only two checks remain:
+/// the runtime variant must match the checked type (runtime values do not
+/// carry dimensions, time scales, or field types, so the checked type is
+/// walked alongside), and a struct's constructor must expand to its checked
+/// field types through the TIR.
 fn project_runtime_value(
     runtime: &RuntimeValue,
     declared_type: &CheckedType,
@@ -154,162 +90,21 @@ fn project_runtime_value(
         }),
         (RuntimeValue::Bool(value), CheckedType::Bool) => Ok(Value::Bool(*value)),
         (RuntimeValue::Int(value), CheckedType::Int) => Ok(Value::Int(*value)),
-        (RuntimeValue::Int(position), CheckedType::Key(index)) => {
-            let finite = index.finite_index().ok_or_else(|| {
-                projection_error(
-                    runtime,
-                    declared_type,
-                    "integer key carrier belongs to a non-finite index",
-                    tir,
-                    src,
-                )
-            })?;
-            let public_position = *position;
-            let position = usize::try_from(public_position).map_err(|_| {
-                projection_error(
-                    runtime,
-                    declared_type,
-                    "finite key position is negative or exceeds the platform index range",
-                    tir,
-                    src,
-                )
-            })?;
-            if position >= finite.cardinality().get() {
-                return Err(projection_error(
-                    runtime,
-                    declared_type,
-                    "finite key position is outside its checked index",
-                    tir,
-                    src,
-                ));
-            }
-            Ok(Value::Int(public_position))
-        }
-        (
-            RuntimeValue::Label {
-                index_name,
-                variant,
-            },
-            CheckedType::Key(declared_index),
-        ) => {
-            let definition = require_matching_index(
-                runtime,
-                index_name,
-                declared_type,
-                declared_index,
-                tir,
-                src,
-            )?;
-            let key = graphcal_compiler::syntax::index_name::IndexEntryKey::named(variant.clone());
-            if !definition.entry_keys().contains(&key) {
-                return Err(projection_error(
-                    runtime,
-                    declared_type,
-                    format!("runtime label `{variant}` is absent from index `{index_name}`"),
-                    tir,
-                    src,
-                ));
-            }
-            Ok(Value::Label {
-                index_name: index_name.clone(),
-                variant: variant.clone(),
-            })
-        }
+        (RuntimeValue::Key(key), CheckedType::Key(_)) => Ok(Value::Key(key.clone())),
         (RuntimeValue::Struct(value), CheckedType::Struct(declared_identity, declared_args)) => {
-            let type_name = value.type_name();
-            let runtime_constructor = value.constructor();
-            let runtime_args = value.generic_args();
-            if type_name != declared_identity.resolved() || runtime_args != declared_args.as_slice()
-            {
-                return Err(projection_error(
-                    runtime,
-                    declared_type,
-                    format!(
-                        "runtime nominal identity `{:?}` or its generic arguments do not match checked identity `{:?}`",
-                        type_name,
-                        declared_identity.resolved()
-                    ),
-                    tir,
-                    src,
-                ));
-            }
-            // Constructor lookup is a correctness boundary: losing it would
-            // discard each field's checked type and could render a quantity in
-            // the wrong unit. Any inconsistency must fail the projection.
-            let model = graphcal_compiler::tir::dim_check::ConcreteModelType::try_new(
-                tir,
+            project_struct(
+                runtime,
+                value,
+                declared_type,
                 declared_identity,
                 declared_args,
+                tir,
                 src,
             )
-            .map_err(|error| {
-                projection_error(runtime, declared_type, error.to_string(), tir, src)
-            })?;
-            let constructors = model.constructors(src).map_err(|error| {
-                projection_error(runtime, declared_type, error.to_string(), tir, src)
-            })?;
-            let constructor = constructors
-                .into_iter()
-                .find(|constructor| constructor.name() == runtime_constructor)
-                .ok_or_else(|| {
-                    projection_error(
-                        runtime,
-                        declared_type,
-                        format!(
-                            "runtime constructor `{runtime_constructor}` is absent from its checked nominal type"
-                        ),
-                        tir,
-                        src,
-                    )
-                })?;
-            // A struct value holds exactly its constructor's declared fields,
-            // so each checked field has its runtime value.
-            let projected_fields = constructor
-                .fields()
-                .iter()
-                .map(|field| {
-                    let field_runtime = value.field(field.name()).ok_or_else(|| {
-                        projection_error(
-                            runtime,
-                            declared_type,
-                            format!("runtime struct is missing field `{}`", field.name()),
-                            tir,
-                            src,
-                        )
-                    })?;
-                    EvaluatedValue::new(field_runtime, field.declared_type())
-                        .project(tir, src)
-                        .map(|value| (field.name().clone(), value))
-                })
-                .collect::<Result<IndexMap<_, _>, _>>()?;
-            Ok(Value::Struct {
-                type_name: declared_identity.clone(),
-                constructor: runtime_constructor.clone(),
-                generic_args: runtime_args.to_vec(),
-                fields: projected_fields,
-            })
         }
-        (
-            RuntimeValue::Indexed(indexed),
-            CheckedType::Indexed {
-                element,
-                index: declared_index,
-            },
-        ) => {
-            // The entry keys are the axis's own keys by construction, so only
-            // the axis identity is compared with the checked type.
+        (RuntimeValue::Indexed(indexed), CheckedType::Indexed { element, .. }) => {
+            // The entry keys are the axis's own keys by construction.
             let index_name = indexed.index();
-            if !index_name.matches_ref(declared_index) {
-                return Err(projection_error(
-                    runtime,
-                    declared_type,
-                    format!(
-                        "runtime index `{index_name}` does not match checked index `{declared_index}`"
-                    ),
-                    tir,
-                    src,
-                ));
-            }
             let entry_display_names = indexed
                 .axis()
                 .coordinate_data()
@@ -328,113 +123,6 @@ fn project_runtime_value(
                 entry_display_names,
             })
         }
-        (
-            RuntimeValue::CoordinateLabel {
-                index_name,
-                position,
-                value,
-            },
-            CheckedType::Quantity(_) | CheckedType::Key(_),
-        ) => {
-            let projection_index = match declared_type {
-                CheckedType::Key(declared_index) => require_matching_index(
-                    runtime,
-                    index_name,
-                    declared_type,
-                    declared_index,
-                    tir,
-                    src,
-                )?,
-                CheckedType::Quantity(_) => {
-                    projection_index_for_ref(index_name, tir).ok_or_else(|| {
-                        projection_error(
-                            runtime,
-                            declared_type,
-                            format!("coordinate index `{index_name}` has no definition"),
-                            tir,
-                            src,
-                        )
-                    })?
-                }
-                _ => {
-                    return Err(projection_error(
-                        runtime,
-                        declared_type,
-                        "coordinate carrier has an unsupported checked type",
-                        tir,
-                        src,
-                    ));
-                }
-            };
-            let definition = projection_index.declared_definition().ok_or_else(|| {
-                projection_error(
-                    runtime,
-                    declared_type,
-                    "runtime coordinate label uses a structural finite index",
-                    tir,
-                    src,
-                )
-            })?;
-            let data = definition.coordinate_data().ok_or_else(|| {
-                projection_error(
-                    runtime,
-                    declared_type,
-                    format!("runtime coordinate label uses non-coordinate index `{index_name}`"),
-                    tir,
-                    src,
-                )
-            })?;
-            let position_out_of_bounds = *position >= data.cardinality();
-            #[expect(
-                clippy::float_cmp,
-                reason = "coordinate runtime values are copied exactly from the checked axis"
-            )]
-            let coordinate_mismatch =
-                !position_out_of_bounds && data.coordinate_value(*position) != value.get();
-            if position_out_of_bounds || coordinate_mismatch {
-                return Err(projection_error(
-                    runtime,
-                    declared_type,
-                    "runtime coordinate position/value does not match its checked index",
-                    tir,
-                    src,
-                ));
-            }
-            let display_unit = data
-                .display()
-                .label
-                .as_ref()
-                .map(|label| DisplayUnit::new(label.clone(), data.display().scale));
-            let dimension = match declared_type {
-                CheckedType::Quantity(dimension) if dimension == data.dimension() => {
-                    dimension.clone()
-                }
-                CheckedType::Quantity(_) => {
-                    return Err(projection_error(
-                        runtime,
-                        declared_type,
-                        "checked quantity dimension does not match the coordinate index",
-                        tir,
-                        src,
-                    ));
-                }
-                CheckedType::Key(_) => data.dimension().clone(),
-                _ => {
-                    return Err(projection_error(
-                        runtime,
-                        declared_type,
-                        "coordinate carrier has an unsupported checked type",
-                        tir,
-                        src,
-                    ));
-                }
-            };
-            Ok(Value::Quantity {
-                si_value: value.get(),
-                dimension,
-                display_unit,
-            })
-        }
         (RuntimeValue::Datetime(epoch), CheckedType::Datetime(time_scale)) => Ok(Value::Datetime {
             epoch: *epoch,
             time_scale: *time_scale,
@@ -448,6 +136,88 @@ fn project_runtime_value(
             src,
         )),
     }
+}
+
+/// Project a struct value field by field through its constructor's checked
+/// field types.
+fn project_struct(
+    runtime: &RuntimeValue,
+    value: &crate::runtime_value::StructValue<RuntimeValue>,
+    declared_type: &CheckedType,
+    declared_identity: &graphcal_compiler::registry::checked_type::StructTypeRef,
+    declared_args: &[graphcal_compiler::registry::checked_type::CheckedGenericArg],
+    tir: &graphcal_compiler::tir::typed::CheckedTir,
+    src: &NamedSource<Arc<String>>,
+) -> Result<Value, GraphcalError> {
+    let type_name = value.type_name();
+    let runtime_constructor = value.constructor();
+    let runtime_args = value.generic_args();
+    if type_name != declared_identity.resolved() || runtime_args != declared_args {
+        return Err(projection_error(
+            runtime,
+            declared_type,
+            format!(
+                "runtime nominal identity `{:?}` or its generic arguments do not match checked identity `{:?}`",
+                type_name,
+                declared_identity.resolved()
+            ),
+            tir,
+            src,
+        ));
+    }
+    // Constructor lookup is a correctness boundary: losing it would
+    // discard each field's checked type and could render a quantity in
+    // the wrong unit. Any inconsistency must fail the projection.
+    let model = graphcal_compiler::tir::dim_check::ConcreteModelType::try_new(
+        tir,
+        declared_identity,
+        declared_args,
+        src,
+    )
+    .map_err(|error| projection_error(runtime, declared_type, error.to_string(), tir, src))?;
+    let constructors = model
+        .constructors(src)
+        .map_err(|error| projection_error(runtime, declared_type, error.to_string(), tir, src))?;
+    let constructor = constructors
+        .into_iter()
+        .find(|constructor| constructor.name() == runtime_constructor)
+        .ok_or_else(|| {
+            projection_error(
+                runtime,
+                declared_type,
+                format!(
+                    "runtime constructor `{runtime_constructor}` is absent from its checked nominal type"
+                ),
+                tir,
+                src,
+            )
+        })?;
+    // A struct value holds exactly its constructor's declared fields,
+    // so each checked field has its runtime value.
+    let projected_fields = constructor
+        .fields()
+        .iter()
+        .map(|field| {
+            let field_runtime = value.field(field.name()).ok_or_else(|| {
+                projection_error(
+                    runtime,
+                    declared_type,
+                    format!("runtime struct is missing field `{}`", field.name()),
+                    tir,
+                    src,
+                )
+            })?;
+            EvaluatedValue::new(field_runtime, field.declared_type())
+                .project(tir, src)
+                .map(|value| (field.name().clone(), value))
+        })
+        .collect::<Result<IndexMap<_, _>, _>>()?;
+    Ok(Value::Struct {
+        type_name: declared_identity.clone(),
+        constructor: runtime_constructor.clone(),
+        generic_args: runtime_args.to_vec(),
+        fields: projected_fields,
+    })
 }
 
 fn coordinate_entry_display_names(
@@ -522,29 +292,12 @@ mod tests {
     }
 
     #[test]
-    fn coordinate_carrier_requires_the_axis_dimension() {
-        let source = "index Step = range(0.0 s, 1.0 s, step: 1.0 s);";
-        let tir = crate::eval::compile_to_tir(source, "projection.gcl").unwrap();
-        let src = NamedSource::new("projection.gcl", Arc::new(source.to_string()));
-        let index = IndexTypeRef::with_owner(
-            tir.root_dag_id().clone(),
-            graphcal_compiler::syntax::index_name::IndexName::expect_valid("Step"),
-        );
-        let runtime = RuntimeValue::coordinate_label(index, 0, 0.0).unwrap();
-        let declared =
-            CheckedType::Quantity(graphcal_compiler::dimension::Dimension::dimensionless());
-
-        assert!(matches!(
-            EvaluatedValue::new(&runtime, &declared).project(&tir, &src),
-            Err(GraphcalError::InternalError { .. })
-        ));
-    }
-
-    #[test]
     fn structural_finite_projection_does_not_require_a_registry_entry() {
         let tir = crate::eval::compile_to_tir("", "projection.gcl").unwrap();
         let src = NamedSource::new("projection.gcl", Arc::new(String::new()));
-        let index = IndexTypeRef::from_finite_index(FiniteIndex::try_from_u64(2).unwrap());
+        let finite = graphcal_compiler::registry::types::FiniteIndex::try_from_u64(2).unwrap();
+        let index =
+            graphcal_compiler::registry::checked_type::IndexTypeRef::from_finite_index(finite);
         let element =
             CheckedType::Quantity(graphcal_compiler::dimension::Dimension::dimensionless());
         let declared = CheckedType::Indexed {
@@ -565,13 +318,18 @@ mod tests {
             Value::Indexed { entries, .. } if entries.len() == 2
         ));
 
-        let key_runtime = RuntimeValue::Int(1);
+        let key = crate::runtime_value::KeyValue::at(
+            crate::runtime_value::IndexAxis::finite(finite).unwrap(),
+            1,
+        )
+        .unwrap();
+        let key_runtime = RuntimeValue::Key(key.clone());
         let key_declared = CheckedType::Key(index);
-        assert!(matches!(
+        assert_eq!(
             EvaluatedValue::new(&key_runtime, &key_declared)
                 .project(&tir, &src)
                 .unwrap(),
-            Value::Int(1)
-        ));
+            Value::Key(key)
+        );
     }
 }

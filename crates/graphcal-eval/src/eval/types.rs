@@ -21,6 +21,8 @@ use graphcal_compiler::syntax::parser::{ParseError, ParseErrorKind};
 use graphcal_compiler::syntax::span::Span;
 use graphcal_compiler::syntax::type_name::{ConstructorName, FieldName};
 
+use crate::runtime_value::{KeyElement, KeyValue};
+
 /// Display unit metadata: the unit name(s) and validated scale factor for pretty-printing.
 #[derive(Debug, Clone, PartialEq)]
 pub struct DisplayUnit {
@@ -103,13 +105,9 @@ pub enum Value {
     },
     Bool(bool),
     Int(i64),
-    /// A label value from a named index (e.g., `Maneuver#Departure`).
-    Label {
-        /// The index identity (e.g., `Maneuver`), including a canonical owner when available.
-        index_name: IndexTypeRef,
-        /// The variant name (e.g., `Departure`).
-        variant: IndexVariantName,
-    },
+    /// A `Key<I>` value: one entry of a concrete index axis. It renders as
+    /// its label, `Fin` position, or coordinate (see [`KeyRendering`]).
+    Key(KeyValue),
     Struct {
         /// Canonical owner-qualified nominal type identity.
         type_name: StructTypeRef,
@@ -154,20 +152,6 @@ pub struct ValueError {
 }
 
 impl Value {
-    /// Construct a label value whose index is named directly, for tests.
-    #[cfg(any(test, feature = "test-identities"))]
-    #[must_use]
-    pub fn label_with_owner(
-        owner: graphcal_compiler::dag_id::DagId,
-        index_name: graphcal_compiler::syntax::index_name::IndexName,
-        variant: IndexVariantName,
-    ) -> Self {
-        Self::Label {
-            index_name: IndexTypeRef::with_owner(owner, index_name),
-            variant,
-        }
-    }
-
     /// Construct a non-generic struct value whose type is named directly, for
     /// tests.
     #[cfg(any(test, feature = "test-identities"))]
@@ -226,10 +210,7 @@ impl Value {
             Self::Complex { .. } => "Complex".to_string(),
             Self::Bool(_) => "Bool".to_string(),
             Self::Int(_) => "Int".to_string(),
-            Self::Label {
-                index_name,
-                variant,
-            } => format!("{index_name}#{variant}"),
+            Self::Key(key) => format!("key of `{}`", key.index()),
             Self::Struct { constructor, .. } => format!("struct `{constructor}`"),
             Self::Indexed { index_name, .. } => format!("indexed `{index_name}[...]`"),
             Self::Datetime { .. } => "Datetime".to_string(),
@@ -326,9 +307,12 @@ impl Value {
                 || default_unit_label(dimension, &render.base_dim_symbols),
                 |du| Some(du.label.clone()),
             ),
+            Self::Key(key) => match KeyRendering::of(key) {
+                KeyRendering::Coordinate(quantity) => quantity.display_label(render),
+                KeyRendering::Label { .. } | KeyRendering::Position(_) => None,
+            },
             Self::Bool(_)
             | Self::Int(_)
-            | Self::Label { .. }
             | Self::Struct { .. }
             | Self::Indexed { .. }
             | Self::Datetime { .. } => None,
@@ -362,10 +346,16 @@ impl Value {
         Ok(match self {
             Self::Bool(b) => b.to_string(),
             Self::Int(i) => i.to_string(),
-            Self::Label {
-                index_name,
-                variant,
-            } => format!("{index_name}#{variant}"),
+            Self::Key(key) => match KeyRendering::of(key) {
+                KeyRendering::Label {
+                    index_name,
+                    variant,
+                } => format!("{index_name}#{variant}"),
+                KeyRendering::Position(position) => position.to_string(),
+                KeyRendering::Coordinate(quantity) => {
+                    quantity.format_display(render, unit_label)?
+                }
+            },
             Self::Struct { constructor, .. } => constructor.as_str().to_string(),
             Self::Datetime {
                 epoch, display_tz, ..
@@ -396,6 +386,49 @@ impl Value {
             }
             Self::Indexed { .. } => "[...]".to_string(),
         })
+    }
+}
+
+/// How a key renders at output boundaries: as its label, its `Fin` position,
+/// or its coordinate quantity.
+///
+/// Every output boundary renders a key through this view, so a coordinate key
+/// renders exactly as the quantity it denotes and a `Fin` key exactly as an
+/// integer.
+#[derive(Debug, Clone, PartialEq)]
+pub enum KeyRendering<'a> {
+    /// A named-index key, rendered `Index#Variant`.
+    Label {
+        index_name: &'a IndexTypeRef,
+        variant: &'a IndexVariantName,
+    },
+    /// A `Fin` key, rendered as its integer position.
+    Position(usize),
+    /// A coordinate key, rendered as its coordinate: a [`Value::Quantity`] in
+    /// the axis's dimension and display unit.
+    Coordinate(Box<Value>),
+}
+
+impl<'a> KeyRendering<'a> {
+    /// The rendering view of `key`.
+    #[must_use]
+    pub fn of(key: &'a KeyValue) -> Self {
+        match key.element() {
+            KeyElement::Named(variant) => Self::Label {
+                index_name: key.index(),
+                variant,
+            },
+            KeyElement::Finite(position) => Self::Position(position),
+            KeyElement::Coordinate { value, data } => Self::Coordinate(Box::new(Value::Quantity {
+                si_value: value.get(),
+                dimension: data.dimension().clone(),
+                display_unit: data
+                    .display()
+                    .label
+                    .as_ref()
+                    .map(|label| DisplayUnit::new(label.clone(), data.display().scale)),
+            })),
+        }
     }
 }
 
@@ -508,7 +541,11 @@ pub(super) fn validate_display_projection(value: &Value) -> Result<(), DisplayPr
         Value::Indexed { entries, .. } => {
             entries.values().try_for_each(validate_display_projection)
         }
-        Value::Bool(_) | Value::Int(_) | Value::Label { .. } | Value::Datetime { .. } => Ok(()),
+        Value::Key(key) => match KeyRendering::of(key) {
+            KeyRendering::Coordinate(quantity) => validate_display_projection(&quantity),
+            KeyRendering::Label { .. } | KeyRendering::Position(_) => Ok(()),
+        },
+        Value::Bool(_) | Value::Int(_) | Value::Datetime { .. } => Ok(()),
     }
 }
 
@@ -1035,6 +1072,60 @@ mod tests {
             ]),
             TimeZoneRegistry::bundled(),
         )
+    }
+
+    #[test]
+    fn keys_render_as_label_position_or_coordinate() {
+        use crate::runtime_value::IndexAxis;
+        use graphcal_compiler::registry::index::{CoordinateDisplayUnit, CoordinateIndexData};
+
+        let owner = graphcal_compiler::dag_id::DagId::root_in_package("key-render", "main");
+        let named = IndexAxis::named_for_test(owner.clone(), "Phase", &["Launch", "Cruise"]);
+        let key = KeyValue::at(named, 1).unwrap();
+        let value = Value::Key(key.clone());
+        assert!(matches!(
+            KeyRendering::of(&key),
+            KeyRendering::Label { variant, .. } if variant.as_str() == "Cruise"
+        ));
+        assert_eq!(
+            value.format_display(&render(), UnitLabel::Inline).unwrap(),
+            "Phase#Cruise"
+        );
+        assert_eq!(value.display_label(&render()), None);
+
+        let finite = graphcal_compiler::registry::types::FiniteIndex::try_from_u64(3).unwrap();
+        let key = KeyValue::at(IndexAxis::finite(finite).unwrap(), 2).unwrap();
+        assert_eq!(KeyRendering::of(&key), KeyRendering::Position(2));
+        assert_eq!(
+            Value::Key(key)
+                .format_display(&render(), UnitLabel::Inline)
+                .unwrap(),
+            "2"
+        );
+
+        let hours = CoordinateDisplayUnit {
+            label: Some("h".to_string()),
+            scale: PositiveFiniteScale::new(3600.0).unwrap(),
+        };
+        let data =
+            CoordinateIndexData::try_range(0.0, 7200.0, 3600.0, Dimension::dimensionless(), hours)
+                .unwrap();
+        let key = KeyValue::at(IndexAxis::coordinate_for_test(owner, "Hour", data), 2).unwrap();
+        let KeyRendering::Coordinate(quantity) = KeyRendering::of(&key) else {
+            panic!("expected a coordinate rendering");
+        };
+        assert_eq!(quantity.si_value().unwrap().to_bits(), 7200.0_f64.to_bits());
+        let value = Value::Key(key);
+        assert_eq!(value.display_label(&render()), Some("h".to_string()));
+        assert_eq!(
+            value.format_display(&render(), UnitLabel::Inline).unwrap(),
+            "2 [h]"
+        );
+        assert_eq!(
+            value.format_display(&render(), UnitLabel::Omitted).unwrap(),
+            "2"
+        );
+        assert!(validate_display_projection(&value).is_ok());
     }
 
     fn empty_eval_result() -> EvalResult {

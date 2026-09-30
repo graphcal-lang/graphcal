@@ -4,10 +4,10 @@ use crate::eval::runtime::{RootFailure, RootOutcome};
 
 use super::{
     Arc, CheckedType, CompileError, ConcreteIndexKind, DeclName, Error, GraphcalError, HashSet,
-    IndexKind, IndexVariantName, ModelSchemaGraph, ModelValueSchema, ParameterBindingRow,
-    ParameterPosition, PreparedProject, ResolvedDeclName, Span, TimeScale, Value,
-    index_def_for_ref, remap_include_debug_name,
+    IndexVariantName, ModelSchemaGraph, ModelValueSchema, ParameterBindingRow, ParameterPosition,
+    PreparedProject, ResolvedDeclName, Span, TimeScale, Value, remap_include_debug_name,
 };
+use crate::runtime_value::IndexAxis;
 
 /// Inclusive lower and upper bounds for one external input family.
 ///
@@ -442,14 +442,13 @@ impl PreparedProject {
                 TenaxV2InputKind::Integer { lower, upper }
             }
             (CheckedType::Key(index), None) => {
-                let Some(definition) = index_def_for_ref(index, self.tir()) else {
+                let Some(axis) = IndexAxis::resolve(self.tir(), index) else {
                     return Err(ModelDefinitionError::UnsupportedInputType {
                         name: port.name.clone(),
                         actual: port.declared_type.format(&self.tir().registry().dimensions),
                     });
                 };
-                let IndexKind::Concrete(ConcreteIndexKind::Named { variants }) = &definition.kind
-                else {
+                let ConcreteIndexKind::Named { variants } = axis.kind() else {
                     return Err(ModelDefinitionError::UnsupportedInputType {
                         name: port.name.clone(),
                         actual: port.declared_type.format(&self.tir().registry().dimensions),

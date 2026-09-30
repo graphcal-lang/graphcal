@@ -1,8 +1,8 @@
 use graphcal_compiler::declaration_category::ValueDeclCategory;
 use graphcal_compiler::syntax::index_name::IndexEntryKey;
 use graphcal_eval::eval::{
-    AssertResult, DisplayProjectionError, DisplayUnit, EvalOutputView, EvalResult, NodeUnavailable,
-    RenderContext, Value, datetime_literal, format_number, quantity_display_value,
+    AssertResult, DisplayProjectionError, DisplayUnit, EvalOutputView, EvalResult, KeyRendering,
+    NodeUnavailable, RenderContext, Value, datetime_literal, format_number, quantity_display_value,
 };
 use serde::Serialize;
 
@@ -303,19 +303,30 @@ impl ValueView {
                     decimal,
                 }
             }
-            Value::Label {
-                index_name,
-                variant,
-            } => {
-                let index = index_name.to_string();
-                let variant = variant.as_str().to_string();
-                Self::Label {
-                    display: format!("{index}#{variant}"),
-                    literal: format!("{index}#{variant}"),
-                    index,
+            Value::Key(key) => match KeyRendering::of(key) {
+                KeyRendering::Label {
+                    index_name,
                     variant,
+                } => {
+                    let index = index_name.to_string();
+                    let variant = variant.as_str().to_string();
+                    Self::Label {
+                        display: format!("{index}#{variant}"),
+                        literal: format!("{index}#{variant}"),
+                        index,
+                        variant,
+                    }
                 }
-            }
+                KeyRendering::Position(position) => {
+                    let decimal = position.to_string();
+                    Self::Int {
+                        display: decimal.clone(),
+                        literal: decimal.clone(),
+                        decimal,
+                    }
+                }
+                KeyRendering::Coordinate(quantity) => Self::from_value(&quantity, render)?,
+            },
             Value::Struct {
                 constructor,
                 fields,

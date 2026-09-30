@@ -16,7 +16,9 @@
 )]
 
 use graphcal_compiler::registry::time_zone::IanaTimeZoneId;
-use graphcal_eval::eval::{EvalResult, NodeUnavailable, UnitLabel, Value, compile_and_eval};
+use graphcal_eval::eval::{
+    EvalResult, KeyRendering, NodeUnavailable, UnitLabel, Value, compile_and_eval,
+};
 use proptest::prelude::*;
 
 // ============================================================================
@@ -275,13 +277,19 @@ node repeated: Key<Hour>[Fin(2)] = for i: Fin(2) { @peak };
     let result = compile_and_eval(source).unwrap();
 
     let peak = find_entry(&result, "peak");
+    let Value::Key(key) = &peak else {
+        panic!("expected a key, got {peak:?}")
+    };
+    let KeyRendering::Coordinate(quantity) = KeyRendering::of(key) else {
+        panic!("expected a coordinate key, got {peak:?}")
+    };
     let Value::Quantity {
         si_value,
         display_unit: Some(display_unit),
         ..
-    } = &peak
+    } = *quantity
     else {
-        panic!("expected a coordinate-shaped key with its axis display unit, got {peak:?}")
+        panic!("expected a coordinate key rendered with its axis display unit, got {peak:?}")
     };
     assert_eq!(si_value.to_bits(), 7200.0_f64.to_bits());
     assert_eq!(display_unit.label, "h");

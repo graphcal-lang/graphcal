@@ -7,7 +7,8 @@
 //! as grids.
 
 use graphcal_eval::eval::{
-    DisplayProjectionError, RenderContext, UnitLabel, Value, format_number, quantity_display_value,
+    DisplayProjectionError, KeyRendering, RenderContext, UnitLabel, Value, format_number,
+    quantity_display_value,
 };
 
 /// Display body of one evaluated value.
@@ -59,6 +60,13 @@ pub fn scalar_display(
             }
             Ok(out)
         }
+        // A coordinate key renders as its coordinate quantity.
+        Value::Key(key) => match KeyRendering::of(key) {
+            KeyRendering::Coordinate(quantity) => scalar_display(&quantity, render),
+            KeyRendering::Label { .. } | KeyRendering::Position(_) => {
+                value.format_display(render, UnitLabel::Inline)
+            }
+        },
         _ => value.format_display(render, UnitLabel::Inline),
     }
 }

@@ -3,6 +3,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use graphcal_compiler::finite_value::FiniteQuantity;
 use graphcal_compiler::registry::checked_type::IndexTypeRef;
 use graphcal_compiler::registry::index::{ConcreteIndexKind, CoordinateIndexData};
 use graphcal_compiler::syntax::index_name::IndexEntryKey;
@@ -13,8 +14,12 @@ use graphcal_compiler::tir::typed::checked::CheckedTir;
 ///
 /// The keys are derived from the index's own concrete definition, so an axis
 /// is never empty and its keys are exactly the index's entries in declaration
-/// order. Cloning shares the key set.
-#[derive(Debug, Clone)]
+/// order. A coordinate axis also holds its coordinates, each proven finite
+/// when the axis is built. Cloning shares the key set.
+///
+/// Two axes are equal when they enumerate the same index identity: the keys
+/// and coordinates are functions of that identity within one program.
+#[derive(Clone)]
 pub struct IndexAxis(Arc<AxisData>);
 
 #[derive(Debug)]
@@ -23,13 +28,29 @@ struct AxisData {
     kind: ConcreteIndexKind,
     keys: NonEmpty<IndexEntryKey>,
     positions: HashMap<IndexEntryKey, usize>,
+    /// One finite coordinate per key; empty unless `kind` is a coordinate index.
+    coordinates: Vec<FiniteQuantity>,
+}
+
+/// Debug output names the axis by its identity, like its equality.
+impl std::fmt::Debug for IndexAxis {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("IndexAxis").field(&self.0.index).finish()
+    }
+}
+
+impl PartialEq for IndexAxis {
+    fn eq(&self, other: &Self) -> bool {
+        self.matches(other)
+    }
 }
 
 impl IndexAxis {
     /// Resolve `index` to its concrete definition in `tir`.
     ///
-    /// Returns `None` when the index is unknown or still required (not bound
-    /// to a concrete definition).
+    /// Returns `None` when the index is unknown, still required (not bound
+    /// to a concrete definition), or a coordinate index with a non-finite
+    /// coordinate.
     #[must_use]
     pub fn resolve(tir: &CheckedTir, index: &IndexTypeRef) -> Option<Self> {
         let definition = tir.index_def(index)?;
@@ -70,6 +91,23 @@ impl IndexAxis {
         .unwrap()
     }
 
+    /// The axis of a coordinate index whose identity is given directly, for
+    /// tests.
+    #[cfg(test)]
+    #[must_use]
+    pub fn coordinate_for_test(
+        owner: graphcal_compiler::dag_id::DagId,
+        index: &str,
+        data: CoordinateIndexData,
+    ) -> Self {
+        use graphcal_compiler::syntax::index_name::IndexName;
+        Self::from_concrete(
+            IndexTypeRef::with_owner(owner, IndexName::expect_valid(index)),
+            ConcreteIndexKind::Coordinate(data),
+        )
+        .unwrap()
+    }
+
     fn from_concrete(index: IndexTypeRef, kind: ConcreteIndexKind) -> Option<Self> {
         let keys = NonEmpty::try_from_vec(kind.entry_keys()).ok()?;
         let positions = keys
@@ -77,11 +115,18 @@ impl IndexAxis {
             .enumerate()
             .map(|(position, key)| (key.clone(), position))
             .collect::<HashMap<_, _>>();
+        let coordinates = match &kind {
+            ConcreteIndexKind::Coordinate(data) => (0..keys.len())
+                .map(|position| FiniteQuantity::try_new(data.coordinate_value(position)).ok())
+                .collect::<Option<Vec<_>>>()?,
+            ConcreteIndexKind::Named { .. } | ConcreteIndexKind::Finite { .. } => Vec::new(),
+        };
         Some(Self(Arc::new(AxisData {
             index,
             kind,
             keys,
             positions,
+            coordinates,
         })))
     }
 
@@ -118,6 +163,19 @@ impl IndexAxis {
         self.0.keys.len()
     }
 
+    /// The entry key at `position`, when the axis has that many entries.
+    #[must_use]
+    pub fn key_at(&self, position: usize) -> Option<&IndexEntryKey> {
+        self.0.keys.as_slice().get(position)
+    }
+
+    /// The finite coordinates of a coordinate axis, one per key in axis
+    /// order; empty for named and `Fin` axes.
+    #[must_use]
+    pub fn coordinates(&self) -> &[FiniteQuantity] {
+        &self.0.coordinates
+    }
+
     /// Position of `key` on this axis.
     #[must_use]
     pub fn position(&self, key: &IndexEntryKey) -> Option<usize> {
@@ -131,6 +189,20 @@ impl IndexAxis {
     #[must_use]
     pub fn matches(&self, other: &Self) -> bool {
         self.0.index.matches_ref(&other.0.index)
+    }
+
+    /// Whether a key of `key_axis` selects an entry of this axis: the same
+    /// index, or — `Fin`-key widening — a structural `Fin(N)` key on a
+    /// `Fin(M)` axis with `N <= M`. Positions of an admitted key are
+    /// positions of this axis.
+    #[must_use]
+    pub fn admits(&self, key_axis: &Self) -> bool {
+        match (&self.0.kind, &key_axis.0.kind) {
+            (ConcreteIndexKind::Finite { .. }, ConcreteIndexKind::Finite { .. }) => {
+                key_axis.len() <= self.len()
+            }
+            _ => self.matches(key_axis),
+        }
     }
 }
 
@@ -169,12 +241,46 @@ mod tests {
     }
 
     #[test]
+    fn coordinate_axes_hold_one_finite_coordinate_per_key() {
+        use graphcal_compiler::dimension::Dimension;
+        use graphcal_compiler::registry::index::{CoordinateDisplayUnit, CoordinateIndexData};
+        let data = CoordinateIndexData::try_range(
+            0.0,
+            2.0,
+            1.0,
+            Dimension::dimensionless(),
+            CoordinateDisplayUnit::SI,
+        )
+        .unwrap();
+        let axis = IndexAxis::coordinate_for_test(owner(), "Step", data);
+        let coordinates = axis
+            .coordinates()
+            .iter()
+            .map(|coordinate| coordinate.get())
+            .collect::<Vec<_>>();
+        assert_eq!(coordinates, vec![0.0, 1.0, 2.0]);
+        assert_eq!(axis.key_at(2), Some(&IndexEntryKey::position(2)));
+        assert_eq!(axis.key_at(3), None);
+        assert!(
+            IndexAxis::named_for_test(owner(), "Phase", &["A"])
+                .coordinates()
+                .is_empty()
+        );
+        assert_eq!(
+            format!("{axis:?}"),
+            format!("IndexAxis({:?})", axis.index())
+        );
+    }
+
+    #[test]
     fn axes_match_by_index_identity() {
         let phase = IndexAxis::named_for_test(owner(), "Phase", &["A", "B"]);
         let same = IndexAxis::named_for_test(owner(), "Phase", &["A", "B"]);
         let other = IndexAxis::named_for_test(owner(), "Mode", &["A", "B"]);
         let finite = IndexAxis::finite(FiniteIndex::try_from_u64(2).unwrap()).unwrap();
         assert!(phase.matches(&same));
+        assert_eq!(phase, same);
+        assert_ne!(phase, other);
         assert!(!phase.matches(&other));
         assert!(!phase.matches(&finite));
     }

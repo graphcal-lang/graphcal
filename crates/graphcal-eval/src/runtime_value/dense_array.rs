@@ -147,8 +147,8 @@ fn build_indexed<T, E>(
 ) -> Result<IndexedValue<RuntimeValue>, E> {
     let chunk_len = inner_axes.iter().map(IndexAxis::len).product::<usize>();
     let chunks = data.chunks_exact(chunk_len).collect::<Vec<_>>();
-    IndexedValue::try_from_axis(axis.clone(), |position, _| {
-        let chunk = chunks[position];
+    IndexedValue::try_from_axis(axis.clone(), |key| {
+        let chunk = chunks[key.position()];
         match inner_axes.split_first() {
             None => leaf(&chunk[0]),
             Some((inner, rest)) => {

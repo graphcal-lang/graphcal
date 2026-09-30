@@ -27,12 +27,13 @@ pub use project::{
     compile_and_eval_from_project, compile_and_eval_project, prepare_from_project,
 };
 
+pub use crate::runtime_value::KeyValue;
 pub use runtime::RuntimeEvaluation;
 pub use types::{
     AssertResult, AxisMeta, CompileError, CompositionProperty, DisplayProjectionError, DisplayUnit,
-    DisplayValueError, EvalOutputView, EvalResult, FigureSpec, LayerSpec, MarkProperty,
-    NodeUnavailable, PlotError, PlotFieldValue, PlotProperty, PlotSpec, RenderContext, UnitLabel,
-    Value, ValueError, datetime_literal, quantity_display_value,
+    DisplayValueError, EvalOutputView, EvalResult, FigureSpec, KeyRendering, LayerSpec,
+    MarkProperty, NodeUnavailable, PlotError, PlotFieldValue, PlotProperty, PlotSpec,
+    RenderContext, UnitLabel, Value, ValueError, datetime_literal, quantity_display_value,
 };
 
 pub fn compile_and_eval(source: &str) -> Result<EvalResult, CompileError> {

@@ -14,7 +14,9 @@ use graphcal_compiler::registry::checked_type::{
 };
 use graphcal_compiler::registry::error::GraphcalError;
 use graphcal_compiler::registry::time_scale::TimeScale;
-use graphcal_compiler::registry::types::{ConcreteIndexKind, FiniteIndex, IndexDef, IndexKind};
+use graphcal_compiler::registry::types::{ConcreteIndexKind, FiniteIndex};
+
+use crate::runtime_value::IndexAxis;
 use graphcal_compiler::syntax::index_name::IndexVariantName;
 use graphcal_compiler::syntax::non_empty::NonEmptyUnique;
 use graphcal_compiler::syntax::type_name::{ConstructorName, FieldName};
@@ -504,45 +506,31 @@ fn model_index_schema(
             kind: ModelIndexKind::Finite { index: finite },
         });
     }
-    let definition = index_def_for_ref(index, tir).ok_or_else(|| {
+    let axis = IndexAxis::resolve(tir, index).ok_or_else(|| {
         GraphcalError::internal_error(
-            format!("concrete model index definition is unavailable for `{index}`"),
+            format!("model index `{index}` has no concrete definition"),
             source,
             DiagnosticAnchor::WholeFile,
         )
     })?;
-    let kind = match &definition.kind {
-        IndexKind::Concrete(ConcreteIndexKind::Named { variants }) => ModelIndexKind::Named {
+    let kind = match axis.kind() {
+        ConcreteIndexKind::Named { variants } => ModelIndexKind::Named {
             variants: variants.clone(),
         },
-        IndexKind::Concrete(ConcreteIndexKind::Coordinate(data)) => ModelIndexKind::Coordinate {
-            coordinates_si: (0..data.cardinality())
-                .map(|position| data.coordinate_value(position))
+        ConcreteIndexKind::Coordinate(data) => ModelIndexKind::Coordinate {
+            coordinates_si: axis
+                .coordinates()
+                .iter()
+                .map(|coordinate| coordinate.get())
                 .collect(),
             dimension: data.dimension().clone(),
             display_label: data.display().label.clone(),
             display_scale: data.display().scale,
         },
-        IndexKind::Concrete(ConcreteIndexKind::Finite { index }) => {
-            ModelIndexKind::Finite { index: *index }
-        }
-        IndexKind::Required(_) => {
-            return Err(GraphcalError::internal_error(
-                format!("required model index `{index}` was not concretely bound"),
-                source,
-                DiagnosticAnchor::WholeFile,
-            ));
-        }
+        ConcreteIndexKind::Finite { index } => ModelIndexKind::Finite { index: *index },
     };
     Ok(ModelIndexSchema {
         identity: index.clone(),
         kind,
     })
-}
-
-pub(super) fn index_def_for_ref<'tir>(
-    index: &IndexTypeRef,
-    tir: &'tir graphcal_compiler::tir::typed::CheckedTir,
-) -> Option<std::borrow::Cow<'tir, IndexDef>> {
-    tir.index_def(index)
 }

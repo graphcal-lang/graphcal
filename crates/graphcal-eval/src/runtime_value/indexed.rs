@@ -5,6 +5,7 @@ use graphcal_compiler::syntax::index_name::IndexEntryKey;
 use graphcal_compiler::syntax::non_empty::NonEmpty;
 
 use super::index_axis::IndexAxis;
+use super::key_value::KeyValue;
 
 /// An indexed value: exactly one entry of type `V` for every key of its axis,
 /// in axis order.
@@ -12,8 +13,9 @@ use super::index_axis::IndexAxis;
 /// Entries are positional; keys come from the axis. The only constructors
 /// build entries by walking the axis (or by mapping an existing value), so an
 /// indexed value is never empty and can never miss, duplicate, or reorder a
-/// key.
-#[derive(Debug, Clone)]
+/// key. Two indexed values are equal when their axes have the same identity
+/// and their entries are equal position by position.
+#[derive(Debug, Clone, PartialEq)]
 pub struct IndexedValue<V> {
     axis: IndexAxis,
     entries: NonEmpty<V>,
@@ -22,21 +24,13 @@ pub struct IndexedValue<V> {
 impl<V> IndexedValue<V> {
     /// Build one entry per axis key, in axis order.
     ///
-    /// `entry` receives each key's position and key.
+    /// `entry` receives each key of the axis.
     pub fn try_from_axis<E>(
         axis: IndexAxis,
-        mut entry: impl FnMut(usize, &IndexEntryKey) -> Result<V, E>,
+        entry: impl FnMut(&KeyValue) -> Result<V, E>,
     ) -> Result<Self, E> {
-        let (first_key, rest_keys) = axis.keys().split_first();
-        let first = entry(0, first_key)?;
-        let rest = (1..)
-            .zip(rest_keys)
-            .map(|(position, key)| entry(position, key))
-            .collect::<Result<Vec<_>, E>>()?;
-        Ok(Self {
-            entries: NonEmpty::new(first, rest),
-            axis,
-        })
+        let entries = KeyValue::all(&axis).try_map_ref(entry)?;
+        Ok(Self { axis, entries })
     }
 
     /// An indexed value with its entries given positionally, for tests.
@@ -66,8 +60,8 @@ impl<V> IndexedValue<V> {
         &self,
         mut entry: impl FnMut(&IndexEntryKey, &V) -> Result<U, E>,
     ) -> Result<IndexedValue<U>, E> {
-        IndexedValue::try_from_axis(self.axis.clone(), |position, key| {
-            entry(key, &self.entries.as_slice()[position])
+        IndexedValue::try_from_axis(self.axis.clone(), |key| {
+            entry(key.entry_key(), &self.entries.as_slice()[key.position()])
         })
     }
 
@@ -89,6 +83,17 @@ impl<V> IndexedValue<V> {
         self.axis
             .position(key)
             .and_then(|position| self.entries.as_slice().get(position))
+    }
+
+    /// The entry `key` selects: a key of this axis, or a narrower `Fin` key
+    /// widened onto it (see [`IndexAxis::admits`]).
+    #[must_use]
+    pub fn get_key(&self, key: &KeyValue) -> Option<&V> {
+        if self.axis.admits(key.axis()) {
+            self.entries.as_slice().get(key.position())
+        } else {
+            None
+        }
     }
 
     /// Entries with their keys, in axis order.
@@ -125,9 +130,9 @@ mod tests {
     #[test]
     fn entries_follow_the_axis_positions() {
         let mut seen = Vec::new();
-        let indexed = IndexedValue::try_from_axis(axis(), |position, key| {
-            seen.push((position, key.clone()));
-            Ok::<_, ()>(position * 10)
+        let indexed = IndexedValue::try_from_axis(axis(), |key| {
+            seen.push((key.position(), key.entry_key().clone()));
+            Ok::<_, ()>(key.position() * 10)
         })
         .unwrap();
         assert_eq!(seen, vec![(0, key("A")), (1, key("B")), (2, key("C"))]);
@@ -146,9 +151,9 @@ mod tests {
     #[test]
     fn construction_stops_at_the_first_entry_error() {
         let mut calls = 0;
-        let error = IndexedValue::try_from_axis(axis(), |position, _| {
+        let error = IndexedValue::try_from_axis(axis(), |key| {
             calls += 1;
-            if position == 1 {
+            if key.position() == 1 {
                 Err("second")
             } else {
                 Ok(true)
@@ -180,5 +185,23 @@ mod tests {
         let indexed = IndexedValue::finite_for_test(vec!['a', 'b']);
         assert_eq!(indexed.get(&IndexEntryKey::position(1)), Some(&'b'));
         assert_eq!(indexed.axis().len(), 2);
+    }
+
+    #[test]
+    fn keys_select_entries_of_their_axis_or_a_wider_fin_axis() {
+        use crate::runtime_value::KeyValue;
+        use graphcal_compiler::registry::index::FiniteIndex;
+
+        let named = IndexedValue::for_test(axis(), vec![1, 2, 3]);
+        let b = KeyValue::for_entry(axis(), &key("B")).unwrap();
+        assert_eq!(named.get_key(&b), Some(&2));
+        let fin = |n| IndexAxis::finite(FiniteIndex::try_from_u64(n).unwrap()).unwrap();
+        assert_eq!(named.get_key(&KeyValue::at(fin(3), 1).unwrap()), None);
+
+        let wide = IndexedValue::finite_for_test(vec!['a', 'b', 'c', 'd']);
+        assert_eq!(wide.get_key(&KeyValue::at(fin(2), 1).unwrap()), Some(&'b'));
+        assert_eq!(wide.get_key(&KeyValue::at(fin(4), 3).unwrap()), Some(&'d'));
+        let narrow = IndexedValue::finite_for_test(vec!['a', 'b']);
+        assert_eq!(narrow.get_key(&KeyValue::at(fin(4), 1).unwrap()), None);
     }
 }

@@ -33,7 +33,7 @@ use std::process;
 use thiserror::Error;
 
 use graphcal_eval::eval::{
-    CompileError, EvalOutputView, EvalResult, ProjectCompiler, format_number,
+    CompileError, EvalOutputView, EvalResult, KeyRendering, ProjectCompiler, format_number,
 };
 use graphcal_eval::host_fns::HostFunctionRegistry;
 use graphcal_eval::loader::{LoadedProject, build_rooted_filesystem, load_project};
@@ -1077,6 +1077,20 @@ fn print_text(result: &EvalResult, output_view: EvalOutputView) {
                             eprintln!("{name:width$} = ERROR: {err}");
                         }
                         display::FlatEntry::Value(name, value) => {
+                            // A coordinate key renders as its coordinate quantity.
+                            let value: &Value = value;
+                            let value = match value {
+                                Value::Key(key) => match KeyRendering::of(key) {
+                                    KeyRendering::Coordinate(quantity) => {
+                                        std::borrow::Cow::Owned(*quantity)
+                                    }
+                                    KeyRendering::Label { .. } | KeyRendering::Position(_) => {
+                                        std::borrow::Cow::Borrowed(value)
+                                    }
+                                },
+                                _ => std::borrow::Cow::Borrowed(value),
+                            };
+                            let value = value.as_ref();
                             if let Value::Quantity {
                                 si_value,
                                 display_unit,
@@ -1192,7 +1206,7 @@ fn print_json(
     result: &EvalResult,
     output_view: EvalOutputView,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    use graphcal_eval::eval::{DisplayProjectionError, NodeUnavailable, Value};
+    use graphcal_eval::eval::{DisplayProjectionError, KeyRendering, NodeUnavailable, Value};
 
     fn value_to_json(
         v: &Value,
@@ -1248,13 +1262,17 @@ fn print_json(
             }
             Value::Bool(b) => Ok(serde_json::Value::Bool(*b)),
             Value::Int(i) => Ok(serde_json::Value::Number((*i).into())),
-            Value::Label {
-                index_name,
-                variant,
-            } => Ok(serde_json::json!({
-                "index": index_name.to_string(),
-                "variant": variant.as_str()
-            })),
+            Value::Key(key) => match KeyRendering::of(key) {
+                KeyRendering::Label {
+                    index_name,
+                    variant,
+                } => Ok(serde_json::json!({
+                    "index": index_name.to_string(),
+                    "variant": variant.as_str()
+                })),
+                KeyRendering::Position(position) => Ok(serde_json::Value::Number(position.into())),
+                KeyRendering::Coordinate(quantity) => value_to_json(&quantity, render),
+            },
             Value::Struct {
                 constructor,
                 fields,

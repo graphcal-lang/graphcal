@@ -15,7 +15,7 @@ use graphcal_compiler::tir::texpr::ConstructorApplication;
 /// Construction rejects missing, unexpected, and duplicate fields and stores
 /// the fields in declaration order, so a struct value always has exactly the
 /// fields of its constructor.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct StructValue<V> {
     /// Canonical nominal identity, independent of source aliases and display spelling.
     type_name: ResolvedStructTypeName,
@@ -174,15 +174,6 @@ impl<V> StructValue<V> {
     pub fn fields(&self) -> impl ExactSizeIterator<Item = (&FieldName, &V)> {
         self.fields.iter()
     }
-
-    /// Whether both values apply the same constructor of the same nominal
-    /// application.
-    #[must_use]
-    pub fn same_application<W>(&self, other: &StructValue<W>) -> bool {
-        self.type_name == other.type_name
-            && self.constructor == other.constructor
-            && self.generic_args == other.generic_args
-    }
 }
 
 #[cfg(test)]
@@ -293,21 +284,22 @@ mod tests {
     }
 
     #[test]
-    fn applications_compare_identity_constructor_and_arguments() {
+    fn equality_compares_application_and_fields() {
         let value = build(vec![("left", 1), ("right", 2)]).unwrap();
-        let same = build(vec![("left", 3), ("right", 4)]).unwrap();
-        assert!(value.same_application(&same));
-        let other_owner = StructValue::<i64>::for_test(
-            type_name("other"),
-            constructor(),
-            indexmap::IndexMap::new(),
+        assert_eq!(value, build(vec![("right", 2), ("left", 1)]).unwrap());
+        assert_ne!(value, build(vec![("left", 3), ("right", 2)]).unwrap());
+        let fields = || indexmap::IndexMap::from([(field("left"), 1), (field("right"), 2)]);
+        assert_eq!(
+            value,
+            StructValue::<i64>::for_test(type_name("main"), constructor(), fields())
         );
-        assert!(!value.same_application(&other_owner));
+        let other_owner = StructValue::<i64>::for_test(type_name("other"), constructor(), fields());
+        assert_ne!(value, other_owner);
         let other_constructor = StructValue::<i64>::for_test(
             type_name("main"),
             ConstructorName::expect_valid("Other"),
-            indexmap::IndexMap::new(),
+            fields(),
         );
-        assert!(!value.same_application(&other_constructor));
+        assert_ne!(value, other_constructor);
     }
 }

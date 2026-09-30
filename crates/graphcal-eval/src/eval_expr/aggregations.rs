@@ -1,7 +1,6 @@
-use crate::runtime_value::{IndexedValue, RuntimeValue, RuntimeValueError};
+use crate::runtime_value::{IndexedValue, KeyValue, RuntimeValue, RuntimeValueError};
 use graphcal_compiler::builtin::{KeyAggregation, ValueAggregation};
 use graphcal_compiler::finite_value::FiniteQuantity;
-use graphcal_compiler::syntax::index_name::IndexEntryKey;
 use thiserror::Error;
 
 use super::numeric;
@@ -61,17 +60,18 @@ fn runtime_quantity(value: f64) -> Result<RuntimeValue, AggregationError> {
         })
 }
 
-/// Entry key of the extremum element, resolving ties to the first entry in
-/// index order (entries iterate in canonical index order).
-pub(super) fn extremum_entry_key(
+/// Key of the extremum element, resolving ties to the first entry in index
+/// order (entries iterate in canonical index order).
+pub(super) fn extremum_key(
     kind: KeyAggregation,
     indexed: &IndexedValue<RuntimeValue>,
-) -> Result<IndexEntryKey, AggregationError> {
+) -> Result<KeyValue, AggregationError> {
     let context = match kind {
         KeyAggregation::Argmin => "argmin element",
         KeyAggregation::Argmax => "argmax element",
     };
-    let (first_key, rest_keys) = indexed.axis().keys().split_first();
+    let keys = KeyValue::all(indexed.axis());
+    let (first_key, rest_keys) = keys.split_first();
     let (first_value, rest_values) = indexed.values().split_first();
     let first = (first_key, quantity_entry(first_value, context)?);
     let (key, _) = rest_keys.iter().zip(rest_values).try_fold(
@@ -179,21 +179,27 @@ mod tests {
             RuntimeValue::quantity(3.0).unwrap(),
         ]);
         assert_eq!(
-            extremum_entry_key(KeyAggregation::Argmin, &entries).unwrap(),
-            IndexEntryKey::position(1)
+            extremum_key(KeyAggregation::Argmin, &entries)
+                .unwrap()
+                .position(),
+            1
         );
         assert_eq!(
-            extremum_entry_key(KeyAggregation::Argmax, &entries).unwrap(),
-            IndexEntryKey::position(2)
+            extremum_key(KeyAggregation::Argmax, &entries)
+                .unwrap()
+                .position(),
+            2
         );
         let single = IndexedValue::finite_for_test(vec![RuntimeValue::quantity(5.0).unwrap()]);
         assert_eq!(
-            extremum_entry_key(KeyAggregation::Argmax, &single).unwrap(),
-            IndexEntryKey::position(0)
+            extremum_key(KeyAggregation::Argmax, &single)
+                .unwrap()
+                .position(),
+            0
         );
         let non_quantity = IndexedValue::finite_for_test(vec![RuntimeValue::Bool(true)]);
         assert!(matches!(
-            extremum_entry_key(KeyAggregation::Argmin, &non_quantity),
+            extremum_key(KeyAggregation::Argmin, &non_quantity),
             Err(AggregationError::ElementType(_))
         ));
     }

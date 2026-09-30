@@ -33,6 +33,7 @@ use crate::presentation_evidence::{
     LeafPresentationDiagnostic, PresentationDiagnostic, PresentationFailure,
     PresentationInstanceMap,
 };
+use crate::runtime_value::KeyElement;
 
 use super::{EvaluatedRoot, declaration_body, dependency_failure_message};
 
@@ -704,13 +705,18 @@ fn runtime_to_plot_field_value(rv: &RuntimeValue) -> Result<PlotFieldValue, Stri
                 )
             }),
         RuntimeValue::Bool(b) => Ok(PlotFieldValue::String(b.to_string())),
-        RuntimeValue::Label { variant, .. } => Ok(PlotFieldValue::String(variant.to_string())),
+        RuntimeValue::Key(key) => match key.element() {
+            KeyElement::Named(variant) => Ok(PlotFieldValue::String(variant.to_string())),
+            KeyElement::Coordinate { value, .. } => Ok(PlotFieldValue::Number(value.get())),
+            KeyElement::Finite(position) => {
+                crate::eval::plot_data::fin_position_number(position).map(PlotFieldValue::Number)
+            }
+        },
         RuntimeValue::Indexed(_) => crate::eval::plot_data::flatten_to_field_value(rv),
         RuntimeValue::Struct(_) => Err(format!("{} cannot be plotted", rv.describe())),
         RuntimeValue::Datetime(epoch) => crate::eval::types::epoch_to_rfc3339(epoch)
             .map(PlotFieldValue::Datetime)
             .map_err(|error| error.to_string()),
-        RuntimeValue::CoordinateLabel { value, .. } => Ok(PlotFieldValue::Number(value.get())),
     }
 }
 

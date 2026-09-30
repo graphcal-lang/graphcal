@@ -20,7 +20,7 @@
 //! * [`FlatEntry`] / [`OutputBlock`] are the data types the renderer walks.
 
 use graphcal_compiler::dimension::Dimension;
-use graphcal_eval::eval::{NodeUnavailable, RenderContext, UnitLabel, Value};
+use graphcal_eval::eval::{KeyRendering, NodeUnavailable, RenderContext, UnitLabel, Value};
 
 /// One line of flat output: either a successfully-evaluated value or an error.
 ///
@@ -152,11 +152,15 @@ fn table_leaf_presentation(value: &Value, render: &RenderContext) -> TableLeafPr
             label: value.display_label(render),
             scale: display_unit.as_ref().map_or(1.0, |unit| unit.scale.get()),
         }),
-        Value::Bool(_)
-        | Value::Int(_)
-        | Value::Label { .. }
-        | Value::Struct { .. }
-        | Value::Datetime { .. } => TableLeafPresentation::NonQuantity,
+        Value::Key(key) => match KeyRendering::of(key) {
+            KeyRendering::Coordinate(quantity) => table_leaf_presentation(&quantity, render),
+            KeyRendering::Label { .. } | KeyRendering::Position(_) => {
+                TableLeafPresentation::NonQuantity
+            }
+        },
+        Value::Bool(_) | Value::Int(_) | Value::Struct { .. } | Value::Datetime { .. } => {
+            TableLeafPresentation::NonQuantity
+        }
     }
 }
 
@@ -174,7 +178,7 @@ pub fn flatten_value<'a>(prefix: &str, value: &'a Value, entries: &mut Vec<FlatE
         | Value::Complex { .. }
         | Value::Bool(_)
         | Value::Int(_)
-        | Value::Label { .. }
+        | Value::Key(_)
         | Value::Datetime { .. } => {
             entries.push(FlatEntry::Value(prefix.to_string(), value));
         }
