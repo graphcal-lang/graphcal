@@ -287,10 +287,15 @@ impl<'a> EvalContext<'a> {
         self.dag.resolve_unit(unit)
     }
 
+    /// Determine, once for a whole root tree, whether every dependency it may
+    /// read (including those of unselected branches) is available.
     pub fn check_dependencies(
         &self,
         expression: &graphcal_compiler::tir::texpr::TExpr,
     ) -> Result<(), GraphcalError> {
+        crate::pipeline_metrics::record(
+            crate::pipeline_metrics::Event::DependencyAvailabilityCheck,
+        );
         self.unavailable_dependencies(std::iter::once(expression))?
             .map_or(Ok(()), |reason| {
                 Err(GraphcalError::EvaluationUnavailable {

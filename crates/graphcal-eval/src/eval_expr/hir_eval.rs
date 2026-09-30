@@ -63,6 +63,10 @@ fn take_presentation_instance(
 /// every static obligation discharged, so evaluation reads each node's checked
 /// type and nominal facts from the node itself. Declaration, constructor,
 /// index-variant, inline-DAG, local, and built-in references are canonical.
+///
+/// `expr` is the root of a declaration's (or another evaluated root's) tree:
+/// the availability of every dependency of the whole tree, including
+/// unselected branches, is determined once before any of it is evaluated.
 pub fn eval_texpr(
     expr: &TExpr,
     values: &RuntimeValueMap,
@@ -70,12 +74,24 @@ pub fn eval_texpr(
     ctx: &EvalContext<'_>,
 ) -> Result<RuntimeValue, GraphcalError> {
     ctx.check_dependencies(expr)?;
+    eval_value(expr, values, local_values, ctx)
+}
+
+/// Evaluate a subtree of a root whose dependency availability has already
+/// been determined by [`eval_texpr`] or [`eval_texpr_with_presentation`].
+fn eval_value(
+    expr: &TExpr,
+    values: &RuntimeValueMap,
+    local_values: &HirLocalValueMap<'_>,
+    ctx: &EvalContext<'_>,
+) -> Result<RuntimeValue, GraphcalError> {
     eval_texpr_evaluated(expr, values, None, local_values, ctx)
         .map(EvaluatedRuntimeValue::into_value)
 }
 
-/// Evaluate one checked tree while preserving concrete presentation-call
-/// identities through value-preserving expression forms.
+/// Evaluate one checked root tree while preserving concrete presentation-call
+/// identities through value-preserving expression forms. Like [`eval_texpr`],
+/// it determines the availability of the whole tree's dependencies once.
 pub fn eval_texpr_with_presentation(
     expr: &TExpr,
     values: &RuntimeValueMap,
@@ -187,7 +203,7 @@ fn eval_texpr_inner(
             then_branch,
             else_branch,
         } => {
-            let cond = eval_texpr(condition, values, local_values, ctx)?
+            let cond = eval_value(condition, values, local_values, ctx)?
                 .expect_bool("if condition")
                 .map_err(|e| ctx.eval_error(e.to_string(), span))?;
             if cond {
@@ -200,7 +216,7 @@ fn eval_texpr_inner(
             expr: inner,
             target,
         } => {
-            let value = eval_texpr(inner, values, local_values, ctx)?;
+            let value = eval_value(inner, values, local_values, ctx)?;
             Ok(EvaluatedRuntimeValue::new(
                 value,
                 super::presentation::pending(target, ctx),
@@ -210,7 +226,7 @@ fn eval_texpr_inner(
             expr: inner,
             timezone,
         } => {
-            let value = eval_texpr(inner, values, local_values, ctx)?;
+            let value = eval_value(inner, values, local_values, ctx)?;
             Ok(EvaluatedRuntimeValue::new(
                 value,
                 PresentationInstance::Timezone(timezone.clone()),
@@ -439,25 +455,25 @@ fn eval_binop(
 ) -> Result<RuntimeValue, GraphcalError> {
     use graphcal_compiler::desugar::desugared_ast::BinOp;
     let compare = |comparison| {
-        let l = eval_texpr(lhs, values, local_values, ctx)?;
-        let r = eval_texpr(rhs, values, local_values, ctx)?;
+        let l = eval_value(lhs, values, local_values, ctx)?;
+        let r = eval_value(rhs, values, local_values, ctx)?;
         super::arithmetic::eval_comparison_values(comparison, &l, &r, ctx, span)
     };
     match op {
         BinOp::And => {
-            let l = eval_texpr(lhs, values, local_values, ctx)?
+            let l = eval_value(lhs, values, local_values, ctx)?
                 .expect_bool("AND operand")
                 .map_err(|e| ctx.eval_error(e.to_string(), span))?;
-            let r = eval_texpr(rhs, values, local_values, ctx)?
+            let r = eval_value(rhs, values, local_values, ctx)?
                 .expect_bool("AND operand")
                 .map_err(|e| ctx.eval_error(e.to_string(), span))?;
             Ok(RuntimeValue::Bool(l && r))
         }
         BinOp::Or => {
-            let l = eval_texpr(lhs, values, local_values, ctx)?
+            let l = eval_value(lhs, values, local_values, ctx)?
                 .expect_bool("OR operand")
                 .map_err(|e| ctx.eval_error(e.to_string(), span))?;
-            let r = eval_texpr(rhs, values, local_values, ctx)?
+            let r = eval_value(rhs, values, local_values, ctx)?
                 .expect_bool("OR operand")
                 .map_err(|e| ctx.eval_error(e.to_string(), span))?;
             Ok(RuntimeValue::Bool(l || r))
@@ -470,8 +486,8 @@ fn eval_binop(
         BinOp::Ge => compare(Comparison::Ord(OrderingOp::Ge)),
         BinOp::Pow(exponent) => eval_power(span, exponent, lhs, rhs, values, local_values, ctx),
         _ => {
-            let l = eval_texpr(lhs, values, local_values, ctx)?;
-            let r = eval_texpr(rhs, values, local_values, ctx)?;
+            let l = eval_value(lhs, values, local_values, ctx)?;
+            let r = eval_value(rhs, values, local_values, ctx)?;
             if let (RuntimeValue::Int(li), RuntimeValue::Int(ri)) = (&l, &r) {
                 return super::arithmetic::eval_int_binop(op, *li, *ri, ctx, span)
                     .map(RuntimeValue::Int);
@@ -545,7 +561,7 @@ fn eval_power(
     use graphcal_compiler::desugar::desugared_ast::BinOp;
     use graphcal_compiler::syntax::ast::PowerExponent;
 
-    let base = eval_texpr(base, values, local_values, ctx)?;
+    let base = eval_value(base, values, local_values, ctx)?;
     let op = BinOp::Pow(exponent);
     match (base, exponent) {
         (RuntimeValue::Int(base), PowerExponent::Exact(exact)) => {
@@ -559,7 +575,7 @@ fn eval_power(
                 .map(RuntimeValue::Int)
         }
         (RuntimeValue::Int(base), _) => {
-            let runtime_exponent = eval_texpr(exponent_expr, values, local_values, ctx)?;
+            let runtime_exponent = eval_value(exponent_expr, values, local_values, ctx)?;
             let RuntimeValue::Int(runtime_exponent) = runtime_exponent else {
                 return Err(
                     ctx.internal_error("non-Int exponent reached Int power evaluation", span)
@@ -573,7 +589,7 @@ fn eval_power(
                 .and_then(|value| checked_finite_quantity(value, "quantity power", span, ctx))
         }
         (RuntimeValue::Quantity(base), _) => {
-            let runtime_exponent = eval_texpr(exponent_expr, values, local_values, ctx)?
+            let runtime_exponent = eval_value(exponent_expr, values, local_values, ctx)?
                 .expect_quantity("power exponent")
                 .map_err(|error| ctx.internal_error(error.to_string(), span))?;
             super::arithmetic::eval_quantity_binop(op, base.get(), runtime_exponent, ctx, span)
@@ -596,7 +612,7 @@ fn eval_unary(
 ) -> Result<RuntimeValue, GraphcalError> {
     match op {
         graphcal_compiler::desugar::desugared_ast::UnaryOp::Neg => {
-            let v = eval_texpr(operand, values, local_values, ctx)?;
+            let v = eval_value(operand, values, local_values, ctx)?;
             match v {
                 RuntimeValue::Int(i) => i
                     .checked_neg()
@@ -615,7 +631,7 @@ fn eval_unary(
             }
         }
         graphcal_compiler::desugar::desugared_ast::UnaryOp::Not => {
-            let v = eval_texpr(operand, values, local_values, ctx)?
+            let v = eval_value(operand, values, local_values, ctx)?
                 .expect_bool("logical NOT")
                 .map_err(|e| ctx.eval_error(e.to_string(), span))?;
             Ok(RuntimeValue::Bool(!v))
@@ -668,7 +684,7 @@ fn eval_fn_call(
         BuiltinFn::Complex(function) => {
             let arguments = args
                 .iter()
-                .map(|argument| eval_texpr(value_arg(argument, ctx)?, values, local_values, ctx))
+                .map(|argument| eval_value(value_arg(argument, ctx)?, values, local_values, ctx))
                 .collect::<Result<Vec<_>, _>>()?;
             super::complex::evaluate_builtin(function, &arguments).map_err(|error| {
                 if error.is_internal_invariant() {
@@ -679,7 +695,7 @@ fn eval_fn_call(
             })
         }
         BuiltinFn::Aggregation(kind) => {
-            let arg_val = eval_texpr(value_arg(&args[0], ctx)?, values, local_values, ctx)?;
+            let arg_val = eval_value(value_arg(&args[0], ctx)?, values, local_values, ctx)?;
             let RuntimeValue::Indexed {
                 index_name,
                 entries,
@@ -702,7 +718,7 @@ fn eval_fn_call(
         BuiltinFn::LinearAlgebra(function) => {
             let arguments = args
                 .iter()
-                .map(|argument| eval_texpr(value_arg(argument, ctx)?, values, local_values, ctx))
+                .map(|argument| eval_value(value_arg(argument, ctx)?, values, local_values, ctx))
                 .collect::<Result<Vec<_>, _>>()?;
             super::linear_algebra::evaluate(function, arguments, ctx).map_err(|error| {
                 error.cancellation().map_or_else(
@@ -721,7 +737,7 @@ fn eval_fn_call(
             eval_conversion_fn(kind, span, args, values, local_values, ctx)
         }
         BuiltinFn::Datetime(DatetimeFn::ScaleConversion(conversion)) => {
-            let arg = eval_texpr(value_arg(&args[0], ctx)?, values, local_values, ctx)?;
+            let arg = eval_value(value_arg(&args[0], ctx)?, values, local_values, ctx)?;
             let RuntimeValue::Datetime(epoch) = arg else {
                 return Err(ctx.internal_error(
                     format!("{}() received non-Datetime argument", name.as_str()),
@@ -736,7 +752,7 @@ fn eval_fn_call(
             eval_datetime_constructor(kind, epoch_scale, span, args, ctx.src)
         }
         BuiltinFn::Datetime(DatetimeFn::Field(kind)) => {
-            let arg_val = eval_texpr(value_arg(&args[0], ctx)?, values, local_values, ctx)?;
+            let arg_val = eval_value(value_arg(&args[0], ctx)?, values, local_values, ctx)?;
             let RuntimeValue::Datetime(epoch) = arg_val else {
                 return Err(ctx.internal_error(
                     format!("{}() received non-Datetime argument", name.as_str()),
@@ -762,7 +778,7 @@ fn eval_fn_call(
             Ok(RuntimeValue::Int(result))
         }
         BuiltinFn::Datetime(DatetimeFn::FromNumeric(kind)) => {
-            let arg_val = eval_texpr(value_arg(&args[0], ctx)?, values, local_values, ctx)?;
+            let arg_val = eval_value(value_arg(&args[0], ctx)?, values, local_values, ctx)?;
             let num = match arg_val {
                 RuntimeValue::Quantity(v) => v.get(),
                 RuntimeValue::Int(v) => {
@@ -785,7 +801,7 @@ fn eval_fn_call(
                 .map_err(|error| ctx.eval_error(error.to_string(), arg_span(&args[0])))
         }
         BuiltinFn::Datetime(DatetimeFn::ToNumeric(kind)) => {
-            let arg_val = eval_texpr(value_arg(&args[0], ctx)?, values, local_values, ctx)?;
+            let arg_val = eval_value(value_arg(&args[0], ctx)?, values, local_values, ctx)?;
             let RuntimeValue::Datetime(epoch) = arg_val else {
                 return Err(ctx.internal_error(
                     format!("{}() received non-Datetime argument", name.as_str()),
@@ -821,7 +837,7 @@ fn eval_key_form(
 ) -> Result<RuntimeValue, GraphcalError> {
     use graphcal_compiler::syntax::ast::KeyFormKind;
 
-    let arg_val = eval_texpr(arg, values, local_values, ctx)?;
+    let arg_val = eval_value(arg, values, local_values, ctx)?;
     match kind {
         KeyFormKind::Static => {
             // Bounds were discharged at compile time.
@@ -1023,7 +1039,7 @@ fn eval_conversion_fn(
 ) -> Result<RuntimeValue, GraphcalError> {
     match kind {
         ConversionFn::ToFloat => {
-            let arg = eval_texpr(value_arg(&args[0], ctx)?, values, local_values, ctx)?;
+            let arg = eval_value(value_arg(&args[0], ctx)?, values, local_values, ctx)?;
             let RuntimeValue::Int(i) = arg else {
                 return Err(
                     ctx.internal_error("to_float() received non-Int argument", arg_span(&args[0]))
@@ -1036,7 +1052,7 @@ fn eval_conversion_fn(
             checked_finite_quantity(i as f64, "to_float()", arg_span(&args[0]), ctx)
         }
         ConversionFn::ToInt => {
-            let arg = eval_texpr(value_arg(&args[0], ctx)?, values, local_values, ctx)?;
+            let arg = eval_value(value_arg(&args[0], ctx)?, values, local_values, ctx)?;
             // A Fin-axis key is represented as its position integer: to_int()
             // on a key is the identity at runtime, checked at the type level.
             if let RuntimeValue::Int(position) = arg {
@@ -1060,7 +1076,7 @@ fn eval_conversion_fn(
                 })
         }
         ConversionFn::Coord => {
-            let arg = eval_texpr(value_arg(&args[0], ctx)?, values, local_values, ctx)?;
+            let arg = eval_value(value_arg(&args[0], ctx)?, values, local_values, ctx)?;
             let RuntimeValue::CoordinateLabel { value, .. } = arg else {
                 return Err(ctx.internal_error(
                     "coord() received a non-coordinate-key argument",
@@ -1425,7 +1441,7 @@ fn eval_extern_fn(
     let mut arg_values: Vec<HostFnValue> = Vec::with_capacity(args.len());
     for (param, arg) in signature.params().iter().zip(args) {
         let arg_span = arg_span(arg);
-        let value = eval_texpr(value_arg(arg, ctx)?, values, local_values, ctx)?;
+        let value = eval_value(value_arg(arg, ctx)?, values, local_values, ctx)?;
         let converted = match (&param.kind, value) {
             (ParamKind::Scalar(ScalarValueKind::Quantity(_)), value) => {
                 let value = value
@@ -1657,7 +1673,7 @@ fn eval_builtin_fn(
     let arg_values: Vec<f64> = args
         .iter()
         .map(|arg| {
-            let rv = eval_texpr(value_arg(arg, ctx)?, values, local_values, ctx)?;
+            let rv = eval_value(value_arg(arg, ctx)?, values, local_values, ctx)?;
             rv.expect_quantity("function argument")
                 .map_err(|e| ctx.eval_error(e.to_string(), arg_span(arg)))
         })
@@ -2082,7 +2098,7 @@ fn eval_index_access(
     let (base_value, base_presentation) = match inner.kind() {
         TExprKind::GraphRef(target) => {
             // This replaces the checkpoint normally performed by
-            // `eval_texpr(inner, ...)` while retaining a reference to the
+            // `eval_value(inner, ...)` while retaining a reference to the
             // stored value instead of deep-cloning it before traversal.
             ctx.cancellation.checkpoint()?;
             let value = std::borrow::Cow::Borrowed(resolve_graph_ref(
@@ -2174,7 +2190,7 @@ fn eval_index_access(
                 operand: index_expr,
                 ..
             } => {
-                let val = eval_texpr(index_expr, values, local_values, ctx)?;
+                let val = eval_value(index_expr, values, local_values, ctx)?;
                 match val {
                     // A key value selects the entry it names; the checker has
                     // already proven the axis identity.

@@ -733,6 +733,29 @@ fn shared_frames_reject_dynamic_parameter_domain_violations_without_losing_indep
 }
 
 #[test]
+fn dependency_availability_is_determined_once_per_declaration() {
+    let source = "node a: Dimensionless = 1.0 + 2.0 * (3.0 - 4.0 / 5.0); \
+                  node b: Dimensionless = if @a > 0.0 { @a * (@a + 1.0) } else { -@a }; \
+                  node c: Dimensionless = abs(@a - @b) + sqrt(@b * 2.0);";
+    let tir = compile_to_tir(source, "availability.gcl").unwrap();
+    let src = miette::NamedSource::new("availability.gcl", std::sync::Arc::new(source.to_string()));
+    let prepared = crate::exec_plan::compile(&tir, &src).unwrap();
+    let (runtime, counts) = crate::pipeline_metrics::measure(|| {
+        super::runtime::run_eval_loop_with_bindings(
+            prepared.plan(),
+            &super::bindings::RuntimeParameterBindings::new(),
+            &src,
+            &crate::host_fns::HostFunctionRegistry::new(),
+            &graphcal_compiler::cancellation::CancellationToken::unbounded(),
+        )
+        .unwrap()
+    });
+    assert!(runtime.errors.is_empty());
+    assert_eq!(runtime.values.len(), 3);
+    assert_eq!(counts.dependency_availability_checks, 3);
+}
+
+#[test]
 fn shared_frames_cancel_before_interpretation() {
     use crate::execution_frame::{ExecutionFrame, FailurePolicy};
     let (tir, src) = callable_plan_fixture();

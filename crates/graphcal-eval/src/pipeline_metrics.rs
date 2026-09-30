@@ -15,6 +15,7 @@ pub enum Event {
     FrameExecution,
     ConstructorFactConsumption,
     PresentationEvaluation,
+    DependencyAvailabilityCheck,
     #[cfg(test)]
     CallFrameValueNodes,
     #[cfg(test)]
@@ -58,6 +59,7 @@ mod observer {
         pub frame_executions: u64,
         pub constructor_fact_consumptions: u64,
         pub presentation_evaluations: u64,
+        pub dependency_availability_checks: u64,
         pub call_frame_value_nodes: u64,
         pub call_output_evidence_nodes: u64,
         pub presentation_evidence_copy_nodes: u64,
@@ -76,6 +78,7 @@ mod observer {
                 Event::FrameExecution => &mut counts.frame_executions,
                 Event::ConstructorFactConsumption => &mut counts.constructor_fact_consumptions,
                 Event::PresentationEvaluation => &mut counts.presentation_evaluations,
+                Event::DependencyAvailabilityCheck => &mut counts.dependency_availability_checks,
                 Event::CallFrameValueNodes => &mut counts.call_frame_value_nodes,
                 Event::CallOutputEvidenceNodes => &mut counts.call_output_evidence_nodes,
                 Event::PresentationEvidenceCopyNode => &mut counts.presentation_evidence_copy_nodes,
@@ -113,6 +116,9 @@ mod observer {
                 presentation_evaluations: after
                     .presentation_evaluations
                     .saturating_sub(before.presentation_evaluations),
+                dependency_availability_checks: after
+                    .dependency_availability_checks
+                    .saturating_sub(before.dependency_availability_checks),
                 call_frame_value_nodes: after
                     .call_frame_value_nodes
                     .saturating_sub(before.call_frame_value_nodes),
