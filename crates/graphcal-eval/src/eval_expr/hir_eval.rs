@@ -9,8 +9,8 @@ use graphcal_compiler::semantic::checked_type::{CheckedType, IndexTypeRef, Struc
 use graphcal_compiler::syntax::index_name::IndexEntryKey;
 use graphcal_compiler::syntax::span::{Span, Spanned};
 use graphcal_compiler::tir::texpr::{
-    CoordinateSearch, TConstructorArm, TExpr, TFieldInit, TIndexArg, TKeyForm, TLabelArm,
-    TParamBinding,
+    CoordinateSearch, TConstructorArm, TExpr, TExternArg, TFieldInit, TIndexArg, TKeyForm,
+    TLabelArm, TParamBinding,
 };
 use graphcal_compiler::tir::typed::body_scope::Scoped;
 use graphcal_compiler::tir::typed::evaluation_unit::{DeclarationBody, ScopedTree};
@@ -692,20 +692,25 @@ fn named_key(
         })
 }
 
+/// The expression of one plugin-call argument, in the argument's scope.
+fn argument_node(arg: Scoped<'_, TExternArg>) -> Scoped<'_, TExpr> {
+    arg.map(|arg| &arg.value)
+}
+
 /// Evaluate an extern (plugin) function call through the embedder-injected
 /// host function registry.
 ///
 /// Arguments and the result cross the host ABI through
-/// [`HostArguments`](crate::host_abi::marshal::HostArguments), which encodes
-/// the arguments per the declared signature and rebuilds the result over the
-/// typed axes the arguments bound. A closure error or an invalid result
+/// [`HostArguments`](crate::host_abi::marshal::HostArguments), which reads each
+/// argument at the ABI kind its checked node carries and rebuilds the result
+/// over the typed axes the arguments bound. A closure error or an invalid result
 /// becomes a per-node evaluation failure naming the plugin alias and function;
 /// dependents report `DependencyFailed` through the ordinary per-node fault
 /// isolation.
 fn eval_extern_fn(
     span: Span,
     ext: &hir::ExternFnRef,
-    args: Scoped<'_, [TExpr]>,
+    args: Scoped<'_, [TExternArg]>,
     values: &RuntimeValueMap,
     local_values: &HirLocalValueMap<'_>,
     ctx: &EvalSession<'_>,
@@ -738,19 +743,19 @@ fn eval_extern_fn(
     let invariant =
         |invariant, span| ctx.internal_error(format!("extern function `{ext}`: {invariant}"), span);
 
+    let evaluate = |node| eval_value(node, values, local_values, ctx);
+    let operands = super::operations::Operands::new(&evaluate, ctx);
     let arguments = HostArguments::encode(
         &function.signature,
-        args.iter()
-            .map(|arg| eval_value(arg, values, local_values, ctx)),
+        args.iter().map(|arg| (&arg.get().kind, argument_node(arg))),
+        &operands,
     )
     .map_err(|error| match error {
-        EncodeError::Arity { expected, actual } => ctx.eval_error(
-            format!("extern function `{ext}` expects {expected} argument(s) but got {actual}"),
-            span,
-        ),
         EncodeError::Value(error) => error,
         EncodeError::Argument { position, failure } => {
-            let span = args.nth(position).map_or(span, ScopedNode::span);
+            let span = args
+                .nth(position)
+                .map_or(span, |arg| argument_node(arg).span());
             match failure {
                 Failure::Error(error) => ctx.eval_error(error.describe(ext), span),
                 Failure::Invariant(error) => invariant(error, span),

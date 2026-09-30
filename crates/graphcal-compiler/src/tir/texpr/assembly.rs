@@ -25,9 +25,9 @@ use crate::syntax::span::Spanned;
 use crate::tir::static_index::StaticIndexRequirement;
 
 use super::model::{
-    ContextualLiteral, CoordinateSearch, DatetimeLiteral, StaticPosition, TArg, TConstRef,
-    TConstructorArm, TContextual, TExpr, TExprKind, TFieldInit, TIndexArg, TKeyForm, TLabelArm,
-    TMapEntry, TMatchArms, TParamBinding,
+    ContextualLiteral, CoordinateSearch, DatetimeLiteral, ExternArgKind, StaticPosition, TArg,
+    TConstRef, TConstructorArm, TContextual, TExpr, TExprKind, TExternArg, TFieldInit, TIndexArg,
+    TKeyForm, TLabelArm, TMapEntry, TMatchArms, TParamBinding,
 };
 use super::nominal::{ConstructorApplication, ConstructorMatch};
 use super::operators::{
@@ -35,6 +35,7 @@ use super::operators::{
     OrderedOperands, OrderingOp, QExpr, ScaleOp, ShiftOp,
 };
 use crate::builtin::{BuiltinFn, ComplexFn, ConversionFn, DatetimeConstructorFn, DatetimeFn};
+use crate::function_signature::FunctionParam;
 use crate::hir::expr::FunctionRef;
 
 /// Why a checked node could not be assembled into a typed tree.
@@ -63,6 +64,8 @@ pub enum AssemblyError {
 /// The node-specific facts checking established for one value expression.
 pub struct NodeFacts<'a> {
     pub constructor: Option<&'a ConstructorApplication<Symbolic>>,
+    /// The declared parameters of the plugin function a call node calls.
+    pub extern_params: Option<&'a [FunctionParam]>,
     pub constructor_matches: &'a HashMap<ResolvedConstructorName, ConstructorMatch>,
     pub static_indexes: &'a [StaticIndexRequirement],
 }
@@ -242,6 +245,7 @@ impl PendingNodes {
                 args.iter()
                     .map(|arg| self.take_arg(expr, arg))
                     .collect::<Result<_, _>>()?,
+                facts.extern_params,
             )
             .ok_or_else(|| AssemblyError::UncheckedOperands(id()))?,
             ExprKind::If {
@@ -603,12 +607,28 @@ fn unary(op: UnaryOp, operand: Box<TExpr<Symbolic>>) -> Option<TExprKind<Symboli
 
 /// The typed form of a call of `callee` with checked `args`, if checking
 /// admits their types.
-fn call(callee: &FunctionRef, args: Vec<TArg<Symbolic>>) -> Option<TExprKind<Symbolic>> {
+fn call(
+    callee: &FunctionRef,
+    args: Vec<TArg<Symbolic>>,
+    extern_params: Option<&[FunctionParam]>,
+) -> Option<TExprKind<Symbolic>> {
     let function = match callee {
         FunctionRef::External(function) => {
+            let params = extern_params?;
+            let args = values(args)?;
+            if args.len() != params.len() {
+                return None;
+            }
             return Some(TExprKind::Extern {
                 function: function.clone(),
-                args: values(args)?.into_iter().map(|arg| *arg).collect(),
+                args: params
+                    .iter()
+                    .zip(args)
+                    .map(|(param, arg)| TExternArg {
+                        kind: ExternArgKind::for_param(param),
+                        value: *arg,
+                    })
+                    .collect(),
             });
         }
         FunctionRef::Epoch { scale } => {
@@ -1250,9 +1270,95 @@ mod tests {
     }
 
     #[test]
+    fn extern_calls_pair_each_argument_with_its_declared_parameter() {
+        use crate::function_signature::{
+            DimMonomial, FunctionParam, FunctionSignature, ParamKind, ScalarValueKind,
+        };
+        use crate::syntax::function_name::{FnName, FnParamName};
+        use crate::syntax::index_name::IndexVarName;
+        use crate::syntax::non_empty::NonEmpty;
+
+        let index = IndexVarName::expect_valid("I");
+        let param = |name: &str, kind| FunctionParam {
+            name: FnParamName::expect_valid(name),
+            kind,
+        };
+        let signature = FunctionSignature::try_new(
+            Vec::new(),
+            vec![index.clone()],
+            vec![
+                param("flag", ParamKind::Scalar(ScalarValueKind::Bool)),
+                param("count", ParamKind::Scalar(ScalarValueKind::Int)),
+                param(
+                    "level",
+                    ParamKind::Scalar(ScalarValueKind::Quantity(DimMonomial::fixed(
+                        Dimension::dimensionless(),
+                    ))),
+                ),
+                param(
+                    "xs",
+                    ParamKind::Indexed {
+                        element: ScalarValueKind::Int,
+                        indexes: NonEmpty::singleton(index),
+                    },
+                ),
+            ],
+            ParamKind::Scalar(ScalarValueKind::Bool).into(),
+        )
+        .unwrap();
+        let callee = FunctionRef::External(crate::hir::expr::ExternFnRef {
+            plugin: crate::plugin_identity::PluginIdentity::Host(
+                crate::syntax::plugin::PluginPath::new("graphcal:test"),
+            ),
+            alias: crate::syntax::module_name::ModuleAliasName::expect_valid("test"),
+            name: FnName::expect_valid("f"),
+        });
+        let args = |count: usize| {
+            (0..count)
+                .map(|_| TArg::Value(arg(quantity())))
+                .collect::<Vec<_>>()
+        };
+
+        let Some(TExprKind::Extern { args: built, .. }) =
+            call(&callee, args(4), Some(signature.params()))
+        else {
+            panic!("a checked extern call builds its node");
+        };
+        let kinds = built.iter().map(|arg| &arg.kind).collect::<Vec<_>>();
+        assert!(matches!(
+            kinds.as_slice(),
+            [
+                ExternArgKind::Bool { .. },
+                ExternArgKind::Int { .. },
+                ExternArgKind::Quantity { .. },
+                ExternArgKind::Indexed {
+                    element: ScalarValueKind::Int,
+                    indexes,
+                    ..
+                },
+            ] if indexes.len() == 1
+        ));
+        assert_eq!(
+            kinds
+                .iter()
+                .map(|kind| kind.param().as_str())
+                .collect::<Vec<_>>(),
+            ["flag", "count", "level", "xs"]
+        );
+
+        // Without its declared parameters, with another argument count, or
+        // with a contextual argument, the call is not a checked extern call.
+        assert!(call(&callee, args(4), None).is_none());
+        assert!(call(&callee, args(3), Some(signature.params())).is_none());
+        let mut contextual_args = args(3);
+        contextual_args.push(contextual(ContextualLiteral::String("x".to_owned())));
+        assert!(call(&callee, contextual_args, Some(signature.params())).is_none());
+    }
+
+    #[test]
     fn datetime_constructors_build_their_parsed_literal() {
         assert!(matches!(
-            call(&datetime_constructor(), vec![contextual(offset())]),
+            call(&datetime_constructor(), vec![contextual(offset())], None),
             Some(TExprKind::DatetimeLiteral(DatetimeLiteral::Offset(_)))
         ));
         let Some(TExprKind::DatetimeLiteral(DatetimeLiteral::Zoned(datetime))) = call(
@@ -1261,6 +1367,7 @@ mod tests {
                 contextual(zoned("Asia/Tokyo")),
                 contextual(ContextualLiteral::TimeZone(zone("Asia/Tokyo"))),
             ],
+            None,
         ) else {
             panic!("a zoned literal in its own timezone builds a zoned datetime");
         };
@@ -1270,7 +1377,7 @@ mod tests {
             scale: Spanned::new(scale, crate::syntax::span::Span::new(0, 1)),
         };
         assert!(matches!(
-            call(&epoch, vec![contextual(ContextualLiteral::CivilDateTime(civil()))]),
+            call(&epoch, vec![contextual(ContextualLiteral::CivilDateTime(civil()))], None),
             Some(TExprKind::DatetimeLiteral(DatetimeLiteral::Epoch { scale: built, .. }))
                 if built == scale
         ));
@@ -1300,20 +1407,21 @@ mod tests {
             Vec::new(),
         ];
         for args in rejected {
-            assert!(call(&constructor, args).is_none());
+            assert!(call(&constructor, args, None).is_none());
         }
         let epoch = FunctionRef::Epoch {
             scale: Spanned::new(TimeScale::ALL[0], crate::syntax::span::Span::new(0, 1)),
         };
-        assert!(call(&epoch, vec![contextual(offset())]).is_none());
-        assert!(call(&epoch, vec![TArg::Value(arg(datetime()))]).is_none());
+        assert!(call(&epoch, vec![contextual(offset())], None).is_none());
+        assert!(call(&epoch, vec![TArg::Value(arg(datetime()))], None).is_none());
         assert!(
             call(
                 &epoch,
                 vec![
                     contextual(ContextualLiteral::CivilDateTime(civil())),
                     contextual(ContextualLiteral::CivilDateTime(civil())),
-                ]
+                ],
+                None,
             )
             .is_none()
         );

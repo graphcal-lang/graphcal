@@ -18,8 +18,9 @@ use graphcal_compiler::tir::texpr::operators::{
 };
 use graphcal_compiler::tir::typed::scoped_node::ScopedNode;
 
+use crate::host_abi::marshal::ArgumentReader;
 use crate::invariant::{Failure, Invariant};
-use crate::runtime_value::{IndexAxis, KeyElement, KeyValue, RuntimeValue};
+use crate::runtime_value::{IndexAxis, IndexedValue, KeyElement, KeyValue, RuntimeValue};
 
 use super::EvalSession;
 use super::arithmetic::apply_ordering;
@@ -88,6 +89,16 @@ impl<'o, 't> Operands<'o, 't> {
         })
     }
 
+    pub(super) fn indexed(
+        &self,
+        node: ScopedNode<'t>,
+    ) -> Result<IndexedValue<RuntimeValue>, GraphcalError> {
+        self.read(node, "an indexed value", |value| match value {
+            RuntimeValue::Indexed(value) => Ok(value),
+            other => Err(other),
+        })
+    }
+
     fn complex(&self, node: ScopedNode<'t>) -> Result<ComplexValue, GraphcalError> {
         self.read(node, "a complex quantity", |value| match value {
             RuntimeValue::Complex(value) => Ok(value),
@@ -111,6 +122,28 @@ impl<'o, 't> Operands<'o, 't> {
 }
 
 /// Evaluate an operation whose result is a real quantity.
+/// Plugin-call arguments are operands read at the kind their checked node
+/// carries.
+impl<'t> ArgumentReader<ScopedNode<'t>> for Operands<'_, 't> {
+    type Error = GraphcalError;
+
+    fn quantity(&self, node: ScopedNode<'t>) -> Result<FiniteQuantity, GraphcalError> {
+        Operands::quantity(self, node)
+    }
+
+    fn bool(&self, node: ScopedNode<'t>) -> Result<bool, GraphcalError> {
+        Operands::bool(self, node)
+    }
+
+    fn int(&self, node: ScopedNode<'t>) -> Result<i64, GraphcalError> {
+        Operands::int(self, node)
+    }
+
+    fn indexed(&self, node: ScopedNode<'t>) -> Result<IndexedValue<RuntimeValue>, GraphcalError> {
+        Operands::indexed(self, node)
+    }
+}
+
 pub(super) fn quantity<'t>(
     operation: &QExpr<ScopedNode<'t>>,
     span: Span,

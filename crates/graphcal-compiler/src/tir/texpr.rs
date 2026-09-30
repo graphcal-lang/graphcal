@@ -31,9 +31,9 @@ pub use checked_bodies::{
     CheckedBodies, CheckedBody, DischargeError, ExecutableBodyError, TypedBodiesError,
 };
 pub use model::{
-    ContextualLiteral, CoordinateSearch, DatetimeLiteral, StaticPosition, TArg, TBody, TConstRef,
-    TConstructorArm, TContextual, TExpr, TExprKind, TFieldInit, TIndexArg, TKeyForm, TLabelArm,
-    TMapEntry, TMatchArms, TNodeRef, TParamBinding, visit_tnodes,
+    ContextualLiteral, CoordinateSearch, DatetimeLiteral, ExternArgKind, StaticPosition, TArg,
+    TBody, TConstRef, TConstructorArm, TContextual, TExpr, TExprKind, TExternArg, TFieldInit,
+    TIndexArg, TKeyForm, TLabelArm, TMapEntry, TMatchArms, TNodeRef, TParamBinding, visit_tnodes,
 };
 pub use nominal::{ConstructorApplication, ConstructorMatch, NominalObservation};
 
