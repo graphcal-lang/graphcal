@@ -1,10 +1,10 @@
 //! Pure complex arithmetic and built-in kernels.
 
+use crate::runtime_value::RuntimeValue;
 use graphcal_compiler::builtin::ComplexFn;
 use graphcal_compiler::complex_value::ComplexValue;
 use graphcal_compiler::desugar::desugared_ast::BinOp;
 use graphcal_compiler::finite_value::FiniteQuantity;
-use graphcal_compiler::registry::runtime_value::{RuntimeValue, RuntimeValueKind};
 use num_rational::BigRational;
 use num_traits::{ToPrimitive, Zero};
 use thiserror::Error;
@@ -42,7 +42,7 @@ pub(super) enum ComplexEvalError {
     #[error("internal complex operation expected {expected}, got {actual}")]
     TypeMismatch {
         expected: &'static str,
-        actual: RuntimeValueKind,
+        actual: String,
     },
     #[error("internal complex arithmetic received unsupported operands for {operator:?}")]
     UnsupportedOperands { operator: BinOp },
@@ -259,7 +259,7 @@ fn quantity(value: &RuntimeValue) -> Result<f64, ComplexEvalError> {
         }
         other => Err(ComplexEvalError::TypeMismatch {
             expected: "a quantity",
-            actual: other.kind(),
+            actual: other.describe().to_string(),
         }),
     }
 }
@@ -269,7 +269,7 @@ fn complex(value: &RuntimeValue) -> Result<RawComplex, ComplexEvalError> {
         RuntimeValue::Complex(value) => Ok(RawComplex::new(value.re(), value.im())),
         other => Err(ComplexEvalError::TypeMismatch {
             expected: "a complex quantity",
-            actual: other.kind(),
+            actual: other.describe().to_string(),
         }),
     }
 }

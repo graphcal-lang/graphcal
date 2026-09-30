@@ -2,55 +2,12 @@
 
 use indexmap::IndexMap;
 
-use crate::complex_value::ComplexValue;
-use crate::finite_value::{FiniteQuantity, NonFiniteQuantity};
-use crate::registry::checked_type::{CheckedGenericArg, IndexTypeRef};
-use crate::resolved_name::{ResolvedIndexVariant, ResolvedStructTypeName};
-use crate::syntax::index_name::{IndexEntryKey, IndexVariantName};
-use crate::syntax::type_name::{ConstructorName, FieldName};
-
-/// The kind of a [`RuntimeValue`], used in type-mismatch error reporting.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum RuntimeValueKind {
-    Quantity,
-    Complex,
-    Bool,
-    Int,
-    Label {
-        index_name: IndexTypeRef,
-        variant: IndexVariantName,
-    },
-    Struct {
-        type_name: ResolvedStructTypeName,
-        constructor: ConstructorName,
-    },
-    Indexed {
-        index_name: IndexTypeRef,
-    },
-    CoordinateLabel {
-        index_name: IndexTypeRef,
-    },
-    Datetime,
-}
-
-impl std::fmt::Display for RuntimeValueKind {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Quantity => write!(f, "Quantity"),
-            Self::Complex => write!(f, "Complex"),
-            Self::Bool => write!(f, "Bool"),
-            Self::Int => write!(f, "Int"),
-            Self::Label {
-                index_name,
-                variant,
-            } => write!(f, "label `{index_name}#{variant}`"),
-            Self::Struct { constructor, .. } => write!(f, "struct `{constructor}`"),
-            Self::Indexed { index_name } => write!(f, "indexed value `{index_name}[...]`"),
-            Self::CoordinateLabel { index_name } => write!(f, "coordinate label `{index_name}`"),
-            Self::Datetime => write!(f, "Datetime"),
-        }
-    }
-}
+use graphcal_compiler::complex_value::ComplexValue;
+use graphcal_compiler::finite_value::{FiniteQuantity, NonFiniteQuantity};
+use graphcal_compiler::registry::checked_type::{CheckedGenericArg, IndexTypeRef};
+use graphcal_compiler::resolved_name::{ResolvedIndexVariant, ResolvedStructTypeName};
+use graphcal_compiler::syntax::index_name::{IndexEntryKey, IndexVariantName};
+use graphcal_compiler::syntax::type_name::{ConstructorName, FieldName};
 
 /// Error returned when a [`RuntimeValue`] accessor is called on an incompatible variant.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -59,8 +16,8 @@ pub struct RuntimeValueError {
     expected: &'static str,
     /// A description of what the value was being used for.
     context: String,
-    /// The actual variant encountered.
-    actual: RuntimeValueKind,
+    /// Description of the value actually encountered.
+    actual: String,
 }
 
 impl std::fmt::Display for RuntimeValueError {
@@ -122,7 +79,11 @@ impl RuntimeValue {
     }
 
     /// Construct a finite complex runtime value from Cartesian components.
-    pub fn complex(re: f64, im: f64) -> Result<Self, crate::complex_value::ComplexValueError> {
+    #[cfg(test)]
+    pub fn complex(
+        re: f64,
+        im: f64,
+    ) -> Result<Self, graphcal_compiler::complex_value::ComplexValueError> {
         ComplexValue::try_new(re, im).map(Self::Complex)
     }
 
@@ -139,20 +100,6 @@ impl RuntimeValue {
         })
     }
 
-    /// Construct a label value whose index is named directly, for tests.
-    #[cfg(any(test, feature = "test-identities"))]
-    #[must_use]
-    pub fn label_with_owner(
-        owner: crate::dag_id::DagId,
-        index_name: crate::syntax::index_name::IndexName,
-        variant: IndexVariantName,
-    ) -> Self {
-        Self::Label {
-            index_name: IndexTypeRef::with_owner(owner, index_name),
-            variant,
-        }
-    }
-
     /// Construct a module-aware label value from a resolved index-variant reference.
     #[must_use]
     pub fn resolved_label(resolved: &ResolvedIndexVariant) -> Self {
@@ -163,11 +110,11 @@ impl RuntimeValue {
     }
 
     /// Construct a struct value whose type is named directly, for tests.
-    #[cfg(any(test, feature = "test-identities"))]
+    #[cfg(test)]
     #[must_use]
     pub const fn struct_with_owner(
-        owner: crate::dag_id::DagId,
-        type_name: crate::syntax::type_name::StructTypeName,
+        owner: graphcal_compiler::dag_id::DagId,
+        type_name: graphcal_compiler::syntax::type_name::StructTypeName,
         constructor: ConstructorName,
         fields: IndexMap<FieldName, Self>,
     ) -> Self {
@@ -180,11 +127,11 @@ impl RuntimeValue {
     }
 
     /// Construct an indexed value whose index is named directly, for tests.
-    #[cfg(any(test, feature = "test-identities"))]
+    #[cfg(test)]
     #[must_use]
     pub fn indexed_with_owner(
-        owner: crate::dag_id::DagId,
-        index_name: crate::syntax::index_name::IndexName,
+        owner: graphcal_compiler::dag_id::DagId,
+        index_name: graphcal_compiler::syntax::index_name::IndexName,
         entries: IndexMap<IndexEntryKey, Self>,
     ) -> Self {
         Self::Indexed {
@@ -193,37 +140,10 @@ impl RuntimeValue {
         }
     }
 
-    /// Return the [`RuntimeValueKind`] of this value.
+    /// Describe this value's variant (not its contents) for diagnostics.
     #[must_use]
-    pub fn kind(&self) -> RuntimeValueKind {
-        match self {
-            Self::Quantity(_) => RuntimeValueKind::Quantity,
-            Self::Complex(_) => RuntimeValueKind::Complex,
-            Self::Bool(_) => RuntimeValueKind::Bool,
-            Self::Int(_) => RuntimeValueKind::Int,
-            Self::Label {
-                index_name,
-                variant,
-            } => RuntimeValueKind::Label {
-                index_name: index_name.clone(),
-                variant: variant.clone(),
-            },
-            Self::Struct {
-                type_name,
-                constructor,
-                ..
-            } => RuntimeValueKind::Struct {
-                type_name: type_name.clone(),
-                constructor: constructor.clone(),
-            },
-            Self::Indexed { index_name, .. } => RuntimeValueKind::Indexed {
-                index_name: index_name.clone(),
-            },
-            Self::CoordinateLabel { index_name, .. } => RuntimeValueKind::CoordinateLabel {
-                index_name: index_name.clone(),
-            },
-            Self::Datetime(_) => RuntimeValueKind::Datetime,
-        }
+    pub const fn describe(&self) -> RuntimeValueDescription<'_> {
+        RuntimeValueDescription(self)
     }
 
     /// Extract quantity value, returning a structured error if this is not a quantity.
@@ -234,19 +154,7 @@ impl RuntimeValue {
             other => Err(RuntimeValueError {
                 expected: "quantity",
                 context: context.to_string(),
-                actual: other.kind(),
-            }),
-        }
-    }
-
-    /// Extract a complex value, returning a structured error for another variant.
-    pub fn expect_complex(&self, context: &str) -> Result<ComplexValue, RuntimeValueError> {
-        match self {
-            Self::Complex(value) => Ok(*value),
-            other => Err(RuntimeValueError {
-                expected: "complex quantity",
-                context: context.to_string(),
-                actual: other.kind(),
+                actual: other.describe().to_string(),
             }),
         }
     }
@@ -259,18 +167,46 @@ impl RuntimeValue {
             other => Err(RuntimeValueError {
                 expected: "Bool",
                 context: context.to_string(),
-                actual: other.kind(),
+                actual: other.describe().to_string(),
             }),
+        }
+    }
+}
+
+/// Diagnostic rendering of a [`RuntimeValue`]'s variant, from
+/// [`RuntimeValue::describe`].
+#[derive(Debug, Clone, Copy)]
+pub struct RuntimeValueDescription<'a>(&'a RuntimeValue);
+
+impl std::fmt::Display for RuntimeValueDescription<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.0 {
+            RuntimeValue::Quantity(_) => write!(f, "Quantity"),
+            RuntimeValue::Complex(_) => write!(f, "Complex"),
+            RuntimeValue::Bool(_) => write!(f, "Bool"),
+            RuntimeValue::Int(_) => write!(f, "Int"),
+            RuntimeValue::Label {
+                index_name,
+                variant,
+            } => write!(f, "label `{index_name}#{variant}`"),
+            RuntimeValue::Struct { constructor, .. } => write!(f, "struct `{constructor}`"),
+            RuntimeValue::Indexed { index_name, .. } => {
+                write!(f, "indexed value `{index_name}[...]`")
+            }
+            RuntimeValue::CoordinateLabel { index_name, .. } => {
+                write!(f, "coordinate label `{index_name}`")
+            }
+            RuntimeValue::Datetime(_) => write!(f, "Datetime"),
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::dag_id::DagId;
-    use crate::registry::checked_type::IndexTypeRef;
-    use crate::registry::runtime_value::RuntimeValue;
-    use crate::syntax::index_name::IndexName;
+    use crate::runtime_value::RuntimeValue;
+    use graphcal_compiler::dag_id::DagId;
+    use graphcal_compiler::registry::checked_type::IndexTypeRef;
+    use graphcal_compiler::syntax::index_name::IndexName;
 
     #[test]
     fn scalar_and_coordinate_ingress_reject_non_finite_values() {

@@ -842,16 +842,6 @@ role = "checking"
 
 [[module]]
 package = "compiler"
-path = ["registry", "runtime_value"]
-role = "contracts"
-
-[[module]]
-package = "compiler"
-path = ["registry", "runtime_value", "tests"]
-role = "contracts"
-
-[[module]]
-package = "compiler"
 path = ["registry", "time_scale"]
 role = "contracts"
 
@@ -2020,6 +2010,16 @@ role = "contracts"
 [[module]]
 package = "eval"
 path = ["constant_pools"]
+role = "contracts"
+
+[[module]]
+package = "eval"
+path = ["runtime_value"]
+role = "contracts"
+
+[[module]]
+package = "eval"
+path = ["runtime_value", "tests"]
 role = "contracts"
 
 [[module]]

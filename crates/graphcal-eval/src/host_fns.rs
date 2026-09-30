@@ -128,11 +128,9 @@ impl HostArray {
 /// declared signature determines its semantic kind and therefore its encoding
 /// (`1.0`/`0.0` for `Bool`, exactly-representable integers for `Int`). Arrays
 /// cross as shaped, row-major dense values. The evaluator
-/// converts to and from typed [`RuntimeValue`]s per the declared signature — a
+/// converts to and from typed runtime values per the declared signature — a
 /// closure returning the wrong shape is reported as a plugin failure, never
 /// reinterpreted.
-///
-/// [`RuntimeValue`]: graphcal_compiler::registry::runtime_value::RuntimeValue
 #[derive(Debug, Clone, PartialEq)]
 pub enum HostFnValue {
     /// One raw `f64` ABI slot; the function signature supplies its semantic kind.

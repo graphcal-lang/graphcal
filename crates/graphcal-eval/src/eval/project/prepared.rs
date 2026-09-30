@@ -4,6 +4,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use crate::runtime_value::RuntimeValue;
 use graphcal_compiler::declaration_category::DeclCategory;
 use graphcal_compiler::desugar::desugared_ast::{Expr, ExprKind as AstExprKind};
 use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
@@ -13,7 +14,6 @@ use graphcal_compiler::hir::{
 use graphcal_compiler::ir::static_interface::StaticInputKind;
 use graphcal_compiler::registry::checked_type::CheckedType;
 use graphcal_compiler::registry::error::GraphcalError;
-use graphcal_compiler::registry::runtime_value::RuntimeValue;
 use graphcal_compiler::registry::time_scale::TimeScale;
 use graphcal_compiler::registry::types::{ConcreteIndexKind, IndexKind};
 use graphcal_compiler::resolve::ModuleResolver;

@@ -2,8 +2,8 @@ use graphcal_compiler::desugar::desugared_ast::BinOp;
 use graphcal_compiler::exact_rational::ExactRational;
 use graphcal_compiler::syntax::span::Span;
 
+use crate::runtime_value::RuntimeValue;
 use graphcal_compiler::registry::error::GraphcalError;
-use graphcal_compiler::registry::runtime_value::RuntimeValue;
 
 use super::EvalContext;
 

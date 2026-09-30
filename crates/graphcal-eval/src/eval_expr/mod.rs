@@ -15,8 +15,8 @@ mod work_budget;
 use graphcal_compiler::registry::checked_type::IndexTypeRef;
 
 pub use crate::constant_pools::RuntimeValueMap;
+pub use crate::runtime_value::RuntimeValue;
 pub use context::{EvalContext, EvalSession};
-pub use graphcal_compiler::registry::runtime_value::RuntimeValue;
 #[cfg(test)]
 pub use hir_eval::{HirLocalValueMap, eval_subtree_for_test};
 pub use hir_eval::{eval_root, eval_root_with_presentation};

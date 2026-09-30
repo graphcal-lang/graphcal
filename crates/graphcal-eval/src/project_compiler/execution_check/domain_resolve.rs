@@ -289,7 +289,7 @@ fn domain_bound_value_error(
         message: format!(
             "{} domain bound on `{display_name}` must evaluate to {expected}, got {}",
             bound.kind,
-            actual.kind()
+            actual.describe()
         ),
         src: src.clone(),
         span: bound.value.span.into(),

@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use crate::runtime_value::RuntimeValue;
 use graphcal_compiler::builtin::{
     AggregationFn, BuiltinFn, ConversionFn, DatetimeConstructorFn, DatetimeField, DatetimeFn,
     DatetimeFromNumericFn, DatetimeToNumericFn, KeyAggregation, ScalarFn, ValueAggregation,
@@ -9,7 +10,6 @@ use graphcal_compiler::declaration_category::DeclCategory;
 use graphcal_compiler::hir::{self, FunctionRef};
 use graphcal_compiler::registry::checked_type::{CheckedType, IndexTypeRef, StructTypeRef};
 use graphcal_compiler::registry::error::GraphcalError;
-use graphcal_compiler::registry::runtime_value::RuntimeValue;
 use graphcal_compiler::registry::time_scale::TimeScale;
 use graphcal_compiler::registry::types::{ConcreteIndexKind, IndexDef};
 use graphcal_compiler::syntax::index_name::IndexEntryKey;

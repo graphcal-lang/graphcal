@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 
 use crate::presentation_evidence::PresentationInstance;
-use graphcal_compiler::registry::runtime_value::RuntimeValue;
+use crate::runtime_value::RuntimeValue;
 
 use graphcal_compiler::resolved_name::ResolvedDeclName;
 

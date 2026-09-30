@@ -31,4 +31,5 @@ pub mod presentation_evidence;
 pub mod project_bundle;
 pub mod project_compiler;
 pub(crate) mod runtime_presentation;
+pub(crate) mod runtime_value;
 mod static_incompleteness;

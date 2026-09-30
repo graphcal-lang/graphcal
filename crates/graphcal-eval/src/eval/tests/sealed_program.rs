@@ -4,9 +4,9 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use crate::runtime_value::RuntimeValue;
 use graphcal_compiler::dag_id::DagId;
 use graphcal_compiler::ir::imported_binding::{ImportedBinding, ImportedValueKind};
-use graphcal_compiler::registry::runtime_value::RuntimeValue;
 use graphcal_compiler::resolved_name::ResolvedDeclName;
 use graphcal_compiler::syntax::decl_name::DeclName;
 use graphcal_compiler::syntax::module_name::ScopedName;

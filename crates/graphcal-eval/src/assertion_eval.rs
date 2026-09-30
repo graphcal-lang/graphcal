@@ -1,11 +1,11 @@
 //! Assertion semantics over an expression-evaluation callback, independent of frame adapters.
 
 use crate::eval::types::AssertResult;
+use crate::runtime_value::RuntimeValue;
 use graphcal_compiler::assertion_expectation::{ExpectedFail, ExpectedFailKey};
 use graphcal_compiler::hir::expr::{AssertBody, Expr};
 use graphcal_compiler::registry::checked_type::IndexTypeRef;
 use graphcal_compiler::registry::error::GraphcalError;
-use graphcal_compiler::registry::runtime_value::RuntimeValue;
 use graphcal_compiler::syntax::index_name::IndexEntryKey;
 use graphcal_compiler::tir::typed::evaluation_unit::{AssertionOperands, Scoped};
 use indexmap::IndexMap;
