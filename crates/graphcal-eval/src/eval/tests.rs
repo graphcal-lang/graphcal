@@ -7418,30 +7418,24 @@ fn eval_index_access_rejects_runtime_owner_mismatch_with_same_leaf_variant() {
         loaded_file_dag_id(&project, "b.gcl"),
         graphcal_compiler::syntax::index_name::IndexName::expect_valid("Phase"),
     );
-    let mut entries = indexmap::IndexMap::new();
-    entries.insert(
-        graphcal_compiler::syntax::index_name::IndexEntryKey::named(
-            graphcal_compiler::syntax::index_name::IndexVariantName::expect_valid("Burn"),
-        ),
-        crate::eval_expr::RuntimeValue::quantity(99.0).unwrap(),
-    );
-    entries.insert(
-        graphcal_compiler::syntax::index_name::IndexEntryKey::named(
-            graphcal_compiler::syntax::index_name::IndexVariantName::expect_valid("Coast"),
-        ),
-        crate::eval_expr::RuntimeValue::quantity(100.0).unwrap(),
+    let b_axis = crate::runtime_value::IndexAxis::resolve(
+        &tir,
+        &graphcal_compiler::registry::checked_type::IndexTypeRef::from_resolved(b_owner),
+    )
+    .unwrap();
+    let entries = crate::runtime_value::IndexedValue::for_test(
+        b_axis,
+        vec![
+            crate::eval_expr::RuntimeValue::quantity(99.0).unwrap(),
+            crate::eval_expr::RuntimeValue::quantity(100.0).unwrap(),
+        ],
     );
     let values = HashMap::from([(
         tir.root()
             .lookup_decl_identity(&scoped_name("series"))
             .into_bound()
             .unwrap(),
-        crate::eval_expr::RuntimeValue::Indexed {
-            index_name: graphcal_compiler::registry::checked_type::IndexTypeRef::from_resolved(
-                b_owner,
-            ),
-            entries,
-        },
+        crate::eval_expr::RuntimeValue::Indexed(entries),
     )]);
     let src = &project.root_file().named_source();
     let ctx = crate::eval_expr::EvalSession::provisional_constants(
@@ -10090,4 +10084,31 @@ fn assumes_targets_resolve_through_semantic_instances() {
         .collect::<Vec<_>>();
     assumers.sort();
     assert_eq!(assumers, ["dependent", "y_out"]);
+}
+
+#[test]
+fn index_axis_resolves_concrete_definitions_from_checked_tir() {
+    use crate::runtime_value::IndexAxis;
+    use graphcal_compiler::registry::checked_type::IndexTypeRef;
+    use graphcal_compiler::syntax::index_name::IndexName;
+
+    let source = "index Mode = { Idle, Run }; index Step = range(0.0 s, 2.0 s, step: 1.0 s);";
+    let tir = compile_to_tir(source, "axis.gcl").unwrap();
+    let index =
+        |name| IndexTypeRef::with_owner(tir.root_dag_id().clone(), IndexName::expect_valid(name));
+
+    let mode = index("Mode");
+    let axis = IndexAxis::resolve(&tir, &mode).unwrap();
+    assert_eq!(axis.index(), &mode);
+    assert_eq!(axis.len(), 2);
+    assert!(matches!(
+        axis.kind(),
+        graphcal_compiler::registry::index::ConcreteIndexKind::Named { .. }
+    ));
+
+    let axis = IndexAxis::resolve(&tir, &index("Step")).unwrap();
+    assert_eq!(axis.len(), 3);
+    assert!(axis.coordinate_data().is_some());
+
+    assert!(IndexAxis::resolve(&tir, &index("Missing")).is_none());
 }

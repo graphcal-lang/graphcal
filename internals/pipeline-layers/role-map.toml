@@ -1954,6 +1954,11 @@ role = "interpreter"
 
 [[module]]
 package = "eval"
+path = ["eval_expr", "linear_algebra", "tests"]
+role = "interpreter"
+
+[[module]]
+package = "eval"
 path = ["eval_expr", "linear_algebra_lu"]
 role = "interpreter"
 
@@ -2020,6 +2025,36 @@ role = "contracts"
 [[module]]
 package = "eval"
 path = ["runtime_value", "tests"]
+role = "contracts"
+
+[[module]]
+package = "eval"
+path = ["runtime_value", "dense_array"]
+role = "contracts"
+
+[[module]]
+package = "eval"
+path = ["runtime_value", "dense_array", "tests"]
+role = "contracts"
+
+[[module]]
+package = "eval"
+path = ["runtime_value", "index_axis"]
+role = "contracts"
+
+[[module]]
+package = "eval"
+path = ["runtime_value", "index_axis", "tests"]
+role = "contracts"
+
+[[module]]
+package = "eval"
+path = ["runtime_value", "indexed"]
+role = "contracts"
+
+[[module]]
+package = "eval"
+path = ["runtime_value", "indexed", "tests"]
 role = "contracts"
 
 [[module]]

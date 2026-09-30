@@ -6,8 +6,15 @@ use graphcal_compiler::complex_value::ComplexValue;
 use graphcal_compiler::finite_value::{FiniteQuantity, NonFiniteQuantity};
 use graphcal_compiler::registry::checked_type::{CheckedGenericArg, IndexTypeRef};
 use graphcal_compiler::resolved_name::{ResolvedIndexVariant, ResolvedStructTypeName};
-use graphcal_compiler::syntax::index_name::{IndexEntryKey, IndexVariantName};
+use graphcal_compiler::syntax::index_name::IndexVariantName;
 use graphcal_compiler::syntax::type_name::{ConstructorName, FieldName};
+
+pub mod dense_array;
+mod index_axis;
+mod indexed;
+
+pub use index_axis::IndexAxis;
+pub use indexed::IndexedValue;
 
 /// Error returned when a [`RuntimeValue`] accessor is called on an incompatible variant.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -56,11 +63,8 @@ pub enum RuntimeValue {
         generic_args: Vec<CheckedGenericArg>,
         fields: IndexMap<FieldName, Self>,
     },
-    /// An indexed collection keyed by named labels or typed positions.
-    Indexed {
-        index_name: IndexTypeRef,
-        entries: IndexMap<IndexEntryKey, Self>,
-    },
+    /// One entry per key of a concrete index axis.
+    Indexed(IndexedValue<Self>),
     /// A coordinate label during coordinate-index iteration.
     /// Carries the index identity, position, and SI value.
     CoordinateLabel {
@@ -126,20 +130,6 @@ impl RuntimeValue {
         }
     }
 
-    /// Construct an indexed value whose index is named directly, for tests.
-    #[cfg(test)]
-    #[must_use]
-    pub fn indexed_with_owner(
-        owner: graphcal_compiler::dag_id::DagId,
-        index_name: graphcal_compiler::syntax::index_name::IndexName,
-        entries: IndexMap<IndexEntryKey, Self>,
-    ) -> Self {
-        Self::Indexed {
-            index_name: IndexTypeRef::with_owner(owner, index_name),
-            entries,
-        }
-    }
-
     /// Describe this value's variant (not its contents) for diagnostics.
     #[must_use]
     pub const fn describe(&self) -> RuntimeValueDescription<'_> {
@@ -190,8 +180,8 @@ impl std::fmt::Display for RuntimeValueDescription<'_> {
                 variant,
             } => write!(f, "label `{index_name}#{variant}`"),
             RuntimeValue::Struct { constructor, .. } => write!(f, "struct `{constructor}`"),
-            RuntimeValue::Indexed { index_name, .. } => {
-                write!(f, "indexed value `{index_name}[...]`")
+            RuntimeValue::Indexed(indexed) => {
+                write!(f, "indexed value `{}[...]`", indexed.index())
             }
             RuntimeValue::CoordinateLabel { index_name, .. } => {
                 write!(f, "coordinate label `{index_name}`")

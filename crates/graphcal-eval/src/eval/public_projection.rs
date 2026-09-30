@@ -10,8 +10,10 @@ use crate::runtime_value::RuntimeValue;
 use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
 use graphcal_compiler::registry::checked_type::{CheckedType, IndexTypeRef};
 use graphcal_compiler::registry::error::GraphcalError;
+use graphcal_compiler::registry::index::CoordinateIndexData;
 use graphcal_compiler::registry::types::{FiniteIndex, IndexDef};
 use graphcal_compiler::syntax::index_name::IndexEntryKey;
+use graphcal_compiler::syntax::non_empty::NonEmpty;
 
 use super::display::{format_coordinate, format_coordinate_exact};
 use super::types::{DisplayUnit, Value};
@@ -299,42 +301,31 @@ fn project_runtime_value(
             })
         }
         (
-            RuntimeValue::Indexed {
-                index_name,
-                entries,
-            },
+            RuntimeValue::Indexed(indexed),
             CheckedType::Indexed {
                 element,
                 index: declared_index,
             },
         ) => {
-            let projection_index = require_matching_index(
-                runtime,
-                index_name,
-                declared_type,
-                declared_index,
-                tir,
-                src,
-            )?;
-            let expected_keys = projection_index.entry_keys();
-            if entries.len() != expected_keys.len()
-                || entries
-                    .keys()
-                    .zip(&expected_keys)
-                    .any(|(actual, expected)| actual != expected)
-            {
+            // The entry keys are the axis's own keys by construction, so only
+            // the axis identity is compared with the checked type.
+            let index_name = indexed.index();
+            if !index_name.matches_ref(declared_index) {
                 return Err(projection_error(
                     runtime,
                     declared_type,
-                    "runtime indexed keys or their order do not match the checked index",
+                    format!(
+                        "runtime index `{index_name}` does not match checked index `{declared_index}`"
+                    ),
                     tir,
                     src,
                 ));
             }
-            let entry_display_names = projection_index
-                .declared_definition()
-                .and_then(|definition| coordinate_entry_display_names(definition, entries));
-            let projected_entries = entries
+            let entry_display_names = indexed
+                .axis()
+                .coordinate_data()
+                .map(|data| coordinate_entry_display_names(data, indexed.axis().keys()));
+            let projected_entries = indexed
                 .iter()
                 .map(|(key, entry)| {
                     EvaluatedValue::new(entry, element)
@@ -472,22 +463,13 @@ fn project_runtime_value(
 }
 
 fn coordinate_entry_display_names(
-    definition: &IndexDef,
-    entries: &IndexMap<graphcal_compiler::syntax::index_name::IndexEntryKey, RuntimeValue>,
-) -> Option<IndexMap<graphcal_compiler::syntax::index_name::IndexEntryKey, String>> {
-    if !definition.is_coordinate() {
-        return None;
-    }
-    let labels = entries
-        .keys()
+    data: &CoordinateIndexData,
+    keys: &NonEmpty<IndexEntryKey>,
+) -> IndexMap<IndexEntryKey, String> {
+    let labels = keys
+        .iter()
         .enumerate()
-        .map(|(position, key)| {
-            (
-                key.clone(),
-                position,
-                format_coordinate(definition, position),
-            )
-        })
+        .map(|(position, key)| (key.clone(), position, format_coordinate(data, position)))
         .collect::<Vec<_>>();
     let mut seen = HashSet::new();
     let duplicates = labels
@@ -495,24 +477,22 @@ fn coordinate_entry_display_names(
         .filter_map(|(_, _, label)| (!seen.insert(label.clone())).then_some(label.clone()))
         .collect::<HashSet<_>>();
     let mut used_display_names = HashSet::new();
-    Some(
-        labels
-            .into_iter()
-            .map(|(key, position, label)| {
-                let candidate = if duplicates.contains(&label) {
-                    format_coordinate_exact(definition, position)
-                } else {
-                    label
-                };
-                let display = if used_display_names.insert(candidate.clone()) {
-                    candidate
-                } else {
-                    format!("{candidate} [#{position}]")
-                };
-                (key, display)
-            })
-            .collect(),
-    )
+    labels
+        .into_iter()
+        .map(|(key, position, label)| {
+            let candidate = if duplicates.contains(&label) {
+                format_coordinate_exact(data, position)
+            } else {
+                label
+            };
+            let display = if used_display_names.insert(candidate.clone()) {
+                candidate
+            } else {
+                format!("{candidate} [#{position}]")
+            };
+            (key, display)
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -623,19 +603,11 @@ mod tests {
             element: Box::new(element),
             index: index.clone(),
         };
-        let runtime = RuntimeValue::Indexed {
-            index_name: index.clone(),
-            entries: IndexMap::from([
-                (
-                    IndexEntryKey::position(0),
-                    RuntimeValue::quantity(1.0).unwrap(),
-                ),
-                (
-                    IndexEntryKey::position(1),
-                    RuntimeValue::quantity(2.0).unwrap(),
-                ),
-            ]),
-        };
+        let runtime =
+            RuntimeValue::Indexed(crate::runtime_value::IndexedValue::finite_for_test(vec![
+                RuntimeValue::quantity(1.0).unwrap(),
+                RuntimeValue::quantity(2.0).unwrap(),
+            ]));
 
         let projected = EvaluatedValue::new(&runtime, &declared)
             .project(&tir, &src)

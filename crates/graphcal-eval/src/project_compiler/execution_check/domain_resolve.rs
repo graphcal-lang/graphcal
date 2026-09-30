@@ -768,8 +768,8 @@ fn check_const_struct_field_constraints(
             }
             Ok(())
         }
-        RuntimeValue::Indexed { entries, .. } => {
-            for (variant, entry) in entries {
+        RuntimeValue::Indexed(entries) => {
+            for (variant, entry) in entries.iter() {
                 check_const_struct_field_constraints(
                     entry,
                     &format!("{decl_name}.{variant}"),
@@ -791,7 +791,7 @@ fn format_runtime_value(rv: &RuntimeValue) -> String {
         RuntimeValue::Quantity(v) => graphcal_compiler::registry::format::format_number(v.get()),
         RuntimeValue::Int(i) => format!("{i}"),
         RuntimeValue::Datetime(epoch) => epoch.to_string(),
-        RuntimeValue::Indexed { entries, .. } => {
+        RuntimeValue::Indexed(entries) => {
             // Show the first violating entry's value if recoverable; otherwise summary.
             let parts: Vec<String> = entries
                 .iter()

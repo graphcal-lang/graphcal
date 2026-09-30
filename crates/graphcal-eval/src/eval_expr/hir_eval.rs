@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use crate::runtime_value::RuntimeValue;
+use crate::runtime_value::{IndexAxis, IndexedValue, RuntimeValue};
 use graphcal_compiler::builtin::{
     AggregationFn, BuiltinFn, ConversionFn, DatetimeConstructorFn, DatetimeField, DatetimeFn,
     DatetimeFromNumericFn, DatetimeToNumericFn, KeyAggregation, ScalarFn, ValueAggregation,
@@ -442,8 +442,9 @@ fn runtime_value_tree_node_count(value: &RuntimeValue) -> usize {
             .values()
             .map(runtime_value_tree_node_count)
             .fold(1, usize::saturating_add),
-        RuntimeValue::Indexed { entries, .. } => entries
+        RuntimeValue::Indexed(entries) => entries
             .values()
+            .iter()
             .map(runtime_value_tree_node_count)
             .fold(1, usize::saturating_add),
         _ => 1,
@@ -741,22 +742,16 @@ fn eval_fn_call(
         }
         BuiltinFn::Aggregation(kind) => {
             let arg_val = eval_value(value_arg(&args[0], ctx)?, values, local_values, ctx)?;
-            let RuntimeValue::Indexed {
-                index_name,
-                entries,
-            } = arg_val
-            else {
+            let RuntimeValue::Indexed(indexed) = arg_val else {
                 return Err(ctx.internal_error(
                     format!("{}() received a non-indexed argument", name.as_str()),
                     arg_span(&args[0]),
                 ));
             };
             match kind {
-                AggregationFn::Key(function) => {
-                    eval_extremum_key(function, &index_name, &entries, span, ctx)
-                }
+                AggregationFn::Key(function) => eval_extremum_key(function, &indexed, span, ctx),
                 AggregationFn::Value(function) => {
-                    eval_aggregation_fn(function, &entries, span, ctx.src)
+                    eval_aggregation_fn(function, &indexed, span, ctx.src)
                 }
             }
         }
@@ -980,12 +975,11 @@ fn eval_key_form(
 /// key as the matching key runtime value for the reduced axis.
 fn eval_extremum_key(
     kind: KeyAggregation,
-    index_name: &IndexTypeRef,
-    entries: &IndexMap<IndexEntryKey, RuntimeValue>,
+    indexed: &IndexedValue<RuntimeValue>,
     span: Span,
     ctx: &EvalContext<'_>,
 ) -> Result<RuntimeValue, GraphcalError> {
-    let entry_key = super::aggregations::extremum_entry_key(kind, entries).map_err(|error| {
+    let entry_key = super::aggregations::extremum_entry_key(kind, indexed).map_err(|error| {
         let message = error.to_string();
         if error.is_internal_invariant() {
             ctx.internal_error(message, span)
@@ -993,7 +987,7 @@ fn eval_extremum_key(
             ctx.eval_error(message, span)
         }
     })?;
-    runtime_key_for_entry(index_name, &entry_key, span, ctx)
+    runtime_key_for_entry(indexed.index(), &entry_key, span, ctx)
 }
 
 /// Reify an [`IndexEntryKey`] of `index_name` as the key runtime value:
@@ -1052,11 +1046,11 @@ fn runtime_key_for_entry(
 
 fn eval_aggregation_fn(
     kind: ValueAggregation,
-    entries: &IndexMap<IndexEntryKey, RuntimeValue>,
+    indexed: &IndexedValue<RuntimeValue>,
     span: Span,
     src: &NamedSource<Arc<String>>,
 ) -> Result<RuntimeValue, GraphcalError> {
-    super::aggregations::aggregate_indexed_values(kind, entries).map_err(|error| {
+    super::aggregations::aggregate_indexed_values(kind, indexed).map_err(|error| {
         let message = error.to_string();
         if error.is_internal_invariant() {
             GraphcalError::InternalError {
@@ -1254,21 +1248,6 @@ fn eval_datetime_constructor(
     }
 }
 
-/// The concrete index an extern call bound to one of its index variables:
-/// the index identity plus its typed entry keys, in
-/// declaration order. Result arrays are rebuilt over exactly these keys.
-#[derive(Clone)]
-struct BoundExternIndex {
-    index_name: graphcal_compiler::registry::checked_type::IndexTypeRef,
-    keys: Vec<IndexEntryKey>,
-}
-
-impl BoundExternIndex {
-    fn matches(&self, other: &Self) -> bool {
-        self.index_name.matches_ref(&other.index_name) && self.keys == other.keys
-    }
-}
-
 enum FlattenedExternArrayValues {
     Quantity(Vec<f64>),
     Bool(Vec<bool>),
@@ -1288,7 +1267,7 @@ impl FlattenedExternArrayValues {
 }
 
 struct FlattenedExternArray {
-    axes: Vec<BoundExternIndex>,
+    axes: Vec<IndexAxis>,
     values: FlattenedExternArrayValues,
 }
 
@@ -1313,15 +1292,10 @@ fn flatten_extern_array(
             axes: Vec::new(),
             values: FlattenedExternArrayValues::Int(vec![*value]),
         }),
-        (
-            _,
-            RuntimeValue::Indexed {
-                index_name,
-                entries,
-            },
-        ) => {
-            let mut children = entries
+        (_, RuntimeValue::Indexed(indexed)) => {
+            let mut children = indexed
                 .values()
+                .iter()
                 .map(|value| flatten_extern_array(value, expected, ctx, span))
                 .collect::<Result<Vec<_>, _>>()?;
             let first = children.first().ok_or_else(|| {
@@ -1347,10 +1321,7 @@ fn flatten_extern_array(
                 })?;
             }
             let mut axes = Vec::with_capacity(first.axes.len().saturating_add(1));
-            axes.push(BoundExternIndex {
-                index_name: index_name.clone(),
-                keys: entries.keys().cloned().collect(),
-            });
+            axes.push(indexed.axis().clone());
             axes.extend(first.axes);
             Ok(FlattenedExternArray {
                 axes,
@@ -1370,7 +1341,7 @@ fn flatten_extern_array(
 }
 
 fn rebuild_extern_array<T>(
-    bound_axes: &[BoundExternIndex],
+    bound_axes: &[IndexAxis],
     values: &[T],
     make_leaf: impl Fn(&T) -> RuntimeValue + Copy,
     ctx: &EvalContext<'_>,
@@ -1386,30 +1357,21 @@ fn rebuild_extern_array<T>(
         Some((axis, remaining)) => {
             let child_len = remaining
                 .iter()
-                .try_fold(1_usize, |size, axis| size.checked_mul(axis.keys.len()));
+                .try_fold(1_usize, |size, axis| size.checked_mul(axis.len()));
             let Some(child_len) = child_len else {
                 return Err(ctx.eval_error("extern result shape cardinality overflowed", span));
             };
             let chunks = values.chunks_exact(child_len);
-            if !chunks.remainder().is_empty() || chunks.len() != axis.keys.len() {
+            if !chunks.remainder().is_empty() || chunks.len() != axis.len() {
                 return Err(
                     ctx.internal_error("extern result buffer did not match its bound shape", span)
                 );
             }
-            let values = axis
-                .keys
-                .iter()
-                .cloned()
-                .zip(chunks)
-                .map(|(key, values)| {
-                    rebuild_extern_array(remaining, values, make_leaf, ctx, span)
-                        .map(|value| (key, value))
-                })
-                .collect::<Result<IndexMap<_, _>, _>>()?;
-            Ok(RuntimeValue::Indexed {
-                index_name: axis.index_name.clone(),
-                entries: values,
+            let chunks = chunks.collect::<Vec<_>>();
+            IndexedValue::try_from_axis(axis.clone(), |position, _| {
+                rebuild_extern_array(remaining, chunks[position], make_leaf, ctx, span)
             })
+            .map(RuntimeValue::Indexed)
         }
     }
 }
@@ -1481,7 +1443,7 @@ fn eval_extern_fn(
 
     let mut bound_indexes: std::collections::HashMap<
         graphcal_compiler::function_signature::IndexBinder,
-        BoundExternIndex,
+        IndexAxis,
     > = std::collections::HashMap::new();
     let mut arg_values: Vec<HostFnValue> = Vec::with_capacity(args.len());
     for (param, arg) in signature.params().iter().zip(args) {
@@ -1549,7 +1511,7 @@ fn eval_extern_fn(
                         std::collections::hash_map::Entry::Occupied(_) => {}
                     }
                 }
-                let shape = flattened.axes.iter().map(|axis| axis.keys.len()).collect();
+                let shape = flattened.axes.iter().map(IndexAxis::len).collect();
                 let encoded_values = match flattened.values {
                     FlattenedExternArrayValues::Quantity(values) => values
                         .into_iter()
@@ -1644,7 +1606,7 @@ fn eval_extern_fn(
                     })
                 })
                 .collect::<Result<Vec<_>, _>>()?;
-            let expected_shape = axes.iter().map(|axis| axis.keys.len()).collect::<Vec<_>>();
+            let expected_shape = axes.iter().map(IndexAxis::len).collect::<Vec<_>>();
             if array.shape() != expected_shape {
                 return Err(ctx.eval_error(
                     format!(
@@ -1856,6 +1818,11 @@ fn eval_constructor_call(
     ))
 }
 
+/// The concrete axis of `index_ref`, when it has one.
+fn index_axis_for_ref(index_ref: &IndexTypeRef, ctx: &EvalContext<'_>) -> Option<IndexAxis> {
+    IndexAxis::resolve(ctx.tir, index_ref)
+}
+
 fn index_def_for_ref<'a>(
     index_ref: &IndexTypeRef,
     ctx: &'a EvalContext<'_>,
@@ -1936,14 +1903,15 @@ fn eval_map_literal(
         return Err(ctx.internal_error("map has no retained indexed type", map_span));
     };
     let idx_name = index.clone();
+    let axis = index_axis_for_ref(&idx_name, ctx).ok_or_else(|| {
+        ctx.internal_error(
+            format!("unknown index `{idx_name}`"),
+            map_entry_key_span(first_key),
+        )
+    })?;
+    let mut presentations = IndexMap::new();
 
     if arity == 1 {
-        let idx_def = index_def_for_ref(&idx_name, ctx).ok_or_else(|| {
-            ctx.internal_error(
-                format!("unknown index `{idx_name}`"),
-                map_entry_key_span(first_key),
-            )
-        })?;
         let mut evaluated = IndexMap::new();
         for (key, _, value) in entries {
             let variant = map_entry_variant_for_axis(key, &idx_name, ctx)?;
@@ -1951,10 +1919,8 @@ fn eval_map_literal(
                 eval_texpr_evaluated(value, values, presentation_values, local_values, ctx)?;
             evaluated.insert(variant, value);
         }
-        let mut result = IndexMap::new();
-        let mut presentations = IndexMap::new();
-        for variant in idx_def.entry_keys() {
-            let evaluated = evaluated.swap_remove(&variant).ok_or_else(|| {
+        let result = IndexedValue::try_from_axis(axis, |_, variant| {
+            let evaluated = evaluated.swap_remove(variant).ok_or_else(|| {
                 ctx.internal_error(
                     format!(
                         "map literal for index `{idx_name}` is missing entry for variant `{variant}`"
@@ -1963,30 +1929,18 @@ fn eval_map_literal(
                 )
             })?;
             let (value, presentation) = evaluated.into_parts();
-            result.insert(variant.clone(), value);
             if !presentation.is_none() {
-                presentations.insert(variant, presentation);
+                presentations.insert(variant.clone(), presentation);
             }
-        }
+            Ok::<_, GraphcalError>(value)
+        })?;
         return Ok(EvaluatedRuntimeValue::new(
-            RuntimeValue::Indexed {
-                index_name: idx_name,
-                entries: result,
-            },
+            RuntimeValue::Indexed(result),
             PresentationInstance::entries(presentations),
         ));
     }
 
-    let idx_def = index_def_for_ref(&idx_name, ctx).ok_or_else(|| {
-        ctx.internal_error(
-            format!("unknown index `{idx_name}`"),
-            map_entry_key_span(first_key),
-        )
-    })?;
-    let variants = idx_def.entry_keys();
-    let mut outer = IndexMap::new();
-    let mut presentations = IndexMap::new();
-    for variant in &variants {
+    let outer = IndexedValue::try_from_axis(axis, |_, variant| {
         let mut sub_entries = Vec::new();
         for (first_entry_key, rest, value) in entries {
             if map_entry_variant_for_axis(first_entry_key, &idx_name, ctx)? != *variant {
@@ -2017,16 +1971,13 @@ fn eval_map_literal(
             ctx,
         )?;
         let (inner, presentation) = evaluated.into_parts();
-        outer.insert(variant.clone(), inner);
         if !presentation.is_none() {
             presentations.insert(variant.clone(), presentation);
         }
-    }
+        Ok::<_, GraphcalError>(inner)
+    })?;
     Ok(EvaluatedRuntimeValue::new(
-        RuntimeValue::Indexed {
-            index_name: idx_name,
-            entries: outer,
-        },
+        RuntimeValue::Indexed(outer),
         PresentationInstance::entries(presentations),
     ))
 }
@@ -2050,23 +2001,19 @@ fn eval_for_comp_bindings(
     let idx_name = index.clone();
     let error_span = binding.local.span;
 
-    let idx_def = index_def_for_ref(&idx_name, ctx)
+    let axis = index_axis_for_ref(&idx_name, ctx)
         .ok_or_else(|| ctx.internal_error(format!("unknown index `{idx_name}`"), error_span))?;
 
     let remaining = &bindings[1..];
-    let variants = idx_def.entry_keys();
-    let mut entries = IndexMap::new();
     let mut presentations = IndexMap::new();
     let mut inner_locals = local_values.child(Vec::new());
-    for (position, variant) in variants.iter().enumerate() {
-        let binding_value = match (idx_def.concrete(), variant) {
-            (Some(ConcreteIndexKind::Named { .. }), IndexEntryKey::Named(name)) => {
-                RuntimeValue::Label {
-                    index_name: idx_name.clone(),
-                    variant: name.clone(),
-                }
-            }
-            (Some(ConcreteIndexKind::Coordinate(data)), IndexEntryKey::Position(_)) => {
+    let entries = IndexedValue::try_from_axis(axis.clone(), |position, variant| {
+        let binding_value = match (axis.kind(), variant) {
+            (ConcreteIndexKind::Named { .. }, IndexEntryKey::Named(name)) => RuntimeValue::Label {
+                index_name: idx_name.clone(),
+                variant: name.clone(),
+            },
+            (ConcreteIndexKind::Coordinate(data), IndexEntryKey::Position(_)) => {
                 RuntimeValue::coordinate_label(
                     idx_name.clone(),
                     position,
@@ -2074,7 +2021,7 @@ fn eval_for_comp_bindings(
                 )
                 .map_err(|error| ctx.internal_error(error.to_string(), error_span))?
             }
-            (Some(ConcreteIndexKind::Finite { .. }), IndexEntryKey::Position(_)) => {
+            (ConcreteIndexKind::Finite { .. }, IndexEntryKey::Position(_)) => {
                 RuntimeValue::Int(i64::try_from(position).map_err(|_| {
                     ctx.internal_error(
                         format!("Fin position {position} is too large for i64"),
@@ -2082,10 +2029,9 @@ fn eval_for_comp_bindings(
                     )
                 })?)
             }
-            (None, _)
-            | (Some(ConcreteIndexKind::Named { .. }), IndexEntryKey::Position(_))
+            (ConcreteIndexKind::Named { .. }, IndexEntryKey::Position(_))
             | (
-                Some(ConcreteIndexKind::Coordinate(_) | ConcreteIndexKind::Finite { .. }),
+                ConcreteIndexKind::Coordinate(_) | ConcreteIndexKind::Finite { .. },
                 IndexEntryKey::Named(_),
             ) => {
                 return Err(ctx.internal_error(
@@ -2112,16 +2058,13 @@ fn eval_for_comp_bindings(
             )?
         };
         let (value, presentation) = evaluated.into_parts();
-        entries.insert(variant.clone(), value);
         if !presentation.is_none() {
             presentations.insert(variant.clone(), presentation);
         }
-    }
+        Ok::<_, GraphcalError>(value)
+    })?;
     Ok(EvaluatedRuntimeValue::new(
-        RuntimeValue::Indexed {
-            index_name: idx_name,
-            entries,
-        },
+        RuntimeValue::Indexed(entries),
         PresentationInstance::entries(presentations),
     ))
 }
@@ -2166,13 +2109,10 @@ fn eval_index_access(
     let mut current = base_value.as_ref();
     let mut selected_keys = Vec::with_capacity(args.len());
     for arg in args {
-        let RuntimeValue::Indexed {
-            index_name,
-            entries,
-        } = current
-        else {
+        let RuntimeValue::Indexed(indexed) = current else {
             return Err(ctx.eval_error("indexing a non-indexed value", span));
         };
+        let index_name = indexed.index();
         let entry_key = match arg {
             TIndexArg::Variant(variant) => {
                 ensure_index_ref_matches_resolved(
@@ -2271,7 +2211,7 @@ fn eval_index_access(
                 }
             }
         };
-        current = entries
+        current = indexed
             .get(&entry_key)
             .ok_or_else(|| ctx.eval_error(format!("index entry `{entry_key}` not found"), span))?;
         selected_keys.push(entry_key);
@@ -2302,18 +2242,10 @@ fn eval_scan(
 ) -> Result<EvaluatedRuntimeValue, GraphcalError> {
     let (source_val, source_presentation) =
         eval_texpr_evaluated(source, values, presentation_values, local_values, ctx)?.into_parts();
-    let RuntimeValue::Indexed {
-        index_name,
-        entries: source_entries,
-    } = source_val
-    else {
+    let RuntimeValue::Indexed(source_entries) = source_val else {
         return Err(ctx.eval_error("scan source must be an indexed value", source.span()));
     };
-    if source_entries
-        .values()
-        .next()
-        .is_some_and(|item| matches!(item, RuntimeValue::Indexed { .. }))
-    {
+    if matches!(source_entries.values().first(), RuntimeValue::Indexed(_)) {
         return Err(ctx.internal_error(
             "multi-axis source reached scan evaluation after rank-one type checking",
             source.span(),
@@ -2323,11 +2255,10 @@ fn eval_scan(
         eval_texpr_evaluated(init, values, presentation_values, local_values, ctx)?;
     let (_, initial_presentation) = evaluated_init.clone().into_parts();
     let mut accumulated = evaluated_init;
-    let mut result_entries = IndexMap::new();
     let mut presentations = IndexMap::new();
     let mut scan_locals = local_values.child(Vec::new());
-    for (variant, item) in &source_entries {
-        scan_locals.bind(acc.id, accumulated);
+    let result_entries = source_entries.try_map_ref(|variant, item| {
+        scan_locals.bind(acc.id, accumulated.clone());
         let item_presentation = source_presentation
             .project_indexes_ref(std::slice::from_ref(variant))
             .cloned()
@@ -2339,16 +2270,13 @@ fn eval_scan(
         accumulated = eval_texpr_evaluated(body, values, presentation_values, &scan_locals, ctx)?
             .with_default_presentation(&initial_presentation);
         let (value, evidence) = accumulated.clone().into_parts();
-        result_entries.insert(variant.clone(), value);
         if !evidence.is_none() {
             presentations.insert(variant.clone(), evidence);
         }
-    }
+        Ok::<_, GraphcalError>(value)
+    })?;
     Ok(EvaluatedRuntimeValue::new(
-        RuntimeValue::Indexed {
-            index_name,
-            entries: result_entries,
-        },
+        RuntimeValue::Indexed(result_entries),
         PresentationInstance::entries(presentations),
     ))
 }
@@ -2373,14 +2301,13 @@ fn eval_unfold(
         return Err(ctx.internal_error("unfold has no retained indexed type", expr.span()));
     };
     let index_ref = index.clone();
-    let idx_def = index_def_for_ref(&index_ref, ctx).ok_or_else(|| {
+    let index_axis = index_axis_for_ref(&index_ref, ctx).ok_or_else(|| {
         ctx.internal_error(
             format!("missing resolved unfold axis `{}`", axis.value),
             axis.span,
         )
     })?;
-    let variants = idx_def.entry_keys();
-    let coordinate_data = idx_def.coordinate_data().ok_or_else(|| {
+    let coordinate_data = index_axis.coordinate_data().ok_or_else(|| {
         ctx.eval_error(
             format!(
                 "unfold requires a coordinate index, but `{index_ref}` is not coordinate-valued"
@@ -2392,19 +2319,17 @@ fn eval_unfold(
         eval_texpr_evaluated(init, values, presentation_values, local_values, ctx)?;
     let mut previous_state = evaluated_init.clone();
     let (init_value, init_presentation) = evaluated_init.into_parts();
-    let mut result_entries = IndexMap::new();
     let mut presentations = IndexMap::new();
-    if !init_presentation.is_none() {
-        presentations.insert(variants[0].clone(), init_presentation.clone());
-    }
-    result_entries.insert(variants[0].clone(), init_value);
 
     let mut unfold_locals = local_values.child(Vec::new());
-    for (position, variant) in variants.iter().enumerate().skip(1) {
-        let previous_position = position
-            .checked_sub(1)
-            .ok_or_else(|| ctx.internal_error("unfold step has no previous position", axis.span))?;
-        unfold_locals.bind(recurrence.previous_state.id, previous_state);
+    let result_entries = IndexedValue::try_from_axis(index_axis.clone(), |position, variant| {
+        let Some(previous_position) = position.checked_sub(1) else {
+            if !init_presentation.is_none() {
+                presentations.insert(variant.clone(), init_presentation.clone());
+            }
+            return Ok(init_value.clone());
+        };
+        unfold_locals.bind(recurrence.previous_state.id, previous_state.clone());
         unfold_locals.bind(
             recurrence.previous_index.id,
             EvaluatedRuntimeValue::plain(
@@ -2431,16 +2356,13 @@ fn eval_unfold(
             eval_texpr_evaluated(body, values, presentation_values, &unfold_locals, ctx)?
                 .with_default_presentation(&init_presentation);
         let (value, evidence) = previous_state.clone().into_parts();
-        result_entries.insert(variant.clone(), value);
         if !evidence.is_none() {
             presentations.insert(variant.clone(), evidence);
         }
-    }
+        Ok::<_, GraphcalError>(value)
+    })?;
     Ok(EvaluatedRuntimeValue::new(
-        RuntimeValue::Indexed {
-            index_name: index_ref,
-            entries: result_entries,
-        },
+        RuntimeValue::Indexed(result_entries),
         PresentationInstance::entries(presentations),
     ))
 }
@@ -2783,8 +2705,6 @@ fn check_inline_dag_asserts(
 
 #[cfg(test)]
 mod tests {
-    use miette::Diagnostic;
-
     use super::*;
     use crate::eval::compile_and_eval;
 
@@ -2818,26 +2738,5 @@ node copied: Int[Fin(4), Fin(4)] = for row: Fin(4), column: Fin(4) {
             16,
             "index traversal must clone only the 16 selected leaves"
         );
-    }
-
-    #[test]
-    fn empty_aggregation_is_reported_as_x001() {
-        let entries = IndexMap::new();
-        let src = NamedSource::new("test.gcl", Arc::new(String::new()));
-
-        for function in [
-            ValueAggregation::Sum,
-            ValueAggregation::Product,
-            ValueAggregation::Minimum,
-            ValueAggregation::Maximum,
-            ValueAggregation::Mean,
-            ValueAggregation::RootSumSquare,
-            ValueAggregation::Count,
-        ] {
-            let error = eval_aggregation_fn(function, &entries, Span::new(0, 0), &src).unwrap_err();
-            assert!(matches!(&error, GraphcalError::InternalError { .. }));
-            let code = error.code().map(|code| code.to_string());
-            assert_eq!(code.as_deref(), Some("graphcal::X001"));
-        }
     }
 }

@@ -78,21 +78,15 @@ fn semantic_value_equals(lhs: &RuntimeValue, rhs: &RuntimeValue) -> bool {
             }
             _ => false,
         },
-        RuntimeValue::Indexed {
-            index_name: lhs_index,
-            entries: lhs_entries,
-        } => match rhs {
-            RuntimeValue::Indexed {
-                index_name: rhs_index,
-                entries: rhs_entries,
-            } => {
-                lhs_index.matches_ref(rhs_index)
-                    && lhs_entries.len() == rhs_entries.len()
-                    && lhs_entries.iter().zip(rhs_entries).all(
-                        |((lhs_key, lhs_value), (rhs_key, rhs_value))| {
-                            lhs_key == rhs_key && semantic_value_equals(lhs_value, rhs_value)
-                        },
-                    )
+        RuntimeValue::Indexed(lhs) => match rhs {
+            // Equal axes have equal keys, so entries compare positionally.
+            RuntimeValue::Indexed(rhs) => {
+                lhs.axis().matches(rhs.axis())
+                    && lhs
+                        .values()
+                        .iter()
+                        .zip(rhs.values())
+                        .all(|(lhs, rhs)| semantic_value_equals(lhs, rhs))
             }
             _ => false,
         },
@@ -170,7 +164,7 @@ pub(super) fn eval_comparison_values(
     span: Span,
 ) -> Result<RuntimeValue, GraphcalError> {
     match (op, l, r) {
-        (_, RuntimeValue::Indexed { .. }, _) | (_, _, RuntimeValue::Indexed { .. }) => {
+        (_, RuntimeValue::Indexed(_), _) | (_, _, RuntimeValue::Indexed(_)) => {
             Err(ctx.internal_error("indexed operand reached comparison evaluation", span))
         }
         (Comparison::Eq | Comparison::Ne, RuntimeValue::Bool(_), RuntimeValue::Bool(_))
