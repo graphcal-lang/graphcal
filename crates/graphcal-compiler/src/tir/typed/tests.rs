@@ -532,9 +532,8 @@ fn check_draft(
 fn importer_tir(path: &str, stores: &[&DagStore]) -> CheckedTir {
     let source = "node x: Dimensionless = 1.0;";
     let mut builder = parse_and_type_resolve_builder_named(source, path).unwrap();
-    stores
-        .iter()
-        .try_for_each(|store| builder.insert_shared_dag_store(store))
+    builder
+        .install_shared_dag_stores(stores.iter().copied())
         .unwrap();
     check_draft(
         builder,
@@ -610,6 +609,45 @@ fn imported_store_diamonds_share_bodies_and_units_without_republishing_imports()
 }
 
 #[test]
+fn installed_stores_bring_every_dag_their_bodies_call() {
+    let leaf = importer_tir("leaf.gcl", &[])
+        .freeze_local_dag_store()
+        .unwrap();
+    let (leaf_id, _) = leaf.iter().next().unwrap();
+    let caller =
+        crate::dag_id::DagId::from_virtual_relative_path(std::path::Path::new("caller.gcl"))
+            .unwrap();
+    // A store whose only body calls the leaf's body.
+    let calling = DagStore {
+        dags: HashMap::new(),
+        runtime_units: HashMap::new(),
+        external_callees: std::collections::BTreeMap::from([(leaf_id.clone(), caller.clone())]),
+    };
+    let draft = || {
+        parse_and_type_resolve_builder_named("node x: Dimensionless = 1.0;", "root.gcl").unwrap()
+    };
+
+    let mut alone = draft();
+    assert!(matches!(
+        alone.install_shared_dag_stores([&calling]),
+        Err(DagStoreInsertError::MissingCallee { caller: found, target })
+            if found == caller && &target == leaf_id
+    ));
+    assert_eq!(alone.finish().dags.len(), 1, "nothing is installed");
+
+    let mut together = draft();
+    together
+        .install_shared_dag_stores([&calling, &leaf])
+        .unwrap();
+    assert_eq!(together.finish().dags.len(), 2);
+
+    let mut callee_first = draft();
+    callee_first.install_shared_dag_stores([&leaf]).unwrap();
+    callee_first.install_shared_dag_stores([&calling]).unwrap();
+    assert_eq!(callee_first.finish().dags.len(), 2);
+}
+
+#[test]
 fn local_and_shared_body_collisions_fail_in_both_insertion_orders() {
     let leaf = importer_tir("leaf.gcl", &[])
         .freeze_local_dag_store()
@@ -620,14 +658,14 @@ fn local_and_shared_body_collisions_fail_in_both_insertion_orders() {
             parse_and_type_resolve_builder_named("node x: Dimensionless = 1.0;", "root.gcl")
                 .unwrap();
         if shared_first {
-            root.insert_shared_dag_store(&leaf).unwrap();
+            root.install_shared_dag_stores([&leaf]).unwrap();
             assert!(
                 matches!(root.insert_dag(body.body().clone()), Err(DagRegistryError::DuplicateDag { dag_id }) if &dag_id == owner)
             );
         } else {
             root.insert_dag(body.body().clone()).unwrap();
             assert!(
-                matches!(root.insert_shared_dag_store(&leaf), Err(DagStoreInsertError::Registry(DagRegistryError::DuplicateDag { dag_id })) if &dag_id == owner)
+                matches!(root.install_shared_dag_stores([&leaf]), Err(DagStoreInsertError::Registry(DagRegistryError::DuplicateDag { dag_id })) if &dag_id == owner)
             );
         }
         assert_eq!(root.finish().dags.len(), 2);

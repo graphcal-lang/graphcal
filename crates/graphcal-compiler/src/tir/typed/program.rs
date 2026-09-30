@@ -45,6 +45,12 @@ pub enum DagStoreInsertError {
     /// The store contains a conflicting instance-specialized unit.
     #[error("runtime unit `{identity}` has competing checked definitions")]
     CompetingRuntimeUnit { identity: ResolvedUnitName },
+    /// A body of the store calls a DAG the assembly would not have.
+    #[error("DAG `{caller}` calls DAG `{target}`, which no installed store or local body has")]
+    MissingCallee {
+        caller: crate::dag_id::DagId,
+        target: crate::dag_id::DagId,
+    },
 }
 
 /// Registry of the DAG bodies of a TIR before it is checked.
@@ -269,16 +275,46 @@ impl TirDraft {
         self.dags.insert(dag)
     }
 
-    /// Add immutable checked bodies from a previously frozen module store.
+    /// Add immutable checked bodies from previously frozen module stores.
     ///
-    /// Only handles are copied. The body and its checked semantic facts remain
-    /// owned by the store that published them.
+    /// Only handles are copied. The bodies and their checked semantic facts
+    /// remain owned by the stores that published them.
+    ///
+    /// The imported bodies stay closed under calls: every DAG a body of the
+    /// installed stores calls must be a body of this draft or of one of
+    /// `stores`, so a store is installed together with (or after) the stores
+    /// it calls into. Nothing is installed when a callee is missing.
     ///
     /// # Errors
     ///
-    /// Returns [`DagStoreInsertError`] when the store repeats a body identity
-    /// or a runtime unit with a competing definition.
-    pub fn insert_shared_dag_store(
+    /// Returns [`DagStoreInsertError`] when a store calls a DAG the draft
+    /// would not have, repeats a body identity, or has a runtime unit with a
+    /// competing definition.
+    pub fn install_shared_dag_stores<'s>(
+        &mut self,
+        stores: impl IntoIterator<Item = &'s super::dag_store::DagStore>,
+    ) -> Result<(), DagStoreInsertError> {
+        let stores = stores.into_iter().collect::<Vec<_>>();
+        let installs = |dag_id: &crate::dag_id::DagId| {
+            self.dags.contains(dag_id) || stores.iter().any(|store| store.get(dag_id).is_some())
+        };
+        if let Some((target, caller)) = stores
+            .iter()
+            .flat_map(|store| store.external_callees())
+            .find(|(target, _)| !installs(target))
+        {
+            return Err(DagStoreInsertError::MissingCallee {
+                caller: caller.clone(),
+                target: target.clone(),
+            });
+        }
+        stores
+            .into_iter()
+            .try_for_each(|store| self.insert_shared_dag_store(store))
+    }
+
+    /// Add the handles of one store whose callees are installed.
+    fn insert_shared_dag_store(
         &mut self,
         store: &super::dag_store::DagStore,
     ) -> Result<(), DagStoreInsertError> {

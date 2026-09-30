@@ -149,17 +149,12 @@ impl<'t> ScopedCall<'t> {
         self.scope().dag().call_targets().target(*self.get())
     }
 
-    /// The position, in the registry of the program running it, of the DAG
-    /// whose body makes this call.
+    /// The position of the DAG this call targets in the registry of the
+    /// program running it, which the registry resolved for the caller's
+    /// body when the program was checked.
     #[must_use]
-    pub const fn caller(self) -> DagPosition {
-        self.scope().position()
-    }
-
-    /// The call's slot in the call targets of its caller.
-    #[must_use]
-    pub const fn slot(self) -> CallSlot {
-        *self.get()
+    pub const fn callee(self) -> DagPosition {
+        self.scope().callee(*self.get())
     }
 }
 

@@ -48,6 +48,7 @@ impl CheckedDagRegistry {
             .filter(|(identity, _)| dags.contains_key(identity.owner()))
             .collect();
         Ok(DagStore {
+            external_callees: super::dag_store::external_callees(&dags),
             dags,
             runtime_units,
         })

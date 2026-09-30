@@ -11,25 +11,30 @@ use super::dag_position::DagPosition;
 
 /// The scope a body runs in: the frame of the checked DAG that owns it.
 ///
-/// Created only by [`super::evaluation_unit`], from the owner of a typed identity (or, for
-/// an external value, the root module), and handed out only inside a
-/// [`Scoped`] part or a [`ScopedTree`] of that DAG.
+/// Created only by the [`CheckedDagRegistry`](super::checked::CheckedDagRegistry)
+/// of the program that runs the body, for [`super::evaluation_unit`] to
+/// select from the owner of a typed identity (or, for an external value, the
+/// root module), and handed out only inside a [`Scoped`] part or a
+/// [`ScopedTree`] of that DAG. It carries the program's resolution of the
+/// DAG's call slots, since a shared body's callees have program-relative
+/// positions.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct BodyScope<'t> {
     dag: &'t CheckedDag,
-    position: DagPosition,
+    callees: &'t [DagPosition],
 }
 
 impl<'t> BodyScope<'t> {
-    /// The scope of `dag`, at `position` in its program's registry, for the
-    /// compiler's own selections.
-    pub(crate) const fn of(position: DagPosition, dag: &'t CheckedDag) -> Self {
-        Self { dag, position }
+    /// The scope of `dag`, whose call slots have the callees `callees` in
+    /// its program's registry.
+    pub(super) const fn of(dag: &'t CheckedDag, callees: &'t [DagPosition]) -> Self {
+        Self { dag, callees }
     }
 
-    /// The position of this scope's DAG in its program's registry.
-    pub(crate) const fn position(self) -> DagPosition {
-        self.position
+    /// The registry position of the DAG a call slot of this scope's body
+    /// targets.
+    pub(crate) const fn callee(self, slot: crate::tir::texpr::CallSlot) -> DagPosition {
+        self.callees[slot.index()]
     }
 
     /// The DAG whose frame this is, for the compiler's own specialization.

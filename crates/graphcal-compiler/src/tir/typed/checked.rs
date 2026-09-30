@@ -23,6 +23,7 @@ use crate::tir::presentation::DagPresentationFacts;
 use crate::tir::schedule::{ConstSchedule, RuntimeSchedule};
 use crate::tir::texpr::CheckedBodies;
 
+use super::body_scope::BodyScope;
 use super::checked_dag::{CheckedDag, PublishedDag};
 use super::dag_position::DagPosition;
 use super::model::{CheckedDeclType, DagTIR, ProjectTypeStore, TirCore};
@@ -37,15 +38,90 @@ use super::program::{TirRead, UncheckedTir};
 ///
 /// Every DAG has a [`DagPosition`]: the root first, then the local DAGs,
 /// then the imported ones, in insertion order.
+///
+/// The registry is closed under calls: every DAG a body calls is in the
+/// registry, and the callee of each call slot of each body is resolved to
+/// its position once, when the registry is built.
 #[derive(Debug, Clone)]
 pub struct CheckedDagRegistry {
     pub(super) root: CheckedDag,
     pub(super) other_dags: IndexMap<DagId, CheckedDag>,
     /// Immutable bodies imported from an already-frozen module store.
     shared_dags: IndexMap<DagId, Arc<CheckedDag>>,
+    /// The position of the callee of each call slot, by caller position.
+    callees: Vec<Box<[DagPosition]>>,
+}
+
+/// A body calls a DAG its registry does not have.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("DAG `{caller}` calls DAG `{target}`, which is not in its program")]
+pub(super) struct UnresolvedCallee {
+    caller: DagId,
+    target: DagId,
 }
 
 impl CheckedDagRegistry {
+    /// Close a registry over its DAGs, resolving every call slot of every
+    /// body to the position of its callee.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`UnresolvedCallee`] when a body calls a DAG outside the
+    /// registry.
+    fn close(
+        root: CheckedDag,
+        other_dags: IndexMap<DagId, CheckedDag>,
+        shared_dags: IndexMap<DagId, Arc<CheckedDag>>,
+    ) -> Result<Self, UnresolvedCallee> {
+        let mut registry = Self {
+            root,
+            other_dags,
+            shared_dags,
+            callees: Vec::new(),
+        };
+        registry.callees = registry
+            .values()
+            .map(|caller| {
+                caller
+                    .call_targets()
+                    .iter()
+                    .map(|(_, target)| {
+                        registry
+                            .get_positioned(target)
+                            .map(|(position, _)| position)
+                            .ok_or_else(|| UnresolvedCallee {
+                                caller: caller.dag_id().clone(),
+                                target: target.clone(),
+                            })
+                    })
+                    .collect()
+            })
+            .collect::<Result<_, _>>()?;
+        Ok(registry)
+    }
+
+    /// The scope of one DAG, to select its bodies in.
+    pub(super) fn scope(&self, dag_id: &DagId) -> Option<BodyScope<'_>> {
+        self.get_positioned(dag_id)
+            .map(|(position, dag)| BodyScope::of(dag, &self.callees[position.index()]))
+    }
+
+    /// The scope of the root DAG.
+    pub(super) fn root_scope(&self) -> BodyScope<'_> {
+        BodyScope::of(&self.root, &self.callees[DagPosition::ROOT.index()])
+    }
+
+    /// The positions of the callees of the body at `caller`, by call slot.
+    ///
+    /// # Panics
+    ///
+    /// Panics when `caller` is a position of another registry with more
+    /// DAGs.
+    #[must_use]
+    pub fn callee_positions(&self, caller: DagPosition) -> &[DagPosition] {
+        &self.callees[caller.index()]
+    }
+
     /// The position and body of one DAG.
     #[must_use]
     pub fn get_positioned(&self, dag_id: &DagId) -> Option<(DagPosition, &CheckedDag)> {
@@ -162,14 +238,12 @@ impl UncheckedTir {
         } = schedules;
         let (core, dags) = self.into_parts();
         let (root, other_dags, shared_dags) = dags.into_parts();
+        let internal = |message: String| {
+            GraphcalError::internal_error(message, src, DiagnosticAnchor::WholeFile)
+        };
         let mut check = |body: DagTIR| {
-            let missing = |what: &str| {
-                GraphcalError::internal_error(
-                    format!("DAG `{}` has no checked {what}", body.dag_id()),
-                    src,
-                    DiagnosticAnchor::WholeFile,
-                )
-            };
+            let missing =
+                |what: &str| internal(format!("DAG `{}` has no checked {what}", body.dag_id()));
             let published = PublishedDag {
                 bodies: bodies
                     .remove(body.dag_id())
@@ -188,13 +262,15 @@ impl UncheckedTir {
             .into_iter()
             .map(|(id, body)| check(body).map(|dag| (id, dag)))
             .collect::<Result<_, GraphcalError>>()?;
+        // Every call target is in the registry: checking resolved each local
+        // body's calls against it, an instance calls its template's targets
+        // and its checked defaults', and installing an imported store
+        // required the stores it calls into. Failing here is a compiler bug.
+        let dags = CheckedDagRegistry::close(root, other_dags, shared_dags.into_iter().collect())
+            .map_err(|error| internal(error.to_string()))?;
         Ok(CheckedTir {
             core,
-            dags: CheckedDagRegistry {
-                root,
-                other_dags,
-                shared_dags: shared_dags.into_iter().collect(),
-            },
+            dags,
             const_schedule: constants,
         })
     }
