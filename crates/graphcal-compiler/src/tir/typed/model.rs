@@ -1550,9 +1550,10 @@ impl DagTIR {
     /// The frame this DAG runs its bodies in.
     ///
     /// Visible only to the checker, which checks each body in the frame of
-    /// the DAG that runs it. Evaluation never sees a frame: it resolves
-    /// handles through the [`BodyScope`](super::BodyScope) that comes with a
-    /// body looked up by its owner's identity, and reads include-site
+    /// the DAG that runs it. Evaluation never sees a frame: it reads handles
+    /// only resolved, as the references of a
+    /// [`ScopedNode`](super::scoped_node::ScopedNode) of a body looked up by its owner's
+    /// identity, and reads include-site
     /// projections already resolved through
     /// [`CheckedInstance`](super::CheckedInstance).
     #[must_use]

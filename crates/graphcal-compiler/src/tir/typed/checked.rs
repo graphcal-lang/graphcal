@@ -79,7 +79,27 @@ impl CheckedDag {
 
     /// The checked tree of every expression root this body owns.
     #[must_use]
-    pub const fn bodies(&self) -> &CheckedBodies {
+    pub(crate) const fn bodies(&self) -> &CheckedBodies {
+        &self.bodies
+    }
+
+    /// Every concrete constructor application this body's checked trees
+    /// make; see [`CheckedBodies::concrete_applications`].
+    #[must_use]
+    pub fn concrete_constructor_applications(
+        &self,
+    ) -> Vec<(
+        &ResolvedStructTypeName,
+        Vec<crate::registry::checked_type::CheckedGenericArg>,
+    )> {
+        self.bodies.concrete_applications()
+    }
+
+    /// The checked tree of every expression root this body owns, for tests
+    /// outside the compiler.
+    #[cfg(any(test, feature = "test-identities"))]
+    #[must_use]
+    pub const fn bodies_for_test(&self) -> &CheckedBodies {
         &self.bodies
     }
 

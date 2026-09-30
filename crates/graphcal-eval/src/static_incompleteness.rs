@@ -8,12 +8,12 @@ use std::sync::Arc;
 
 use graphcal_compiler::cancellation::CancellationToken;
 use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
-use graphcal_compiler::hir::expr::{Expr, ExprKind, LocalDecl, visit_expr};
+use graphcal_compiler::hir::expr::{Expr, ExprKind, visit_expr};
 use graphcal_compiler::node_unavailable::NodeUnavailable;
 use graphcal_compiler::registry::error::GraphcalError;
 use graphcal_compiler::resolved_name::ResolvedDeclName;
 use graphcal_compiler::syntax::non_empty::NonEmpty;
-use graphcal_compiler::tir::texpr::{TExpr, TExprKind, TNodeRef, visit_tnodes};
+use graphcal_compiler::tir::typed::scoped_node::{NodeKind, ScopedNode};
 use miette::NamedSource;
 
 use crate::execution_plan::{ExecPlan, PlannedBody};
@@ -26,42 +26,29 @@ type Origins = BTreeSet<ResolvedDeclName>;
 /// The inline calls an expression's availability depends on.
 ///
 /// References through `@name` are body handles, resolved only in the scope
-/// the expression runs in; see [`graph_refs`].
+/// the expression runs in ([`ScopedNode::graph_refs`]).
 pub trait ExpressionDependencies {
     /// Every inline DAG call's output and explicitly bound parameters.
     fn dag_calls(&self) -> Vec<Query>;
 }
 
-impl ExpressionDependencies for Expr {
+impl ExpressionDependencies for &Expr {
     fn dag_calls(&self) -> Vec<Query> {
         calls(self, &BoundParameters::new())
     }
 }
 
-/// Declarations a checked tree references through `@name`, including
-/// unselected branches, as handles of the scope the tree runs in.
-pub fn graph_refs(tree: &TExpr) -> BTreeSet<LocalDecl> {
-    let mut refs = BTreeSet::new();
-    visit_tnodes(TNodeRef::Value(tree), &mut |node| {
-        if let TNodeRef::Value(expr) = node
-            && let TExprKind::GraphRef(target) = expr.kind()
-        {
-            refs.insert(target.value.clone());
-        }
-    });
-    refs
-}
-
-impl ExpressionDependencies for TExpr {
+impl ExpressionDependencies for ScopedNode<'_> {
     fn dag_calls(&self) -> Vec<Query> {
         let mut calls = Vec::new();
-        visit_tnodes(TNodeRef::Value(self), &mut |node| {
-            if let TNodeRef::Value(expr) = node
-                && let TExprKind::DagCall { args, output, .. } = expr.kind()
-            {
+        self.visit(&mut |node| {
+            if let NodeKind::DagCall { args, output, .. } = node.kind() {
                 calls.push((
                     output.value.clone(),
-                    args.iter().map(|binding| binding.target.clone()).collect(),
+                    args.get()
+                        .iter()
+                        .map(|binding| binding.target.clone())
+                        .collect(),
                 ));
             }
         });

@@ -543,8 +543,11 @@ fn collect_field_constraint_applications(
         collect_concrete_nominal_applications(declared, tir, src, &mut applications)?;
     }
     for dag in tir.dag_registry().values() {
-        for (_, body) in dag.bodies().roots() {
-            collect_constructor_applications(body, &mut applications);
+        for (definition, generic_args) in dag.concrete_constructor_applications() {
+            applications.insert(ConcreteNominalApplication {
+                identity: StructTypeRef::from_resolved(definition.clone()),
+                generic_args,
+            });
         }
         for (identity, type_def) in &dag.semantic().type_defs.struct_types {
             if type_def.generic_params().is_empty() {
@@ -556,48 +559,6 @@ fn collect_field_constraint_applications(
         }
     }
     Ok(applications)
-}
-
-/// Every concrete constructor application a checked tree makes, including
-/// the concretely typed nodes of a tree that still awaits bindings.
-fn collect_constructor_applications(
-    body: &graphcal_compiler::tir::texpr::CheckedBody,
-    applications: &mut HashSet<ConcreteNominalApplication>,
-) {
-    use graphcal_compiler::tir::texpr::{CheckedBody, TNodeRef, visit_tnodes};
-    let mut insert = |definition: &graphcal_compiler::resolved_name::ResolvedStructTypeName,
-                      generic_args: Vec<CheckedGenericArg>| {
-        applications.insert(ConcreteNominalApplication {
-            identity: StructTypeRef::from_resolved(definition.clone()),
-            generic_args,
-        });
-    };
-    match body {
-        CheckedBody::Executable(body) => visit_tnodes(body.as_node(), &mut |node| {
-            if let TNodeRef::Value(expr) = node
-                && let Some(application) = expr.application()
-            {
-                insert(application.definition(), application.generic_args.clone());
-            }
-        }),
-        CheckedBody::Deferred(body) => visit_tnodes(body.as_node(), &mut |node| {
-            let TNodeRef::Value(expr) = node else {
-                return;
-            };
-            let Some(application) = expr.application() else {
-                return;
-            };
-            // Only a concretely typed application is one a value can have.
-            let generic_args = application
-                .generic_args
-                .iter()
-                .map(graphcal_compiler::registry::checked_type::CheckedGenericArg::to_concrete)
-                .collect::<Option<Vec<_>>>();
-            if let (Some(_), Some(generic_args)) = (expr.ty().to_concrete(), generic_args) {
-                insert(application.definition(), generic_args);
-            }
-        }),
-    }
 }
 
 pub(super) fn resolve_struct_field_constraints_for_dags(

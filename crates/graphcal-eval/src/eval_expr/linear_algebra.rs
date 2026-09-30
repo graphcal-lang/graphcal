@@ -15,7 +15,7 @@ use crate::runtime_value::{IndexAxis, RuntimeValue, RuntimeValueError};
 
 use graphcal_compiler::outcome::Outcome;
 
-use super::EvalContext;
+use super::EvalSession;
 use super::linear_algebra_lu::LuFailure;
 use super::numeric::{self, QuantityValidationError};
 use super::work_budget::{KernelCheckpoint, WorkAmount, WorkAmountError, WorkBudgetError};
@@ -187,7 +187,7 @@ fn kernel_control<'a>(
     function: LinearAlgebraFn,
     factors: &[usize],
     multiplier: u64,
-    ctx: &'a EvalContext<'_>,
+    ctx: &'a EvalSession<'_>,
 ) -> Result<KernelCheckpoint<'a>, LinearAlgebraFailure> {
     let amount = WorkAmount::checked_product(factors, multiplier)?;
     ctx.work_budget
@@ -319,7 +319,7 @@ fn finite_runtime_quantity(
 
 fn evaluate_dot(
     arguments: Vec<RuntimeValue>,
-    ctx: &EvalContext<'_>,
+    ctx: &EvalSession<'_>,
 ) -> Result<RuntimeValue, LinearAlgebraFailure> {
     let function = LinearAlgebraFn::Dot;
     let [lhs, rhs] = two_arguments(function, arguments)?;
@@ -332,7 +332,7 @@ fn evaluate_dot(
 
 fn evaluate_matmul(
     arguments: Vec<RuntimeValue>,
-    ctx: &EvalContext<'_>,
+    ctx: &EvalSession<'_>,
 ) -> Result<RuntimeValue, LinearAlgebraFailure> {
     let function = LinearAlgebraFn::Matmul;
     let [lhs, rhs] = two_arguments(function, arguments)?;
@@ -359,7 +359,7 @@ fn evaluate_matmul(
 
 fn evaluate_transpose(
     arguments: Vec<RuntimeValue>,
-    ctx: &EvalContext<'_>,
+    ctx: &EvalSession<'_>,
 ) -> Result<RuntimeValue, LinearAlgebraFailure> {
     let function = LinearAlgebraFn::Transpose;
     let matrix = Matrix::from_value(&one_argument(function, arguments)?, "transpose")?;
@@ -377,7 +377,7 @@ fn evaluate_transpose(
 
 fn evaluate_trace(
     arguments: Vec<RuntimeValue>,
-    ctx: &EvalContext<'_>,
+    ctx: &EvalSession<'_>,
 ) -> Result<RuntimeValue, LinearAlgebraFailure> {
     let function = LinearAlgebraFn::Trace;
     let matrix = Matrix::from_value(&one_argument(function, arguments)?, "trace")?;
@@ -397,7 +397,7 @@ fn evaluate_trace(
 
 fn evaluate_norm(
     arguments: Vec<RuntimeValue>,
-    ctx: &EvalContext<'_>,
+    ctx: &EvalSession<'_>,
 ) -> Result<RuntimeValue, LinearAlgebraFailure> {
     let function = LinearAlgebraFn::Norm;
     let vector = Vector::from_value(&one_argument(function, arguments)?, "norm")?;
@@ -407,7 +407,7 @@ fn evaluate_norm(
 
 fn evaluate_cross(
     arguments: Vec<RuntimeValue>,
-    ctx: &EvalContext<'_>,
+    ctx: &EvalSession<'_>,
 ) -> Result<RuntimeValue, LinearAlgebraFailure> {
     let function = LinearAlgebraFn::Cross;
     let [lhs, rhs] = two_arguments(function, arguments)?;
@@ -439,7 +439,7 @@ fn evaluate_cross(
 
 fn evaluate_outer(
     arguments: Vec<RuntimeValue>,
-    ctx: &EvalContext<'_>,
+    ctx: &EvalSession<'_>,
 ) -> Result<RuntimeValue, LinearAlgebraFailure> {
     let function = LinearAlgebraFn::Outer;
     let [lhs, rhs] = two_arguments(function, arguments)?;
@@ -460,7 +460,7 @@ fn evaluate_outer(
 
 fn evaluate_solve(
     arguments: Vec<RuntimeValue>,
-    ctx: &EvalContext<'_>,
+    ctx: &EvalSession<'_>,
 ) -> Result<RuntimeValue, LinearAlgebraFailure> {
     let function = LinearAlgebraFn::Solve;
     let [matrix, rhs] = two_arguments(function, arguments)?;
@@ -481,7 +481,7 @@ fn evaluate_solve(
 
 fn evaluate_inverse(
     arguments: Vec<RuntimeValue>,
-    ctx: &EvalContext<'_>,
+    ctx: &EvalSession<'_>,
 ) -> Result<RuntimeValue, LinearAlgebraFailure> {
     let function = LinearAlgebraFn::Inverse;
     let matrix = Matrix::from_value(&one_argument(function, arguments)?, "inverse")?;
@@ -498,7 +498,7 @@ fn evaluate_inverse(
 
 fn evaluate_determinant(
     arguments: Vec<RuntimeValue>,
-    ctx: &EvalContext<'_>,
+    ctx: &EvalSession<'_>,
 ) -> Result<RuntimeValue, LinearAlgebraFailure> {
     let function = LinearAlgebraFn::Determinant;
     let matrix = Matrix::from_value(&one_argument(function, arguments)?, "det")?;
@@ -517,7 +517,7 @@ fn evaluate_determinant(
 pub(super) fn evaluate(
     function: LinearAlgebraFn,
     arguments: Vec<RuntimeValue>,
-    ctx: &EvalContext<'_>,
+    ctx: &EvalSession<'_>,
 ) -> Result<RuntimeValue, LinearAlgebraFailure> {
     match function {
         LinearAlgebraFn::Dot => evaluate_dot(arguments, ctx),

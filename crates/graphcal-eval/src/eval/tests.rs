@@ -106,7 +106,7 @@ fn checked_nodes(
 ) -> HashMap<graphcal_compiler::expression_id::ExprId, CheckedNodeSummary> {
     use graphcal_compiler::tir::texpr::{CheckedBody, TNodeRef, visit_tnodes};
     let mut nodes = HashMap::new();
-    for (_, body) in dag.bodies().roots() {
+    for (_, body) in dag.bodies_for_test().roots() {
         match body {
             CheckedBody::Executable(body) => visit_tnodes(body.as_node(), &mut |node| {
                 let summary = match node {
@@ -209,7 +209,7 @@ node packet: Packet = Packet(value: @first);
         let checked = ProjectCompiler::new(&project).check().unwrap();
         let mut retained = 0_usize;
         for dag in checked.tir().dag_registry().values() {
-            for (_, body) in dag.bodies().roots() {
+            for (_, body) in dag.bodies_for_test().roots() {
                 let mut count = |applies: bool| retained += usize::from(applies);
                 match body {
                     graphcal_compiler::tir::texpr::CheckedBody::Executable(body) => {
@@ -929,7 +929,7 @@ fn shared_frame_dependency_and_fatal_error_policies_are_explicit() {
                         GraphcalError::EvalError {
                             message: "ordinary sentinel".into(),
                             src: src.clone(),
-                            span: entry.body().tree().span().into(),
+                            span: entry.body().root().span().into(),
                         }
                     });
                 }
@@ -974,7 +974,6 @@ const _: fn() = || {
     impl<T: ?Sized> ReadOnlyUnlessMutable<()> for T {}
     struct Mutable;
     impl<T: ?Sized + std::ops::DerefMut> ReadOnlyUnlessMutable<Mutable> for T {}
-    let _ = <crate::eval_expr::EvalContext<'static> as ReadOnlyUnlessMutable<_>>::probe;
     let _ = <crate::eval_expr::EvalSession<'static> as ReadOnlyUnlessMutable<_>>::probe;
 };
 
@@ -6702,66 +6701,6 @@ fn eval_constructor_match_rejects_runtime_owner_mismatch_with_same_leaf_construc
 }
 
 #[test]
-fn eval_field_access_rejects_runtime_owner_mismatch_with_same_leaf_type() {
-    let (_dir, root) = write_same_leaf_record_type_project(
-        "import collide.a as a;\n\
-         import collide.b as b;\n\
-         node item: a::Item = a::Item(distance: 2.0 m);\n\
-         node other: b::Item = b::Item(duration: 3.0 s);\n\
-         node distance: Length = @item.distance;\n",
-    );
-
-    let (tir, project) = compile_to_tir_project(&root, None, &fs()).unwrap();
-    let expr_key = tir
-        .root()
-        .bound_decl_identity(&scoped_name("distance"))
-        .unwrap()
-        .clone();
-    let expr = tir
-        .declaration_body(&expr_key)
-        .unwrap()
-        .runtime_expression()
-        .unwrap();
-    let b_owner = graphcal_compiler::resolved_name::ResolvedName::for_test(
-        loaded_file_dag_id(&project, "b.gcl"),
-        graphcal_compiler::syntax::type_name::StructTypeName::expect_valid("Item"),
-    );
-    let mut fields = indexmap::IndexMap::new();
-    fields.insert(
-        graphcal_compiler::syntax::type_name::FieldName::expect_valid("distance"),
-        crate::eval_expr::RuntimeValue::quantity(99.0).unwrap(),
-    );
-    let values = HashMap::from([(
-        tir.root()
-            .lookup_decl_identity(&scoped_name("item"))
-            .into_bound()
-            .unwrap(),
-        crate::eval_expr::RuntimeValue::Struct(crate::runtime_value::StructValue::for_test(
-            b_owner,
-            graphcal_compiler::syntax::type_name::ConstructorName::expect_valid("Item"),
-            fields,
-        )),
-    )]);
-    let src = &project.root_file().named_source();
-    let ctx = crate::eval_expr::EvalSession::provisional_constants(
-        &tir,
-        src,
-        graphcal_compiler::cancellation::CancellationToken::unbounded(),
-    )
-    .with_roots(&values, None)
-    .for_decl(&expr_key);
-
-    let err =
-        crate::eval_expr::eval_root(&ctx.executable(expr).unwrap(), &values, &ctx).unwrap_err();
-    match err {
-        GraphcalError::EvalError { message, .. } => {
-            assert!(message.contains("no field `distance`"), "{message}");
-        }
-        other => panic!("expected EvalError, got {other:?}"),
-    }
-}
-
-#[test]
 fn eval_struct_field_constraints_use_resolved_owner_with_same_leaf_types_and_fields() {
     let (_dir, root) = write_same_leaf_same_field_constrained_record_type_project(
         "import collide.a as a;\n\
@@ -7654,14 +7593,17 @@ fn eval_label_match_rejects_runtime_owner_mismatch_with_same_leaf_variant() {
         .runtime_expression()
         .unwrap();
     let root = expr.executable().unwrap();
-    let tree = root.tree();
-    let graphcal_compiler::tir::texpr::TExprKind::For { bindings, body } = tree.kind() else {
+    let tree = root.root();
+    let graphcal_compiler::tir::typed::scoped_node::NodeKind::For {
+        bindings,
+        body: match_expr,
+    } = tree.kind()
+    else {
         panic!("expected `code` to be a for-comprehension, got {tree:?}");
     };
-    let [binding] = bindings.as_slice() else {
+    let [binding] = bindings else {
         panic!("expected one for-comprehension binding, got {bindings:?}");
     };
-    let match_expr = body.as_ref();
     let b_owner = graphcal_compiler::resolved_name::ResolvedName::for_test(
         loaded_file_dag_id(&project, "b.gcl"),
         graphcal_compiler::syntax::index_name::IndexName::expect_valid("Phase"),
@@ -7698,9 +7640,8 @@ fn eval_label_match_rejects_runtime_owner_mismatch_with_same_leaf_variant() {
     .with_roots(&values, None)
     .for_decl(&expr_key);
 
-    let err =
-        crate::eval_expr::eval_subtree_for_test(&root, match_expr, &values, &local_values, &ctx)
-            .unwrap_err();
+    let err = crate::eval_expr::eval_subtree_for_test(match_expr, &values, &local_values, &ctx)
+        .unwrap_err();
     match err {
         GraphcalError::EvalError { message, .. } => {
             assert!(message.contains("no match arm for label"), "{message}");

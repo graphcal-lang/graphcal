@@ -1,6 +1,6 @@
 use crate::runtime_value::RuntimeValue;
 use graphcal_compiler::hir::ResolvedUnitExpr;
-use graphcal_compiler::hir::expr::{LocalUnit, ResolvedUnitRef};
+use graphcal_compiler::hir::expr::{ResolvedUnitExprItem, ResolvedUnitRef};
 use graphcal_compiler::registry::error::GraphcalError;
 use graphcal_compiler::registry::types::{
     PositiveFiniteScale, PositiveFiniteScaleError, UnitScale, UnitScaleStepError, UnitScaleTerm,
@@ -9,16 +9,17 @@ use graphcal_compiler::registry::types::{
 use graphcal_compiler::resolved_name::ResolvedUnitName;
 use graphcal_compiler::syntax::dimension::UnitRef;
 use graphcal_compiler::syntax::span::Span;
+use graphcal_compiler::tir::typed::scoped_node::ScopedUnitExpr;
 
 use super::numeric;
-use super::{EvalContext, EvalSession, RuntimeValueMap, hir_eval::eval_root};
+use super::{EvalSession, RuntimeValueMap, hir_eval::eval_root};
 
 /// Build a quantity runtime value after validating that it is finite.
 pub(in crate::eval_expr) fn checked_finite_quantity(
     value: f64,
     context: &str,
     span: Span,
-    ctx: &EvalContext<'_>,
+    ctx: &EvalSession<'_>,
 ) -> Result<RuntimeValue, GraphcalError> {
     numeric::finite_quantity(value, context)
         .map(RuntimeValue::Quantity)
@@ -39,7 +40,7 @@ pub(in crate::eval_expr) fn checked_unit_scaled_value(
     value: f64,
     scale: PositiveFiniteScale,
     span: Span,
-    ctx: &EvalContext<'_>,
+    ctx: &EvalSession<'_>,
 ) -> Result<RuntimeValue, GraphcalError> {
     numeric::finite_quantity(value * scale.get(), "quantity literal value")
         .map(RuntimeValue::Quantity)
@@ -97,20 +98,19 @@ fn resolve_dynamic_unit_scale(
         .map_err(|error| unit_scale_error("dynamic unit scale", error, scale.span(), session))
 }
 
-/// Fold the scale of a unit expression whose terms name their units by `R`,
-/// resolving each term to the unit whose scale applies with `resolve`.
-fn fold_unit_scale<R>(
-    unit: &ResolvedUnitExpr<R>,
+/// Fold the scale of the unit expression spanning `span` whose terms name
+/// their units by `R`, each paired with the unit whose scale applies.
+fn fold_unit_scale<'u, R: 'u>(
+    span: Span,
+    terms: impl IntoIterator<Item = (&'u ResolvedUnitExprItem<R>, ResolvedUnitName)>,
     values: &RuntimeValueMap,
     session: &EvalSession<'_>,
-    resolve: impl Fn(&R) -> ResolvedUnitName,
     spelling: fn(&R) -> &UnitRef,
 ) -> Result<PositiveFiniteScale, GraphcalError> {
     try_fold_unit_scale(
-        &unit.terms,
-        |item| {
-            let resolved_unit = resolve(&item.name.value);
-            let info = session.tir.unit_info(&resolved_unit).ok_or_else(|| {
+        terms,
+        |(item, resolved_unit)| {
+            let info = session.tir.unit_info(resolved_unit).ok_or_else(|| {
                 session.internal_error(
                     format!("unknown checked unit `{}`", spelling(&item.name.value)),
                     item.name.span,
@@ -119,7 +119,7 @@ fn fold_unit_scale<R>(
             let scale = match &info.scale {
                 UnitScale::Const(scale) | UnitScale::Runtime(scale) => *scale,
                 UnitScale::Dynamic { base_unit_scale } => resolve_dynamic_unit_scale(
-                    &resolved_unit,
+                    resolved_unit,
                     spelling(&item.name.value),
                     *base_unit_scale,
                     item.name.span,
@@ -133,19 +133,19 @@ fn fold_unit_scale<R>(
                 power: item.power,
             })
         },
-        |item, error| match error {
+        |(item, _), error| match error {
             UnitScaleStepError::Power(error) => {
                 unit_scale_error("unit scale exponentiation", error, item.name.span, session)
             }
             UnitScaleStepError::Compound(error) => {
-                unit_scale_error("compound unit scale", error, unit.span, session)
+                unit_scale_error("compound unit scale", error, span, session)
             }
         },
     )
 }
 
-/// Resolve a `UnitExpr` of the tree `ctx` evaluates to its compound scale
-/// factor at runtime.
+/// Resolve a `UnitExpr` of an evaluated tree, whose terms resolve in the
+/// tree's scope, to its compound scale factor at runtime.
 ///
 /// Static unit definitions come from the TIR's canonical project type store.
 /// For dynamic units, the unit's strictly validated HIR scale expression, in
@@ -159,16 +159,16 @@ fn fold_unit_scale<R>(
 /// Returns a [`GraphcalError`] if a unit is unknown or a dynamic scale expression
 /// fails to evaluate to a quantity.
 pub(in crate::eval_expr) fn resolve_unit_scale(
-    unit: &ResolvedUnitExpr,
+    unit: ScopedUnitExpr<'_>,
     values: &RuntimeValueMap,
-    ctx: &EvalContext<'_>,
+    ctx: &EvalSession<'_>,
 ) -> Result<PositiveFiniteScale, GraphcalError> {
     fold_unit_scale(
-        unit,
+        unit.get().span,
+        unit.terms(),
         values,
         ctx,
-        |unit| ctx.resolve_unit(unit),
-        LocalUnit::spelling,
+        graphcal_compiler::hir::expr::LocalUnit::spelling,
     )
 }
 
@@ -185,10 +185,12 @@ pub(in crate::eval_expr) fn resolved_unit_scale(
     session: &EvalSession<'_>,
 ) -> Result<PositiveFiniteScale, GraphcalError> {
     fold_unit_scale(
-        unit,
+        unit.span,
+        unit.terms
+            .iter()
+            .map(|term| (term, term.name.value.resolved().clone())),
         values,
         session,
-        |unit| unit.resolved().clone(),
         ResolvedUnitRef::spelling,
     )
 }

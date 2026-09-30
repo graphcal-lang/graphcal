@@ -16,7 +16,7 @@ use graphcal_compiler::registry::checked_type::IndexTypeRef;
 
 pub use crate::constant_pools::RuntimeValueMap;
 pub use crate::runtime_value::RuntimeValue;
-pub use context::{EvalContext, EvalSession};
+pub use context::EvalSession;
 #[cfg(test)]
 pub use hir_eval::{HirLocalValueMap, eval_subtree_for_test};
 pub use hir_eval::{eval_root, eval_root_with_presentation};
@@ -33,10 +33,11 @@ pub fn index_ref_matches_resolved(
 
 fn imported_binding_value<'a>(
     target: &graphcal_compiler::resolved_name::ResolvedDeclName,
+    caller_dag: &graphcal_compiler::dag_id::DagId,
     caller_values: &'a RuntimeValueMap,
-    ctx: &'a EvalContext<'_>,
+    ctx: &'a EvalSession<'_>,
 ) -> Option<&'a RuntimeValue> {
-    if target.owner() == ctx.dag_id() {
+    if target.owner() == caller_dag {
         caller_values.get(target)
     } else if target.owner() == ctx.tir.root_dag_id() {
         ctx.root_values.and_then(|values| values.get(target))
