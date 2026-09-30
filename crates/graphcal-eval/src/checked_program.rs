@@ -18,7 +18,8 @@ use graphcal_compiler::ir::imported_binding::{ImportedBinding, ImportedValueKind
 use graphcal_compiler::resolved_name::ResolvedDeclName;
 use graphcal_compiler::semantic::checked_type::CheckedType;
 use graphcal_compiler::syntax::module_name::ScopedName;
-use graphcal_compiler::tir::typed::checked::{CheckedDag, CheckedTir};
+use graphcal_compiler::tir::typed::checked::CheckedTir;
+use graphcal_compiler::tir::typed::checked_dag::CheckedDag;
 use graphcal_compiler::tir::typed::model::StructFieldConstraintKey;
 
 use crate::runtime_value::RuntimeValue;

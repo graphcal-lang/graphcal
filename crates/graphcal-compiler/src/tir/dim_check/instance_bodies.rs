@@ -9,7 +9,7 @@ use crate::cancellation::CancellationToken;
 use crate::diagnostic_anchor::DiagnosticAnchor;
 use crate::graphcal_error::GraphcalError;
 use crate::tir::texpr::{CheckedBodies, CheckedBody, NominalObservation, TBody};
-use crate::tir::typed::model::{TirRead, UncheckedTir};
+use crate::tir::typed::program::{TirRead, UncheckedTir};
 use crate::tir::typed::specialization::specialize_expression_type;
 
 use super::body_specialization::DerivedTrees;

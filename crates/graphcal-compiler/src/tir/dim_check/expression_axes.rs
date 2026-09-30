@@ -10,7 +10,7 @@ use crate::semantic::index_def::IndexCardinality;
 use crate::syntax::span::Span;
 use crate::tir::materialized_shape::MaterializedShapeError;
 use crate::tir::static_index::UnavailableIndex;
-use crate::tir::typed::model::TirRead;
+use crate::tir::typed::program::TirRead;
 
 pub(super) fn checked_index_cardinality(
     tir: &dyn TirRead,

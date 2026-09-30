@@ -6,7 +6,7 @@
 use crate::hir::expr::{LocalDecl, LocalUnit};
 use crate::resolved_name::{ResolvedDeclName, ResolvedUnitName};
 
-use super::checked::CheckedDag;
+use super::checked_dag::CheckedDag;
 
 /// The scope a body runs in: the frame of the checked DAG that owns it.
 ///

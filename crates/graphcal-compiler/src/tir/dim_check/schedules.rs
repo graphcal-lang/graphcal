@@ -49,7 +49,7 @@ impl ScheduleBuilder {
         let callables = callables
             .into_iter()
             .map(|dag| {
-                RuntimeSchedule::build(tir, dag)
+                RuntimeSchedule::build(dag, |owner| tir.dags.get(owner))
                     .map(|schedule| (dag.dag_id().clone(), schedule))
                     .map_err(|error| match error {
                         RuntimeScheduleError::Cycle(cycle) => {

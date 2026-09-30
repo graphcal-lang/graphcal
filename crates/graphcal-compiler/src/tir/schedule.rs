@@ -12,7 +12,7 @@ use crate::dag_id::DagId;
 use crate::declaration_category::{DeclCategory, ValueDeclCategory};
 use crate::dependency_graph::{Cycle, DependencyGraph, TopoOrder};
 use crate::resolved_name::ResolvedDeclName;
-use crate::tir::typed::model::{DagTIR, UncheckedTir};
+use crate::tir::typed::model::DagTIR;
 
 /// Evaluation order of every constant of a checked file's local DAGs.
 ///
@@ -101,11 +101,11 @@ impl RuntimeSchedule {
     ///
     /// Returns [`RuntimeScheduleError`] for a dangling instance edge or a
     /// dependency cycle.
-    pub(crate) fn build(
-        tir: &UncheckedTir,
-        callable: &DagTIR,
+    pub(crate) fn build<'a>(
+        callable: &'a DagTIR,
+        dag: impl Fn(&DagId) -> Option<&'a DagTIR>,
     ) -> Result<Self, RuntimeScheduleError> {
-        let dags = instance_closure(tir, callable)?;
+        let dags = instance_closure(callable, dag)?;
         let mut graph = DependencyGraph::new();
         let mut dependencies = HashMap::new();
         for dag in &dags {
@@ -185,8 +185,8 @@ impl RuntimeSchedule {
 /// `callable` followed by every DAG its semantic instance edges reach, in
 /// [`DagId`] order.
 fn instance_closure<'a>(
-    tir: &'a UncheckedTir,
     callable: &'a DagTIR,
+    dag_of: impl Fn(&DagId) -> Option<&'a DagTIR>,
 ) -> Result<Vec<&'a DagTIR>, RuntimeScheduleError> {
     let mut pending = vec![callable];
     let mut visited = HashSet::from([callable.dag_id()]);
@@ -194,9 +194,7 @@ fn instance_closure<'a>(
     while let Some(dag) = pending.pop() {
         for edge in dag.semantic_instances() {
             let owner = edge.instance.id().owner();
-            let instance = tir
-                .dags
-                .get(owner)
+            let instance = dag_of(owner)
                 .ok_or_else(|| RuntimeScheduleError::MissingInstance(owner.clone()))?;
             if visited.insert(instance.dag_id()) {
                 pending.push(instance);
