@@ -727,20 +727,15 @@ fn check_const_struct_field_constraints(
     src: &NamedSource<Arc<String>>,
 ) -> Result<(), GraphcalError> {
     match value {
-        RuntimeValue::Struct {
-            type_name,
-            constructor,
-            generic_args,
-            fields,
-        } => {
-            let runtime_owning_type = StructTypeRef::from_resolved(type_name.clone());
+        RuntimeValue::Struct(value) => {
+            let runtime_owning_type = StructTypeRef::from_resolved(value.type_name().clone());
             let effective_owning_type = owning_type.or(Some(&runtime_owning_type));
-            for (field_name, field_value) in fields {
+            for (field_name, field_value) in value.fields() {
                 if let Some(constraint) = find_struct_field_constraint(
                     field_constraints,
                     effective_owning_type,
-                    generic_args,
-                    constructor,
+                    value.generic_args(),
+                    value.constructor(),
                     field_name,
                 ) && let Err(violation) =
                     crate::domain_check::check_domain_constraint(field_value, constraint)

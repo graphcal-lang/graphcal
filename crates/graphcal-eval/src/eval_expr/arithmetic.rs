@@ -20,12 +20,14 @@ mod tests {
     #[test]
     fn nominal_equality_compares_owner_and_constructor_independently() {
         let value = |module, constructor| {
-            RuntimeValue::struct_with_owner(
-                DagId::root_in_package("test", module),
-                StructTypeName::expect_valid("Phase"),
+            RuntimeValue::Struct(crate::runtime_value::StructValue::for_test(
+                graphcal_compiler::resolved_name::ResolvedStructTypeName::for_test(
+                    DagId::root_in_package("test", module),
+                    StructTypeName::expect_valid("Phase"),
+                ),
                 ConstructorName::expect_valid(constructor),
                 indexmap::IndexMap::new(),
-            )
+            ))
         };
         let idle = value("main", "Idle");
         assert!(semantic_value_equals(&idle, &value("main", "Idle")));
@@ -54,27 +56,15 @@ fn semantic_value_equals(lhs: &RuntimeValue, rhs: &RuntimeValue) -> bool {
                 variant: rhs_variant,
             } if lhs_index.matches_ref(rhs_index) && lhs_variant == rhs_variant
         ),
-        RuntimeValue::Struct {
-            type_name: lhs_type,
-            constructor: lhs_constructor,
-            generic_args: lhs_args,
-            fields: lhs_fields,
-        } => match rhs {
-            RuntimeValue::Struct {
-                type_name: rhs_type,
-                constructor: rhs_constructor,
-                generic_args: rhs_args,
-                fields: rhs_fields,
-            } => {
-                lhs_type == rhs_type
-                    && lhs_constructor == rhs_constructor
-                    && lhs_args == rhs_args
-                    && lhs_fields.len() == rhs_fields.len()
-                    && lhs_fields.iter().all(|(field, lhs_value)| {
-                        rhs_fields
-                            .get(field)
-                            .is_some_and(|rhs_value| semantic_value_equals(lhs_value, rhs_value))
-                    })
+        RuntimeValue::Struct(lhs) => match rhs {
+            // The same constructor application has the same declared fields
+            // in the same order.
+            RuntimeValue::Struct(rhs) => {
+                lhs.same_application(rhs)
+                    && lhs
+                        .fields()
+                        .zip(rhs.fields())
+                        .all(|((_, lhs), (_, rhs))| semantic_value_equals(lhs, rhs))
             }
             _ => false,
         },
@@ -175,11 +165,7 @@ pub(super) fn eval_comparison_values(
             RuntimeValue::Label { .. },
             RuntimeValue::Label { .. },
         )
-        | (
-            Comparison::Eq | Comparison::Ne,
-            RuntimeValue::Struct { .. },
-            RuntimeValue::Struct { .. },
-        )
+        | (Comparison::Eq | Comparison::Ne, RuntimeValue::Struct(_), RuntimeValue::Struct(_))
         | (
             Comparison::Eq | Comparison::Ne,
             RuntimeValue::CoordinateLabel { .. },
