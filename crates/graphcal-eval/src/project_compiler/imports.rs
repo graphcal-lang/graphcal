@@ -974,7 +974,7 @@ pub(in crate::project_compiler) fn process_file_include<'a>(
         DeclName,
         Vec<graphcal_compiler::desugar::desugared_ast::Attribute>,
     > = HashMap::new();
-    let mut requested_plots: HashMap<DeclName, graphcal_compiler::ir::lower::RequestedPlot> =
+    let mut requested_plots: HashMap<DeclName, graphcal_compiler::ir::model::RequestedPlot> =
         HashMap::new();
     let mut assertion_aliases = HashMap::new();
     let mut unit_projection_aliases = Vec::new();
@@ -1023,7 +1023,7 @@ pub(in crate::project_compiler) fn process_file_include<'a>(
                     // its local alias, evaluating against this instance (#847).
                     requested_plots.insert(
                         original,
-                        graphcal_compiler::ir::lower::RequestedPlot {
+                        graphcal_compiler::ir::model::RequestedPlot {
                             alias: local.clone(),
                             visibility,
                         },
@@ -1208,7 +1208,7 @@ pub(in crate::project_compiler) fn process_inline_dag_include<'a>(
         DeclName,
         Vec<graphcal_compiler::desugar::desugared_ast::Attribute>,
     > = HashMap::new();
-    let mut requested_plots: HashMap<DeclName, graphcal_compiler::ir::lower::RequestedPlot> =
+    let mut requested_plots: HashMap<DeclName, graphcal_compiler::ir::model::RequestedPlot> =
         HashMap::new();
     let mut assertion_aliases = HashMap::new();
     let mut unit_projection_aliases = Vec::new();
@@ -1255,7 +1255,7 @@ pub(in crate::project_compiler) fn process_inline_dag_include<'a>(
                 if is_plot {
                     requested_plots.insert(
                         original,
-                        graphcal_compiler::ir::lower::RequestedPlot {
+                        graphcal_compiler::ir::model::RequestedPlot {
                             alias: local.clone(),
                             visibility,
                         },

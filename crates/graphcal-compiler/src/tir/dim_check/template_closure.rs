@@ -126,19 +126,19 @@ fn check_rigid_plot_field(
     owner: &ResolvedDeclName,
     body: &TemplateBodyIdentity,
     failure: RigidFailure<'_>,
-    field: &crate::ir::lower::LoweredPlotField,
+    field: &crate::ir::model::LoweredPlotField,
 ) -> Result<(), GraphcalError> {
     let (property, expected) = match &field.property {
-        crate::ir::lower::LoweredPlotProperty::Mark(property) => {
+        crate::ir::model::LoweredPlotProperty::Mark(property) => {
             (property.name(), property.value_type())
         }
-        crate::ir::lower::LoweredPlotProperty::Plot(property) => {
+        crate::ir::model::LoweredPlotProperty::Plot(property) => {
             (property.name(), property.value_type())
         }
-        crate::ir::lower::LoweredPlotProperty::Composition(property) => {
+        crate::ir::model::LoweredPlotProperty::Composition(property) => {
             (property.name(), property.value_type())
         }
-        crate::ir::lower::LoweredPlotProperty::Unknown(property) => {
+        crate::ir::model::LoweredPlotProperty::Unknown(property) => {
             return Err(GraphcalError::internal_error(
                 format!("unchecked plot property `{property}` reached rigid validation"),
                 ctx.env.src,

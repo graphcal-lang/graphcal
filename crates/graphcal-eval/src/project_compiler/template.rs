@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use graphcal_compiler::dag_id::DagId;
-use graphcal_compiler::ir::lower::UnfrozenIR;
+use graphcal_compiler::ir::model::UnfrozenIR;
 
 /// Reusable elaborated pre-HIR template shared by every concrete instance.
 #[derive(Debug)]

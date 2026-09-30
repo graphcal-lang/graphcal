@@ -822,8 +822,8 @@ impl crate::ir::entry::BodyPhase for Typed {
     type TypeAnnotation = CheckedTypeAnnotation;
     type NodeDefinition = hir::node_definition::NodeDefinition;
     type AssertBody = hir::CheckedAssertBody;
-    type PlotBody = crate::ir::lower::LoweredPlotBody;
-    type CompositionFields = Vec<crate::ir::lower::LoweredPlotField>;
+    type PlotBody = crate::ir::model::LoweredPlotBody;
+    type CompositionFields = Vec<crate::ir::model::LoweredPlotField>;
     type UnitIdentity = ResolvedUnitName;
 }
 
@@ -919,7 +919,7 @@ pub struct DagSemanticBody {
     ///
     /// Each entry carries the validated declared/base dimensions and strictly
     /// lowered HIR scalar expression as one semantic record.
-    pub dynamic_unit_scales: HashMap<ResolvedUnitName, crate::ir::lower::DynamicUnitScaleEntry>,
+    pub dynamic_unit_scales: HashMap<ResolvedUnitName, crate::ir::model::DynamicUnitScaleEntry>,
     /// Canonical dependency maps for this DAG.
     pub dependencies: ResolvedDagDependencies,
     /// Include override obligations keyed by the canonical param whose default
@@ -950,7 +950,7 @@ pub struct CompetingExternFunctionDefinition {
 
 /// Resolved extern function signatures keyed by plugin and function identity.
 pub type ExternFunctions =
-    HashMap<crate::plugin_identity::ExternFnKey, crate::ir::lower::ExternFunctionEntry>;
+    HashMap<crate::plugin_identity::ExternFnKey, crate::ir::extern_function::ExternFunctionEntry>;
 
 /// Project-wide type services shared by every TIR state: formatting, the
 /// owner-qualified type store, instance runtime units, and extern signatures.
@@ -959,8 +959,10 @@ pub(crate) struct TirCore {
     registry: FormattingRegistry,
     project_types: Arc<ProjectTypeStore>,
     runtime_units: HashMap<ResolvedUnitName, Arc<UnitInfo>>,
-    extern_functions:
-        HashMap<crate::plugin_identity::ExternFnKey, crate::ir::lower::ExternFunctionEntry>,
+    extern_functions: HashMap<
+        crate::plugin_identity::ExternFnKey,
+        crate::ir::extern_function::ExternFunctionEntry,
+    >,
 }
 
 impl TirCore {
@@ -977,7 +979,10 @@ impl TirCore {
     /// Borrow resolved extern function signatures.
     pub(crate) const fn extern_functions(
         &self,
-    ) -> &HashMap<crate::plugin_identity::ExternFnKey, crate::ir::lower::ExternFunctionEntry> {
+    ) -> &HashMap<
+        crate::plugin_identity::ExternFnKey,
+        crate::ir::extern_function::ExternFunctionEntry,
+    > {
         &self.extern_functions
     }
 
@@ -1085,7 +1090,7 @@ impl TirDraft {
         root: DagTIR,
         extern_functions: HashMap<
             crate::plugin_identity::ExternFnKey,
-            crate::ir::lower::ExternFunctionEntry,
+            crate::ir::extern_function::ExternFunctionEntry,
         >,
     ) -> Self {
         Self {
@@ -1182,7 +1187,7 @@ impl TirDraft {
     pub fn insert_extern_function(
         &mut self,
         key: crate::plugin_identity::ExternFnKey,
-        function: crate::ir::lower::ExternFunctionEntry,
+        function: crate::ir::extern_function::ExternFunctionEntry,
     ) -> Result<(), CompetingExternFunctionDefinition> {
         match self.core.extern_functions.get(&key) {
             Some(existing) if !existing.has_same_callable_definition(&function) => {
@@ -1209,7 +1214,7 @@ impl TirDraft {
     /// conflicting one is a user-facing diagnostic at the later declaration.
     pub(crate) fn merge_declared_extern_functions(
         &mut self,
-        hir: &crate::ir::lower::HirDag,
+        hir: &crate::ir::model::HirDag,
         src: &NamedSource<Arc<String>>,
     ) -> Result<(), GraphcalError> {
         // Deterministic conflict reporting: earliest declaration first.
@@ -1341,7 +1346,10 @@ impl dyn TirRead + '_ {
     /// Borrow resolved extern function signatures.
     pub(crate) fn extern_functions(
         &self,
-    ) -> &HashMap<crate::plugin_identity::ExternFnKey, crate::ir::lower::ExternFunctionEntry> {
+    ) -> &HashMap<
+        crate::plugin_identity::ExternFnKey,
+        crate::ir::extern_function::ExternFunctionEntry,
+    > {
         self.core().extern_functions()
     }
 
@@ -1458,7 +1466,7 @@ pub struct InstantiatedTir {
     pub(crate) tir: UncheckedTir,
 }
 
-pub(crate) use crate::ir::lower::ResolvedExpectedFailMetadata;
+pub(crate) use crate::ir::model::ResolvedExpectedFailMetadata;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum ExpressionRootScope {
@@ -1479,7 +1487,7 @@ pub struct DagTIR {
     /// Every declaration owned by this DAG, keyed by canonical identity, in
     /// source order.
     pub(crate) decls: crate::ir::decl_table::DeclTable<Typed>,
-    pub(crate) included_plots: Vec<crate::ir::lower::IncludedPlotEntry>,
+    pub(crate) included_plots: Vec<crate::ir::model::IncludedPlotEntry>,
     pub(crate) semantic: DagSemanticBody,
     pub(crate) static_ports: Vec<crate::hir::StaticPort>,
     pub(crate) assumes_map: HashMap<ResolvedDeclName, Vec<ResolvedDeclName>>,

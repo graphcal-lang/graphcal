@@ -49,10 +49,8 @@ pub(crate) use expr::{find_extern_call, visit_expr};
 pub use expr_lower::context::ExprLoweringContext;
 pub use expr_lower::context::{BindingOverlay, FrozenBindings};
 pub use expr_lower::error::ExprLowerError;
-pub(crate) use expr_lower::lower::{lower_assert_body, lower_expr};
 pub use expr_lower::lower::{lower_expr_draft, lower_expr_tolerant};
 pub use expr_lower::tolerant::{LoweringFailure, Tolerant};
-pub(crate) use lower::lower_decl_type;
 pub use lower::{
     GenericApplicationTarget, GenericArgArity, GenericParamBinding, GenericScope, HirLowerError,
     ModuleScope, TypePathSlot,

@@ -429,7 +429,7 @@ fn lower_inline_dag_modules(
     semantic: &mut ProjectSemanticContext<'_, '_>,
     loaded_file: &crate::loader::LoadedFile,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
-) -> Result<Vec<graphcal_compiler::ir::lower::HirDag>, CompileError> {
+) -> Result<Vec<graphcal_compiler::ir::model::HirDag>, CompileError> {
     let file_src = loaded_file.named_source();
     loaded_file
         .inline_dags()
@@ -456,7 +456,7 @@ fn compile_loaded_dag_module_ir(
     dag_body: &[Declaration],
     file_src: &NamedSource<Arc<String>>,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
-) -> Result<graphcal_compiler::ir::lower::HirDag, CompileError> {
+) -> Result<graphcal_compiler::ir::model::HirDag, CompileError> {
     cancellation.checkpoint()?;
     if let Some(template) = semantic.module_templates.get(loaded_dag.dag_id()) {
         return freeze_inline_module_template(
@@ -561,7 +561,7 @@ fn freeze_inline_module_template(
     definitions: &mut graphcal_compiler::ir::static_definitions::StaticDefinitionEvaluator<'_>,
     src: &NamedSource<Arc<String>>,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
-) -> Result<graphcal_compiler::ir::lower::HirDag, CompileError> {
+) -> Result<graphcal_compiler::ir::model::HirDag, CompileError> {
     Ok(template.unfrozen.clone().freeze_with_cancellation(
         dag_id,
         definitions,
@@ -573,10 +573,10 @@ fn freeze_inline_module_template(
 fn store_and_freeze_module_template(
     semantic: &mut ProjectSemanticContext<'_, '_>,
     dag_id: &graphcal_compiler::dag_id::DagId,
-    unfrozen: graphcal_compiler::ir::lower::UnfrozenIR,
+    unfrozen: graphcal_compiler::ir::model::UnfrozenIR,
     src: &NamedSource<Arc<String>>,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
-) -> Result<graphcal_compiler::ir::lower::HirDag, CompileError> {
+) -> Result<graphcal_compiler::ir::model::HirDag, CompileError> {
     let template_unfrozen = unfrozen.clone();
     let frozen =
         unfrozen.freeze_with_cancellation(dag_id, semantic.definitions, src, cancellation)?;
@@ -823,7 +823,7 @@ fn resolve_projection_expected_fail(
 
 /// Leaves of the template's value declarations, each materialized by an instance.
 fn template_value_ports(
-    template: &graphcal_compiler::ir::lower::UnfrozenIR,
+    template: &graphcal_compiler::ir::model::UnfrozenIR,
 ) -> impl Iterator<Item = graphcal_compiler::syntax::decl_name::DeclName> + '_ {
     template.value_names().cloned()
 }
@@ -898,7 +898,7 @@ fn semantic_output_projections(
 
 fn semantic_assertion_projections(
     request: &IncludeInstanceRequest,
-    template: &graphcal_compiler::ir::lower::UnfrozenIR,
+    template: &graphcal_compiler::ir::model::UnfrozenIR,
     instance: &graphcal_compiler::dag_id::InstanceId,
     importer: &graphcal_compiler::dag_id::DagId,
     module_resolver: &graphcal_compiler::resolve::ModuleResolver,
@@ -936,7 +936,7 @@ fn semantic_assertion_projections(
 
 fn semantic_plot_projections(
     request: &IncludeInstanceRequest,
-    template: &graphcal_compiler::ir::lower::UnfrozenIR,
+    template: &graphcal_compiler::ir::model::UnfrozenIR,
     src: &NamedSource<Arc<String>>,
 ) -> Result<Vec<InstancePlotProjection>, CompileError> {
     request
@@ -962,10 +962,10 @@ fn semantic_plot_projections(
 }
 
 fn record_semantic_instance(
-    unfrozen: &mut graphcal_compiler::ir::lower::UnfrozenIR,
+    unfrozen: &mut graphcal_compiler::ir::model::UnfrozenIR,
     request: &IncludeInstanceRequest,
-    template: &graphcal_compiler::ir::lower::UnfrozenIR,
-    override_reconciliations: graphcal_compiler::ir::lower::IncludeOverrideReconciliations,
+    template: &graphcal_compiler::ir::model::UnfrozenIR,
+    override_reconciliations: graphcal_compiler::ir::include::IncludeOverrideReconciliations,
     importer: &graphcal_compiler::dag_id::DagId,
     module_resolver: &graphcal_compiler::resolve::ModuleResolver,
     src: &NamedSource<Arc<String>>,
@@ -990,7 +990,7 @@ fn record_semantic_instance(
     let plot_projections = semantic_plot_projections(request, template, src)?;
     unfrozen.add_semantic_dynamic_unit_bindings(&request.runtime_unit_names, &instance_id);
     unfrozen.record_semantic_instance(
-        graphcal_compiler::ir::lower::SemanticInstanceInput {
+        graphcal_compiler::ir::include::SemanticInstanceInput {
             instance: InstanceRecord::new(
                 instance_id,
                 substitution,
@@ -1034,7 +1034,7 @@ fn elaborate_include_instances(
     include_instances: &[IncludeInstanceRequest],
     importer_src: &NamedSource<Arc<String>>,
     importer: crate::loader::LoadedModule<'_>,
-    unfrozen: &mut graphcal_compiler::ir::lower::UnfrozenIR,
+    unfrozen: &mut graphcal_compiler::ir::model::UnfrozenIR,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<(), CompileError> {
     let project = semantic.project;
@@ -1479,13 +1479,13 @@ struct AliasResolutionOwners<'a> {
 /// `declarations` is the producer's effective HIR-facing value surface after
 /// its own includes have been elaborated. Type-system-only items are absent.
 fn add_selective_aliases_inner(
-    declarations: &HashMap<DeclName, graphcal_compiler::ir::lower::IncludeAliasDeclaration>,
+    declarations: &HashMap<DeclName, graphcal_compiler::ir::model::IncludeAliasDeclaration>,
     selective: &[ImportAlias],
     public_originals: &HashSet<graphcal_compiler::syntax::names::NameAtom>,
     prefix: &ScopeSegment,
     owners: &AliasResolutionOwners<'_>,
     import_span: Span,
-    unfrozen: &mut graphcal_compiler::ir::lower::UnfrozenIR,
+    unfrozen: &mut graphcal_compiler::ir::model::UnfrozenIR,
 ) {
     for alias in selective {
         let orig_name = &alias.original;

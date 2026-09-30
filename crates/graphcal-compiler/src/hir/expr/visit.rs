@@ -5,8 +5,8 @@ use std::collections::BTreeSet;
 use crate::dag_id::DagId;
 use crate::syntax::span::{Span, Spanned};
 
-use super::completeness::Completeness;
 use super::local_decl::LocalDecl;
+use super::model::Completeness;
 use super::model::{ConstRef, Expr, ExprKind, ExternFnRef, FunctionRef, IndexArg};
 
 /// Declaration dependencies observed in one HIR expression tree, named as

@@ -1,11 +1,11 @@
 //! Finished HIR bodies: strict trees whose every node carries an occurrence identity.
 
-use super::completeness::{Draft, NoErrorNode, Strict};
 use super::local_decl::LocalDecl;
 use super::local_unit::LocalUnit;
 #[cfg(test)]
 use super::model::ExprKind;
 use super::model::{AssertBody, Expr};
+use super::model::{Draft, NoErrorNode, Strict};
 use super::refine::{Refinement, refine_assert_body, refine_expr};
 use super::visit::visit_expr;
 #[cfg(test)]

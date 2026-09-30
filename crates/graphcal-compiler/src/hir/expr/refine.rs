@@ -5,7 +5,7 @@
 //! children in the structural order of [`super::visit_expr_children`]), so the
 //! first failure a [`Refinement`] reports is the first one in source order.
 
-use super::completeness::Completeness;
+use super::model::Completeness;
 use super::model::{
     AssertBody, ConstRef, Expr, ExprKind, FieldInit, IndexArg, MapEntry, MatchArm, ParamBinding,
     ResolvedUnitExpr, ResolvedUnitExprItem,

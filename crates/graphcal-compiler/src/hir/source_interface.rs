@@ -8,7 +8,7 @@ use crate::syntax::span::Span;
 
 /// One runtime-interface-relevant declaration authored directly in a DAG.
 ///
-/// Include elaboration can merge additional declarations into a [`HirDag`](crate::ir::lower::HirDag).
+/// Include elaboration can merge additional declarations into a [`HirDag`](crate::ir::model::HirDag).
 /// This record deliberately excludes those merged declarations, preserving the
 /// distinction between an entry DAG's own ports and its internal instances.
 #[derive(Debug, Clone, PartialEq, Eq)]
