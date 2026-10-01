@@ -40,7 +40,7 @@ pub enum DenseShapeError {
 ///
 /// Returns [`DenseShapeError`] for an empty axis, an overflowing cardinality,
 /// or a mismatched element count.
-pub fn check_dense_shape(shape: &[usize], len: usize) -> Result<(), DenseShapeError> {
+pub(crate) fn check_dense_shape(shape: &[usize], len: usize) -> Result<(), DenseShapeError> {
     if shape.is_empty() || shape.contains(&0) {
         return Err(DenseShapeError::EmptyAxis);
     }

@@ -369,13 +369,13 @@ impl<'p> CallablePlan<'p> {
     /// closure, in [`DagId`] order, each with the semantic instances it
     /// includes, in record order.
     #[must_use]
-    pub fn closure_instances(&self) -> &[(SealedDag<'p>, Vec<PlannedInstance<'p>>)] {
+    pub(crate) fn closure_instances(&self) -> &[(SealedDag<'p>, Vec<PlannedInstance<'p>>)] {
         &self.closure_instances
     }
 
     /// Whether `dag` is one of this callable's execution DAGs.
     #[must_use]
-    pub fn executes(&self, dag: &DagId) -> bool {
+    pub(crate) fn executes(&self, dag: &DagId) -> bool {
         self.execution_dags
             .iter()
             .any(|scope| scope.dag().dag_id() == dag)

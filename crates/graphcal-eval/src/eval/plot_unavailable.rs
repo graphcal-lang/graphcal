@@ -66,7 +66,7 @@ impl ComposedPlotsUnavailable<ResolvedDeclName> {
     /// preserving every unfinished origin and every failed plot. No
     /// unavailable plot is a valid case.
     #[must_use]
-    pub fn blocked_by<'a>(
+    pub(crate) fn blocked_by<'a>(
         plots: impl IntoIterator<Item = (&'a DeclName, &'a NodeUnavailable)>,
     ) -> Option<Self> {
         let plots = plots.into_iter().collect::<Vec<_>>();
@@ -98,7 +98,7 @@ impl ComposedPlotsUnavailable<ResolvedDeclName> {
 impl<N> ComposedPlotsUnavailable<N> {
     /// The same reason with every declaration it names renamed by `rename`.
     #[must_use]
-    pub fn map_names<M>(&self, rename: impl FnMut(&N) -> M) -> ComposedPlotsUnavailable<M> {
+    pub(crate) fn map_names<M>(&self, rename: impl FnMut(&N) -> M) -> ComposedPlotsUnavailable<M> {
         match self {
             Self::Blocked {
                 unfinished,

@@ -69,7 +69,7 @@ impl<T> DenseArray<T> {
     ///
     /// Returns [`DenseArrayError::Ragged`] when sibling entries disagree on
     /// their axes, or the first error `element` reports.
-    pub fn try_from_indexed<'v, E>(
+    pub(crate) fn try_from_indexed<'v, E>(
         value: &'v IndexedValue<RuntimeValue>,
         mut element: impl FnMut(&'v RuntimeValue) -> Result<T, E>,
     ) -> Result<Self, DenseArrayError<E>> {
@@ -122,7 +122,7 @@ impl<T> DenseArray<T> {
     /// # Errors
     ///
     /// Returns the first error `leaf` reports.
-    pub fn try_to_indexed<E>(
+    pub(crate) fn try_to_indexed<E>(
         &self,
         mut leaf: impl FnMut(&T) -> Result<RuntimeValue, E>,
     ) -> Result<IndexedValue<RuntimeValue>, E> {

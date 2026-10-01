@@ -63,7 +63,7 @@ pub enum DisplayValueError {
 
 /// Failure to project an exact hifitime epoch into jiff's timestamp range.
 #[derive(Debug, Error)]
-pub enum EpochProjectionError {
+pub(crate) enum EpochProjectionError {
     /// Whole Unix seconds exceeded jiff's signed-second input representation.
     #[error("datetime Unix seconds are outside the i64 range")]
     SecondsOutOfRange,
@@ -220,21 +220,6 @@ impl Value {
             Self::Quantity { si_value, .. } => Ok(*si_value),
             other => Err(ValueError {
                 expected: "Quantity",
-                actual: other.variant_description(),
-            }),
-        }
-    }
-
-    /// Get the Cartesian SI components of a complex quantity.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`ValueError`] if this is not a `Complex` value.
-    pub fn complex_si_value(&self) -> Result<ComplexValue, ValueError> {
-        match self {
-            Self::Complex { si_value, .. } => Ok(*si_value),
-            other => Err(ValueError {
-                expected: "Complex",
                 actual: other.variant_description(),
             }),
         }
@@ -636,7 +621,7 @@ fn format_epoch_in_timezone(
 /// # Errors
 ///
 /// Returns an error for epochs outside jiff's representable timestamp range.
-pub fn epoch_to_rfc3339(epoch: &hifitime::Epoch) -> Result<String, EpochProjectionError> {
+pub(crate) fn epoch_to_rfc3339(epoch: &hifitime::Epoch) -> Result<String, EpochProjectionError> {
     epoch_to_jiff_timestamp(epoch).map(|timestamp| timestamp.to_string())
 }
 
@@ -696,7 +681,7 @@ pub enum AssertResult<N = OutputDeclName> {
 impl<N> AssertResult<N> {
     /// The same result with every declaration it names renamed by `rename`.
     #[must_use]
-    pub fn map_names<M>(&self, rename: impl FnMut(&N) -> M) -> AssertResult<M> {
+    pub(crate) fn map_names<M>(&self, rename: impl FnMut(&N) -> M) -> AssertResult<M> {
         match self {
             Self::Blocked { reason } => AssertResult::Blocked {
                 reason: reason.map_names(rename),

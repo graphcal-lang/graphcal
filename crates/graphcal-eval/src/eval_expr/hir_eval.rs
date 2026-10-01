@@ -440,18 +440,18 @@ fn resolve_graph_ref<'a>(
 }
 
 fn clone_graph_ref_value(value: &RuntimeValue) -> RuntimeValue {
-    #[cfg(any(test, feature = "test-internals"))]
+    #[cfg(test)]
     record_cloned_runtime_nodes(value);
     value.clone()
 }
 
 fn clone_index_access_result(value: &RuntimeValue) -> RuntimeValue {
-    #[cfg(any(test, feature = "test-internals"))]
+    #[cfg(test)]
     record_cloned_runtime_nodes(value);
     value.clone()
 }
 
-#[cfg(any(test, feature = "test-internals"))]
+#[cfg(test)]
 fn record_cloned_runtime_nodes(value: &RuntimeValue) {
     CLONED_RUNTIME_NODES.with(|count| {
         count.set(
@@ -462,7 +462,7 @@ fn record_cloned_runtime_nodes(value: &RuntimeValue) {
     });
 }
 
-#[cfg(any(test, feature = "test-internals"))]
+#[cfg(test)]
 std::thread_local! {
     static CLONED_RUNTIME_NODES: std::cell::Cell<usize> = const {
         std::cell::Cell::new(0)
@@ -487,13 +487,13 @@ fn runtime_value_tree_node_count(value: &RuntimeValue) -> usize {
 
 /// Test-only: reset the count of runtime value nodes cloned by graph
 /// references and index accesses.
-#[cfg(any(test, feature = "test-internals"))]
+#[cfg(test)]
 pub fn reset_cloned_runtime_node_count() {
     CLONED_RUNTIME_NODES.with(|count| count.set(0));
 }
 
 /// Test-only: take the count of cloned runtime value nodes.
-#[cfg(any(test, feature = "test-internals"))]
+#[cfg(test)]
 #[must_use]
 pub fn take_cloned_runtime_node_count() -> usize {
     CLONED_RUNTIME_NODES.with(|count| count.replace(0))

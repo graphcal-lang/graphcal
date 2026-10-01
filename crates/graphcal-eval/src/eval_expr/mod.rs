@@ -19,8 +19,8 @@ pub use context::EvalSession;
 #[cfg(any(test, feature = "test-internals"))]
 pub use hir_eval::{HirLocalValueMap, eval_subtree_for_test};
 pub use hir_eval::{eval_root, eval_root_with_presentation};
-#[cfg(any(test, feature = "test-internals"))]
-pub use hir_eval::{reset_cloned_runtime_node_count, take_cloned_runtime_node_count};
+#[cfg(test)]
+pub(crate) use hir_eval::{reset_cloned_runtime_node_count, take_cloned_runtime_node_count};
 
 /// Compute every pending display unit of `presented` against `values`, the
 /// complete values of the root frame.

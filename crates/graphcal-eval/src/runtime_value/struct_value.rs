@@ -54,7 +54,7 @@ impl<V> StructValue<V> {
     ///
     /// Returns [`StructFieldsError`] when `fields` is not exactly the
     /// constructor's declared field set.
-    pub fn try_from_application(
+    pub(crate) fn try_from_application(
         application: &ConstructorApplication,
         fields: impl IntoIterator<Item = (FieldName, V)>,
     ) -> Result<Self, StructFieldsError> {
@@ -68,7 +68,7 @@ impl<V> StructValue<V> {
     ///
     /// Returns [`StructFieldsError`] when `fields` is not exactly the shape's
     /// field set.
-    pub fn try_from_record(
+    pub(crate) fn try_from_record(
         record: &ExternStructResult,
         fields: impl IntoIterator<Item = (FieldName, V)>,
     ) -> Result<Self, StructFieldsError> {
@@ -182,7 +182,7 @@ impl<V> StructValue<V> {
     /// Every declared field, at its instantiated type, with its value, in
     /// declaration order.
     #[must_use]
-    pub fn typed_fields(&self) -> impl ExactSizeIterator<Item = (&AppliedField, &V)> {
+    pub(crate) fn typed_fields(&self) -> impl ExactSizeIterator<Item = (&AppliedField, &V)> {
         self.application.fields().iter().zip(&self.values)
     }
 
@@ -215,7 +215,7 @@ impl<V> StructValue<V> {
 
     /// The owned value of `field`, when the constructor declares it.
     #[must_use]
-    pub fn into_field(self, field: &FieldName) -> Option<V> {
+    pub(crate) fn into_field(self, field: &FieldName) -> Option<V> {
         let index = self.position(field)?;
         self.values.into_iter().nth(index)
     }
