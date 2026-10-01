@@ -4,7 +4,9 @@ use crate::constant_pools::RuntimeValueMap;
 use crate::domain_check::check_domain_constraint;
 use crate::domain_constraint::ResolvedDomainConstraint;
 use crate::eval::types::NodeUnavailable;
-use crate::execution_plan::{CallablePlan, ExecPlan, PlannedBody};
+use crate::execution_plan::{
+    CallImport, CallablePlan, ExecPlan, ImportSource, PlannedBody, PlannedCall,
+};
 use crate::runtime_presentation::EvaluatedRuntimeValue;
 use crate::runtime_presentation::PendingPresentedMap;
 use graphcal_compiler::cancellation::CancellationToken;
@@ -35,10 +37,36 @@ pub enum FailurePolicy {
 pub struct ExecutionFrame<'a> {
     plan: &'a ExecPlan<'a>,
     callable: &'a CallablePlan<'a>,
+    /// The runtime imports the frame's caller supplies, with their frames.
+    imports: &'a [CallImport],
     policy: FailurePolicy,
     values: RuntimeValueMap,
     presented: PendingPresentedMap,
     errors: HashMap<ResolvedDeclName, NodeUnavailable>,
+}
+
+/// The values of a running or finished frame, with the presented values of
+/// those that have a presentation.
+#[derive(Clone, Copy)]
+pub struct FrameValues<'v> {
+    pub values: &'v RuntimeValueMap,
+    pub presentations: Option<&'v PendingPresentedMap>,
+}
+
+impl FrameValues<'_> {
+    /// The value of `key`, with its presentation when it has one.
+    fn presented(self, key: &ResolvedDeclName) -> Option<EvaluatedRuntimeValue> {
+        let value = self.values.get(key)?;
+        Some(
+            self.presentations
+                .and_then(|presented| presented.get(key))
+                .map_or_else(
+                    || crate::runtime_presentation::PresentedRef::plain(value),
+                    EvaluatedRuntimeValue::as_ref,
+                )
+                .to_owned_with(crate::runtime_value::RuntimeValue::clone),
+        )
+    }
 }
 
 /// What a finished frame computed.
@@ -102,11 +130,33 @@ pub fn eval_failed_node_error(error: &GraphcalError) -> NodeUnavailable {
 }
 
 impl<'a> ExecutionFrame<'a> {
-    /// A frame of `callable`, seeded with its constants and constant imports.
+    /// A frame of `callable` run without a caller, seeded with its constants
+    /// and constant imports; no caller supplies it runtime imports.
     #[must_use]
     pub fn new(
         plan: &'a ExecPlan<'a>,
         callable: &'a CallablePlan<'a>,
+        policy: FailurePolicy,
+    ) -> Self {
+        Self::with_imports(plan, callable, &[], policy)
+    }
+
+    /// A frame of the callable `call` runs, seeded with its constants and
+    /// constant imports, to be seeded with the runtime imports the call
+    /// supplies by [`Self::seed_runtime_imports`].
+    #[must_use]
+    pub fn called(
+        plan: &'a ExecPlan<'a>,
+        call: PlannedCall<'a, 'a>,
+        policy: FailurePolicy,
+    ) -> Self {
+        Self::with_imports(plan, call.callable(), call.imports(), policy)
+    }
+
+    fn with_imports(
+        plan: &'a ExecPlan<'a>,
+        callable: &'a CallablePlan<'a>,
+        imports: &'a [CallImport],
         policy: FailurePolicy,
     ) -> Self {
         let mut values = RuntimeValueMap::new();
@@ -130,6 +180,7 @@ impl<'a> ExecutionFrame<'a> {
         Self {
             plan,
             callable,
+            imports,
             policy,
             values,
             presented,
@@ -242,19 +293,22 @@ impl<'a> ExecutionFrame<'a> {
         self.bind(key, domain, value, source, span)
     }
 
-    /// Seed each prepared runtime import of this callable that is not bound
-    /// yet with the value `lookup` finds for it in the caller's frames.
+    /// Seed each runtime import the caller supplies that is not bound yet
+    /// with its value in the frame the plan classified it to: the `caller`'s
+    /// frame or, when there is one, the `root` frame.
     ///
     /// Supplied values and retained checked constants always win.
-    pub fn seed_runtime_imports(
-        &mut self,
-        mut lookup: impl FnMut(&ResolvedDeclName) -> Option<EvaluatedRuntimeValue>,
-    ) {
-        for key in &self.callable.imports().runtime {
+    pub fn seed_runtime_imports(&mut self, caller: FrameValues<'_>, root: Option<FrameValues<'_>>) {
+        for import in self.imports {
+            let key = import.key();
             if self.values.contains_key(key) {
                 continue;
             }
-            if let Some(imported) = lookup(key) {
+            let frame = match import.source() {
+                ImportSource::Caller => Some(caller),
+                ImportSource::Root => root,
+            };
+            if let Some(imported) = frame.and_then(|frame| frame.presented(key)) {
                 self.store(key, imported);
             }
         }

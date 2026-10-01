@@ -988,16 +988,17 @@ fn frame_arguments_are_domain_checked_and_keep_presentation_only_when_bound() {
 
 #[test]
 fn frame_runtime_imports_seed_only_unbound_prepared_imports() {
-    use graphcal_eval::execution_frame::{ExecutionFrame, FailurePolicy};
-    use graphcal_eval::runtime_presentation::EvaluatedRuntimeValue;
+    use graphcal_eval::execution_frame::{ExecutionFrame, FailurePolicy, FrameValues};
+    use graphcal_eval::execution_plan::{CallImport, ImportSource, PlannedCall};
     use graphcal_eval::runtime_value::RuntimeValue;
     let source = "dag scaled { param factor: Dimensionless; pub node result: Dimensionless = @factor * 2.0; } node out: Dimensionless = @scaled(factor: 4.0)::result;";
     let tir = compile_to_tir(source, "frame.gcl").unwrap();
     let src = miette::NamedSource::new("frame.gcl", std::sync::Arc::new(source.to_string()));
     let prepared = graphcal_eval::exec_plan::compile(&tir, &src).unwrap();
     let plan = prepared.plan();
-    // Runtime imports are prepared from checked import bindings; prepare one
-    // directly so the frame's contract is exercised on its own.
+    // Runtime imports are classified from checked import bindings when the
+    // plan is prepared; classify one directly so the frame's contract is
+    // exercised on its own.
     let inline = plan
         .callables()
         .find(|callable| callable.scope().dag().dag_id() != tir.root_dag_id())
@@ -1009,44 +1010,77 @@ fn frame_runtime_imports_seed_only_unbound_prepared_imports() {
         .next()
         .map(graphcal_compiler::tir::typed::TypedParamEntry::identity)
         .unwrap();
-    let callable = graphcal_eval::execution_plan::CallablePlan::new(
-        inline.scope(),
-        inline.execution_dags().to_vec(),
-        inline.semantic_instances().to_vec(),
-        inline.closure_instances().to_vec(),
-        graphcal_eval::execution_plan::PreparedImports {
-            constants: Vec::new(),
-            runtime: vec![import.clone()],
-        },
-        inline
-            .steps()
-            .map(|step| step.declaration().clone())
-            .collect(),
-    )
-    .unwrap();
-    let expected_imports = vec![import.clone()];
-    let value = |value: f64| EvaluatedRuntimeValue::plain(RuntimeValue::quantity(value).unwrap());
+    let inline_id = inline.scope().dag().dag_id();
+    let from_caller = CallImport::classify(&import, inline_id, tir.root_dag_id()).unwrap();
+    assert_eq!(from_caller.source(), ImportSource::Caller);
+    let from_root = CallImport::classify(&import, tir.root_dag_id(), inline_id).unwrap();
+    assert_eq!(from_root.source(), ImportSource::Root);
+    assert!(CallImport::classify(&import, tir.root_dag_id(), tir.root_dag_id()).is_none());
 
-    let mut frame = ExecutionFrame::new(plan, &callable, FailurePolicy::Propagate);
-    let mut asked = Vec::new();
-    frame.seed_runtime_imports(|key| {
-        asked.push(key.clone());
-        Some(value(5.0))
-    });
-    assert_eq!(asked, expected_imports);
-    assert!(frame.values().contains_key(&import));
-    assert!(!frame.presentations().contains_key(&import));
+    let frame_of = |value: f64| {
+        graphcal_eval::constant_pools::RuntimeValueMap::from([(
+            import.clone(),
+            RuntimeValue::quantity(value).unwrap(),
+        )])
+    };
+    let caller = frame_of(5.0);
+    let root = frame_of(6.0);
+    let caller = FrameValues {
+        values: &caller,
+        presentations: None,
+    };
+    let root = FrameValues {
+        values: &root,
+        presentations: None,
+    };
+    let seeded = |imports: &[CallImport], root: Option<FrameValues<'_>>| {
+        let mut frame = ExecutionFrame::called(
+            plan,
+            PlannedCall::for_test(inline, imports),
+            FailurePolicy::Propagate,
+        );
+        frame.seed_runtime_imports(caller, root);
+        let presented = frame.presentations().contains_key(&import);
+        let value = frame
+            .values()
+            .get(&import)
+            .and_then(|value| value.expect_quantity("import").ok())
+            .map(graphcal_compiler::finite_value::FiniteQuantity::get);
+        (value, presented)
+    };
+    assert_eq!(
+        seeded(std::slice::from_ref(&from_caller), Some(root)),
+        (Some(5.0), false)
+    );
+    assert_eq!(
+        seeded(std::slice::from_ref(&from_root), Some(root)),
+        (Some(6.0), false)
+    );
+    // Before the root frame is available, a root import is not seeded.
+    assert_eq!(
+        seeded(std::slice::from_ref(&from_root), None),
+        (None, false)
+    );
 
     // An import already bound keeps its value.
     let span = graphcal_compiler::syntax::span::Span::new(0, 0);
-    let mut frame = ExecutionFrame::new(plan, &callable, FailurePolicy::Propagate);
+    let imports = [from_caller];
+    let mut frame = ExecutionFrame::called(
+        plan,
+        PlannedCall::for_test(inline, &imports),
+        FailurePolicy::Propagate,
+    );
     frame
-        .bind_argument(&import, value(7.0), &src, span)
+        .bind_argument(
+            &import,
+            graphcal_eval::runtime_presentation::EvaluatedRuntimeValue::plain(
+                RuntimeValue::quantity(7.0).unwrap(),
+            ),
+            &src,
+            span,
+        )
         .unwrap();
-    frame.seed_runtime_imports(|key| {
-        assert_ne!(key, &import, "a bound import is never looked up");
-        Some(value(5.0))
-    });
+    frame.seed_runtime_imports(caller, Some(root));
     assert_eq!(
         frame
             .values()

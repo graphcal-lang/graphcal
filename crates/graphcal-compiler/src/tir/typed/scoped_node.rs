@@ -161,6 +161,13 @@ impl<'t> ScopedCall<'t> {
     pub const fn callee(self) -> DagPosition {
         self.scope().callee(*self.get())
     }
+
+    /// The position of the calling DAG, the DAG whose body holds the call,
+    /// in the registry of the program running it.
+    #[must_use]
+    pub const fn caller(self) -> DagPosition {
+        self.scope().position()
+    }
 }
 
 /// The arms of a match node, in the node's scope.

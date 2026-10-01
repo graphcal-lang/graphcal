@@ -21,14 +21,28 @@ use super::dag_position::DagPosition;
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct BodyScope<'t> {
     dag: &'t CheckedDag,
+    position: DagPosition,
     callees: &'t [DagPosition],
 }
 
 impl<'t> BodyScope<'t> {
-    /// The scope of `dag`, whose call slots have the callees `callees` in
-    /// its program's registry.
-    pub(super) const fn of(dag: &'t CheckedDag, callees: &'t [DagPosition]) -> Self {
-        Self { dag, callees }
+    /// The scope of `dag`, at `position` in its program's registry, whose
+    /// call slots have the callees `callees` there.
+    pub(super) const fn of(
+        dag: &'t CheckedDag,
+        position: DagPosition,
+        callees: &'t [DagPosition],
+    ) -> Self {
+        Self {
+            dag,
+            position,
+            callees,
+        }
+    }
+
+    /// The registry position of this scope's DAG.
+    pub(crate) const fn position(self) -> DagPosition {
+        self.position
     }
 
     /// The registry position of the DAG a call slot of this scope's body

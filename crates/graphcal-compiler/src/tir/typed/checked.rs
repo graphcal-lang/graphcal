@@ -104,12 +104,16 @@ impl CheckedDagRegistry {
     /// The scope of one DAG, to select its bodies in.
     pub(super) fn scope(&self, dag_id: &DagId) -> Option<BodyScope<'_>> {
         self.get_positioned(dag_id)
-            .map(|(position, dag)| BodyScope::of(dag, &self.callees[position.index()]))
+            .map(|(position, dag)| BodyScope::of(dag, position, &self.callees[position.index()]))
     }
 
     /// The scope of the root DAG.
     pub(super) fn root_scope(&self) -> BodyScope<'_> {
-        BodyScope::of(&self.root, &self.callees[DagPosition::ROOT.index()])
+        BodyScope::of(
+            &self.root,
+            DagPosition::ROOT,
+            &self.callees[DagPosition::ROOT.index()],
+        )
     }
 
     /// The positions of the callees of the body at `caller`, by call slot.
