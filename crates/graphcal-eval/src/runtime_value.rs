@@ -4,15 +4,12 @@ use graphcal_compiler::complex_value::ComplexValue;
 use graphcal_compiler::finite_value::{FiniteQuantity, NonFiniteQuantity};
 
 pub(crate) mod dense_array;
-mod index_axis;
 mod indexed;
-mod key_value;
-mod struct_value;
 
-pub use index_axis::IndexAxis;
+pub use graphcal_compiler::semantic::index_axis::IndexAxis;
+pub use graphcal_compiler::semantic::key_value::{KeyElement, KeyValue};
+pub use graphcal_compiler::semantic::struct_value::{StructFieldsError, StructValue};
 pub use indexed::IndexedValue;
-pub use key_value::{KeyElement, KeyValue};
-pub use struct_value::{StructFieldsError, StructValue};
 
 /// Error returned when a [`RuntimeValue`] accessor is called on an incompatible variant.
 #[derive(Debug, Clone, PartialEq, Eq)]

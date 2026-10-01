@@ -4,8 +4,8 @@ use graphcal_compiler::semantic::checked_type::IndexTypeRef;
 use graphcal_compiler::syntax::index_name::IndexEntryKey;
 use graphcal_compiler::syntax::non_empty::NonEmpty;
 
-use super::index_axis::IndexAxis;
-use super::key_value::KeyValue;
+use graphcal_compiler::semantic::index_axis::IndexAxis;
+use graphcal_compiler::semantic::key_value::KeyValue;
 
 /// An indexed value: exactly one entry of type `V` for every key of its axis,
 /// in axis order.

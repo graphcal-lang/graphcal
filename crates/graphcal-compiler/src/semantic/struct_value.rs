@@ -4,12 +4,11 @@ use std::sync::Arc;
 
 use indexmap::IndexMap;
 
-use graphcal_compiler::extern_struct_result::ExternStructResult;
-use graphcal_compiler::resolved_name::ResolvedStructTypeName;
-use graphcal_compiler::semantic::applied_constructor::{AppliedConstructor, AppliedField};
-use graphcal_compiler::semantic::checked_type::CheckedGenericArg;
-use graphcal_compiler::syntax::type_name::{ConstructorName, FieldName};
-use graphcal_compiler::tir::texpr::ConstructorApplication;
+use crate::extern_struct_result::ExternStructResult;
+use crate::resolved_name::ResolvedStructTypeName;
+use crate::semantic::applied_constructor::{AppliedConstructor, AppliedField};
+use crate::semantic::checked_type::CheckedGenericArg;
+use crate::syntax::type_name::{ConstructorName, FieldName};
 
 /// A constructor applied to exactly its declared fields.
 ///
@@ -54,11 +53,11 @@ impl<V> StructValue<V> {
     ///
     /// Returns [`StructFieldsError`] when `fields` is not exactly the
     /// constructor's declared field set.
-    pub(crate) fn try_from_application(
-        application: &ConstructorApplication,
+    pub fn try_from_application(
+        application: &Arc<AppliedConstructor>,
         fields: impl IntoIterator<Item = (FieldName, V)>,
     ) -> Result<Self, StructFieldsError> {
-        Self::try_new(Arc::clone(&application.applied), fields)
+        Self::try_new(Arc::clone(application), fields)
     }
 
     /// Build the record an extern function returned, whose declaration bound
@@ -68,7 +67,7 @@ impl<V> StructValue<V> {
     ///
     /// Returns [`StructFieldsError`] when `fields` is not exactly the shape's
     /// field set.
-    pub(crate) fn try_from_record(
+    pub fn try_from_record(
         record: &ExternStructResult,
         fields: impl IntoIterator<Item = (FieldName, V)>,
     ) -> Result<Self, StructFieldsError> {
@@ -115,16 +114,12 @@ impl<V> StructValue<V> {
     /// A struct value of `constructor` of `type_name` whose declared fields
     /// are exactly `fields`, each at its type, for tests (including of the
     /// evaluator's defenses against values of a foreign type).
-    #[cfg(any(test, feature = "test-internals"))]
+    #[cfg(any(test, feature = "test-identities"))]
     #[must_use]
     pub fn for_test(
         type_name: ResolvedStructTypeName,
         constructor: ConstructorName,
-        fields: Vec<(
-            FieldName,
-            graphcal_compiler::semantic::checked_type::CheckedType,
-            V,
-        )>,
+        fields: Vec<(FieldName, crate::semantic::checked_type::CheckedType, V)>,
     ) -> Self {
         let (declared, values): (Vec<_>, Vec<_>) = fields
             .into_iter()
@@ -182,7 +177,7 @@ impl<V> StructValue<V> {
     /// Every declared field, at its instantiated type, with its value, in
     /// declaration order.
     #[must_use]
-    pub(crate) fn typed_fields(&self) -> impl ExactSizeIterator<Item = (&AppliedField, &V)> {
+    pub fn typed_fields(&self) -> impl ExactSizeIterator<Item = (&AppliedField, &V)> {
         self.application.fields().iter().zip(&self.values)
     }
 
@@ -215,7 +210,7 @@ impl<V> StructValue<V> {
 
     /// The owned value of `field`, when the constructor declares it.
     #[must_use]
-    pub(crate) fn into_field(self, field: &FieldName) -> Option<V> {
+    pub fn into_field(self, field: &FieldName) -> Option<V> {
         let index = self.position(field)?;
         self.values.into_iter().nth(index)
     }
@@ -225,15 +220,15 @@ impl<V> StructValue<V> {
 mod tests {
     use std::sync::Arc;
 
-    use graphcal_compiler::dag_id::DagId;
-    use graphcal_compiler::extern_struct_result::ExternStructResult;
-    use graphcal_compiler::function_signature::{StructFieldKind, StructShape, StructShapeField};
-    use graphcal_compiler::resolved_name::ResolvedStructTypeName;
-    use graphcal_compiler::semantic::applied_constructor::AppliedConstructor;
-    use graphcal_compiler::semantic::checked_type::CheckedType;
-    use graphcal_compiler::syntax::type_name::{ConstructorName, FieldName, StructTypeName};
+    use crate::dag_id::DagId;
+    use crate::extern_struct_result::ExternStructResult;
+    use crate::function_signature::{StructFieldKind, StructShape, StructShapeField};
+    use crate::resolved_name::ResolvedStructTypeName;
+    use crate::semantic::applied_constructor::AppliedConstructor;
+    use crate::semantic::checked_type::CheckedType;
+    use crate::syntax::type_name::{ConstructorName, FieldName, StructTypeName};
 
-    use crate::runtime_value::struct_value::{StructFieldsError, StructValue};
+    use super::{StructFieldsError, StructValue};
 
     fn field(name: &str) -> FieldName {
         FieldName::expect_valid(name)

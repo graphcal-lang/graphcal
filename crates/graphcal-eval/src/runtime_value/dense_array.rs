@@ -3,8 +3,8 @@
 use graphcal_compiler::syntax::non_empty::NonEmpty;
 
 use super::RuntimeValue;
-use super::index_axis::IndexAxis;
 use super::indexed::IndexedValue;
+use graphcal_compiler::semantic::index_axis::IndexAxis;
 
 /// A rectangular array: one element per combination of axis keys, stored
 /// row-major (the last axis varies fastest).

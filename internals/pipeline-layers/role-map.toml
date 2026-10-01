@@ -2179,13 +2179,13 @@ path = ["runtime_value", "dense_array", "tests"]
 role = "contracts"
 
 [[module]]
-package = "eval"
-path = ["runtime_value", "index_axis"]
+package = "compiler"
+path = ["semantic", "index_axis"]
 role = "contracts"
 
 [[module]]
-package = "eval"
-path = ["runtime_value", "index_axis", "tests"]
+package = "compiler"
+path = ["semantic", "index_axis", "tests"]
 role = "contracts"
 
 [[module]]
@@ -2199,23 +2199,23 @@ path = ["runtime_value", "indexed", "tests"]
 role = "contracts"
 
 [[module]]
-package = "eval"
-path = ["runtime_value", "key_value"]
+package = "compiler"
+path = ["semantic", "key_value"]
 role = "contracts"
 
 [[module]]
-package = "eval"
-path = ["runtime_value", "key_value", "tests"]
+package = "compiler"
+path = ["semantic", "key_value", "tests"]
 role = "contracts"
 
 [[module]]
-package = "eval"
-path = ["runtime_value", "struct_value"]
+package = "compiler"
+path = ["semantic", "struct_value"]
 role = "contracts"
 
 [[module]]
-package = "eval"
-path = ["runtime_value", "struct_value", "tests"]
+package = "compiler"
+path = ["semantic", "struct_value", "tests"]
 role = "contracts"
 
 [[module]]

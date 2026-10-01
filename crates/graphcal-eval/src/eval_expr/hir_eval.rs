@@ -530,7 +530,7 @@ fn apply_constructor(
     span: Span,
     ctx: &EvalSession<'_>,
 ) -> Result<RuntimeValue, SemanticError> {
-    StructValue::try_from_application(application, fields)
+    StructValue::try_from_application(&application.applied, fields)
         .map(RuntimeValue::Struct)
         .map_err(|error| ctx.internal_error(error.to_string(), span))
 }
@@ -861,7 +861,7 @@ fn eval_constructor_call(
         field_values.push((field_init.name.clone(), evaluated));
     }
     // The checker admits a constructor call only with its declared fields.
-    StructValue::try_from_application(application, field_values)
+    StructValue::try_from_application(&application.applied, field_values)
         .map(EvaluatedRuntimeValue::from_struct)
         .map_err(|error| invariant_error(Invariant::violated(error), span, ctx))
         .map_err(Outcome::Failed)
