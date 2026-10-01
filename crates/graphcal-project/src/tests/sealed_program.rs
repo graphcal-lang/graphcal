@@ -54,7 +54,7 @@ fn const_pools_evaluate_every_constant_once_after_the_constants_it_reads() {
     )
     .unwrap();
     let mut evaluated = Vec::new();
-    let pool = ConstPool::build(&tir, &ConstPool::default(), |step| {
+    let (pool, pools) = ConstPool::build(&tir, &ConstPool::default(), |step| {
         assert!(std::ptr::eq(step.tir, &raw const tir));
         assert!(std::ptr::eq(
             step.expression.get(),
@@ -77,6 +77,10 @@ fn const_pools_evaluate_every_constant_once_after_the_constants_it_reads() {
     assert_eq!(names, ["a", "b", "c"]);
     let root = pool.for_dag(tir.root_dag_id()).unwrap();
     assert_eq!(root.len(), 3);
+    assert!(std::sync::Arc::ptr_eq(
+        root,
+        pools.at(graphcal_compiler::tir::typed::dag_position::DagPosition::ROOT)
+    ));
     assert_eq!(pool.dags().collect::<Vec<_>>(), [tir.root_dag_id()]);
 
     let reference = pool.reference(&key(&tir, "c")).unwrap();
@@ -111,7 +115,7 @@ fn const_pools_stop_at_the_first_failed_constant() {
 #[test]
 fn const_pools_reject_inherited_pools_for_scheduled_dags() {
     let tir = compile_to_tir("const node a: Dimensionless = 1.0;", "test.gcl").unwrap();
-    let pool = ConstPool::build(&tir, &ConstPool::default(), one()).unwrap();
+    let (pool, _) = ConstPool::build(&tir, &ConstPool::default(), one()).unwrap();
     assert!(matches!(
         ConstPool::build(&tir, &pool, one()),
         Err(ConstPoolBuildError::Invalid(ConstantPoolError::Rescheduled(dag))) if &dag == tir.root_dag_id()

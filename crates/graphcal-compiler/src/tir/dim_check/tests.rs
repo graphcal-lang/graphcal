@@ -4577,7 +4577,10 @@ fn checker_retains_dependency_then_source_ordered_schedules() {
     let tir = check_draft(draft.clone(), src).unwrap();
 
     let constants = tir.const_schedule();
-    assert_eq!(constants.dags(), [test_dag_id()]);
+    assert_eq!(
+        constants.dags(),
+        [crate::tir::typed::dag_position::DagPosition::ROOT]
+    );
     assert_eq!(
         constants.order().as_slice(),
         [root_decl("a"), root_decl("b"), root_decl("c")]

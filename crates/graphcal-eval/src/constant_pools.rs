@@ -15,6 +15,7 @@ use graphcal_compiler::hir::expr::Expr;
 use graphcal_compiler::resolved_name::ResolvedDeclName;
 use graphcal_compiler::tir::typed::body_scope::Scoped;
 use graphcal_compiler::tir::typed::checked::CheckedTir;
+use graphcal_compiler::tir::typed::dag_position::DagPosition;
 use graphcal_compiler::tir::typed::evaluation_unit::BodyKind;
 use thiserror::Error;
 
@@ -26,8 +27,6 @@ pub enum ConstantPoolError {
     Uncovered(DagId),
     #[error("DAG `{0}` is scheduled by this check but was inherited from a checked module")]
     Rescheduled(DagId),
-    #[error("scheduled DAG `{0}` has no checked body")]
-    MissingDag(DagId),
     #[error("constant schedule references missing declaration `{0}`")]
     MissingDeclaration(ResolvedDeclName),
 }
@@ -75,21 +74,15 @@ impl ConstPool {
         tir: &CheckedTir,
         inherited: &Self,
         mut evaluate: impl FnMut(ConstStep<'_>) -> Result<RuntimeValue, E>,
-    ) -> Result<Self, ConstPoolBuildError<E>> {
+    ) -> Result<(Self, PositionedPools), ConstPoolBuildError<E>> {
         let invalid = |error| Err(ConstPoolBuildError::Invalid(error));
         let schedule = tir.const_schedule();
-        let scheduled = schedule.dags().iter().collect::<HashSet<_>>();
-        if let Some(missing) = schedule
-            .dags()
-            .iter()
-            .find(|dag_id| tir.dag_registry().get(dag_id).is_none())
-        {
-            return invalid(ConstantPoolError::MissingDag(missing.clone()));
-        }
+        let scheduled = schedule.dags().iter().copied().collect::<HashSet<_>>();
         let mut by_dag = HashMap::new();
         let mut fresh = HashMap::new();
-        for dag_id in tir.dag_registry().keys() {
-            match (scheduled.contains(dag_id), inherited.by_dag.get(dag_id)) {
+        for (position, dag) in tir.dag_registry().positioned() {
+            let dag_id = dag.dag_id();
+            match (scheduled.contains(&position), inherited.by_dag.get(dag_id)) {
                 (true, None) => {
                     fresh.insert(dag_id.clone(), RuntimeValueMap::new());
                 }
@@ -131,7 +124,13 @@ impl ConstPool {
                 .into_iter()
                 .map(|(dag_id, pool)| (dag_id, Arc::new(pool))),
         );
-        Ok(Self { by_dag })
+        // The loop above gave every DAG of the registry a pool.
+        let by_position = tir
+            .dag_registry()
+            .positioned()
+            .map(|(_, dag)| Arc::clone(&by_dag[dag.dag_id()]))
+            .collect();
+        Ok((Self { by_dag }, PositionedPools { by_position }))
     }
 
     /// The evaluated constants of one DAG.
@@ -153,6 +152,29 @@ impl ConstPool {
             pool: Arc::clone(pool),
             key: key.clone(),
         })
+    }
+}
+
+/// The pool of every DAG of the checked TIR one [`ConstPool`] was built
+/// for, at the DAG's position in that TIR's registry.
+///
+/// Only [`ConstPool::build`] creates one, aligned with the registry it
+/// covers, so every position of that registry has a pool.
+#[derive(Debug, Clone)]
+pub struct PositionedPools {
+    by_position: Vec<Arc<RuntimeValueMap>>,
+}
+
+impl PositionedPools {
+    /// The evaluated constants of the DAG at `position`.
+    ///
+    /// # Panics
+    ///
+    /// Panics when `position` is a position of another registry with more
+    /// DAGs.
+    #[must_use]
+    pub fn at(&self, position: DagPosition) -> &Arc<RuntimeValueMap> {
+        &self.by_position[position.index()]
     }
 }
 

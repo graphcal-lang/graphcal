@@ -21,7 +21,7 @@ mod const_eval;
 mod domain_resolve;
 
 use domain_resolve::{
-    DagConstScope, check_dag_const_struct_field_constraints_at_compile_time,
+    ConstScopes, DagConstScope, check_dag_const_struct_field_constraints_at_compile_time,
     resolve_domain_constraints_for_dag, resolve_struct_field_constraints_for_dags,
 };
 
@@ -65,13 +65,6 @@ pub fn seal_checked_program(
     let (evaluated, const_presentations) =
         const_eval::eval_const_pool(tir, inherited, src, sources, cancellation)?;
     let (tir, consts) = (evaluated.tir(), evaluated.consts());
-    let pool = |dag_id| {
-        consts.for_dag(dag_id).ok_or_else(|| {
-            internal(format!(
-                "checked DAG `{dag_id}` has no initialized const pool"
-            ))
-        })
-    };
     let all_const_values = consts
         .dags()
         .filter_map(|dag_id| consts.for_dag(dag_id))
@@ -81,35 +74,28 @@ pub fn seal_checked_program(
     let scheduled = tir.const_schedule().dags();
     let domain_constraints = scheduled
         .iter()
-        .map(|dag_id| {
+        .map(|&position| {
             cancellation.checkpoint()?;
+            let dag = tir.dag_registry().at(position);
             resolve_domain_constraints_for_dag(
                 tir,
-                &tir.dag_registry()[dag_id],
-                pool(dag_id)?,
+                dag,
+                evaluated.pool_at(position),
                 &all_const_values,
                 src,
                 sources,
                 cancellation,
             )
-            .map(|constraints| (dag_id.clone(), constraints))
+            .map(|constraints| (dag.dag_id().clone(), constraints))
         })
         .collect::<Result<HashMap<_, _>, Outcome<SemanticError>>>()?;
 
     // Field-bound evaluation only needs provisional constant scopes, not fake
     // executable artifacts with missing constraints.
-    let const_scopes = consts
-        .dags()
-        .map(|dag_id| {
-            Ok((
-                dag_id.clone(),
-                DagConstScope {
-                    values: pool(dag_id)?,
-                    source: evaluated.inherited().source(dag_id).unwrap_or(src),
-                },
-            ))
-        })
-        .collect::<Result<HashMap<_, _>, SemanticError>>()?;
+    let const_scopes = ConstScopes::new(tir, |position, dag| DagConstScope {
+        values: evaluated.pool_at(position),
+        source: evaluated.inherited().source(dag.dag_id()).unwrap_or(src),
+    });
     cancellation.checkpoint()?;
     let struct_field_constraints = resolve_struct_field_constraints_for_dags(
         tir,
@@ -128,10 +114,10 @@ pub fn seal_checked_program(
             .iter()
             .map(|(key, constraint)| (key.clone(), constraint.clone())),
     );
-    for dag_id in scheduled {
+    for &position in scheduled {
         check_dag_const_struct_field_constraints_at_compile_time(
-            &tir.dag_registry()[dag_id],
-            pool(dag_id)?,
+            tir.dag_registry().at(position),
+            evaluated.pool_at(position),
             &all_field_constraints,
             src,
         )?;

@@ -123,6 +123,17 @@ impl CheckedDagRegistry {
             .map(|position| (position, self.dags.at(position)))
     }
 
+    /// The DAG at `position`.
+    ///
+    /// # Panics
+    ///
+    /// Panics when `position` is a position of another registry with more
+    /// DAGs.
+    #[must_use]
+    pub fn at(&self, position: DagPosition) -> &CheckedDag {
+        self.dags.at(position)
+    }
+
     /// Every DAG with its position, in position order.
     pub fn positioned(&self) -> impl Iterator<Item = (DagPosition, &CheckedDag)> {
         self.dags.positioned()

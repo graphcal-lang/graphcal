@@ -421,9 +421,43 @@ pub(super) struct DagConstScope<'a> {
     pub source: SourceId,
 }
 
+/// The constant scope of every DAG of one checked TIR, at the DAG's position
+/// in its registry.
+pub(super) struct ConstScopes<'a> {
+    by_position: Vec<DagConstScope<'a>>,
+}
+
+impl<'a> ConstScopes<'a> {
+    /// The scope `scope` gives each DAG of `tir`, in position order.
+    pub(super) fn new(
+        tir: &'a CheckedTir,
+        mut scope: impl FnMut(
+            graphcal_compiler::tir::typed::dag_position::DagPosition,
+            &'a CheckedDag,
+        ) -> DagConstScope<'a>,
+    ) -> Self {
+        Self {
+            by_position: tir
+                .dag_registry()
+                .positioned()
+                .map(|(position, dag)| scope(position, dag))
+                .collect(),
+        }
+    }
+
+    /// The constant scope of the DAG at `position` of the TIR the scopes
+    /// were made for.
+    fn at(
+        &self,
+        position: graphcal_compiler::tir::typed::dag_position::DagPosition,
+    ) -> &DagConstScope<'a> {
+        &self.by_position[position.index()]
+    }
+}
+
 struct FieldConstraintResolutionContext<'a> {
     tir: &'a CheckedTir,
-    const_scopes: &'a HashMap<graphcal_compiler::dag_id::DagId, DagConstScope<'a>>,
+    const_scopes: &'a ConstScopes<'a>,
     all_const_values: &'a RuntimeValueMap,
     fallback_src: SourceId,
     sources: &'a SourceRegistry,
@@ -471,13 +505,7 @@ fn resolve_application_field_constraints(
             )
         })?;
     let type_def = nominal.definition();
-    let constants = ctx.const_scopes.get(dag_id).ok_or_else(|| {
-        SemanticError::internal_error(
-            format!("type owner `{dag_id}` has no evaluated constant scope"),
-            ctx.fallback_src,
-            DiagnosticAnchor::WholeFile,
-        )
-    })?;
+    let constants = ctx.const_scopes.at(nominal.position());
     let owner_src = constants.source;
     let visible_const_values = visible_values_with_imports(constants.values, ctx.all_const_values);
     let nat_bindings = generic_nat_bindings(
@@ -567,7 +595,7 @@ fn collect_field_constraint_applications(
 
 pub(super) fn resolve_struct_field_constraints_for_dags(
     tir: &CheckedTir,
-    const_scopes: &HashMap<graphcal_compiler::dag_id::DagId, DagConstScope<'_>>,
+    const_scopes: &ConstScopes<'_>,
     all_const_values: &RuntimeValueMap,
     src: SourceId,
     sources: &SourceRegistry,
@@ -599,24 +627,14 @@ pub(super) fn resolve_struct_field_constraints_with_cancellation(
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<HashMap<StructFieldConstraintKey, ResolvedDomainConstraint>, Outcome<SemanticError>> {
     let empty = RuntimeValueMap::new();
-    let const_scopes = tir
-        .dag_registry()
-        .keys()
-        .map(|dag_id| {
-            let values = if dag_id == tir.root_dag_id() {
-                const_values
-            } else {
-                &empty
-            };
-            (
-                dag_id.clone(),
-                DagConstScope {
-                    values,
-                    source: src,
-                },
-            )
-        })
-        .collect::<HashMap<_, _>>();
+    let const_scopes = ConstScopes::new(tir, |_, dag| DagConstScope {
+        values: if dag.dag_id() == tir.root_dag_id() {
+            const_values
+        } else {
+            &empty
+        },
+        source: src,
+    });
     let all_const_values = visible_values_with_imports(const_values, &empty);
     resolve_struct_field_constraints_for_dags(
         tir,

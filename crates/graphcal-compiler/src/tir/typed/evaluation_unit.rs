@@ -293,6 +293,12 @@ pub struct NominalTypeBody<'t> {
 }
 
 impl<'t> NominalTypeBody<'t> {
+    /// The position of the DAG that defines the type.
+    #[must_use]
+    pub const fn position(self) -> super::dag_position::DagPosition {
+        self.scope.position()
+    }
+
     /// The type's definition.
     #[must_use]
     pub fn definition(self) -> &'t crate::hir::nominal::NominalTypeDef {

@@ -26,7 +26,7 @@ use graphcal_compiler::tir::typed::model::StructFieldConstraintKey;
 use crate::runtime_value::RuntimeValue;
 
 use crate::constant_pools::{
-    ConstPool, ConstPoolBuildError, ConstStep, ConstantReference, RuntimeValueMap,
+    ConstPool, ConstPoolBuildError, ConstStep, ConstantReference, PositionedPools, RuntimeValueMap,
 };
 use crate::domain_constraint::ResolvedDomainConstraint;
 use crate::runtime_presentation::{EvaluatedRuntimeValue, PendingPresentedMap};
@@ -41,8 +41,6 @@ pub(crate) type StructFieldConstraints =
 /// Why a checked TIR could not be sealed with its execution facts.
 #[derive(Debug, Error)]
 pub enum SealError {
-    #[error("the constant pool does not cover DAG `{0}` of the checked TIR")]
-    UncoveredDag(DagId),
     #[error("DAG `{0}` has incomplete execution checks")]
     MissingDomainConstraints(DagId),
     #[error("imported constant `{0}` has no checked value in its defining body's pool")]
@@ -202,6 +200,7 @@ impl<'a> SealedDag<'a> {
 pub struct EvaluatedTir {
     tir: CheckedTir,
     consts: ConstPool,
+    pools: PositionedPools,
     inherited: ExecutionFacts,
 }
 
@@ -219,10 +218,11 @@ impl EvaluatedTir {
         inherited: &ExecutionFacts,
         evaluate: impl FnMut(ConstStep<'_>) -> Result<RuntimeValue, E>,
     ) -> Result<Self, ConstPoolBuildError<E>> {
-        let consts = ConstPool::build(&tir, &inherited.consts, evaluate)?;
+        let (consts, pools) = ConstPool::build(&tir, &inherited.consts, evaluate)?;
         Ok(Self {
             tir,
             consts,
+            pools,
             inherited: inherited.clone(),
         })
     }
@@ -237,6 +237,17 @@ impl EvaluatedTir {
     #[must_use]
     pub const fn consts(&self) -> &ConstPool {
         &self.consts
+    }
+
+    /// The evaluated constants of the DAG at `position` of the TIR.
+    ///
+    /// # Panics
+    ///
+    /// Panics when `position` is a position of another registry with more
+    /// DAGs.
+    #[must_use]
+    pub fn pool_at(&self, position: DagPosition) -> &Arc<RuntimeValueMap> {
+        self.pools.at(position)
     }
 
     /// Facts of the checked modules this TIR includes.
@@ -257,6 +268,7 @@ impl EvaluatedTir {
         let Self {
             tir,
             consts,
+            pools,
             inherited,
         } = self;
         let ScheduledChecks {
@@ -267,11 +279,9 @@ impl EvaluatedTir {
         } = checks;
         let mut by_dag = HashMap::new();
         let mut by_position = Vec::with_capacity(tir.dag_registry().len());
-        for (_, dag) in tir.dag_registry().positioned() {
+        for (position, dag) in tir.dag_registry().positioned() {
             let dag_id = dag.dag_id();
-            let const_values = consts
-                .for_dag(dag_id)
-                .ok_or_else(|| SealError::UncoveredDag(dag_id.clone()))?;
+            let const_values = pools.at(position);
             let facts = if let Some(facts) = inherited.by_dag.get(dag_id) {
                 Arc::clone(facts)
             } else {
