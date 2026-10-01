@@ -4,6 +4,8 @@ use crate::function_signature::FunctionSignature;
 use crate::graphcal_error::GraphcalError;
 use crate::ir::lower::{LoweredTestFile, lower_file_with_inline_dags_for_test};
 use crate::ir::model::HirDag;
+use crate::semantic_error::SemanticErrorKind;
+use crate::semantic_error::plugin::PluginError;
 
 use super::ExternStructResult;
 
@@ -26,7 +28,10 @@ fn only_signature(dag: &HirDag) -> &FunctionSignature<ExternStructResult> {
 
 fn expect_invalid_signature(source: &str, fragment: &str) {
     match lower(source) {
-        Err(GraphcalError::InvalidExternSignature { message, .. }) => {
+        Err(GraphcalError::Located(crate::diagnostic::Diagnostic {
+            kind: SemanticErrorKind::Plugin(PluginError::InvalidExternSignature { message, .. }),
+            ..
+        })) => {
             assert!(message.contains(fragment), "{message}");
         }
         Err(other) => panic!("expected an invalid extern signature, got {other:?}"),

@@ -7,6 +7,7 @@ use crate::desugar::desugared_ast::TypeExpr;
 use crate::extern_struct_result::ExternStructResult;
 use crate::graphcal_error::GraphcalError;
 use crate::ir::extern_function::{ExternFunctionEntry, merge_extern_function};
+use crate::semantic_error::plugin::PluginError;
 use crate::source_id::SourceId;
 use crate::syntax::names::NamePath;
 use crate::syntax::span::Span;
@@ -166,10 +167,14 @@ impl ExternGenerics {
             generics
                 .scope
                 .insert_binding(GenericParamBinding::new(id.clone(), constraint, span))
-                .map_err(|_| GraphcalError::InvalidExternSignature {
-                    message: format!("generic binder `{atom}` is declared more than once"),
-                    src,
-                    span: binder.span().into(),
+                .map_err(|_| {
+                    GraphcalError::located(
+                        src,
+                        binder.span(),
+                        PluginError::InvalidExternSignature {
+                            message: format!("generic binder `{atom}` is declared more than once"),
+                        },
+                    )
                 })?;
             match binder {
                 ExternGenericBinder::Dim(var) => {
@@ -219,11 +224,14 @@ fn resolve_extern_value_kind(
     use crate::function_signature::ParamKind;
 
     if !type_ann.constraints.is_empty() {
-        return Err(GraphcalError::InvalidExternSignature {
-            message: "domain constraints are not allowed in extern function signatures".to_string(),
+        return Err(GraphcalError::located(
             src,
-            span: type_ann.span.into(),
-        });
+            type_ann.span,
+            PluginError::InvalidExternSignature {
+                message: "domain constraints are not allowed in extern function signatures"
+                    .to_string(),
+            },
+        ));
     }
     match &type_ann.kind {
         TypeExprKind::Bool => Ok(ParamKind::bool()),
@@ -241,13 +249,8 @@ fn resolve_extern_value_kind(
         | TypeExprKind::DatetimeApplication { .. }
         | TypeExprKind::ComplexApplication { .. }
         | TypeExprKind::KeyApplication { .. }
-        | TypeExprKind::TypeApplication { .. } => Err(GraphcalError::InvalidExternSignature {
-            message:
-                "extern function signatures support Bool, Int, quantity types, and indexed scalar collections over one or more declared index variables"
-                    .to_string(),
-            src,
-            span: type_ann.span.into(),
-        }),
+        | TypeExprKind::TypeApplication { .. } => Err(GraphcalError::located(src, type_ann.span, PluginError::InvalidExternSignature { message: "extern function signatures support Bool, Int, quantity types, and indexed scalar collections over one or more declared index variables"
+                    .to_string() })),
     }
 }
 
@@ -294,18 +297,22 @@ fn resolve_extern_function(
             && let (Some(first_param), Some(duplicate_param)) =
                 (function.params.get(*first), function.params.get(*duplicate))
         {
-            return GraphcalError::DuplicateExternParameter {
-                name: name.clone(),
+            return GraphcalError::located(
                 src,
-                duplicate: duplicate_param.name.span.into(),
-                first: first_param.name.span.into(),
-            };
+                duplicate_param.name.span,
+                PluginError::DuplicateExternParameter {
+                    name: name.clone(),
+                    first: first_param.name.span,
+                },
+            );
         }
-        GraphcalError::InvalidExternSignature {
-            message: err.to_string(),
+        GraphcalError::located(
             src,
-            span: function.span.into(),
-        }
+            function.span,
+            PluginError::InvalidExternSignature {
+                message: err.to_string(),
+            },
+        )
     })?;
     Ok(ExternFunctionEntry {
         plugin: key.plugin,
@@ -348,13 +355,15 @@ fn resolve_extern_result_kind(
         );
     }
     if let TypeExprKind::TypeApplication { .. } = &type_ann.kind {
-        return Err(GraphcalError::InvalidExternSignature {
-            message: "generic struct returns are not supported in this phase; use a record \
-                      type with concrete field types"
-                .to_string(),
+        return Err(GraphcalError::located(
             src,
-            span: type_ann.span.into(),
-        });
+            type_ann.span,
+            PluginError::InvalidExternSignature {
+                message: "generic struct returns are not supported in this phase; use a record \
+                      type with concrete field types"
+                    .to_string(),
+            },
+        ));
     }
     resolve_extern_value_kind(type_ann, generics, scope, src).map(Into::into)
 }
@@ -369,10 +378,8 @@ pub(super) fn resolve_extern_struct_return(
 ) -> Result<crate::function_signature::NamedResultKind<ExternStructResult>, GraphcalError> {
     use crate::function_signature::{ResultKind, StructShape, StructShapeField};
 
-    let invalid = |message: String| GraphcalError::InvalidExternSignature {
-        message,
-        src,
-        span: span.into(),
+    let invalid = |message: String| {
+        GraphcalError::located(src, span, PluginError::InvalidExternSignature { message })
     };
     let Ok(resolved_type) = scope
         .resolver()
@@ -436,14 +443,18 @@ fn resolve_extern_struct_field(
     use crate::hir::types::{BuiltinType, DeclType, DimTermTarget, ValueTypeKind};
 
     let annotation = field.type_annotation();
-    let unsupported = || GraphcalError::InvalidExternSignature {
-        message: format!(
-            "field `{}` has a type that cannot cross the plugin boundary; struct-return \
+    let unsupported = || {
+        GraphcalError::located(
+            src,
+            annotation.span,
+            PluginError::InvalidExternSignature {
+                message: format!(
+                    "field `{}` has a type that cannot cross the plugin boundary; struct-return \
              fields support Bool, Int, and quantity types in this phase",
-            field.name()
-        ),
-        src,
-        span: annotation.span.into(),
+                    field.name()
+                ),
+            },
+        )
     };
     if !annotation.domain_bounds.is_empty() {
         return Err(unsupported());
@@ -512,31 +523,38 @@ fn resolve_extern_array_kind(
         .iter()
         .map(|index_expr| {
             scope.index_var(index_expr, generics).ok_or_else(|| {
-                GraphcalError::InvalidExternSignature {
-                    message: "extern array axes must name the signature's `Index` binders \
-                          (concrete indexes and `Fin(N)` axes cannot appear in the declaration)"
-                        .to_string(),
+                GraphcalError::located(
                     src,
-                    span: index_expr.span().into(),
-                }
+                    index_expr.span(),
+                    PluginError::InvalidExternSignature {
+                        message: "extern array axes must name the signature's `Index` binders \
+                          (concrete indexes and `Fin(N)` axes cannot appear in the declaration)"
+                            .to_string(),
+                    },
+                )
             })
         })
         .collect::<Result<Vec<_>, _>>()?;
     let indexes =
         crate::syntax::non_empty::NonEmpty::try_from_vec(resolved_indexes).map_err(|_| {
-            GraphcalError::InvalidExternSignature {
-                message: "extern arrays must have at least one axis".to_string(),
+            GraphcalError::located(
                 src,
-                span: type_ann_indexes_span(indexes, base),
-            }
+                type_ann_indexes_span(indexes, base),
+                PluginError::InvalidExternSignature {
+                    message: "extern arrays must have at least one axis".to_string(),
+                },
+            )
         })?;
 
     if !base.constraints.is_empty() {
-        return Err(GraphcalError::InvalidExternSignature {
-            message: "domain constraints are not allowed in extern function signatures".to_string(),
+        return Err(GraphcalError::located(
             src,
-            span: base.span.into(),
-        });
+            base.span,
+            PluginError::InvalidExternSignature {
+                message: "domain constraints are not allowed in extern function signatures"
+                    .to_string(),
+            },
+        ));
     }
     let element = match &base.kind {
         TypeExprKind::Bool => ScalarValueKind::Bool,
@@ -546,11 +564,13 @@ fn resolve_extern_array_kind(
             ScalarValueKind::Quantity(resolve_extern_dim_monomial(dim_expr, generics, scope, src)?)
         }
         _ => {
-            return Err(GraphcalError::InvalidExternSignature {
-                message: "extern array elements must be Bool, Int, or quantities".to_string(),
+            return Err(GraphcalError::located(
                 src,
-                span: base.span.into(),
-            });
+                base.span,
+                PluginError::InvalidExternSignature {
+                    message: "extern array elements must be Bool, Int, or quantities".to_string(),
+                },
+            ));
         }
     };
     Ok(ParamKind::Indexed { element, indexes })
@@ -561,10 +581,10 @@ fn resolve_extern_array_kind(
 fn type_ann_indexes_span(
     indexes: &[crate::syntax::ast::IndexExpr],
     base: &TypeExpr,
-) -> miette::SourceSpan {
+) -> crate::syntax::span::Span {
     match (indexes.first(), indexes.last()) {
-        (Some(first), Some(last)) => first.span().merge(last.span()).into(),
-        _ => base.span.into(),
+        (Some(first), Some(last)) => first.span().merge(last.span()),
+        _ => base.span,
     }
 }
 
@@ -615,10 +635,12 @@ fn resolve_extern_dim_monomial(
         }
     }
     crate::function_signature::DimMonomial::try_new(vars, fixed).map_err(|error| {
-        GraphcalError::InvalidExternSignature {
-            message: crate::function_signature::SignatureError::from(error).to_string(),
+        GraphcalError::located(
             src,
-            span: dim_expr.span.into(),
-        }
+            dim_expr.span,
+            PluginError::InvalidExternSignature {
+                message: crate::function_signature::SignatureError::from(error).to_string(),
+            },
+        )
     })
 }

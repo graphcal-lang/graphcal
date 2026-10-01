@@ -12,6 +12,9 @@ use crate::diagnostic::{DiagnosticKind, SecondaryLabel};
 pub mod attribute;
 pub mod domain;
 pub mod graph;
+pub mod index;
+pub mod name;
+pub mod plugin;
 pub mod structure;
 pub mod visibility;
 // MODULES
@@ -27,6 +30,9 @@ pub enum SemanticErrorKind {
     Graph(graph::GraphError),
     Struct(structure::StructError),
     Visibility(visibility::VisibilityError),
+    Name(name::NameError),
+    Index(index::IndexError),
+    Plugin(plugin::PluginError),
     // KINDS
 }
 
@@ -39,6 +45,9 @@ impl SemanticErrorKind {
             Self::Graph(kind) => kind,
             Self::Struct(kind) => kind,
             Self::Visibility(kind) => kind,
+            Self::Name(kind) => kind,
+            Self::Index(kind) => kind,
+            Self::Plugin(kind) => kind,
             // DELEGATE
         }
     }
@@ -95,6 +104,24 @@ impl From<structure::StructError> for SemanticErrorKind {
 impl From<visibility::VisibilityError> for SemanticErrorKind {
     fn from(kind: visibility::VisibilityError) -> Self {
         Self::Visibility(kind)
+    }
+}
+
+impl From<name::NameError> for SemanticErrorKind {
+    fn from(kind: name::NameError) -> Self {
+        Self::Name(kind)
+    }
+}
+
+impl From<index::IndexError> for SemanticErrorKind {
+    fn from(kind: index::IndexError) -> Self {
+        Self::Index(kind)
+    }
+}
+
+impl From<plugin::PluginError> for SemanticErrorKind {
+    fn from(kind: plugin::PluginError) -> Self {
+        Self::Plugin(kind)
     }
 }
 

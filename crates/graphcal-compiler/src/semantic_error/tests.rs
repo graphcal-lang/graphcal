@@ -7,6 +7,9 @@ const FAMILY_SOURCES: &[(&str, &str)] = &[
     ("graph", include_str!("graph.rs")),
     ("structure", include_str!("structure.rs")),
     ("visibility", include_str!("visibility.rs")),
+    ("name", include_str!("name.rs")),
+    ("index", include_str!("index.rs")),
+    ("plugin", include_str!("plugin.rs")),
     // CATALOG
 ];
 

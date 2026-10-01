@@ -2,6 +2,8 @@
 
 use crate::hir::expr::{Expr, ExternFnRef};
 use crate::outcome::Outcome;
+use crate::semantic_error::name::NameError;
+use crate::semantic_error::plugin::PluginError;
 use std::collections::HashMap;
 
 use crate::graphcal_error::GraphcalError;
@@ -28,23 +30,27 @@ impl Infer<'_> {
         use crate::tir::dim_check::builtins::SignatureDimWalk;
 
         let Some(function) = self.env.tir.extern_functions().get(&ext.key()) else {
-            return Err(GraphcalError::UnknownExternFunction {
-                alias: ext.alias.clone(),
-                name: ext.name.clone(),
-                src: self.env.src,
-                span: callee_span.into(),
-            }
+            return Err(GraphcalError::located(
+                self.env.src,
+                callee_span,
+                PluginError::UnknownExternFunction {
+                    alias: ext.alias.clone(),
+                    name: ext.name.clone(),
+                },
+            )
             .into());
         };
         let sig = &function.signature;
         if args.len() != sig.arity() {
-            return Err(GraphcalError::WrongArity {
-                name: crate::graphcal_error::CalledFunction::Extern(ext.name.clone()),
-                expected: sig.arity(),
-                got: args.len(),
-                src: self.env.src,
-                span: callee_span.into(),
-            }
+            return Err(GraphcalError::located(
+                self.env.src,
+                callee_span,
+                NameError::WrongArity {
+                    name: crate::semantic_error::name::CalledFunction::Extern(ext.name.clone()),
+                    expected: sig.arity(),
+                    got: args.len(),
+                },
+            )
             .into());
         }
 

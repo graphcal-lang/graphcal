@@ -848,6 +848,21 @@ role = "contracts"
 
 [[module]]
 package = "compiler"
+path = ["semantic_error", "index"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["semantic_error", "name"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["semantic_error", "plugin"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
 path = ["graphcal_error"]
 role = "contracts"
 

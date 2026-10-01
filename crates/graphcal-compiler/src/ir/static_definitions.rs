@@ -35,6 +35,8 @@ use crate::semantic::unit_scale::{
     PositiveFiniteScale, PositiveFiniteScaleError, UnitInfo, UnitResolveError, UnitScale,
     resolve_unit_expr_with,
 };
+use crate::semantic_error::index::IndexError;
+use crate::semantic_error::name::NameError;
 use crate::source_id::SourceId;
 use crate::syntax::ast::{BindableVisibility, UnitConstness};
 use crate::syntax::dimension::{DimName, DimRef, UnitName, UnitRef};
@@ -1092,15 +1094,17 @@ impl<'a> StaticDefinitionEvaluator<'a> {
                 let unique =
                     NonEmptyUnique::try_from_non_empty(variants.map_ref(|v| v.value.clone()))
                         .map_err(|DuplicateItemError { first, duplicate }| {
-                            GraphcalError::DuplicateName {
-                                name: variants[duplicate]
-                                    .value
-                                    .qualified_by(&index.name.value)
-                                    .to_string(),
+                            GraphcalError::located(
                                 src,
-                                duplicate: variants[duplicate].span.into(),
-                                first: variants[first].span.into(),
-                            }
+                                variants[duplicate].span,
+                                NameError::DuplicateName {
+                                    name: variants[duplicate]
+                                        .value
+                                        .qualified_by(&index.name.value)
+                                        .to_string(),
+                                    first: variants[first].span,
+                                },
+                            )
                         })?;
                 IndexKind::Concrete(ConcreteIndexKind::Named { variants: unique })
             }
@@ -1187,13 +1191,16 @@ impl<'a> StaticDefinitionEvaluator<'a> {
         src: SourceId,
         decl_span: Span,
     ) -> Result<IndexKind, GraphcalError> {
-        let dimension_mismatch =
-            |message: String| GraphcalError::CoordinateIndexDimensionMismatch {
-                name: name.clone(),
-                message,
+        let dimension_mismatch = |message: String| {
+            GraphcalError::located(
                 src,
-                span: decl_span.into(),
-            };
+                decl_span,
+                IndexError::CoordinateIndexDimensionMismatch {
+                    name: name.clone(),
+                    message,
+                },
+            )
+        };
         axis.evaluate()
             .map(|data| IndexKind::Concrete(ConcreteIndexKind::Coordinate(data)))
             .map_err(|error| match error {
@@ -1213,15 +1220,15 @@ impl<'a> StaticDefinitionEvaluator<'a> {
                         self.format_dimension(owner, &end)
                     ))
                 }
-                CoordinateAxisError::Invalid { error, point_count } => {
-                    GraphcalError::CoordinateIndexInvalid {
+                CoordinateAxisError::Invalid { error, point_count } => GraphcalError::located(
+                    src,
+                    point_count.unwrap_or(decl_span),
+                    IndexError::CoordinateIndexInvalid {
                         name: name.clone(),
                         message: error.to_string(),
                         help: error.help(),
-                        src,
-                        span: point_count.unwrap_or(decl_span).into(),
-                    }
-                }
+                    },
+                ),
             })
     }
 }

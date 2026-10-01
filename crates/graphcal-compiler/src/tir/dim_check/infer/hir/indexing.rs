@@ -2,6 +2,7 @@
 
 use crate::hir::expr::{Expr, ForBinding, ForBindingIndex, IndexArg};
 use crate::outcome::Outcome;
+use crate::semantic_error::index::IndexError;
 use crate::semantic_error::structure::StructError;
 use crate::source_id::SourceId;
 
@@ -43,10 +44,14 @@ impl Infer<'_> {
                 let identity = IndexTypeRef::from_resolved(index.value.clone());
                 let idx_def =
                     crate::tir::dim_check::infer::index_def_for_inferred(&identity, self.env.tir)
-                        .ok_or_else(|| GraphcalError::UnknownIndex {
-                        name: identity.display_name(),
-                        src: self.env.src,
-                        span: index.span.into(),
+                        .ok_or_else(|| {
+                        GraphcalError::located(
+                            self.env.src,
+                            index.span,
+                            IndexError::UnknownIndex {
+                                name: identity.display_name(),
+                            },
+                        )
                     })?;
                 let finite_form = idx_def.finite_index_size().map(NatPolyForm::from_constant);
                 (identity, finite_form)
@@ -210,10 +215,14 @@ impl Infer<'_> {
                         &index_identity,
                         self.env.tir,
                     )
-                    .ok_or_else(|| GraphcalError::UnknownIndex {
-                        name: index_identity.display_name(),
-                        src: self.env.src,
-                        span: index.span.into(),
+                    .ok_or_else(|| {
+                        GraphcalError::located(
+                            self.env.src,
+                            index.span,
+                            IndexError::UnknownIndex {
+                                name: index_identity.display_name(),
+                            },
+                        )
                     })?;
                     CheckedType::Key(index_identity)
                 }
@@ -297,12 +306,14 @@ impl Infer<'_> {
                     )?;
                     let arg_index = IndexTypeRef::from_resolved(variant.variant.index().clone());
                     if arg_index != index {
-                        return Err(GraphcalError::IndexMismatch {
-                            expected: index.display_name(),
-                            found: arg_index.display_name(),
-                            src: self.env.src,
-                            span: variant.path_span().into(),
-                        }
+                        return Err(GraphcalError::located(
+                            self.env.src,
+                            variant.path_span(),
+                            IndexError::IndexMismatch {
+                                expected: index.display_name(),
+                                found: arg_index.display_name(),
+                            },
+                        )
                         .into());
                     }
                 }
@@ -336,12 +347,14 @@ impl Infer<'_> {
                                 _ => key_index == &index,
                             };
                             if !accepted {
-                                return Err(GraphcalError::IndexMismatch {
-                                    expected: index.display_name(),
-                                    found: key_index.display_name(),
-                                    src: self.env.src,
-                                    span: local.span.into(),
-                                }
+                                return Err(GraphcalError::located(
+                                    self.env.src,
+                                    local.span,
+                                    IndexError::IndexMismatch {
+                                        expected: index.display_name(),
+                                        found: key_index.display_name(),
+                                    },
+                                )
                                 .into());
                             }
                         }
@@ -384,12 +397,14 @@ impl Infer<'_> {
                             _ => *key_index == index,
                         };
                         if !accepted {
-                            return Err(GraphcalError::IndexMismatch {
-                                expected: index.display_name(),
-                                found: key_index.display_name(),
-                                src: self.env.src,
-                                span: index_expr.span.into(),
-                            }
+                            return Err(GraphcalError::located(
+                                self.env.src,
+                                index_expr.span,
+                                IndexError::IndexMismatch {
+                                    expected: index.display_name(),
+                                    found: key_index.display_name(),
+                                },
+                            )
                             .into());
                         }
                         current = *element;

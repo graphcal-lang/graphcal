@@ -4,6 +4,7 @@ use crate::hir::expr::{Expr, MatchArm, MatchPattern, PatternBinding};
 use crate::hir::nominal::{NominalConstructor, NominalTypeDef};
 use crate::outcome::Outcome;
 use crate::resolved_name::ResolvedStructTypeName;
+use crate::semantic_error::index::IndexError;
 use crate::semantic_error::structure::StructError;
 use crate::source_id::SourceId;
 
@@ -81,10 +82,14 @@ impl Infer<'_> {
                     index_identity,
                     self.env.tir,
                 )
-                .ok_or_else(|| GraphcalError::UnknownIndex {
-                    name: index_identity.display_name(),
-                    src: self.env.src,
-                    span: scrutinee.span.into(),
+                .ok_or_else(|| {
+                    GraphcalError::located(
+                        self.env.src,
+                        scrutinee.span,
+                        IndexError::UnknownIndex {
+                            name: index_identity.display_name(),
+                        },
+                    )
                 })?;
                 let variants = match &index_def.kind {
                     crate::semantic::index_def::IndexKind::Concrete(
@@ -119,22 +124,26 @@ impl Infer<'_> {
                         IndexNominalUse::Label(variant.variant.variant()),
                     )?;
                     if index_identity.declared_resolved() != Some(variant.variant.index()) {
-                        return Err(GraphcalError::IndexMismatch {
-                            expected: index_identity.display_name(),
-                            found: variant.variant.index().to_unowned_def_name().into(),
-                            src: self.env.src,
-                            span: (*span).into(),
-                        }
+                        return Err(GraphcalError::located(
+                            self.env.src,
+                            *span,
+                            IndexError::IndexMismatch {
+                                expected: index_identity.display_name(),
+                                found: variant.variant.index().to_unowned_def_name().into(),
+                            },
+                        )
                         .into());
                     }
                     let variant_name = variant.variant.variant();
                     if !variants.iter().any(|v| v == variant_name) {
-                        return Err(GraphcalError::UnknownVariant {
-                            index_name: index_identity.display_name(),
-                            variant_name: variant_name.clone(),
-                            src: self.env.src,
-                            span: variant.path_span().into(),
-                        }
+                        return Err(GraphcalError::located(
+                            self.env.src,
+                            variant.path_span(),
+                            IndexError::UnknownVariant {
+                                index_name: index_identity.display_name(),
+                                variant_name: variant_name.clone(),
+                            },
+                        )
                         .into());
                     }
                     if !covered.insert(variant_name.clone()) {

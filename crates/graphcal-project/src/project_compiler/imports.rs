@@ -16,6 +16,8 @@ use graphcal_compiler::resolved_name::ResolvedDeclName;
 use graphcal_compiler::semantic::index_def::IndexBindingTarget;
 use graphcal_compiler::semantic_error::attribute::AttributeError;
 use graphcal_compiler::semantic_error::graph::GraphError;
+use graphcal_compiler::semantic_error::index::IndexError;
+use graphcal_compiler::semantic_error::name::NameError;
 use graphcal_compiler::semantic_error::visibility::VisibilityError;
 use graphcal_compiler::source_id::SourceId;
 use graphcal_compiler::syntax::decl_name::DeclName;
@@ -842,14 +844,11 @@ fn validate_required_static_bindings(
     let Some((kind, name)) = missing.into_iter().next() else {
         return Ok(());
     };
-    Err(PipelineError::Semantic(
-        GraphcalError::RequiredStaticInputNotBound {
-            kind,
-            name,
-            src: file_src,
-            span: include_span.into(),
-        },
-    ))
+    Err(PipelineError::Semantic(GraphcalError::located(
+        file_src,
+        include_span,
+        IndexError::RequiredStaticInputNotBound { kind, name },
+    )))
 }
 
 pub(super) fn validate_direct_dag_call_bindings(
@@ -1673,12 +1672,14 @@ fn insert_imported_binding(
             .chain(&imported_names.node_names)
             .find_map(|(name, first_span)| (name == &lexical_name).then_some(*first_span))
             .unwrap_or(span);
-        return Err(PipelineError::Semantic(GraphcalError::DuplicateName {
-            name: lexical_name.to_string(),
+        return Err(PipelineError::Semantic(GraphcalError::located(
             src,
-            duplicate: span.into(),
-            first: first.into(),
-        }));
+            span,
+            NameError::DuplicateName {
+                name: lexical_name.to_string(),
+                first,
+            },
+        )));
     }
     imported_bindings.insert(lexical_name, binding);
     Ok(())

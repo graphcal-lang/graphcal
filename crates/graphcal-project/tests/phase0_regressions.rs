@@ -13,6 +13,9 @@ use std::panic;
 use graphcal_compiler::graphcal_error::GraphcalError;
 use graphcal_compiler::semantic_error::SemanticErrorKind;
 use graphcal_compiler::semantic_error::attribute::AttributeError;
+use graphcal_compiler::semantic_error::index::IndexError;
+use graphcal_compiler::semantic_error::name::NameError;
+use graphcal_compiler::semantic_error::plugin::PluginError;
 
 use graphcal_compiler::graphcal_error::RenderedGraphcalError;
 use graphcal_eval::eval::{EvalResult, Value};
@@ -368,7 +371,13 @@ fn unused_dynamic_unit_scale_rejects_unknown_reference() {
     let err = compile_graphcal_error(
         "base dim Money;\nbase unit USD: Money;\nunit EUR: Money = (@missing) USD;\n",
     );
-    assert!(matches!(err, GraphcalError::UnknownGraphRef { .. }));
+    assert!(matches!(
+        err,
+        GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+            kind: SemanticErrorKind::Name(NameError::UnknownGraphRef { .. }),
+            ..
+        })
+    ));
 }
 
 #[test]
@@ -586,7 +595,13 @@ param trigger: Dimensionless = 2.0;
 unit Bad: Length = (demo::factor(@trigger)) m;
 "#,
     );
-    assert!(matches!(err, GraphcalError::ExternCallNotAllowed { .. }));
+    assert!(matches!(
+        err,
+        GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+            kind: SemanticErrorKind::Plugin(PluginError::ExternCallNotAllowed { .. }),
+            ..
+        })
+    ));
 }
 
 #[test]
@@ -726,7 +741,13 @@ fn included_dynamic_unit_error_uses_producer_source() {
     let CompileError::Eval(error) = error else {
         panic!("expected semantic error, got {error:?}");
     };
-    assert!(matches!(error.error, GraphcalError::UnknownGraphRef { .. }));
+    assert!(matches!(
+        error.error,
+        GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+            kind: SemanticErrorKind::Name(NameError::UnknownGraphRef { .. }),
+            ..
+        })
+    ));
     let source = error.named_source();
     assert!(
         source.name().ends_with("lib.gcl"),
@@ -762,7 +783,12 @@ fn include_binding_lowering_error_uses_importer_source() {
     let result = compile_and_eval_project(&root, &HashMap::new(), None, &RealFileSystem::default());
     match result {
         Err(CompileError::Eval(rendered)) => {
-            let GraphcalError::UnknownGraphRef { name, span, .. } = &rendered.error else {
+            let GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+                kind: SemanticErrorKind::Name(NameError::UnknownGraphRef { name, .. }),
+                primary: span,
+                ..
+            }) = &rendered.error
+            else {
                 panic!("expected UnknownGraphRef, got {:?}", rendered.error);
             };
             let src = rendered.named_source();
@@ -864,7 +890,7 @@ include pkg.lib()::{ cost };
     assert!(
         matches!(
             &result,
-            Err(CompileError::Eval(RenderedGraphcalError { error: GraphcalError::RequiredStaticInputNotBound { name, .. }, .. }))
+            Err(CompileError::Eval(RenderedGraphcalError { error: GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic { kind: SemanticErrorKind::Index(IndexError::RequiredStaticInputNotBound { name, .. }), .. }), .. }))
                 if name == "Phase"
         ),
         "explicit instance should report its unsatisfied index: {result:?}",
@@ -928,7 +954,7 @@ node result: Dimensionless = @target()::out;
         assert!(
             matches!(
                 error,
-                GraphcalError::RequiredStaticInputNotBound { kind, .. }
+                GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic { kind: SemanticErrorKind::Index(IndexError::RequiredStaticInputNotBound { kind, .. }), .. })
                     if kind.to_string() == expected_kind
             ),
             "missing required {expected_kind} was not diagnosed: {error:?}",

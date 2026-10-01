@@ -2,6 +2,7 @@
 
 use crate::hir::expr::LocalDecl;
 use crate::hir::expr::{ConstRef, ResolvedUnitExpr};
+use crate::semantic_error::name::NameError;
 use crate::source_id::SourceId;
 
 use crate::dimension::Dimension;
@@ -34,14 +35,15 @@ impl InferEnv<'_> {
         // The body is shared with its template; the frame of the DAG checked
         // here names the declaration the reference reads.
         let runtime_target = self.dag.frame().resolve(target);
-        let checked =
-            self.tir
-                .decl_type(&runtime_target)
-                .ok_or_else(|| GraphcalError::UnknownGraphRef {
+        let checked = self.tir.decl_type(&runtime_target).ok_or_else(|| {
+            GraphcalError::located(
+                self.src,
+                span,
+                NameError::UnknownGraphRef {
                     name: ScopedName::local(runtime_target.to_unowned_def_name()),
-                    src: self.src,
-                    span: span.into(),
-                })?;
+                },
+            )
+        })?;
         Ok(checked.declared().to_symbolic())
     }
 }

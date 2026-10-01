@@ -11,6 +11,8 @@ use crate::resolved_name::{
 };
 use crate::semantic_error::attribute::AttributeError;
 use crate::semantic_error::graph::GraphError;
+use crate::semantic_error::name::NameError;
+use crate::semantic_error::plugin::PluginError;
 use crate::semantic_error::visibility::VisibilityError;
 use crate::source_id::SourceId;
 use std::collections::{HashMap, HashSet};
@@ -1175,13 +1177,13 @@ fn record_resolved_struct_type_def(
 ///
 /// Walks every lowered body of one DAG and enforces:
 /// - const bodies and every domain bound must not `@`-reference runtime
-///   declarations (E020-style [`GraphcalError::GraphRefInConst`]) or use runtime
+///   declarations (E020-style [`NameError::GraphRefInConst`](crate::semantic_error::name::NameError::GraphRefInConst)) or use runtime
 ///   units in literals / conversion targets;
 /// - no body may `@`-reference an assert declaration
-///   ([`AttributeError::GraphRefToAssert`](crate::semantic_error::attribute::AttributeError::GraphRefToAssert));
+///   ([`AttributeError::GraphRefToAssert`](AttributeError::GraphRefToAssert));
 /// - A10(c) / V004: bodies of non-bindable kinds owned by this module must
 ///   not mention variant literals of the module's own `pub(bind)` indexes
-///   ([`VisibilityError::PubIndexVariantLiteral`](crate::semantic_error::visibility::VisibilityError::PubIndexVariantLiteral)). Params are exempt (A10(a));
+///   ([`VisibilityError::PubIndexVariantLiteral`](VisibilityError::PubIndexVariantLiteral)). Params are exempt (A10(a));
 ///   sink kinds (assert/plot/figure/layer) are checked only when `pub`.
 fn check_hir_body_policies(
     dag: &DagTIR,
@@ -1251,12 +1253,14 @@ fn check_domain_bound_policies(
             )?;
             // Domain bounds are evaluated without a host function registry.
             if let Some((external, span)) = crate::hir::expr::find_extern_call(&bound.value) {
-                return Err(GraphcalError::ExternCallNotAllowed {
-                    name: external.to_string(),
-                    context: "domain bound".to_string(),
-                    src: bound.src,
-                    span: span.into(),
-                });
+                return Err(GraphcalError::located(
+                    bound.src,
+                    span,
+                    PluginError::ExternCallNotAllowed {
+                        name: external.to_string(),
+                        context: "domain bound".to_string(),
+                    },
+                ));
             }
         }
         Ok(())
@@ -1286,12 +1290,14 @@ fn check_dynamic_unit_policies(
         }
         .check_expr(&entry.expr, BodyPhase::Runtime, false)?;
         if let Some((external, span)) = crate::hir::expr::find_extern_call(&entry.expr) {
-            return Err(GraphcalError::ExternCallNotAllowed {
-                name: external.to_string(),
-                context: "unit scale expression".to_string(),
-                src: entry.src,
-                span: span.into(),
-            });
+            return Err(GraphcalError::located(
+                entry.src,
+                span,
+                PluginError::ExternCallNotAllowed {
+                    name: external.to_string(),
+                    context: "unit scale expression".to_string(),
+                },
+            ));
         }
     }
     Ok(())
@@ -1446,12 +1452,14 @@ impl HirPolicyChecker<'_> {
                 if phase.is_compile_time()
                     && let crate::hir::expr::FunctionRef::External(ext) = &callee.value
                 {
-                    return Err(GraphcalError::ExternCallNotAllowed {
-                        name: ext.to_string(),
-                        context: "const expression".to_string(),
-                        src: self.src,
-                        span: callee.span.into(),
-                    });
+                    return Err(GraphcalError::located(
+                        self.src,
+                        callee.span,
+                        PluginError::ExternCallNotAllowed {
+                            name: ext.to_string(),
+                            context: "const expression".to_string(),
+                        },
+                    ));
                 }
                 args.iter().try_for_each(recurse)
             }
@@ -1582,11 +1590,13 @@ impl HirPolicyChecker<'_> {
             ));
         }
         if phase.is_compile_time() && !kind.is_const() {
-            return Err(GraphcalError::GraphRefInConst {
-                name: ScopedName::local(target.to_unowned_def_name()),
-                src: self.src,
-                span: ref_span.into(),
-            });
+            return Err(GraphcalError::located(
+                self.src,
+                ref_span,
+                NameError::GraphRefInConst {
+                    name: ScopedName::local(target.to_unowned_def_name()),
+                },
+            ));
         }
         Ok(())
     }

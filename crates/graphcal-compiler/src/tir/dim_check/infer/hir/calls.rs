@@ -2,6 +2,7 @@
 
 use crate::hir::expr::{Expr, FunctionRef};
 use crate::outcome::Outcome;
+use crate::semantic_error::name::NameError;
 use crate::source_id::SourceId;
 
 use crate::builtin::{
@@ -31,13 +32,15 @@ fn check_builtin_arity(
     src: SourceId,
 ) -> Result<(), GraphcalError> {
     match function.entry().arity() {
-        BuiltinArity::Exact(expected) if got != expected => Err(GraphcalError::WrongArity {
-            name: crate::graphcal_error::CalledFunction::Builtin(function),
-            expected,
-            got,
+        BuiltinArity::Exact(expected) if got != expected => Err(GraphcalError::located(
             src,
-            span: span.into(),
-        }),
+            span,
+            NameError::WrongArity {
+                name: crate::semantic_error::name::CalledFunction::Builtin(function),
+                expected,
+                got,
+            },
+        )),
         arity @ BuiltinArity::OptionalTrailing { .. } if !arity.accepts(got) => {
             Err(GraphcalError::EvalError {
                 message: format!("{function}() expects {arity} arguments, got {got}"),

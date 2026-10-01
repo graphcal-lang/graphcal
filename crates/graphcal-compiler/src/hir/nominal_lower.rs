@@ -20,6 +20,7 @@ use crate::resolve::namespace::Namespace;
 use crate::resolve::reserved_name::validate_reserved_name;
 use crate::resolved_name::ResolvedStructTypeName;
 use crate::semantic::time_zone::TimeZoneRegistry;
+use crate::semantic_error::name::NameError;
 use crate::source_id::SourceId;
 use crate::syntax::names::NameAtom;
 use crate::syntax::span::{Span, Spanned};
@@ -108,14 +109,16 @@ fn member_error(
             first_index,
             duplicate_index,
         } => match (payload.get(first_index), payload.get(duplicate_index)) {
-            (Some(first), Some(duplicate)) => GraphcalError::DuplicateConstructorField {
-                type_name: declaration.name.value.clone(),
-                constructor,
-                field,
+            (Some(first), Some(duplicate)) => GraphcalError::located(
                 src,
-                duplicate: duplicate.name.span.into(),
-                first: first.name.span.into(),
-            },
+                duplicate.name.span,
+                NameError::DuplicateConstructorField {
+                    type_name: declaration.name.value.clone(),
+                    constructor,
+                    field,
+                    first: first.name.span,
+                },
+            ),
             _ => invariant_error(
                 format!("duplicate field `{field}` has no source declaration"),
                 src,
@@ -134,12 +137,14 @@ fn member_error(
             .into_iter();
             let first = members.next().unwrap_or(declaration.name.span);
             let duplicate = members.next().unwrap_or(first);
-            GraphcalError::DuplicateName {
-                name: constructor.to_string(),
+            GraphcalError::located(
                 src,
-                duplicate: duplicate.into(),
-                first: first.into(),
-            }
+                duplicate,
+                NameError::DuplicateName {
+                    name: constructor.to_string(),
+                    first,
+                },
+            )
         }
         error @ (NominalTypeError::ConstructorOwnerMismatch { .. }
         | NominalTypeError::DuplicateType { .. }
@@ -703,6 +708,7 @@ mod tests {
     use crate::resolve::builder::TestModules;
     use crate::resolved_name::{ResolvedDimName, ResolvedIndexName};
     use crate::semantic::index_def::FiniteIndex;
+    use crate::semantic_error::SemanticErrorKind;
     use crate::syntax::parser::Parser;
     use crate::syntax::type_name::StructTypeName;
     use std::collections::BTreeMap;
@@ -787,7 +793,7 @@ mod tests {
         assert!(
             matches!(
                 &error,
-                GraphcalError::DuplicateConstructorField { type_name, field, .. }
+                GraphcalError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Name(NameError::DuplicateConstructorField { type_name, field, .. }), .. })
                     if type_name.as_str() == "Pair" && field.as_str() == "value"
             ),
             "{error:?}"

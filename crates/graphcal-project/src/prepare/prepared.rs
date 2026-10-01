@@ -16,6 +16,7 @@ use graphcal_compiler::resolve::ModuleResolver;
 use graphcal_compiler::semantic::checked_type::CheckedType;
 use graphcal_compiler::semantic::index_def::ConcreteIndexKind;
 use graphcal_compiler::semantic::time_scale::TimeScale;
+use graphcal_compiler::semantic_error::index::IndexError;
 use graphcal_compiler::source_id::SourceId;
 use graphcal_compiler::source_registry::SourceRegistry;
 use graphcal_compiler::static_interface::StaticInputKind;
@@ -612,12 +613,14 @@ pub(super) fn prepare_checked_project(
             .into());
         };
         return Err(CompileError::semantic(
-            GraphcalError::RequiredStaticInputNotBound {
-                kind: StaticInputKind::Index,
-                name: index.name().to_string(),
-                src: source,
-                span: span.into(),
-            },
+            GraphcalError::located(
+                source,
+                span,
+                IndexError::RequiredStaticInputNotBound {
+                    kind: StaticInputKind::Index,
+                    name: index.name().to_string(),
+                },
+            ),
             &sources,
         )
         .into());

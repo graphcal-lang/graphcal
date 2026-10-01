@@ -11,6 +11,7 @@ use std::collections::{HashMap, HashSet};
 
 use super::required_bindability::{self, InterfaceDecl, Violation as RequiredBindabilityViolation};
 use crate::semantic_error::attribute::AttributeError;
+use crate::semantic_error::name::NameError;
 use crate::semantic_error::visibility::VisibilityError;
 use crate::source_id::SourceId;
 use crate::static_interface::{Requirement, StaticInputKind as NominalKind};
@@ -59,12 +60,14 @@ fn register_value_namespace_name(
 ) -> Result<(), GraphcalError> {
     let scoped_name = ScopedName::local(DeclName::classify(name.clone()));
     if let Some(first_span) = value_names.get(&scoped_name) {
-        return Err(GraphcalError::DuplicateName {
-            name: name.to_string(),
+        return Err(GraphcalError::located(
             src,
-            duplicate: span.into(),
-            first: (*first_span).into(),
-        });
+            span,
+            NameError::DuplicateName {
+                name: name.to_string(),
+                first: *first_span,
+            },
+        ));
     }
     value_names.insert(scoped_name, span);
     Ok(())
@@ -77,12 +80,14 @@ fn register_exclusive_universe_name(
     src: SourceId,
 ) -> Result<(), GraphcalError> {
     occupied.insert(atom.clone(), span).map_or(Ok(()), |first| {
-        Err(GraphcalError::DuplicateName {
-            name: atom.to_string(),
+        Err(GraphcalError::located(
             src,
-            duplicate: span.into(),
-            first: first.into(),
-        })
+            span,
+            NameError::DuplicateName {
+                name: atom.to_string(),
+                first,
+            },
+        ))
     })
 }
 
@@ -94,11 +99,15 @@ fn check_builtin_name_shadowing(file: &File, src: SourceId) -> Result<(), Graphc
         .flat_map(|decl| decl.kind.introduced_names())
         .try_for_each(|introduced| {
             validate_reserved_name(Namespace::of(introduced.namespace()), introduced.atom())
-                .map_err(|_| GraphcalError::BuiltinNameShadowed {
-                    kind: introduced.kind().describe(),
-                    name: introduced.atom().to_string(),
-                    src,
-                    span: introduced.span().into(),
+                .map_err(|_| {
+                    GraphcalError::located(
+                        src,
+                        introduced.span(),
+                        NameError::BuiltinNameShadowed {
+                            kind: introduced.kind().describe(),
+                            name: introduced.atom().to_string(),
+                        },
+                    )
                 })
         })
 }
@@ -116,12 +125,14 @@ fn check_imported_graph_value_names(
         .try_for_each(|(name, span)| {
             let atom = name.leaf().atom();
             validate_reserved_name(Namespace::Term, atom).map_err(|_| {
-                GraphcalError::BuiltinNameShadowed {
-                    kind: "graph-value alias",
-                    name: atom.to_string(),
+                GraphcalError::located(
                     src,
-                    span: (*span).into(),
-                }
+                    *span,
+                    NameError::BuiltinNameShadowed {
+                        kind: "graph-value alias",
+                        name: atom.to_string(),
+                    },
+                )
             })
         })
 }

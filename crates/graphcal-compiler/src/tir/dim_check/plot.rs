@@ -8,6 +8,7 @@
 
 use crate::outcome::Outcome;
 use crate::semantic::checked_type::Symbolic;
+use crate::semantic_error::name::NameError;
 use std::collections::HashMap;
 
 use crate::graphcal_error::GraphcalError;
@@ -176,30 +177,40 @@ fn check_plot_references(
                     None
                 };
                 return Err(actual_kind.map_or_else(
-                    || GraphcalError::UnknownPlotReference {
-                        owner_kind,
-                        owner: owner.clone(),
-                        name: reference.value.clone(),
-                        src: ctx.env.src,
-                        span: reference.span.into(),
+                    || {
+                        GraphcalError::located(
+                            ctx.env.src,
+                            reference.span,
+                            NameError::UnknownPlotReference {
+                                owner_kind,
+                                owner: owner.clone(),
+                                name: reference.value.clone(),
+                            },
+                        )
                     },
-                    |actual_kind| GraphcalError::CompositionReferencesNonPlot {
-                        owner_kind,
-                        actual_kind,
-                        name: reference.value.clone(),
-                        src: ctx.env.src,
-                        span: reference.span.into(),
+                    |actual_kind| {
+                        GraphcalError::located(
+                            ctx.env.src,
+                            reference.span,
+                            NameError::CompositionReferencesNonPlot {
+                                owner_kind,
+                                actual_kind,
+                                name: reference.value.clone(),
+                            },
+                        )
                     },
                 ));
             }
             if plot_names[..i].iter().any(|p| p.value == reference.value) {
-                return Err(GraphcalError::DuplicatePlotReference {
-                    owner_kind,
-                    owner: owner.clone(),
-                    name: reference.value.clone(),
-                    src: ctx.env.src,
-                    span: reference.span.into(),
-                });
+                return Err(GraphcalError::located(
+                    ctx.env.src,
+                    reference.span,
+                    NameError::DuplicatePlotReference {
+                        owner_kind,
+                        owner: owner.clone(),
+                        name: reference.value.clone(),
+                    },
+                ));
             }
         }
     }
@@ -323,13 +334,15 @@ fn invalid_property(
     context: &'static str,
     valid: &str,
 ) -> GraphcalError {
-    GraphcalError::InvalidPlotProperty {
-        property: field.property.name().to_string(),
-        context,
-        valid: valid.to_string(),
-        src: ctx.env.src,
-        span: field.name_span.into(),
-    }
+    GraphcalError::located(
+        ctx.env.src,
+        field.name_span,
+        NameError::InvalidPlotProperty {
+            property: field.property.name().to_string(),
+            context,
+            valid: valid.to_string(),
+        },
+    )
 }
 
 /// Check one property value against its expected type.

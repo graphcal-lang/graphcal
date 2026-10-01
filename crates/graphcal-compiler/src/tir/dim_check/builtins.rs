@@ -15,6 +15,7 @@ use crate::function_signature::{
     ScalarValueKind, StructResult,
 };
 use crate::graphcal_error::GraphcalError;
+use crate::semantic_error::name::NameError;
 use crate::source_id::SourceId;
 use crate::syntax::span::{Span, Spanned};
 
@@ -38,13 +39,15 @@ pub(super) fn infer_fn_dim(
             .get(sig.arity())
             .or_else(|| args.last())
             .map_or(call_span, |arg| arg.span);
-        return Err(GraphcalError::WrongArity {
-            name: crate::graphcal_error::CalledFunction::Builtin(function),
-            expected: sig.arity(),
-            got: args.len(),
+        return Err(GraphcalError::located(
             src,
-            span: error_span.into(),
-        });
+            error_span,
+            NameError::WrongArity {
+                name: crate::semantic_error::name::CalledFunction::Builtin(function),
+                expected: sig.arity(),
+                got: args.len(),
+            },
+        ));
     }
 
     let fn_name = function.as_str();
@@ -216,6 +219,7 @@ fn first_binding_param<'a, S: StructResult>(
 mod tests {
     use super::*;
     use crate::dimension::{BaseDimId, PreludeBaseDimension};
+    use crate::semantic_error::SemanticErrorKind;
     use crate::syntax::function_name::FnParamName;
 
     #[test]
@@ -290,7 +294,12 @@ mod tests {
             source,
         )
         .unwrap_err();
-        let GraphcalError::WrongArity { span, .. } = error else {
+        let GraphcalError::Located(crate::diagnostic::Diagnostic {
+            kind: SemanticErrorKind::Name(NameError::WrongArity { .. }),
+            primary: span,
+            ..
+        }) = error
+        else {
             panic!("expected wrong-arity diagnostic");
         };
         assert_eq!(span.offset(), call_span.offset());

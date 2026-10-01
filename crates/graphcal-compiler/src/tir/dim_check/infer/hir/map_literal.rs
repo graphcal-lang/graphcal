@@ -3,6 +3,7 @@
 use crate::hir::expr::{Expr, MapEntry, MapEntryKey};
 use crate::outcome::Outcome;
 use crate::resolved_name::ResolvedIndexVariant;
+use crate::semantic_error::index::IndexError;
 use crate::source_id::SourceId;
 
 use crate::graphcal_error::GraphcalError;
@@ -207,10 +208,14 @@ impl Infer<'_> {
             let index = inferred_index_for_hir_map_key(key, self.env.src)?;
             let idx_def =
                 crate::tir::dim_check::infer::index_def_for_inferred(&index, self.env.tir)
-                    .ok_or_else(|| GraphcalError::UnknownIndex {
-                        name: index.display_name(),
-                        src: self.env.src,
-                        span: expr.span.into(),
+                    .ok_or_else(|| {
+                        GraphcalError::located(
+                            self.env.src,
+                            expr.span,
+                            IndexError::UnknownIndex {
+                                name: index.display_name(),
+                            },
+                        )
                     })?;
             if idx_def.is_coordinate() {
                 return Err(GraphcalError::EvalError {
@@ -230,12 +235,14 @@ impl Infer<'_> {
             for (i, key) in entry.keys.iter().enumerate() {
                 let key_index = inferred_index_for_hir_map_key(key, self.env.src)?;
                 if key_index != axes[i].index {
-                    return Err(GraphcalError::IndexMismatch {
-                        expected: axes[i].index.display_name(),
-                        found: key_index.display_name(),
-                        src: self.env.src,
-                        span: expr.span.into(),
-                    }
+                    return Err(GraphcalError::located(
+                        self.env.src,
+                        expr.span,
+                        IndexError::IndexMismatch {
+                            expected: axes[i].index.display_name(),
+                            found: key_index.display_name(),
+                        },
+                    )
                     .into());
                 }
             }
@@ -269,20 +276,22 @@ impl Infer<'_> {
                     let entry_key = hir_map_entry_key(key);
                     if !axes[i].entry_keys.contains(&entry_key) {
                         return match (arity, entry_key) {
-                            (1, extra) => Err(GraphcalError::ExtraVariants {
-                                index_name: axes[0].index.display_name(),
-                                extra: vec![extra],
-                                src: self.env.src,
-                                span: expr.span.into(),
-                            }),
-                            (_, IndexEntryKey::Named(variant_name)) => {
-                                Err(GraphcalError::UnknownVariant {
+                            (1, extra) => Err(GraphcalError::located(
+                                self.env.src,
+                                expr.span,
+                                IndexError::ExtraVariants {
+                                    index_name: axes[0].index.display_name(),
+                                    extra: vec![extra],
+                                },
+                            )),
+                            (_, IndexEntryKey::Named(variant_name)) => Err(GraphcalError::located(
+                                self.env.src,
+                                expr.span,
+                                IndexError::UnknownVariant {
                                     index_name: axes[i].index.display_name(),
                                     variant_name,
-                                    src: self.env.src,
-                                    span: expr.span.into(),
-                                })
-                            }
+                                },
+                            )),
                             (_, IndexEntryKey::Position(position)) => {
                                 Err(GraphcalError::EvalError {
                                     message: format!(
@@ -317,12 +326,14 @@ impl Infer<'_> {
                     .filter(|key| !provided_tuples.contains(&vec![(*key).clone()]))
                     .map(MapLiteralVariantKey::entry_key)
                     .collect();
-                return Err(GraphcalError::MissingVariants {
-                    index_name: axes[0].index.display_name(),
-                    missing,
-                    src: self.env.src,
-                    span: expr.span.into(),
-                }
+                return Err(GraphcalError::located(
+                    self.env.src,
+                    expr.span,
+                    IndexError::MissingVariants {
+                        index_name: axes[0].index.display_name(),
+                        missing,
+                    },
+                )
                 .into());
             }
             let first_missing = first_missing_map_tuple(&axes_variant_keys, &provided_tuples)

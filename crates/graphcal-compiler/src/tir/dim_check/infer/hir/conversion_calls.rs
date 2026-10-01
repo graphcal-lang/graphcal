@@ -5,6 +5,7 @@ use crate::dimension::Dimension;
 use crate::graphcal_error::GraphcalError;
 use crate::hir::expr::{Expr, ExprKind};
 use crate::outcome::Outcome;
+use crate::semantic_error::index::IndexError;
 
 use crate::semantic::checked_type::{CheckedType, Symbolic};
 use crate::tir::dim_check::helpers::{expect_quantity, format_checked_type};
@@ -91,10 +92,14 @@ impl Infer<'_> {
                 }
                 let index_def =
                     crate::tir::dim_check::infer::index_def_for_inferred(index, self.env.tir)
-                        .ok_or_else(|| GraphcalError::UnknownIndex {
-                            name: index.display_name(),
-                            src: self.env.src,
-                            span: args[0].span.into(),
+                        .ok_or_else(|| {
+                            GraphcalError::located(
+                                self.env.src,
+                                args[0].span,
+                                IndexError::UnknownIndex {
+                                    name: index.display_name(),
+                                },
+                            )
                         })?;
                 index_def
                     .coordinate_dimension()

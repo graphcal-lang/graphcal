@@ -19,6 +19,8 @@ use std::path::Path;
 use graphcal_compiler::dimension::PreludeBaseDimension;
 use graphcal_compiler::graphcal_error::GraphcalError;
 use graphcal_compiler::graphcal_error::RenderedGraphcalError;
+use graphcal_compiler::semantic_error::SemanticErrorKind;
+use graphcal_compiler::semantic_error::plugin::PluginError;
 use graphcal_compiler::syntax::plugin::PluginPath;
 use graphcal_eval::host_fns::{HostFnValue, HostFunctionRegistry};
 use graphcal_io::RealFileSystem;
@@ -171,7 +173,11 @@ node ok: Dimensionless = 1.0;
 "#;
     let err = compile(dir.path(), source, &registry).expect_err("mismatch must be rejected");
     let CompileError::Eval(RenderedGraphcalError {
-        error: GraphcalError::ExternSignatureMismatch { name, .. },
+        error:
+            GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+                kind: SemanticErrorKind::Plugin(PluginError::ExternSignatureMismatch { name, .. }),
+                ..
+            }),
         ..
     }) = err
     else {

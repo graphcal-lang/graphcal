@@ -5,6 +5,8 @@ use crate::display::formatting_registry::FormattingRegistry;
 use crate::generic_param::test_support::type_param;
 use crate::resolved_name::{ResolvedIndexName, ResolvedStructTypeName, ResolvedUnitName};
 use crate::semantic::time_scale::TimeScale;
+use crate::semantic_error::SemanticErrorKind;
+use crate::semantic_error::index::IndexError;
 use crate::syntax::dimension::UnitName;
 use crate::syntax::index_name::IndexName;
 use crate::syntax::non_empty::NonEmpty;
@@ -368,7 +370,13 @@ fn quantity_is_semantic_not_a_source_type_constructor() {
 #[test]
 fn resolve_unknown_index_error() {
     let err = resolve_source_type("Length[UnknownIdx]", &[], &[], &[]).unwrap_err();
-    assert!(matches!(err, GraphcalError::UnknownIndex { .. }));
+    assert!(matches!(
+        err,
+        GraphcalError::Located(crate::diagnostic::Diagnostic {
+            kind: SemanticErrorKind::Index(IndexError::UnknownIndex { .. }),
+            ..
+        })
+    ));
 }
 
 #[test]

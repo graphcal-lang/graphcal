@@ -6,6 +6,7 @@ use std::collections::HashMap;
 use graphcal_compiler::graphcal_error::GraphcalError;
 use graphcal_compiler::semantic_error::SemanticErrorKind;
 use graphcal_compiler::semantic_error::graph::GraphError;
+use graphcal_compiler::semantic_error::name::NameError;
 use graphcal_compiler::semantic_error::structure::StructError;
 use graphcal_compiler::semantic_error::visibility::VisibilityError;
 
@@ -57,7 +58,10 @@ layer l = { plots: [p], title: @missing };
         assert!(
             matches!(
                 compile_graphcal_error(source),
-                GraphcalError::UnknownGraphRef { .. }
+                GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+                    kind: SemanticErrorKind::Name(NameError::UnknownGraphRef { .. }),
+                    ..
+                })
             ),
             "sink accepted an unresolved graph reference:\n{source}"
         );

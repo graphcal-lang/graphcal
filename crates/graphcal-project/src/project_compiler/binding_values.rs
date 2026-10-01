@@ -4,6 +4,7 @@
 use graphcal_compiler::desugar::desugared_ast::{Expr, ExprKind};
 use graphcal_compiler::graphcal_error::GraphcalError;
 use graphcal_compiler::semantic::index_def::IndexBindingTarget;
+use graphcal_compiler::semantic_error::index::IndexError;
 use graphcal_compiler::source_id::SourceId;
 use graphcal_compiler::syntax::index_name::IndexName;
 
@@ -65,11 +66,13 @@ fn closed_binding_cardinality(
     };
     match expr {
         NatExpr::Literal(value, _) => Ok(*value),
-        NatExpr::Var(ident) => Err(GraphcalError::UnknownIndex {
-            name: IndexName::classify(ident.name.atom().clone()).into(),
-            src: file_src,
-            span: ident.span.into(),
-        }),
+        NatExpr::Var(ident) => Err(GraphcalError::located(
+            file_src,
+            ident.span,
+            IndexError::UnknownIndex {
+                name: IndexName::classify(ident.name.atom().clone()).into(),
+            },
+        )),
         NatExpr::Add(operands, span) => operands.iter().try_fold(0_u64, |sum, operand| {
             sum.checked_add(closed_binding_cardinality(operand, file_src)?)
                 .ok_or_else(|| overflow(*span))

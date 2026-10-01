@@ -592,6 +592,9 @@ fn build_ir_from_resolved(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::semantic_error::SemanticErrorKind;
+    use crate::semantic_error::name::NameError;
+    use crate::semantic_error::plugin::PluginError;
     use crate::syntax::decl_name::DeclName;
     use crate::syntax::names::{NameAtom, NamePath};
     use crate::syntax::parser::Parser;
@@ -725,14 +728,26 @@ mod tests {
         // so `@transfer` (the include's projected node) cannot resolve.
         let source = include_str!("../../../../tests/fixtures/valid/hohmann.gcl");
         let err = parse_and_lower(source).unwrap_err();
-        assert!(matches!(err, GraphcalError::UnknownGraphRef { .. }));
+        assert!(matches!(
+            err,
+            GraphcalError::Located(crate::diagnostic::Diagnostic {
+                kind: SemanticErrorKind::Name(NameError::UnknownGraphRef { .. }),
+                ..
+            })
+        ));
     }
 
     #[test]
     fn lower_duplicate_name_error() {
         let err = parse_and_lower("param x: Dimensionless = 1.0;\nnode x: Dimensionless = 2.0;")
             .unwrap_err();
-        assert!(matches!(err, GraphcalError::DuplicateName { .. }));
+        assert!(matches!(
+            err,
+            GraphcalError::Located(crate::diagnostic::Diagnostic {
+                kind: SemanticErrorKind::Name(NameError::DuplicateName { .. }),
+                ..
+            })
+        ));
     }
 
     #[test]
@@ -742,12 +757,7 @@ mod tests {
                 .unwrap_err();
         assert!(matches!(
             err,
-            GraphcalError::DuplicateConstructorField {
-                type_name,
-                constructor,
-                field,
-                ..
-            } if type_name.as_str() == "Pair"
+            GraphcalError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Name(NameError::DuplicateConstructorField { type_name, constructor, field, .. }), .. }) if type_name.as_str() == "Pair"
                 && constructor.as_str() == "Pair"
                 && field.as_str() == "value"
         ));
@@ -794,7 +804,7 @@ mod tests {
         assert!(
             matches!(
                 &err,
-                GraphcalError::InvalidExternSignature { message, .. }
+                GraphcalError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Plugin(PluginError::InvalidExternSignature { message, .. }), .. })
                     if message.contains("different result type")
             ),
             "{err:?}"

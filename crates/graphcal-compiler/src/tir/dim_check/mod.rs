@@ -1376,7 +1376,7 @@ fn collect_dag_call_targets_from_dag(
 /// A dag `A` that transitively inline-calls itself — directly or through a
 /// chain `A → B → … → A` — would recurse unboundedly at evaluation time. We
 /// reject such programs at compile time with
-/// [`GraphError::CyclicDependency`](crate::semantic_error::graph::GraphError::CyclicDependency) naming the dag at which the
+/// [`GraphError::CyclicDependency`](GraphError::CyclicDependency) naming the dag at which the
 /// dependency-graph search (dags and call targets in `DagId` order)
 /// re-entered the cycle, spanning the call that re-entered it.
 ///

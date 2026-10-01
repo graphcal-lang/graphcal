@@ -11,6 +11,7 @@ use std::sync::Arc;
 use graphcal_compiler::graphcal_error::GraphcalError;
 use graphcal_compiler::ir::resolve::ImportedValueNames;
 use graphcal_compiler::outcome::Outcome;
+use graphcal_compiler::semantic_error::plugin::PluginError;
 use graphcal_compiler::source_id::SourceId;
 
 use super::{checking, imports, lowering};
@@ -372,12 +373,14 @@ fn verify_host_functions(
             verify_wasm_plugin(plugins, function, src, host_metadata)?;
         }
         if !host_metadata.contains(key) {
-            return Err(PipelineError::Semantic(GraphcalError::MissingHostFunction {
-                plugin: function.plugin.clone(),
-                name: function.name.clone(),
+            return Err(PipelineError::Semantic(GraphcalError::located(
                 src,
-                span: function.name_span.into(),
-            })
+                function.name_span,
+                PluginError::MissingHostFunction {
+                    plugin: function.plugin.clone(),
+                    name: function.name.clone(),
+                },
+            ))
             .into());
         }
         if let Some(provided) = host_metadata.provided_signature(key)
@@ -386,17 +389,17 @@ fn verify_host_functions(
             let format_dim = |dim: &graphcal_compiler::dimension::Dimension| {
                 tir.registry().dimensions.format_dimension(dim)
             };
-            return Err(
-                PipelineError::Semantic(GraphcalError::ExternSignatureMismatch {
+            return Err(PipelineError::Semantic(GraphcalError::located(
+                src,
+                function.decl_span,
+                PluginError::ExternSignatureMismatch {
                     plugin: function.plugin.clone(),
                     name: function.name.clone(),
                     declared: function.signature.format_with(format_dim),
                     provided: provided.format_with(format_dim),
-                    src,
-                    span: function.decl_span.into(),
-                })
-                .into(),
-            );
+                },
+            ))
+            .into());
         }
     }
     Ok(())
@@ -416,41 +419,49 @@ fn verify_wasm_plugin(
 ) -> Result<(), PipelineError> {
     match plugins.get(&function.plugin) {
         Some(Err(crate::loader::loaded_project::PluginFileError::NotPinned)) => {
-            return Err(PipelineError::Semantic(GraphcalError::PluginNotPinned {
-                plugin: function.plugin.clone(),
+            return Err(PipelineError::Semantic(GraphcalError::located(
                 src,
-                span: function.path_span.into(),
-            }));
+                function.path_span,
+                PluginError::PluginNotPinned {
+                    plugin: function.plugin.clone(),
+                },
+            )));
         }
         Some(Err(crate::loader::loaded_project::PluginFileError::HashMismatch {
             expected,
             actual,
         })) => {
-            return Err(PipelineError::Semantic(GraphcalError::PluginHashMismatch {
-                plugin: function.plugin.clone(),
-                expected: expected.clone(),
-                actual: actual.clone(),
+            return Err(PipelineError::Semantic(GraphcalError::located(
                 src,
-                span: function.path_span.into(),
-            }));
+                function.path_span,
+                PluginError::PluginHashMismatch {
+                    plugin: function.plugin.clone(),
+                    expected: expected.clone(),
+                    actual: actual.clone(),
+                },
+            )));
         }
         Some(Err(file_error)) => {
-            return Err(PipelineError::Semantic(GraphcalError::PluginLoadFailed {
-                plugin: function.plugin.clone(),
-                reason: file_error.to_string(),
+            return Err(PipelineError::Semantic(GraphcalError::located(
                 src,
-                span: function.path_span.into(),
-            }));
+                function.path_span,
+                PluginError::PluginLoadFailed {
+                    plugin: function.plugin.clone(),
+                    reason: file_error.to_string(),
+                },
+            )));
         }
         // Defensive: the loader records an entry for every root-package wasm
         // import, so an absent entry means an embedder skipped `load_project`.
         None => {
-            return Err(PipelineError::Semantic(GraphcalError::PluginLoadFailed {
-                plugin: function.plugin.clone(),
-                reason: "the project loader provided no bytes for this plugin".to_string(),
+            return Err(PipelineError::Semantic(GraphcalError::located(
                 src,
-                span: function.path_span.into(),
-            }));
+                function.path_span,
+                PluginError::PluginLoadFailed {
+                    plugin: function.plugin.clone(),
+                    reason: "the project loader provided no bytes for this plugin".to_string(),
+                },
+            )));
         }
         Some(Ok(_)) => {}
     }
@@ -459,22 +470,24 @@ fn verify_wasm_plugin(
         Some(graphcal_eval::host_fns::PluginRegistrationError::ForbiddenImport {
             module,
             name,
-        }) => Err(PipelineError::Semantic(
-            GraphcalError::PluginForbiddenImport {
+        }) => Err(PipelineError::Semantic(GraphcalError::located(
+            src,
+            function.path_span,
+            PluginError::PluginForbiddenImport {
                 plugin: function.plugin.clone(),
                 import_module: module.clone(),
                 import_name: name.clone(),
-                src,
-                span: function.path_span.into(),
             },
-        )),
+        ))),
         Some(graphcal_eval::host_fns::PluginRegistrationError::LoadFailed { reason }) => {
-            Err(PipelineError::Semantic(GraphcalError::PluginLoadFailed {
-                plugin: function.plugin.clone(),
-                reason: reason.clone(),
+            Err(PipelineError::Semantic(GraphcalError::located(
                 src,
-                span: function.path_span.into(),
-            }))
+                function.path_span,
+                PluginError::PluginLoadFailed {
+                    plugin: function.plugin.clone(),
+                    reason: reason.clone(),
+                },
+            )))
         }
         None => Ok(()),
     }

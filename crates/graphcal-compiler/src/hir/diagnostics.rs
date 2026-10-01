@@ -8,6 +8,9 @@ use crate::resolve::category::SymbolTable;
 use crate::resolve::error::{ModuleResolveError, NameCategory};
 use crate::semantic_error::attribute::AttributeError;
 use crate::semantic_error::domain::DomainError;
+use crate::semantic_error::index::IndexError;
+use crate::semantic_error::name::NameError;
+use crate::semantic_error::plugin::PluginError;
 use crate::semantic_error::structure::StructError;
 use crate::semantic_error::visibility::VisibilityError;
 use crate::source_id::SourceId;
@@ -74,11 +77,13 @@ pub fn type_lower_error_to_graphcal(err: &HirLowerError, src: SourceId) -> Graph
         && let Some(atom) = path.as_bare()
     {
         return match slot {
-            TypePathSlot::IndexAxis => GraphcalError::UnknownIndex {
-                name: IndexName::classify(atom.clone()).into(),
+            TypePathSlot::IndexAxis => GraphcalError::located(
                 src,
-                span: (*span).into(),
-            },
+                *span,
+                IndexError::UnknownIndex {
+                    name: IndexName::classify(atom.clone()).into(),
+                },
+            ),
             TypePathSlot::DimensionTerm => GraphcalError::UnknownDimension {
                 name: NamePath::local(atom.clone()),
                 src,
@@ -98,19 +103,21 @@ pub fn type_lower_error_to_graphcal(err: &HirLowerError, src: SourceId) -> Graph
 pub fn expr_lower_error_to_graphcal(err: &ExprLowerError, src: SourceId) -> GraphcalError {
     match err {
         ExprLowerError::UnknownFunction { path, span } => {
-            return GraphcalError::UnknownFunction {
-                name: path.clone(),
+            return GraphcalError::located(
                 src,
-                span: (*span).into(),
-            };
+                *span,
+                NameError::UnknownFunction { name: path.clone() },
+            );
         }
         ExprLowerError::UnknownExternFunction { alias, name, span } => {
-            return GraphcalError::UnknownExternFunction {
-                alias: alias.clone(),
-                name: name.clone(),
+            return GraphcalError::located(
                 src,
-                span: (*span).into(),
-            };
+                *span,
+                PluginError::UnknownExternFunction {
+                    alias: alias.clone(),
+                    name: name.clone(),
+                },
+            );
         }
         ExprLowerError::NamedArgumentsOnFunction {
             function,
@@ -123,12 +130,14 @@ pub fn expr_lower_error_to_graphcal(err: &ExprLowerError, src: SourceId) -> Grap
                 .map(|argument| format!("{argument}_value"))
                 .collect::<Vec<_>>()
                 .join(", ");
-            return GraphcalError::NamedArgumentsOnFunction {
-                positional_call: format!("{name}({positional_args})"),
-                name,
+            return GraphcalError::located(
                 src,
-                span: (*span).into(),
-            };
+                *span,
+                NameError::NamedArgumentsOnFunction {
+                    positional_call: format!("{name}({positional_args})"),
+                    name,
+                },
+            );
         }
         ExprLowerError::WrongArity {
             name,
@@ -136,13 +145,15 @@ pub fn expr_lower_error_to_graphcal(err: &ExprLowerError, src: SourceId) -> Grap
             got,
             span,
         } => {
-            return GraphcalError::WrongArity {
-                name: crate::graphcal_error::CalledFunction::Builtin(*name),
-                expected: *expected,
-                got: *got,
+            return GraphcalError::located(
                 src,
-                span: (*span).into(),
-            };
+                *span,
+                NameError::WrongArity {
+                    name: crate::semantic_error::name::CalledFunction::Builtin(*name),
+                    expected: *expected,
+                    got: *got,
+                },
+            );
         }
         ExprLowerError::InvalidStaticBindingValue { name, span } => {
             return GraphcalError::InvalidTypeLevelBindingValue {
@@ -161,26 +172,28 @@ pub fn expr_lower_error_to_graphcal(err: &ExprLowerError, src: SourceId) -> Grap
             );
         }
         ExprLowerError::UnknownGraphRef { name, span } => {
-            return GraphcalError::UnknownGraphRef {
-                name: name.clone(),
+            return GraphcalError::located(
                 src,
-                span: (*span).into(),
-            };
+                *span,
+                NameError::UnknownGraphRef { name: name.clone() },
+            );
         }
         ExprLowerError::BareGraphDeclarationRef { name, kind, span } => {
-            return GraphcalError::BareGraphDeclarationRef {
-                name: name.clone(),
-                kind: *kind,
+            return GraphcalError::located(
                 src,
-                span: (*span).into(),
-            };
+                *span,
+                NameError::BareGraphDeclarationRef {
+                    name: name.clone(),
+                    kind: *kind,
+                },
+            );
         }
         ExprLowerError::TimeScaleInValuePosition { scale, span } => {
-            return GraphcalError::TimeScaleInValuePosition {
-                scale: *scale,
+            return GraphcalError::located(
                 src,
-                span: (*span).into(),
-            };
+                *span,
+                NameError::TimeScaleInValuePosition { scale: *scale },
+            );
         }
         ExprLowerError::UnknownUnit { name, span } => {
             return GraphcalError::UnknownUnit {
@@ -287,14 +300,16 @@ pub fn expr_lower_error_to_graphcal(err: &ExprLowerError, src: SourceId) -> Grap
             variant_name,
             span,
         } => {
-            return GraphcalError::ExtraVariants {
-                index_name: index_name.clone().into(),
-                extra: vec![crate::syntax::index_name::IndexEntryKey::named(
-                    variant_name.clone(),
-                )],
+            return GraphcalError::located(
                 src,
-                span: (*span).into(),
-            };
+                *span,
+                IndexError::ExtraVariants {
+                    index_name: index_name.clone().into(),
+                    extra: vec![crate::syntax::index_name::IndexEntryKey::named(
+                        variant_name.clone(),
+                    )],
+                },
+            );
         }
         ExprLowerError::ModuleResolve {
             source: ModuleResolveError::UnknownModuleAlias { alias, .. },
@@ -340,12 +355,14 @@ pub fn expr_lower_error_to_graphcal(err: &ExprLowerError, src: SourceId) -> Grap
             source: ModuleResolveError::UnknownIndexVariant { index, variant },
             span,
         } => {
-            return GraphcalError::UnknownVariant {
-                index_name: index.to_unowned_def_name().into(),
-                variant_name: variant.clone(),
+            return GraphcalError::located(
                 src,
-                span: (*span).into(),
-            };
+                *span,
+                IndexError::UnknownVariant {
+                    index_name: index.to_unowned_def_name().into(),
+                    variant_name: variant.clone(),
+                },
+            );
         }
         ExprLowerError::ModuleResolve {
             source:
@@ -356,11 +373,13 @@ pub fn expr_lower_error_to_graphcal(err: &ExprLowerError, src: SourceId) -> Grap
                 },
             span,
         } => {
-            return GraphcalError::UnknownIndex {
-                name: IndexName::classify(name.clone()).into(),
+            return GraphcalError::located(
                 src,
-                span: (*span).into(),
-            };
+                *span,
+                IndexError::UnknownIndex {
+                    name: IndexName::classify(name.clone()).into(),
+                },
+            );
         }
         ExprLowerError::ModuleResolve {
             source:
@@ -432,11 +451,13 @@ pub fn expr_lower_error_to_graphcal(err: &ExprLowerError, src: SourceId) -> Grap
 /// Convert a HIR type-lowering failure into a spanned diagnostic.
 pub fn hir_lower_error_to_graphcal(err: &HirLowerError, src: SourceId) -> GraphcalError {
     if let HirLowerError::ExpectedIndexFoundNat { expression, span } = err {
-        return GraphcalError::ExpectedIndexFoundNat {
-            expression: expression.clone(),
+        return GraphcalError::located(
             src,
-            span: (*span).into(),
-        };
+            *span,
+            IndexError::ExpectedIndexFoundNat {
+                expression: expression.clone(),
+            },
+        );
     }
     let span = match &err {
         HirLowerError::ModuleResolve { span, .. }
@@ -466,6 +487,7 @@ pub fn hir_lower_error_to_graphcal(err: &HirLowerError, src: SourceId) -> Graphc
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::semantic_error::SemanticErrorKind;
     use crate::syntax::names::NameAtom;
     use crate::syntax::non_empty::NonEmpty;
     use crate::syntax::span::Span;
@@ -490,7 +512,7 @@ mod tests {
         let path = NamePath::local(atom("Foo"));
         assert!(matches!(
             unknown(path.clone(), TypePathSlot::IndexAxis),
-            GraphcalError::UnknownIndex { name, .. } if name.to_string() == "Foo"
+            GraphcalError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Index(IndexError::UnknownIndex { name, .. }), .. }) if name.to_string() == "Foo"
         ));
         assert!(matches!(
             unknown(path.clone(), TypePathSlot::DimensionTerm),

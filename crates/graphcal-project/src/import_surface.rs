@@ -11,6 +11,7 @@ use graphcal_compiler::ir::module_interface::ModuleInterface;
 use graphcal_compiler::resolve::category::ExportedImportItemKind;
 use graphcal_compiler::resolve::namespace::Namespace;
 use graphcal_compiler::resolve::reserved_name::validate_reserved_name;
+use graphcal_compiler::semantic_error::name::NameError;
 use graphcal_compiler::source_id::SourceId;
 use graphcal_compiler::syntax::ast::{ImportItem, ImportItemNamespace};
 use graphcal_compiler::syntax::import_category::ImportItemCategoryMismatch;
@@ -53,12 +54,14 @@ pub fn validate_reserved_alias(
             Namespace::Unit => "unit alias",
             Namespace::Term => "Term alias",
         };
-        GraphcalError::BuiltinNameShadowed {
-            kind,
-            name: local_name.to_string(),
+        GraphcalError::located(
             src,
-            span: import_item.local_span().into(),
-        }
+            import_item.local_span(),
+            NameError::BuiltinNameShadowed {
+                kind,
+                name: local_name.to_string(),
+            },
+        )
     })
 }
 

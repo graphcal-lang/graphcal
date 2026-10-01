@@ -12,6 +12,8 @@ use graphcal_compiler::ir::static_dependencies::{ModuleDeclarations, StaticScope
 use graphcal_compiler::ir::static_substitution::StaticSubstitution;
 use graphcal_compiler::outcome::Outcome;
 use graphcal_compiler::resolved_name::{ResolvedDeclName, ResolvedDimName, ResolvedIndexName};
+use graphcal_compiler::semantic_error::index::IndexError;
+use graphcal_compiler::semantic_error::name::NameError;
 use graphcal_compiler::source_id::SourceId;
 
 use graphcal_compiler::declaration_category::DeclCategory;
@@ -554,12 +556,14 @@ fn extend_imported_bindings(
                     DiagnosticAnchor::Source(first),
                 )));
             };
-            return Err(PipelineError::Semantic(GraphcalError::DuplicateName {
-                name: name.to_string(),
+            return Err(PipelineError::Semantic(GraphcalError::located(
                 src,
-                duplicate: duplicate.into(),
-                first: first.into(),
-            }));
+                duplicate,
+                NameError::DuplicateName {
+                    name: name.to_string(),
+                    first,
+                },
+            )));
         }
         target.insert(name, binding);
     }
@@ -1287,16 +1291,16 @@ fn validate_index_binding_contracts(
                 }));
             }
             Err(IndexBindingContractError::DimensionMismatch { expected, found }) => {
-                return Err(PipelineError::Semantic(
-                    GraphcalError::IndexBindingDimensionMismatch {
+                return Err(PipelineError::Semantic(GraphcalError::located(
+                    sites.importer_src,
+                    site.span,
+                    IndexError::IndexBindingDimensionMismatch {
                         dep_index: dep_index.to_string(),
                         expected_dim: definitions.format_dimension(sites.importer, &expected),
                         bound_index: site.authored.to_string(),
                         found_dim: definitions.format_dimension(sites.importer, &found),
-                        src: sites.importer_src,
-                        span: site.span.into(),
                     },
-                ));
+                )));
             }
         }
     }

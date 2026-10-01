@@ -14,41 +14,11 @@ use crate::datetime_literal::CivilDateTimeLiteral;
 use crate::declaration_kind::DeclarationKind;
 use crate::diagnostic_anchor::DiagnosticAnchor;
 use crate::outcome::Outcome;
-use crate::resolve::category::DeclSymbolKind;
-use crate::semantic::checked_type::IndexDisplayName;
-use crate::semantic::time_scale::TimeScale;
 use crate::semantic::time_zone::IanaTimeZoneId;
 use crate::syntax::dimension::{DimName, UnitName, UnitRef};
-use crate::syntax::function_name::{FnName, FnParamName};
 use crate::syntax::import_category::{ImportItemCategoryMismatch, ImportItemNamespace};
-use crate::syntax::index_name::{IndexEntryKey, IndexName, IndexVariantName};
 use crate::syntax::module_name::ScopedName;
 use crate::syntax::names::{NameAtom, NamePath};
-use crate::syntax::type_name::{ConstructorName, FieldName, StructTypeName};
-
-fn format_index_entry_keys(keys: &[IndexEntryKey]) -> String {
-    keys.iter()
-        .map(|key| format!("\"{key}\""))
-        .collect::<Vec<_>>()
-        .join(", ")
-}
-
-/// The function an arity diagnostic names: a closed built-in or a plugin
-/// function spelled by its declared name.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum CalledFunction {
-    Builtin(crate::builtin::BuiltinFn),
-    Extern(FnName),
-}
-
-impl std::fmt::Display for CalledFunction {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Builtin(function) => function.fmt(f),
-            Self::Extern(name) => name.fmt(f),
-        }
-    }
-}
 
 /// Rich diagnostic error types for graphcal evaluation.
 #[derive(Debug, Clone, Error, Diagnostic)]
@@ -65,61 +35,6 @@ pub enum GraphcalError {
         reason: crate::node_unavailable::NodeUnavailable,
         src: SourceId,
         #[label("value unavailable here")]
-        span: SourceSpan,
-    },
-
-    #[error("duplicate name `{name}`")]
-    #[diagnostic(code(graphcal::N001), help("each name must be unique within a file"))]
-    DuplicateName {
-        name: String,
-        src: SourceId,
-        #[label("duplicate definition here")]
-        duplicate: SourceSpan,
-        #[label("first defined here")]
-        first: SourceSpan,
-    },
-
-    /// A constructor payload repeats a field declaration.
-    #[error("constructor `{constructor}` declares field `{field}` more than once")]
-    #[diagnostic(
-        code(graphcal::N016),
-        help("constructor field names must be unique; remove or rename one declaration")
-    )]
-    DuplicateConstructorField {
-        type_name: StructTypeName,
-        constructor: ConstructorName,
-        field: FieldName,
-        src: SourceId,
-        #[label("duplicate `{field}` field in `{type_name}.{constructor}`")]
-        duplicate: SourceSpan,
-        #[label("first `{field}` field declared here")]
-        first: SourceSpan,
-    },
-
-    #[error("{kind} `{name}` shadows a built-in name")]
-    #[diagnostic(
-        code(graphcal::N009),
-        help(
-            "choose a different name; prelude dimensions, built-in types, prelude units, and built-in numeric constants cannot be redefined in their namespaces"
-        )
-    )]
-    BuiltinNameShadowed {
-        kind: &'static str,
-        name: String,
-        src: SourceId,
-        #[label("shadows a built-in name")]
-        span: SourceSpan,
-    },
-
-    #[error("property `{property}` is not valid in {context}")]
-    #[diagnostic(code(graphcal::N011), help("{valid}"))]
-    InvalidPlotProperty {
-        property: String,
-        context: &'static str,
-        /// Preformatted help listing the valid property set for `context`.
-        valid: String,
-        src: SourceId,
-        #[label("not a {context} property")]
         span: SourceSpan,
     },
 
@@ -312,275 +227,6 @@ pub enum GraphcalError {
         first: SourceSpan,
     },
 
-    #[error("{owner_kind} `{owner}` references unknown plot `{name}`")]
-    #[diagnostic(
-        code(graphcal::N012),
-        help("`plots:` entries must name `plot` declarations visible in this file")
-    )]
-    UnknownPlotReference {
-        owner_kind: &'static str,
-        owner: crate::syntax::decl_name::DeclName,
-        name: ScopedName,
-        src: SourceId,
-        #[label("no plot with this name")]
-        span: SourceSpan,
-    },
-
-    #[error("`{name}` is a {actual_kind}, not a plot")]
-    #[diagnostic(
-        code(graphcal::N013),
-        help("{owner_kind}s compose `plot` declarations; they cannot nest other {actual_kind}s")
-    )]
-    CompositionReferencesNonPlot {
-        owner_kind: &'static str,
-        actual_kind: &'static str,
-        name: ScopedName,
-        src: SourceId,
-        #[label("this names a {actual_kind}")]
-        span: SourceSpan,
-    },
-
-    #[error("{owner_kind} `{owner}` lists plot `{name}` more than once")]
-    #[diagnostic(
-        code(graphcal::N014),
-        help("each plot may appear at most once in a `plots:` list")
-    )]
-    DuplicatePlotReference {
-        owner_kind: &'static str,
-        owner: crate::syntax::decl_name::DeclName,
-        name: ScopedName,
-        src: SourceId,
-        #[label("duplicate entry")]
-        span: SourceSpan,
-    },
-
-    #[error("unknown graph reference `@{name}`")]
-    #[diagnostic(
-        code(graphcal::N002),
-        help("graph references must point to a `param` or `node`")
-    )]
-    UnknownGraphRef {
-        name: ScopedName,
-        src: SourceId,
-        #[label("not found")]
-        span: SourceSpan,
-    },
-
-    #[error("bare reference `{name}` names a {kind}; user graph declarations require `@`")]
-    #[diagnostic(code(graphcal::N017), help("write `@{name}` to reference this {kind}"))]
-    BareGraphDeclarationRef {
-        name: ScopedName,
-        kind: DeclSymbolKind,
-        src: SourceId,
-        #[label("missing `@` sigil")]
-        span: SourceSpan,
-    },
-
-    #[error("time scale `{scale}` cannot be used as a value")]
-    #[diagnostic(
-        code(graphcal::N018),
-        help(
-            "time scales are Static atoms; use `{scale}` in `Datetime<{scale}>` or `epoch<{scale}>(...)`"
-        )
-    )]
-    TimeScaleInValuePosition {
-        scale: TimeScale,
-        src: SourceId,
-        #[label("no Term named `{scale}` is in scope")]
-        span: SourceSpan,
-    },
-
-    #[error("unknown function `{name}`")]
-    #[diagnostic(
-        code(graphcal::N004),
-        help("check function name and ensure it is defined")
-    )]
-    UnknownFunction {
-        name: String,
-        src: SourceId,
-        #[label("unknown function")]
-        span: SourceSpan,
-    },
-
-    #[error("plugin alias `{alias}` does not declare a function `{name}`")]
-    #[diagnostic(
-        code(graphcal::P002),
-        help(
-            "extern functions must be declared in the plugin's `import plugin ... {{ ... }}` block"
-        )
-    )]
-    UnknownExternFunction {
-        alias: crate::syntax::module_name::ModuleAliasName,
-        name: crate::syntax::function_name::FnName,
-        src: SourceId,
-        #[label("unknown extern function")]
-        span: SourceSpan,
-    },
-
-    #[error("function `{name}` uses positional arguments")]
-    #[diagnostic(code(graphcal::N015), help("write `{positional_call}`"))]
-    NamedArgumentsOnFunction {
-        name: String,
-        positional_call: String,
-        src: SourceId,
-        #[label("named arguments are not allowed in function calls")]
-        span: SourceSpan,
-    },
-
-    #[error("invalid extern function signature: {message}")]
-    #[diagnostic(
-        code(graphcal::P001),
-        help(
-            "extern signatures support Bool, Int, quantity types, indexed collections of those scalar kinds over one or more declared index variables, and record struct returns with concrete fields; each dimension variable must be declared in the `<...>` binder list and bound by a bare quantity parameter or bare quantity-array element before compound uses, and every result axis must reuse an index variable that indexes some parameter"
-        )
-    )]
-    InvalidExternSignature {
-        message: String,
-        src: SourceId,
-        #[label("invalid signature")]
-        span: SourceSpan,
-    },
-
-    #[error("duplicate parameter `{name}` in extern function signature")]
-    #[diagnostic(
-        code(graphcal::P011),
-        help("each extern function parameter name must be unique")
-    )]
-    DuplicateExternParameter {
-        name: FnParamName,
-        src: SourceId,
-        #[label("duplicate parameter")]
-        duplicate: SourceSpan,
-        #[label("first declared here")]
-        first: SourceSpan,
-    },
-
-    #[error("extern function `{name}` (plugin \"{plugin}\") is not provided by the host")]
-    #[diagnostic(
-        code(graphcal::P003),
-        help(
-            "the embedder's host function registry has no entry for this declared extern function"
-        )
-    )]
-    MissingHostFunction {
-        plugin: crate::plugin_identity::PluginIdentity,
-        name: crate::syntax::function_name::FnName,
-        src: SourceId,
-        #[label("missing host function")]
-        span: SourceSpan,
-    },
-
-    #[error("extern function call `{name}` not allowed in {context}")]
-    #[diagnostic(
-        code(graphcal::P004),
-        help(
-            "extern functions are runtime-provided and can only be called from runtime expressions (nodes, param defaults, and asserts)"
-        )
-    )]
-    ExternCallNotAllowed {
-        name: String,
-        context: String,
-        src: SourceId,
-        #[label("extern call not allowed here")]
-        span: SourceSpan,
-    },
-
-    #[error(
-        "extern function `{name}` is declared with signature {declared}, but plugin \"{plugin}\" provides {provided}"
-    )]
-    #[diagnostic(
-        code(graphcal::P005),
-        help(
-            "the extern declaration must structurally match the signature in the plugin's manifest (dimension-variable and parameter names may differ; the dimensional shape may not); note that plugin manifests cannot express user-defined base dimensions"
-        )
-    )]
-    ExternSignatureMismatch {
-        plugin: crate::plugin_identity::PluginIdentity,
-        name: crate::syntax::function_name::FnName,
-        declared: String,
-        provided: String,
-        src: SourceId,
-        #[label("signature does not match the plugin manifest")]
-        span: SourceSpan,
-    },
-
-    #[error("failed to load plugin \"{plugin}\": {reason}")]
-    #[diagnostic(
-        code(graphcal::P006),
-        help(
-            "plugin paths ending in `.wasm` resolve relative to the declaring package root and must name a vendored WebAssembly module with an embedded graphcal manifest"
-        )
-    )]
-    PluginLoadFailed {
-        plugin: crate::plugin_identity::PluginIdentity,
-        reason: String,
-        src: SourceId,
-        #[label("plugin failed to load")]
-        span: SourceSpan,
-    },
-
-    #[error("plugin \"{plugin}\" imports `{import_module}::{import_name}`, which is not allowed")]
-    #[diagnostic(
-        code(graphcal::P007),
-        help(
-            "graphcal plugins must be pure: they may import nothing except `graphcal::fail`. A module importing WASI or other host APIs is not a graphcal plugin (rebuild for a bare wasm32 target or stub the imports out)"
-        )
-    )]
-    PluginForbiddenImport {
-        plugin: crate::plugin_identity::PluginIdentity,
-        import_module: String,
-        import_name: String,
-        src: SourceId,
-        #[label("plugin declares a forbidden import")]
-        span: SourceSpan,
-    },
-
-    #[error("plugin \"{plugin}\" is not pinned in graphcal.lock")]
-    #[diagnostic(
-        code(graphcal::P009),
-        help(
-            "projects with a graphcal.toml load plugin binaries only through lockfile pins; run `graphcal deps lock` to record this plugin's hash"
-        )
-    )]
-    PluginNotPinned {
-        plugin: crate::plugin_identity::PluginIdentity,
-        src: SourceId,
-        #[label("plugin has no graphcal.lock pin")]
-        span: SourceSpan,
-    },
-
-    #[error(
-        "plugin \"{plugin}\" does not match its graphcal.lock pin: file hashes to {actual}, lockfile pins {expected}"
-    )]
-    #[diagnostic(
-        code(graphcal::P010),
-        help(
-            "the lockfile is the trust boundary for plugin code — a changed binary must arrive together with a reviewed pin update; if this change is intentional, rerun `graphcal deps lock`"
-        )
-    )]
-    PluginHashMismatch {
-        plugin: crate::plugin_identity::PluginIdentity,
-        expected: String,
-        actual: String,
-        src: SourceId,
-        #[label("plugin file does not match its pin")]
-        span: SourceSpan,
-    },
-
-    #[error("graph reference `@{name}` not allowed in const expression")]
-    #[diagnostic(
-        code(graphcal::N005),
-        help(
-            "const expressions are evaluated at compile time and cannot reference params or nodes"
-        )
-    )]
-    GraphRefInConst {
-        name: ScopedName,
-        src: SourceId,
-        #[label("@ reference not allowed here")]
-        span: SourceSpan,
-    },
-
     #[error("graph reference `@{name}` not allowed in const unit scale")]
     #[diagnostic(
         code(graphcal::D017),
@@ -606,17 +252,6 @@ pub enum GraphcalError {
         name: UnitRef,
         src: SourceId,
         #[label("unit is not const")]
-        span: SourceSpan,
-    },
-
-    #[error("function `{name}` expects {expected} argument(s), got {got}")]
-    #[diagnostic(code(graphcal::N006))]
-    WrongArity {
-        name: CalledFunction,
-        expected: usize,
-        got: usize,
-        src: SourceId,
-        #[label("wrong number of arguments")]
         span: SourceSpan,
     },
 
@@ -946,72 +581,6 @@ pub enum GraphcalError {
         span: SourceSpan,
     },
 
-    #[error("unknown index `{name}`")]
-    #[diagnostic(
-        code(graphcal::I001),
-        help(
-            "declare a named or coordinate index, or write `Fin(N)` explicitly for a structural axis; coordinate constructors are `range(start, end, step: delta)` and `linspace(start, end, points: N)`"
-        )
-    )]
-    UnknownIndex {
-        name: IndexDisplayName,
-        src: SourceId,
-        #[label("unknown index")]
-        span: SourceSpan,
-    },
-
-    #[error("unknown variant `{variant_name}` in index `{index_name}`")]
-    #[diagnostic(code(graphcal::I002))]
-    UnknownVariant {
-        index_name: IndexDisplayName,
-        variant_name: IndexVariantName,
-        src: SourceId,
-        #[label("not a variant of `{index_name}`")]
-        span: SourceSpan,
-    },
-
-    #[error(
-        "missing variant(s) [{}] in map literal for index `{index_name}`",
-        format_index_entry_keys(missing)
-    )]
-    #[diagnostic(
-        code(graphcal::I003),
-        help("map literals must cover all variants of the index")
-    )]
-    MissingVariants {
-        index_name: IndexDisplayName,
-        missing: Vec<IndexEntryKey>,
-        src: SourceId,
-        #[label("incomplete map literal")]
-        span: SourceSpan,
-    },
-
-    #[error(
-        "extra variant(s) [{}] in map literal for index `{index_name}`",
-        format_index_entry_keys(extra)
-    )]
-    #[diagnostic(
-        code(graphcal::I004),
-        help("only variants declared in the index are allowed")
-    )]
-    ExtraVariants {
-        index_name: IndexDisplayName,
-        extra: Vec<IndexEntryKey>,
-        src: SourceId,
-        #[label("unexpected variants")]
-        span: SourceSpan,
-    },
-
-    #[error("index mismatch: expected `{expected}`, found `{found}`")]
-    #[diagnostic(code(graphcal::I005))]
-    IndexMismatch {
-        expected: IndexDisplayName,
-        found: IndexDisplayName,
-        src: SourceId,
-        #[label("wrong index")]
-        span: SourceSpan,
-    },
-
     #[error("name `{name}` not found in imported file `{file_path}`")]
     #[diagnostic(
         code(graphcal::M003),
@@ -1057,42 +626,6 @@ pub enum GraphcalError {
         name: String,
         src: SourceId,
         #[label("unknown module")]
-        span: SourceSpan,
-    },
-
-    #[error("coordinate index `{name}`: {message}")]
-    #[diagnostic(
-        code(graphcal::I006),
-        help("coordinate constructor arguments must have exactly the same dimension")
-    )]
-    CoordinateIndexDimensionMismatch {
-        name: IndexName,
-        message: String,
-        src: SourceId,
-        #[label("dimension mismatch")]
-        span: SourceSpan,
-    },
-
-    #[error("coordinate index `{name}`: {message}")]
-    #[diagnostic(code(graphcal::I007), help("{help}"))]
-    CoordinateIndexInvalid {
-        name: IndexName,
-        message: String,
-        help: String,
-        src: SourceId,
-        #[label("invalid coordinate index")]
-        span: SourceSpan,
-    },
-
-    #[error("expected Index, found Nat `{expression}`")]
-    #[diagnostic(
-        code(graphcal::I008),
-        help("write `Fin({expression})` for an explicit finite structural index")
-    )]
-    ExpectedIndexFoundNat {
-        expression: String,
-        src: SourceId,
-        #[label("Nat is not implicitly converted to Index")]
         span: SourceSpan,
     },
 
@@ -1180,39 +713,6 @@ pub enum GraphcalError {
         bound_kind: String,
         src: SourceId,
         #[label("kind mismatch")]
-        span: SourceSpan,
-    },
-
-    #[error(
-        "index dimension mismatch: `{dep_index}` requires dimension {expected_dim} but `{bound_index}` has dimension {found_dim}"
-    )]
-    #[diagnostic(
-        code(graphcal::I009),
-        help("coordinate-index bindings must have matching dimensions")
-    )]
-    IndexBindingDimensionMismatch {
-        dep_index: String,
-        expected_dim: String,
-        bound_index: String,
-        found_dim: String,
-        src: SourceId,
-        #[label("dimension mismatch")]
-        span: SourceSpan,
-    },
-
-    /// A required typed Static input was not bound at a DAG instantiation boundary.
-    #[error("required {kind} `{name}` must be bound at DAG instantiation")]
-    #[diagnostic(
-        code(graphcal::I010),
-        help(
-            "bind the input with its explicit `{kind}` marker at the include or direct-call site"
-        )
-    )]
-    RequiredStaticInputNotBound {
-        kind: crate::static_interface::StaticInputKind,
-        name: String,
-        src: SourceId,
-        #[label("required {kind} input is not bound")]
         span: SourceSpan,
     },
 
@@ -1364,17 +864,10 @@ impl GraphcalError {
     pub const fn source(&self) -> SourceId {
         match self {
             Self::Located(diagnostic) => diagnostic.src,
-            Self::DuplicateName { src, .. }
-            | Self::DuplicateConstructorField { src, .. }
-            | Self::BuiltinNameShadowed { src, .. }
-            | Self::InvalidPlotProperty { src, .. }
-            | Self::PlotPropertyTypeMismatch { src, .. }
+            Self::PlotPropertyTypeMismatch { src, .. }
             | Self::PlotPropertyDimensioned { src, .. }
             | Self::PlotEncodingTypeMismatch { src, .. }
             | Self::PlotEncodingAxisMismatch { src, .. }
-            | Self::UnknownPlotReference { src, .. }
-            | Self::CompositionReferencesNonPlot { src, .. }
-            | Self::DuplicatePlotReference { src, .. }
             | Self::ImportPlotItem { src, .. }
             | Self::ImportAssertionItem { src, .. }
             | Self::ImportRuntimeUnit { src, .. }
@@ -1384,25 +877,8 @@ impl GraphcalError {
             | Self::IncludeItemNotProjectable { src, .. }
             | Self::IncludeConstructorOwnerRebound { src, .. }
             | Self::DuplicateIncludeSelection { src, .. }
-            | Self::UnknownGraphRef { src, .. }
-            | Self::BareGraphDeclarationRef { src, .. }
-            | Self::TimeScaleInValuePosition { src, .. }
-            | Self::UnknownFunction { src, .. }
-            | Self::UnknownExternFunction { src, .. }
-            | Self::NamedArgumentsOnFunction { src, .. }
-            | Self::ExternSignatureMismatch { src, .. }
-            | Self::PluginLoadFailed { src, .. }
-            | Self::PluginForbiddenImport { src, .. }
-            | Self::PluginNotPinned { src, .. }
-            | Self::PluginHashMismatch { src, .. }
-            | Self::InvalidExternSignature { src, .. }
-            | Self::DuplicateExternParameter { src, .. }
-            | Self::MissingHostFunction { src, .. }
-            | Self::ExternCallNotAllowed { src, .. }
-            | Self::GraphRefInConst { src, .. }
             | Self::GraphRefInConstUnit { src, .. }
             | Self::NonConstUnitInConst { src, .. }
-            | Self::WrongArity { src, .. }
             | Self::EvalError { src, .. }
             | Self::EvaluationUnavailable { src, .. }
             | Self::InternalError { src, .. }
@@ -1429,26 +905,16 @@ impl GraphcalError {
             | Self::IneffectiveConversion { src, .. }
             | Self::InvalidBaseUnitDeclaration { src, .. }
             | Self::AffineProneUnitDefinition { src, .. }
-            | Self::UnknownIndex { src, .. }
-            | Self::UnknownVariant { src, .. }
-            | Self::MissingVariants { src, .. }
-            | Self::ExtraVariants { src, .. }
-            | Self::IndexMismatch { src, .. }
             | Self::ImportNameNotFound { src, .. }
             | Self::ImportCategoryMismatch { src, .. }
             | Self::DuplicateModuleName { src, .. }
             | Self::UnknownModule { src, .. }
-            | Self::CoordinateIndexDimensionMismatch { src, .. }
-            | Self::CoordinateIndexInvalid { src, .. }
-            | Self::ExpectedIndexFoundNat { src, .. }
             | Self::UnknownParamBinding { src, .. }
             | Self::BindingNotAParam { src, .. }
             | Self::DagInputCategoryMismatch { src, .. }
             | Self::InvalidTypeLevelBindingValue { src, .. }
             | Self::IndexBindingNotAnIndex { src, .. }
             | Self::IndexKindMismatch { src, .. }
-            | Self::IndexBindingDimensionMismatch { src, .. }
-            | Self::RequiredStaticInputNotBound { src, .. }
             | Self::ImportRuntimeItem { src, .. }
             | Self::InvalidTimezone { src, .. }
             | Self::InvalidDatetimeLiteral { src, .. }
@@ -1693,8 +1159,8 @@ mod tests {
 
     #[test]
     fn typed_member_and_function_payloads_render_their_source_spelling() {
-        use super::CalledFunction;
         use crate::builtin::{BuiltinFn, ScalarFn};
+        use crate::semantic_error::name::CalledFunction;
         use crate::semantic_error::structure::NominalMember;
         use crate::syntax::function_name::FnName;
         use crate::syntax::type_name::{ConstructorName, FieldName};

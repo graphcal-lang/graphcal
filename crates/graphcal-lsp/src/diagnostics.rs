@@ -1,6 +1,8 @@
 //! Diagnostic production from compile errors and evaluation results.
 
 use graphcal_compiler::semantic_error::SemanticErrorKind;
+use graphcal_compiler::semantic_error::index::IndexError;
+use graphcal_compiler::semantic_error::name::NameError;
 use graphcal_compiler::semantic_error::structure::StructError;
 use graphcal_compiler::semantic_error::visibility::VisibilityError;
 use std::collections::HashMap;
@@ -274,7 +276,10 @@ fn structured_data(error: &CompileError) -> Option<serde_json::Value> {
             auto_import_data(name.leaf().as_str(), AutoImportCategory::Unit)
         }
         // Structural `Fin(N)` axes are never importable.
-        GraphcalError::UnknownIndex { name, .. } => name
+        GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+            kind: SemanticErrorKind::Index(IndexError::UnknownIndex { name, .. }),
+            ..
+        }) => name
             .declared_name()
             .and_then(|name| auto_import_data(name.as_str(), AutoImportCategory::Index)),
         GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
@@ -285,7 +290,10 @@ fn structured_data(error: &CompileError) -> Option<serde_json::Value> {
             kind: SemanticErrorKind::Struct(StructError::UnknownLocalRef { name, .. }),
             ..
         }) => auto_import_data(name, AutoImportCategory::Term),
-        GraphcalError::UnknownGraphRef { name, .. } if name.qualifier().is_empty() => {
+        GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+            kind: SemanticErrorKind::Name(NameError::UnknownGraphRef { name, .. }),
+            ..
+        }) if name.qualifier().is_empty() => {
             auto_import_data(name.leaf().as_str(), AutoImportCategory::Term)
         }
         _ => None,

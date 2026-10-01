@@ -4,6 +4,7 @@ use crate::graphcal_error::GraphcalError;
 use crate::hir::nominal::{NominalGenericParam, NominalTypeDef};
 use crate::resolve::error::ModuleResolveError;
 use crate::resolved_name::{ResolvedDimName, ResolvedIndexName, ResolvedStructTypeName};
+use crate::semantic_error::index::IndexError;
 use crate::semantic_error::structure::StructError;
 use crate::source_id::SourceId;
 use crate::syntax::ast::GenericConstraint;
@@ -150,11 +151,13 @@ fn hir_index_name(
     if ctx.project_types.get_index(name).is_some() {
         Ok(name.to_unowned_def_name())
     } else {
-        Err(GraphcalError::UnknownIndex {
-            name: name.to_unowned_def_name().into(),
-            src: ctx.src,
-            span: span.into(),
-        })
+        Err(GraphcalError::located(
+            ctx.src,
+            span,
+            IndexError::UnknownIndex {
+                name: name.to_unowned_def_name().into(),
+            },
+        ))
     }
 }
 

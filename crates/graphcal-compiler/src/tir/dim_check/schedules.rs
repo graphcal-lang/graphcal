@@ -3,7 +3,7 @@
 //! A dependency cycle is a topological property of source, knowable without
 //! evaluating any value. The checker orders every local DAG's constants and
 //! every local callable's params and nodes exactly once; a cycle becomes a
-//! [`GraphError::CyclicDependency`](crate::semantic_error::graph::GraphError::CyclicDependency) under `graphcal check`, and the orders
+//! [`GraphError::CyclicDependency`](GraphError::CyclicDependency) under `graphcal check`, and the orders
 //! are retained for evaluation.
 
 use crate::dag_id::DagId;
@@ -30,7 +30,7 @@ impl ScheduleBuilder {
     ///
     /// # Errors
     ///
-    /// Returns [`GraphError::CyclicDependency`](crate::semantic_error::graph::GraphError::CyclicDependency) for the first cycle found,
+    /// Returns [`GraphError::CyclicDependency`](GraphError::CyclicDependency) for the first cycle found,
     /// at the declaration that closes it.
     pub(super) fn build(tir: &UncheckedTir, src: SourceId) -> Result<Self, GraphcalError> {
         let constants = ConstSchedule::build(tir.dags.local_iter().map(|(_, dag)| dag))
