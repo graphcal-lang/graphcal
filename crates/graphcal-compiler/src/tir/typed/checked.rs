@@ -69,7 +69,7 @@ impl CheckedDagRegistry {
     ///
     /// Returns [`UnresolvedCallee`] when a body calls a DAG outside the
     /// registry.
-    fn close(
+    pub(super) fn close(
         root: CheckedDag,
         other_dags: IndexMap<DagId, CheckedDag>,
         shared_dags: IndexMap<DagId, Arc<CheckedDag>>,

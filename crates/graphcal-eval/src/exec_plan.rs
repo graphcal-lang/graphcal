@@ -100,38 +100,15 @@ fn prepare<'p>(
 ) -> Result<ExecPlan<'p>, GraphcalError> {
     cancellation.checkpoint()?;
     let tir = program.tir();
-    let scopes = tir
-        .dag_registry()
-        .keys()
-        .map(|owner| {
-            program
-                .dag(owner)
-                .map(|scope| (owner, scope))
-                .ok_or_else(|| invalid(format!("DAG `{owner}` has no compiled body"), src))
-        })
-        .collect::<Result<HashMap<_, _>, _>>()?;
-    let declarations = prepare_declarations(
-        tir,
-        tir.dag_registry().keys().map(|owner| scopes[owner]),
-        src,
-    )?;
-    let root = prepare_callable_plan(
-        tir,
-        &scopes,
-        scopes[tir.root_dag_id()],
-        &declarations,
-        cancellation,
-    )?;
-    let others = tir
-        .dag_registry()
-        .keys()
-        .filter(|owner| *owner != tir.root_dag_id())
-        .map(|owner| {
-            prepare_callable_plan(tir, &scopes, scopes[owner], &declarations, cancellation)
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    ExecPlan::new(program, declarations, root, others)
-        .map_err(|error| invalid(error.to_string(), src))
+    let scopes = program
+        .positioned()
+        .map(|(_, scope)| (scope.dag().dag_id(), scope))
+        .collect::<HashMap<_, _>>();
+    let declarations =
+        prepare_declarations(tir, program.positioned().map(|(_, scope)| scope), src)?;
+    ExecPlan::new(program, declarations.clone(), |scope| {
+        prepare_callable_plan(tir, &scopes, scope, &declarations, cancellation)
+    })
 }
 
 /// Plan every value declaration of every DAG once: its body (in the scope of
@@ -190,50 +167,6 @@ fn prepare_declarations<'p>(
         }
     }
     Ok(declarations)
-}
-
-/// Test-only: prepare the plan of `prepared`'s program again, but without
-/// the callable of `omitted`, and report whether the plan can be assembled.
-///
-/// # Errors
-///
-/// Returns a [`GraphcalError`] when preparing a callable fails; the inner
-/// result is the plan assembly's own verdict.
-#[cfg(feature = "test-internals")]
-pub fn assemble_without_callable_for_test(
-    prepared: &PreparedPlan,
-    omitted: &DagId,
-    src: &NamedSource<Arc<String>>,
-) -> Result<Result<(), crate::execution_plan::ExecPlanError>, GraphcalError> {
-    let program = prepared.borrow_owner();
-    let tir = program.tir();
-    let cancellation = graphcal_compiler::cancellation::CancellationToken::unbounded();
-    let scopes = tir
-        .dag_registry()
-        .keys()
-        .map(|owner| {
-            program
-                .dag(owner)
-                .map(|scope| (owner, scope))
-                .ok_or_else(|| invalid(format!("DAG `{owner}` has no compiled body"), src))
-        })
-        .collect::<Result<HashMap<_, _>, _>>()?;
-    let declarations = prepare_declarations(
-        tir,
-        tir.dag_registry().keys().map(|owner| scopes[owner]),
-        src,
-    )?;
-    let prepare = |owner: &DagId| {
-        prepare_callable_plan(tir, &scopes, scopes[owner], &declarations, &cancellation)
-    };
-    let root = prepare(tir.root_dag_id())?;
-    let others = tir
-        .dag_registry()
-        .keys()
-        .filter(|owner| *owner != tir.root_dag_id() && *owner != omitted)
-        .map(prepare)
-        .collect::<Result<Vec<_>, _>>()?;
-    Ok(ExecPlan::new(program, declarations.clone(), root, others).map(drop))
 }
 
 /// Test-only access to the callable preparation of [`compile_checked_with_cancellation`].
@@ -520,28 +453,6 @@ mod tests {
         assert!(matches!(
             index(root, vec![a.clone(), a]),
             Err(crate::execution_plan::StepIndexError::Duplicate(_))
-        ));
-    }
-
-    #[test]
-    fn plans_reject_two_callables_of_one_body() {
-        let (tir, src) = tir_from_source("node a: Dimensionless = 1.0;");
-        let prepared = compile(&tir, &src).unwrap();
-        let plan = prepared.plan();
-        let root = || {
-            CallablePlan::new(
-                plan.root().scope(),
-                plan.root().execution_dags().to_vec(),
-                plan.root().semantic_instances().to_vec(),
-                plan.root().closure_instances().to_vec(),
-                PreparedImports::default(),
-                Vec::new(),
-            )
-            .unwrap()
-        };
-        assert!(matches!(
-            ExecPlan::new(plan.program(), HashMap::new(), root(), vec![root()]),
-            Err(crate::execution_plan::ExecPlanError::DuplicateCallable(_))
         ));
     }
 

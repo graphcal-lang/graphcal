@@ -188,7 +188,7 @@ fn consuming_rules_record_contextual_literals() {
     // The literal argument is parsed into the typed datetime it builds.
     assert_eq!(count_contextual(tir.root().bodies()), 0);
     let node = tir.root().nodes().next().unwrap();
-    let independent = check_external_value_expr_type(
+    let independent = check_callless_value_expr_type(
         &tir,
         node.definition.formula().unwrap(),
         node.type_ann.checked().declared(),

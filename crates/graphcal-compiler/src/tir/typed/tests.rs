@@ -954,6 +954,49 @@ fn finalized_tir_keeps_inline_dags_in_the_checked_registry() {
 }
 
 #[test]
+fn closing_a_registry_resolves_every_call_slot_or_names_the_missing_callee() {
+    let tir = parse_and_type_resolve(
+        "dag child { pub node output: Dimensionless = 1.0; }\n\
+         node result: Dimensionless = @child()::output;",
+    )
+    .unwrap();
+    let child_id = tir
+        .root_dag_id()
+        .inline_dag_child(crate::syntax::decl_name::DeclName::expect_valid("child"));
+    let registry = &tir.dags;
+    let (child, _) = registry.get_positioned(&child_id).unwrap();
+    assert_eq!(
+        registry.callee_positions(crate::tir::typed::dag_position::DagPosition::ROOT),
+        [child]
+    );
+
+    let closed = CheckedDagRegistry::close(
+        registry.root.clone(),
+        registry.other_dags.clone(),
+        indexmap::IndexMap::new(),
+    )
+    .unwrap();
+    assert_eq!(
+        closed.callee_positions(crate::tir::typed::dag_position::DagPosition::ROOT),
+        [child]
+    );
+
+    let error = CheckedDagRegistry::close(
+        registry.root.clone(),
+        indexmap::IndexMap::new(),
+        indexmap::IndexMap::new(),
+    )
+    .unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        format!(
+            "DAG `{}` calls DAG `{child_id}`, which is not in its program",
+            tir.root_dag_id()
+        )
+    );
+}
+
+#[test]
 fn module_aware_type_resolve_records_semantic_deps() {
     let source = "const node C: Dimensionless = 1.0;\n\
                   const node D: Dimensionless = @C;\n\

@@ -619,49 +619,24 @@ fn callable_plan_fixture() -> (
 }
 
 #[test]
-fn plans_reject_a_called_dag_without_a_callable() {
-    let (tir, src) = callable_plan_fixture();
-    let prepared = graphcal_eval::exec_plan::compile(&tir, &src).unwrap();
-    let helper = tir
-        .dag_registry()
-        .keys()
-        .find(|owner| *owner != tir.root_dag_id())
-        .unwrap();
-    let assembled =
-        graphcal_eval::exec_plan::assemble_without_callable_for_test(&prepared, helper, &src)
-            .unwrap();
-    assert!(matches!(
-        assembled,
-        Err(graphcal_eval::execution_plan::ExecPlanError::MissingCallable(dag)) if &dag == helper
-    ));
-    let root = tir.root_dag_id().clone();
-    assert!(
-        graphcal_eval::exec_plan::assemble_without_callable_for_test(&prepared, &root, &src)
-            .unwrap()
-            .is_ok(),
-        "the root callable is always prepared, so every callee is present"
-    );
-}
-
-#[test]
-fn plans_require_a_callable_for_every_dag_of_the_program() {
+fn plans_have_one_callable_for_every_dag_at_its_position() {
     let source =
         "dag unused { pub node out: Dimensionless = 1.0; } node value: Dimensionless = 2.0;";
     let tir = compile_to_tir(source, "uncalled.gcl").unwrap();
     let src = miette::NamedSource::new("uncalled.gcl", std::sync::Arc::new(source.to_string()));
     let prepared = graphcal_eval::exec_plan::compile(&tir, &src).unwrap();
-    let unused = tir
+    let owners = prepared
+        .plan()
+        .callables()
+        .map(|callable| callable.scope().dag().dag_id().clone())
+        .collect::<Vec<_>>();
+    let positioned = tir
         .dag_registry()
-        .keys()
-        .find(|owner| *owner != tir.root_dag_id())
-        .unwrap();
-    let assembled =
-        graphcal_eval::exec_plan::assemble_without_callable_for_test(&prepared, unused, &src)
-            .unwrap();
-    assert!(matches!(
-        assembled,
-        Err(graphcal_eval::execution_plan::ExecPlanError::MissingCallable(dag)) if &dag == unused
-    ));
+        .positioned()
+        .map(|(_, dag)| dag.dag_id().clone())
+        .collect::<Vec<_>>();
+    assert_eq!(owners, positioned, "the uncalled DAG has its callable too");
+    assert_eq!(&owners[0], tir.root_dag_id());
 }
 
 #[test]

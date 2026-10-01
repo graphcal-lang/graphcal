@@ -300,15 +300,8 @@ impl PreparedProject {
         let plan = prepared_plan.plan();
         let tir = plan.tir();
         let imported_values = plan
-            .program()
-            .dag(tir.root_dag_id())
-            .ok_or_else(|| {
-                CompileError::Eval(GraphcalError::internal_error(
-                    format!("DAG `{}` has no compiled body", tir.root_dag_id()),
-                    &source,
-                    DiagnosticAnchor::WholeFile,
-                ))
-            })?
+            .root()
+            .scope()
             .imported_constants()
             .iter()
             .map(|constant| (constant.name().clone(), constant.clone()))

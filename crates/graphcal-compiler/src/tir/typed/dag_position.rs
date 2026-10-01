@@ -12,7 +12,7 @@ pub struct DagPosition(usize);
 
 impl DagPosition {
     /// The position of every registry's root DAG.
-    pub(super) const ROOT: Self = Self(0);
+    pub const ROOT: Self = Self(0);
 
     /// The position at `index`, for the registry that assigns it.
     pub(super) const fn new(index: usize) -> Self {
