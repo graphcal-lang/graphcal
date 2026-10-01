@@ -1,0 +1,23 @@
+---
+source: crates/graphcal-project/tests/error_snapshots.rs
+expression: rendered
+---
+dimension exponent overflow
+    Diagnostic severity: error
+Begin snippet for instance_dimension_overflow.gcl starting at line 1, column 1
+
+snippet line 1: // error: binding a dimension port raises the template's exponents past the
+    label starting at line 1, column 1: overflow here
+snippet line 2: // exponent range
+snippet line 3: dim Big = Length^2000000000;
+snippet line 4: 
+snippet line 5: dag t {
+snippet line 6:     pub(bind) dim D;
+snippet line 7:     param p: D^2000000000 = 1.0;
+snippet line 8:     pub node q: D^2000000000 = @p;
+snippet line 9: }
+snippet line 10: 
+snippet line 11: include t(dim D: Big) as x;
+    label ending at line 11, column 27: overflow here
+diagnostic help: dimension exponents are stored as `i32`; reduce the magnitude of the exponent
+diagnostic code: graphcal::D010
