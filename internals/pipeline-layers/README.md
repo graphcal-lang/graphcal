@@ -12,14 +12,15 @@ cargo run --locked --manifest-path internals/pipeline-layers/Cargo.toml -- prune
 
 ## Policy and maintenance
 
-`role-map.toml` explicitly assigns every discovered compiler/evaluator module,
-including inline tests and literal-`#[path]` modules. Missing, stale, unreachable,
+`role-map.toml` explicitly assigns every discovered module of
+`graphcal-compiler`, `graphcal-eval`, and `graphcal-project`, including inline
+tests and literal-`#[path]` modules. Missing, stale, unreachable,
 and undeclared entries fail. Roles describe boundaries, not SCC membership:
 
 - **Contracts**: shared data, semantic primitives, and foundational syntax utilities.
 - **Checking**: lowering, checking, specialization, and plan construction.
 - **Interpreter**: expression execution, numerical kernels, and host invocation.
-- **Loading**: project/source acquisition.
+- **Loading**: project/source acquisition (the `graphcal-project` loader).
 - **Facade**: orchestration and public adapters.
 
 Contracts may consume only contracts; interpreter modules may consume contracts

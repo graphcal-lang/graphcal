@@ -91,12 +91,12 @@ Read the pipeline as a sequence of practical questions:
    checker orders it once: one constant schedule for the file's local DAGs and
    one runtime schedule per callable DAG and its include closure.
 7. **ExecPlan: what exact work should runtime evaluation do?**
-   Project checking evaluates constants in the checked constant schedule and
-   retains per-DAG constraints, publishing execution facts only after mandatory
-   checks finish.
-   Preparation validates body/fact ownership and coverage before selecting the
-   entry plan. `CheckedExecutionScope` pairs a selected DAG with its own facts;
-   it is not a substitute for completing static checks.
+   Execution checking evaluates constants in the checked constant schedule,
+   resolves domain constraints, and seals the `CheckedTir` together with those
+   facts into a `CheckedProgram`; sealing is its only construction. The
+   `ExecPlan` borrows that program, and execution selects each DAG with its
+   own facts as one `SealedDag` from it, so a body and its facts can never
+   come from different checks.
 
 Some names in this pipeline can sound misleading if read too literally:
 
@@ -106,11 +106,12 @@ Some names in this pipeline can sound misleading if read too literally:
   complete project-level phase value that owns those modules before checking.
 - TIR is not just HIR with types; it is the checked, per-DAG program model.
 
-`DagTIR` keeps source-facing declarations for diagnostics and presentation, but
-semantic value bodies live in `DagSemanticBody`. Checked expression,
-dependency, constructor, collection, inline-DAG, type-definition, and
-declaration-binding facts are required fields of that semantic body and are
-keyed by canonical `ResolvedName`/`DagId` identities where ownership matters.
+`DagTIR` keeps the declaration records (with their HIR bodies) and
+`DagSemanticBody`, which holds facts derived from them: dependencies, domain
+bounds, dynamic units, type definitions, and declaration bindings, keyed by
+canonical `ResolvedName`/`DagId` identities. A `CheckedDag` pairs one `DagTIR`
+with everything its check published: the checked typed tree (`TExpr`) of
+every expression root, presentation facts, and its runtime schedule.
 
 Every `.gcl` file moves forward through the same core stages:
 
@@ -146,9 +147,13 @@ HirProject  (every file-root and inline `HirDag`; no checked/runtime facts)
   |  crates/graphcal-project/src/project_compiler/checking.rs
   |  crates/graphcal-compiler/src/tir/
   v
-CheckedProject / TIR  (DagTIR + DagSemanticBody)
+CheckedTir  (TirDraft -> InstantiatedTir -> CheckedTir; CheckedDag per body)
   |
   |  crates/graphcal-eval/src/execution_check.rs
+  v
+CheckedProgram  (CheckedTir + constant pools + resolved constraints;
+  |              retained by graphcal-project's CheckedProject)
+  |
   |  crates/graphcal-eval/src/exec_plan.rs
   v
 ExecPlan
@@ -184,11 +189,11 @@ The marker controls only the slots that actually vary by phase:
 | ----------- | --------------- | --------------- |
 | `DeclSugar` | `RawDeclSugar`  | `Infallible`    |
 | `ExprSugar` | `RawExprSugar`  | `Infallible`    |
-| `RefSugar`  | `UnresolvedRef` | `UnresolvedRef` |
 
-Type-level syntactic references such as type applications, dimension terms, and
-index expressions are `NamePath` in every phase, so they are represented
-directly as `NamePath` fields rather than as `Phase` associated types.
+References are `UnresolvedRef` paths in both phases, and type-level syntactic
+references such as type applications, dimension terms, and index expressions
+are `NamePath` in every phase, so they are represented directly as fields
+rather than as `Phase` associated types.
 
 `File<Raw>` is produced by the parser and consumed by surface-aware tooling such
 as the formatter. `File<Desugared>` has no multi-decl or table-literal sugar
@@ -312,17 +317,14 @@ the single resolution stage of the compiler:
   from referenced foreign nominal bounds, while dependency inspection still
   visits both.
   Presentation selections travel with concrete values, not static call-site keys.
-  `tir/expression_facts.rs` replaces the old sparse
-  materialization map: every owned root and descendant has a value or contextual
-  record, with explicit scalar/concrete/symbolic shape. Publication checks
-  owner/revision, exact source-ID coverage, operation/child compatibility, and
-  shape consistency against canonical index cardinalities without inferring types.
-  Constructor calls and match targets retain checked nominal identities; runtime
-  consumes these facts instead of resolving constructor generics again.
-  `body_revision.rs` separately identifies a semantic checking revision: rechecking
-  an immutable source tree cannot authorize old execution facts merely because
-  its DAG name and expression IDs still agree. Checked execution scope selection
-  validates this revision. Generic Nat discharge belongs only to checking and
+  Checking turns each expression root into one typed tree (`tir/texpr/`,
+  `TExpr`): every node carries its `CheckedType`, a constructor its
+  `ConstructorApplication`, a match arm its constructor target, and a
+  statically checked position its range proof. `CheckedBodies` publishes each
+  root as executable or as deferred until Static or generic bindings fix its
+  axes, and a semantic instance specializes its template's trees instead of
+  re-inferring them. Runtime consumes these trees instead of resolving
+  constructor generics again. Generic Nat discharge belongs only to checking and
   uses canonical parameter owners, never same-leaf matching. Interpretation has
   no Nat-binding store or source-Nat evaluation service.
 - `hir/closed_expr.rs` validates the complete syntactically closed input-literal
@@ -415,8 +417,9 @@ variant literal rules) run when `HirProject` is consumed by checking.
 
 `tir/typed.rs` resolves type annotations into semantic type expressions.
 `tir/materialized_shape.rs` defines the checked total-cardinality policy carried
-by concrete indexed expressions. `tir/expression_facts.rs` defines sealed expression records and their separate
-diagnostic projection. `tir/presentation.rs` retains checked plot-channel shapes;
+by concrete indexed expressions. `tir/texpr/` defines the checked typed trees
+and `tir/static_index.rs` the static membership proofs they rely on.
+`tir/presentation.rs` retains checked plot-channel shapes;
 there is no second tree containing presentation selector HIR. `tir/dim_check/`
 infers and installs concrete value types, eager shape facts, and plot shapes
 before evaluation. The interpreter records selected value-shaped presentation
@@ -444,14 +447,18 @@ no lexical key or canonical import target changed across the boundary;
 declaration bounds then move into checked semantic storage without another
 lowering pass.
 
-The TIR is not flat:
+The TIR is a typestate, and it is not flat:
 
 ```text
-TIR
-  registry: FormattingRegistry  // diagnostics + timezone validation only
-  project_type_store            // canonical owner-qualified definitions
-  root_dag_id
-  dags: HashMap<DagId, DagTIR>
+TirDraft -> InstantiatedTir -> CheckedTir   // tir/typed/program.rs, checked.rs
+
+CheckedTir
+  core
+    registry: FormattingRegistry  // diagnostics + timezone validation only
+    project_types                 // canonical owner-qualified definitions
+    runtime_units, extern_functions
+  dags: CheckedDagRegistry        // root, local, then imported DAGs, each at a DagPosition
+  const_schedule
 ```
 
 Each file root and inline `dag` body is represented by a `DagTIR`. Dependency
@@ -480,27 +487,10 @@ side map clones bodies.
 `DagSemanticBody` contains derived facts only:
 
 - `semantic.dependencies`: owner-qualified declaration dependency maps.
-- `semantic.expression_facts`: sealed value/contextual results, operation and
-  direct dependency identities, complete shapes, constructor applications (each
-  carrying its `hir::nominal::ResolvedConstructor`, whose shared definition supplies the
-  field constraints), match targets, and binder-aware nominal observations.
-  Rows retain the semantic owner and checking revision. Static instances specialize
-  retained rows and check only independently lowered replacement bindings; replaced
-  defaults are excluded from the instance's owned coverage. Generic bound products
-  discharge Nat obligations through owner-qualified `GenericParamId` keys before
-  interpretation; canonical substitutions remain in checking-only contexts.
-  `expression_facts/static_index.rs` retains key/integer-selection membership
-  requirements independently of result shape. Publication validates their
-  structural coverage and composes readiness in postorder, so a deferred child
-  blocks its enclosing expression before an earlier sibling can invoke a host.
-  Conflicting origins for one ID and incorrect contextual subtypes are rejected.
-  Contextual completion walks once per owned or independently checked root, not
-  once per inferred node. External values and replacement bindings complete their
-  own contextual operands before publication. Active visit counts and actual
-  contextual-row checks cover both traversed values and inserted metadata.
-  Published tables, checking stamps, immutable operations/dependencies, lexical
-  scopes, and nominal observations share storage across clones/specializations;
-  specialized types and obligation axes are constructed independently.
+- `semantic.domain_bounds`: checked, unevaluated HIR bound expressions, a
+  non-empty list per constrained declaration.
+- `semantic.dynamic_unit_scales`: runtime-dependent unit definitions with
+  their validated dimensions and HIR scale expressions.
 - `semantic.type_defs`: resolved field/default semantics plus shared handles to
   canonical nominal definitions.
 - `semantic.decl_bindings`: declaration records and visible imported values
@@ -510,7 +500,14 @@ side map clones bodies.
   `DeclarationIdentityLookup::DiagnosticProbe`; they never synthesize a
   resolved identity from the current DAG owner.
 
-Collection and index semantics call `TIR::index_def`, which resolves both
+The checked typed trees are not part of `DagSemanticBody`. Checking publishes
+them per body as `CheckedBodies` (`tir/texpr/checked_bodies.rs`) on the
+`CheckedDag`, next to the body's presentation facts and runtime schedule. A
+semantic instance's trees are its template's, specialized with the instance's
+Static substitution (`tir/dim_check/body_specialization.rs`); only its own
+replacement bindings are inferred afresh.
+
+Collection and index semantics call the TIR's `index_def`, which resolves both
 owner-qualified declared indexes and concrete `Fin(N)` identities through the
 project type store. `DagSemanticBody` has no duplicate per-DAG index-definition
 cache or expression walk.
@@ -525,36 +522,49 @@ Dimension inference is split by expression families under
 `tir/dim_check/infer/` and operates on HIR expressions. Every
 `DimCheckContext` carries its concrete `DagTIR`; checking cannot run in a
 context that lacks canonical index/constructor/inline-DAG ownership.
-Function-signature checking treats a missing parameter for an already-bound dimension variable as
-an internal invariant failure; mismatch help never fabricates a parameter
-name. Index-access checking classifies structural `Fin` identities separately
+Function-signature checking records each dimension-variable binding together
+with the parameter that bound it, so mismatch help names that parameter and
+never fabricates one. Index-access checking classifies structural `Fin` identities separately
 from declared axes: structural cardinality forms need no registry entry, while
 a declared axis missing its semantic definition is an internal error instead of
 disabling `Fin(N) <= Fin(M)` widening.
 
 ### 1.7 Execution and Runtime Evaluation
 
-Checking evaluates `const node` declarations and resolves top-level and
-struct-field domain constraints once, retaining those immutable stores on the
-checked project. Runtime preparation reuses the same stores and the checker's
+Execution checking (`graphcal-eval/src/execution_check.rs`) evaluates
+`const node` declarations in the checker's constant schedule and resolves
+top-level and struct-field domain constraints once, sealing those immutable
+stores with the `CheckedTir` into the `CheckedProgram` that the checked
+project retains. Runtime preparation reuses the same stores and the checker's
 topological `param`/`node` schedule of each callable.
 
-Runtime execution is keyed directly by canonical `ResolvedDeclName`
+Runtime values are keyed by canonical `ResolvedDeclName`
 (`ResolvedName<Decl>`) identities so same-leaf declarations from different DAGs
-do not collide. Every `EvalContext` also carries a non-optional `DagTIR` scope:
-root evaluation selects `TIR::root()` at construction, while inline calls select
-their concrete DAG. Dynamic-unit, constructor, materialized-shape, and
-presentation lookups therefore cannot silently reinterpret a missing scope as
-the root DAG. Const and runtime declaration evaluation read the authoritative
-`DagTIR` declaration records through typed ID-to-record indexes and use
-`eval_expr/hir_eval.rs`. Assertions and visualization declarations are also
-read directly from `DagTIR`, not copied into `ExecPlan`.
+do not collide. Checked bodies, however, name declarations and units by
+DAG-relative handles (`LocalDecl`, `LocalUnit`), because a template and all of
+its instances share one body. The evaluator never chooses the DAG a handle
+resolves in: `CheckedTir::declaration_body`, `unit_scale_body`, and
+`nominal_type_body` hand out each evaluation unit already bound to the scope of
+the DAG that owns it (`Scoped` / `ScopedTree`,
+`tir/typed/evaluation_unit.rs`), and the kernel walks a tree only as
+`ScopedNode`s, whose children and references come out resolved in that scope
+(`tir/typed/scoped_node.rs`). `EvalSession` (`eval_expr/context.rs`) carries
+everything else evaluation needs and has no scope of its own. The kernel
+(`eval_expr/hir_eval.rs` and its operation families) executes the checked
+`TExpr` trees directly; there is no separate execution IR. Assertions and
+visualization declarations are read from the checked DAGs, not copied into
+`ExecPlan`.
 
-`eval/runtime.rs` evaluates declarations in topological order. A failed node is
-contained as a `NodeError`; independent nodes can still evaluate. One
+`eval/runtime.rs` runs the root's plan through the shared frame machine
+(`execution_frame.rs`). A failed node is contained as a typed `NodeUnavailable`
+reason; independent nodes can still evaluate. A violated evaluator invariant is
+a `Failure::Invariant` (`invariant.rs`) and cancellation is
+`Outcome::Cancelled`; neither is an ordinary evaluation failure. One
 `RuntimeEvaluation` retains the SI-normalized value map, contained-error map,
-and display-aware root result together. `PreparedProject` then assembles the
-normal project-level `EvalResult`.
+and display-aware root result together. `PreparedProject` (in
+`graphcal-project`) then assembles the normal project-level `EvalResult`.
+Reasons in the output name declarations as the root's source does
+(`eval/output_decl_name.rs`), never by internal runtime identity.
 
 `graphcal dump` is deliberately only a debugging shell: each stage stops at an
 existing pipeline boundary and pretty-prints that boundary's Rust `Debug`
@@ -569,7 +579,8 @@ The workspace contains eighteen Rust crates:
 ```text
 graphcal-cli           binary/library: CLI shell
 graphcal-lsp           binary/library: Language Server Protocol
-graphcal-eval          evaluation, project orchestration, loader
+graphcal-project       loader, project compiler, runtime preparation, output
+graphcal-eval          interpreter: sealing, execution plans, evaluation
 graphcal-compiler      syntax, semantic core, HIR, IR, TIR
 graphcal-ast-derive    AST derive proc-macros for the compiler
 graphcal-ratio         reduced rational numbers (dimension exponents)
@@ -637,10 +648,9 @@ The compiler crate owns the functional core through TIR.
 | `syntax/format_equivalent.rs` | `FormatEquivalent` trait (formatter's AST-preservation check), leaves, containers |
 | `syntax/ast.rs`               | Phase-parameterized AST aggregate and re-exports              |
 | `syntax/ast/common.rs`        | Shared AST nodes and typed common fields                      |
-| `syntax/ast/value.rs`         | Expression/value AST definitions                              |
+| `syntax/ast/value.rs`         | Expression/value AST definitions, with their non-structural format-equivalence impls |
 | `syntax/ast/decl.rs`          | Declaration AST definitions                                   |
 | `syntax/ast/plot_props.rs`    | Syntax-level plot/figure/layer property names                 |
-| `syntax/ast/format_equivalent.rs` | Non-structural format-equivalence impls (`Expr`, table literals) |
 | `plot_props.rs`               | Semantic plot/mark/composition property registry              |
 | `plot_visibility.rs`          | Standalone vs composition-only plot output                    |
 | `syntax/phase.rs`             | `Raw`, `Desugared`, sugar/path slots, `never`                 |
@@ -674,13 +684,20 @@ The compiler crate owns the functional core through TIR.
 | `ir/required_bindability.rs`  | Pure V002 required-interface validation                       |
 | `ir/resolve/`                 | Declaration-shell collection and validation                   |
 | `semantic/`                   | Checked types, indexes, unit scales, time, built-in catalog   |
-| `display/`                    | Number and unit-label formatting, `FormattingRegistry`        |
-| `graphcal_error.rs`           | The shared `GraphcalError` diagnostic enum                    |
+| `display/`                    | Number and unit-label formatting, `FormattingRegistry`, include-scope names |
+| `diagnostic.rs`               | Source-located diagnostics as plain core data (`Diagnostic<K>`) |
+| `semantic_error/`             | `SemanticError`: typed diagnostic families, or an internal error |
+| `internal_error.rs`           | `InternalError` (`X001`); `InternalError::new` is its only constructor |
+| `source_id.rs` / `source_registry.rs` | Opaque source identity in the core; shell-side registry that renders it |
+| `cancellation.rs` / `outcome.rs` | `CancellationToken` and `Outcome<E>`, which keeps cancellation out of error types |
+| `node_unavailable.rs`         | Typed reasons a declaration has no evaluated value            |
+| `hir/expr/local_decl.rs`      | `LocalDecl`: DAG-relative declaration handles in checked bodies |
+| `ir/instance/frame.rs`        | `InstanceFrame`: how the DAG running a shared body names its declarations |
 | `tir/materialized_shape.rs`   | Checked total cardinality for eagerly materialized indexed values |
-| `tir/expression_facts.rs` | Sealed, revision-bound expression records and coverage validation |
-| `tir/expression_facts/static_index.rs` | Retained static membership requirements and readiness |
+| `tir/texpr.rs` / `tir/texpr/` | Checked typed trees (`TExpr`), `CheckedBodies`, and DAG-relative `CallSlot`s |
+| `tir/static_index.rs`         | Static membership proofs, independent of result shape          |
 | `tir/dim_check/expression_axes.rs` | Cardinalities and shapes from checked declared types |
-| `tir/dim_check/expression_facts.rs` | Retained instance specialization and canonical generic-bound discharge |
+| `tir/dim_check/body_specialization.rs` | Specializing checked typed trees without re-inferring their bodies |
 | `tir/dim_check/concrete_obligations.rs` | Concrete application validation using published bound facts |
 | `tir/presentation.rs`         | Checked plot-channel shape tables                            |
 | `tir/schedule.rs`             | Checker-built constant and per-callable runtime schedules     |
@@ -690,7 +707,12 @@ The compiler crate owns the functional core through TIR.
 | `tir/typed/module_type_context.rs` | Module-aware type-resolution context for one DAG body |
 | `tir/typed/program.rs`        | DAG registry and the draft/unchecked/instantiated TIR states    |
 | `tir/typed/checked_dag.rs`    | A checked DAG body with the facts its check published          |
-| `tir/typed/checked.rs`        | The checked project TIR (`CheckedTir`)                         |
+| `tir/typed/checked.rs`        | The checked project TIR (`CheckedTir`) and its call-closed `CheckedDagRegistry` |
+| `tir/typed/dag_position.rs`   | `DagPosition`: a DAG's deterministic position in its program's registry |
+| `tir/typed/declaration_view.rs` | Declarations of a checked DAG as seen outside the compiler, without HIR bodies |
+| `tir/typed/evaluation_unit.rs` | Evaluation units handed out bound to their owner's scope (`Scoped`, `ScopedTree`) |
+| `tir/typed/scoped_node.rs`    | Scoped traversal of executable trees (`ScopedNode`)            |
+| `tir/typed/dag_store.rs`      | The immutable store of checked bodies one module publishes     |
 | `tir/typed/freeze.rs`         | Freezing a checked TIR's local bodies into a `DagStore`        |
 | `tir/typed/substitution.rs`   | `Substitution` of generic parameters and its single type fold  |
 | `tir/dim_check/`              | Dimension/type inference, including scalar unit-scale checks   |
@@ -703,14 +725,19 @@ The interpreter crate. It seals a checked TIR into a `CheckedProgram` by
 evaluating its constants and resolving its domain constraints, prepares the
 indexed `ExecPlan`, and executes it. It depends only on `graphcal-compiler`;
 project loading and compilation live in `graphcal-project`, whose tests enable
-the `test-internals` feature to reach interpreter test hooks.
+the `test-internals` feature to reach interpreter test hooks. Single-file
+interpreter tests live in this crate (`interpreter_tests.rs`), over checked
+TIRs built by `test_tir.rs`.
 
 | Path                              | Purpose                                                        |
 | --------------------------------- | -------------------------------------------------------------- |
 | `execution_check.rs` / `execution_check/` | Constant evaluation, domain resolution, and sealing into a `CheckedProgram` |
-| `execution_facts.rs`              | Per-DAG checked constants, constraints, and source              |
+| `checked_program.rs`              | `CheckedProgram` and `SealedDag`: a checked TIR sealed with its per-DAG constants, constraints, and source |
+| `runtime_value.rs` / `runtime_value/` | Internal `RuntimeValue`, index axes, keys, dense arrays, and struct values |
+| `invariant.rs`                    | `Invariant` / `Failure<E>`: violated invariants kept apart from user-facing failures |
+| `host_abi.rs` / `host_abi/`       | Validated host-function arguments and marshalling across the host ABI |
+| `static_incompleteness.rs`        | Value-independent TODO reachability across call outputs        |
 | `presentation_evidence.rs`        | Selected value-shaped display data and typed presentation diagnostics |
-| `execution_scope.rs`              | Validated borrowed selection of a canonical DAG and its own facts |
 | `runtime_presentation.rs`         | Atomic interpreter transport of values and selected evidence |
 | `constant_pools.rs` | Shared constant-pool views and validated imported references |
 | `execution_plan.rs`     | Immutable indexed callable plans and steps borrowing a sealed program |
@@ -724,6 +751,7 @@ the `test-internals` feature to reach interpreter test hooks.
 | `eval/runtime/evaluated_root.rs` | What one root run evaluated, borrowed by the assembly stages |
 | `eval/runtime/declaration_body.rs` | Checked-body lookup of a declaration identity            |
 | `eval/runtime/dependency_failures.rs` | `dependency failed: ...` reports for failed reads     |
+| `eval/output_decl_name.rs` | The names an evaluation's output gives the declarations it reports |
 | `eval_expr/context.rs`  | Immutable phase-selected environments and checked scope transitions |
 | `pipeline_metrics.rs`  | Test-only observations of copying, planning, resolution, and presentation work |
 | `eval_expr/presentation.rs` | Deliberate selected display computations in live owning frames |
@@ -736,7 +764,8 @@ the `test-internals` feature to reach interpreter test hooks.
 | `eval_expr/unit_scale.rs` | Dynamic unit-scale resolution (re-entering the kernel it is handed) and finite-quantity validation |
 | `eval_expr/aggregations.rs` | Aggregation built-ins such as sum/mean/min/max/count     |
 | `eval_expr/conversions.rs` | Unit/type conversion helpers                              |
-| `eval_expr/hir_eval.rs` | HIR expression evaluator with canonical references            |
+| `eval_expr/hir_eval.rs` | Expression kernel over checked typed trees, walked as `ScopedNode`s |
+| `eval_expr/operations.rs` | Checked operations, each evaluated by its operand family's kernel |
 
 `eval/public_projection.rs` projects a presented value (value and
 presentation in one tree) together with its `CheckedType` in one walk. Struct
@@ -756,7 +785,8 @@ points in `prepare/`.
 
 | Path                              | Purpose                                                        |
 | --------------------------------- | -------------------------------------------------------------- |
-| `compile_error.rs`                | `CompileError`: parse, semantic, and external-binding failures  |
+| `compile_error.rs`                | `CompileError`: parse, load, binding, rendered semantic, and external-binding failures |
+| `load_error.rs` / `binding_error.rs` | Typed loader and parameter-binding failures                 |
 | `dependency_ordered.rs`           | `DependencyOrdered<T>`: dependency-first modules plus the root  |
 | `loader.rs`                       | The IO shell that fetches a `SourceSnapshot` and builds a `LoadedProject` |
 | `loader/module_path.rs`           | `ModulePathKey` and the module targets the loader resolves them to |
@@ -836,7 +866,9 @@ AST types derive it (`#[derive(FormatEquivalent)]`, spans marked
 `graphcal-io` isolates filesystem access behind `FileSystemReader`.
 Implementations include real, in-memory, and overlay filesystems. The loader
 uses this crate so tests and editor integrations can run deterministically
-without direct disk coupling.
+without direct disk coupling. Cancellable reads use the compiler's
+`CancellationToken` and report cancellation as `Outcome::Cancelled`, not as a
+read error.
 
 ### 2.7 `graphcal-package`
 
@@ -1187,53 +1219,76 @@ and reproducible timezone validation; semantic consumers must use
 
 ### 3.7 TIR and `DagTIR`
 
-`TIR` wraps post-resolution formatting services and all DAGs reachable from one file.
+The project TIR wraps post-resolution formatting services and all DAGs
+reachable from one file. It moves through a typestate: `TirDraft` (assembly) is
+consumed by `instantiate` into `InstantiatedTir`, whose only transition,
+`check`, produces the immutable `CheckedTir` that evaluation and the language
+server see.
 
 ```text
-TIR
-  registry: FormattingRegistry       // display + timezone boundary
-  project_types: Arc<ProjectTypeStore>  // one frozen project-wide store
+TirDraft / InstantiatedTir             // tir/typed/program.rs
+  core: TirCore
   dags: DagRegistry
     root: DagTIR                       // mutable only during local assembly
-    other_dags: HashMap<DagId, DagTIR>  // local inline/instance bodies
-    shared_dags: HashMap<DagId, Arc<DagTIR>>  // immutable imports
-  runtime_units: HashMap<ResolvedUnitName, Arc<UnitInfo>>
+    other_dags: BTreeMap<DagId, DagTIR>  // local inline/instance bodies
+    shared_dags: BTreeMap<DagId, Arc<CheckedDag>>  // immutable imports
+
+CheckedTir                             // tir/typed/checked.rs
+  core: TirCore
+    registry: FormattingRegistry       // display + timezone boundary
+    project_types: Arc<ProjectTypeStore>  // one frozen project-wide store
+    runtime_units: HashMap<ResolvedUnitName, Arc<UnitInfo>>
+    extern_functions
+  dags: CheckedDagRegistry
+    root: CheckedDag, other_dags, shared_dags  // each at a deterministic DagPosition
+    callees  // the callee position of every call slot of every body
+  const_schedule: ConstSchedule
+
+CheckedDag                             // tir/typed/checked_dag.rs
+  body: DagTIR
+  bodies: CheckedBodies                // checked TExpr tree per expression root
+  presentation: DagPresentationFacts
+  runtime_schedule: RuntimeSchedule
 
 DagStore  // published by `tir/typed/freeze.rs` consuming local assembly, never by cloning its closure
-  dags: HashMap<DagId, Arc<DagTIR>>  // only this module's own bodies
+  dags: HashMap<DagId, Arc<CheckedDag>>  // only this module's own bodies
   runtime_units: HashMap<ResolvedUnitName, Arc<UnitInfo>>  // only locally owned overlays
+  external_callees  // DAGs outside the store that its bodies call
 
 DagTIR
   dag_id: DagId
   decls: DeclTable<Typed>  // identity-keyed records in source order
     value records carry CheckedTypeAnnotation { decl_type, span, checked }
-    TIR::decl_type(&ResolvedDeclName) finds any value declaration's type
+    CheckedTir::decl_type(&ResolvedDeclName) finds any value declaration's type
     instances rebase every record to the instance owner
+  included_plots
   semantic: DagSemanticBody
-  assert_names
+  static_ports
   assumes_map: HashMap<ResolvedDeclName, Vec<ResolvedDeclName>>
   expected_fail: HashMap<ResolvedDeclName, ResolvedExpectedFailMetadata>
     canonical keys + authored diagnostic source; instances rekey to runtime identities
-  semantic.domain_bounds  // checked, unevaluated HIR bound expressions
+  imported_bindings: HashMap<ScopedName, ImportedBinding>  // imported constants
   semantic_instances: Vec<HirInstanceRecord>  // typed include edges
-  semantic_specialization: Option<StaticSpecializationId>
-  runtime_owner_rebases: HashMap<DagId, DagId>
-  imported_bindings: HashMap<ScopedName, ImportedBinding>
+  frame: InstanceFrame  // how this DAG's bodies name its declarations
   projectable_outputs  // explicit node exports + param input ports
 ```
 
-`TIR::root()` borrows the file root; crate-internal `root_mut()` is an assembly
-operation. Imported bodies have no mutable registry view. Publication checks
-runtime-unit owners and never republishes imported unit definitions. Inline
-DAG call routing is not re-derived from source paths on `TIR`;
-each HIR `ExprKind::DagCall` already carries its canonical `DagId` target.
+`CheckedTir::root()` borrows the file root; crate-internal `root_mut()` on the
+draft is an assembly operation. Imported bodies have no mutable registry view.
+Publication checks runtime-unit owners and never republishes imported unit
+definitions. Inline DAG call routing is not re-derived from source paths: each
+HIR `ExprKind::DagCall` carries its canonical `DagId` target, and its checked
+`TExprKind::DagCall` node carries a `CallSlot` relative to the calling body.
+`CheckedDagRegistry` resolves every slot of every body to the callee's
+`DagPosition` once when it is built, so the registry is closed under calls by
+construction.
 
 ### 3.8 ExecPlan
 
 `ExecPlan<'p>` in `execution_plan.rs` borrows the sealed `CheckedProgram` it was
-prepared from and retains one `CallablePlan` for every checked body, including
-its semantic-instance closure; `exec_plan.rs::PreparedPlan` owns the program
-together with its plan. Preparation and validation remain free functions in
+prepared from and retains one `CallablePlan` for every DAG of the program, by
+registry position; `exec_plan.rs::PreparedPlan` owns the program together with
+its plan (`self_cell`). Preparation and validation remain free functions in
 checking `exec_plan.rs`; runtime consumers import data directly, without a
 checking-layer re-export:
 
@@ -1241,18 +1296,21 @@ checking-layer re-export:
 ExecPlan<'p>
   program: &'p CheckedProgram
   declarations: HashMap<&ResolvedDeclName, PlannedDeclaration>  // every value declaration
-  callables: IndexVec<CallableIdx, CallablePlan>  // the root first
-  by_dag: HashMap<&DagId, CallableIdx>  // inline-call targets only
+  callables: IndexVec<DagPosition, CallablePlan>  // one per DAG, by registry position
+  calls: IndexVec<DagPosition, Box<[DagPosition]>>  // callee of each call slot, per DAG
 
 PlannedDeclaration<'p>
   scope: SealedDag  // physical body, not semantic owner
-  body: Todo | Expression { root: &Expr, tree: Result<&TExpr, _> } | Supplied
+  body: Todo
+      | Expression { root: Scoped<Expr>, tree: Result<ScopedTree<&TExpr>, _> }
+      | Supplied
   reads: &[ResolvedDeclName]  // the checker's reads, incl. constants and imports
   domain: Option<&ResolvedDomainConstraint>
 
 CallablePlan<'p>
   scope: SealedDag
   execution_dags: Vec<SealedDag>  // prepared semantic closure
+  instances, closure_instances: PlannedInstance  // included instances and their sealed DAGs
   imports: Vec<PreparedConstantImport>  // retained imported constants
   steps: IndexVec<StepIdx, Step { declaration, deps: Vec<StepIdx> }>
 ```
@@ -1264,8 +1322,10 @@ runtime schedule as steps whose dependencies are earlier steps of the same
 callable; it rejects schedule entries absent from the declaration table or
 outside the selected semantic closure. Running a frame walks the steps by index:
 it looks up neither declarations nor bodies nor DAGs, and never scans bodies.
-Only an inline call selects its callable by the target `DagId` its checked tree
-carries. Assertion expectations and `#[assumes]` tables are read from each
+An inline call finds its callee by indexing `calls` with the caller's position
+and the `CallSlot` its checked node carries; no DAG is looked up by identity.
+Modules import only constants, so a call never seeds imported runtime values.
+Assertion expectations and `#[assumes]` tables are read from each
 body's own records.
 
 Preparation retains canonical constant pools for both singleton and multi-body
@@ -1300,7 +1360,7 @@ Dynamic positions and actual numeric/domain/owner/generic-argument checks remain
 
 It contains no cloned HIR bodies and no parser or registry-building work;
 evaluation reads declaration/assertion/visualization records from the checked
-`TIR`. Runtime planning keeps assertion metadata under canonical
+DAGs. Runtime planning keeps assertion metadata under canonical
 `ResolvedDeclName`s and converts back to source-facing `ScopedName`s only while
 assembling public output. Per-DAG execution facts retain only the stores read in
 that scope; project-wide struct-field constraints have a single authoritative
@@ -1314,10 +1374,12 @@ and public result records no longer depend on runtime validation algorithms.
 
 There are two value layers:
 
-- `RuntimeValue` is internal and unit-normalized. It carries no display-unit
-  metadata, but label/struct/indexed values carry type identity through
-  `IndexTypeRef` / `StructTypeRef` so owner-qualified type/index identity is
-  preserved during evaluation.
+- `RuntimeValue` (`graphcal-eval/src/runtime_value.rs`) is internal and
+  unit-normalized. It carries no display-unit metadata. Quantities are
+  `FiniteQuantity`s, keys are `KeyValue`s (a position on a concrete
+  `IndexAxis`), indexed values are `IndexedValue`s over their axes, and struct
+  values are `StructValue`s carrying their applied constructor, so
+  owner-qualified type/index identity is preserved during evaluation.
 - `Value` is user-facing and appears in `EvalResult`. Quantity values carry a
   dimension and optional display-unit information; labels, structs, and indexed
   values keep public identity carriers for diagnostics/output.
@@ -1355,7 +1417,7 @@ its role remains distinct from declarations carrying an explicit `pub` marker.
 
 | Category          | Main syntax                                | Evaluation phase                                | Reference rules                     |
 | ----------------- | ------------------------------------------ | ----------------------------------------------- | ----------------------------------- |
-| Type system       | `base dim`, `dim`, `unit`, `type`, `index` | Registry build                                  | Other type-system declarations      |
+| Type system       | `base dim`, `dim`, `unit`, `type`, `index` | Static definitions (compile time)               | Other type-system declarations      |
 | DAG               | `dag`                                      | Compiled per body, instantiated by include/call | Own declarations, imports, includes |
 | Const node        | `const node`                               | Compile time                                    | Const nodes and built-ins           |
 | Param             | `param`                                    | Runtime input/default                           | Consts, params, nodes               |
@@ -1407,10 +1469,9 @@ at the stage where each product first has the information it needs:
 | ----------------------------- | ---------------------------------------------------------------- | --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
 | Import scope assembly         | canonical constant targets and module/source aliases             | before current-file HIR lowering  | HIR records canonical targets only; checked types and optional constant values are attached later.                             |
 | Canonical type-store assembly | native owner-qualified dimensions, units, indexes, and types      | complete HIR -> TIR checking      | Every HIR module contributes before checking, so resolver aliases point to one canonical definition without checked dependencies feeding lowering. |
-| Frontend registry seeding     | leaf/alias views needed to build local declarations               | local IR registry builder         | This is a construction boundary only; copied frontend views are filtered out of the canonical store.                            |
-| Module-template elaboration   | one shared `UnfrozenIR`/frontend-registry template per canonical `DagId` | project-session template store | Repeated include/call sites reuse import processing and body lowering rather than recompiling the source template.              |
-| Instantiated include assembly | instance-specialized declarations plus a typed binding environment | unfrozen IR builder             | The current monomorphizing implementation exposes declarations to the importer graph while retaining the template/instance edge. |
-| Dependency DAG attachment     | already-compiled dependency `DagTIR`s keyed by canonical `DagId` | TIR finalization                  | Cross-file DAG calls need callable checked templates, but those templates remain separate owners.                              |
+| Module-template elaboration   | one shared `UnfrozenIR` template per canonical `DagId`           | project-session template store    | Repeated include/call sites reuse import processing and body lowering rather than recompiling the source template.              |
+| Instantiated include assembly | a typed instance edge plus its binding environment                | unfrozen IR builder             | The importer records the typed template/instance edge; checking materializes the instance as its own DAG. |
+| Dependency DAG attachment     | already-checked dependency `DagStore`s of `CheckedDag`s keyed by canonical `DagId` | TIR finalization | Cross-file DAG calls need callable checked templates, but those templates remain separate owners.                              |
 
 The invariant is that each source `File<Desugared>` AST owns its bodies once;
 `LoadedDag` indexes those bodies rather than cloning them. `import` assembles
@@ -1420,9 +1481,11 @@ Instantiated `include` or call sites clone that immutable template only at the
 specialization boundary and record an `InstanceRecord`: its `InstanceId` pairs
 the canonical template with a fresh concrete owner, while its
 `StaticSpecializationId` carries the index, type, and dimension substitution
-and its value ports are derived from the concrete owner. The current evaluator still monomorphizes declarations into the
-importer, but semantic declaration records carry the explicit concrete owner;
-source-facing prefixes are lookup/presentation names, not the source of semantic
+and its value ports are derived from the concrete owner. Checking materializes
+each instance as its own DAG under that owner: it shares its template's HIR
+bodies, names their declarations through its `InstanceFrame`, and specializes
+the template's checked trees with its substitution. Semantic declaration
+records carry the explicit concrete owner; source-facing prefixes are lookup/presentation names, not the source of semantic
 identity. Runtime-dependent units are rebased onto that concrete owner and are
 installed in the project type store under their instance-qualified identities.
 
@@ -1437,8 +1500,9 @@ bindings contain canonical targets but cannot express checked types or values.
 Checking then freezes one shared `ProjectTypeStore` from the complete HIR project.
 Non-root module publication consumes local bodies into an immutable `DagStore`;
 importers install body/unit handles rather than copying dependency closures.
-Imported interfaces carry an explicit constant/runtime category. Required constants
-are read from their defining body's checked pool, with missing facts rejected;
+Imported values are constants by construction: checking builds each checked
+binding by walking the HIR imports, and the constants are read from their
+defining body's checked pool, with missing facts rejected;
 no mutable imported-value injection or duplicate artifact value map remains.
 Constructor references resolve through `ProjectTypeStore::lookup_constructor`
 to a `hir::nominal::ResolvedConstructor` (shared definition handle plus member), so
@@ -1467,45 +1531,48 @@ parse lockfile conventions in the compiler core.
 
 ## 6. Errors
 
-Errors use `miette` diagnostics with source snippets, spans, labels, and codes.
+Diagnostics are plain core data; shells render them with `miette` (source
+snippets, spans, labels, and codes).
 
 Common layers:
 
 ```text
-CompileError
+CompileError                       // graphcal-project/src/compile_error.rs
   Parse(RenderableDiagnostic<ParseErrorKind>)
-  Eval(GraphcalError)
+  Load(LoadError)
+  Binding(BindingError)
+  Eval(RenderedSemanticError)      // a SemanticError with its SourceRegistry
+  ExternalBinding { .. }
 
-GraphcalError
-  DuplicateName
-  CyclicDependency
-  DimensionMismatch
-  TypeAnnotationMismatch
-  UnknownUnit
-  ImportRuntimeItem
-  ImportPrivateItem
-  RequiredItemMustBePub
-  PrivateInPublic
-  PubIndexVariantLiteral
-  ...
+SemanticError                      // graphcal-compiler/src/semantic_error/
+  Located(Diagnostic<SemanticErrorKind>)  // SourceId + span + typed family payload
+  Internal(InternalError)                 // X001: a violated compiler invariant
+
+SemanticErrorKind
+  Domain, Attribute, Graph, Struct, Visibility, Name, Index,
+  Plugin, Dimension, Module, Evaluation   // one typed enum per family
 
 ModuleResolveError
   DuplicateModule
   DuplicateSymbol
   UnknownName
   PrivateName
-  AmbiguousIndexVariant
+  UnknownIndexVariant
   UnexpectedDeclKind
   ...
 ```
 
-`ModuleResolveError` is produced by the pure module resolver and mapped to
-`CompileError`/`GraphcalError` at project boundaries. Each `GraphcalError`
-diagnostic carries a `NamedSource<Arc<String>>` for rich output. Parse errors
-are already core data: a `ParseError` is a typed `ParseErrorKind` (with
-`Expected` / `Found` payloads) plus a span, and the shell that owns the source
-attaches it through `RenderableDiagnostic`. Error codes such as `D001`, `V001`,
-and `M020` are searchable in the source.
+`ModuleResolveError` is produced by the pure module resolver and mapped to a
+`SemanticError` at project boundaries. A semantic diagnostic names its source
+only by `SourceId`; the shell resolves the id through the `SourceRegistry` that
+issued it when rendering (`semantic_error/rendered.rs`), so the core never
+holds `NamedSource`s. `InternalError::new` is the only constructor of an
+internal error. Cooperative cancellation is never an error variant: cancellable
+operations return `Result<T, Outcome<E>>`, and only `Cancelled` produces
+`Outcome::Cancelled`. Parse errors are already core data: a `ParseError` is a
+typed `ParseErrorKind` (with `Expected` / `Found` payloads) plus a span, and the
+shell that owns the source attaches it through `RenderableDiagnostic`. Error
+codes such as `D001`, `V001`, and `M020` are searchable in the source.
 
 ## 7. Tests and Fixtures
 
@@ -1525,6 +1592,8 @@ Important test locations:
 
 - `crates/graphcal-package/src/lib.rs` (manifest/lockfile/package-graph unit tests)
 - `crates/graphcal-project/src/graph_ir/` (graph export unit tests)
+- `crates/graphcal-eval/src/interpreter_tests.rs` (single-file interpreter tests)
+- `crates/graphcal-cli/tests/output_golden.rs` (whole-output golden files)
 - `crates/graphcal-project/tests/error_snapshots.rs`
 - `crates/graphcal-project/tests/edge_case_bugs.rs`
 - `crates/graphcal-project/tests/phase0_regressions.rs`
