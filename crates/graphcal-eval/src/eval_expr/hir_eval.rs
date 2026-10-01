@@ -256,10 +256,7 @@ fn eval_texpr_inner(
             .map_err(Outcome::Failed)
         }
         NodeKind::LinearAlgebra(call) => {
-            let call = call.try_map(|operand| eval_value(*operand, values, local_values, ctx))?;
-            super::linear_algebra::evaluate(&call, ctx)
-                .map_err(|outcome| ctx.outcome_error(outcome, span))
-                .map(plain)
+            super::linear_algebra::evaluate(&call, span, &operands, ctx).map(plain)
         }
         NodeKind::Extern {
             function,

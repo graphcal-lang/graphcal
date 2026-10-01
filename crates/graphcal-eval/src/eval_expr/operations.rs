@@ -187,6 +187,32 @@ impl<'o, 't> Operands<'o, 't> {
     }
 }
 
+/// Linear-algebra operands are read as the vectors and matrices their checked
+/// types are.
+impl<'t> super::linear_algebra::LinearOperands<ScopedNode<'t>> for Operands<'_, 't> {
+    fn vector(
+        &self,
+        node: ScopedNode<'t>,
+    ) -> Result<super::linear_algebra::Vector, Outcome<SemanticError>> {
+        self.read(
+            node,
+            "a rank-1 quantity array",
+            super::linear_algebra::Vector::try_from_value,
+        )
+    }
+
+    fn matrix(
+        &self,
+        node: ScopedNode<'t>,
+    ) -> Result<super::linear_algebra::Matrix, Outcome<SemanticError>> {
+        self.read(
+            node,
+            "a rank-2 quantity array",
+            super::linear_algebra::Matrix::try_from_value,
+        )
+    }
+}
+
 /// Evaluate an operation whose result is a real quantity.
 /// Plugin-call arguments are operands read at the kind their checked node
 /// carries.
