@@ -14,9 +14,8 @@ use std::collections::HashMap;
 use crate::compile_error::CompileError;
 use crate::prepare::*;
 use crate::project_compiler::{ProjectCompiler, compile_to_tir, compile_to_tir_from_project};
-use graphcal_compiler::graphcal_error::GraphcalError;
-use graphcal_compiler::graphcal_error::RenderedGraphcalError;
 use graphcal_compiler::outcome::Outcome;
+use graphcal_compiler::semantic_error::SemanticError;
 use graphcal_compiler::semantic_error::SemanticErrorKind;
 use graphcal_compiler::semantic_error::attribute::AttributeError;
 use graphcal_compiler::semantic_error::dimension::DimensionError;
@@ -26,6 +25,7 @@ use graphcal_compiler::semantic_error::graph::GraphError;
 use graphcal_compiler::semantic_error::index::IndexError;
 use graphcal_compiler::semantic_error::module::ModuleError;
 use graphcal_compiler::semantic_error::name::NameError;
+use graphcal_compiler::semantic_error::rendered::RenderedSemanticError;
 use graphcal_compiler::semantic_error::structure::StructError;
 use graphcal_compiler::semantic_error::visibility::VisibilityError;
 use graphcal_compiler::syntax::attribute::AttributeName;
@@ -1178,13 +1178,13 @@ fn shared_frame_dependency_and_fatal_error_policies_are_explicit() {
             let outcome = frame.run(&token, |entry, _| {
                 if entry.key().as_str() == "a" {
                     return Err(if fatal {
-                        GraphcalError::internal_error(
+                        SemanticError::internal_error(
                             "fatal sentinel",
                             src,
                             graphcal_compiler::diagnostic_anchor::DiagnosticAnchor::WholeFile,
                         )
                     } else {
-                        GraphcalError::located(
+                        SemanticError::located(
                             src,
                             entry.body().root().span(),
                             EvaluationError::Failed {
@@ -1306,7 +1306,7 @@ fn selective_import_rejects_required_static_inputs() {
         let error = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap_err();
         assert!(matches!(
             error,
-            CompileError::Eval(RenderedGraphcalError { error: GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic { kind: SemanticErrorKind::Module(ModuleError::ImportRequiredStaticInput { kind, .. }), .. }), .. })
+            CompileError::Eval(RenderedSemanticError { error: SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic { kind: SemanticErrorKind::Module(ModuleError::ImportRequiredStaticInput { kind, .. }), .. }), .. })
                 if kind == expected_kind
         ));
     }
@@ -1329,8 +1329,8 @@ fn qualified_import_rejects_required_static_members() {
     let error = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap_err();
     assert!(matches!(
         error,
-        CompileError::Eval(RenderedGraphcalError {
-            error: GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+        CompileError::Eval(RenderedSemanticError {
+            error: SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
                 kind: SemanticErrorKind::Module(ModuleError::ImportRequiredStaticInput { .. }),
                 ..
             }),
@@ -1361,7 +1361,7 @@ fn qualified_import_rejects_transitive_required_static_dependencies() {
     let error = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap_err();
     assert!(matches!(
         error,
-        CompileError::Eval(RenderedGraphcalError { error: GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic { kind: SemanticErrorKind::Module(ModuleError::ImportUnresolvedStaticDependency { dependency_kind: graphcal_compiler::static_interface::StaticInputKind::Type, dependency, .. }), .. }), .. }) if dependency == "Element"
+        CompileError::Eval(RenderedSemanticError { error: SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic { kind: SemanticErrorKind::Module(ModuleError::ImportUnresolvedStaticDependency { dependency_kind: graphcal_compiler::static_interface::StaticInputKind::Type, dependency, .. }), .. }), .. }) if dependency == "Element"
     ));
 }
 
@@ -1386,7 +1386,7 @@ fn qualified_import_resolves_ambiguous_static_dependencies_to_their_symbol() {
     let error = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap_err();
     assert!(matches!(
         error,
-        CompileError::Eval(RenderedGraphcalError { error: GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic { kind: SemanticErrorKind::Module(ModuleError::ImportUnresolvedStaticDependency { dependency_kind: graphcal_compiler::static_interface::StaticInputKind::Dimension, dependency, .. }), .. }), .. }) if dependency == "Basis"
+        CompileError::Eval(RenderedSemanticError { error: SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic { kind: SemanticErrorKind::Module(ModuleError::ImportUnresolvedStaticDependency { dependency_kind: graphcal_compiler::static_interface::StaticInputKind::Dimension, dependency, .. }), .. }), .. }) if dependency == "Basis"
     ));
 }
 
@@ -1410,7 +1410,7 @@ fn selective_import_rejects_transitive_required_static_dependencies() {
     let error = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap_err();
     assert!(matches!(
         error,
-        CompileError::Eval(RenderedGraphcalError { error: GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic { kind: SemanticErrorKind::Module(ModuleError::ImportUnresolvedStaticDependency { dependency_kind: graphcal_compiler::static_interface::StaticInputKind::Type, dependency, .. }), .. }), .. }) if dependency == "Element"
+        CompileError::Eval(RenderedSemanticError { error: SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic { kind: SemanticErrorKind::Module(ModuleError::ImportUnresolvedStaticDependency { dependency_kind: graphcal_compiler::static_interface::StaticInputKind::Type, dependency, .. }), .. }), .. }) if dependency == "Element"
     ));
 }
 
@@ -1499,9 +1499,9 @@ fn renamed_include_projection_does_not_bind_the_source_name_in_declarations() {
         ),
     ] {
         match compile_and_eval(&format!("{target}{body}")) {
-            Err(CompileError::Eval(RenderedGraphcalError {
+            Err(CompileError::Eval(RenderedSemanticError {
                 error:
-                    GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+                    SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
                         kind:
                             SemanticErrorKind::Dimension(DimensionError::UnknownDimension {
                                 name, ..
@@ -1522,9 +1522,9 @@ fn renamed_include_projection_does_not_bind_the_source_name_in_declarations() {
          unit quad_metre: Length = 2.0 double_metre;",
     ] {
         match compile_and_eval(&format!("{target}{body}")) {
-            Err(CompileError::Eval(RenderedGraphcalError {
+            Err(CompileError::Eval(RenderedSemanticError {
                 error:
-                    GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+                    SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
                         kind: SemanticErrorKind::Dimension(DimensionError::UnknownUnit { name, .. }),
                         ..
                     }),
@@ -1571,9 +1571,9 @@ const DERIVED_FROM_BINDABLE_DIM_DAG: &str = "dag blib {\n\
 
 fn expect_annotation_mismatch(source: &str) {
     match compile_and_eval(source) {
-        Err(CompileError::Eval(RenderedGraphcalError {
+        Err(CompileError::Eval(RenderedSemanticError {
             error:
-                GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+                SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
                     kind:
                         SemanticErrorKind::Dimension(DimensionError::DimensionMismatchInAnnotation {
                             ..
@@ -1657,9 +1657,9 @@ fn derived_dimension_projection_from_file_module_follows_the_include_binding() {
         match (result, expected) {
             (Ok(result), Some(value)) => assert_quantity_value(&result, "y", value),
             (
-                Err(CompileError::Eval(RenderedGraphcalError {
+                Err(CompileError::Eval(RenderedSemanticError {
                     error:
-                        GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+                        SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
                             kind:
                                 SemanticErrorKind::Dimension(
                                     DimensionError::DimensionMismatchInAnnotation { .. },
@@ -1756,9 +1756,9 @@ fn defaulted_bindable_dimension_follows_the_include_binding_in_file_modules() {
                 assert_quantity_value(&result, "y", y);
             }
             (
-                Err(CompileError::Eval(RenderedGraphcalError {
+                Err(CompileError::Eval(RenderedSemanticError {
                     error:
-                        GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+                        SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
                             kind:
                                 SemanticErrorKind::Dimension(
                                     DimensionError::DimensionMismatchInAnnotation { .. },
@@ -1904,7 +1904,7 @@ fn constructor_empty_parentheses_are_rejected() {
         assert!(
             matches!(
                 &error,
-                CompileError::Eval(RenderedGraphcalError { error: GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic { kind: SemanticErrorKind::Struct(StructError::EmptyParenthesizedConstructor { constructor, .. }), .. }), .. }) if constructor.as_str() == expected_constructor
+                CompileError::Eval(RenderedSemanticError { error: SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic { kind: SemanticErrorKind::Struct(StructError::EmptyParenthesizedConstructor { constructor, .. }), .. }), .. }) if constructor.as_str() == expected_constructor
             ),
             "unexpected error: {error:?}"
         );
@@ -1923,7 +1923,7 @@ fn payload_constructor_empty_pattern_keeps_missing_field_diagnostic() {
     assert!(
         matches!(
             &error,
-            CompileError::Eval(RenderedGraphcalError { error: GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic { kind: SemanticErrorKind::Struct(StructError::MissingPatternFields { constructor, .. }), .. }), .. })
+            CompileError::Eval(RenderedSemanticError { error: SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic { kind: SemanticErrorKind::Struct(StructError::MissingPatternFields { constructor, .. }), .. }), .. })
                 if constructor.as_str() == "Present"
         ),
         "unexpected error: {error:?}"
@@ -1940,7 +1940,7 @@ fn selective_include_rejects_dag_blueprint_projection() {
     let error = compile_and_eval(source).unwrap_err();
     assert!(matches!(
         error,
-        CompileError::Eval(RenderedGraphcalError { error: GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic { kind: SemanticErrorKind::Module(ModuleError::IncludeItemNotProjectable { name, .. }), .. }), .. }) if name == "child"
+        CompileError::Eval(RenderedSemanticError { error: SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic { kind: SemanticErrorKind::Module(ModuleError::IncludeItemNotProjectable { name, .. }), .. }), .. }) if name == "child"
     ));
 }
 
@@ -1953,7 +1953,7 @@ fn selective_include_rejects_constructor_of_rebound_owner_type() {
     let error = compile_and_eval(source).unwrap_err();
     assert!(matches!(
         error,
-        CompileError::Eval(RenderedGraphcalError { error: GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic { kind: SemanticErrorKind::Module(ModuleError::IncludeConstructorOwnerRebound { constructor, owner_type, .. }), .. }), .. }) if constructor == "Pick" && owner_type.ends_with("Choice")
+        CompileError::Eval(RenderedSemanticError { error: SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic { kind: SemanticErrorKind::Module(ModuleError::IncludeConstructorOwnerRebound { constructor, owner_type, .. }), .. }), .. }) if constructor == "Pick" && owner_type.ends_with("Choice")
     ));
 }
 
@@ -1977,11 +1977,11 @@ fn structural_index_binding_cardinality_must_be_closed() {
     compile_and_eval(&program("1 + 2 * 3")).expect("a closed cardinality binds");
     assert!(matches!(
         compile_and_eval(&program("N + 1")).unwrap_err(),
-        CompileError::Eval(RenderedGraphcalError { error: GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic { kind: SemanticErrorKind::Index(IndexError::UnknownIndex { name, .. }), .. }), .. }) if name.to_string() == "N"
+        CompileError::Eval(RenderedSemanticError { error: SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic { kind: SemanticErrorKind::Index(IndexError::UnknownIndex { name, .. }), .. }), .. }) if name.to_string() == "N"
     ));
     assert!(matches!(
         compile_and_eval(&program("4294967296 * 4294967296")).unwrap_err(),
-        CompileError::Eval(RenderedGraphcalError { error: GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic { kind: SemanticErrorKind::Evaluation(EvaluationError::Failed { message, .. }), .. }), .. })
+        CompileError::Eval(RenderedSemanticError { error: SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic { kind: SemanticErrorKind::Evaluation(EvaluationError::Failed { message, .. }), .. }), .. })
             if message.contains("type-level Nat arithmetic overflow")
     ));
 }
@@ -1995,7 +1995,7 @@ fn include_rejects_required_static_inputs_as_binding_targets() {
     let error = compile_and_eval(source).unwrap_err();
     assert!(matches!(
         error,
-        CompileError::Eval(RenderedGraphcalError { error: GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic { kind: SemanticErrorKind::Module(ModuleError::InvalidStaticBindingTarget { kind: graphcal_compiler::static_interface::StaticInputKind::Type, name, target, .. }), .. }), .. }) if name == "Slot" && target == "Replacement"
+        CompileError::Eval(RenderedSemanticError { error: SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic { kind: SemanticErrorKind::Module(ModuleError::InvalidStaticBindingTarget { kind: graphcal_compiler::static_interface::StaticInputKind::Type, name, target, .. }), .. }), .. }) if name == "Slot" && target == "Replacement"
     ));
 }
 
@@ -2028,7 +2028,7 @@ fn include_requires_every_required_static_input_category() {
         let error = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap_err();
         assert!(matches!(
             error,
-            CompileError::Eval(RenderedGraphcalError { error: GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic { kind: SemanticErrorKind::Index(IndexError::RequiredStaticInputNotBound { kind, .. }), .. }), .. })
+            CompileError::Eval(RenderedSemanticError { error: SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic { kind: SemanticErrorKind::Index(IndexError::RequiredStaticInputNotBound { kind, .. }), .. }), .. })
                 if kind == expected_kind
         ));
     }
@@ -2051,8 +2051,8 @@ fn fixed_static_declarations_are_not_binding_ports() {
     let error = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap_err();
     assert!(matches!(
         error,
-        CompileError::Eval(RenderedGraphcalError {
-            error: GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+        CompileError::Eval(RenderedSemanticError {
+            error: SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
                 kind: SemanticErrorKind::Module(ModuleError::DagInputCategoryMismatch {
                     expected: "type",
                     ..
@@ -2104,7 +2104,7 @@ fn bare_graph_declaration_refs_fail_before_dependency_planning() {
         assert!(
             matches!(
                 error,
-                CompileError::Eval(RenderedGraphcalError { error: GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic { kind: SemanticErrorKind::Name(NameError::BareGraphDeclarationRef { name, .. }), .. }), .. })
+                CompileError::Eval(RenderedSemanticError { error: SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic { kind: SemanticErrorKind::Name(NameError::BareGraphDeclarationRef { name, .. }), .. }), .. })
                     if name.to_string() == expected_name
             ),
             "case: {case}"
@@ -2120,8 +2120,8 @@ fn safety_attributes_reject_repetition_and_invalid_assumptions() {
     let error = compile_and_eval_named(repeated_expected_fail, "test.gcl").unwrap_err();
     assert!(matches!(
         error,
-        CompileError::Eval(RenderedGraphcalError {
-            error: GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+        CompileError::Eval(RenderedSemanticError {
+            error: SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
                 kind: SemanticErrorKind::Attribute(AttributeError::RepeatedSingletonAttribute {
                     name: AttributeName::ExpectedFail,
                     ..
@@ -2163,8 +2163,8 @@ fn repeated_expected_fail_is_rejected_on_file_and_inline_include_items() {
     let file_error = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap_err();
     assert!(matches!(
         file_error,
-        CompileError::Eval(RenderedGraphcalError {
-            error: GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+        CompileError::Eval(RenderedSemanticError {
+            error: SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
                 kind: SemanticErrorKind::Attribute(AttributeError::RepeatedSingletonAttribute {
                     name: AttributeName::ExpectedFail,
                     ..
@@ -2184,8 +2184,8 @@ fn repeated_expected_fail_is_rejected_on_file_and_inline_include_items() {
     let inline_error = compile_and_eval_named(inline, "test.gcl").unwrap_err();
     assert!(matches!(
         inline_error,
-        CompileError::Eval(RenderedGraphcalError {
-            error: GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+        CompileError::Eval(RenderedSemanticError {
+            error: SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
                 kind: SemanticErrorKind::Attribute(AttributeError::RepeatedSingletonAttribute {
                     name: AttributeName::ExpectedFail,
                     ..
@@ -2206,8 +2206,8 @@ fn repeated_hidden_is_rejected_on_plots_and_include_items() {
     let declaration_error = compile_and_eval_named(declaration, "test.gcl").unwrap_err();
     assert!(matches!(
         declaration_error,
-        CompileError::Eval(RenderedGraphcalError {
-            error: GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+        CompileError::Eval(RenderedSemanticError {
+            error: SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
                 kind: SemanticErrorKind::Attribute(AttributeError::RepeatedSingletonAttribute {
                     name: AttributeName::Hidden,
                     ..
@@ -2233,8 +2233,8 @@ fn repeated_hidden_is_rejected_on_plots_and_include_items() {
     let include_error = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap_err();
     assert!(matches!(
         include_error,
-        CompileError::Eval(RenderedGraphcalError {
-            error: GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+        CompileError::Eval(RenderedSemanticError {
+            error: SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
                 kind: SemanticErrorKind::Attribute(AttributeError::RepeatedSingletonAttribute {
                     name: AttributeName::Hidden,
                     ..
@@ -2299,7 +2299,7 @@ fn time_scale_spellings_are_disjoint_from_graph_value_namespaces() {
     .unwrap_err();
     assert!(matches!(
         bare_error,
-        CompileError::Eval(RenderedGraphcalError { error: GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic { kind: SemanticErrorKind::Name(NameError::BareGraphDeclarationRef { name, .. }), .. }), .. })
+        CompileError::Eval(RenderedSemanticError { error: SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic { kind: SemanticErrorKind::Name(NameError::BareGraphDeclarationRef { name, .. }), .. }), .. })
             if name.to_string() == "UTC"
     ));
 }
@@ -2331,7 +2331,7 @@ fn reserved_name_policy_covers_import_include_and_reexport_aliases() {
         let error = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap_err();
         assert!(matches!(
             error,
-            CompileError::Eval(RenderedGraphcalError { error: GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic { kind: SemanticErrorKind::Name(NameError::BuiltinNameShadowed { name, .. }), .. }), .. })
+            CompileError::Eval(RenderedSemanticError { error: SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic { kind: SemanticErrorKind::Name(NameError::BuiltinNameShadowed { name, .. }), .. }), .. })
                 if name == expected_name
         ));
     }
@@ -2352,7 +2352,7 @@ fn reserved_name_policy_covers_import_include_and_reexport_aliases() {
         };
         assert!(matches!(
             error,
-            CompileError::Eval(RenderedGraphcalError { error: GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic { kind: SemanticErrorKind::Name(NameError::BuiltinNameShadowed { name, .. }), .. }), .. }) if name == "E"
+            CompileError::Eval(RenderedSemanticError { error: SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic { kind: SemanticErrorKind::Name(NameError::BuiltinNameShadowed { name, .. }), .. }), .. }) if name == "E"
         ));
     }
 
@@ -2367,7 +2367,7 @@ fn reserved_name_policy_covers_import_include_and_reexport_aliases() {
     let reexport_error = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap_err();
     assert!(matches!(
         reexport_error,
-        CompileError::Eval(RenderedGraphcalError { error: GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic { kind: SemanticErrorKind::Name(NameError::BuiltinNameShadowed { name, .. }), .. }), .. }) if name == "E"
+        CompileError::Eval(RenderedSemanticError { error: SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic { kind: SemanticErrorKind::Name(NameError::BuiltinNameShadowed { name, .. }), .. }), .. }) if name == "E"
     ));
 
     let (_directory, root) = write_pipeline_project(
@@ -2382,7 +2382,7 @@ fn reserved_name_policy_covers_import_include_and_reexport_aliases() {
         compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap_err();
     assert!(matches!(
         constructor_reexport_error,
-        CompileError::Eval(RenderedGraphcalError { error: GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic { kind: SemanticErrorKind::Name(NameError::BuiltinNameShadowed { name, .. }), .. }), .. }) if name == "sum"
+        CompileError::Eval(RenderedSemanticError { error: SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic { kind: SemanticErrorKind::Name(NameError::BuiltinNameShadowed { name, .. }), .. }), .. }) if name == "sum"
     ));
 
     let (_directory, root) = write_pipeline_project(
@@ -2403,7 +2403,7 @@ fn reserved_name_policy_covers_import_include_and_reexport_aliases() {
         compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap_err();
     assert!(matches!(
         self_import_error,
-        CompileError::Eval(RenderedGraphcalError { error: GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic { kind: SemanticErrorKind::Name(NameError::BuiltinNameShadowed { name, .. }), .. }), .. }) if name == "E"
+        CompileError::Eval(RenderedSemanticError { error: SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic { kind: SemanticErrorKind::Name(NameError::BuiltinNameShadowed { name, .. }), .. }), .. }) if name == "E"
     ));
 }
 
@@ -2429,8 +2429,8 @@ fn repeated_include_producers_are_rejected_before_metadata_maps() {
         let error = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap_err();
         assert!(matches!(
             error,
-            CompileError::Eval(RenderedGraphcalError {
-                error: GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+            CompileError::Eval(RenderedSemanticError {
+                error: SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
                     kind: SemanticErrorKind::Module(ModuleError::DuplicateIncludeSelection { .. }),
                     ..
                 }),
@@ -2448,8 +2448,8 @@ fn repeated_include_producers_are_rejected_before_metadata_maps() {
         let error = compile_and_eval_named(&source, "test.gcl").unwrap_err();
         assert!(matches!(
             error,
-            CompileError::Eval(RenderedGraphcalError {
-                error: GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+            CompileError::Eval(RenderedSemanticError {
+                error: SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
                     kind: SemanticErrorKind::Module(ModuleError::DuplicateIncludeSelection { .. }),
                     ..
                 }),
@@ -2489,8 +2489,8 @@ fn lazy_attribute_is_rejected_on_declarations_and_include_items() {
         let error = compile_and_eval_named(source, "test.gcl").unwrap_err();
         assert!(matches!(
             error,
-            CompileError::Eval(RenderedGraphcalError {
-                error: GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+            CompileError::Eval(RenderedSemanticError {
+                error: SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
                     kind: SemanticErrorKind::Attribute(AttributeError::LazyNotSupported),
                     ..
                 }),
@@ -2509,8 +2509,8 @@ fn lazy_attribute_is_rejected_on_declarations_and_include_items() {
     let file_error = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap_err();
     assert!(matches!(
         file_error,
-        CompileError::Eval(RenderedGraphcalError {
-            error: GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+        CompileError::Eval(RenderedSemanticError {
+            error: SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
                 kind: SemanticErrorKind::Attribute(AttributeError::LazyNotSupported),
                 ..
             }),
@@ -2526,8 +2526,8 @@ fn lazy_attribute_is_rejected_on_declarations_and_include_items() {
     .unwrap_err();
     assert!(matches!(
         inline_error,
-        CompileError::Eval(RenderedGraphcalError {
-            error: GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+        CompileError::Eval(RenderedSemanticError {
+            error: SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
                 kind: SemanticErrorKind::Attribute(AttributeError::LazyNotSupported),
                 ..
             }),
@@ -2542,9 +2542,9 @@ fn assert_missing_dag_bindings(
     expected_missing: &[&str],
 ) {
     match error {
-        CompileError::Eval(RenderedGraphcalError {
+        CompileError::Eval(RenderedSemanticError {
             error:
-                GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+                SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
                     kind:
                         SemanticErrorKind::Graph(GraphError::MissingDagBindings {
                             missing,
@@ -2765,8 +2765,8 @@ fn pure_imports_reject_assertion_outcomes_and_runtime_unit_scales() {
     assert!(
         matches!(
             assertion_error,
-            CompileError::Eval(RenderedGraphcalError {
-                error: GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+            CompileError::Eval(RenderedSemanticError {
+                error: SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
                     kind: SemanticErrorKind::Module(ModuleError::ImportAssertionItem { .. }),
                     ..
                 }),
@@ -2794,8 +2794,8 @@ fn pure_imports_reject_assertion_outcomes_and_runtime_unit_scales() {
     assert!(
         matches!(
             unit_error,
-            CompileError::Eval(RenderedGraphcalError {
-                error: GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+            CompileError::Eval(RenderedSemanticError {
+                error: SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
                     kind: SemanticErrorKind::Module(ModuleError::ImportRuntimeUnit { .. }),
                     ..
                 }),
@@ -2815,8 +2815,8 @@ fn pure_imports_reject_assertion_outcomes_and_runtime_unit_scales() {
     assert!(
         matches!(
             unit_definition_error,
-            CompileError::Eval(RenderedGraphcalError {
-                error: GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+            CompileError::Eval(RenderedSemanticError {
+                error: SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
                     kind: SemanticErrorKind::Module(ModuleError::ImportRuntimeUnit { .. }),
                     ..
                 }),
@@ -2836,8 +2836,8 @@ fn pure_imports_reject_assertion_outcomes_and_runtime_unit_scales() {
     assert!(
         matches!(
             constant_scale_runtime_error,
-            CompileError::Eval(RenderedGraphcalError {
-                error: GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+            CompileError::Eval(RenderedSemanticError {
+                error: SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
                     kind: SemanticErrorKind::Module(ModuleError::ImportRuntimeUnit { .. }),
                     ..
                 }),
@@ -3858,7 +3858,7 @@ fn assert_literal_negative_zero_tolerance_is_rejected() {
     .unwrap_err();
     assert!(matches!(
         error,
-        CompileError::Eval(RenderedGraphcalError { error: GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic { kind: SemanticErrorKind::Attribute(AttributeError::NegativeTolerance { found, .. }), .. }), .. }) if found == "-0"
+        CompileError::Eval(RenderedSemanticError { error: SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic { kind: SemanticErrorKind::Attribute(AttributeError::NegativeTolerance { found, .. }), .. }), .. }) if found == "-0"
     ));
 }
 
@@ -4230,8 +4230,8 @@ fn dst_gaps_and_folds_are_rejected_during_checking() {
     .unwrap_err();
     assert!(matches!(
         gap,
-        CompileError::Eval(RenderedGraphcalError {
-            error: GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+        CompileError::Eval(RenderedSemanticError {
+            error: SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
                 kind: SemanticErrorKind::Dimension(DimensionError::NonexistentCivilDateTime { .. }),
                 ..
             }),
@@ -4252,8 +4252,8 @@ node fold: Datetime = if true {
     .unwrap_err();
     assert!(matches!(
         fold,
-        CompileError::Eval(RenderedGraphcalError {
-            error: GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+        CompileError::Eval(RenderedSemanticError {
+            error: SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
                 kind: SemanticErrorKind::Dimension(DimensionError::RepeatedCivilDateTime { .. }),
                 ..
             }),
@@ -5893,7 +5893,7 @@ fn aliased_include_does_not_bind_the_source_module_name() {
     assert!(
         matches!(
             &error,
-            CompileError::Eval(RenderedGraphcalError { error: GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic { kind: SemanticErrorKind::Evaluation(EvaluationError::Failed { message, .. }), .. }), .. })
+            CompileError::Eval(RenderedSemanticError { error: SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic { kind: SemanticErrorKind::Evaluation(EvaluationError::Failed { message, .. }), .. }), .. })
                 if message == "unknown module `src.app.defaults`"
         ),
         "unexpected alias-leak diagnostic: {error:?}"
@@ -6317,9 +6317,9 @@ fn module_aliases_and_same_named_nodes_are_duplicate_names() {
     ] {
         let source = format!("{velocity}{alias_decl}\nnode parking: Dimensionless = 2.0;\n");
         match compile_and_eval(&source) {
-            Err(CompileError::Eval(RenderedGraphcalError {
+            Err(CompileError::Eval(RenderedSemanticError {
                 error:
-                    GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+                    SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
                         kind: SemanticErrorKind::Name(NameError::DuplicateName { name, .. }),
                         ..
                     }),
@@ -6364,9 +6364,9 @@ fn project_module_includes_still_reject_duplicate_default_aliases() {
     );
 
     match compile_and_eval_project(&root, &HashMap::new(), None, &fs()) {
-        Err(CompileError::Eval(RenderedGraphcalError {
+        Err(CompileError::Eval(RenderedSemanticError {
             error:
-                GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+                SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
                     kind: SemanticErrorKind::Module(ModuleError::DuplicateModuleName { name, .. }),
                     ..
                 }),
@@ -6374,9 +6374,9 @@ fn project_module_includes_still_reject_duplicate_default_aliases() {
         })) => {
             assert_eq!(name, "shared");
         }
-        Err(CompileError::Eval(RenderedGraphcalError {
+        Err(CompileError::Eval(RenderedSemanticError {
             error:
-                GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+                SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
                     kind: SemanticErrorKind::Evaluation(EvaluationError::Failed { message, .. }),
                     ..
                 }),
@@ -6473,9 +6473,9 @@ fn project_selective_import_item_rejects_unknown_attribute() {
     .unwrap();
 
     match compile_and_eval_project(&root, &HashMap::new(), None, &fs()) {
-        Err(CompileError::Eval(RenderedGraphcalError {
+        Err(CompileError::Eval(RenderedSemanticError {
             error:
-                GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+                SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
                     kind:
                         SemanticErrorKind::Attribute(AttributeError::UnknownAttribute { name, .. }),
                     ..
@@ -6951,9 +6951,9 @@ fn selectively_imported_unit_does_not_expose_its_backing_dimension_name() {
     );
 
     match compile_to_tir_project(&root, None, &fs()) {
-        Err(CompileError::Eval(RenderedGraphcalError {
+        Err(CompileError::Eval(RenderedSemanticError {
             error:
-                GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+                SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
                     kind:
                         SemanticErrorKind::Dimension(DimensionError::UnknownDimension { name, .. }),
                     ..
@@ -7014,9 +7014,9 @@ fn project_struct_type_rejects_same_leaf_wrong_owner_constructor() {
     );
 
     match compile_to_tir_project(&root, None, &fs()) {
-        Err(CompileError::Eval(RenderedGraphcalError {
+        Err(CompileError::Eval(RenderedSemanticError {
             error:
-                GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+                SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
                     kind:
                         SemanticErrorKind::Dimension(DimensionError::DimensionMismatchInAnnotation {
                             ..
@@ -7180,7 +7180,7 @@ fn eval_constructor_match_rejects_runtime_owner_mismatch_with_same_leaf_construc
     // A value of another owner contradicts the checked type: no arm is
     // selected by leaf name, and the violation is an internal error.
     match err {
-        Outcome::Failed(GraphcalError::Internal(internal)) => {
+        Outcome::Failed(SemanticError::Internal(internal)) => {
             assert!(
                 internal.message().contains("no match arm for variant"),
                 "{}",
@@ -7687,9 +7687,9 @@ fn project_index_access_rejects_same_leaf_wrong_owner() {
     );
 
     match compile_to_tir_project(&root, None, &fs()) {
-        Err(CompileError::Eval(RenderedGraphcalError {
+        Err(CompileError::Eval(RenderedSemanticError {
             error:
-                GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+                SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
                     kind: SemanticErrorKind::Index(IndexError::IndexMismatch { .. }),
                     ..
                 }),
@@ -7708,9 +7708,9 @@ fn project_for_comp_rejects_same_leaf_wrong_owner() {
     );
 
     match compile_to_tir_project(&root, None, &fs()) {
-        Err(CompileError::Eval(RenderedGraphcalError {
+        Err(CompileError::Eval(RenderedSemanticError {
             error:
-                GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+                SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
                     kind:
                         SemanticErrorKind::Dimension(DimensionError::DimensionMismatchInAnnotation {
                             ..
@@ -7749,9 +7749,9 @@ fn project_map_literal_rejects_same_leaf_wrong_owner_key() {
     );
 
     match compile_to_tir_project(&root, None, &fs()) {
-        Err(CompileError::Eval(RenderedGraphcalError {
+        Err(CompileError::Eval(RenderedSemanticError {
             error:
-                GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+                SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
                     kind: SemanticErrorKind::Index(IndexError::IndexMismatch { .. }),
                     ..
                 }),
@@ -7772,9 +7772,9 @@ fn project_map_literal_missing_variants_uses_resolved_owner() {
     );
 
     match compile_to_tir_project(&root, None, &fs()) {
-        Err(CompileError::Eval(RenderedGraphcalError {
+        Err(CompileError::Eval(RenderedSemanticError {
             error:
-                GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+                SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
                     kind: SemanticErrorKind::Index(IndexError::MissingVariants { missing, .. }),
                     ..
                 }),
@@ -7854,9 +7854,9 @@ fn project_label_match_rejects_same_leaf_wrong_owner_pattern() {
     );
 
     match compile_to_tir_project(&root, None, &fs()) {
-        Err(CompileError::Eval(RenderedGraphcalError {
+        Err(CompileError::Eval(RenderedSemanticError {
             error:
-                GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+                SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
                     kind: SemanticErrorKind::Index(IndexError::IndexMismatch { .. }),
                     ..
                 }),
@@ -7928,9 +7928,9 @@ fn project_expected_fail_keys_reject_same_leaf_wrong_owner() {
     );
 
     match compile_and_eval_project(&root, &HashMap::new(), None, &fs()) {
-        Err(CompileError::Eval(RenderedGraphcalError {
+        Err(CompileError::Eval(RenderedSemanticError {
             error:
-                GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+                SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
                     kind:
                         SemanticErrorKind::Attribute(AttributeError::ExpectedFailKeyIndexMismatch {
                             ..
@@ -8111,7 +8111,7 @@ fn eval_index_access_rejects_runtime_owner_mismatch_with_same_leaf_variant() {
     // A key of another owner contradicts the checked type: no entry is
     // selected by leaf name, and the violation is an internal error.
     match err {
-        Outcome::Failed(GraphcalError::Internal(internal)) => {
+        Outcome::Failed(SemanticError::Internal(internal)) => {
             assert!(
                 internal.message().contains("checked index entry"),
                 "{}",
@@ -8203,7 +8203,7 @@ fn eval_label_match_rejects_runtime_owner_mismatch_with_same_leaf_variant() {
     // A value of another owner contradicts the checked type: no arm is
     // selected by leaf name, and the violation is an internal error.
     match err {
-        Outcome::Failed(GraphcalError::Internal(internal)) => {
+        Outcome::Failed(SemanticError::Internal(internal)) => {
             assert!(
                 internal.message().contains("no match arm for label"),
                 "{}",
@@ -8340,9 +8340,9 @@ fn project_injectable_index_kind_mismatch() {
         .join("../../tests/fixtures/invalid/multi/injectable_index_kind_mismatch/src/lib/main.gcl");
     let result = compile_and_eval_project(&root, &HashMap::new(), None, &fs());
     match result {
-        Err(CompileError::Eval(RenderedGraphcalError {
+        Err(CompileError::Eval(RenderedSemanticError {
             error:
-                GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+                SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
                     kind:
                         SemanticErrorKind::Module(ModuleError::IndexKindMismatch {
                             dep_index,
@@ -8427,9 +8427,9 @@ fn project_include_overrides_index_no_param_binding_v005() {
     );
     let result = compile_and_eval_project(&root, &HashMap::new(), None, &fs());
     match result {
-        Err(CompileError::Eval(RenderedGraphcalError {
+        Err(CompileError::Eval(RenderedSemanticError {
             error:
-                GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+                SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
                     kind:
                         SemanticErrorKind::Visibility(VisibilityError::IncludeMustReconcileOverride {
                             overridden,
@@ -8475,7 +8475,7 @@ fn template_closure_error_renders_against_dependency_source() {
     let result = compile_and_eval_project(&root, &HashMap::new(), None, &fs());
     match result {
         Err(CompileError::Eval(rendered)) => {
-            let GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+            let SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
                 kind:
                     SemanticErrorKind::Visibility(VisibilityError::TemplateBodyDependsOnStaticDefault {
                         body_name,
@@ -8519,9 +8519,9 @@ fn project_selective_include_leaks_private_type_v006() {
     );
     let result = compile_and_eval_project(&root, &HashMap::new(), None, &fs());
     match result {
-        Err(CompileError::Eval(RenderedGraphcalError {
+        Err(CompileError::Eval(RenderedSemanticError {
             error:
-                GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+                SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
                     kind:
                         SemanticErrorKind::Visibility(VisibilityError::GenericsLeakage {
                             reexport_name,
@@ -8548,9 +8548,9 @@ fn project_selective_include_rejects_private_generic_default_binding() {
     );
     let result = compile_and_eval_project(&root, &HashMap::new(), None, &fs());
     match result {
-        Err(CompileError::Eval(RenderedGraphcalError {
+        Err(CompileError::Eval(RenderedSemanticError {
             error:
-                GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+                SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
                     kind:
                         SemanticErrorKind::Visibility(VisibilityError::GenericsLeakage {
                             reexport_name,
@@ -8644,8 +8644,8 @@ fn imported_generic_field_obligation_is_checked_in_the_consumer() {
     let error = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap_err();
     assert!(matches!(
         error,
-        CompileError::Eval(RenderedGraphcalError {
-            error: GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+        CompileError::Eval(RenderedSemanticError {
+            error: SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
                 kind: SemanticErrorKind::Domain(DomainError::DomainDimensionMismatch { .. }),
                 ..
             }),
@@ -8666,8 +8666,8 @@ node bad: Bad = Bad(value: Wrapper<Length>(value: -1.0 m));
     .unwrap_err();
     assert!(matches!(
         error,
-        CompileError::Eval(RenderedGraphcalError {
-            error: GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+        CompileError::Eval(RenderedSemanticError {
+            error: SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
                 kind: SemanticErrorKind::Domain(DomainError::GenericTypeArgDomainConstraint),
                 ..
             }),
@@ -8690,8 +8690,8 @@ dag nested {
     .unwrap_err();
     assert!(matches!(
         error,
-        CompileError::Eval(RenderedGraphcalError {
-            error: GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+        CompileError::Eval(RenderedSemanticError {
+            error: SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
                 kind: SemanticErrorKind::Domain(DomainError::GenericTypeArgDomainConstraint),
                 ..
             }),
@@ -8715,9 +8715,9 @@ fn selective_import_wrong_category_preserves_marker_and_alternatives() {
     );
 
     let error = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap_err();
-    let CompileError::Eval(RenderedGraphcalError {
+    let CompileError::Eval(RenderedSemanticError {
         error:
-            GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+            SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
                 kind:
                     SemanticErrorKind::Module(ModuleError::ImportCategoryMismatch { mismatch, .. }),
                 ..
@@ -8759,9 +8759,9 @@ include pass_through(
 
     let result = compile_and_eval(source);
     match result {
-        Err(CompileError::Eval(RenderedGraphcalError {
+        Err(CompileError::Eval(RenderedSemanticError {
             error:
-                GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+                SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
                     kind:
                         SemanticErrorKind::Index(IndexError::IndexBindingDimensionMismatch {
                             dep_index,
@@ -8804,9 +8804,9 @@ include pass_through(
 
     let result = compile_and_eval(source);
     match result {
-        Err(CompileError::Eval(RenderedGraphcalError {
+        Err(CompileError::Eval(RenderedSemanticError {
             error:
-                GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+                SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
                     kind:
                         SemanticErrorKind::Module(ModuleError::IndexKindMismatch {
                             dep_index,
@@ -8842,9 +8842,9 @@ include pass_through(samples: 1.0 m) as output;
 
     let result = compile_and_eval(source);
     match result {
-        Err(CompileError::Eval(RenderedGraphcalError {
+        Err(CompileError::Eval(RenderedSemanticError {
             error:
-                GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+                SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
                     kind:
                         SemanticErrorKind::Index(IndexError::RequiredStaticInputNotBound {
                             name, ..
@@ -8964,8 +8964,8 @@ include sem.library.pass_through(
     assert!(
         matches!(
             result,
-            Err(CompileError::Eval(RenderedGraphcalError {
-                error: GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+            Err(CompileError::Eval(RenderedSemanticError {
+                error: SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
                     kind: SemanticErrorKind::Index(
                         IndexError::IndexBindingDimensionMismatch { .. }
                     ),
@@ -9150,7 +9150,7 @@ node used: Force = @internal_scratch;
     let error = compile_and_eval(source).unwrap_err();
     assert!(matches!(
         error,
-        CompileError::Eval(RenderedGraphcalError { error: GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic { kind: SemanticErrorKind::Visibility(VisibilityError::ImportPrivateItem { name, .. }), .. }), .. })
+        CompileError::Eval(RenderedSemanticError { error: SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic { kind: SemanticErrorKind::Visibility(VisibilityError::ImportPrivateItem { name, .. }), .. }), .. })
             if name == "internal_scratch"
     ));
 }
@@ -9171,7 +9171,7 @@ node used: Force = @inst::internal_scratch;
     let error = compile_and_eval(source).unwrap_err();
     assert!(matches!(
         error,
-        CompileError::Eval(RenderedGraphcalError { error: GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic { kind: SemanticErrorKind::Visibility(VisibilityError::ImportPrivateItem { name, .. }), .. }), .. })
+        CompileError::Eval(RenderedSemanticError { error: SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic { kind: SemanticErrorKind::Visibility(VisibilityError::ImportPrivateItem { name, .. }), .. }), .. })
             if name == "internal_scratch"
     ));
 }
@@ -9363,9 +9363,9 @@ fn include_closure_cycles_are_rejected_at_the_including_declaration() {
                   include lib(x: @a) as inst;\n\
                   node a: Dimensionless = @inst::out;";
     match compile_and_eval(source) {
-        Err(CompileError::Eval(RenderedGraphcalError {
+        Err(CompileError::Eval(RenderedSemanticError {
             error:
-                GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+                SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
                     kind: SemanticErrorKind::Graph(GraphError::CyclicDependency { name, .. }),
                     primary: span,
                     ..
@@ -9382,9 +9382,9 @@ fn include_closure_cycles_are_rejected_at_the_including_declaration() {
 /// Message and label start of the E001 a recursive inline-DAG source reports.
 fn recursive_dag_error(source: &str) -> (String, usize) {
     match compile_and_eval(source) {
-        Err(CompileError::Eval(RenderedGraphcalError {
+        Err(CompileError::Eval(RenderedSemanticError {
             error:
-                GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+                SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
                     kind: SemanticErrorKind::Evaluation(EvaluationError::Failed { message, .. }),
                     primary: span,
                     ..
@@ -9606,7 +9606,7 @@ fn absolute_inline_call_path_reports_imported_name_diagnostic() {
     let err = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap_err();
     assert!(matches!(
         err,
-        CompileError::Eval(RenderedGraphcalError { error: GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic { kind: SemanticErrorKind::Module(ModuleError::UnknownModule { name, .. }), .. }), .. }) if name == "callable"
+        CompileError::Eval(RenderedSemanticError { error: SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic { kind: SemanticErrorKind::Module(ModuleError::UnknownModule { name, .. }), .. }), .. }) if name == "callable"
     ));
 }
 
@@ -9661,7 +9661,7 @@ fn dot_member_access_on_include_alias_is_rejected_everywhere() {
         assert!(
             matches!(
                 &error,
-                CompileError::Eval(RenderedGraphcalError { error: GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic { kind: SemanticErrorKind::Name(NameError::UnknownGraphRef { name, .. }), .. }), .. })
+                CompileError::Eval(RenderedSemanticError { error: SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic { kind: SemanticErrorKind::Name(NameError::UnknownGraphRef { name, .. }), .. }), .. })
                     if name == &scoped_name("inst")
             ),
             "`{body}`: unexpected error: {error:?}"
@@ -10381,8 +10381,8 @@ node event: EventSpec = EventSpec(at: epoch<TT>("2024-06-01T00:00:00"));
     .unwrap_err();
     assert!(matches!(
         error,
-        CompileError::Eval(RenderedGraphcalError {
-            error: GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+        CompileError::Eval(RenderedSemanticError {
+            error: SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
                 kind: SemanticErrorKind::Domain(
                     DomainError::DatetimeDomainBoundTypeMismatch { .. }
                 ),
@@ -10439,8 +10439,8 @@ param event: Datetime(min: @start) = datetime("2024-06-01T00:00:00Z");
     .unwrap_err();
     assert!(matches!(
         error,
-        CompileError::Eval(RenderedGraphcalError {
-            error: GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+        CompileError::Eval(RenderedSemanticError {
+            error: SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
                 kind: SemanticErrorKind::Name(NameError::GraphRefInConst { .. }),
                 ..
             }),
@@ -10484,9 +10484,9 @@ type Spec { Spec(mass: Mass(min: 100.0 kg, max: 2000.0 kg)) }
 const node SAT: Spec = Spec(mass: 5000.0 kg);
 ";
     let err = compile_and_eval(source).unwrap_err();
-    let CompileError::Eval(RenderedGraphcalError {
+    let CompileError::Eval(RenderedSemanticError {
         error:
-            GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+            SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
                 kind:
                     SemanticErrorKind::Domain(DomainError::DomainViolation {
                         name, violation, ..
@@ -10564,8 +10564,8 @@ node bad: Box<Time> = Box<Time>(x: 1.0 s);
     .unwrap_err();
     assert!(matches!(
         error,
-        CompileError::Eval(RenderedGraphcalError {
-            error: GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+        CompileError::Eval(RenderedSemanticError {
+            error: SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
                 kind: SemanticErrorKind::Domain(DomainError::DomainDimensionMismatch { .. }),
                 ..
             }),
@@ -10622,8 +10622,8 @@ node bad: T<0> = T<0>(x: 0);
     .unwrap_err();
     assert!(matches!(
         error,
-        CompileError::Eval(RenderedGraphcalError {
-            error: GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+        CompileError::Eval(RenderedSemanticError {
+            error: SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
                 kind: SemanticErrorKind::Evaluation(EvaluationError::Failed { .. }),
                 ..
             }),
@@ -10703,9 +10703,9 @@ node good: T<2> = T<2>(x: 1);
 fn struct_field_min_exceeds_max_at_compile_time() {
     let source = "type Foo { Foo(x: Mass(min: 100.0 kg, max: 50.0 kg)) }";
     let err = compile_and_eval(source).unwrap_err();
-    let CompileError::Eval(RenderedGraphcalError {
+    let CompileError::Eval(RenderedSemanticError {
         error:
-            GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+            SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
                 kind: SemanticErrorKind::Domain(DomainError::DomainMinExceedsMax { name, .. }),
                 ..
             }),
@@ -10724,8 +10724,8 @@ fn struct_field_invalid_target_at_compile_time() {
     assert!(
         matches!(
             err,
-            CompileError::Eval(RenderedGraphcalError {
-                error: GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+            CompileError::Eval(RenderedSemanticError {
+                error: SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
                     kind: SemanticErrorKind::Domain(DomainError::InvalidDomainTarget { .. }),
                     ..
                 }),
@@ -10740,9 +10740,9 @@ fn struct_field_invalid_target_at_compile_time() {
 fn struct_field_dim_mismatch_at_compile_time() {
     let source = "type Foo { Foo(x: Length(min: 1.0 s)) }";
     let err = compile_and_eval(source).unwrap_err();
-    let CompileError::Eval(RenderedGraphcalError {
+    let CompileError::Eval(RenderedSemanticError {
         error:
-            GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+            SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
                 kind: SemanticErrorKind::Domain(DomainError::DomainDimensionMismatch { name, .. }),
                 ..
             }),
@@ -10767,8 +10767,8 @@ param p: Vec3<Length(min: 0.0 m), Eci> = Vec3<Length, Eci>(x: 1.0 m, y: 2.0 m, z
     assert!(
         matches!(
             err,
-            CompileError::Eval(RenderedGraphcalError {
-                error: GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+            CompileError::Eval(RenderedSemanticError {
+                error: SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
                     kind: SemanticErrorKind::Domain(DomainError::GenericTypeArgDomainConstraint),
                     ..
                 }),
@@ -10813,8 +10813,8 @@ include bumper(v: 5.0 m/s)::{ out };
     assert!(
         matches!(
             err,
-            CompileError::Eval(RenderedGraphcalError {
-                error: GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+            CompileError::Eval(RenderedSemanticError {
+                error: SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
                     kind: SemanticErrorKind::Domain(DomainError::DomainDimensionMismatch { .. }),
                     ..
                 }),

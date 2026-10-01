@@ -2,8 +2,8 @@
 //! `Type: Target`), read from their desugared source expressions.
 
 use graphcal_compiler::desugar::desugared_ast::{Expr, ExprKind};
-use graphcal_compiler::graphcal_error::GraphcalError;
 use graphcal_compiler::semantic::index_def::IndexBindingTarget;
+use graphcal_compiler::semantic_error::SemanticError;
 use graphcal_compiler::semantic_error::evaluation::EvaluationError;
 use graphcal_compiler::semantic_error::index::IndexError;
 use graphcal_compiler::semantic_error::module::ModuleError;
@@ -25,7 +25,7 @@ pub(super) fn extract_index_binding_target(
     use graphcal_compiler::semantic::index_def::FiniteIndex;
 
     let invalid_binding = || {
-        PipelineError::Semantic(GraphcalError::located(
+        PipelineError::Semantic(SemanticError::located(
             file_src,
             expr.span,
             ModuleError::InvalidTypeLevelBindingValue {
@@ -42,7 +42,7 @@ pub(super) fn extract_index_binding_target(
         IndexExpr::Finite { cardinality, .. } => {
             let cardinality = closed_binding_cardinality(&cardinality, file_src)?;
             let finite = FiniteIndex::try_from_u64(cardinality).map_err(|error| {
-                PipelineError::Semantic(GraphcalError::located(
+                PipelineError::Semantic(SemanticError::located(
                     file_src,
                     expr.span,
                     EvaluationError::Failed {
@@ -63,10 +63,10 @@ pub(super) fn extract_index_binding_target(
 fn closed_binding_cardinality(
     expr: &graphcal_compiler::desugar::desugared_ast::NatExpr,
     file_src: SourceId,
-) -> Result<u64, GraphcalError> {
+) -> Result<u64, SemanticError> {
     use graphcal_compiler::desugar::desugared_ast::NatExpr;
     let overflow = |span: graphcal_compiler::syntax::span::Span| {
-        GraphcalError::located(
+        SemanticError::located(
             file_src,
             span,
             EvaluationError::Failed {
@@ -76,7 +76,7 @@ fn closed_binding_cardinality(
     };
     match expr {
         NatExpr::Literal(value, _) => Ok(*value),
-        NatExpr::Var(ident) => Err(GraphcalError::located(
+        NatExpr::Var(ident) => Err(SemanticError::located(
             file_src,
             ident.span,
             IndexError::UnknownIndex {
@@ -106,7 +106,7 @@ pub(super) fn extract_type_name_from_binding_expr(
     file_src: SourceId,
 ) -> Result<String, PipelineError> {
     let invalid_binding = || {
-        PipelineError::Semantic(GraphcalError::located(
+        PipelineError::Semantic(SemanticError::located(
             file_src,
             expr.span,
             ModuleError::InvalidTypeLevelBindingValue {

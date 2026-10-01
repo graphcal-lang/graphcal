@@ -1,9 +1,9 @@
 //! Inference of `scan` and `unfold` recurrences.
 
-use crate::graphcal_error::GraphcalError;
 use crate::hir::expr::{Expr, LocalDef};
 use crate::outcome::Outcome;
 use crate::semantic::checked_type::{IndexTypeRef, Symbolic};
+use crate::semantic_error::SemanticError;
 use crate::semantic_error::dimension::DimensionError;
 use crate::semantic_error::evaluation::EvaluationError;
 
@@ -20,11 +20,11 @@ impl Infer<'_> {
         acc: &LocalDef,
         val: &LocalDef,
         body: &Expr,
-    ) -> Result<CheckedType<Symbolic>, Outcome<GraphcalError>> {
+    ) -> Result<CheckedType<Symbolic>, Outcome<SemanticError>> {
         let source_type = self.infer_hir_type(source)?;
         let source_rank = source_type.indexed_rank();
         let CheckedType::Indexed { element, index } = source_type else {
-            return Err(GraphcalError::located(
+            return Err(SemanticError::located(
                 self.env.src,
                 source.span,
                 EvaluationError::Failed {
@@ -34,7 +34,7 @@ impl Infer<'_> {
             .into());
         };
         if source_rank > 1 {
-            return Err(GraphcalError::located(
+            return Err(SemanticError::located(
                 self.env.src,
                 source.span,
                 DimensionError::MultiAxisScanSource { rank: source_rank },
@@ -47,7 +47,7 @@ impl Infer<'_> {
             .child(vec![(acc.id, accumulator_type.clone()), (val.id, *element)]);
         let body_type = self.with_locals(&scan_locals).infer_hir_type(body)?;
         if body_type != accumulator_type {
-            return Err(GraphcalError::located(
+            return Err(SemanticError::located(
                 self.env.src,
                 body.span,
                 DimensionError::DimensionMismatch {
@@ -72,7 +72,7 @@ impl Infer<'_> {
         prev_index: &LocalDef,
         current_index: &LocalDef,
         body: &Expr,
-    ) -> Result<CheckedType<Symbolic>, Outcome<GraphcalError>> {
+    ) -> Result<CheckedType<Symbolic>, Outcome<SemanticError>> {
         let init_type = self.infer_hir_type(init)?;
         let index = IndexTypeRef::from_resolved(axis.value.clone());
         let idx_def = self
@@ -80,14 +80,14 @@ impl Infer<'_> {
             .tir
             .declared_index_def(&axis.value)
             .ok_or_else(|| {
-                GraphcalError::internal_error(
+                SemanticError::internal_error(
                     format!("missing resolved unfold axis `{}`", axis.value),
                     self.env.src,
                     crate::diagnostic_anchor::DiagnosticAnchor::Source(axis.span),
                 )
             })?;
         if !idx_def.is_coordinate() {
-            return Err(GraphcalError::located(
+            return Err(SemanticError::located(
                 self.env.src,
                 axis.span,
                 EvaluationError::Failed {
@@ -106,7 +106,7 @@ impl Infer<'_> {
         ]);
         let body_type = self.with_locals(&unfold_locals).infer_hir_type(body)?;
         if body_type != init_type {
-            return Err(GraphcalError::located(
+            return Err(SemanticError::located(
                 self.env.src,
                 body.span,
                 DimensionError::DimensionMismatch {

@@ -7,11 +7,11 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 
 use graphcal_compiler::cancellation::CancellationToken;
 use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
-use graphcal_compiler::graphcal_error::GraphcalError;
 use graphcal_compiler::hir::expr::{Expr, ExprKind, visit_expr};
 use graphcal_compiler::node_unavailable::NodeUnavailable;
 use graphcal_compiler::outcome::Outcome;
 use graphcal_compiler::resolved_name::ResolvedDeclName;
+use graphcal_compiler::semantic_error::SemanticError;
 use graphcal_compiler::source_id::SourceId;
 use graphcal_compiler::syntax::non_empty::NonEmpty;
 use graphcal_compiler::tir::typed::scoped_node::{NodeKind, ScopedNode};
@@ -61,7 +61,7 @@ pub fn collect(
     plan: &ExecPlan<'_>,
     source: SourceId,
     cancellation: &CancellationToken,
-) -> Result<Vec<(ResolvedDeclName, NodeUnavailable)>, Outcome<GraphcalError>> {
+) -> Result<Vec<(ResolvedDeclName, NodeUnavailable)>, Outcome<SemanticError>> {
     if !plan.has_unfinished_definitions() {
         return Ok(Vec::new());
     }
@@ -114,15 +114,15 @@ struct Analysis<'a> {
 }
 
 impl Analysis<'_> {
-    fn invalid(&self, message: impl Into<String>) -> GraphcalError {
-        GraphcalError::internal_error(message, self.source, DiagnosticAnchor::WholeFile)
+    fn invalid(&self, message: impl Into<String>) -> SemanticError {
+        SemanticError::internal_error(message, self.source, DiagnosticAnchor::WholeFile)
     }
 
     fn declaration(
         &mut self,
         name: &ResolvedDeclName,
         bound: &BoundParameters,
-    ) -> Result<Origins, Outcome<GraphcalError>> {
+    ) -> Result<Origins, Outcome<SemanticError>> {
         graphcal_compiler::stack::with_stack_growth(|| self.declaration_inner(name, bound))
     }
 
@@ -130,7 +130,7 @@ impl Analysis<'_> {
         &mut self,
         name: &ResolvedDeclName,
         bound: &BoundParameters,
-    ) -> Result<Origins, Outcome<GraphcalError>> {
+    ) -> Result<Origins, Outcome<SemanticError>> {
         self.cancellation.checkpoint()?;
         if bound.contains(name) {
             return Ok(Origins::new());

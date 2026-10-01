@@ -3,8 +3,8 @@
 
 use crate::dimension::Dimension;
 use crate::display::formatting_registry::FormattingRegistry;
-use crate::graphcal_error::GraphcalError;
 use crate::semantic::checked_type::{CheckedType, Concrete, Concreteness};
+use crate::semantic_error::SemanticError;
 use crate::semantic_error::domain::DomainError;
 use crate::source_id::SourceId;
 
@@ -60,7 +60,7 @@ pub(super) fn check_one_bound_with_display_name<V: Concreteness>(
     expected: &ExpectedBound,
     registry: &FormattingRegistry,
     src: SourceId,
-) -> Result<(), GraphcalError> {
+) -> Result<(), SemanticError> {
     match expected {
         ExpectedBound::Quantity(target_dim) => {
             let ok = match inferred {
@@ -74,7 +74,7 @@ pub(super) fn check_one_bound_with_display_name<V: Concreteness>(
                 || format_checked_type(inferred, registry),
                 |d| registry.dimensions.format_dimension(d),
             );
-            Err(GraphcalError::located(
+            Err(SemanticError::located(
                 src,
                 bound.span,
                 DomainError::DomainDimensionMismatch {
@@ -89,7 +89,7 @@ pub(super) fn check_one_bound_with_display_name<V: Concreteness>(
             if matches!(inferred, CheckedType::Int) {
                 return Ok(());
             }
-            Err(GraphcalError::located(
+            Err(SemanticError::located(
                 src,
                 bound.span,
                 DomainError::IntDomainBoundTypeMismatch {
@@ -104,7 +104,7 @@ pub(super) fn check_one_bound_with_display_name<V: Concreteness>(
             {
                 return Ok(());
             }
-            Err(GraphcalError::located(
+            Err(SemanticError::located(
                 src,
                 bound.span,
                 DomainError::DatetimeDomainBoundTypeMismatch {

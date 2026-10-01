@@ -11,10 +11,10 @@ use crate::invariant::Invariant;
 use crate::runtime_value::{IndexedValue, RuntimeValue};
 use graphcal_compiler::assertion_expectation::{ExpectedFail, ExpectedFailKey};
 use graphcal_compiler::cancellation::Cancelled;
-use graphcal_compiler::graphcal_error::GraphcalError;
 use graphcal_compiler::hir::expr::{AssertBody, Expr};
 use graphcal_compiler::outcome::Outcome;
 use graphcal_compiler::semantic::checked_type::IndexTypeRef;
+use graphcal_compiler::semantic_error::SemanticError;
 use graphcal_compiler::semantic_error::SemanticErrorKind;
 use graphcal_compiler::semantic_error::evaluation::EvaluationError;
 use graphcal_compiler::syntax::index_name::IndexEntryKey;
@@ -79,10 +79,10 @@ type Evaluated = Result<AssertResult, Cancelled>;
 
 /// The result reporting a failed operand evaluation, or the cancellation that
 /// interrupted it.
-fn evaluation_error(error: Outcome<GraphcalError>) -> Evaluated {
+fn evaluation_error(error: Outcome<SemanticError>) -> Evaluated {
     match error {
         Outcome::Cancelled => Err(Cancelled),
-        Outcome::Failed(GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+        Outcome::Failed(SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
             kind: SemanticErrorKind::Evaluation(EvaluationError::Unavailable { reason, .. }),
             ..
         })) if reason.is_incomplete() => Ok(AssertResult::Blocked { reason }),
@@ -115,7 +115,7 @@ pub fn evaluate_assert_with_expected_fail<'t>(
     ef: Option<&ExpectedFail>,
     evaluate_expression: &mut impl FnMut(
         Scoped<'t, Expr>,
-    ) -> Result<RuntimeValue, Outcome<GraphcalError>>,
+    ) -> Result<RuntimeValue, Outcome<SemanticError>>,
 ) -> Evaluated {
     let body = body.operands();
     Ok(match ef {
@@ -384,7 +384,7 @@ fn evaluate_assert_body<'t>(
     body: AssertionOperands<'t>,
     evaluate_expression: &mut impl FnMut(
         Scoped<'t, Expr>,
-    ) -> Result<RuntimeValue, Outcome<GraphcalError>>,
+    ) -> Result<RuntimeValue, Outcome<SemanticError>>,
 ) -> Evaluated {
     match body {
         AssertionOperands::Condition(body_expr) => {
@@ -418,7 +418,7 @@ fn evaluate_tolerance_assert<'t>(
     tolerance: Scoped<'t, Expr>,
     evaluate_expression: &mut impl FnMut(
         Scoped<'t, Expr>,
-    ) -> Result<RuntimeValue, Outcome<GraphcalError>>,
+    ) -> Result<RuntimeValue, Outcome<SemanticError>>,
 ) -> Evaluated {
     let (actual_val, expected_val, tolerance_val) =
         match eval_tolerance_operands(actual, expected, tolerance, evaluate_expression)? {
@@ -446,7 +446,7 @@ fn eval_tolerance_operands<'t>(
     tolerance: Scoped<'t, Expr>,
     evaluate_expression: &mut impl FnMut(
         Scoped<'t, Expr>,
-    ) -> Result<RuntimeValue, Outcome<GraphcalError>>,
+    ) -> Result<RuntimeValue, Outcome<SemanticError>>,
 ) -> Result<Result<(Measured, Measured, Measured), AssertResult>, Cancelled> {
     let mut operand =
         |expr: Scoped<'t, Expr>, role: &str| match evaluate_expression(expr) {

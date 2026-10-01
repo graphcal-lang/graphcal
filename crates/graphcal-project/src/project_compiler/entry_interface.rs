@@ -2,10 +2,10 @@
 
 use graphcal_compiler::declaration_category::ValueDeclCategory;
 use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
-use graphcal_compiler::graphcal_error::GraphcalError;
 use graphcal_compiler::hir::source_interface::SourceDeclaration;
 use graphcal_compiler::ir::resolve::collected::ExternalDeclSurface;
 use graphcal_compiler::semantic::checked_type::CheckedType;
+use graphcal_compiler::semantic_error::SemanticError;
 use graphcal_compiler::source_id::SourceId;
 use graphcal_compiler::syntax::ast::Visibility;
 use graphcal_compiler::syntax::decl_name::DeclName;
@@ -116,7 +116,7 @@ impl CheckedEntryInterface {
 }
 
 fn missing_interface_fact(message: String, source: SourceId, span: Span) -> PipelineError {
-    PipelineError::Semantic(GraphcalError::internal_error(
+    PipelineError::Semantic(SemanticError::internal_error(
         message,
         source,
         graphcal_compiler::diagnostic_anchor::DiagnosticAnchor::Source(span),

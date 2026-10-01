@@ -4,13 +4,13 @@ use std::collections::{HashMap, HashSet};
 
 use crate::declaration_category::DeclCategory;
 use crate::desugar::desugared_ast::{Expr, ExprKind, TypeExpr};
-use crate::graphcal_error::GraphcalError;
 use crate::hir::expr::LocalDecl;
 use crate::ir::instance::identity::{instance_declaration, projection_alias};
 use crate::ir::instance::{
     InstanceAssertionProjection, InstancePlotProjection, InstanceRecord, InstanceValueProjection,
 };
 use crate::resolved_name::ResolvedDeclName;
+use crate::semantic_error::SemanticError;
 use crate::semantic_error::visibility::VisibilityError;
 use crate::source_id::SourceId;
 use crate::syntax::decl_name::DeclName;
@@ -110,13 +110,13 @@ impl UnfrozenIR {
         input: SemanticInstanceInput,
         src: SourceId,
         span: Span,
-    ) -> Result<(), GraphcalError> {
+    ) -> Result<(), SemanticError> {
         if self
             .semantic_instances
             .iter()
             .any(|existing| existing.instance.id().owner() == input.instance.id().owner())
         {
-            return Err(GraphcalError::internal_error(
+            return Err(SemanticError::internal_error(
                 format!(
                     "duplicate semantic instance identity `{}`",
                     input.instance.id().owner()
@@ -264,7 +264,7 @@ impl UnfrozenIR {
         dependency_owner: &crate::dag_id::DagId,
         importer_src: SourceId,
         include_span: Span,
-    ) -> Result<IncludeOverrideReconciliations, GraphcalError> {
+    ) -> Result<IncludeOverrideReconciliations, SemanticError> {
         self.params()
             .filter(|param| !bindings.contains_key(param.name()))
             .map(|param| {
@@ -318,7 +318,7 @@ struct NominalOverridePreflight<'a> {
 }
 
 impl NominalOverridePreflight<'_> {
-    fn check_label(&self, index: &IndexName, detail: String) -> Result<(), GraphcalError> {
+    fn check_label(&self, index: &IndexName, detail: String) -> Result<(), SemanticError> {
         let Ok(symbol) = self.resolver.resolve_index_path(
             self.dependency_owner,
             &crate::syntax::names::NamePath::local(index.atom().clone()),
@@ -328,7 +328,7 @@ impl NominalOverridePreflight<'_> {
         if !self.substitution.indexes.contains_key(symbol.resolved()) {
             return Ok(());
         }
-        Err(GraphcalError::located(
+        Err(SemanticError::located(
             self.importer_src,
             self.include_span,
             VisibilityError::IncludeMustReconcileOverride {
@@ -344,7 +344,7 @@ impl NominalOverridePreflight<'_> {
         &self,
         constructor: &ConstructorName,
         detail: String,
-    ) -> Result<(), GraphcalError> {
+    ) -> Result<(), SemanticError> {
         let Ok(symbol) = self.resolver.resolve_constructor_path(
             self.dependency_owner,
             &crate::syntax::names::NamePath::local(constructor.atom().clone()),
@@ -356,7 +356,7 @@ impl NominalOverridePreflight<'_> {
         if !self.substitution.types.contains_key(&owning_identity) {
             return Ok(());
         }
-        Err(GraphcalError::located(
+        Err(SemanticError::located(
             self.importer_src,
             self.include_span,
             VisibilityError::IncludeMustReconcileOverride {
@@ -370,7 +370,7 @@ impl NominalOverridePreflight<'_> {
 }
 
 impl ExprVisitor<crate::syntax::phase::Desugared> for NominalOverridePreflight<'_> {
-    type Error = GraphcalError;
+    type Error = SemanticError;
 
     fn visit_unresolved_ref(&mut self, expr: &Expr) -> Result<(), Self::Error> {
         let ExprKind::UnresolvedRef(reference) = &expr.kind else {

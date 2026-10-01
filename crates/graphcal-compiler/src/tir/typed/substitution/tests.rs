@@ -251,14 +251,14 @@ fn errors_render_at_their_span() {
         .register("test.gcl", std::sync::Arc::new(String::new()));
     assert!(matches!(
         SubstitutionError::DimensionOverflow { span: span() }.into_graphcal(src),
-        GraphcalError::Located(crate::diagnostic::Diagnostic {
+        SemanticError::Located(crate::diagnostic::Diagnostic {
             kind: SemanticErrorKind::Dimension(DimensionError::DimensionOverflow),
             ..
         })
     ));
     assert!(matches!(
         SubstitutionError::NatOverflow { span: span() }.into_graphcal(src),
-        GraphcalError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Evaluation(EvaluationError::Failed { message, .. }), .. }) if message.contains("Nat arithmetic overflow")
+        SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Evaluation(EvaluationError::Failed { message, .. }), .. }) if message.contains("Nat arithmetic overflow")
     ));
     assert!(matches!(
         SubstitutionError::InvalidFiniteIndex {
@@ -266,7 +266,7 @@ fn errors_render_at_their_span() {
             span: span(),
         }
         .into_graphcal(src),
-        GraphcalError::Located(crate::diagnostic::Diagnostic {
+        SemanticError::Located(crate::diagnostic::Diagnostic {
             kind: SemanticErrorKind::Evaluation(EvaluationError::Failed { .. }),
             ..
         })

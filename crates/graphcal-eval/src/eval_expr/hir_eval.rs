@@ -3,9 +3,9 @@ use crate::runtime_value::{
 };
 use graphcal_compiler::builtin::{AggregationFn, KeyAggregation};
 use graphcal_compiler::declaration_category::DeclCategory;
-use graphcal_compiler::graphcal_error::GraphcalError;
 use graphcal_compiler::outcome::Outcome;
 use graphcal_compiler::semantic::checked_type::{CheckedType, IndexTypeRef, StructTypeRef};
+use graphcal_compiler::semantic_error::SemanticError;
 use graphcal_compiler::semantic_error::evaluation::EvaluationError;
 use graphcal_compiler::syntax::index_name::IndexEntryKey;
 use graphcal_compiler::syntax::span::{Span, Spanned};
@@ -51,7 +51,7 @@ fn presented_ref<'a>(
 }
 
 /// The diagnostic for a violated presentation invariant.
-fn invariant_error(invariant: Invariant, span: Span, ctx: &EvalSession<'_>) -> GraphcalError {
+fn invariant_error(invariant: Invariant, span: Span, ctx: &EvalSession<'_>) -> SemanticError {
     ctx.failure_error(
         Failure::<std::convert::Infallible>::Invariant(invariant),
         span,
@@ -64,7 +64,7 @@ fn type_invariant(
     message: impl std::fmt::Display,
     span: Span,
     ctx: &EvalSession<'_>,
-) -> GraphcalError {
+) -> SemanticError {
     invariant_error(Invariant::violated(message), span, ctx)
 }
 
@@ -74,7 +74,7 @@ pub fn eval_root<T: std::borrow::Borrow<TExpr>>(
     root: &ScopedTree<'_, T>,
     values: &RuntimeValueMap,
     session: &EvalSession<'_>,
-) -> Result<RuntimeValue, Outcome<GraphcalError>> {
+) -> Result<RuntimeValue, Outcome<SemanticError>> {
     eval_texpr(root.root(), values, &HirLocalValueMap::root(), session)
 }
 
@@ -84,7 +84,7 @@ pub(super) fn eval_executable(
     root: &ScopedTree<'_, &TExpr>,
     values: &RuntimeValueMap,
     session: &EvalSession<'_>,
-) -> Result<RuntimeValue, Outcome<GraphcalError>> {
+) -> Result<RuntimeValue, Outcome<SemanticError>> {
     eval_root(root, values, session)
 }
 
@@ -95,7 +95,7 @@ pub fn eval_root_with_presentation<T: std::borrow::Borrow<TExpr>>(
     values: &RuntimeValueMap,
     presentation_values: &PendingPresentedMap,
     session: &EvalSession<'_>,
-) -> Result<EvaluatedRuntimeValue, Outcome<GraphcalError>> {
+) -> Result<EvaluatedRuntimeValue, Outcome<SemanticError>> {
     eval_texpr_with_presentation(
         root.root(),
         values,
@@ -113,7 +113,7 @@ pub fn eval_subtree_for_test(
     values: &RuntimeValueMap,
     locals: &HirLocalValueMap<'_>,
     session: &EvalSession<'_>,
-) -> Result<RuntimeValue, Outcome<GraphcalError>> {
+) -> Result<RuntimeValue, Outcome<SemanticError>> {
     eval_texpr(subtree, values, locals, session)
 }
 
@@ -132,7 +132,7 @@ fn eval_texpr(
     values: &RuntimeValueMap,
     local_values: &HirLocalValueMap<'_>,
     ctx: &EvalSession<'_>,
-) -> Result<RuntimeValue, Outcome<GraphcalError>> {
+) -> Result<RuntimeValue, Outcome<SemanticError>> {
     ctx.check_dependencies(expr)?;
     eval_value(expr, values, local_values, ctx)
 }
@@ -144,7 +144,7 @@ fn eval_value(
     values: &RuntimeValueMap,
     local_values: &HirLocalValueMap<'_>,
     ctx: &EvalSession<'_>,
-) -> Result<RuntimeValue, Outcome<GraphcalError>> {
+) -> Result<RuntimeValue, Outcome<SemanticError>> {
     eval_texpr_evaluated(expr, values, None, local_values, ctx)
         .map(EvaluatedRuntimeValue::into_value)
 }
@@ -158,7 +158,7 @@ fn eval_texpr_with_presentation(
     presentation_values: &PendingPresentedMap,
     local_values: &HirLocalValueMap<'_>,
     ctx: &EvalSession<'_>,
-) -> Result<EvaluatedRuntimeValue, Outcome<GraphcalError>> {
+) -> Result<EvaluatedRuntimeValue, Outcome<SemanticError>> {
     ctx.check_dependencies(expr)?;
     eval_texpr_evaluated(expr, values, Some(presentation_values), local_values, ctx)
 }
@@ -169,7 +169,7 @@ fn eval_texpr_evaluated(
     presentation_values: Option<&PendingPresentedMap>,
     local_values: &HirLocalValueMap<'_>,
     ctx: &EvalSession<'_>,
-) -> Result<EvaluatedRuntimeValue, Outcome<GraphcalError>> {
+) -> Result<EvaluatedRuntimeValue, Outcome<SemanticError>> {
     ctx.cancellation.checkpoint()?;
     // Recursion choke point: evaluation recurses once per tree level
     // (unbounded for left-nested operator chains).
@@ -188,7 +188,7 @@ fn eval_texpr_inner(
     presentation_values: Option<&PendingPresentedMap>,
     local_values: &HirLocalValueMap<'_>,
     ctx: &EvalSession<'_>,
-) -> Result<EvaluatedRuntimeValue, Outcome<GraphcalError>> {
+) -> Result<EvaluatedRuntimeValue, Outcome<SemanticError>> {
     let span = expr.span();
     let evaluate = |node| eval_value(node, values, local_values, ctx);
     let operands = super::operations::Operands::new(&evaluate, ctx);
@@ -417,7 +417,7 @@ fn resolve_graph_ref<'a>(
     target: &Spanned<ResolvedDeclName>,
     values: &'a RuntimeValueMap,
     ctx: &EvalSession<'_>,
-) -> Result<&'a RuntimeValue, GraphcalError> {
+) -> Result<&'a RuntimeValue, SemanticError> {
     values.get(&target.value).ok_or_else(|| {
         ctx.eval_error(
             format!("undefined graph reference `@{}`", target.value),
@@ -490,7 +490,7 @@ fn eval_const_ref(
     target: &Spanned<ConstRef<'_>>,
     values: &RuntimeValueMap,
     ctx: &EvalSession<'_>,
-) -> Result<RuntimeValue, GraphcalError> {
+) -> Result<RuntimeValue, SemanticError> {
     match &target.value {
         ConstRef::Decl(resolved) => values
             .get(resolved)
@@ -504,7 +504,7 @@ fn nullary_constructor(
     application: &graphcal_compiler::tir::texpr::ConstructorApplication,
     span: Span,
     ctx: &EvalSession<'_>,
-) -> Result<RuntimeValue, GraphcalError> {
+) -> Result<RuntimeValue, SemanticError> {
     crate::pipeline_metrics::record(crate::pipeline_metrics::Event::ConstructorFactConsumption);
     apply_constructor(application, Vec::new(), span, ctx)
 }
@@ -518,7 +518,7 @@ fn apply_constructor(
     )>,
     span: Span,
     ctx: &EvalSession<'_>,
-) -> Result<RuntimeValue, GraphcalError> {
+) -> Result<RuntimeValue, SemanticError> {
     StructValue::try_from_application(application, fields)
         .map(RuntimeValue::Struct)
         .map_err(|error| ctx.internal_error(error.to_string(), span))
@@ -535,7 +535,7 @@ fn eval_key_form<'t>(
     arg: ScopedNode<'t>,
     span: Span,
     operands: &super::operations::Operands<'_, 't>,
-) -> Result<KeyValue, Outcome<GraphcalError>> {
+) -> Result<KeyValue, Outcome<SemanticError>> {
     let ctx = operands.ctx();
     let axis = index_axis_for_ref(axis_ref, ctx).ok_or_else(|| {
         ctx.internal_error(
@@ -588,7 +588,7 @@ fn coordinate_search(
     axis_ref: &IndexTypeRef,
     span: Span,
     ctx: &EvalSession<'_>,
-) -> Result<KeyValue, GraphcalError> {
+) -> Result<KeyValue, SemanticError> {
     let keys = KeyValue::all(axis);
     let mut best: Option<(&KeyValue, f64)> = None;
     for key in &keys {
@@ -647,7 +647,7 @@ fn eval_extremum_key(
     indexed: &IndexedValue<RuntimeValue>,
     span: Span,
     ctx: &EvalSession<'_>,
-) -> Result<RuntimeValue, GraphcalError> {
+) -> Result<RuntimeValue, SemanticError> {
     super::aggregations::extremum_key(kind, indexed)
         .map(RuntimeValue::Key)
         .map_err(|error| ctx.eval_error(error.to_string(), span))
@@ -658,7 +658,7 @@ fn named_key(
     variant: &graphcal_compiler::resolved_name::ResolvedIndexVariant,
     span: Span,
     ctx: &EvalSession<'_>,
-) -> Result<RuntimeValue, GraphcalError> {
+) -> Result<RuntimeValue, SemanticError> {
     let index = IndexTypeRef::from_resolved(variant.index().clone());
     index_axis_for_ref(&index, ctx)
         .and_then(|axis| {
@@ -701,7 +701,7 @@ fn eval_extern_fn(
     values: &RuntimeValueMap,
     local_values: &HirLocalValueMap<'_>,
     ctx: &EvalSession<'_>,
-) -> Result<RuntimeValue, Outcome<GraphcalError>> {
+) -> Result<RuntimeValue, Outcome<SemanticError>> {
     use crate::host_abi::marshal::{EncodeError, HostArguments};
     use crate::invariant::Failure;
 
@@ -776,7 +776,7 @@ fn eval_field_access<V>(
     inner: ScopedNode<'_>,
     field: &Spanned<graphcal_compiler::syntax::type_name::FieldName>,
     ctx: &EvalSession<'_>,
-) -> Result<V, GraphcalError> {
+) -> Result<V, SemanticError> {
     inner_val
         .and_then(|value| value.into_field(&field.value))
         .ok_or_else(|| {
@@ -800,7 +800,7 @@ fn eval_constructor_call(
     presentation_values: Option<&PendingPresentedMap>,
     local_values: &HirLocalValueMap<'_>,
     ctx: &EvalSession<'_>,
-) -> Result<EvaluatedRuntimeValue, Outcome<GraphcalError>> {
+) -> Result<EvaluatedRuntimeValue, Outcome<SemanticError>> {
     crate::pipeline_metrics::record(crate::pipeline_metrics::Event::ConstructorFactConsumption);
     let constructor_name = application.constructor.name();
     let owning_type = StructTypeRef::from_resolved(application.definition().clone());
@@ -866,7 +866,7 @@ fn ensure_index_ref_matches_resolved(
     expected: &graphcal_compiler::resolved_name::ResolvedIndexName,
     span: Span,
     ctx: &EvalSession<'_>,
-) -> Result<(), GraphcalError> {
+) -> Result<(), SemanticError> {
     if index_ref_matches_resolved(actual, expected) {
         return Ok(());
     }
@@ -884,7 +884,7 @@ fn map_entry_variant_for_axis(
     key: &graphcal_compiler::hir::expr::MapEntryKey,
     axis: &IndexTypeRef,
     ctx: &EvalSession<'_>,
-) -> Result<IndexEntryKey, GraphcalError> {
+) -> Result<IndexEntryKey, SemanticError> {
     match key {
         graphcal_compiler::hir::expr::MapEntryKey::IndexVariant(variant) => {
             ensure_index_ref_matches_resolved(
@@ -924,7 +924,7 @@ fn eval_map_literal(
     presentation_values: Option<&PendingPresentedMap>,
     local_values: &HirLocalValueMap<'_>,
     ctx: &EvalSession<'_>,
-) -> Result<EvaluatedRuntimeValue, Outcome<GraphcalError>> {
+) -> Result<EvaluatedRuntimeValue, Outcome<SemanticError>> {
     let first = entries
         .first()
         .ok_or_else(|| ctx.internal_error("empty map literal", map_span))?;
@@ -960,12 +960,12 @@ fn eval_map_literal(
                     map_span,
                 )
             })?;
-            Ok::<_, GraphcalError>(evaluated)
+            Ok::<_, SemanticError>(evaluated)
         })?;
         return Ok(EvaluatedRuntimeValue::from_indexed(result));
     }
 
-    let outer = IndexedValue::try_from_axis(axis, |key| -> Result<_, Outcome<GraphcalError>> {
+    let outer = IndexedValue::try_from_axis(axis, |key| -> Result<_, Outcome<SemanticError>> {
         let variant = key.entry_key();
         let mut sub_entries = Vec::new();
         for (first_entry_key, rest, value) in entries {
@@ -1009,7 +1009,7 @@ fn eval_for_comp_bindings(
     presentation_values: Option<&PendingPresentedMap>,
     local_values: &HirLocalValueMap<'_>,
     ctx: &EvalSession<'_>,
-) -> Result<EvaluatedRuntimeValue, Outcome<GraphcalError>> {
+) -> Result<EvaluatedRuntimeValue, Outcome<SemanticError>> {
     let binding = &bindings[0];
     let CheckedType::Indexed { element, index } = checked_type else {
         return Err(ctx
@@ -1062,7 +1062,7 @@ fn eval_index_access(
     presentation_values: Option<&PendingPresentedMap>,
     local_values: &HirLocalValueMap<'_>,
     ctx: &EvalSession<'_>,
-) -> Result<EvaluatedRuntimeValue, Outcome<GraphcalError>> {
+) -> Result<EvaluatedRuntimeValue, Outcome<SemanticError>> {
     let evaluated;
     let base = match inner.kind() {
         NodeKind::GraphRef(target) => {
@@ -1141,7 +1141,7 @@ fn eval_scan(
     presentation_values: Option<&PendingPresentedMap>,
     local_values: &HirLocalValueMap<'_>,
     ctx: &EvalSession<'_>,
-) -> Result<EvaluatedRuntimeValue, Outcome<GraphcalError>> {
+) -> Result<EvaluatedRuntimeValue, Outcome<SemanticError>> {
     let source_entries =
         eval_texpr_evaluated(source, values, presentation_values, local_values, ctx)?
             .into_entries()
@@ -1157,7 +1157,7 @@ fn eval_scan(
         accumulated = eval_texpr_evaluated(body, values, presentation_values, &scan_locals, ctx)?
             .with_default_presentation(&initial)
             .map_err(|invariant| invariant_error(invariant, body.span(), ctx))?;
-        Ok::<_, Outcome<GraphcalError>>(accumulated.clone())
+        Ok::<_, Outcome<SemanticError>>(accumulated.clone())
     })?;
     Ok(EvaluatedRuntimeValue::from_indexed(result_entries))
 }
@@ -1168,7 +1168,7 @@ fn eval_unfold(
     presentation_values: Option<&PendingPresentedMap>,
     local_values: &HirLocalValueMap<'_>,
     ctx: &EvalSession<'_>,
-) -> Result<EvaluatedRuntimeValue, Outcome<GraphcalError>> {
+) -> Result<EvaluatedRuntimeValue, Outcome<SemanticError>> {
     let NodeKind::Unfold {
         recurrence,
         init,
@@ -1228,7 +1228,7 @@ fn eval_unfold(
             eval_texpr_evaluated(body, values, presentation_values, &unfold_locals, ctx)?
                 .with_default_presentation(&evaluated_init)
                 .map_err(|invariant| invariant_error(invariant, body.span(), ctx))?;
-        Ok::<_, Outcome<GraphcalError>>(previous_state.clone())
+        Ok::<_, Outcome<SemanticError>>(previous_state.clone())
     })?;
     Ok(EvaluatedRuntimeValue::from_indexed(result_entries))
 }
@@ -1240,7 +1240,7 @@ fn match_label<'t>(
     key: &KeyValue,
     arms: Scoped<'t, [TLabelArm]>,
     ctx: &EvalSession<'_>,
-) -> Result<Scoped<'t, TLabelArm>, GraphcalError> {
+) -> Result<Scoped<'t, TLabelArm>, SemanticError> {
     let KeyElement::Named(variant) = key.element() else {
         return Err(type_invariant(
             "match scrutinee is not a named key",
@@ -1273,7 +1273,7 @@ fn eval_constructor_match(
     presentation_values: Option<&PendingPresentedMap>,
     local_values: &HirLocalValueMap<'_>,
     ctx: &EvalSession<'_>,
-) -> Result<EvaluatedRuntimeValue, Outcome<GraphcalError>> {
+) -> Result<EvaluatedRuntimeValue, Outcome<SemanticError>> {
     let presented =
         eval_texpr_evaluated(scrutinee, values, presentation_values, local_values, ctx)?;
     let arm = {
@@ -1337,7 +1337,7 @@ fn eval_dag_call(
     caller_presentations: Option<&PendingPresentedMap>,
     caller_locals: &HirLocalValueMap,
     ctx: &EvalSession<'_>,
-) -> Result<EvaluatedRuntimeValue, Outcome<GraphcalError>> {
+) -> Result<EvaluatedRuntimeValue, Outcome<SemanticError>> {
     let target = call.target();
     let plan = ctx.execution_plan()?;
     let planned = plan.call(call);
@@ -1399,7 +1399,7 @@ fn eval_dag_call(
     let output_key = &output.value;
     let output_value = dag_values.get(output_key).ok_or_else(|| {
         if let Some(reason) = errors.get(output_key) {
-            return GraphcalError::located(ctx.src, output.span, EvaluationError::Unavailable { reason: reason.clone() });
+            return SemanticError::located(ctx.src, output.span, EvaluationError::Unavailable { reason: reason.clone() });
         }
         ctx.internal_error(
             format!(
@@ -1451,7 +1451,7 @@ fn check_inline_plan_asserts(
     target: &graphcal_compiler::dag_id::DagId,
     span: Span,
     ctx: &EvalSession<'_>,
-) -> Result<(), Outcome<GraphcalError>> {
+) -> Result<(), Outcome<SemanticError>> {
     callable.execution_dags().iter().try_for_each(|scope| {
         check_inline_dag_asserts(
             scope.dag(),
@@ -1479,7 +1479,7 @@ fn check_inline_dag_asserts(
     target: &graphcal_compiler::dag_id::DagId,
     call_span: Span,
     ctx: &EvalSession<'_>,
-) -> Result<(), Outcome<GraphcalError>> {
+) -> Result<(), Outcome<SemanticError>> {
     for entry in dag_tir.declarations() {
         if !matches!(entry.category(), DeclCategory::Assert) {
             continue;
@@ -1516,7 +1516,7 @@ fn check_inline_dag_asserts(
                     .into());
             }
             crate::eval::types::AssertResult::Blocked { reason } => {
-                return Err(GraphcalError::located(
+                return Err(SemanticError::located(
                     ctx.src,
                     call_span,
                     EvaluationError::Unavailable { reason },

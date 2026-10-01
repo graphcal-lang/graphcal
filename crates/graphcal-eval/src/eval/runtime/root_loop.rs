@@ -4,9 +4,9 @@
 use graphcal_compiler::source_registry::SourceRegistry;
 use std::collections::{BTreeSet, HashMap};
 
-use graphcal_compiler::graphcal_error::GraphcalError;
 use graphcal_compiler::outcome::Outcome;
 use graphcal_compiler::resolved_name::ResolvedDeclName;
+use graphcal_compiler::semantic_error::SemanticError;
 use graphcal_compiler::source_id::SourceId;
 use graphcal_compiler::syntax::span::Span;
 
@@ -31,7 +31,7 @@ pub fn run_eval_loop_with_bindings(
     sources: &SourceRegistry,
     host_fns: &crate::host_fns::HostFunctionRegistry,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
-) -> Result<EvalLoopResult, Outcome<GraphcalError>> {
+) -> Result<EvalLoopResult, Outcome<SemanticError>> {
     use crate::execution_frame::{ExecutionFrame, FailurePolicy};
     cancellation.checkpoint()?;
     let unfinished_calls = std::cell::RefCell::new(BTreeSet::new());

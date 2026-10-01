@@ -7,9 +7,9 @@ use graphcal_compiler::source_registry::SourceRegistry;
 use std::collections::{HashMap, HashSet};
 
 use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
-use graphcal_compiler::graphcal_error::GraphcalError;
 use graphcal_compiler::outcome::Outcome;
 use graphcal_compiler::semantic::checked_type::{CheckedGenericArg, CheckedType, StructTypeRef};
+use graphcal_compiler::semantic_error::SemanticError;
 use graphcal_compiler::source_id::SourceId;
 use graphcal_compiler::syntax::span::Span;
 use graphcal_compiler::syntax::type_name::{ConstructorName, FieldName};
@@ -42,7 +42,7 @@ pub(super) fn resolve_domain_constraints_for_dag(
     src: SourceId,
     sources: &SourceRegistry,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
-) -> Result<HashMap<ResolvedDeclName, ResolvedDomainConstraint>, Outcome<GraphcalError>> {
+) -> Result<HashMap<ResolvedDeclName, ResolvedDomainConstraint>, Outcome<SemanticError>> {
     cancellation.checkpoint()?;
     let visible_const_values = visible_values_with_imports(const_values, all_const_values);
 
@@ -104,7 +104,7 @@ pub(super) fn resolve_domain_constraints_for_dag(
             && let Err(violation) =
                 crate::domain_check::check_domain_constraint(value, &resolved_constraint)
         {
-            return Err(GraphcalError::located(
+            return Err(SemanticError::located(
                 src,
                 decl_span,
                 DomainError::DomainViolation {
@@ -143,7 +143,7 @@ fn resolve_constraint_from_bounds(
     values: &RuntimeValueMap,
     ctx: BoundCheckingContext<'_, '_>,
     src: SourceId,
-) -> Result<ResolvedDomainConstraint, Outcome<GraphcalError>> {
+) -> Result<ResolvedDomainConstraint, Outcome<SemanticError>> {
     match target {
         ConstraintTarget::Quantity => evaluate_domain_bounds(
             bounds,
@@ -207,7 +207,7 @@ fn resolve_constraint_from_bounds(
                 let anchor = bounds.get().first().map_or(DiagnosticAnchor::WholeFile, |bound| {
                     DiagnosticAnchor::Source(bound.span)
                 });
-                GraphcalError::internal_error(
+                SemanticError::internal_error(
                     format!(
                         "datetime domain bounds on `{display_name}` violated their checked scale invariant: {error}"
                     ),
@@ -228,12 +228,12 @@ fn evaluate_domain_bounds<T: PartialOrd>(
     convert: impl Fn(
         &RuntimeValue,
         &graphcal_compiler::tir::typed::ResolvedDomainBound,
-    ) -> Result<T, Outcome<GraphcalError>>,
+    ) -> Result<T, Outcome<SemanticError>>,
     format_display: impl Fn(&graphcal_compiler::hir::expr::Expr, &T) -> String,
-) -> Result<EvaluatedDomainBounds<T>, Outcome<GraphcalError>> {
+) -> Result<EvaluatedDomainBounds<T>, Outcome<SemanticError>> {
     let bounds = scoped_bounds.get();
     let Some(first) = bounds.first() else {
-        return Err(GraphcalError::internal_error(
+        return Err(SemanticError::internal_error(
             format!("domain constraint on `{display_name}` has no bounds"),
             src,
             DiagnosticAnchor::WholeFile,
@@ -252,7 +252,7 @@ fn evaluate_domain_bounds<T: PartialOrd>(
             let display = format_display(&bound.value, &value);
             Ok((bound.kind, EvaluatedDomainBound::new(value, display)))
         })
-        .collect::<Result<Vec<_>, Outcome<GraphcalError>>>()?;
+        .collect::<Result<Vec<_>, Outcome<SemanticError>>>()?;
     let constraint_span = bounds
         .iter()
         .skip(1)
@@ -267,7 +267,7 @@ fn evaluate_domain_bounds<T: PartialOrd>(
     if let (Some(min), Some(max)) = (&min, &max)
         && min.value() > max.value()
     {
-        return Err(GraphcalError::located(
+        return Err(SemanticError::located(
             src,
             constraint_span,
             DomainError::DomainMinExceedsMax {
@@ -287,8 +287,8 @@ fn domain_bound_value_error(
     expected: &str,
     actual: &RuntimeValue,
     src: SourceId,
-) -> GraphcalError {
-    GraphcalError::located(
+) -> SemanticError {
+    SemanticError::located(
         src,
         bound.value.span,
         EvaluationError::Failed {
@@ -312,7 +312,7 @@ fn collect_concrete_nominal_applications(
     tir: &CheckedTir,
     src: SourceId,
     applications: &mut HashSet<ConcreteNominalApplication>,
-) -> Result<(), GraphcalError> {
+) -> Result<(), SemanticError> {
     match declared {
         CheckedType::Struct(identity, generic_args) => {
             for arg in generic_args {
@@ -333,7 +333,7 @@ fn collect_concrete_nominal_applications(
                 generic_args,
                 src,
             )
-            .map_err(|error| error.into_graphcal_error(src))?;
+            .map_err(|error| error.into_semantic_error(src))?;
             for constructor in model_type.constructors(src)? {
                 for field in constructor.fields() {
                     collect_concrete_nominal_applications(
@@ -363,9 +363,9 @@ fn generic_nat_bindings(
     generic_args: &[CheckedGenericArg],
     src: SourceId,
     span: Span,
-) -> Result<HashMap<graphcal_compiler::hir::types::GenericParamId, u64>, GraphcalError> {
+) -> Result<HashMap<graphcal_compiler::hir::types::GenericParamId, u64>, SemanticError> {
     if type_def.generic_params().len() != generic_args.len() {
-        return Err(GraphcalError::internal_error(
+        return Err(SemanticError::internal_error(
             format!(
                 "concrete application of `{}` has {} generic arguments, expected {}",
                 type_def.name(),
@@ -408,7 +408,7 @@ pub(super) fn resolve_struct_field_constraints(
     const_values: &RuntimeValueMap,
     src: SourceId,
     sources: &SourceRegistry,
-) -> Result<HashMap<StructFieldConstraintKey, ResolvedDomainConstraint>, GraphcalError> {
+) -> Result<HashMap<StructFieldConstraintKey, ResolvedDomainConstraint>, SemanticError> {
     graphcal_compiler::outcome::without_cancellation(|cancellation| {
         resolve_struct_field_constraints_with_cancellation(
             tir,
@@ -460,14 +460,14 @@ fn application_field_constraint_key(
 fn resolve_application_field_constraints(
     application: &ConcreteNominalApplication,
     ctx: &FieldConstraintResolutionContext<'_>,
-) -> Result<ApplicationFieldConstraints, Outcome<GraphcalError>> {
+) -> Result<ApplicationFieldConstraints, Outcome<SemanticError>> {
     ctx.cancellation.checkpoint()?;
     let dag_id = application.identity.resolved().owner();
     let nominal = ctx
         .tir
         .nominal_type_body(application.identity.resolved())
         .ok_or_else(|| {
-            GraphcalError::internal_error(
+            SemanticError::internal_error(
                 format!(
                     "semantic type metadata missing concrete application `{}`",
                     application.identity
@@ -478,7 +478,7 @@ fn resolve_application_field_constraints(
         })?;
     let type_def = nominal.definition();
     let constants = ctx.const_scopes.get(dag_id).ok_or_else(|| {
-        GraphcalError::internal_error(
+        SemanticError::internal_error(
             format!("type owner `{dag_id}` has no evaluated constant scope"),
             ctx.fallback_src,
             DiagnosticAnchor::WholeFile,
@@ -505,7 +505,7 @@ fn resolve_application_field_constraints(
         let display_name = format!("{}.{}", key.constructor, key.field);
         let bounds = scoped_field.map(ResolvedStructFieldSemantics::domain_bounds);
         let Some(first_bound) = bounds.get().first() else {
-            return Err(GraphcalError::internal_error(
+            return Err(SemanticError::internal_error(
                 format!("constrained field `{display_name}` has no domain bounds"),
                 type_def.source(),
                 DiagnosticAnchor::Source(type_def.span()),
@@ -542,7 +542,7 @@ fn resolve_application_field_constraints(
 fn collect_field_constraint_applications(
     tir: &CheckedTir,
     src: SourceId,
-) -> Result<HashSet<ConcreteNominalApplication>, GraphcalError> {
+) -> Result<HashSet<ConcreteNominalApplication>, SemanticError> {
     let mut applications = HashSet::new();
     // The entry DAG's own declarations and the imported values visible in it.
     let root = tir.root();
@@ -583,7 +583,7 @@ pub(super) fn resolve_struct_field_constraints_for_dags(
     src: SourceId,
     sources: &SourceRegistry,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
-) -> Result<DagFieldConstraints, Outcome<GraphcalError>> {
+) -> Result<DagFieldConstraints, Outcome<SemanticError>> {
     cancellation.checkpoint()?;
     let context = FieldConstraintResolutionContext {
         tir,
@@ -608,7 +608,7 @@ pub(super) fn resolve_struct_field_constraints_with_cancellation(
     src: SourceId,
     sources: &SourceRegistry,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
-) -> Result<HashMap<StructFieldConstraintKey, ResolvedDomainConstraint>, Outcome<GraphcalError>> {
+) -> Result<HashMap<StructFieldConstraintKey, ResolvedDomainConstraint>, Outcome<SemanticError>> {
     let empty = RuntimeValueMap::new();
     let const_scopes = tir
         .dag_registry()
@@ -645,7 +645,7 @@ pub(super) fn check_dag_const_struct_field_constraints_at_compile_time(
     const_values: &RuntimeValueMap,
     field_constraints: &HashMap<StructFieldConstraintKey, ResolvedDomainConstraint>,
     src: SourceId,
-) -> Result<(), GraphcalError> {
+) -> Result<(), SemanticError> {
     for (entry, declared) in dag.declarations().filter_map(|entry| {
         entry
             .value()
@@ -654,7 +654,7 @@ pub(super) fn check_dag_const_struct_field_constraints_at_compile_time(
     }) {
         let key = entry.identity().clone();
         let value = const_values.get(&key).ok_or_else(|| {
-            GraphcalError::internal_error(
+            SemanticError::internal_error(
                 format!("checked constant `{key}` has no evaluated value"),
                 src,
                 DiagnosticAnchor::Source(declared.span),
@@ -711,7 +711,7 @@ fn check_const_struct_field_constraints(
     owning_type: Option<&StructTypeRef>,
     field_constraints: &HashMap<StructFieldConstraintKey, ResolvedDomainConstraint>,
     src: SourceId,
-) -> Result<(), GraphcalError> {
+) -> Result<(), SemanticError> {
     match value {
         RuntimeValue::Struct(value) => {
             let runtime_owning_type = StructTypeRef::from_resolved(value.type_name().clone());
@@ -726,7 +726,7 @@ fn check_const_struct_field_constraints(
                 ) && let Err(violation) =
                     crate::domain_check::check_domain_constraint(field_value, constraint)
                 {
-                    return Err(GraphcalError::located(
+                    return Err(SemanticError::located(
                         src,
                         decl_span,
                         DomainError::DomainViolation {
@@ -792,9 +792,9 @@ fn resolve_constraint_target(
     base_resolved: Option<&ResolvedValueType>,
     decl_span: Span,
     src: SourceId,
-) -> Result<ConstraintTarget, GraphcalError> {
+) -> Result<ConstraintTarget, SemanticError> {
     let Some(resolved) = base_resolved else {
-        return Err(GraphcalError::internal_error(
+        return Err(SemanticError::internal_error(
             format!("domain constraint target `{name}` has no resolved type"),
             src,
             graphcal_compiler::diagnostic_anchor::DiagnosticAnchor::Source(decl_span),
@@ -804,21 +804,21 @@ fn resolve_constraint_target(
         ResolvedValueType::Quantity(_) => Ok(ConstraintTarget::Quantity),
         ResolvedValueType::Int => Ok(ConstraintTarget::Int),
         ResolvedValueType::Datetime(scale) => Ok(ConstraintTarget::Datetime(*scale)),
-        ResolvedValueType::Bool => Err(GraphcalError::located(
+        ResolvedValueType::Bool => Err(SemanticError::located(
             src,
             decl_span,
             DomainError::InvalidDomainTarget {
                 type_kind: "Bool".to_string(),
             },
         )),
-        ResolvedValueType::Complex { .. } => Err(GraphcalError::located(
+        ResolvedValueType::Complex { .. } => Err(SemanticError::located(
             src,
             decl_span,
             DomainError::InvalidDomainTarget {
                 type_kind: "Complex".to_string(),
             },
         )),
-        ResolvedValueType::Key { .. } => Err(GraphcalError::located(
+        ResolvedValueType::Key { .. } => Err(SemanticError::located(
             src,
             decl_span,
             DomainError::InvalidDomainTarget {
@@ -827,14 +827,14 @@ fn resolve_constraint_target(
         )),
         ResolvedValueType::Struct {
             name: struct_name, ..
-        } => Err(GraphcalError::located(
+        } => Err(SemanticError::located(
             src,
             decl_span,
             DomainError::InvalidDomainTarget {
                 type_kind: format!("struct `{}`", struct_name.as_str()),
             },
         )),
-        ResolvedValueType::GenericTypeParam(param, _) => Err(GraphcalError::located(
+        ResolvedValueType::GenericTypeParam(param, _) => Err(SemanticError::located(
             src,
             decl_span,
             DomainError::InvalidDomainTarget {
@@ -853,9 +853,9 @@ fn exact_domain_int_bound(
     value: i64,
     src: SourceId,
     span: graphcal_compiler::syntax::span::Span,
-) -> Result<f64, GraphcalError> {
+) -> Result<f64, SemanticError> {
     crate::eval_expr::numeric::exact_i64_to_f64(value).map_err(|_| {
-        GraphcalError::located(
+        SemanticError::located(
             src,
             span,
             EvaluationError::Failed {

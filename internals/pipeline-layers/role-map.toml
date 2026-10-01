@@ -888,12 +888,12 @@ role = "contracts"
 
 [[module]]
 package = "compiler"
-path = ["graphcal_error"]
+path = ["semantic_error", "rendered"]
 role = "contracts"
 
 [[module]]
 package = "compiler"
-path = ["graphcal_error", "tests"]
+path = ["semantic_error", "rendered", "tests"]
 role = "contracts"
 
 [[module]]

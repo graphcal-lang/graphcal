@@ -63,12 +63,12 @@ fn internal_errors_abort_plot_evaluation() {
     let src = graphcal_compiler::source_registry::SourceRegistry::new()
         .register("plot_property.gcl", Arc::new(String::new()));
     assert!(matches!(
-        PlotEvaluationError::from(GraphcalError::internal_error(
+        PlotEvaluationError::from(SemanticError::internal_error(
             "missing checked expression",
             src,
             DiagnosticAnchor::WholeFile,
         )),
-        PlotEvaluationError::Fatal(Outcome::Failed(GraphcalError::Internal(_)))
+        PlotEvaluationError::Fatal(Outcome::Failed(SemanticError::Internal(_)))
     ));
 }
 

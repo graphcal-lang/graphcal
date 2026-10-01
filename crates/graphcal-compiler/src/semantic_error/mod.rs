@@ -7,7 +7,14 @@
 //! one by source id and primary span. Rendering happens only at the shell,
 //! through the source registry that issued the id.
 
-use crate::diagnostic::{DiagnosticKind, SecondaryLabel};
+use thiserror::Error;
+
+use crate::diagnostic::{Diagnostic, DiagnosticKind, SecondaryLabel};
+use crate::diagnostic_anchor::DiagnosticAnchor;
+use crate::internal_error::InternalError;
+use crate::outcome::Outcome;
+use crate::source_id::SourceId;
+use crate::syntax::span::Span;
 
 pub mod attribute;
 pub mod dimension;
@@ -18,12 +25,63 @@ pub mod index;
 pub mod module;
 pub mod name;
 pub mod plugin;
+pub mod rendered;
 pub mod structure;
 pub mod visibility;
 // MODULES
 
 #[cfg(test)]
 mod tests;
+
+/// A semantic diagnostic: a typed family payload located in one source, or
+/// a violated compiler invariant.
+#[derive(Debug, Clone, Error)]
+pub enum SemanticError {
+    /// A diagnostic of a typed family, located by source id and span.
+    #[error("{}", .0.kind)]
+    Located(Diagnostic<SemanticErrorKind>),
+    /// An internal invariant violation that should never be reached if earlier
+    /// compiler phases (parsing, resolution, `dim_check`) are correct.
+    #[error(transparent)]
+    Internal(InternalError),
+}
+
+/// A cancellable operation that fails with a [`SemanticError`] reports it as
+/// [`Outcome::Failed`]; cancellation only ever
+/// comes from [`Cancelled`](crate::cancellation::Cancelled).
+impl From<SemanticError> for Outcome<SemanticError> {
+    fn from(error: SemanticError) -> Self {
+        Self::Failed(error)
+    }
+}
+
+impl SemanticError {
+    /// Locate a typed family diagnostic at `primary` in `src`.
+    #[must_use]
+    pub fn located(src: SourceId, primary: Span, kind: impl Into<SemanticErrorKind>) -> Self {
+        Self::Located(Diagnostic::new(src, primary, kind.into()))
+    }
+
+    /// Construct an internal diagnostic with an explicit source-anchor policy.
+    #[must_use]
+    #[cold]
+    pub fn internal_error(
+        message: impl Into<String>,
+        src: SourceId,
+        anchor: DiagnosticAnchor,
+    ) -> Self {
+        Self::Internal(InternalError::new(message, src, anchor))
+    }
+
+    /// The source this error's spans index into.
+    #[must_use]
+    pub const fn source(&self) -> SourceId {
+        match self {
+            Self::Located(diagnostic) => diagnostic.src,
+            Self::Internal(internal) => internal.src(),
+        }
+    }
+}
 
 /// The payload of a semantic diagnostic, by family.
 #[derive(Debug, Clone)]

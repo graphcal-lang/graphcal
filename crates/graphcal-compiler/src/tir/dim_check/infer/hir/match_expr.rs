@@ -10,8 +10,8 @@ use crate::semantic_error::structure::StructError;
 use crate::source_id::SourceId;
 
 use crate::display::formatting_registry::FormattingRegistry;
-use crate::graphcal_error::GraphcalError;
 use crate::semantic::checked_type::{IndexTypeRef, Symbolic};
+use crate::semantic_error::SemanticError;
 use crate::syntax::type_name::FieldName;
 
 use crate::semantic::checked_type::{CheckedGenericArg, CheckedType};
@@ -30,13 +30,13 @@ impl InferEnv<'_> {
         owning_type: &ResolvedStructTypeName,
         type_def: &NominalTypeDef,
         scrutinee_type_args: &[CheckedGenericArg<Symbolic>],
-    ) -> Result<CheckedType<Symbolic>, GraphcalError> {
+    ) -> Result<CheckedType<Symbolic>, SemanticError> {
         if !variant
             .fields()
             .iter()
             .any(|field_def| field_def.name() == &field.value)
         {
-            return Err(GraphcalError::located(
+            return Err(SemanticError::located(
                 self.src,
                 field.span,
                 StructError::UnknownField {
@@ -66,12 +66,12 @@ impl Infer<'_> {
         expr: &Expr,
         scrutinee: &Expr,
         arms: &[MatchArm],
-    ) -> Result<CheckedType<Symbolic>, Outcome<GraphcalError>> {
+    ) -> Result<CheckedType<Symbolic>, Outcome<SemanticError>> {
         let scrutinee_type = self.infer_hir_type(scrutinee)?;
         match &scrutinee_type {
             CheckedType::Key(index_identity) => {
                 if index_identity.finite_index_form().is_some() {
-                    return Err(GraphcalError::located(self.env.src, scrutinee.span, EvaluationError::Failed { message: format!(
+                    return Err(SemanticError::located(self.env.src, scrutinee.span, EvaluationError::Failed { message: format!(
                             "cannot match on `Key<{index_identity}>`; only named-axis keys support label matching"
                         ) }).into());
                 }
@@ -80,7 +80,7 @@ impl Infer<'_> {
                     self.env.tir,
                 )
                 .ok_or_else(|| {
-                    GraphcalError::located(
+                    SemanticError::located(
                         self.env.src,
                         scrutinee.span,
                         IndexError::UnknownIndex {
@@ -96,7 +96,7 @@ impl Infer<'_> {
                         crate::semantic::index_def::RequiredIndexKind::Named,
                     ) => vec![],
                     _ => {
-                        return Err(GraphcalError::located(self.env.src, scrutinee.span, EvaluationError::Failed { message: format!(
+                        return Err(SemanticError::located(self.env.src, scrutinee.span, EvaluationError::Failed { message: format!(
                                 "cannot match on coordinate index `{index_identity}`; only named indexes can be matched"
                             ) }).into());
                     }
@@ -105,7 +105,7 @@ impl Infer<'_> {
                 let mut arm_types = Vec::new();
                 for arm in arms {
                     let MatchPattern::IndexLabel { variant, span } = &arm.pattern else {
-                        return Err(GraphcalError::located(
+                        return Err(SemanticError::located(
                             self.env.src,
                             arm.span,
                             EvaluationError::Failed {
@@ -120,7 +120,7 @@ impl Infer<'_> {
                         IndexNominalUse::Label(variant.variant.variant()),
                     )?;
                     if index_identity.declared_resolved() != Some(variant.variant.index()) {
-                        return Err(GraphcalError::located(
+                        return Err(SemanticError::located(
                             self.env.src,
                             *span,
                             IndexError::IndexMismatch {
@@ -132,7 +132,7 @@ impl Infer<'_> {
                     }
                     let variant_name = variant.variant.variant();
                     if !variants.iter().any(|v| v == variant_name) {
-                        return Err(GraphcalError::located(
+                        return Err(SemanticError::located(
                             self.env.src,
                             variant.path_span(),
                             IndexError::UnknownVariant {
@@ -143,7 +143,7 @@ impl Infer<'_> {
                         .into());
                     }
                     if !covered.insert(variant_name.clone()) {
-                        return Err(GraphcalError::located(
+                        return Err(SemanticError::located(
                             self.env.src,
                             *span,
                             EvaluationError::Failed {
@@ -158,7 +158,7 @@ impl Infer<'_> {
                 }
                 for variant in variants {
                     if !covered.contains(&variant) {
-                        return Err(GraphcalError::located(self.env.src, expr.span, EvaluationError::Failed { message: format!(
+                        return Err(SemanticError::located(self.env.src, expr.span, EvaluationError::Failed { message: format!(
                                 "non-exhaustive match: variant `{index_identity}#{variant}` not covered"
                             ) }).into());
                     }
@@ -170,7 +170,7 @@ impl Infer<'_> {
                 let type_def =
                     struct_type_def_for_inferred(type_name, Some(self.env.dag), self.env.registry)
                         .ok_or_else(|| {
-                            GraphcalError::located(
+                            SemanticError::located(
                                 self.env.src,
                                 scrutinee.span,
                                 StructError::UnknownStructType {
@@ -187,7 +187,7 @@ impl Infer<'_> {
                         span,
                     } = &arm.pattern
                     else {
-                        return Err(GraphcalError::located(
+                        return Err(SemanticError::located(
                             self.env.src,
                             arm.span,
                             EvaluationError::Failed {
@@ -208,7 +208,7 @@ impl Infer<'_> {
                         },
                     )?;
                     if bindings.is_explicit_empty() && target.variant().fields().is_empty() {
-                        return Err(GraphcalError::located(
+                        return Err(SemanticError::located(
                             self.env.src,
                             *span,
                             StructError::EmptyParenthesizedConstructor {
@@ -218,7 +218,7 @@ impl Infer<'_> {
                         .into());
                     }
                     if type_name.resolved() != target.owning_type() {
-                        return Err(GraphcalError::located(
+                        return Err(SemanticError::located(
                             self.env.src,
                             constructor.span,
                             StructError::UnknownField {
@@ -232,7 +232,7 @@ impl Infer<'_> {
                         .into());
                     }
                     if !covered.insert(target.variant().name().clone()) {
-                        return Err(GraphcalError::located(
+                        return Err(SemanticError::located(
                             self.env.src,
                             *span,
                             EvaluationError::Failed {
@@ -252,7 +252,7 @@ impl Infer<'_> {
                             | PatternBinding::Wildcard { field, .. } => field,
                         };
                         if !seen_pattern_fields.insert(field.value.clone()) {
-                            return Err(GraphcalError::located(
+                            return Err(SemanticError::located(
                                 self.env.src,
                                 field.span,
                                 EvaluationError::Failed {
@@ -287,7 +287,7 @@ impl Infer<'_> {
                         .map(|field| field.name().clone())
                         .collect::<Vec<_>>();
                     if !missing.is_empty() {
-                        return Err(GraphcalError::located(
+                        return Err(SemanticError::located(
                             self.env.src,
                             *span,
                             StructError::MissingPatternFields {
@@ -302,7 +302,7 @@ impl Infer<'_> {
                 if let Some(members) = type_def.union_members() {
                     for member in members {
                         if !covered.contains(&member.name()) {
-                            return Err(GraphcalError::located(
+                            return Err(SemanticError::located(
                                 self.env.src,
                                 expr.span,
                                 EvaluationError::Failed {
@@ -319,7 +319,7 @@ impl Infer<'_> {
                 hir_arm_types_match(&arm_types, arms, self.env.registry, self.env.src, expr)
                     .map_err(Outcome::Failed)
             }
-            _ => Err(GraphcalError::located(
+            _ => Err(SemanticError::located(
                 self.env.src,
                 scrutinee.span,
                 EvaluationError::Failed {
@@ -340,6 +340,6 @@ fn hir_arm_types_match(
     registry: &FormattingRegistry,
     src: SourceId,
     expr: &Expr,
-) -> Result<CheckedType<Symbolic>, GraphcalError> {
+) -> Result<CheckedType<Symbolic>, SemanticError> {
     rules::match_arms_rule(arm_types, |i| arms[i].body.span, expr.span, registry, src)
 }

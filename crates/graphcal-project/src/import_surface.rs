@@ -6,11 +6,11 @@
 //! into source diagnostics. Keeping it outside `project_compiler` avoids a
 //! circular module dependency between the two consumers.
 
-use graphcal_compiler::graphcal_error::GraphcalError;
 use graphcal_compiler::ir::module_interface::ModuleInterface;
 use graphcal_compiler::resolve::category::ExportedImportItemKind;
 use graphcal_compiler::resolve::namespace::Namespace;
 use graphcal_compiler::resolve::reserved_name::validate_reserved_name;
+use graphcal_compiler::semantic_error::SemanticError;
 use graphcal_compiler::semantic_error::module::ModuleError;
 use graphcal_compiler::semantic_error::name::NameError;
 use graphcal_compiler::source_id::SourceId;
@@ -24,7 +24,7 @@ pub fn validate_constructor_alias(
     kind: ExportedImportItemKind,
     import_item: &ImportItem,
     src: SourceId,
-) -> Result<(), GraphcalError> {
+) -> Result<(), SemanticError> {
     match kind {
         ExportedImportItemKind::Constructor => {
             validate_reserved_alias(Namespace::Term, import_item, src)
@@ -42,7 +42,7 @@ pub fn validate_reserved_alias(
     namespace: Namespace,
     import_item: &ImportItem,
     src: SourceId,
-) -> Result<(), GraphcalError> {
+) -> Result<(), SemanticError> {
     let local_name = import_item.local_name_atom();
     validate_reserved_name(namespace, local_name).map_err(|_| {
         let kind = match namespace {
@@ -55,7 +55,7 @@ pub fn validate_reserved_alias(
             Namespace::Unit => "unit alias",
             Namespace::Term => "Term alias",
         };
-        GraphcalError::located(
+        SemanticError::located(
             src,
             import_item.local_span(),
             NameError::BuiltinNameShadowed {
@@ -76,10 +76,10 @@ pub fn import_item_not_found_error(
     file_path: &str,
     src: SourceId,
     span: Span,
-) -> GraphcalError {
+) -> SemanticError {
     interface.namespaces_of(name).map_or_else(
         || {
-            GraphcalError::located(
+            SemanticError::located(
                 src,
                 span,
                 ModuleError::ImportNameNotFound {
@@ -89,7 +89,7 @@ pub fn import_item_not_found_error(
             )
         },
         |alternatives| {
-            GraphcalError::located(
+            SemanticError::located(
                 src,
                 span,
                 ModuleError::ImportCategoryMismatch {
@@ -131,7 +131,7 @@ mod tests {
             src(),
             Span::new(0, 3),
         ) {
-            GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+            SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
                 kind:
                     SemanticErrorKind::Module(ModuleError::ImportCategoryMismatch { mismatch, .. }),
                 ..
@@ -157,7 +157,7 @@ mod tests {
                 src(),
                 Span::new(0, 7),
             ),
-            GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+            SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
                 kind: SemanticErrorKind::Module(ModuleError::ImportNameNotFound { .. }),
                 ..
             })

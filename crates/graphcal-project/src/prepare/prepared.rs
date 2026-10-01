@@ -7,7 +7,6 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use graphcal_compiler::declaration_category::DeclCategory;
 use graphcal_compiler::desugar::desugared_ast::{Expr, ExprKind as AstExprKind};
 use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
-use graphcal_compiler::graphcal_error::GraphcalError;
 use graphcal_compiler::hir::ExprLoweringContext;
 use graphcal_compiler::hir::expr::ExprKind as HirExprKind;
 use graphcal_compiler::hir::lower::{GenericScope, ModuleScope};
@@ -16,6 +15,7 @@ use graphcal_compiler::resolve::ModuleResolver;
 use graphcal_compiler::semantic::checked_type::CheckedType;
 use graphcal_compiler::semantic::index_def::ConcreteIndexKind;
 use graphcal_compiler::semantic::time_scale::TimeScale;
+use graphcal_compiler::semantic_error::SemanticError;
 use graphcal_compiler::semantic_error::index::IndexError;
 use graphcal_compiler::source_id::SourceId;
 use graphcal_compiler::source_registry::SourceRegistry;
@@ -137,7 +137,7 @@ impl ParameterBindingBuilder<'_> {
     pub fn bind_value(&mut self, value: ParameterValue) -> Result<(), CompileError> {
         if value.plan_id != self.project.plan_id {
             return Err(CompileError::semantic(
-                GraphcalError::internal_error(
+                SemanticError::internal_error(
                     "parameter value belongs to another prepared project",
                     self.project.source,
                     DiagnosticAnchor::Builtin,
@@ -460,7 +460,7 @@ impl PreparedProject {
     }
 
     /// Render a semantic error against this project's sources.
-    pub(super) fn render(&self, error: GraphcalError) -> CompileError {
+    pub(super) fn render(&self, error: SemanticError) -> CompileError {
         CompileError::semantic(error, &self.sources)
     }
 
@@ -469,7 +469,7 @@ impl PreparedProject {
             Ok(())
         } else {
             Err(CompileError::semantic(
-                GraphcalError::internal_error(
+                SemanticError::internal_error(
                     "parameter binding row belongs to another prepared project",
                     self.source,
                     DiagnosticAnchor::Builtin,
@@ -600,7 +600,7 @@ pub(super) fn prepare_checked_project(
     if let Some(index) = compiled.entry_interface.required_index() {
         let Some(span) = index.anchor().resolve(source.whole_span().len()) else {
             return Err(CompileError::semantic(
-                GraphcalError::internal_error(
+                SemanticError::internal_error(
                     format!(
                         "required index `{}` has no diagnostic source anchor",
                         index.name()
@@ -613,7 +613,7 @@ pub(super) fn prepare_checked_project(
             .into());
         };
         return Err(CompileError::semantic(
-            GraphcalError::located(
+            SemanticError::located(
                 source,
                 span,
                 IndexError::RequiredStaticInputNotBound {

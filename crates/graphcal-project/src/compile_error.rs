@@ -6,7 +6,7 @@ use miette::{Diagnostic, NamedSource, SourceSpan};
 use thiserror::Error;
 
 use graphcal_compiler::diagnostic_render::RenderableDiagnostic;
-use graphcal_compiler::graphcal_error::{GraphcalError, RenderedGraphcalError};
+use graphcal_compiler::semantic_error::{SemanticError, rendered::RenderedSemanticError};
 use graphcal_compiler::source_registry::SourceRegistry;
 
 use crate::binding_error::BindingError;
@@ -39,7 +39,7 @@ pub enum CompileError {
     /// source it points into.
     #[error(transparent)]
     #[diagnostic(transparent)]
-    Eval(RenderedGraphcalError),
+    Eval(RenderedSemanticError),
 
     /// A value supplied through an external binding format failed semantic
     /// validation. The boundary source and parameter span deliberately replace
@@ -78,7 +78,7 @@ pub(crate) enum PipelineError {
     /// A failure that is already renderable on its own.
     Compile(CompileError),
     /// A semantic or evaluation error about a registered source.
-    Semantic(GraphcalError),
+    Semantic(SemanticError),
 }
 
 impl PipelineError {
@@ -98,8 +98,8 @@ impl From<CompileError> for PipelineError {
     }
 }
 
-impl From<GraphcalError> for PipelineError {
-    fn from(error: GraphcalError) -> Self {
+impl From<SemanticError> for PipelineError {
+    fn from(error: SemanticError) -> Self {
         Self::Semantic(error)
     }
 }
@@ -128,8 +128,8 @@ impl CompileError {
     /// Render a semantic error against the project sources that issued its
     /// source id.
     #[must_use]
-    pub fn semantic(error: GraphcalError, sources: &SourceRegistry) -> Self {
-        Self::Eval(RenderedGraphcalError::new(error, sources))
+    pub fn semantic(error: SemanticError, sources: &SourceRegistry) -> Self {
+        Self::Eval(RenderedSemanticError::new(error, sources))
     }
 
     /// Attach the named source a parse error was produced from.
@@ -143,7 +143,7 @@ impl CompileError {
     /// Return the `NamedSource` embedded in this error, if any.
     ///
     /// Forwards to the parse diagnostic's attached source or
-    /// [`RenderedGraphcalError::named_source`].
+    /// [`RenderedSemanticError::named_source`].
     /// When present, the returned
     /// `NamedSource` pairs the file's name with the exact source text whose
     /// byte offsets the error's labels index into — so diagnostic emitters

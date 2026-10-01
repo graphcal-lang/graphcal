@@ -136,7 +136,7 @@ fn symbolic_complex_and_generic_args_have_no_checked_type() {
     let lone = symbolic(vec![param_term("D", Rational::ONE, MulDivOp::Mul)]);
     let squared = symbolic(vec![param_term("D", Rational::from(2), MulDivOp::Mul)]);
     let message = |ty: &ResolvedValueType| match ty.to_checked_type(src()) {
-        Err(GraphcalError::Located(crate::diagnostic::Diagnostic {
+        Err(SemanticError::Located(crate::diagnostic::Diagnostic {
             kind: SemanticErrorKind::Evaluation(EvaluationError::Failed { message, .. }),
             ..
         })) => message,

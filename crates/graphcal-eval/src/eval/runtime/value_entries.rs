@@ -11,8 +11,8 @@ use std::collections::{HashMap, HashSet};
 use graphcal_compiler::dag_id::DagId;
 use graphcal_compiler::declaration_category::ValueDeclCategory;
 use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
-use graphcal_compiler::graphcal_error::GraphcalError;
 use graphcal_compiler::resolved_name::ResolvedDeclName;
+use graphcal_compiler::semantic_error::SemanticError;
 use graphcal_compiler::syntax::module_name::ScopedName;
 use graphcal_compiler::tir::typed::{CheckedDag, ResolvedProjection};
 
@@ -65,7 +65,7 @@ impl ValueEntries {
     fn collect(
         entries: impl IntoIterator<Item = ValueEntry>,
         ctx: &EvalSession<'_>,
-    ) -> Result<Self, GraphcalError> {
+    ) -> Result<Self, SemanticError> {
         let mut identities = HashMap::<ScopedName, ResolvedDeclName>::new();
         let mut collected = Self {
             entries: Vec::new(),
@@ -104,7 +104,7 @@ pub(super) fn assemble_value_entries(
     plan: &ExecPlan<'_>,
     evaluated: EvaluatedRoot<'_>,
     ctx: &EvalSession<'_>,
-) -> Result<ValueEntries, GraphcalError> {
+) -> Result<ValueEntries, SemanticError> {
     let root = root_entries(plan, evaluated, ctx)?;
     let root_id = plan.tir().root_dag_id();
     let mut projected = Vec::new();
@@ -120,7 +120,7 @@ fn root_entries(
     plan: &ExecPlan<'_>,
     evaluated: EvaluatedRoot<'_>,
     ctx: &EvalSession<'_>,
-) -> Result<Vec<ValueEntry>, GraphcalError> {
+) -> Result<Vec<ValueEntry>, SemanticError> {
     let scope = plan.root().scope();
     scope
         .dag()
@@ -158,7 +158,7 @@ fn projection_entries(
     planned: PlannedInstance<'_>,
     evaluated: EvaluatedRoot<'_>,
     ctx: &EvalSession<'_>,
-) -> Result<Vec<ValueEntry>, GraphcalError> {
+) -> Result<Vec<ValueEntry>, SemanticError> {
     let instance = planned.instance();
     let instance_ctx = ctx.with_src(planned.scope().source());
     instance
@@ -184,7 +184,7 @@ fn declared_value_category(
     dag: &CheckedDag,
     declaration: &ResolvedDeclName,
     ctx: &EvalSession<'_>,
-) -> Result<ValueDeclCategory, GraphcalError> {
+) -> Result<ValueDeclCategory, SemanticError> {
     dag.declaration(declaration)
         .and_then(graphcal_compiler::tir::typed::declaration_view::DeclarationView::value)
         .map(|value| value.category)
@@ -203,7 +203,7 @@ fn debug_entries(
     root: &DagId,
     evaluated: EvaluatedRoot<'_>,
     ctx: &EvalSession<'_>,
-) -> Result<Vec<ValueEntry>, GraphcalError> {
+) -> Result<Vec<ValueEntry>, SemanticError> {
     let instance_ctx = ctx.with_src(planned.scope().source());
     planned
         .instance()
@@ -232,7 +232,7 @@ fn evaluated_value(
     key: &ResolvedDeclName,
     evaluated: EvaluatedRoot<'_>,
     ctx: &EvalSession<'_>,
-) -> Result<(Result<Value, NodeUnavailable>, Vec<PresentationDiagnostic>), GraphcalError> {
+) -> Result<(Result<Value, NodeUnavailable>, Vec<PresentationDiagnostic>), SemanticError> {
     if let Some(error) = evaluated.errors.get(key) {
         return Ok((Err(error.clone()), Vec::new()));
     }
@@ -248,7 +248,7 @@ fn project_value(
     runtime: Option<&RuntimeValue>,
     evaluated: EvaluatedRoot<'_>,
     ctx: &EvalSession<'_>,
-) -> Result<(Value, Vec<PresentationDiagnostic>), GraphcalError> {
+) -> Result<(Value, Vec<PresentationDiagnostic>), SemanticError> {
     let declared_type = ctx
         .tir
         .decl_type(declaration)

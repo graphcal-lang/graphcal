@@ -1,9 +1,9 @@
 //! Materialization facts directly from checked types, without rebuilding inferred types.
 
 use crate::diagnostic_anchor::DiagnosticAnchor;
-use crate::graphcal_error::GraphcalError;
 use crate::semantic::checked_type::{CheckedType, IndexTypeRef, Symbolic};
 use crate::semantic::index_def::IndexCardinality;
+use crate::semantic_error::SemanticError;
 use crate::semantic_error::dimension::DimensionError;
 use crate::source_id::SourceId;
 use crate::syntax::span::Span;
@@ -45,17 +45,17 @@ pub(super) fn check_materializable(
     tir: &dyn TirRead,
     src: SourceId,
     span: Span,
-) -> Result<(), GraphcalError> {
+) -> Result<(), SemanticError> {
     ty.materialized_shape(|axis| {
         checked_index_cardinality(tir, axis).map_err(MaterializationError::Index)
     })
     .map(|_| ())
     .map_err(|error| match error {
         MaterializationError::Index(error) => {
-            GraphcalError::internal_error(error.to_string(), src, DiagnosticAnchor::Source(span))
+            SemanticError::internal_error(error.to_string(), src, DiagnosticAnchor::Source(span))
         }
         MaterializationError::Shape(MaterializedShapeError::ExceedsLimit { maximum }) => {
-            GraphcalError::located(
+            SemanticError::located(
                 src,
                 span,
                 DimensionError::MaterializedShapeTooLarge { maximum },

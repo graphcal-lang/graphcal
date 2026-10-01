@@ -11,9 +11,9 @@ use crate::runtime_presentation::EvaluatedRuntimeValue;
 use crate::runtime_presentation::PendingPresentedMap;
 use graphcal_compiler::cancellation::CancellationToken;
 use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
-use graphcal_compiler::graphcal_error::GraphcalError;
 use graphcal_compiler::outcome::Outcome;
 use graphcal_compiler::resolved_name::ResolvedDeclName;
+use graphcal_compiler::semantic_error::SemanticError;
 use graphcal_compiler::semantic_error::SemanticErrorKind;
 use graphcal_compiler::semantic_error::evaluation::EvaluationError;
 use graphcal_compiler::source_id::SourceId;
@@ -110,9 +110,9 @@ impl<'a> ScheduledDeclaration<'a> {
 }
 
 #[must_use]
-pub fn eval_failed_node_error(error: &GraphcalError) -> NodeUnavailable {
+pub fn eval_failed_node_error(error: &SemanticError) -> NodeUnavailable {
     match error {
-        GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+        SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
             kind:
                 SemanticErrorKind::Evaluation(EvaluationError::Unavailable {
                     reason: NodeUnavailable::Todo { declaration },
@@ -125,11 +125,11 @@ pub fn eval_failed_node_error(error: &GraphcalError) -> NodeUnavailable {
             ),
             failed_deps: Vec::new(),
         },
-        GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+        SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
             kind: SemanticErrorKind::Evaluation(EvaluationError::Unavailable { reason, .. }),
             ..
         }) => reason.clone(),
-        GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+        SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
             kind: SemanticErrorKind::Evaluation(EvaluationError::Failed { message, .. }),
             ..
         }) => NodeUnavailable::EvalFailed {
@@ -237,11 +237,11 @@ impl<'a> ExecutionFrame<'a> {
     fn failure(
         &mut self,
         key: &ResolvedDeclName,
-        error: GraphcalError,
-    ) -> Result<(), GraphcalError> {
-        let only_incomplete = matches!(&error, GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic { kind: SemanticErrorKind::Evaluation(EvaluationError::Unavailable { reason, .. }), .. }) if !reason.has_failure());
+        error: SemanticError,
+    ) -> Result<(), SemanticError> {
+        let only_incomplete = matches!(&error, SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic { kind: SemanticErrorKind::Evaluation(EvaluationError::Unavailable { reason, .. }), .. }) if !reason.has_failure());
         match (&error, self.policy) {
-            (GraphcalError::Internal(_), _) => Err(error),
+            (SemanticError::Internal(_), _) => Err(error),
             (_, FailurePolicy::Propagate) if !only_incomplete => Err(error),
             _ => {
                 self.errors
@@ -260,7 +260,7 @@ impl<'a> ExecutionFrame<'a> {
         value: EvaluatedRuntimeValue,
         source: SourceId,
         span: Span,
-    ) -> Result<(), GraphcalError> {
+    ) -> Result<(), SemanticError> {
         if let Some(constraint) = domain
             && let Err(violation) = check_domain_constraint(&value.value(), constraint)
         {
@@ -268,7 +268,7 @@ impl<'a> ExecutionFrame<'a> {
             self.presented.remove(key);
             return self.failure(
                 key,
-                GraphcalError::located(
+                SemanticError::located(
                     source,
                     span,
                     EvaluationError::Failed {
@@ -302,7 +302,7 @@ impl<'a> ExecutionFrame<'a> {
         value: EvaluatedRuntimeValue,
         source: SourceId,
         span: Span,
-    ) -> Result<(), GraphcalError> {
+    ) -> Result<(), SemanticError> {
         let domain = self.plan.domain_constraint(key);
         self.bind(key, domain, value, source, span)
     }
@@ -338,8 +338,8 @@ impl<'a> ExecutionFrame<'a> {
         mut evaluate: impl FnMut(
             ScheduledDeclaration<'a>,
             &Self,
-        ) -> Result<EvaluatedRuntimeValue, Outcome<GraphcalError>>,
-    ) -> Result<(), Outcome<GraphcalError>> {
+        ) -> Result<EvaluatedRuntimeValue, Outcome<SemanticError>>,
+    ) -> Result<(), Outcome<SemanticError>> {
         crate::pipeline_metrics::record(crate::pipeline_metrics::Event::FrameExecution);
         let callable = self.callable;
         for step in callable.steps() {
@@ -362,7 +362,7 @@ impl<'a> ExecutionFrame<'a> {
                 }
                 PlannedBody::Expression { root, tree } => (root.get(), tree),
                 PlannedBody::Supplied => {
-                    return Err(GraphcalError::internal_error(
+                    return Err(SemanticError::internal_error(
                         format!("TIR runtime declaration missing for `{key}`"),
                         scope.source(),
                         DiagnosticAnchor::WholeFile,
@@ -382,7 +382,7 @@ impl<'a> ExecutionFrame<'a> {
                 continue;
             }
             let body = *tree.as_ref().map_err(|error| {
-                GraphcalError::internal_error(error.to_string(), scope.source(), root.span.into())
+                SemanticError::internal_error(error.to_string(), scope.source(), root.span.into())
             })?;
             let result = evaluate(
                 ScheduledDeclaration {

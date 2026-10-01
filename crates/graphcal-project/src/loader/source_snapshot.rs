@@ -22,9 +22,9 @@ use crate::compile_error::CompileError;
 use graphcal_compiler::cancellation::CancellationToken;
 use graphcal_compiler::dag_id::{DagId, DagPackageId};
 use graphcal_compiler::desugar::desugared_ast::{Declaration, File};
-use graphcal_compiler::graphcal_error::GraphcalError;
 use graphcal_compiler::import_cycle::ImportChainFile;
 use graphcal_compiler::outcome::Outcome;
+use graphcal_compiler::semantic_error::SemanticError;
 use graphcal_compiler::semantic_error::evaluation::EvaluationError;
 use graphcal_compiler::source_id::SourceId;
 use graphcal_compiler::source_registry::SourceRegistry;
@@ -353,7 +353,7 @@ impl ResolveFailure {
             }
             .into(),
             Self::NotLocked { message } => CompileError::semantic(
-                GraphcalError::located(
+                SemanticError::located(
                     source_id,
                     path.span(),
                     EvaluationError::Failed {

@@ -25,7 +25,6 @@ use crate::desugar::desugared_ast::{
     AssertBody, DeclKind, Declaration, DimExpr, ExprKind, File, IndexDeclKind, IndexExpr,
     TypeDeclBody, TypeExpr, TypeExprKind,
 };
-use crate::graphcal_error::GraphcalError;
 use crate::ir::entry::{
     AssertEntry, ConstEntry, Decl, FigureEntry, InScope, LayerEntry, NodeEntry, ParamEntry,
     PlotEntry, PlotSyntax, Syntax,
@@ -37,6 +36,7 @@ use crate::resolve::error::ModuleResolveError;
 use crate::resolve::namespace::Namespace;
 use crate::resolve::reserved_name::validate_reserved_name;
 use crate::resolved_name::ResolvedDeclName;
+use crate::semantic_error::SemanticError;
 use crate::syntax::ast::{DeclExposure, ImportItemNamespace, IntroducedKind};
 use crate::syntax::attribute::AttributeName;
 use crate::syntax::decl_name::DeclName;
@@ -58,10 +58,10 @@ fn register_value_namespace_name(
     name: &NameAtom,
     span: Span,
     src: SourceId,
-) -> Result<(), GraphcalError> {
+) -> Result<(), SemanticError> {
     let scoped_name = ScopedName::local(DeclName::classify(name.clone()));
     if let Some(first_span) = value_names.get(&scoped_name) {
-        return Err(GraphcalError::located(
+        return Err(SemanticError::located(
             src,
             span,
             NameError::DuplicateName {
@@ -79,9 +79,9 @@ fn register_exclusive_universe_name(
     atom: &NameAtom,
     span: Span,
     src: SourceId,
-) -> Result<(), GraphcalError> {
+) -> Result<(), SemanticError> {
     occupied.insert(atom.clone(), span).map_or(Ok(()), |first| {
-        Err(GraphcalError::located(
+        Err(SemanticError::located(
             src,
             span,
             NameError::DuplicateName {
@@ -94,14 +94,14 @@ fn register_exclusive_universe_name(
 
 /// Reject every introduced name (declarations and `type` constructors) that
 /// shadows a built-in spelling reserved in its namespace.
-fn check_builtin_name_shadowing(file: &File, src: SourceId) -> Result<(), GraphcalError> {
+fn check_builtin_name_shadowing(file: &File, src: SourceId) -> Result<(), SemanticError> {
     file.declarations
         .iter()
         .flat_map(|decl| decl.kind.introduced_names())
         .try_for_each(|introduced| {
             validate_reserved_name(Namespace::of(introduced.namespace()), introduced.atom())
                 .map_err(|_| {
-                    GraphcalError::located(
+                    SemanticError::located(
                         src,
                         introduced.span(),
                         NameError::BuiltinNameShadowed {
@@ -116,7 +116,7 @@ fn check_builtin_name_shadowing(file: &File, src: SourceId) -> Result<(), Graphc
 fn check_imported_graph_value_names(
     imported: &ImportedValueNames,
     src: SourceId,
-) -> Result<(), GraphcalError> {
+) -> Result<(), SemanticError> {
     imported
         .const_names
         .iter()
@@ -126,7 +126,7 @@ fn check_imported_graph_value_names(
         .try_for_each(|(name, span)| {
             let atom = name.leaf().atom();
             validate_reserved_name(Namespace::Term, atom).map_err(|_| {
-                GraphcalError::located(
+                SemanticError::located(
                     src,
                     *span,
                     NameError::BuiltinNameShadowed {
@@ -139,7 +139,7 @@ fn check_imported_graph_value_names(
 }
 
 /// Dimensions, types, and indexes share one exclusive Static universe.
-fn check_static_namespace_collisions(file: &File, src: SourceId) -> Result<(), GraphcalError> {
+fn check_static_namespace_collisions(file: &File, src: SourceId) -> Result<(), SemanticError> {
     let mut occupied = HashMap::new();
     for introduced in file
         .declarations
@@ -158,7 +158,7 @@ fn check_value_namespace_collisions(
     file: &File,
     src: SourceId,
     names: &HashMap<ScopedName, Span>,
-) -> Result<(), GraphcalError> {
+) -> Result<(), SemanticError> {
     let mut value_names: HashMap<ScopedName, Span> = names.clone();
     for introduced in file
         .declarations
@@ -311,7 +311,7 @@ fn required_bindability_interface(decl: &DeclKind) -> Option<InterfaceDecl> {
 
 /// Validate that every required interface declaration can be supplied from
 /// outside its module. This is the production implementation of V002.
-fn validate_required_bindability(file: &File, src: SourceId) -> Result<(), GraphcalError> {
+fn validate_required_bindability(file: &File, src: SourceId) -> Result<(), SemanticError> {
     file.declarations
         .iter()
         .filter_map(|decl| {
@@ -323,7 +323,7 @@ fn validate_required_bindability(file: &File, src: SourceId) -> Result<(), Graph
         .try_for_each(|(interface, introduced)| {
             required_bindability::validate(interface).map_err(|violation| match violation {
                 RequiredBindabilityViolation::RequiredMustBeBindable { kind } => {
-                    GraphcalError::located(
+                    SemanticError::located(
                         src,
                         introduced.span(),
                         VisibilityError::RequiredItemMustBeBindable {
@@ -366,7 +366,7 @@ fn collect_local_declarations(
     declared_surface: &ExternalDeclSurface,
     src: SourceId,
     names: &mut HashMap<ScopedName, Span>,
-) -> Result<CollectedDeclarations, GraphcalError> {
+) -> Result<CollectedDeclarations, SemanticError> {
     let mut assert_names: HashSet<DeclName> = HashSet::new();
 
     check_builtin_name_shadowing(file, src)?;
@@ -539,7 +539,7 @@ fn collect_entries(
     file: &File,
     src: SourceId,
     assert_names: &HashSet<DeclName>,
-) -> Result<CollectedEntries, GraphcalError> {
+) -> Result<CollectedEntries, SemanticError> {
     let mut entries = CollectedEntries::default();
     for decl in &file.declarations {
         let visibility = validate_declaration_attributes(
@@ -567,7 +567,7 @@ fn validate_declaration_attributes(
     assert_names: &HashSet<DeclName>,
     assumes_map: &mut HashMap<DeclName, Vec<DeclName>>,
     expected_fail_map: &mut HashMap<DeclName, CollectedExpectedFail>,
-) -> Result<PlotVisibility, GraphcalError> {
+) -> Result<PlotVisibility, SemanticError> {
     let mut visibility = PlotVisibility::Standalone;
     // Attribute applicability limits name-bearing attributes to
     // param/node (`assumes`), assert (`expected_fail`), and plot
@@ -591,7 +591,7 @@ fn validate_declaration_attributes(
                 // of unique, plain assertion names.
                 for argument in validated.assumes_arguments() {
                     if !assert_names.contains(&argument.value) {
-                        return Err(GraphcalError::located(
+                        return Err(SemanticError::located(
                             src,
                             argument.span,
                             AttributeError::UnknownAssertInAssumes {
@@ -609,7 +609,7 @@ fn validate_declaration_attributes(
             }
             AttributeName::ExpectedFail => {
                 let DeclKind::Assert(assertion) = &decl.kind else {
-                    return Err(GraphcalError::internal_error(
+                    return Err(SemanticError::internal_error(
                         "attribute applicability accepted expected_fail on a non-assert",
                         src,
                         crate::diagnostic_anchor::DiagnosticAnchor::Source(attr.span),
@@ -624,7 +624,7 @@ fn validate_declaration_attributes(
                         AssertBody::Expr(expr) if matches!(expr.kind, ExprKind::ForComp { .. })
                     );
                     if is_indexed {
-                        return Err(GraphcalError::located(
+                        return Err(SemanticError::located(
                             src,
                             attr.span,
                             AttributeError::ExpectedFailAllOnIndexed,
@@ -643,7 +643,7 @@ fn validate_declaration_attributes(
             }
             AttributeName::Hidden => {
                 if !attr.args.is_empty() {
-                    return Err(GraphcalError::located(
+                    return Err(SemanticError::located(
                         src,
                         attr.span,
                         EvaluationError::Failed {
@@ -654,7 +654,7 @@ fn validate_declaration_attributes(
                 visibility = PlotVisibility::CompositionOnly;
             }
             AttributeName::Lazy => {
-                return Err(GraphcalError::located(
+                return Err(SemanticError::located(
                     src,
                     attr.span,
                     AttributeError::LazyNotSupported,
@@ -679,7 +679,7 @@ fn validate_private_in_public(
     file: &File,
     src: SourceId,
     external_surface: &ExternalDeclSurface,
-) -> Result<(), GraphcalError> {
+) -> Result<(), SemanticError> {
     // Preserve the semantic category beside each local type-system name so
     // the visibility diagnostic never has to rescan declarations.
     let local_type_names: HashMap<&NameAtom, DeclarationKind> = file
@@ -705,7 +705,7 @@ fn validate_private_in_public(
                 pub_name: NameAtom,
                 pub_span: Span,
                 refs: &[(crate::syntax::names::NamePath, Span)]|
-     -> Result<(), GraphcalError> {
+     -> Result<(), SemanticError> {
         for (ref_path, ref_span) in refs {
             // Only a bare path can name a local declaration; qualified refs are foreign.
             let Some(ref_name) = ref_path.as_bare() else {
@@ -714,7 +714,7 @@ fn validate_private_in_public(
             if let Some(ref_kind) = local_type_names.get(ref_name)
                 && !external_surface.is_static_explicit_export(ref_name)
             {
-                return Err(GraphcalError::located(
+                return Err(SemanticError::located(
                     src,
                     *ref_span,
                     VisibilityError::PrivateInPublic {
@@ -897,7 +897,7 @@ fn collect_dim_refs(dim_expr: &DimExpr, refs: &mut Vec<(crate::syntax::names::Na
 /// Validate declaration shells through the production imported-binding path,
 /// then build the declaration entries against a single-module resolver.
 #[cfg(test)]
-fn resolve(file: &File, src: SourceId) -> Result<CollectedWithEntries, GraphcalError> {
+fn resolve(file: &File, src: SourceId) -> Result<CollectedWithEntries, SemanticError> {
     let interface = crate::ir::module_interface::ModuleInterface::new(&file.declarations);
     let collected = resolve_with_imported_values(
         file,
@@ -928,14 +928,14 @@ fn resolve(file: &File, src: SourceId) -> Result<CollectedWithEntries, GraphcalE
 ///
 /// # Errors
 ///
-/// Returns a [`GraphcalError`] if duplicate names, unknown references, or
+/// Returns a [`SemanticError`] if duplicate names, unknown references, or
 /// arity mismatches are found.
 pub(crate) fn resolve_with_imported_values(
     file: &File,
     declared_surface: &ExternalDeclSurface,
     src: SourceId,
     imported: &ImportedValueNames,
-) -> Result<CollectedFile, GraphcalError> {
+) -> Result<CollectedFile, SemanticError> {
     check_imported_graph_value_names(imported, src)?;
     let mut names: HashMap<ScopedName, Span> = HashMap::new();
 

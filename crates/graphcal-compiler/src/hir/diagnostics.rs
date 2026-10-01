@@ -1,11 +1,11 @@
-//! Conversions from HIR lowering diagnostics to spanned [`GraphcalError`]s.
+//! Conversions from HIR lowering diagnostics to spanned [`SemanticError`]s.
 
 use crate::desugar::desugared_ast::{TypeExpr, TypeExprKind};
-use crate::graphcal_error::GraphcalError;
 use crate::hir::expr_lower::error::ExprLowerError;
 use crate::hir::lower::{HirLowerError, TypePathSlot};
 use crate::resolve::category::SymbolTable;
 use crate::resolve::error::{ModuleResolveError, NameCategory};
+use crate::semantic_error::SemanticError;
 use crate::semantic_error::attribute::AttributeError;
 use crate::semantic_error::dimension::DimensionError;
 use crate::semantic_error::domain::DomainError;
@@ -21,7 +21,7 @@ use crate::syntax::index_name::IndexName;
 use crate::syntax::names::NamePath;
 
 /// Reject source-only type syntax that has no valid HIR representation.
-pub fn validate_type_annotation(type_expr: &TypeExpr, src: SourceId) -> Result<(), GraphcalError> {
+pub fn validate_type_annotation(type_expr: &TypeExpr, src: SourceId) -> Result<(), SemanticError> {
     match &type_expr.kind {
         TypeExprKind::Indexed { base, .. } => validate_type_annotation(base, src),
         TypeExprKind::TypeApplication { generic_args, .. } => {
@@ -33,7 +33,7 @@ pub fn validate_type_annotation(type_expr: &TypeExpr, src: SourceId) -> Result<(
         }
         TypeExprKind::DatetimeApplication { type_args } => type_args.iter().try_for_each(|arg| {
             if let Some(bound) = arg.constraints.first() {
-                return Err(GraphcalError::located(
+                return Err(SemanticError::located(
                     src,
                     bound.span,
                     DomainError::GenericTypeArgDomainConstraint,
@@ -53,11 +53,11 @@ pub fn validate_type_annotation(type_expr: &TypeExpr, src: SourceId) -> Result<(
 fn validate_generic_args<'a>(
     generic_args: impl IntoIterator<Item = &'a crate::desugar::desugared_ast::GenericArg>,
     src: SourceId,
-) -> Result<(), GraphcalError> {
+) -> Result<(), SemanticError> {
     generic_args.into_iter().try_for_each(|arg| match arg {
         crate::desugar::desugared_ast::GenericArg::Type(type_expr) => {
             if let Some(bound) = type_expr.constraints.first() {
-                return Err(GraphcalError::located(
+                return Err(SemanticError::located(
                     src,
                     bound.span,
                     DomainError::GenericTypeArgDomainConstraint,
@@ -75,19 +75,19 @@ fn validate_generic_args<'a>(
 ///
 /// An unknown path in an index axis or a dimension term is reported as the
 /// missing index or dimension; its slot says which namespace was searched.
-pub fn type_lower_error_to_graphcal(err: &HirLowerError, src: SourceId) -> GraphcalError {
+pub fn type_lower_error_to_graphcal(err: &HirLowerError, src: SourceId) -> SemanticError {
     if let HirLowerError::UnknownTypePath { path, slot, span } = err
         && let Some(atom) = path.as_bare()
     {
         return match slot {
-            TypePathSlot::IndexAxis => GraphcalError::located(
+            TypePathSlot::IndexAxis => SemanticError::located(
                 src,
                 *span,
                 IndexError::UnknownIndex {
                     name: IndexName::classify(atom.clone()).into(),
                 },
             ),
-            TypePathSlot::DimensionTerm => GraphcalError::located(
+            TypePathSlot::DimensionTerm => SemanticError::located(
                 src,
                 *span,
                 DimensionError::UnknownDimension {
@@ -105,17 +105,17 @@ pub fn type_lower_error_to_graphcal(err: &HirLowerError, src: SourceId) -> Graph
     reason = "exhaustive mapping from lowering diagnostics to spanned errors"
 )]
 #[must_use]
-pub fn expr_lower_error_to_graphcal(err: &ExprLowerError, src: SourceId) -> GraphcalError {
+pub fn expr_lower_error_to_semantic(err: &ExprLowerError, src: SourceId) -> SemanticError {
     match err {
         ExprLowerError::UnknownFunction { path, span } => {
-            return GraphcalError::located(
+            return SemanticError::located(
                 src,
                 *span,
                 NameError::UnknownFunction { name: path.clone() },
             );
         }
         ExprLowerError::UnknownExternFunction { alias, name, span } => {
-            return GraphcalError::located(
+            return SemanticError::located(
                 src,
                 *span,
                 PluginError::UnknownExternFunction {
@@ -135,7 +135,7 @@ pub fn expr_lower_error_to_graphcal(err: &ExprLowerError, src: SourceId) -> Grap
                 .map(|argument| format!("{argument}_value"))
                 .collect::<Vec<_>>()
                 .join(", ");
-            return GraphcalError::located(
+            return SemanticError::located(
                 src,
                 *span,
                 NameError::NamedArgumentsOnFunction {
@@ -150,7 +150,7 @@ pub fn expr_lower_error_to_graphcal(err: &ExprLowerError, src: SourceId) -> Grap
             got,
             span,
         } => {
-            return GraphcalError::located(
+            return SemanticError::located(
                 src,
                 *span,
                 NameError::WrongArity {
@@ -161,7 +161,7 @@ pub fn expr_lower_error_to_graphcal(err: &ExprLowerError, src: SourceId) -> Grap
             );
         }
         ExprLowerError::InvalidStaticBindingValue { name, span } => {
-            return GraphcalError::located(
+            return SemanticError::located(
                 src,
                 *span,
                 ModuleError::InvalidTypeLevelBindingValue {
@@ -170,7 +170,7 @@ pub fn expr_lower_error_to_graphcal(err: &ExprLowerError, src: SourceId) -> Grap
             );
         }
         ExprLowerError::UnknownLocalRef { name, span } => {
-            return GraphcalError::located(
+            return SemanticError::located(
                 src,
                 *span,
                 StructError::UnknownLocalRef {
@@ -179,14 +179,14 @@ pub fn expr_lower_error_to_graphcal(err: &ExprLowerError, src: SourceId) -> Grap
             );
         }
         ExprLowerError::UnknownGraphRef { name, span } => {
-            return GraphcalError::located(
+            return SemanticError::located(
                 src,
                 *span,
                 NameError::UnknownGraphRef { name: name.clone() },
             );
         }
         ExprLowerError::BareGraphDeclarationRef { name, kind, span } => {
-            return GraphcalError::located(
+            return SemanticError::located(
                 src,
                 *span,
                 NameError::BareGraphDeclarationRef {
@@ -196,14 +196,14 @@ pub fn expr_lower_error_to_graphcal(err: &ExprLowerError, src: SourceId) -> Grap
             );
         }
         ExprLowerError::TimeScaleInValuePosition { scale, span } => {
-            return GraphcalError::located(
+            return SemanticError::located(
                 src,
                 *span,
                 NameError::TimeScaleInValuePosition { scale: *scale },
             );
         }
         ExprLowerError::UnknownUnit { name, span } => {
-            return GraphcalError::located(
+            return SemanticError::located(
                 src,
                 *span,
                 DimensionError::UnknownUnit { name: name.clone() },
@@ -214,7 +214,7 @@ pub fn expr_lower_error_to_graphcal(err: &ExprLowerError, src: SourceId) -> Grap
             tzdb_version,
             span,
         } => {
-            return GraphcalError::located(
+            return SemanticError::located(
                 src,
                 *span,
                 DimensionError::InvalidTimezone {
@@ -228,7 +228,7 @@ pub fn expr_lower_error_to_graphcal(err: &ExprLowerError, src: SourceId) -> Grap
             reason,
             span,
         } => {
-            return GraphcalError::located(
+            return SemanticError::located(
                 src,
                 *span,
                 DimensionError::InvalidDatetimeLiteral {
@@ -245,7 +245,7 @@ pub fn expr_lower_error_to_graphcal(err: &ExprLowerError, src: SourceId) -> Grap
             datetime_span,
             time_zone_span,
         } => {
-            return GraphcalError::located(
+            return SemanticError::located(
                 src,
                 *datetime_span,
                 DimensionError::NonexistentCivilDateTime {
@@ -265,7 +265,7 @@ pub fn expr_lower_error_to_graphcal(err: &ExprLowerError, src: SourceId) -> Grap
             datetime_span,
             time_zone_span,
         } => {
-            return GraphcalError::located(
+            return SemanticError::located(
                 src,
                 *datetime_span,
                 DimensionError::RepeatedCivilDateTime {
@@ -282,21 +282,21 @@ pub fn expr_lower_error_to_graphcal(err: &ExprLowerError, src: SourceId) -> Grap
             reason,
             span,
         } => {
-            return GraphcalError::internal_error(
+            return SemanticError::internal_error(
                 format!("validated timezone `{time_zone}` could not be loaded: {reason}"),
                 src,
                 crate::diagnostic_anchor::DiagnosticAnchor::Source(*span),
             );
         }
         ExprLowerError::EpochTimeScaleArgumentCount { got, span } => {
-            return GraphcalError::located(
+            return SemanticError::located(
                 src,
                 *span,
                 DimensionError::EpochTimeScaleArgumentCount { got: *got },
             );
         }
         ExprLowerError::InvalidEpochTimeScaleArgument { span } => {
-            return GraphcalError::located(
+            return SemanticError::located(
                 src,
                 *span,
                 DimensionError::InvalidEpochTimeScaleArgument {
@@ -305,7 +305,7 @@ pub fn expr_lower_error_to_graphcal(err: &ExprLowerError, src: SourceId) -> Grap
             );
         }
         ExprLowerError::UnsupportedEpochTimeScale { name, span } => {
-            return GraphcalError::located(
+            return SemanticError::located(
                 src,
                 *span,
                 DimensionError::UnsupportedEpochTimeScale {
@@ -319,7 +319,7 @@ pub fn expr_lower_error_to_graphcal(err: &ExprLowerError, src: SourceId) -> Grap
             variant_name,
             span,
         } => {
-            return GraphcalError::located(
+            return SemanticError::located(
                 src,
                 *span,
                 IndexError::ExtraVariants {
@@ -334,7 +334,7 @@ pub fn expr_lower_error_to_graphcal(err: &ExprLowerError, src: SourceId) -> Grap
             source: ModuleResolveError::UnknownModuleAlias { alias, .. },
             span,
         } => {
-            return GraphcalError::located(
+            return SemanticError::located(
                 src,
                 *span,
                 ModuleError::UnknownModule {
@@ -351,7 +351,7 @@ pub fn expr_lower_error_to_graphcal(err: &ExprLowerError, src: SourceId) -> Grap
                 },
             span,
         } => {
-            return GraphcalError::located(
+            return SemanticError::located(
                 src,
                 *span,
                 AttributeError::GraphRefToAssert {
@@ -363,7 +363,7 @@ pub fn expr_lower_error_to_graphcal(err: &ExprLowerError, src: SourceId) -> Grap
             source: ModuleResolveError::PrivateName { owner, name, .. },
             span,
         } => {
-            return GraphcalError::located(
+            return SemanticError::located(
                 src,
                 *span,
                 VisibilityError::ImportPrivateItem {
@@ -376,7 +376,7 @@ pub fn expr_lower_error_to_graphcal(err: &ExprLowerError, src: SourceId) -> Grap
             source: ModuleResolveError::UnknownIndexVariant { index, variant },
             span,
         } => {
-            return GraphcalError::located(
+            return SemanticError::located(
                 src,
                 *span,
                 IndexError::UnknownVariant {
@@ -394,7 +394,7 @@ pub fn expr_lower_error_to_graphcal(err: &ExprLowerError, src: SourceId) -> Grap
                 },
             span,
         } => {
-            return GraphcalError::located(
+            return SemanticError::located(
                 src,
                 *span,
                 IndexError::UnknownIndex {
@@ -411,7 +411,7 @@ pub fn expr_lower_error_to_graphcal(err: &ExprLowerError, src: SourceId) -> Grap
                 },
             span,
         } => {
-            return GraphcalError::located(
+            return SemanticError::located(
                 src,
                 *span,
                 StructError::UnknownLocalRef {
@@ -420,7 +420,7 @@ pub fn expr_lower_error_to_graphcal(err: &ExprLowerError, src: SourceId) -> Grap
             );
         }
         ExprLowerError::EmptyParenthesizedConstructor { constructor, span } => {
-            return GraphcalError::located(
+            return SemanticError::located(
                 src,
                 *span,
                 StructError::EmptyParenthesizedConstructor {
@@ -462,7 +462,7 @@ pub fn expr_lower_error_to_graphcal(err: &ExprLowerError, src: SourceId) -> Grap
         ExprLowerError::DuplicateLocalBinding { duplicate, .. }
         | ExprLowerError::LocalBindingShadowsTerm { duplicate, .. } => *duplicate,
     };
-    GraphcalError::located(
+    SemanticError::located(
         src,
         span,
         EvaluationError::Failed {
@@ -472,9 +472,9 @@ pub fn expr_lower_error_to_graphcal(err: &ExprLowerError, src: SourceId) -> Grap
 }
 
 /// Convert a HIR type-lowering failure into a spanned diagnostic.
-pub fn hir_lower_error_to_graphcal(err: &HirLowerError, src: SourceId) -> GraphcalError {
+pub fn hir_lower_error_to_graphcal(err: &HirLowerError, src: SourceId) -> SemanticError {
     if let HirLowerError::ExpectedIndexFoundNat { expression, span } = err {
-        return GraphcalError::located(
+        return SemanticError::located(
             src,
             *span,
             IndexError::ExpectedIndexFoundNat {
@@ -500,7 +500,7 @@ pub fn hir_lower_error_to_graphcal(err: &HirLowerError, src: SourceId) -> Graphc
         HirLowerError::DuplicateGenericParam { duplicate, .. }
         | HirLowerError::GenericParamShadowsStatic { duplicate, .. } => *duplicate,
     };
-    GraphcalError::located(
+    SemanticError::located(
         src,
         span,
         EvaluationError::Failed {
@@ -517,7 +517,7 @@ mod tests {
     use crate::syntax::non_empty::NonEmpty;
     use crate::syntax::span::Span;
 
-    fn unknown(path: NamePath, slot: TypePathSlot) -> GraphcalError {
+    fn unknown(path: NamePath, slot: TypePathSlot) -> SemanticError {
         let src = crate::source_registry::SourceRegistry::new()
             .register("main.gcl", std::sync::Arc::new(String::new()));
         let error = HirLowerError::UnknownTypePath {
@@ -537,11 +537,11 @@ mod tests {
         let path = NamePath::local(atom("Foo"));
         assert!(matches!(
             unknown(path.clone(), TypePathSlot::IndexAxis),
-            GraphcalError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Index(IndexError::UnknownIndex { name, .. }), .. }) if name.to_string() == "Foo"
+            SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Index(IndexError::UnknownIndex { name, .. }), .. }) if name.to_string() == "Foo"
         ));
         assert!(matches!(
             unknown(path.clone(), TypePathSlot::DimensionTerm),
-            GraphcalError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Dimension(DimensionError::UnknownDimension { name, .. }), .. }) if name == path
+            SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Dimension(DimensionError::UnknownDimension { name, .. }), .. }) if name == path
         ));
     }
 
@@ -551,7 +551,7 @@ mod tests {
         for slot in [TypePathSlot::IndexAxis, TypePathSlot::DimensionTerm] {
             assert!(matches!(
                 unknown(path.clone(), slot),
-                GraphcalError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Evaluation(EvaluationError::Failed { message, .. }), .. })
+                SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Evaluation(EvaluationError::Failed { message, .. }), .. })
                     if message == "unknown type-level name `lib::Foo`"
             ));
         }

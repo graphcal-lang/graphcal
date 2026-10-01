@@ -8,9 +8,9 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use graphcal_compiler::graphcal_error::GraphcalError;
 use graphcal_compiler::ir::resolve::ImportedValueNames;
 use graphcal_compiler::outcome::Outcome;
+use graphcal_compiler::semantic_error::SemanticError;
 use graphcal_compiler::semantic_error::evaluation::EvaluationError;
 use graphcal_compiler::semantic_error::plugin::PluginError;
 use graphcal_compiler::source_id::SourceId;
@@ -54,7 +54,7 @@ pub(super) fn recursive_dag_instantiation(
             (src, src.whole_span())
         }
     };
-    PipelineError::Semantic(GraphcalError::located(
+    PipelineError::Semantic(SemanticError::located(
         src,
         span,
         EvaluationError::Failed {
@@ -129,7 +129,7 @@ fn store_module_artifact(
     // mutable assembly registry so each local body becomes one immutable
     // handle; no DAG body is cloned for an importer.
     let dag_store = tir.freeze_local_dag_store().map_err(|error| {
-        PipelineError::Semantic(GraphcalError::internal_error(
+        PipelineError::Semantic(SemanticError::internal_error(
             error.to_string(),
             file_src,
             DiagnosticAnchor::WholeFile,
@@ -147,7 +147,7 @@ fn store_module_artifact(
             },
         )
         .map_err(|error| {
-            PipelineError::Semantic(GraphcalError::internal_error(
+            PipelineError::Semantic(SemanticError::internal_error(
                 error.to_string(),
                 file_src,
                 DiagnosticAnchor::WholeFile,
@@ -243,7 +243,7 @@ fn build_project_type_store<Mode>(
     let root_source = &hir.files.root().source;
     let mut project_types = graphcal_compiler::tir::typed::ProjectTypeStore::default();
     project_types.insert_graphcal_prelude().map_err(|error| {
-        GraphcalError::internal_error(
+        SemanticError::internal_error(
             format!("failed to build prelude project type store: {error}"),
             *root_source,
             DiagnosticAnchor::Builtin,
@@ -257,7 +257,7 @@ fn build_project_type_store<Mode>(
                 project_types
                     .insert_module(dag.definitions())
                     .map_err(|error| {
-                        GraphcalError::internal_error(
+                        SemanticError::internal_error(
                             format!("cannot build project type store: {error}"),
                             *source,
                             DiagnosticAnchor::WholeFile,
@@ -376,7 +376,7 @@ fn verify_host_functions(
             verify_wasm_plugin(plugins, function, src, host_metadata)?;
         }
         if !host_metadata.contains(key) {
-            return Err(PipelineError::Semantic(GraphcalError::located(
+            return Err(PipelineError::Semantic(SemanticError::located(
                 src,
                 function.name_span,
                 PluginError::MissingHostFunction {
@@ -392,7 +392,7 @@ fn verify_host_functions(
             let format_dim = |dim: &graphcal_compiler::dimension::Dimension| {
                 tir.registry().dimensions.format_dimension(dim)
             };
-            return Err(PipelineError::Semantic(GraphcalError::located(
+            return Err(PipelineError::Semantic(SemanticError::located(
                 src,
                 function.decl_span,
                 PluginError::ExternSignatureMismatch {
@@ -422,7 +422,7 @@ fn verify_wasm_plugin(
 ) -> Result<(), PipelineError> {
     match plugins.get(&function.plugin) {
         Some(Err(crate::loader::loaded_project::PluginFileError::NotPinned)) => {
-            return Err(PipelineError::Semantic(GraphcalError::located(
+            return Err(PipelineError::Semantic(SemanticError::located(
                 src,
                 function.path_span,
                 PluginError::PluginNotPinned {
@@ -434,7 +434,7 @@ fn verify_wasm_plugin(
             expected,
             actual,
         })) => {
-            return Err(PipelineError::Semantic(GraphcalError::located(
+            return Err(PipelineError::Semantic(SemanticError::located(
                 src,
                 function.path_span,
                 PluginError::PluginHashMismatch {
@@ -445,7 +445,7 @@ fn verify_wasm_plugin(
             )));
         }
         Some(Err(file_error)) => {
-            return Err(PipelineError::Semantic(GraphcalError::located(
+            return Err(PipelineError::Semantic(SemanticError::located(
                 src,
                 function.path_span,
                 PluginError::PluginLoadFailed {
@@ -457,7 +457,7 @@ fn verify_wasm_plugin(
         // Defensive: the loader records an entry for every root-package wasm
         // import, so an absent entry means an embedder skipped `load_project`.
         None => {
-            return Err(PipelineError::Semantic(GraphcalError::located(
+            return Err(PipelineError::Semantic(SemanticError::located(
                 src,
                 function.path_span,
                 PluginError::PluginLoadFailed {
@@ -473,7 +473,7 @@ fn verify_wasm_plugin(
         Some(graphcal_eval::host_fns::PluginRegistrationError::ForbiddenImport {
             module,
             name,
-        }) => Err(PipelineError::Semantic(GraphcalError::located(
+        }) => Err(PipelineError::Semantic(SemanticError::located(
             src,
             function.path_span,
             PluginError::PluginForbiddenImport {
@@ -483,7 +483,7 @@ fn verify_wasm_plugin(
             },
         ))),
         Some(graphcal_eval::host_fns::PluginRegistrationError::LoadFailed { reason }) => {
-            Err(PipelineError::Semantic(GraphcalError::located(
+            Err(PipelineError::Semantic(SemanticError::located(
                 src,
                 function.path_span,
                 PluginError::PluginLoadFailed {

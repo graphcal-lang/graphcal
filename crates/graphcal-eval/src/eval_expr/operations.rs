@@ -9,9 +9,9 @@
 use graphcal_compiler::builtin::{DatetimeField, DatetimeFromNumericFn, DatetimeToNumericFn};
 use graphcal_compiler::complex_value::ComplexValue;
 use graphcal_compiler::finite_value::FiniteQuantity;
-use graphcal_compiler::graphcal_error::GraphcalError;
 use graphcal_compiler::outcome::Outcome;
 use graphcal_compiler::semantic::checked_type::IndexTypeRef;
+use graphcal_compiler::semantic_error::SemanticError;
 use graphcal_compiler::syntax::span::Span;
 use graphcal_compiler::tir::texpr::DatetimeLiteral;
 use graphcal_compiler::tir::texpr::operators::{
@@ -29,13 +29,13 @@ use super::arithmetic::apply_ordering;
 /// Evaluates the operands of typed operations of one tree, reading each as
 /// the type its checked node has.
 pub(super) struct Operands<'o, 't> {
-    evaluate: &'o dyn Fn(ScopedNode<'t>) -> Result<RuntimeValue, Outcome<GraphcalError>>,
+    evaluate: &'o dyn Fn(ScopedNode<'t>) -> Result<RuntimeValue, Outcome<SemanticError>>,
     ctx: &'o EvalSession<'o>,
 }
 
 impl<'o, 't> Operands<'o, 't> {
     pub(super) fn new(
-        evaluate: &'o dyn Fn(ScopedNode<'t>) -> Result<RuntimeValue, Outcome<GraphcalError>>,
+        evaluate: &'o dyn Fn(ScopedNode<'t>) -> Result<RuntimeValue, Outcome<SemanticError>>,
         ctx: &'o EvalSession<'o>,
     ) -> Self {
         Self { evaluate, ctx }
@@ -48,7 +48,7 @@ impl<'o, 't> Operands<'o, 't> {
         node: ScopedNode<'t>,
         expected: &str,
         extract: impl FnOnce(RuntimeValue) -> Result<T, RuntimeValue>,
-    ) -> Result<T, Outcome<GraphcalError>> {
+    ) -> Result<T, Outcome<SemanticError>> {
         extract((self.evaluate)(node)?)
             .map_err(|other| {
                 self.ctx.failure_error(
@@ -69,28 +69,28 @@ impl<'o, 't> Operands<'o, 't> {
         self.ctx
     }
 
-    fn value(&self, node: ScopedNode<'t>) -> Result<RuntimeValue, Outcome<GraphcalError>> {
+    fn value(&self, node: ScopedNode<'t>) -> Result<RuntimeValue, Outcome<SemanticError>> {
         (self.evaluate)(node)
     }
 
     pub(super) fn quantity(
         &self,
         node: ScopedNode<'t>,
-    ) -> Result<FiniteQuantity, Outcome<GraphcalError>> {
+    ) -> Result<FiniteQuantity, Outcome<SemanticError>> {
         self.read(node, "a quantity", |value| match value {
             RuntimeValue::Quantity(value) => Ok(value),
             other => Err(other),
         })
     }
 
-    pub(super) fn int(&self, node: ScopedNode<'t>) -> Result<i64, Outcome<GraphcalError>> {
+    pub(super) fn int(&self, node: ScopedNode<'t>) -> Result<i64, Outcome<SemanticError>> {
         self.read(node, "an Int", |value| match value {
             RuntimeValue::Int(value) => Ok(value),
             other => Err(other),
         })
     }
 
-    pub(super) fn bool(&self, node: ScopedNode<'t>) -> Result<bool, Outcome<GraphcalError>> {
+    pub(super) fn bool(&self, node: ScopedNode<'t>) -> Result<bool, Outcome<SemanticError>> {
         self.read(node, "a Bool", |value| match value {
             RuntimeValue::Bool(value) => Ok(value),
             other => Err(other),
@@ -100,28 +100,28 @@ impl<'o, 't> Operands<'o, 't> {
     pub(super) fn indexed(
         &self,
         node: ScopedNode<'t>,
-    ) -> Result<IndexedValue<RuntimeValue>, Outcome<GraphcalError>> {
+    ) -> Result<IndexedValue<RuntimeValue>, Outcome<SemanticError>> {
         self.read(node, "an indexed value", |value| match value {
             RuntimeValue::Indexed(value) => Ok(value),
             other => Err(other),
         })
     }
 
-    fn complex(&self, node: ScopedNode<'t>) -> Result<ComplexValue, Outcome<GraphcalError>> {
+    fn complex(&self, node: ScopedNode<'t>) -> Result<ComplexValue, Outcome<SemanticError>> {
         self.read(node, "a complex quantity", |value| match value {
             RuntimeValue::Complex(value) => Ok(value),
             other => Err(other),
         })
     }
 
-    fn datetime(&self, node: ScopedNode<'t>) -> Result<hifitime::Epoch, Outcome<GraphcalError>> {
+    fn datetime(&self, node: ScopedNode<'t>) -> Result<hifitime::Epoch, Outcome<SemanticError>> {
         self.read(node, "a Datetime", |value| match value {
             RuntimeValue::Datetime(value) => Ok(value),
             other => Err(other),
         })
     }
 
-    pub(super) fn key(&self, node: ScopedNode<'t>) -> Result<KeyValue, Outcome<GraphcalError>> {
+    pub(super) fn key(&self, node: ScopedNode<'t>) -> Result<KeyValue, Outcome<SemanticError>> {
         self.read(node, "a key", |value| match value {
             RuntimeValue::Key(value) => Ok(value),
             other => Err(other),
@@ -133,24 +133,24 @@ impl<'o, 't> Operands<'o, 't> {
 /// Plugin-call arguments are operands read at the kind their checked node
 /// carries.
 impl<'t> ArgumentReader<ScopedNode<'t>> for Operands<'_, 't> {
-    type Error = Outcome<GraphcalError>;
+    type Error = Outcome<SemanticError>;
 
-    fn quantity(&self, node: ScopedNode<'t>) -> Result<FiniteQuantity, Outcome<GraphcalError>> {
+    fn quantity(&self, node: ScopedNode<'t>) -> Result<FiniteQuantity, Outcome<SemanticError>> {
         Operands::quantity(self, node)
     }
 
-    fn bool(&self, node: ScopedNode<'t>) -> Result<bool, Outcome<GraphcalError>> {
+    fn bool(&self, node: ScopedNode<'t>) -> Result<bool, Outcome<SemanticError>> {
         Operands::bool(self, node)
     }
 
-    fn int(&self, node: ScopedNode<'t>) -> Result<i64, Outcome<GraphcalError>> {
+    fn int(&self, node: ScopedNode<'t>) -> Result<i64, Outcome<SemanticError>> {
         Operands::int(self, node)
     }
 
     fn indexed(
         &self,
         node: ScopedNode<'t>,
-    ) -> Result<IndexedValue<RuntimeValue>, Outcome<GraphcalError>> {
+    ) -> Result<IndexedValue<RuntimeValue>, Outcome<SemanticError>> {
         Operands::indexed(self, node)
     }
 }
@@ -159,7 +159,7 @@ pub(super) fn quantity<'t>(
     operation: &QExpr<ScopedNode<'t>>,
     span: Span,
     operands: &Operands<'_, 't>,
-) -> Result<FiniteQuantity, Outcome<GraphcalError>> {
+) -> Result<FiniteQuantity, Outcome<SemanticError>> {
     let ctx = operands.ctx;
     match *operation {
         QExpr::Number(value) => super::numeric::finite_quantity(value, "numeric literal")
@@ -252,7 +252,7 @@ pub(super) fn int<'t>(
     operation: &IExpr<ScopedNode<'t>>,
     span: Span,
     operands: &Operands<'_, 't>,
-) -> Result<i64, Outcome<GraphcalError>> {
+) -> Result<i64, Outcome<SemanticError>> {
     let ctx = operands.ctx;
     match *operation {
         IExpr::Literal(value) => Ok(value),
@@ -335,7 +335,7 @@ pub(super) fn int<'t>(
 pub(super) fn boolean<'t>(
     operation: &BExpr<ScopedNode<'t>>,
     operands: &Operands<'_, 't>,
-) -> Result<bool, Outcome<GraphcalError>> {
+) -> Result<bool, Outcome<SemanticError>> {
     Ok(match *operation {
         BExpr::Literal(value) => value,
         BExpr::Not(operand) => !operands.bool(operand)?,
@@ -384,7 +384,7 @@ pub(super) fn complex<'t>(
     operation: &CExpr<ScopedNode<'t>>,
     span: Span,
     operands: &Operands<'_, 't>,
-) -> Result<ComplexValue, Outcome<GraphcalError>> {
+) -> Result<ComplexValue, Outcome<SemanticError>> {
     let result = match *operation {
         CExpr::Arith { op, lhs, rhs } => {
             let lhs = operands.complex(lhs)?;
@@ -439,7 +439,7 @@ pub(super) fn datetime<'t>(
     operation: &DExpr<ScopedNode<'t>>,
     span: Span,
     operands: &Operands<'_, 't>,
-) -> Result<hifitime::Epoch, Outcome<GraphcalError>> {
+) -> Result<hifitime::Epoch, Outcome<SemanticError>> {
     let result = match *operation {
         DExpr::Shift {
             op,
@@ -492,7 +492,7 @@ fn from_numeric(
     value: f64,
     span: Span,
     ctx: &EvalSession<'_>,
-) -> Result<hifitime::Epoch, Outcome<GraphcalError>> {
+) -> Result<hifitime::Epoch, Outcome<SemanticError>> {
     let kind = match function {
         DatetimeFromNumericFn::Jd => super::datetime::NumericEpochKind::JulianDate,
         DatetimeFromNumericFn::Mjd => super::datetime::NumericEpochKind::ModifiedJulianDate,
@@ -508,7 +508,7 @@ pub(super) fn datetime_literal(
     literal: &DatetimeLiteral,
     span: Span,
     ctx: &EvalSession<'_>,
-) -> Result<hifitime::Epoch, Outcome<GraphcalError>> {
+) -> Result<hifitime::Epoch, Outcome<SemanticError>> {
     match literal {
         DatetimeLiteral::Offset(datetime) => Ok(super::datetime::datetime_from_offset(*datetime)),
         DatetimeLiteral::Zoned(datetime) => Ok(super::datetime::datetime_from_zoned(datetime)),
@@ -533,7 +533,7 @@ pub(super) fn key_shift<'t>(
     addend: ScopedNode<'t>,
     span: Span,
     operands: &Operands<'_, 't>,
-) -> Result<KeyValue, Outcome<GraphcalError>> {
+) -> Result<KeyValue, Outcome<SemanticError>> {
     let ctx = operands.ctx;
     let key = operands.key(key)?;
     let addend = operands.int(addend)?;

@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use thiserror::Error;
 
 use crate::desugar::desugared_ast::ImportItem;
-use crate::graphcal_error::GraphcalError;
+use crate::semantic_error::SemanticError;
 use crate::semantic_error::module::ModuleError;
 use crate::source_id::SourceId;
 use crate::syntax::import_category::ImportItemNamespace;
@@ -62,8 +62,8 @@ pub fn validate_unique_include_producers(
 pub fn duplicate_include_producer_to_graphcal(
     error: DuplicateIncludeProducer,
     src: SourceId,
-) -> GraphcalError {
-    GraphcalError::located(
+) -> SemanticError {
+    SemanticError::located(
         src,
         error.duplicate,
         ModuleError::DuplicateIncludeSelection {

@@ -4,8 +4,8 @@ use graphcal_compiler::semantic_error::graph::GraphError;
 use graphcal_compiler::source_registry::SourceRegistry;
 
 use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
-use graphcal_compiler::graphcal_error::GraphcalError;
 use graphcal_compiler::outcome::Outcome;
+use graphcal_compiler::semantic_error::SemanticError;
 use graphcal_compiler::source_id::SourceId;
 use graphcal_compiler::tir::typed::CheckedTir;
 
@@ -22,7 +22,7 @@ pub(super) fn eval_const_pool(
     src: SourceId,
     sources: &SourceRegistry,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
-) -> Result<(EvaluatedTir, PendingPresentedMap), Outcome<GraphcalError>> {
+) -> Result<(EvaluatedTir, PendingPresentedMap), Outcome<SemanticError>> {
     cancellation.checkpoint()?;
     let mut presentations = inherited
         .const_presentations()
@@ -45,12 +45,12 @@ pub(super) fn eval_const_pool(
         if !presented.is_plain() {
             presentations.insert(step.key.clone(), presented);
         }
-        Ok::<_, Outcome<GraphcalError>>(value)
+        Ok::<_, Outcome<SemanticError>>(value)
     })
     .map_err(|error| match error {
         ConstPoolBuildError::Evaluation(error) => error,
         ConstPoolBuildError::Invalid(error) => {
-            GraphcalError::internal_error(error.to_string(), src, DiagnosticAnchor::WholeFile)
+            SemanticError::internal_error(error.to_string(), src, DiagnosticAnchor::WholeFile)
                 .into()
         }
     })?;
@@ -60,9 +60,9 @@ pub(super) fn eval_const_pool(
 fn reject_constant_call(
     expr: &graphcal_compiler::hir::expr::Expr,
     src: SourceId,
-) -> Result<(), GraphcalError> {
+) -> Result<(), SemanticError> {
     match graphcal_compiler::hir::expr::find_dag_call(expr) {
-        Some((target, span)) => Err(GraphcalError::located(
+        Some((target, span)) => Err(SemanticError::located(
             src,
             span,
             GraphError::DagCallInCompileTime {

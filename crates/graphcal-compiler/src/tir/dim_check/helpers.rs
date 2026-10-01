@@ -1,7 +1,7 @@
 use crate::dimension::Dimension;
 use crate::display::formatting_registry::FormattingRegistry;
-use crate::graphcal_error::GraphcalError;
 use crate::hir::nominal::NominalTypeDef;
+use crate::semantic_error::SemanticError;
 use crate::semantic_error::dimension::DimensionError;
 use crate::source_id::SourceId;
 
@@ -62,7 +62,7 @@ pub fn expect_quantity<V: Concreteness>(
     registry: &FormattingRegistry,
     src: SourceId,
     span: crate::syntax::span::Span,
-) -> Result<Dimension, GraphcalError> {
+) -> Result<Dimension, SemanticError> {
     let found_kind = match inferred {
         CheckedType::Quantity(d) => return Ok(d.clone()),
         CheckedType::Complex(_) => "a Complex value",
@@ -73,7 +73,7 @@ pub fn expect_quantity<V: Concreteness>(
         CheckedType::Struct(..) => "a struct",
         CheckedType::Indexed { .. } => "an indexed value",
     };
-    Err(GraphcalError::located(
+    Err(SemanticError::located(
         src,
         span,
         DimensionError::DimensionMismatch {

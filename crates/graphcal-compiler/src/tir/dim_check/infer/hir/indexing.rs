@@ -9,8 +9,8 @@ use crate::semantic_error::structure::StructError;
 use crate::source_id::SourceId;
 
 use crate::diagnostic_anchor::DiagnosticAnchor;
-use crate::graphcal_error::GraphcalError;
 use crate::semantic::checked_type::{IndexDisplayName, IndexTypeRef, Symbolic};
+use crate::semantic_error::SemanticError;
 use crate::syntax::span::Span;
 use crate::tir::typed::NatPolyForm;
 
@@ -36,7 +36,7 @@ impl Infer<'_> {
         axis: &ForBindingIndex,
         axis_span: Span,
         arg: &Expr,
-    ) -> Result<CheckedType<Symbolic>, Outcome<GraphcalError>> {
+    ) -> Result<CheckedType<Symbolic>, Outcome<SemanticError>> {
         use crate::syntax::ast::KeyFormKind;
 
         let arg_type = self.infer_hir_type(arg)?;
@@ -47,7 +47,7 @@ impl Infer<'_> {
                 let idx_def =
                     crate::tir::dim_check::infer::index_def_for_inferred(&identity, self.env.tir)
                         .ok_or_else(|| {
-                        GraphcalError::located(
+                        SemanticError::located(
                             self.env.src,
                             index.span,
                             IndexError::UnknownIndex {
@@ -68,7 +68,7 @@ impl Infer<'_> {
         match kind {
             KeyFormKind::Static => {
                 let Some(form) = &finite_form else {
-                    return Err(GraphcalError::located(
+                    return Err(SemanticError::located(
                         self.env.src,
                         axis_span,
                         EvaluationError::Failed {
@@ -82,7 +82,7 @@ impl Infer<'_> {
                     .into());
                 };
                 if arg_type != CheckedType::Int {
-                    return Err(GraphcalError::located(
+                    return Err(SemanticError::located(
                         self.env.src,
                         arg.span,
                         DimensionError::DimensionMismatch {
@@ -94,7 +94,7 @@ impl Infer<'_> {
                     .into());
                 }
                 let Some(position) = try_const_int(arg) else {
-                    return Err(GraphcalError::located(
+                    return Err(SemanticError::located(
                         self.env.src,
                         arg.span,
                         EvaluationError::Failed {
@@ -106,7 +106,7 @@ impl Infer<'_> {
                     .into());
                 };
                 if position < 0 {
-                    return Err(GraphcalError::located(
+                    return Err(SemanticError::located(
                         self.env.src,
                         arg.span,
                         EvaluationError::Failed {
@@ -121,7 +121,7 @@ impl Infer<'_> {
                     let size = form.constant();
                     let position_u64 = u64::try_from(position).unwrap_or(u64::MAX);
                     if position_u64 >= size {
-                        return Err(GraphcalError::located(
+                        return Err(SemanticError::located(
                             self.env.src,
                             arg.span,
                             EvaluationError::Failed {
@@ -139,7 +139,7 @@ impl Infer<'_> {
                     arg,
                     &index_identity,
                     u64::try_from(position).map_err(|_| {
-                        GraphcalError::internal_error(
+                        SemanticError::internal_error(
                             "checked position is negative",
                             self.env.src,
                             DiagnosticAnchor::Source(arg.span),
@@ -151,7 +151,7 @@ impl Infer<'_> {
             }
             KeyFormKind::Fin => {
                 if finite_form.is_none() {
-                    return Err(GraphcalError::located(
+                    return Err(SemanticError::located(
                         self.env.src,
                         axis_span,
                         EvaluationError::Failed {
@@ -163,7 +163,7 @@ impl Infer<'_> {
                     .into());
                 }
                 if arg_type != CheckedType::Int {
-                    return Err(GraphcalError::located(
+                    return Err(SemanticError::located(
                         self.env.src,
                         arg.span,
                         DimensionError::DimensionMismatch {
@@ -189,7 +189,7 @@ impl Infer<'_> {
                 {
                     Some(dimension) => dimension.clone(),
                     None => {
-                        return Err(GraphcalError::located(
+                        return Err(SemanticError::located(
                             self.env.src,
                             axis_span,
                             EvaluationError::Failed {
@@ -206,7 +206,7 @@ impl Infer<'_> {
                 let arg_dim =
                     expect_quantity(&arg_type, self.env.registry, self.env.src, arg.span)?;
                 if arg_dim != dimension {
-                    return Err(GraphcalError::located(
+                    return Err(SemanticError::located(
                         self.env.src,
                         arg.span,
                         DimensionError::DimensionMismatch {
@@ -229,7 +229,7 @@ impl Infer<'_> {
         &self,
         bindings: &[ForBinding],
         body: &Expr,
-    ) -> Result<CheckedType<Symbolic>, Outcome<GraphcalError>> {
+    ) -> Result<CheckedType<Symbolic>, Outcome<SemanticError>> {
         let mut inner_locals = self.locals.child(Vec::new());
         for binding in bindings {
             // Every loop variable is a key of its axis. Coordinate arithmetic
@@ -242,7 +242,7 @@ impl Infer<'_> {
                         self.env.tir,
                     )
                     .ok_or_else(|| {
-                        GraphcalError::located(
+                        SemanticError::located(
                             self.env.src,
                             index.span,
                             IndexError::UnknownIndex {
@@ -286,12 +286,12 @@ fn finite_axis_form(
     declared_definition: Option<&crate::semantic::index_def::IndexDef>,
     src: SourceId,
     span: Span,
-) -> Result<Option<NatPolyForm>, GraphcalError> {
+) -> Result<Option<NatPolyForm>, SemanticError> {
     match index {
         IndexTypeRef::Finite(reference) => Ok(Some(reference.form())),
         IndexTypeRef::Declared(reference) => {
             let definition = declared_definition.ok_or_else(|| {
-                GraphcalError::internal_error(
+                SemanticError::internal_error(
                     format!(
                         "declared indexed axis `{}` has no semantic index definition",
                         reference.resolved()
@@ -313,11 +313,11 @@ impl Infer<'_> {
         expr: &Expr,
         inner: &Expr,
         args: &[IndexArg],
-    ) -> Result<CheckedType<Symbolic>, Outcome<GraphcalError>> {
+    ) -> Result<CheckedType<Symbolic>, Outcome<SemanticError>> {
         let mut current = self.infer_hir_type(inner)?;
         for arg in args {
             let CheckedType::Indexed { element, index } = current else {
-                return Err(GraphcalError::located(
+                return Err(SemanticError::located(
                     self.env.src,
                     expr.span,
                     EvaluationError::Failed {
@@ -334,7 +334,7 @@ impl Infer<'_> {
                     )?;
                     let arg_index = IndexTypeRef::from_resolved(variant.variant.index().clone());
                     if arg_index != index {
-                        return Err(GraphcalError::located(
+                        return Err(SemanticError::located(
                             self.env.src,
                             variant.path_span(),
                             IndexError::IndexMismatch {
@@ -347,7 +347,7 @@ impl Infer<'_> {
                 }
                 IndexArg::Var(local) => {
                     let Some(var_type) = self.locals.get(local.value) else {
-                        return Err(GraphcalError::located(
+                        return Err(SemanticError::located(
                             self.env.src,
                             local.span,
                             StructError::UnknownLocalRef {
@@ -375,7 +375,7 @@ impl Infer<'_> {
                                 _ => key_index == &index,
                             };
                             if !accepted {
-                                return Err(GraphcalError::located(
+                                return Err(SemanticError::located(
                                     self.env.src,
                                     local.span,
                                     IndexError::IndexMismatch {
@@ -387,12 +387,12 @@ impl Infer<'_> {
                             }
                         }
                         CheckedType::Quantity(_) => {
-                            return Err(GraphcalError::located(self.env.src, local.span, EvaluationError::Failed { message: format!(
+                            return Err(SemanticError::located(self.env.src, local.span, EvaluationError::Failed { message: format!(
                                     "quantity local cannot index into coordinate index `{index}`; use that coordinate index's loop variable"
                                 ) }).into());
                         }
                         _ => {
-                            return Err(GraphcalError::located(
+                            return Err(SemanticError::located(
                                 self.env.src,
                                 local.span,
                                 EvaluationError::Failed {
@@ -423,7 +423,7 @@ impl Infer<'_> {
                             _ => *key_index == index,
                         };
                         if !accepted {
-                            return Err(GraphcalError::located(
+                            return Err(SemanticError::located(
                                 self.env.src,
                                 index_expr.span,
                                 IndexError::IndexMismatch {
@@ -437,7 +437,7 @@ impl Infer<'_> {
                         continue;
                     }
                     let Some(index_form) = index_form else {
-                        return Err(GraphcalError::located(self.env.src, index_expr.span, EvaluationError::Failed { message: format!(
+                        return Err(SemanticError::located(self.env.src, index_expr.span, EvaluationError::Failed { message: format!(
                                 "integer expression cannot index into non-finite-index index `{index}`"
                             ) }).into());
                     };
@@ -447,7 +447,7 @@ impl Infer<'_> {
                             // statically discharged constant selects implicitly;
                             // a runtime Int goes through the explicit fin_key().
                             let Some(constant) = try_const_int(index_expr) else {
-                                return Err(GraphcalError::located(self.env.src, index_expr.span, EvaluationError::Failed { message: format!(
+                                return Err(SemanticError::located(self.env.src, index_expr.span, EvaluationError::Failed { message: format!(
                                         "a runtime Int cannot index `{index}` implicitly; write \
                                      `fin_key({index}, ...)` to make the range check explicit",
                                     ) })
@@ -468,7 +468,7 @@ impl Infer<'_> {
                             );
                         }
                         _ => {
-                            return Err(GraphcalError::located(
+                            return Err(SemanticError::located(
                                 self.env.src,
                                 index_expr.span,
                                 EvaluationError::Failed {
@@ -494,9 +494,9 @@ fn check_constant_finite_index_index(
     index_span: Span,
     index_form: &NatPolyForm,
     src: SourceId,
-) -> Result<u64, GraphcalError> {
+) -> Result<u64, SemanticError> {
     let Ok(index_u64) = u64::try_from(index) else {
-        return Err(GraphcalError::located(
+        return Err(SemanticError::located(
             src,
             index_span,
             EvaluationError::Failed {
@@ -509,7 +509,7 @@ fn check_constant_finite_index_index(
     }
     let size = index_form.constant();
     if index_u64 >= size {
-        return Err(GraphcalError::located(
+        return Err(SemanticError::located(
             src,
             index_span,
             EvaluationError::Failed {
@@ -554,14 +554,14 @@ mod finite_axis_form_tests {
 
         let error = finite_axis_form(&index, None, source, Span::new(7, 3)).unwrap_err();
         match error {
-            GraphcalError::Internal(internal) => assert!(
+            SemanticError::Internal(internal) => assert!(
                 internal.message().contains(
                     "declared indexed axis `test.Missing` has no semantic index definition"
                 ),
                 "{}",
                 internal.message()
             ),
-            other @ GraphcalError::Located(_) => panic!("expected internal error, got {other:?}"),
+            other @ SemanticError::Located(_) => panic!("expected internal error, got {other:?}"),
         }
     }
 }

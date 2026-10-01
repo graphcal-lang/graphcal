@@ -1,16 +1,16 @@
 use std::sync::Arc;
 
 use crate::function_signature::FunctionSignature;
-use crate::graphcal_error::GraphcalError;
 use crate::ir::lower::{LoweredTestFile, lower_file_with_inline_dags_for_test};
 use crate::ir::model::HirDag;
+use crate::semantic_error::SemanticError;
 use crate::semantic_error::SemanticErrorKind;
 use crate::semantic_error::dimension::DimensionError;
 use crate::semantic_error::plugin::PluginError;
 
 use super::ExternStructResult;
 
-fn lower(source: &str) -> Result<LoweredTestFile, GraphcalError> {
+fn lower(source: &str) -> Result<LoweredTestFile, SemanticError> {
     let parsed = crate::syntax::parser::Parser::new(source)
         .parse_file()
         .expect("source parses");
@@ -29,7 +29,7 @@ fn only_signature(dag: &HirDag) -> &FunctionSignature<ExternStructResult> {
 
 fn expect_invalid_signature(source: &str, fragment: &str) {
     match lower(source) {
-        Err(GraphcalError::Located(crate::diagnostic::Diagnostic {
+        Err(SemanticError::Located(crate::diagnostic::Diagnostic {
             kind: SemanticErrorKind::Plugin(PluginError::InvalidExternSignature { message, .. }),
             ..
         })) => {
@@ -111,6 +111,6 @@ fn binders_share_one_namespace_and_keep_their_sort() {
 fn unknown_dimensions_are_reported_at_the_term() {
     assert!(matches!(
         lower("import plugin \"graphcal:demo\" as demo { fn f(x: Missing * Length) -> Length; }\n"),
-        Err(GraphcalError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Dimension(DimensionError::UnknownDimension { name, .. }), .. })) if name.to_string() == "Missing"
+        Err(SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Dimension(DimensionError::UnknownDimension { name, .. }), .. })) if name.to_string() == "Missing"
     ));
 }

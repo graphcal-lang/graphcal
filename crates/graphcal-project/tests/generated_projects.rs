@@ -5,9 +5,9 @@
 
 use std::collections::HashMap;
 
-use graphcal_compiler::graphcal_error::{GraphcalError, RenderedGraphcalError};
 use graphcal_compiler::semantic_error::SemanticErrorKind;
 use graphcal_compiler::semantic_error::dimension::DimensionError;
+use graphcal_compiler::semantic_error::{SemanticError, rendered::RenderedSemanticError};
 use graphcal_compiler::syntax::module_name::ModuleAliasName;
 use graphcal_eval::eval::Value;
 use graphcal_io::{InMemoryFileSystem, VirtualAbsolutePath};
@@ -167,8 +167,8 @@ proptest! {
         prop_assert!(
             matches!(
                 error,
-                CompileError::Eval(RenderedGraphcalError {
-error: GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+                CompileError::Eval(RenderedSemanticError {
+error: SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
     kind: SemanticErrorKind::Dimension(DimensionError::DimensionMismatch { ..
         }), .. } | graphcal_compiler::diagnostic::Diagnostic {
     kind: SemanticErrorKind::Dimension(DimensionError::DimensionMismatchInAnnotation {

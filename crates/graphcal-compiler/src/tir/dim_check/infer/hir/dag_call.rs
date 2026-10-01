@@ -9,7 +9,7 @@ use crate::semantic_error::graph::GraphError;
 use crate::semantic_error::visibility::VisibilityError;
 use std::collections::HashMap;
 
-use crate::graphcal_error::GraphcalError;
+use crate::semantic_error::SemanticError;
 use crate::tir::typed::specialization::specialize_type;
 
 use crate::semantic::checked_type::{CheckedType, Symbolic};
@@ -25,10 +25,10 @@ impl Infer<'_> {
         args: &[ParamBinding],
         static_bindings: &StaticSubstitution,
         output: &crate::syntax::span::Spanned<ResolvedDeclName>,
-    ) -> Result<CheckedType<Symbolic>, Outcome<GraphcalError>> {
+    ) -> Result<CheckedType<Symbolic>, Outcome<SemanticError>> {
         let display_path = target.value.to_string();
         let dag_tir = self.env.tir.dag(&target.value).ok_or_else(|| {
-            GraphcalError::located(
+            SemanticError::located(
                 self.env.src,
                 target.span,
                 GraphError::UnknownDag {
@@ -65,7 +65,7 @@ impl Infer<'_> {
             let target_key = &binding.target.value;
             bound_resolved_names.insert(target_key.clone());
             let expected = param_decl_types_by_key.get(target_key).ok_or_else(|| {
-                GraphcalError::located(
+                SemanticError::located(
                     self.env.src,
                     binding.target.span,
                     GraphError::UnknownDagParam {
@@ -87,7 +87,7 @@ impl Infer<'_> {
                 .to_checked_type(self.env.src)
                 .is_ok_and(|expected| expected.to_symbolic() == found)
             {
-                return Err(GraphcalError::located(
+                return Err(SemanticError::located(
                     self.env.src,
                     binding.value.span,
                     GraphError::DagArgTypeMismatch {
@@ -107,7 +107,7 @@ impl Infer<'_> {
             .collect();
         if !missing.is_empty() {
             missing.sort();
-            return Err(GraphcalError::located(
+            return Err(SemanticError::located(
                 self.env.src,
                 expr.span,
                 GraphError::MissingDagBindings {
@@ -123,7 +123,7 @@ impl Infer<'_> {
             .get(output_key)
             .or_else(|| param_decl_types_by_key.get(output_key))
             .ok_or_else(|| {
-                GraphcalError::located(
+                SemanticError::located(
                     self.env.src,
                     output.span,
                     GraphError::UnknownDagOutput {
@@ -137,7 +137,7 @@ impl Infer<'_> {
             .projectable_outputs
             .contains(&output_key.to_unowned_def_name())
         {
-            return Err(GraphcalError::located(
+            return Err(SemanticError::located(
                 self.env.src,
                 output.span,
                 VisibilityError::ImportPrivateItem {

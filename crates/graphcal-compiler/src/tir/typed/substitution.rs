@@ -17,10 +17,10 @@ use std::collections::HashMap;
 use crate::desugar::desugared_ast::MulDivOp;
 use crate::dimension::{Dimension, Rational};
 use crate::generic_param::GenericParamId;
-use crate::graphcal_error::GraphcalError;
 use crate::hir::nominal::NominalGenericParam;
 use crate::nat::{NatOverflowError, NatPolyForm};
 use crate::semantic::checked_type::{CheckedType, IndexTypeRef, InstantiationError, Symbolic};
+use crate::semantic_error::SemanticError;
 use crate::semantic_error::dimension::DimensionError;
 use crate::semantic_error::evaluation::EvaluationError;
 use crate::source_id::SourceId;
@@ -60,9 +60,9 @@ pub enum SubstitutionError {
 impl SubstitutionError {
     /// Render the failure at its source span.
     #[must_use]
-    pub fn into_graphcal(self, src: SourceId) -> GraphcalError {
+    pub fn into_graphcal(self, src: SourceId) -> SemanticError {
         match self {
-            Self::NatOverflow { span } => GraphcalError::located(
+            Self::NatOverflow { span } => SemanticError::located(
                 src,
                 span,
                 EvaluationError::Failed {
@@ -70,16 +70,16 @@ impl SubstitutionError {
                 },
             ),
             Self::DimensionOverflow { span } => {
-                GraphcalError::located(src, span, DimensionError::DimensionOverflow)
+                SemanticError::located(src, span, DimensionError::DimensionOverflow)
             }
-            Self::InvalidFiniteIndex { error, span } => GraphcalError::located(
+            Self::InvalidFiniteIndex { error, span } => SemanticError::located(
                 src,
                 span,
                 EvaluationError::Failed {
                     message: error.describe_finite_index(),
                 },
             ),
-            Self::UnboundNat { param, span } => GraphcalError::internal_error(
+            Self::UnboundNat { param, span } => SemanticError::internal_error(
                 format!("required Nat binding is missing: {param:?}"),
                 src,
                 crate::diagnostic_anchor::DiagnosticAnchor::Source(span),

@@ -17,7 +17,6 @@ use crate::desugar::desugared_ast::{
     UnitExpr,
 };
 use crate::dimension::{BaseDimId, Dimension};
-use crate::graphcal_error::GraphcalError;
 use crate::hir::const_expr::{ConstExprError, CoordinateAxisError, CoordinateAxisExpr};
 use crate::hir::const_lower::{
     UnitScaleSource, classify_unit_scale, lower_coordinate_expr, lower_static_nat_expr,
@@ -35,6 +34,7 @@ use crate::semantic::unit_scale::{
     PositiveFiniteScale, PositiveFiniteScaleError, UnitInfo, UnitResolveError, UnitScale,
     resolve_unit_expr_with,
 };
+use crate::semantic_error::SemanticError;
 use crate::semantic_error::dimension::DimensionError;
 use crate::semantic_error::evaluation::EvaluationError;
 use crate::semantic_error::index::IndexError;
@@ -63,7 +63,7 @@ pub enum DimExprFailure {
     /// Exponent arithmetic overflowed.
     Overflow,
     /// A referenced dimension's own definition is invalid.
-    Definition(Box<GraphcalError>),
+    Definition(Box<SemanticError>),
 }
 
 /// One module's evaluated Static definitions together with the runtime unit
@@ -89,16 +89,16 @@ enum CycleSite<'a> {
 }
 
 impl CycleSite<'_> {
-    fn error(self) -> GraphcalError {
+    fn error(self) -> SemanticError {
         match self {
-            Self::Dimension { name, src } => GraphcalError::located(
+            Self::Dimension { name, src } => SemanticError::located(
                 src,
                 name.span,
                 DimensionError::CyclicDimension {
                     name: name.value.clone(),
                 },
             ),
-            Self::Unit { name, src } => GraphcalError::located(
+            Self::Unit { name, src } => SemanticError::located(
                 src,
                 name.span,
                 DimensionError::CyclicUnit {
@@ -374,7 +374,7 @@ impl<'a> StaticDefinitionEvaluator<'a> {
     /// # Errors
     ///
     /// Returns the diagnostic of an invalid definition or a definition cycle.
-    pub fn dimension(&mut self, identity: &ResolvedDimName) -> Result<Dimension, GraphcalError> {
+    pub fn dimension(&mut self, identity: &ResolvedDimName) -> Result<Dimension, SemanticError> {
         self.dimension_from(identity, None)
     }
 
@@ -383,7 +383,7 @@ impl<'a> StaticDefinitionEvaluator<'a> {
     /// # Errors
     ///
     /// Returns the diagnostic of an invalid definition or a definition cycle.
-    pub fn unit(&mut self, identity: &ResolvedUnitName) -> Result<UnitInfo, GraphcalError> {
+    pub fn unit(&mut self, identity: &ResolvedUnitName) -> Result<UnitInfo, SemanticError> {
         self.unit_from(identity, None)
     }
 
@@ -392,7 +392,7 @@ impl<'a> StaticDefinitionEvaluator<'a> {
     /// # Errors
     ///
     /// Returns the diagnostic of an invalid definition.
-    pub fn index(&mut self, identity: &ResolvedIndexName) -> Result<IndexDef, GraphcalError> {
+    pub fn index(&mut self, identity: &ResolvedIndexName) -> Result<IndexDef, SemanticError> {
         if let Some(definition) = self.indexes.get(identity) {
             return Ok(definition.clone());
         }
@@ -441,7 +441,7 @@ impl<'a> StaticDefinitionEvaluator<'a> {
     pub(crate) fn module_definitions(
         &mut self,
         owner: &DagId,
-    ) -> Result<ModuleStaticDefinitions, GraphcalError> {
+    ) -> Result<ModuleStaticDefinitions, SemanticError> {
         for item in self.evaluation_order(owner) {
             match &item {
                 StaticItem::Dimension(identity) => self.dimension(identity).map(drop),
@@ -548,7 +548,7 @@ impl<'a> StaticDefinitionEvaluator<'a> {
     pub(crate) fn display_dimensions(
         &mut self,
         owner: &DagId,
-    ) -> Result<Vec<(DimRef, Dimension)>, GraphcalError> {
+    ) -> Result<Vec<(DimRef, Dimension)>, SemanticError> {
         self.display_spellings(owner)
             .into_iter()
             .map(|(spelling, identity)| Ok((spelling, self.dimension(&identity)?)))
@@ -597,7 +597,7 @@ impl<'a> StaticDefinitionEvaluator<'a> {
         &mut self,
         identity: &ResolvedDimName,
         site: Option<CycleSite<'a>>,
-    ) -> Result<Dimension, GraphcalError> {
+    ) -> Result<Dimension, SemanticError> {
         if let Some(dimension) = self.dimensions.get(identity) {
             return Ok(dimension.clone());
         }
@@ -631,7 +631,7 @@ impl<'a> StaticDefinitionEvaluator<'a> {
     pub(crate) fn port_generic_dimension(
         &mut self,
         identity: &ResolvedDimName,
-    ) -> Result<Dimension, GraphcalError> {
+    ) -> Result<Dimension, SemanticError> {
         let view = PortView::Generic(identity.owner().clone());
         self.dimension_in(identity, &view, None)
     }
@@ -641,7 +641,7 @@ impl<'a> StaticDefinitionEvaluator<'a> {
         identity: &ResolvedDimName,
         view: &PortView,
         site: Option<CycleSite<'a>>,
-    ) -> Result<Dimension, GraphcalError> {
+    ) -> Result<Dimension, SemanticError> {
         // The default evaluation validates the definition and rejects cycles
         // for the whole reference closure the generic view walks again.
         let default = self.dimension_from(identity, site)?;
@@ -697,7 +697,7 @@ impl<'a> StaticDefinitionEvaluator<'a> {
             })
     }
 
-    fn dimension_cycle_at(&self, identity: &ResolvedDimName) -> GraphcalError {
+    fn dimension_cycle_at(&self, identity: &ResolvedDimName) -> SemanticError {
         let source = self.modules.get(identity.owner()).and_then(|module| {
             module
                 .dimensions
@@ -718,7 +718,7 @@ impl<'a> StaticDefinitionEvaluator<'a> {
     fn declared_dimension(
         &mut self,
         identity: &ResolvedDimName,
-    ) -> Result<Dimension, GraphcalError> {
+    ) -> Result<Dimension, SemanticError> {
         let owner = identity.owner();
         let Some((source, src)) = self.modules.get(owner).and_then(|module| {
             module
@@ -769,7 +769,7 @@ impl<'a> StaticDefinitionEvaluator<'a> {
         owner: &DagId,
         projection: &crate::resolve::symbols::DimensionProjection,
         view: &PortView,
-    ) -> Result<Dimension, GraphcalError> {
+    ) -> Result<Dimension, SemanticError> {
         let template = self.port_generic_dimension(projection.template())?;
         let template_owner = projection.template().owner().clone();
         let mut bound = HashMap::new();
@@ -813,7 +813,7 @@ impl<'a> StaticDefinitionEvaluator<'a> {
                     .and_then(|factor| acc.checked_mul(&factor))
             })
             .map_err(|_| {
-                GraphcalError::located(src, src.whole_span(), DimensionError::DimensionOverflow)
+                SemanticError::located(src, src.whole_span(), DimensionError::DimensionOverflow)
             })
     }
 
@@ -856,7 +856,7 @@ impl<'a> StaticDefinitionEvaluator<'a> {
         &mut self,
         identity: &ResolvedUnitName,
         site: Option<CycleSite<'a>>,
-    ) -> Result<UnitInfo, GraphcalError> {
+    ) -> Result<UnitInfo, SemanticError> {
         if let Some(info) = self.units.get(identity) {
             return Ok(info.clone());
         }
@@ -898,7 +898,7 @@ impl<'a> StaticDefinitionEvaluator<'a> {
         identity: &ResolvedUnitName,
         unit: &'a UnitDecl,
         src: SourceId,
-    ) -> Result<UnitInfo, GraphcalError> {
+    ) -> Result<UnitInfo, SemanticError> {
         let owner = identity.owner();
         let site = CycleSite::Unit {
             name: &unit.name,
@@ -941,7 +941,7 @@ impl<'a> StaticDefinitionEvaluator<'a> {
                 )),
             };
             if let Some((reason, help)) = reason {
-                return Err(GraphcalError::located(
+                return Err(SemanticError::located(
                     src,
                     unit.name.span,
                     DimensionError::InvalidBaseUnitDeclaration {
@@ -966,7 +966,7 @@ impl<'a> StaticDefinitionEvaluator<'a> {
             .and_then(|id| self.base_dimensions.get(id))
             .is_some_and(BaseDimensionInfo::is_affine_prone)
         {
-            return Err(GraphcalError::located(
+            return Err(SemanticError::located(
                 src,
                 unit.name.span,
                 DimensionError::AffineProneUnitDefinition {
@@ -977,7 +977,7 @@ impl<'a> StaticDefinitionEvaluator<'a> {
         let scale_source = classify_unit_scale(&def.scale_expr);
         if unit.constness.is_const() {
             if let UnitScaleSource::Dynamic { first_graph_ref } = &scale_source {
-                return Err(GraphcalError::located(
+                return Err(SemanticError::located(
                     src,
                     first_graph_ref.span,
                     DimensionError::GraphRefInConstUnit {
@@ -991,7 +991,7 @@ impl<'a> StaticDefinitionEvaluator<'a> {
                     None => None,
                 };
                 if info.is_some_and(|info| !info.scale.constness().is_const()) {
-                    return Err(GraphcalError::located(
+                    return Err(SemanticError::located(
                         src,
                         term.name.span,
                         DimensionError::NonConstUnitInConst {
@@ -1005,7 +1005,7 @@ impl<'a> StaticDefinitionEvaluator<'a> {
             .resolve_unit_expr(owner, &def.unit_expr, Some(site))?
             .map_err(|error| unit_resolve_error(error, src, def.unit_expr.span))?;
         if base_unit_dimension != dim {
-            return Err(GraphcalError::located(
+            return Err(SemanticError::located(
                 src,
                 def.unit_expr.span,
                 DimensionError::UnitDefinitionDimensionMismatch {
@@ -1069,7 +1069,7 @@ impl<'a> StaticDefinitionEvaluator<'a> {
         owner: &DagId,
         expr: &UnitExpr,
         site: Option<CycleSite<'a>>,
-    ) -> Result<Result<(Dimension, PositiveFiniteScale), UnitResolveError>, GraphcalError> {
+    ) -> Result<Result<(Dimension, PositiveFiniteScale), UnitResolveError>, SemanticError> {
         let mut infos = HashMap::new();
         for term in &expr.terms {
             if let Some(target) = self.resolve_unit(owner, &term.name.value) {
@@ -1085,7 +1085,7 @@ impl<'a> StaticDefinitionEvaluator<'a> {
     fn index_declaration(
         &self,
         identity: &ResolvedIndexName,
-    ) -> Result<(&'a IndexDecl, Span, SourceId), GraphcalError> {
+    ) -> Result<(&'a IndexDecl, Span, SourceId), SemanticError> {
         self.modules
             .get(identity.owner())
             .and_then(|module| {
@@ -1103,13 +1103,13 @@ impl<'a> StaticDefinitionEvaluator<'a> {
         index: &'a IndexDecl,
         decl_span: Span,
         src: SourceId,
-    ) -> Result<IndexDef, GraphcalError> {
+    ) -> Result<IndexDef, SemanticError> {
         let kind = match &index.kind {
             IndexDeclKind::Named { variants } => {
                 let unique =
                     NonEmptyUnique::try_from_non_empty(variants.map_ref(|v| v.value.clone()))
                         .map_err(|DuplicateItemError { first, duplicate }| {
-                            GraphcalError::located(
+                            SemanticError::located(
                                 src,
                                 variants[duplicate].span,
                                 NameError::DuplicateName {
@@ -1171,7 +1171,7 @@ impl<'a> StaticDefinitionEvaluator<'a> {
         &mut self,
         owner: &DagId,
         exprs: [&ast::Expr; N],
-    ) -> Result<HashMap<UnitRef, UnitInfo>, GraphcalError> {
+    ) -> Result<HashMap<UnitRef, UnitInfo>, SemanticError> {
         fn unit_exprs<'e>(expr: &'e ast::Expr, found: &mut Vec<&'e UnitExpr>) {
             match &expr.kind {
                 ast::ExprKind::QuantityLiteral { unit, .. } => found.push(unit),
@@ -1205,9 +1205,9 @@ impl<'a> StaticDefinitionEvaluator<'a> {
         axis: &CoordinateAxisExpr,
         src: SourceId,
         decl_span: Span,
-    ) -> Result<IndexKind, GraphcalError> {
+    ) -> Result<IndexKind, SemanticError> {
         let dimension_mismatch = |message: String| {
-            GraphcalError::located(
+            SemanticError::located(
                 src,
                 decl_span,
                 IndexError::CoordinateIndexDimensionMismatch {
@@ -1235,7 +1235,7 @@ impl<'a> StaticDefinitionEvaluator<'a> {
                         self.format_dimension(owner, &end)
                     ))
                 }
-                CoordinateAxisError::Invalid { error, point_count } => GraphcalError::located(
+                CoordinateAxisError::Invalid { error, point_count } => SemanticError::located(
                     src,
                     point_count.unwrap_or(decl_span),
                     IndexError::CoordinateIndexInvalid {
@@ -1250,8 +1250,8 @@ impl<'a> StaticDefinitionEvaluator<'a> {
 
 /// A resolver symbol has no valid definition source: the evaluator was not
 /// given the declaring module, or the symbol belongs to another module.
-fn missing_definition_error(detail: &str, src: SourceId) -> GraphcalError {
-    GraphcalError::internal_error(
+fn missing_definition_error(detail: &str, src: SourceId) -> SemanticError {
+    SemanticError::internal_error(
         format!("resolved definition has no owned source declaration: {detail}"),
         src,
         crate::diagnostic_anchor::DiagnosticAnchor::WholeFile,
@@ -1259,9 +1259,9 @@ fn missing_definition_error(detail: &str, src: SourceId) -> GraphcalError {
 }
 
 /// Render a dimension-expression failure at its declaration.
-fn dim_expr_error(failure: DimExprFailure, src: SourceId, span: Span) -> GraphcalError {
+fn dim_expr_error(failure: DimExprFailure, src: SourceId, span: Span) -> SemanticError {
     match failure {
-        DimExprFailure::Unknown(name) => GraphcalError::located(
+        DimExprFailure::Unknown(name) => SemanticError::located(
             src,
             span,
             DimensionError::UnknownDimension {
@@ -1269,14 +1269,14 @@ fn dim_expr_error(failure: DimExprFailure, src: SourceId, span: Span) -> Graphca
             },
         ),
         DimExprFailure::Overflow => {
-            GraphcalError::located(src, span, DimensionError::DimensionOverflow)
+            SemanticError::located(src, span, DimensionError::DimensionOverflow)
         }
         DimExprFailure::Definition(error) => *error,
     }
 }
 
-fn eval_error(message: impl Into<String>, src: SourceId, span: Span) -> GraphcalError {
-    GraphcalError::located(
+fn eval_error(message: impl Into<String>, src: SourceId, span: Span) -> SemanticError {
+    SemanticError::located(
         src,
         span,
         EvaluationError::Failed {
@@ -1290,17 +1290,17 @@ fn scale_error(
     err: PositiveFiniteScaleError,
     src: SourceId,
     span: Span,
-) -> GraphcalError {
+) -> SemanticError {
     eval_error(format!("{context} {err}"), src, span)
 }
 
 /// Convert a typed unit-resolution failure into a spanned diagnostic.
-fn unit_resolve_error(err: UnitResolveError, src: SourceId, span: Span) -> GraphcalError {
+fn unit_resolve_error(err: UnitResolveError, src: SourceId, span: Span) -> SemanticError {
     match err {
         UnitResolveError::UnknownUnit(name) => {
-            GraphcalError::located(src, span, DimensionError::UnknownUnit { name })
+            SemanticError::located(src, span, DimensionError::UnknownUnit { name })
         }
-        UnitResolveError::DynamicScale(name) => GraphcalError::located(
+        UnitResolveError::DynamicScale(name) => SemanticError::located(
             src,
             span,
             EvaluationError::Failed {
@@ -1309,17 +1309,17 @@ fn unit_resolve_error(err: UnitResolveError, src: SourceId, span: Span) -> Graph
         ),
         UnitResolveError::InvalidScale(err) => scale_error("compound unit scale", err, src, span),
         UnitResolveError::Overflow(_) => {
-            GraphcalError::located(src, span, DimensionError::DimensionOverflow)
+            SemanticError::located(src, span, DimensionError::DimensionOverflow)
         }
     }
 }
 
 /// Render a constant-expression failure at the definition boundary.
-fn const_expr_error(error: ConstExprError, src: SourceId) -> GraphcalError {
+fn const_expr_error(error: ConstExprError, src: SourceId) -> SemanticError {
     match error {
         ConstExprError::Unit { error, span } => unit_resolve_error(error, src, span),
         ConstExprError::DimensionOverflow { span } => {
-            GraphcalError::located(src, span, DimensionError::DimensionOverflow)
+            SemanticError::located(src, span, DimensionError::DimensionOverflow)
         }
         error => eval_error(error.to_string(), src, error.span()),
     }
@@ -1330,7 +1330,7 @@ fn const_expr_error(error: ConstExprError, src: SourceId) -> GraphcalError {
 fn validate_structural_finite_indexes(
     declarations: &[Declaration],
     src: SourceId,
-) -> Result<(), GraphcalError> {
+) -> Result<(), SemanticError> {
     for decl in declarations {
         match &decl.kind {
             DeclKind::Param(d) => {
@@ -1373,7 +1373,7 @@ fn validate_structural_finite_indexes(
     Ok(())
 }
 
-fn concrete_nat_value(expr: &ast::NatExpr, src: SourceId) -> Result<Option<u64>, GraphcalError> {
+fn concrete_nat_value(expr: &ast::NatExpr, src: SourceId) -> Result<Option<u64>, SemanticError> {
     match expr {
         ast::NatExpr::Literal(value, _) => Ok(Some(*value)),
         ast::NatExpr::Var(_) => Ok(None),
@@ -1407,7 +1407,7 @@ fn validate_finite_cardinality(
     cardinality: u64,
     span: Span,
     src: SourceId,
-) -> Result<(), GraphcalError> {
+) -> Result<(), SemanticError> {
     FiniteIndex::try_from_u64(cardinality)
         .map(|_| ())
         .map_err(|error| eval_error(error.describe_finite_index(), src, span))
@@ -1416,7 +1416,7 @@ fn validate_finite_cardinality(
 fn validate_index_expr_finite_indexes(
     index: &ast::IndexExpr,
     src: SourceId,
-) -> Result<(), GraphcalError> {
+) -> Result<(), SemanticError> {
     match index {
         ast::IndexExpr::Finite { cardinality, span } => {
             if let Some(value) = concrete_nat_value(cardinality, src)? {
@@ -1431,7 +1431,7 @@ fn validate_index_expr_finite_indexes(
 fn validate_generic_arg_finite_indexes(
     arg: &ast::GenericArg,
     src: SourceId,
-) -> Result<(), GraphcalError> {
+) -> Result<(), SemanticError> {
     match arg {
         ast::GenericArg::Type(type_expr) => validate_type_expr_finite_indexes(type_expr, src),
         ast::GenericArg::Index(index) => validate_index_expr_finite_indexes(index, src),
@@ -1442,7 +1442,7 @@ fn validate_generic_arg_finite_indexes(
 fn validate_type_expr_finite_indexes(
     type_expr: &ast::TypeExpr,
     src: SourceId,
-) -> Result<(), GraphcalError> {
+) -> Result<(), SemanticError> {
     match &type_expr.kind {
         ast::TypeExprKind::Indexed { base, indexes } => {
             validate_type_expr_finite_indexes(base, src)?;
@@ -1466,7 +1466,7 @@ fn validate_type_expr_finite_indexes(
 }
 
 /// Reject invalid concrete `Fin(N)` identities used by comprehensions and tables.
-fn validate_expr_finite_indexes(expr: &ast::Expr, src: SourceId) -> Result<(), GraphcalError> {
+fn validate_expr_finite_indexes(expr: &ast::Expr, src: SourceId) -> Result<(), SemanticError> {
     use crate::syntax::visitor::ExprVisitor;
 
     struct FiniteValidator {
@@ -1474,9 +1474,9 @@ fn validate_expr_finite_indexes(expr: &ast::Expr, src: SourceId) -> Result<(), G
     }
 
     impl ExprVisitor<crate::syntax::phase::Desugared> for FiniteValidator {
-        type Error = GraphcalError;
+        type Error = SemanticError;
 
-        fn visit_expr(&mut self, expr: &ast::Expr) -> Result<(), GraphcalError> {
+        fn visit_expr(&mut self, expr: &ast::Expr) -> Result<(), SemanticError> {
             match &expr.kind {
                 ast::ExprKind::ForComp { bindings, .. } => {
                     for binding in bindings {
@@ -1606,7 +1606,7 @@ mod tests {
         evaluator: &mut StaticDefinitionEvaluator<'_>,
         owner: &DagId,
         name: &str,
-    ) -> Result<Dimension, GraphcalError> {
+    ) -> Result<Dimension, SemanticError> {
         let identity = evaluator
             .resolve_dimension(owner, &DimRef::local(DimName::expect_valid(name)))
             .unwrap_or_else(|| panic!("`{name}` must resolve"));
@@ -1663,7 +1663,7 @@ mod tests {
             .module_definitions(&Project::id("main"))
             .unwrap_err();
         assert!(
-            matches!(&error, GraphcalError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Dimension(DimensionError::CyclicDimension { name, .. }), .. }) if name.as_str() == "Baz"),
+            matches!(&error, SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Dimension(DimensionError::CyclicDimension { name, .. }), .. }) if name.as_str() == "Baz"),
             "{error:?}"
         );
     }
@@ -1678,7 +1678,7 @@ mod tests {
             .module_definitions(&Project::id("main"))
             .unwrap_err();
         assert!(
-            matches!(&error, GraphcalError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Dimension(DimensionError::UnknownDimension { name, .. }), .. }) if name.to_string() == "Missing"),
+            matches!(&error, SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Dimension(DimensionError::UnknownDimension { name, .. }), .. }) if name.to_string() == "Missing"),
             "{error:?}"
         );
     }
@@ -1846,7 +1846,7 @@ mod tests {
             .module_definitions(&Project::id("main"))
             .unwrap_err();
         assert!(
-            matches!(&error, GraphcalError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Dimension(DimensionError::InvalidBaseUnitDeclaration { reason, .. }), .. }) if reason.contains("already has canonical base unit `USD`")),
+            matches!(&error, SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Dimension(DimensionError::InvalidBaseUnitDeclaration { reason, .. }), .. }) if reason.contains("already has canonical base unit `USD`")),
             "{error:?}"
         );
     }
@@ -1901,7 +1901,7 @@ mod tests {
 
         assert!(matches!(
             evaluator.module_definitions(&Project::id("main")),
-            Err(GraphcalError::Located(crate::diagnostic::Diagnostic {
+            Err(SemanticError::Located(crate::diagnostic::Diagnostic {
                 kind: SemanticErrorKind::Evaluation(EvaluationError::Failed { .. }),
                 ..
             }))

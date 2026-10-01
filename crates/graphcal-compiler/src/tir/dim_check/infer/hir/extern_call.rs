@@ -7,8 +7,8 @@ use crate::semantic_error::name::NameError;
 use crate::semantic_error::plugin::PluginError;
 use std::collections::HashMap;
 
-use crate::graphcal_error::GraphcalError;
 use crate::semantic::checked_type::{IndexTypeRef, StructTypeRef, Symbolic};
+use crate::semantic_error::SemanticError;
 use crate::syntax::span::Span;
 
 use crate::semantic::checked_type::CheckedType;
@@ -25,13 +25,13 @@ impl Infer<'_> {
         ext: &ExternFnRef,
         callee_span: Span,
         args: &[Expr],
-    ) -> Result<CheckedType<Symbolic>, Outcome<GraphcalError>> {
+    ) -> Result<CheckedType<Symbolic>, Outcome<SemanticError>> {
         use crate::function_signature::{ParamKind, ResultKind, ScalarValueKind};
 
         use crate::tir::dim_check::builtins::SignatureDimWalk;
 
         let Some(function) = self.env.tir.extern_functions().get(&ext.key()) else {
-            return Err(GraphcalError::located(
+            return Err(SemanticError::located(
                 self.env.src,
                 callee_span,
                 PluginError::UnknownExternFunction {
@@ -43,7 +43,7 @@ impl Infer<'_> {
         };
         let sig = &function.signature;
         if args.len() != sig.arity() {
-            return Err(GraphcalError::located(
+            return Err(SemanticError::located(
                 self.env.src,
                 callee_span,
                 NameError::WrongArity {
@@ -68,7 +68,7 @@ impl Infer<'_> {
             match &param.kind {
                 ParamKind::Scalar(ScalarValueKind::Bool) => {
                     if !matches!(arg_type, CheckedType::Bool) {
-                        return Err(GraphcalError::located(
+                        return Err(SemanticError::located(
                             self.env.src,
                             arg.span,
                             DimensionError::DimensionMismatch {
@@ -82,7 +82,7 @@ impl Infer<'_> {
                 }
                 ParamKind::Scalar(ScalarValueKind::Int) => {
                     if arg_type != CheckedType::Int {
-                        return Err(GraphcalError::located(
+                        return Err(SemanticError::located(
                             self.env.src,
                             arg.span,
                             DimensionError::DimensionMismatch {
@@ -108,7 +108,7 @@ impl Infer<'_> {
                             index: arg_index,
                         } = current
                         else {
-                            return Err(GraphcalError::located(self.env.src, arg.span, DimensionError::DimensionMismatch { expected: format!("a rank-{} indexed collection", indexes.len()), found: format_checked_type(&arg_type, self.env.registry), help: format!(
+                            return Err(SemanticError::located(self.env.src, arg.span, DimensionError::DimensionMismatch { expected: format!("a rank-{} indexed collection", indexes.len()), found: format_checked_type(&arg_type, self.env.registry), help: format!(
                                     "parameter `{}` of `{display_name}` takes one axis for each declared index variable",
                                     param.name
                                 ) }).into());
@@ -119,7 +119,7 @@ impl Infer<'_> {
                     match element {
                         ScalarValueKind::Quantity(monomial) => {
                             let Some(arg_dim) = current.quantity_dimension().cloned() else {
-                                return Err(GraphcalError::located(self.env.src, arg.span, DimensionError::DimensionMismatch { expected: format!(
+                                return Err(SemanticError::located(self.env.src, arg.span, DimensionError::DimensionMismatch { expected: format!(
                                         "a rank-{} indexed quantity collection",
                                         indexes.len()
                                     ), found: format_checked_type(&arg_type, self.env.registry), help: format!(
@@ -146,7 +146,7 @@ impl Infer<'_> {
                                     | (ScalarValueKind::Int, CheckedType::Int)
                             );
                             if !matches {
-                                return Err(GraphcalError::located(self.env.src, arg.span, DimensionError::DimensionMismatch { expected: format!(
+                                return Err(SemanticError::located(self.env.src, arg.span, DimensionError::DimensionMismatch { expected: format!(
                                         "{name} with exactly {} indexed axes",
                                         indexes.len()
                                     ), found: format_checked_type(&arg_type, self.env.registry), help: format!(
@@ -163,7 +163,7 @@ impl Infer<'_> {
                             }
                             std::collections::hash_map::Entry::Occupied(bound) => {
                                 if bound.get() != arg_index {
-                                    return Err(GraphcalError::located(self.env.src, arg.span, DimensionError::DimensionMismatch { expected: format!(
+                                    return Err(SemanticError::located(self.env.src, arg.span, DimensionError::DimensionMismatch { expected: format!(
                                             "an axis over `{}` (index variable `{index}` was bound by an earlier argument)",
                                             bound.get()
                                         ), found: format_checked_type(&arg_type, self.env.registry), help: format!(
@@ -197,7 +197,7 @@ impl Infer<'_> {
                 let Some(bound) = index_bindings.get(index) else {
                     // try_new guarantees every result index variable indexes
                     // some parameter, so this is a compiler bug.
-                    return Err(GraphcalError::internal_error(format!(
+                    return Err(SemanticError::internal_error(format!(
                             "result index variable `{index}` of `{display_name}` was not bound by any argument"
                         ), self.env.src, crate::diagnostic_anchor::DiagnosticAnchor::Source(callee_span)));
                 };

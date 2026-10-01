@@ -19,14 +19,14 @@ fn parse_and_desugar(source: &str) -> crate::desugar::desugared_ast::File {
     crate::desugar::desugared_ast::File::from(raw_file)
 }
 
-fn parse_and_resolve(source: &str) -> Result<CollectedWithEntries, GraphcalError> {
+fn parse_and_resolve(source: &str) -> Result<CollectedWithEntries, SemanticError> {
     let file = parse_and_desugar(source);
     resolve(&file, make_src(source))
 }
 
 /// Run the full per-file pipeline (desugar → IR → HIR/TIR) so tests can
 /// observe reference resolution and the HIR-derived dependency graph.
-fn compile_to_tir(source: &str) -> Result<crate::tir::typed::UncheckedTir, GraphcalError> {
+fn compile_to_tir(source: &str) -> Result<crate::tir::typed::UncheckedTir, SemanticError> {
     let file = parse_and_desugar(source);
     let src = crate::source_registry::SourceRegistry::new()
         .register("test.gcl", std::sync::Arc::new(source.to_string()));
@@ -73,7 +73,7 @@ fn source_level_min_i32_dimension_exponent_is_out_of_range() {
     assert!(
         matches!(
             error,
-            GraphcalError::Located(crate::diagnostic::Diagnostic {
+            SemanticError::Located(crate::diagnostic::Diagnostic {
                 kind: SemanticErrorKind::Dimension(DimensionError::DimensionOverflow),
                 ..
             })
@@ -127,7 +127,7 @@ fn resolve_duplicate_name() {
         .unwrap_err();
     assert!(matches!(
         err,
-        GraphcalError::Located(crate::diagnostic::Diagnostic {
+        SemanticError::Located(crate::diagnostic::Diagnostic {
             kind: SemanticErrorKind::Name(NameError::DuplicateName { .. }),
             ..
         })
@@ -140,7 +140,7 @@ fn resolve_rejects_type_index_name_collision() {
         parse_and_resolve("type M { Mk(v: Dimensionless) }\npub index M = { A, B };").unwrap_err();
     assert!(matches!(
         err,
-        GraphcalError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Name(NameError::DuplicateName { name, .. }), .. }) if name == "M"
+        SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Name(NameError::DuplicateName { name, .. }), .. }) if name == "M"
     ));
 }
 
@@ -149,7 +149,7 @@ fn resolve_rejects_dimension_index_name_collision() {
     let err = parse_and_resolve("dim M = Length;\npub index M = { A, B };").unwrap_err();
     assert!(matches!(
         err,
-        GraphcalError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Name(NameError::DuplicateName { name, .. }), .. }) if name == "M"
+        SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Name(NameError::DuplicateName { name, .. }), .. }) if name == "M"
     ));
 }
 
@@ -158,7 +158,7 @@ fn resolve_rejects_dimension_type_name_collision() {
     let err = parse_and_resolve("dim M = Length;\ntype M { Mk(v: Dimensionless) }").unwrap_err();
     assert!(matches!(
         err,
-        GraphcalError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Name(NameError::DuplicateName { name, .. }), .. }) if name == "M"
+        SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Name(NameError::DuplicateName { name, .. }), .. }) if name == "M"
     ));
 }
 
@@ -180,7 +180,7 @@ fn static_index_and_prelude_unit_resolve_independently() {
 fn resolve_rejects_builtin_dimension_shadowing() {
     let err = parse_and_resolve("dim Velocity = Length / Time;").unwrap_err();
     assert!(
-        matches!(err, GraphcalError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Name(NameError::BuiltinNameShadowed { name, .. }), .. }) if name == "Velocity")
+        matches!(err, SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Name(NameError::BuiltinNameShadowed { name, .. }), .. }) if name == "Velocity")
     );
 }
 
@@ -188,7 +188,7 @@ fn resolve_rejects_builtin_dimension_shadowing() {
 fn resolve_rejects_builtin_unit_shadowing() {
     let err = parse_and_resolve("unit m: Length = 1.0 m;").unwrap_err();
     assert!(
-        matches!(err, GraphcalError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Name(NameError::BuiltinNameShadowed { name, .. }), .. }) if name == "m")
+        matches!(err, SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Name(NameError::BuiltinNameShadowed { name, .. }), .. }) if name == "m")
     );
 }
 
@@ -203,7 +203,7 @@ fn resolve_rejects_every_builtin_constant_spelling_for_graph_values() {
             let err = parse_and_resolve(&declaration).unwrap_err();
             assert!(matches!(
                 err,
-                GraphcalError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Name(NameError::BuiltinNameShadowed { name, .. }), .. }) if name == builtin.as_str()
+                SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Name(NameError::BuiltinNameShadowed { name, .. }), .. }) if name == builtin.as_str()
             ));
         }
     }
@@ -234,7 +234,7 @@ fn resolve_rejects_every_builtin_term_spelling_for_constructors() {
             let err = parse_and_resolve(&declaration).unwrap_err();
             assert!(matches!(
                 err,
-                GraphcalError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Name(NameError::BuiltinNameShadowed { name: rejected, .. }), .. })
+                SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Name(NameError::BuiltinNameShadowed { name: rejected, .. }), .. })
                     if rejected == name
             ));
         }
@@ -256,7 +256,7 @@ fn bare_time_scale_without_a_term_reports_the_static_namespace() {
     let err = compile_to_tir("node invalid: Dimensionless = UTC;").unwrap_err();
     assert!(matches!(
         err,
-        GraphcalError::Located(crate::diagnostic::Diagnostic {
+        SemanticError::Located(crate::diagnostic::Diagnostic {
             kind: SemanticErrorKind::Name(NameError::TimeScaleInValuePosition {
                 scale: TimeScale::UTC,
                 ..
@@ -308,7 +308,7 @@ fn resolve_at_in_const() {
             .unwrap_err();
     assert!(matches!(
         err,
-        GraphcalError::Located(crate::diagnostic::Diagnostic {
+        SemanticError::Located(crate::diagnostic::Diagnostic {
             kind: SemanticErrorKind::Name(NameError::GraphRefInConst { .. }),
             ..
         })
@@ -354,7 +354,7 @@ fn resolve_unknown_function() {
     let err = compile_to_tir("node x: Dimensionless = unknown_fn(1.0);").unwrap_err();
     assert!(matches!(
         err,
-        GraphcalError::Located(crate::diagnostic::Diagnostic {
+        SemanticError::Located(crate::diagnostic::Diagnostic {
             kind: SemanticErrorKind::Name(NameError::UnknownFunction { .. }),
             ..
         })
@@ -366,7 +366,7 @@ fn named_arguments_on_builtin_report_positional_call_syntax() {
     let err = compile_to_tir("node angle: Angle = atan2(y: 1.0 m, x: 2.0 m);").unwrap_err();
     assert!(matches!(
         err,
-        GraphcalError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Name(NameError::NamedArgumentsOnFunction { name, positional_call, .. }), .. }) if name == "atan2" && positional_call == "atan2(y_value, x_value)"
+        SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Name(NameError::NamedArgumentsOnFunction { name, positional_call, .. }), .. }) if name == "atan2" && positional_call == "atan2(y_value, x_value)"
     ));
 }
 
@@ -383,7 +383,7 @@ node x: Dimensionless = demo::lerp(a: 1.0, b: 2.0, t: 0.5);
     .unwrap_err();
     assert!(matches!(
         err,
-        GraphcalError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Name(NameError::NamedArgumentsOnFunction { name, positional_call, .. }), .. }) if name == "demo::lerp"
+        SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Name(NameError::NamedArgumentsOnFunction { name, positional_call, .. }), .. }) if name == "demo::lerp"
             && positional_call == "demo::lerp(a_value, b_value, t_value)"
     ));
 }
@@ -393,7 +393,7 @@ fn unknown_named_call_reports_one_unknown_term_callee() {
     let err = compile_to_tir("node x: Dimensionless = Missing(value: 1.0);").unwrap_err();
     assert!(matches!(
         err,
-        GraphcalError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Name(NameError::UnknownFunction { name, .. }), .. }) if name == "Missing"
+        SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Name(NameError::UnknownFunction { name, .. }), .. }) if name == "Missing"
     ));
 }
 
@@ -402,7 +402,7 @@ fn obsolete_extremum_function_names_are_rejected() {
     for obsolete in ["min", "max"] {
         let source = format!("node x: Dimensionless = {obsolete}(1.0, 2.0);");
         match compile_to_tir(&source).unwrap_err() {
-            GraphcalError::Located(crate::diagnostic::Diagnostic {
+            SemanticError::Located(crate::diagnostic::Diagnostic {
                 kind: SemanticErrorKind::Name(NameError::UnknownFunction { name, .. }),
                 ..
             }) => assert_eq!(name, obsolete),
@@ -416,7 +416,7 @@ fn binary_selection_functions_have_fixed_arity() {
     let err = compile_to_tir("node x: Dimensionless = least(1.0);").unwrap_err();
     assert!(matches!(
         err,
-        GraphcalError::Located(crate::diagnostic::Diagnostic {
+        SemanticError::Located(crate::diagnostic::Diagnostic {
             kind: SemanticErrorKind::Name(NameError::WrongArity { .. }),
             ..
         })
@@ -428,7 +428,7 @@ fn resolve_wrong_arity() {
     let err = compile_to_tir("node x: Dimensionless = sqrt(1.0, 2.0);").unwrap_err();
     assert!(matches!(
         err,
-        GraphcalError::Located(crate::diagnostic::Diagnostic {
+        SemanticError::Located(crate::diagnostic::Diagnostic {
             kind: SemanticErrorKind::Name(NameError::WrongArity { .. }),
             ..
         })
@@ -461,7 +461,7 @@ fn resolve_duplicate_param_name() {
         .unwrap_err();
     assert!(matches!(
         err,
-        GraphcalError::Located(crate::diagnostic::Diagnostic {
+        SemanticError::Located(crate::diagnostic::Diagnostic {
             kind: SemanticErrorKind::Name(NameError::DuplicateName { .. }),
             ..
         })
@@ -475,7 +475,7 @@ fn resolve_duplicate_const_name() {
             .unwrap_err();
     assert!(matches!(
         err,
-        GraphcalError::Located(crate::diagnostic::Diagnostic {
+        SemanticError::Located(crate::diagnostic::Diagnostic {
             kind: SemanticErrorKind::Name(NameError::DuplicateName { .. }),
             ..
         })
@@ -490,7 +490,7 @@ fn resolve_duplicate_node_name() {
     .unwrap_err();
     assert!(matches!(
         err,
-        GraphcalError::Located(crate::diagnostic::Diagnostic {
+        SemanticError::Located(crate::diagnostic::Diagnostic {
             kind: SemanticErrorKind::Name(NameError::DuplicateName { .. }),
             ..
         })
@@ -505,7 +505,7 @@ fn resolve_constructor_collision_with_node() {
     .unwrap_err();
     assert!(matches!(
         err,
-        GraphcalError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Name(NameError::DuplicateName { name, .. }), .. }) if name == "Student"
+        SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Name(NameError::DuplicateName { name, .. }), .. }) if name == "Student"
     ));
 }
 
@@ -533,7 +533,7 @@ fn resolve_unknown_function_in_const() {
     let err = compile_to_tir("const node a: Dimensionless = unknown_fn(1.0);").unwrap_err();
     assert!(matches!(
         err,
-        GraphcalError::Located(crate::diagnostic::Diagnostic {
+        SemanticError::Located(crate::diagnostic::Diagnostic {
             kind: SemanticErrorKind::Name(NameError::UnknownFunction { .. }),
             ..
         })
@@ -545,7 +545,7 @@ fn resolve_wrong_arity_in_const() {
     let err = compile_to_tir("const node a: Dimensionless = sqrt(1.0, 2.0);").unwrap_err();
     assert!(matches!(
         err,
-        GraphcalError::Located(crate::diagnostic::Diagnostic {
+        SemanticError::Located(crate::diagnostic::Diagnostic {
             kind: SemanticErrorKind::Name(NameError::WrongArity { .. }),
             ..
         })
@@ -565,7 +565,7 @@ fn resolve_unknown_function_in_node() {
         .unwrap_err();
     assert!(matches!(
         err,
-        GraphcalError::Located(crate::diagnostic::Diagnostic {
+        SemanticError::Located(crate::diagnostic::Diagnostic {
             kind: SemanticErrorKind::Name(NameError::UnknownFunction { .. }),
             ..
         })
@@ -579,7 +579,7 @@ fn resolve_wrong_arity_in_node() {
             .unwrap_err();
     assert!(matches!(
         err,
-        GraphcalError::Located(crate::diagnostic::Diagnostic {
+        SemanticError::Located(crate::diagnostic::Diagnostic {
             kind: SemanticErrorKind::Name(NameError::WrongArity { .. }),
             ..
         })
@@ -755,7 +755,7 @@ fn resolve_required_index_must_be_bindable() {
     ";
     let err = parse_and_resolve(source).unwrap_err();
     assert!(
-        matches!(err, GraphcalError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Visibility(VisibilityError::RequiredItemMustBeBindable { kind, .. }), .. }) if kind == "index")
+        matches!(err, SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Visibility(VisibilityError::RequiredItemMustBeBindable { kind, .. }), .. }) if kind == "index")
     );
 }
 
@@ -768,7 +768,7 @@ fn resolve_required_pub_index_still_needs_bind() {
     ";
     let err = parse_and_resolve(source).unwrap_err();
     assert!(
-        matches!(err, GraphcalError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Visibility(VisibilityError::RequiredItemMustBeBindable { kind, .. }), .. }) if kind == "index")
+        matches!(err, SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Visibility(VisibilityError::RequiredItemMustBeBindable { kind, .. }), .. }) if kind == "index")
     );
 }
 
@@ -787,7 +787,7 @@ fn resolve_required_type_must_be_bindable() {
     ";
     let err = parse_and_resolve(source).unwrap_err();
     assert!(
-        matches!(err, GraphcalError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Visibility(VisibilityError::RequiredItemMustBeBindable { kind, .. }), .. }) if kind == "type")
+        matches!(err, SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Visibility(VisibilityError::RequiredItemMustBeBindable { kind, .. }), .. }) if kind == "type")
     );
 }
 
@@ -806,7 +806,7 @@ fn resolve_required_dim_must_be_bindable() {
     ";
     let err = parse_and_resolve(source).unwrap_err();
     assert!(
-        matches!(err, GraphcalError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Visibility(VisibilityError::RequiredItemMustBeBindable { kind, .. }), .. }) if kind == "dim")
+        matches!(err, SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Visibility(VisibilityError::RequiredItemMustBeBindable { kind, .. }), .. }) if kind == "dim")
     );
 }
 
@@ -828,7 +828,7 @@ fn resolve_private_in_public_dim() {
     ";
     let err = parse_and_resolve(source).unwrap_err();
     assert!(
-        matches!(&err, GraphcalError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Visibility(VisibilityError::PrivateInPublic { ref_name, .. }), .. }) if ref_name.as_str() == "Speed")
+        matches!(&err, SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Visibility(VisibilityError::PrivateInPublic { ref_name, .. }), .. }) if ref_name.as_str() == "Speed")
     );
 }
 
@@ -862,10 +862,10 @@ fn resolve_private_in_public_index_in_type() {
     let err = parse_and_resolve(source).unwrap_err();
     // May get PubIndexVariantLiteral before PrivateInPublic.
     assert!(
-        matches!(&err, GraphcalError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Visibility(VisibilityError::PrivateInPublic { ref_name, .. }), .. }) if ref_name.as_str() == "Step")
+        matches!(&err, SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Visibility(VisibilityError::PrivateInPublic { ref_name, .. }), .. }) if ref_name.as_str() == "Step")
             || matches!(
                 err,
-                GraphcalError::Located(crate::diagnostic::Diagnostic {
+                SemanticError::Located(crate::diagnostic::Diagnostic {
                     kind: SemanticErrorKind::Visibility(
                         VisibilityError::PubIndexVariantLiteral { .. }
                     ),
@@ -943,7 +943,7 @@ fn resolve_node_with_pub_bind_variant_literal_fires_v004() {
     let err = compile_to_tir(source).unwrap_err();
     assert!(matches!(
         err,
-        GraphcalError::Located(crate::diagnostic::Diagnostic {
+        SemanticError::Located(crate::diagnostic::Diagnostic {
             kind: SemanticErrorKind::Visibility(VisibilityError::PubIndexVariantLiteral { .. }),
             ..
         })
@@ -962,7 +962,7 @@ fn resolve_const_with_pub_bind_variant_literal_fires_v004() {
     let err = compile_to_tir(source).unwrap_err();
     assert!(matches!(
         err,
-        GraphcalError::Located(crate::diagnostic::Diagnostic {
+        SemanticError::Located(crate::diagnostic::Diagnostic {
             kind: SemanticErrorKind::Visibility(VisibilityError::PubIndexVariantLiteral { .. }),
             ..
         })
@@ -1000,7 +1000,7 @@ fn resolve_public_assert_with_pub_bind_variant_literal_fires_v004() {
     let err = compile_to_tir(source).unwrap_err();
     assert!(matches!(
         err,
-        GraphcalError::Located(crate::diagnostic::Diagnostic {
+        SemanticError::Located(crate::diagnostic::Diagnostic {
             kind: SemanticErrorKind::Visibility(VisibilityError::PubIndexVariantLiteral { .. }),
             ..
         })
@@ -1031,7 +1031,7 @@ fn resolve_param_with_private_dim_fires_v003() {
     ";
     let err = parse_and_resolve(source).unwrap_err();
     assert!(
-        matches!(&err, GraphcalError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Visibility(VisibilityError::PrivateInPublic { ref_name, .. }), .. }) if ref_name.as_str() == "Speed")
+        matches!(&err, SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Visibility(VisibilityError::PrivateInPublic { ref_name, .. }), .. }) if ref_name.as_str() == "Speed")
     );
 }
 
@@ -1053,7 +1053,7 @@ fn resolve_pub_dim_with_private_dim_fires_v003() {
     ";
     let err = parse_and_resolve(source).unwrap_err();
     assert!(
-        matches!(err, GraphcalError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Visibility(VisibilityError::PrivateInPublic { pub_kind, ref_name, .. }), .. })
+        matches!(err, SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Visibility(VisibilityError::PrivateInPublic { pub_kind, ref_name, .. }), .. })
             if pub_kind == DeclarationKind::Dimension && ref_name.as_str() == "Inner")
     );
 }
@@ -1066,7 +1066,7 @@ fn resolve_pub_type_with_private_field_type_fires_v003() {
     ";
     let err = parse_and_resolve(source).unwrap_err();
     assert!(
-        matches!(err, GraphcalError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Visibility(VisibilityError::PrivateInPublic { pub_kind, ref_name, .. }), .. })
+        matches!(err, SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Visibility(VisibilityError::PrivateInPublic { pub_kind, ref_name, .. }), .. })
             if pub_kind == DeclarationKind::Type && ref_name.as_str() == "Inner")
     );
 }
@@ -1086,7 +1086,7 @@ fn resolve_pub_union_type_with_private_payload_type_fires_v003() {
     ";
     let err = parse_and_resolve(source).unwrap_err();
     assert!(
-        matches!(err, GraphcalError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Visibility(VisibilityError::PrivateInPublic { pub_kind, ref_name, .. }), .. })
+        matches!(err, SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Visibility(VisibilityError::PrivateInPublic { pub_kind, ref_name, .. }), .. })
             if pub_kind == DeclarationKind::Type && ref_name.as_str() == "Inner")
     );
 }
@@ -1099,7 +1099,7 @@ fn resolve_pub_type_with_private_type_default_fires_v003() {
     ";
     let err = compile_to_tir(source).unwrap_err();
     assert!(
-        matches!(err, GraphcalError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Visibility(VisibilityError::PrivateInPublic { pub_kind, ref_kind, ref_name, .. }), .. })
+        matches!(err, SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Visibility(VisibilityError::PrivateInPublic { pub_kind, ref_kind, ref_name, .. }), .. })
             if pub_kind == DeclarationKind::Type
                 && ref_kind == DeclarationKind::Type
                 && ref_name.as_str() == "Secret")
@@ -1114,7 +1114,7 @@ fn resolve_pub_type_with_private_dimension_default_fires_v003() {
     ";
     let err = compile_to_tir(source).unwrap_err();
     assert!(
-        matches!(err, GraphcalError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Visibility(VisibilityError::PrivateInPublic { ref_kind, ref_name, .. }), .. })
+        matches!(err, SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Visibility(VisibilityError::PrivateInPublic { ref_kind, ref_name, .. }), .. })
             if ref_kind == DeclarationKind::Dimension && ref_name.as_str() == "SecretDim")
     );
 }
@@ -1127,7 +1127,7 @@ fn resolve_pub_type_with_private_index_default_fires_v003() {
     ";
     let err = compile_to_tir(source).unwrap_err();
     assert!(
-        matches!(err, GraphcalError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Visibility(VisibilityError::PrivateInPublic { ref_kind, ref_name, .. }), .. })
+        matches!(err, SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Visibility(VisibilityError::PrivateInPublic { ref_kind, ref_name, .. }), .. })
             if ref_kind == DeclarationKind::Index && ref_name.as_str() == "SecretIndex")
     );
 }
@@ -1141,7 +1141,7 @@ fn resolve_pub_type_checks_nested_generic_default_dependencies() {
     ";
     let err = compile_to_tir(source).unwrap_err();
     assert!(
-        matches!(&err, GraphcalError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Visibility(VisibilityError::PrivateInPublic { ref_name, .. }), .. })
+        matches!(&err, SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Visibility(VisibilityError::PrivateInPublic { ref_name, .. }), .. })
             if ref_name.as_str() == "Secret")
     );
 }
@@ -1154,7 +1154,7 @@ fn generic_parameter_cannot_shadow_private_static_type() {
     ";
     assert!(matches!(
         compile_to_tir(source),
-        Err(GraphcalError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Evaluation(EvaluationError::Failed { message, .. }), .. }))
+        Err(SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Evaluation(EvaluationError::Failed { message, .. }), .. }))
             if message.contains("shadows a visible Static name")
     ));
 }
@@ -1184,7 +1184,7 @@ fn resolve_pub_bind_index_with_private_dim_fires_v003() {
     ";
     let err = parse_and_resolve(source).unwrap_err();
     assert!(
-        matches!(err, GraphcalError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Visibility(VisibilityError::PrivateInPublic { pub_kind, ref_name, .. }), .. })
+        matches!(err, SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Visibility(VisibilityError::PrivateInPublic { pub_kind, ref_name, .. }), .. })
             if pub_kind == DeclarationKind::Index && ref_name.as_str() == "Rate")
     );
 }
@@ -1197,7 +1197,7 @@ fn resolve_pub_unit_with_private_dim_fires_v003() {
     ";
     let err = parse_and_resolve(source).unwrap_err();
     assert!(
-        matches!(err, GraphcalError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Visibility(VisibilityError::PrivateInPublic { pub_kind, ref_name, .. }), .. })
+        matches!(err, SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Visibility(VisibilityError::PrivateInPublic { pub_kind, ref_name, .. }), .. })
             if pub_kind == DeclarationKind::Unit && ref_name.as_str() == "Currency")
     );
 }

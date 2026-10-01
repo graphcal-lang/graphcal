@@ -8,12 +8,12 @@
 use std::collections::{HashMap, HashSet};
 
 use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
-use graphcal_compiler::graphcal_error::GraphcalError;
 use graphcal_compiler::semantic::checked_type::{
     CheckedGenericArg, CheckedType, IndexTypeRef, StructTypeRef,
 };
 use graphcal_compiler::semantic::index_def::{ConcreteIndexKind, FiniteIndex};
 use graphcal_compiler::semantic::time_scale::TimeScale;
+use graphcal_compiler::semantic_error::SemanticError;
 use graphcal_compiler::source_id::SourceId;
 
 use graphcal_compiler::syntax::index_name::IndexVariantName;
@@ -388,7 +388,7 @@ impl<'a> ModelSchemaGraphBuilder<'a> {
     pub(super) fn value_schema(
         &mut self,
         declared_type: &CheckedType,
-    ) -> Result<ModelValueSchema, GraphcalError> {
+    ) -> Result<ModelValueSchema, SemanticError> {
         match declared_type {
             CheckedType::Quantity(dimension) => Ok(ModelValueSchema::Quantity(
                 model_quantity_schema(dimension, self.tir),
@@ -418,7 +418,7 @@ impl<'a> ModelSchemaGraphBuilder<'a> {
         clippy::needless_collect,
         reason = "materializing TIR-backed field specs releases immutable borrows before recursively mutating the schema arena"
     )]
-    fn ensure_algebraic_definition(&mut self, id: &ModelTypeId) -> Result<(), GraphcalError> {
+    fn ensure_algebraic_definition(&mut self, id: &ModelTypeId) -> Result<(), SemanticError> {
         if self.graph.definition(id).is_some() || !self.building.insert(id.clone()) {
             return Ok(());
         }
@@ -430,7 +430,7 @@ impl<'a> ModelSchemaGraphBuilder<'a> {
                 &id.generic_args,
                 self.source,
             )
-            .map_err(|error| error.into_graphcal_error(self.source))?;
+            .map_err(|error| error.into_semantic_error(self.source))?;
             let constructor_specs = model_type
                 .constructors(self.source)?
                 .into_iter()
@@ -457,10 +457,10 @@ impl<'a> ModelSchemaGraphBuilder<'a> {
                                 value: self.value_schema(&declared_type)?,
                             })
                         })
-                        .collect::<Result<Vec<_>, GraphcalError>>()?;
+                        .collect::<Result<Vec<_>, SemanticError>>()?;
                     Ok(ModelConstructorSchema { name, fields })
                 })
-                .collect::<Result<Vec<_>, GraphcalError>>()
+                .collect::<Result<Vec<_>, SemanticError>>()
         })();
         self.building.remove(id);
         let constructors = result?;
@@ -498,7 +498,7 @@ fn model_index_schema(
     index: &IndexTypeRef,
     tir: &graphcal_compiler::tir::typed::CheckedTir,
     source: SourceId,
-) -> Result<ModelIndexSchema, GraphcalError> {
+) -> Result<ModelIndexSchema, SemanticError> {
     if let Some(finite) = index.finite_index() {
         return Ok(ModelIndexSchema {
             identity: index.clone(),
@@ -506,7 +506,7 @@ fn model_index_schema(
         });
     }
     let axis = IndexAxis::resolve(tir, index).ok_or_else(|| {
-        GraphcalError::internal_error(
+        SemanticError::internal_error(
             format!("model index `{index}` has no concrete definition"),
             source,
             DiagnosticAnchor::WholeFile,

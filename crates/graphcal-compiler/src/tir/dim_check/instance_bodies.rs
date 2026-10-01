@@ -5,8 +5,8 @@ use std::collections::HashMap;
 
 use crate::cancellation::CancellationToken;
 use crate::diagnostic_anchor::DiagnosticAnchor;
-use crate::graphcal_error::GraphcalError;
 use crate::outcome::Outcome;
+use crate::semantic_error::SemanticError;
 use crate::semantic_error::dimension::DimensionError;
 use crate::semantic_error::visibility::VisibilityError;
 use crate::source_id::SourceId;
@@ -21,7 +21,7 @@ fn check_retained_reconciliations(
     dag: &crate::tir::typed::model::DagTIR,
     declaration: &crate::resolved_name::ResolvedDeclName,
     observations: &[NominalObservation],
-) -> Result<(), GraphcalError> {
+) -> Result<(), SemanticError> {
     use crate::tir::typed::model::OverrideTarget;
     for reconciliation in dag
         .semantic
@@ -89,7 +89,7 @@ fn check_retained_reconciliations(
                     }
                 };
                 if let Some((overridden, kind, detail)) = matched {
-                    return Err(GraphcalError::located(
+                    return Err(SemanticError::located(
                         reconciliation.src,
                         reconciliation.include_span,
                         VisibilityError::IncludeMustReconcileOverride {
@@ -143,7 +143,7 @@ fn check_instance_defaults(
     template: &crate::tir::typed::model::DagTIR,
     template_bodies: &CheckedBodies,
     substitution: &crate::ir::static_substitution::StaticSubstitution,
-) -> Result<(), Outcome<GraphcalError>> {
+) -> Result<(), Outcome<SemanticError>> {
     let template_defaults = inherited_defaults(template);
     for entry in ctx.env.dag.params() {
         ctx.checkpoint()?;
@@ -157,7 +157,7 @@ fn check_instance_defaults(
             continue;
         }
         let internal = |message: String| {
-            GraphcalError::internal_error(
+            SemanticError::internal_error(
                 message,
                 ctx.env.src,
                 DiagnosticAnchor::Source(default.span),
@@ -186,7 +186,7 @@ fn check_instance_defaults(
             specialize_expression_type(&checked_type, substitution, ctx.env.tir, ctx.env.src)?;
         let expected = entry.type_ann.checked().declared();
         if specialized != expected.to_symbolic() {
-            return Err(GraphcalError::located(
+            return Err(SemanticError::located(
                 ctx.env.src,
                 default.span,
                 DimensionError::DimensionMismatchInAnnotation {
@@ -217,13 +217,13 @@ pub(super) fn instance_bodies(
     canonical: &HashMap<crate::dag_id::DagId, CheckedBodies>,
     src: SourceId,
     cancellation: &CancellationToken,
-) -> Result<InstanceBodies, Outcome<GraphcalError>> {
+) -> Result<InstanceBodies, Outcome<SemanticError>> {
     let checking = crate::tir::typed::CheckingTir {
         tir,
         bodies: canonical,
     };
     let internal =
-        |message: String| GraphcalError::internal_error(message, src, DiagnosticAnchor::WholeFile);
+        |message: String| SemanticError::internal_error(message, src, DiagnosticAnchor::WholeFile);
     let mut port_generic_plot_channels = HashMap::new();
     let mut published = Vec::new();
     let instances = tir.local_dags().filter_map(|(owner, dag)| {

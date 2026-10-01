@@ -20,8 +20,8 @@ use graphcal_compiler::semantic_error::name::NameError;
 use graphcal_compiler::source_id::SourceId;
 
 use graphcal_compiler::declaration_category::DeclCategory;
-use graphcal_compiler::graphcal_error::GraphcalError;
 use graphcal_compiler::ir::resolve::{ImportedValueNames, ScopedName};
+use graphcal_compiler::semantic_error::SemanticError;
 use graphcal_compiler::syntax::decl_name::DeclName;
 use graphcal_compiler::syntax::module_name::{ModuleAliasName, ScopeSegment};
 use graphcal_compiler::syntax::span::Span;
@@ -192,12 +192,12 @@ fn is_imported_dynamic_unit_during_lowering(
 }
 
 fn remap_imported_dynamic_unit_error(
-    error: GraphcalError,
+    error: SemanticError,
     module_map: &HashMap<ModuleAliasName, ProjectModuleBinding>,
     project: &crate::loader::loaded_project::LoadedProject,
-) -> GraphcalError {
+) -> SemanticError {
     match error {
-        GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+        SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
             src,
             primary,
             kind: SemanticErrorKind::Dimension(DimensionError::UnknownUnit { name }),
@@ -205,7 +205,7 @@ fn remap_imported_dynamic_unit_error(
             is_imported_dynamic_unit_during_lowering(alias, name.leaf(), module_map, project)
         }) =>
         {
-            GraphcalError::located(
+            SemanticError::located(
                 src,
                 primary,
                 ModuleError::ImportRuntimeUnit {
@@ -225,7 +225,7 @@ pub(super) fn validate_imported_runtime_units(
         HashSet<graphcal_compiler::syntax::dimension::UnitName>,
     >,
     src: SourceId,
-) -> Result<(), GraphcalError> {
+) -> Result<(), SemanticError> {
     let mut invalid = None;
     dag.visit_unit_references(&mut |unit, span| {
         if invalid.is_none()
@@ -241,7 +241,7 @@ pub(super) fn validate_imported_runtime_units(
         }
     });
     match invalid {
-        Some((unit, span)) => Err(GraphcalError::located(
+        Some((unit, span)) => Err(SemanticError::located(
             src,
             span,
             ModuleError::ImportRuntimeUnit {
@@ -553,20 +553,20 @@ fn extend_imported_bindings(
                 .chain(&imported_names.node_names)
                 .filter_map(|(candidate, span)| (candidate == &name).then_some(*span));
             let Some(first) = spans.next() else {
-                return Err(PipelineError::Semantic(GraphcalError::internal_error(
+                return Err(PipelineError::Semantic(SemanticError::internal_error(
                     format!("duplicate imported binding `{name}` has no source provenance"),
                     src,
                     DiagnosticAnchor::WholeFile,
                 )));
             };
             let Some(duplicate) = spans.next_back() else {
-                return Err(PipelineError::Semantic(GraphcalError::internal_error(
+                return Err(PipelineError::Semantic(SemanticError::internal_error(
                     format!("duplicate imported binding `{name}` has only one source location"),
                     src,
                     DiagnosticAnchor::Source(first),
                 )));
             };
-            return Err(PipelineError::Semantic(GraphcalError::located(
+            return Err(PipelineError::Semantic(SemanticError::located(
                 src,
                 duplicate,
                 NameError::DuplicateName {
@@ -700,7 +700,7 @@ pub(super) fn install_shared_module_artifacts(
         for (key, function) in &dep_eval.extern_functions {
             tir.insert_extern_function(key.clone(), function.clone())
                 .map_err(|error| {
-                    PipelineError::Semantic(GraphcalError::internal_error(
+                    PipelineError::Semantic(SemanticError::internal_error(
                         error.to_string(),
                         src,
                         DiagnosticAnchor::WholeFile,
@@ -716,7 +716,7 @@ pub(super) fn install_shared_module_artifacts(
             .map(|artifact| artifact.dag_store.as_ref()),
     )
     .map_err(|error| {
-        PipelineError::Semantic(GraphcalError::internal_error(
+        PipelineError::Semantic(SemanticError::internal_error(
             error.to_string(),
             src,
             DiagnosticAnchor::WholeFile,
@@ -906,7 +906,7 @@ fn semantic_plot_projections(
                     visibility: requested.visibility,
                 })
                 .ok_or_else(|| {
-                    PipelineError::Semantic(GraphcalError::internal_error(
+                    PipelineError::Semantic(SemanticError::internal_error(
                         format!("requested template plot `{source}` has no semantic target"),
                         src,
                         DiagnosticAnchor::WholeFile,
@@ -1266,7 +1266,7 @@ fn validate_index_binding_contracts(
 
     for (port, target) in &bindings.substitution.indexes {
         let site = bindings.index_sites.get(port).ok_or_else(|| {
-            PipelineError::Semantic(GraphcalError::internal_error(
+            PipelineError::Semantic(SemanticError::internal_error(
                 format!("bound index port `{port}` has no binding site"),
                 sites.importer_src,
                 graphcal_compiler::diagnostic_anchor::DiagnosticAnchor::Source(sites.include_span),
@@ -1289,7 +1289,7 @@ fn validate_index_binding_contracts(
         match contract.validate(&candidate) {
             Ok(()) => {}
             Err(IndexBindingContractError::KindMismatch { expected, found }) => {
-                return Err(PipelineError::Semantic(GraphcalError::located(
+                return Err(PipelineError::Semantic(SemanticError::located(
                     sites.importer_src,
                     site.span,
                     ModuleError::IndexKindMismatch {
@@ -1301,7 +1301,7 @@ fn validate_index_binding_contracts(
                 )));
             }
             Err(IndexBindingContractError::DimensionMismatch { expected, found }) => {
-                return Err(PipelineError::Semantic(GraphcalError::located(
+                return Err(PipelineError::Semantic(SemanticError::located(
                     sites.importer_src,
                     site.span,
                     IndexError::IndexBindingDimensionMismatch {
@@ -1323,7 +1323,7 @@ fn validate_index_binding_contracts(
 fn bound_dimension_ports(
     definitions: &mut graphcal_compiler::ir::static_definitions::StaticDefinitionEvaluator<'_>,
     dimensions: &std::collections::BTreeMap<ResolvedDimName, ResolvedDimName>,
-) -> Result<HashMap<ResolvedDimName, Option<graphcal_compiler::dimension::Dimension>>, GraphcalError>
+) -> Result<HashMap<ResolvedDimName, Option<graphcal_compiler::dimension::Dimension>>, SemanticError>
 {
     dimensions
         .iter()
@@ -1384,7 +1384,7 @@ fn effective_index_binding_contract(
                     }
                 })
                 .ok_or_else(|| {
-                    PipelineError::Semantic(GraphcalError::internal_error(
+                    PipelineError::Semantic(SemanticError::internal_error(
                         format!(
                             "required coordinate index `{dep_index}` has no source declaration"
                         ),
@@ -1402,14 +1402,14 @@ fn effective_index_binding_contract(
                 .evaluate_dim_expr_with_overrides(sites.template, dimension_expr, &overrides)
                 .map_err(|failure| {
                     PipelineError::Semantic(match failure {
-                        DimExprFailure::Unknown(name) => GraphcalError::located(
+                        DimExprFailure::Unknown(name) => SemanticError::located(
                             sites.importer_src,
                             binding_span,
                             DimensionError::UnknownDimension {
                                 name: name.to_name_path(),
                             },
                         ),
-                        DimExprFailure::Overflow => GraphcalError::located(
+                        DimExprFailure::Overflow => SemanticError::located(
                             sites.importer_src,
                             binding_span,
                             DimensionError::DimensionOverflow,
@@ -1420,7 +1420,7 @@ fn effective_index_binding_contract(
             Ok(IndexBindingContract::Coordinate { dimension })
         }
         IndexKind::Concrete(ConcreteIndexKind::Finite { .. }) => {
-            Err(PipelineError::Semantic(GraphcalError::internal_error(
+            Err(PipelineError::Semantic(SemanticError::internal_error(
                 format!("declared dependency index `{dep_index}` became structural"),
                 sites.importer_src,
                 graphcal_compiler::diagnostic_anchor::DiagnosticAnchor::Source(binding_span),

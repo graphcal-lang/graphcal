@@ -4,9 +4,9 @@ use std::collections::HashMap;
 
 use graphcal_compiler::dag_id::DagId;
 use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
-use graphcal_compiler::graphcal_error::GraphcalError;
 use graphcal_compiler::outcome::Outcome;
 use graphcal_compiler::resolved_name::ResolvedDeclName;
+use graphcal_compiler::semantic_error::SemanticError;
 use graphcal_compiler::source_id::SourceId;
 
 use crate::checked_program::{CheckedProgram, SealedDag};
@@ -46,13 +46,13 @@ impl std::fmt::Debug for PreparedPlan {
 ///
 /// # Errors
 ///
-/// Returns a [`GraphcalError`] when execution checking or plan selection fails.
+/// Returns a [`SemanticError`] when execution checking or plan selection fails.
 #[cfg(any(test, feature = "test-internals"))]
 pub fn compile(
     tir: &graphcal_compiler::tir::typed::CheckedTir,
     src: SourceId,
     sources: &graphcal_compiler::source_registry::SourceRegistry,
-) -> Result<PreparedPlan, GraphcalError> {
+) -> Result<PreparedPlan, SemanticError> {
     graphcal_compiler::outcome::without_cancellation(|cancellation| {
         compile_with_cancellation(tir, src, sources, cancellation)
     })
@@ -63,14 +63,14 @@ pub fn compile(
 ///
 /// # Errors
 ///
-/// Returns a [`GraphcalError`] for an invalid plan or cancellation.
+/// Returns a [`SemanticError`] for an invalid plan or cancellation.
 #[cfg(any(test, feature = "test-internals"))]
 pub fn compile_with_cancellation(
     tir: &graphcal_compiler::tir::typed::CheckedTir,
     src: SourceId,
     sources: &graphcal_compiler::source_registry::SourceRegistry,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
-) -> Result<PreparedPlan, Outcome<GraphcalError>> {
+) -> Result<PreparedPlan, Outcome<SemanticError>> {
     let program = crate::execution_check::seal_checked_program_with_cancellation(
         tir.clone(),
         src,
@@ -85,19 +85,19 @@ pub fn compile_checked_with_cancellation(
     program: CheckedProgram,
     src: SourceId,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
-) -> Result<PreparedPlan, Outcome<GraphcalError>> {
+) -> Result<PreparedPlan, Outcome<SemanticError>> {
     PreparedPlan::try_new(program, |program| prepare(program, src, cancellation))
 }
 
-fn invalid(message: impl Into<String>, src: SourceId) -> GraphcalError {
-    GraphcalError::internal_error(message, src, DiagnosticAnchor::WholeFile)
+fn invalid(message: impl Into<String>, src: SourceId) -> SemanticError {
+    SemanticError::internal_error(message, src, DiagnosticAnchor::WholeFile)
 }
 
 fn prepare<'p>(
     program: &'p CheckedProgram,
     src: SourceId,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
-) -> Result<ExecPlan<'p>, Outcome<GraphcalError>> {
+) -> Result<ExecPlan<'p>, Outcome<SemanticError>> {
     cancellation.checkpoint()?;
     let tir = program.tir();
     let scopes = program
@@ -117,7 +117,7 @@ fn prepare_declarations<'p>(
     tir: &'p graphcal_compiler::tir::typed::CheckedTir,
     scopes: impl IntoIterator<Item = SealedDag<'p>>,
     src: SourceId,
-) -> Result<HashMap<&'p ResolvedDeclName, PlannedDeclaration<'p>>, GraphcalError> {
+) -> Result<HashMap<&'p ResolvedDeclName, PlannedDeclaration<'p>>, SemanticError> {
     let mut declarations = HashMap::<&ResolvedDeclName, PlannedDeclaration<'p>>::new();
     for scope in scopes {
         let dag = scope.dag();
@@ -173,7 +173,7 @@ fn prepare_declarations<'p>(
 ///
 /// # Errors
 ///
-/// Returns a [`GraphcalError`] when a scheduled declaration has no prepared
+/// Returns a [`SemanticError`] when a scheduled declaration has no prepared
 /// location in the callable's closure.
 #[cfg(feature = "test-internals")]
 #[expect(
@@ -186,7 +186,7 @@ pub fn prepare_callable_plan_for_test<'p>(
     body: SealedDag<'p>,
     declarations: &HashMap<&'p ResolvedDeclName, PlannedDeclaration<'p>>,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
-) -> Result<CallablePlan<'p>, Outcome<GraphcalError>> {
+) -> Result<CallablePlan<'p>, Outcome<SemanticError>> {
     prepare_callable_plan(tir, scopes, body, declarations, cancellation)
 }
 
@@ -196,7 +196,7 @@ fn prepare_callable_plan<'p>(
     body: SealedDag<'p>,
     declarations: &HashMap<&'p ResolvedDeclName, PlannedDeclaration<'p>>,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
-) -> Result<CallablePlan<'p>, Outcome<GraphcalError>> {
+) -> Result<CallablePlan<'p>, Outcome<SemanticError>> {
     cancellation.checkpoint()?;
     crate::pipeline_metrics::record(crate::pipeline_metrics::Event::PlanConstruction);
     let src = body.source();
@@ -268,7 +268,7 @@ fn prepare_callable_plan<'p>(
     let closure_instances = parents
         .into_iter()
         .map(|parent| Ok((parent, plan_instances(parent)?)))
-        .collect::<Result<Vec<_>, GraphcalError>>()?;
+        .collect::<Result<Vec<_>, SemanticError>>()?;
     let imports = prepare_imports(&execution_dags, declarations, src)?;
     CallablePlan::new(
         body,
@@ -287,7 +287,7 @@ fn located<'a, 'p>(
     declarations: &'a HashMap<&'p ResolvedDeclName, PlannedDeclaration<'p>>,
     key: &ResolvedDeclName,
     src: SourceId,
-) -> Result<&'a PlannedDeclaration<'p>, GraphcalError> {
+) -> Result<&'a PlannedDeclaration<'p>, SemanticError> {
     declarations.get(key).ok_or_else(|| {
         invalid(
             format!("declaration `{key}` has no prepared physical location"),
@@ -302,7 +302,7 @@ fn prepare_imports(
     dags: &[SealedDag<'_>],
     declarations: &HashMap<&ResolvedDeclName, PlannedDeclaration<'_>>,
     source: SourceId,
-) -> Result<PreparedImports, GraphcalError> {
+) -> Result<PreparedImports, SemanticError> {
     use graphcal_compiler::ir::imported_binding::ImportedValueKind;
     let mut result = PreparedImports::default();
     for dag in dags {
@@ -342,7 +342,7 @@ mod tests {
     use graphcal_compiler::syntax::decl_name::DeclName;
     use std::collections::HashSet;
 
-    fn compile_source(source: &str) -> Result<PreparedPlan, GraphcalError> {
+    fn compile_source(source: &str) -> Result<PreparedPlan, SemanticError> {
         let (tir, src, sources) = checked_tir_from_source(source)?;
         compile(&tir, src, &sources)
     }
@@ -586,7 +586,7 @@ mod tests {
         .unwrap_err();
         assert!(matches!(
             err,
-            GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+            SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
                 kind: SemanticErrorKind::Graph(GraphError::CyclicDependency { .. }),
                 ..
             })
@@ -600,7 +600,7 @@ mod tests {
                 .unwrap_err();
         assert!(matches!(
             err,
-            GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+            SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
                 kind: SemanticErrorKind::Graph(GraphError::CyclicDependency { .. }),
                 ..
             })
@@ -670,7 +670,7 @@ mod tests {
         assert!(
             matches!(
                 err,
-                GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+                SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
                     kind: SemanticErrorKind::Domain(DomainError::DomainViolation { .. }),
                     ..
                 })
@@ -685,7 +685,7 @@ mod tests {
         assert!(
             matches!(
                 err,
-                GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+                SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
                     kind: SemanticErrorKind::Domain(DomainError::DomainViolation { .. }),
                     ..
                 })
@@ -701,7 +701,7 @@ mod tests {
         assert!(
             matches!(
                 err,
-                GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+                SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
                     kind: SemanticErrorKind::Domain(DomainError::DomainMinExceedsMax { .. }),
                     ..
                 })
@@ -717,7 +717,7 @@ mod tests {
         assert!(
             matches!(
                 err,
-                GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+                SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
                     kind: SemanticErrorKind::Domain(DomainError::InvalidDomainTarget { .. }),
                     ..
                 })
@@ -737,7 +737,7 @@ mod tests {
         assert!(
             matches!(
                 err,
-                GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+                SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
                     kind: SemanticErrorKind::Domain(DomainError::DomainViolation { .. }),
                     ..
                 })
@@ -783,7 +783,7 @@ const node EVENT: Datetime(
         .unwrap_err();
         assert!(matches!(
             error,
-            GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+            SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
                 kind: SemanticErrorKind::Domain(DomainError::DomainViolation { .. }),
                 ..
             })
@@ -803,7 +803,7 @@ const node EVENT: Datetime<TT>(
         .unwrap_err();
         assert!(matches!(
             error,
-            GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+            SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
                 kind: SemanticErrorKind::Domain(DomainError::DomainMinExceedsMax { .. }),
                 ..
             })

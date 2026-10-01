@@ -1,7 +1,7 @@
 use crate::load_error::LoadError;
-use graphcal_compiler::graphcal_error::RenderedGraphcalError;
 use graphcal_compiler::semantic_error::SemanticErrorKind;
 use graphcal_compiler::semantic_error::evaluation::EvaluationError;
+use graphcal_compiler::semantic_error::rendered::RenderedSemanticError;
 use std::path::{Path, PathBuf};
 
 use graphcal_compiler::dag_id::DagPackageId;
@@ -380,7 +380,7 @@ fn resolution_failures_render_at_the_import_site() {
     assert!(
         matches!(
             &error,
-            CompileError::Eval(RenderedGraphcalError { error: GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic { kind: SemanticErrorKind::Evaluation(EvaluationError::Failed { message, .. }), .. }), .. })
+            CompileError::Eval(RenderedSemanticError { error: SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic { kind: SemanticErrorKind::Evaluation(EvaluationError::Failed { message, .. }), .. }), .. })
                 if message == "no dependency `b`; run `graphcal deps lock` after changing dependencies"
         ),
         "{error:?}"
