@@ -1,4 +1,5 @@
 use super::*;
+use graphcal_compiler::outcome::Outcome;
 use graphcal_eval::presentation_evidence::{
     PendingDisplayUnit, PendingLeaf, PendingQuantityDisplay, PresentationFailure, QuantityDisplay,
     ResolvedLeaf,
@@ -466,11 +467,13 @@ node independent: Length = 3.0 m;
 fn requested_display_unit(
     tir: &graphcal_compiler::tir::typed::CheckedTir,
     declaration: &graphcal_compiler::resolved_name::ResolvedDeclName,
-    src: &miette::NamedSource<std::sync::Arc<String>>,
+    src: graphcal_compiler::source_id::SourceId,
+    sources: &graphcal_compiler::source_registry::SourceRegistry,
 ) -> graphcal_compiler::hir::expr::ResolvedUnitExpr<graphcal_compiler::hir::expr::ResolvedUnitRef> {
     let session = graphcal_eval::eval_expr::EvalSession::provisional_constants(
         tir,
         src,
+        sources,
         graphcal_compiler::cancellation::CancellationToken::unbounded(),
     );
     let root = session
@@ -502,20 +505,21 @@ fn requested_display_unit(
 fn nested_presentation_computation_abort_classification_is_not_contained() {
     let source = "param rate: Dimensionless = 2.0; unit scaled: Length = (@rate) m; node value: Length = 1.0 m -> scaled;";
     let tir = compile_to_tir(source, "classification.gcl").unwrap();
-    let src =
-        miette::NamedSource::new("classification.gcl", std::sync::Arc::new(source.to_owned()));
+    let mut sources = graphcal_compiler::source_registry::SourceRegistry::new();
+    let src = sources.register("classification.gcl", std::sync::Arc::new(source.to_owned()));
     let declaration = tir
         .root()
         .body_for_test()
         .bound_decl_identity(&scoped_name("value"))
         .unwrap();
-    let target = requested_display_unit(&tir, declaration, &src);
-    let context =
-        |token| graphcal_eval::eval_expr::EvalSession::provisional_constants(&tir, &src, token);
+    let target = requested_display_unit(&tir, declaration, src, &sources);
+    let context = |token| {
+        graphcal_eval::eval_expr::EvalSession::provisional_constants(&tir, src, &sources, token)
+    };
     let evidence = |unit| {
         requested(PendingDisplayUnit {
             owner: tir.root_dag_id().clone(),
-            source: src.clone(),
+            source: src,
             unit,
         })
     };
@@ -534,18 +538,18 @@ fn nested_presentation_computation_abort_classification_is_not_contained() {
             &values,
             &context(graphcal_compiler::cancellation::CancellationToken::unbounded())
         ),
-        Err(GraphcalError::InternalError { .. })
+        Err(Outcome::Failed(SemanticError::Internal(_)))
     ));
     // The outer presentation checkpoint succeeds; the unit-body evaluator cancels.
-    assert!(matches!(graphcal_eval::eval_expr::resolve_presentation(evidence(target), &values, &context(graphcal_compiler::cancellation::CancellationToken::cancel_after_successful_checkpoints(1))), Err(GraphcalError::Cancelled(_))));
+    assert!(matches!(graphcal_eval::eval_expr::resolve_presentation(evidence(target), &values, &context(graphcal_compiler::cancellation::CancellationToken::cancel_after_successful_checkpoints(1))), Err(Outcome::Cancelled)));
 }
 
 #[test]
 fn presentation_cancellation_is_never_a_notice() {
     let source = "node value: Length = 1.0 m -> km;";
     let tir = compile_to_tir(source, "classification.gcl").unwrap();
-    let src =
-        miette::NamedSource::new("classification.gcl", std::sync::Arc::new(source.to_owned()));
+    let mut sources = graphcal_compiler::source_registry::SourceRegistry::new();
+    let src = sources.register("classification.gcl", std::sync::Arc::new(source.to_owned()));
     let declaration = tir
         .root()
         .body_for_test()
@@ -553,14 +557,15 @@ fn presentation_cancellation_is_never_a_notice() {
         .unwrap();
     let pending = requested(PendingDisplayUnit {
         owner: tir.root_dag_id().clone(),
-        source: src.clone(),
-        unit: requested_display_unit(&tir, declaration, &src),
+        source: src,
+        unit: requested_display_unit(&tir, declaration, src, &sources),
     });
     let values = graphcal_eval::constant_pools::RuntimeValueMap::new();
     let cancellation = graphcal_compiler::cancellation::CancellationSource::new();
     let context = graphcal_eval::eval_expr::EvalSession::provisional_constants(
         &tir,
-        &src,
+        src,
+        &sources,
         cancellation.token(),
     );
     let resolved =
@@ -575,7 +580,7 @@ fn presentation_cancellation_is_never_a_notice() {
     cancellation.cancel();
     assert!(matches!(
         graphcal_eval::eval_expr::resolve_presentation(pending, &values, &context),
-        Err(GraphcalError::Cancelled(_))
+        Err(Outcome::Cancelled)
     ));
 }
 

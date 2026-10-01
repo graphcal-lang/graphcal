@@ -2,13 +2,13 @@
 //! DAG reports, and the `#[assumes]` table keyed by the root's source names.
 
 use std::collections::HashMap;
-use std::sync::Arc;
 
-use miette::NamedSource;
-
+use graphcal_compiler::cancellation::Cancelled;
 use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
-use graphcal_compiler::graphcal_error::GraphcalError;
+use graphcal_compiler::outcome::Outcome;
 use graphcal_compiler::resolved_name::ResolvedDeclName;
+use graphcal_compiler::semantic_error::SemanticError;
+use graphcal_compiler::source_id::SourceId;
 use graphcal_compiler::syntax::module_name::ScopedName;
 use graphcal_compiler::syntax::span::Span;
 use graphcal_compiler::tir::typed::{
@@ -27,17 +27,17 @@ use super::root_names::{qualified_below, root_source_names};
 fn assertion_body<'tir>(
     tir: &'tir graphcal_compiler::tir::typed::CheckedTir,
     owner: &ResolvedDeclName,
-    src: &NamedSource<Arc<String>>,
+    src: SourceId,
 ) -> Result<
     (
         DeclarationBody<'tir>,
         Scoped<'tir, graphcal_compiler::tir::typed::TypedAssertEntry>,
     ),
-    GraphcalError,
+    SemanticError,
 > {
     let unit = declaration_body(tir, owner, src)?;
     let entry = unit.assertion().ok_or_else(|| {
-        GraphcalError::internal_error(
+        SemanticError::internal_error(
             format!("assertion `{owner}` has no checked body"),
             src,
             DiagnosticAnchor::WholeFile,
@@ -55,11 +55,11 @@ fn assertion_body<'tir>(
 /// value map where the failed name is simply absent (#814).
 pub(super) fn evaluate_assertions(
     plan: &crate::execution_plan::ExecPlan<'_>,
-    src: &NamedSource<Arc<String>>,
+    src: SourceId,
     ctx: &EvalSession<'_>,
     values: &RuntimeValueMap,
     errors: &HashMap<ResolvedDeclName, NodeUnavailable>,
-) -> Result<Vec<(ScopedName, AssertResult, Span)>, GraphcalError> {
+) -> Result<Vec<(ScopedName, AssertResult, Span)>, Outcome<SemanticError>> {
     let tir = plan.tir();
     let mut assertions: Vec<(ScopedName, AssertResult, Span)> = tir
         .root()
@@ -75,15 +75,17 @@ pub(super) fn evaluate_assertions(
             let (unit, body) = assertion_body(tir, &owner, src)?;
             let body = body.map(|entry| &*entry.body);
             let entry_ctx = ctx.for_decl(&owner);
-            let assert_result =
-                assert_dependency_failure(body, errors, &entry_ctx).unwrap_or_else(|| {
+            let assert_result = match assert_dependency_failure(body, errors, &entry_ctx)? {
+                Some(result) => result,
+                None => {
                     evaluate_assert_with_expected_fail(body, unit.expected_fail(), &mut |expr| {
                         eval_root(&entry_ctx.executable(expr)?, values, &entry_ctx)
-                    })
-                });
+                    })?
+                }
+            };
             Ok((ScopedName::local(entry.name().clone()), assert_result, span))
         })
-        .collect::<Result<_, GraphcalError>>()?;
+        .collect::<Result<_, Outcome<SemanticError>>>()?;
     for (parent, instances) in plan.root().closure_instances() {
         let parent_dag = parent.dag();
         for planned in instances {
@@ -104,7 +106,7 @@ pub(super) fn evaluate_assertions(
                     entry.map(|entry| &*entry.body),
                     expected,
                     &mut |expr| eval_root(&assertion_ctx.executable(expr)?, values, &assertion_ctx),
-                );
+                )?;
                 // A parent outside the root's subtree contributes no qualifier.
                 let exposed = record.instance.exposed_name(projection);
                 let name = qualified_below(tir.root_dag_id(), parent_dag.dag_id(), &exposed)
@@ -120,14 +122,14 @@ pub(super) fn evaluate_assertions(
 /// by the root source names of the assertions and their assumers.
 pub(super) fn root_assumes_map(
     plan: &crate::execution_plan::ExecPlan<'_>,
-    src: &NamedSource<Arc<String>>,
-) -> Result<HashMap<ScopedName, Vec<ScopedName>>, GraphcalError> {
+    src: SourceId,
+) -> Result<HashMap<ScopedName, Vec<ScopedName>>, SemanticError> {
     let source_names_by_key = root_source_names(plan)
         .into_iter()
         .collect::<HashMap<_, _>>();
     let source_name = |key: &ResolvedDeclName, role: &str| {
         source_names_by_key.get(key).cloned().ok_or_else(|| {
-            GraphcalError::internal_error(
+            SemanticError::internal_error(
                 format!("{role} `{key}` is missing from checked source order"),
                 src,
                 DiagnosticAnchor::WholeFile,
@@ -145,7 +147,7 @@ pub(super) fn root_assumes_map(
         let assumer_names = assumers
             .iter()
             .map(|assumer| source_name(assumer, "assertion assumer"))
-            .collect::<Result<Vec<_>, GraphcalError>>()?;
+            .collect::<Result<Vec<_>, SemanticError>>()?;
         Ok((source_name(assertion, "assertion")?, assumer_names))
     })
     .collect()
@@ -182,7 +184,7 @@ fn assert_dependency_failure(
     body: Scoped<'_, graphcal_compiler::hir::expr::AssertBody>,
     errors: &HashMap<ResolvedDeclName, NodeUnavailable>,
     ctx: &EvalSession<'_>,
-) -> Option<AssertResult> {
+) -> Result<Option<AssertResult>, Cancelled> {
     let body_exprs = match body.operands() {
         AssertionOperands::Condition(expr) => vec![expr],
         AssertionOperands::Tolerance {
@@ -191,12 +193,15 @@ fn assert_dependency_failure(
             tolerance,
         } => vec![actual, expected, tolerance],
     };
-    match ctx.unavailable_dependencies(body_exprs.iter().copied()) {
-        Ok(Some(reason)) if reason.is_incomplete() => Some(AssertResult::Blocked { reason }),
-        Err(error) => Some(AssertResult::Error {
-            message: error.to_string(),
-        }),
-        _ => dependency_failure_message(body_exprs, errors)
-            .map(|message| AssertResult::Error { message }),
-    }
+    Ok(
+        match ctx.unavailable_dependencies(body_exprs.iter().copied()) {
+            Ok(Some(reason)) if reason.is_incomplete() => Some(AssertResult::Blocked { reason }),
+            Err(Outcome::Cancelled) => return Err(Cancelled),
+            Err(Outcome::Failed(error)) => Some(AssertResult::Error {
+                message: error.to_string(),
+            }),
+            Ok(_) => dependency_failure_message(body_exprs, errors)
+                .map(|message| AssertResult::Error { message }),
+        },
+    )
 }

@@ -7,10 +7,11 @@
 )]
 use std::collections::{HashMap, HashSet};
 
-use graphcal_compiler::graphcal_error::GraphcalError;
+use graphcal_compiler::semantic_error::SemanticError;
+use graphcal_compiler::semantic_error::visibility::VisibilityError;
 use graphcal_compiler::syntax::span::Span;
 
-use crate::compile_error::CompileError;
+use crate::compile_error::PipelineError;
 
 use super::including_module::IncludingModule;
 
@@ -145,7 +146,7 @@ pub(super) fn check_generics_leakage(
     substitution: &StaticSubstitution,
     importer: &IncludingModule<'_>,
     include_span: Span,
-) -> Result<(), CompileError> {
+) -> Result<(), PipelineError> {
     let IncludingModule {
         interface: importer_interface,
         source: importer_src,
@@ -187,7 +188,7 @@ pub(super) fn check_generics_leakage(
                 }
                 ReferenceSubstitution::Unbound => {
                     if let Some(namespace) = required_bindings.get(reference_name) {
-                        return Err(CompileError::Eval(GraphcalError::internal_error(
+                        return Err(PipelineError::Semantic(SemanticError::internal_error(
                             format!(
                                 "required {} binding `{reference_name}` is absent during generic-leakage analysis",
                                 namespace_diagnostic_name(*namespace),
@@ -211,14 +212,16 @@ pub(super) fn check_generics_leakage(
                     .external_surface()
                     .is_static_explicit_export(substituted.atom())
             {
-                return Err(CompileError::Eval(GraphcalError::GenericsLeakage {
-                    reexport_kind: decl_kind_str.to_string(),
-                    reexport_name: decl_name.to_string(),
-                    leaked_kind: namespace_diagnostic_name(namespace).to_string(),
-                    leaked_name: substituted.atom().to_string(),
-                    src: importer_src.clone(),
-                    span: include_span.into(),
-                }));
+                return Err(PipelineError::Semantic(SemanticError::located(
+                    importer_src,
+                    include_span,
+                    VisibilityError::GenericsLeakage {
+                        reexport_kind: decl_kind_str.to_string(),
+                        reexport_name: decl_name.to_string(),
+                        leaked_kind: namespace_diagnostic_name(namespace).to_string(),
+                        leaked_name: substituted.atom().to_string(),
+                    },
+                )));
             }
         }
     }

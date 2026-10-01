@@ -1,15 +1,15 @@
 //! Differential conformance test between the Lean V002 oracle and the
 //! production declaration-shell validator.
 
+use serde::Deserialize;
 use std::collections::HashSet;
 use std::env;
 use std::process::Command;
 use std::sync::Arc;
 
-use miette::NamedSource;
-use serde::Deserialize;
-
-use super::{CollectedWithEntries, GraphcalError, resolve};
+use super::{CollectedWithEntries, SemanticError, resolve};
+use crate::semantic_error::SemanticErrorKind;
+use crate::semantic_error::visibility::VisibilityError;
 use crate::syntax::parser::Parser;
 
 const ORACLE_ENV: &str = "GRAPHCAL_REQUIRED_BINDABILITY_ORACLE";
@@ -144,13 +144,14 @@ fn load_oracle_cases() -> Result<Vec<OracleCase>, String> {
         .map_err(|error| format!("Lean oracle emitted invalid JSON: {error}"))
 }
 
-fn parse_and_resolve_case(source: &str) -> Result<CollectedWithEntries, GraphcalError> {
+fn parse_and_resolve_case(source: &str) -> Result<CollectedWithEntries, SemanticError> {
     let raw_file = Parser::new(source)
         .parse_file()
         .unwrap_or_else(|error| panic!("oracle rendered invalid Graphcal `{source}`: {error}"));
     let file = crate::desugar::desugared_ast::File::from(raw_file);
-    let src = NamedSource::new("lean-oracle-case.gcl", Arc::new(source.to_string()));
-    resolve(&file, &src)
+    let src = crate::source_registry::SourceRegistry::new()
+        .register("lean-oracle-case.gcl", Arc::new(source.to_string()));
+    resolve(&file, src)
 }
 
 fn compare_case(case: &OracleCase) -> Result<(), String> {
@@ -164,7 +165,14 @@ fn compare_case(case: &OracleCase) -> Result<(), String> {
                 rule: OracleRule::RequiredMustBeBindable,
                 kind: expected_kind,
             },
-            Err(GraphcalError::RequiredItemMustBeBindable { kind, .. }),
+            Err(SemanticError::Located(crate::diagnostic::Diagnostic {
+                kind:
+                    SemanticErrorKind::Visibility(VisibilityError::RequiredItemMustBeBindable {
+                        kind,
+                        ..
+                    }),
+                ..
+            })),
         ) if kind == expected_kind.diagnostic_name() => Ok(()),
         (OracleDecision::Accepted, Err(error)) => Err(format!(
             "Lean accepted `{source}`, but Rust rejected it with {error:?}"

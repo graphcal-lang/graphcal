@@ -42,14 +42,6 @@ def count-matches [sources: table, pattern: string]: nothing -> int {
     $sources | each {|source| $source.text | parse --regex $pattern | length } | math sum
 }
 
-def graphcal-error-variants []: nothing -> int {
-    let text = open --raw crates/graphcal-compiler/src/graphcal_error.rs
-    let body = $text
-        | parse --regex '(?s)pub enum GraphcalError \{(?<body>.*?)\n\}'
-        | get 0.body
-    $body | lines | where {|line| $line =~ '^    [A-Z][A-Za-z0-9]*\b' } | length
-}
-
 def reading-order-sccs []: nothing -> int {
     uv run --quiet internals/reading-order.py
     | lines
@@ -62,9 +54,11 @@ def measure []: nothing -> record {
     let consumers = production-sources [graphcal-compiler graphcal-eval graphcal-project graphcal-lsp]
     let outside_resolver = $consumers
         | where {|source| not ($source.path | str contains "graphcal-compiler/src/resolve/") }
+    let semantic_families = $core
+        | where {|source| $source.path | str contains "graphcal-compiler/src/semantic_error/" }
     let resolver = $core | where {|source| $source.path | str contains "graphcal-compiler/src/resolve/" }
     {
-        internal_error_calls: (count-matches $core '(?<!fn )\binternal_error\(')
+        internal_error_calls: (count-matches $core '(?<!fn )\b(?:\w*(?:internal|invariant)\w*|Invariant::violated|InternalError::new)\(')
         resolved_name_from_def_outside_resolver: (count-matches $outside_resolver 'Resolved[A-Za-z]*Name::from_def\b')
         expect_valid_format: (count-matches $core 'expect_valid\(\s*&?format!\(')
         too_many_arguments_expects: (count-matches $consumers 'clippy::too_many_arguments')
@@ -72,7 +66,7 @@ def measure []: nothing -> record {
         module_resolve_str_key_lookups: (count-matches $resolver '\.(?:get|get_mut|contains_key|remove)\(\s*[^()]*(?:\.as_str\(\)|\.as_ref\(\)|&\*)')
         pipeline_layers_exceptions: (open internals/pipeline-layers/baseline.toml | default [] exception | get exception | length)
         reading_order_sccs: (reading-order-sccs)
-        graphcal_error_variants: (graphcal-error-variants)
+        semantic_error_string_payloads: (count-matches $semantic_families '\b[a-z_][a-z0-9_]*: String\b')
     }
 }
 

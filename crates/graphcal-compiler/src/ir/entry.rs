@@ -12,9 +12,6 @@
 //!   strictly lowered HIR bodies whose references are already canonical.
 
 use std::fmt;
-use std::sync::Arc;
-
-use miette::NamedSource;
 
 use crate::dag_id::DagId;
 use crate::declaration_category::{DeclCategory, ValueDeclCategory};
@@ -22,6 +19,7 @@ use crate::desugar::desugared_ast::{AssertBody, Encoding, Expr, PlotField, TypeE
 use crate::dimension::Dimension;
 use crate::plot_visibility::PlotVisibility;
 use crate::resolved_name::ResolvedDeclName;
+use crate::source_id::SourceId;
 use crate::syntax::ast::MarkType;
 use crate::syntax::decl_name::DeclName;
 use crate::syntax::dimension::UnitRef;
@@ -185,7 +183,7 @@ pub struct DynamicUnitScaleEntry<P: BodyPhase> {
     pub span: Span,
     /// Source of the owning DAG, whose bytes `expr` and `span` index. The
     /// evaluator needs it when it evaluates a unit scale owned by another DAG.
-    pub src: NamedSource<Arc<String>>,
+    pub src: SourceId,
 }
 
 macro_rules! impl_entry_identity {

@@ -5,13 +5,11 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use indexmap::IndexMap;
-use miette::NamedSource;
 
 use crate::dag_id::DagId;
 use crate::diagnostic_anchor::DiagnosticAnchor;
 use crate::dimension::Dimension;
 use crate::display::formatting_registry::FormattingRegistry;
-use crate::graphcal_error::GraphcalError;
 use crate::hir::nominal::NominalTypeDef;
 use crate::resolved_name::{
     ResolvedDeclName, ResolvedDimName, ResolvedIndexName, ResolvedStructTypeName, ResolvedUnitName,
@@ -19,6 +17,8 @@ use crate::resolved_name::{
 use crate::semantic::checked_type::IndexTypeRef;
 use crate::semantic::index_def::IndexDef;
 use crate::semantic::unit_scale::UnitInfo;
+use crate::semantic_error::SemanticError;
+use crate::source_id::SourceId;
 use crate::tir::presentation::DagPresentationFacts;
 use crate::tir::schedule::{ConstSchedule, RuntimeSchedule};
 use crate::tir::texpr::CheckedBodies;
@@ -230,8 +230,8 @@ impl UncheckedTir {
     pub(crate) fn into_checked(
         self,
         parts: CheckedParts,
-        src: &NamedSource<Arc<String>>,
-    ) -> Result<CheckedTir, GraphcalError> {
+        src: SourceId,
+    ) -> Result<CheckedTir, SemanticError> {
         let CheckedParts {
             mut bodies,
             mut presentation,
@@ -244,7 +244,7 @@ impl UncheckedTir {
         let (core, dags) = self.into_parts();
         let (root, other_dags, shared_dags) = dags.into_parts();
         let internal = |message: String| {
-            GraphcalError::internal_error(message, src, DiagnosticAnchor::WholeFile)
+            SemanticError::internal_error(message, src, DiagnosticAnchor::WholeFile)
         };
         let mut check = |body: DagTIR| {
             let missing =
@@ -266,7 +266,7 @@ impl UncheckedTir {
         let other_dags = other_dags
             .into_iter()
             .map(|(id, body)| check(body).map(|dag| (id, dag)))
-            .collect::<Result<_, GraphcalError>>()?;
+            .collect::<Result<_, SemanticError>>()?;
         // Every call target is in the registry: checking resolved each local
         // body's calls against it, an instance calls its template's targets
         // and its checked defaults', and installing an imported store

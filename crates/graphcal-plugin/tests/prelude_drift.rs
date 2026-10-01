@@ -11,13 +11,16 @@
 #![cfg(test)]
 #![expect(
     clippy::result_large_err,
-    reason = "GraphcalError is inherently large and only constructed on the error path"
+    reason = "SemanticError is inherently large and only constructed on the error path"
 )]
 
 use std::path::Path;
 
 use graphcal_compiler::dimension::PreludeBaseDimension;
-use graphcal_compiler::graphcal_error::GraphcalError;
+use graphcal_compiler::semantic_error::SemanticError;
+use graphcal_compiler::semantic_error::SemanticErrorKind;
+use graphcal_compiler::semantic_error::plugin::PluginError;
+use graphcal_compiler::semantic_error::rendered::RenderedSemanticError;
 use graphcal_compiler::syntax::plugin::PluginPath;
 use graphcal_eval::host_fns::{HostFnValue, HostFunctionRegistry};
 use graphcal_io::RealFileSystem;
@@ -169,7 +172,15 @@ import plugin "graphcal:sdk-drift" as sdk {
 node ok: Dimensionless = 1.0;
 "#;
     let err = compile(dir.path(), source, &registry).expect_err("mismatch must be rejected");
-    let CompileError::Eval(GraphcalError::ExternSignatureMismatch { name, .. }) = err else {
+    let CompileError::Eval(RenderedSemanticError {
+        error:
+            SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
+                kind: SemanticErrorKind::Plugin(PluginError::ExternSignatureMismatch { name, .. }),
+                ..
+            }),
+        ..
+    }) = err
+    else {
         panic!("expected ExternSignatureMismatch, got {err:?}");
     };
     assert_eq!(name.as_str(), "f_pressure");

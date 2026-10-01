@@ -813,12 +813,87 @@ role = "contracts"
 
 [[module]]
 package = "compiler"
-path = ["graphcal_error"]
+path = ["semantic_error"]
 role = "contracts"
 
 [[module]]
 package = "compiler"
-path = ["graphcal_error", "tests"]
+path = ["semantic_error", "attribute"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["semantic_error", "domain"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["semantic_error", "graph"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["semantic_error", "structure"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["semantic_error", "visibility"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["semantic_error", "tests"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["semantic_error", "index"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["semantic_error", "name"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["semantic_error", "plugin"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["semantic_error", "dimension"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["semantic_error", "module"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["internal_error"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["internal_error", "tests"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["semantic_error", "evaluation"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["semantic_error", "rendered"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["semantic_error", "rendered", "tests"]
 role = "contracts"
 
 [[module]]
@@ -2574,7 +2649,27 @@ role = "facade"
 
 [[module]]
 package = "project"
+path = ["binding_error"]
+role = "contracts"
+
+[[module]]
+package = "project"
+path = ["binding_error", "tests"]
+role = "contracts"
+
+[[module]]
+package = "project"
 path = ["compile_error"]
+role = "contracts"
+
+[[module]]
+package = "project"
+path = ["load_error"]
+role = "contracts"
+
+[[module]]
+package = "project"
+path = ["load_error", "tests"]
 role = "contracts"
 
 [[module]]

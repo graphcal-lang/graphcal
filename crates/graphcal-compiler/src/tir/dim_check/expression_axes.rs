@@ -1,12 +1,11 @@
 //! Materialization facts directly from checked types, without rebuilding inferred types.
 
-use miette::NamedSource;
-use std::sync::Arc;
-
 use crate::diagnostic_anchor::DiagnosticAnchor;
-use crate::graphcal_error::GraphcalError;
 use crate::semantic::checked_type::{CheckedType, IndexTypeRef, Symbolic};
 use crate::semantic::index_def::IndexCardinality;
+use crate::semantic_error::SemanticError;
+use crate::semantic_error::dimension::DimensionError;
+use crate::source_id::SourceId;
 use crate::syntax::span::Span;
 use crate::tir::materialized_shape::MaterializedShapeError;
 use crate::tir::static_index::UnavailableIndex;
@@ -44,23 +43,23 @@ impl From<MaterializedShapeError> for MaterializationError {
 pub(super) fn check_materializable(
     ty: &CheckedType<Symbolic>,
     tir: &dyn TirRead,
-    src: &NamedSource<Arc<String>>,
+    src: SourceId,
     span: Span,
-) -> Result<(), GraphcalError> {
+) -> Result<(), SemanticError> {
     ty.materialized_shape(|axis| {
         checked_index_cardinality(tir, axis).map_err(MaterializationError::Index)
     })
     .map(|_| ())
     .map_err(|error| match error {
         MaterializationError::Index(error) => {
-            GraphcalError::internal_error(error.to_string(), src, DiagnosticAnchor::Source(span))
+            SemanticError::internal_error(error.to_string(), src, DiagnosticAnchor::Source(span))
         }
         MaterializationError::Shape(MaterializedShapeError::ExceedsLimit { maximum }) => {
-            GraphcalError::MaterializedShapeTooLarge {
-                maximum,
-                src: src.clone(),
-                span: span.into(),
-            }
+            SemanticError::located(
+                src,
+                span,
+                DimensionError::MaterializedShapeTooLarge { maximum },
+            )
         }
     })
 }

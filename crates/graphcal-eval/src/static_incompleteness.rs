@@ -4,17 +4,17 @@
 //! and no hypothetical runtime value is introduced during this analysis.
 
 use std::collections::{BTreeSet, HashMap, HashSet};
-use std::sync::Arc;
 
 use graphcal_compiler::cancellation::CancellationToken;
 use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
-use graphcal_compiler::graphcal_error::GraphcalError;
 use graphcal_compiler::hir::expr::{Expr, ExprKind, visit_expr};
 use graphcal_compiler::node_unavailable::NodeUnavailable;
+use graphcal_compiler::outcome::Outcome;
 use graphcal_compiler::resolved_name::ResolvedDeclName;
+use graphcal_compiler::semantic_error::SemanticError;
+use graphcal_compiler::source_id::SourceId;
 use graphcal_compiler::syntax::non_empty::NonEmpty;
 use graphcal_compiler::tir::typed::scoped_node::{NodeKind, ScopedNode};
-use miette::NamedSource;
 
 use crate::execution_plan::{ExecPlan, PlannedBody};
 
@@ -59,9 +59,9 @@ impl ExpressionDependencies for ScopedNode<'_> {
 pub fn collect(
     expression: &(impl ExpressionDependencies + ?Sized),
     plan: &ExecPlan<'_>,
-    source: &NamedSource<Arc<String>>,
+    source: SourceId,
     cancellation: &CancellationToken,
-) -> Result<Vec<(ResolvedDeclName, NodeUnavailable)>, GraphcalError> {
+) -> Result<Vec<(ResolvedDeclName, NodeUnavailable)>, Outcome<SemanticError>> {
     if !plan.has_unfinished_definitions() {
         return Ok(Vec::new());
     }
@@ -107,22 +107,22 @@ fn calls(expression: &Expr, bound: &BoundParameters) -> Vec<Query> {
 
 struct Analysis<'a> {
     plan: &'a ExecPlan<'a>,
-    source: &'a NamedSource<Arc<String>>,
+    source: SourceId,
     cancellation: &'a CancellationToken,
     memo: HashMap<Query, Origins>,
     active: HashSet<Query>,
 }
 
 impl Analysis<'_> {
-    fn invalid(&self, message: impl Into<String>) -> GraphcalError {
-        GraphcalError::internal_error(message, self.source, DiagnosticAnchor::WholeFile)
+    fn invalid(&self, message: impl Into<String>) -> SemanticError {
+        SemanticError::internal_error(message, self.source, DiagnosticAnchor::WholeFile)
     }
 
     fn declaration(
         &mut self,
         name: &ResolvedDeclName,
         bound: &BoundParameters,
-    ) -> Result<Origins, GraphcalError> {
+    ) -> Result<Origins, Outcome<SemanticError>> {
         graphcal_compiler::stack::with_stack_growth(|| self.declaration_inner(name, bound))
     }
 
@@ -130,7 +130,7 @@ impl Analysis<'_> {
         &mut self,
         name: &ResolvedDeclName,
         bound: &BoundParameters,
-    ) -> Result<Origins, GraphcalError> {
+    ) -> Result<Origins, Outcome<SemanticError>> {
         self.cancellation.checkpoint()?;
         if bound.contains(name) {
             return Ok(Origins::new());
@@ -140,7 +140,9 @@ impl Analysis<'_> {
             return Ok(origins.clone());
         }
         if !self.active.insert(query.clone()) {
-            return Err(self.invalid(format!("cyclic checked call dependency at `{name}`")));
+            return Err(self
+                .invalid(format!("cyclic checked call dependency at `{name}`"))
+                .into());
         }
         let plan = self.plan;
         let declaration = plan.declaration(name).ok_or_else(|| {

@@ -2,6 +2,7 @@
 
 use std::collections::{HashMap, HashSet};
 
+use graphcal_compiler::outcome::Uncancellable;
 use graphcal_compiler::{dag_id::DagId, syntax::dimension::UnitName};
 
 use super::model::HirFile;
@@ -15,7 +16,9 @@ use crate::dependency_ordered::DependencyOrdered;
 /// expression reference is canonical, and every cross-module HIR interface
 /// required by a dependent module was available during lowering.
 /// It carries no checked TIR, runtime values, execution plan, or host metadata.
-pub struct HirProject<'project> {
+/// `Mode` is the cancellation of the session that lowered it, which its
+/// static checks keep observing.
+pub struct HirProject<'project, Mode = Uncancellable> {
     /// One HIR file per loaded source file, in the loader's dependency order
     /// and ending with the root file.
     pub(super) files: DependencyOrdered<HirFile>,
@@ -29,10 +32,12 @@ pub struct HirProject<'project> {
     /// boundary. Full frontend registries are discarded after HIR lowering.
     pub(super) exported_runtime_units: HashMap<DagId, HashSet<UnitName>>,
     pub(super) module_resolver: graphcal_compiler::resolve::ModuleResolver,
-    pub(super) cancellation: graphcal_compiler::cancellation::CancellationToken,
+    /// The registry every source id of the lowered modules resolves in.
+    pub(super) sources: std::sync::Arc<graphcal_compiler::source_registry::SourceRegistry>,
+    pub(super) mode: Mode,
 }
 
-impl std::fmt::Debug for HirProject<'_> {
+impl<Mode> std::fmt::Debug for HirProject<'_, Mode> {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let mut modules = self
             .files
@@ -48,7 +53,7 @@ impl std::fmt::Debug for HirProject<'_> {
     }
 }
 
-impl HirProject<'_> {
+impl<Mode> HirProject<'_, Mode> {
     /// Canonical identity of the entry DAG.
     #[must_use]
     pub const fn root(&self) -> &DagId {

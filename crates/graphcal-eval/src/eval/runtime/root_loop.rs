@@ -1,13 +1,13 @@
 //! The root's execution: its plan run by the shared frame machine with
 //! ordinary failures contained.
 
+use graphcal_compiler::source_registry::SourceRegistry;
 use std::collections::{BTreeSet, HashMap};
-use std::sync::Arc;
 
-use miette::NamedSource;
-
-use graphcal_compiler::graphcal_error::GraphcalError;
+use graphcal_compiler::outcome::Outcome;
 use graphcal_compiler::resolved_name::ResolvedDeclName;
+use graphcal_compiler::semantic_error::SemanticError;
+use graphcal_compiler::source_id::SourceId;
 use graphcal_compiler::syntax::span::Span;
 
 use crate::eval::types::NodeUnavailable;
@@ -27,10 +27,11 @@ pub struct EvalLoopResult {
 pub fn run_eval_loop_with_bindings(
     plan: &ExecPlan<'_>,
     bindings: &crate::eval::bindings::RuntimeParameterBindings,
-    src: &NamedSource<Arc<String>>,
+    src: SourceId,
+    sources: &SourceRegistry,
     host_fns: &crate::host_fns::HostFunctionRegistry,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
-) -> Result<EvalLoopResult, GraphcalError> {
+) -> Result<EvalLoopResult, Outcome<SemanticError>> {
     use crate::execution_frame::{ExecutionFrame, FailurePolicy};
     cancellation.checkpoint()?;
     let unfinished_calls = std::cell::RefCell::new(BTreeSet::new());
@@ -41,7 +42,7 @@ pub fn run_eval_loop_with_bindings(
     frame.run(cancellation, |entry, frame| {
         // Root declarations keep their existing work allowance; nested calls
         // share this context's budget through immutable scope reselection.
-        let root = EvalSession::checked(plan, src, host_fns, cancellation.clone())
+        let root = EvalSession::checked(plan, src, sources, host_fns, cancellation.clone())
             .with_roots(frame.values(), Some(frame.presentations()))
             .with_unavailable(frame.errors())
             .with_unfinished_calls(&unfinished_calls);

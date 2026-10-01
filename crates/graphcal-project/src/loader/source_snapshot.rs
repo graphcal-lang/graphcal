@@ -7,6 +7,8 @@
 //! path it contains. Diagnostics are rendered only when the builder reaches an
 //! offending path, so the reported error follows the builder's traversal.
 
+use crate::load_error::LoadError;
+
 use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
@@ -17,12 +19,15 @@ use miette::NamedSource;
 
 use super::module_path::{ModulePathKey, ResolvedModuleTarget};
 use crate::compile_error::CompileError;
-use graphcal_compiler::cancellation::{CancellationToken, Cancelled};
+use graphcal_compiler::cancellation::CancellationToken;
 use graphcal_compiler::dag_id::{DagId, DagPackageId};
 use graphcal_compiler::desugar::desugared_ast::{Declaration, File};
-use graphcal_compiler::graphcal_error::GraphcalError;
 use graphcal_compiler::import_cycle::ImportChainFile;
 use graphcal_compiler::outcome::Outcome;
+use graphcal_compiler::semantic_error::SemanticError;
+use graphcal_compiler::semantic_error::evaluation::EvaluationError;
+use graphcal_compiler::source_id::SourceId;
+use graphcal_compiler::source_registry::SourceRegistry;
 use graphcal_compiler::syntax::ast::{DeclKind, ModulePath};
 use graphcal_compiler::syntax::decl_name::DeclName;
 use graphcal_compiler::syntax::parser::Parser;
@@ -122,6 +127,8 @@ impl SourceKey for PackageFileKey {
 pub(super) struct SourceSnapshot<K> {
     pub(super) root: K,
     pub(super) files: HashMap<K, FetchedFile<K>>,
+    /// Every fetched source text, registered as it was read.
+    pub(super) sources: SourceRegistry,
 }
 
 /// One fetched file: its parsed content, or the read/parse failure the
@@ -137,40 +144,44 @@ pub(super) struct ModuleLocation {
     pub(super) relative_path: PathBuf,
 }
 
-/// One parsed and desugared source text with its diagnostic name.
+/// One parsed and desugared source text, registered under its diagnostic
+/// name.
 #[derive(Debug)]
 pub(super) struct ParsedFile {
     pub(super) source: Arc<String>,
+    /// Identity of the text in the project's source registry; core
+    /// diagnostics refer to it.
+    pub(super) source_id: SourceId,
+    /// The registered text under its name, for the loader's own diagnostics.
     pub(super) named_source: NamedSource<Arc<String>>,
     pub(super) ast: File,
 }
 
 impl ParsedFile {
-    /// The source text, its diagnostic name, and the desugared AST.
-    pub(super) fn into_parts(self) -> (Arc<String>, NamedSource<Arc<String>>, File) {
-        (self.source, self.named_source, self.ast)
+    /// The source text, its registered identity, and the desugared AST.
+    pub(super) fn into_parts(self) -> (Arc<String>, SourceId, File) {
+        (self.source, self.source_id, self.ast)
     }
 
-    /// Parse and desugar `source` under the diagnostic `name`, rendering a
-    /// parse failure against that same named source. This is the loader's
-    /// only parse sequence.
-    ///
-    /// Until the loader returns `Outcome<_>` itself, cancellation still
-    /// travels inside `CompileError` (as `GraphcalError::Cancelled`).
+    /// Register `source` under the diagnostic `name` in `sources`, then parse
+    /// and desugar it, rendering a parse failure against the registered text.
+    /// This is the loader's only parse sequence.
     pub(super) fn parse(
+        sources: &mut SourceRegistry,
         name: &str,
         source: Arc<String>,
         cancellation: &CancellationToken,
-    ) -> Result<Self, CompileError> {
+    ) -> Result<Self, Outcome<CompileError>> {
+        let source_id = sources.register(name, Arc::clone(&source));
         let named_source = NamedSource::new(name, Arc::clone(&source));
         let raw_ast = Parser::new(&source)
             .parse_file_with_cancellation(cancellation)
-            .map_err(|outcome| match outcome {
-                Outcome::Cancelled => CompileError::from(Cancelled),
-                Outcome::Failed(error) => CompileError::parse(error, named_source.clone()),
+            .map_err(|outcome| {
+                outcome.map_failed(|error| CompileError::parse(error, named_source.clone()))
             })?;
         Ok(Self {
             source,
+            source_id,
             named_source,
             ast: File::from(raw_ast),
         })
@@ -217,6 +228,11 @@ impl<K: SourceKey> ParsedSource<K> {
 
     pub(super) const fn named_source(&self) -> &NamedSource<Arc<String>> {
         &self.file.named_source
+    }
+
+    /// Identity of this file's text in the project's source registry.
+    pub(super) const fn source_id(&self) -> SourceId {
+        self.file.source_id
     }
 
     pub(super) const fn ast(&self) -> &File {
@@ -305,48 +321,60 @@ impl ResolveFailure {
         &self,
         path: &ModulePath,
         src: &NamedSource<Arc<String>>,
+        source_id: SourceId,
+        sources: &SourceRegistry,
     ) -> CompileError {
         let src = src.clone();
         let span = path.span().into();
-        CompileError::Eval(match self {
-            Self::StdlibNotImplemented => GraphcalError::StdlibNotImplemented {
+        match self {
+            Self::StdlibNotImplemented => LoadError::StdlibNotImplemented {
                 path: path.display_path(),
                 src,
                 span,
-            },
-            Self::PackageNameMismatch { package_name } => GraphcalError::PackageNameMismatch {
+            }
+            .into(),
+            Self::PackageNameMismatch { package_name } => LoadError::PackageNameMismatch {
                 path_first: path.segments.first().name.to_string(),
                 package_name: package_name.clone(),
                 src,
                 span,
-            },
-            Self::FileNotFound => GraphcalError::ImportFileNotFound {
+            }
+            .into(),
+            Self::FileNotFound => LoadError::ImportFileNotFound {
                 path: path.display_path(),
                 src,
                 span,
-            },
-            Self::CrossFileImportInVirtualPackage => {
-                GraphcalError::CrossFileImportInVirtualPackage {
-                    path: path.display_path(),
-                    src,
-                    span,
-                }
             }
-            Self::NotLocked { message } => GraphcalError::EvalError {
-                message: format!("{message}; run `graphcal deps lock` after changing dependencies"),
+            .into(),
+            Self::CrossFileImportInVirtualPackage => LoadError::CrossFileImportInVirtualPackage {
+                path: path.display_path(),
                 src,
                 span,
-            },
-            Self::Manifest { message } => GraphcalError::ManifestError {
+            }
+            .into(),
+            Self::NotLocked { message } => CompileError::semantic(
+                SemanticError::located(
+                    source_id,
+                    path.span(),
+                    EvaluationError::Failed {
+                        message: format!(
+                            "{message}; run `graphcal deps lock` after changing dependencies"
+                        ),
+                    },
+                ),
+                sources,
+            ),
+            Self::Manifest { message } => LoadError::ManifestError {
                 message: message.clone(),
-            },
-        })
+            }
+            .into(),
+        }
     }
 }
 
 /// Error for a path that resolved outside the permitted source root.
-pub(super) fn outside_root(path: &ModulePath, src: NamedSource<Arc<String>>) -> GraphcalError {
-    GraphcalError::ImportOutsideRoot {
+pub(super) fn outside_root(path: &ModulePath, src: NamedSource<Arc<String>>) -> LoadError {
+    LoadError::ImportOutsideRoot {
         path: path.display_path(),
         src,
         span: path.span().into(),

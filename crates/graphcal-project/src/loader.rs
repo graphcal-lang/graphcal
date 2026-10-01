@@ -1,3 +1,4 @@
+use crate::load_error::LoadError;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt::Write as _;
 use std::path::{Component, Path, PathBuf};
@@ -9,8 +10,10 @@ use crate::compile_error::CompileError;
 use crate::dependency_ordered::DependencyOrdered;
 use graphcal_compiler::dag_id::{DagId, DagPackageId};
 use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
-use graphcal_compiler::graphcal_error::GraphcalError;
+use graphcal_compiler::outcome::Outcome;
 use graphcal_compiler::plugin_identity::{ExternFnKey, PluginIdentity};
+use graphcal_compiler::semantic_error::SemanticError;
+use graphcal_compiler::source_registry::SourceRegistry;
 use graphcal_compiler::syntax::ast::ModulePath;
 use graphcal_compiler::syntax::decl_name::DeclName;
 #[cfg(test)]
@@ -127,7 +130,7 @@ fn read_wasm_plugins<'a>(
     fs: &dyn FileSystemReader,
     budget: &mut LoaderBudgetState,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
-) -> Result<HashMap<PluginIdentity, PluginFileEntry>, CompileError> {
+) -> Result<HashMap<PluginIdentity, PluginFileEntry>, Outcome<CompileError>> {
     let mut plugins = HashMap::new();
     for (package, ast) in file_asts {
         for path in wasm_plugin_paths(ast) {
@@ -258,11 +261,9 @@ impl LoadedProject {
     /// Returns a [`CompileError`] if parsing fails or `name` is not a valid
     /// `.gcl` source path.
     pub fn from_source(source: &str, name: &str) -> Result<Self, CompileError> {
-        Self::from_source_with_cancellation(
-            source,
-            name,
-            &graphcal_compiler::cancellation::CancellationToken::unbounded(),
-        )
+        graphcal_compiler::outcome::without_cancellation(|cancellation| {
+            Self::from_source_with_cancellation(source, name, cancellation)
+        })
     }
 
     /// Build a single-file project while observing cooperative cancellation.
@@ -275,9 +276,15 @@ impl LoadedProject {
         source: &str,
         name: &str,
         cancellation: &graphcal_compiler::cancellation::CancellationToken,
-    ) -> Result<Self, CompileError> {
+    ) -> Result<Self, Outcome<CompileError>> {
         cancellation.checkpoint()?;
-        let parsed = ParsedFile::parse(name, Arc::new(source.to_string()), cancellation)?;
+        let mut sources = SourceRegistry::new();
+        let parsed = ParsedFile::parse(
+            &mut sources,
+            name,
+            Arc::new(source.to_string()),
+            cancellation,
+        )?;
         cancellation.checkpoint()?;
         let path = PathBuf::from(name);
         let stem = file_stem(&path);
@@ -301,11 +308,14 @@ impl LoadedProject {
             _ => path.as_path(),
         };
         let dag_id = DagId::from_virtual_relative_path(semantic_path).map_err(|error| {
-            CompileError::Eval(GraphcalError::internal_error(
-                format!("invalid source name `{name}`: {error}"),
-                &parsed.named_source,
-                DiagnosticAnchor::WholeFile,
-            ))
+            CompileError::semantic(
+                SemanticError::internal_error(
+                    format!("invalid source name `{name}`: {error}"),
+                    parsed.source_id,
+                    DiagnosticAnchor::WholeFile,
+                ),
+                &sources,
+            )
         })?;
         // No project root or manifest in single-file mode — only the
         // file-stem self-reference (Concept 7) can be detected here.
@@ -322,18 +332,19 @@ impl LoadedProject {
             })
             .collect();
         cancellation.checkpoint()?;
-        let (source, named_source, ast) = parsed.into_parts();
+        let (source, source_id, ast) = parsed.into_parts();
         let loaded_file = LoadedFile::new(
             path,
             dag_id,
             source,
-            named_source,
+            source_id,
             ast,
             HashMap::new(),
             inline_dags,
         );
         Ok(Self::from_parts(
             DependencyOrdered::root_only(loaded_file),
+            sources,
             plugins,
             PluginCallPolicy::default(),
         ))
@@ -426,12 +437,11 @@ pub fn load_project<F: FileSystemReader>(
     project_root_override: Option<&Path>,
     fs: &F,
 ) -> Result<LoadedProject, CompileError> {
-    load_project_with_budget_and_cancellation(
+    load_project_with_budget(
         root_path,
         project_root_override,
         fs,
         LoaderBudget::default(),
-        &graphcal_compiler::cancellation::CancellationToken::unbounded(),
     )
 }
 
@@ -447,13 +457,15 @@ pub fn load_project_with_budget<F: FileSystemReader>(
     fs: &F,
     budget: LoaderBudget,
 ) -> Result<LoadedProject, CompileError> {
-    load_project_with_budget_and_cancellation(
-        root_path,
-        project_root_override,
-        fs,
-        budget,
-        &graphcal_compiler::cancellation::CancellationToken::unbounded(),
-    )
+    graphcal_compiler::outcome::without_cancellation(|cancellation| {
+        load_project_with_budget_and_cancellation(
+            root_path,
+            project_root_override,
+            fs,
+            budget,
+            cancellation,
+        )
+    })
 }
 
 /// Load a project with cooperative cancellation between bounded reads, files,
@@ -468,7 +480,7 @@ pub fn load_project_with_cancellation<F: FileSystemReader>(
     project_root_override: Option<&Path>,
     fs: &F,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
-) -> Result<LoadedProject, CompileError> {
+) -> Result<LoadedProject, Outcome<CompileError>> {
     load_project_with_budget_and_cancellation(
         root_path,
         project_root_override,
@@ -490,7 +502,7 @@ pub fn load_project_with_budget_and_cancellation<F: FileSystemReader>(
     fs: &F,
     budget: LoaderBudget,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
-) -> Result<LoadedProject, CompileError> {
+) -> Result<LoadedProject, Outcome<CompileError>> {
     load_project_with_dependency_sources(
         root_path,
         project_root_override,
@@ -514,7 +526,7 @@ pub fn load_project_with_dependency_sources<F: FileSystemReader>(
     sources: crate::package_sources::DependencySources<'_>,
     budget: LoaderBudget,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
-) -> Result<LoadedProject, CompileError> {
+) -> Result<LoadedProject, Outcome<CompileError>> {
     let mut budget = LoaderBudgetState::new(budget);
     load_project_with_budget_state(
         root_path,
@@ -533,7 +545,7 @@ fn load_project_with_budget_state<F: FileSystemReader>(
     sources: crate::package_sources::DependencySources<'_>,
     budget: &mut LoaderBudgetState,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
-) -> Result<LoadedProject, CompileError> {
+) -> Result<LoadedProject, Outcome<CompileError>> {
     cancellation.checkpoint()?;
     let root_canonical = fs
         .canonicalize(root_path)
@@ -568,7 +580,8 @@ fn load_project_with_budget_state<F: FileSystemReader>(
     {
         return Err(loader_manifest_error(
             "embedded packages were supplied but the root has no dependencies",
-        ));
+        )
+        .into());
     }
     let package_id = match manifest.as_ref() {
         Some(package_manifest) => DagPackageId::new(package_manifest.name.as_str()),
@@ -583,7 +596,7 @@ fn load_project_with_budget_state<F: FileSystemReader>(
     };
     let snapshot = fetch_source_snapshot(&authority, root_canonical, budget, cancellation)?;
     cancellation.checkpoint()?;
-    let files = build_loaded_files(snapshot)?;
+    let (files, sources) = build_loaded_files(snapshot)?;
     cancellation.checkpoint()?;
     // Single-package project: every loaded file belongs to the root package,
     // so every declared wasm plugin resolves against the project root.
@@ -611,6 +624,7 @@ fn load_project_with_budget_state<F: FileSystemReader>(
     cancellation.checkpoint()?;
     Ok(LoadedProject::from_parts(
         files,
+        sources,
         plugins,
         plugin_call_policy,
     ))
@@ -626,7 +640,7 @@ fn load_plugin_pins(
     fs: &dyn FileSystemReader,
     budget: &mut LoaderBudgetState,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
-) -> Result<BTreeMap<String, String>, CompileError> {
+) -> Result<BTreeMap<String, String>, Outcome<CompileError>> {
     let lockfile_path = project_root.join("graphcal.lock");
     let lockfile_text =
         match budget.read_text(fs, &lockfile_path, LoaderArtifact::Lockfile, cancellation) {
@@ -638,25 +652,26 @@ fn load_plugin_pins(
             }
             Err(LoaderReadError::Filesystem(FileSystemReadError::Cancelled)) => {
                 cancellation.checkpoint()?;
-                return Err(loader_manifest_error("plugin lockfile read cancelled"));
+                return Err(loader_manifest_error("plugin lockfile read cancelled").into());
             }
             Err(error) => {
                 return Err(loader_manifest_error(format!(
                     "could not read `{}`: {error}",
                     lockfile_path.display()
-                )));
+                ))
+                .into());
             }
         };
     let lockfile = parse_lockfile_str_with_limits(&lockfile_text, budget.lockfile_parse_limits())
         .map_err(|error| {
-        CompileError::Eval(GraphcalError::ManifestError {
+        CompileError::Load(LoadError::ManifestError {
             message: error.to_string(),
         })
     })?;
     let validated = lockfile
         .validated(env!("CARGO_PKG_VERSION"), STDLIB_VERSION)
         .map_err(|error| {
-            CompileError::Eval(GraphcalError::ManifestError {
+            CompileError::Load(LoadError::ManifestError {
                 message: error.to_string(),
             })
         })?;
@@ -674,7 +689,7 @@ fn load_locked_package_project<F: FileSystemReader>(
     sources: crate::package_sources::DependencySources<'_>,
     budget: &mut LoaderBudgetState,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
-) -> Result<LoadedProject, CompileError> {
+) -> Result<LoadedProject, Outcome<CompileError>> {
     cancellation.checkpoint()?;
     let root_policy = root_manifest.plugin_execution_policy.clone();
     let context = PackageLoadContext::from_lockfile(
@@ -704,7 +719,7 @@ fn load_locked_package_project<F: FileSystemReader>(
     };
     let snapshot = fetch_source_snapshot(&context, root_file, budget, cancellation)?;
     cancellation.checkpoint()?;
-    let files = build_loaded_files(snapshot)?;
+    let (files, sources) = build_loaded_files(snapshot)?;
     cancellation.checkpoint()?;
     // Each artifact resolves within its declaring package's authority. Root
     // plugins use explicit pins; dependency binaries need verified coverage.
@@ -731,7 +746,7 @@ fn load_locked_package_project<F: FileSystemReader>(
     }
     validate_plugin_call_policy(&files, &plugin_call_policy)?;
     cancellation.checkpoint()?;
-    let mut project = LoadedProject::from_parts(files, plugins, plugin_call_policy);
+    let mut project = LoadedProject::from_parts(files, sources, plugins, plugin_call_policy);
     project.package_closure = Some(context.closure);
     Ok(project)
 }
@@ -760,7 +775,7 @@ impl<'a> PackageLoadContext<'a> {
         sources: crate::package_sources::DependencySources<'_>,
         budget: &mut LoaderBudgetState,
         cancellation: &graphcal_compiler::cancellation::CancellationToken,
-    ) -> Result<Self, CompileError> {
+    ) -> Result<Self, Outcome<CompileError>> {
         cancellation.checkpoint()?;
         let lockfile_path = project_root.join("graphcal.lock");
         let lockfile_text = budget
@@ -789,7 +804,8 @@ impl<'a> PackageLoadContext<'a> {
             if expected != packages.keys().collect() {
                 return Err(loader_manifest_error(
                     "embedded package identities must exactly match the locked dependency closure",
-                ));
+                )
+                .into());
             }
         }
 
@@ -947,7 +963,7 @@ fn capture_dependency_from_authority(
     sources: crate::package_sources::DependencySources<'_>,
     budget: &mut LoaderBudgetState,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
-) -> Result<VerifiedDependency, CompileError> {
+) -> Result<VerifiedDependency, Outcome<CompileError>> {
     match sources {
         crate::package_sources::DependencySources::NativeCache => {
             let cache = package_cache_root().map_err(loader_manifest_error)?;
@@ -985,7 +1001,8 @@ fn capture_dependency_from_authority(
                 return Err(loader_manifest_error(format!(
                     "embedded package `{}` contains files outside its authenticated closure",
                     package.id
-                )));
+                ))
+                .into());
             }
             Ok(verified)
         }
@@ -1004,7 +1021,7 @@ fn load_verified_dependency(
     reader: &dyn FileSystemReader,
     budget: &mut LoaderBudgetState,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
-) -> Result<VerifiedDependency, CompileError> {
+) -> Result<VerifiedDependency, Outcome<CompileError>> {
     let manifest = read_package_manifest_from_path(root, reader, budget, cancellation)?;
     let snapshot = verify_locked_source(root, package, &manifest, reader, budget, cancellation)?;
     let filesystem = snapshot.mount(root).map_err(loader_manifest_error)?;
@@ -1013,7 +1030,8 @@ fn load_verified_dependency(
     if captured_manifest != manifest {
         return Err(loader_manifest_error(
             "package manifest changed while capturing its authenticated snapshot",
-        ));
+        )
+        .into());
     }
     Ok(VerifiedDependency {
         manifest,
@@ -1032,11 +1050,12 @@ fn verify_locked_source(
     fs: &dyn FileSystemReader,
     budget: &mut LoaderBudgetState,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
-) -> Result<graphcal_io::SourceTreeSnapshot, CompileError> {
+) -> Result<graphcal_io::SourceTreeSnapshot, Outcome<CompileError>> {
     let PackageSource::Git { tree_hashes, .. } = &package.source else {
         return Err(loader_manifest_error(
             "only Git dependencies have authenticated source snapshots",
-        ));
+        )
+        .into());
     };
     let cancellation_signal = || cancellation.is_cancelled();
     let source_dir = manifest.source_dir.to_path_buf();
@@ -1056,9 +1075,9 @@ fn verify_locked_source(
         ) {
             cancellation
                 .checkpoint()
-                .map_or_else(CompileError::from, |()| loader_manifest_error(error))
+                .map_or_else(Outcome::from, |()| loader_manifest_error(error).into())
         } else {
-            loader_manifest_error(error)
+            loader_manifest_error(error).into()
         }
     })?;
     let actual = snapshot.hash();
@@ -1073,7 +1092,8 @@ fn verify_locked_source(
             package.id,
             tree_hashes.sha256,
             actual.sha256()
-        )))
+        ))
+        .into())
     }
 }
 
@@ -1271,13 +1291,13 @@ fn virtual_package_id_for_path(path: &Path) -> Result<DagPackageId, CompileError
         .file_name()
         .and_then(|name| name.to_str())
         .ok_or_else(|| {
-            CompileError::Eval(GraphcalError::InvalidSourcePath {
+            CompileError::Load(LoadError::InvalidSourcePath {
                 path: path.display().to_string(),
                 reason: "source path has no UTF-8 file name".to_string(),
             })
         })?;
     let stem = file_name.strip_suffix(".gcl").ok_or_else(|| {
-        CompileError::Eval(GraphcalError::InvalidSourcePath {
+        CompileError::Load(LoadError::InvalidSourcePath {
             path: path.display().to_string(),
             reason: "source path must end with `.gcl`".to_string(),
         })

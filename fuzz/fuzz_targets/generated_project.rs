@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 use std::sync::LazyLock;
 
-use graphcal_compiler::graphcal_error::GraphcalError;
+use graphcal_compiler::semantic_error::SemanticError;
 use graphcal_project::compile_error::CompileError;
 use graphcal_project::prepare::compile_and_eval_project;
 use graphcal_io::{InMemoryFileSystem, VirtualAbsolutePath};
@@ -38,14 +38,16 @@ fuzz_target!(|data: &[u8]| {
         .expect("typed project has a valid file topology");
     }
 
-    if let Err(CompileError::Eval(GraphcalError::InternalError { message, .. })) =
-        compile_and_eval_project(
-            &root.as_path().join(rendered.root()),
-            &HashMap::new(),
-            Some(root.as_path()),
-            &fs,
-        )
+    if let Err(CompileError::Eval(error)) = compile_and_eval_project(
+        &root.as_path().join(rendered.root()),
+        &HashMap::new(),
+        Some(root.as_path()),
+        &fs,
+    ) && let SemanticError::Internal(internal) = error.error()
     {
-        panic!("typed generated project reached an internal error: {message}");
+        panic!(
+            "typed generated project reached an internal error: {}",
+            internal.message()
+        );
     }
 });

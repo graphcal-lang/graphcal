@@ -4,13 +4,12 @@
 use crate::hir::nominal::{NominalConstructor, NominalGenericParam, NominalTypeDef};
 use crate::hir::types::GenericParamId;
 use crate::resolved_name::ResolvedStructTypeName;
+use crate::semantic_error::evaluation::EvaluationError;
+use crate::source_id::SourceId;
 use std::collections::HashMap;
-use std::sync::Arc;
 
-use miette::NamedSource;
-
-use crate::graphcal_error::GraphcalError;
 use crate::semantic::checked_type::Symbolic;
+use crate::semantic_error::SemanticError;
 use crate::syntax::ast::GenericConstraint;
 use crate::syntax::span::Span;
 use crate::syntax::type_name::{FieldName, GenericParamName};
@@ -33,20 +32,22 @@ pub(in crate::tir::dim_check) fn resolved_type_field_key(
 pub(in crate::tir::dim_check) fn generic_substitution_prefix(
     type_def: &NominalTypeDef,
     type_args: &[CheckedGenericArg<Symbolic>],
-    src: &NamedSource<Arc<String>>,
+    src: SourceId,
     span: Span,
-) -> Result<Substitution, GraphcalError> {
+) -> Result<Substitution, SemanticError> {
     if type_args.len() > type_def.generic_params().len() {
-        return Err(GraphcalError::EvalError {
-            message: format!(
-                "type `{}` expects at most {} generic arguments, got {}",
-                type_def.name(),
-                type_def.generic_params().len(),
-                type_args.len()
-            ),
-            src: src.clone(),
-            span: span.into(),
-        });
+        return Err(SemanticError::located(
+            src,
+            span,
+            EvaluationError::Failed {
+                message: format!(
+                    "type `{}` expects at most {} generic arguments, got {}",
+                    type_def.name(),
+                    type_def.generic_params().len(),
+                    type_args.len()
+                ),
+            },
+        ));
     }
 
     // A validated concrete argument, embedded into the symbolic form. An
@@ -124,20 +125,22 @@ pub(in crate::tir::dim_check) fn generic_substitution_prefix(
 pub(in crate::tir::dim_check) fn concrete_generic_substitutions(
     type_def: &NominalTypeDef,
     type_args: &[CheckedGenericArg<Symbolic>],
-    src: &NamedSource<Arc<String>>,
+    src: SourceId,
     span: Span,
-) -> Result<ConcreteGenericSubstitutions, GraphcalError> {
+) -> Result<ConcreteGenericSubstitutions, SemanticError> {
     if type_args.len() != type_def.generic_params().len() {
-        return Err(GraphcalError::EvalError {
-            message: format!(
-                "concrete type `{}` requires exactly {} generic arguments, got {}",
-                type_def.name(),
-                type_def.generic_params().len(),
-                type_args.len()
-            ),
-            src: src.clone(),
-            span: span.into(),
-        });
+        return Err(SemanticError::located(
+            src,
+            span,
+            EvaluationError::Failed {
+                message: format!(
+                    "concrete type `{}` requires exactly {} generic arguments, got {}",
+                    type_def.name(),
+                    type_def.generic_params().len(),
+                    type_args.len()
+                ),
+            },
+        ));
     }
     let substitution = generic_substitution_prefix(type_def, type_args, src, span)?;
     let nats = type_def
@@ -159,29 +162,31 @@ pub(in crate::tir::dim_check) fn concrete_generic_substitutions(
 pub(in crate::tir::dim_check) fn non_concrete_generic_argument(
     parameter: &GenericParamName,
     argument: &str,
-    src: &NamedSource<Arc<String>>,
+    src: SourceId,
     span: Span,
-) -> GraphcalError {
-    GraphcalError::EvalError {
-        message: format!("generic argument `{argument}` for `{parameter}` is not concrete"),
-        src: src.clone(),
-        span: span.into(),
-    }
+) -> SemanticError {
+    SemanticError::located(
+        src,
+        span,
+        EvaluationError::Failed {
+            message: format!("generic argument `{argument}` for `{parameter}` is not concrete"),
+        },
+    )
 }
 
 pub(in crate::tir::dim_check) fn generic_arg_internal_sort_error(
     param: &NominalGenericParam,
-    src: &NamedSource<Arc<String>>,
+    src: SourceId,
     span: Span,
-) -> GraphcalError {
-    GraphcalError::InternalError {
-        message: format!(
+) -> SemanticError {
+    SemanticError::internal_error(
+        format!(
             "generic argument for `{}` does not match its registered sort",
             param.name()
         ),
-        src: src.clone(),
-        span: span.into(),
-    }
+        src,
+        crate::diagnostic_anchor::DiagnosticAnchor::Source(span),
+    )
 }
 
 /// Complete, sort-checked, concrete bindings for one nominal application.
@@ -202,8 +207,8 @@ impl ConcreteGenericSubstitutions {
     pub(in crate::tir::dim_check) fn field_type(
         &self,
         resolved: &crate::tir::typed::ResolvedDeclType,
-        src: &NamedSource<Arc<String>>,
-    ) -> Result<CheckedType, GraphcalError> {
+        src: SourceId,
+    ) -> Result<CheckedType, SemanticError> {
         instantiate_concrete_type(resolved, &self.substitution, src)
     }
 }
@@ -213,8 +218,8 @@ impl ConcreteGenericSubstitutions {
 pub(in crate::tir::dim_check) fn instantiate_concrete_type(
     resolved: &crate::tir::typed::ResolvedDeclType,
     substitution: &Substitution,
-    src: &NamedSource<Arc<String>>,
-) -> Result<CheckedType, GraphcalError> {
+    src: SourceId,
+) -> Result<CheckedType, SemanticError> {
     let instantiated = substitution
         .apply(resolved)
         .map_err(|error| error.into_graphcal(src))?;
@@ -224,8 +229,8 @@ pub(in crate::tir::dim_check) fn instantiate_concrete_type(
 pub(in crate::tir::dim_check) fn instantiate_concrete_generic_arg(
     resolved: &crate::tir::typed::ResolvedGenericArg,
     substitution: &Substitution,
-    src: &NamedSource<Arc<String>>,
-) -> Result<CheckedGenericArg, GraphcalError> {
+    src: SourceId,
+) -> Result<CheckedGenericArg, SemanticError> {
     let instantiated = substitution
         .apply_generic_arg(resolved)
         .map_err(|error| error.into_graphcal(src))?;
@@ -237,20 +242,18 @@ pub(in crate::tir::dim_check) fn resolved_field_type(
     type_def: &NominalTypeDef,
     type_args: &[CheckedGenericArg<Symbolic>],
     dag: &crate::tir::typed::DagTIR,
-    src: &NamedSource<Arc<String>>,
+    src: SourceId,
     span: Span,
-) -> Result<CheckedType, GraphcalError> {
-    let resolved =
-        dag.semantic
-            .type_defs
-            .field_type(key)
-            .ok_or_else(|| GraphcalError::InternalError {
-                message: format!(
-                    "semantic type metadata missing field type for `{}.{}`",
-                    key.constructor, key.field
-                ),
-                src: src.clone(),
-                span: span.into(),
-            })?;
+) -> Result<CheckedType, SemanticError> {
+    let resolved = dag.semantic.type_defs.field_type(key).ok_or_else(|| {
+        SemanticError::internal_error(
+            format!(
+                "semantic type metadata missing field type for `{}.{}`",
+                key.constructor, key.field
+            ),
+            src,
+            crate::diagnostic_anchor::DiagnosticAnchor::Source(span),
+        )
+    })?;
     concrete_generic_substitutions(type_def, type_args, src, span)?.field_type(resolved, src)
 }

@@ -2,9 +2,10 @@
 
 use crate::hir::types::{GenericArg, IndexRef, ValueType, ValueTypeKind};
 use crate::resolved_name::{ResolvedConstructorName, ResolvedStructTypeName};
+use crate::semantic_error::visibility::VisibilityError;
 
-use crate::graphcal_error::GraphcalError;
 use crate::semantic::checked_type::{IndexTypeRef, Symbolic};
+use crate::semantic_error::SemanticError;
 use crate::syntax::span::Span;
 use crate::syntax::type_name::FieldName;
 use crate::tir::texpr::NominalObservation;
@@ -38,7 +39,7 @@ impl Infer<'_> {
         &self,
         actual: &ResolvedStructTypeName,
         nominal_use: TypeNominalUse<'_>,
-    ) -> Result<(), GraphcalError> {
+    ) -> Result<(), SemanticError> {
         self.control.observe_nominal(
             match nominal_use {
                 TypeNominalUse::Field { field, .. } => NominalObservation::Field {
@@ -86,14 +87,16 @@ impl Infer<'_> {
                     ),
                     TypeNominalUse::TypeArgument => format!("type `{overridden}`"),
                 };
-                return Err(GraphcalError::IncludeMustReconcileOverride {
-                    overridden: overridden.to_string(),
-                    overridden_kind: "type".to_string(),
-                    orphan_decl: reconciliation.orphan_decl().to_string(),
-                    detail,
-                    src: reconciliation.src.clone(),
-                    span: reconciliation.include_span.into(),
-                });
+                return Err(SemanticError::located(
+                    reconciliation.src,
+                    reconciliation.include_span,
+                    VisibilityError::IncludeMustReconcileOverride {
+                        overridden: overridden.to_string(),
+                        overridden_kind: "type".to_string(),
+                        orphan_decl: reconciliation.orphan_decl().to_string(),
+                        detail,
+                    },
+                ));
             }
         }
         Ok(())
@@ -111,7 +114,7 @@ impl Infer<'_> {
         &self,
         actual: &IndexTypeRef<Symbolic>,
         nominal_use: IndexNominalUse<'_>,
-    ) -> Result<(), GraphcalError> {
+    ) -> Result<(), SemanticError> {
         self.control.observe_nominal(
             match nominal_use {
                 IndexNominalUse::Label(variant) => NominalObservation::IndexLabel {
@@ -150,14 +153,16 @@ impl Infer<'_> {
                     }
                     IndexNominalUse::TypeArgument => format!("index `{overridden}`"),
                 };
-                return Err(GraphcalError::IncludeMustReconcileOverride {
-                    overridden: overridden.to_string(),
-                    overridden_kind: "index".to_string(),
-                    orphan_decl: reconciliation.orphan_decl().to_string(),
-                    detail,
-                    src: reconciliation.src.clone(),
-                    span: reconciliation.include_span.into(),
-                });
+                return Err(SemanticError::located(
+                    reconciliation.src,
+                    reconciliation.include_span,
+                    VisibilityError::IncludeMustReconcileOverride {
+                        overridden: overridden.to_string(),
+                        overridden_kind: "index".to_string(),
+                        orphan_decl: reconciliation.orphan_decl().to_string(),
+                        detail,
+                    },
+                ));
             }
         }
         Ok(())
@@ -166,7 +171,7 @@ impl Infer<'_> {
     fn check_hir_index_ref_override_dependency(
         &self,
         index: &IndexRef,
-    ) -> Result<(), GraphcalError> {
+    ) -> Result<(), SemanticError> {
         let actual = match index {
             IndexRef::Concrete(index) => IndexTypeRef::from_resolved(index.value.clone()),
             IndexRef::Finite(cardinality) => {
@@ -184,7 +189,7 @@ impl Infer<'_> {
     pub(super) fn check_hir_generic_arg_override_dependencies(
         &self,
         arg: &GenericArg,
-    ) -> Result<(), GraphcalError> {
+    ) -> Result<(), SemanticError> {
         match arg {
             GenericArg::Index(index) => self.check_hir_index_ref_override_dependency(index),
             GenericArg::Type(value_type) => self.check_hir_type_override_dependencies(value_type),
@@ -195,7 +200,7 @@ impl Infer<'_> {
     fn check_hir_type_override_dependencies(
         &self,
         value_type: &ValueType,
-    ) -> Result<(), GraphcalError> {
+    ) -> Result<(), SemanticError> {
         match &value_type.kind {
             ValueTypeKind::Struct(name) => {
                 self.check_type_override_dependency(&name.value, TypeNominalUse::TypeArgument)

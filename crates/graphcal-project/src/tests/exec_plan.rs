@@ -2,18 +2,13 @@
 //! (inline DAG calls and includes).
 
 use std::collections::HashMap;
-use std::sync::Arc;
 
-use graphcal_compiler::graphcal_error::GraphcalError;
+use graphcal_compiler::outcome::Outcome;
 use graphcal_compiler::resolved_name::ResolvedDeclName;
+use graphcal_compiler::semantic_error::SemanticError;
 use graphcal_compiler::syntax::decl_name::DeclName;
 use graphcal_eval::exec_plan::{compile, prepare_callable_plan_for_test};
 use graphcal_eval::execution_plan::{ExecPlan, PlannedDeclaration, PlannedInstance};
-use miette::NamedSource;
-
-fn make_src(source: &str) -> NamedSource<Arc<String>> {
-    NamedSource::new("test.gcl", Arc::new(source.to_string()))
-}
 
 fn test_dag_id() -> graphcal_compiler::dag_id::DagId {
     graphcal_compiler::dag_id::DagId::from_virtual_relative_path(std::path::Path::new("test.gcl"))
@@ -41,7 +36,7 @@ fn callables_reject_missing_and_out_of_closure_locations() {
         .check()
         .unwrap();
     let tir = checked.tir();
-    let prepared = compile(tir, &make_src(source)).unwrap();
+    let prepared = compile(tir, loaded.root_file().source_id(), checked.sources()).unwrap();
     let plan = prepared.plan();
     let program = plan.program();
     let scopes = tir
@@ -69,7 +64,7 @@ fn callables_reject_missing_and_out_of_closure_locations() {
             prepare_callable_plan_for_test(tir, &scopes, root, &declarations, &cancellation)
                 .unwrap_err();
         assert!(
-            matches!(&error, GraphcalError::InternalError { message, .. } if message.contains(expected)),
+            matches!(&error, Outcome::Failed(SemanticError::Internal(internal)) if internal.message().contains(expected)),
             "{error:?}"
         );
     }
@@ -86,8 +81,7 @@ fn callable_plans_use_the_checked_closure_schedule() {
         .check()
         .unwrap();
     let tir = checked.tir();
-    let src = make_src(source);
-    let prepared = compile(tir, &src).unwrap();
+    let prepared = compile(tir, loaded.root_file().source_id(), checked.sources()).unwrap();
     let plan = prepared.plan();
     let schedule = tir.root().runtime_schedule();
     assert_eq!(

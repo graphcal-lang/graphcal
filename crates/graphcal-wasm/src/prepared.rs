@@ -85,16 +85,22 @@ enum BrowserCapabilities {
     BundledPlugins,
 }
 
+#[expect(
+    clippy::result_large_err,
+    reason = "the loader reports its compile error by value, as every loader entry point does"
+)]
 fn prepare_virtual(project: &VirtualProject, capabilities: BrowserCapabilities) -> PrepareOutcome {
     let filesystem = project.filesystem();
-    let loaded = match load_project_with_dependency_sources(
-        &project.entry_path(),
-        Some(VirtualProject::root_path()),
-        &filesystem,
-        project.dependency_sources(),
-        LoaderBudget::default(),
-        &graphcal_compiler::cancellation::CancellationToken::unbounded(),
-    ) {
+    let loaded = match graphcal_compiler::outcome::without_cancellation(|cancellation| {
+        load_project_with_dependency_sources(
+            &project.entry_path(),
+            Some(VirtualProject::root_path()),
+            &filesystem,
+            project.dependency_sources(),
+            LoaderBudget::default(),
+            cancellation,
+        )
+    }) {
         Ok(loaded) => loaded,
         Err(error) => {
             return PrepareOutcome::CompileError {

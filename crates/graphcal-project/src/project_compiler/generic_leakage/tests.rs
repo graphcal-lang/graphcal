@@ -1,9 +1,9 @@
 use std::sync::Arc;
 
 use graphcal_compiler::ir::module_interface::ModuleInterface;
-use miette::NamedSource;
 
 use super::*;
+use crate::compile_error::PipelineError;
 
 fn parse_declarations(source: &str) -> Vec<graphcal_compiler::desugar::desugared_ast::Declaration> {
     let raw = graphcal_compiler::syntax::parser::Parser::new(source)
@@ -12,8 +12,9 @@ fn parse_declarations(source: &str) -> Vec<graphcal_compiler::desugar::desugared
     graphcal_compiler::desugar::desugared_ast::File::from(raw).declarations
 }
 
-fn source() -> NamedSource<Arc<String>> {
-    NamedSource::new("main.gcl", Arc::new(String::new()))
+fn source() -> graphcal_compiler::source_id::SourceId {
+    graphcal_compiler::source_registry::SourceRegistry::new()
+        .register("main.gcl", Arc::new(String::new()))
 }
 
 fn dependency() -> DagId {
@@ -55,7 +56,7 @@ fn unsubstituted_dependency_name_is_not_probed_in_the_importer() {
         &StaticSubstitution::default(),
         &IncludingModule {
             interface: &importer_interface,
-            source: &source(),
+            source: source(),
             scope: StaticScope::new(&importer_owner, &resolver),
         },
         Span::new(0, 0),
@@ -79,7 +80,7 @@ fn missing_required_substitution_is_an_internal_error() {
         &StaticSubstitution::default(),
         &IncludingModule {
             interface: &ModuleInterface::default(),
-            source: &source(),
+            source: source(),
             scope: StaticScope::new(&importer_owner, &resolver),
         },
         Span::new(0, 0),
@@ -87,11 +88,12 @@ fn missing_required_substitution_is_an_internal_error() {
     .unwrap_err();
 
     match error {
-        CompileError::Eval(GraphcalError::InternalError { message, .. }) => assert!(
-            message.contains(
+        PipelineError::Semantic(SemanticError::Internal(internal)) => assert!(
+            internal.message().contains(
                 "required type binding `Element` is absent during generic-leakage analysis"
             ),
-            "{message}"
+            "{}",
+            internal.message()
         ),
         other => panic!("expected internal error, got {other:?}"),
     }

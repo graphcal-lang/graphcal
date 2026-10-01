@@ -3,19 +3,17 @@
 //! A dependency cycle is a topological property of source, knowable without
 //! evaluating any value. The checker orders every local DAG's constants and
 //! every local callable's params and nodes exactly once; a cycle becomes a
-//! [`GraphcalError::CyclicDependency`] under `graphcal check`, and the orders
+//! [`GraphError::CyclicDependency`](GraphError::CyclicDependency) under `graphcal check`, and the orders
 //! are retained for evaluation.
-
-use std::sync::Arc;
-
-use miette::NamedSource;
 
 use crate::dag_id::DagId;
 use crate::dependency_graph::Cycle;
 use crate::diagnostic_anchor::DiagnosticAnchor;
-use crate::graphcal_error::GraphcalError;
 use crate::ir::entry::Decl;
 use crate::resolved_name::ResolvedDeclName;
+use crate::semantic_error::SemanticError;
+use crate::semantic_error::graph::GraphError;
+use crate::source_id::SourceId;
 use crate::tir::schedule::{ConstSchedule, RuntimeSchedule, RuntimeScheduleError};
 use crate::tir::typed::UncheckedTir;
 
@@ -32,12 +30,9 @@ impl ScheduleBuilder {
     ///
     /// # Errors
     ///
-    /// Returns [`GraphcalError::CyclicDependency`] for the first cycle found,
+    /// Returns [`GraphError::CyclicDependency`](GraphError::CyclicDependency) for the first cycle found,
     /// at the declaration that closes it.
-    pub(super) fn build(
-        tir: &UncheckedTir,
-        src: &NamedSource<Arc<String>>,
-    ) -> Result<Self, GraphcalError> {
+    pub(super) fn build(tir: &UncheckedTir, src: SourceId) -> Result<Self, SemanticError> {
         let constants = ConstSchedule::build(tir.dags.local_iter().map(|(_, dag)| dag))
             .map_err(|cycle| cyclic_dependency(tir, &cycle, None, src))?;
         let mut callables = tir
@@ -56,7 +51,7 @@ impl ScheduleBuilder {
                             cyclic_dependency(tir, &cycle, Some(dag.dag_id()), src)
                         }
                         RuntimeScheduleError::MissingInstance(owner) => {
-                            GraphcalError::internal_error(
+                            SemanticError::internal_error(
                                 format!("semantic runtime instance `{owner}` has no compiled DAG"),
                                 src,
                                 DiagnosticAnchor::WholeFile,
@@ -92,8 +87,8 @@ fn cyclic_dependency(
     tir: &UncheckedTir,
     cycle: &Cycle<ResolvedDeclName>,
     callable: Option<&DagId>,
-    src: &NamedSource<Arc<String>>,
-) -> GraphcalError {
+    src: SourceId,
+) -> SemanticError {
     let closing = callable
         .and_then(|owner| {
             cycle
@@ -114,12 +109,14 @@ fn cyclic_dependency(
             Decl::Assert(_) | Decl::Plot(_) | Decl::Figure(_) | Decl::Layer(_) => None,
         });
     match site {
-        Some((name, span)) => GraphcalError::CyclicDependency {
-            name: name.to_string(),
-            src: src.clone(),
-            span: span.into(),
-        },
-        None => GraphcalError::internal_error(
+        Some((name, span)) => SemanticError::located(
+            src,
+            span,
+            GraphError::CyclicDependency {
+                name: name.to_string(),
+            },
+        ),
+        None => SemanticError::internal_error(
             format!("cycle node `{closing}` is missing declaration metadata"),
             src,
             DiagnosticAnchor::WholeFile,

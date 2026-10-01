@@ -5,9 +5,17 @@
 //! parameters, or generic index parameters. It does not reinterpret source
 //! paths from declaration signatures.
 
+use crate::outcome::Outcome;
 use crate::resolved_name::{
     ResolvedDeclName, ResolvedDimName, ResolvedIndexName, ResolvedStructTypeName,
 };
+use crate::semantic_error::attribute::AttributeError;
+use crate::semantic_error::dimension::DimensionError;
+use crate::semantic_error::graph::GraphError;
+use crate::semantic_error::name::NameError;
+use crate::semantic_error::plugin::PluginError;
+use crate::semantic_error::visibility::VisibilityError;
+use crate::source_id::SourceId;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
@@ -17,13 +25,12 @@ pub use crate::ir::model::{LoweredPlotBody, LoweredPlotField};
 pub use crate::nat::NatPolyForm;
 use crate::syntax::decl_name::DeclName;
 use crate::syntax::span::{Span, Spanned};
-use miette::NamedSource;
 
-use crate::graphcal_error::GraphcalError;
 use crate::ir::model::HirDag;
 use crate::ir::resolve::collected::ExternalDeclSurface;
 use crate::resolve::ModuleResolver;
 use crate::resolve::symbols::SymbolRef;
+use crate::semantic_error::SemanticError;
 use crate::syntax::module_name::ScopedName;
 
 pub mod body_scope;
@@ -133,15 +140,15 @@ impl SignatureResolvedHirDag {
 ///
 /// # Errors
 ///
-/// Returns a [`GraphcalError`] when a declaration annotation cannot be
+/// Returns a [`SemanticError`] when a declaration annotation cannot be
 /// resolved to a concrete declared type.
 pub fn resolve_hir_signature_with_modules_and_cancellation(
     hir: HirDag,
-    src: &NamedSource<Arc<String>>,
+    src: SourceId,
     module_resolver: &ModuleResolver,
     project_types: &ProjectTypeStore,
     cancellation: &crate::cancellation::CancellationToken,
-) -> Result<SignatureResolvedHirDag, GraphcalError> {
+) -> Result<SignatureResolvedHirDag, Outcome<SemanticError>> {
     cancellation.checkpoint()?;
     let ctx = ModuleTypeContext::new(hir.dag_id(), module_resolver, project_types);
     let decl_types = resolve_declared_type_exprs(&hir, src, ctx, cancellation)?;
@@ -152,26 +159,27 @@ pub fn resolve_hir_signature_with_modules_and_cancellation(
 #[cfg(test)]
 pub(crate) fn type_resolve_draft(
     dag: HirDag,
-    src: &NamedSource<Arc<String>>,
+    src: SourceId,
     module_resolver: &ModuleResolver,
     project_types: Arc<ProjectTypeStore>,
-) -> Result<TirDraft, GraphcalError> {
-    let cancellation = crate::cancellation::CancellationToken::unbounded();
-    let signed = resolve_hir_signature_with_modules_and_cancellation(
-        dag,
-        src,
-        module_resolver,
-        &project_types,
-        &cancellation,
-    )?;
-    TirDraft::resolve_root(
-        signed,
-        HashMap::new(),
-        src,
-        module_resolver,
-        project_types,
-        &cancellation,
-    )
+) -> Result<TirDraft, SemanticError> {
+    crate::outcome::without_cancellation(|cancellation| {
+        let signed = resolve_hir_signature_with_modules_and_cancellation(
+            dag,
+            src,
+            module_resolver,
+            &project_types,
+            cancellation,
+        )?;
+        TirDraft::resolve_root(
+            signed,
+            HashMap::new(),
+            src,
+            module_resolver,
+            project_types,
+            cancellation,
+        )
+    })
 }
 
 impl TirDraft {
@@ -179,16 +187,16 @@ impl TirDraft {
     ///
     /// # Errors
     ///
-    /// Returns a [`GraphcalError`] when an imported interface is inconsistent
+    /// Returns a [`SemanticError`] when an imported interface is inconsistent
     /// or body semantic resolution fails.
     pub fn resolve_root<S>(
         signed: SignatureResolvedHirDag,
         imported_bindings: HashMap<ScopedName, crate::ir::imported_binding::ImportedBinding, S>,
-        src: &NamedSource<Arc<String>>,
+        src: SourceId,
         module_resolver: &ModuleResolver,
         project_types: Arc<ProjectTypeStore>,
         cancellation: &crate::cancellation::CancellationToken,
-    ) -> Result<Self, GraphcalError>
+    ) -> Result<Self, Outcome<SemanticError>>
     where
         S: std::hash::BuildHasher,
     {
@@ -214,17 +222,17 @@ impl TirDraft {
     ///
     /// # Errors
     ///
-    /// Returns a [`GraphcalError`] when a declared extern signature conflicts,
+    /// Returns a [`SemanticError`] when a declared extern signature conflicts,
     /// an imported interface is inconsistent, or body semantic resolution
     /// fails.
     pub fn add_inline_dag<S>(
         &mut self,
         signed: SignatureResolvedHirDag,
         imported_bindings: HashMap<ScopedName, crate::ir::imported_binding::ImportedBinding, S>,
-        src: &NamedSource<Arc<String>>,
+        src: SourceId,
         module_resolver: &ModuleResolver,
         cancellation: &crate::cancellation::CancellationToken,
-    ) -> Result<(), GraphcalError>
+    ) -> Result<(), Outcome<SemanticError>>
     where
         S: std::hash::BuildHasher,
     {
@@ -241,9 +249,11 @@ impl TirDraft {
             &project_types,
             cancellation,
         )?;
-        self.insert_dag(dag).map_err(|error| {
-            GraphcalError::internal_error(error.to_string(), src, DiagnosticAnchor::WholeFile)
-        })
+        self.insert_dag(dag)
+            .map_err(|error| {
+                SemanticError::internal_error(error.to_string(), src, DiagnosticAnchor::WholeFile)
+            })
+            .map_err(Outcome::Failed)
     }
 
     /// Complete assembly and materialize every semantic include edge as a
@@ -255,12 +265,12 @@ impl TirDraft {
     ///
     /// # Errors
     ///
-    /// Returns a [`GraphcalError`] when an instance cannot be specialized.
+    /// Returns a [`SemanticError`] when an instance cannot be specialized.
     pub fn instantiate(
         self,
         overrides: &CheckedOverrideDependencies,
-        src: &NamedSource<Arc<String>>,
-    ) -> Result<InstantiatedTir, GraphcalError> {
+        src: SourceId,
+    ) -> Result<InstantiatedTir, SemanticError> {
         let mut tir = self.finish();
         specialization::instantiate_semantic_edges(&mut tir, src)?;
         overrides.reconcile(&mut tir);
@@ -271,13 +281,13 @@ impl TirDraft {
 fn validate_checked_imported_bindings<S>(
     ir: &HirDag,
     checked: &HashMap<ScopedName, crate::ir::imported_binding::ImportedBinding, S>,
-    src: &NamedSource<Arc<String>>,
-) -> Result<(), GraphcalError>
+    src: SourceId,
+) -> Result<(), SemanticError>
 where
     S: std::hash::BuildHasher,
 {
     if ir.imported_bindings().len() != checked.len() {
-        return Err(GraphcalError::internal_error(
+        return Err(SemanticError::internal_error(
             format!(
                 "HIR declares {} imported bindings but checking supplied {}",
                 ir.imported_bindings().len(),
@@ -289,14 +299,14 @@ where
     }
     for (lexical, hir_target) in ir.imported_bindings() {
         let Some(checked_binding) = checked.get(lexical) else {
-            return Err(GraphcalError::internal_error(
+            return Err(SemanticError::internal_error(
                 format!("checked interface for imported binding `{lexical}` is missing"),
                 src,
                 DiagnosticAnchor::WholeFile,
             ));
         };
         if checked_binding.target() != hir_target {
-            return Err(GraphcalError::internal_error(
+            return Err(SemanticError::internal_error(
                 format!(
                     "checked interface for `{lexical}` targets `{}` instead of HIR target `{}`",
                     checked_binding.target(),
@@ -314,26 +324,26 @@ fn finalize_hir_dag(
     dag: &mut DagTIR,
     surface: &ExternalDeclSurface,
     module_ctx: ModuleTypeContext<'_>,
-    src: &NamedSource<Arc<String>>,
+    src: SourceId,
     cancellation: &crate::cancellation::CancellationToken,
-) -> Result<(), GraphcalError> {
+) -> Result<(), Outcome<SemanticError>> {
     cancellation.checkpoint()?;
     augment_runtime_deps_for_dynamic_units(dag);
     dag.populate_projectable_outputs(surface);
     cancellation.checkpoint()?;
     validate_public_generic_defaults(dag, surface, module_ctx, src)?;
     cancellation.checkpoint()?;
-    check_hir_body_policies(dag, surface, module_ctx, src)
+    check_hir_body_policies(dag, surface, module_ctx, src).map_err(Outcome::Failed)
 }
 
 fn type_resolve_impl(
     signed: SignatureResolvedHirDag,
     imported_bindings: HashMap<ScopedName, crate::ir::imported_binding::ImportedBinding>,
-    src: &NamedSource<Arc<String>>,
+    src: SourceId,
     module_ctx: ModuleTypeContext<'_>,
     project_types: Arc<ProjectTypeStore>,
     cancellation: &crate::cancellation::CancellationToken,
-) -> Result<TirDraft, GraphcalError> {
+) -> Result<TirDraft, Outcome<SemanticError>> {
     cancellation.checkpoint()?;
     let SignatureResolvedHirDag {
         hir: mut ir,
@@ -386,37 +396,38 @@ fn type_resolve_impl(
 #[cfg(test)]
 pub(crate) fn type_resolve_single_with_modules(
     dag: HirDag,
-    src: &NamedSource<Arc<String>>,
+    src: SourceId,
     module_resolver: &ModuleResolver,
     project_types: &ProjectTypeStore,
-) -> Result<DagTIR, GraphcalError> {
-    let cancellation = crate::cancellation::CancellationToken::unbounded();
-    let signed = resolve_hir_signature_with_modules_and_cancellation(
-        dag,
-        src,
-        module_resolver,
-        project_types,
-        &cancellation,
-    )?;
-    type_resolve_signed_single_with_imported_bindings_and_cancellation(
-        signed,
-        HashMap::<_, _, std::hash::RandomState>::new(),
-        src,
-        module_resolver,
-        project_types,
-        &cancellation,
-    )
+) -> Result<DagTIR, SemanticError> {
+    crate::outcome::without_cancellation(|cancellation| {
+        let signed = resolve_hir_signature_with_modules_and_cancellation(
+            dag,
+            src,
+            module_resolver,
+            project_types,
+            cancellation,
+        )?;
+        type_resolve_signed_single_with_imported_bindings_and_cancellation(
+            signed,
+            HashMap::<_, _, std::hash::RandomState>::new(),
+            src,
+            module_resolver,
+            project_types,
+            cancellation,
+        )
+    })
 }
 
 /// Resolve a signature-complete non-root HIR module's bodies.
 fn type_resolve_signed_single_with_imported_bindings_and_cancellation<S>(
     signed: SignatureResolvedHirDag,
     imported_bindings: HashMap<ScopedName, crate::ir::imported_binding::ImportedBinding, S>,
-    src: &NamedSource<Arc<String>>,
+    src: SourceId,
     module_resolver: &ModuleResolver,
     project_types: &ProjectTypeStore,
     cancellation: &crate::cancellation::CancellationToken,
-) -> Result<DagTIR, GraphcalError>
+) -> Result<DagTIR, Outcome<SemanticError>>
 where
     S: std::hash::BuildHasher,
 {
@@ -431,10 +442,10 @@ where
 fn type_resolve_single_impl(
     signed: SignatureResolvedHirDag,
     imported_bindings: HashMap<ScopedName, crate::ir::imported_binding::ImportedBinding>,
-    src: &NamedSource<Arc<String>>,
+    src: SourceId,
     module_ctx: ModuleTypeContext<'_>,
     cancellation: &crate::cancellation::CancellationToken,
-) -> Result<DagTIR, GraphcalError> {
+) -> Result<DagTIR, Outcome<SemanticError>> {
     cancellation.checkpoint()?;
     let SignatureResolvedHirDag {
         hir: mut ir,
@@ -478,10 +489,10 @@ fn type_resolve_single_impl(
 /// Resolve every const/param/node annotation of one HIR DAG.
 fn resolve_declared_type_exprs(
     hir: &HirDag,
-    src: &NamedSource<Arc<String>>,
+    src: SourceId,
     module_ctx: ModuleTypeContext<'_>,
     cancellation: &crate::cancellation::CancellationToken,
-) -> Result<HashMap<ResolvedDeclName, CheckedDeclType>, GraphcalError> {
+) -> Result<HashMap<ResolvedDeclName, CheckedDeclType>, Outcome<SemanticError>> {
     let decls = hir.decls();
     resolve_declared_types(
         decls
@@ -515,9 +526,9 @@ fn resolve_declared_types<'d>(
     declarations: impl Iterator<Item = (ResolvedDeclName, &'d crate::hir::types::DeclType)>,
     semantic_instances: &[crate::ir::instance::HirInstanceRecord],
     types: &ProjectTypeStore,
-    src: &NamedSource<Arc<String>>,
+    src: SourceId,
     cancellation: &crate::cancellation::CancellationToken,
-) -> Result<HashMap<ResolvedDeclName, CheckedDeclType>, GraphcalError> {
+) -> Result<HashMap<ResolvedDeclName, CheckedDeclType>, Outcome<SemanticError>> {
     let projection_substitutions = semantic_instances
         .iter()
         .flat_map(|record| {
@@ -548,7 +559,8 @@ fn resolve_declared_types<'d>(
     resolved
         .into_iter()
         .map(|(identity, ty)| CheckedDeclType::new(ty, src).map(|checked| (identity, checked)))
-        .collect()
+        .collect::<Result<_, SemanticError>>()
+        .map_err(Outcome::Failed)
 }
 
 /// The type view a template annotation is resolved in for an include with
@@ -557,8 +569,8 @@ fn resolve_declared_types<'d>(
 fn instance_type_view<'s>(
     types: &'s ProjectTypeStore,
     substitution: &crate::ir::static_substitution::StaticSubstitution,
-    src: &NamedSource<Arc<String>>,
-) -> Result<std::borrow::Cow<'s, ProjectTypeStore>, GraphcalError> {
+    src: SourceId,
+) -> Result<std::borrow::Cow<'s, ProjectTypeStore>, SemanticError> {
     let ports = types.bound_defaulted_dimension_ports(substitution);
     if ports.is_empty() {
         return Ok(std::borrow::Cow::Borrowed(types));
@@ -566,9 +578,8 @@ fn instance_type_view<'s>(
     types
         .with_rigid_dimensions(&ports)
         .map(std::borrow::Cow::Owned)
-        .map_err(|_| GraphcalError::DimensionOverflow {
-            src: src.clone(),
-            span: Span::new(0, src.inner().len()).into(),
+        .map_err(|_| {
+            SemanticError::located(src, src.whole_span(), DimensionError::DimensionOverflow)
         })
 }
 
@@ -579,8 +590,8 @@ fn resolve_instance_decl_type(
     substitution: &crate::ir::static_substitution::StaticSubstitution,
     view: &ProjectTypeStore,
     types: &ProjectTypeStore,
-    src: &NamedSource<Arc<String>>,
-) -> Result<ResolvedDeclType, GraphcalError> {
+    src: SourceId,
+) -> Result<ResolvedDeclType, SemanticError> {
     let template_type = type_expr::resolve_hir_decl_type_with_project_types(decl_type, src, view)?;
     specialization::specialize_type(&template_type, substitution, types, src)
 }
@@ -593,8 +604,8 @@ type DomainBounds = HashMap<ResolvedDeclName, Vec<ResolvedDomainBound>>;
 fn attach_checked_types(
     decls: crate::ir::decl_table::DeclTable<crate::ir::model::Lowered>,
     mut decl_types: HashMap<ResolvedDeclName, CheckedDeclType>,
-    src: &NamedSource<Arc<String>>,
-) -> Result<(crate::ir::decl_table::DeclTable<Typed>, DomainBounds), GraphcalError> {
+    src: SourceId,
+) -> Result<(crate::ir::decl_table::DeclTable<Typed>, DomainBounds), SemanticError> {
     use crate::ir::entry::{
         AssertEntry, ConstEntry, Decl, FigureEntry, LayerEntry, NodeEntry, ParamEntry, PlotEntry,
     };
@@ -602,7 +613,7 @@ fn attach_checked_types(
     let mut check = |identity: ResolvedDeclName,
                      annotation: crate::hir::type_annotation::TypeAnnotation| {
         let checked = decl_types.remove(&identity).ok_or_else(|| {
-            GraphcalError::internal_error(
+            SemanticError::internal_error(
                 format!("value declaration `{identity}` has no resolved signature"),
                 src,
                 DiagnosticAnchor::Source(annotation.span),
@@ -616,12 +627,12 @@ fn attach_checked_types(
                     kind: bound.kind,
                     value: bound.value,
                     span: bound.span,
-                    src: src.clone(),
+                    src,
                 })
                 .collect();
             domain_bounds.insert(identity, bounds);
         }
-        Ok::<_, GraphcalError>(CheckedTypeAnnotation {
+        Ok::<_, SemanticError>(CheckedTypeAnnotation {
             decl_type: annotation.decl_type,
             span: annotation.span,
             checked,
@@ -631,7 +642,7 @@ fn attach_checked_types(
         |_| (),
         |decl| {
             let identity = decl.identity();
-            Ok::<_, GraphcalError>(match decl {
+            Ok::<_, SemanticError>(match decl {
                 Decl::Const(entry) => Decl::Const(ConstEntry {
                     type_ann: check(identity, entry.type_ann)?,
                     identity: entry.identity,
@@ -682,13 +693,13 @@ fn attach_checked_types(
 /// declarations of a single DAG, returning a partially-built [`DagTIR`].
 fn type_resolve_dag(
     decls: crate::ir::decl_table::DeclTable<Typed>,
-    src: &NamedSource<Arc<String>>,
+    src: SourceId,
     dag_id: &crate::dag_id::DagId,
     module_ctx: ModuleTypeContext<'_>,
     imported_bindings: &HashMap<ScopedName, crate::ir::imported_binding::ImportedBinding>,
     domain_bounds: DomainBounds,
     cancellation: &crate::cancellation::CancellationToken,
-) -> Result<DagTIRSeed, GraphcalError> {
+) -> Result<DagTIRSeed, Outcome<SemanticError>> {
     cancellation.checkpoint()?;
     // A type-resolved module or inline DAG is canonical: it runs the bodies
     // it defines.
@@ -729,10 +740,10 @@ fn type_resolve_dag(
 
 fn collect_bindable_nominals(
     ctx: ModuleTypeContext<'_>,
-    src: &NamedSource<Arc<String>>,
-) -> Result<HashSet<BindableNominalIdentity>, GraphcalError> {
+    src: SourceId,
+) -> Result<HashSet<BindableNominalIdentity>, SemanticError> {
     let symbols = ctx.resolver.symbols(ctx.owner).ok_or_else(|| {
-        GraphcalError::internal_error(
+        SemanticError::internal_error(
             format!("module symbol table missing for DAG `{}`", ctx.owner),
             src,
             DiagnosticAnchor::WholeFile,
@@ -766,7 +777,7 @@ fn collect_resolved_type_defs<'a>(
     annotations: impl Iterator<Item = &'a CheckedTypeAnnotation>,
     imported_bindings: &HashMap<ScopedName, crate::ir::imported_binding::ImportedBinding>,
     ctx: ModuleTypeContext<'_>,
-) -> Result<ResolvedTypeDefs, GraphcalError> {
+) -> Result<ResolvedTypeDefs, SemanticError> {
     let mut defs = ResolvedTypeDefs::default();
     if let Some(symbols) = ctx.resolver.symbols(ctx.owner) {
         for symbol in symbols.struct_types().values() {
@@ -960,8 +971,8 @@ fn validate_public_generic_defaults(
     dag: &DagTIR,
     external_surface: &ExternalDeclSurface,
     ctx: ModuleTypeContext<'_>,
-    src: &NamedSource<Arc<String>>,
-) -> Result<(), GraphcalError> {
+    src: SourceId,
+) -> Result<(), SemanticError> {
     for (type_name, type_def) in &dag.semantic.type_defs.struct_types {
         if type_name.owner() != ctx.owner
             || !external_surface.is_static_explicit_export(type_name.atom())
@@ -973,7 +984,7 @@ fn validate_public_generic_defaults(
             .symbol(type_name)
             .map(SymbolRef::span)
             .ok_or_else(|| {
-                GraphcalError::internal_error(
+                SemanticError::internal_error(
                     format!("module resolver lost source span for public type `{type_name}`"),
                     src,
                     DiagnosticAnchor::WholeFile,
@@ -999,26 +1010,28 @@ fn validate_public_generic_defaults(
                 match dependency.is_public(ctx.resolver) {
                     Some(true) => {}
                     Some(false) => {
-                        return Err(GraphcalError::PrivateInPublic {
-                            pub_kind: crate::declaration_kind::DeclarationKind::Type,
-                            pub_name: type_name.atom().clone(),
-                            ref_kind: dependency.kind(),
-                            ref_name: dependency.name(),
-                            src: src.clone(),
-                            ref_span: dependency.span().into(),
-                            pub_span: pub_span.into(),
-                        });
+                        return Err(SemanticError::located(
+                            src,
+                            dependency.span(),
+                            VisibilityError::PrivateInPublic {
+                                pub_kind: crate::declaration_kind::DeclarationKind::Type,
+                                pub_name: type_name.atom().clone(),
+                                ref_kind: dependency.kind(),
+                                ref_name: dependency.name(),
+                                pub_span,
+                            },
+                        ));
                     }
                     None => {
-                        return Err(GraphcalError::InternalError {
-                            message: format!(
+                        return Err(SemanticError::internal_error(
+                            format!(
                                 "canonical {} `{}` is missing visibility metadata",
                                 dependency.kind(),
                                 dependency.name()
                             ),
-                            src: src.clone(),
-                            span: dependency.span().into(),
-                        });
+                            src,
+                            crate::diagnostic_anchor::DiagnosticAnchor::Source(dependency.span()),
+                        ));
                     }
                 }
             }
@@ -1031,7 +1044,7 @@ fn collect_struct_type_defs_from_declared_type(
     declared: &crate::semantic::checked_type::CheckedType,
     ctx: ModuleTypeContext<'_>,
     defs: &mut ResolvedTypeDefs,
-) -> Result<(), GraphcalError> {
+) -> Result<(), SemanticError> {
     match declared {
         crate::semantic::checked_type::CheckedType::Struct(name, generic_args) => {
             record_resolved_struct_type_def(name.resolved(), ctx, defs)?;
@@ -1058,7 +1071,7 @@ fn collect_struct_type_defs_from_resolved_type(
     resolved: &ResolvedValueType,
     ctx: ModuleTypeContext<'_>,
     defs: &mut ResolvedTypeDefs,
-) -> Result<(), GraphcalError> {
+) -> Result<(), SemanticError> {
     match resolved {
         ResolvedValueType::Struct {
             name, generic_args, ..
@@ -1085,7 +1098,7 @@ fn record_resolved_struct_type_def(
     name: &ResolvedStructTypeName,
     ctx: ModuleTypeContext<'_>,
     defs: &mut ResolvedTypeDefs,
-) -> Result<(), GraphcalError> {
+) -> Result<(), SemanticError> {
     if defs.struct_types.contains_key(name) {
         return Ok(());
     }
@@ -1146,7 +1159,7 @@ fn record_resolved_struct_type_def(
                         kind: bound.kind,
                         value: bound.value.clone(),
                         span: bound.span,
-                        src: definition_src.clone(),
+                        src: definition_src,
                     })
                     .collect();
                 collect_struct_type_defs_from_resolved_type(resolved.element(), ctx, defs)?;
@@ -1162,20 +1175,20 @@ fn record_resolved_struct_type_def(
 ///
 /// Walks every lowered body of one DAG and enforces:
 /// - const bodies and every domain bound must not `@`-reference runtime
-///   declarations (E020-style [`GraphcalError::GraphRefInConst`]) or use runtime
+///   declarations (E020-style [`NameError::GraphRefInConst`](NameError::GraphRefInConst)) or use runtime
 ///   units in literals / conversion targets;
 /// - no body may `@`-reference an assert declaration
-///   ([`GraphcalError::GraphRefToAssert`]);
+///   ([`AttributeError::GraphRefToAssert`](AttributeError::GraphRefToAssert));
 /// - A10(c) / V004: bodies of non-bindable kinds owned by this module must
 ///   not mention variant literals of the module's own `pub(bind)` indexes
-///   ([`GraphcalError::PubIndexVariantLiteral`]). Params are exempt (A10(a));
+///   ([`VisibilityError::PubIndexVariantLiteral`](VisibilityError::PubIndexVariantLiteral)). Params are exempt (A10(a));
 ///   sink kinds (assert/plot/figure/layer) are checked only when `pub`.
 fn check_hir_body_policies(
     dag: &DagTIR,
     external_surface: &ExternalDeclSurface,
     ctx: ModuleTypeContext<'_>,
-    src: &NamedSource<Arc<String>>,
-) -> Result<(), GraphcalError> {
+    src: SourceId,
+) -> Result<(), SemanticError> {
     let semantic = &dag.semantic;
     let local = |key: &ResolvedDeclName| key.owner() == ctx.owner;
 
@@ -1221,14 +1234,14 @@ fn check_domain_bound_policies(
     semantic: &DagSemanticBody,
     frame: &crate::ir::instance::frame::InstanceFrame,
     ctx: ModuleTypeContext<'_>,
-) -> Result<(), GraphcalError> {
+) -> Result<(), SemanticError> {
     let check_bounds = |bounds: &[ResolvedDomainBound],
                         check_pub_bind_literals: bool|
-     -> Result<(), GraphcalError> {
+     -> Result<(), SemanticError> {
         for bound in bounds {
             HirPolicyChecker {
                 ctx,
-                src: &bound.src,
+                src: bound.src,
                 frame,
             }
             .check_expr(
@@ -1238,12 +1251,14 @@ fn check_domain_bound_policies(
             )?;
             // Domain bounds are evaluated without a host function registry.
             if let Some((external, span)) = crate::hir::expr::find_extern_call(&bound.value) {
-                return Err(GraphcalError::ExternCallNotAllowed {
-                    name: external.to_string(),
-                    context: "domain bound".to_string(),
-                    src: bound.src.clone(),
-                    span: span.into(),
-                });
+                return Err(SemanticError::located(
+                    bound.src,
+                    span,
+                    PluginError::ExternCallNotAllowed {
+                        name: external.to_string(),
+                        context: "domain bound".to_string(),
+                    },
+                ));
             }
         }
         Ok(())
@@ -1261,24 +1276,26 @@ fn check_dynamic_unit_policies(
     semantic: &DagSemanticBody,
     frame: &crate::ir::instance::frame::InstanceFrame,
     ctx: ModuleTypeContext<'_>,
-) -> Result<(), GraphcalError> {
+) -> Result<(), SemanticError> {
     // Dynamic unit scales may read runtime params/nodes, but otherwise obey
     // ordinary runtime-body policy (notably, assertions cannot be read).
     // They also resolve in contexts with no host-function registry.
     for entry in semantic.dynamic_unit_scales.values() {
         HirPolicyChecker {
             ctx,
-            src: &entry.src,
+            src: entry.src,
             frame,
         }
         .check_expr(&entry.expr, BodyPhase::Runtime, false)?;
         if let Some((external, span)) = crate::hir::expr::find_extern_call(&entry.expr) {
-            return Err(GraphcalError::ExternCallNotAllowed {
-                name: external.to_string(),
-                context: "unit scale expression".to_string(),
-                src: entry.src.clone(),
-                span: span.into(),
-            });
+            return Err(SemanticError::located(
+                entry.src,
+                span,
+                PluginError::ExternCallNotAllowed {
+                    name: external.to_string(),
+                    context: "unit scale expression".to_string(),
+                },
+            ));
         }
     }
     Ok(())
@@ -1288,8 +1305,8 @@ fn check_sink_body_policies(
     dag: &DagTIR,
     external_surface: &ExternalDeclSurface,
     ctx: ModuleTypeContext<'_>,
-    src: &NamedSource<Arc<String>>,
-) -> Result<(), GraphcalError> {
+    src: SourceId,
+) -> Result<(), SemanticError> {
     let is_explicit_export = |name: &DeclName| external_surface.is_explicit_export(name);
     for entry in dag.asserts() {
         let check_literals =
@@ -1362,7 +1379,7 @@ impl BodyPhase {
 
 struct HirPolicyChecker<'a> {
     ctx: ModuleTypeContext<'a>,
-    src: &'a NamedSource<Arc<String>>,
+    src: SourceId,
     /// The frame of the DAG whose bodies are checked.
     frame: &'a crate::ir::instance::frame::InstanceFrame,
 }
@@ -1373,7 +1390,7 @@ impl HirPolicyChecker<'_> {
         expr: &crate::hir::expr::Expr,
         phase: BodyPhase,
         check_pub_bind_literals: bool,
-    ) -> Result<(), GraphcalError> {
+    ) -> Result<(), SemanticError> {
         // Recursion choke point: recurses once per tree level.
         crate::stack::with_stack_growth(|| {
             self.check_expr_inner(expr, phase, check_pub_bind_literals)
@@ -1386,7 +1403,7 @@ impl HirPolicyChecker<'_> {
         expr: &crate::hir::expr::Expr,
         phase: BodyPhase,
         check_pub_bind_literals: bool,
-    ) -> Result<(), GraphcalError> {
+    ) -> Result<(), SemanticError> {
         let recurse =
             |inner: &crate::hir::expr::Expr| self.check_expr(inner, phase, check_pub_bind_literals);
         match expr.kind() {
@@ -1433,12 +1450,14 @@ impl HirPolicyChecker<'_> {
                 if phase.is_compile_time()
                     && let crate::hir::expr::FunctionRef::External(ext) = &callee.value
                 {
-                    return Err(GraphcalError::ExternCallNotAllowed {
-                        name: ext.to_string(),
-                        context: "const expression".to_string(),
-                        src: self.src.clone(),
-                        span: callee.span.into(),
-                    });
+                    return Err(SemanticError::located(
+                        self.src,
+                        callee.span,
+                        PluginError::ExternCallNotAllowed {
+                            name: ext.to_string(),
+                            context: "const expression".to_string(),
+                        },
+                    ));
                 }
                 args.iter().try_for_each(recurse)
             }
@@ -1504,11 +1523,13 @@ impl HirPolicyChecker<'_> {
             }
             crate::hir::expr::ExprKind::DagCall { target, args, .. } => {
                 if phase.is_compile_time() {
-                    return Err(GraphcalError::DagCallInCompileTime {
-                        name: target.value.to_string(),
-                        src: self.src.clone(),
-                        span: expr.span.into(),
-                    });
+                    return Err(SemanticError::located(
+                        self.src,
+                        expr.span,
+                        GraphError::DagCallInCompileTime {
+                            name: target.value.to_string(),
+                        },
+                    ));
                 }
                 args.iter().try_for_each(|arg| recurse(&arg.value))
             }
@@ -1519,7 +1540,7 @@ impl HirPolicyChecker<'_> {
         &self,
         unit: &crate::hir::expr::ResolvedUnitExpr,
         phase: BodyPhase,
-    ) -> Result<(), GraphcalError> {
+    ) -> Result<(), SemanticError> {
         if !phase.is_compile_time() {
             return Ok(());
         }
@@ -1530,11 +1551,13 @@ impl HirPolicyChecker<'_> {
                 continue;
             };
             if !info.scale.constness().is_const() {
-                return Err(GraphcalError::NonConstUnitInConst {
-                    name: term.name.value.spelling().clone(),
-                    src: self.src.clone(),
-                    span: term.name.span.into(),
-                });
+                return Err(SemanticError::located(
+                    self.src,
+                    term.name.span,
+                    DimensionError::NonConstUnitInConst {
+                        name: term.name.value.spelling().clone(),
+                    },
+                ));
             }
         }
         Ok(())
@@ -1545,7 +1568,7 @@ impl HirPolicyChecker<'_> {
         reference: &Spanned<crate::hir::expr::LocalDecl>,
         ref_span: Span,
         phase: BodyPhase,
-    ) -> Result<(), GraphcalError> {
+    ) -> Result<(), SemanticError> {
         let target = self.frame.resolve(&reference.value);
         let Some(kind) = self
             .ctx
@@ -1558,18 +1581,22 @@ impl HirPolicyChecker<'_> {
             return Ok(());
         };
         if matches!(kind, crate::resolve::category::DeclSymbolKind::Assert) {
-            return Err(GraphcalError::GraphRefToAssert {
-                name: target.to_unowned_def_name(),
-                src: self.src.clone(),
-                span: ref_span.into(),
-            });
+            return Err(SemanticError::located(
+                self.src,
+                ref_span,
+                AttributeError::GraphRefToAssert {
+                    name: target.to_unowned_def_name(),
+                },
+            ));
         }
         if phase.is_compile_time() && !kind.is_const() {
-            return Err(GraphcalError::GraphRefInConst {
-                name: ScopedName::local(target.to_unowned_def_name()),
-                src: self.src.clone(),
-                span: ref_span.into(),
-            });
+            return Err(SemanticError::located(
+                self.src,
+                ref_span,
+                NameError::GraphRefInConst {
+                    name: ScopedName::local(target.to_unowned_def_name()),
+                },
+            ));
         }
         Ok(())
     }
@@ -1578,7 +1605,7 @@ impl HirPolicyChecker<'_> {
         &self,
         variant: &crate::hir::expr::IndexVariantRef,
         check_pub_bind_literals: bool,
-    ) -> Result<(), GraphcalError> {
+    ) -> Result<(), SemanticError> {
         if !check_pub_bind_literals {
             return Ok(());
         }
@@ -1596,12 +1623,14 @@ impl HirPolicyChecker<'_> {
                 symbol.visibility().is_bindable() && !symbol.data().is_empty()
             });
         if is_pub_bind {
-            return Err(GraphcalError::PubIndexVariantLiteral {
-                index: index.as_str().to_string(),
-                variant: variant.variant.variant().as_str().to_string(),
-                src: self.src.clone(),
-                span: variant.path_span().into(),
-            });
+            return Err(SemanticError::located(
+                self.src,
+                variant.path_span(),
+                VisibilityError::PubIndexVariantLiteral {
+                    index: index.as_str().to_string(),
+                    variant: variant.variant.variant().as_str().to_string(),
+                },
+            ));
         }
         Ok(())
     }
@@ -1643,8 +1672,8 @@ impl DagTIRSeed {
         body: HirBody,
         imported_bindings: HashMap<ScopedName, crate::ir::imported_binding::ImportedBinding>,
         module_ctx: ModuleTypeContext<'_>,
-        src: &NamedSource<Arc<String>>,
-    ) -> Result<DagTIR, GraphcalError> {
+        src: SourceId,
+    ) -> Result<DagTIR, SemanticError> {
         let HirBody {
             included_plots,
             static_ports,
@@ -1677,7 +1706,7 @@ impl DagTIRSeed {
                 .insert(unit.clone(), entry)
                 .is_some()
             {
-                return Err(GraphcalError::internal_error(
+                return Err(SemanticError::internal_error(
                     format!("duplicate dynamic unit semantic entry `{unit}`"),
                     src,
                     DiagnosticAnchor::Source(span),
@@ -1724,14 +1753,13 @@ pub(crate) fn rigid_dimension_view(
     tir: &UncheckedTir,
     dag_id: &crate::dag_id::DagId,
     ports: &[ResolvedDimName],
-    src: &NamedSource<Arc<String>>,
-) -> Result<UncheckedTir, GraphcalError> {
+    src: SourceId,
+) -> Result<UncheckedTir, SemanticError> {
     let rigid_types = tir
         .project_type_store()
         .with_rigid_dimensions(ports)
-        .map_err(|_| GraphcalError::DimensionOverflow {
-            src: src.clone(),
-            span: Span::new(0, src.inner().len()).into(),
+        .map_err(|_| {
+            SemanticError::located(src, src.whole_span(), DimensionError::DimensionOverflow)
         })?;
     let mut rigid = tir.clone();
     for port in ports {
@@ -1741,21 +1769,23 @@ pub(crate) fn rigid_dimension_view(
             .register_rigid_dimension(port);
     }
     let rigid_dag = rigid.dags.localized_mut(dag_id).ok_or_else(|| {
-        GraphcalError::internal_error(
+        SemanticError::internal_error(
             format!("template DAG `{dag_id}` is unavailable for rigid checking"),
             src,
             DiagnosticAnchor::WholeFile,
         )
     })?;
-    let resolved = resolve_declared_types(
-        rigid_dag
-            .value_decl_types()
-            .map(|(identity, annotation)| (identity, &annotation.decl_type)),
-        &rigid_dag.semantic_instances,
-        &rigid_types,
-        src,
-        &crate::cancellation::CancellationToken::unbounded(),
-    )?;
+    let resolved = crate::outcome::without_cancellation(|cancellation| {
+        resolve_declared_types(
+            rigid_dag
+                .value_decl_types()
+                .map(|(identity, annotation)| (identity, &annotation.decl_type)),
+            &rigid_dag.semantic_instances,
+            &rigid_types,
+            src,
+            cancellation,
+        )
+    })?;
     rigid_dag.replace_value_decl_types(resolved);
     rigid.replace_project_types(rigid_types);
     Ok(rigid)

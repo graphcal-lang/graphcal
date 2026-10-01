@@ -5,6 +5,10 @@ use crate::display::formatting_registry::FormattingRegistry;
 use crate::generic_param::test_support::type_param;
 use crate::resolved_name::{ResolvedIndexName, ResolvedStructTypeName, ResolvedUnitName};
 use crate::semantic::time_scale::TimeScale;
+use crate::semantic_error::SemanticErrorKind;
+use crate::semantic_error::dimension::DimensionError;
+use crate::semantic_error::evaluation::EvaluationError;
+use crate::semantic_error::index::IndexError;
 use crate::syntax::dimension::UnitName;
 use crate::syntax::index_name::IndexName;
 use crate::syntax::non_empty::NonEmpty;
@@ -15,8 +19,8 @@ fn make_registry() -> FormattingRegistry {
     FormattingRegistry::graphcal_prelude().unwrap()
 }
 
-fn make_src() -> NamedSource<Arc<String>> {
-    NamedSource::new("test", Arc::new(String::new()))
+fn make_src() -> crate::source_id::SourceId {
+    crate::source_registry::SourceRegistry::new().register("test", Arc::new(String::new()))
 }
 
 /// Resolve a source type through the production AST → HIR → TIR path.
@@ -28,7 +32,7 @@ fn resolve_source_type(
     dim_params: &[GenericParamName],
     index_params: &[GenericParamName],
     nat_params: &[GenericParamName],
-) -> Result<ResolvedDeclType, GraphcalError> {
+) -> Result<ResolvedDeclType, SemanticError> {
     let params = dim_params
         .iter()
         .map(|name| format!("{name}: Dim"))
@@ -53,14 +57,17 @@ fn resolve_source_type(
             key.owning_type.as_str() == "ResolutionSubject" && key.field.as_str() == "value"
         })
         .map(|(_, field)| field.resolved_type().clone())
-        .ok_or_else(|| GraphcalError::InternalError {
-            message: "test type field was not resolved through HIR".to_string(),
-            src: NamedSource::new("test.gcl", Arc::new(source)),
-            span: Span::new(0, 0).into(),
+        .ok_or_else(|| {
+            SemanticError::internal_error(
+                "test type field was not resolved through HIR".to_string(),
+                crate::source_registry::SourceRegistry::new()
+                    .register("test.gcl", Arc::new(source)),
+                crate::diagnostic_anchor::DiagnosticAnchor::Source(Span::new(0, 0)),
+            )
         })
 }
 
-fn resolved_param_type(program: &str, name: &str) -> Result<ResolvedDeclType, GraphcalError> {
+fn resolved_param_type(program: &str, name: &str) -> Result<ResolvedDeclType, SemanticError> {
     let tir = parse_and_type_resolve(program)?;
     Ok(root_decl_type(&tir, name).clone())
 }
@@ -154,14 +161,15 @@ fn decl_type_rejects_identities_owned_by_unknown_dags() {
 
 #[test]
 fn checked_decl_type_requires_a_concrete_type() {
-    let src = NamedSource::new("test.gcl", Arc::new(String::new()));
+    let src =
+        crate::source_registry::SourceRegistry::new().register("test.gcl", Arc::new(String::new()));
     let generic = ResolvedDeclType::Value(ResolvedValueType::GenericTypeParam(
         type_param("T"),
         Span::new(0, 0),
     ));
-    assert!(CheckedDeclType::new(generic, &src).is_err());
+    assert!(CheckedDeclType::new(generic, src).is_err());
     let checked =
-        CheckedDeclType::new(ResolvedDeclType::Value(ResolvedValueType::Int), &src).unwrap();
+        CheckedDeclType::new(ResolvedDeclType::Value(ResolvedValueType::Int), src).unwrap();
     assert_eq!(checked.declared(), &CheckedType::Int);
 }
 
@@ -354,19 +362,37 @@ fn resolve_generic_indexed() {
 #[test]
 fn resolve_unknown_dimension_error() {
     let err = resolve_source_type("UnknownDim", &[], &[], &[]).unwrap_err();
-    assert!(matches!(err, GraphcalError::UnknownDimension { .. }));
+    assert!(matches!(
+        err,
+        SemanticError::Located(crate::diagnostic::Diagnostic {
+            kind: SemanticErrorKind::Dimension(DimensionError::UnknownDimension { .. }),
+            ..
+        })
+    ));
 }
 
 #[test]
 fn quantity_is_semantic_not_a_source_type_constructor() {
     let error = resolve_source_type("Quantity", &[], &[], &[]).unwrap_err();
-    assert!(matches!(error, GraphcalError::UnknownDimension { .. }));
+    assert!(matches!(
+        error,
+        SemanticError::Located(crate::diagnostic::Diagnostic {
+            kind: SemanticErrorKind::Dimension(DimensionError::UnknownDimension { .. }),
+            ..
+        })
+    ));
 }
 
 #[test]
 fn resolve_unknown_index_error() {
     let err = resolve_source_type("Length[UnknownIdx]", &[], &[], &[]).unwrap_err();
-    assert!(matches!(err, GraphcalError::UnknownIndex { .. }));
+    assert!(matches!(
+        err,
+        SemanticError::Located(crate::diagnostic::Diagnostic {
+            kind: SemanticErrorKind::Index(IndexError::UnknownIndex { .. }),
+            ..
+        })
+    ));
 }
 
 #[test]
@@ -379,7 +405,7 @@ fn generic_dim_param_cannot_shadow_struct_type() {
     );
     assert!(matches!(
         result,
-        Err(GraphcalError::EvalError { ref message, .. })
+        Err(SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Evaluation(EvaluationError::Failed { message, .. }), .. }))
             if message.contains("shadows a visible Static name")
     ));
 }
@@ -404,19 +430,24 @@ fn field_constraint_hir_error_uses_definition_source() {
                          pub type Price { Price(amount: Currency(min: 0.0 missing)) }\n";
     let raw_file = Parser::new(schema_source).parse_file().unwrap();
     let file = crate::desugar::desugared_ast::File::from(raw_file);
-    let schema_src = NamedSource::new("schema.gcl", Arc::new(schema_source.to_string()));
+    let schema_src = crate::source_registry::SourceRegistry::new()
+        .register("schema.gcl", Arc::new(schema_source.to_string()));
 
     // Nominal field bounds now cross into HIR with their definition. An
     // unresolved unit therefore fails before a TIR or consumer scope exists.
-    let error = crate::ir::lower::lower(&file, &schema_src).unwrap_err();
+    let error = crate::ir::lower::lower(&file, "schema.gcl", schema_src).unwrap_err();
 
     match error {
-        GraphcalError::UnknownUnit { name, src, span } => {
+        SemanticError::Located(crate::diagnostic::Diagnostic {
+            src,
+            primary: span,
+            kind: SemanticErrorKind::Dimension(DimensionError::UnknownUnit { name }),
+        }) => {
             assert_eq!(name.to_string(), "missing");
-            assert_eq!(src.name(), "schema.gcl");
-            assert!(span.offset() + span.len() <= src.inner().len());
+            assert_eq!(src, schema_src);
+            assert!(span.offset() + span.len() <= schema_source.len());
             assert_eq!(
-                &src.inner()[span.offset()..span.offset() + span.len()],
+                &schema_source[span.offset()..span.offset() + span.len()],
                 "missing"
             );
         }
@@ -482,8 +513,9 @@ fn repeated_store_insertion_preserves_canonical_definition_handles() {
     let source = "pub index Axis = { A };\npub type Item { Item(value: Dimensionless) }\n";
     let raw_file = Parser::new(source).parse_file().unwrap();
     let file = crate::desugar::desugared_ast::File::from(raw_file);
-    let src = NamedSource::new("store.gcl", Arc::new(source.to_string()));
-    let ir = crate::ir::lower::lower(&file, &src).unwrap();
+    let src = crate::source_registry::SourceRegistry::new()
+        .register("store.gcl", Arc::new(source.to_string()));
+    let ir = crate::ir::lower::lower(&file, "store.gcl", src).unwrap();
     let owner = ir.dag_id().clone();
     let index_name = ResolvedIndexName::for_test(
         owner.clone(),
@@ -522,11 +554,10 @@ fn dag_store_clones_share_canonical_body_handles() {
 /// Instantiate and check a draft without external override summaries.
 fn check_draft(
     draft: TirDraft,
-    src: &NamedSource<Arc<String>>,
-) -> Result<CheckedTir, GraphcalError> {
-    draft
-        .instantiate(&CheckedOverrideDependencies::default(), src)?
-        .check(src, &crate::cancellation::CancellationToken::unbounded())
+    src: crate::source_id::SourceId,
+) -> Result<CheckedTir, SemanticError> {
+    let instantiated = draft.instantiate(&CheckedOverrideDependencies::default(), src)?;
+    crate::outcome::without_cancellation(|cancellation| instantiated.check(src, cancellation))
 }
 
 fn importer_tir(path: &str, stores: &[&DagStore]) -> CheckedTir {
@@ -537,7 +568,7 @@ fn importer_tir(path: &str, stores: &[&DagStore]) -> CheckedTir {
         .unwrap();
     check_draft(
         builder,
-        &NamedSource::new(path, Arc::new(source.to_string())),
+        crate::source_registry::SourceRegistry::new().register(path, Arc::new(source.to_string())),
     )
     .unwrap()
 }
@@ -565,7 +596,8 @@ fn unit_overlay_tir_with(
     extra(&mut tir, &unit);
     let tir = InstantiatedTir { tir }
         .check(
-            &NamedSource::new(path, Arc::new(source.to_string())),
+            crate::source_registry::SourceRegistry::new()
+                .register(path, Arc::new(source.to_string())),
             &crate::cancellation::CancellationToken::unbounded(),
         )
         .unwrap();
@@ -717,8 +749,9 @@ fn publication_rejects_runtime_units_without_a_defining_body() {
 fn lower_store_hir(source: &str) -> crate::ir::model::HirDag {
     let raw = Parser::new(source).parse_file().unwrap();
     let file = crate::desugar::desugared_ast::File::from(raw);
-    let src = NamedSource::new("same.gcl", Arc::new(source.to_string()));
-    crate::ir::lower::lower(&file, &src).unwrap()
+    let src = crate::source_registry::SourceRegistry::new()
+        .register("same.gcl", Arc::new(source.to_string()));
+    crate::ir::lower::lower(&file, "same.gcl", src).unwrap()
 }
 
 #[test]
@@ -838,63 +871,66 @@ fn tir_builder_accepts_identical_externs_and_rejects_competing_signatures() {
 /// directly (no self-import preprocessing — fixtures exercised here
 /// either don't use self-imports or are expected to surface errors that
 /// fall out of the unprocessed body).
-fn parse_and_type_resolve(source: &str) -> Result<CheckedTir, GraphcalError> {
+fn parse_and_type_resolve(source: &str) -> Result<CheckedTir, SemanticError> {
     let draft = parse_and_type_resolve_builder(source)?;
     check_draft(
         draft,
-        &NamedSource::new("test.gcl", Arc::new(source.to_string())),
+        crate::source_registry::SourceRegistry::new()
+            .register("test.gcl", Arc::new(source.to_string())),
     )
 }
 
-fn parse_and_type_resolve_builder(source: &str) -> Result<TirDraft, GraphcalError> {
+fn parse_and_type_resolve_builder(source: &str) -> Result<TirDraft, SemanticError> {
     parse_and_type_resolve_builder_named(source, "test.gcl")
 }
 
 fn parse_and_type_resolve_builder_named(
     source: &str,
     path: &str,
-) -> Result<TirDraft, GraphcalError> {
+) -> Result<TirDraft, SemanticError> {
     let raw_file = Parser::new(source).parse_file().unwrap();
     let desugared = crate::desugar::desugared_ast::File::from(raw_file);
     let file = desugared;
-    let src = NamedSource::new(path, Arc::new(source.to_string()));
-    let lowered = crate::ir::lower::lower_file_with_inline_dags_for_test(&file, &src)?;
+    let src =
+        crate::source_registry::SourceRegistry::new().register(path, Arc::new(source.to_string()));
+    let lowered = crate::ir::lower::lower_file_with_inline_dags_for_test(&file, path, src)?;
     let resolver = lowered.resolver;
     let mut project_types = ProjectTypeStore::default();
     project_types.insert_graphcal_prelude().map_err(|err| {
         internal_error(
             format!("test module type prelude failed: {err}"),
-            &src,
+            src,
             Span::new(0, 0),
         )
     })?;
     for dag in std::iter::once(&lowered.root).chain(&lowered.inline_dags) {
         project_types
             .insert_module(dag.definitions())
-            .map_err(|error| internal_error(error.to_string(), &src, Span::new(0, 0)))?;
+            .map_err(|error| internal_error(error.to_string(), src, Span::new(0, 0)))?;
     }
-    let cancellation = crate::cancellation::CancellationToken::unbounded();
-    let signed = resolve_hir_signature_with_modules_and_cancellation(
-        lowered.root,
-        &src,
-        &resolver,
-        &project_types,
-        &cancellation,
-    )?;
-    let mut builder = TirDraft::resolve_root(
-        signed,
-        HashMap::new(),
-        &src,
-        &resolver,
-        Arc::new(project_types.clone()),
-        &cancellation,
-    )?;
+    let mut builder = crate::outcome::without_cancellation(|cancellation| {
+        let signed = resolve_hir_signature_with_modules_and_cancellation(
+            lowered.root,
+            src,
+            &resolver,
+            &project_types,
+            cancellation,
+        )?;
+        TirDraft::resolve_root(
+            signed,
+            HashMap::new(),
+            src,
+            &resolver,
+            Arc::new(project_types.clone()),
+            cancellation,
+        )
+    })?;
     for dag_body_ir in lowered.inline_dags {
         let compiled_dag =
-            type_resolve_single_with_modules(dag_body_ir, &src, &resolver, &project_types)?;
+            type_resolve_single_with_modules(dag_body_ir, src, &resolver, &project_types)?;
         builder
             .insert_dag(compiled_dag)
-            .map_err(|error| internal_error(error.to_string(), &src, Span::new(0, 0)))?;
+            .map_err(|error| internal_error(error.to_string(), src, Span::new(0, 0)))?;
     }
     Ok(builder)
 }
@@ -904,17 +940,18 @@ fn tir_builder_preserves_root_and_rejects_duplicate_dag_identity() {
     let source = "node value: Dimensionless = 1.0;";
     let raw_file = Parser::new(source).parse_file().unwrap();
     let file = crate::desugar::desugared_ast::File::from(raw_file);
-    let src = NamedSource::new("test.gcl", Arc::new(source.to_string()));
+    let src = crate::source_registry::SourceRegistry::new()
+        .register("test.gcl", Arc::new(source.to_string()));
     let root_id =
         crate::dag_id::DagId::from_virtual_relative_path(std::path::Path::new("test.gcl")).unwrap();
-    let ir = crate::ir::lower::lower(&file, &src).unwrap();
+    let ir = crate::ir::lower::lower(&file, "test.gcl", src).unwrap();
     let mut modules = crate::resolve::builder::TestModules::default();
     modules.add(root_id.clone(), &file.declarations);
     let resolver = modules.build().unwrap();
     let mut project_types = ProjectTypeStore::default();
     project_types.insert_graphcal_prelude().unwrap();
     project_types.insert_module(ir.definitions()).unwrap();
-    let mut builder = type_resolve_draft(ir, &src, &resolver, Arc::new(project_types)).unwrap();
+    let mut builder = type_resolve_draft(ir, src, &resolver, Arc::new(project_types)).unwrap();
 
     assert_eq!(builder.root().dag_id(), &root_id);
     let duplicate = builder.root().clone();
@@ -923,7 +960,7 @@ fn tir_builder_preserves_root_and_rejects_duplicate_dag_identity() {
         Err(DagRegistryError::DuplicateDag { dag_id }) if dag_id == root_id
     ));
 
-    let tir = check_draft(builder, &src).unwrap();
+    let tir = check_draft(builder, src).unwrap();
     assert_eq!(tir.root_dag_id(), &root_id);
     assert_eq!(tir.root().dag_id(), &root_id);
     assert_eq!(tir.dag_registry().len(), 1);
@@ -1086,10 +1123,11 @@ fn module_aware_type_resolve_records_semantic_deps() {
     let raw_file = Parser::new(source).parse_file().unwrap();
     let desugared = crate::desugar::desugared_ast::File::from(raw_file);
     let file = desugared;
-    let src = NamedSource::new("test.gcl", Arc::new(source.to_string()));
+    let src = crate::source_registry::SourceRegistry::new()
+        .register("test.gcl", Arc::new(source.to_string()));
     let dag_id =
         crate::dag_id::DagId::from_virtual_relative_path(std::path::Path::new("test.gcl")).unwrap();
-    let ir = crate::ir::lower::lower(&file, &src).unwrap();
+    let ir = crate::ir::lower::lower(&file, "test.gcl", src).unwrap();
     let mut modules = crate::resolve::builder::TestModules::default();
     modules.add(dag_id.clone(), &file.declarations);
     let resolver = modules.build().unwrap();
@@ -1097,7 +1135,7 @@ fn module_aware_type_resolve_records_semantic_deps() {
     project_types.insert_graphcal_prelude().unwrap();
     project_types.insert_module(ir.definitions()).unwrap();
 
-    let tir = type_resolve_draft(ir, &src, &resolver, Arc::new(project_types))
+    let tir = type_resolve_draft(ir, src, &resolver, Arc::new(project_types))
         .unwrap()
         .finish();
     let deps = &tir.root().semantic.dependencies;
@@ -1182,7 +1220,7 @@ pub type Wrap<I: Index> {
 ";
     assert!(matches!(
         parse_and_type_resolve(source),
-        Err(GraphcalError::EvalError { ref message, .. })
+        Err(SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Evaluation(EvaluationError::Failed { message, .. }), .. }))
             if message.contains("shadows a visible Static name")
     ));
 }
@@ -1298,7 +1336,7 @@ fn generic_index_substitution_preserves_resolved_owner() {
     let substituted = substitution
         .apply(&resolved_type)
         .unwrap()
-        .to_checked_type(&src)
+        .to_checked_type(src)
         .unwrap();
     let CheckedType::Indexed { index, .. } = substituted else {
         panic!("expected indexed type after substitution");
@@ -1309,22 +1347,20 @@ fn generic_index_substitution_preserves_resolved_owner() {
 #[test]
 fn convert_dimensionless() {
     let dt = concrete_quantity(Dimension::dimensionless())
-        .to_checked_type(&make_src())
+        .to_checked_type(make_src())
         .unwrap();
     assert_eq!(dt, CheckedType::Quantity(Dimension::dimensionless()));
 }
 
 #[test]
 fn convert_bool() {
-    let dt = ResolvedValueType::Bool
-        .to_checked_type(&make_src())
-        .unwrap();
+    let dt = ResolvedValueType::Bool.to_checked_type(make_src()).unwrap();
     assert_eq!(dt, CheckedType::Bool);
 }
 
 #[test]
 fn convert_int() {
-    let dt = ResolvedValueType::Int.to_checked_type(&make_src()).unwrap();
+    let dt = ResolvedValueType::Int.to_checked_type(make_src()).unwrap();
     assert_eq!(dt, CheckedType::Int);
 }
 
@@ -1334,7 +1370,7 @@ fn convert_quantity() {
         crate::dimension::PreludeBaseDimension::Length,
     ));
     let dt = concrete_quantity(dim.clone())
-        .to_checked_type(&make_src())
+        .to_checked_type(make_src())
         .unwrap();
     assert_eq!(dt, CheckedType::Quantity(dim));
 }
@@ -1348,7 +1384,7 @@ fn convert_struct() {
         generic_args: Vec::new(),
         span: Span::new(0, 0),
     }
-    .to_checked_type(&make_src())
+    .to_checked_type(make_src())
     .unwrap();
     assert_eq!(
         dt,
@@ -1369,7 +1405,7 @@ fn convert_indexed() {
             Span::new(0, 0),
         )),
     }
-    .to_checked_type(&make_src())
+    .to_checked_type(make_src())
     .unwrap();
     assert_eq!(
         dt,
@@ -1395,19 +1431,19 @@ fn convert_generic_dim_param_fails() {
         span,
     };
     let err = ResolvedValueType::Quantity(dimension(1))
-        .to_checked_type(&make_src())
+        .to_checked_type(make_src())
         .unwrap_err();
     assert!(matches!(
         err,
-        GraphcalError::EvalError { ref message, .. }
+        SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Evaluation(EvaluationError::Failed { message, .. }), .. })
             if message == "cannot use generic dimension parameter `D` as a concrete type"
     ));
     let err = ResolvedValueType::Quantity(dimension(2))
-        .to_checked_type(&make_src())
+        .to_checked_type(make_src())
         .unwrap_err();
     assert!(matches!(
         err,
-        GraphcalError::EvalError { ref message, .. }
+        SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Evaluation(EvaluationError::Failed { message, .. }), .. })
             if message == "cannot use generic dimension expression as a concrete type"
     ));
 }
@@ -1421,9 +1457,15 @@ fn convert_generic_index_fails() {
             Span::new(0, 0),
         )),
     }
-    .to_checked_type(&make_src())
+    .to_checked_type(make_src())
     .unwrap_err();
-    assert!(matches!(err, GraphcalError::EvalError { .. }));
+    assert!(matches!(
+        err,
+        SemanticError::Located(crate::diagnostic::Diagnostic {
+            kind: SemanticErrorKind::Evaluation(EvaluationError::Failed { .. }),
+            ..
+        })
+    ));
 }
 
 // --- Datetime type resolution tests ---
@@ -1473,13 +1515,19 @@ fn resolve_datetime_gpst() {
 #[test]
 fn resolve_datetime_unknown_scale_error() {
     let err = resolve_source_type("Datetime<XYZ>", &[], &[], &[]).unwrap_err();
-    assert!(matches!(err, GraphcalError::EvalError { .. }));
+    assert!(matches!(
+        err,
+        SemanticError::Located(crate::diagnostic::Diagnostic {
+            kind: SemanticErrorKind::Evaluation(EvaluationError::Failed { .. }),
+            ..
+        })
+    ));
 }
 
 #[test]
 fn convert_datetime_utc() {
     let dt = ResolvedValueType::Datetime(TimeScale::UTC)
-        .to_checked_type(&make_src())
+        .to_checked_type(make_src())
         .unwrap();
     assert_eq!(dt, CheckedType::Datetime(TimeScale::UTC));
 }
@@ -1487,7 +1535,7 @@ fn convert_datetime_utc() {
 #[test]
 fn convert_datetime_tt() {
     let dt = ResolvedValueType::Datetime(TimeScale::TT)
-        .to_checked_type(&make_src())
+        .to_checked_type(make_src())
         .unwrap();
     assert_eq!(dt, CheckedType::Datetime(TimeScale::TT));
 }
@@ -1821,7 +1869,7 @@ fn rigid_views_keep_bound_defaulted_ports_opaque_and_recompute_derived_dimension
     assert_eq!(store.get_dimension(&qp), Some(&(&length * &mass).unwrap()));
 }
 
-fn instantiate_for_test(draft: TirDraft, src: &NamedSource<Arc<String>>) -> InstantiatedTir {
+fn instantiate_for_test(draft: TirDraft, src: crate::source_id::SourceId) -> InstantiatedTir {
     draft
         .instantiate(&CheckedOverrideDependencies::default(), src)
         .unwrap()
@@ -1844,19 +1892,20 @@ fn root_parts(tir: &CheckedTir) -> CheckedParts {
 #[test]
 fn checked_tir_pairs_each_local_body_with_everything_its_check_published() {
     let source = "node x: Dimensionless = 1.0;";
-    let src = NamedSource::new("test.gcl", Arc::new(source.to_string()));
+    let src = crate::source_registry::SourceRegistry::new()
+        .register("test.gcl", Arc::new(source.to_string()));
     let draft = parse_and_type_resolve_builder(source).unwrap();
-    let other = check_draft(draft.clone(), &src).unwrap();
+    let other = check_draft(draft.clone(), src).unwrap();
     let pair = |edit: &dyn Fn(&mut CheckedParts)| {
         let mut parts = root_parts(&other);
         edit(&mut parts);
-        instantiate_for_test(draft.clone(), &src)
+        instantiate_for_test(draft.clone(), src)
             .tir
-            .into_checked(parts, &src)
+            .into_checked(parts, src)
     };
-    let fails_with = |result: Result<CheckedTir, GraphcalError>, expected: &str| {
+    let fails_with = |result: Result<CheckedTir, SemanticError>, expected: &str| {
         assert!(
-            matches!(&result, Err(GraphcalError::InternalError { message, .. }) if message.contains(expected)),
+            matches!(&result, Err(SemanticError::Internal(internal)) if internal.message().contains(expected)),
             "expected `{expected}`: {result:?}"
         );
     };
@@ -1877,7 +1926,7 @@ fn checked_tir_pairs_each_local_body_with_everything_its_check_published() {
     // Trees of another body do not cover this one's expression roots.
     let unrelated = check_draft(
         parse_and_type_resolve_builder("node x: Dimensionless = 2.0;").unwrap(),
-        &src,
+        src,
     )
     .unwrap();
     fails_with(

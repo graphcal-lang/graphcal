@@ -2,14 +2,16 @@
 
 use crate::hir::expr::{Expr, MatchArm, MatchPattern, PatternBinding};
 use crate::hir::nominal::{NominalConstructor, NominalTypeDef};
+use crate::outcome::Outcome;
 use crate::resolved_name::ResolvedStructTypeName;
-use std::sync::Arc;
-
-use miette::NamedSource;
+use crate::semantic_error::evaluation::EvaluationError;
+use crate::semantic_error::index::IndexError;
+use crate::semantic_error::structure::StructError;
+use crate::source_id::SourceId;
 
 use crate::display::formatting_registry::FormattingRegistry;
-use crate::graphcal_error::GraphcalError;
 use crate::semantic::checked_type::{IndexTypeRef, Symbolic};
+use crate::semantic_error::SemanticError;
 use crate::syntax::type_name::FieldName;
 
 use crate::semantic::checked_type::{CheckedGenericArg, CheckedType};
@@ -28,18 +30,22 @@ impl InferEnv<'_> {
         owning_type: &ResolvedStructTypeName,
         type_def: &NominalTypeDef,
         scrutinee_type_args: &[CheckedGenericArg<Symbolic>],
-    ) -> Result<CheckedType<Symbolic>, GraphcalError> {
+    ) -> Result<CheckedType<Symbolic>, SemanticError> {
         if !variant
             .fields()
             .iter()
             .any(|field_def| field_def.name() == &field.value)
         {
-            return Err(GraphcalError::UnknownField {
-                type_name: type_def.name(),
-                member: crate::graphcal_error::NominalMember::Field(field.value.clone()),
-                src: self.src.clone(),
-                span: field.span.into(),
-            });
+            return Err(SemanticError::located(
+                self.src,
+                field.span,
+                StructError::UnknownField {
+                    type_name: type_def.name(),
+                    member: crate::semantic_error::structure::NominalMember::Field(
+                        field.value.clone(),
+                    ),
+                },
+            ));
         }
         resolved_field_type(
             &resolved_type_field_key(owning_type, variant, &field.value),
@@ -60,27 +66,27 @@ impl Infer<'_> {
         expr: &Expr,
         scrutinee: &Expr,
         arms: &[MatchArm],
-    ) -> Result<CheckedType<Symbolic>, GraphcalError> {
+    ) -> Result<CheckedType<Symbolic>, Outcome<SemanticError>> {
         let scrutinee_type = self.infer_hir_type(scrutinee)?;
         match &scrutinee_type {
             CheckedType::Key(index_identity) => {
                 if index_identity.finite_index_form().is_some() {
-                    return Err(GraphcalError::EvalError {
-                        message: format!(
+                    return Err(SemanticError::located(self.env.src, scrutinee.span, EvaluationError::Failed { message: format!(
                             "cannot match on `Key<{index_identity}>`; only named-axis keys support label matching"
-                        ),
-                        src: self.env.src.clone(),
-                        span: scrutinee.span.into(),
-                    });
+                        ) }).into());
                 }
                 let index_def = crate::tir::dim_check::infer::index_def_for_inferred(
                     index_identity,
                     self.env.tir,
                 )
-                .ok_or_else(|| GraphcalError::UnknownIndex {
-                    name: index_identity.display_name(),
-                    src: self.env.src.clone(),
-                    span: scrutinee.span.into(),
+                .ok_or_else(|| {
+                    SemanticError::located(
+                        self.env.src,
+                        scrutinee.span,
+                        IndexError::UnknownIndex {
+                            name: index_identity.display_name(),
+                        },
+                    )
                 })?;
                 let variants = match &index_def.kind {
                     crate::semantic::index_def::IndexKind::Concrete(
@@ -90,75 +96,87 @@ impl Infer<'_> {
                         crate::semantic::index_def::RequiredIndexKind::Named,
                     ) => vec![],
                     _ => {
-                        return Err(GraphcalError::EvalError {
-                            message: format!(
+                        return Err(SemanticError::located(self.env.src, scrutinee.span, EvaluationError::Failed { message: format!(
                                 "cannot match on coordinate index `{index_identity}`; only named indexes can be matched"
-                            ),
-                            src: self.env.src.clone(),
-                            span: scrutinee.span.into(),
-                        });
+                            ) }).into());
                     }
                 };
                 let mut covered = std::collections::HashSet::new();
                 let mut arm_types = Vec::new();
                 for arm in arms {
                     let MatchPattern::IndexLabel { variant, span } = &arm.pattern else {
-                        return Err(GraphcalError::EvalError {
-                            message: "label match arms must use index-label patterns".to_string(),
-                            src: self.env.src.clone(),
-                            span: arm.span.into(),
-                        });
+                        return Err(SemanticError::located(
+                            self.env.src,
+                            arm.span,
+                            EvaluationError::Failed {
+                                message: "label match arms must use index-label patterns"
+                                    .to_string(),
+                            },
+                        )
+                        .into());
                     };
                     self.check_index_override_dependency(
                         &IndexTypeRef::from_resolved(variant.variant.index().clone()),
                         IndexNominalUse::Label(variant.variant.variant()),
                     )?;
                     if index_identity.declared_resolved() != Some(variant.variant.index()) {
-                        return Err(GraphcalError::IndexMismatch {
-                            expected: index_identity.display_name(),
-                            found: variant.variant.index().to_unowned_def_name().into(),
-                            src: self.env.src.clone(),
-                            span: (*span).into(),
-                        });
+                        return Err(SemanticError::located(
+                            self.env.src,
+                            *span,
+                            IndexError::IndexMismatch {
+                                expected: index_identity.display_name(),
+                                found: variant.variant.index().to_unowned_def_name().into(),
+                            },
+                        )
+                        .into());
                     }
                     let variant_name = variant.variant.variant();
                     if !variants.iter().any(|v| v == variant_name) {
-                        return Err(GraphcalError::UnknownVariant {
-                            index_name: index_identity.display_name(),
-                            variant_name: variant_name.clone(),
-                            src: self.env.src.clone(),
-                            span: variant.path_span().into(),
-                        });
+                        return Err(SemanticError::located(
+                            self.env.src,
+                            variant.path_span(),
+                            IndexError::UnknownVariant {
+                                index_name: index_identity.display_name(),
+                                variant_name: variant_name.clone(),
+                            },
+                        )
+                        .into());
                     }
                     if !covered.insert(variant_name.clone()) {
-                        return Err(GraphcalError::EvalError {
-                            message: format!("duplicate match arm for variant `{variant_name}`"),
-                            src: self.env.src.clone(),
-                            span: (*span).into(),
-                        });
+                        return Err(SemanticError::located(
+                            self.env.src,
+                            *span,
+                            EvaluationError::Failed {
+                                message: format!(
+                                    "duplicate match arm for variant `{variant_name}`"
+                                ),
+                            },
+                        )
+                        .into());
                     }
                     arm_types.push(self.infer_hir_type(&arm.body)?);
                 }
                 for variant in variants {
                     if !covered.contains(&variant) {
-                        return Err(GraphcalError::EvalError {
-                            message: format!(
+                        return Err(SemanticError::located(self.env.src, expr.span, EvaluationError::Failed { message: format!(
                                 "non-exhaustive match: variant `{index_identity}#{variant}` not covered"
-                            ),
-                            src: self.env.src.clone(),
-                            span: expr.span.into(),
-                        });
+                            ) }).into());
                     }
                 }
                 hir_arm_types_match(&arm_types, arms, self.env.registry, self.env.src, expr)
+                    .map_err(Outcome::Failed)
             }
             CheckedType::Struct(type_name, scrutinee_type_args) => {
                 let type_def =
                     struct_type_def_for_inferred(type_name, Some(self.env.dag), self.env.registry)
-                        .ok_or_else(|| GraphcalError::UnknownStructType {
-                            name: type_name.to_string(),
-                            src: self.env.src.clone(),
-                            span: scrutinee.span.into(),
+                        .ok_or_else(|| {
+                            SemanticError::located(
+                                self.env.src,
+                                scrutinee.span,
+                                StructError::UnknownStructType {
+                                    name: type_name.to_string(),
+                                },
+                            )
                         })?;
                 let mut covered = std::collections::HashSet::new();
                 let mut arm_types = Vec::new();
@@ -169,11 +187,15 @@ impl Infer<'_> {
                         span,
                     } = &arm.pattern
                     else {
-                        return Err(GraphcalError::EvalError {
-                            message: "union match arms must use constructor patterns".to_string(),
-                            src: self.env.src.clone(),
-                            span: arm.span.into(),
-                        });
+                        return Err(SemanticError::located(
+                            self.env.src,
+                            arm.span,
+                            EvaluationError::Failed {
+                                message: "union match arms must use constructor patterns"
+                                    .to_string(),
+                            },
+                        )
+                        .into());
                     };
                     let target = self
                         .env
@@ -186,31 +208,41 @@ impl Infer<'_> {
                         },
                     )?;
                     if bindings.is_explicit_empty() && target.variant().fields().is_empty() {
-                        return Err(GraphcalError::EmptyParenthesizedConstructor {
-                            constructor: target.variant().name(),
-                            src: self.env.src.clone(),
-                            span: (*span).into(),
-                        });
+                        return Err(SemanticError::located(
+                            self.env.src,
+                            *span,
+                            StructError::EmptyParenthesizedConstructor {
+                                constructor: target.variant().name(),
+                            },
+                        )
+                        .into());
                     }
                     if type_name.resolved() != target.owning_type() {
-                        return Err(GraphcalError::UnknownField {
-                            type_name: type_name.name().clone(),
-                            member: crate::graphcal_error::NominalMember::Constructor(
-                                target.name(),
-                            ),
-                            src: self.env.src.clone(),
-                            span: constructor.span.into(),
-                        });
+                        return Err(SemanticError::located(
+                            self.env.src,
+                            constructor.span,
+                            StructError::UnknownField {
+                                type_name: type_name.name().clone(),
+                                member:
+                                    crate::semantic_error::structure::NominalMember::Constructor(
+                                        target.name(),
+                                    ),
+                            },
+                        )
+                        .into());
                     }
                     if !covered.insert(target.variant().name().clone()) {
-                        return Err(GraphcalError::EvalError {
-                            message: format!(
-                                "duplicate match arm for `{}`",
-                                target.variant().name()
-                            ),
-                            src: self.env.src.clone(),
-                            span: (*span).into(),
-                        });
+                        return Err(SemanticError::located(
+                            self.env.src,
+                            *span,
+                            EvaluationError::Failed {
+                                message: format!(
+                                    "duplicate match arm for `{}`",
+                                    target.variant().name()
+                                ),
+                            },
+                        )
+                        .into());
                     }
                     let mut arm_locals = self.locals.child(Vec::new());
                     let mut seen_pattern_fields = std::collections::HashSet::new();
@@ -220,15 +252,18 @@ impl Infer<'_> {
                             | PatternBinding::Wildcard { field, .. } => field,
                         };
                         if !seen_pattern_fields.insert(field.value.clone()) {
-                            return Err(GraphcalError::EvalError {
-                                message: format!(
-                                    "duplicate pattern binding for field `{}` in `{}`",
-                                    field.value,
-                                    target.variant().name()
-                                ),
-                                src: self.env.src.clone(),
-                                span: field.span.into(),
-                            });
+                            return Err(SemanticError::located(
+                                self.env.src,
+                                field.span,
+                                EvaluationError::Failed {
+                                    message: format!(
+                                        "duplicate pattern binding for field `{}` in `{}`",
+                                        field.value,
+                                        target.variant().name()
+                                    ),
+                                },
+                            )
+                            .into());
                         }
                         let field_type = self.env.constructor_field_type(
                             field,
@@ -252,39 +287,49 @@ impl Infer<'_> {
                         .map(|field| field.name().clone())
                         .collect::<Vec<_>>();
                     if !missing.is_empty() {
-                        return Err(GraphcalError::MissingPatternFields {
-                            constructor: target.variant().name(),
-                            missing,
-                            src: self.env.src.clone(),
-                            span: (*span).into(),
-                        });
+                        return Err(SemanticError::located(
+                            self.env.src,
+                            *span,
+                            StructError::MissingPatternFields {
+                                constructor: target.variant().name(),
+                                missing,
+                            },
+                        )
+                        .into());
                     }
                     arm_types.push(self.with_locals(&arm_locals).infer_hir_type(&arm.body)?);
                 }
                 if let Some(members) = type_def.union_members() {
                     for member in members {
                         if !covered.contains(&member.name()) {
-                            return Err(GraphcalError::EvalError {
-                                message: format!(
-                                    "non-exhaustive match: member `{}` not covered",
-                                    member.name()
-                                ),
-                                src: self.env.src.clone(),
-                                span: expr.span.into(),
-                            });
+                            return Err(SemanticError::located(
+                                self.env.src,
+                                expr.span,
+                                EvaluationError::Failed {
+                                    message: format!(
+                                        "non-exhaustive match: member `{}` not covered",
+                                        member.name()
+                                    ),
+                                },
+                            )
+                            .into());
                         }
                     }
                 }
                 hir_arm_types_match(&arm_types, arms, self.env.registry, self.env.src, expr)
+                    .map_err(Outcome::Failed)
             }
-            _ => Err(GraphcalError::EvalError {
-                message: format!(
-                    "cannot match on type `{}`; expected a tagged union or label value",
-                    format_checked_type(&scrutinee_type, self.env.registry)
-                ),
-                src: self.env.src.clone(),
-                span: scrutinee.span.into(),
-            }),
+            _ => Err(SemanticError::located(
+                self.env.src,
+                scrutinee.span,
+                EvaluationError::Failed {
+                    message: format!(
+                        "cannot match on type `{}`; expected a tagged union or label value",
+                        format_checked_type(&scrutinee_type, self.env.registry)
+                    ),
+                },
+            )
+            .into()),
         }
     }
 }
@@ -293,8 +338,8 @@ fn hir_arm_types_match(
     arm_types: &[CheckedType<Symbolic>],
     arms: &[MatchArm],
     registry: &FormattingRegistry,
-    src: &NamedSource<Arc<String>>,
+    src: SourceId,
     expr: &Expr,
-) -> Result<CheckedType<Symbolic>, GraphcalError> {
+) -> Result<CheckedType<Symbolic>, SemanticError> {
     rules::match_arms_rule(arm_types, |i| arms[i].body.span, expr.span, registry, src)
 }

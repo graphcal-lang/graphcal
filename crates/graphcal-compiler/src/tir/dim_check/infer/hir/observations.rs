@@ -9,16 +9,15 @@
 
 use crate::hir::expr::{ConstRef, Expr, ExprKind, FunctionRef, MatchPattern};
 use crate::resolved_name::{ResolvedConstructorName, ResolvedStructTypeName};
+use crate::source_id::SourceId;
 use crate::tir::texpr::ExternSignature;
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use miette::NamedSource;
-
 use crate::diagnostic_anchor::DiagnosticAnchor;
 use crate::expression_id::ExprId;
-use crate::graphcal_error::GraphcalError;
+use crate::semantic_error::SemanticError;
 use crate::syntax::span::Span;
 use crate::tir::static_index::StaticIndexRequirement;
 use crate::tir::texpr::{
@@ -177,14 +176,9 @@ impl BodyObservations {
     }
 
     /// Record one checked expression's typed node.
-    fn insert(
-        &self,
-        expr: &Expr,
-        node: CheckedNode,
-        src: &NamedSource<Arc<String>>,
-    ) -> Result<(), GraphcalError> {
+    fn insert(&self, expr: &Expr, node: CheckedNode, src: SourceId) -> Result<(), SemanticError> {
         self.try_insert(expr, node).map_err(|error| {
-            GraphcalError::internal_error(
+            SemanticError::internal_error(
                 error.to_string(),
                 src,
                 DiagnosticAnchor::Source(expr.span),
@@ -232,8 +226,8 @@ impl BodyObservations {
     pub(in crate::tir::dim_check) fn record_contextual(
         &self,
         expr: &Expr,
-        src: &NamedSource<Arc<String>>,
-    ) -> Result<(), GraphcalError> {
+        src: SourceId,
+    ) -> Result<(), SemanticError> {
         self.insert(expr, CheckedNode::Contextual, src)
     }
 
@@ -243,8 +237,8 @@ impl BodyObservations {
         inferred: &CheckedType<Symbolic>,
         dag: &crate::tir::typed::DagTIR,
         tir: &dyn crate::tir::typed::TirRead,
-        src: &NamedSource<Arc<String>>,
-    ) -> Result<(), GraphcalError> {
+        src: SourceId,
+    ) -> Result<(), SemanticError> {
         let checked_type = inferred.clone();
         crate::tir::dim_check::expression_axes::check_materializable(
             &checked_type,
@@ -256,7 +250,7 @@ impl BodyObservations {
             tir.project_type_store()
                 .lookup_constructor(name)
                 .ok_or_else(|| {
-                    GraphcalError::internal_error(
+                    SemanticError::internal_error(
                         format!("checked constructor `{name}` has no definition"),
                         src,
                         DiagnosticAnchor::Source(expr.span),
@@ -274,7 +268,7 @@ impl BodyObservations {
         .map(|name| {
             let target = resolved_constructor(name)?;
             let CheckedType::Struct(_, args) = &checked_type else {
-                return Err(GraphcalError::internal_error(
+                return Err(SemanticError::internal_error(
                     "constructor inferred a non-nominal type",
                     src,
                     DiagnosticAnchor::Source(expr.span),
@@ -334,7 +328,7 @@ impl BodyObservations {
                         },
                     ))
                 })
-                .collect::<Result<_, GraphcalError>>()?,
+                .collect::<Result<_, SemanticError>>()?,
             _ => HashMap::new(),
         };
         // The declared signature a plugin call was checked against, so its

@@ -1,3 +1,7 @@
+use crate::load_error::LoadError;
+use graphcal_compiler::semantic_error::SemanticErrorKind;
+use graphcal_compiler::semantic_error::evaluation::EvaluationError;
+use graphcal_compiler::semantic_error::rendered::RenderedSemanticError;
 use std::path::{Path, PathBuf};
 
 use graphcal_compiler::dag_id::DagPackageId;
@@ -27,6 +31,7 @@ fn resolved(name: &str, inline: &[&str]) -> ModuleResolution<PathBuf> {
 
 fn parse(file: &Path, text: &str) -> ParsedFile {
     ParsedFile::parse(
+        &mut graphcal_compiler::source_registry::SourceRegistry::new(),
         &file.display().to_string(),
         Arc::new(text.to_string()),
         &graphcal_compiler::cancellation::CancellationToken::unbounded(),
@@ -80,6 +85,7 @@ fn snapshot<const N: usize>(
     SourceSnapshot {
         root: key(root),
         files: files.into_iter().collect(),
+        sources: graphcal_compiler::source_registry::SourceRegistry::new(),
     }
 }
 
@@ -87,10 +93,9 @@ fn dag_id(name: &str) -> DagId {
     DagId::from_relative_path(PACKAGE, Path::new(&format!("src/{name}.gcl"))).unwrap()
 }
 
-fn build_error<K: SourceKey>(snapshot: SourceSnapshot<K>) -> GraphcalError {
-    match build_loaded_files(snapshot) {
-        Err(CompileError::Eval(error)) => error,
-        Err(other) => panic!("unexpected error kind: {other:?}"),
+fn build_error<K: SourceKey>(snapshot: SourceSnapshot<K>) -> CompileError {
+    match build_files(snapshot) {
+        Err(error) => error,
         Ok(_) => panic!("expected the build to fail"),
     }
 }
@@ -107,7 +112,7 @@ fn import_targets(file: &LoadedFile) -> Vec<ResolvedModuleTarget> {
 
 #[test]
 fn dependencies_precede_dependents_in_post_order() {
-    let files = build_loaded_files(snapshot(
+    let files = build_files(snapshot(
         "main",
         [
             fetched(
@@ -128,7 +133,6 @@ fn dependencies_precede_dependents_in_post_order() {
         root.source.as_str(),
         "import pkg.b::{y};\nimport pkg.c::{z};"
     );
-    assert_eq!(root.named_source.name(), "/p/src/main.gcl");
     assert_eq!(
         import_targets(root),
         [
@@ -140,7 +144,7 @@ fn dependencies_precede_dependents_in_post_order() {
 
 #[test]
 fn diamond_dependency_is_built_once() {
-    let files = build_loaded_files(snapshot(
+    let files = build_files(snapshot(
         "main",
         [
             fetched(
@@ -167,7 +171,7 @@ fn diamond_dependency_is_built_once() {
 
 #[test]
 fn inline_path_targets_nested_dag_in_owner_file() {
-    let files = build_loaded_files(snapshot(
+    let files = build_files(snapshot(
         "main",
         [
             fetched(
@@ -201,7 +205,7 @@ fn import_cycle_reports_typed_loading_chain() {
         ],
     ));
 
-    let GraphcalError::CircularImport { cycle } = &error else {
+    let CompileError::Load(LoadError::CircularImport { cycle }) = &error else {
         panic!("expected a circular import, got {error:?}");
     };
     assert_eq!(cycle.lead_in(), [ImportChainFile::Path(key("a"))]);
@@ -257,6 +261,7 @@ fn package_import_cycle_labels_files_with_their_package() {
         ]
         .into_iter()
         .collect(),
+        sources: graphcal_compiler::source_registry::SourceRegistry::new(),
     });
     assert_eq!(
         error.to_string(),
@@ -284,7 +289,7 @@ fn earlier_import_failure_wins_over_later_file_failure() {
         ],
     ));
     assert!(
-        matches!(error, GraphcalError::StdlibNotImplemented { ref path, .. } if path == "graphcal.core"),
+        matches!(error, CompileError::Load(LoadError::StdlibNotImplemented { ref path, .. }) if path == "graphcal.core"),
         "{error:?}"
     );
 }
@@ -309,7 +314,7 @@ fn dependency_failure_is_reported_when_reached() {
         ],
     ));
     assert!(
-        matches!(error, GraphcalError::FileNotFound { ref path } if path == "/p/src/b.gcl"),
+        matches!(error, CompileError::Load(LoadError::FileNotFound { ref path }) if path == "/p/src/b.gcl"),
         "{error:?}"
     );
 }
@@ -325,17 +330,17 @@ fn file_missing_from_snapshot_is_not_found() {
         )],
     ));
     assert!(
-        matches!(error, GraphcalError::FileNotFound { ref path } if path == "/p/src/b.gcl"),
+        matches!(error, CompileError::Load(LoadError::FileNotFound { ref path }) if path == "/p/src/b.gcl"),
         "{error:?}"
     );
     let error = build_error(snapshot("main", []));
     assert!(
-        matches!(error, GraphcalError::FileNotFound { ref path } if path == "/p/src/main.gcl"),
+        matches!(error, CompileError::Load(LoadError::FileNotFound { ref path }) if path == "/p/src/main.gcl"),
         "{error:?}"
     );
 }
 
-fn failing_import(failure: ResolveFailure) -> GraphcalError {
+fn failing_import(failure: ResolveFailure) -> CompileError {
     build_error(snapshot(
         "main",
         [fetched(
@@ -354,19 +359,19 @@ fn resolution_failures_render_at_the_import_site() {
     assert!(
         matches!(
             error,
-            GraphcalError::PackageNameMismatch { ref path_first, ref package_name, .. }
+            CompileError::Load(LoadError::PackageNameMismatch { ref path_first, ref package_name, .. })
                 if path_first == "pkg" && package_name == "other"
         ),
         "{error:?}"
     );
     let error = failing_import(ResolveFailure::FileNotFound);
     assert!(
-        matches!(error, GraphcalError::ImportFileNotFound { ref path, .. } if path == "pkg.b"),
+        matches!(error, CompileError::Load(LoadError::ImportFileNotFound { ref path, .. }) if path == "pkg.b"),
         "{error:?}"
     );
     let error = failing_import(ResolveFailure::CrossFileImportInVirtualPackage);
     assert!(
-        matches!(error, GraphcalError::CrossFileImportInVirtualPackage { ref path, .. } if path == "pkg.b"),
+        matches!(error, CompileError::Load(LoadError::CrossFileImportInVirtualPackage { ref path, .. }) if path == "pkg.b"),
         "{error:?}"
     );
     let error = failing_import(ResolveFailure::NotLocked {
@@ -374,8 +379,8 @@ fn resolution_failures_render_at_the_import_site() {
     });
     assert!(
         matches!(
-            error,
-            GraphcalError::EvalError { ref message, .. }
+            &error,
+            CompileError::Eval(RenderedSemanticError { error: SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic { kind: SemanticErrorKind::Evaluation(EvaluationError::Failed { message, .. }), .. }), .. })
                 if message == "no dependency `b`; run `graphcal deps lock` after changing dependencies"
         ),
         "{error:?}"
@@ -386,7 +391,7 @@ fn resolution_failures_render_at_the_import_site() {
     assert!(
         matches!(
             error,
-            GraphcalError::ManifestError { ref message } if message == "lockfile package `b` is missing"
+            CompileError::Load(LoadError::ManifestError { ref message }) if message == "lockfile package `b` is missing"
         ),
         "{error:?}"
     );
@@ -403,7 +408,7 @@ fn file_root_self_import_is_rejected() {
         )],
     ));
     assert!(
-        matches!(error, GraphcalError::FileRootSelfImport { ref path, .. } if path == "pkg.main"),
+        matches!(error, CompileError::Load(LoadError::FileRootSelfImport { ref path, .. }) if path == "pkg.main"),
         "{error:?}"
     );
 
@@ -412,14 +417,14 @@ fn file_root_self_import_is_rejected() {
         [fetched("main", "import main::{x};", &[])],
     ));
     assert!(
-        matches!(error, GraphcalError::FileRootSelfImport { ref path, .. } if path == "main"),
+        matches!(error, CompileError::Load(LoadError::FileRootSelfImport { ref path, .. }) if path == "main"),
         "{error:?}"
     );
 }
 
 #[test]
 fn self_references_through_inline_paths_and_includes_are_allowed() {
-    let files = build_loaded_files(snapshot(
+    let files = build_files(snapshot(
         "main",
         [fetched(
             "main",
@@ -437,7 +442,7 @@ fn self_references_through_inline_paths_and_includes_are_allowed() {
         )
     );
 
-    let files = build_loaded_files(snapshot(
+    let files = build_files(snapshot(
         "main",
         [fetched(
             "main",
@@ -452,7 +457,7 @@ fn self_references_through_inline_paths_and_includes_are_allowed() {
 
 #[test]
 fn same_file_dag_references_are_not_dependencies() {
-    let files = build_loaded_files(snapshot(
+    let files = build_files(snapshot(
         "main",
         [fetched(
             "main",
@@ -477,7 +482,7 @@ fn outside_root_is_rejected_at_file_root_and_in_dag_bodies() {
             )],
         ));
         assert!(
-            matches!(error, GraphcalError::ImportOutsideRoot { ref path, .. } if path == "pkg.b"),
+            matches!(error, CompileError::Load(LoadError::ImportOutsideRoot { ref path, .. }) if path == "pkg.b"),
             "{error:?}"
         );
     }
@@ -485,7 +490,7 @@ fn outside_root_is_rejected_at_file_root_and_in_dag_bodies() {
 
 #[test]
 fn dag_body_imports_load_dependencies_and_keep_failures_unresolved() {
-    let files = build_loaded_files(snapshot(
+    let files = build_files(snapshot(
             "main",
             [
                 fetched(
@@ -539,7 +544,7 @@ fn dag_body_imports_load_dependencies_and_keep_failures_unresolved() {
 fn dag_body_reference_to_an_unloaded_file_stays_unresolved() {
     // A single-segment body path naming a same-file DAG outside lexical
     // scope never loads the file it would resolve to.
-    let files = build_loaded_files(snapshot(
+    let files = build_files(snapshot(
         "main",
         [
             fetched(
@@ -581,6 +586,7 @@ fn invalid_module_location_is_an_error() {
     let error = build_error(SourceSnapshot {
         root: file.clone(),
         files: std::iter::once((file, Ok(fetched))).collect(),
+        sources: graphcal_compiler::source_registry::SourceRegistry::new(),
     });
     assert!(
         error
@@ -588,4 +594,11 @@ fn invalid_module_location_is_an_error() {
             .contains("invalid module path `src/main.txt`"),
         "{error}"
     );
+}
+
+/// Build the loaded files of `snapshot`, without its source registry.
+fn build_files<K: SourceKey>(
+    snapshot: SourceSnapshot<K>,
+) -> Result<DependencyOrdered<LoadedFile>, CompileError> {
+    build_loaded_files(snapshot).map(|(files, _)| files)
 }

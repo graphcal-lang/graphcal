@@ -9,13 +9,9 @@
 //! rewritten.
 
 use std::collections::HashMap;
-use std::sync::Arc;
-
-use miette::NamedSource;
 
 use crate::desugar::desugared_ast::{self as ast, TypeDecl, TypeDeclBody};
 use crate::diagnostic_anchor::DiagnosticAnchor;
-use crate::graphcal_error::GraphcalError;
 use crate::ir::static_substitution::{InstanceIndexBindingTarget, StaticSubstitution};
 use crate::nat::{NatOverflowError, NatPolyForm};
 use crate::resolve::ModuleResolver;
@@ -23,6 +19,10 @@ use crate::resolve::namespace::Namespace;
 use crate::resolve::reserved_name::validate_reserved_name;
 use crate::resolved_name::ResolvedStructTypeName;
 use crate::semantic::time_zone::TimeZoneRegistry;
+use crate::semantic_error::SemanticError;
+use crate::semantic_error::evaluation::EvaluationError;
+use crate::semantic_error::name::NameError;
+use crate::source_id::SourceId;
 use crate::syntax::names::NameAtom;
 use crate::syntax::span::{Span, Spanned};
 use crate::syntax::type_name::GenericParamName;
@@ -36,6 +36,7 @@ use super::types::{
     DeclType, DimArg, DimExpr, DimExprItem, DimTermRef, DimTermTarget, GenericArg, GenericParamId,
     GenericParamOwner, IndexRef, ValueType, ValueTypeKind,
 };
+use crate::outcome::Outcome;
 
 /// Services one nominal lowering run needs.
 #[derive(Debug, Clone, Copy)]
@@ -51,15 +52,15 @@ pub struct NominalLowering<'a> {
 ///
 /// # Errors
 ///
-/// Returns a [`GraphcalError`] for an invalid generic parameter list, a
+/// Returns a [`SemanticError`] for an invalid generic parameter list, a
 /// duplicate constructor or payload field, or an unresolvable signature.
 pub fn lower_type_declaration(
     declaration: &TypeDecl,
     identity: ResolvedStructTypeName,
     span: Span,
-    src: &NamedSource<Arc<String>>,
+    src: SourceId,
     lowering: NominalLowering<'_>,
-) -> Result<NominalTypeDef, GraphcalError> {
+) -> Result<NominalTypeDef, Outcome<SemanticError>> {
     validate_generic_params(declaration, src)?;
     let (generic_params, generic_scope) =
         lower_generic_params(declaration, &identity, src, lowering)?;
@@ -67,7 +68,7 @@ pub fn lower_type_declaration(
         TypeDeclBody::Required => Ok(NominalTypeDef::required(
             identity,
             generic_params,
-            src.clone(),
+            src,
             span,
         )),
         TypeDeclBody::Constructors(members) => {
@@ -81,16 +82,16 @@ pub fn lower_type_declaration(
                         .map(|field| {
                             lower_nominal_field(field, &identity, &generic_scope, src, lowering)
                         })
-                        .collect::<Result<Vec<_>, GraphcalError>>()?;
+                        .collect::<Result<Vec<_>, SemanticError>>()?;
                     NominalConstructor::try_new(
                         identity.constructor(member.name.value.clone()),
                         fields,
                     )
-                    .map_err(|error| member_error(error, declaration, payload, src))
+                    .map_err(|error| member_error(error, declaration, payload, src).into())
                 })
-                .collect::<Result<Vec<_>, GraphcalError>>()?;
-            NominalTypeDef::try_union(identity, generic_params, lowered, src.clone(), span)
-                .map_err(|error| member_error(error, declaration, &[], src))
+                .collect::<Result<Vec<_>, Outcome<SemanticError>>>()?;
+            NominalTypeDef::try_union(identity, generic_params, lowered, src, span)
+                .map_err(|error| member_error(error, declaration, &[], src).into())
         }
     }
 }
@@ -100,8 +101,8 @@ fn member_error(
     error: NominalTypeError,
     declaration: &TypeDecl,
     payload: &[ast::FieldDecl],
-    src: &NamedSource<Arc<String>>,
-) -> GraphcalError {
+    src: SourceId,
+) -> SemanticError {
     match error {
         NominalTypeError::DuplicateConstructorField {
             constructor,
@@ -109,14 +110,16 @@ fn member_error(
             first_index,
             duplicate_index,
         } => match (payload.get(first_index), payload.get(duplicate_index)) {
-            (Some(first), Some(duplicate)) => GraphcalError::DuplicateConstructorField {
-                type_name: declaration.name.value.clone(),
-                constructor,
-                field,
-                src: src.clone(),
-                duplicate: duplicate.name.span.into(),
-                first: first.name.span.into(),
-            },
+            (Some(first), Some(duplicate)) => SemanticError::located(
+                src,
+                duplicate.name.span,
+                NameError::DuplicateConstructorField {
+                    type_name: declaration.name.value.clone(),
+                    constructor,
+                    field,
+                    first: first.name.span,
+                },
+            ),
             _ => invariant_error(
                 format!("duplicate field `{field}` has no source declaration"),
                 src,
@@ -135,12 +138,14 @@ fn member_error(
             .into_iter();
             let first = members.next().unwrap_or(declaration.name.span);
             let duplicate = members.next().unwrap_or(first);
-            GraphcalError::DuplicateName {
-                name: constructor.to_string(),
-                src: src.clone(),
-                duplicate: duplicate.into(),
-                first: first.into(),
-            }
+            SemanticError::located(
+                src,
+                duplicate,
+                NameError::DuplicateName {
+                    name: constructor.to_string(),
+                    first,
+                },
+            )
         }
         error @ (NominalTypeError::ConstructorOwnerMismatch { .. }
         | NominalTypeError::DuplicateType { .. }
@@ -160,21 +165,20 @@ fn member_error(
 ///
 /// A default may reference only earlier parameters, and a parameter without
 /// a default cannot follow a defaulted one.
-fn validate_generic_params(
-    declaration: &TypeDecl,
-    src: &NamedSource<Arc<String>>,
-) -> Result<(), GraphcalError> {
+fn validate_generic_params(declaration: &TypeDecl, src: SourceId) -> Result<(), SemanticError> {
     let positions = declaration.generic_params.iter().enumerate().try_fold(
         HashMap::new(),
         |mut positions, (index, param)| match positions.insert(
             param.name.value.atom().clone(),
             (param.name.value.clone(), index, param.name.span),
         ) {
-            Some((name, _, _)) => Err(GraphcalError::EvalError {
-                message: format!("duplicate generic parameter `{name}`"),
-                src: src.clone(),
-                span: param.name.span.into(),
-            }),
+            Some((name, _, _)) => Err(SemanticError::located(
+                src,
+                param.name.span,
+                EvaluationError::Failed {
+                    message: format!("duplicate generic parameter `{name}`"),
+                },
+            )),
             None => Ok(positions),
         },
     )?;
@@ -187,26 +191,30 @@ fn validate_generic_params(
                 if let Some((referenced, span)) =
                     find_non_earlier_generic_reference(default, index, &positions)
                 {
-                    return Err(GraphcalError::EvalError {
-                        message: format!(
-                            "default for generic parameter `{}` may reference only earlier generic parameters; `{referenced}` is not earlier",
-                            param.name.value
-                        ),
-                        src: src.clone(),
-                        span: span.into(),
-                    });
+                    return Err(SemanticError::located(
+                        src,
+                        span,
+                        EvaluationError::Failed {
+                            message: format!(
+                                "default for generic parameter `{}` may reference only earlier generic parameters; `{referenced}` is not earlier",
+                                param.name.value
+                            ),
+                        },
+                    ));
                 }
             }
             None => {
                 if let Some(first_defaulted) = first_defaulted {
-                    return Err(GraphcalError::EvalError {
-                        message: format!(
-                            "generic parameter `{}` without a default cannot follow defaulted parameter `{first_defaulted}`",
-                            param.name.value
-                        ),
-                        src: src.clone(),
-                        span: param.name.span.into(),
-                    });
+                    return Err(SemanticError::located(
+                        src,
+                        param.name.span,
+                        EvaluationError::Failed {
+                            message: format!(
+                                "generic parameter `{}` without a default cannot follow defaulted parameter `{first_defaulted}`",
+                                param.name.value
+                            ),
+                        },
+                    ));
                 }
             }
         }
@@ -343,9 +351,9 @@ fn find_non_earlier_type_reference(
 fn lower_generic_params(
     declaration: &TypeDecl,
     identity: &ResolvedStructTypeName,
-    src: &NamedSource<Arc<String>>,
+    src: SourceId,
     lowering: NominalLowering<'_>,
-) -> Result<(Vec<NominalGenericParam>, super::lower::GenericScope), GraphcalError> {
+) -> Result<(Vec<NominalGenericParam>, super::lower::GenericScope), Outcome<SemanticError>> {
     let generic_owner = GenericParamOwner::Type(identity.clone());
     declaration.generic_params.iter().try_fold(
         (
@@ -367,7 +375,7 @@ fn lower_generic_params(
                 .resolver
                 .visible_span(identity.owner(), Namespace::Static, atom)
                 .map_err(|error| {
-                    GraphcalError::internal_error(
+                    SemanticError::internal_error(
                         format!("failed to inspect Static scope for `{atom}`: {error}"),
                         src,
                         DiagnosticAnchor::Source(param.name.span),
@@ -381,7 +389,8 @@ fn lower_generic_params(
                         duplicate: param.name.span,
                     },
                     src,
-                ));
+                )
+                .into());
             }
             scope
                 .insert_binding(super::lower::GenericParamBinding::new(
@@ -399,9 +408,9 @@ fn lower_generic_default(
     param: &ast::GenericParam,
     identity: &ResolvedStructTypeName,
     scope: &super::lower::GenericScope,
-    src: &NamedSource<Arc<String>>,
+    src: SourceId,
     lowering: NominalLowering<'_>,
-) -> Result<Option<GenericArg>, GraphcalError> {
+) -> Result<Option<GenericArg>, SemanticError> {
     param
         .default
         .as_ref()
@@ -424,9 +433,9 @@ fn lower_nominal_field(
     field: &ast::FieldDecl,
     identity: &ResolvedStructTypeName,
     generic_scope: &super::lower::GenericScope,
-    src: &NamedSource<Arc<String>>,
+    src: SourceId,
     lowering: NominalLowering<'_>,
-) -> Result<NominalField, GraphcalError> {
+) -> Result<NominalField, SemanticError> {
     super::diagnostics::validate_type_annotation(&field.type_ann, src)?;
     let scope = super::lower::ModuleScope::new(identity.owner(), lowering.resolver, generic_scope);
     let decl_type = super::lower::lower_decl_type(&field.type_ann, scope)
@@ -441,12 +450,12 @@ fn lower_nominal_field(
             Ok(super::type_annotation::DomainBound {
                 kind: bound.kind,
                 value: super::expr_lower::lower::lower_expr(&bound.value, expr_ctx).map_err(
-                    |error| super::diagnostics::expr_lower_error_to_graphcal(&error, src),
+                    |error| super::diagnostics::expr_lower_error_to_semantic(&error, src),
                 )?,
                 span: bound.span,
             })
         })
-        .collect::<Result<Vec<_>, GraphcalError>>()?;
+        .collect::<Result<Vec<_>, SemanticError>>()?;
     Ok(NominalField::new(
         field.name.value.clone(),
         TypeAnnotation {
@@ -457,12 +466,12 @@ fn lower_nominal_field(
     ))
 }
 
-fn invariant_error(message: String, src: &NamedSource<Arc<String>>, span: Span) -> GraphcalError {
-    GraphcalError::InternalError {
+fn invariant_error(message: String, src: SourceId, span: Span) -> SemanticError {
+    SemanticError::internal_error(
         message,
-        src: src.clone(),
-        span: span.into(),
-    }
+        src,
+        crate::diagnostic_anchor::DiagnosticAnchor::Source(span),
+    )
 }
 
 /// Specialize a template's nominal definition as the importer-owned
@@ -481,7 +490,7 @@ pub fn specialize_nominal_type(
     template: &NominalTypeDef,
     identity: ResolvedStructTypeName,
     substitution: &StaticSubstitution,
-    source: NamedSource<Arc<String>>,
+    source: SourceId,
     span: Span,
 ) -> Result<NominalTypeDef, NominalTypeError> {
     let specializer = Specializer {
@@ -706,6 +715,7 @@ mod tests {
     use crate::resolve::builder::TestModules;
     use crate::resolved_name::{ResolvedDimName, ResolvedIndexName};
     use crate::semantic::index_def::FiniteIndex;
+    use crate::semantic_error::SemanticErrorKind;
     use crate::syntax::parser::Parser;
     use crate::syntax::type_name::StructTypeName;
     use std::collections::BTreeMap;
@@ -737,29 +747,35 @@ mod tests {
     }
 
     /// Lower the first type declaration of a one-module project.
-    fn lower_first(source: &str) -> Result<NominalTypeDef, GraphcalError> {
+    fn lower_first(source: &str) -> Result<NominalTypeDef, SemanticError> {
         let owner = DagId::root_in_package("test", "main");
         let file = parse(source);
         let mut modules = TestModules::default();
         modules.add(owner.clone(), &file.declarations);
         let resolver = modules.build().unwrap();
-        let src = NamedSource::new("main.gcl", Arc::new(source.to_string()));
+        let src = crate::source_registry::SourceRegistry::new()
+            .register("main.gcl", std::sync::Arc::new(source.to_string()));
         let declaration = first_type(&file);
-        lower_type_declaration(
-            declaration,
-            ResolvedStructTypeName::for_test(owner, declaration.name.value.clone()),
-            declaration.name.span,
-            &src,
-            NominalLowering {
-                resolver: &resolver,
-                cancellation: &crate::cancellation::CancellationToken::unbounded(),
-            },
-        )
+        crate::outcome::without_cancellation(|cancellation| {
+            lower_type_declaration(
+                declaration,
+                ResolvedStructTypeName::for_test(owner, declaration.name.value.clone()),
+                declaration.name.span,
+                src,
+                NominalLowering {
+                    resolver: &resolver,
+                    cancellation,
+                },
+            )
+        })
     }
 
-    fn eval_message(result: Result<NominalTypeDef, GraphcalError>) -> String {
+    fn eval_message(result: Result<NominalTypeDef, SemanticError>) -> String {
         match result {
-            Err(GraphcalError::EvalError { message, .. }) => message,
+            Err(SemanticError::Located(crate::diagnostic::Diagnostic {
+                kind: SemanticErrorKind::Evaluation(EvaluationError::Failed { message, .. }),
+                ..
+            })) => message,
             other => panic!("expected an evaluation diagnostic, got {other:?}"),
         }
     }
@@ -787,7 +803,7 @@ mod tests {
         assert!(
             matches!(
                 &error,
-                GraphcalError::DuplicateConstructorField { type_name, field, .. }
+                SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Name(NameError::DuplicateConstructorField { type_name, field, .. }), .. })
                     if type_name.as_str() == "Pair" && field.as_str() == "value"
             ),
             "{error:?}"
@@ -808,7 +824,7 @@ mod tests {
     }
 
     /// The template `Box` of the specialization test, owned by `template_id`.
-    fn template_box(template_id: &DagId) -> (NominalTypeDef, NamedSource<Arc<String>>) {
+    fn template_box(template_id: &DagId) -> (NominalTypeDef, SourceId) {
         let source = "pub(bind) dim Q;\n\
                       pub(bind) index Axis;\n\
                       pub(bind) type Slot;\n\
@@ -818,13 +834,14 @@ mod tests {
         let mut modules = TestModules::default();
         modules.add(template_id.clone(), &file.declarations);
         let resolver = modules.build().unwrap();
-        let src = NamedSource::new("lib.gcl", Arc::new(source.to_string()));
+        let src = crate::source_registry::SourceRegistry::new()
+            .register("lib.gcl", std::sync::Arc::new(source.to_string()));
         let declaration = type_named(&file, "Box");
         let template = lower_type_declaration(
             declaration,
             ResolvedStructTypeName::for_test(template_id.clone(), declaration.name.value.clone()),
             declaration.name.span,
-            &src,
+            src,
             NominalLowering {
                 resolver: &resolver,
                 cancellation: &crate::cancellation::CancellationToken::unbounded(),

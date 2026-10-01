@@ -1,15 +1,17 @@
 //! Inference of built-in function calls: arity, dispatch, and the linear-algebra and complex families.
 
 use crate::hir::expr::{Expr, FunctionRef};
-use std::sync::Arc;
-
-use miette::NamedSource;
+use crate::outcome::Outcome;
+use crate::semantic_error::dimension::DimensionError;
+use crate::semantic_error::evaluation::EvaluationError;
+use crate::semantic_error::name::NameError;
+use crate::source_id::SourceId;
 
 use crate::builtin::{
     AggregationFn, BuiltinArity, BuiltinFn, DatetimeFn, ScalarFn, ValueAggregation,
 };
 use crate::dimension::{Dimension, Rational};
-use crate::graphcal_error::GraphcalError;
+use crate::semantic_error::SemanticError;
 use crate::syntax::span::Span;
 
 use crate::semantic::checked_type::{CheckedType, Symbolic};
@@ -29,22 +31,26 @@ fn check_builtin_arity(
     function: BuiltinFn,
     got: usize,
     span: Span,
-    src: &NamedSource<Arc<String>>,
-) -> Result<(), GraphcalError> {
+    src: SourceId,
+) -> Result<(), SemanticError> {
     match function.entry().arity() {
-        BuiltinArity::Exact(expected) if got != expected => Err(GraphcalError::WrongArity {
-            name: crate::graphcal_error::CalledFunction::Builtin(function),
-            expected,
-            got,
-            src: src.clone(),
-            span: span.into(),
-        }),
+        BuiltinArity::Exact(expected) if got != expected => Err(SemanticError::located(
+            src,
+            span,
+            NameError::WrongArity {
+                name: crate::semantic_error::name::CalledFunction::Builtin(function),
+                expected,
+                got,
+            },
+        )),
         arity @ BuiltinArity::OptionalTrailing { .. } if !arity.accepts(got) => {
-            Err(GraphcalError::EvalError {
-                message: format!("{function}() expects {arity} arguments, got {got}"),
-                src: src.clone(),
-                span: span.into(),
-            })
+            Err(SemanticError::located(
+                src,
+                span,
+                EvaluationError::Failed {
+                    message: format!("{function}() expects {arity} arguments, got {got}"),
+                },
+            ))
         }
         BuiltinArity::Exact(_) | BuiltinArity::OptionalTrailing { .. } => Ok(()),
     }
@@ -56,7 +62,7 @@ impl Infer<'_> {
         function: crate::builtin::LinearAlgebraFn,
         callee_span: Span,
         args: &[Expr],
-    ) -> Result<CheckedType<Symbolic>, GraphcalError> {
+    ) -> Result<CheckedType<Symbolic>, Outcome<SemanticError>> {
         let argument_types = args
             .iter()
             .map(|arg| self.infer_arg(arg))
@@ -67,71 +73,41 @@ impl Infer<'_> {
     })
     .map_err(|error| match error {
         LinearAlgebraTypeError::ExpectedIndexedQuantity { argument, rank } => {
-            GraphcalError::DimensionMismatch {
-                expected: format!("rank-{rank} indexed quantity"),
-                found: format_checked_type(&argument_types[argument], self.env.registry),
-                help: format!(
+            SemanticError::located(self.env.src, args[argument].span, DimensionError::DimensionMismatch { expected: format!("rank-{rank} indexed quantity"), found: format_checked_type(&argument_types[argument], self.env.registry), help: format!(
                     "{}() requires argument {} to be a rank-{rank} indexed quantity",
                     function.as_str(),
                     argument.saturating_add(1)
-                ),
-                src: self.env.src.clone(),
-                span: args[argument].span.into(),
-            }
+                ) })
         }
         LinearAlgebraTypeError::AxisMismatch {
             argument,
             expected,
             found,
-        } => GraphcalError::LinearAlgebraShapeMismatch {
-            function,
-            expected: expected.to_string(),
-            found: found.to_string(),
-            help: "linear-algebra contractions match axes by typed identity; use the same declared index (or the same Fin(N) structural index) at both contracted positions"
-                .to_string(),
-            src: self.env.src.clone(),
-            span: args[argument].span.into(),
-        },
+        } => SemanticError::located(self.env.src, args[argument].span, DimensionError::LinearAlgebraShapeMismatch { function, expected: expected.to_string(), found: found.to_string(), help: "linear-algebra contractions match axes by typed identity; use the same declared index (or the same Fin(N) structural index) at both contracted positions"
+                .to_string() }),
         LinearAlgebraTypeError::CardinalityMismatch {
             argument,
             expected,
             found,
-        } => GraphcalError::LinearAlgebraShapeMismatch {
-            function,
-            expected: format!("an axis with exactly {expected} entries"),
-            found: found.map_or_else(
+        } => SemanticError::located(self.env.src, args[argument].span, DimensionError::LinearAlgebraShapeMismatch { function, expected: format!("an axis with exactly {expected} entries"), found: found.map_or_else(
                 || "an axis whose cardinality is not concrete".to_string(),
                 |cardinality| format!("an axis with {cardinality} entries"),
-            ),
-            help: format!("{}() is defined only for three-component vectors", function.as_str()),
-            src: self.env.src.clone(),
-            span: args[argument].span.into(),
-        },
+            ), help: format!("{}() is defined only for three-component vectors", function.as_str()) }),
         LinearAlgebraTypeError::ConcreteCardinalityRequired { argument } => {
-            GraphcalError::LinearAlgebraShapeMismatch {
-                function,
-                expected: "an axis with a concrete cardinality".to_string(),
-                found: "an axis whose cardinality is still generic".to_string(),
-                help: format!(
+            SemanticError::located(self.env.src, args[argument].span, DimensionError::LinearAlgebraShapeMismatch { function, expected: "an axis with a concrete cardinality".to_string(), found: "an axis whose cardinality is still generic".to_string(), help: format!(
                     "{}() needs a concrete matrix size because its result dimension depends on that size",
                     function.as_str()
-                ),
-                src: self.env.src.clone(),
-                span: args[argument].span.into(),
-            }
+                ) })
         }
-        LinearAlgebraTypeError::DimensionOverflow => GraphcalError::DimensionOverflow {
-            src: self.env.src.clone(),
-            span: callee_span.into(),
-        },
-    })
+        LinearAlgebraTypeError::DimensionOverflow => SemanticError::located(self.env.src, callee_span, DimensionError::DimensionOverflow),
+    }).map_err(Outcome::Failed)
     }
 
     pub(super) fn infer_hir_fn_call(
         &self,
         callee: &crate::syntax::span::Spanned<FunctionRef>,
         args: &[Expr],
-    ) -> Result<CheckedType<Symbolic>, GraphcalError> {
+    ) -> Result<CheckedType<Symbolic>, Outcome<SemanticError>> {
         let (builtin, epoch_scale) = match &callee.value {
             FunctionRef::Builtin(builtin) => (builtin.function(), None),
             FunctionRef::Epoch { scale } => (BuiltinFn::EPOCH, Some(scale.value)),
@@ -148,22 +124,28 @@ impl Infer<'_> {
             BuiltinFn::Aggregation(kind) => {
                 let arg_type = self.infer_arg(&args[0])?;
                 let CheckedType::Indexed { element, index } = &arg_type else {
-                    return Err(GraphcalError::DimensionMismatch {
-                        expected: "indexed collection".to_string(),
-                        found: format_checked_type(&arg_type, self.env.registry),
-                        help: format!("{}() requires an indexed value", builtin.as_str()),
-                        src: self.env.src.clone(),
-                        span: args[0].span.into(),
-                    });
+                    return Err(SemanticError::located(
+                        self.env.src,
+                        args[0].span,
+                        DimensionError::DimensionMismatch {
+                            expected: "indexed collection".to_string(),
+                            found: format_checked_type(&arg_type, self.env.registry),
+                            help: format!("{}() requires an indexed value", builtin.as_str()),
+                        },
+                    )
+                    .into());
                 };
                 let rank = arg_type.indexed_rank();
                 if rank > 1 {
-                    return Err(GraphcalError::MultiAxisAggregation {
-                        function: kind,
-                        rank,
-                        src: self.env.src.clone(),
-                        span: args[0].span.into(),
-                    });
+                    return Err(SemanticError::located(
+                        self.env.src,
+                        args[0].span,
+                        DimensionError::MultiAxisAggregation {
+                            function: kind,
+                            rank,
+                        },
+                    )
+                    .into());
                 }
                 if kind == AggregationFn::Value(ValueAggregation::Count) {
                     return Ok(CheckedType::Int);
@@ -173,30 +155,36 @@ impl Infer<'_> {
                     // element-type requirement below still applies, so check it
                     // before returning.
                     if element.quantity_dimension().is_none() {
-                        return Err(GraphcalError::DimensionMismatch {
+                        return Err(SemanticError::located(
+                            self.env.src,
+                            args[0].span,
+                            DimensionError::DimensionMismatch {
+                                expected: "indexed quantity collection".to_string(),
+                                found: format_checked_type(element, self.env.registry),
+                                help: format!(
+                                    "{}() requires every indexed element to be quantity",
+                                    builtin.as_str()
+                                ),
+                            },
+                        )
+                        .into());
+                    }
+                    return Ok(CheckedType::Key(index.clone()));
+                }
+                let Some(dimension) = element.quantity_dimension().cloned() else {
+                    return Err(SemanticError::located(
+                        self.env.src,
+                        args[0].span,
+                        DimensionError::DimensionMismatch {
                             expected: "indexed quantity collection".to_string(),
                             found: format_checked_type(element, self.env.registry),
                             help: format!(
                                 "{}() requires every indexed element to be quantity",
                                 builtin.as_str()
                             ),
-                            src: self.env.src.clone(),
-                            span: args[0].span.into(),
-                        });
-                    }
-                    return Ok(CheckedType::Key(index.clone()));
-                }
-                let Some(dimension) = element.quantity_dimension().cloned() else {
-                    return Err(GraphcalError::DimensionMismatch {
-                        expected: "indexed quantity collection".to_string(),
-                        found: format_checked_type(element, self.env.registry),
-                        help: format!(
-                            "{}() requires every indexed element to be quantity",
-                            builtin.as_str()
-                        ),
-                        src: self.env.src.clone(),
-                        span: args[0].span.into(),
-                    });
+                        },
+                    )
+                    .into());
                 };
                 if kind != AggregationFn::Value(ValueAggregation::Product)
                     || dimension.is_dimensionless()
@@ -207,20 +195,26 @@ impl Infer<'_> {
                     index,
                     self.env.tir,
                 )
-                .ok_or_else(|| GraphcalError::AggregationCardinalityUnknown {
-                    function: kind,
-                    src: self.env.src.clone(),
-                    span: args[0].span.into(),
+                .ok_or_else(|| {
+                    SemanticError::located(
+                        self.env.src,
+                        args[0].span,
+                        DimensionError::AggregationCardinalityUnknown { function: kind },
+                    )
                 })?;
                 i32::try_from(cardinality)
                     .ok()
                     .and_then(|exponent| Rational::integer(exponent).ok())
                     .and_then(|exponent| dimension.pow(exponent).ok())
                     .map(CheckedType::Quantity)
-                    .ok_or_else(|| GraphcalError::DimensionOverflow {
-                        src: self.env.src.clone(),
-                        span: args[0].span.into(),
+                    .ok_or_else(|| {
+                        SemanticError::located(
+                            self.env.src,
+                            args[0].span,
+                            DimensionError::DimensionOverflow,
+                        )
                     })
+                    .map_err(Outcome::Failed)
             }
             BuiltinFn::LinearAlgebra(function) => {
                 self.infer_hir_linear_algebra_call(function, callee.span, args)
@@ -243,16 +237,19 @@ impl Infer<'_> {
                         .is_some_and(Dimension::is_dimensionless) => {}
                     CheckedType::Int => {}
                     _ => {
-                        return Err(GraphcalError::DimensionMismatch {
-                            expected: "Dimensionless or Int".to_string(),
-                            found: format_checked_type(&arg_type, self.env.registry),
-                            help: format!(
-                                "{}() requires a dimensionless numeric argument",
-                                builtin.as_str()
-                            ),
-                            src: self.env.src.clone(),
-                            span: args[0].span.into(),
-                        });
+                        return Err(SemanticError::located(
+                            self.env.src,
+                            args[0].span,
+                            DimensionError::DimensionMismatch {
+                                expected: "Dimensionless or Int".to_string(),
+                                found: format_checked_type(&arg_type, self.env.registry),
+                                help: format!(
+                                    "{}() requires a dimensionless numeric argument",
+                                    builtin.as_str()
+                                ),
+                            },
+                        )
+                        .into());
                     }
                 }
                 Ok(CheckedType::Datetime(
@@ -272,17 +269,19 @@ impl Infer<'_> {
         &self,
         function: crate::builtin::ComplexFn,
         args: &[Expr],
-    ) -> Result<CheckedType<Symbolic>, GraphcalError> {
+    ) -> Result<CheckedType<Symbolic>, Outcome<SemanticError>> {
         use crate::tir::dim_check::infer::complex::ComplexTypeError;
 
         let inferred = args
             .iter()
             .map(|arg| self.infer_arg(arg))
             .collect::<Result<Vec<_>, _>>()?;
-        crate::tir::dim_check::infer::complex::infer(function, &inferred).map_err(|error| {
-            match error {
-                ComplexTypeError::ExpectedQuantity { argument } => {
-                    GraphcalError::DimensionMismatch {
+        crate::tir::dim_check::infer::complex::infer(function, &inferred)
+            .map_err(|error| match error {
+                ComplexTypeError::ExpectedQuantity { argument } => SemanticError::located(
+                    self.env.src,
+                    args[argument].span,
+                    DimensionError::DimensionMismatch {
                         expected: "quantity type".to_string(),
                         found: format_checked_type(&inferred[argument], self.env.registry),
                         help: format!(
@@ -290,59 +289,59 @@ impl Infer<'_> {
                             function.as_str(),
                             argument.saturating_add(1)
                         ),
-                        src: self.env.src.clone(),
-                        span: args[argument].span.into(),
-                    }
-                }
-                ComplexTypeError::ExpectedComplex { argument } => {
-                    GraphcalError::DimensionMismatch {
+                    },
+                ),
+                ComplexTypeError::ExpectedComplex { argument } => SemanticError::located(
+                    self.env.src,
+                    args[argument].span,
+                    DimensionError::DimensionMismatch {
                         expected: "Complex<D>".to_string(),
                         found: format_checked_type(&inferred[argument], self.env.registry),
                         help: format!("{}() requires a complex quantity", function.as_str()),
-                        src: self.env.src.clone(),
-                        span: args[argument].span.into(),
-                    }
-                }
-                ComplexTypeError::ExpectedQuantityOrComplex { argument } => {
-                    GraphcalError::DimensionMismatch {
+                    },
+                ),
+                ComplexTypeError::ExpectedQuantityOrComplex { argument } => SemanticError::located(
+                    self.env.src,
+                    args[argument].span,
+                    DimensionError::DimensionMismatch {
                         expected: "a real or complex quantity".to_string(),
                         found: format_checked_type(&inferred[argument], self.env.registry),
                         help: format!(
                             "{}() requires a real or complex quantity",
                             function.as_str()
                         ),
-                        src: self.env.src.clone(),
-                        span: args[argument].span.into(),
-                    }
-                }
-                ComplexTypeError::DimensionMismatch { left, right } => {
-                    GraphcalError::DimensionMismatch {
+                    },
+                ),
+                ComplexTypeError::DimensionMismatch { left, right } => SemanticError::located(
+                    self.env.src,
+                    args[right].span,
+                    DimensionError::DimensionMismatch {
                         expected: format_checked_type(&inferred[left], self.env.registry),
                         found: format_checked_type(&inferred[right], self.env.registry),
                         help: "real and imaginary components must have the same dimension"
                             .to_string(),
-                        src: self.env.src.clone(),
-                        span: args[right].span.into(),
-                    }
-                }
-                ComplexTypeError::ExpectedAngle { argument } => GraphcalError::DimensionMismatch {
-                    expected: "Angle".to_string(),
-                    found: format_checked_type(&inferred[argument], self.env.registry),
-                    help: "polar() phase must be an Angle quantity".to_string(),
-                    src: self.env.src.clone(),
-                    span: args[argument].span.into(),
-                },
-                ComplexTypeError::ExpectedDimensionless { argument } => {
-                    GraphcalError::DimensionMismatch {
+                    },
+                ),
+                ComplexTypeError::ExpectedAngle { argument } => SemanticError::located(
+                    self.env.src,
+                    args[argument].span,
+                    DimensionError::DimensionMismatch {
+                        expected: "Angle".to_string(),
+                        found: format_checked_type(&inferred[argument], self.env.registry),
+                        help: "polar() phase must be an Angle quantity".to_string(),
+                    },
+                ),
+                ComplexTypeError::ExpectedDimensionless { argument } => SemanticError::located(
+                    self.env.src,
+                    args[argument].span,
+                    DimensionError::DimensionMismatch {
                         expected: "Dimensionless or Complex<Dimensionless>".to_string(),
                         found: format_checked_type(&inferred[argument], self.env.registry),
                         help: "exp() requires a dimensionless real or complex argument".to_string(),
-                        src: self.env.src.clone(),
-                        span: args[argument].span.into(),
-                    }
-                }
-            }
-        })
+                    },
+                ),
+            })
+            .map_err(Outcome::Failed)
     }
 
     fn infer_hir_builtin_fn(
@@ -350,7 +349,7 @@ impl Infer<'_> {
         name: ScalarFn,
         callee_span: Span,
         args: &[Expr],
-    ) -> Result<CheckedType<Symbolic>, GraphcalError> {
+    ) -> Result<CheckedType<Symbolic>, Outcome<SemanticError>> {
         let func = crate::semantic::scalar_function::scalar_function(name);
         let dimension_args = args
             .iter()
@@ -360,7 +359,7 @@ impl Infer<'_> {
                     expect_quantity(&inferred, self.env.registry, self.env.src, arg.span)?;
                 Ok(crate::syntax::span::Spanned::new(dimension, arg.span))
             })
-            .collect::<Result<Vec<_>, GraphcalError>>()?;
+            .collect::<Result<Vec<_>, Outcome<SemanticError>>>()?;
         infer_fn_dim(
             name.into(),
             func.signature(),
@@ -370,5 +369,6 @@ impl Infer<'_> {
             self.env.src,
         )
         .map(CheckedType::Quantity)
+        .map_err(Outcome::Failed)
     }
 }

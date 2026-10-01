@@ -1,11 +1,11 @@
 //! Inference of conditionals, unary and binary operators, and display conversions.
 
 use crate::hir::expr::{Expr, ExprKind, ResolvedUnitExpr};
-use std::sync::Arc;
+use crate::outcome::Outcome;
+use crate::semantic_error::dimension::DimensionError;
+use crate::source_id::SourceId;
 
-use miette::NamedSource;
-
-use crate::graphcal_error::GraphcalError;
+use crate::semantic_error::SemanticError;
 use crate::syntax::ast::UnaryOp;
 
 use crate::semantic::checked_type::{CheckedType, Symbolic};
@@ -20,7 +20,7 @@ impl Infer<'_> {
         condition: &Expr,
         then_branch: &Expr,
         else_branch: &Expr,
-    ) -> Result<CheckedType<Symbolic>, GraphcalError> {
+    ) -> Result<CheckedType<Symbolic>, Outcome<SemanticError>> {
         let infer = |expr: &Expr| self.infer_hir_type(expr);
         let cond_type = infer(condition)?;
         let then_type = infer(then_branch)?;
@@ -41,13 +41,14 @@ impl Infer<'_> {
             self.env.registry,
             self.env.src,
         )
+        .map_err(Outcome::Failed)
     }
 
     pub(super) fn infer_hir_unary(
         &self,
         op: crate::desugar::desugared_ast::UnaryOp,
         operand: &Expr,
-    ) -> Result<CheckedType<Symbolic>, GraphcalError> {
+    ) -> Result<CheckedType<Symbolic>, Outcome<SemanticError>> {
         let operand_type = self.infer_hir_type(operand)?;
         rules::unary_rule(
             op,
@@ -58,6 +59,7 @@ impl Infer<'_> {
             self.env.registry,
             self.env.src,
         )
+        .map_err(Outcome::Failed)
     }
 }
 
@@ -94,7 +96,7 @@ impl Infer<'_> {
         op: crate::desugar::desugared_ast::BinOp,
         lhs: &Expr,
         rhs: &Expr,
-    ) -> Result<CheckedType<Symbolic>, GraphcalError> {
+    ) -> Result<CheckedType<Symbolic>, Outcome<SemanticError>> {
         use crate::desugar::desugared_ast::BinOp;
         let lhs_type = self.infer_hir_type(lhs)?;
         let rhs_type = self.infer_hir_type(rhs)?;
@@ -121,6 +123,7 @@ impl Infer<'_> {
             self.env.registry,
             self.env.src,
         )
+        .map_err(Outcome::Failed)
     }
 }
 
@@ -131,18 +134,16 @@ impl Infer<'_> {
 /// target ever took effect, so the inner one is either a typo or dead code.
 /// Parens are flattened in HIR, so a direct nested `Convert`/`DisplayTimezone`
 /// operand is exactly the parenthesized-chain shape.
-fn reject_nested_conversion(
-    inner: &Expr,
-    src: &NamedSource<Arc<String>>,
-) -> Result<(), GraphcalError> {
+fn reject_nested_conversion(inner: &Expr, src: SourceId) -> Result<(), SemanticError> {
     if matches!(
         inner.kind(),
         ExprKind::Convert { .. } | ExprKind::DisplayTimezone { .. }
     ) {
-        return Err(GraphcalError::NestedConversion {
-            src: src.clone(),
-            span: inner.span.into(),
-        });
+        return Err(SemanticError::located(
+            src,
+            inner.span,
+            DimensionError::NestedConversion,
+        ));
     }
     Ok(())
 }
@@ -152,7 +153,7 @@ impl Infer<'_> {
         &self,
         inner: &Expr,
         target: &ResolvedUnitExpr,
-    ) -> Result<CheckedType<Symbolic>, GraphcalError> {
+    ) -> Result<CheckedType<Symbolic>, Outcome<SemanticError>> {
         reject_nested_conversion(inner, self.env.src)?;
         let inner_type = self.infer_hir_type(inner)?;
         // `->` distributes element-wise over indexed values (#648 U1): the quantity
@@ -173,12 +174,15 @@ impl Infer<'_> {
             rules::resolve_unit_dimension_or_diagnose(target, self.env.tir, self.env.src)?;
 
         if expr_dim != target_dim {
-            return Err(GraphcalError::ConversionDimensionMismatch {
-                target: self.env.registry.dimensions.format_dimension(&target_dim),
-                expr_dim: self.env.registry.dimensions.format_dimension(&expr_dim),
-                src: self.env.src.clone(),
-                span: target.span.into(),
-            });
+            return Err(SemanticError::located(
+                self.env.src,
+                target.span,
+                DimensionError::ConversionDimensionMismatch {
+                    target: self.env.registry.dimensions.format_dimension(&target_dim),
+                    expr_dim: self.env.registry.dimensions.format_dimension(&expr_dim),
+                },
+            )
+            .into());
         }
 
         Ok(inner_type)
@@ -188,19 +192,22 @@ impl Infer<'_> {
         &self,
         inner: &Expr,
         timezone: &crate::semantic::time_zone::IanaTimeZoneId,
-    ) -> Result<CheckedType<Symbolic>, GraphcalError> {
+    ) -> Result<CheckedType<Symbolic>, Outcome<SemanticError>> {
         reject_nested_conversion(inner, self.env.src)?;
         let inner_type = self.infer_hir_type(inner)?;
         if !matches!(&inner_type, CheckedType::Datetime(_)) {
-            return Err(GraphcalError::DimensionMismatch {
-                expected: "Datetime".to_string(),
-                found: format_checked_type(&inner_type, self.env.registry),
-                help: format!(
-                    "timezone display `-> \"{timezone}\"` requires a Datetime expression"
-                ),
-                src: self.env.src.clone(),
-                span: inner.span.into(),
-            });
+            return Err(SemanticError::located(
+                self.env.src,
+                inner.span,
+                DimensionError::DimensionMismatch {
+                    expected: "Datetime".to_string(),
+                    found: format_checked_type(&inner_type, self.env.registry),
+                    help: format!(
+                        "timezone display `-> \"{timezone}\"` requires a Datetime expression"
+                    ),
+                },
+            )
+            .into());
         }
         Ok(inner_type)
     }

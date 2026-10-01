@@ -16,12 +16,25 @@
 pub struct SourceId {
     registry: u64,
     index: usize,
+    /// Byte length of the source text, so a diagnostic about the source as a
+    /// whole can be located without the text itself.
+    len: usize,
 }
 
 impl SourceId {
     /// Only source registries mint ids.
-    pub(crate) const fn new(registry: u64, index: usize) -> Self {
-        Self { registry, index }
+    pub(crate) const fn new(registry: u64, index: usize, len: usize) -> Self {
+        Self {
+            registry,
+            index,
+            len,
+        }
+    }
+
+    /// The span covering the whole source text.
+    #[must_use]
+    pub const fn whole_span(self) -> crate::syntax::span::Span {
+        crate::syntax::span::Span::new(0, self.len)
     }
 
     /// Identity of the registry that issued this id.

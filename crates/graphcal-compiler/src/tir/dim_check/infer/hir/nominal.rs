@@ -3,10 +3,13 @@
 use crate::hir::expr::{Expr, FieldInit};
 use crate::hir::nominal::{NominalConstructor, NominalField, NominalTypeDef};
 use crate::hir::types::GenericArg;
+use crate::outcome::Outcome;
 use crate::resolved_name::ResolvedConstructorName;
+use crate::semantic_error::evaluation::EvaluationError;
+use crate::semantic_error::structure::StructError;
 
-use crate::graphcal_error::GraphcalError;
 use crate::semantic::checked_type::{StructTypeRef, Symbolic};
+use crate::semantic_error::SemanticError;
 use crate::syntax::type_name::FieldName;
 
 use crate::semantic::checked_type::CheckedType;
@@ -31,14 +34,17 @@ impl Infer<'_> {
         &self,
         inner: &Expr,
         field: &crate::syntax::span::Spanned<FieldName>,
-    ) -> Result<CheckedType<Symbolic>, GraphcalError> {
+    ) -> Result<CheckedType<Symbolic>, Outcome<SemanticError>> {
         let inner_type = self.infer_hir_type(inner)?;
         let CheckedType::Struct(type_name, type_args) = &inner_type else {
-            return Err(GraphcalError::NotAStruct {
-                name: format_checked_type(&inner_type, self.env.registry),
-                src: self.env.src.clone(),
-                span: inner.span.into(),
-            });
+            return Err(SemanticError::located(
+                self.env.src,
+                inner.span,
+                StructError::NotAStruct {
+                    name: format_checked_type(&inner_type, self.env.registry),
+                },
+            )
+            .into());
         };
         self.check_type_override_dependency(
             type_name.resolved(),
@@ -49,10 +55,14 @@ impl Infer<'_> {
         )?;
         let type_def =
             struct_type_def_for_inferred(type_name, Some(self.env.dag), self.env.registry)
-                .ok_or_else(|| GraphcalError::UnknownStructType {
-                    name: type_name.to_string(),
-                    src: self.env.src.clone(),
-                    span: inner.span.into(),
+                .ok_or_else(|| {
+                    SemanticError::located(
+                        self.env.src,
+                        inner.span,
+                        StructError::UnknownStructType {
+                            name: type_name.to_string(),
+                        },
+                    )
                 })?;
         let member = record_member(type_def).ok_or_else(|| {
             let detail = if type_def.is_required() {
@@ -63,23 +73,28 @@ impl Infer<'_> {
                     type_name.name()
                 )
             };
-            GraphcalError::NotAStruct {
-                name: detail,
-                src: self.env.src.clone(),
-                span: inner.span.into(),
-            }
+            SemanticError::located(
+                self.env.src,
+                inner.span,
+                StructError::NotAStruct { name: detail },
+            )
         })?;
         if !member
             .fields()
             .iter()
             .any(|field_def| field_def.name() == &field.value)
         {
-            return Err(GraphcalError::UnknownField {
-                type_name: type_name.name().clone(),
-                member: crate::graphcal_error::NominalMember::Field(field.value.clone()),
-                src: self.env.src.clone(),
-                span: field.span.into(),
-            });
+            return Err(SemanticError::located(
+                self.env.src,
+                field.span,
+                StructError::UnknownField {
+                    type_name: type_name.name().clone(),
+                    member: crate::semantic_error::structure::NominalMember::Field(
+                        field.value.clone(),
+                    ),
+                },
+            )
+            .into());
         }
         resolved_field_type(
             &resolved_type_field_key(type_name.resolved(), member, &field.value),
@@ -90,6 +105,7 @@ impl Infer<'_> {
             field.span,
         )
         .map(|ty| ty.to_symbolic())
+        .map_err(Outcome::Failed)
     }
 
     pub(super) fn infer_hir_constructor_call(
@@ -98,7 +114,7 @@ impl Infer<'_> {
         callee: &crate::syntax::span::Spanned<ResolvedConstructorName>,
         constructor_generic_args: &[GenericArg],
         fields: &[FieldInit],
-    ) -> Result<CheckedType<Symbolic>, GraphcalError> {
+    ) -> Result<CheckedType<Symbolic>, Outcome<SemanticError>> {
         let target = self.env.resolved_constructor(&callee.value, callee.span)?;
         self.check_type_override_dependency(
             target.owning_type(),
@@ -128,15 +144,18 @@ impl Infer<'_> {
         let mut seen_fields = std::collections::HashSet::new();
         for field in fields {
             if !seen_fields.insert(field.name.value.clone()) {
-                return Err(GraphcalError::EvalError {
-                    message: format!(
-                        "duplicate field `{}` in constructor `{}`",
-                        field.name.value,
-                        variant.name()
-                    ),
-                    src: self.env.src.clone(),
-                    span: field.name.span.into(),
-                });
+                return Err(SemanticError::located(
+                    self.env.src,
+                    field.name.span,
+                    EvaluationError::Failed {
+                        message: format!(
+                            "duplicate field `{}` in constructor `{}`",
+                            field.name.value,
+                            variant.name()
+                        ),
+                    },
+                )
+                .into());
             }
         }
         let extra: Vec<FieldName> = provided_names
@@ -145,12 +164,15 @@ impl Infer<'_> {
             .map(|name| (*name).clone())
             .collect();
         if !extra.is_empty() {
-            return Err(GraphcalError::ExtraFields {
-                type_name: owning_type_name,
-                extra,
-                src: self.env.src.clone(),
-                span: expr.span.into(),
-            });
+            return Err(SemanticError::located(
+                self.env.src,
+                expr.span,
+                StructError::ExtraFields {
+                    type_name: owning_type_name,
+                    extra,
+                },
+            )
+            .into());
         }
 
         let provided_set: std::collections::HashSet<&FieldName> =
@@ -162,12 +184,15 @@ impl Infer<'_> {
             .map(|field| field.name().clone())
             .collect();
         if !missing.is_empty() {
-            return Err(GraphcalError::MissingFields {
-                type_name: owning_type_name,
-                missing,
-                src: self.env.src.clone(),
-                span: expr.span.into(),
-            });
+            return Err(SemanticError::located(
+                self.env.src,
+                expr.span,
+                StructError::MissingFields {
+                    type_name: owning_type_name,
+                    missing,
+                },
+            )
+            .into());
         }
 
         for field_init in fields {
@@ -175,14 +200,18 @@ impl Infer<'_> {
                 .fields()
                 .iter()
                 .find(|field| field.name() == &field_init.name.value)
-                .ok_or_else(|| GraphcalError::EvalError {
-                    message: format!(
-                        "internal: unknown field `{}` in constructor `{}`",
-                        field_init.name.value,
-                        variant.name()
-                    ),
-                    src: self.env.src.clone(),
-                    span: field_init.name.span.into(),
+                .ok_or_else(|| {
+                    SemanticError::located(
+                        self.env.src,
+                        field_init.name.span,
+                        EvaluationError::Failed {
+                            message: format!(
+                                "internal: unknown field `{}` in constructor `{}`",
+                                field_init.name.value,
+                                variant.name()
+                            ),
+                        },
+                    )
                 })?;
             let value_type = self.infer_hir_type(&field_init.value)?;
             let expected = resolved_field_type(
@@ -197,14 +226,17 @@ impl Infer<'_> {
             if value_type != expected {
                 let (expected, found) =
                     format_distinct_types(&expected, &value_type, self.env.registry);
-                return Err(GraphcalError::FieldDimensionMismatch {
-                    type_name: owning_type_name,
-                    field_name: field_init.name.value.clone(),
-                    expected,
-                    found,
-                    src: self.env.src.clone(),
-                    span: field_init.name.span.into(),
-                });
+                return Err(SemanticError::located(
+                    self.env.src,
+                    field_init.name.span,
+                    StructError::FieldDimensionMismatch {
+                        type_name: owning_type_name,
+                        field_name: field_init.name.value.clone(),
+                        expected,
+                        found,
+                    },
+                )
+                .into());
             }
         }
 

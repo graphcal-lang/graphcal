@@ -1,13 +1,14 @@
-use std::sync::Arc;
-
-use miette::NamedSource;
-
 use crate::desugar::desugared_ast::MulDivOp;
 use crate::dimension::Dimension;
-use crate::graphcal_error::GraphcalError;
 use crate::hir::nominal::{NominalGenericParam, NominalTypeDef};
 use crate::resolve::error::ModuleResolveError;
 use crate::resolved_name::{ResolvedDimName, ResolvedIndexName, ResolvedStructTypeName};
+use crate::semantic_error::SemanticError;
+use crate::semantic_error::dimension::DimensionError;
+use crate::semantic_error::evaluation::EvaluationError;
+use crate::semantic_error::index::IndexError;
+use crate::semantic_error::structure::StructError;
+use crate::source_id::SourceId;
 use crate::syntax::ast::GenericConstraint;
 use crate::syntax::index_name::IndexName;
 use crate::syntax::names::NamePath;
@@ -24,31 +25,29 @@ use super::{
 
 pub(super) fn module_resolve_error(
     err: &ModuleResolveError,
-    src: &NamedSource<Arc<String>>,
+    src: SourceId,
     span: Span,
-) -> GraphcalError {
-    GraphcalError::EvalError {
-        message: err.to_string(),
-        src: src.clone(),
-        span: span.into(),
-    }
+) -> SemanticError {
+    SemanticError::located(
+        src,
+        span,
+        EvaluationError::Failed {
+            message: err.to_string(),
+        },
+    )
 }
 
-pub(super) fn internal_error(
-    message: String,
-    src: &NamedSource<Arc<String>>,
-    span: Span,
-) -> GraphcalError {
-    GraphcalError::InternalError {
+pub(super) fn internal_error(message: String, src: SourceId, span: Span) -> SemanticError {
+    SemanticError::internal_error(
         message,
-        src: src.clone(),
-        span: span.into(),
-    }
+        src,
+        crate::diagnostic_anchor::DiagnosticAnchor::Source(span),
+    )
 }
 
 #[derive(Clone, Copy)]
 struct HirTypeResolutionContext<'a> {
-    src: &'a NamedSource<Arc<String>>,
+    src: SourceId,
     project_types: &'a ProjectTypeStore,
 }
 
@@ -61,17 +60,17 @@ struct HirTypeResolutionContext<'a> {
 /// source-path lookup itself.
 pub fn resolve_hir_decl_type(
     decl_type: &crate::hir::types::DeclType,
-    src: &NamedSource<Arc<String>>,
+    src: SourceId,
     module_ctx: ModuleTypeContext<'_>,
-) -> Result<ResolvedDeclType, GraphcalError> {
+) -> Result<ResolvedDeclType, SemanticError> {
     resolve_hir_decl_type_with_project_types(decl_type, src, module_ctx.types)
 }
 
 pub(super) fn resolve_hir_decl_type_with_project_types(
     decl_type: &crate::hir::types::DeclType,
-    src: &NamedSource<Arc<String>>,
+    src: SourceId,
     project_types: &ProjectTypeStore,
-) -> Result<ResolvedDeclType, GraphcalError> {
+) -> Result<ResolvedDeclType, SemanticError> {
     let ctx = HirTypeResolutionContext { src, project_types };
     match decl_type {
         crate::hir::types::DeclType::Value(value_type) => {
@@ -89,7 +88,7 @@ pub(super) fn resolve_hir_decl_type_with_project_types(
 fn resolve_hir_value_type(
     value_type: &crate::hir::types::ValueType,
     ctx: HirTypeResolutionContext<'_>,
-) -> Result<ResolvedValueType, GraphcalError> {
+) -> Result<ResolvedValueType, SemanticError> {
     match &value_type.kind {
         crate::hir::types::ValueTypeKind::Builtin(builtin) => {
             Ok(resolve_hir_builtin_type(*builtin))
@@ -137,14 +136,18 @@ fn hir_dimension(
     name: &ResolvedDimName,
     span: Span,
     ctx: HirTypeResolutionContext<'_>,
-) -> Result<Dimension, GraphcalError> {
+) -> Result<Dimension, SemanticError> {
     ctx.project_types
         .get_dimension(name)
         .cloned()
-        .ok_or_else(|| GraphcalError::UnknownDimension {
-            name: NamePath::from(name.atom().clone()),
-            src: ctx.src.clone(),
-            span: span.into(),
+        .ok_or_else(|| {
+            SemanticError::located(
+                ctx.src,
+                span,
+                DimensionError::UnknownDimension {
+                    name: NamePath::from(name.atom().clone()),
+                },
+            )
         })
 }
 
@@ -152,15 +155,17 @@ fn hir_index_name(
     name: &ResolvedIndexName,
     span: Span,
     ctx: HirTypeResolutionContext<'_>,
-) -> Result<IndexName, GraphcalError> {
+) -> Result<IndexName, SemanticError> {
     if ctx.project_types.get_index(name).is_some() {
         Ok(name.to_unowned_def_name())
     } else {
-        Err(GraphcalError::UnknownIndex {
-            name: name.to_unowned_def_name().into(),
-            src: ctx.src.clone(),
-            span: span.into(),
-        })
+        Err(SemanticError::located(
+            ctx.src,
+            span,
+            IndexError::UnknownIndex {
+                name: name.to_unowned_def_name().into(),
+            },
+        ))
     }
 }
 
@@ -168,20 +173,22 @@ fn hir_struct_type_def<'a>(
     name: &ResolvedStructTypeName,
     span: Span,
     ctx: HirTypeResolutionContext<'a>,
-) -> Result<&'a NominalTypeDef, GraphcalError> {
-    ctx.project_types
-        .get_struct_type(name)
-        .ok_or_else(|| GraphcalError::UnknownStructType {
-            name: name.to_string(),
-            src: ctx.src.clone(),
-            span: span.into(),
-        })
+) -> Result<&'a NominalTypeDef, SemanticError> {
+    ctx.project_types.get_struct_type(name).ok_or_else(|| {
+        SemanticError::located(
+            ctx.src,
+            span,
+            StructError::UnknownStructType {
+                name: name.to_string(),
+            },
+        )
+    })
 }
 
 fn resolve_hir_dim_expr(
     dim_expr: &crate::hir::types::DimExpr,
     ctx: HirTypeResolutionContext<'_>,
-) -> Result<ResolvedDim, GraphcalError> {
+) -> Result<ResolvedDim, SemanticError> {
     let terms = dim_expr
         .terms
         .iter()
@@ -200,18 +207,16 @@ fn resolve_hir_dim_expr(
 
     let result = terms.iter().try_fold(
         Dimension::dimensionless(),
-        |acc, term| -> Result<Dimension, GraphcalError> {
+        |acc, term| -> Result<Dimension, SemanticError> {
             let ResolvedDimTerm::Concrete { dim, power, op } = term else {
-                return Err(GraphcalError::InternalError {
-                    message: "generic dimension term reached concrete dimension folding"
-                        .to_string(),
-                    src: ctx.src.clone(),
-                    span: dim_expr.span.into(),
-                });
+                return Err(SemanticError::internal_error(
+                    "generic dimension term reached concrete dimension folding".to_string(),
+                    ctx.src,
+                    crate::diagnostic_anchor::DiagnosticAnchor::Source(dim_expr.span),
+                ));
             };
-            let overflow_err = || GraphcalError::DimensionOverflow {
-                src: ctx.src.clone(),
-                span: dim_expr.span.into(),
+            let overflow_err = || {
+                SemanticError::located(ctx.src, dim_expr.span, DimensionError::DimensionOverflow)
             };
             let powered = dim.pow(*power).map_err(|_| overflow_err())?;
             match op {
@@ -226,7 +231,7 @@ fn resolve_hir_dim_expr(
 fn resolve_hir_dim_expr_item(
     item: &crate::hir::types::DimExprItem,
     ctx: HirTypeResolutionContext<'_>,
-) -> Result<ResolvedDimTerm, GraphcalError> {
+) -> Result<ResolvedDimTerm, SemanticError> {
     let power = item.term.power;
     match &item.term.target {
         crate::hir::types::DimTermTarget::Dimension(name) => Ok(ResolvedDimTerm::Concrete {
@@ -248,7 +253,7 @@ fn resolve_hir_dim_expr_item(
 fn resolve_hir_index_ref(
     index: &crate::hir::types::IndexRef,
     ctx: HirTypeResolutionContext<'_>,
-) -> Result<ResolvedIndex, GraphcalError> {
+) -> Result<ResolvedIndex, SemanticError> {
     match index {
         crate::hir::types::IndexRef::Concrete(name) => {
             hir_index_name(&name.value, name.span, ctx)?;
@@ -272,8 +277,8 @@ fn check_type_application_arity(
     type_def: &NominalTypeDef,
     arg_count: usize,
     span: Span,
-    src: &NamedSource<Arc<String>>,
-) -> Result<(), GraphcalError> {
+    src: SourceId,
+) -> Result<(), SemanticError> {
     let total_params = type_def.generic_params().len();
     let required_count = type_def
         .generic_params()
@@ -286,13 +291,15 @@ fn check_type_application_arity(
         } else {
             format!("{required_count}..{total_params}")
         };
-        return Err(GraphcalError::EvalError {
-            message: format!(
-                "type `{type_name}` expects {hint} generic argument(s), got {arg_count}"
-            ),
-            src: src.clone(),
-            span: span.into(),
-        });
+        return Err(SemanticError::located(
+            src,
+            span,
+            EvaluationError::Failed {
+                message: format!(
+                    "type `{type_name}` expects {hint} generic argument(s), got {arg_count}"
+                ),
+            },
+        ));
     }
     Ok(())
 }
@@ -302,7 +309,7 @@ fn resolve_hir_type_application(
     name: &crate::syntax::span::Spanned<ResolvedStructTypeName>,
     generic_args: &[crate::hir::types::GenericArg],
     ctx: HirTypeResolutionContext<'_>,
-) -> Result<ResolvedValueType, GraphcalError> {
+) -> Result<ResolvedValueType, SemanticError> {
     let type_def = hir_struct_type_def(&name.value, name.span, ctx)?;
     check_type_application_arity(
         name.value.as_str(),
@@ -318,13 +325,17 @@ fn resolve_hir_type_application(
     }
 
     for param in type_def.generic_params().iter().skip(generic_args.len()) {
-        let default = param.default().ok_or_else(|| GraphcalError::EvalError {
-            message: format!(
-                "internal: generic parameter `{}` has no default",
-                param.name()
-            ),
-            src: ctx.src.clone(),
-            span: type_ann.span.into(),
+        let default = param.default().ok_or_else(|| {
+            SemanticError::located(
+                ctx.src,
+                type_ann.span,
+                EvaluationError::Failed {
+                    message: format!(
+                        "internal: generic parameter `{}` has no default",
+                        param.name()
+                    ),
+                },
+            )
         })?;
         // A default may name earlier parameters; instantiate it with the
         // arguments resolved so far.
@@ -345,9 +356,9 @@ fn resolve_hir_type_application(
 pub(super) fn resolve_hir_generic_arg(
     param: &NominalGenericParam,
     arg: &crate::hir::types::GenericArg,
-    src: &NamedSource<Arc<String>>,
+    src: SourceId,
     module_ctx: ModuleTypeContext<'_>,
-) -> Result<ResolvedGenericArg, GraphcalError> {
+) -> Result<ResolvedGenericArg, SemanticError> {
     resolve_hir_generic_arg_for_param(
         param,
         arg,
@@ -362,7 +373,7 @@ fn resolve_hir_generic_arg_for_param(
     param: &NominalGenericParam,
     arg: &crate::hir::types::GenericArg,
     ctx: HirTypeResolutionContext<'_>,
-) -> Result<ResolvedGenericArg, GraphcalError> {
+) -> Result<ResolvedGenericArg, SemanticError> {
     match (param.constraint(), arg) {
         (GenericConstraint::Dim, crate::hir::types::GenericArg::Dim(dim)) => {
             resolve_hir_dim_arg(dim, ctx).map(ResolvedGenericArg::Dim)
@@ -390,7 +401,7 @@ fn resolve_hir_generic_arg_for_param(
 fn resolve_hir_dim_arg(
     arg: &crate::hir::types::DimArg,
     ctx: HirTypeResolutionContext<'_>,
-) -> Result<ResolvedDim, GraphcalError> {
+) -> Result<ResolvedDim, SemanticError> {
     match arg {
         crate::hir::types::DimArg::Dimensionless(_) => Ok(ResolvedDim::dimensionless()),
         crate::hir::types::DimArg::Expr(dim_expr) => resolve_hir_dim_expr(dim_expr, ctx),

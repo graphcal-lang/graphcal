@@ -123,7 +123,8 @@ fn include_surface_outputs_expose_ports_and_exported_values() {
 
 #[test]
 fn selective_import_records_only_the_canonical_hir_target() {
-    let src = NamedSource::new("test.gcl", Arc::new(String::new()));
+    let mut sources = graphcal_compiler::source_registry::SourceRegistry::new();
+    let src = sources.register("test.gcl", std::sync::Arc::new(String::new()));
     let mut imported_names = ImportedValueNames::default();
     let mut imported_bindings = HashMap::new();
     let owner = graphcal_compiler::dag_id::DagId::root_in_package("test", "dep");
@@ -135,7 +136,7 @@ fn selective_import_records_only_the_canonical_hir_target() {
         ),
         &DeclName::expect_valid("local_g0"),
         Span::new(0, 2),
-        &src,
+        src,
         &mut imported_names,
         &mut imported_bindings,
         None,

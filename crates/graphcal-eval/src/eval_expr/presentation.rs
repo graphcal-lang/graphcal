@@ -5,9 +5,12 @@
 
 use graphcal_compiler::dag_id::DagId;
 use graphcal_compiler::display::unit_label::format_unit_terms_canonical;
-use graphcal_compiler::graphcal_error::GraphcalError;
 use graphcal_compiler::hir::expr::ResolvedUnitExpr;
+use graphcal_compiler::outcome::Outcome;
 use graphcal_compiler::semantic::unit_scale::PositiveFiniteScale;
+use graphcal_compiler::semantic_error::SemanticError;
+use graphcal_compiler::semantic_error::SemanticErrorKind;
+use graphcal_compiler::semantic_error::evaluation::EvaluationError;
 use graphcal_compiler::tir::typed::scoped_node::ScopedUnitExpr;
 
 use super::context::EvalSession;
@@ -28,7 +31,7 @@ pub(super) fn pending(
 ) -> PendingQuantityDisplay {
     PendingQuantityDisplay::Requested(Box::new(PendingDisplayUnit {
         owner: owner.clone(),
-        source: ctx.src.clone(),
+        source: ctx.src,
         unit: unit.resolved(),
     }))
 }
@@ -47,7 +50,7 @@ pub(super) fn scaled<R: std::fmt::Display>(
     ) {
         Ok(label) => QuantityDisplay::Unit { label, scale },
         Err(error) => QuantityDisplay::Failed(PresentationFailure::Formatting {
-            source_name: ctx.src.name().to_owned(),
+            source_name: ctx.source_name(ctx.src).to_owned(),
             error,
         }),
     }
@@ -63,7 +66,7 @@ pub(super) fn resolve(
     values: &RuntimeValueMap,
     ctx: &EvalSession<'_>,
     evaluate: EvaluateExecutable,
-) -> Result<ResolvedValue, GraphcalError> {
+) -> Result<ResolvedValue, Outcome<SemanticError>> {
     presented.try_resolve(|display| match display {
         PendingQuantityDisplay::Ready(display) => Ok(display),
         PendingQuantityDisplay::Requested(request) => {
@@ -80,7 +83,7 @@ pub(super) fn resolve_frame(
     ctx: &EvalSession<'_>,
     callable: &crate::execution_plan::CallablePlan<'_>,
     evaluate: EvaluateExecutable,
-) -> Result<EvaluatedRuntimeValue, GraphcalError> {
+) -> Result<EvaluatedRuntimeValue, Outcome<SemanticError>> {
     presented.try_map_quantity_displays(|display| match display {
         PendingQuantityDisplay::Requested(request) if callable.executes(&request.owner) => {
             resolve_request(&request, values, ctx, evaluate).map(PendingQuantityDisplay::Ready)
@@ -98,21 +101,25 @@ fn resolve_request(
     values: &RuntimeValueMap,
     ctx: &EvalSession<'_>,
     evaluate: EvaluateExecutable,
-) -> Result<QuantityDisplay, GraphcalError> {
+) -> Result<QuantityDisplay, Outcome<SemanticError>> {
     ctx.cancellation.checkpoint()?;
-    let context = ctx.with_src(&request.source);
+    let context = ctx.with_src(request.source);
     crate::pipeline_metrics::record(crate::pipeline_metrics::Event::PresentationEvaluation);
     match resolved_unit_scale(&request.unit, values, &context, evaluate)
         .map(|scale| scaled(&request.unit, scale, &context))
     {
         Ok(leaf) => Ok(leaf),
-        Err(error @ (GraphcalError::InternalError { .. } | GraphcalError::Cancelled(_))) => {
+        Err(error @ (Outcome::Cancelled | Outcome::Failed(SemanticError::Internal(_)))) => {
             Err(error)
         }
-        Err(error) => Ok(QuantityDisplay::Failed(PresentationFailure::Scale {
+        Err(Outcome::Failed(error)) => Ok(QuantityDisplay::Failed(PresentationFailure::Scale {
             source_name: match &error {
-                GraphcalError::EvalError { src, .. } => src.name().to_owned(),
-                _ => context.src.name().to_owned(),
+                SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
+                    kind: SemanticErrorKind::Evaluation(EvaluationError::Failed { .. }),
+                    src,
+                    ..
+                }) => context.source_name(*src).to_owned(),
+                _ => context.source_name(context.src).to_owned(),
             },
             message: error.to_string(),
         })),

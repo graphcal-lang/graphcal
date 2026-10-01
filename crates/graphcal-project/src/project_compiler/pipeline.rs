@@ -8,14 +8,15 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use miette::NamedSource;
-
-use graphcal_compiler::graphcal_error::GraphcalError;
 use graphcal_compiler::ir::resolve::ImportedValueNames;
-use graphcal_compiler::syntax::span::Span;
+use graphcal_compiler::outcome::Outcome;
+use graphcal_compiler::semantic_error::SemanticError;
+use graphcal_compiler::semantic_error::evaluation::EvaluationError;
+use graphcal_compiler::semantic_error::plugin::PluginError;
+use graphcal_compiler::source_id::SourceId;
 
 use super::{checking, imports, lowering};
-use crate::compile_error::CompileError;
+use crate::compile_error::PipelineError;
 
 use super::checked_project::CheckedProject;
 use super::checked_project::CompiledFile;
@@ -35,7 +36,7 @@ use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
 pub(super) fn recursive_dag_instantiation(
     project: &crate::loader::loaded_project::LoadedProject,
     cycle: &Cycle<DagId>,
-) -> CompileError {
+) -> PipelineError {
     let names = cycle
         .path()
         .chain(std::iter::once(cycle.entry()))
@@ -43,22 +44,23 @@ pub(super) fn recursive_dag_instantiation(
         .collect::<Vec<_>>();
     let (src, span) = match project.module(cycle.entry()) {
         Some(crate::loader::loaded_file::LoadedModule::InlineDag { file, dag }) => {
-            (file.named_source(), dag.declaration(file).span)
+            (file.source_id(), dag.declaration(file).span)
         }
-        Some(crate::loader::loaded_file::LoadedModule::FileRoot(file)) => (
-            file.named_source(),
-            Span::new(0, file.named_source().inner().len()),
-        ),
+        Some(crate::loader::loaded_file::LoadedModule::FileRoot(file)) => {
+            (file.source_id(), file.source_id().whole_span())
+        }
         None => {
-            let src = project.root_file().named_source();
-            (src, Span::new(0, src.inner().len()))
+            let src = project.root_file().source_id();
+            (src, src.whole_span())
         }
     };
-    CompileError::Eval(GraphcalError::EvalError {
-        message: format!("recursive DAG instantiation: {}", names.join(" -> ")),
-        src: src.clone(),
-        span: span.into(),
-    })
+    PipelineError::Semantic(SemanticError::located(
+        src,
+        span,
+        EvaluationError::Failed {
+            message: format!("recursive DAG instantiation: {}", names.join(" -> ")),
+        },
+    ))
 }
 
 /// A template's inline-DAG path inside its file, or the file root's identity.
@@ -82,7 +84,7 @@ fn lower_single_file_to_hir(
     semantic: &mut ProjectSemanticContext<'_, '_>,
     loaded_file: &crate::loader::loaded_file::LoadedFile,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
-) -> Result<HirFile, CompileError> {
+) -> Result<HirFile, Outcome<PipelineError>> {
     cancellation.checkpoint()?;
     let mut ctx = ImportContext {
         imported_names: ImportedValueNames::default(),
@@ -108,10 +110,10 @@ fn lower_single_file_to_hir(
 fn store_module_artifact(
     compiled: CompiledFile,
     file_dag_id: &graphcal_compiler::dag_id::DagId,
-    file_src: &NamedSource<Arc<String>>,
+    file_src: SourceId,
     module_artifacts: &mut ModuleArtifactStore,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
-) -> Result<graphcal_eval::checked_program::ExecutionFacts, CompileError> {
+) -> Result<graphcal_eval::checked_program::ExecutionFacts, Outcome<PipelineError>> {
     cancellation.checkpoint()?;
     let (tir, execution_facts) = compiled.program.into_parts();
     let local_owners = tir.local_dags().map(|(dag_id, _)| dag_id.clone()).collect();
@@ -120,13 +122,14 @@ fn store_module_artifact(
             &tir,
             file_src,
             cancellation,
-        )?;
+        )
+        .map_err(Outcome::map_into)?;
     let extern_functions = tir.extern_functions().clone();
     // The checked file is no longer needed after publication. Consume its
     // mutable assembly registry so each local body becomes one immutable
     // handle; no DAG body is cloned for an importer.
     let dag_store = tir.freeze_local_dag_store().map_err(|error| {
-        CompileError::Eval(GraphcalError::internal_error(
+        PipelineError::Semantic(SemanticError::internal_error(
             error.to_string(),
             file_src,
             DiagnosticAnchor::WholeFile,
@@ -144,7 +147,7 @@ fn store_module_artifact(
             },
         )
         .map_err(|error| {
-            CompileError::Eval(GraphcalError::internal_error(
+            PipelineError::Semantic(SemanticError::internal_error(
                 error.to_string(),
                 file_src,
                 DiagnosticAnchor::WholeFile,
@@ -157,11 +160,12 @@ fn store_module_artifact(
 ///
 /// Dependencies contribute HIR interfaces only. No TIR construction, static
 /// body checking, constant evaluation, or host verification occurs here.
-pub(super) fn lower_project_perfile<'project>(
+pub(super) fn lower_project_perfile<'project, Mode>(
     project: &'project crate::loader::loaded_project::LoadedProject,
     module_resolver: graphcal_compiler::resolve::ModuleResolver,
+    mode: Mode,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
-) -> Result<HirProject<'project>, CompileError> {
+) -> Result<HirProject<'project, Mode>, Outcome<PipelineError>> {
     cancellation.checkpoint()?;
     let mut module_templates = ModuleTemplateStore::default();
 
@@ -169,7 +173,7 @@ pub(super) fn lower_project_perfile<'project>(
         let mut definitions = graphcal_compiler::ir::lower::definition_evaluator(
             &module_resolver,
             project.files().iter().flat_map(|loaded_file| {
-                let src = loaded_file.named_source();
+                let src = loaded_file.source_id();
                 std::iter::once((
                     loaded_file.dag_id().clone(),
                     graphcal_compiler::ir::static_definitions::DefinitionSource {
@@ -187,8 +191,9 @@ pub(super) fn lower_project_perfile<'project>(
                     )
                 }))
             }),
-            project.root_file().named_source(),
-        )?;
+            project.root_file().source_id(),
+        )
+        .map_err(PipelineError::from)?;
         let mut semantic = ProjectSemanticContext {
             project,
             module_resolver: &module_resolver,
@@ -227,19 +232,20 @@ pub(super) fn lower_project_perfile<'project>(
         plugins: project.plugins(),
         exported_runtime_units,
         module_resolver,
-        cancellation: cancellation.clone(),
+        sources: std::sync::Arc::clone(project.sources()),
+        mode,
     })
 }
 
-fn build_project_type_store(
-    hir: &HirProject<'_>,
-) -> Result<Arc<graphcal_compiler::tir::typed::ProjectTypeStore>, CompileError> {
+fn build_project_type_store<Mode>(
+    hir: &HirProject<'_, Mode>,
+) -> Result<Arc<graphcal_compiler::tir::typed::ProjectTypeStore>, PipelineError> {
     let root_source = &hir.files.root().source;
     let mut project_types = graphcal_compiler::tir::typed::ProjectTypeStore::default();
     project_types.insert_graphcal_prelude().map_err(|error| {
-        GraphcalError::internal_error(
+        SemanticError::internal_error(
             format!("failed to build prelude project type store: {error}"),
-            root_source,
+            *root_source,
             DiagnosticAnchor::Builtin,
         )
     })?;
@@ -251,9 +257,9 @@ fn build_project_type_store(
                 project_types
                     .insert_module(dag.definitions())
                     .map_err(|error| {
-                        GraphcalError::internal_error(
+                        SemanticError::internal_error(
                             format!("cannot build project type store: {error}"),
-                            source,
+                            *source,
                             DiagnosticAnchor::WholeFile,
                         )
                     })
@@ -263,18 +269,20 @@ fn build_project_type_store(
 }
 
 /// Consume a complete HIR project and perform all mandatory static checks.
-pub(super) fn check_hir_project(
-    hir: HirProject<'_>,
+pub(super) fn check_hir_project<Mode>(
+    hir: HirProject<'_, Mode>,
     host_metadata: &graphcal_eval::host_fns::HostFunctionMetadata,
-) -> Result<CheckedProject, CompileError> {
-    hir.cancellation.checkpoint()?;
+    cancellation: &graphcal_compiler::cancellation::CancellationToken,
+) -> Result<CheckedProject, Outcome<PipelineError>> {
+    cancellation.checkpoint()?;
     let project_types = build_project_type_store(&hir)?;
     let HirProject {
         files,
         plugins,
         exported_runtime_units,
         module_resolver,
-        cancellation,
+        sources,
+        mode: _,
     } = hir;
     let (deps, root_file) = files.into_parts();
     let mut module_artifacts = ModuleArtifactStore::default();
@@ -285,24 +293,27 @@ pub(super) fn check_hir_project(
         |hir_file: HirFile,
          module_artifacts: &ModuleArtifactStore,
          inherited_execution_facts: &graphcal_eval::checked_program::ExecutionFacts|
-         -> Result<(CompiledFile, NamedSource<Arc<String>>), CompileError> {
+         -> Result<(CompiledFile, SourceId), Outcome<PipelineError>> {
             cancellation.checkpoint()?;
-            let file_src = hir_file.source.clone();
+            let file_src = hir_file.source;
             let compiled = checking::check_hir_file(
                 hir_file,
                 module_artifacts,
                 inherited_execution_facts,
-                &exported_runtime_units,
-                &module_resolver,
-                &project_types,
-                &cancellation,
+                checking::FileCheckEnvironment {
+                    exported_runtime_units: &exported_runtime_units,
+                    module_resolver: &module_resolver,
+                    project_types: &project_types,
+                    sources: &sources,
+                },
+                cancellation,
             )?;
             verify_host_functions(
                 plugins,
                 compiled.program.tir(),
-                &file_src,
+                file_src,
                 host_metadata,
-                &cancellation,
+                cancellation,
             )?;
             Ok((compiled, file_src))
         };
@@ -314,9 +325,9 @@ pub(super) fn check_hir_project(
         inherited_execution_facts = store_module_artifact(
             compiled,
             &file_dag_id,
-            &file_src,
+            file_src,
             &mut module_artifacts,
-            &cancellation,
+            cancellation,
         )?;
     }
 
@@ -324,6 +335,7 @@ pub(super) fn check_hir_project(
     Ok(CheckedProject {
         compiled,
         source,
+        sources,
         module_resolver,
     })
 }
@@ -347,10 +359,10 @@ fn verify_host_functions(
         crate::loader::loaded_project::PluginFileEntry,
     >,
     tir: &graphcal_compiler::tir::typed::CheckedTir,
-    src: &NamedSource<Arc<String>>,
+    src: SourceId,
     host_metadata: &graphcal_eval::host_fns::HostFunctionMetadata,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
-) -> Result<(), CompileError> {
+) -> Result<(), Outcome<PipelineError>> {
     // Deterministic reporting order: earliest declaration first.
     let mut declared: Vec<_> = tir.extern_functions().iter().collect();
     declared.sort_by_key(|(_, function)| function.name_span.offset());
@@ -364,12 +376,15 @@ fn verify_host_functions(
             verify_wasm_plugin(plugins, function, src, host_metadata)?;
         }
         if !host_metadata.contains(key) {
-            return Err(CompileError::Eval(GraphcalError::MissingHostFunction {
-                plugin: function.plugin.clone(),
-                name: function.name.clone(),
-                src: src.clone(),
-                span: function.name_span.into(),
-            }));
+            return Err(PipelineError::Semantic(SemanticError::located(
+                src,
+                function.name_span,
+                PluginError::MissingHostFunction {
+                    plugin: function.plugin.clone(),
+                    name: function.name.clone(),
+                },
+            ))
+            .into());
         }
         if let Some(provided) = host_metadata.provided_signature(key)
             && !function.signature.structurally_equivalent(provided)
@@ -377,14 +392,17 @@ fn verify_host_functions(
             let format_dim = |dim: &graphcal_compiler::dimension::Dimension| {
                 tir.registry().dimensions.format_dimension(dim)
             };
-            return Err(CompileError::Eval(GraphcalError::ExternSignatureMismatch {
-                plugin: function.plugin.clone(),
-                name: function.name.clone(),
-                declared: function.signature.format_with(format_dim),
-                provided: provided.format_with(format_dim),
-                src: src.clone(),
-                span: function.decl_span.into(),
-            }));
+            return Err(PipelineError::Semantic(SemanticError::located(
+                src,
+                function.decl_span,
+                PluginError::ExternSignatureMismatch {
+                    plugin: function.plugin.clone(),
+                    name: function.name.clone(),
+                    declared: function.signature.format_with(format_dim),
+                    provided: provided.format_with(format_dim),
+                },
+            ))
+            .into());
         }
     }
     Ok(())
@@ -399,46 +417,54 @@ fn verify_wasm_plugin(
         crate::loader::loaded_project::PluginFileEntry,
     >,
     function: &graphcal_compiler::ir::extern_function::ExternFunctionEntry,
-    src: &NamedSource<Arc<String>>,
+    src: SourceId,
     host_metadata: &graphcal_eval::host_fns::HostFunctionMetadata,
-) -> Result<(), CompileError> {
+) -> Result<(), PipelineError> {
     match plugins.get(&function.plugin) {
         Some(Err(crate::loader::loaded_project::PluginFileError::NotPinned)) => {
-            return Err(CompileError::Eval(GraphcalError::PluginNotPinned {
-                plugin: function.plugin.clone(),
-                src: src.clone(),
-                span: function.path_span.into(),
-            }));
+            return Err(PipelineError::Semantic(SemanticError::located(
+                src,
+                function.path_span,
+                PluginError::PluginNotPinned {
+                    plugin: function.plugin.clone(),
+                },
+            )));
         }
         Some(Err(crate::loader::loaded_project::PluginFileError::HashMismatch {
             expected,
             actual,
         })) => {
-            return Err(CompileError::Eval(GraphcalError::PluginHashMismatch {
-                plugin: function.plugin.clone(),
-                expected: expected.clone(),
-                actual: actual.clone(),
-                src: src.clone(),
-                span: function.path_span.into(),
-            }));
+            return Err(PipelineError::Semantic(SemanticError::located(
+                src,
+                function.path_span,
+                PluginError::PluginHashMismatch {
+                    plugin: function.plugin.clone(),
+                    expected: expected.clone(),
+                    actual: actual.clone(),
+                },
+            )));
         }
         Some(Err(file_error)) => {
-            return Err(CompileError::Eval(GraphcalError::PluginLoadFailed {
-                plugin: function.plugin.clone(),
-                reason: file_error.to_string(),
-                src: src.clone(),
-                span: function.path_span.into(),
-            }));
+            return Err(PipelineError::Semantic(SemanticError::located(
+                src,
+                function.path_span,
+                PluginError::PluginLoadFailed {
+                    plugin: function.plugin.clone(),
+                    reason: file_error.to_string(),
+                },
+            )));
         }
         // Defensive: the loader records an entry for every root-package wasm
         // import, so an absent entry means an embedder skipped `load_project`.
         None => {
-            return Err(CompileError::Eval(GraphcalError::PluginLoadFailed {
-                plugin: function.plugin.clone(),
-                reason: "the project loader provided no bytes for this plugin".to_string(),
-                src: src.clone(),
-                span: function.path_span.into(),
-            }));
+            return Err(PipelineError::Semantic(SemanticError::located(
+                src,
+                function.path_span,
+                PluginError::PluginLoadFailed {
+                    plugin: function.plugin.clone(),
+                    reason: "the project loader provided no bytes for this plugin".to_string(),
+                },
+            )));
         }
         Some(Ok(_)) => {}
     }
@@ -447,20 +473,24 @@ fn verify_wasm_plugin(
         Some(graphcal_eval::host_fns::PluginRegistrationError::ForbiddenImport {
             module,
             name,
-        }) => Err(CompileError::Eval(GraphcalError::PluginForbiddenImport {
-            plugin: function.plugin.clone(),
-            import_module: module.clone(),
-            import_name: name.clone(),
-            src: src.clone(),
-            span: function.path_span.into(),
-        })),
-        Some(graphcal_eval::host_fns::PluginRegistrationError::LoadFailed { reason }) => {
-            Err(CompileError::Eval(GraphcalError::PluginLoadFailed {
+        }) => Err(PipelineError::Semantic(SemanticError::located(
+            src,
+            function.path_span,
+            PluginError::PluginForbiddenImport {
                 plugin: function.plugin.clone(),
-                reason: reason.clone(),
-                src: src.clone(),
-                span: function.path_span.into(),
-            }))
+                import_module: module.clone(),
+                import_name: name.clone(),
+            },
+        ))),
+        Some(graphcal_eval::host_fns::PluginRegistrationError::LoadFailed { reason }) => {
+            Err(PipelineError::Semantic(SemanticError::located(
+                src,
+                function.path_span,
+                PluginError::PluginLoadFailed {
+                    plugin: function.plugin.clone(),
+                    reason: reason.clone(),
+                },
+            )))
         }
         None => Ok(()),
     }

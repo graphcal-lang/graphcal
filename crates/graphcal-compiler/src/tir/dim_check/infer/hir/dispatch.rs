@@ -1,9 +1,13 @@
 //! The recursive expression-kind dispatch of HIR inference.
 
 use crate::dimension::Dimension;
-use crate::graphcal_error::GraphcalError;
 use crate::hir::expr::{Expr, ExprKind};
+use crate::outcome::Outcome;
 use crate::semantic::checked_type::{IndexTypeRef, Symbolic};
+use crate::semantic_error::SemanticError;
+use crate::semantic_error::dimension::DimensionError;
+use crate::semantic_error::evaluation::EvaluationError;
+use crate::semantic_error::structure::StructError;
 
 use crate::semantic::checked_type::CheckedType;
 
@@ -15,14 +19,17 @@ impl Infer<'_> {
     pub(super) fn infer_hir_type(
         &self,
         expr: &Expr,
-    ) -> Result<CheckedType<Symbolic>, GraphcalError> {
+    ) -> Result<CheckedType<Symbolic>, Outcome<SemanticError>> {
         self.control.checkpoint()?;
         // Recursion choke point: inference recurses once per tree level
         // (unbounded for left-nested operator chains).
         crate::stack::with_stack_growth(|| self.outside_call().infer_hir_type_inner(expr))
     }
 
-    fn infer_hir_type_inner(&self, expr: &Expr) -> Result<CheckedType<Symbolic>, GraphcalError> {
+    fn infer_hir_type_inner(
+        &self,
+        expr: &Expr,
+    ) -> Result<CheckedType<Symbolic>, Outcome<SemanticError>> {
         let inferred = match expr.kind() {
             ExprKind::Error(no_error) => no_error.absurd(),
             ExprKind::Number(_) => CheckedType::Quantity(Dimension::dimensionless()),
@@ -33,21 +40,28 @@ impl Infer<'_> {
             | ExprKind::CivilDateTimeLiteral(_)
             | ExprKind::ZonedDateTimeLiteral(_)
             | ExprKind::IanaTimeZoneLiteral(_) => {
-                return Err(GraphcalError::DimensionMismatch {
-                    expected: "a numeric or boolean expression".to_string(),
-                    found: "contextual string literal".to_string(),
-                    help: "string literals can only be used in their declared datetime contexts"
-                        .to_string(),
-                    src: self.env.src.clone(),
-                    span: expr.span.into(),
-                });
+                return Err(SemanticError::located(
+                    self.env.src,
+                    expr.span,
+                    DimensionError::DimensionMismatch {
+                        expected: "a numeric or boolean expression".to_string(),
+                        found: "contextual string literal".to_string(),
+                        help:
+                            "string literals can only be used in their declared datetime contexts"
+                                .to_string(),
+                    },
+                )
+                .into());
             }
             ExprKind::TypeSystemRef(name) => {
-                return Err(GraphcalError::EvalError {
-                    message: name.value.value_position_error(),
-                    src: self.env.src.clone(),
-                    span: name.span.into(),
-                });
+                return Err(SemanticError::located(
+                    self.env.src,
+                    name.span,
+                    EvaluationError::Failed {
+                        message: name.value.value_position_error(),
+                    },
+                )
+                .into());
             }
             ExprKind::QuantityLiteral { unit, .. } => {
                 infer_hir_quantity_literal(unit, self.env.tir, self.env.src)?
@@ -67,11 +81,13 @@ impl Infer<'_> {
             ExprKind::ConstRef(target) => self.infer_hir_const_ref(target)?,
             ExprKind::LocalRef(local) => {
                 self.locals.get(local.value).cloned().ok_or_else(|| {
-                    GraphcalError::UnknownLocalRef {
-                        name: format!("#{}", local.value.index()),
-                        src: self.env.src.clone(),
-                        span: local.span.into(),
-                    }
+                    SemanticError::located(
+                        self.env.src,
+                        local.span,
+                        StructError::UnknownLocalRef {
+                            name: format!("#{}", local.value.index()),
+                        },
+                    )
                 })?
             }
             ExprKind::FnCall { callee, args, .. } => {

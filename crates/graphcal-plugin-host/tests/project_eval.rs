@@ -4,13 +4,19 @@
 #![cfg(test)]
 #![expect(
     clippy::result_large_err,
-    reason = "GraphcalError is inherently large and only constructed on the error path"
+    reason = "SemanticError is inherently large and only constructed on the error path"
 )]
+
+use graphcal_project::load_error::LoadError;
 
 use std::collections::HashMap;
 use std::path::Path;
 
-use graphcal_compiler::graphcal_error::GraphcalError;
+use graphcal_compiler::semantic_error::SemanticError;
+use graphcal_compiler::semantic_error::SemanticErrorKind;
+use graphcal_compiler::semantic_error::plugin::PluginError;
+
+use graphcal_compiler::semantic_error::rendered::RenderedSemanticError;
 use graphcal_eval::eval::{EvalResult, Value};
 use graphcal_eval::host_fns::HostFunctionRegistry;
 use graphcal_io::RealFileSystem;
@@ -186,10 +192,18 @@ node x: Dimensionless = demo::lerp(1.0, 3.0, 0.5);
         Some(("plugins/demo.wasm", lerp_plugin())),
     )
     .unwrap_err();
-    let CompileError::Eval(GraphcalError::ExternSignatureMismatch {
-        name,
-        declared,
-        provided,
+    let CompileError::Eval(RenderedSemanticError {
+        error:
+            SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
+                kind:
+                    SemanticErrorKind::Plugin(PluginError::ExternSignatureMismatch {
+                        name,
+                        declared,
+                        provided,
+                        ..
+                    }),
+                ..
+            }),
         ..
     }) = err
     else {
@@ -252,8 +266,8 @@ node x: Dimensionless = 1.0;
         .unwrap_err();
     assert!(
         matches!(
-            err,
-            CompileError::Eval(GraphcalError::ExternSignatureMismatch { ref name, .. })
+            &err,
+            CompileError::Eval(RenderedSemanticError { error: SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic { kind: SemanticErrorKind::Plugin(PluginError::ExternSignatureMismatch { name, .. }), .. }), .. })
                 if name.as_str() == "lerp"
         ),
         "expected ExternSignatureMismatch, got {err:?}"
@@ -284,9 +298,17 @@ fn forbidden_imports_surface_as_a_dedicated_diagnostic() {
     let source = format!("{LERP_IMPORT}\nnode x: Dimensionless = demo::lerp(0.0, 1.0, 0.5);\n");
     let err = eval_project_with_plugin(dir.path(), &source, Some(("plugins/demo.wasm", bytes)))
         .unwrap_err();
-    let CompileError::Eval(GraphcalError::PluginForbiddenImport {
-        import_module,
-        import_name,
+    let CompileError::Eval(RenderedSemanticError {
+        error:
+            SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
+                kind:
+                    SemanticErrorKind::Plugin(PluginError::PluginForbiddenImport {
+                        import_module,
+                        import_name,
+                        ..
+                    }),
+                ..
+            }),
         ..
     }) = err
     else {
@@ -301,7 +323,15 @@ fn missing_plugin_file_is_reported_at_the_import() {
     let dir = tempfile::tempdir().unwrap();
     let source = format!("{LERP_IMPORT}\nnode x: Dimensionless = demo::lerp(0.0, 1.0, 0.5);\n");
     let err = eval_project_with_plugin(dir.path(), &source, None).unwrap_err();
-    let CompileError::Eval(GraphcalError::PluginLoadFailed { reason, .. }) = err else {
+    let CompileError::Eval(RenderedSemanticError {
+        error:
+            SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
+                kind: SemanticErrorKind::Plugin(PluginError::PluginLoadFailed { reason, .. }),
+                ..
+            }),
+        ..
+    }) = err
+    else {
         panic!("expected PluginLoadFailed, got {err:?}");
     };
     assert!(reason.contains("cannot read"), "reason: {reason}");
@@ -339,7 +369,16 @@ fn wasm_plugin_imported_inside_a_dag_body_evaluates() {
 fn missing_plugin_file_inside_a_dag_body_is_reported_at_the_import() {
     let dir = tempfile::tempdir().unwrap();
     let err = eval_project_with_plugin(dir.path(), NESTED_LERP_SOURCE, None).unwrap_err();
-    let CompileError::Eval(GraphcalError::PluginLoadFailed { reason, span, .. }) = err else {
+    let CompileError::Eval(RenderedSemanticError {
+        error:
+            SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
+                kind: SemanticErrorKind::Plugin(PluginError::PluginLoadFailed { reason, .. }),
+                primary: span,
+                ..
+            }),
+        ..
+    }) = err
+    else {
         panic!("expected PluginLoadFailed, got {err:?}");
     };
     assert!(reason.contains("cannot read"), "reason: {reason}");
@@ -367,7 +406,15 @@ node y: Length = @inner()::mid;
         Some(("plugins/demo.wasm", lerp_plugin())),
     )
     .unwrap_err();
-    let CompileError::Eval(GraphcalError::InvalidExternSignature { message, span, .. }) = err
+    let CompileError::Eval(RenderedSemanticError {
+        error:
+            SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
+                kind: SemanticErrorKind::Plugin(PluginError::InvalidExternSignature { message, .. }),
+                primary: span,
+                ..
+            }),
+        ..
+    }) = err
     else {
         panic!("expected InvalidExternSignature, got {err:?}");
     };
@@ -412,7 +459,15 @@ import plugin "../outside.wasm" as demo {
 node x: Dimensionless = demo::lerp(0.0, 1.0, 0.5);
 "#;
     let err = eval_project_with_plugin(dir.path(), source, None).unwrap_err();
-    let CompileError::Eval(GraphcalError::PluginLoadFailed { reason, .. }) = err else {
+    let CompileError::Eval(RenderedSemanticError {
+        error:
+            SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
+                kind: SemanticErrorKind::Plugin(PluginError::PluginLoadFailed { reason, .. }),
+                ..
+            }),
+        ..
+    }) = err
+    else {
         panic!("expected PluginLoadFailed, got {err:?}");
     };
     assert!(reason.contains("must be relative"), "reason: {reason}");
@@ -427,7 +482,15 @@ fn from_source_projects_report_missing_filesystem() {
         .host_fns(&registry)
         .eval(&HashMap::new())
         .unwrap_err();
-    let CompileError::Eval(GraphcalError::PluginLoadFailed { reason, .. }) = err else {
+    let CompileError::Eval(RenderedSemanticError {
+        error:
+            SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
+                kind: SemanticErrorKind::Plugin(PluginError::PluginLoadFailed { reason, .. }),
+                ..
+            }),
+        ..
+    }) = err
+    else {
         panic!("expected PluginLoadFailed, got {err:?}");
     };
     assert!(reason.contains("without a project on disk"), "{reason}");
@@ -554,8 +617,8 @@ fn unpinned_plugins_are_rejected_in_package_projects() {
     let err = eval_package_project(dir.path(), &lerp_plugin(), None).unwrap_err();
     assert!(
         matches!(
-            err,
-            CompileError::Eval(GraphcalError::PluginNotPinned { ref plugin, .. })
+            &err,
+            CompileError::Eval(RenderedSemanticError { error: SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic { kind: SemanticErrorKind::Plugin(PluginError::PluginNotPinned { plugin, .. }), .. }), .. })
                 if plugin.path().as_str() == "plugins/demo.wasm"
         ),
         "expected PluginNotPinned, got {err:?}"
@@ -569,8 +632,8 @@ fn hash_mismatches_against_the_pin_are_hard_errors() {
     let err = eval_package_project(dir.path(), &lerp_plugin(), Some(&wrong_sha)).unwrap_err();
     assert!(
         matches!(
-            err,
-            CompileError::Eval(GraphcalError::PluginHashMismatch { ref expected, .. })
+            &err,
+            CompileError::Eval(RenderedSemanticError { error: SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic { kind: SemanticErrorKind::Plugin(PluginError::PluginHashMismatch { expected, .. }), .. }), .. })
                 if *expected == wrong_sha
         ),
         "expected PluginHashMismatch, got {err:?}"
@@ -687,7 +750,7 @@ fuel_per_call = 200000000
     assert!(
         matches!(
             err,
-            CompileError::Eval(GraphcalError::ManifestError { ref message })
+            CompileError::Load(LoadError::ManifestError { ref message })
                 if message.contains("plugins/demo.wasm (package proj).missing")
         ),
         "unexpected error: {err:?}"
@@ -984,8 +1047,18 @@ node bad: Dimensionless[Phase] = arrays::scale(@xs, 2.0);
         Some(("plugins/arrays.wasm", scale_plugin())),
     )
     .unwrap_err();
-    let CompileError::Eval(GraphcalError::ExternSignatureMismatch {
-        declared, provided, ..
+    let CompileError::Eval(RenderedSemanticError {
+        error:
+            SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
+                kind:
+                    SemanticErrorKind::Plugin(PluginError::ExternSignatureMismatch {
+                        declared,
+                        provided,
+                        ..
+                    }),
+                ..
+            }),
+        ..
     }) = err
     else {
         panic!("expected ExternSignatureMismatch, got {err:?}");
@@ -1134,7 +1207,16 @@ node span: DvSpan = stats::span(@dv);
         Some(("plugins/span.wasm", span_plugin())),
     )
     .unwrap_err();
-    let CompileError::Eval(GraphcalError::ExternSignatureMismatch { declared, .. }) = err else {
+    let CompileError::Eval(RenderedSemanticError {
+        error:
+            SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
+                kind:
+                    SemanticErrorKind::Plugin(PluginError::ExternSignatureMismatch { declared, .. }),
+                ..
+            }),
+        ..
+    }) = err
+    else {
         panic!("expected ExternSignatureMismatch, got {err:?}");
     };
     assert!(declared.contains("minimum:"), "{declared}");

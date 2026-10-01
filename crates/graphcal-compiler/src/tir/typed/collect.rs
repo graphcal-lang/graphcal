@@ -1,11 +1,9 @@
 use std::collections::{BTreeSet, HashMap, HashSet};
-use std::sync::Arc;
 
-use miette::NamedSource;
-
-use crate::graphcal_error::GraphcalError;
 use crate::ir::instance::frame::InstanceFrame;
 use crate::resolved_name::{ResolvedConstructorName, ResolvedDeclName, ResolvedStructTypeName};
+use crate::semantic_error::SemanticError;
+use crate::source_id::SourceId;
 use crate::syntax::span::Span;
 
 use super::model::{DagTIR, ResolvedDagDependencies};
@@ -119,8 +117,8 @@ pub(super) fn collect_resolved_dag_dependencies(
     decls: &crate::ir::decl_table::DeclTable<super::model::Typed>,
     frame: &InstanceFrame,
     ctx: ModuleTypeContext<'_>,
-    src: &NamedSource<Arc<String>>,
-) -> Result<ResolvedDagDependencies, GraphcalError> {
+    src: SourceId,
+) -> Result<ResolvedDagDependencies, SemanticError> {
     let mut resolved = ResolvedDagDependencies::default();
 
     for entry in decls.consts() {
@@ -190,10 +188,10 @@ pub(super) fn collect_resolved_dag_dependencies(
 fn record_constructed_type(
     constructor: &ResolvedConstructorName,
     ctx: ModuleTypeContext<'_>,
-    src: &NamedSource<Arc<String>>,
+    src: SourceId,
     span: Span,
     constructed_types: &mut HashSet<ResolvedStructTypeName>,
-) -> Result<(), GraphcalError> {
+) -> Result<(), SemanticError> {
     let resolved = ctx.types.lookup_constructor(constructor).ok_or_else(|| {
         internal_error(
             format!("semantic constructor metadata references unknown constructor `{constructor}`"),
@@ -209,9 +207,9 @@ fn record_constructed_type(
 pub(super) fn collect_constructed_types_from_expr(
     expr: &crate::hir::expr::Expr,
     ctx: ModuleTypeContext<'_>,
-    src: &NamedSource<Arc<String>>,
+    src: SourceId,
     constructed_types: &mut HashSet<ResolvedStructTypeName>,
-) -> Result<(), GraphcalError> {
+) -> Result<(), SemanticError> {
     let mut result = Ok(());
     crate::hir::expr::visit_expr(expr, &mut |node| {
         if result.is_err() {

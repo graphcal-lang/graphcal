@@ -1,11 +1,10 @@
-use std::sync::Arc;
-
 use crate::assertion_expectation::{ExpectedFail, ExpectedFailKeyPart};
 use crate::desugar::desugared_ast::AttributeArg;
-use crate::graphcal_error::GraphcalError;
 use crate::ir::resolve::collected::{ParsedExpectedFail, ParsedExpectedFailKey};
+use crate::semantic_error::SemanticError;
+use crate::semantic_error::attribute::AttributeError;
+use crate::source_id::SourceId;
 use crate::syntax::non_empty::NonEmpty;
-use miette::NamedSource;
 
 /// Parse `#[expected_fail]` attribute arguments into an [`ExpectedFail`] value.
 ///
@@ -15,8 +14,8 @@ use miette::NamedSource;
 /// - `Group` args produce multi-axis keys
 pub fn parse_expected_fail_args(
     args: &[AttributeArg],
-    src: &NamedSource<Arc<String>>,
-) -> Result<ParsedExpectedFail, GraphcalError> {
+    src: SourceId,
+) -> Result<ParsedExpectedFail, SemanticError> {
     let keys: Vec<ParsedExpectedFailKey> = args
         .iter()
         .map(|arg| match arg {
@@ -27,10 +26,11 @@ pub fn parse_expected_fail_args(
                     span: *span,
                 }])
             }
-            AttributeArg::Path { path } => Err(GraphcalError::ExpectedFailInvalidArg {
-                src: src.clone(),
-                span: path.span.into(),
-            }),
+            AttributeArg::Path { path } => Err(SemanticError::located(
+                src,
+                path.span,
+                AttributeError::ExpectedFailInvalidArg,
+            )),
             AttributeArg::FinitePosition { position, span } => {
                 Ok(vec![ExpectedFailKeyPart::FinitePosition {
                     position: *position,
@@ -38,7 +38,7 @@ pub fn parse_expected_fail_args(
                 }])
             }
             AttributeArg::Group { elements, span } => {
-                let key: Result<ParsedExpectedFailKey, GraphcalError> = elements
+                let key: Result<ParsedExpectedFailKey, SemanticError> = elements
                     .iter()
                     .map(|elem| match elem {
                         AttributeArg::IndexLabel { index, label, span } => {
@@ -48,30 +48,31 @@ pub fn parse_expected_fail_args(
                                 span: *span,
                             })
                         }
-                        AttributeArg::Path { path } => Err(GraphcalError::ExpectedFailInvalidArg {
-                            src: src.clone(),
-                            span: path.span.into(),
-                        }),
+                        AttributeArg::Path { path } => Err(SemanticError::located(
+                            src,
+                            path.span,
+                            AttributeError::ExpectedFailInvalidArg,
+                        )),
                         AttributeArg::FinitePosition { position, span } => {
                             Ok(ExpectedFailKeyPart::FinitePosition {
                                 position: *position,
                                 span: *span,
                             })
                         }
-                        AttributeArg::Group { span: g_span, .. } => {
-                            Err(GraphcalError::ExpectedFailInvalidArg {
-                                src: src.clone(),
-                                span: (*g_span).into(),
-                            })
-                        }
+                        AttributeArg::Group { span: g_span, .. } => Err(SemanticError::located(
+                            src,
+                            *g_span,
+                            AttributeError::ExpectedFailInvalidArg,
+                        )),
                     })
                     .collect();
                 let key = key?;
                 if key.is_empty() {
-                    Err(GraphcalError::ExpectedFailInvalidArg {
-                        src: src.clone(),
-                        span: (*span).into(),
-                    })
+                    Err(SemanticError::located(
+                        src,
+                        *span,
+                        AttributeError::ExpectedFailInvalidArg,
+                    ))
                 } else {
                     Ok(key)
                 }

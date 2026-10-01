@@ -2,12 +2,11 @@
 //! the rule that merges repeated declarations of one plugin function.
 
 use std::collections::HashMap;
-use std::sync::Arc;
-
-use miette::NamedSource;
 
 use crate::extern_struct_result::ExternStructResult;
-use crate::graphcal_error::GraphcalError;
+use crate::semantic_error::SemanticError;
+use crate::semantic_error::plugin::PluginError;
+use crate::source_id::SourceId;
 use crate::syntax::span::Span;
 
 /// A resolved extern function declared by an `import plugin` block.
@@ -66,14 +65,14 @@ impl ExternFunctionEntry {
 ///
 /// # Errors
 ///
-/// Returns [`GraphcalError::InvalidExternSignature`] when `entry` disagrees
+/// Returns [`PluginError::InvalidExternSignature`](PluginError::InvalidExternSignature) when `entry` disagrees
 /// with an existing declaration of the same key on its signature or on its
 /// nominal struct result type.
 pub(crate) fn merge_extern_function(
     map: &mut HashMap<crate::plugin_identity::ExternFnKey, ExternFunctionEntry>,
     entry: ExternFunctionEntry,
-    src: &NamedSource<Arc<String>>,
-) -> Result<(), GraphcalError> {
+    src: SourceId,
+) -> Result<(), SemanticError> {
     use std::collections::hash_map::Entry;
 
     use crate::function_signature::ResultKind;
@@ -82,14 +81,16 @@ pub(crate) fn merge_extern_function(
         Entry::Occupied(existing) => {
             let existing = existing.get();
             if !existing.signature.structurally_equivalent(&entry.signature) {
-                return Err(GraphcalError::InvalidExternSignature {
-                    message: format!(
-                        "function `{}` of plugin \"{}\" is declared elsewhere with a different signature",
-                        entry.name, entry.plugin
-                    ),
-                    src: src.clone(),
-                    span: entry.decl_span.into(),
-                });
+                return Err(SemanticError::located(
+                    src,
+                    entry.decl_span,
+                    PluginError::InvalidExternSignature {
+                        message: format!(
+                            "function `{}` of plugin \"{}\" is declared elsewhere with a different signature",
+                            entry.name, entry.plugin
+                        ),
+                    },
+                ));
             }
             // A struct return is nominal at the declaration site: two
             // declarations must also agree on WHICH record type the shared
@@ -98,14 +99,16 @@ pub(crate) fn merge_extern_function(
                 (existing.signature.result(), entry.signature.result())
                 && !existing.same_record(declared)
             {
-                return Err(GraphcalError::InvalidExternSignature {
-                    message: format!(
-                        "function `{}` of plugin \"{}\" is declared elsewhere with a different result type",
-                        entry.name, entry.plugin
-                    ),
-                    src: src.clone(),
-                    span: entry.decl_span.into(),
-                });
+                return Err(SemanticError::located(
+                    src,
+                    entry.decl_span,
+                    PluginError::InvalidExternSignature {
+                        message: format!(
+                            "function `{}` of plugin \"{}\" is declared elsewhere with a different result type",
+                            entry.name, entry.plugin
+                        ),
+                    },
+                ));
             }
             Ok(())
         }

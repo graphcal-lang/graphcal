@@ -86,7 +86,10 @@ pub enum HirLowerError {
     },
     /// A Nat was supplied where an explicit Index is required.
     #[error("expected Index, found Nat `{expression}`; write `Fin({expression})`")]
-    ExpectedIndexFoundNat { expression: String, span: Span },
+    ExpectedIndexFoundNat {
+        expression: crate::semantic_error::index::FoundNat,
+        span: Span,
+    },
     /// A type-level natural-number expression's normalized form overflowed.
     #[error("{source}")]
     NatOverflow {
@@ -579,7 +582,7 @@ pub(crate) fn lower_generic_arg_for_constraint(
         GenericConstraint::Index => match arg {
             ast::GenericArg::Index(index) => lower_index_expr(index, ctx).map(GenericArg::Index),
             ast::GenericArg::Nat(nat) => Err(HirLowerError::ExpectedIndexFoundNat {
-                expression: nat.to_string(),
+                expression: crate::semantic_error::index::FoundNat::Expression(nat.clone()),
                 span: nat.span(),
             }),
             ast::GenericArg::Type(_) | ast::GenericArg::Ambiguous(_) => {
@@ -1004,7 +1007,7 @@ pub(crate) fn lower_index_expr(
             lower_nat_expr(cardinality, ctx).map(IndexRef::Finite)
         }
         ast::IndexExpr::BareNat(nat_expr) => Err(HirLowerError::ExpectedIndexFoundNat {
-            expression: nat_expr.to_string(),
+            expression: crate::semantic_error::index::FoundNat::Expression(nat_expr.clone()),
             span: nat_expr.span(),
         }),
     }
@@ -1020,7 +1023,7 @@ fn lower_index_expr_name(
         return match binding.constraint {
             GenericConstraint::Index => Ok(IndexRef::GenericParam(binding.spanned_id(path.span))),
             GenericConstraint::Nat => Err(HirLowerError::ExpectedIndexFoundNat {
-                expression: atom.to_string(),
+                expression: crate::semantic_error::index::FoundNat::Parameter(atom.clone()),
                 span: path.span,
             }),
             GenericConstraint::Dim | GenericConstraint::Type => {

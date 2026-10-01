@@ -7,15 +7,14 @@
 //! had already drifted (HIR accepted `-` on Bool) when each carried its own
 //! copy.
 
-use std::sync::Arc;
-
-use miette::NamedSource;
-
 use crate::desugar::desugared_ast::{BinOp, UnaryOp};
 use crate::dimension::{BaseDimId, Dimension, PreludeBaseDimension, Rational};
 use crate::display::formatting_registry::FormattingRegistry;
 use crate::exact_rational::ExactRational;
-use crate::graphcal_error::GraphcalError;
+use crate::semantic_error::SemanticError;
+use crate::semantic_error::dimension::DimensionError;
+use crate::semantic_error::evaluation::EvaluationError;
+use crate::source_id::SourceId;
 use crate::syntax::ast::PowerExponent;
 use crate::syntax::span::Span;
 
@@ -35,14 +34,16 @@ pub(super) struct Operand {
 fn comparison_operand_type<'a>(
     operand: &'a Operand,
     registry: &FormattingRegistry,
-    src: &NamedSource<Arc<String>>,
-) -> Result<&'a CheckedType<Symbolic>, GraphcalError> {
+    src: SourceId,
+) -> Result<&'a CheckedType<Symbolic>, SemanticError> {
     match &operand.ty {
-        CheckedType::Indexed { .. } => Err(GraphcalError::IndexedComparisonOperand {
-            found: format_checked_type(&operand.ty, registry),
-            src: src.clone(),
-            span: operand.span.into(),
-        }),
+        CheckedType::Indexed { .. } => Err(SemanticError::located(
+            src,
+            operand.span,
+            DimensionError::IndexedComparisonOperand {
+                found: format_checked_type(&operand.ty, registry),
+            },
+        )),
         ty => Ok(ty),
     }
 }
@@ -60,16 +61,18 @@ fn fin_key_additive_rule(
     rhs: &Operand,
     rhs_const_int: Option<i64>,
     registry: &FormattingRegistry,
-    src: &NamedSource<Arc<String>>,
-) -> Result<CheckedType<Symbolic>, GraphcalError> {
+    src: SourceId,
+) -> Result<CheckedType<Symbolic>, SemanticError> {
     let reject = |help: &str| {
-        Err(GraphcalError::DimensionMismatch {
-            expected: "a static Nat constant".to_string(),
-            found: format_checked_type(&rhs.ty, registry),
-            help: help.to_string(),
-            src: src.clone(),
-            span: rhs.span.into(),
-        })
+        Err(SemanticError::located(
+            src,
+            rhs.span,
+            DimensionError::DimensionMismatch {
+                expected: "a static Nat constant".to_string(),
+                found: format_checked_type(&rhs.ty, registry),
+                help: help.to_string(),
+            },
+        ))
     };
     let Some(bound) = key_index.finite_index_form() else {
         return reject(
@@ -97,17 +100,25 @@ fn fin_key_additive_rule(
     };
     let shifted = bound
         .add(&crate::nat::NatPolyForm::from_constant(addend))
-        .map_err(|err| GraphcalError::EvalError {
-            message: err.to_string(),
-            src: src.clone(),
-            span: rhs.span.into(),
+        .map_err(|err| {
+            SemanticError::located(
+                src,
+                rhs.span,
+                EvaluationError::Failed {
+                    message: err.to_string(),
+                },
+            )
         })?;
     crate::semantic::checked_type::IndexTypeRef::from_finite_index_form(shifted)
         .map(CheckedType::Key)
-        .map_err(|err| GraphcalError::EvalError {
-            message: err.describe_finite_index(),
-            src: src.clone(),
-            span: rhs.span.into(),
+        .map_err(|err| {
+            SemanticError::located(
+                src,
+                rhs.span,
+                EvaluationError::Failed {
+                    message: err.describe_finite_index(),
+                },
+            )
         })
 }
 
@@ -128,30 +139,34 @@ pub(super) fn binop_rule(
     rhs: &Operand,
     rhs_const_int: Option<i64>,
     registry: &FormattingRegistry,
-    src: &NamedSource<Arc<String>>,
-) -> Result<CheckedType<Symbolic>, GraphcalError> {
+    src: SourceId,
+) -> Result<CheckedType<Symbolic>, SemanticError> {
     let lhs_type = &lhs.ty;
     let rhs_type = &rhs.ty;
     match op {
         // Logical operators: require Bool operands, return Bool
         BinOp::And | BinOp::Or => {
             if *lhs_type != CheckedType::Bool {
-                return Err(GraphcalError::DimensionMismatch {
-                    expected: "Bool".to_string(),
-                    found: format_checked_type(lhs_type, registry),
-                    help: "boolean operators require Bool operands".to_string(),
-                    src: src.clone(),
-                    span: lhs.span.into(),
-                });
+                return Err(SemanticError::located(
+                    src,
+                    lhs.span,
+                    DimensionError::DimensionMismatch {
+                        expected: "Bool".to_string(),
+                        found: format_checked_type(lhs_type, registry),
+                        help: "boolean operators require Bool operands".to_string(),
+                    },
+                ));
             }
             if *rhs_type != CheckedType::Bool {
-                return Err(GraphcalError::DimensionMismatch {
-                    expected: "Bool".to_string(),
-                    found: format_checked_type(rhs_type, registry),
-                    help: "boolean operators require Bool operands".to_string(),
-                    src: src.clone(),
-                    span: rhs.span.into(),
-                });
+                return Err(SemanticError::located(
+                    src,
+                    rhs.span,
+                    DimensionError::DimensionMismatch {
+                        expected: "Bool".to_string(),
+                        found: format_checked_type(rhs_type, registry),
+                        help: "boolean operators require Bool operands".to_string(),
+                    },
+                ));
             }
             Ok(CheckedType::Bool)
         }
@@ -168,13 +183,15 @@ pub(super) fn binop_rule(
             {
                 return Ok(CheckedType::Bool);
             }
-            Err(GraphcalError::DimensionMismatch {
-                expected: format_checked_type(lhs_type, registry),
-                found: format_checked_type(rhs_type, registry),
-                help: "equality operands must have the same type".to_string(),
-                src: src.clone(),
-                span: rhs.span.into(),
-            })
+            Err(SemanticError::located(
+                src,
+                rhs.span,
+                DimensionError::DimensionMismatch {
+                    expected: format_checked_type(lhs_type, registry),
+                    found: format_checked_type(rhs_type, registry),
+                    help: "equality operands must have the same type".to_string(),
+                },
+            ))
         }
         // Ordering comparisons require unindexed operands that are same-type
         // quantities, Int/Fin values, or same-scale Datetimes.
@@ -184,33 +201,29 @@ pub(super) fn binop_rule(
             if matches!(lhs_type, CheckedType::Complex(_))
                 || matches!(rhs_type, CheckedType::Complex(_))
             {
-                return Err(GraphcalError::DimensionMismatch {
-                    expected: "an ordered real quantity, integer, or datetime".to_string(),
-                    found: if matches!(lhs_type, CheckedType::Complex(_)) {
-                        format_checked_type(lhs_type, registry)
-                    } else {
-                        format_checked_type(rhs_type, registry)
-                    },
-                    help: "complex quantities are unordered; compare re(), im(), abs(), or phase() explicitly"
-                        .to_string(),
-                    src: src.clone(),
-                    span: if matches!(lhs_type, CheckedType::Complex(_)) {
+                return Err(SemanticError::located(src, if matches!(lhs_type, CheckedType::Complex(_)) {
                         lhs.span
                     } else {
                         rhs.span
                     }
-                    .into(),
-                });
+                    , DimensionError::DimensionMismatch { expected: "an ordered real quantity, integer, or datetime".to_string(), found: if matches!(lhs_type, CheckedType::Complex(_)) {
+                        format_checked_type(lhs_type, registry)
+                    } else {
+                        format_checked_type(rhs_type, registry)
+                    }, help: "complex quantities are unordered; compare re(), im(), abs(), or phase() explicitly"
+                        .to_string() }));
             }
             if matches!(lhs_type, CheckedType::Int) || matches!(rhs_type, CheckedType::Int) {
                 if !matches!(lhs_type, CheckedType::Int) || !matches!(rhs_type, CheckedType::Int) {
-                    return Err(GraphcalError::DimensionMismatch {
-                        expected: format_checked_type(lhs_type, registry),
-                        found: format_checked_type(rhs_type, registry),
-                        help: "comparison operands must have the same type".to_string(),
-                        src: src.clone(),
-                        span: rhs.span.into(),
-                    });
+                    return Err(SemanticError::located(
+                        src,
+                        rhs.span,
+                        DimensionError::DimensionMismatch {
+                            expected: format_checked_type(lhs_type, registry),
+                            found: format_checked_type(rhs_type, registry),
+                            help: "comparison operands must have the same type".to_string(),
+                        },
+                    ));
                 }
                 return Ok(CheckedType::Bool);
             }
@@ -219,26 +232,30 @@ pub(super) fn binop_rule(
                 && let CheckedType::Datetime(rs) = rhs_type
             {
                 if ls != rs {
-                    return Err(GraphcalError::DimensionMismatch {
-                        expected: format_checked_type(lhs_type, registry),
-                        found: format_checked_type(rhs_type, registry),
-                        help: "cannot compare datetimes with different time scales".to_string(),
-                        src: src.clone(),
-                        span: rhs.span.into(),
-                    });
+                    return Err(SemanticError::located(
+                        src,
+                        rhs.span,
+                        DimensionError::DimensionMismatch {
+                            expected: format_checked_type(lhs_type, registry),
+                            found: format_checked_type(rhs_type, registry),
+                            help: "cannot compare datetimes with different time scales".to_string(),
+                        },
+                    ));
                 }
                 return Ok(CheckedType::Bool);
             }
             let lhs_dim = expect_quantity(lhs_type, registry, src, lhs.span)?;
             let rhs_dim = expect_quantity(rhs_type, registry, src, rhs.span)?;
             if lhs_dim != rhs_dim {
-                return Err(GraphcalError::DimensionMismatch {
-                    expected: registry.dimensions.format_dimension(&lhs_dim),
-                    found: registry.dimensions.format_dimension(&rhs_dim),
-                    help: "comparison operands must have the same dimension".to_string(),
-                    src: src.clone(),
-                    span: rhs.span.into(),
-                });
+                return Err(SemanticError::located(
+                    src,
+                    rhs.span,
+                    DimensionError::DimensionMismatch {
+                        expected: registry.dimensions.format_dimension(&lhs_dim),
+                        found: registry.dimensions.format_dimension(&rhs_dim),
+                        help: "comparison operands must have the same dimension".to_string(),
+                    },
+                ));
             }
             Ok(CheckedType::Bool)
         }
@@ -253,15 +270,17 @@ pub(super) fn binop_rule(
                 return fin_key_additive_rule(op, key_index, rhs, rhs_const_int, registry, src);
             }
             if matches!(rhs_type, CheckedType::Key(_)) {
-                return Err(GraphcalError::DimensionMismatch {
-                    expected: format_checked_type(lhs_type, registry),
-                    found: format_checked_type(rhs_type, registry),
-                    help: "Fin-key arithmetic is written key-first: `k + c` with a \
+                return Err(SemanticError::located(
+                    src,
+                    rhs.span,
+                    DimensionError::DimensionMismatch {
+                        expected: format_checked_type(lhs_type, registry),
+                        found: format_checked_type(rhs_type, registry),
+                        help: "Fin-key arithmetic is written key-first: `k + c` with a \
                            static Nat constant"
-                        .to_string(),
-                    src: src.clone(),
-                    span: rhs.span.into(),
-                });
+                            .to_string(),
+                    },
+                ));
             }
             if matches!(lhs_type, CheckedType::Int) && matches!(rhs_type, CheckedType::Int) {
                 return Ok(CheckedType::Int);
@@ -269,26 +288,14 @@ pub(super) fn binop_rule(
             match (lhs_type, rhs_type) {
                 (CheckedType::Complex(lhs_dim), CheckedType::Complex(rhs_dim)) => {
                     if lhs_dim != rhs_dim {
-                        return Err(GraphcalError::DimensionMismatch {
-                            expected: format_checked_type(lhs_type, registry),
-                            found: format_checked_type(rhs_type, registry),
-                            help: "complex operands of addition and subtraction must have the same dimension"
-                                .to_string(),
-                            src: src.clone(),
-                            span: rhs.span.into(),
-                        });
+                        return Err(SemanticError::located(src, rhs.span, DimensionError::DimensionMismatch { expected: format_checked_type(lhs_type, registry), found: format_checked_type(rhs_type, registry), help: "complex operands of addition and subtraction must have the same dimension"
+                                .to_string() }));
                     }
                     return Ok(CheckedType::Complex(lhs_dim.clone()));
                 }
                 (CheckedType::Complex(_), _) | (_, CheckedType::Complex(_)) => {
-                    return Err(GraphcalError::DimensionMismatch {
-                        expected: format_checked_type(lhs_type, registry),
-                        found: format_checked_type(rhs_type, registry),
-                        help: "addition and subtraction do not implicitly promote real quantities; use to_complex()"
-                            .to_string(),
-                        src: src.clone(),
-                        span: rhs.span.into(),
-                    });
+                    return Err(SemanticError::located(src, rhs.span, DimensionError::DimensionMismatch { expected: format_checked_type(lhs_type, registry), found: format_checked_type(rhs_type, registry), help: "addition and subtraction do not implicitly promote real quantities; use to_complex()"
+                            .to_string() }));
                 }
                 _ => {}
             }
@@ -299,37 +306,43 @@ pub(super) fn binop_rule(
                     // Datetime - Datetime -> Quantity(Time)
                     if op == BinOp::Sub {
                         if ls != rs {
-                            return Err(GraphcalError::DimensionMismatch {
-                                expected: format_checked_type(lhs_type, registry),
-                                found: format_checked_type(rhs_type, registry),
-                                help: "cannot subtract datetimes with different time scales"
-                                    .to_string(),
-                                src: src.clone(),
-                                span: rhs.span.into(),
-                            });
+                            return Err(SemanticError::located(
+                                src,
+                                rhs.span,
+                                DimensionError::DimensionMismatch {
+                                    expected: format_checked_type(lhs_type, registry),
+                                    found: format_checked_type(rhs_type, registry),
+                                    help: "cannot subtract datetimes with different time scales"
+                                        .to_string(),
+                                },
+                            ));
                         }
                         return Ok(CheckedType::Quantity(time_dim));
                     }
                     // Datetime + Datetime -> error
-                    return Err(GraphcalError::DimensionMismatch {
-                        expected: "Quantity(Time)".to_string(),
-                        found: format_checked_type(rhs_type, registry),
-                        help: "cannot add two datetimes; did you mean to subtract?".to_string(),
-                        src: src.clone(),
-                        span: rhs.span.into(),
-                    });
+                    return Err(SemanticError::located(
+                        src,
+                        rhs.span,
+                        DimensionError::DimensionMismatch {
+                            expected: "Quantity(Time)".to_string(),
+                            found: format_checked_type(rhs_type, registry),
+                            help: "cannot add two datetimes; did you mean to subtract?".to_string(),
+                        },
+                    ));
                 }
                 // Datetime +/- Quantity(Time) -> Datetime
                 let rhs_dim = expect_quantity(rhs_type, registry, src, rhs.span)?;
                 if rhs_dim != time_dim {
-                    return Err(GraphcalError::DimensionMismatch {
-                        expected: "Time".to_string(),
-                        found: registry.dimensions.format_dimension(&rhs_dim),
-                        help: "can only add/subtract a Time duration to/from a Datetime"
-                            .to_string(),
-                        src: src.clone(),
-                        span: rhs.span.into(),
-                    });
+                    return Err(SemanticError::located(
+                        src,
+                        rhs.span,
+                        DimensionError::DimensionMismatch {
+                            expected: "Time".to_string(),
+                            found: registry.dimensions.format_dimension(&rhs_dim),
+                            help: "can only add/subtract a Time duration to/from a Datetime"
+                                .to_string(),
+                        },
+                    ));
                 }
                 return Ok(CheckedType::Datetime(*ls));
             }
@@ -339,36 +352,42 @@ pub(super) fn binop_rule(
                     let time_dim = Dimension::base(BaseDimId::Prelude(PreludeBaseDimension::Time));
                     let lhs_dim = expect_quantity(lhs_type, registry, src, lhs.span)?;
                     if lhs_dim != time_dim {
-                        return Err(GraphcalError::DimensionMismatch {
-                            expected: "Time".to_string(),
-                            found: registry.dimensions.format_dimension(&lhs_dim),
-                            help: "can only add a Time duration to a Datetime".to_string(),
-                            src: src.clone(),
-                            span: lhs.span.into(),
-                        });
+                        return Err(SemanticError::located(
+                            src,
+                            lhs.span,
+                            DimensionError::DimensionMismatch {
+                                expected: "Time".to_string(),
+                                found: registry.dimensions.format_dimension(&lhs_dim),
+                                help: "can only add a Time duration to a Datetime".to_string(),
+                            },
+                        ));
                     }
                     return Ok(CheckedType::Datetime(*rs));
                 }
                 // Quantity - Datetime -> error
-                return Err(GraphcalError::DimensionMismatch {
-                    expected: format_checked_type(lhs_type, registry),
-                    found: format_checked_type(rhs_type, registry),
-                    help: "cannot subtract a Datetime from a quantity".to_string(),
-                    src: src.clone(),
-                    span: rhs.span.into(),
-                });
+                return Err(SemanticError::located(
+                    src,
+                    rhs.span,
+                    DimensionError::DimensionMismatch {
+                        expected: format_checked_type(lhs_type, registry),
+                        found: format_checked_type(rhs_type, registry),
+                        help: "cannot subtract a Datetime from a quantity".to_string(),
+                    },
+                ));
             }
             let lhs_dim = expect_quantity(lhs_type, registry, src, lhs.span)?;
             let rhs_dim = expect_quantity(rhs_type, registry, src, rhs.span)?;
             if lhs_dim != rhs_dim {
-                return Err(GraphcalError::DimensionMismatch {
-                    expected: registry.dimensions.format_dimension(&lhs_dim),
-                    found: registry.dimensions.format_dimension(&rhs_dim),
-                    help: "operands of addition and subtraction must have the same dimension"
-                        .to_string(),
-                    src: src.clone(),
-                    span: rhs.span.into(),
-                });
+                return Err(SemanticError::located(
+                    src,
+                    rhs.span,
+                    DimensionError::DimensionMismatch {
+                        expected: registry.dimensions.format_dimension(&lhs_dim),
+                        found: registry.dimensions.format_dimension(&rhs_dim),
+                        help: "operands of addition and subtraction must have the same dimension"
+                            .to_string(),
+                    },
+                ));
             }
             Ok(CheckedType::Quantity(lhs_dim))
         }
@@ -384,13 +403,9 @@ pub(super) fn binop_rule(
                 CheckedType::Complex(dimension) => (dimension.clone(), true),
                 _ => (expect_quantity(rhs_type, registry, src, rhs.span)?, false),
             };
-            let dim =
-                lhs_dim
-                    .checked_mul(&rhs_dim)
-                    .map_err(|_| GraphcalError::DimensionOverflow {
-                        src: src.clone(),
-                        span: expr_span.into(),
-                    })?;
+            let dim = lhs_dim.checked_mul(&rhs_dim).map_err(|_| {
+                SemanticError::located(src, expr_span, DimensionError::DimensionOverflow)
+            })?;
             if lhs_complex || rhs_complex {
                 Ok(CheckedType::Complex(dim))
             } else {
@@ -409,13 +424,9 @@ pub(super) fn binop_rule(
                 CheckedType::Complex(dimension) => (dimension.clone(), true),
                 _ => (expect_quantity(rhs_type, registry, src, rhs.span)?, false),
             };
-            let dim =
-                lhs_dim
-                    .checked_div(&rhs_dim)
-                    .map_err(|_| GraphcalError::DimensionOverflow {
-                        src: src.clone(),
-                        span: expr_span.into(),
-                    })?;
+            let dim = lhs_dim.checked_div(&rhs_dim).map_err(|_| {
+                SemanticError::located(src, expr_span, DimensionError::DimensionOverflow)
+            })?;
             if lhs_complex || rhs_complex {
                 Ok(CheckedType::Complex(dim))
             } else {
@@ -426,17 +437,19 @@ pub(super) fn binop_rule(
             if matches!(lhs_type, CheckedType::Int) && matches!(rhs_type, CheckedType::Int) {
                 return Ok(CheckedType::Int);
             }
-            Err(GraphcalError::DimensionMismatch {
-                expected: "Int".to_string(),
-                found: format!(
-                    "{} % {}",
-                    format_checked_type(lhs_type, registry),
-                    format_checked_type(rhs_type, registry)
-                ),
-                help: "modulo operator requires Int operands".to_string(),
-                src: src.clone(),
-                span: expr_span.into(),
-            })
+            Err(SemanticError::located(
+                src,
+                expr_span,
+                DimensionError::DimensionMismatch {
+                    expected: "Int".to_string(),
+                    found: format!(
+                        "{} % {}",
+                        format_checked_type(lhs_type, registry),
+                        format_checked_type(rhs_type, registry)
+                    ),
+                    help: "modulo operator requires Int operands".to_string(),
+                },
+            ))
         }
         BinOp::Pow(exponent) => {
             // Int powers remain integer-only. Exact integer syntax is
@@ -452,23 +465,27 @@ pub(super) fn binop_rule(
                     if value >= 0 {
                         return Ok(CheckedType::Int);
                     }
-                    return Err(GraphcalError::DimensionMismatch {
-                        expected: "non-negative Int exponent".to_string(),
-                        found: value.to_string(),
-                        help: "integer power requires a non-negative exact integer exponent"
-                            .to_string(),
-                        src: src.clone(),
-                        span: rhs.span.into(),
-                    });
+                    return Err(SemanticError::located(
+                        src,
+                        rhs.span,
+                        DimensionError::DimensionMismatch {
+                            expected: "non-negative Int exponent".to_string(),
+                            found: value.to_string(),
+                            help: "integer power requires a non-negative exact integer exponent"
+                                .to_string(),
+                        },
+                    ));
                 }
-                return Err(GraphcalError::DimensionMismatch {
-                    expected: "non-negative exact Int exponent".to_string(),
-                    found: format_checked_type(rhs_type, registry),
-                    help: "integer power requires an exact integer exponent such as `2`"
-                        .to_string(),
-                    src: src.clone(),
-                    span: rhs.span.into(),
-                });
+                return Err(SemanticError::located(
+                    src,
+                    rhs.span,
+                    DimensionError::DimensionMismatch {
+                        expected: "non-negative exact Int exponent".to_string(),
+                        found: format_checked_type(rhs_type, registry),
+                        help: "integer power requires an exact integer exponent such as `2`"
+                            .to_string(),
+                    },
+                ));
             }
 
             let lhs_dim = expect_quantity(lhs_type, registry, src, lhs.span)?;
@@ -477,13 +494,15 @@ pub(super) fn binop_rule(
             if !matches!(exponent, PowerExponent::Exact(_)) {
                 let rhs_dim = expect_quantity(rhs_type, registry, src, rhs.span)?;
                 if !rhs_dim.is_dimensionless() {
-                    return Err(GraphcalError::DimensionMismatch {
-                        expected: "Dimensionless exponent".to_string(),
-                        found: registry.dimensions.format_dimension(&rhs_dim),
-                        help: "the exponent of a power must be dimensionless".to_string(),
-                        src: src.clone(),
-                        span: rhs.span.into(),
-                    });
+                    return Err(SemanticError::located(
+                        src,
+                        rhs.span,
+                        DimensionError::DimensionMismatch {
+                            expected: "Dimensionless exponent".to_string(),
+                            found: registry.dimensions.format_dimension(&rhs_dim),
+                            help: "the exponent of a power must be dimensionless".to_string(),
+                        },
+                    ));
                 }
             }
 
@@ -493,18 +512,11 @@ pub(super) fn binop_rule(
                         return Ok(CheckedType::Quantity(Dimension::dimensionless()));
                     }
                     let rational = Rational::try_from(exact).map_err(|_| {
-                        GraphcalError::DimensionOverflow {
-                            src: src.clone(),
-                            span: rhs.span.into(),
-                        }
+                        SemanticError::located(src, rhs.span, DimensionError::DimensionOverflow)
                     })?;
-                    let dim =
-                        lhs_dim
-                            .pow(rational)
-                            .map_err(|_| GraphcalError::DimensionOverflow {
-                                src: src.clone(),
-                                span: expr_span.into(),
-                            })?;
+                    let dim = lhs_dim.pow(rational).map_err(|_| {
+                        SemanticError::located(src, expr_span, DimensionError::DimensionOverflow)
+                    })?;
                     Ok(CheckedType::Quantity(dim))
                 }
                 PowerExponent::FloatSyntax { exact } => {
@@ -519,21 +531,21 @@ pub(super) fn binop_rule(
                         },
                         |replacement| format!("replace the float exponent with `{replacement}`"),
                     );
-                    Err(GraphcalError::FloatPowerExponent {
-                        replacement,
-                        help,
-                        src: src.clone(),
-                        span: rhs.span.into(),
-                    })
+                    Err(SemanticError::located(
+                        src,
+                        rhs.span,
+                        DimensionError::FloatPowerExponent { replacement, help },
+                    ))
                 }
                 PowerExponent::Runtime => {
                     if lhs_dim.is_dimensionless() {
                         Ok(CheckedType::Quantity(Dimension::dimensionless()))
                     } else {
-                        Err(GraphcalError::RuntimeExponentForDimensionedBase {
-                            src: src.clone(),
-                            span: rhs.span.into(),
-                        })
+                        Err(SemanticError::located(
+                            src,
+                            rhs.span,
+                            DimensionError::RuntimeExponentForDimensionedBase,
+                        ))
                     }
                 }
             }
@@ -546,18 +558,20 @@ pub(super) fn unary_rule(
     op: UnaryOp,
     operand: &Operand,
     registry: &FormattingRegistry,
-    src: &NamedSource<Arc<String>>,
-) -> Result<CheckedType<Symbolic>, GraphcalError> {
+    src: SourceId,
+) -> Result<CheckedType<Symbolic>, SemanticError> {
     match op {
         UnaryOp::Not => {
             if operand.ty != CheckedType::Bool {
-                return Err(GraphcalError::DimensionMismatch {
-                    expected: "Bool".to_string(),
-                    found: format_checked_type(&operand.ty, registry),
-                    help: "logical NOT requires a Bool operand".to_string(),
-                    src: src.clone(),
-                    span: operand.span.into(),
-                });
+                return Err(SemanticError::located(
+                    src,
+                    operand.span,
+                    DimensionError::DimensionMismatch {
+                        expected: "Bool".to_string(),
+                        found: format_checked_type(&operand.ty, registry),
+                        help: "logical NOT requires a Bool operand".to_string(),
+                    },
+                ));
             }
             Ok(CheckedType::Bool)
         }
@@ -565,13 +579,15 @@ pub(super) fn unary_rule(
             CheckedType::Quantity(_) | CheckedType::Complex(_) | CheckedType::Int => {
                 Ok(operand.ty.clone())
             }
-            other => Err(GraphcalError::DimensionMismatch {
-                expected: "Int or Quantity".to_string(),
-                found: format_checked_type(other, registry),
-                help: "negation requires a numeric quantity or Int operand".to_string(),
-                src: src.clone(),
-                span: operand.span.into(),
-            }),
+            other => Err(SemanticError::located(
+                src,
+                operand.span,
+                DimensionError::DimensionMismatch {
+                    expected: "Int or Quantity".to_string(),
+                    found: format_checked_type(other, registry),
+                    help: "negation requires a numeric quantity or Int operand".to_string(),
+                },
+            )),
         },
     }
 }
@@ -582,25 +598,29 @@ pub(super) fn if_rule(
     then_branch: &Operand,
     else_branch: &Operand,
     registry: &FormattingRegistry,
-    src: &NamedSource<Arc<String>>,
-) -> Result<CheckedType<Symbolic>, GraphcalError> {
+    src: SourceId,
+) -> Result<CheckedType<Symbolic>, SemanticError> {
     if cond.ty != CheckedType::Bool {
-        return Err(GraphcalError::DimensionMismatch {
-            expected: "Bool".to_string(),
-            found: format_checked_type(&cond.ty, registry),
-            help: "if/else condition must be Bool".to_string(),
-            src: src.clone(),
-            span: cond.span.into(),
-        });
+        return Err(SemanticError::located(
+            src,
+            cond.span,
+            DimensionError::DimensionMismatch {
+                expected: "Bool".to_string(),
+                found: format_checked_type(&cond.ty, registry),
+                help: "if/else condition must be Bool".to_string(),
+            },
+        ));
     }
     if then_branch.ty != else_branch.ty {
-        return Err(GraphcalError::DimensionMismatch {
-            expected: format_checked_type(&then_branch.ty, registry),
-            found: format_checked_type(&else_branch.ty, registry),
-            help: "both branches of if/else must have the same dimension".to_string(),
-            src: src.clone(),
-            span: else_branch.span.into(),
-        });
+        return Err(SemanticError::located(
+            src,
+            else_branch.span,
+            DimensionError::DimensionMismatch {
+                expected: format_checked_type(&then_branch.ty, registry),
+                found: format_checked_type(&else_branch.ty, registry),
+                help: "both branches of if/else must have the same dimension".to_string(),
+            },
+        ));
     }
     Ok(then_branch.ty.clone())
 }
@@ -609,33 +629,32 @@ pub(super) fn if_rule(
 pub(in crate::tir::dim_check) fn resolve_unit_dimension_or_diagnose(
     unit: &crate::hir::expr::ResolvedUnitExpr,
     tir: &dyn crate::tir::typed::TirRead,
-    src: &NamedSource<Arc<String>>,
-) -> Result<Dimension, GraphcalError> {
+    src: SourceId,
+) -> Result<Dimension, SemanticError> {
     unit.terms
         .iter()
         .try_fold(Dimension::dimensionless(), |dimension, item| {
             let info = tir
                 .unit_info(item.name.value.static_definition())
-                .ok_or_else(|| GraphcalError::UnknownUnit {
-                    name: item.name.value.spelling().clone(),
-                    src: src.clone(),
-                    span: item.name.span.into(),
+                .ok_or_else(|| {
+                    SemanticError::located(
+                        src,
+                        item.name.span,
+                        DimensionError::UnknownUnit {
+                            name: item.name.value.spelling().clone(),
+                        },
+                    )
                 })?;
             let exponent = item.power;
-            let term_dimension =
-                info.dimension
-                    .pow(exponent)
-                    .map_err(|_| GraphcalError::DimensionOverflow {
-                        src: src.clone(),
-                        span: item.name.span.into(),
-                    })?;
+            let term_dimension = info.dimension.pow(exponent).map_err(|_| {
+                SemanticError::located(src, item.name.span, DimensionError::DimensionOverflow)
+            })?;
             let resolved = match item.op {
                 crate::syntax::ast::MulDivOp::Mul => dimension.checked_mul(&term_dimension),
                 crate::syntax::ast::MulDivOp::Div => dimension.checked_div(&term_dimension),
             };
-            resolved.map_err(|_| GraphcalError::DimensionOverflow {
-                src: src.clone(),
-                span: item.name.span.into(),
+            resolved.map_err(|_| {
+                SemanticError::located(src, item.name.span, DimensionError::DimensionOverflow)
             })
         })
 }
@@ -648,24 +667,28 @@ pub(in crate::tir::dim_check) fn match_arms_rule(
     arm_body_span: impl Fn(usize) -> Span,
     expr_span: Span,
     registry: &FormattingRegistry,
-    src: &NamedSource<Arc<String>>,
-) -> Result<CheckedType<Symbolic>, GraphcalError> {
+    src: SourceId,
+) -> Result<CheckedType<Symbolic>, SemanticError> {
     let Some(first) = arm_types.first() else {
-        return Err(GraphcalError::EvalError {
-            message: "match expression has no arms".to_string(),
-            src: src.clone(),
-            span: expr_span.into(),
-        });
+        return Err(SemanticError::located(
+            src,
+            expr_span,
+            EvaluationError::Failed {
+                message: "match expression has no arms".to_string(),
+            },
+        ));
     };
     for (i, arm_type) in arm_types.iter().enumerate().skip(1) {
         if arm_type != first {
-            return Err(GraphcalError::DimensionMismatch {
-                expected: format_checked_type(first, registry),
-                found: format_checked_type(arm_type, registry),
-                help: "all match arms must return the same type".to_string(),
-                src: src.clone(),
-                span: arm_body_span(i).into(),
-            });
+            return Err(SemanticError::located(
+                src,
+                arm_body_span(i),
+                DimensionError::DimensionMismatch {
+                    expected: format_checked_type(first, registry),
+                    found: format_checked_type(arm_type, registry),
+                    help: "all match arms must return the same type".to_string(),
+                },
+            ));
         }
     }
     Ok(first.clone())

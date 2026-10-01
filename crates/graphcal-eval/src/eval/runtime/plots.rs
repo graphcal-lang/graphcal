@@ -9,11 +9,12 @@
 use std::collections::HashMap;
 
 use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
-use graphcal_compiler::graphcal_error::GraphcalError;
+use graphcal_compiler::outcome::Outcome;
 use graphcal_compiler::plot_shape::PlotLeafKind;
 use graphcal_compiler::plot_visibility::PlotVisibility;
 use graphcal_compiler::resolved_name::ResolvedDeclName;
 use graphcal_compiler::semantic::checked_type::{CheckedType, Symbolic};
+use graphcal_compiler::semantic_error::SemanticError;
 use graphcal_compiler::syntax::decl_name::DeclName;
 use graphcal_compiler::syntax::module_name::ScopedName;
 use graphcal_compiler::syntax::span::{Span, Spanned};
@@ -105,7 +106,7 @@ pub(super) fn evaluate_root_plots(
     plan: &crate::execution_plan::ExecPlan<'_>,
     evaluated: EvaluatedRoot<'_>,
     ctx: &EvalSession<'_>,
-) -> Result<PlotOutputs, GraphcalError> {
+) -> Result<PlotOutputs, Outcome<SemanticError>> {
     let tir = plan.tir();
     let root_plots = root_plots(plan);
     let mut plots = Vec::new();
@@ -164,7 +165,7 @@ pub(super) fn evaluate_root_plots(
                     properties: composed.properties,
                 }))
         })
-        .collect::<Result<Vec<_>, GraphcalError>>()?
+        .collect::<Result<Vec<_>, Outcome<SemanticError>>>()?
         .into_iter()
         .flatten()
         .collect();
@@ -190,7 +191,7 @@ pub(super) fn evaluate_root_plots(
                     properties: composed.properties,
                 }))
         })
-        .collect::<Result<Vec<_>, GraphcalError>>()?
+        .collect::<Result<Vec<_>, Outcome<SemanticError>>>()?
         .into_iter()
         .flatten()
         .collect();
@@ -220,7 +221,7 @@ impl Compositions<'_, '_> {
         name: &DeclName,
         fields: Option<Scoped<'_, [graphcal_compiler::tir::typed::LoweredPlotField]>>,
         references: &[Spanned<ScopedName>],
-    ) -> Result<Option<CompositionFields>, GraphcalError> {
+    ) -> Result<Option<CompositionFields>, Outcome<SemanticError>> {
         let fields = fields.ok_or_else(|| {
             self.ctx.internal_error(
                 format!("composition `{owner}` has no checked body"),
@@ -255,7 +256,9 @@ fn eval_plot_property(
     values: &RuntimeValueMap,
     ctx: &EvalSession<'_>,
 ) -> Result<PlotFieldValue, PlotEvaluationError> {
-    ctx.cancellation.checkpoint().map_err(GraphcalError::from)?;
+    ctx.cancellation
+        .checkpoint()
+        .map_err(Outcome::<SemanticError>::from)?;
     if let graphcal_compiler::hir::expr::ExprKind::StringLiteral(_) = expr.get().kind() {
         let text = ctx
             .checked_string(expr)
@@ -263,6 +266,7 @@ fn eval_plot_property(
         return Ok(PlotFieldValue::String(text.to_owned()));
     }
     ctx.executable(expr)
+        .map_err(Outcome::Failed)
         .and_then(|tree| eval_root(&tree, values, ctx))
         .map_err(PlotEvaluationError::from)
         .and_then(|rv| runtime_to_plot_field_value(&rv).map_err(PlotEvaluationError::from))
@@ -272,18 +276,32 @@ fn eval_plot_property(
 enum PlotEvaluationError {
     #[error("{0}")]
     Unavailable(NodeUnavailable),
-    #[error(transparent)]
-    Fatal(GraphcalError),
+    /// Cancellation or a violated invariant, which aborts the whole run.
+    #[error("plot evaluation aborted")]
+    Fatal(Outcome<SemanticError>),
 }
 
-impl From<GraphcalError> for PlotEvaluationError {
-    fn from(error: GraphcalError) -> Self {
+impl PlotEvaluationError {
+    /// An error that aborts the whole run instead of the plot.
+    const fn fatal(error: SemanticError) -> Self {
+        Self::Fatal(Outcome::Failed(error))
+    }
+}
+
+impl From<Outcome<SemanticError>> for PlotEvaluationError {
+    fn from(error: Outcome<SemanticError>) -> Self {
         match error {
-            error @ (GraphcalError::InternalError { .. } | GraphcalError::Cancelled(_)) => {
+            error @ (Outcome::Cancelled | Outcome::Failed(SemanticError::Internal(_))) => {
                 Self::Fatal(error)
             }
-            error => Self::Unavailable(eval_failed_node_error(&error)),
+            Outcome::Failed(error) => Self::Unavailable(eval_failed_node_error(&error)),
         }
+    }
+}
+
+impl From<SemanticError> for PlotEvaluationError {
+    fn from(error: SemanticError) -> Self {
+        Self::from(Outcome::Failed(error))
     }
 }
 
@@ -388,7 +406,7 @@ fn evaluate_plot(
 
     let owner = unit.identity();
     let channel_facts = unit.plot_channel_presentations().ok_or_else(|| {
-        PlotEvaluationError::Fatal(ctx.internal_error(
+        PlotEvaluationError::fatal(ctx.internal_error(
             format!("checked presentation facts are missing for plot `{owner}`"),
             DiagnosticAnchor::WholeFile,
         ))
@@ -401,7 +419,7 @@ fn evaluate_plot(
     let mut channel_data = Vec::new();
     for (channel, expr) in encodings {
         let fact = channel_facts.get(&channel).ok_or_else(|| {
-            PlotEvaluationError::Fatal(ctx.internal_error(
+            PlotEvaluationError::fatal(ctx.internal_error(
                 format!("checked presentation is missing channel `{channel}`"),
                 expr.get().span,
             ))
@@ -444,7 +462,7 @@ fn evaluate_plot(
         let field = scoped_field.get();
         let graphcal_compiler::ir::model::LoweredPlotProperty::Plot(plot_prop) = &field.property
         else {
-            return Err(PlotEvaluationError::Fatal(ctx.internal_error(
+            return Err(PlotEvaluationError::fatal(ctx.internal_error(
                 format!(
                     "checked plot property has incompatible classification `{}`",
                     field.property.name()
@@ -481,7 +499,7 @@ fn evaluate_mark_properties(
             let graphcal_compiler::ir::model::LoweredPlotProperty::Mark(mark_prop) =
                 &field.property
             else {
-                return Err(PlotEvaluationError::Fatal(ctx.internal_error(
+                return Err(PlotEvaluationError::fatal(ctx.internal_error(
                     format!(
                         "checked mark property has incompatible classification `{}`",
                         field.property.name()
@@ -521,15 +539,16 @@ fn evaluate_plot_channel(
     }
     let evaluated = ctx
         .executable(scoped_expr)
+        .map_err(Outcome::Failed)
         .and_then(|tree| eval_root_with_presentation(&tree, values, presentation_values, ctx))
         .map_err(|error| classify_plot_channel_error(channel, error))?;
     let presented = crate::eval_expr::resolve_presentation(evaluated, values, ctx)
         .map_err(|error| classify_plot_channel_error(channel, error))?;
     let declared_type =
-        plot_declared_type(fact, ctx, expr.span).map_err(PlotEvaluationError::Fatal)?;
+        plot_declared_type(fact, ctx, expr.span).map_err(PlotEvaluationError::fatal)?;
     let project = |value| {
         public_projection::project(value, &declared_type)
-            .map_err(|invariant| PlotEvaluationError::Fatal(invariant.into_internal_error(ctx.src)))
+            .map_err(|invariant| PlotEvaluationError::fatal(invariant.into_internal_error(ctx.src)))
     };
     let (displayed, mut diagnostics) = project(presented.as_ref())?;
     // A numeric channel must use one scale: it is displayed only when every
@@ -557,7 +576,7 @@ fn evaluate_plot_channel(
 
 fn classify_plot_channel_error(
     channel: graphcal_compiler::syntax::ast::EncodingChannel,
-    error: GraphcalError,
+    error: Outcome<SemanticError>,
 ) -> PlotEvaluationError {
     match PlotEvaluationError::from(error) {
         PlotEvaluationError::Unavailable(NodeUnavailable::EvalFailed { message }) => {
@@ -572,7 +591,7 @@ fn plot_declared_type(
     shape: &graphcal_compiler::plot_shape::PlotChannelShape,
     ctx: &EvalSession<'_>,
     span: Span,
-) -> Result<CheckedType, GraphcalError> {
+) -> Result<CheckedType, SemanticError> {
     // A contextual string channel has no runtime value type, and a symbolic
     // `Fin(N)` axis belongs to a template body, never to an executed plot.
     let leaf: Option<CheckedType<Symbolic>> = match shape.leaf() {
@@ -659,7 +678,7 @@ fn eval_composition_fields(
         let graphcal_compiler::ir::model::LoweredPlotProperty::Composition(comp_prop) =
             &field.property
         else {
-            return Err(PlotEvaluationError::Fatal(ctx.internal_error(
+            return Err(PlotEvaluationError::fatal(ctx.internal_error(
                 format!(
                     "checked composition property has incompatible classification `{}`",
                     field.property.name()

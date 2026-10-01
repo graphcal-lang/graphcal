@@ -1,5 +1,8 @@
 //! Prepared-parameter binding compilation and row construction.
 
+use crate::binding_error::BindingError;
+
+use graphcal_compiler::semantic_error::evaluation::EvaluationError;
 use graphcal_compiler::syntax::ast::{FieldInit, Ident, IdentPath, MapEntry, MapEntryKey};
 use graphcal_compiler::syntax::fin_position::FinPosition;
 use graphcal_compiler::syntax::non_empty::NonEmpty;
@@ -8,10 +11,10 @@ use graphcal_compiler::syntax::token::SourceIdentifier;
 
 use super::{
     AstExprKind, CheckedEntryInterface, CompileError, DeclName, DiagnosticAnchor, EvalSession,
-    Expr, ExprLoweringContext, GenericScope, GraphcalError, HirExprKind, ModelIndexKind,
-    ModelIndexSchema, ModelSchemaGraph, ModelSchemaGraphBuilder, ModelTypeId, ModelValueSchema,
-    ModuleScope, ParameterBindingBuilder, ParameterPort, ParameterPosition, ParameterValue,
-    PreparedProject, RuntimeParameterBinding, RuntimeParameterBindings, RuntimeValueMap, Span,
+    Expr, ExprLoweringContext, GenericScope, HirExprKind, ModelIndexKind, ModelIndexSchema,
+    ModelSchemaGraph, ModelSchemaGraphBuilder, ModelTypeId, ModelValueSchema, ModuleScope,
+    ParameterBindingBuilder, ParameterPort, ParameterPosition, ParameterValue, PreparedProject,
+    RuntimeParameterBinding, RuntimeParameterBindings, RuntimeValueMap, SemanticError, Span,
     parameter_domain,
 };
 
@@ -82,11 +85,16 @@ impl PreparedProject {
         let normalized =
             normalize_binding_literal(expr.clone(), &port.value_schema, &self.schema_graph)
                 .map_err(|message| {
-                    CompileError::Eval(GraphcalError::EvalError {
-                        message: format!("invalid binding for `{}`: {message}", port.name),
-                        src: self.source.clone(),
-                        span: expr.span.into(),
-                    })
+                    CompileError::semantic(
+                        SemanticError::located(
+                            self.source,
+                            expr.span,
+                            EvaluationError::Failed {
+                                message: format!("invalid binding for `{}`: {message}", port.name),
+                            },
+                        ),
+                        &self.sources,
+                    )
                 })?;
         let tree = self.check_closed_binding(port, &normalized)?;
         Ok(ParameterValue {
@@ -184,7 +192,7 @@ impl PreparedProject {
             self.tir(),
             &hir,
             &expected.declared_type(),
-            &self.source,
+            self.source,
         )
         .map_err(|error| structured_error(path, error.to_string()))?;
         Ok(normalized)
@@ -368,10 +376,10 @@ impl ParameterBindingBuilder<'_> {
             .iter()
             .find(|port| !port.has_default && self.slots[port.position.index].is_none())
         {
-            return Err(CompileError::Eval(
-                GraphcalError::RequiredParamNotProvided {
-                    name: port.name.to_string(),
-                    src: self.project.source.clone(),
+            return Err(CompileError::Binding(
+                BindingError::RequiredParamNotProvided {
+                    name: port.name.clone(),
+                    src: self.project.sources.renderable(self.project.source),
                     span: port.span.into(),
                 },
             ));
@@ -431,9 +439,9 @@ impl PreparedProject {
                 .declarations()
                 .find_map(|entry| (entry.name() == name).then_some(entry.category()));
             actual_kind.map_or_else(
-                || CompileError::Eval(GraphcalError::OverrideUnknownParam { name: name.clone() }),
+                || CompileError::Binding(BindingError::UnknownParam { name: name.clone() }),
                 |actual_kind| {
-                    CompileError::Eval(GraphcalError::OverrideNotAParam {
+                    CompileError::Binding(BindingError::NotAParam {
                         name: name.clone(),
                         actual_kind,
                     })
@@ -447,18 +455,24 @@ impl PreparedProject {
         position: ParameterPosition,
     ) -> Result<&ParameterPort, CompileError> {
         if position.plan_id != self.plan_id {
-            return Err(CompileError::Eval(GraphcalError::internal_error(
-                "parameter position belongs to another prepared project",
-                &self.source,
-                DiagnosticAnchor::Builtin,
-            )));
+            return Err(CompileError::semantic(
+                SemanticError::internal_error(
+                    "parameter position belongs to another prepared project",
+                    self.source,
+                    DiagnosticAnchor::Builtin,
+                ),
+                &self.sources,
+            ));
         }
         self.parameter_ports.get(position.index).ok_or_else(|| {
-            CompileError::Eval(GraphcalError::internal_error(
-                format!("parameter position {} is out of bounds", position.index),
-                &self.source,
-                DiagnosticAnchor::Builtin,
-            ))
+            CompileError::semantic(
+                SemanticError::internal_error(
+                    format!("parameter position {} is out of bounds", position.index),
+                    self.source,
+                    DiagnosticAnchor::Builtin,
+                ),
+                &self.sources,
+            )
         })
     }
 
@@ -476,22 +490,27 @@ impl PreparedProject {
         let span = hir.span;
         let hir =
             graphcal_compiler::hir::closed_expr::ClosedExpr::try_new(hir).map_err(|message| {
-                CompileError::Eval(GraphcalError::EvalError {
-                    message: format!(
-                        "binding for `{}` is not a closed value: {message}",
-                        port.name
+                CompileError::semantic(
+                    SemanticError::located(
+                        self.source,
+                        span,
+                        EvaluationError::Failed {
+                            message: format!(
+                                "binding for `{}` is not a closed value: {message}",
+                                port.name
+                            ),
+                        },
                     ),
-                    src: self.source.clone(),
-                    span: span.into(),
-                })
+                    &self.sources,
+                )
             })?;
         graphcal_compiler::tir::dim_check::check_external_value_expr_type(
             self.tir(),
             &hir,
             &port.declared_type,
-            &self.source,
+            self.source,
         )
-        .map_err(CompileError::from)
+        .map_err(|error| self.render(error))
     }
 
     /// Lower a closed boundary value against its canonical recursive schema.
@@ -683,11 +702,16 @@ impl PreparedProject {
                 };
                 let entry_schema =
                     map_entry_value_schema(expected, entry.keys.len()).map_err(|message| {
-                        CompileError::Eval(GraphcalError::EvalError {
-                            message: format!("invalid external map binding: {message}"),
-                            src: self.source.clone(),
-                            span: entry.value.span.into(),
-                        })
+                        CompileError::semantic(
+                            SemanticError::located(
+                                self.source,
+                                entry.value.span,
+                                EvaluationError::Failed {
+                                    message: format!("invalid external map binding: {message}"),
+                                },
+                            ),
+                            &self.sources,
+                        )
                     })?;
                 let value = self.lower_closed_binding_expr(&entry.value, entry_schema, owner)?;
                 Ok(graphcal_compiler::hir::expr::MapEntry {
@@ -714,19 +738,22 @@ impl PreparedProject {
             &self.tir().registry().time_zones,
         );
         graphcal_compiler::hir::lower_expr_draft(expr, context).map_err(|error| {
-            CompileError::Eval(graphcal_compiler::hir::expr_lower_error_to_graphcal(
-                &error,
-                &self.source,
-            ))
+            CompileError::semantic(
+                graphcal_compiler::hir::expr_lower_error_to_semantic(&error, self.source),
+                &self.sources,
+            )
         })
     }
 
     fn binding_internal_error(&self, message: &str, span: Span) -> CompileError {
-        CompileError::Eval(GraphcalError::InternalError {
-            message: message.to_string(),
-            src: self.source.clone(),
-            span: span.into(),
-        })
+        CompileError::semantic(
+            SemanticError::internal_error(
+                message.to_string(),
+                self.source,
+                graphcal_compiler::diagnostic_anchor::DiagnosticAnchor::Source(span),
+            ),
+            &self.sources,
+        )
     }
 
     fn evaluate_closed_binding(
@@ -734,16 +761,23 @@ impl PreparedProject {
         tree: &graphcal_compiler::tir::typed::ScopedTree<'_, graphcal_compiler::tir::texpr::TExpr>,
     ) -> Result<graphcal_eval::runtime_presentation::EvaluatedRuntimeValue, CompileError> {
         let values = RuntimeValueMap::new();
-        let cancellation = graphcal_compiler::cancellation::CancellationToken::unbounded();
-        let session = EvalSession::checked(self.plan(), &self.source, &self.host_fns, cancellation)
+        graphcal_compiler::outcome::without_cancellation(|cancellation| {
+            let session = EvalSession::checked(
+                self.plan(),
+                self.source,
+                &self.sources,
+                &self.host_fns,
+                cancellation.clone(),
+            )
             .with_roots(&values, None);
-        graphcal_eval::eval_expr::eval_root_with_presentation(
-            tree,
-            &values,
-            &graphcal_eval::runtime_presentation::PendingPresentedMap::new(),
-            &session,
-        )
-        .map_err(CompileError::from)
+            graphcal_eval::eval_expr::eval_root_with_presentation(
+                tree,
+                &values,
+                &graphcal_eval::runtime_presentation::PendingPresentedMap::new(),
+                &session,
+            )
+        })
+        .map_err(|error| self.render(error))
     }
 
     pub(super) fn binding_kind_error(&self, port: &ParameterPort, actual: &str) -> CompileError {
@@ -758,11 +792,16 @@ impl PreparedProject {
     }
 
     pub(super) fn binding_value_error(&self, port: &ParameterPort, message: &str) -> CompileError {
-        CompileError::Eval(GraphcalError::EvalError {
-            message: message.to_string(),
-            src: self.source.clone(),
-            span: port.span.into(),
-        })
+        CompileError::semantic(
+            SemanticError::located(
+                self.source,
+                port.span,
+                EvaluationError::Failed {
+                    message: message.to_string(),
+                },
+            ),
+            &self.sources,
+        )
     }
 }
 
@@ -770,6 +809,7 @@ pub(super) fn build_parameter_ports(
     plan_id: u64,
     entry_interface: &CheckedEntryInterface,
     plan: &graphcal_eval::execution_plan::ExecPlan<'_>,
+    sources: &graphcal_compiler::source_registry::SourceRegistry,
     schemas: &mut ModelSchemaGraphBuilder<'_>,
 ) -> Result<Vec<ParameterPort>, CompileError> {
     entry_interface
@@ -780,18 +820,21 @@ pub(super) fn build_parameter_ports(
             let declared_type = parameter.declared_type().clone();
             let value_schema = schemas
                 .value_schema(&declared_type)
-                .map_err(CompileError::Eval)?;
+                .map_err(|error| CompileError::semantic(error, sources))?;
             let runtime_key = parameter.runtime_key().clone();
             let domain = plan
                 .domain_constraint(&runtime_key)
                 .map(parameter_domain)
                 .transpose()
                 .map_err(|error| {
-                    CompileError::Eval(GraphcalError::internal_error(
-                        format!("domain of parameter `{}`: {error}", parameter.name()),
-                        plan.root().scope().source(),
-                        DiagnosticAnchor::Source(parameter.span()),
-                    ))
+                    CompileError::semantic(
+                        SemanticError::internal_error(
+                            format!("domain of parameter `{}`: {error}", parameter.name()),
+                            plan.root().scope().source(),
+                            DiagnosticAnchor::Source(parameter.span()),
+                        ),
+                        sources,
+                    )
                 })?;
             Ok(ParameterPort {
                 name: parameter.name().clone(),

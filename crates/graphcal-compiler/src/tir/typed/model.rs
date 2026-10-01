@@ -1,14 +1,12 @@
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
 
-use miette::NamedSource;
 use thiserror::Error;
 
 use crate::assertion_expectation::ExpectedFail;
 use crate::dimension::Dimension;
 use crate::display::formatting_registry::FormattingRegistry;
 use crate::generic_param::GenericParamId;
-use crate::graphcal_error::GraphcalError;
 use crate::hir::nominal::NominalTypeDef;
 use crate::resolved_name::{
     ResolvedConstructorName, ResolvedDeclName, ResolvedDimName, ResolvedIndexName,
@@ -18,6 +16,9 @@ use crate::semantic::checked_type::{CheckedType, IndexTypeRef};
 use crate::semantic::dimension_table::BaseDimensionInfo;
 use crate::semantic::index_def::IndexDef;
 use crate::semantic::unit_scale::UnitInfo;
+use crate::semantic_error::SemanticError;
+use crate::semantic_error::evaluation::EvaluationError;
+use crate::source_id::SourceId;
 use crate::syntax::decl_name::DeclName;
 use crate::syntax::module_name::ScopedName;
 use crate::syntax::span::Span;
@@ -26,18 +27,20 @@ use crate::syntax::type_name::{ConstructorName, FieldName};
 use super::resolved_type::{ResolvedDeclType, ResolvedGenericArg};
 
 /// Convert a [`NatOverflowError`](crate::nat::NatOverflowError)
-/// into a spanned [`GraphcalError`].
+/// into a spanned [`SemanticError`].
 #[must_use]
 pub fn nat_overflow_error(
     err: crate::nat::NatOverflowError,
-    src: &NamedSource<Arc<String>>,
+    src: SourceId,
     span: Span,
-) -> GraphcalError {
-    GraphcalError::EvalError {
-        message: err.to_string(),
-        src: src.clone(),
-        span: span.into(),
-    }
+) -> SemanticError {
+    SemanticError::located(
+        src,
+        span,
+        EvaluationError::Failed {
+            message: err.to_string(),
+        },
+    )
 }
 
 /// Authoritative project type-system definitions keyed by
@@ -567,7 +570,7 @@ pub struct ResolvedDomainBound {
     /// Span of the whole bound.
     pub span: Span,
     /// Source file whose bytes are indexed by `span` and the expression spans.
-    pub src: NamedSource<Arc<String>>,
+    pub src: SourceId,
 }
 
 /// The checked type of one value declaration.
@@ -586,12 +589,9 @@ impl CheckedDeclType {
     ///
     /// # Errors
     ///
-    /// Returns a [`GraphcalError`] when the type contains unresolved generic
+    /// Returns a [`SemanticError`] when the type contains unresolved generic
     /// parameters.
-    pub(crate) fn new(
-        resolved: ResolvedDeclType,
-        src: &NamedSource<Arc<String>>,
-    ) -> Result<Self, GraphcalError> {
+    pub(crate) fn new(resolved: ResolvedDeclType, src: SourceId) -> Result<Self, SemanticError> {
         let declared = resolved.to_checked_type(src)?;
         Ok(Self { resolved, declared })
     }

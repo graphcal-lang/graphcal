@@ -1,5 +1,11 @@
 //! Diagnostic production from compile errors and evaluation results.
 
+use graphcal_compiler::semantic_error::SemanticErrorKind;
+use graphcal_compiler::semantic_error::dimension::DimensionError;
+use graphcal_compiler::semantic_error::index::IndexError;
+use graphcal_compiler::semantic_error::name::NameError;
+use graphcal_compiler::semantic_error::structure::StructError;
+use graphcal_compiler::semantic_error::visibility::VisibilityError;
 use std::collections::HashMap;
 
 use tower_lsp::lsp_types::{
@@ -241,42 +247,64 @@ pub fn compile_error_to_diagnostics_grouped(
 /// string-convention round trip the project bans. `Diagnostic::data` rides
 /// along with the diagnostic to the `textDocument/codeAction` request.
 fn structured_data(error: &CompileError) -> Option<serde_json::Value> {
-    use graphcal_compiler::graphcal_error::GraphcalError;
+    use graphcal_compiler::semantic_error::SemanticError;
+
     let CompileError::Eval(e) = error else {
         return None;
     };
-    match e {
+    match e.error() {
         // V003: the private item that needs `pub`.
-        GraphcalError::PrivateInPublic { ref_name, .. } => {
-            Some(serde_json::json!({ "referencedName": ref_name.as_str() }))
-        }
+        SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
+            kind: SemanticErrorKind::Visibility(VisibilityError::PrivateInPublic { ref_name, .. }),
+            ..
+        }) => Some(serde_json::json!({ "referencedName": ref_name.as_str() })),
         // V006: the leaked private item that needs `pub`.
-        GraphcalError::GenericsLeakage { leaked_name, .. } => {
-            Some(serde_json::json!({ "referencedName": leaked_name }))
-        }
+        SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
+            kind:
+                SemanticErrorKind::Visibility(VisibilityError::GenericsLeakage { leaked_name, .. }),
+            ..
+        }) => Some(serde_json::json!({ "referencedName": leaked_name })),
         // D020: an exact replacement exists only when the decimal spelling
         // maps exactly into the dimension rational model.
-        GraphcalError::FloatPowerExponent {
-            replacement: Some(replacement),
+        SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
+            kind:
+                SemanticErrorKind::Dimension(DimensionError::FloatPowerExponent {
+                    replacement: Some(replacement),
+                    ..
+                }),
             ..
-        } => Some(serde_json::json!({ "replacement": replacement })),
-        GraphcalError::UnknownDimension { name, .. } => name
+        }) => Some(serde_json::json!({ "replacement": replacement })),
+        SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
+            kind: SemanticErrorKind::Dimension(DimensionError::UnknownDimension { name, .. }),
+            ..
+        }) => name
             .as_bare()
             .and_then(|name| auto_import_data(name.as_str(), AutoImportCategory::Dimension)),
-        GraphcalError::UnknownUnit { name, .. } if !name.is_qualified() => {
+        SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
+            kind: SemanticErrorKind::Dimension(DimensionError::UnknownUnit { name, .. }),
+            ..
+        }) if !name.is_qualified() => {
             auto_import_data(name.leaf().as_str(), AutoImportCategory::Unit)
         }
         // Structural `Fin(N)` axes are never importable.
-        GraphcalError::UnknownIndex { name, .. } => name
+        SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
+            kind: SemanticErrorKind::Index(IndexError::UnknownIndex { name, .. }),
+            ..
+        }) => name
             .declared_name()
             .and_then(|name| auto_import_data(name.as_str(), AutoImportCategory::Index)),
-        GraphcalError::UnknownStructType { name, .. } => {
-            auto_import_data(name, AutoImportCategory::Type)
-        }
-        GraphcalError::UnknownLocalRef { name, .. } => {
-            auto_import_data(name, AutoImportCategory::Term)
-        }
-        GraphcalError::UnknownGraphRef { name, .. } if name.qualifier().is_empty() => {
+        SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
+            kind: SemanticErrorKind::Struct(StructError::UnknownStructType { name, .. }),
+            ..
+        }) => auto_import_data(name, AutoImportCategory::Type),
+        SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
+            kind: SemanticErrorKind::Struct(StructError::UnknownLocalRef { name, .. }),
+            ..
+        }) => auto_import_data(name, AutoImportCategory::Term),
+        SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
+            kind: SemanticErrorKind::Name(NameError::UnknownGraphRef { name, .. }),
+            ..
+        }) if name.qualifier().is_empty() => {
             auto_import_data(name.leaf().as_str(), AutoImportCategory::Term)
         }
         _ => None,
@@ -375,14 +403,14 @@ mod tests {
     use std::sync::Arc;
 
     use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
-    use graphcal_compiler::graphcal_error::GraphcalError;
+    use graphcal_compiler::semantic_error::SemanticError;
     use graphcal_compiler::syntax::names::{NameAtom, NamePath};
     use graphcal_compiler::syntax::non_empty::NonEmpty;
     use graphcal_compiler::syntax::parser::Parser;
     use graphcal_compiler::syntax::span::Span;
     use graphcal_io::RealFileSystem;
     use graphcal_project::prepare::{compile_and_eval_named, compile_and_eval_project};
-    use miette::NamedSource;
+
     use tower_lsp::lsp_types::Position;
 
     use super::*;
@@ -424,12 +452,16 @@ mod tests {
     #[test]
     fn source_less_internal_anchor_uses_the_whole_document_range() {
         let source = "node x";
-        let named_source = NamedSource::new("test.gcl", Arc::new(source.to_string()));
-        let error = CompileError::Eval(GraphcalError::internal_error(
-            "synthetic failure",
-            &named_source,
-            DiagnosticAnchor::Builtin,
-        ));
+        let mut sources = graphcal_compiler::source_registry::SourceRegistry::new();
+        let named_source = sources.register("test.gcl", Arc::new(source.to_string()));
+        let error = CompileError::semantic(
+            SemanticError::internal_error(
+                "synthetic failure",
+                named_source,
+                DiagnosticAnchor::Builtin,
+            ),
+            &sources,
+        );
 
         let diagnostics = compile_error_to_diagnostics(&error);
         assert_eq!(diagnostics.len(), 1);
@@ -443,16 +475,20 @@ mod tests {
     #[test]
     fn qualified_unknown_dimension_retains_its_path_without_auto_import_data() {
         let source = "missing::Dimension";
-        let named_source = NamedSource::new("test.gcl", Arc::new(source.to_string()));
+        let mut sources = graphcal_compiler::source_registry::SourceRegistry::new();
+        let named_source = sources.register("test.gcl", Arc::new(source.to_string()));
         let path = NamePath::qualified(
             NonEmpty::singleton(NameAtom::parse("missing").unwrap()),
             NameAtom::parse("Dimension").unwrap(),
         );
-        let error = CompileError::Eval(GraphcalError::UnknownDimension {
-            name: path,
-            src: named_source,
-            span: Span::new(0, source.len()).into(),
-        });
+        let error = CompileError::semantic(
+            SemanticError::located(
+                named_source,
+                Span::new(0, source.len()),
+                DimensionError::UnknownDimension { name: path },
+            ),
+            &sources,
+        );
         let diagnostics = compile_error_to_diagnostics(&error);
         let [diagnostic] = diagnostics.as_slice() else {
             panic!("expected one unknown-dimension diagnostic");
@@ -626,66 +662,91 @@ mod tests {
 
         use graphcal_compiler::builtin::{AggregationFn, ValueAggregation};
         use graphcal_compiler::datetime_literal::DatetimeLiteralExpectation;
-        use graphcal_compiler::graphcal_error::GraphcalError;
+        use graphcal_compiler::semantic_error::SemanticError;
         use graphcal_compiler::syntax::names::NameAtom;
-        use miette::NamedSource;
+        use graphcal_project::load_error::LoadError;
 
-        let src = || NamedSource::new("file:///test.gcl", Arc::new("x".to_string()));
-        let span = || miette::SourceSpan::from((0, 1));
+        let mut sources = graphcal_compiler::source_registry::SourceRegistry::new();
+        let id = sources.register("file:///test.gcl", Arc::new("x".to_string()));
+        let src = || id;
+        let span = || graphcal_compiler::syntax::span::Span::new(0, 1);
         let cases = [
             (
-                GraphcalError::InvalidSourcePath {
+                CompileError::Load(LoadError::InvalidSourcePath {
                     path: "bad.txt".to_string(),
                     reason: "wrong extension".to_string(),
-                },
+                }),
                 "graphcal::M023",
             ),
             (
-                GraphcalError::AggregationCardinalityUnknown {
-                    function: AggregationFn::Value(ValueAggregation::Product),
-                    src: src(),
-                    span: span(),
-                },
+                CompileError::semantic(
+                    SemanticError::located(
+                        src(),
+                        span(),
+                        DimensionError::AggregationCardinalityUnknown {
+                            function: AggregationFn::Value(ValueAggregation::Product),
+                        },
+                    ),
+                    &sources,
+                ),
                 "graphcal::D027",
             ),
             (
-                GraphcalError::MaterializedShapeTooLarge {
-                    maximum: 1_000_000,
-                    src: src(),
-                    span: span(),
-                },
+                CompileError::semantic(
+                    SemanticError::located(
+                        src(),
+                        span(),
+                        DimensionError::MaterializedShapeTooLarge { maximum: 1_000_000 },
+                    ),
+                    &sources,
+                ),
                 "graphcal::D035",
             ),
             (
-                GraphcalError::InvalidDatetimeLiteral {
-                    expectation: DatetimeLiteralExpectation::OffsetDateTime,
-                    reason: "invalid".to_string(),
-                    src: src(),
-                    span: span(),
-                },
+                CompileError::semantic(
+                    SemanticError::located(
+                        src(),
+                        span(),
+                        DimensionError::InvalidDatetimeLiteral {
+                            expectation: DatetimeLiteralExpectation::OffsetDateTime,
+                            reason: "invalid".to_string(),
+                        },
+                    ),
+                    &sources,
+                ),
                 "graphcal::D028",
             ),
             (
-                GraphcalError::InvalidEpochTimeScaleArgument {
-                    expected: "UTC".to_string(),
-                    src: src(),
-                    span: span(),
-                },
+                CompileError::semantic(
+                    SemanticError::located(
+                        src(),
+                        span(),
+                        DimensionError::InvalidEpochTimeScaleArgument {
+                            expected: "UTC".to_string(),
+                        },
+                    ),
+                    &sources,
+                ),
                 "graphcal::D029",
             ),
             (
-                GraphcalError::UnsupportedEpochTimeScale {
-                    name: NameAtom::parse("BAD").unwrap(),
-                    expected: "UTC".to_string(),
-                    src: src(),
-                    span: span(),
-                },
+                CompileError::semantic(
+                    SemanticError::located(
+                        src(),
+                        span(),
+                        DimensionError::UnsupportedEpochTimeScale {
+                            name: NameAtom::parse("BAD").unwrap(),
+                            expected: "UTC".to_string(),
+                        },
+                    ),
+                    &sources,
+                ),
                 "graphcal::D030",
             ),
         ];
 
         for (error, expected_code) in cases {
-            let diagnostics = compile_error_to_diagnostics(&CompileError::Eval(error));
+            let diagnostics = compile_error_to_diagnostics(&error);
             assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
             assert_eq!(
                 diagnostics[0].code,

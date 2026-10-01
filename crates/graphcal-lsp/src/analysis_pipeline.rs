@@ -1,5 +1,7 @@
 //! The synchronous analysis pipeline: load, check, evaluate, and index one document.
 
+use graphcal_project::load_error::LoadError;
+
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
@@ -11,7 +13,7 @@ use crate::project_symbols::ProjectSymbols;
 use crate::symbol_table::{self, SymbolTable};
 use crate::workspace_revision::{AnalysisInputSnapshot, DocumentIdentity};
 use graphcal_compiler::cancellation::{CancellationToken, Cancelled};
-use graphcal_compiler::graphcal_error::GraphcalError;
+use graphcal_compiler::outcome::Outcome;
 use graphcal_compiler::syntax::module_name::ScopedName;
 use graphcal_project::compile_error::CompileError;
 use graphcal_project::loader::LoadedProject;
@@ -79,14 +81,14 @@ pub struct OpenBuffer {
 /// access in lockstep with the CLI's. For untitled/non-file URIs, builds a
 /// single-file project from the in-memory text alone.
 pub struct ProjectBuild {
-    pub project: std::result::Result<LoadedProject, Box<CompileError>>,
+    pub project: std::result::Result<LoadedProject, Outcome<Box<CompileError>>>,
     pub filesystem_inputs: HashSet<DocumentIdentity>,
 }
 
 impl ProjectBuild {
     pub fn failed(error: CompileError) -> Self {
         Self {
-            project: Err(Box::new(error)),
+            project: Err(Outcome::Failed(Box::new(error))),
             filesystem_inputs: HashSet::new(),
         }
     }
@@ -102,7 +104,7 @@ pub fn build_project(
     let Ok(path) = uri.to_file_path() else {
         return ProjectBuild {
             project: LoadedProject::from_source_with_cancellation(text, name, cancellation)
-                .map_err(Box::new),
+                .map_err(|outcome| outcome.map_failed(Box::new)),
             filesystem_inputs: HashSet::new(),
         };
     };
@@ -133,7 +135,7 @@ pub fn build_project(
     let fs = match graphcal_io::OverlayFileSystem::with_overlays(base, overlays) {
         Ok(fs) => fs,
         Err(error) => {
-            return ProjectBuild::failed(CompileError::Eval(GraphcalError::InvalidSourcePath {
+            return ProjectBuild::failed(CompileError::Load(LoadError::InvalidSourcePath {
                 path: error.path().display().to_string(),
                 reason: error.to_string(),
             }));
@@ -146,7 +148,7 @@ pub fn build_project(
         &tracking_fs,
         cancellation,
     )
-    .map_err(Box::new);
+    .map_err(|outcome| outcome.map_failed(Box::new));
     let root_identity = file_identity(&path);
     let filesystem_inputs = tracking_fs
         .accessed_paths()
@@ -294,8 +296,8 @@ pub fn run_analysis_with_cancellation(
     let mut filesystem_inputs = project_build.filesystem_inputs;
     let project = match project_build.project {
         Ok(project) => project,
-        Err(error) if error.is_cancelled() => return Err(Cancelled),
-        Err(error) => {
+        Err(Outcome::Cancelled) => return Err(Cancelled),
+        Err(Outcome::Failed(error)) => {
             let mut diagnostics = compile_error_to_diagnostics_grouped(&error, uri);
             diagnostics.entry(uri.clone()).or_default();
             // `Some` when the failure was in an *import* (the buffer itself
@@ -311,8 +313,8 @@ pub fn run_analysis_with_cancellation(
                         true,
                         Vec::new(),
                     ),
-                    Err(error) if error.is_cancelled() => return Err(Cancelled),
-                    Err(error) => (
+                    Err(Outcome::Cancelled) => return Err(Cancelled),
+                    Err(Outcome::Failed(error)) => (
                         SymbolTable::default(),
                         false,
                         vec![AnalysisDegradation::EmptySymbolTable {
@@ -414,8 +416,8 @@ pub fn run_analysis_with_cancellation(
                 buffer_parsed: true,
             }))
         }
-        Err(error) if error.is_cancelled() => Err(Cancelled),
-        Err(error) => {
+        Err(Outcome::Cancelled) => Err(Cancelled),
+        Err(Outcome::Failed(error)) => {
             cancellation.checkpoint()?;
             // A failed session has no checked resolver continuation. Rebuild a
             // best-effort resolver only for partial editor information.
@@ -476,7 +478,7 @@ pub fn run_eval_from_checked(
     let result = match checked.prepare_with_host_fns_and_cancellation(host_fns, cancellation) {
         Ok(prepared) => match prepared.binding_builder().finish() {
             Ok(row) => prepared.evaluate_with_cancellation(&row, cancellation),
-            Err(error) => Err(error),
+            Err(error) => Err(Outcome::Failed(error)),
         },
         Err(error) => Err(error),
     };
@@ -487,8 +489,8 @@ pub fn run_eval_from_checked(
             let values = format_eval_values(&result, cancellation)?;
             Ok((diagnostics_for_active_uri(uri, diagnostics), values))
         }
-        Err(error) if error.is_cancelled() => Err(Cancelled),
-        Err(error) => {
+        Err(Outcome::Cancelled) => Err(Cancelled),
+        Err(Outcome::Failed(error)) => {
             let mut diagnostics = compile_error_to_diagnostics_grouped(&error, uri);
             diagnostics.entry(uri.clone()).or_default();
             Ok((diagnostics, HashMap::new()))

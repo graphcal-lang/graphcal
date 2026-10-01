@@ -4,17 +4,20 @@
 use super::generic_substitution::concrete_generic_substitutions;
 use crate::cancellation::CancellationToken;
 use crate::diagnostic_anchor::DiagnosticAnchor;
-use crate::graphcal_error::GraphcalError;
 use crate::hir::nominal::{NominalConstructor, NominalTypeDef};
+use crate::outcome::Outcome;
 use crate::semantic::checked_type::{
     CheckedGenericArg, CheckedType, IndexTypeRef, StructTypeRef, Symbolic,
 };
+use crate::semantic_error::SemanticError;
+use crate::semantic_error::domain::DomainError;
+use crate::semantic_error::evaluation::EvaluationError;
+use crate::semantic_error::structure::StructError;
+use crate::source_id::SourceId;
 use crate::syntax::span::Span;
 use crate::tir::texpr::{CheckedBody, TBody, TNodeRef, visit_tnodes};
 use crate::tir::typed::model::{DagTIR, ResolvedStructFieldTypeKey};
 use crate::tir::typed::program::TirRead;
-use miette::NamedSource;
-use std::sync::Arc;
 
 #[derive(Clone, PartialEq, Eq)]
 struct Application {
@@ -25,7 +28,7 @@ struct Application {
 struct Context<'a> {
     dag: &'a DagTIR,
     tir: &'a dyn TirRead,
-    src: &'a NamedSource<Arc<String>>,
+    src: SourceId,
     span: Span,
     cancellation: &'a CancellationToken,
 }
@@ -34,10 +37,10 @@ pub(super) fn validate_concrete_type_obligations(
     inferred: &CheckedType<Symbolic>,
     dag: &DagTIR,
     tir: &dyn TirRead,
-    src: &NamedSource<Arc<String>>,
+    src: SourceId,
     span: Span,
     cancellation: &CancellationToken,
-) -> Result<(), GraphcalError> {
+) -> Result<(), Outcome<SemanticError>> {
     validate(
         inferred,
         &Context {
@@ -53,9 +56,9 @@ pub(super) fn validate_concrete_type_obligations(
 
 pub(super) fn validate_project(
     checking: &crate::tir::typed::CheckingTir<'_>,
-    src: &NamedSource<Arc<String>>,
+    src: SourceId,
     cancellation: &CancellationToken,
-) -> Result<(), GraphcalError> {
+) -> Result<(), Outcome<SemanticError>> {
     let tir: &dyn TirRead = checking;
     for (dag_id, dag) in checking.tir.local_dags() {
         for (_, annotation) in dag.value_decl_types() {
@@ -69,7 +72,7 @@ pub(super) fn validate_project(
             )?;
         }
         let bodies = checking.bodies.get(dag_id).ok_or_else(|| {
-            GraphcalError::internal_error(
+            SemanticError::internal_error(
                 format!("DAG `{dag_id}` has no published typed bodies"),
                 src,
                 DiagnosticAnchor::WholeFile,
@@ -117,7 +120,7 @@ fn validate(
     inferred: &CheckedType<Symbolic>,
     ctx: &Context<'_>,
     stack: &mut Vec<Application>,
-) -> Result<(), GraphcalError> {
+) -> Result<(), Outcome<SemanticError>> {
     ctx.cancellation.checkpoint()?;
     super::expression_axes::check_materializable(inferred, ctx.tir, ctx.src, ctx.span)?;
     match inferred {
@@ -130,10 +133,14 @@ fn validate(
             let definition = ctx
                 .tir
                 .struct_type_def(identity.resolved())
-                .ok_or_else(|| GraphcalError::UnknownStructType {
-                    name: identity.to_string(),
-                    src: ctx.src.clone(),
-                    span: ctx.span.into(),
+                .ok_or_else(|| {
+                    SemanticError::located(
+                        ctx.src,
+                        ctx.span,
+                        StructError::UnknownStructType {
+                            name: identity.to_string(),
+                        },
+                    )
                 })?;
             let application = Application {
                 identity: identity.clone(),
@@ -145,13 +152,9 @@ fn validate(
                 if ancestor == &application {
                     return Ok(());
                 }
-                return Err(GraphcalError::EvalError {
-                    message: format!(
+                return Err(SemanticError::located(ctx.src, ctx.span, EvaluationError::Failed { message: format!(
                         "recursive generic type `{identity}` changes its arguments; concrete field obligations cannot be discharged finitely"
-                    ),
-                    src: ctx.src.clone(),
-                    span: ctx.span.into(),
-                });
+                    ) }).into());
             }
             stack.push(application);
             for member in definition.union_members().into_iter().flatten() {
@@ -163,7 +166,7 @@ fn validate(
                         field: field.name().clone(),
                     };
                     let semantics = ctx.dag.semantic.type_defs.field(&key).ok_or_else(|| {
-                        GraphcalError::internal_error(
+                        SemanticError::internal_error(
                             format!(
                                 "semantic type metadata missing field `{}.{}`",
                                 member.name(),
@@ -195,7 +198,7 @@ fn validate(
             validate_index(index, ctx)?;
             validate(element, ctx, stack)
         }
-        CheckedType::Key(index) => validate_index(index, ctx),
+        CheckedType::Key(index) => Ok(validate_index(index, ctx)?),
         CheckedType::Quantity(_)
         | CheckedType::Complex(_)
         | CheckedType::Bool
@@ -204,14 +207,16 @@ fn validate(
     }
 }
 
-fn validate_index(index: &IndexTypeRef<Symbolic>, ctx: &Context<'_>) -> Result<(), GraphcalError> {
+fn validate_index(index: &IndexTypeRef<Symbolic>, ctx: &Context<'_>) -> Result<(), SemanticError> {
     match index.to_concrete() {
         Some(_) => Ok(()),
-        None => Err(GraphcalError::EvalError {
-            message: format!("unresolved finite-index obligation `{index}`"),
-            src: ctx.src.clone(),
-            span: ctx.span.into(),
-        }),
+        None => Err(SemanticError::located(
+            ctx.src,
+            ctx.span,
+            EvaluationError::Failed {
+                message: format!("unresolved finite-index obligation `{index}`"),
+            },
+        )),
     }
 }
 
@@ -223,14 +228,16 @@ fn check_bound(
     target: &CheckedType,
     nats: &std::collections::HashMap<crate::hir::types::GenericParamId, u64>,
     ctx: &Context<'_>,
-) -> Result<(), GraphcalError> {
+) -> Result<(), SemanticError> {
     let expected =
         super::domain_bound_type::expected_bound_from_inferred(target).ok_or_else(|| {
-            GraphcalError::InvalidDomainTarget {
-                type_kind: super::format_checked_type(target, ctx.tir.registry()),
-                src: bound.src.clone(),
-                span: bound.span.into(),
-            }
+            SemanticError::located(
+                bound.src,
+                bound.span,
+                DomainError::InvalidDomainTarget {
+                    type_kind: super::format_checked_type(target, ctx.tir.registry()),
+                },
+            )
         })?;
     let display = if member.name().as_str() == definition.name().as_str() {
         format!("{}.{}", definition.name(), key.field)
@@ -241,9 +248,9 @@ fn check_bound(
         ctx.tir.dag(key.owning_type.owner()),
         ctx.tir.checked_bodies(key.owning_type.owner()),
     ) else {
-        return Err(GraphcalError::internal_error(
+        return Err(SemanticError::internal_error(
             "field-constraint owner has no checked DAG",
-            &bound.src,
+            bound.src,
             DiagnosticAnchor::Source(bound.span),
         ));
     };
@@ -253,7 +260,7 @@ fn check_bound(
         bodies,
         &bound.value,
         nats,
-        &bound.src,
+        bound.src,
     )?;
     super::domain_bound_type::check_one_bound_with_display_name(
         &display,
@@ -261,6 +268,6 @@ fn check_bound(
         tree.ty(),
         &expected,
         ctx.tir.registry(),
-        &bound.src,
+        bound.src,
     )
 }

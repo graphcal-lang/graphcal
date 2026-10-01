@@ -5,19 +5,30 @@
 //! and make the assertion pass normally.
 #![cfg(test)]
 
+use graphcal_project::load_error::LoadError;
+
 use std::collections::HashMap;
 use std::panic;
 
-use graphcal_compiler::graphcal_error::GraphcalError;
+use graphcal_compiler::semantic_error::SemanticError;
+use graphcal_compiler::semantic_error::SemanticErrorKind;
+use graphcal_compiler::semantic_error::attribute::AttributeError;
+use graphcal_compiler::semantic_error::dimension::DimensionError;
+use graphcal_compiler::semantic_error::index::IndexError;
+use graphcal_compiler::semantic_error::module::ModuleError;
+use graphcal_compiler::semantic_error::name::NameError;
+use graphcal_compiler::semantic_error::plugin::PluginError;
+
+use graphcal_compiler::semantic_error::rendered::RenderedSemanticError;
 use graphcal_eval::eval::{EvalResult, Value};
 use graphcal_io::RealFileSystem;
 use graphcal_project::compile_error::CompileError;
 use graphcal_project::prepare::{compile_and_eval, compile_and_eval_project};
 use miette::Diagnostic;
 
-fn compile_graphcal_error(source: &str) -> GraphcalError {
+fn compile_semantic_error(source: &str) -> SemanticError {
     match compile_and_eval(source).unwrap_err() {
-        CompileError::Eval(err) => err,
+        CompileError::Eval(err) => err.error,
         other => panic!("expected semantic error, got {other:?}"),
     }
 }
@@ -193,9 +204,13 @@ fn reexported_assertions_and_plots_keep_pure_import_rejections() {
     );
     assert!(matches!(
         assertion,
-        Err(CompileError::Eval(
-            GraphcalError::ImportAssertionItem { .. }
-        ))
+        Err(CompileError::Eval(RenderedSemanticError {
+            error: SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
+                kind: SemanticErrorKind::Module(ModuleError::ImportAssertionItem { .. }),
+                ..
+            }),
+            ..
+        }))
     ));
 
     let (_plot_dir, plot_root) = write_test_project("reexport_roles", &files, "plot_main.gcl");
@@ -207,7 +222,13 @@ fn reexported_assertions_and_plots_keep_pure_import_rejections() {
     );
     assert!(matches!(
         plot,
-        Err(CompileError::Eval(GraphcalError::ImportPlotItem { .. }))
+        Err(CompileError::Eval(RenderedSemanticError {
+            error: SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
+                kind: SemanticErrorKind::Module(ModuleError::ImportPlotItem { .. }),
+                ..
+            }),
+            ..
+        }))
     ));
 }
 
@@ -355,18 +376,30 @@ node price: Money = 1.0 EUR;
 
 #[test]
 fn unused_dynamic_unit_scale_rejects_unknown_reference() {
-    let err = compile_graphcal_error(
+    let err = compile_semantic_error(
         "base dim Money;\nbase unit USD: Money;\nunit EUR: Money = (@missing) USD;\n",
     );
-    assert!(matches!(err, GraphcalError::UnknownGraphRef { .. }));
+    assert!(matches!(
+        err,
+        SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
+            kind: SemanticErrorKind::Name(NameError::UnknownGraphRef { .. }),
+            ..
+        })
+    ));
 }
 
 #[test]
 fn unused_dynamic_unit_scale_rejects_assertion_reference() {
-    let err = compile_graphcal_error(
+    let err = compile_semantic_error(
         "base dim Money;\nbase unit USD: Money;\nassert factor = true;\nunit EUR: Money = (@factor) USD;\n",
     );
-    assert!(matches!(err, GraphcalError::GraphRefToAssert { .. }));
+    assert!(matches!(
+        err,
+        SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
+            kind: SemanticErrorKind::Attribute(AttributeError::GraphRefToAssert { .. }),
+            ..
+        })
+    ));
 }
 
 #[test]
@@ -382,9 +415,17 @@ fn dynamic_unit_scale_must_be_scalar_dimensionless_quantity() {
         let source = format!(
             "base dim Money;\nbase unit USD: Money;\n{declarations}\nunit EUR: Money = (@factor) USD;\n"
         );
-        let err = compile_graphcal_error(&source);
+        let err = compile_semantic_error(&source);
         assert!(
-            matches!(err, GraphcalError::DynamicUnitScaleTypeMismatch { .. }),
+            matches!(
+                err,
+                SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
+                    kind: SemanticErrorKind::Dimension(
+                        DimensionError::DynamicUnitScaleTypeMismatch { .. }
+                    ),
+                    ..
+                })
+            ),
             "expected D032 for invalid dynamic scale, got {err:?}"
         );
     }
@@ -561,7 +602,7 @@ fn nested_includes_keep_hidden_imported_bindings_instance_scoped() {
 
 #[test]
 fn unused_dynamic_unit_scale_rejects_external_function_call() {
-    let err = compile_graphcal_error(
+    let err = compile_semantic_error(
         r#"
 import plugin "graphcal:demo" as demo {
     fn factor(x: Dimensionless) -> Dimensionless;
@@ -570,7 +611,13 @@ param trigger: Dimensionless = 2.0;
 unit Bad: Length = (demo::factor(@trigger)) m;
 "#,
     );
-    assert!(matches!(err, GraphcalError::ExternCallNotAllowed { .. }));
+    assert!(matches!(
+        err,
+        SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
+            kind: SemanticErrorKind::Plugin(PluginError::ExternCallNotAllowed { .. }),
+            ..
+        })
+    ));
 }
 
 #[test]
@@ -710,8 +757,14 @@ fn included_dynamic_unit_error_uses_producer_source() {
     let CompileError::Eval(error) = error else {
         panic!("expected semantic error, got {error:?}");
     };
-    assert!(matches!(error, GraphcalError::UnknownGraphRef { .. }));
-    let source = error.named_source().expect("error must carry source");
+    assert!(matches!(
+        error.error,
+        SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
+            kind: SemanticErrorKind::Name(NameError::UnknownGraphRef { .. }),
+            ..
+        })
+    ));
+    let source = error.named_source();
     assert!(
         source.name().ends_with("lib.gcl"),
         "wrong source: {source:?}"
@@ -745,7 +798,16 @@ fn include_binding_lowering_error_uses_importer_source() {
 
     let result = compile_and_eval_project(&root, &HashMap::new(), None, &RealFileSystem::default());
     match result {
-        Err(CompileError::Eval(GraphcalError::UnknownGraphRef { name, src, span })) => {
+        Err(CompileError::Eval(rendered)) => {
+            let SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
+                kind: SemanticErrorKind::Name(NameError::UnknownGraphRef { name, .. }),
+                primary: span,
+                ..
+            }) = &rendered.error
+            else {
+                panic!("expected UnknownGraphRef, got {:?}", rendered.error);
+            };
+            let src = rendered.named_source();
             assert_eq!(name.leaf().as_str(), "missing");
             assert!(
                 src.name().ends_with("main.gcl"),
@@ -844,7 +906,7 @@ include pkg.lib()::{ cost };
     assert!(
         matches!(
             &result,
-            Err(CompileError::Eval(GraphcalError::RequiredStaticInputNotBound { name, .. }))
+            Err(CompileError::Eval(RenderedSemanticError { error: SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic { kind: SemanticErrorKind::Index(IndexError::RequiredStaticInputNotBound { name, .. }), .. }), .. }))
                 if name == "Phase"
         ),
         "explicit instance should report its unsatisfied index: {result:?}",
@@ -904,11 +966,11 @@ node result: Dimensionless = @target()::out;
         ),
     ];
     for (expected_kind, source) in cases {
-        let error = compile_graphcal_error(source);
+        let error = compile_semantic_error(source);
         assert!(
             matches!(
                 error,
-                GraphcalError::RequiredStaticInputNotBound { kind, .. }
+                SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic { kind: SemanticErrorKind::Index(IndexError::RequiredStaticInputNotBound { kind, .. }), .. })
                     if kind.to_string() == expected_kind
             ),
             "missing required {expected_kind} was not diagnosed: {error:?}",
@@ -990,7 +1052,7 @@ fn virtual_file_root_self_import_is_rejected() {
 
         assert!(matches!(
             error,
-            CompileError::Eval(GraphcalError::FileRootSelfImport { .. })
+            CompileError::Load(LoadError::FileRootSelfImport { .. })
         ));
     }
 }
@@ -1026,7 +1088,7 @@ fn fully_qualified_file_root_self_import_is_rejected() {
     .unwrap_err();
     assert!(matches!(
         error,
-        CompileError::Eval(GraphcalError::FileRootSelfImport { .. })
+        CompileError::Load(LoadError::FileRootSelfImport { .. })
     ));
 }
 

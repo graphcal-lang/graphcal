@@ -1,9 +1,10 @@
 //! Byte and file budgets for one project load, and the loader's error
 //! constructors shared by source acquisition.
 
+use crate::load_error::LoadError;
+
 use std::path::Path;
 
-use graphcal_compiler::graphcal_error::GraphcalError;
 use graphcal_io::{
     ByteLimit, FileSystemReadError, FileSystemReader, ProjectIngestionPolicy, SourceTreeHashLimits,
 };
@@ -277,7 +278,7 @@ impl LoaderBudgetState {
 }
 
 pub(super) fn loader_manifest_error(error: impl std::fmt::Display) -> CompileError {
-    CompileError::Eval(GraphcalError::ManifestError {
+    CompileError::Load(LoadError::ManifestError {
         message: error.to_string(),
     })
 }
@@ -293,7 +294,7 @@ pub(super) enum PackageAuthorityError {
 
 /// Helper to create a `FileNotFound` error (used for the root file itself).
 pub(super) fn io_not_found(path: &Path) -> CompileError {
-    CompileError::Eval(GraphcalError::FileNotFound {
+    CompileError::Load(LoadError::FileNotFound {
         path: path.display().to_string(),
     })
 }

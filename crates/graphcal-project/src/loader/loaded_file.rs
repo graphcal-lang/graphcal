@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use miette::NamedSource;
+use graphcal_compiler::source_id::SourceId;
 
 use graphcal_compiler::dag_id::DagId;
 use graphcal_compiler::desugar::desugared_ast::{Declaration, File};
@@ -199,8 +199,8 @@ pub struct LoadedFile {
     pub(super) source: Arc<String>,
     /// Parsed AST.
     pub(super) ast: File,
-    /// Named source for diagnostics.
-    pub(super) named_source: NamedSource<Arc<String>>,
+    /// Identity of the source text in the project's source registry.
+    pub(super) source_id: SourceId,
     /// Loader-resolved DAG identities for each import declaration, keyed by the
     /// import path's display string (e.g. `"./lib.gcl"` or `"nasa/rocket"`).
     /// Produced by the loader so that downstream consumers (evaluator, LSP) can
@@ -221,7 +221,7 @@ impl LoadedFile {
         path: PathBuf,
         dag_id: DagId,
         source: Arc<String>,
-        named_source: NamedSource<Arc<String>>,
+        source_id: SourceId,
         ast: File,
         resolved_imports: HashMap<ModulePathKey, ResolvedModuleTarget>,
         inline_dags: Vec<LoadedDag>,
@@ -232,7 +232,7 @@ impl LoadedFile {
             source,
             interface: ModuleInterface::new(&ast.declarations),
             ast,
-            named_source,
+            source_id,
             resolved_imports,
             inline_dags,
         }
@@ -274,10 +274,10 @@ impl LoadedFile {
         &self.ast
     }
 
-    /// Named source paired with this file's path and source snapshot.
+    /// Identity of this file's text in the project's source registry.
     #[must_use]
-    pub(crate) const fn named_source(&self) -> &NamedSource<Arc<String>> {
-        &self.named_source
+    pub(crate) const fn source_id(&self) -> SourceId {
+        self.source_id
     }
 
     #[must_use]

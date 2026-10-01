@@ -11,14 +11,16 @@ use crate::runtime_presentation::EvaluatedRuntimeValue;
 use crate::runtime_presentation::PendingPresentedMap;
 use graphcal_compiler::cancellation::CancellationToken;
 use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
-use graphcal_compiler::graphcal_error::GraphcalError;
+use graphcal_compiler::outcome::Outcome;
 use graphcal_compiler::resolved_name::ResolvedDeclName;
+use graphcal_compiler::semantic_error::SemanticError;
+use graphcal_compiler::semantic_error::SemanticErrorKind;
+use graphcal_compiler::semantic_error::evaluation::EvaluationError;
+use graphcal_compiler::source_id::SourceId;
 use graphcal_compiler::syntax::span::Span;
 use graphcal_compiler::tir::texpr::TExpr;
 use graphcal_compiler::tir::typed::evaluation_unit::ScopedTree;
-use miette::NamedSource;
 use std::collections::HashMap;
-use std::sync::Arc;
 
 #[derive(Clone, Copy)]
 pub enum FailurePolicy {
@@ -83,7 +85,7 @@ pub struct FrameOutcome {
 /// declaration, so the adapter evaluates it in that scope.
 pub struct ScheduledDeclaration<'a> {
     key: &'a ResolvedDeclName,
-    source: &'a NamedSource<Arc<String>>,
+    source: SourceId,
     body: ScopedTree<'a, &'a TExpr>,
 }
 
@@ -102,25 +104,35 @@ impl<'a> ScheduledDeclaration<'a> {
 
     /// The source the declaration's diagnostics point into.
     #[must_use]
-    pub const fn source(&self) -> &'a NamedSource<Arc<String>> {
+    pub const fn source(&self) -> SourceId {
         self.source
     }
 }
 
 #[must_use]
-pub fn eval_failed_node_error(error: &GraphcalError) -> NodeUnavailable {
+pub fn eval_failed_node_error(error: &SemanticError) -> NodeUnavailable {
     match error {
-        GraphcalError::EvaluationUnavailable {
-            reason: NodeUnavailable::Todo { declaration },
+        SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
+            kind:
+                SemanticErrorKind::Evaluation(EvaluationError::Unavailable {
+                    reason: NodeUnavailable::Todo { declaration },
+                    ..
+                }),
             ..
-        } => NodeUnavailable::Blocked {
+        }) => NodeUnavailable::Blocked {
             unfinished: graphcal_compiler::syntax::non_empty::NonEmpty::singleton(
                 declaration.clone(),
             ),
             failed_deps: Vec::new(),
         },
-        GraphcalError::EvaluationUnavailable { reason, .. } => reason.clone(),
-        GraphcalError::EvalError { message, .. } => NodeUnavailable::EvalFailed {
+        SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
+            kind: SemanticErrorKind::Evaluation(EvaluationError::Unavailable { reason, .. }),
+            ..
+        }) => reason.clone(),
+        SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
+            kind: SemanticErrorKind::Evaluation(EvaluationError::Failed { message, .. }),
+            ..
+        }) => NodeUnavailable::EvalFailed {
             message: message.clone(),
         },
         other => NodeUnavailable::EvalFailed {
@@ -225,11 +237,11 @@ impl<'a> ExecutionFrame<'a> {
     fn failure(
         &mut self,
         key: &ResolvedDeclName,
-        error: GraphcalError,
-    ) -> Result<(), GraphcalError> {
-        let only_incomplete = matches!(&error, GraphcalError::EvaluationUnavailable { reason, .. } if !reason.has_failure());
+        error: SemanticError,
+    ) -> Result<(), SemanticError> {
+        let only_incomplete = matches!(&error, SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic { kind: SemanticErrorKind::Evaluation(EvaluationError::Unavailable { reason, .. }), .. }) if !reason.has_failure());
         match (&error, self.policy) {
-            (GraphcalError::InternalError { .. } | GraphcalError::Cancelled(_), _) => Err(error),
+            (SemanticError::Internal(_), _) => Err(error),
             (_, FailurePolicy::Propagate) if !only_incomplete => Err(error),
             _ => {
                 self.errors
@@ -246,9 +258,9 @@ impl<'a> ExecutionFrame<'a> {
         key: &ResolvedDeclName,
         domain: Option<&ResolvedDomainConstraint>,
         value: EvaluatedRuntimeValue,
-        source: &NamedSource<Arc<String>>,
+        source: SourceId,
         span: Span,
-    ) -> Result<(), GraphcalError> {
+    ) -> Result<(), SemanticError> {
         if let Some(constraint) = domain
             && let Err(violation) = check_domain_constraint(&value.value(), constraint)
         {
@@ -256,11 +268,13 @@ impl<'a> ExecutionFrame<'a> {
             self.presented.remove(key);
             return self.failure(
                 key,
-                GraphcalError::EvalError {
-                    message: violation.message,
-                    src: source.clone(),
-                    span: span.into(),
-                },
+                SemanticError::located(
+                    source,
+                    span,
+                    EvaluationError::Failed {
+                        message: violation.message,
+                    },
+                ),
             );
         }
         self.store(key, value);
@@ -286,9 +300,9 @@ impl<'a> ExecutionFrame<'a> {
         &mut self,
         key: &ResolvedDeclName,
         value: EvaluatedRuntimeValue,
-        source: &NamedSource<Arc<String>>,
+        source: SourceId,
         span: Span,
-    ) -> Result<(), GraphcalError> {
+    ) -> Result<(), SemanticError> {
         let domain = self.plan.domain_constraint(key);
         self.bind(key, domain, value, source, span)
     }
@@ -324,8 +338,8 @@ impl<'a> ExecutionFrame<'a> {
         mut evaluate: impl FnMut(
             ScheduledDeclaration<'a>,
             &Self,
-        ) -> Result<EvaluatedRuntimeValue, GraphcalError>,
-    ) -> Result<(), GraphcalError> {
+        ) -> Result<EvaluatedRuntimeValue, Outcome<SemanticError>>,
+    ) -> Result<(), Outcome<SemanticError>> {
         crate::pipeline_metrics::record(crate::pipeline_metrics::Event::FrameExecution);
         let callable = self.callable;
         for step in callable.steps() {
@@ -348,11 +362,12 @@ impl<'a> ExecutionFrame<'a> {
                 }
                 PlannedBody::Expression { root, tree } => (root.get(), tree),
                 PlannedBody::Supplied => {
-                    return Err(GraphcalError::internal_error(
+                    return Err(SemanticError::internal_error(
                         format!("TIR runtime declaration missing for `{key}`"),
                         scope.source(),
                         DiagnosticAnchor::WholeFile,
-                    ));
+                    )
+                    .into());
                 }
             };
             if let Some(reason) =
@@ -367,7 +382,7 @@ impl<'a> ExecutionFrame<'a> {
                 continue;
             }
             let body = *tree.as_ref().map_err(|error| {
-                GraphcalError::internal_error(error.to_string(), scope.source(), root.span.into())
+                SemanticError::internal_error(error.to_string(), scope.source(), root.span.into())
             })?;
             let result = evaluate(
                 ScheduledDeclaration {
@@ -387,7 +402,8 @@ impl<'a> ExecutionFrame<'a> {
                         root.span,
                     )?;
                 }
-                Err(error) => self.failure(key, error)?,
+                Err(Outcome::Cancelled) => return Err(Outcome::Cancelled),
+                Err(Outcome::Failed(error)) => self.failure(key, error)?,
             }
         }
         Ok(())

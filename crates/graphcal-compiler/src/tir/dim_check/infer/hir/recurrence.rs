@@ -1,8 +1,11 @@
 //! Inference of `scan` and `unfold` recurrences.
 
-use crate::graphcal_error::GraphcalError;
 use crate::hir::expr::{Expr, LocalDef};
+use crate::outcome::Outcome;
 use crate::semantic::checked_type::{IndexTypeRef, Symbolic};
+use crate::semantic_error::SemanticError;
+use crate::semantic_error::dimension::DimensionError;
+use crate::semantic_error::evaluation::EvaluationError;
 
 use crate::semantic::checked_type::CheckedType;
 use crate::tir::dim_check::helpers::format_checked_type;
@@ -17,22 +20,26 @@ impl Infer<'_> {
         acc: &LocalDef,
         val: &LocalDef,
         body: &Expr,
-    ) -> Result<CheckedType<Symbolic>, GraphcalError> {
+    ) -> Result<CheckedType<Symbolic>, Outcome<SemanticError>> {
         let source_type = self.infer_hir_type(source)?;
         let source_rank = source_type.indexed_rank();
         let CheckedType::Indexed { element, index } = source_type else {
-            return Err(GraphcalError::EvalError {
-                message: "scan source must be an indexed value".to_string(),
-                src: self.env.src.clone(),
-                span: source.span.into(),
-            });
+            return Err(SemanticError::located(
+                self.env.src,
+                source.span,
+                EvaluationError::Failed {
+                    message: "scan source must be an indexed value".to_string(),
+                },
+            )
+            .into());
         };
         if source_rank > 1 {
-            return Err(GraphcalError::MultiAxisScanSource {
-                rank: source_rank,
-                src: self.env.src.clone(),
-                span: source.span.into(),
-            });
+            return Err(SemanticError::located(
+                self.env.src,
+                source.span,
+                DimensionError::MultiAxisScanSource { rank: source_rank },
+            )
+            .into());
         }
         let accumulator_type = self.infer_hir_type(init)?;
         let scan_locals = self
@@ -40,13 +47,16 @@ impl Infer<'_> {
             .child(vec![(acc.id, accumulator_type.clone()), (val.id, *element)]);
         let body_type = self.with_locals(&scan_locals).infer_hir_type(body)?;
         if body_type != accumulator_type {
-            return Err(GraphcalError::DimensionMismatch {
-                expected: format_checked_type(&accumulator_type, self.env.registry),
-                found: format_checked_type(&body_type, self.env.registry),
-                help: "scan body must return the same type as the accumulator".to_string(),
-                src: self.env.src.clone(),
-                span: body.span.into(),
-            });
+            return Err(SemanticError::located(
+                self.env.src,
+                body.span,
+                DimensionError::DimensionMismatch {
+                    expected: format_checked_type(&accumulator_type, self.env.registry),
+                    found: format_checked_type(&body_type, self.env.registry),
+                    help: "scan body must return the same type as the accumulator".to_string(),
+                },
+            )
+            .into());
         }
         Ok(CheckedType::Indexed {
             element: Box::new(accumulator_type),
@@ -62,24 +72,29 @@ impl Infer<'_> {
         prev_index: &LocalDef,
         current_index: &LocalDef,
         body: &Expr,
-    ) -> Result<CheckedType<Symbolic>, GraphcalError> {
+    ) -> Result<CheckedType<Symbolic>, Outcome<SemanticError>> {
         let init_type = self.infer_hir_type(init)?;
         let index = IndexTypeRef::from_resolved(axis.value.clone());
         let idx_def = self
             .env
             .tir
             .declared_index_def(&axis.value)
-            .ok_or_else(|| GraphcalError::InternalError {
-                message: format!("missing resolved unfold axis `{}`", axis.value),
-                src: self.env.src.clone(),
-                span: axis.span.into(),
+            .ok_or_else(|| {
+                SemanticError::internal_error(
+                    format!("missing resolved unfold axis `{}`", axis.value),
+                    self.env.src,
+                    crate::diagnostic_anchor::DiagnosticAnchor::Source(axis.span),
+                )
             })?;
         if !idx_def.is_coordinate() {
-            return Err(GraphcalError::EvalError {
-                message: format!("unfold requires a coordinate index, got `{index}`"),
-                src: self.env.src.clone(),
-                span: axis.span.into(),
-            });
+            return Err(SemanticError::located(
+                self.env.src,
+                axis.span,
+                EvaluationError::Failed {
+                    message: format!("unfold requires a coordinate index, got `{index}`"),
+                },
+            )
+            .into());
         }
         // The recurrence coordinate binders are keys of the axis; the coordinate
         // quantity is extracted with coord().
@@ -91,13 +106,16 @@ impl Infer<'_> {
         ]);
         let body_type = self.with_locals(&unfold_locals).infer_hir_type(body)?;
         if body_type != init_type {
-            return Err(GraphcalError::DimensionMismatch {
-                expected: format_checked_type(&init_type, self.env.registry),
-                found: format_checked_type(&body_type, self.env.registry),
-                help: "unfold body must return the same type as the previous state".to_string(),
-                src: self.env.src.clone(),
-                span: body.span.into(),
-            });
+            return Err(SemanticError::located(
+                self.env.src,
+                body.span,
+                DimensionError::DimensionMismatch {
+                    expected: format_checked_type(&init_type, self.env.registry),
+                    found: format_checked_type(&body_type, self.env.registry),
+                    help: "unfold body must return the same type as the previous state".to_string(),
+                },
+            )
+            .into());
         }
         Ok(CheckedType::Indexed {
             element: Box::new(init_type),

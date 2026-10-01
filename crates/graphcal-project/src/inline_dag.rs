@@ -5,18 +5,17 @@
 //! parent-file visibility and values.
 
 use std::collections::HashMap;
-use std::sync::Arc;
-
-use miette::NamedSource;
 
 use graphcal_compiler::dag_id::DagId;
 use graphcal_compiler::desugar::desugared_ast::{DeclKind, Declaration};
 use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
-use graphcal_compiler::graphcal_error::GraphcalError;
 use graphcal_compiler::ir::lower::DagBodySelfImports;
 use graphcal_compiler::ir::module_interface::{ModuleInterface, PureImportTermDisposition};
 use graphcal_compiler::ir::resolve::{ImportedValueNames, ScopedName};
 use graphcal_compiler::resolve::ModuleResolver;
+use graphcal_compiler::semantic_error::SemanticError;
+use graphcal_compiler::semantic_error::visibility::VisibilityError;
+use graphcal_compiler::source_id::SourceId;
 use graphcal_compiler::syntax::ast::{DeclExposure, ImportItemNamespace};
 use graphcal_compiler::syntax::decl_name::DeclName;
 
@@ -52,7 +51,7 @@ use crate::import_surface::{import_item_not_found_error, validate_constructor_al
 ///
 /// # Errors
 ///
-/// Returns a [`GraphcalError`] if a self-import names a runtime declaration
+/// Returns a [`SemanticError`] if a self-import names a runtime declaration
 /// (a param input port or node), a private non-param declaration, or a name
 /// that does not exist in the parent.
 #[expect(
@@ -68,12 +67,12 @@ pub fn preprocess_dag_body_self_imports(
         crate::loader::module_path::InlineBodyImportResolution,
     >,
     module_resolver: &ModuleResolver,
-    src: &NamedSource<Arc<String>>,
-) -> Result<DagBodySelfImports, GraphcalError> {
+    src: SourceId,
+) -> Result<DagBodySelfImports, SemanticError> {
     let exported_bindings = module_resolver
         .exported_bindings(parent_dag_id)
         .map_err(|error| {
-            GraphcalError::internal_error(
+            SemanticError::internal_error(
                 format!(
                     "module resolver could not enumerate exports of `{parent_dag_id}`: {error}"
                 ),
@@ -127,12 +126,14 @@ pub fn preprocess_dag_body_self_imports(
                             ));
                         }
                         Some(DeclExposure::Private) => {
-                            return Err(GraphcalError::ImportPrivateItem {
-                                name: orig_name.to_string(),
-                                file_path: import_decl.path().display_path(),
-                                src: src.clone(),
-                                span: span.into(),
-                            });
+                            return Err(SemanticError::located(
+                                src,
+                                span,
+                                VisibilityError::ImportPrivateItem {
+                                    name: orig_name.to_string(),
+                                    file_path: import_decl.path().display_path(),
+                                },
+                            ));
                         }
                         Some(DeclExposure::ExplicitExport | DeclExposure::InputPort) => {}
                     }

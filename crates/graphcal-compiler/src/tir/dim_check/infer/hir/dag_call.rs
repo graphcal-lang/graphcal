@@ -3,10 +3,13 @@
 
 use crate::hir::expr::{Expr, ParamBinding};
 use crate::ir::static_substitution::StaticSubstitution;
+use crate::outcome::Outcome;
 use crate::resolved_name::ResolvedDeclName;
+use crate::semantic_error::graph::GraphError;
+use crate::semantic_error::visibility::VisibilityError;
 use std::collections::HashMap;
 
-use crate::graphcal_error::GraphcalError;
+use crate::semantic_error::SemanticError;
 use crate::tir::typed::specialization::specialize_type;
 
 use crate::semantic::checked_type::{CheckedType, Symbolic};
@@ -22,17 +25,17 @@ impl Infer<'_> {
         args: &[ParamBinding],
         static_bindings: &StaticSubstitution,
         output: &crate::syntax::span::Spanned<ResolvedDeclName>,
-    ) -> Result<CheckedType<Symbolic>, GraphcalError> {
+    ) -> Result<CheckedType<Symbolic>, Outcome<SemanticError>> {
         let display_path = target.value.to_string();
-        let dag_tir = self
-            .env
-            .tir
-            .dag(&target.value)
-            .ok_or_else(|| GraphcalError::UnknownDag {
-                name: display_path.clone(),
-                src: self.env.src.clone(),
-                span: target.span.into(),
-            })?;
+        let dag_tir = self.env.tir.dag(&target.value).ok_or_else(|| {
+            SemanticError::located(
+                self.env.src,
+                target.span,
+                GraphError::UnknownDag {
+                    name: display_path.clone(),
+                },
+            )
+        })?;
 
         let mut required_param_keys = std::collections::HashSet::new();
         let param_decl_types_by_key: HashMap<
@@ -62,12 +65,14 @@ impl Infer<'_> {
             let target_key = &binding.target.value;
             bound_resolved_names.insert(target_key.clone());
             let expected = param_decl_types_by_key.get(target_key).ok_or_else(|| {
-                GraphcalError::UnknownDagParam {
-                    name: target_key.as_str().to_string(),
-                    dag_name: display_path.clone(),
-                    src: self.env.src.clone(),
-                    span: binding.target.span.into(),
-                }
+                SemanticError::located(
+                    self.env.src,
+                    binding.target.span,
+                    GraphError::UnknownDagParam {
+                        name: target_key.as_str().to_string(),
+                        dag_name: display_path.clone(),
+                    },
+                )
             })?;
             let found = self.infer_hir_type(&binding.value)?;
             let expected = specialize_type(
@@ -82,13 +87,16 @@ impl Infer<'_> {
                 .to_checked_type(self.env.src)
                 .is_ok_and(|expected| expected.to_symbolic() == found)
             {
-                return Err(GraphcalError::DagArgTypeMismatch {
-                    param_name: target_key.as_str().to_string(),
-                    expected: expected.format(self.env.registry),
-                    found: format_checked_type(&found, self.env.registry),
-                    src: self.env.src.clone(),
-                    span: binding.value.span.into(),
-                });
+                return Err(SemanticError::located(
+                    self.env.src,
+                    binding.value.span,
+                    GraphError::DagArgTypeMismatch {
+                        param_name: target_key.as_str().to_string(),
+                        expected: expected.format(self.env.registry),
+                        found: format_checked_type(&found, self.env.registry),
+                    },
+                )
+                .into());
             }
         }
 
@@ -99,35 +107,45 @@ impl Infer<'_> {
             .collect();
         if !missing.is_empty() {
             missing.sort();
-            return Err(GraphcalError::MissingDagBindings {
-                missing,
-                dag_name: display_path.clone(),
-                src: self.env.src.clone(),
-                span: expr.span.into(),
-            });
+            return Err(SemanticError::located(
+                self.env.src,
+                expr.span,
+                GraphError::MissingDagBindings {
+                    missing,
+                    dag_name: display_path.clone(),
+                },
+            )
+            .into());
         }
 
         let output_key = &output.value;
         let output_decl = node_decl_types_by_key
             .get(output_key)
             .or_else(|| param_decl_types_by_key.get(output_key))
-            .ok_or_else(|| GraphcalError::UnknownDagOutput {
-                name: output_key.as_str().to_string(),
-                dag_name: display_path.clone(),
-                src: self.env.src.clone(),
-                span: output.span.into(),
+            .ok_or_else(|| {
+                SemanticError::located(
+                    self.env.src,
+                    output.span,
+                    GraphError::UnknownDagOutput {
+                        name: output_key.as_str().to_string(),
+                        dag_name: display_path.clone(),
+                    },
+                )
             })?;
         let output_name = output_key.as_str();
         if !dag_tir
             .projectable_outputs
             .contains(&output_key.to_unowned_def_name())
         {
-            return Err(GraphcalError::ImportPrivateItem {
-                name: output_name.to_string(),
-                file_path: display_path,
-                src: self.env.src.clone(),
-                span: output.span.into(),
-            });
+            return Err(SemanticError::located(
+                self.env.src,
+                output.span,
+                VisibilityError::ImportPrivateItem {
+                    name: output_name.to_string(),
+                    file_path: display_path,
+                },
+            )
+            .into());
         }
         let output_decl = specialize_type(
             output_decl,
@@ -138,5 +156,6 @@ impl Infer<'_> {
         output_decl
             .to_checked_type(self.env.src)
             .map(|ty| ty.to_symbolic())
+            .map_err(Outcome::Failed)
     }
 }

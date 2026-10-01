@@ -6,14 +6,16 @@
 #![warn(clippy::arithmetic_side_effects)]
 #![expect(
     clippy::result_large_err,
-    reason = "GraphcalError is inherently large and only constructed on the error path"
+    reason = "SemanticError is inherently large and only constructed on the error path"
 )]
 
+pub mod binding_error;
 pub mod compile_error;
 pub mod dependency_ordered;
 pub mod graph_ir;
 pub(crate) mod import_surface;
 pub(crate) mod inline_dag;
+pub mod load_error;
 pub mod loader;
 pub mod package_cache;
 pub mod package_snapshot;

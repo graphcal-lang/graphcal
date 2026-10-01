@@ -1,14 +1,12 @@
 //! Concrete nominal-type expansion for transport-independent model schemas.
 
-use std::sync::Arc;
-
-use miette::NamedSource;
 use thiserror::Error;
 
 use crate::diagnostic_anchor::DiagnosticAnchor;
-use crate::graphcal_error::GraphcalError;
 use crate::hir::nominal::{NominalConstructor, NominalTypeDef, NominalTypeKind};
 use crate::semantic::checked_type::{CheckedGenericArg, CheckedType, IndexTypeRef, StructTypeRef};
+use crate::semantic_error::SemanticError;
+use crate::source_id::SourceId;
 use crate::syntax::ast::GenericConstraint;
 use crate::syntax::type_name::{ConstructorName, FieldName, GenericParamName};
 
@@ -48,7 +46,7 @@ pub enum ConcreteModelTypeError {
     #[error("required index `{index}` was not concretely bound")]
     RequiredIndex { index: IndexTypeRef },
     #[error(transparent)]
-    Compiler(#[from] GraphcalError),
+    Compiler(#[from] SemanticError),
 }
 
 impl ConcreteModelTypeError {
@@ -56,11 +54,11 @@ impl ConcreteModelTypeError {
     /// evaluation shells. Source-language failures retain their original
     /// diagnostic; malformed safe-API inputs are internal invariant failures.
     #[must_use]
-    pub fn into_graphcal_error(self, src: &NamedSource<Arc<String>>) -> GraphcalError {
+    pub fn into_semantic_error(self, src: SourceId) -> SemanticError {
         match self {
             Self::Compiler(error) => error,
             invariant => {
-                GraphcalError::internal_error(invariant.to_string(), src, DiagnosticAnchor::Builtin)
+                SemanticError::internal_error(invariant.to_string(), src, DiagnosticAnchor::Builtin)
             }
         }
     }
@@ -100,7 +98,7 @@ impl<'tir> ValidatedModelType<'tir> {
         tir: &'tir crate::tir::typed::CheckedTir,
         identity: &StructTypeRef,
         generic_args: &[CheckedGenericArg],
-        src: &NamedSource<Arc<String>>,
+        src: SourceId,
     ) -> Result<Self, ConcreteModelTypeError> {
         let definition = validate_model_type_definition(tir, identity, generic_args)?;
         validate_application_obligations(tir, identity, generic_args, &definition, src)?;
@@ -129,8 +127,8 @@ impl<'tir> ValidatedModelType<'tir> {
     /// Returns a compiler diagnostic if checked TIR field metadata is missing.
     pub fn constructors(
         &self,
-        _src: &NamedSource<Arc<String>>,
-    ) -> Result<Vec<ConcreteModelConstructor>, GraphcalError> {
+        _src: SourceId,
+    ) -> Result<Vec<ConcreteModelConstructor>, SemanticError> {
         let tir: &dyn crate::tir::typed::TirRead = self.tir;
         let metadata_dag = tir
             .dag_with_type_metadata(self.identity.resolved())
@@ -195,7 +193,7 @@ impl<'tir> ConcreteModelType<'tir> {
         tir: &'tir crate::tir::typed::CheckedTir,
         identity: &StructTypeRef,
         generic_args: &[CheckedGenericArg],
-        src: &NamedSource<Arc<String>>,
+        src: SourceId,
     ) -> Result<Self, ConcreteModelTypeError> {
         let validated = ValidatedModelType::try_new(tir, identity, generic_args, src)?;
         validate_bound_generic_arguments(tir, identity, generic_args)?;
@@ -219,8 +217,8 @@ impl<'tir> ConcreteModelType<'tir> {
     /// Returns a compiler diagnostic if checked TIR field metadata is missing.
     pub fn constructors(
         &self,
-        src: &NamedSource<Arc<String>>,
-    ) -> Result<Vec<ConcreteModelConstructor>, GraphcalError> {
+        src: SourceId,
+    ) -> Result<Vec<ConcreteModelConstructor>, SemanticError> {
         self.validated.constructors(src)
     }
 }
@@ -230,20 +228,22 @@ fn validate_application_obligations(
     identity: &StructTypeRef,
     generic_args: &[CheckedGenericArg],
     definition: &ModelTypeDefinition<'_>,
-    _src: &NamedSource<Arc<String>>,
+    _src: SourceId,
 ) -> Result<(), ConcreteModelTypeError> {
     let application = CheckedType::Struct(identity.clone(), generic_args.to_vec());
     let metadata_dag = tir
         .dag_with_type_metadata(identity.resolved())
         .unwrap_or_else(|| tir.root());
-    super::concrete_obligations::validate_concrete_type_obligations(
-        &application.to_symbolic(),
-        metadata_dag,
-        tir,
-        definition.type_def.source(),
-        definition.type_def.span(),
-        &crate::cancellation::CancellationToken::unbounded(),
-    )?;
+    crate::outcome::without_cancellation(|cancellation| {
+        super::concrete_obligations::validate_concrete_type_obligations(
+            &application.to_symbolic(),
+            metadata_dag,
+            tir,
+            definition.type_def.source(),
+            definition.type_def.span(),
+            cancellation,
+        )
+    })?;
     Ok(())
 }
 

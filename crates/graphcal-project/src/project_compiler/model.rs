@@ -3,8 +3,6 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use miette::NamedSource;
-
 use graphcal_compiler::declaration_category::DeclCategory;
 use graphcal_compiler::desugar::desugared_ast::Expr;
 use graphcal_compiler::ir::resolve::collected::ImportedValueNames;
@@ -12,6 +10,7 @@ use graphcal_compiler::ir::static_substitution::StaticSubstitution;
 use graphcal_compiler::resolved_name::ResolvedDeclName;
 use graphcal_compiler::resolved_name::ResolvedIndexName;
 use graphcal_compiler::semantic::index_def::IndexBindingTarget;
+use graphcal_compiler::source_id::SourceId;
 use graphcal_compiler::syntax::decl_name::DeclName;
 use graphcal_compiler::syntax::dimension::UnitName;
 use graphcal_compiler::syntax::module_name::IncludeInstanceId;
@@ -51,7 +50,7 @@ pub(super) struct ImportAlias {
 /// One fully resolved physical file before static checking.
 #[derive(Debug)]
 pub(super) struct HirFile {
-    pub(super) source: NamedSource<Arc<String>>,
+    pub(super) source: SourceId,
     pub(super) root: graphcal_compiler::ir::model::HirDag,
     /// Inline DAG bodies carry their own canonical keys; no parallel tuple key
     /// can disagree with the body identity.

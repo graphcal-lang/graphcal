@@ -1,13 +1,15 @@
 //! Inference and coverage checking of map literals.
 
 use crate::hir::expr::{Expr, MapEntry, MapEntryKey};
+use crate::outcome::Outcome;
 use crate::resolved_name::ResolvedIndexVariant;
-use std::sync::Arc;
+use crate::semantic_error::dimension::DimensionError;
+use crate::semantic_error::evaluation::EvaluationError;
+use crate::semantic_error::index::IndexError;
+use crate::source_id::SourceId;
 
-use miette::NamedSource;
-
-use crate::graphcal_error::GraphcalError;
 use crate::semantic::checked_type::{IndexDisplayName, IndexTypeRef, Symbolic};
+use crate::semantic_error::SemanticError;
 use crate::syntax::index_name::IndexEntryKey;
 use crate::syntax::span::Span;
 use crate::tir::typed::NatPolyForm;
@@ -59,19 +61,21 @@ struct MapCoverageCardinality(usize);
 impl MapCoverageCardinality {
     fn checked_from_axes(
         axes: &[Vec<MapLiteralVariantKey>],
-        src: &NamedSource<Arc<String>>,
+        src: SourceId,
         span: Span,
-    ) -> Result<Self, GraphcalError> {
+    ) -> Result<Self, SemanticError> {
         axes.iter()
             .try_fold(1_usize, |product, axis| {
-                product
-                    .checked_mul(axis.len())
-                    .ok_or_else(|| GraphcalError::EvalError {
-                        message: "map literal key-space cardinality exceeds supported size"
-                            .to_string(),
-                        src: src.clone(),
-                        span: span.into(),
-                    })
+                product.checked_mul(axis.len()).ok_or_else(|| {
+                    SemanticError::located(
+                        src,
+                        span,
+                        EvaluationError::Failed {
+                            message: "map literal key-space cardinality exceeds supported size"
+                                .to_string(),
+                        },
+                    )
+                })
             })
             .map(Self)
     }
@@ -139,8 +143,8 @@ impl MapLiteralAxis {
 
 fn inferred_index_for_hir_map_key(
     key: &MapEntryKey,
-    src: &NamedSource<Arc<String>>,
-) -> Result<IndexTypeRef<Symbolic>, GraphcalError> {
+    src: SourceId,
+) -> Result<IndexTypeRef<Symbolic>, SemanticError> {
     match key {
         MapEntryKey::IndexVariant(variant) => {
             Ok(IndexTypeRef::from_resolved(variant.variant.index().clone()))
@@ -170,7 +174,7 @@ impl Infer<'_> {
         &self,
         expr: &Expr,
         entries: &[MapEntry],
-    ) -> Result<CheckedType<Symbolic>, GraphcalError> {
+    ) -> Result<CheckedType<Symbolic>, Outcome<SemanticError>> {
         for entry in entries {
             for key in &entry.keys {
                 if let MapEntryKey::IndexVariant(variant) = key {
@@ -182,23 +186,22 @@ impl Infer<'_> {
             }
         }
         let Some(first_entry) = entries.first() else {
-            return Err(GraphcalError::EvalError {
-                message: "empty map literal".to_string(),
-                src: self.env.src.clone(),
-                span: expr.span.into(),
-            });
+            return Err(SemanticError::located(
+                self.env.src,
+                expr.span,
+                EvaluationError::Failed {
+                    message: "empty map literal".to_string(),
+                },
+            )
+            .into());
         };
         let arity = first_entry.keys.len();
         for entry in entries.iter().skip(1) {
             if entry.keys.len() != arity {
-                return Err(GraphcalError::EvalError {
-                    message: format!(
+                return Err(SemanticError::located(self.env.src, expr.span, EvaluationError::Failed { message: format!(
                         "map literal entries have inconsistent key arity: expected {arity}, found {}",
                         entry.keys.len()
-                    ),
-                    src: self.env.src.clone(),
-                    span: expr.span.into(),
-                });
+                    ) }).into());
             }
         }
 
@@ -207,19 +210,19 @@ impl Infer<'_> {
             let index = inferred_index_for_hir_map_key(key, self.env.src)?;
             let idx_def =
                 crate::tir::dim_check::infer::index_def_for_inferred(&index, self.env.tir)
-                    .ok_or_else(|| GraphcalError::UnknownIndex {
-                        name: index.display_name(),
-                        src: self.env.src.clone(),
-                        span: expr.span.into(),
+                    .ok_or_else(|| {
+                        SemanticError::located(
+                            self.env.src,
+                            expr.span,
+                            IndexError::UnknownIndex {
+                                name: index.display_name(),
+                            },
+                        )
                     })?;
             if idx_def.is_coordinate() {
-                return Err(GraphcalError::EvalError {
-                    message: format!(
+                return Err(SemanticError::located(self.env.src, expr.span, EvaluationError::Failed { message: format!(
                         "coordinate index `{index}` cannot be used as a map/table literal key; use a `for` comprehension instead"
-                    ),
-                    src: self.env.src.clone(),
-                    span: expr.span.into(),
-                });
+                    ) }).into());
             }
             axes.push(MapLiteralAxis {
                 index,
@@ -230,20 +233,27 @@ impl Infer<'_> {
             for (i, key) in entry.keys.iter().enumerate() {
                 let key_index = inferred_index_for_hir_map_key(key, self.env.src)?;
                 if key_index != axes[i].index {
-                    return Err(GraphcalError::IndexMismatch {
-                        expected: axes[i].index.display_name(),
-                        found: key_index.display_name(),
-                        src: self.env.src.clone(),
-                        span: expr.span.into(),
-                    });
+                    return Err(SemanticError::located(
+                        self.env.src,
+                        expr.span,
+                        IndexError::IndexMismatch {
+                            expected: axes[i].index.display_name(),
+                            found: key_index.display_name(),
+                        },
+                    )
+                    .into());
                 }
             }
         }
 
-        let incompatible_key_error = |key: IndexEntryKey| GraphcalError::EvalError {
-            message: format!("map entry key `{key}` does not match its index category"),
-            src: self.env.src.clone(),
-            span: expr.span.into(),
+        let incompatible_key_error = |key: IndexEntryKey| {
+            SemanticError::located(
+                self.env.src,
+                expr.span,
+                EvaluationError::Failed {
+                    message: format!("map entry key `{key}` does not match its index category"),
+                },
+            )
         };
         let axes_variant_keys: Vec<Vec<MapLiteralVariantKey>> = axes
             .iter()
@@ -268,30 +278,32 @@ impl Infer<'_> {
                     let entry_key = hir_map_entry_key(key);
                     if !axes[i].entry_keys.contains(&entry_key) {
                         return match (arity, entry_key) {
-                            (1, extra) => Err(GraphcalError::ExtraVariants {
-                                index_name: axes[0].index.display_name(),
-                                extra: vec![extra],
-                                src: self.env.src.clone(),
-                                span: expr.span.into(),
-                            }),
-                            (_, IndexEntryKey::Named(variant_name)) => {
-                                Err(GraphcalError::UnknownVariant {
+                            (1, extra) => Err(SemanticError::located(
+                                self.env.src,
+                                expr.span,
+                                IndexError::ExtraVariants {
+                                    index_name: axes[0].index.display_name(),
+                                    extra: vec![extra],
+                                },
+                            )),
+                            (_, IndexEntryKey::Named(variant_name)) => Err(SemanticError::located(
+                                self.env.src,
+                                expr.span,
+                                IndexError::UnknownVariant {
                                     index_name: axes[i].index.display_name(),
                                     variant_name,
-                                    src: self.env.src.clone(),
-                                    span: expr.span.into(),
-                                })
-                            }
-                            (_, IndexEntryKey::Position(position)) => {
-                                Err(GraphcalError::EvalError {
+                                },
+                            )),
+                            (_, IndexEntryKey::Position(position)) => Err(SemanticError::located(
+                                self.env.src,
+                                expr.span,
+                                EvaluationError::Failed {
                                     message: format!(
                                         "position #{position} is outside index `{}`",
                                         axes[i].index
                                     ),
-                                    src: self.env.src.clone(),
-                                    span: expr.span.into(),
-                                })
-                            }
+                                },
+                            )),
                         };
                     }
                     axes[i]
@@ -300,11 +312,14 @@ impl Infer<'_> {
                 })
                 .collect::<Result<Vec<_>, _>>()?;
             if !provided_tuples.insert(tuple) {
-                return Err(GraphcalError::EvalError {
-                    message: "duplicate map literal entry".to_string(),
-                    src: self.env.src.clone(),
-                    span: expr.span.into(),
-                });
+                return Err(SemanticError::located(
+                    self.env.src,
+                    expr.span,
+                    EvaluationError::Failed {
+                        message: "duplicate map literal entry".to_string(),
+                    },
+                )
+                .into());
             }
         }
 
@@ -315,18 +330,23 @@ impl Infer<'_> {
                     .filter(|key| !provided_tuples.contains(&vec![(*key).clone()]))
                     .map(MapLiteralVariantKey::entry_key)
                     .collect();
-                return Err(GraphcalError::MissingVariants {
-                    index_name: axes[0].index.display_name(),
-                    missing,
-                    src: self.env.src.clone(),
-                    span: expr.span.into(),
-                });
+                return Err(SemanticError::located(
+                    self.env.src,
+                    expr.span,
+                    IndexError::MissingVariants {
+                        index_name: axes[0].index.display_name(),
+                        missing,
+                    },
+                )
+                .into());
             }
             let first_missing = first_missing_map_tuple(&axes_variant_keys, &provided_tuples)
-                .ok_or_else(|| GraphcalError::InternalError {
-                    message: "map coverage count and tuple membership disagree".to_string(),
-                    src: self.env.src.clone(),
-                    span: expr.span.into(),
+                .ok_or_else(|| {
+                    SemanticError::internal_error(
+                        "map coverage count and tuple membership disagree".to_string(),
+                        self.env.src,
+                        crate::diagnostic_anchor::DiagnosticAnchor::Source(expr.span),
+                    )
                 })?;
             let witness = first_missing
                 .iter()
@@ -336,18 +356,16 @@ impl Infer<'_> {
             let missing_count = expected_cardinality
                 .get()
                 .checked_sub(provided_tuples.len())
-                .ok_or_else(|| GraphcalError::InternalError {
-                    message: "map coverage cardinality underflow".to_string(),
-                    src: self.env.src.clone(),
-                    span: expr.span.into(),
+                .ok_or_else(|| {
+                    SemanticError::internal_error(
+                        "map coverage cardinality underflow".to_string(),
+                        self.env.src,
+                        crate::diagnostic_anchor::DiagnosticAnchor::Source(expr.span),
+                    )
                 })?;
-            return Err(GraphcalError::EvalError {
-                message: format!(
+            return Err(SemanticError::located(self.env.src, expr.span, EvaluationError::Failed { message: format!(
                     "non-exhaustive map literal: missing {missing_count} entries; first missing entry is ({witness})"
-                ),
-                src: self.env.src.clone(),
-                span: expr.span.into(),
-            });
+                ) }).into());
         }
 
         let first_type = self.infer_hir_type(&first_entry.value)?;
@@ -356,22 +374,21 @@ impl Infer<'_> {
                 crate::tir::dim_check::infer::index_def_for_inferred(index, self.env.tir)
                     .is_some_and(|def| !def.is_coordinate());
             if inner_is_label {
-                return Err(GraphcalError::EvalError {
-                message: "map literal element type must be a value type, not an indexed type; use tuple keys for multi-axis map literals".to_string(),
-                src: self.env.src.clone(),
-                span: first_entry.value.span.into(),
-            });
+                return Err(SemanticError::located(self.env.src, first_entry.value.span, EvaluationError::Failed { message: "map literal element type must be a value type, not an indexed type; use tuple keys for multi-axis map literals".to_string() }).into());
             }
         }
         for entry in entries.iter().skip(1) {
             let entry_type = self.infer_hir_type(&entry.value)?;
             if entry_type != first_type {
-                return Err(GraphcalError::DimensionMismatchInAnnotation {
-                    declared: format_checked_type(&first_type, self.env.registry),
-                    inferred: format_checked_type(&entry_type, self.env.registry),
-                    src: self.env.src.clone(),
-                    span: entry.value.span.into(),
-                });
+                return Err(SemanticError::located(
+                    self.env.src,
+                    entry.value.span,
+                    DimensionError::DimensionMismatchInAnnotation {
+                        declared: format_checked_type(&first_type, self.env.registry),
+                        inferred: format_checked_type(&entry_type, self.env.registry),
+                    },
+                )
+                .into());
             }
         }
         let mut result = first_type;

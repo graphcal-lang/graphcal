@@ -1,19 +1,18 @@
 //! Include assembly and typed substitution for unfrozen per-DAG IR.
 
 use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
-
-use miette::NamedSource;
 
 use crate::declaration_category::DeclCategory;
 use crate::desugar::desugared_ast::{Expr, ExprKind, TypeExpr};
-use crate::graphcal_error::GraphcalError;
 use crate::hir::expr::LocalDecl;
 use crate::ir::instance::identity::{instance_declaration, projection_alias};
 use crate::ir::instance::{
     InstanceAssertionProjection, InstancePlotProjection, InstanceRecord, InstanceValueProjection,
 };
 use crate::resolved_name::ResolvedDeclName;
+use crate::semantic_error::SemanticError;
+use crate::semantic_error::visibility::VisibilityError;
+use crate::source_id::SourceId;
 use crate::syntax::decl_name::DeclName;
 use crate::syntax::dimension::{UnitName, UnitRef};
 use crate::syntax::index_name::IndexName;
@@ -109,22 +108,22 @@ impl UnfrozenIR {
     pub fn record_semantic_instance(
         &mut self,
         input: SemanticInstanceInput,
-        src: &NamedSource<Arc<String>>,
+        src: SourceId,
         span: Span,
-    ) -> Result<(), GraphcalError> {
+    ) -> Result<(), SemanticError> {
         if self
             .semantic_instances
             .iter()
             .any(|existing| existing.instance.id().owner() == input.instance.id().owner())
         {
-            return Err(GraphcalError::InternalError {
-                message: format!(
+            return Err(SemanticError::internal_error(
+                format!(
                     "duplicate semantic instance identity `{}`",
                     input.instance.id().owner()
                 ),
-                src: src.clone(),
-                span: span.into(),
-            });
+                src,
+                crate::diagnostic_anchor::DiagnosticAnchor::Source(span),
+            ));
         }
         self.semantic_instances.push(UnfrozenSemanticInstance {
             instance: input.instance,
@@ -263,9 +262,9 @@ impl UnfrozenIR {
         substitution: &crate::ir::static_substitution::StaticSubstitution,
         resolver: &crate::resolve::ModuleResolver,
         dependency_owner: &crate::dag_id::DagId,
-        importer_src: &NamedSource<Arc<String>>,
+        importer_src: SourceId,
         include_span: Span,
-    ) -> Result<IncludeOverrideReconciliations, GraphcalError> {
+    ) -> Result<IncludeOverrideReconciliations, SemanticError> {
         self.params()
             .filter(|param| !bindings.contains_key(param.name()))
             .map(|param| {
@@ -286,7 +285,7 @@ impl UnfrozenIR {
                         crate::ir::override_reconciliation::OverrideReconciliation::new(
                             param.identity(),
                             substitution,
-                            importer_src.clone(),
+                            importer_src,
                             include_span,
                         ),
                     );
@@ -314,12 +313,12 @@ struct NominalOverridePreflight<'a> {
     resolver: &'a crate::resolve::ModuleResolver,
     dependency_owner: &'a crate::dag_id::DagId,
     orphan_decl: &'a DeclName,
-    importer_src: &'a NamedSource<Arc<String>>,
+    importer_src: SourceId,
     include_span: Span,
 }
 
 impl NominalOverridePreflight<'_> {
-    fn check_label(&self, index: &IndexName, detail: String) -> Result<(), GraphcalError> {
+    fn check_label(&self, index: &IndexName, detail: String) -> Result<(), SemanticError> {
         let Ok(symbol) = self.resolver.resolve_index_path(
             self.dependency_owner,
             &crate::syntax::names::NamePath::local(index.atom().clone()),
@@ -329,21 +328,23 @@ impl NominalOverridePreflight<'_> {
         if !self.substitution.indexes.contains_key(symbol.resolved()) {
             return Ok(());
         }
-        Err(GraphcalError::IncludeMustReconcileOverride {
-            overridden: index.to_string(),
-            overridden_kind: "index".to_string(),
-            orphan_decl: self.orphan_decl.to_string(),
-            detail,
-            src: self.importer_src.clone(),
-            span: self.include_span.into(),
-        })
+        Err(SemanticError::located(
+            self.importer_src,
+            self.include_span,
+            VisibilityError::IncludeMustReconcileOverride {
+                overridden: index.to_string(),
+                overridden_kind: "index".to_string(),
+                orphan_decl: self.orphan_decl.to_string(),
+                detail,
+            },
+        ))
     }
 
     fn check_constructor(
         &self,
         constructor: &ConstructorName,
         detail: String,
-    ) -> Result<(), GraphcalError> {
+    ) -> Result<(), SemanticError> {
         let Ok(symbol) = self.resolver.resolve_constructor_path(
             self.dependency_owner,
             &crate::syntax::names::NamePath::local(constructor.atom().clone()),
@@ -355,19 +356,21 @@ impl NominalOverridePreflight<'_> {
         if !self.substitution.types.contains_key(&owning_identity) {
             return Ok(());
         }
-        Err(GraphcalError::IncludeMustReconcileOverride {
-            overridden: owning_type.to_string(),
-            overridden_kind: "type".to_string(),
-            orphan_decl: self.orphan_decl.to_string(),
-            detail,
-            src: self.importer_src.clone(),
-            span: self.include_span.into(),
-        })
+        Err(SemanticError::located(
+            self.importer_src,
+            self.include_span,
+            VisibilityError::IncludeMustReconcileOverride {
+                overridden: owning_type.to_string(),
+                overridden_kind: "type".to_string(),
+                orphan_decl: self.orphan_decl.to_string(),
+                detail,
+            },
+        ))
     }
 }
 
 impl ExprVisitor<crate::syntax::phase::Desugared> for NominalOverridePreflight<'_> {
-    type Error = GraphcalError;
+    type Error = SemanticError;
 
     fn visit_unresolved_ref(&mut self, expr: &Expr) -> Result<(), Self::Error> {
         let ExprKind::UnresolvedRef(reference) = &expr.kind else {

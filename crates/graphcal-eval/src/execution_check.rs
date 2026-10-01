@@ -1,13 +1,13 @@
 //! Compile-time execution checking: seals a fully checked TIR into a
 //! [`CheckedProgram`].
 
+use graphcal_compiler::source_registry::SourceRegistry;
 use std::collections::HashMap;
-use std::sync::Arc;
-
-use miette::NamedSource;
 
 use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
-use graphcal_compiler::graphcal_error::GraphcalError;
+use graphcal_compiler::outcome::Outcome;
+use graphcal_compiler::semantic_error::SemanticError;
+use graphcal_compiler::source_id::SourceId;
 use graphcal_compiler::tir::typed::CheckedTir;
 #[cfg(any(test, feature = "test-internals"))]
 use graphcal_compiler::tir::typed::StructFieldConstraintKey;
@@ -30,19 +30,21 @@ use domain_resolve::{
 pub fn resolve_struct_field_constraints(
     tir: &CheckedTir,
     const_values: &RuntimeValueMap,
-    src: &NamedSource<Arc<String>>,
-) -> Result<HashMap<StructFieldConstraintKey, ResolvedDomainConstraint>, GraphcalError> {
-    domain_resolve::resolve_struct_field_constraints(tir, const_values, src)
+    src: SourceId,
+    sources: &SourceRegistry,
+) -> Result<HashMap<StructFieldConstraintKey, ResolvedDomainConstraint>, SemanticError> {
+    domain_resolve::resolve_struct_field_constraints(tir, const_values, src, sources)
 }
 
 /// Test-only sealing of a single checked TIR without checked modules.
 #[cfg(any(test, feature = "test-internals"))]
 pub fn seal_checked_program_with_cancellation(
     tir: CheckedTir,
-    src: &NamedSource<Arc<String>>,
+    src: SourceId,
+    sources: &SourceRegistry,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
-) -> Result<CheckedProgram, GraphcalError> {
-    seal_checked_program(tir, &ExecutionFacts::default(), src, cancellation)
+) -> Result<CheckedProgram, Outcome<SemanticError>> {
+    seal_checked_program(tir, &ExecutionFacts::default(), src, sources, cancellation)
 }
 
 /// Evaluate the constants of every DAG `tir` schedules, derive their domain
@@ -51,16 +53,17 @@ pub fn seal_checked_program_with_cancellation(
 pub fn seal_checked_program(
     tir: CheckedTir,
     inherited: &ExecutionFacts,
-    src: &NamedSource<Arc<String>>,
+    src: SourceId,
+    sources: &SourceRegistry,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
-) -> Result<CheckedProgram, GraphcalError> {
+) -> Result<CheckedProgram, Outcome<SemanticError>> {
     cancellation.checkpoint()?;
     let internal =
-        |message: String| GraphcalError::internal_error(message, src, DiagnosticAnchor::WholeFile);
+        |message: String| SemanticError::internal_error(message, src, DiagnosticAnchor::WholeFile);
     // Newly evaluated constants and constraints are provisional until every
     // mandatory check has succeeded; sealing is the last step.
     let (evaluated, const_presentations) =
-        const_eval::eval_const_pool(tir, inherited, src, cancellation)?;
+        const_eval::eval_const_pool(tir, inherited, src, sources, cancellation)?;
     let (tir, consts) = (evaluated.tir(), evaluated.consts());
     let pool = |dag_id| {
         consts.for_dag(dag_id).ok_or_else(|| {
@@ -86,11 +89,12 @@ pub fn seal_checked_program(
                 pool(dag_id)?,
                 &all_const_values,
                 src,
+                sources,
                 cancellation,
             )
             .map(|constraints| (dag_id.clone(), constraints))
         })
-        .collect::<Result<HashMap<_, _>, GraphcalError>>()?;
+        .collect::<Result<HashMap<_, _>, Outcome<SemanticError>>>()?;
 
     // Field-bound evaluation only needs provisional constant scopes, not fake
     // executable artifacts with missing constraints.
@@ -105,13 +109,14 @@ pub fn seal_checked_program(
                 },
             ))
         })
-        .collect::<Result<HashMap<_, _>, GraphcalError>>()?;
+        .collect::<Result<HashMap<_, _>, SemanticError>>()?;
     cancellation.checkpoint()?;
     let struct_field_constraints = resolve_struct_field_constraints_for_dags(
         tir,
         &const_scopes,
         &all_const_values,
         src,
+        sources,
         cancellation,
     )?
     .into_values()
@@ -134,10 +139,11 @@ pub fn seal_checked_program(
 
     evaluated
         .seal(ScheduledChecks {
-            source: src.clone(),
+            source: src,
             const_presentations,
             domain_constraints,
             struct_field_constraints,
         })
         .map_err(|error| internal(error.to_string()))
+        .map_err(Outcome::Failed)
 }

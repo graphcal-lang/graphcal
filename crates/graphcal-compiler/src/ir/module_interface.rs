@@ -7,13 +7,12 @@
 //! [`ModuleInterface`] instead of re-walking the module's AST.
 
 use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
-
-use miette::NamedSource;
 
 use crate::desugar::desugared_ast::{DeclKind, Declaration, ImportDecl, ImportKind};
-use crate::graphcal_error::GraphcalError;
 use crate::ir::resolve::collected::ExternalDeclSurface;
+use crate::semantic_error::SemanticError;
+use crate::semantic_error::module::ModuleError;
+use crate::source_id::SourceId;
 use crate::static_interface::{StaticInputKind, StaticInterface, StaticRole, static_interface};
 use crate::syntax::ast::{DeclExposure, ImportItemNamespace, IntroducedKind};
 use crate::syntax::decl_name::DeclName;
@@ -89,19 +88,18 @@ pub enum PureImportRejection {
 impl PureImportRejection {
     /// Build the diagnostic shared by cross-file and inline-self imports.
     #[must_use]
-    pub fn diagnostic(
-        self,
-        name: &NameAtom,
-        src: &NamedSource<Arc<String>>,
-        span: Span,
-    ) -> GraphcalError {
+    pub fn diagnostic(self, name: &NameAtom, src: SourceId, span: Span) -> SemanticError {
         let name = name.to_string();
-        let src = src.clone();
-        let span = span.into();
         match self {
-            Self::Runtime => GraphcalError::ImportRuntimeItem { name, src, span },
-            Self::Assertion => GraphcalError::ImportAssertionItem { name, src, span },
-            Self::Visualization => GraphcalError::ImportPlotItem { name, src, span },
+            Self::Runtime => {
+                SemanticError::located(src, span, ModuleError::ImportRuntimeItem { name })
+            }
+            Self::Assertion => {
+                SemanticError::located(src, span, ModuleError::ImportAssertionItem { name })
+            }
+            Self::Visualization => {
+                SemanticError::located(src, span, ModuleError::ImportPlotItem { name })
+            }
         }
     }
 }
@@ -482,6 +480,7 @@ impl ModuleInterface {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::semantic_error::SemanticErrorKind;
     use crate::syntax::parser::Parser;
 
     fn interface(source: &str) -> ModuleInterface {
@@ -610,19 +609,29 @@ mod tests {
 
     #[test]
     fn rejection_diagnostics_name_their_boundary() {
-        let src = NamedSource::new("main.gcl", Arc::new(String::new()));
+        let src = crate::source_registry::SourceRegistry::new()
+            .register("main.gcl", std::sync::Arc::new(String::new()));
         let span = Span::new(0, 0);
         assert!(matches!(
-            PureImportRejection::Runtime.diagnostic(&atom("x"), &src, span),
-            GraphcalError::ImportRuntimeItem { .. }
+            PureImportRejection::Runtime.diagnostic(&atom("x"), src, span),
+            SemanticError::Located(crate::diagnostic::Diagnostic {
+                kind: SemanticErrorKind::Module(ModuleError::ImportRuntimeItem { .. }),
+                ..
+            })
         ));
         assert!(matches!(
-            PureImportRejection::Assertion.diagnostic(&atom("x"), &src, span),
-            GraphcalError::ImportAssertionItem { .. }
+            PureImportRejection::Assertion.diagnostic(&atom("x"), src, span),
+            SemanticError::Located(crate::diagnostic::Diagnostic {
+                kind: SemanticErrorKind::Module(ModuleError::ImportAssertionItem { .. }),
+                ..
+            })
         ));
         assert!(matches!(
-            PureImportRejection::Visualization.diagnostic(&atom("x"), &src, span),
-            GraphcalError::ImportPlotItem { .. }
+            PureImportRejection::Visualization.diagnostic(&atom("x"), src, span),
+            SemanticError::Located(crate::diagnostic::Diagnostic {
+                kind: SemanticErrorKind::Module(ModuleError::ImportPlotItem { .. }),
+                ..
+            })
         ));
     }
 

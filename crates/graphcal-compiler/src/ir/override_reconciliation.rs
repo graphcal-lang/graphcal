@@ -5,13 +5,10 @@
 //! is only available after HIR/type resolution, so these records carry the
 //! canonical overrides across that phase boundary.
 
-use std::sync::Arc;
-
-use miette::NamedSource;
-
 use crate::ir::static_substitution::{InstanceIndexBindingTarget, StaticSubstitution};
 use crate::resolved_name::{ResolvedDeclName, ResolvedIndexName, ResolvedStructTypeName};
 use crate::semantic::checked_type::IndexTypeRef;
+use crate::source_id::SourceId;
 use crate::syntax::decl_name::DeclName;
 use crate::syntax::index_name::IndexName;
 use crate::syntax::span::Span;
@@ -23,7 +20,7 @@ use crate::syntax::type_name::StructTypeName;
 pub struct OverrideReconciliation {
     pub(crate) source_decl: ResolvedDeclName,
     pub(crate) targets: Vec<OverrideTarget>,
-    pub(crate) src: NamedSource<Arc<String>>,
+    pub(crate) src: SourceId,
     pub(crate) include_span: Span,
 }
 
@@ -34,7 +31,7 @@ impl OverrideReconciliation {
     pub(crate) fn new(
         source_decl: ResolvedDeclName,
         substitution: &StaticSubstitution,
-        src: NamedSource<Arc<String>>,
+        src: SourceId,
         include_span: Span,
     ) -> Self {
         let targets =
@@ -127,7 +124,8 @@ mod tests {
         let reconciliation = OverrideReconciliation::new(
             fallback.clone(),
             &substitution,
-            NamedSource::new("main.gcl", Arc::new(String::new())),
+            crate::source_registry::SourceRegistry::new()
+                .register("main.gcl", std::sync::Arc::new(String::new())),
             Span::new(0, 0),
         );
 

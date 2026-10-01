@@ -12,10 +12,9 @@ use graphcal_compiler::dag_id::DagId;
 use graphcal_compiler::hir::expr::{ResolvedUnitExpr, ResolvedUnitRef};
 use graphcal_compiler::semantic::time_zone::IanaTimeZoneId;
 use graphcal_compiler::semantic::unit_scale::PositiveFiniteScale;
+use graphcal_compiler::source_id::SourceId;
 use graphcal_compiler::syntax::index_name::IndexEntryKey;
 use graphcal_compiler::syntax::type_name::FieldName;
-use miette::NamedSource;
-use std::sync::Arc;
 use thiserror::Error;
 
 /// A display-only computation, to be performed once the frame of the selected
@@ -25,7 +24,7 @@ pub struct PendingDisplayUnit {
     /// The DAG whose frame computed the value; the request is resolved against
     /// that frame's values.
     pub owner: DagId,
-    pub source: NamedSource<Arc<String>>,
+    pub source: SourceId,
     /// The display unit, each term already resolved in the scope of the tree
     /// that names it.
     pub unit: ResolvedUnitExpr<ResolvedUnitRef>,

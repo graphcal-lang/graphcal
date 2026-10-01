@@ -1,11 +1,9 @@
-use std::sync::Arc;
-
-use miette::NamedSource;
-
 use crate::dimension::Dimension;
 use crate::display::formatting_registry::FormattingRegistry;
-use crate::graphcal_error::GraphcalError;
 use crate::hir::nominal::NominalTypeDef;
+use crate::semantic_error::SemanticError;
+use crate::semantic_error::dimension::DimensionError;
+use crate::source_id::SourceId;
 
 use crate::semantic::checked_type::{CheckedType, Concreteness, StructTypeRef, Symbolic};
 
@@ -62,9 +60,9 @@ pub(super) fn format_distinct_types(
 pub fn expect_quantity<V: Concreteness>(
     inferred: &CheckedType<V>,
     registry: &FormattingRegistry,
-    src: &NamedSource<Arc<String>>,
+    src: SourceId,
     span: crate::syntax::span::Span,
-) -> Result<Dimension, GraphcalError> {
+) -> Result<Dimension, SemanticError> {
     let found_kind = match inferred {
         CheckedType::Quantity(d) => return Ok(d.clone()),
         CheckedType::Complex(_) => "a Complex value",
@@ -75,11 +73,13 @@ pub fn expect_quantity<V: Concreteness>(
         CheckedType::Struct(..) => "a struct",
         CheckedType::Indexed { .. } => "an indexed value",
     };
-    Err(GraphcalError::DimensionMismatch {
-        expected: "quantity type".to_string(),
-        found: format_checked_type(inferred, registry),
-        help: format!("expected a quantity value, not {found_kind}"),
-        src: src.clone(),
-        span: span.into(),
-    })
+    Err(SemanticError::located(
+        src,
+        span,
+        DimensionError::DimensionMismatch {
+            expected: "quantity type".to_string(),
+            found: format_checked_type(inferred, registry),
+            help: format!("expected a quantity value, not {found_kind}"),
+        },
+    ))
 }

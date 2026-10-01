@@ -470,7 +470,9 @@ impl ExprLowerer<'_> {
                     }
                     crate::syntax::ast::IndexExpr::BareNat(nat_expr) => {
                         return Err(crate::hir::lower::HirLowerError::ExpectedIndexFoundNat {
-                            expression: nat_expr.to_string(),
+                            expression: crate::semantic_error::index::FoundNat::Expression(
+                                nat_expr.clone(),
+                            ),
                             span: nat_expr.span(),
                         }
                         .into());

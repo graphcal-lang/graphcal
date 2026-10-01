@@ -4,12 +4,10 @@
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
-use miette::NamedSource;
 use thiserror::Error;
 
 use crate::dimension::Dimension;
 use crate::display::formatting_registry::FormattingRegistry;
-use crate::graphcal_error::GraphcalError;
 use crate::hir::nominal::NominalTypeDef;
 use crate::resolved_name::{
     ResolvedDeclName, ResolvedDimName, ResolvedIndexName, ResolvedStructTypeName, ResolvedUnitName,
@@ -17,6 +15,8 @@ use crate::resolved_name::{
 use crate::semantic::checked_type::IndexTypeRef;
 use crate::semantic::index_def::IndexDef;
 use crate::semantic::unit_scale::UnitInfo;
+use crate::semantic_error::SemanticError;
+use crate::source_id::SourceId;
 
 use super::dag_store::DagStore;
 use super::model::{
@@ -382,8 +382,8 @@ impl TirDraft {
     pub(crate) fn merge_declared_extern_functions(
         &mut self,
         hir: &crate::ir::model::HirDag,
-        src: &NamedSource<Arc<String>>,
-    ) -> Result<(), GraphcalError> {
+        src: SourceId,
+    ) -> Result<(), SemanticError> {
         // Deterministic conflict reporting: earliest declaration first.
         let mut declared: Vec<_> = hir.extern_functions().iter().collect();
         declared.sort_by_key(|(_, function)| function.decl_span.offset());

@@ -1,13 +1,13 @@
 //! Pure validation for selective include producer identities.
 
 use std::collections::HashMap;
-use std::sync::Arc;
 
-use miette::NamedSource;
 use thiserror::Error;
 
 use crate::desugar::desugared_ast::ImportItem;
-use crate::graphcal_error::GraphcalError;
+use crate::semantic_error::SemanticError;
+use crate::semantic_error::module::ModuleError;
+use crate::source_id::SourceId;
 use crate::syntax::import_category::ImportItemNamespace;
 use crate::syntax::names::NameAtom;
 use crate::syntax::span::Span;
@@ -61,15 +61,17 @@ pub fn validate_unique_include_producers(
 #[must_use]
 pub fn duplicate_include_producer_to_graphcal(
     error: DuplicateIncludeProducer,
-    src: &NamedSource<Arc<String>>,
-) -> GraphcalError {
-    GraphcalError::DuplicateIncludeSelection {
-        namespace: error.namespace,
-        name: error.name,
-        src: src.clone(),
-        first: error.first.into(),
-        duplicate: error.duplicate.into(),
-    }
+    src: SourceId,
+) -> SemanticError {
+    SemanticError::located(
+        src,
+        error.duplicate,
+        ModuleError::DuplicateIncludeSelection {
+            namespace: error.namespace,
+            name: error.name,
+            first: error.first,
+        },
+    )
 }
 
 #[cfg(test)]

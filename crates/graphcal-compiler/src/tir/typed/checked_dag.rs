@@ -1,13 +1,11 @@
 //! A checked DAG body: one body paired with every fact its check published.
 
 use std::collections::HashMap;
-use std::sync::Arc;
-
-use miette::NamedSource;
 
 use crate::diagnostic_anchor::DiagnosticAnchor;
-use crate::graphcal_error::GraphcalError;
 use crate::resolved_name::{ResolvedDeclName, ResolvedStructTypeName};
+use crate::semantic_error::SemanticError;
+use crate::source_id::SourceId;
 use crate::tir::presentation::DagPresentationFacts;
 use crate::tir::schedule::RuntimeSchedule;
 use crate::tir::texpr::CheckedBodies;
@@ -46,10 +44,10 @@ impl CheckedDag {
     pub(super) fn new(
         body: DagTIR,
         published: PublishedDag,
-        src: &NamedSource<Arc<String>>,
-    ) -> Result<Self, GraphcalError> {
+        src: SourceId,
+    ) -> Result<Self, SemanticError> {
         let internal = |message: String| {
-            GraphcalError::internal_error(
+            SemanticError::internal_error(
                 format!("DAG `{}`: {message}", body.dag_id()),
                 src,
                 DiagnosticAnchor::WholeFile,
@@ -225,7 +223,7 @@ impl CheckedDag {
     #[must_use]
     pub const fn struct_type_defs(
         &self,
-    ) -> &HashMap<ResolvedStructTypeName, Arc<crate::hir::nominal::NominalTypeDef>> {
+    ) -> &HashMap<ResolvedStructTypeName, std::sync::Arc<crate::hir::nominal::NominalTypeDef>> {
         &self.body.semantic().type_defs.struct_types
     }
 

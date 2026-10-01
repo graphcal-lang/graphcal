@@ -1,13 +1,15 @@
 //! Check each semantic instance's own bodies and specialize the rest of its
 //! checked trees from its template's, without re-inferring the template.
 
-use miette::NamedSource;
 use std::collections::HashMap;
-use std::sync::Arc;
 
 use crate::cancellation::CancellationToken;
 use crate::diagnostic_anchor::DiagnosticAnchor;
-use crate::graphcal_error::GraphcalError;
+use crate::outcome::Outcome;
+use crate::semantic_error::SemanticError;
+use crate::semantic_error::dimension::DimensionError;
+use crate::semantic_error::visibility::VisibilityError;
+use crate::source_id::SourceId;
 use crate::tir::texpr::{CheckedBodies, CheckedBody, NominalObservation, TBody};
 use crate::tir::typed::program::{TirRead, UncheckedTir};
 use crate::tir::typed::specialization::specialize_expression_type;
@@ -19,7 +21,7 @@ fn check_retained_reconciliations(
     dag: &crate::tir::typed::model::DagTIR,
     declaration: &crate::resolved_name::ResolvedDeclName,
     observations: &[NominalObservation],
-) -> Result<(), GraphcalError> {
+) -> Result<(), SemanticError> {
     use crate::tir::typed::model::OverrideTarget;
     for reconciliation in dag
         .semantic
@@ -87,14 +89,16 @@ fn check_retained_reconciliations(
                     }
                 };
                 if let Some((overridden, kind, detail)) = matched {
-                    return Err(GraphcalError::IncludeMustReconcileOverride {
-                        overridden,
-                        overridden_kind: kind.to_string(),
-                        orphan_decl: reconciliation.orphan_decl().to_string(),
-                        detail,
-                        src: reconciliation.src.clone(),
-                        span: reconciliation.include_span.into(),
-                    });
+                    return Err(SemanticError::located(
+                        reconciliation.src,
+                        reconciliation.include_span,
+                        VisibilityError::IncludeMustReconcileOverride {
+                            overridden,
+                            overridden_kind: kind.to_string(),
+                            orphan_decl: reconciliation.orphan_decl().to_string(),
+                            detail,
+                        },
+                    ));
                 }
             }
         }
@@ -139,7 +143,7 @@ fn check_instance_defaults(
     template: &crate::tir::typed::model::DagTIR,
     template_bodies: &CheckedBodies,
     substitution: &crate::ir::static_substitution::StaticSubstitution,
-) -> Result<(), GraphcalError> {
+) -> Result<(), Outcome<SemanticError>> {
     let template_defaults = inherited_defaults(template);
     for entry in ctx.env.dag.params() {
         ctx.checkpoint()?;
@@ -153,7 +157,7 @@ fn check_instance_defaults(
             continue;
         }
         let internal = |message: String| {
-            GraphcalError::internal_error(
+            SemanticError::internal_error(
                 message,
                 ctx.env.src,
                 DiagnosticAnchor::Source(default.span),
@@ -173,21 +177,24 @@ fn check_instance_defaults(
             CheckedBody::Deferred(TBody::Value(tree)) => tree.ty().clone(),
             CheckedBody::Executable(TBody::Contextual(_))
             | CheckedBody::Deferred(TBody::Contextual(_)) => {
-                return Err(internal(
-                    "parameter default has no value checking result".to_owned(),
-                ));
+                return Err(
+                    internal("parameter default has no value checking result".to_owned()).into(),
+                );
             }
         };
         let specialized =
             specialize_expression_type(&checked_type, substitution, ctx.env.tir, ctx.env.src)?;
         let expected = entry.type_ann.checked().declared();
         if specialized != expected.to_symbolic() {
-            return Err(GraphcalError::DimensionMismatchInAnnotation {
-                declared: expected.format(&ctx.env.registry.dimensions),
-                inferred: specialized.format(&ctx.env.registry.dimensions),
-                src: ctx.env.src.clone(),
-                span: default.span.into(),
-            });
+            return Err(SemanticError::located(
+                ctx.env.src,
+                default.span,
+                DimensionError::DimensionMismatchInAnnotation {
+                    declared: expected.format(&ctx.env.registry.dimensions),
+                    inferred: specialized.format(&ctx.env.registry.dimensions),
+                },
+            )
+            .into());
         }
     }
     Ok(())
@@ -208,15 +215,15 @@ pub(super) struct InstanceBodies {
 pub(super) fn instance_bodies(
     tir: &UncheckedTir,
     canonical: &HashMap<crate::dag_id::DagId, CheckedBodies>,
-    src: &NamedSource<Arc<String>>,
+    src: SourceId,
     cancellation: &CancellationToken,
-) -> Result<InstanceBodies, GraphcalError> {
+) -> Result<InstanceBodies, Outcome<SemanticError>> {
     let checking = crate::tir::typed::CheckingTir {
         tir,
         bodies: canonical,
     };
     let internal =
-        |message: String| GraphcalError::internal_error(message, src, DiagnosticAnchor::WholeFile);
+        |message: String| SemanticError::internal_error(message, src, DiagnosticAnchor::WholeFile);
     let mut port_generic_plot_channels = HashMap::new();
     let mut published = Vec::new();
     let instances = tir.local_dags().filter_map(|(owner, dag)| {

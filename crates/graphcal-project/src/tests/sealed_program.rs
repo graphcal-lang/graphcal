@@ -11,7 +11,6 @@ use graphcal_compiler::syntax::decl_name::DeclName;
 use graphcal_compiler::syntax::module_name::ScopedName;
 use graphcal_compiler::tir::typed::CheckedTir;
 use graphcal_eval::runtime_value::RuntimeValue;
-use miette::NamedSource;
 
 use crate::project_compiler::compile_to_tir;
 use graphcal_eval::checked_program::{
@@ -33,10 +32,12 @@ fn one() -> impl FnMut(
 
 fn sealed(source: &str) -> CheckedProgram {
     let tir = compile_to_tir(source, "test.gcl").unwrap();
-    let src = NamedSource::new("test.gcl", Arc::new(source.to_owned()));
+    let mut sources = graphcal_compiler::source_registry::SourceRegistry::new();
+    let src = sources.register("test.gcl", Arc::new(source.to_owned()));
     graphcal_eval::execution_check::seal_checked_program_with_cancellation(
         tir,
-        &src,
+        src,
+        &sources,
         &graphcal_compiler::cancellation::CancellationToken::unbounded(),
     )
     .unwrap()
@@ -205,10 +206,11 @@ fn sealing_pairs_every_dag_with_its_own_facts() {
     );
     let tir = program.tir();
     assert!(tir.dag_registry().len() > 1);
+    let file_source = program.dag(tir.root_dag_id()).unwrap().source();
     for (dag_id, dag) in tir.dag_registry().iter() {
         let sealed = program.dag(dag_id).unwrap();
         assert!(std::ptr::eq(sealed.dag(), dag));
-        assert_eq!(sealed.source().name(), "test.gcl");
+        assert_eq!(sealed.source(), file_source);
         assert_eq!(
             sealed.const_values().len(),
             dag.body_for_test().consts().count(),
@@ -221,7 +223,7 @@ fn sealing_pairs_every_dag_with_its_own_facts() {
     assert!(program.dag(&foreign).is_none());
     let root_id = tir.root_dag_id().clone();
     let (_, facts) = program.into_parts();
-    assert_eq!(facts.source(&root_id).unwrap().name(), "test.gcl");
+    assert_eq!(facts.source(&root_id), Some(file_source));
     assert!(facts.source(&foreign).is_none());
 }
 
@@ -231,7 +233,8 @@ fn sealing_requires_constraints_for_every_scheduled_dag() {
     let tir = compile_to_tir(source, "test.gcl").unwrap();
     let evaluated = EvaluatedTir::evaluate(tir, &ExecutionFacts::default(), one()).unwrap();
     let result = evaluated.seal(ScheduledChecks {
-        source: NamedSource::new("test.gcl", Arc::new(source.to_owned())),
+        source: graphcal_compiler::source_registry::SourceRegistry::new()
+            .register("test.gcl", Arc::new(source.to_owned())),
         const_presentations: PendingPresentedMap::new(),
         domain_constraints: HashMap::new(),
         struct_field_constraints: HashMap::new(),

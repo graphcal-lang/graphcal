@@ -6,14 +6,17 @@
 //! the typed registry in [`crate::plot_props`], and property values are
 //! type-checked (string literal vs. dimensionless number vs. boolean).
 
+use crate::outcome::Outcome;
 use crate::semantic::checked_type::Symbolic;
+use crate::semantic_error::dimension::DimensionError;
+use crate::semantic_error::name::NameError;
 use std::collections::HashMap;
 
-use crate::graphcal_error::GraphcalError;
 use crate::hir::expr::ExprKind;
 use crate::ir::model::{LoweredPlotField, LoweredPlotProperty};
 use crate::plot_props::{CompositionProperty, MarkProperty, PlotProperty, PlotPropertyType};
 use crate::plot_shape::{PlotChannelShape, PlotLeafKind, align_plot_channel_axes};
+use crate::semantic_error::SemanticError;
 
 use super::{
     CheckedType, DimCheckContext, check_ineffective_conversions, helpers::format_checked_type,
@@ -29,7 +32,7 @@ pub(super) type CheckedPlotChannelShapes = HashMap<
 pub(super) fn check_plot_properties_dag(
     ctx: &DimCheckContext<'_>,
     dag: &crate::tir::typed::DagTIR,
-) -> Result<CheckedPlotChannelShapes, GraphcalError> {
+) -> Result<CheckedPlotChannelShapes, Outcome<SemanticError>> {
     check_plot_references(ctx, dag)?;
     let mut channel_types = HashMap::new();
     for entry in dag.plots() {
@@ -51,7 +54,7 @@ pub(super) fn check_plot_entry(
         crate::resolved_name::ResolvedDeclName,
         HashMap<crate::syntax::ast::EncodingChannel, PlotChannelShape>,
     ),
-    GraphcalError,
+    Outcome<SemanticError>,
 > {
     let body = &entry.body;
     let owner = entry.identity();
@@ -63,7 +66,8 @@ pub(super) fn check_plot_entry(
                 field,
                 "a mark block",
                 &valid_names(MarkProperty::ALL.iter().map(|p| p.name())),
-            ));
+            )
+            .into());
         };
         check_property_value(ctx, &owner, prop.name(), prop.value_type(), field)?;
     }
@@ -74,7 +78,8 @@ pub(super) fn check_plot_entry(
                 field,
                 "a plot declaration",
                 &valid_names(PlotProperty::ALL.iter().map(|p| p.name())),
-            ));
+            )
+            .into());
         };
         check_property_value(ctx, &owner, prop.name(), prop.value_type(), field)?;
     }
@@ -84,7 +89,7 @@ pub(super) fn check_plot_entry(
 pub(super) fn check_figure_entry(
     ctx: &DimCheckContext<'_>,
     entry: &crate::tir::typed::TypedFigureEntry,
-) -> Result<(), GraphcalError> {
+) -> Result<(), Outcome<SemanticError>> {
     let owner = entry.identity();
     for field in &entry.fields {
         let LoweredPlotProperty::Composition(prop) = &field.property else {
@@ -102,7 +107,8 @@ pub(super) fn check_figure_entry(
                             .map(|p| p.name()),
                     )
                 ),
-            ));
+            )
+            .into());
         };
         if !prop.applies_to_figure() {
             return Err(invalid_property(
@@ -119,7 +125,8 @@ pub(super) fn check_figure_entry(
                             .map(|p| p.name()),
                     )
                 ),
-            ));
+            )
+            .into());
         }
         check_property_value(ctx, &owner, prop.name(), prop.value_type(), field)?;
     }
@@ -129,7 +136,7 @@ pub(super) fn check_figure_entry(
 pub(super) fn check_layer_entry(
     ctx: &DimCheckContext<'_>,
     entry: &crate::tir::typed::TypedLayerEntry,
-) -> Result<(), GraphcalError> {
+) -> Result<(), Outcome<SemanticError>> {
     let owner = entry.identity();
     for field in &entry.fields {
         let LoweredPlotProperty::Composition(prop) = &field.property else {
@@ -138,7 +145,8 @@ pub(super) fn check_layer_entry(
                 field,
                 "a layer declaration",
                 &valid_names(CompositionProperty::ALL.iter().map(|p| p.name())),
-            ));
+            )
+            .into());
         };
         check_property_value(ctx, &owner, prop.name(), prop.value_type(), field)?;
     }
@@ -151,7 +159,7 @@ pub(super) fn check_layer_entry(
 fn check_plot_references(
     ctx: &DimCheckContext<'_>,
     dag: &crate::tir::typed::DagTIR,
-) -> Result<(), GraphcalError> {
+) -> Result<(), SemanticError> {
     let owners = dag
         .figures()
         .map(|f| ("figure", f.name(), &f.plot_names))
@@ -170,30 +178,40 @@ fn check_plot_references(
                     None
                 };
                 return Err(actual_kind.map_or_else(
-                    || GraphcalError::UnknownPlotReference {
-                        owner_kind,
-                        owner: owner.clone(),
-                        name: reference.value.clone(),
-                        src: ctx.env.src.clone(),
-                        span: reference.span.into(),
+                    || {
+                        SemanticError::located(
+                            ctx.env.src,
+                            reference.span,
+                            NameError::UnknownPlotReference {
+                                owner_kind,
+                                owner: owner.clone(),
+                                name: reference.value.clone(),
+                            },
+                        )
                     },
-                    |actual_kind| GraphcalError::CompositionReferencesNonPlot {
-                        owner_kind,
-                        actual_kind,
-                        name: reference.value.clone(),
-                        src: ctx.env.src.clone(),
-                        span: reference.span.into(),
+                    |actual_kind| {
+                        SemanticError::located(
+                            ctx.env.src,
+                            reference.span,
+                            NameError::CompositionReferencesNonPlot {
+                                owner_kind,
+                                actual_kind,
+                                name: reference.value.clone(),
+                            },
+                        )
                     },
                 ));
             }
             if plot_names[..i].iter().any(|p| p.value == reference.value) {
-                return Err(GraphcalError::DuplicatePlotReference {
-                    owner_kind,
-                    owner: owner.clone(),
-                    name: reference.value.clone(),
-                    src: ctx.env.src.clone(),
-                    span: reference.span.into(),
-                });
+                return Err(SemanticError::located(
+                    ctx.env.src,
+                    reference.span,
+                    NameError::DuplicatePlotReference {
+                        owner_kind,
+                        owner: owner.clone(),
+                        name: reference.value.clone(),
+                    },
+                ));
             }
         }
     }
@@ -204,7 +222,8 @@ fn check_plot_encodings(
     ctx: &DimCheckContext<'_>,
     owner: &crate::resolved_name::ResolvedDeclName,
     body: &crate::ir::model::LoweredPlotBody,
-) -> Result<HashMap<crate::syntax::ast::EncodingChannel, PlotChannelShape>, GraphcalError> {
+) -> Result<HashMap<crate::syntax::ast::EncodingChannel, PlotChannelShape>, Outcome<SemanticError>>
+{
     let shapes = body
         .encodings
         .iter()
@@ -219,25 +238,33 @@ fn check_plot_encodings(
                 ));
             }
             let inferred = infer_expression_type(ctx, owner, expr)?;
-            plot_channel_shape(&inferred).ok_or_else(|| GraphcalError::PlotEncodingTypeMismatch {
-                channel: *channel,
-                found: format_checked_type(&inferred, ctx.env.registry),
-                src: ctx.env.src.clone(),
-                span: expr.span.into(),
+            plot_channel_shape(&inferred).ok_or_else(|| {
+                SemanticError::located(
+                    ctx.env.src,
+                    expr.span,
+                    DimensionError::PlotEncodingTypeMismatch {
+                        channel: *channel,
+                        found: format_checked_type(&inferred, ctx.env.registry),
+                    },
+                )
+                .into()
             })
         })
-        .collect::<Result<Vec<_>, GraphcalError>>()?;
+        .collect::<Result<Vec<_>, Outcome<SemanticError>>>()?;
     let axes = shapes
         .iter()
         .map(PlotChannelShape::axes)
         .collect::<Vec<_>>();
     if let Err(error) = align_plot_channel_axes(&axes) {
         let (_, expr) = &body.encodings[error.channel()];
-        return Err(GraphcalError::PlotEncodingAxisMismatch {
-            channels: describe_channel_axes(body, &shapes),
-            src: ctx.env.src.clone(),
-            span: expr.span.into(),
-        });
+        return Err(SemanticError::located(
+            ctx.env.src,
+            expr.span,
+            DimensionError::PlotEncodingAxisMismatch {
+                channels: describe_channel_axes(body, &shapes),
+            },
+        )
+        .into());
     }
     Ok(body
         .encodings
@@ -311,14 +338,16 @@ fn invalid_property(
     field: &LoweredPlotField,
     context: &'static str,
     valid: &str,
-) -> GraphcalError {
-    GraphcalError::InvalidPlotProperty {
-        property: field.property.name().to_string(),
-        context,
-        valid: valid.to_string(),
-        src: ctx.env.src.clone(),
-        span: field.name_span.into(),
-    }
+) -> SemanticError {
+    SemanticError::located(
+        ctx.env.src,
+        field.name_span,
+        NameError::InvalidPlotProperty {
+            property: field.property.name().to_string(),
+            context,
+            valid: valid.to_string(),
+        },
+    )
 }
 
 /// Check one property value against its expected type.
@@ -328,14 +357,18 @@ pub(super) fn check_property_value(
     property: &'static str,
     expected: PlotPropertyType,
     field: &LoweredPlotField,
-) -> Result<(), GraphcalError> {
+) -> Result<(), Outcome<SemanticError>> {
     let is_string_literal = matches!(field.value.kind(), ExprKind::StringLiteral(_));
-    let mismatch = |found: String| GraphcalError::PlotPropertyTypeMismatch {
-        property,
-        expected: expected.describe(),
-        found,
-        src: ctx.env.src.clone(),
-        span: field.value.span.into(),
+    let mismatch = |found: String| {
+        SemanticError::located(
+            ctx.env.src,
+            field.value.span,
+            DimensionError::PlotPropertyTypeMismatch {
+                property,
+                expected: expected.describe(),
+                found,
+            },
+        )
     };
 
     match expected {
@@ -343,35 +376,39 @@ pub(super) fn check_property_value(
             if is_string_literal {
                 ctx.observations
                     .record_contextual(&field.value, ctx.env.src)
+                    .map_err(Outcome::Failed)
             } else {
                 // No expression other than a literal can produce a string —
                 // graphcal has no runtime string values.
-                Err(mismatch("not a string literal".to_string()))
+                Err(mismatch("not a string literal".to_string()).into())
             }
         }
         PlotPropertyType::Number | PlotPropertyType::PositiveNumber => {
             if is_string_literal {
-                return Err(mismatch("a string literal".to_string()));
+                return Err(mismatch("a string literal".to_string()).into());
             }
             match infer_expression_type(ctx, owner, &field.value)? {
                 CheckedType::Int => Ok(()),
                 CheckedType::Quantity(d) if d.is_dimensionless() => Ok(()),
-                CheckedType::Quantity(d) => Err(GraphcalError::PlotPropertyDimensioned {
-                    property,
-                    dimension: ctx.env.registry.dimensions.format_dimension(&d),
-                    src: ctx.env.src.clone(),
-                    span: field.value.span.into(),
-                }),
-                other => Err(mismatch(format_checked_type(&other, ctx.env.registry))),
+                CheckedType::Quantity(d) => Err(SemanticError::located(
+                    ctx.env.src,
+                    field.value.span,
+                    DimensionError::PlotPropertyDimensioned {
+                        property,
+                        dimension: ctx.env.registry.dimensions.format_dimension(&d),
+                    },
+                )
+                .into()),
+                other => Err(mismatch(format_checked_type(&other, ctx.env.registry)).into()),
             }
         }
         PlotPropertyType::Bool => {
             if is_string_literal {
-                return Err(mismatch("a string literal".to_string()));
+                return Err(mismatch("a string literal".to_string()).into());
             }
             match infer_expression_type(ctx, owner, &field.value)? {
                 CheckedType::Bool => Ok(()),
-                other => Err(mismatch(format_checked_type(&other, ctx.env.registry))),
+                other => Err(mismatch(format_checked_type(&other, ctx.env.registry)).into()),
             }
         }
     }
@@ -381,6 +418,6 @@ fn infer_expression_type(
     ctx: &DimCheckContext<'_>,
     owner: &crate::resolved_name::ResolvedDeclName,
     expr: &crate::hir::expr::Expr,
-) -> Result<CheckedType<Symbolic>, GraphcalError> {
+) -> Result<CheckedType<Symbolic>, Outcome<SemanticError>> {
     ctx.infer_hir(expr, Some(owner))
 }

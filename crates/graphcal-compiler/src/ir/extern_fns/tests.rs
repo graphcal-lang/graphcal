@@ -1,21 +1,23 @@
 use std::sync::Arc;
 
-use miette::NamedSource;
-
 use crate::function_signature::FunctionSignature;
-use crate::graphcal_error::GraphcalError;
 use crate::ir::lower::{LoweredTestFile, lower_file_with_inline_dags_for_test};
 use crate::ir::model::HirDag;
+use crate::semantic_error::SemanticError;
+use crate::semantic_error::SemanticErrorKind;
+use crate::semantic_error::dimension::DimensionError;
+use crate::semantic_error::plugin::PluginError;
 
 use super::ExternStructResult;
 
-fn lower(source: &str) -> Result<LoweredTestFile, GraphcalError> {
+fn lower(source: &str) -> Result<LoweredTestFile, SemanticError> {
     let parsed = crate::syntax::parser::Parser::new(source)
         .parse_file()
         .expect("source parses");
     let ast = crate::desugar::desugared_ast::File::from(parsed);
-    let src = NamedSource::new("main.gcl", Arc::new(source.to_string()));
-    lower_file_with_inline_dags_for_test(&ast, &src)
+    let src = crate::source_registry::SourceRegistry::new()
+        .register("main.gcl", Arc::new(source.to_string()));
+    lower_file_with_inline_dags_for_test(&ast, "main.gcl", src)
 }
 
 fn only_signature(dag: &HirDag) -> &FunctionSignature<ExternStructResult> {
@@ -27,7 +29,10 @@ fn only_signature(dag: &HirDag) -> &FunctionSignature<ExternStructResult> {
 
 fn expect_invalid_signature(source: &str, fragment: &str) {
     match lower(source) {
-        Err(GraphcalError::InvalidExternSignature { message, .. }) => {
+        Err(SemanticError::Located(crate::diagnostic::Diagnostic {
+            kind: SemanticErrorKind::Plugin(PluginError::InvalidExternSignature { message, .. }),
+            ..
+        })) => {
             assert!(message.contains(fragment), "{message}");
         }
         Err(other) => panic!("expected an invalid extern signature, got {other:?}"),
@@ -106,6 +111,6 @@ fn binders_share_one_namespace_and_keep_their_sort() {
 fn unknown_dimensions_are_reported_at_the_term() {
     assert!(matches!(
         lower("import plugin \"graphcal:demo\" as demo { fn f(x: Missing * Length) -> Length; }\n"),
-        Err(GraphcalError::UnknownDimension { name, .. }) if name.to_string() == "Missing"
+        Err(SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Dimension(DimensionError::UnknownDimension { name, .. }), .. })) if name.to_string() == "Missing"
     ));
 }

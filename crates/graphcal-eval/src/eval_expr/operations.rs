@@ -9,8 +9,9 @@
 use graphcal_compiler::builtin::{DatetimeField, DatetimeFromNumericFn, DatetimeToNumericFn};
 use graphcal_compiler::complex_value::ComplexValue;
 use graphcal_compiler::finite_value::FiniteQuantity;
-use graphcal_compiler::graphcal_error::GraphcalError;
+use graphcal_compiler::outcome::Outcome;
 use graphcal_compiler::semantic::checked_type::IndexTypeRef;
+use graphcal_compiler::semantic_error::SemanticError;
 use graphcal_compiler::syntax::span::Span;
 use graphcal_compiler::tir::texpr::DatetimeLiteral;
 use graphcal_compiler::tir::texpr::operators::{
@@ -28,13 +29,13 @@ use super::arithmetic::apply_ordering;
 /// Evaluates the operands of typed operations of one tree, reading each as
 /// the type its checked node has.
 pub(super) struct Operands<'o, 't> {
-    evaluate: &'o dyn Fn(ScopedNode<'t>) -> Result<RuntimeValue, GraphcalError>,
+    evaluate: &'o dyn Fn(ScopedNode<'t>) -> Result<RuntimeValue, Outcome<SemanticError>>,
     ctx: &'o EvalSession<'o>,
 }
 
 impl<'o, 't> Operands<'o, 't> {
     pub(super) fn new(
-        evaluate: &'o dyn Fn(ScopedNode<'t>) -> Result<RuntimeValue, GraphcalError>,
+        evaluate: &'o dyn Fn(ScopedNode<'t>) -> Result<RuntimeValue, Outcome<SemanticError>>,
         ctx: &'o EvalSession<'o>,
     ) -> Self {
         Self { evaluate, ctx }
@@ -47,16 +48,20 @@ impl<'o, 't> Operands<'o, 't> {
         node: ScopedNode<'t>,
         expected: &str,
         extract: impl FnOnce(RuntimeValue) -> Result<T, RuntimeValue>,
-    ) -> Result<T, GraphcalError> {
-        extract((self.evaluate)(node)?).map_err(|other| {
-            self.ctx.failure_error(
-                Failure::<std::convert::Infallible>::Invariant(Invariant::violated(format_args!(
-                    "operand checked as {expected} evaluated to {}",
-                    other.describe()
-                ))),
-                node.span(),
-            )
-        })
+    ) -> Result<T, Outcome<SemanticError>> {
+        extract((self.evaluate)(node)?)
+            .map_err(|other| {
+                self.ctx.failure_error(
+                    Failure::<std::convert::Infallible>::Invariant(Invariant::violated(
+                        format_args!(
+                            "operand checked as {expected} evaluated to {}",
+                            other.describe()
+                        ),
+                    )),
+                    node.span(),
+                )
+            })
+            .map_err(Outcome::Failed)
     }
 
     /// The session operands are evaluated in.
@@ -64,25 +69,28 @@ impl<'o, 't> Operands<'o, 't> {
         self.ctx
     }
 
-    fn value(&self, node: ScopedNode<'t>) -> Result<RuntimeValue, GraphcalError> {
+    fn value(&self, node: ScopedNode<'t>) -> Result<RuntimeValue, Outcome<SemanticError>> {
         (self.evaluate)(node)
     }
 
-    pub(super) fn quantity(&self, node: ScopedNode<'t>) -> Result<FiniteQuantity, GraphcalError> {
+    pub(super) fn quantity(
+        &self,
+        node: ScopedNode<'t>,
+    ) -> Result<FiniteQuantity, Outcome<SemanticError>> {
         self.read(node, "a quantity", |value| match value {
             RuntimeValue::Quantity(value) => Ok(value),
             other => Err(other),
         })
     }
 
-    pub(super) fn int(&self, node: ScopedNode<'t>) -> Result<i64, GraphcalError> {
+    pub(super) fn int(&self, node: ScopedNode<'t>) -> Result<i64, Outcome<SemanticError>> {
         self.read(node, "an Int", |value| match value {
             RuntimeValue::Int(value) => Ok(value),
             other => Err(other),
         })
     }
 
-    pub(super) fn bool(&self, node: ScopedNode<'t>) -> Result<bool, GraphcalError> {
+    pub(super) fn bool(&self, node: ScopedNode<'t>) -> Result<bool, Outcome<SemanticError>> {
         self.read(node, "a Bool", |value| match value {
             RuntimeValue::Bool(value) => Ok(value),
             other => Err(other),
@@ -92,28 +100,28 @@ impl<'o, 't> Operands<'o, 't> {
     pub(super) fn indexed(
         &self,
         node: ScopedNode<'t>,
-    ) -> Result<IndexedValue<RuntimeValue>, GraphcalError> {
+    ) -> Result<IndexedValue<RuntimeValue>, Outcome<SemanticError>> {
         self.read(node, "an indexed value", |value| match value {
             RuntimeValue::Indexed(value) => Ok(value),
             other => Err(other),
         })
     }
 
-    fn complex(&self, node: ScopedNode<'t>) -> Result<ComplexValue, GraphcalError> {
+    fn complex(&self, node: ScopedNode<'t>) -> Result<ComplexValue, Outcome<SemanticError>> {
         self.read(node, "a complex quantity", |value| match value {
             RuntimeValue::Complex(value) => Ok(value),
             other => Err(other),
         })
     }
 
-    fn datetime(&self, node: ScopedNode<'t>) -> Result<hifitime::Epoch, GraphcalError> {
+    fn datetime(&self, node: ScopedNode<'t>) -> Result<hifitime::Epoch, Outcome<SemanticError>> {
         self.read(node, "a Datetime", |value| match value {
             RuntimeValue::Datetime(value) => Ok(value),
             other => Err(other),
         })
     }
 
-    pub(super) fn key(&self, node: ScopedNode<'t>) -> Result<KeyValue, GraphcalError> {
+    pub(super) fn key(&self, node: ScopedNode<'t>) -> Result<KeyValue, Outcome<SemanticError>> {
         self.read(node, "a key", |value| match value {
             RuntimeValue::Key(value) => Ok(value),
             other => Err(other),
@@ -125,21 +133,24 @@ impl<'o, 't> Operands<'o, 't> {
 /// Plugin-call arguments are operands read at the kind their checked node
 /// carries.
 impl<'t> ArgumentReader<ScopedNode<'t>> for Operands<'_, 't> {
-    type Error = GraphcalError;
+    type Error = Outcome<SemanticError>;
 
-    fn quantity(&self, node: ScopedNode<'t>) -> Result<FiniteQuantity, GraphcalError> {
+    fn quantity(&self, node: ScopedNode<'t>) -> Result<FiniteQuantity, Outcome<SemanticError>> {
         Operands::quantity(self, node)
     }
 
-    fn bool(&self, node: ScopedNode<'t>) -> Result<bool, GraphcalError> {
+    fn bool(&self, node: ScopedNode<'t>) -> Result<bool, Outcome<SemanticError>> {
         Operands::bool(self, node)
     }
 
-    fn int(&self, node: ScopedNode<'t>) -> Result<i64, GraphcalError> {
+    fn int(&self, node: ScopedNode<'t>) -> Result<i64, Outcome<SemanticError>> {
         Operands::int(self, node)
     }
 
-    fn indexed(&self, node: ScopedNode<'t>) -> Result<IndexedValue<RuntimeValue>, GraphcalError> {
+    fn indexed(
+        &self,
+        node: ScopedNode<'t>,
+    ) -> Result<IndexedValue<RuntimeValue>, Outcome<SemanticError>> {
         Operands::indexed(self, node)
     }
 }
@@ -148,28 +159,31 @@ pub(super) fn quantity<'t>(
     operation: &QExpr<ScopedNode<'t>>,
     span: Span,
     operands: &Operands<'_, 't>,
-) -> Result<FiniteQuantity, GraphcalError> {
+) -> Result<FiniteQuantity, Outcome<SemanticError>> {
     let ctx = operands.ctx;
     match *operation {
         QExpr::Number(value) => super::numeric::finite_quantity(value, "numeric literal")
-            .map_err(|error| ctx.eval_error(error.to_string(), span)),
+            .map_err(|error| ctx.eval_error(error.to_string(), span))
+            .map_err(Outcome::Failed),
         QExpr::Constant(constant) => {
             super::numeric::finite_quantity(constant.value(), "built-in constant")
                 .map_err(|error| ctx.eval_error(error.to_string(), span))
+                .map_err(Outcome::Failed)
         }
         QExpr::Arith { op, lhs, rhs } => {
             let lhs = operands.quantity(lhs)?;
             let rhs = operands.quantity(rhs)?;
-            super::arithmetic::quantity_arith(op, lhs, rhs, ctx, span)
+            super::arithmetic::quantity_arith(op, lhs, rhs, ctx, span).map_err(Outcome::Failed)
         }
         QExpr::ExactPower { base, exponent, .. } => {
             let base = operands.quantity(base)?;
             super::arithmetic::eval_exact_quantity_power(base, exponent, ctx, span)
+                .map_err(Outcome::Failed)
         }
         QExpr::Power { base, exponent } => {
             let base = operands.quantity(base)?;
             let exponent = operands.quantity(exponent)?;
-            super::arithmetic::quantity_power(base, exponent, ctx, span)
+            super::arithmetic::quantity_power(base, exponent, ctx, span).map_err(Outcome::Failed)
         }
         QExpr::Neg(operand) => Ok(operands.quantity(operand)?.negated()),
         QExpr::DatetimeDifference { lhs, rhs } => {
@@ -179,6 +193,7 @@ pub(super) fn quantity<'t>(
                 .map_err(|error| ctx.eval_error(error.to_string(), span))?;
             super::numeric::finite_quantity(seconds, "datetime difference")
                 .map_err(|error| ctx.eval_error(error.to_string(), span))
+                .map_err(Outcome::Failed)
         }
         QExpr::Scalar { function, ref args } => {
             let arguments = args
@@ -191,13 +206,14 @@ pub(super) fn quantity<'t>(
                     ctx.eval_error(format!("builtin function `{function}` {error}"), span)
                 })?;
             super::arithmetic::check_finite(result, function.as_str(), ctx, span)
+                .map_err(Outcome::Failed)
         }
         QExpr::ComplexPart { part, arg } => super::complex::part(part, operands.complex(arg)?)
-            .map_err(|error| ctx.eval_error(error.to_string(), span)),
+            .map_err(|error| ctx.eval_error(error.to_string(), span).into()),
         QExpr::Abs(arg) => super::complex::real_abs(operands.quantity(arg)?)
-            .map_err(|error| ctx.eval_error(error.to_string(), span)),
+            .map_err(|error| ctx.eval_error(error.to_string(), span).into()),
         QExpr::Exp(arg) => super::complex::real_exp(operands.quantity(arg)?)
-            .map_err(|error| ctx.eval_error(error.to_string(), span)),
+            .map_err(|error| ctx.eval_error(error.to_string(), span).into()),
         QExpr::FromInt(arg) => {
             let value = operands.int(arg)?;
             #[expect(
@@ -206,14 +222,15 @@ pub(super) fn quantity<'t>(
             )]
             super::numeric::finite_quantity(value as f64, "to_float()")
                 .map_err(|error| ctx.eval_error(error.to_string(), arg.span()))
+                .map_err(Outcome::Failed)
         }
         QExpr::Coordinate(arg) => {
             let key = operands.key(arg)?;
             match key.element() {
                 KeyElement::Coordinate { value, .. } => Ok(value),
-                KeyElement::Finite(_) | KeyElement::Named(_) => {
-                    Err(ctx.internal_error("coord() received a non-coordinate key", arg.span()))
-                }
+                KeyElement::Finite(_) | KeyElement::Named(_) => Err(ctx
+                    .internal_error("coord() received a non-coordinate key", arg.span())
+                    .into()),
             }
         }
         QExpr::FromDatetime { function, arg } => {
@@ -225,6 +242,7 @@ pub(super) fn quantity<'t>(
             };
             super::numeric::finite_quantity(result, "datetime conversion")
                 .map_err(|error| ctx.eval_error(error.to_string(), arg.span()))
+                .map_err(Outcome::Failed)
         }
     }
 }
@@ -234,53 +252,60 @@ pub(super) fn int<'t>(
     operation: &IExpr<ScopedNode<'t>>,
     span: Span,
     operands: &Operands<'_, 't>,
-) -> Result<i64, GraphcalError> {
+) -> Result<i64, Outcome<SemanticError>> {
     let ctx = operands.ctx;
     match *operation {
         IExpr::Literal(value) => Ok(value),
         IExpr::Arith { op, lhs, rhs } => {
             let lhs = operands.int(lhs)?;
             let rhs = operands.int(rhs)?;
-            super::arithmetic::int_arith(op, lhs, rhs, ctx, span)
+            super::arithmetic::int_arith(op, lhs, rhs, ctx, span).map_err(Outcome::Failed)
         }
         IExpr::ExactPower { base, exponent, .. } => {
             let base = operands.int(base)?;
-            super::arithmetic::int_power(base, exponent, ctx, span)
+            super::arithmetic::int_power(base, exponent, ctx, span).map_err(Outcome::Failed)
         }
         IExpr::Power { base, exponent } => {
             let base = operands.int(base)?;
             let exponent = operands.int(exponent)?;
-            super::arithmetic::int_power(base, exponent, ctx, span)
+            super::arithmetic::int_power(base, exponent, ctx, span).map_err(Outcome::Failed)
         }
         IExpr::Neg(operand) => operands
             .int(operand)?
             .checked_neg()
-            .ok_or_else(|| ctx.eval_error("integer negation overflow", span)),
+            .ok_or_else(|| ctx.eval_error("integer negation overflow", span))
+            .map_err(Outcome::Failed),
         IExpr::FromQuantity(arg) => {
             let value = operands.quantity(arg)?.get();
-            super::conversions::exact_f64_to_i64(value).map_err(|error| {
-                let rounding_help = if matches!(
-                    &error,
-                    super::conversions::ExactIntConversionError::NonInteger { .. }
-                ) {
-                    "; apply trunc(), floor(), ceil(), or round() explicitly before to_int()"
-                } else {
-                    ""
-                };
-                ctx.eval_error(format!("to_int() argument {error}{rounding_help}"), span)
-            })
+            super::conversions::exact_f64_to_i64(value)
+                .map_err(|error| {
+                    let rounding_help = if matches!(
+                        &error,
+                        super::conversions::ExactIntConversionError::NonInteger { .. }
+                    ) {
+                        "; apply trunc(), floor(), ceil(), or round() explicitly before to_int()"
+                    } else {
+                        ""
+                    };
+                    ctx.eval_error(format!("to_int() argument {error}{rounding_help}"), span)
+                })
+                .map_err(Outcome::Failed)
         }
         IExpr::FinPosition(arg) => {
             let key = operands.key(arg)?;
             let KeyElement::Finite(position) = key.element() else {
-                return Err(ctx.internal_error("to_int() received a non-Fin key", arg.span()));
+                return Err(ctx
+                    .internal_error("to_int() received a non-Fin key", arg.span())
+                    .into());
             };
-            i64::try_from(position).map_err(|_| {
-                ctx.internal_error(
-                    format!("Fin position {position} does not fit Int"),
-                    arg.span(),
-                )
-            })
+            i64::try_from(position)
+                .map_err(|_| {
+                    ctx.internal_error(
+                        format!("Fin position {position} does not fit Int"),
+                        arg.span(),
+                    )
+                })
+                .map_err(Outcome::Failed)
         }
         IExpr::DatetimeField { field, arg } => {
             let epoch = operands.datetime(arg)?;
@@ -310,7 +335,7 @@ pub(super) fn int<'t>(
 pub(super) fn boolean<'t>(
     operation: &BExpr<ScopedNode<'t>>,
     operands: &Operands<'_, 't>,
-) -> Result<bool, GraphcalError> {
+) -> Result<bool, Outcome<SemanticError>> {
     Ok(match *operation {
         BExpr::Literal(value) => value,
         BExpr::Not(operand) => !operands.bool(operand)?,
@@ -359,7 +384,7 @@ pub(super) fn complex<'t>(
     operation: &CExpr<ScopedNode<'t>>,
     span: Span,
     operands: &Operands<'_, 't>,
-) -> Result<ComplexValue, GraphcalError> {
+) -> Result<ComplexValue, Outcome<SemanticError>> {
     let result = match *operation {
         CExpr::Arith { op, lhs, rhs } => {
             let lhs = operands.complex(lhs)?;
@@ -404,7 +429,9 @@ pub(super) fn complex<'t>(
         CExpr::Conjugate(arg) => return Ok(operands.complex(arg)?.conjugate()),
         CExpr::Exp(arg) => super::complex::exp(operands.complex(arg)?),
     };
-    result.map_err(|error| operands.ctx.eval_error(error.to_string(), span))
+    result
+        .map_err(|error| operands.ctx.eval_error(error.to_string(), span))
+        .map_err(Outcome::Failed)
 }
 
 /// Evaluate an operation whose result is a datetime.
@@ -412,7 +439,7 @@ pub(super) fn datetime<'t>(
     operation: &DExpr<ScopedNode<'t>>,
     span: Span,
     operands: &Operands<'_, 't>,
-) -> Result<hifitime::Epoch, GraphcalError> {
+) -> Result<hifitime::Epoch, Outcome<SemanticError>> {
     let result = match *operation {
         DExpr::Shift {
             op,
@@ -454,7 +481,9 @@ pub(super) fn datetime<'t>(
                 .to_time_scale(conversion.target().to_hifitime()));
         }
     };
-    result.map_err(|error| operands.ctx.eval_error(error.to_string(), span))
+    result
+        .map_err(|error| operands.ctx.eval_error(error.to_string(), span))
+        .map_err(Outcome::Failed)
 }
 
 /// The UTC datetime a numeric epoch count denotes.
@@ -463,7 +492,7 @@ fn from_numeric(
     value: f64,
     span: Span,
     ctx: &EvalSession<'_>,
-) -> Result<hifitime::Epoch, GraphcalError> {
+) -> Result<hifitime::Epoch, Outcome<SemanticError>> {
     let kind = match function {
         DatetimeFromNumericFn::Jd => super::datetime::NumericEpochKind::JulianDate,
         DatetimeFromNumericFn::Mjd => super::datetime::NumericEpochKind::ModifiedJulianDate,
@@ -471,6 +500,7 @@ fn from_numeric(
     };
     super::datetime::checked_epoch_from_numeric(value, kind)
         .map_err(|error| ctx.eval_error(error.to_string(), span))
+        .map_err(Outcome::Failed)
 }
 
 /// The instant a datetime literal denotes.
@@ -478,17 +508,19 @@ pub(super) fn datetime_literal(
     literal: &DatetimeLiteral,
     span: Span,
     ctx: &EvalSession<'_>,
-) -> Result<hifitime::Epoch, GraphcalError> {
+) -> Result<hifitime::Epoch, Outcome<SemanticError>> {
     match literal {
         DatetimeLiteral::Offset(datetime) => Ok(super::datetime::datetime_from_offset(*datetime)),
         DatetimeLiteral::Zoned(datetime) => Ok(super::datetime::datetime_from_zoned(datetime)),
         DatetimeLiteral::Epoch { civil, scale } => {
-            super::datetime::epoch_from_civil_datetime(*civil, *scale).map_err(|error| {
-                ctx.internal_error(
-                    format!("validated epoch literal failed evaluation: {error}"),
-                    span,
-                )
-            })
+            super::datetime::epoch_from_civil_datetime(*civil, *scale)
+                .map_err(|error| {
+                    ctx.internal_error(
+                        format!("validated epoch literal failed evaluation: {error}"),
+                        span,
+                    )
+                })
+                .map_err(Outcome::Failed)
         }
     }
 }
@@ -501,7 +533,7 @@ pub(super) fn key_shift<'t>(
     addend: ScopedNode<'t>,
     span: Span,
     operands: &Operands<'_, 't>,
-) -> Result<KeyValue, GraphcalError> {
+) -> Result<KeyValue, Outcome<SemanticError>> {
     let ctx = operands.ctx;
     let key = operands.key(key)?;
     let addend = operands.int(addend)?;
@@ -521,4 +553,5 @@ pub(super) fn key_shift<'t>(
                 span,
             )
         })
+        .map_err(Outcome::Failed)
 }

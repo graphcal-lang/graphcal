@@ -1,15 +1,14 @@
 //! The inference environment, operation-scoped control state, and inference position.
 
 use crate::hir::expr::{Expr, LocalEnv};
+use crate::outcome::Outcome;
 use crate::resolved_name::ResolvedDeclName;
-use std::sync::Arc;
-
-use miette::NamedSource;
+use crate::source_id::SourceId;
 
 use crate::display::formatting_registry::FormattingRegistry;
 use crate::expression_id::ExprId;
-use crate::graphcal_error::GraphcalError;
 use crate::semantic::checked_type::{IndexTypeRef, Symbolic};
+use crate::semantic_error::SemanticError;
 
 use crate::semantic::checked_type::CheckedType;
 
@@ -21,7 +20,7 @@ pub(in crate::tir::dim_check) struct InferEnv<'a> {
     pub(in crate::tir::dim_check) dag: &'a crate::tir::typed::DagTIR,
     pub(in crate::tir::dim_check) tir: &'a dyn crate::tir::typed::TirRead,
     pub(in crate::tir::dim_check) registry: &'a FormattingRegistry,
-    pub(in crate::tir::dim_check) src: &'a NamedSource<Arc<String>>,
+    pub(in crate::tir::dim_check) src: SourceId,
 }
 
 impl<'a> InferEnv<'a> {
@@ -30,12 +29,12 @@ impl<'a> InferEnv<'a> {
         self,
         constructor: &crate::resolved_name::ResolvedConstructorName,
         span: crate::syntax::span::Span,
-    ) -> Result<&'a crate::hir::nominal::ResolvedConstructor, GraphcalError> {
+    ) -> Result<&'a crate::hir::nominal::ResolvedConstructor, SemanticError> {
         self.tir
             .project_type_store()
             .lookup_constructor(constructor)
             .ok_or_else(|| {
-                GraphcalError::internal_error(
+                SemanticError::internal_error(
                     format!("project type store has no constructor `{constructor}`"),
                     self.src,
                     crate::diagnostic_anchor::DiagnosticAnchor::Source(span),
@@ -51,7 +50,7 @@ impl<'a> InferEnv<'a> {
         owner: Option<&ResolvedDeclName>,
         cancellation: &crate::cancellation::CancellationToken,
         observations: &BodyObservations,
-    ) -> Result<CheckedType<Symbolic>, GraphcalError> {
+    ) -> Result<CheckedType<Symbolic>, Outcome<SemanticError>> {
         let control = InferenceControl {
             cancellation,
             observations,
@@ -74,8 +73,8 @@ pub(super) struct InferenceControl<'a> {
 }
 
 impl InferenceControl<'_> {
-    pub(super) fn checkpoint(&self) -> Result<(), GraphcalError> {
-        self.cancellation.checkpoint().map_err(GraphcalError::from)
+    pub(super) fn checkpoint(&self) -> Result<(), crate::cancellation::Cancelled> {
+        self.cancellation.checkpoint()
     }
 
     pub(super) const fn observations(&self) -> &BodyObservations {
@@ -219,7 +218,10 @@ impl<'a> Infer<'a> {
 
     /// The type of an argument of the enclosing call, inferred outside the
     /// owning declaration's override checks unless it was already checked.
-    pub(super) fn infer_arg(&self, arg: &Expr) -> Result<CheckedType<Symbolic>, GraphcalError> {
+    pub(super) fn infer_arg(
+        &self,
+        arg: &Expr,
+    ) -> Result<CheckedType<Symbolic>, Outcome<SemanticError>> {
         self.prechecked_args
             .and_then(|prechecked| prechecked.get(arg))
             .map_or_else(
