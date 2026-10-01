@@ -68,8 +68,8 @@ impl InferEnv<'_> {
                     .dag
                     .semantic
                     .type_defs
-                    .struct_types
-                    .get(&name.value)
+                    .nominal(&name.value)
+                    .map(|nominal| nominal.definition().as_ref())
                     .ok_or_else(|| {
                         SemanticError::internal_error(
                             format!(

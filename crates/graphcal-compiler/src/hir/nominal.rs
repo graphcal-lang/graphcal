@@ -301,6 +301,8 @@ impl NominalTypeDef {
 pub struct ResolvedConstructor {
     def: Arc<NominalTypeDef>,
     variant: NominalConstructor,
+    /// The position of `variant` among the definition's union members.
+    position: usize,
 }
 
 impl ResolvedConstructor {
@@ -310,10 +312,19 @@ impl ResolvedConstructor {
         def.union_members()
             .into_iter()
             .flatten()
-            .map(|variant| Self {
+            .enumerate()
+            .map(|(position, variant)| Self {
                 def: Arc::clone(def),
                 variant: variant.clone(),
+                position,
             })
+    }
+
+    /// The position of this constructor among its definition's union
+    /// members.
+    #[must_use]
+    pub const fn position(&self) -> usize {
+        self.position
     }
 
     /// Shared handle of the owning nominal definition.

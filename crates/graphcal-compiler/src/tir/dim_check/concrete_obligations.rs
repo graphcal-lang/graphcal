@@ -1,10 +1,9 @@
 //! Discharge concrete nominal applications using retained bound proofs.
 //! This pass follows expression publication; it never infers bound source HIR.
 
-use super::generic_substitution::concrete_generic_substitutions;
+use super::generic_substitution::{concrete_generic_substitutions, recorded_nominal};
 use crate::cancellation::CancellationToken;
 use crate::diagnostic_anchor::DiagnosticAnchor;
-use crate::hir::nominal::{NominalConstructor, NominalTypeDef};
 use crate::outcome::Outcome;
 use crate::semantic::checked_type::{
     CheckedGenericArg, CheckedType, IndexTypeRef, StructTypeRef, Symbolic,
@@ -16,8 +15,9 @@ use crate::semantic_error::structure::StructError;
 use crate::source_id::SourceId;
 use crate::syntax::span::Span;
 use crate::tir::texpr::{CheckedBody, TBody, TNodeRef, visit_tnodes};
-use crate::tir::typed::model::{DagTIR, ResolvedStructFieldTypeKey};
+use crate::tir::typed::model::DagTIR;
 use crate::tir::typed::program::TirRead;
+use crate::tir::typed::{NominalFieldSemantics, NominalMember};
 
 #[derive(Clone, PartialEq, Eq)]
 struct Application {
@@ -150,36 +150,21 @@ fn validate(
                     ) }).into());
             }
             stack.push(application);
-            for member in definition.union_members().into_iter().flatten() {
-                for field in member.fields() {
+            // A type whose constructors have no fields needs no field
+            // semantics.
+            let has_fields = definition
+                .union_members()
+                .into_iter()
+                .flatten()
+                .any(|member| !member.fields().is_empty());
+            if has_fields {
+                let nominal = recorded_nominal(ctx.dag, identity.resolved(), ctx.src, ctx.span)?;
+                for field in nominal.members().flat_map(NominalMember::fields) {
                     ctx.cancellation.checkpoint()?;
-                    let key = ResolvedStructFieldTypeKey {
-                        owning_type: identity.resolved().clone(),
-                        constructor: member.name(),
-                        field: field.name().clone(),
-                    };
-                    let semantics = ctx.dag.semantic.type_defs.field(&key).ok_or_else(|| {
-                        SemanticError::internal_error(
-                            format!(
-                                "semantic type metadata missing field `{}.{}`",
-                                member.name(),
-                                field.name()
-                            ),
-                            ctx.src,
-                            DiagnosticAnchor::Source(ctx.span),
-                        )
-                    })?;
-                    let ty = substitutions.field_type(semantics.resolved_type(), ctx.src)?;
-                    for bound in semantics.domain_bounds().into_iter().flatten() {
-                        check_bound(
-                            &key,
-                            definition,
-                            member,
-                            bound,
-                            &ty,
-                            substitutions.nats(),
-                            ctx,
-                        )?;
+                    let ty =
+                        substitutions.field_type(field.semantics().resolved_type(), ctx.src)?;
+                    for bound in field.semantics().domain_bounds().into_iter().flatten() {
+                        check_bound(field, bound, &ty, substitutions.nats(), ctx)?;
                     }
                     validate(&ty.to_symbolic(), ctx, stack)?;
                 }
@@ -214,9 +199,7 @@ fn validate_index(index: &IndexTypeRef<Symbolic>, ctx: &Context<'_>) -> Result<(
 }
 
 fn check_bound(
-    key: &ResolvedStructFieldTypeKey,
-    definition: &NominalTypeDef,
-    member: &NominalConstructor,
+    field: NominalFieldSemantics<'_>,
     bound: &crate::tir::typed::ResolvedDomainBound,
     target: &CheckedType,
     nats: &std::collections::HashMap<crate::hir::types::GenericParamId, u64>,
@@ -232,15 +215,10 @@ fn check_bound(
                 },
             )
         })?;
-    let display = if member.name().as_str() == definition.name().as_str() {
-        format!("{}.{}", definition.name(), key.field)
-    } else {
-        format!("{}.{}.{}", definition.name(), member.name(), key.field)
-    };
-    let (Some(owner), Some(bodies)) = (
-        ctx.tir.dag(key.owning_type.owner()),
-        ctx.tir.checked_bodies(key.owning_type.owner()),
-    ) else {
+    let display = field.display_name();
+    let owning_dag = field.member().nominal().identity().owner();
+    let (Some(owner), Some(bodies)) = (ctx.tir.dag(owning_dag), ctx.tir.checked_bodies(owning_dag))
+    else {
         return Err(SemanticError::internal_error(
             "field-constraint owner has no checked DAG",
             bound.src,

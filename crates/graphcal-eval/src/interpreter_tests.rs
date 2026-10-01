@@ -108,9 +108,15 @@ fn generic_nat_services_cannot_cross_type_owners_with_the_same_parameter_name() 
         .clone();
     assert_eq!(a.name, b.name);
     assert_ne!(a, b);
-    let (key, _, bounds) = nominal_a.constrained_fields().next().unwrap();
-    assert_eq!(key.constructor, ConstructorName::expect_valid("A"));
-    assert_eq!(key.field, FieldName::expect_valid("value"));
+    let (constrained, bounds) = nominal_a.constrained_fields().next().unwrap();
+    assert_eq!(
+        constrained.field().member().constructor().name(),
+        ConstructorName::expect_valid("A")
+    );
+    assert_eq!(
+        constrained.field().field().name(),
+        &FieldName::expect_valid("value")
+    );
     let bound = bounds.map(graphcal_compiler::syntax::non_empty::NonEmpty::first);
     let context = crate::eval_expr::EvalSession::provisional_constants(
         &tir,

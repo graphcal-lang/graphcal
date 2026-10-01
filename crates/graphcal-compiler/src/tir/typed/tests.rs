@@ -52,11 +52,15 @@ fn resolve_source_type(
     tir.root()
         .semantic()
         .type_defs
-        .fields()
-        .find(|(key, _)| {
-            key.owning_type.as_str() == "ResolutionSubject" && key.field.as_str() == "value"
+        .nominals()
+        .filter(|nominal| nominal.identity().as_str() == "ResolutionSubject")
+        .flat_map(|nominal| {
+            nominal
+                .members()
+                .flat_map(crate::tir::typed::NominalMember::fields)
         })
-        .map(|(_, field)| field.resolved_type().clone())
+        .find(|field| field.field().name().as_str() == "value")
+        .map(|field| field.semantics().resolved_type().clone())
         .ok_or_else(|| {
             SemanticError::internal_error(
                 "test type field was not resolved through HIR".to_string(),
@@ -469,9 +473,9 @@ fn dag_type_indexes_share_the_project_store_definition_handle() {
         .root()
         .semantic()
         .type_defs
-        .struct_types
-        .get(&name)
-        .unwrap();
+        .nominal(&name)
+        .unwrap()
+        .definition();
     let canonical = tir
         .project_type_store()
         .get_struct_type_handle(&name)

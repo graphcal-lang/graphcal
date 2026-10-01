@@ -23,10 +23,8 @@ use crate::tir::texpr::{CheckedBody, ContextualLiteral, ExecutableBodyError, TBo
 
 use super::body_scope::{BodyScope, Scoped};
 use super::checked::CheckedTir;
-use super::model::{
-    ResolvedDomainBound, ResolvedStructFieldSemantics, ResolvedStructFieldTypeKey, Typed,
-    TypedAssertEntry, TypedFigureEntry, TypedLayerEntry, TypedPlotEntry,
-};
+use super::model::{Typed, TypedAssertEntry, TypedFigureEntry, TypedLayerEntry, TypedPlotEntry};
+use super::resolved_nominal::{ConstrainedField, ResolvedDomainBound, ResolvedNominal};
 use super::scoped_node::ScopedNode;
 
 /// Why a root checked as a contextual literal is not a string.
@@ -291,37 +289,30 @@ impl<'t> DeclarationBody<'t> {
 #[derive(Debug, Clone, Copy)]
 pub struct NominalTypeBody<'t> {
     scope: BodyScope<'t>,
-    identity: &'t ResolvedStructTypeName,
-    definition: &'t crate::hir::nominal::NominalTypeDef,
+    nominal: &'t ResolvedNominal,
 }
 
 impl<'t> NominalTypeBody<'t> {
     /// The type's definition.
     #[must_use]
-    pub const fn definition(self) -> &'t crate::hir::nominal::NominalTypeDef {
-        self.definition
+    pub fn definition(self) -> &'t crate::hir::nominal::NominalTypeDef {
+        self.nominal.definition()
     }
 
-    /// Every field of the type that carries domain bounds, with its bounds.
+    /// Every field of the type that carries domain bounds, with its bounds
+    /// in the scope of the defining DAG.
     pub fn constrained_fields(
         self,
     ) -> impl Iterator<
         Item = (
-            &'t ResolvedStructFieldTypeKey,
-            Scoped<'t, ResolvedStructFieldSemantics>,
+            ConstrainedField<'t>,
             Scoped<'t, NonEmpty<ResolvedDomainBound>>,
         ),
     > + use<'t> {
-        let (scope, identity) = (self.scope, self.identity);
-        scope
-            .dag()
-            .semantic()
-            .type_defs
+        let scope = self.scope;
+        self.nominal
             .constrained_fields()
-            .filter(move |(key, _, _)| key.owning_type == *identity)
-            .map(move |(key, field, bounds)| {
-                (key, Scoped::new(scope, field), Scoped::new(scope, bounds))
-            })
+            .map(move |field| (field, Scoped::new(scope, field.bounds())))
     }
 }
 
@@ -424,16 +415,8 @@ impl CheckedTir {
     ) -> Option<NominalTypeBody<'t>> {
         let scope = self.dag_registry().scope(nominal.owner())?;
         let dag = scope.dag();
-        let (identity, definition) = dag
-            .semantic()
-            .type_defs
-            .struct_types
-            .get_key_value(nominal)?;
-        Some(NominalTypeBody {
-            scope,
-            identity,
-            definition,
-        })
+        let nominal = dag.semantic().type_defs.nominal(nominal)?;
+        Some(NominalTypeBody { scope, nominal })
     }
 
     /// A closed external value tree checked in the root module, in the

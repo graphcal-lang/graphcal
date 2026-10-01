@@ -441,13 +441,13 @@ type ApplicationFieldConstraints = (
 
 fn application_field_constraint_key(
     application: &ConcreteNominalApplication,
-    key: &graphcal_compiler::tir::typed::ResolvedStructFieldTypeKey,
+    field: graphcal_compiler::tir::typed::NominalFieldSemantics<'_>,
 ) -> StructFieldConstraintKey {
     StructFieldConstraintKey::for_application(
-        StructTypeRef::from_resolved(key.owning_type.clone()),
+        StructTypeRef::from_resolved(field.member().nominal().identity().clone()),
         application.generic_args.clone(),
-        key.constructor.clone(),
-        key.field.clone(),
+        field.member().constructor().name(),
+        field.field().name().clone(),
     )
 }
 
@@ -493,9 +493,14 @@ fn resolve_application_field_constraints(
         ctx.cancellation.clone(),
     );
     let mut constraints = Vec::new();
-    for (key, scoped_field, bounds) in nominal.constrained_fields() {
-        let field_semantics = scoped_field.get();
-        let display_name = format!("{}.{}", key.constructor, key.field);
+    for (constrained, bounds) in nominal.constrained_fields() {
+        let field = constrained.field();
+        let field_semantics = field.semantics();
+        let display_name = format!(
+            "{}.{}",
+            field.member().constructor().name(),
+            field.field().name()
+        );
         let first_bound = bounds.get().first();
         let bound_span = first_bound.span;
         let constraint_src = &first_bound.src;
@@ -516,7 +521,7 @@ fn resolve_application_field_constraints(
             *constraint_src,
         )?;
         constraints.push((
-            application_field_constraint_key(application, key),
+            application_field_constraint_key(application, field),
             constraint,
         ));
     }
@@ -548,10 +553,10 @@ fn collect_field_constraint_applications(
                 generic_args,
             });
         }
-        for (identity, type_def) in dag.struct_type_defs() {
-            if type_def.generic_params().is_empty() {
+        for nominal in dag.nominal_types() {
+            if nominal.definition().generic_params().is_empty() {
                 applications.insert(ConcreteNominalApplication {
-                    identity: StructTypeRef::from_resolved(identity.clone()),
+                    identity: StructTypeRef::from_resolved(nominal.identity().clone()),
                     generic_args: Vec::new(),
                 });
             }

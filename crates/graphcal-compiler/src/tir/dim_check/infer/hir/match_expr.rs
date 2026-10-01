@@ -1,9 +1,7 @@
 //! Inference of `match` expressions.
 
 use crate::hir::expr::{Expr, MatchArm, MatchPattern, PatternBinding};
-use crate::hir::nominal::{NominalConstructor, NominalTypeDef};
 use crate::outcome::Outcome;
-use crate::resolved_name::ResolvedStructTypeName;
 use crate::semantic_error::evaluation::EvaluationError;
 use crate::semantic_error::index::IndexError;
 use crate::semantic_error::structure::StructError;
@@ -15,47 +13,35 @@ use crate::semantic_error::SemanticError;
 use crate::syntax::type_name::FieldName;
 
 use crate::semantic::checked_type::{CheckedGenericArg, CheckedType};
-use crate::tir::dim_check::helpers::{format_checked_type, struct_type_def_for_inferred};
+use crate::tir::dim_check::helpers::{format_checked_type, nominal_for_inferred};
 use crate::tir::dim_check::infer::rules;
 
 use super::context::{Infer, InferEnv};
 use super::override_deps::{IndexNominalUse, TypeNominalUse};
-use crate::tir::dim_check::generic_substitution::{resolved_field_type, resolved_type_field_key};
+use crate::tir::dim_check::generic_substitution::applied_field_type;
+use crate::tir::typed::NominalMember;
 
 impl InferEnv<'_> {
     fn constructor_field_type(
         &self,
         field: &crate::syntax::span::Spanned<FieldName>,
-        variant: &NominalConstructor,
-        owning_type: &ResolvedStructTypeName,
-        type_def: &NominalTypeDef,
+        member: NominalMember<'_>,
         scrutinee_type_args: &[CheckedGenericArg<Symbolic>],
     ) -> Result<CheckedType<Symbolic>, SemanticError> {
-        if !variant
-            .fields()
-            .iter()
-            .any(|field_def| field_def.name() == &field.value)
-        {
-            return Err(SemanticError::located(
+        let field_semantics = member.field(&field.value).ok_or_else(|| {
+            SemanticError::located(
                 self.src,
                 field.span,
                 StructError::UnknownField {
-                    type_name: type_def.name(),
+                    type_name: member.nominal().definition().name(),
                     member: crate::semantic_error::structure::NominalMember::Field(
                         field.value.clone(),
                     ),
                 },
-            ));
-        }
-        resolved_field_type(
-            &resolved_type_field_key(owning_type, variant, &field.value),
-            type_def,
-            scrutinee_type_args,
-            self.dag,
-            self.src,
-            field.span,
-        )
-        .map(|ty| ty.to_symbolic())
+            )
+        })?;
+        applied_field_type(field_semantics, scrutinee_type_args, self.src, field.span)
+            .map(|ty| ty.to_symbolic())
     }
 }
 
@@ -167,17 +153,15 @@ impl Infer<'_> {
                     .map_err(Outcome::Failed)
             }
             CheckedType::Struct(type_name, scrutinee_type_args) => {
-                let type_def =
-                    struct_type_def_for_inferred(type_name, Some(self.env.dag), self.env.registry)
-                        .ok_or_else(|| {
-                            SemanticError::located(
-                                self.env.src,
-                                scrutinee.span,
-                                StructError::UnknownStructType {
-                                    name: type_name.to_string(),
-                                },
-                            )
-                        })?;
+                let nominal = nominal_for_inferred(type_name, self.env.dag).ok_or_else(|| {
+                    SemanticError::located(
+                        self.env.src,
+                        scrutinee.span,
+                        StructError::UnknownStructType {
+                            name: type_name.to_string(),
+                        },
+                    )
+                })?;
                 let mut covered = std::collections::HashSet::new();
                 let mut arm_types = Vec::new();
                 for arm in arms {
@@ -217,7 +201,7 @@ impl Infer<'_> {
                         )
                         .into());
                     }
-                    if type_name.resolved() != target.owning_type() {
+                    let Some(member) = nominal.member_of(target) else {
                         return Err(SemanticError::located(
                             self.env.src,
                             constructor.span,
@@ -230,7 +214,7 @@ impl Infer<'_> {
                             },
                         )
                         .into());
-                    }
+                    };
                     if !covered.insert(target.variant().name().clone()) {
                         return Err(SemanticError::located(
                             self.env.src,
@@ -265,13 +249,9 @@ impl Infer<'_> {
                             )
                             .into());
                         }
-                        let field_type = self.env.constructor_field_type(
-                            field,
-                            target.variant(),
-                            target.owning_type(),
-                            target.definition(),
-                            scrutinee_type_args,
-                        )?;
+                        let field_type =
+                            self.env
+                                .constructor_field_type(field, member, scrutinee_type_args)?;
                         match binding {
                             PatternBinding::Bind { local, .. } => {
                                 arm_locals.bind(local.id, field_type);
@@ -299,21 +279,19 @@ impl Infer<'_> {
                     }
                     arm_types.push(self.with_locals(&arm_locals).infer_hir_type(&arm.body)?);
                 }
-                if let Some(members) = type_def.union_members() {
-                    for member in members {
-                        if !covered.contains(&member.name()) {
-                            return Err(SemanticError::located(
-                                self.env.src,
-                                expr.span,
-                                EvaluationError::Failed {
-                                    message: format!(
-                                        "non-exhaustive match: member `{}` not covered",
-                                        member.name()
-                                    ),
-                                },
-                            )
-                            .into());
-                        }
+                for member in nominal.members() {
+                    let name = member.constructor().name();
+                    if !covered.contains(&name) {
+                        return Err(SemanticError::located(
+                            self.env.src,
+                            expr.span,
+                            EvaluationError::Failed {
+                                message: format!(
+                                    "non-exhaustive match: member `{name}` not covered"
+                                ),
+                            },
+                        )
+                        .into());
                     }
                 }
                 hir_arm_types_match(&arm_types, arms, self.env.registry, self.env.src, expr)

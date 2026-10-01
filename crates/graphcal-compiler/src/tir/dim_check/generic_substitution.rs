@@ -1,9 +1,9 @@
 //! Concrete generic substitutions of nominal-type applications and the
 //! field types they instantiate.
 
-use crate::hir::nominal::{NominalConstructor, NominalGenericParam, NominalTypeDef};
+use crate::hir::nominal::{NominalGenericParam, NominalTypeDef, ResolvedConstructor};
 use crate::hir::types::GenericParamId;
-use crate::resolved_name::ResolvedStructTypeName;
+use crate::resolved_name::{ResolvedConstructorName, ResolvedStructTypeName};
 use crate::semantic_error::evaluation::EvaluationError;
 use crate::source_id::SourceId;
 use std::collections::HashMap;
@@ -12,22 +12,10 @@ use crate::semantic::checked_type::Symbolic;
 use crate::semantic_error::SemanticError;
 use crate::syntax::ast::GenericConstraint;
 use crate::syntax::span::Span;
-use crate::syntax::type_name::{FieldName, GenericParamName};
+use crate::syntax::type_name::GenericParamName;
 
 use crate::semantic::checked_type::{CheckedGenericArg, CheckedType};
-use crate::tir::typed::Substitution;
-
-pub(in crate::tir::dim_check) fn resolved_type_field_key(
-    owning_type: &ResolvedStructTypeName,
-    constructor: &NominalConstructor,
-    field: &FieldName,
-) -> crate::tir::typed::ResolvedStructFieldTypeKey {
-    crate::tir::typed::ResolvedStructFieldTypeKey {
-        owning_type: owning_type.clone(),
-        constructor: constructor.name(),
-        field: field.clone(),
-    }
-}
+use crate::tir::typed::{NominalFieldSemantics, NominalMember, ResolvedNominal, Substitution};
 
 pub(in crate::tir::dim_check) fn generic_substitution_prefix(
     type_def: &NominalTypeDef,
@@ -235,25 +223,72 @@ pub(in crate::tir::dim_check) fn instantiate_concrete_generic_arg(
     crate::tir::typed::resolved_generic_arg_to_declared(&instantiated, src)
 }
 
-pub(in crate::tir::dim_check) fn resolved_field_type(
-    key: &crate::tir::typed::ResolvedStructFieldTypeKey,
-    type_def: &NominalTypeDef,
+/// The type of `field` in the application of its nominal type to
+/// `type_args`.
+pub(in crate::tir::dim_check) fn applied_field_type(
+    field: NominalFieldSemantics<'_>,
     type_args: &[CheckedGenericArg<Symbolic>],
-    dag: &crate::tir::typed::DagTIR,
     src: SourceId,
     span: Span,
 ) -> Result<CheckedType, SemanticError> {
-    let resolved = dag.semantic.type_defs.field_type(key).ok_or_else(|| {
+    concrete_generic_substitutions(field.member().nominal().definition(), type_args, src, span)?
+        .field_type(field.semantics().resolved_type(), src)
+}
+
+/// The canonical constructor `constructor` names, with the nominal
+/// definition that owns it.
+pub(in crate::tir::dim_check) fn resolved_constructor<'t>(
+    tir: &'t dyn crate::tir::typed::TirRead,
+    constructor: &ResolvedConstructorName,
+    src: SourceId,
+    span: Span,
+) -> Result<&'t ResolvedConstructor, SemanticError> {
+    tir.project_type_store()
+        .lookup_constructor(constructor)
+        .ok_or_else(|| {
+            SemanticError::internal_error(
+                format!("project type store has no constructor `{constructor}`"),
+                src,
+                crate::diagnostic_anchor::DiagnosticAnchor::Source(span),
+            )
+        })
+}
+
+/// The nominal type `identity` with its fields' semantics, as `dag` records
+/// it.
+pub(in crate::tir::dim_check) fn recorded_nominal<'d>(
+    dag: &'d crate::tir::typed::DagTIR,
+    identity: &ResolvedStructTypeName,
+    src: SourceId,
+    span: Span,
+) -> Result<&'d ResolvedNominal, SemanticError> {
+    dag.semantic.type_defs.nominal(identity).ok_or_else(|| {
+        SemanticError::internal_error(
+            format!("semantic type metadata missing nominal type `{identity}`"),
+            src,
+            crate::diagnostic_anchor::DiagnosticAnchor::Source(span),
+        )
+    })
+}
+
+/// The constructor `constructor` with its fields' semantics, as `dag`
+/// records its type.
+pub(in crate::tir::dim_check) fn recorded_member<'d>(
+    dag: &'d crate::tir::typed::DagTIR,
+    constructor: &ResolvedConstructor,
+    src: SourceId,
+    span: Span,
+) -> Result<NominalMember<'d>, SemanticError> {
+    dag.semantic.type_defs.member(constructor).ok_or_else(|| {
         SemanticError::internal_error(
             format!(
-                "semantic type metadata missing field type for `{}.{}`",
-                key.constructor, key.field
+                "semantic type metadata missing constructor `{}`",
+                constructor.identity()
             ),
             src,
             crate::diagnostic_anchor::DiagnosticAnchor::Source(span),
         )
-    })?;
-    concrete_generic_substitutions(type_def, type_args, src, span)?.field_type(resolved, src)
+    })
 }
 
 #[cfg(test)]
