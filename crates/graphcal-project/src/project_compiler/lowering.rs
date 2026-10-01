@@ -12,6 +12,7 @@ use graphcal_compiler::ir::static_dependencies::{ModuleDeclarations, StaticScope
 use graphcal_compiler::ir::static_substitution::StaticSubstitution;
 use graphcal_compiler::outcome::Outcome;
 use graphcal_compiler::resolved_name::{ResolvedDeclName, ResolvedDimName, ResolvedIndexName};
+use graphcal_compiler::semantic_error::dimension::DimensionError;
 use graphcal_compiler::semantic_error::index::IndexError;
 use graphcal_compiler::semantic_error::name::NameError;
 use graphcal_compiler::source_id::SourceId;
@@ -194,15 +195,21 @@ fn remap_imported_dynamic_unit_error(
     project: &crate::loader::loaded_project::LoadedProject,
 ) -> GraphcalError {
     match error {
-        GraphcalError::UnknownUnit { name, src, span }
-            if name.owner().is_some_and(|alias| {
-                is_imported_dynamic_unit_during_lowering(alias, name.leaf(), module_map, project)
-            }) =>
+        GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+            src,
+            primary,
+            kind:
+                graphcal_compiler::semantic_error::SemanticErrorKind::Dimension(
+                    DimensionError::UnknownUnit { name },
+                ),
+        }) if name.owner().is_some_and(|alias| {
+            is_imported_dynamic_unit_during_lowering(alias, name.leaf(), module_map, project)
+        }) =>
         {
             GraphcalError::ImportRuntimeUnit {
                 name: name.to_string(),
                 src,
-                span,
+                span: primary.into(),
             }
         }
         other => other,
@@ -1392,15 +1399,18 @@ fn effective_index_binding_contract(
                 .evaluate_dim_expr_with_overrides(sites.template, dimension_expr, &overrides)
                 .map_err(|failure| {
                     PipelineError::Semantic(match failure {
-                        DimExprFailure::Unknown(name) => GraphcalError::UnknownDimension {
-                            name: name.to_name_path(),
-                            src: sites.importer_src,
-                            span: binding_span.into(),
-                        },
-                        DimExprFailure::Overflow => GraphcalError::DimensionOverflow {
-                            src: sites.importer_src,
-                            span: binding_span.into(),
-                        },
+                        DimExprFailure::Unknown(name) => GraphcalError::located(
+                            sites.importer_src,
+                            binding_span,
+                            DimensionError::UnknownDimension {
+                                name: name.to_name_path(),
+                            },
+                        ),
+                        DimExprFailure::Overflow => GraphcalError::located(
+                            sites.importer_src,
+                            binding_span,
+                            DimensionError::DimensionOverflow,
+                        ),
                         DimExprFailure::Definition(error) => *error,
                     })
                 })?;

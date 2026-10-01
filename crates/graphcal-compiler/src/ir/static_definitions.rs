@@ -35,6 +35,7 @@ use crate::semantic::unit_scale::{
     PositiveFiniteScale, PositiveFiniteScaleError, UnitInfo, UnitResolveError, UnitScale,
     resolve_unit_expr_with,
 };
+use crate::semantic_error::dimension::DimensionError;
 use crate::semantic_error::index::IndexError;
 use crate::semantic_error::name::NameError;
 use crate::source_id::SourceId;
@@ -89,16 +90,20 @@ enum CycleSite<'a> {
 impl CycleSite<'_> {
     fn error(self) -> GraphcalError {
         match self {
-            Self::Dimension { name, src } => GraphcalError::CyclicDimension {
-                name: name.value.clone(),
+            Self::Dimension { name, src } => GraphcalError::located(
                 src,
-                span: name.span.into(),
-            },
-            Self::Unit { name, src } => GraphcalError::CyclicUnit {
-                name: name.value.clone(),
+                name.span,
+                DimensionError::CyclicDimension {
+                    name: name.value.clone(),
+                },
+            ),
+            Self::Unit { name, src } => GraphcalError::located(
                 src,
-                span: name.span.into(),
-            },
+                name.span,
+                DimensionError::CyclicUnit {
+                    name: name.value.clone(),
+                },
+            ),
         }
     }
 }
@@ -806,9 +811,8 @@ impl<'a> StaticDefinitionEvaluator<'a> {
                     .pow(exponent)
                     .and_then(|factor| acc.checked_mul(&factor))
             })
-            .map_err(|_| GraphcalError::DimensionOverflow {
-                span: src.whole_span().into(),
-                src,
+            .map_err(|_| {
+                GraphcalError::located(src, src.whole_span(), DimensionError::DimensionOverflow)
             })
     }
 
@@ -936,14 +940,16 @@ impl<'a> StaticDefinitionEvaluator<'a> {
                 )),
             };
             if let Some((reason, help)) = reason {
-                return Err(GraphcalError::InvalidBaseUnitDeclaration {
-                    name: unit.name.value.clone(),
-                    dim: self.format_dimension(owner, &dim),
-                    reason,
-                    help,
+                return Err(GraphcalError::located(
                     src,
-                    span: unit.name.span.into(),
-                });
+                    unit.name.span,
+                    DimensionError::InvalidBaseUnitDeclaration {
+                        name: unit.name.value.clone(),
+                        dim: self.format_dimension(owner, &dim),
+                        reason,
+                        help,
+                    },
+                ));
             }
             if let Some(base) = base {
                 self.annotate_base(owner, base);
@@ -959,20 +965,24 @@ impl<'a> StaticDefinitionEvaluator<'a> {
             .and_then(|id| self.base_dimensions.get(id))
             .is_some_and(BaseDimensionInfo::is_affine_prone)
         {
-            return Err(GraphcalError::AffineProneUnitDefinition {
-                dim: self.format_dimension(owner, &dim),
+            return Err(GraphcalError::located(
                 src,
-                span: unit.name.span.into(),
-            });
+                unit.name.span,
+                DimensionError::AffineProneUnitDefinition {
+                    dim: self.format_dimension(owner, &dim),
+                },
+            ));
         }
         let scale_source = classify_unit_scale(&def.scale_expr);
         if unit.constness.is_const() {
             if let UnitScaleSource::Dynamic { first_graph_ref } = &scale_source {
-                return Err(GraphcalError::GraphRefInConstUnit {
-                    name: first_graph_ref.value.clone(),
+                return Err(GraphcalError::located(
                     src,
-                    span: first_graph_ref.span.into(),
-                });
+                    first_graph_ref.span,
+                    DimensionError::GraphRefInConstUnit {
+                        name: first_graph_ref.value.clone(),
+                    },
+                ));
             }
             for term in &def.unit_expr.terms {
                 let info = match self.resolve_unit(owner, &term.name.value) {
@@ -980,11 +990,13 @@ impl<'a> StaticDefinitionEvaluator<'a> {
                     None => None,
                 };
                 if info.is_some_and(|info| !info.scale.constness().is_const()) {
-                    return Err(GraphcalError::NonConstUnitInConst {
-                        name: term.name.value.clone(),
+                    return Err(GraphcalError::located(
                         src,
-                        span: term.name.span.into(),
-                    });
+                        term.name.span,
+                        DimensionError::NonConstUnitInConst {
+                            name: term.name.value.clone(),
+                        },
+                    ));
                 }
             }
         }
@@ -992,13 +1004,15 @@ impl<'a> StaticDefinitionEvaluator<'a> {
             .resolve_unit_expr(owner, &def.unit_expr, Some(site))?
             .map_err(|error| unit_resolve_error(error, src, def.unit_expr.span))?;
         if base_unit_dimension != dim {
-            return Err(GraphcalError::UnitDefinitionDimensionMismatch {
-                name: unit.name.value.clone(),
-                declared: self.format_dimension(owner, &dim),
-                definition: self.format_dimension(owner, &base_unit_dimension),
+            return Err(GraphcalError::located(
                 src,
-                span: def.unit_expr.span.into(),
-            });
+                def.unit_expr.span,
+                DimensionError::UnitDefinitionDimensionMismatch {
+                    name: unit.name.value.clone(),
+                    declared: self.format_dimension(owner, &dim),
+                    definition: self.format_dimension(owner, &base_unit_dimension),
+                },
+            ));
         }
         let scale = match scale_source {
             UnitScaleSource::Dynamic { .. } => {
@@ -1246,15 +1260,16 @@ fn missing_definition_error(detail: &str, src: SourceId) -> GraphcalError {
 /// Render a dimension-expression failure at its declaration.
 fn dim_expr_error(failure: DimExprFailure, src: SourceId, span: Span) -> GraphcalError {
     match failure {
-        DimExprFailure::Unknown(name) => GraphcalError::UnknownDimension {
-            name: name.to_name_path(),
+        DimExprFailure::Unknown(name) => GraphcalError::located(
             src,
-            span: span.into(),
-        },
-        DimExprFailure::Overflow => GraphcalError::DimensionOverflow {
-            src,
-            span: span.into(),
-        },
+            span,
+            DimensionError::UnknownDimension {
+                name: name.to_name_path(),
+            },
+        ),
+        DimExprFailure::Overflow => {
+            GraphcalError::located(src, span, DimensionError::DimensionOverflow)
+        }
         DimExprFailure::Definition(error) => *error,
     }
 }
@@ -1279,21 +1294,18 @@ fn scale_error(
 /// Convert a typed unit-resolution failure into a spanned diagnostic.
 fn unit_resolve_error(err: UnitResolveError, src: SourceId, span: Span) -> GraphcalError {
     match err {
-        UnitResolveError::UnknownUnit(name) => GraphcalError::UnknownUnit {
-            name,
-            src,
-            span: span.into(),
-        },
+        UnitResolveError::UnknownUnit(name) => {
+            GraphcalError::located(src, span, DimensionError::UnknownUnit { name })
+        }
         UnitResolveError::DynamicScale(name) => GraphcalError::EvalError {
             message: format!("unit `{name}` has a dynamic scale and cannot be used here"),
             src,
             span: span.into(),
         },
         UnitResolveError::InvalidScale(err) => scale_error("compound unit scale", err, src, span),
-        UnitResolveError::Overflow(_) => GraphcalError::DimensionOverflow {
-            src,
-            span: span.into(),
-        },
+        UnitResolveError::Overflow(_) => {
+            GraphcalError::located(src, span, DimensionError::DimensionOverflow)
+        }
     }
 }
 
@@ -1301,10 +1313,9 @@ fn unit_resolve_error(err: UnitResolveError, src: SourceId, span: Span) -> Graph
 fn const_expr_error(error: ConstExprError, src: SourceId) -> GraphcalError {
     match error {
         ConstExprError::Unit { error, span } => unit_resolve_error(error, src, span),
-        ConstExprError::DimensionOverflow { span } => GraphcalError::DimensionOverflow {
-            src,
-            span: span.into(),
-        },
+        ConstExprError::DimensionOverflow { span } => {
+            GraphcalError::located(src, span, DimensionError::DimensionOverflow)
+        }
         error => eval_error(error.to_string(), src, error.span()),
     }
 }
@@ -1502,6 +1513,7 @@ mod tests {
     use super::*;
     use crate::dimension::PreludeBaseDimension;
     use crate::resolve::builder::TestModules;
+    use crate::semantic_error::SemanticErrorKind;
     use crate::syntax::names::NamePath;
     use crate::syntax::parser::Parser;
 
@@ -1646,7 +1658,7 @@ mod tests {
             .module_definitions(&Project::id("main"))
             .unwrap_err();
         assert!(
-            matches!(&error, GraphcalError::CyclicDimension { name, .. } if name.as_str() == "Baz"),
+            matches!(&error, GraphcalError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Dimension(DimensionError::CyclicDimension { name, .. }), .. }) if name.as_str() == "Baz"),
             "{error:?}"
         );
     }
@@ -1661,7 +1673,7 @@ mod tests {
             .module_definitions(&Project::id("main"))
             .unwrap_err();
         assert!(
-            matches!(&error, GraphcalError::UnknownDimension { name, .. } if name.to_string() == "Missing"),
+            matches!(&error, GraphcalError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Dimension(DimensionError::UnknownDimension { name, .. }), .. }) if name.to_string() == "Missing"),
             "{error:?}"
         );
     }
@@ -1829,7 +1841,7 @@ mod tests {
             .module_definitions(&Project::id("main"))
             .unwrap_err();
         assert!(
-            matches!(&error, GraphcalError::InvalidBaseUnitDeclaration { reason, .. } if reason.contains("already has canonical base unit `USD`")),
+            matches!(&error, GraphcalError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Dimension(DimensionError::InvalidBaseUnitDeclaration { reason, .. }), .. }) if reason.contains("already has canonical base unit `USD`")),
             "{error:?}"
         );
     }

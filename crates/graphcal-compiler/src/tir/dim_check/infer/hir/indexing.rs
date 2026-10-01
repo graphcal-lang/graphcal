@@ -2,6 +2,7 @@
 
 use crate::hir::expr::{Expr, ForBinding, ForBindingIndex, IndexArg};
 use crate::outcome::Outcome;
+use crate::semantic_error::dimension::DimensionError;
 use crate::semantic_error::index::IndexError;
 use crate::semantic_error::structure::StructError;
 use crate::source_id::SourceId;
@@ -77,13 +78,15 @@ impl Infer<'_> {
                     .into());
                 };
                 if arg_type != CheckedType::Int {
-                    return Err(GraphcalError::DimensionMismatch {
-                        expected: "a static Nat position".to_string(),
-                        found: format_checked_type(&arg_type, self.env.registry),
-                        help: "key(Fin(N), position) takes an integer position".to_string(),
-                        src: self.env.src,
-                        span: arg.span.into(),
-                    }
+                    return Err(GraphcalError::located(
+                        self.env.src,
+                        arg.span,
+                        DimensionError::DimensionMismatch {
+                            expected: "a static Nat position".to_string(),
+                            found: format_checked_type(&arg_type, self.env.registry),
+                            help: "key(Fin(N), position) takes an integer position".to_string(),
+                        },
+                    )
                     .into());
                 }
                 let Some(position) = try_const_int(arg) else {
@@ -146,15 +149,17 @@ impl Infer<'_> {
                     .into());
                 }
                 if arg_type != CheckedType::Int {
-                    return Err(GraphcalError::DimensionMismatch {
-                        expected: "Int".to_string(),
-                        found: format_checked_type(&arg_type, self.env.registry),
-                        help: "fin_key(Fin(N), position) takes an Int position, checked at \
+                    return Err(GraphcalError::located(
+                        self.env.src,
+                        arg.span,
+                        DimensionError::DimensionMismatch {
+                            expected: "Int".to_string(),
+                            found: format_checked_type(&arg_type, self.env.registry),
+                            help: "fin_key(Fin(N), position) takes an Int position, checked at \
                            runtime"
-                            .to_string(),
-                        src: self.env.src,
-                        span: arg.span.into(),
-                    }
+                                .to_string(),
+                        },
+                    )
                     .into());
                 }
                 Ok(CheckedType::Key(index_identity))
@@ -185,13 +190,18 @@ impl Infer<'_> {
                 let arg_dim =
                     expect_quantity(&arg_type, self.env.registry, self.env.src, arg.span)?;
                 if arg_dim != dimension {
-                    return Err(GraphcalError::DimensionMismatch {
-                        expected: self.env.registry.dimensions.format_dimension(&dimension),
-                        found: self.env.registry.dimensions.format_dimension(&arg_dim),
-                        help: format!("{}() takes a quantity in the axis dimension", kind.as_str()),
-                        src: self.env.src,
-                        span: arg.span.into(),
-                    }
+                    return Err(GraphcalError::located(
+                        self.env.src,
+                        arg.span,
+                        DimensionError::DimensionMismatch {
+                            expected: self.env.registry.dimensions.format_dimension(&dimension),
+                            found: self.env.registry.dimensions.format_dimension(&arg_dim),
+                            help: format!(
+                                "{}() takes a quantity in the axis dimension",
+                                kind.as_str()
+                            ),
+                        },
+                    )
                     .into());
                 }
                 Ok(CheckedType::Key(index_identity))

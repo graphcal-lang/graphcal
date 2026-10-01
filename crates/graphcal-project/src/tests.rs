@@ -19,6 +19,7 @@ use graphcal_compiler::graphcal_error::RenderedGraphcalError;
 use graphcal_compiler::outcome::Outcome;
 use graphcal_compiler::semantic_error::SemanticErrorKind;
 use graphcal_compiler::semantic_error::attribute::AttributeError;
+use graphcal_compiler::semantic_error::dimension::DimensionError;
 use graphcal_compiler::semantic_error::domain::DomainError;
 use graphcal_compiler::semantic_error::graph::GraphError;
 use graphcal_compiler::semantic_error::index::IndexError;
@@ -1504,7 +1505,14 @@ fn renamed_include_projection_does_not_bind_the_source_name_in_declarations() {
     ] {
         match compile_and_eval(&format!("{target}{body}")) {
             Err(CompileError::Eval(RenderedGraphcalError {
-                error: GraphcalError::UnknownDimension { name, .. },
+                error:
+                    GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+                        kind:
+                            SemanticErrorKind::Dimension(DimensionError::UnknownDimension {
+                                name, ..
+                            }),
+                        ..
+                    }),
                 ..
             })) => {
                 assert_eq!(name.to_string(), expected, "{body}");
@@ -1520,7 +1528,11 @@ fn renamed_include_projection_does_not_bind_the_source_name_in_declarations() {
     ] {
         match compile_and_eval(&format!("{target}{body}")) {
             Err(CompileError::Eval(RenderedGraphcalError {
-                error: GraphcalError::UnknownUnit { name, .. },
+                error:
+                    GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+                        kind: SemanticErrorKind::Dimension(DimensionError::UnknownUnit { name, .. }),
+                        ..
+                    }),
                 ..
             })) => {
                 assert_eq!(name.to_string(), "double_metre", "{body}");
@@ -1565,7 +1577,14 @@ const DERIVED_FROM_BINDABLE_DIM_DAG: &str = "dag blib {\n\
 fn expect_annotation_mismatch(source: &str) {
     match compile_and_eval(source) {
         Err(CompileError::Eval(RenderedGraphcalError {
-            error: GraphcalError::DimensionMismatchInAnnotation { .. },
+            error:
+                GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+                    kind:
+                        SemanticErrorKind::Dimension(DimensionError::DimensionMismatchInAnnotation {
+                            ..
+                        }),
+                    ..
+                }),
             ..
         })) => {}
         other => panic!("expected DimensionMismatchInAnnotation for\n{source}\ngot {other:?}"),
@@ -1644,7 +1663,14 @@ fn derived_dimension_projection_from_file_module_follows_the_include_binding() {
             (Ok(result), Some(value)) => assert_quantity_value(&result, "y", value),
             (
                 Err(CompileError::Eval(RenderedGraphcalError {
-                    error: GraphcalError::DimensionMismatchInAnnotation { .. },
+                    error:
+                        GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+                            kind:
+                                SemanticErrorKind::Dimension(
+                                    DimensionError::DimensionMismatchInAnnotation { .. },
+                                ),
+                            ..
+                        }),
                     ..
                 })),
                 None,
@@ -1736,7 +1762,14 @@ fn defaulted_bindable_dimension_follows_the_include_binding_in_file_modules() {
             }
             (
                 Err(CompileError::Eval(RenderedGraphcalError {
-                    error: GraphcalError::DimensionMismatchInAnnotation { .. },
+                    error:
+                        GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+                            kind:
+                                SemanticErrorKind::Dimension(
+                                    DimensionError::DimensionMismatchInAnnotation { .. },
+                                ),
+                            ..
+                        }),
                     ..
                 })),
                 None,
@@ -4194,7 +4227,10 @@ fn dst_gaps_and_folds_are_rejected_during_checking() {
     assert!(matches!(
         gap,
         CompileError::Eval(RenderedGraphcalError {
-            error: GraphcalError::NonexistentCivilDateTime { .. },
+            error: GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+                kind: SemanticErrorKind::Dimension(DimensionError::NonexistentCivilDateTime { .. }),
+                ..
+            }),
             ..
         })
     ));
@@ -4213,7 +4249,10 @@ node fold: Datetime = if true {
     assert!(matches!(
         fold,
         CompileError::Eval(RenderedGraphcalError {
-            error: GraphcalError::RepeatedCivilDateTime { .. },
+            error: GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+                kind: SemanticErrorKind::Dimension(DimensionError::RepeatedCivilDateTime { .. }),
+                ..
+            }),
             ..
         })
     ));
@@ -6901,7 +6940,12 @@ fn selectively_imported_unit_does_not_expose_its_backing_dimension_name() {
 
     match compile_to_tir_project(&root, None, &fs()) {
         Err(CompileError::Eval(RenderedGraphcalError {
-            error: GraphcalError::UnknownDimension { name, .. },
+            error:
+                GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+                    kind:
+                        SemanticErrorKind::Dimension(DimensionError::UnknownDimension { name, .. }),
+                    ..
+                }),
             ..
         })) => {
             assert_eq!(name.to_string(), "Score");
@@ -6959,7 +7003,14 @@ fn project_struct_type_rejects_same_leaf_wrong_owner_constructor() {
 
     match compile_to_tir_project(&root, None, &fs()) {
         Err(CompileError::Eval(RenderedGraphcalError {
-            error: GraphcalError::DimensionMismatchInAnnotation { .. },
+            error:
+                GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+                    kind:
+                        SemanticErrorKind::Dimension(DimensionError::DimensionMismatchInAnnotation {
+                            ..
+                        }),
+                    ..
+                }),
             ..
         })) => {}
         other => panic!("expected DimensionMismatchInAnnotation, got {other:?}"),
@@ -7642,7 +7693,14 @@ fn project_for_comp_rejects_same_leaf_wrong_owner() {
 
     match compile_to_tir_project(&root, None, &fs()) {
         Err(CompileError::Eval(RenderedGraphcalError {
-            error: GraphcalError::DimensionMismatchInAnnotation { .. },
+            error:
+                GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+                    kind:
+                        SemanticErrorKind::Dimension(DimensionError::DimensionMismatchInAnnotation {
+                            ..
+                        }),
+                    ..
+                }),
             ..
         })) => {}
         other => panic!("expected DimensionMismatchInAnnotation, got {other:?}"),

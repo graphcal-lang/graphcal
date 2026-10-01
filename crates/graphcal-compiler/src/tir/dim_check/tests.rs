@@ -5,6 +5,7 @@ use crate::resolved_name::{ResolvedDeclName, ResolvedIndexName, ResolvedStructTy
 use crate::semantic::checked_type::{CheckedGenericArg, IndexTypeRef, StructTypeRef};
 use crate::semantic_error::SemanticErrorKind;
 use crate::semantic_error::attribute::AttributeError;
+use crate::semantic_error::dimension::DimensionError;
 use crate::semantic_error::domain::DomainError;
 use crate::semantic_error::graph::GraphError;
 use crate::semantic_error::index::IndexError;
@@ -623,7 +624,13 @@ fn check_velocity_from_division() {
 fn check_add_dimension_mismatch() {
     let source = "param x: Length = 1.0 m;\nparam y: Time = 1.0 s;\nnode z: Length = @x + @y;";
     let err = check(source).unwrap_err();
-    assert!(matches!(err, GraphcalError::DimensionMismatch { .. }));
+    assert!(matches!(
+        err,
+        GraphcalError::Located(crate::diagnostic::Diagnostic {
+            kind: SemanticErrorKind::Dimension(DimensionError::DimensionMismatch { .. }),
+            ..
+        })
+    ));
 }
 
 #[test]
@@ -631,7 +638,15 @@ fn check_annotation_mismatch() {
     let source = "param x: Length = 1.0 m;\nnode y: Time = @x;";
     let err = check(source).unwrap_err();
     assert!(
-        matches!(err, GraphcalError::DimensionMismatchInAnnotation { .. }),
+        matches!(
+            err,
+            GraphcalError::Located(crate::diagnostic::Diagnostic {
+                kind: SemanticErrorKind::Dimension(
+                    DimensionError::DimensionMismatchInAnnotation { .. }
+                ),
+                ..
+            })
+        ),
         "got: {err:?}"
     );
 }
@@ -776,7 +791,10 @@ fn check_conversion_wrong_dimension() {
     let err = check(source).unwrap_err();
     assert!(matches!(
         err,
-        GraphcalError::ConversionDimensionMismatch { .. }
+        GraphcalError::Located(crate::diagnostic::Diagnostic {
+            kind: SemanticErrorKind::Dimension(DimensionError::ConversionDimensionMismatch { .. }),
+            ..
+        })
     ));
 }
 
@@ -788,7 +806,12 @@ fn check_sqrt_dimension() {
     let err = check(source).unwrap_err();
     assert!(matches!(
         err,
-        GraphcalError::DimensionMismatchInAnnotation { .. }
+        GraphcalError::Located(crate::diagnostic::Diagnostic {
+            kind: SemanticErrorKind::Dimension(
+                DimensionError::DimensionMismatchInAnnotation { .. }
+            ),
+            ..
+        })
     ));
 }
 
@@ -796,7 +819,13 @@ fn check_sqrt_dimension() {
 fn check_builtin_sin_requires_angle() {
     let source = "param x: Length = 1.0 m;\nnode y: Dimensionless = sin(@x);";
     let err = check(source).unwrap_err();
-    assert!(matches!(err, GraphcalError::DimensionMismatch { .. }));
+    assert!(matches!(
+        err,
+        GraphcalError::Located(crate::diagnostic::Diagnostic {
+            kind: SemanticErrorKind::Dimension(DimensionError::DimensionMismatch { .. }),
+            ..
+        })
+    ));
 }
 
 #[test]
@@ -810,7 +839,13 @@ fn check_if_branches_same_dim() {
 fn check_if_branches_different_dim() {
     let source = "param x: Length = 1.0 m;\nnode y: Length = if true { @x } else { 0.0 };";
     let err = check(source).unwrap_err();
-    assert!(matches!(err, GraphcalError::DimensionMismatch { .. }));
+    assert!(matches!(
+        err,
+        GraphcalError::Located(crate::diagnostic::Diagnostic {
+            kind: SemanticErrorKind::Dimension(DimensionError::DimensionMismatch { .. }),
+            ..
+        })
+    ));
 }
 
 #[test]
@@ -892,7 +927,15 @@ Maneuver#Insertion: 1.8 km / s,
 node bad: Length[Maneuver] = for m: Maneuver { @dv[m] };";
     let err = check(source).unwrap_err();
     assert!(
-        matches!(err, GraphcalError::DimensionMismatchInAnnotation { .. }),
+        matches!(
+            err,
+            GraphcalError::Located(crate::diagnostic::Diagnostic {
+                kind: SemanticErrorKind::Dimension(
+                    DimensionError::DimensionMismatchInAnnotation { .. }
+                ),
+                ..
+            })
+        ),
         "got: {err:?}"
     );
 }
@@ -1013,10 +1056,13 @@ fn map_key_space_overflow_is_preempted_by_the_eager_shape_policy() {
     assert!(
         matches!(
             &error,
-            GraphcalError::MaterializedShapeTooLarge {
-                maximum: 1_000_000,
+            GraphcalError::Located(crate::diagnostic::Diagnostic {
+                kind: SemanticErrorKind::Dimension(DimensionError::MaterializedShapeTooLarge {
+                    maximum: 1_000_000,
+                    ..
+                }),
                 ..
-            }
+            })
         ),
         "got: {error:?}"
     );
@@ -1091,7 +1137,12 @@ node n: Dimensionless = count(@values);";
     let error = check(source).unwrap_err();
     assert!(matches!(
         error,
-        GraphcalError::DimensionMismatchInAnnotation { .. }
+        GraphcalError::Located(crate::diagnostic::Diagnostic {
+            kind: SemanticErrorKind::Dimension(
+                DimensionError::DimensionMismatchInAnnotation { .. }
+            ),
+            ..
+        })
     ));
 }
 
@@ -1105,7 +1156,13 @@ node n: Int = count(@matrix);";
     let error = check(source).unwrap_err();
     assert!(matches!(
         error,
-        GraphcalError::MultiAxisAggregation { rank: 2, .. }
+        GraphcalError::Located(crate::diagnostic::Diagnostic {
+            kind: SemanticErrorKind::Dimension(DimensionError::MultiAxisAggregation {
+                rank: 2,
+                ..
+            }),
+            ..
+        })
     ));
 }
 
@@ -1194,7 +1251,15 @@ param b: Dimensionless[Right] = for i: Right { 1.0 };
 node result: Dimensionless = dot(@a, @b);";
     let error = check(source).unwrap_err();
     assert!(
-        matches!(error, GraphcalError::LinearAlgebraShapeMismatch { .. }),
+        matches!(
+            error,
+            GraphcalError::Located(crate::diagnostic::Diagnostic {
+                kind: SemanticErrorKind::Dimension(
+                    DimensionError::LinearAlgebraShapeMismatch { .. }
+                ),
+                ..
+            })
+        ),
         "got: {error:?}"
     );
 }
@@ -1208,7 +1273,10 @@ node result: Dimensionless[Fin(2)] = cross(@a, @b);";
     let error = check(source).unwrap_err();
     assert!(matches!(
         error,
-        GraphcalError::LinearAlgebraShapeMismatch { .. }
+        GraphcalError::Located(crate::diagnostic::Diagnostic {
+            kind: SemanticErrorKind::Dimension(DimensionError::LinearAlgebraShapeMismatch { .. }),
+            ..
+        })
     ));
 }
 
@@ -1218,7 +1286,13 @@ fn check_linear_algebra_rejects_non_quantity_elements() {
 param flags: Bool[Fin(2)] = for i: Fin(2) { true };
 node result: Dimensionless = norm(@flags);";
     let error = check(source).unwrap_err();
-    assert!(matches!(error, GraphcalError::DimensionMismatch { .. }));
+    assert!(matches!(
+        error,
+        GraphcalError::Located(crate::diagnostic::Diagnostic {
+            kind: SemanticErrorKind::Dimension(DimensionError::DimensionMismatch { .. }),
+            ..
+        })
+    ));
 }
 
 #[test]
@@ -1242,7 +1316,13 @@ const ILL_TYPED_ARG: &str = "(1.0 m + 1.0 s)";
 fn builtin_arity_is_checked_before_arguments_are_inferred() {
     let alone = check(&format!("node x: Dimensionless = {ILL_TYPED_ARG};")).unwrap_err();
     assert!(
-        matches!(alone, GraphcalError::DimensionMismatch { .. }),
+        matches!(
+            alone,
+            GraphcalError::Located(crate::diagnostic::Diagnostic {
+                kind: SemanticErrorKind::Dimension(DimensionError::DimensionMismatch { .. }),
+                ..
+            })
+        ),
         "got: {alone:?}"
     );
     // (callee, arguments with `{bad}` placeholders, expected arity), one row
@@ -1346,7 +1426,16 @@ fn scan_rejects_multi_axis_source_instead_of_choosing_an_axis_implicitly() {
     let source = include_str!("../../../../../tests/fixtures/invalid/scan_multi_axis_source.gcl");
     let err = check(source).unwrap_err();
     assert!(
-        matches!(err, GraphcalError::MultiAxisScanSource { rank: 2, .. }),
+        matches!(
+            err,
+            GraphcalError::Located(crate::diagnostic::Diagnostic {
+                kind: SemanticErrorKind::Dimension(DimensionError::MultiAxisScanSource {
+                    rank: 2,
+                    ..
+                }),
+                ..
+            })
+        ),
         "got: {err:?}"
     );
 }
@@ -1363,7 +1452,13 @@ Maneuver#Insertion: 1.8 km / s,
 node bad: Velocity[Maneuver] = scan(@dv, 0.0 m, |acc, val| acc + val);";
     let err = check(source).unwrap_err();
     assert!(
-        matches!(err, GraphcalError::DimensionMismatch { .. }),
+        matches!(
+            err,
+            GraphcalError::Located(crate::diagnostic::Diagnostic {
+                kind: SemanticErrorKind::Dimension(DimensionError::DimensionMismatch { .. }),
+                ..
+            })
+        ),
         "got: {err:?}"
     );
 }
@@ -1420,7 +1515,7 @@ Case#B: 2.0 m,
             assert!(
                 matches!(
                     &err,
-                    GraphcalError::IndexedComparisonOperand { found, .. }
+                    GraphcalError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Dimension(DimensionError::IndexedComparisonOperand { found, .. }), .. })
                         if found == "Length[Case]"
                 ),
                 "operator `{op}` in `{expr}` produced: {err:?}"
@@ -1448,7 +1543,13 @@ param t: Time = 1.0 s;
 node bad: Dimensionless = if @x > @t { 1.0 } else { 0.0 };";
     let err = check(source).unwrap_err();
     assert!(
-        matches!(err, GraphcalError::DimensionMismatch { .. }),
+        matches!(
+            err,
+            GraphcalError::Located(crate::diagnostic::Diagnostic {
+                kind: SemanticErrorKind::Dimension(DimensionError::DimensionMismatch { .. }),
+                ..
+            })
+        ),
         "got: {err:?}"
     );
 }
@@ -1462,7 +1563,13 @@ param x: Length = 1.0 m;
 node bad: Dimensionless = @x && true;";
     let err = check(source).unwrap_err();
     assert!(
-        matches!(err, GraphcalError::DimensionMismatch { .. }),
+        matches!(
+            err,
+            GraphcalError::Located(crate::diagnostic::Diagnostic {
+                kind: SemanticErrorKind::Dimension(DimensionError::DimensionMismatch { .. }),
+                ..
+            })
+        ),
         "got: {err:?}"
     );
 }
@@ -1474,7 +1581,13 @@ param x: Length = 1.0 m;
 node bad: Dimensionless = true || @x;";
     let err = check(source).unwrap_err();
     assert!(
-        matches!(err, GraphcalError::DimensionMismatch { .. }),
+        matches!(
+            err,
+            GraphcalError::Located(crate::diagnostic::Diagnostic {
+                kind: SemanticErrorKind::Dimension(DimensionError::DimensionMismatch { .. }),
+                ..
+            })
+        ),
         "got: {err:?}"
     );
 }
@@ -1496,7 +1609,15 @@ param n: Dimensionless = 2.0;
 node bad: Area = @x ^ @n;";
     let err = check(source).unwrap_err();
     assert!(
-        matches!(err, GraphcalError::RuntimeExponentForDimensionedBase { .. }),
+        matches!(
+            err,
+            GraphcalError::Located(crate::diagnostic::Diagnostic {
+                kind: SemanticErrorKind::Dimension(
+                    DimensionError::RuntimeExponentForDimensionedBase
+                ),
+                ..
+            })
+        ),
         "got: {err:?}"
     );
 }
@@ -1518,10 +1639,7 @@ fn check_power_float_syntax_on_dimensioned_base_has_exact_replacement() {
     assert!(
         matches!(
             err,
-            GraphcalError::FloatPowerExponent {
-                replacement: Some(ref replacement),
-                ..
-            } if replacement == "(1/4)"
+            GraphcalError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Dimension(DimensionError::FloatPowerExponent { replacement: Some(ref replacement), .. }), .. }) if replacement == "(1/4)"
         ),
         "got: {err:?}"
     );
@@ -1534,10 +1652,7 @@ fn check_power_integral_float_syntax_suggests_integer() {
     assert!(
         matches!(
             err,
-            GraphcalError::FloatPowerExponent {
-                replacement: Some(ref replacement),
-                ..
-            } if replacement == "2"
+            GraphcalError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Dimension(DimensionError::FloatPowerExponent { replacement: Some(ref replacement), .. }), .. }) if replacement == "2"
         ),
         "got: {err:?}"
     );
@@ -1551,7 +1666,13 @@ param n: Length = 1.0 m;
 node bad: Dimensionless = @x ^ @n;";
     let err = check(source).unwrap_err();
     assert!(
-        matches!(err, GraphcalError::DimensionMismatch { .. }),
+        matches!(
+            err,
+            GraphcalError::Located(crate::diagnostic::Diagnostic {
+                kind: SemanticErrorKind::Dimension(DimensionError::DimensionMismatch { .. }),
+                ..
+            })
+        ),
         "got: {err:?}"
     );
 }
@@ -1621,7 +1742,13 @@ fn check_power_dimension_rational_overflow_uses_d010() {
     let source = "param x: Length = 4.0 m;\nnode bad: Dimensionless = @x ^ (1/2147483648);";
     let err = check(source).unwrap_err();
     assert!(
-        matches!(err, GraphcalError::DimensionOverflow { .. }),
+        matches!(
+            err,
+            GraphcalError::Located(crate::diagnostic::Diagnostic {
+                kind: SemanticErrorKind::Dimension(DimensionError::DimensionOverflow),
+                ..
+            })
+        ),
         "got: {err:?}"
     );
 }
@@ -1660,7 +1787,13 @@ fn check_power_int_chain_with_negative_constant_exponent_rejected() {
     // with the Int-specific "non-negative" diagnostic, not "non-literal".
     let err = check("const node bad: Int = 2 ^ (3 - 5);").unwrap_err();
     assert!(
-        matches!(err, GraphcalError::DimensionMismatch { .. }),
+        matches!(
+            err,
+            GraphcalError::Located(crate::diagnostic::Diagnostic {
+                kind: SemanticErrorKind::Dimension(DimensionError::DimensionMismatch { .. }),
+                ..
+            })
+        ),
         "got: {err:?}"
     );
 }
@@ -1673,7 +1806,13 @@ fn check_power_int_signed_negative_literal_exponent_rejected_with_int_message() 
     let source = "param x: Int = 2;\nnode y: Int = @x ^ -2;";
     let err = check(source).unwrap_err();
     assert!(
-        matches!(err, GraphcalError::DimensionMismatch { .. }),
+        matches!(
+            err,
+            GraphcalError::Located(crate::diagnostic::Diagnostic {
+                kind: SemanticErrorKind::Dimension(DimensionError::DimensionMismatch { .. }),
+                ..
+            })
+        ),
         "got: {err:?}"
     );
 }
@@ -1687,7 +1826,13 @@ param x: Length = 1.0 m;
 node bad: Dimensionless = if @x { 1.0 } else { 0.0 };";
     let err = check(source).unwrap_err();
     assert!(
-        matches!(err, GraphcalError::DimensionMismatch { .. }),
+        matches!(
+            err,
+            GraphcalError::Located(crate::diagnostic::Diagnostic {
+                kind: SemanticErrorKind::Dimension(DimensionError::DimensionMismatch { .. }),
+                ..
+            })
+        ),
         "got: {err:?}"
     );
 }
@@ -1699,7 +1844,13 @@ fn check_unknown_dimension_in_type() {
     let source = "param x: NoSuchDimension = 1.0;";
     let err = check(source).unwrap_err();
     assert!(
-        matches!(err, GraphcalError::UnknownDimension { .. }),
+        matches!(
+            err,
+            GraphcalError::Located(crate::diagnostic::Diagnostic {
+                kind: SemanticErrorKind::Dimension(DimensionError::UnknownDimension { .. }),
+                ..
+            })
+        ),
         "got: {err:?}"
     );
 }
@@ -1714,7 +1865,13 @@ param o: Orbit = Orbit(altitude: 400.0 km, speed: 7.6 km / s);
 node bad: Length = @o + 1.0 m;";
     let err = check(source).unwrap_err();
     assert!(
-        matches!(err, GraphcalError::DimensionMismatch { .. }),
+        matches!(
+            err,
+            GraphcalError::Located(crate::diagnostic::Diagnostic {
+                kind: SemanticErrorKind::Dimension(DimensionError::DimensionMismatch { .. }),
+                ..
+            })
+        ),
         "got: {err:?}"
     );
 }
@@ -1841,7 +1998,15 @@ param x: Dimensionless = 1.0;
 node o: Orbit = @x;";
     let err = check(source).unwrap_err();
     assert!(
-        matches!(err, GraphcalError::DimensionMismatchInAnnotation { .. }),
+        matches!(
+            err,
+            GraphcalError::Located(crate::diagnostic::Diagnostic {
+                kind: SemanticErrorKind::Dimension(
+                    DimensionError::DimensionMismatchInAnnotation { .. }
+                ),
+                ..
+            })
+        ),
         "got: {err:?}"
     );
 }
@@ -1880,7 +2045,13 @@ Maneuver#Insertion: 1.8 km / s,
 node bad: Velocity[Maneuver] = scan(@dv, 0.0 km / s, |acc, val| acc * val);";
     let err = check(source).unwrap_err();
     assert!(
-        matches!(err, GraphcalError::DimensionMismatch { .. }),
+        matches!(
+            err,
+            GraphcalError::Located(crate::diagnostic::Diagnostic {
+                kind: SemanticErrorKind::Dimension(DimensionError::DimensionMismatch { .. }),
+                ..
+            })
+        ),
         "got: {err:?}"
     );
 }
@@ -1914,8 +2085,17 @@ Phase#Burn: 2.0 m,
     assert!(
         matches!(
             err,
-            GraphcalError::DimensionMismatchInAnnotation { .. }
-                | GraphcalError::DimensionMismatch { .. }
+            GraphcalError::Located(
+                crate::diagnostic::Diagnostic {
+                    kind: SemanticErrorKind::Dimension(
+                        DimensionError::DimensionMismatchInAnnotation { .. }
+                    ),
+                    ..
+                } | crate::diagnostic::Diagnostic {
+                    kind: SemanticErrorKind::Dimension(DimensionError::DimensionMismatch { .. }),
+                    ..
+                }
+            )
         ),
         "got: {err:?}"
     );
@@ -2039,7 +2219,7 @@ node a: Dimensionless = 1.0;
 node b: a = 1.0;";
     let err = check(source).unwrap_err();
     assert!(
-        matches!(&err, GraphcalError::UnknownDimension { name, .. } if name.as_bare() == Some(&crate::syntax::names::NameAtom::parse("a").unwrap())),
+        matches!(&err, GraphcalError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Dimension(DimensionError::UnknownDimension { name, .. }), .. }) if name.as_bare() == Some(&crate::syntax::names::NameAtom::parse("a").unwrap())),
         "got: {err:?}"
     );
 }
@@ -2064,7 +2244,7 @@ type Pos { MkPos(v: Dimensionless) }
 param p: MkPos = 1.0;";
     let err = check(source).unwrap_err();
     assert!(
-        matches!(&err, GraphcalError::UnknownDimension { name, .. } if name.as_bare() == Some(&crate::syntax::names::NameAtom::parse("MkPos").unwrap())),
+        matches!(&err, GraphcalError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Dimension(DimensionError::UnknownDimension { name, .. }), .. }) if name.as_bare() == Some(&crate::syntax::names::NameAtom::parse("MkPos").unwrap())),
         "got: {err:?}"
     );
 }
@@ -2091,7 +2271,13 @@ param x: Dimensionless = 1.0;
 node bad: Dimensionless = if (1.0 foobar > 0.0) { 1.0 } else { 0.0 };";
     let err = check(source).unwrap_err();
     assert!(
-        matches!(err, GraphcalError::UnknownUnit { .. }),
+        matches!(
+            err,
+            GraphcalError::Located(crate::diagnostic::Diagnostic {
+                kind: SemanticErrorKind::Dimension(DimensionError::UnknownUnit { .. }),
+                ..
+            })
+        ),
         "got: {err:?}"
     );
 }
@@ -2104,7 +2290,13 @@ param x: Dimensionless = 1.0;
 node bad: Dimensionless = if true { 1.0 foobar } else { 0.0 };";
     let err = check(source).unwrap_err();
     assert!(
-        matches!(err, GraphcalError::UnknownUnit { .. }),
+        matches!(
+            err,
+            GraphcalError::Located(crate::diagnostic::Diagnostic {
+                kind: SemanticErrorKind::Dimension(DimensionError::UnknownUnit { .. }),
+                ..
+            })
+        ),
         "got: {err:?}"
     );
 }
@@ -2117,7 +2309,13 @@ param x: Dimensionless = 1.0;
 node bad: Dimensionless = if true { 0.0 } else { 1.0 foobar };";
     let err = check(source).unwrap_err();
     assert!(
-        matches!(err, GraphcalError::UnknownUnit { .. }),
+        matches!(
+            err,
+            GraphcalError::Located(crate::diagnostic::Diagnostic {
+                kind: SemanticErrorKind::Dimension(DimensionError::UnknownUnit { .. }),
+                ..
+            })
+        ),
         "got: {err:?}"
     );
 }
@@ -2133,7 +2331,13 @@ param rate: Dimensionless = 1.08;
 const unit EUR: Money = (@rate) USD;";
     let err = check(source).unwrap_err();
     assert!(
-        matches!(err, GraphcalError::GraphRefInConstUnit { .. }),
+        matches!(
+            err,
+            GraphcalError::Located(crate::diagnostic::Diagnostic {
+                kind: SemanticErrorKind::Dimension(DimensionError::GraphRefInConstUnit { .. }),
+                ..
+            })
+        ),
         "got: {err:?}"
     );
 }
@@ -2151,7 +2355,15 @@ fn dynamic_unit_scale_requires_scalar_dimensionless_quantity() {
         );
         let err = check(&source).unwrap_err();
         assert!(
-            matches!(err, GraphcalError::DynamicUnitScaleTypeMismatch { .. }),
+            matches!(
+                err,
+                GraphcalError::Located(crate::diagnostic::Diagnostic {
+                    kind: SemanticErrorKind::Dimension(
+                        DimensionError::DynamicUnitScaleTypeMismatch { .. }
+                    ),
+                    ..
+                })
+            ),
             "got: {err:?}"
         );
     }
@@ -2172,7 +2384,13 @@ unit mile: Length = 1609.344 m;
 const unit double_mile: Length = 2.0 mile;";
     let err = check(source).unwrap_err();
     assert!(
-        matches!(err, GraphcalError::NonConstUnitInConst { .. }),
+        matches!(
+            err,
+            GraphcalError::Located(crate::diagnostic::Diagnostic {
+                kind: SemanticErrorKind::Dimension(DimensionError::NonConstUnitInConst { .. }),
+                ..
+            })
+        ),
         "got: {err:?}"
     );
 }
@@ -2184,7 +2402,13 @@ unit mile: Length = 1609.344 m;
 const node distance: Length = 1.0 mile;";
     let err = check(source).unwrap_err();
     assert!(
-        matches!(err, GraphcalError::NonConstUnitInConst { .. }),
+        matches!(
+            err,
+            GraphcalError::Located(crate::diagnostic::Diagnostic {
+                kind: SemanticErrorKind::Dimension(DimensionError::NonConstUnitInConst { .. }),
+                ..
+            })
+        ),
         "got: {err:?}"
     );
 }
@@ -2196,7 +2420,13 @@ unit mile: Length = 1609.344 m;
 const node distance: Length(min: 1.0 mile) = 1609.344 m;";
     let err = check(source).unwrap_err();
     assert!(
-        matches!(err, GraphcalError::NonConstUnitInConst { .. }),
+        matches!(
+            err,
+            GraphcalError::Located(crate::diagnostic::Diagnostic {
+                kind: SemanticErrorKind::Dimension(DimensionError::NonConstUnitInConst { .. }),
+                ..
+            })
+        ),
         "got: {err:?}"
     );
 }
@@ -2216,7 +2446,13 @@ unit mile: Length = 1609.344 m;
 const node distance: Length = 1609.344 m -> mile;";
     let err = check(source).unwrap_err();
     assert!(
-        matches!(err, GraphcalError::NonConstUnitInConst { .. }),
+        matches!(
+            err,
+            GraphcalError::Located(crate::diagnostic::Diagnostic {
+                kind: SemanticErrorKind::Dimension(DimensionError::NonConstUnitInConst { .. }),
+                ..
+            })
+        ),
         "got: {err:?}"
     );
 }
@@ -2230,7 +2466,13 @@ fn check_convert_error_in_inner() {
 node bad: Length = (1.0 foobar) -> m;";
     let err = check(source).unwrap_err();
     assert!(
-        matches!(err, GraphcalError::UnknownUnit { .. }),
+        matches!(
+            err,
+            GraphcalError::Located(crate::diagnostic::Diagnostic {
+                kind: SemanticErrorKind::Dimension(DimensionError::UnknownUnit { .. }),
+                ..
+            })
+        ),
         "got: {err:?}"
     );
 }
@@ -2246,7 +2488,13 @@ type Orbit { Orbit(altitude: Length, speed: Velocity) }
 node bad: Length = (1.0 foobar).altitude;";
     let err = check(source).unwrap_err();
     assert!(
-        matches!(err, GraphcalError::UnknownUnit { .. }),
+        matches!(
+            err,
+            GraphcalError::Located(crate::diagnostic::Diagnostic {
+                kind: SemanticErrorKind::Dimension(DimensionError::UnknownUnit { .. }),
+                ..
+            })
+        ),
         "got: {err:?}"
     );
 }
@@ -2260,7 +2508,13 @@ type Orbit { Orbit(altitude: Length, speed: Velocity) }
 node o: Orbit = Orbit(altitude: 1.0 foobar, speed: 7.6 km / s);";
     let err = check(source).unwrap_err();
     assert!(
-        matches!(err, GraphcalError::UnknownUnit { .. }),
+        matches!(
+            err,
+            GraphcalError::Located(crate::diagnostic::Diagnostic {
+                kind: SemanticErrorKind::Dimension(DimensionError::UnknownUnit { .. }),
+                ..
+            })
+        ),
         "got: {err:?}"
     );
 }
@@ -2274,7 +2528,13 @@ pub index Phase = { Coast, Burn };
 node bad: Dimensionless[Phase] = for p: Phase { 1.0 foobar };";
     let err = check(source).unwrap_err();
     assert!(
-        matches!(err, GraphcalError::UnknownUnit { .. }),
+        matches!(
+            err,
+            GraphcalError::Located(crate::diagnostic::Diagnostic {
+                kind: SemanticErrorKind::Dimension(DimensionError::UnknownUnit { .. }),
+                ..
+            })
+        ),
         "got: {err:?}"
     );
 }
@@ -2287,7 +2547,13 @@ fn check_aggregation_error_in_arg() {
 node bad: Dimensionless = sum(1.0 foobar);";
     let err = check(source).unwrap_err();
     assert!(
-        matches!(err, GraphcalError::UnknownUnit { .. }),
+        matches!(
+            err,
+            GraphcalError::Located(crate::diagnostic::Diagnostic {
+                kind: SemanticErrorKind::Dimension(DimensionError::UnknownUnit { .. }),
+                ..
+            })
+        ),
         "got: {err:?}"
     );
 }
@@ -2301,7 +2567,13 @@ pub index Phase = { Coast, Burn };
 node bad: Dimensionless[Phase] = scan(1.0 foobar, 0.0, |acc, val| acc + val);";
     let err = check(source).unwrap_err();
     assert!(
-        matches!(err, GraphcalError::UnknownUnit { .. }),
+        matches!(
+            err,
+            GraphcalError::Located(crate::diagnostic::Diagnostic {
+                kind: SemanticErrorKind::Dimension(DimensionError::UnknownUnit { .. }),
+                ..
+            })
+        ),
         "got: {err:?}"
     );
 }
@@ -2318,7 +2590,13 @@ Phase#Burn: 2.0,
 };";
     let err = check(source).unwrap_err();
     assert!(
-        matches!(err, GraphcalError::UnknownUnit { .. }),
+        matches!(
+            err,
+            GraphcalError::Located(crate::diagnostic::Diagnostic {
+                kind: SemanticErrorKind::Dimension(DimensionError::UnknownUnit { .. }),
+                ..
+            })
+        ),
         "got: {err:?}"
     );
 }
@@ -2464,11 +2742,7 @@ node state: Dimensionless[Element, Step] = unfold(
     assert!(
         matches!(
             &err,
-            GraphcalError::DimensionMismatchInAnnotation {
-                declared,
-                inferred,
-                ..
-            } if declared == "Dimensionless[Element, Step]"
+            GraphcalError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Dimension(DimensionError::DimensionMismatchInAnnotation { declared, inferred, .. }), .. }) if declared == "Dimensionless[Element, Step]"
                 && inferred == "Dimensionless[Step, Element]"
         ),
         "got: {err:?}"
@@ -2491,11 +2765,7 @@ node state: Dimensionless[Step, Element] = unfold(
     assert!(
         matches!(
             &err,
-            GraphcalError::DimensionMismatch {
-                expected,
-                found,
-                ..
-            } if expected == "Dimensionless[Element]"
+            GraphcalError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Dimension(DimensionError::DimensionMismatch { expected, found, .. }), .. }) if expected == "Dimensionless[Element]"
                 && found == "Dimensionless[Other]"
         ),
         "got: {err:?}"
@@ -2568,7 +2838,7 @@ param v: Dimensionless[Fin(3)] = for i: Fin(3) { 1.0 };
 node w: Dimensionless[Fin(3)] = for i: Fin(3) { @v[-i] };";
     let err = check(source).unwrap_err();
     assert!(
-        matches!(&err, GraphcalError::DimensionMismatch { found, .. } if found.contains("Fin")),
+        matches!(&err, GraphcalError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Dimension(DimensionError::DimensionMismatch { found, .. }), .. }) if found.contains("Fin")),
         "got: {err:?}"
     );
 }
@@ -2578,7 +2848,7 @@ fn negation_rejects_datetime() {
     let source = "node t: Datetime<UTC> = -datetime(\"2026-01-01T00:00:00Z\");";
     let err = check(source).unwrap_err();
     assert!(
-        matches!(&err, GraphcalError::DimensionMismatch { found, .. } if found.contains("Datetime")),
+        matches!(&err, GraphcalError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Dimension(DimensionError::DimensionMismatch { found, .. }), .. }) if found.contains("Datetime")),
         "got: {err:?}"
     );
 }
@@ -2591,7 +2861,7 @@ param flags: Bool[Phase] = for p: Phase { true };
 node total: Dimensionless = sum(@flags);";
     let err = check(source).unwrap_err();
     assert!(
-        matches!(&err, GraphcalError::DimensionMismatch { expected, .. } if expected == "indexed quantity collection"),
+        matches!(&err, GraphcalError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Dimension(DimensionError::DimensionMismatch { expected, .. }), .. }) if expected == "indexed quantity collection"),
         "got: {err:?}"
     );
 }
@@ -2603,7 +2873,7 @@ param counts: Int[Fin(3)] = for i: Fin(3) { i };
 node total: Int = sum(@counts);";
     let err = check(source).unwrap_err();
     assert!(
-        matches!(&err, GraphcalError::DimensionMismatch { expected, .. } if expected == "indexed quantity collection"),
+        matches!(&err, GraphcalError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Dimension(DimensionError::DimensionMismatch { expected, .. }), .. }) if expected == "indexed quantity collection"),
         "got: {err:?}"
     );
 }
@@ -2718,7 +2988,13 @@ fn domain_bound_addition_unit_mismatch_in_bound() {
     let source = "param t: Time(min: 5.0 m + 3.0 s) = 10.0 s;";
     let err = check(source).unwrap_err();
     assert!(
-        matches!(err, GraphcalError::DimensionMismatch { .. }),
+        matches!(
+            err,
+            GraphcalError::Located(crate::diagnostic::Diagnostic {
+                kind: SemanticErrorKind::Dimension(DimensionError::DimensionMismatch { .. }),
+                ..
+            })
+        ),
         "got: {err:?}"
     );
 }
@@ -3500,7 +3776,13 @@ node y: Length = @bogus(v: @src)::result;
 ";
     let err = check(source).unwrap_err();
     assert!(
-        matches!(err, GraphcalError::DimensionMismatch { .. }),
+        matches!(
+            err,
+            GraphcalError::Located(crate::diagnostic::Diagnostic {
+                kind: SemanticErrorKind::Dimension(DimensionError::DimensionMismatch { .. }),
+                ..
+            })
+        ),
         "expected DimensionMismatch from inside dag body, got: {err:?}"
     );
 }
@@ -3653,7 +3935,13 @@ fn exact_exponent_beyond_dimension_model_uses_d010() {
     ] {
         let err = check(source).unwrap_err();
         assert!(
-            matches!(err, GraphcalError::DimensionOverflow { .. }),
+            matches!(
+                err,
+                GraphcalError::Located(crate::diagnostic::Diagnostic {
+                    kind: SemanticErrorKind::Dimension(DimensionError::DimensionOverflow),
+                    ..
+                })
+            ),
             "expected DimensionOverflow, got: {err:?}"
         );
     }
@@ -3666,10 +3954,13 @@ fn out_of_range_float_exponent_still_uses_float_syntax_diagnostic() {
     assert!(
         matches!(
             err,
-            GraphcalError::FloatPowerExponent {
-                replacement: None,
+            GraphcalError::Located(crate::diagnostic::Diagnostic {
+                kind: SemanticErrorKind::Dimension(DimensionError::FloatPowerExponent {
+                    replacement: None,
+                    ..
+                }),
                 ..
-            }
+            })
         ),
         "expected FloatPowerExponent without an unusable fix, got: {err:?}"
     );
@@ -3683,7 +3974,13 @@ fn negating_a_bool_is_rejected() {
     let source = "node x: Bool = -(1.0 > 2.0);";
     let err = check(source).unwrap_err();
     assert!(
-        matches!(err, GraphcalError::DimensionMismatch { .. }),
+        matches!(
+            err,
+            GraphcalError::Located(crate::diagnostic::Diagnostic {
+                kind: SemanticErrorKind::Dimension(DimensionError::DimensionMismatch { .. }),
+                ..
+            })
+        ),
         "expected DimensionMismatch, got: {err:?}"
     );
 }
@@ -3697,7 +3994,13 @@ fn check_infers_every_plot_encoding_channel() {
     ] {
         let source = format!("plot p = {{ mark: line, encode: {{ {channel}: true + 1.0 }} }};");
         assert!(
-            matches!(check(&source), Err(GraphcalError::DimensionMismatch { .. })),
+            matches!(
+                check(&source),
+                Err(GraphcalError::Located(crate::diagnostic::Diagnostic {
+                    kind: SemanticErrorKind::Dimension(DimensionError::DimensionMismatch { .. }),
+                    ..
+                }))
+            ),
             "encoding channel `{channel}` escaped inference"
         );
     }
@@ -3721,11 +4024,7 @@ fn check_rejects_non_plottable_encoding_leaves() {
         assert!(
             matches!(
                 check(source),
-                Err(GraphcalError::PlotEncodingTypeMismatch {
-                    channel: crate::syntax::ast::EncodingChannel::X,
-                    ref found,
-                    ..
-                }) if found == expected
+                Err(GraphcalError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Dimension(DimensionError::PlotEncodingTypeMismatch { channel: crate::syntax::ast::EncodingChannel::X, found, .. }), .. })) if found == expected
             ),
             "non-plottable leaf `{expected}` was accepted"
         );
@@ -3748,7 +4047,7 @@ plot p = {
     let error = check(source).unwrap_err();
     assert!(matches!(
         error,
-        GraphcalError::PlotEncodingAxisMismatch { ref channels, .. }
+        GraphcalError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Dimension(DimensionError::PlotEncodingAxisMismatch { channels, .. }), .. })
             if channels.contains("test.Step") && channels.contains("test.Pair")
     ));
 }
@@ -3795,7 +4094,10 @@ fn check_rejects_ineffective_conversion_inside_plot_encoding() {
     let source = "plot p = { mark: point, encode: { x: (1.0 m -> cm) + 1.0 m } };";
     assert!(matches!(
         check(source),
-        Err(GraphcalError::IneffectiveConversion { .. })
+        Err(GraphcalError::Located(crate::diagnostic::Diagnostic {
+            kind: SemanticErrorKind::Dimension(DimensionError::IneffectiveConversion),
+            ..
+        }))
     ));
 }
 
@@ -3835,10 +4137,13 @@ plot p = { mark: line, encode: { x: for s: Step { @vals[s] } }, title: 42.0 };";
     assert!(
         matches!(
             err,
-            GraphcalError::PlotPropertyTypeMismatch {
-                property: "title",
+            GraphcalError::Located(crate::diagnostic::Diagnostic {
+                kind: SemanticErrorKind::Dimension(DimensionError::PlotPropertyTypeMismatch {
+                    property: "title",
+                    ..
+                }),
                 ..
-            }
+            })
         ),
         "got: {err:?}"
     );
@@ -3854,10 +4159,13 @@ plot p = { mark: line, encode: { x: for s: Step { @vals[s] } }, width: \"wide\" 
     assert!(
         matches!(
             err,
-            GraphcalError::PlotPropertyTypeMismatch {
-                property: "width",
+            GraphcalError::Located(crate::diagnostic::Diagnostic {
+                kind: SemanticErrorKind::Dimension(DimensionError::PlotPropertyTypeMismatch {
+                    property: "width",
+                    ..
+                }),
                 ..
-            }
+            })
         ),
         "got: {err:?}"
     );
@@ -3873,10 +4181,13 @@ plot p = { mark: line { stroke_width: 2.0 m }, encode: { x: for s: Step { @vals[
     assert!(
         matches!(
             err,
-            GraphcalError::PlotPropertyDimensioned {
-                property: "stroke_width",
+            GraphcalError::Located(crate::diagnostic::Diagnostic {
+                kind: SemanticErrorKind::Dimension(DimensionError::PlotPropertyDimensioned {
+                    property: "stroke_width",
+                    ..
+                }),
                 ..
-            }
+            })
         ),
         "got: {err:?}"
     );

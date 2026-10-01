@@ -2,6 +2,7 @@
 
 use crate::hir::expr::{Expr, ExternFnRef};
 use crate::outcome::Outcome;
+use crate::semantic_error::dimension::DimensionError;
 use crate::semantic_error::name::NameError;
 use crate::semantic_error::plugin::PluginError;
 use std::collections::HashMap;
@@ -67,25 +68,29 @@ impl Infer<'_> {
             match &param.kind {
                 ParamKind::Scalar(ScalarValueKind::Bool) => {
                     if !matches!(arg_type, CheckedType::Bool) {
-                        return Err(GraphcalError::DimensionMismatch {
-                            expected: "Bool".to_string(),
-                            found: format_checked_type(&arg_type, self.env.registry),
-                            help: format!("parameter `{}` requires Bool", param.name),
-                            src: self.env.src,
-                            span: arg.span.into(),
-                        }
+                        return Err(GraphcalError::located(
+                            self.env.src,
+                            arg.span,
+                            DimensionError::DimensionMismatch {
+                                expected: "Bool".to_string(),
+                                found: format_checked_type(&arg_type, self.env.registry),
+                                help: format!("parameter `{}` requires Bool", param.name),
+                            },
+                        )
                         .into());
                     }
                 }
                 ParamKind::Scalar(ScalarValueKind::Int) => {
                     if arg_type != CheckedType::Int {
-                        return Err(GraphcalError::DimensionMismatch {
-                            expected: "Int".to_string(),
-                            found: format_checked_type(&arg_type, self.env.registry),
-                            help: format!("parameter `{}` requires Int", param.name),
-                            src: self.env.src,
-                            span: arg.span.into(),
-                        }
+                        return Err(GraphcalError::located(
+                            self.env.src,
+                            arg.span,
+                            DimensionError::DimensionMismatch {
+                                expected: "Int".to_string(),
+                                found: format_checked_type(&arg_type, self.env.registry),
+                                help: format!("parameter `{}` requires Int", param.name),
+                            },
+                        )
                         .into());
                     }
                 }
@@ -103,16 +108,10 @@ impl Infer<'_> {
                             index: arg_index,
                         } = current
                         else {
-                            return Err(GraphcalError::DimensionMismatch {
-                                expected: format!("a rank-{} indexed collection", indexes.len()),
-                                found: format_checked_type(&arg_type, self.env.registry),
-                                help: format!(
+                            return Err(GraphcalError::located(self.env.src, arg.span, DimensionError::DimensionMismatch { expected: format!("a rank-{} indexed collection", indexes.len()), found: format_checked_type(&arg_type, self.env.registry), help: format!(
                                     "parameter `{}` of `{display_name}` takes one axis for each declared index variable",
                                     param.name
-                                ),
-                                src: self.env.src,
-                                span: arg.span.into(),
-                            }.into());
+                                ) }).into());
                         };
                         arg_indexes.push(arg_index);
                         current = element;
@@ -120,19 +119,13 @@ impl Infer<'_> {
                     match element {
                         ScalarValueKind::Quantity(monomial) => {
                             let Some(arg_dim) = current.quantity_dimension().cloned() else {
-                                return Err(GraphcalError::DimensionMismatch {
-                                    expected: format!(
+                                return Err(GraphcalError::located(self.env.src, arg.span, DimensionError::DimensionMismatch { expected: format!(
                                         "a rank-{} indexed quantity collection",
                                         indexes.len()
-                                    ),
-                                    found: format_checked_type(&arg_type, self.env.registry),
-                                    help: format!(
+                                    ), found: format_checked_type(&arg_type, self.env.registry), help: format!(
                                         "parameter `{}` of `{display_name}` requires quantity elements",
                                         param.name
-                                    ),
-                                    src: self.env.src,
-                                    span: arg.span.into(),
-                                }.into());
+                                    ) }).into());
                             };
                             dim_walk.check_quantity_param(
                                 &param.name,
@@ -153,19 +146,13 @@ impl Infer<'_> {
                                     | (ScalarValueKind::Int, CheckedType::Int)
                             );
                             if !matches {
-                                return Err(GraphcalError::DimensionMismatch {
-                                    expected: format!(
+                                return Err(GraphcalError::located(self.env.src, arg.span, DimensionError::DimensionMismatch { expected: format!(
                                         "{name} with exactly {} indexed axes",
                                         indexes.len()
-                                    ),
-                                    found: format_checked_type(&arg_type, self.env.registry),
-                                    help: format!(
+                                    ), found: format_checked_type(&arg_type, self.env.registry), help: format!(
                                         "parameter `{}` of `{display_name}` requires {name} elements",
                                         param.name
-                                    ),
-                                    src: self.env.src,
-                                    span: arg.span.into(),
-                                }.into());
+                                    ) }).into());
                             }
                         }
                     }
@@ -176,18 +163,12 @@ impl Infer<'_> {
                             }
                             std::collections::hash_map::Entry::Occupied(bound) => {
                                 if bound.get() != arg_index {
-                                    return Err(GraphcalError::DimensionMismatch {
-                                        expected: format!(
+                                    return Err(GraphcalError::located(self.env.src, arg.span, DimensionError::DimensionMismatch { expected: format!(
                                             "an axis over `{}` (index variable `{index}` was bound by an earlier argument)",
                                             bound.get()
-                                        ),
-                                        found: format_checked_type(&arg_type, self.env.registry),
-                                        help: format!(
+                                        ), found: format_checked_type(&arg_type, self.env.registry), help: format!(
                                             "axes sharing index variable `{index}` of `{display_name}` must use the same typed index"
-                                        ),
-                                        src: self.env.src,
-                                        span: arg.span.into(),
-                                    }.into());
+                                        ) }).into());
                                 }
                             }
                         }

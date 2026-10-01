@@ -4,6 +4,7 @@ use crate::diagnostic_anchor::DiagnosticAnchor;
 use crate::graphcal_error::GraphcalError;
 use crate::semantic::checked_type::{CheckedType, IndexTypeRef, Symbolic};
 use crate::semantic::index_def::IndexCardinality;
+use crate::semantic_error::dimension::DimensionError;
 use crate::source_id::SourceId;
 use crate::syntax::span::Span;
 use crate::tir::materialized_shape::MaterializedShapeError;
@@ -54,11 +55,11 @@ pub(super) fn check_materializable(
             GraphcalError::internal_error(error.to_string(), src, DiagnosticAnchor::Source(span))
         }
         MaterializationError::Shape(MaterializedShapeError::ExceedsLimit { maximum }) => {
-            GraphcalError::MaterializedShapeTooLarge {
-                maximum,
+            GraphcalError::located(
                 src,
-                span: span.into(),
-            }
+                span,
+                DimensionError::MaterializedShapeTooLarge { maximum },
+            )
         }
     })
 }

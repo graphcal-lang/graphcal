@@ -7,6 +7,7 @@ use crate::cancellation::CancellationToken;
 use crate::diagnostic_anchor::DiagnosticAnchor;
 use crate::graphcal_error::GraphcalError;
 use crate::outcome::Outcome;
+use crate::semantic_error::dimension::DimensionError;
 use crate::semantic_error::visibility::VisibilityError;
 use crate::source_id::SourceId;
 use crate::tir::texpr::{CheckedBodies, CheckedBody, NominalObservation, TBody};
@@ -185,12 +186,14 @@ fn check_instance_defaults(
             specialize_expression_type(&checked_type, substitution, ctx.env.tir, ctx.env.src)?;
         let expected = entry.type_ann.checked().declared();
         if specialized != expected.to_symbolic() {
-            return Err(GraphcalError::DimensionMismatchInAnnotation {
-                declared: expected.format(&ctx.env.registry.dimensions),
-                inferred: specialized.format(&ctx.env.registry.dimensions),
-                src: ctx.env.src,
-                span: default.span.into(),
-            }
+            return Err(GraphcalError::located(
+                ctx.env.src,
+                default.span,
+                DimensionError::DimensionMismatchInAnnotation {
+                    declared: expected.format(&ctx.env.registry.dimensions),
+                    inferred: specialized.format(&ctx.env.registry.dimensions),
+                },
+            )
             .into());
         }
     }

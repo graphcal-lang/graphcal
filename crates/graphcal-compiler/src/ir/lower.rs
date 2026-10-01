@@ -593,6 +593,7 @@ fn build_ir_from_resolved(
 mod tests {
     use super::*;
     use crate::semantic_error::SemanticErrorKind;
+    use crate::semantic_error::dimension::DimensionError;
     use crate::semantic_error::name::NameError;
     use crate::semantic_error::plugin::PluginError;
     use crate::syntax::decl_name::DeclName;
@@ -773,7 +774,7 @@ mod tests {
         let err = parse_and_lower("unit foo: Blah = 1.0 m;").unwrap_err();
         assert!(matches!(
             err,
-            GraphcalError::UnknownDimension { name, .. } if name.to_string() == "Blah"
+            GraphcalError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Dimension(DimensionError::UnknownDimension { name, .. }), .. }) if name.to_string() == "Blah"
         ));
     }
 
@@ -782,7 +783,7 @@ mod tests {
         let err = parse_and_lower("dim Foo = Bar * Baz;").unwrap_err();
         assert!(matches!(
             err,
-            GraphcalError::UnknownDimension { name, .. } if name.to_string() == "Bar"
+            GraphcalError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Dimension(DimensionError::UnknownDimension { name, .. }), .. }) if name.to_string() == "Bar"
         ));
     }
 
@@ -840,7 +841,7 @@ mod tests {
         assert!(
             matches!(
                 &error,
-                GraphcalError::UnknownDimension { name, .. }
+                GraphcalError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Dimension(DimensionError::UnknownDimension { name, .. }), .. })
                     if name.qualifier().iter().map(NameAtom::as_str).eq(["missing"])
                         && name.leaf().as_str() == "Dimension"
             ),
@@ -853,12 +854,7 @@ mod tests {
         let err = parse_and_lower("const unit wrong: Length = 1.0 h;").unwrap_err();
         assert!(matches!(
             err,
-            GraphcalError::UnitDefinitionDimensionMismatch {
-                name,
-                declared,
-                definition,
-                ..
-            } if name.as_str() == "wrong"
+            GraphcalError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Dimension(DimensionError::UnitDefinitionDimensionMismatch { name, declared, definition, .. }), .. }) if name.as_str() == "wrong"
                 && declared == "Length"
                 && definition == "Time"
         ));
@@ -872,7 +868,7 @@ mod tests {
         .unwrap_err();
         assert!(matches!(
             err,
-            GraphcalError::UnitDefinitionDimensionMismatch { name, .. }
+            GraphcalError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Dimension(DimensionError::UnitDefinitionDimensionMismatch { name, .. }), .. })
                 if name.as_str() == "wrong"
         ));
     }
@@ -910,12 +906,22 @@ mod tests {
         for _ in 0..2 {
             assert!(matches!(
                 definitions.unit(&wrong),
-                Err(GraphcalError::UnitDefinitionDimensionMismatch { .. })
+                Err(GraphcalError::Located(crate::diagnostic::Diagnostic {
+                    kind: SemanticErrorKind::Dimension(
+                        DimensionError::UnitDefinitionDimensionMismatch { .. }
+                    ),
+                    ..
+                }))
             ));
         }
         assert!(matches!(
             definitions.module_definitions(&owner),
-            Err(GraphcalError::UnitDefinitionDimensionMismatch { .. })
+            Err(GraphcalError::Located(crate::diagnostic::Diagnostic {
+                kind: SemanticErrorKind::Dimension(
+                    DimensionError::UnitDefinitionDimensionMismatch { .. }
+                ),
+                ..
+            }))
         ));
     }
 

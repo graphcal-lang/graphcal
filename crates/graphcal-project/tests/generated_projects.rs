@@ -6,6 +6,8 @@
 use std::collections::HashMap;
 
 use graphcal_compiler::graphcal_error::{GraphcalError, RenderedGraphcalError};
+use graphcal_compiler::semantic_error::SemanticErrorKind;
+use graphcal_compiler::semantic_error::dimension::DimensionError;
 use graphcal_compiler::syntax::module_name::ModuleAliasName;
 use graphcal_eval::eval::Value;
 use graphcal_io::{InMemoryFileSystem, VirtualAbsolutePath};
@@ -166,8 +168,11 @@ proptest! {
             matches!(
                 error,
                 CompileError::Eval(RenderedGraphcalError {
-                    error: GraphcalError::DimensionMismatch { .. }
-                        | GraphcalError::DimensionMismatchInAnnotation { .. }, .. })
+error: GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+    kind: SemanticErrorKind::Dimension(DimensionError::DimensionMismatch { ..
+        }), .. } | graphcal_compiler::diagnostic::Diagnostic {
+    kind: SemanticErrorKind::Dimension(DimensionError::DimensionMismatchInAnnotation {
+        .. }), .. }), .. })
             ),
             "controlled mutation produced the wrong diagnostic: {error:?}"
         );

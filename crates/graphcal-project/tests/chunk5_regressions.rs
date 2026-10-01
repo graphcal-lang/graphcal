@@ -5,6 +5,7 @@ use std::fmt::Write as _;
 
 use graphcal_compiler::graphcal_error::GraphcalError;
 use graphcal_compiler::semantic_error::SemanticErrorKind;
+use graphcal_compiler::semantic_error::dimension::DimensionError;
 use graphcal_compiler::semantic_error::domain::DomainError;
 
 use graphcal_compiler::graphcal_error::RenderedGraphcalError;
@@ -276,10 +277,15 @@ node grid: Dimensionless[Fin(1000000), Fin(1000000)] =
     assert!(matches!(
         error,
         graphcal_project::compile_error::CompileError::Eval(RenderedGraphcalError {
-            error: graphcal_compiler::graphcal_error::GraphcalError::MaterializedShapeTooLarge {
-                maximum: 1_000_000,
-                ..
-            },
+            error: graphcal_compiler::graphcal_error::GraphcalError::Located(
+                graphcal_compiler::diagnostic::Diagnostic {
+                    kind: SemanticErrorKind::Dimension(DimensionError::MaterializedShapeTooLarge {
+                        maximum: 1_000_000,
+                        ..
+                    }),
+                    ..
+                }
+            ),
             ..
         })
     ));
@@ -300,10 +306,15 @@ param matrix: Matrix<1000000>;
     assert!(matches!(
         error,
         graphcal_project::compile_error::CompileError::Eval(RenderedGraphcalError {
-            error: graphcal_compiler::graphcal_error::GraphcalError::MaterializedShapeTooLarge {
-                maximum: 1_000_000,
-                ..
-            },
+            error: graphcal_compiler::graphcal_error::GraphcalError::Located(
+                graphcal_compiler::diagnostic::Diagnostic {
+                    kind: SemanticErrorKind::Dimension(DimensionError::MaterializedShapeTooLarge {
+                        maximum: 1_000_000,
+                        ..
+                    }),
+                    ..
+                }
+            ),
             ..
         })
     ));
@@ -328,10 +339,15 @@ node unreachable: Dimensionless = count(@giant::values);
     assert!(matches!(
         error,
         graphcal_project::compile_error::CompileError::Eval(RenderedGraphcalError {
-            error: graphcal_compiler::graphcal_error::GraphcalError::MaterializedShapeTooLarge {
-                maximum: 1_000_000,
-                ..
-            },
+            error: graphcal_compiler::graphcal_error::GraphcalError::Located(
+                graphcal_compiler::diagnostic::Diagnostic {
+                    kind: SemanticErrorKind::Dimension(DimensionError::MaterializedShapeTooLarge {
+                        maximum: 1_000_000,
+                        ..
+                    }),
+                    ..
+                }
+            ),
             ..
         })
     ));
@@ -359,11 +375,17 @@ node unreachable: Dimensionless = count(@giant::values);
         matches!(
             error,
             graphcal_project::compile_error::CompileError::Eval(RenderedGraphcalError {
-                error:
-                    graphcal_compiler::graphcal_error::GraphcalError::MaterializedShapeTooLarge {
-                        maximum: 1_000_000,
+                error: graphcal_compiler::graphcal_error::GraphcalError::Located(
+                    graphcal_compiler::diagnostic::Diagnostic {
+                        kind: SemanticErrorKind::Dimension(
+                            DimensionError::MaterializedShapeTooLarge {
+                                maximum: 1_000_000,
+                                ..
+                            }
+                        ),
                         ..
-                    },
+                    }
+                ),
                 ..
             })
         ),

@@ -15,6 +15,7 @@ use crate::function_signature::{
     ScalarValueKind, StructResult,
 };
 use crate::graphcal_error::GraphcalError;
+use crate::semantic_error::dimension::DimensionError;
 use crate::semantic_error::name::NameError;
 use crate::source_id::SourceId;
 use crate::syntax::span::{Span, Spanned};
@@ -129,15 +130,17 @@ impl<'a, S: StructResult> SignatureDimWalk<'a, S> {
                             DiagnosticAnchor::Source(arg_span),
                         )
                     })?;
-                    return Err(GraphcalError::DimensionMismatch {
-                        expected: self.registry.dimensions.format_dimension(bound),
-                        found: self.registry.dimensions.format_dimension(arg_dim),
-                        help: format!(
-                            "parameter `{param_name}` must have the same dimension as `{bind_param_name}`",
-                        ),
-                        src: self.src,
-                        span: arg_span.into(),
-                    });
+                    return Err(GraphcalError::located(
+                        self.src,
+                        arg_span,
+                        DimensionError::DimensionMismatch {
+                            expected: self.registry.dimensions.format_dimension(bound),
+                            found: self.registry.dimensions.format_dimension(arg_dim),
+                            help: format!(
+                                "parameter `{param_name}` must have the same dimension as `{bind_param_name}`",
+                            ),
+                        },
+                    ));
                 }
             } else {
                 self.bindings.insert(var.clone(), arg_dim.clone());
@@ -147,16 +150,18 @@ impl<'a, S: StructResult> SignatureDimWalk<'a, S> {
 
         let expected = eval_monomial(self.fn_name, monomial, &self.bindings, self.src, arg_span)?;
         if *arg_dim != expected {
-            return Err(GraphcalError::DimensionMismatch {
-                expected: self.registry.dimensions.format_dimension(&expected),
-                found: self.registry.dimensions.format_dimension(arg_dim),
-                help: format!(
-                    "parameter `{param_name}` requires {}",
-                    self.registry.dimensions.format_dimension(&expected),
-                ),
-                src: self.src,
-                span: arg_span.into(),
-            });
+            return Err(GraphcalError::located(
+                self.src,
+                arg_span,
+                DimensionError::DimensionMismatch {
+                    expected: self.registry.dimensions.format_dimension(&expected),
+                    found: self.registry.dimensions.format_dimension(arg_dim),
+                    help: format!(
+                        "parameter `{param_name}` requires {}",
+                        self.registry.dimensions.format_dimension(&expected),
+                    ),
+                },
+            ));
         }
         Ok(())
     }
@@ -192,10 +197,9 @@ fn eval_monomial(
                 src,
                 DiagnosticAnchor::Source(span),
             ),
-            DimMonomialEvalError::Overflow(_) => GraphcalError::DimensionOverflow {
-                src,
-                span: span.into(),
-            },
+            DimMonomialEvalError::Overflow(_) => {
+                GraphcalError::located(src, span, DimensionError::DimensionOverflow)
+            }
         })
 }
 

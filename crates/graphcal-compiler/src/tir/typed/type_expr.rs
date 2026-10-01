@@ -4,6 +4,7 @@ use crate::graphcal_error::GraphcalError;
 use crate::hir::nominal::{NominalGenericParam, NominalTypeDef};
 use crate::resolve::error::ModuleResolveError;
 use crate::resolved_name::{ResolvedDimName, ResolvedIndexName, ResolvedStructTypeName};
+use crate::semantic_error::dimension::DimensionError;
 use crate::semantic_error::index::IndexError;
 use crate::semantic_error::structure::StructError;
 use crate::source_id::SourceId;
@@ -136,10 +137,14 @@ fn hir_dimension(
     ctx.project_types
         .get_dimension(name)
         .cloned()
-        .ok_or_else(|| GraphcalError::UnknownDimension {
-            name: NamePath::from(name.atom().clone()),
-            src: ctx.src,
-            span: span.into(),
+        .ok_or_else(|| {
+            GraphcalError::located(
+                ctx.src,
+                span,
+                DimensionError::UnknownDimension {
+                    name: NamePath::from(name.atom().clone()),
+                },
+            )
         })
 }
 
@@ -208,9 +213,8 @@ fn resolve_hir_dim_expr(
                     anchor: crate::diagnostic_anchor::DiagnosticAnchor::Source(dim_expr.span),
                 });
             };
-            let overflow_err = || GraphcalError::DimensionOverflow {
-                src: ctx.src,
-                span: dim_expr.span.into(),
+            let overflow_err = || {
+                GraphcalError::located(ctx.src, dim_expr.span, DimensionError::DimensionOverflow)
             };
             let powered = dim.pow(*power).map_err(|_| overflow_err())?;
             match op {

@@ -13,6 +13,7 @@ use std::panic;
 use graphcal_compiler::graphcal_error::GraphcalError;
 use graphcal_compiler::semantic_error::SemanticErrorKind;
 use graphcal_compiler::semantic_error::attribute::AttributeError;
+use graphcal_compiler::semantic_error::dimension::DimensionError;
 use graphcal_compiler::semantic_error::index::IndexError;
 use graphcal_compiler::semantic_error::name::NameError;
 use graphcal_compiler::semantic_error::plugin::PluginError;
@@ -409,7 +410,15 @@ fn dynamic_unit_scale_must_be_scalar_dimensionless_quantity() {
         );
         let err = compile_graphcal_error(&source);
         assert!(
-            matches!(err, GraphcalError::DynamicUnitScaleTypeMismatch { .. }),
+            matches!(
+                err,
+                GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+                    kind: SemanticErrorKind::Dimension(
+                        DimensionError::DynamicUnitScaleTypeMismatch { .. }
+                    ),
+                    ..
+                })
+            ),
             "expected D032 for invalid dynamic scale, got {err:?}"
         );
     }

@@ -7,6 +7,7 @@ use crate::hir::lower::{HirLowerError, TypePathSlot};
 use crate::resolve::category::SymbolTable;
 use crate::resolve::error::{ModuleResolveError, NameCategory};
 use crate::semantic_error::attribute::AttributeError;
+use crate::semantic_error::dimension::DimensionError;
 use crate::semantic_error::domain::DomainError;
 use crate::semantic_error::index::IndexError;
 use crate::semantic_error::name::NameError;
@@ -84,11 +85,13 @@ pub fn type_lower_error_to_graphcal(err: &HirLowerError, src: SourceId) -> Graph
                     name: IndexName::classify(atom.clone()).into(),
                 },
             ),
-            TypePathSlot::DimensionTerm => GraphcalError::UnknownDimension {
-                name: NamePath::local(atom.clone()),
+            TypePathSlot::DimensionTerm => GraphcalError::located(
                 src,
-                span: (*span).into(),
-            },
+                *span,
+                DimensionError::UnknownDimension {
+                    name: NamePath::local(atom.clone()),
+                },
+            ),
         };
     }
     hir_lower_error_to_graphcal(err, src)
@@ -196,35 +199,39 @@ pub fn expr_lower_error_to_graphcal(err: &ExprLowerError, src: SourceId) -> Grap
             );
         }
         ExprLowerError::UnknownUnit { name, span } => {
-            return GraphcalError::UnknownUnit {
-                name: name.clone(),
+            return GraphcalError::located(
                 src,
-                span: (*span).into(),
-            };
+                *span,
+                DimensionError::UnknownUnit { name: name.clone() },
+            );
         }
         ExprLowerError::InvalidTimezone {
             timezone,
             tzdb_version,
             span,
         } => {
-            return GraphcalError::InvalidTimezone {
-                timezone: timezone.clone(),
-                tzdb_version,
+            return GraphcalError::located(
                 src,
-                span: (*span).into(),
-            };
+                *span,
+                DimensionError::InvalidTimezone {
+                    timezone: timezone.clone(),
+                    tzdb_version,
+                },
+            );
         }
         ExprLowerError::InvalidDatetimeLiteral {
             expectation,
             reason,
             span,
         } => {
-            return GraphcalError::InvalidDatetimeLiteral {
-                expectation: *expectation,
-                reason: reason.clone(),
+            return GraphcalError::located(
                 src,
-                span: (*span).into(),
-            };
+                *span,
+                DimensionError::InvalidDatetimeLiteral {
+                    expectation: *expectation,
+                    reason: reason.clone(),
+                },
+            );
         }
         ExprLowerError::NonexistentCivilDateTime {
             datetime,
@@ -234,15 +241,17 @@ pub fn expr_lower_error_to_graphcal(err: &ExprLowerError, src: SourceId) -> Grap
             datetime_span,
             time_zone_span,
         } => {
-            return GraphcalError::NonexistentCivilDateTime {
-                datetime: *datetime,
-                time_zone: time_zone.clone(),
-                before: *before,
-                after: *after,
+            return GraphcalError::located(
                 src,
-                datetime_span: (*datetime_span).into(),
-                time_zone_span: (*time_zone_span).into(),
-            };
+                *datetime_span,
+                DimensionError::NonexistentCivilDateTime {
+                    datetime: *datetime,
+                    time_zone: time_zone.clone(),
+                    before: *before,
+                    after: *after,
+                    time_zone_span: *time_zone_span,
+                },
+            );
         }
         ExprLowerError::RepeatedCivilDateTime {
             datetime,
@@ -252,15 +261,17 @@ pub fn expr_lower_error_to_graphcal(err: &ExprLowerError, src: SourceId) -> Grap
             datetime_span,
             time_zone_span,
         } => {
-            return GraphcalError::RepeatedCivilDateTime {
-                datetime: *datetime,
-                time_zone: time_zone.clone(),
-                before: *before,
-                after: *after,
+            return GraphcalError::located(
                 src,
-                datetime_span: (*datetime_span).into(),
-                time_zone_span: (*time_zone_span).into(),
-            };
+                *datetime_span,
+                DimensionError::RepeatedCivilDateTime {
+                    datetime: *datetime,
+                    time_zone: time_zone.clone(),
+                    before: *before,
+                    after: *after,
+                    time_zone_span: *time_zone_span,
+                },
+            );
         }
         ExprLowerError::TimeZoneRegistryInvariant {
             time_zone,
@@ -274,26 +285,30 @@ pub fn expr_lower_error_to_graphcal(err: &ExprLowerError, src: SourceId) -> Grap
             };
         }
         ExprLowerError::EpochTimeScaleArgumentCount { got, span } => {
-            return GraphcalError::EpochTimeScaleArgumentCount {
-                got: *got,
+            return GraphcalError::located(
                 src,
-                span: (*span).into(),
-            };
+                *span,
+                DimensionError::EpochTimeScaleArgumentCount { got: *got },
+            );
         }
         ExprLowerError::InvalidEpochTimeScaleArgument { span } => {
-            return GraphcalError::InvalidEpochTimeScaleArgument {
-                expected: crate::semantic::time_scale::TimeScale::expected_names(),
+            return GraphcalError::located(
                 src,
-                span: (*span).into(),
-            };
+                *span,
+                DimensionError::InvalidEpochTimeScaleArgument {
+                    expected: crate::semantic::time_scale::TimeScale::expected_names(),
+                },
+            );
         }
         ExprLowerError::UnsupportedEpochTimeScale { name, span } => {
-            return GraphcalError::UnsupportedEpochTimeScale {
-                name: name.clone(),
-                expected: crate::semantic::time_scale::TimeScale::expected_names(),
+            return GraphcalError::located(
                 src,
-                span: (*span).into(),
-            };
+                *span,
+                DimensionError::UnsupportedEpochTimeScale {
+                    name: name.clone(),
+                    expected: crate::semantic::time_scale::TimeScale::expected_names(),
+                },
+            );
         }
         ExprLowerError::ExtraMapVariant {
             index_name,
@@ -516,7 +531,7 @@ mod tests {
         ));
         assert!(matches!(
             unknown(path.clone(), TypePathSlot::DimensionTerm),
-            GraphcalError::UnknownDimension { name, .. } if name == path
+            GraphcalError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Dimension(DimensionError::UnknownDimension { name, .. }), .. }) if name == path
         ));
     }
 

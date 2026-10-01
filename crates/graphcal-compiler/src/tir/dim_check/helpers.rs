@@ -2,6 +2,7 @@ use crate::dimension::Dimension;
 use crate::display::formatting_registry::FormattingRegistry;
 use crate::graphcal_error::GraphcalError;
 use crate::hir::nominal::NominalTypeDef;
+use crate::semantic_error::dimension::DimensionError;
 use crate::source_id::SourceId;
 
 use crate::semantic::checked_type::{CheckedType, Concreteness, StructTypeRef, Symbolic};
@@ -72,11 +73,13 @@ pub fn expect_quantity<V: Concreteness>(
         CheckedType::Struct(..) => "a struct",
         CheckedType::Indexed { .. } => "an indexed value",
     };
-    Err(GraphcalError::DimensionMismatch {
-        expected: "quantity type".to_string(),
-        found: format_checked_type(inferred, registry),
-        help: format!("expected a quantity value, not {found_kind}"),
+    Err(GraphcalError::located(
         src,
-        span: span.into(),
-    })
+        span,
+        DimensionError::DimensionMismatch {
+            expected: "quantity type".to_string(),
+            found: format_checked_type(inferred, registry),
+            help: format!("expected a quantity value, not {found_kind}"),
+        },
+    ))
 }

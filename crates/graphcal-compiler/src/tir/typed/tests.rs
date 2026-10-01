@@ -6,6 +6,7 @@ use crate::generic_param::test_support::type_param;
 use crate::resolved_name::{ResolvedIndexName, ResolvedStructTypeName, ResolvedUnitName};
 use crate::semantic::time_scale::TimeScale;
 use crate::semantic_error::SemanticErrorKind;
+use crate::semantic_error::dimension::DimensionError;
 use crate::semantic_error::index::IndexError;
 use crate::syntax::dimension::UnitName;
 use crate::syntax::index_name::IndexName;
@@ -358,13 +359,25 @@ fn resolve_generic_indexed() {
 #[test]
 fn resolve_unknown_dimension_error() {
     let err = resolve_source_type("UnknownDim", &[], &[], &[]).unwrap_err();
-    assert!(matches!(err, GraphcalError::UnknownDimension { .. }));
+    assert!(matches!(
+        err,
+        GraphcalError::Located(crate::diagnostic::Diagnostic {
+            kind: SemanticErrorKind::Dimension(DimensionError::UnknownDimension { .. }),
+            ..
+        })
+    ));
 }
 
 #[test]
 fn quantity_is_semantic_not_a_source_type_constructor() {
     let error = resolve_source_type("Quantity", &[], &[], &[]).unwrap_err();
-    assert!(matches!(error, GraphcalError::UnknownDimension { .. }));
+    assert!(matches!(
+        error,
+        GraphcalError::Located(crate::diagnostic::Diagnostic {
+            kind: SemanticErrorKind::Dimension(DimensionError::UnknownDimension { .. }),
+            ..
+        })
+    ));
 }
 
 #[test]
@@ -422,7 +435,14 @@ fn field_constraint_hir_error_uses_definition_source() {
     let error = crate::ir::lower::lower(&file, "schema.gcl", schema_src).unwrap_err();
 
     match error {
-        GraphcalError::UnknownUnit { name, src, span } => {
+        GraphcalError::Located(crate::diagnostic::Diagnostic {
+            src,
+            primary: span,
+            kind:
+                crate::semantic_error::SemanticErrorKind::Dimension(DimensionError::UnknownUnit {
+                    name,
+                }),
+        }) => {
             assert_eq!(name.to_string(), "missing");
             assert_eq!(src, schema_src);
             assert!(span.offset() + span.len() <= schema_source.len());

@@ -4,6 +4,7 @@ use crate::graphcal_error::GraphcalError;
 use crate::hir::expr::{Expr, LocalDef};
 use crate::outcome::Outcome;
 use crate::semantic::checked_type::{IndexTypeRef, Symbolic};
+use crate::semantic_error::dimension::DimensionError;
 
 use crate::semantic::checked_type::CheckedType;
 use crate::tir::dim_check::helpers::format_checked_type;
@@ -30,11 +31,11 @@ impl Infer<'_> {
             .into());
         };
         if source_rank > 1 {
-            return Err(GraphcalError::MultiAxisScanSource {
-                rank: source_rank,
-                src: self.env.src,
-                span: source.span.into(),
-            }
+            return Err(GraphcalError::located(
+                self.env.src,
+                source.span,
+                DimensionError::MultiAxisScanSource { rank: source_rank },
+            )
             .into());
         }
         let accumulator_type = self.infer_hir_type(init)?;
@@ -43,13 +44,15 @@ impl Infer<'_> {
             .child(vec![(acc.id, accumulator_type.clone()), (val.id, *element)]);
         let body_type = self.with_locals(&scan_locals).infer_hir_type(body)?;
         if body_type != accumulator_type {
-            return Err(GraphcalError::DimensionMismatch {
-                expected: format_checked_type(&accumulator_type, self.env.registry),
-                found: format_checked_type(&body_type, self.env.registry),
-                help: "scan body must return the same type as the accumulator".to_string(),
-                src: self.env.src,
-                span: body.span.into(),
-            }
+            return Err(GraphcalError::located(
+                self.env.src,
+                body.span,
+                DimensionError::DimensionMismatch {
+                    expected: format_checked_type(&accumulator_type, self.env.registry),
+                    found: format_checked_type(&body_type, self.env.registry),
+                    help: "scan body must return the same type as the accumulator".to_string(),
+                },
+            )
             .into());
         }
         Ok(CheckedType::Indexed {
@@ -96,13 +99,15 @@ impl Infer<'_> {
         ]);
         let body_type = self.with_locals(&unfold_locals).infer_hir_type(body)?;
         if body_type != init_type {
-            return Err(GraphcalError::DimensionMismatch {
-                expected: format_checked_type(&init_type, self.env.registry),
-                found: format_checked_type(&body_type, self.env.registry),
-                help: "unfold body must return the same type as the previous state".to_string(),
-                src: self.env.src,
-                span: body.span.into(),
-            }
+            return Err(GraphcalError::located(
+                self.env.src,
+                body.span,
+                DimensionError::DimensionMismatch {
+                    expected: format_checked_type(&init_type, self.env.registry),
+                    found: format_checked_type(&body_type, self.env.registry),
+                    help: "unfold body must return the same type as the previous state".to_string(),
+                },
+            )
             .into());
         }
         Ok(CheckedType::Indexed {

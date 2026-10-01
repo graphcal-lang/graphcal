@@ -4,6 +4,7 @@ use crate::hir::nominal::NominalTypeDef;
 use crate::hir::types::{
     BuiltinType, DimArg, DimExpr, DimTermTarget, GenericArg, IndexRef, ValueType, ValueTypeKind,
 };
+use crate::semantic_error::dimension::DimensionError;
 use crate::source_id::SourceId;
 
 use crate::dimension::Dimension;
@@ -135,11 +136,13 @@ fn infer_hir_dim_expr_arg(
             let (dim, power, span) = match &item.term.target {
                 DimTermTarget::Dimension(target) => {
                     let dim = tir.dimension(&target.value).cloned().ok_or_else(|| {
-                        GraphcalError::UnknownDimension {
-                            name: NamePath::from(target.value.atom().clone()),
+                        GraphcalError::located(
                             src,
-                            span: target.span.into(),
-                        }
+                            target.span,
+                            DimensionError::UnknownDimension {
+                                name: NamePath::from(target.value.atom().clone()),
+                            },
+                        )
                     })?;
                     (dim, item.term.power, item.term.span)
                 }
@@ -154,26 +157,19 @@ fn infer_hir_dim_expr_arg(
                     });
                 }
             };
-            let powered = dim
-                .pow(power)
-                .map_err(|_| GraphcalError::DimensionOverflow {
-                    src,
-                    span: span.into(),
-                })?;
+            let powered = dim.pow(power).map_err(|_| {
+                GraphcalError::located(src, span, DimensionError::DimensionOverflow)
+            })?;
             match item.op {
                 crate::desugar::desugared_ast::MulDivOp::Mul => {
-                    acc.checked_mul(&powered)
-                        .map_err(|_| GraphcalError::DimensionOverflow {
-                            src,
-                            span: span.into(),
-                        })
+                    acc.checked_mul(&powered).map_err(|_| {
+                        GraphcalError::located(src, span, DimensionError::DimensionOverflow)
+                    })
                 }
                 crate::desugar::desugared_ast::MulDivOp::Div => {
-                    acc.checked_div(&powered)
-                        .map_err(|_| GraphcalError::DimensionOverflow {
-                            src,
-                            span: span.into(),
-                        })
+                    acc.checked_div(&powered).map_err(|_| {
+                        GraphcalError::located(src, span, DimensionError::DimensionOverflow)
+                    })
                 }
             }
         })

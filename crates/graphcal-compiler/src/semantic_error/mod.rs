@@ -10,6 +10,7 @@
 use crate::diagnostic::{DiagnosticKind, SecondaryLabel};
 
 pub mod attribute;
+pub mod dimension;
 pub mod domain;
 pub mod graph;
 pub mod index;
@@ -33,6 +34,7 @@ pub enum SemanticErrorKind {
     Name(name::NameError),
     Index(index::IndexError),
     Plugin(plugin::PluginError),
+    Dimension(dimension::DimensionError),
     // KINDS
 }
 
@@ -48,6 +50,7 @@ impl SemanticErrorKind {
             Self::Name(kind) => kind,
             Self::Index(kind) => kind,
             Self::Plugin(kind) => kind,
+            Self::Dimension(kind) => kind,
             // DELEGATE
         }
     }
@@ -122,6 +125,12 @@ impl From<index::IndexError> for SemanticErrorKind {
 impl From<plugin::PluginError> for SemanticErrorKind {
     fn from(kind: plugin::PluginError) -> Self {
         Self::Plugin(kind)
+    }
+}
+
+impl From<dimension::DimensionError> for SemanticErrorKind {
+    fn from(kind: dimension::DimensionError) -> Self {
+        Self::Dimension(kind)
     }
 }
 

@@ -7,6 +7,7 @@ use crate::desugar::desugared_ast::TypeExpr;
 use crate::extern_struct_result::ExternStructResult;
 use crate::graphcal_error::GraphcalError;
 use crate::ir::extern_function::{ExternFunctionEntry, merge_extern_function};
+use crate::semantic_error::dimension::DimensionError;
 use crate::semantic_error::plugin::PluginError;
 use crate::source_id::SourceId;
 use crate::syntax::names::NamePath;
@@ -388,11 +389,11 @@ pub(super) fn resolve_extern_struct_return(
     else {
         // Neither a dimension nor a type in scope: report it the way any
         // other unknown dimension-position name is reported.
-        return Err(GraphcalError::UnknownDimension {
-            name: path.clone(),
+        return Err(GraphcalError::located(
             src,
-            span: span.into(),
-        });
+            span,
+            DimensionError::UnknownDimension { name: path.clone() },
+        ));
     };
     let leaf = resolved_type.to_unowned_def_name();
     let Some(type_def) = scope.nominal_type(&resolved_type)? else {
@@ -471,10 +472,8 @@ fn resolve_extern_struct_field(
         ValueTypeKind::DimExpr(expr) => {
             // No dimension variables are in scope inside a record's fields;
             // the dimension is therefore concrete by construction.
-            let overflow = || GraphcalError::DimensionOverflow {
-                src,
-                span: annotation.span.into(),
-            };
+            let overflow =
+                || GraphcalError::located(src, annotation.span, DimensionError::DimensionOverflow);
             let mut dimension = crate::dimension::Dimension::dimensionless();
             for item in &expr.terms {
                 let DimTermTarget::Dimension(name) = &item.term.target else {
@@ -599,10 +598,8 @@ fn resolve_extern_dim_monomial(
 ) -> Result<crate::function_signature::NamedDimMonomial, GraphcalError> {
     use crate::syntax::ast::MulDivOp;
 
-    let overflow = |span: Span| GraphcalError::DimensionOverflow {
-        src,
-        span: span.into(),
-    };
+    let overflow =
+        |span: Span| GraphcalError::located(src, span, DimensionError::DimensionOverflow);
 
     let mut vars = Vec::new();
     let mut fixed = crate::dimension::Dimension::dimensionless();
@@ -626,11 +623,13 @@ fn resolve_extern_dim_monomial(
                 .map_err(|_| overflow(term.span))?;
             }
             None => {
-                return Err(GraphcalError::UnknownDimension {
-                    name: term.name.value.clone(),
+                return Err(GraphcalError::located(
                     src,
-                    span: term.name.span.into(),
-                });
+                    term.name.span,
+                    DimensionError::UnknownDimension {
+                        name: term.name.value.clone(),
+                    },
+                ));
             }
         }
     }

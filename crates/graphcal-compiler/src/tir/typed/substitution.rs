@@ -21,6 +21,7 @@ use crate::graphcal_error::GraphcalError;
 use crate::hir::nominal::NominalGenericParam;
 use crate::nat::{NatOverflowError, NatPolyForm};
 use crate::semantic::checked_type::{CheckedType, IndexTypeRef, InstantiationError, Symbolic};
+use crate::semantic_error::dimension::DimensionError;
 use crate::source_id::SourceId;
 use crate::syntax::span::Span;
 
@@ -65,10 +66,9 @@ impl SubstitutionError {
                 src,
                 span: span.into(),
             },
-            Self::DimensionOverflow { span } => GraphcalError::DimensionOverflow {
-                src,
-                span: span.into(),
-            },
+            Self::DimensionOverflow { span } => {
+                GraphcalError::located(src, span, DimensionError::DimensionOverflow)
+            }
             Self::InvalidFiniteIndex { error, span } => GraphcalError::EvalError {
                 message: error.describe_finite_index(),
                 src,

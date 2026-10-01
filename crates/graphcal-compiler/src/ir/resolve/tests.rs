@@ -3,6 +3,7 @@ use crate::builtin::{BuiltinConst, BuiltinFn};
 use crate::resolved_name::ResolvedDeclName;
 use crate::semantic::time_scale::TimeScale;
 use crate::semantic_error::SemanticErrorKind;
+use crate::semantic_error::dimension::DimensionError;
 use crate::semantic_error::name::NameError;
 use crate::semantic_error::visibility::VisibilityError;
 use crate::syntax::parser::Parser;
@@ -69,7 +70,13 @@ fn source_level_min_i32_dimension_exponent_is_out_of_range() {
     )
     .unwrap_err();
     assert!(
-        matches!(error, GraphcalError::DimensionOverflow { .. }),
+        matches!(
+            error,
+            GraphcalError::Located(crate::diagnostic::Diagnostic {
+                kind: SemanticErrorKind::Dimension(DimensionError::DimensionOverflow),
+                ..
+            })
+        ),
         "{error:?}"
     );
 }

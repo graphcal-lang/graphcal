@@ -1,6 +1,7 @@
 use crate::outcome::Outcome;
 use crate::resolved_name::ResolvedDeclName;
 use crate::semantic_error::attribute::AttributeError;
+use crate::semantic_error::dimension::DimensionError;
 use crate::semantic_error::domain::DomainError;
 use crate::semantic_error::graph::GraphError;
 use crate::source_id::SourceId;
@@ -164,12 +165,14 @@ fn check_decl_expr_type(
     }
     let inferred = ctx.infer_hir(hir_expr, Some(identity))?;
     if declared.to_symbolic() != inferred {
-        return Err(GraphcalError::DimensionMismatchInAnnotation {
-            declared: format_checked_type(declared, ctx.env.registry),
-            inferred: format_checked_type(&inferred, ctx.env.registry),
-            src: ctx.env.src,
-            span: (*type_ann_span).into(),
-        }
+        return Err(GraphcalError::located(
+            ctx.env.src,
+            *type_ann_span,
+            DimensionError::DimensionMismatchInAnnotation {
+                declared: format_checked_type(declared, ctx.env.registry),
+                inferred: format_checked_type(&inferred, ctx.env.registry),
+            },
+        )
         .into());
     }
     check_ineffective_conversions(hir_expr, true, ctx.env.src)?;
@@ -192,21 +195,23 @@ fn check_dynamic_unit_scale_type(
 ) -> Result<(), Outcome<GraphcalError>> {
     ctx.checkpoint()?;
     if entry.declared_dimension != entry.base_unit_dimension {
-        return Err(GraphcalError::UnitDefinitionDimensionMismatch {
-            name: entry.spelling.leaf().clone(),
-            declared: ctx
-                .env
-                .registry
-                .dimensions
-                .format_dimension(&entry.declared_dimension),
-            definition: ctx
-                .env
-                .registry
-                .dimensions
-                .format_dimension(&entry.base_unit_dimension),
-            src: ctx.env.src,
-            span: entry.span.into(),
-        }
+        return Err(GraphcalError::located(
+            ctx.env.src,
+            entry.span,
+            DimensionError::UnitDefinitionDimensionMismatch {
+                name: entry.spelling.leaf().clone(),
+                declared: ctx
+                    .env
+                    .registry
+                    .dimensions
+                    .format_dimension(&entry.declared_dimension),
+                definition: ctx
+                    .env
+                    .registry
+                    .dimensions
+                    .format_dimension(&entry.base_unit_dimension),
+            },
+        )
         .into());
     }
     let inferred = ctx.infer_hir(&entry.expr, None)?;
@@ -214,12 +219,14 @@ fn check_dynamic_unit_scale_type(
         &inferred,
         CheckedType::Quantity(dimension) if dimension.is_dimensionless()
     ) {
-        return Err(GraphcalError::DynamicUnitScaleTypeMismatch {
-            name: entry.spelling.clone(),
-            found: format_checked_type(&inferred, ctx.env.registry),
-            src: ctx.env.src,
-            span: entry.expr.span.into(),
-        }
+        return Err(GraphcalError::located(
+            ctx.env.src,
+            entry.expr.span,
+            DimensionError::DynamicUnitScaleTypeMismatch {
+                name: entry.spelling.clone(),
+                found: format_checked_type(&inferred, ctx.env.registry),
+            },
+        )
         .into());
     }
     Ok(())
@@ -254,10 +261,11 @@ fn check_ineffective_conversions_inner(
     match expr.kind() {
         ExprKind::Convert { expr: inner, .. } | ExprKind::DisplayTimezone { expr: inner, .. } => {
             if !display_position {
-                return Err(GraphcalError::IneffectiveConversion {
+                return Err(GraphcalError::located(
                     src,
-                    span: expr.span.into(),
-                });
+                    expr.span,
+                    DimensionError::IneffectiveConversion,
+                ));
             }
             // The operand of a conversion is not itself a display position
             // (direct nesting is already rejected as D012).
@@ -433,27 +441,23 @@ fn check_hir_assert_body(
             let actual_dim = expect_quantity(actual_elem, registry, src, actual.span)?;
             let expected_dim = expect_quantity(expected_elem, registry, src, expected.span)?;
             if actual_dim != expected_dim {
-                return Err(GraphcalError::DimensionMismatch {
-                    expected: registry.dimensions.format_dimension(&actual_dim),
-                    found: registry.dimensions.format_dimension(&expected_dim),
-                    help: "actual and expected in tolerance assertion must have the same dimension"
-                        .to_string(),
-                    src,
-                    span: expected.span.into(),
-                }
+                return Err(GraphcalError::located(src, expected.span, DimensionError::DimensionMismatch { expected: registry.dimensions.format_dimension(&actual_dim), found: registry.dimensions.format_dimension(&expected_dim), help: "actual and expected in tolerance assertion must have the same dimension"
+                        .to_string() })
                 .into());
             }
 
             let tolerance_dim = expect_quantity(tolerance_elem, registry, src, tolerance.span)?;
             if tolerance_dim != actual_dim {
-                return Err(GraphcalError::DimensionMismatch {
-                    expected: registry.dimensions.format_dimension(&actual_dim),
-                    found: format_checked_type(&tolerance_type, registry),
-                    help: "absolute tolerance must have the same dimension as actual/expected"
-                        .to_string(),
+                return Err(GraphcalError::located(
                     src,
-                    span: tolerance.span.into(),
-                }
+                    tolerance.span,
+                    DimensionError::DimensionMismatch {
+                        expected: registry.dimensions.format_dimension(&actual_dim),
+                        found: format_checked_type(&tolerance_type, registry),
+                        help: "absolute tolerance must have the same dimension as actual/expected"
+                            .to_string(),
+                    },
+                )
                 .into());
             }
 
@@ -507,13 +511,15 @@ fn broadcast_operand_element<'a>(
 ) -> Result<&'a CheckedType<Symbolic>, GraphcalError> {
     let (operand_axes, operand_elem) = peel_index_axes(operand_type);
     if !operand_axes.is_empty() && operand_axes != *actual_axes {
-        return Err(GraphcalError::IndexedShapeMismatch {
-            context: "tolerance assertion".to_string(),
-            lhs: format_checked_type(actual_type, registry),
-            rhs: format_checked_type(operand_type, registry),
+        return Err(GraphcalError::located(
             src,
-            span: operand_span.into(),
-        });
+            operand_span,
+            DimensionError::IndexedShapeMismatch {
+                context: "tolerance assertion".to_string(),
+                lhs: format_checked_type(actual_type, registry),
+                rhs: format_checked_type(operand_type, registry),
+            },
+        ));
     }
     Ok(operand_elem)
 }
@@ -920,12 +926,14 @@ fn check_callless_value_expr_type<'t>(
                 GraphcalError::internal_error(message, src, DiagnosticAnchor::Source(expr.span))
             })
     } else {
-        Err(GraphcalError::DimensionMismatchInAnnotation {
-            declared: format_checked_type(expected, tir.registry()),
-            inferred: format_checked_type(&inferred, tir.registry()),
+        Err(GraphcalError::located(
             src,
-            span: expr.span.into(),
-        })
+            expr.span,
+            DimensionError::DimensionMismatchInAnnotation {
+                declared: format_checked_type(expected, tir.registry()),
+                inferred: format_checked_type(&inferred, tir.registry()),
+            },
+        ))
     }
 }
 

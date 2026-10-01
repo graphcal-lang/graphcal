@@ -5,6 +5,7 @@ use crate::graphcal_error::GraphcalError;
 use crate::hir::expr::{Expr, ExprKind};
 use crate::outcome::Outcome;
 use crate::semantic::checked_type::{IndexTypeRef, Symbolic};
+use crate::semantic_error::dimension::DimensionError;
 use crate::semantic_error::structure::StructError;
 
 use crate::semantic::checked_type::CheckedType;
@@ -38,14 +39,17 @@ impl Infer<'_> {
             | ExprKind::CivilDateTimeLiteral(_)
             | ExprKind::ZonedDateTimeLiteral(_)
             | ExprKind::IanaTimeZoneLiteral(_) => {
-                return Err(GraphcalError::DimensionMismatch {
-                    expected: "a numeric or boolean expression".to_string(),
-                    found: "contextual string literal".to_string(),
-                    help: "string literals can only be used in their declared datetime contexts"
-                        .to_string(),
-                    src: self.env.src,
-                    span: expr.span.into(),
-                }
+                return Err(GraphcalError::located(
+                    self.env.src,
+                    expr.span,
+                    DimensionError::DimensionMismatch {
+                        expected: "a numeric or boolean expression".to_string(),
+                        found: "contextual string literal".to_string(),
+                        help:
+                            "string literals can only be used in their declared datetime contexts"
+                                .to_string(),
+                    },
+                )
                 .into());
             }
             ExprKind::TypeSystemRef(name) => {

@@ -2,6 +2,7 @@
 
 use crate::hir::expr::{Expr, ExprKind, ResolvedUnitExpr};
 use crate::outcome::Outcome;
+use crate::semantic_error::dimension::DimensionError;
 use crate::source_id::SourceId;
 
 use crate::graphcal_error::GraphcalError;
@@ -138,10 +139,11 @@ fn reject_nested_conversion(inner: &Expr, src: SourceId) -> Result<(), GraphcalE
         inner.kind(),
         ExprKind::Convert { .. } | ExprKind::DisplayTimezone { .. }
     ) {
-        return Err(GraphcalError::NestedConversion {
+        return Err(GraphcalError::located(
             src,
-            span: inner.span.into(),
-        });
+            inner.span,
+            DimensionError::NestedConversion,
+        ));
     }
     Ok(())
 }
@@ -172,12 +174,14 @@ impl Infer<'_> {
             rules::resolve_unit_dimension_or_diagnose(target, self.env.tir, self.env.src)?;
 
         if expr_dim != target_dim {
-            return Err(GraphcalError::ConversionDimensionMismatch {
-                target: self.env.registry.dimensions.format_dimension(&target_dim),
-                expr_dim: self.env.registry.dimensions.format_dimension(&expr_dim),
-                src: self.env.src,
-                span: target.span.into(),
-            }
+            return Err(GraphcalError::located(
+                self.env.src,
+                target.span,
+                DimensionError::ConversionDimensionMismatch {
+                    target: self.env.registry.dimensions.format_dimension(&target_dim),
+                    expr_dim: self.env.registry.dimensions.format_dimension(&expr_dim),
+                },
+            )
             .into());
         }
 
@@ -192,15 +196,17 @@ impl Infer<'_> {
         reject_nested_conversion(inner, self.env.src)?;
         let inner_type = self.infer_hir_type(inner)?;
         if !matches!(&inner_type, CheckedType::Datetime(_)) {
-            return Err(GraphcalError::DimensionMismatch {
-                expected: "Datetime".to_string(),
-                found: format_checked_type(&inner_type, self.env.registry),
-                help: format!(
-                    "timezone display `-> \"{timezone}\"` requires a Datetime expression"
-                ),
-                src: self.env.src,
-                span: inner.span.into(),
-            }
+            return Err(GraphcalError::located(
+                self.env.src,
+                inner.span,
+                DimensionError::DimensionMismatch {
+                    expected: "Datetime".to_string(),
+                    found: format_checked_type(&inner_type, self.env.registry),
+                    help: format!(
+                        "timezone display `-> \"{timezone}\"` requires a Datetime expression"
+                    ),
+                },
+            )
             .into());
         }
         Ok(inner_type)

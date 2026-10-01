@@ -5,6 +5,7 @@ use crate::graphcal_error::GraphcalError;
 use crate::ir::lower::{LoweredTestFile, lower_file_with_inline_dags_for_test};
 use crate::ir::model::HirDag;
 use crate::semantic_error::SemanticErrorKind;
+use crate::semantic_error::dimension::DimensionError;
 use crate::semantic_error::plugin::PluginError;
 
 use super::ExternStructResult;
@@ -110,6 +111,6 @@ fn binders_share_one_namespace_and_keep_their_sort() {
 fn unknown_dimensions_are_reported_at_the_term() {
     assert!(matches!(
         lower("import plugin \"graphcal:demo\" as demo { fn f(x: Missing * Length) -> Length; }\n"),
-        Err(GraphcalError::UnknownDimension { name, .. }) if name.to_string() == "Missing"
+        Err(GraphcalError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Dimension(DimensionError::UnknownDimension { name, .. }), .. })) if name.to_string() == "Missing"
     ));
 }

@@ -8,6 +8,7 @@
 
 use crate::outcome::Outcome;
 use crate::semantic::checked_type::Symbolic;
+use crate::semantic_error::dimension::DimensionError;
 use crate::semantic_error::name::NameError;
 use std::collections::HashMap;
 
@@ -238,12 +239,14 @@ fn check_plot_encodings(
             }
             let inferred = infer_expression_type(ctx, owner, expr)?;
             plot_channel_shape(&inferred).ok_or_else(|| {
-                GraphcalError::PlotEncodingTypeMismatch {
-                    channel: *channel,
-                    found: format_checked_type(&inferred, ctx.env.registry),
-                    src: ctx.env.src,
-                    span: expr.span.into(),
-                }
+                GraphcalError::located(
+                    ctx.env.src,
+                    expr.span,
+                    DimensionError::PlotEncodingTypeMismatch {
+                        channel: *channel,
+                        found: format_checked_type(&inferred, ctx.env.registry),
+                    },
+                )
                 .into()
             })
         })
@@ -254,11 +257,13 @@ fn check_plot_encodings(
         .collect::<Vec<_>>();
     if let Err(error) = align_plot_channel_axes(&axes) {
         let (_, expr) = &body.encodings[error.channel()];
-        return Err(GraphcalError::PlotEncodingAxisMismatch {
-            channels: describe_channel_axes(body, &shapes),
-            src: ctx.env.src,
-            span: expr.span.into(),
-        }
+        return Err(GraphcalError::located(
+            ctx.env.src,
+            expr.span,
+            DimensionError::PlotEncodingAxisMismatch {
+                channels: describe_channel_axes(body, &shapes),
+            },
+        )
         .into());
     }
     Ok(body
@@ -354,12 +359,16 @@ pub(super) fn check_property_value(
     field: &LoweredPlotField,
 ) -> Result<(), Outcome<GraphcalError>> {
     let is_string_literal = matches!(field.value.kind(), ExprKind::StringLiteral(_));
-    let mismatch = |found: String| GraphcalError::PlotPropertyTypeMismatch {
-        property,
-        expected: expected.describe(),
-        found,
-        src: ctx.env.src,
-        span: field.value.span.into(),
+    let mismatch = |found: String| {
+        GraphcalError::located(
+            ctx.env.src,
+            field.value.span,
+            DimensionError::PlotPropertyTypeMismatch {
+                property,
+                expected: expected.describe(),
+                found,
+            },
+        )
     };
 
     match expected {
@@ -381,12 +390,14 @@ pub(super) fn check_property_value(
             match infer_expression_type(ctx, owner, &field.value)? {
                 CheckedType::Int => Ok(()),
                 CheckedType::Quantity(d) if d.is_dimensionless() => Ok(()),
-                CheckedType::Quantity(d) => Err(GraphcalError::PlotPropertyDimensioned {
-                    property,
-                    dimension: ctx.env.registry.dimensions.format_dimension(&d),
-                    src: ctx.env.src,
-                    span: field.value.span.into(),
-                }
+                CheckedType::Quantity(d) => Err(GraphcalError::located(
+                    ctx.env.src,
+                    field.value.span,
+                    DimensionError::PlotPropertyDimensioned {
+                        property,
+                        dimension: ctx.env.registry.dimensions.format_dimension(&d),
+                    },
+                )
                 .into()),
                 other => Err(mismatch(format_checked_type(&other, ctx.env.registry)).into()),
             }

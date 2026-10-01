@@ -3,6 +3,7 @@
 use crate::hir::expr::{Expr, MapEntry, MapEntryKey};
 use crate::outcome::Outcome;
 use crate::resolved_name::ResolvedIndexVariant;
+use crate::semantic_error::dimension::DimensionError;
 use crate::semantic_error::index::IndexError;
 use crate::source_id::SourceId;
 
@@ -380,12 +381,14 @@ impl Infer<'_> {
         for entry in entries.iter().skip(1) {
             let entry_type = self.infer_hir_type(&entry.value)?;
             if entry_type != first_type {
-                return Err(GraphcalError::DimensionMismatchInAnnotation {
-                    declared: format_checked_type(&first_type, self.env.registry),
-                    inferred: format_checked_type(&entry_type, self.env.registry),
-                    src: self.env.src,
-                    span: entry.value.span.into(),
-                }
+                return Err(GraphcalError::located(
+                    self.env.src,
+                    entry.value.span,
+                    DimensionError::DimensionMismatchInAnnotation {
+                        declared: format_checked_type(&first_type, self.env.registry),
+                        inferred: format_checked_type(&entry_type, self.env.registry),
+                    },
+                )
                 .into());
             }
         }

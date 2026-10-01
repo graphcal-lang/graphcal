@@ -5,6 +5,8 @@ use crate::generic_param::GenericParamOwner;
 use crate::generic_param::test_support::type_param;
 use crate::resolved_name::{ResolvedIndexName, ResolvedStructTypeName};
 use crate::semantic::index_def::FiniteIndex;
+use crate::semantic_error::SemanticErrorKind;
+use crate::semantic_error::dimension::DimensionError;
 use crate::syntax::index_name::IndexName;
 use crate::syntax::non_empty::NonEmpty;
 use crate::syntax::type_name::{GenericParamName, StructTypeName};
@@ -248,7 +250,10 @@ fn errors_render_at_their_span() {
         .register("test.gcl", std::sync::Arc::new(String::new()));
     assert!(matches!(
         SubstitutionError::DimensionOverflow { span: span() }.into_graphcal(src),
-        GraphcalError::DimensionOverflow { .. }
+        GraphcalError::Located(crate::diagnostic::Diagnostic {
+            kind: SemanticErrorKind::Dimension(DimensionError::DimensionOverflow),
+            ..
+        })
     ));
     assert!(matches!(
         SubstitutionError::NatOverflow { span: span() }.into_graphcal(src),

@@ -5,6 +5,7 @@ use std::collections::HashMap;
 
 use graphcal_compiler::graphcal_error::GraphcalError;
 use graphcal_compiler::semantic_error::SemanticErrorKind;
+use graphcal_compiler::semantic_error::dimension::DimensionError;
 use graphcal_compiler::semantic_error::graph::GraphError;
 use graphcal_compiler::semantic_error::name::NameError;
 use graphcal_compiler::semantic_error::structure::StructError;
@@ -222,7 +223,7 @@ plot p = {
         .unwrap_err();
     assert!(matches!(
         error,
-        CompileError::Eval(RenderedGraphcalError { error: GraphcalError::PlotEncodingAxisMismatch { ref channels, .. }, .. })
+        CompileError::Eval(RenderedGraphcalError { error: GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic { kind: SemanticErrorKind::Dimension(DimensionError::PlotEncodingAxisMismatch { channels, .. }), .. }), .. })
             if channels.contains("owner_dims.a.Axis")
                 && channels.contains("owner_dims.b.Axis")
     ));

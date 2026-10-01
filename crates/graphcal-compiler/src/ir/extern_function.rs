@@ -65,7 +65,7 @@ impl ExternFunctionEntry {
 ///
 /// # Errors
 ///
-/// Returns [`PluginError::InvalidExternSignature`](crate::semantic_error::plugin::PluginError::InvalidExternSignature) when `entry` disagrees
+/// Returns [`PluginError::InvalidExternSignature`](PluginError::InvalidExternSignature) when `entry` disagrees
 /// with an existing declaration of the same key on its signature or on its
 /// nominal struct result type.
 pub(crate) fn merge_extern_function(

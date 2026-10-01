@@ -10,6 +10,7 @@ use crate::resolved_name::{
     ResolvedDeclName, ResolvedDimName, ResolvedIndexName, ResolvedStructTypeName,
 };
 use crate::semantic_error::attribute::AttributeError;
+use crate::semantic_error::dimension::DimensionError;
 use crate::semantic_error::graph::GraphError;
 use crate::semantic_error::name::NameError;
 use crate::semantic_error::plugin::PluginError;
@@ -577,9 +578,8 @@ fn instance_type_view<'s>(
     types
         .with_rigid_dimensions(&ports)
         .map(std::borrow::Cow::Owned)
-        .map_err(|_| GraphcalError::DimensionOverflow {
-            src,
-            span: src.whole_span().into(),
+        .map_err(|_| {
+            GraphcalError::located(src, src.whole_span(), DimensionError::DimensionOverflow)
         })
 }
 
@@ -1177,7 +1177,7 @@ fn record_resolved_struct_type_def(
 ///
 /// Walks every lowered body of one DAG and enforces:
 /// - const bodies and every domain bound must not `@`-reference runtime
-///   declarations (E020-style [`NameError::GraphRefInConst`](crate::semantic_error::name::NameError::GraphRefInConst)) or use runtime
+///   declarations (E020-style [`NameError::GraphRefInConst`](NameError::GraphRefInConst)) or use runtime
 ///   units in literals / conversion targets;
 /// - no body may `@`-reference an assert declaration
 ///   ([`AttributeError::GraphRefToAssert`](AttributeError::GraphRefToAssert));
@@ -1553,11 +1553,13 @@ impl HirPolicyChecker<'_> {
                 continue;
             };
             if !info.scale.constness().is_const() {
-                return Err(GraphcalError::NonConstUnitInConst {
-                    name: term.name.value.spelling().clone(),
-                    src: self.src,
-                    span: term.name.span.into(),
-                });
+                return Err(GraphcalError::located(
+                    self.src,
+                    term.name.span,
+                    DimensionError::NonConstUnitInConst {
+                        name: term.name.value.spelling().clone(),
+                    },
+                ));
             }
         }
         Ok(())
@@ -1758,9 +1760,8 @@ pub(crate) fn rigid_dimension_view(
     let rigid_types = tir
         .project_type_store()
         .with_rigid_dimensions(ports)
-        .map_err(|_| GraphcalError::DimensionOverflow {
-            src,
-            span: src.whole_span().into(),
+        .map_err(|_| {
+            GraphcalError::located(src, src.whole_span(), DimensionError::DimensionOverflow)
         })?;
     let mut rigid = tir.clone();
     for port in ports {

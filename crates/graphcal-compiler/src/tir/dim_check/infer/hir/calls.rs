@@ -2,6 +2,7 @@
 
 use crate::hir::expr::{Expr, FunctionRef};
 use crate::outcome::Outcome;
+use crate::semantic_error::dimension::DimensionError;
 use crate::semantic_error::name::NameError;
 use crate::source_id::SourceId;
 
@@ -69,63 +70,33 @@ impl Infer<'_> {
     })
     .map_err(|error| match error {
         LinearAlgebraTypeError::ExpectedIndexedQuantity { argument, rank } => {
-            GraphcalError::DimensionMismatch {
-                expected: format!("rank-{rank} indexed quantity"),
-                found: format_checked_type(&argument_types[argument], self.env.registry),
-                help: format!(
+            GraphcalError::located(self.env.src, args[argument].span, DimensionError::DimensionMismatch { expected: format!("rank-{rank} indexed quantity"), found: format_checked_type(&argument_types[argument], self.env.registry), help: format!(
                     "{}() requires argument {} to be a rank-{rank} indexed quantity",
                     function.as_str(),
                     argument.saturating_add(1)
-                ),
-                src: self.env.src,
-                span: args[argument].span.into(),
-            }
+                ) })
         }
         LinearAlgebraTypeError::AxisMismatch {
             argument,
             expected,
             found,
-        } => GraphcalError::LinearAlgebraShapeMismatch {
-            function,
-            expected: expected.to_string(),
-            found: found.to_string(),
-            help: "linear-algebra contractions match axes by typed identity; use the same declared index (or the same Fin(N) structural index) at both contracted positions"
-                .to_string(),
-            src: self.env.src,
-            span: args[argument].span.into(),
-        },
+        } => GraphcalError::located(self.env.src, args[argument].span, DimensionError::LinearAlgebraShapeMismatch { function, expected: expected.to_string(), found: found.to_string(), help: "linear-algebra contractions match axes by typed identity; use the same declared index (or the same Fin(N) structural index) at both contracted positions"
+                .to_string() }),
         LinearAlgebraTypeError::CardinalityMismatch {
             argument,
             expected,
             found,
-        } => GraphcalError::LinearAlgebraShapeMismatch {
-            function,
-            expected: format!("an axis with exactly {expected} entries"),
-            found: found.map_or_else(
+        } => GraphcalError::located(self.env.src, args[argument].span, DimensionError::LinearAlgebraShapeMismatch { function, expected: format!("an axis with exactly {expected} entries"), found: found.map_or_else(
                 || "an axis whose cardinality is not concrete".to_string(),
                 |cardinality| format!("an axis with {cardinality} entries"),
-            ),
-            help: format!("{}() is defined only for three-component vectors", function.as_str()),
-            src: self.env.src,
-            span: args[argument].span.into(),
-        },
+            ), help: format!("{}() is defined only for three-component vectors", function.as_str()) }),
         LinearAlgebraTypeError::ConcreteCardinalityRequired { argument } => {
-            GraphcalError::LinearAlgebraShapeMismatch {
-                function,
-                expected: "an axis with a concrete cardinality".to_string(),
-                found: "an axis whose cardinality is still generic".to_string(),
-                help: format!(
+            GraphcalError::located(self.env.src, args[argument].span, DimensionError::LinearAlgebraShapeMismatch { function, expected: "an axis with a concrete cardinality".to_string(), found: "an axis whose cardinality is still generic".to_string(), help: format!(
                     "{}() needs a concrete matrix size because its result dimension depends on that size",
                     function.as_str()
-                ),
-                src: self.env.src,
-                span: args[argument].span.into(),
-            }
+                ) })
         }
-        LinearAlgebraTypeError::DimensionOverflow => GraphcalError::DimensionOverflow {
-            src: self.env.src,
-            span: callee_span.into(),
-        },
+        LinearAlgebraTypeError::DimensionOverflow => GraphcalError::located(self.env.src, callee_span, DimensionError::DimensionOverflow),
     }).map_err(Outcome::Failed)
     }
 
@@ -150,23 +121,27 @@ impl Infer<'_> {
             BuiltinFn::Aggregation(kind) => {
                 let arg_type = self.infer_arg(&args[0])?;
                 let CheckedType::Indexed { element, index } = &arg_type else {
-                    return Err(GraphcalError::DimensionMismatch {
-                        expected: "indexed collection".to_string(),
-                        found: format_checked_type(&arg_type, self.env.registry),
-                        help: format!("{}() requires an indexed value", builtin.as_str()),
-                        src: self.env.src,
-                        span: args[0].span.into(),
-                    }
+                    return Err(GraphcalError::located(
+                        self.env.src,
+                        args[0].span,
+                        DimensionError::DimensionMismatch {
+                            expected: "indexed collection".to_string(),
+                            found: format_checked_type(&arg_type, self.env.registry),
+                            help: format!("{}() requires an indexed value", builtin.as_str()),
+                        },
+                    )
                     .into());
                 };
                 let rank = arg_type.indexed_rank();
                 if rank > 1 {
-                    return Err(GraphcalError::MultiAxisAggregation {
-                        function: kind,
-                        rank,
-                        src: self.env.src,
-                        span: args[0].span.into(),
-                    }
+                    return Err(GraphcalError::located(
+                        self.env.src,
+                        args[0].span,
+                        DimensionError::MultiAxisAggregation {
+                            function: kind,
+                            rank,
+                        },
+                    )
                     .into());
                 }
                 if kind == AggregationFn::Value(ValueAggregation::Count) {
@@ -177,31 +152,35 @@ impl Infer<'_> {
                     // element-type requirement below still applies, so check it
                     // before returning.
                     if element.quantity_dimension().is_none() {
-                        return Err(GraphcalError::DimensionMismatch {
+                        return Err(GraphcalError::located(
+                            self.env.src,
+                            args[0].span,
+                            DimensionError::DimensionMismatch {
+                                expected: "indexed quantity collection".to_string(),
+                                found: format_checked_type(element, self.env.registry),
+                                help: format!(
+                                    "{}() requires every indexed element to be quantity",
+                                    builtin.as_str()
+                                ),
+                            },
+                        )
+                        .into());
+                    }
+                    return Ok(CheckedType::Key(index.clone()));
+                }
+                let Some(dimension) = element.quantity_dimension().cloned() else {
+                    return Err(GraphcalError::located(
+                        self.env.src,
+                        args[0].span,
+                        DimensionError::DimensionMismatch {
                             expected: "indexed quantity collection".to_string(),
                             found: format_checked_type(element, self.env.registry),
                             help: format!(
                                 "{}() requires every indexed element to be quantity",
                                 builtin.as_str()
                             ),
-                            src: self.env.src,
-                            span: args[0].span.into(),
-                        }
-                        .into());
-                    }
-                    return Ok(CheckedType::Key(index.clone()));
-                }
-                let Some(dimension) = element.quantity_dimension().cloned() else {
-                    return Err(GraphcalError::DimensionMismatch {
-                        expected: "indexed quantity collection".to_string(),
-                        found: format_checked_type(element, self.env.registry),
-                        help: format!(
-                            "{}() requires every indexed element to be quantity",
-                            builtin.as_str()
-                        ),
-                        src: self.env.src,
-                        span: args[0].span.into(),
-                    }
+                        },
+                    )
                     .into());
                 };
                 if kind != AggregationFn::Value(ValueAggregation::Product)
@@ -213,19 +192,24 @@ impl Infer<'_> {
                     index,
                     self.env.tir,
                 )
-                .ok_or_else(|| GraphcalError::AggregationCardinalityUnknown {
-                    function: kind,
-                    src: self.env.src,
-                    span: args[0].span.into(),
+                .ok_or_else(|| {
+                    GraphcalError::located(
+                        self.env.src,
+                        args[0].span,
+                        DimensionError::AggregationCardinalityUnknown { function: kind },
+                    )
                 })?;
                 i32::try_from(cardinality)
                     .ok()
                     .and_then(|exponent| Rational::integer(exponent).ok())
                     .and_then(|exponent| dimension.pow(exponent).ok())
                     .map(CheckedType::Quantity)
-                    .ok_or_else(|| GraphcalError::DimensionOverflow {
-                        src: self.env.src,
-                        span: args[0].span.into(),
+                    .ok_or_else(|| {
+                        GraphcalError::located(
+                            self.env.src,
+                            args[0].span,
+                            DimensionError::DimensionOverflow,
+                        )
                     })
                     .map_err(Outcome::Failed)
             }
@@ -250,16 +234,18 @@ impl Infer<'_> {
                         .is_some_and(Dimension::is_dimensionless) => {}
                     CheckedType::Int => {}
                     _ => {
-                        return Err(GraphcalError::DimensionMismatch {
-                            expected: "Dimensionless or Int".to_string(),
-                            found: format_checked_type(&arg_type, self.env.registry),
-                            help: format!(
-                                "{}() requires a dimensionless numeric argument",
-                                builtin.as_str()
-                            ),
-                            src: self.env.src,
-                            span: args[0].span.into(),
-                        }
+                        return Err(GraphcalError::located(
+                            self.env.src,
+                            args[0].span,
+                            DimensionError::DimensionMismatch {
+                                expected: "Dimensionless or Int".to_string(),
+                                found: format_checked_type(&arg_type, self.env.registry),
+                                help: format!(
+                                    "{}() requires a dimensionless numeric argument",
+                                    builtin.as_str()
+                                ),
+                            },
+                        )
                         .into());
                     }
                 }
@@ -289,8 +275,10 @@ impl Infer<'_> {
             .collect::<Result<Vec<_>, _>>()?;
         crate::tir::dim_check::infer::complex::infer(function, &inferred)
             .map_err(|error| match error {
-                ComplexTypeError::ExpectedQuantity { argument } => {
-                    GraphcalError::DimensionMismatch {
+                ComplexTypeError::ExpectedQuantity { argument } => GraphcalError::located(
+                    self.env.src,
+                    args[argument].span,
+                    DimensionError::DimensionMismatch {
                         expected: "quantity type".to_string(),
                         found: format_checked_type(&inferred[argument], self.env.registry),
                         help: format!(
@@ -298,57 +286,57 @@ impl Infer<'_> {
                             function.as_str(),
                             argument.saturating_add(1)
                         ),
-                        src: self.env.src,
-                        span: args[argument].span.into(),
-                    }
-                }
-                ComplexTypeError::ExpectedComplex { argument } => {
-                    GraphcalError::DimensionMismatch {
+                    },
+                ),
+                ComplexTypeError::ExpectedComplex { argument } => GraphcalError::located(
+                    self.env.src,
+                    args[argument].span,
+                    DimensionError::DimensionMismatch {
                         expected: "Complex<D>".to_string(),
                         found: format_checked_type(&inferred[argument], self.env.registry),
                         help: format!("{}() requires a complex quantity", function.as_str()),
-                        src: self.env.src,
-                        span: args[argument].span.into(),
-                    }
-                }
-                ComplexTypeError::ExpectedQuantityOrComplex { argument } => {
-                    GraphcalError::DimensionMismatch {
+                    },
+                ),
+                ComplexTypeError::ExpectedQuantityOrComplex { argument } => GraphcalError::located(
+                    self.env.src,
+                    args[argument].span,
+                    DimensionError::DimensionMismatch {
                         expected: "a real or complex quantity".to_string(),
                         found: format_checked_type(&inferred[argument], self.env.registry),
                         help: format!(
                             "{}() requires a real or complex quantity",
                             function.as_str()
                         ),
-                        src: self.env.src,
-                        span: args[argument].span.into(),
-                    }
-                }
-                ComplexTypeError::DimensionMismatch { left, right } => {
-                    GraphcalError::DimensionMismatch {
+                    },
+                ),
+                ComplexTypeError::DimensionMismatch { left, right } => GraphcalError::located(
+                    self.env.src,
+                    args[right].span,
+                    DimensionError::DimensionMismatch {
                         expected: format_checked_type(&inferred[left], self.env.registry),
                         found: format_checked_type(&inferred[right], self.env.registry),
                         help: "real and imaginary components must have the same dimension"
                             .to_string(),
-                        src: self.env.src,
-                        span: args[right].span.into(),
-                    }
-                }
-                ComplexTypeError::ExpectedAngle { argument } => GraphcalError::DimensionMismatch {
-                    expected: "Angle".to_string(),
-                    found: format_checked_type(&inferred[argument], self.env.registry),
-                    help: "polar() phase must be an Angle quantity".to_string(),
-                    src: self.env.src,
-                    span: args[argument].span.into(),
-                },
-                ComplexTypeError::ExpectedDimensionless { argument } => {
-                    GraphcalError::DimensionMismatch {
+                    },
+                ),
+                ComplexTypeError::ExpectedAngle { argument } => GraphcalError::located(
+                    self.env.src,
+                    args[argument].span,
+                    DimensionError::DimensionMismatch {
+                        expected: "Angle".to_string(),
+                        found: format_checked_type(&inferred[argument], self.env.registry),
+                        help: "polar() phase must be an Angle quantity".to_string(),
+                    },
+                ),
+                ComplexTypeError::ExpectedDimensionless { argument } => GraphcalError::located(
+                    self.env.src,
+                    args[argument].span,
+                    DimensionError::DimensionMismatch {
                         expected: "Dimensionless or Complex<Dimensionless>".to_string(),
                         found: format_checked_type(&inferred[argument], self.env.registry),
                         help: "exp() requires a dimensionless real or complex argument".to_string(),
-                        src: self.env.src,
-                        span: args[argument].span.into(),
-                    }
-                }
+                    },
+                ),
             })
             .map_err(Outcome::Failed)
     }

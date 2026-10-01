@@ -1,6 +1,7 @@
 //! Diagnostic production from compile errors and evaluation results.
 
 use graphcal_compiler::semantic_error::SemanticErrorKind;
+use graphcal_compiler::semantic_error::dimension::DimensionError;
 use graphcal_compiler::semantic_error::index::IndexError;
 use graphcal_compiler::semantic_error::name::NameError;
 use graphcal_compiler::semantic_error::structure::StructError;
@@ -265,14 +266,24 @@ fn structured_data(error: &CompileError) -> Option<serde_json::Value> {
         }) => Some(serde_json::json!({ "referencedName": leaked_name })),
         // D020: an exact replacement exists only when the decimal spelling
         // maps exactly into the dimension rational model.
-        GraphcalError::FloatPowerExponent {
-            replacement: Some(replacement),
+        GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+            kind:
+                SemanticErrorKind::Dimension(DimensionError::FloatPowerExponent {
+                    replacement: Some(replacement),
+                    ..
+                }),
             ..
-        } => Some(serde_json::json!({ "replacement": replacement })),
-        GraphcalError::UnknownDimension { name, .. } => name
+        }) => Some(serde_json::json!({ "replacement": replacement })),
+        GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+            kind: SemanticErrorKind::Dimension(DimensionError::UnknownDimension { name, .. }),
+            ..
+        }) => name
             .as_bare()
             .and_then(|name| auto_import_data(name.as_str(), AutoImportCategory::Dimension)),
-        GraphcalError::UnknownUnit { name, .. } if !name.is_qualified() => {
+        GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+            kind: SemanticErrorKind::Dimension(DimensionError::UnknownUnit { name, .. }),
+            ..
+        }) if !name.is_qualified() => {
             auto_import_data(name.leaf().as_str(), AutoImportCategory::Unit)
         }
         // Structural `Fin(N)` axes are never importable.
@@ -471,11 +482,11 @@ mod tests {
             NameAtom::parse("Dimension").unwrap(),
         );
         let error = CompileError::semantic(
-            GraphcalError::UnknownDimension {
-                name: path,
-                src: named_source,
-                span: Span::new(0, source.len()).into(),
-            },
+            GraphcalError::located(
+                named_source,
+                Span::new(0, source.len()),
+                DimensionError::UnknownDimension { name: path },
+            ),
             &sources,
         );
         let diagnostics = compile_error_to_diagnostics(&error);
@@ -658,7 +669,7 @@ mod tests {
         let mut sources = graphcal_compiler::source_registry::SourceRegistry::new();
         let id = sources.register("file:///test.gcl", Arc::new("x".to_string()));
         let src = || id;
-        let span = || miette::SourceSpan::from((0, 1));
+        let span = || graphcal_compiler::syntax::span::Span::new(0, 1);
         let cases = [
             (
                 CompileError::Load(LoadError::InvalidSourcePath {
@@ -669,57 +680,65 @@ mod tests {
             ),
             (
                 CompileError::semantic(
-                    GraphcalError::AggregationCardinalityUnknown {
-                        function: AggregationFn::Value(ValueAggregation::Product),
-                        src: src(),
-                        span: span(),
-                    },
+                    GraphcalError::located(
+                        src(),
+                        span(),
+                        DimensionError::AggregationCardinalityUnknown {
+                            function: AggregationFn::Value(ValueAggregation::Product),
+                        },
+                    ),
                     &sources,
                 ),
                 "graphcal::D027",
             ),
             (
                 CompileError::semantic(
-                    GraphcalError::MaterializedShapeTooLarge {
-                        maximum: 1_000_000,
-                        src: src(),
-                        span: span(),
-                    },
+                    GraphcalError::located(
+                        src(),
+                        span(),
+                        DimensionError::MaterializedShapeTooLarge { maximum: 1_000_000 },
+                    ),
                     &sources,
                 ),
                 "graphcal::D035",
             ),
             (
                 CompileError::semantic(
-                    GraphcalError::InvalidDatetimeLiteral {
-                        expectation: DatetimeLiteralExpectation::OffsetDateTime,
-                        reason: "invalid".to_string(),
-                        src: src(),
-                        span: span(),
-                    },
+                    GraphcalError::located(
+                        src(),
+                        span(),
+                        DimensionError::InvalidDatetimeLiteral {
+                            expectation: DatetimeLiteralExpectation::OffsetDateTime,
+                            reason: "invalid".to_string(),
+                        },
+                    ),
                     &sources,
                 ),
                 "graphcal::D028",
             ),
             (
                 CompileError::semantic(
-                    GraphcalError::InvalidEpochTimeScaleArgument {
-                        expected: "UTC".to_string(),
-                        src: src(),
-                        span: span(),
-                    },
+                    GraphcalError::located(
+                        src(),
+                        span(),
+                        DimensionError::InvalidEpochTimeScaleArgument {
+                            expected: "UTC".to_string(),
+                        },
+                    ),
                     &sources,
                 ),
                 "graphcal::D029",
             ),
             (
                 CompileError::semantic(
-                    GraphcalError::UnsupportedEpochTimeScale {
-                        name: NameAtom::parse("BAD").unwrap(),
-                        expected: "UTC".to_string(),
-                        src: src(),
-                        span: span(),
-                    },
+                    GraphcalError::located(
+                        src(),
+                        span(),
+                        DimensionError::UnsupportedEpochTimeScale {
+                            name: NameAtom::parse("BAD").unwrap(),
+                            expected: "UTC".to_string(),
+                        },
+                    ),
                     &sources,
                 ),
                 "graphcal::D030",
