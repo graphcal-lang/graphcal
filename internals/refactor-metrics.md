@@ -12,6 +12,14 @@ runs `nu internals/refactor-metrics.nu check`:
 Run `nu internals/refactor-metrics.nu` to print the current counts. The
 `reading_order_sccs` metric runs `internals/reading-order.py` through `uv`.
 
+Run `nu internals/refactor-metrics.nu list` to see what is counted: it prints,
+for every metric, each counted site as `path:line: <line>` (the line on which
+the match starts), and `nu internals/refactor-metrics.nu list <metric>` limits
+the output to one metric. The list uses the same sources and patterns as the
+counts, so each metric's list has exactly as many entries as its count. For
+`pipeline_layers_exceptions` the entries are the baseline's exceptions, and for
+`reading_order_sccs` the cycles reported by `internals/reading-order.py`.
+
 ## Metrics
 
 Counts cover production sources only: `tests.rs`, `tests/` directories, inline
