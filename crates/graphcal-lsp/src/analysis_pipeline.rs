@@ -1,5 +1,7 @@
 //! The synchronous analysis pipeline: load, check, evaluate, and index one document.
 
+use graphcal_project::load_error::LoadError;
+
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
@@ -11,7 +13,6 @@ use crate::project_symbols::ProjectSymbols;
 use crate::symbol_table::{self, SymbolTable};
 use crate::workspace_revision::{AnalysisInputSnapshot, DocumentIdentity};
 use graphcal_compiler::cancellation::{CancellationToken, Cancelled};
-use graphcal_compiler::graphcal_error::GraphcalError;
 use graphcal_compiler::outcome::Outcome;
 use graphcal_compiler::syntax::module_name::ScopedName;
 use graphcal_project::compile_error::CompileError;
@@ -134,7 +135,7 @@ pub fn build_project(
     let fs = match graphcal_io::OverlayFileSystem::with_overlays(base, overlays) {
         Ok(fs) => fs,
         Err(error) => {
-            return ProjectBuild::failed(CompileError::Eval(GraphcalError::InvalidSourcePath {
+            return ProjectBuild::failed(CompileError::Load(LoadError::InvalidSourcePath {
                 path: error.path().display().to_string(),
                 reason: error.to_string(),
             }));

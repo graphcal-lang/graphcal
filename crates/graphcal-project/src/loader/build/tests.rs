@@ -1,3 +1,4 @@
+use crate::load_error::LoadError;
 use std::path::{Path, PathBuf};
 
 use graphcal_compiler::dag_id::DagPackageId;
@@ -87,10 +88,9 @@ fn dag_id(name: &str) -> DagId {
     DagId::from_relative_path(PACKAGE, Path::new(&format!("src/{name}.gcl"))).unwrap()
 }
 
-fn build_error<K: SourceKey>(snapshot: SourceSnapshot<K>) -> GraphcalError {
+fn build_error<K: SourceKey>(snapshot: SourceSnapshot<K>) -> CompileError {
     match build_loaded_files(snapshot) {
-        Err(CompileError::Eval(error)) => error,
-        Err(other) => panic!("unexpected error kind: {other:?}"),
+        Err(error) => error,
         Ok(_) => panic!("expected the build to fail"),
     }
 }
@@ -201,7 +201,7 @@ fn import_cycle_reports_typed_loading_chain() {
         ],
     ));
 
-    let GraphcalError::CircularImport { cycle } = &error else {
+    let CompileError::Load(LoadError::CircularImport { cycle }) = &error else {
         panic!("expected a circular import, got {error:?}");
     };
     assert_eq!(cycle.lead_in(), [ImportChainFile::Path(key("a"))]);
@@ -284,7 +284,7 @@ fn earlier_import_failure_wins_over_later_file_failure() {
         ],
     ));
     assert!(
-        matches!(error, GraphcalError::StdlibNotImplemented { ref path, .. } if path == "graphcal.core"),
+        matches!(error, CompileError::Load(LoadError::StdlibNotImplemented { ref path, .. }) if path == "graphcal.core"),
         "{error:?}"
     );
 }
@@ -309,7 +309,7 @@ fn dependency_failure_is_reported_when_reached() {
         ],
     ));
     assert!(
-        matches!(error, GraphcalError::FileNotFound { ref path } if path == "/p/src/b.gcl"),
+        matches!(error, CompileError::Load(LoadError::FileNotFound { ref path }) if path == "/p/src/b.gcl"),
         "{error:?}"
     );
 }
@@ -325,17 +325,17 @@ fn file_missing_from_snapshot_is_not_found() {
         )],
     ));
     assert!(
-        matches!(error, GraphcalError::FileNotFound { ref path } if path == "/p/src/b.gcl"),
+        matches!(error, CompileError::Load(LoadError::FileNotFound { ref path }) if path == "/p/src/b.gcl"),
         "{error:?}"
     );
     let error = build_error(snapshot("main", []));
     assert!(
-        matches!(error, GraphcalError::FileNotFound { ref path } if path == "/p/src/main.gcl"),
+        matches!(error, CompileError::Load(LoadError::FileNotFound { ref path }) if path == "/p/src/main.gcl"),
         "{error:?}"
     );
 }
 
-fn failing_import(failure: ResolveFailure) -> GraphcalError {
+fn failing_import(failure: ResolveFailure) -> CompileError {
     build_error(snapshot(
         "main",
         [fetched(
@@ -354,19 +354,19 @@ fn resolution_failures_render_at_the_import_site() {
     assert!(
         matches!(
             error,
-            GraphcalError::PackageNameMismatch { ref path_first, ref package_name, .. }
+            CompileError::Load(LoadError::PackageNameMismatch { ref path_first, ref package_name, .. })
                 if path_first == "pkg" && package_name == "other"
         ),
         "{error:?}"
     );
     let error = failing_import(ResolveFailure::FileNotFound);
     assert!(
-        matches!(error, GraphcalError::ImportFileNotFound { ref path, .. } if path == "pkg.b"),
+        matches!(error, CompileError::Load(LoadError::ImportFileNotFound { ref path, .. }) if path == "pkg.b"),
         "{error:?}"
     );
     let error = failing_import(ResolveFailure::CrossFileImportInVirtualPackage);
     assert!(
-        matches!(error, GraphcalError::CrossFileImportInVirtualPackage { ref path, .. } if path == "pkg.b"),
+        matches!(error, CompileError::Load(LoadError::CrossFileImportInVirtualPackage { ref path, .. }) if path == "pkg.b"),
         "{error:?}"
     );
     let error = failing_import(ResolveFailure::NotLocked {
@@ -375,7 +375,7 @@ fn resolution_failures_render_at_the_import_site() {
     assert!(
         matches!(
             error,
-            GraphcalError::EvalError { ref message, .. }
+            CompileError::Eval(GraphcalError::EvalError { ref message, .. })
                 if message == "no dependency `b`; run `graphcal deps lock` after changing dependencies"
         ),
         "{error:?}"
@@ -386,7 +386,7 @@ fn resolution_failures_render_at_the_import_site() {
     assert!(
         matches!(
             error,
-            GraphcalError::ManifestError { ref message } if message == "lockfile package `b` is missing"
+            CompileError::Load(LoadError::ManifestError { ref message }) if message == "lockfile package `b` is missing"
         ),
         "{error:?}"
     );
@@ -403,7 +403,7 @@ fn file_root_self_import_is_rejected() {
         )],
     ));
     assert!(
-        matches!(error, GraphcalError::FileRootSelfImport { ref path, .. } if path == "pkg.main"),
+        matches!(error, CompileError::Load(LoadError::FileRootSelfImport { ref path, .. }) if path == "pkg.main"),
         "{error:?}"
     );
 
@@ -412,7 +412,7 @@ fn file_root_self_import_is_rejected() {
         [fetched("main", "import main::{x};", &[])],
     ));
     assert!(
-        matches!(error, GraphcalError::FileRootSelfImport { ref path, .. } if path == "main"),
+        matches!(error, CompileError::Load(LoadError::FileRootSelfImport { ref path, .. }) if path == "main"),
         "{error:?}"
     );
 }
@@ -477,7 +477,7 @@ fn outside_root_is_rejected_at_file_root_and_in_dag_bodies() {
             )],
         ));
         assert!(
-            matches!(error, GraphcalError::ImportOutsideRoot { ref path, .. } if path == "pkg.b"),
+            matches!(error, CompileError::Load(LoadError::ImportOutsideRoot { ref path, .. }) if path == "pkg.b"),
             "{error:?}"
         );
     }

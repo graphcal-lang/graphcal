@@ -1,3 +1,4 @@
+use crate::load_error::LoadError;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt::Write as _;
 use std::path::{Component, Path, PathBuf};
@@ -651,14 +652,14 @@ fn load_plugin_pins(
         };
     let lockfile = parse_lockfile_str_with_limits(&lockfile_text, budget.lockfile_parse_limits())
         .map_err(|error| {
-        CompileError::Eval(GraphcalError::ManifestError {
+        CompileError::Load(LoadError::ManifestError {
             message: error.to_string(),
         })
     })?;
     let validated = lockfile
         .validated(env!("CARGO_PKG_VERSION"), STDLIB_VERSION)
         .map_err(|error| {
-            CompileError::Eval(GraphcalError::ManifestError {
+            CompileError::Load(LoadError::ManifestError {
                 message: error.to_string(),
             })
         })?;
@@ -1278,13 +1279,13 @@ fn virtual_package_id_for_path(path: &Path) -> Result<DagPackageId, CompileError
         .file_name()
         .and_then(|name| name.to_str())
         .ok_or_else(|| {
-            CompileError::Eval(GraphcalError::InvalidSourcePath {
+            CompileError::Load(LoadError::InvalidSourcePath {
                 path: path.display().to_string(),
                 reason: "source path has no UTF-8 file name".to_string(),
             })
         })?;
     let stem = file_name.strip_suffix(".gcl").ok_or_else(|| {
-        CompileError::Eval(GraphcalError::InvalidSourcePath {
+        CompileError::Load(LoadError::InvalidSourcePath {
             path: path.display().to_string(),
             reason: "source path must end with `.gcl`".to_string(),
         })

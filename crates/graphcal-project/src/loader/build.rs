@@ -11,6 +11,8 @@
 //! [`DagId`] and connects every import/include path to the exact module it
 //! names.
 
+use crate::load_error::LoadError;
+
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
@@ -78,7 +80,7 @@ pub(super) fn build_loaded_files<K: SourceKey>(
             .take_while(|file| *file != cycle.entry())
             .map(SourceKey::chain_file)
             .collect();
-        CompileError::Eval(GraphcalError::CircularImport {
+        CompileError::Load(LoadError::CircularImport {
             cycle: ImportCycle::new(lead_in, cycle.map(|file| file.chain_file())),
         })
     })?;
@@ -224,7 +226,7 @@ impl<K: SourceKey> Builder<K> {
             let resolved = match parsed.resolution(path) {
                 Some(ModuleResolution::Resolved(resolved)) => resolved,
                 Some(ModuleResolution::OutsideRoot) => {
-                    return Err(CompileError::Eval(outside_root(path, src.clone())).into());
+                    return Err(CompileError::Load(outside_root(path, src.clone())).into());
                 }
                 Some(ModuleResolution::Failed(failure)) => {
                     return Err(failure.to_error(path, src).into());
@@ -262,7 +264,7 @@ impl<K: SourceKey> Builder<K> {
                 }
                 Some(ModuleResolution::Resolved(_) | ModuleResolution::Failed(_)) | None => {}
                 Some(ModuleResolution::OutsideRoot) => {
-                    return Err(CompileError::Eval(outside_root(
+                    return Err(CompileError::Load(outside_root(
                         dependency.path,
                         parsed.named_source().clone(),
                     ))
@@ -278,7 +280,7 @@ pub(super) fn file_root_self_import_error(
     path: &ModulePath,
     src: &NamedSource<Arc<String>>,
 ) -> CompileError {
-    CompileError::Eval(GraphcalError::FileRootSelfImport {
+    CompileError::Load(LoadError::FileRootSelfImport {
         path: path.display_path(),
         src: src.clone(),
         span: path.span().into(),

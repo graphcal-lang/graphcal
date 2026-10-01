@@ -7,6 +7,8 @@
 //! path it contains. Diagnostics are rendered only when the builder reaches an
 //! offending path, so the reported error follows the builder's traversal.
 
+use crate::load_error::LoadError;
+
 use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
@@ -304,45 +306,49 @@ impl ResolveFailure {
     ) -> CompileError {
         let src = src.clone();
         let span = path.span().into();
-        CompileError::Eval(match self {
-            Self::StdlibNotImplemented => GraphcalError::StdlibNotImplemented {
+        match self {
+            Self::StdlibNotImplemented => LoadError::StdlibNotImplemented {
                 path: path.display_path(),
                 src,
                 span,
-            },
-            Self::PackageNameMismatch { package_name } => GraphcalError::PackageNameMismatch {
+            }
+            .into(),
+            Self::PackageNameMismatch { package_name } => LoadError::PackageNameMismatch {
                 path_first: path.segments.first().name.to_string(),
                 package_name: package_name.clone(),
                 src,
                 span,
-            },
-            Self::FileNotFound => GraphcalError::ImportFileNotFound {
+            }
+            .into(),
+            Self::FileNotFound => LoadError::ImportFileNotFound {
                 path: path.display_path(),
                 src,
                 span,
-            },
-            Self::CrossFileImportInVirtualPackage => {
-                GraphcalError::CrossFileImportInVirtualPackage {
-                    path: path.display_path(),
-                    src,
-                    span,
-                }
             }
+            .into(),
+            Self::CrossFileImportInVirtualPackage => LoadError::CrossFileImportInVirtualPackage {
+                path: path.display_path(),
+                src,
+                span,
+            }
+            .into(),
             Self::NotLocked { message } => GraphcalError::EvalError {
                 message: format!("{message}; run `graphcal deps lock` after changing dependencies"),
                 src,
                 span,
-            },
-            Self::Manifest { message } => GraphcalError::ManifestError {
+            }
+            .into(),
+            Self::Manifest { message } => LoadError::ManifestError {
                 message: message.clone(),
-            },
-        })
+            }
+            .into(),
+        }
     }
 }
 
 /// Error for a path that resolved outside the permitted source root.
-pub(super) fn outside_root(path: &ModulePath, src: NamedSource<Arc<String>>) -> GraphcalError {
-    GraphcalError::ImportOutsideRoot {
+pub(super) fn outside_root(path: &ModulePath, src: NamedSource<Arc<String>>) -> LoadError {
+    LoadError::ImportOutsideRoot {
         path: path.display_path(),
         src,
         span: path.span().into(),

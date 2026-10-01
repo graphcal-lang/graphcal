@@ -1,5 +1,7 @@
 //! Prepared-parameter binding compilation and row construction.
 
+use crate::binding_error::BindingError;
+
 use graphcal_compiler::syntax::ast::{FieldInit, Ident, IdentPath, MapEntry, MapEntryKey};
 use graphcal_compiler::syntax::fin_position::FinPosition;
 use graphcal_compiler::syntax::non_empty::NonEmpty;
@@ -368,9 +370,9 @@ impl ParameterBindingBuilder<'_> {
             .iter()
             .find(|port| !port.has_default && self.slots[port.position.index].is_none())
         {
-            return Err(CompileError::Eval(
-                GraphcalError::RequiredParamNotProvided {
-                    name: port.name.to_string(),
+            return Err(CompileError::Binding(
+                BindingError::RequiredParamNotProvided {
+                    name: port.name.clone(),
                     src: self.project.source.clone(),
                     span: port.span.into(),
                 },
@@ -431,9 +433,9 @@ impl PreparedProject {
                 .declarations()
                 .find_map(|entry| (entry.name() == name).then_some(entry.category()));
             actual_kind.map_or_else(
-                || CompileError::Eval(GraphcalError::OverrideUnknownParam { name: name.clone() }),
+                || CompileError::Binding(BindingError::UnknownParam { name: name.clone() }),
                 |actual_kind| {
-                    CompileError::Eval(GraphcalError::OverrideNotAParam {
+                    CompileError::Binding(BindingError::NotAParam {
                         name: name.clone(),
                         actual_kind,
                     })

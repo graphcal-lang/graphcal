@@ -1256,51 +1256,6 @@ pub enum GraphcalError {
         span: SourceSpan,
     },
 
-    #[error("file not found: {path}")]
-    #[diagnostic(code(graphcal::M000), help("check that the file path is correct"))]
-    FileNotFound { path: String },
-
-    #[error("invalid source path `{path}`: {reason}")]
-    #[diagnostic(
-        code(graphcal::M023),
-        help("Graphcal source files must be UTF-8 `.gcl` files")
-    )]
-    InvalidSourcePath { path: String, reason: String },
-
-    #[error("circular import detected: {cycle}")]
-    #[diagnostic(
-        code(graphcal::M001),
-        help("files cannot import each other in a cycle")
-    )]
-    CircularImport {
-        cycle: crate::import_cycle::ImportCycle,
-    },
-
-    #[error("imported file not found: {path}")]
-    #[diagnostic(code(graphcal::M002))]
-    ImportFileNotFound {
-        path: String,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
-        #[label("referenced here")]
-        span: SourceSpan,
-    },
-
-    #[error("a file-root `import` cannot target its own file `{path}`")]
-    #[diagnostic(
-        code(graphcal::M033),
-        help(
-            "top-level declarations are already in scope; self-imports are only meaningful inside isolated inline DAG bodies"
-        )
-    )]
-    FileRootSelfImport {
-        path: String,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
-        #[label("this import resolves to its own file root")]
-        span: SourceSpan,
-    },
-
     #[error("name `{name}` not found in imported file `{file_path}`")]
     #[diagnostic(
         code(graphcal::M003),
@@ -1660,53 +1615,6 @@ pub enum GraphcalError {
         span: SourceSpan,
     },
 
-    #[error("import path `{path}` resolves outside the project root")]
-    #[diagnostic(
-        code(graphcal::M008),
-        help(
-            "imports must reference files within the project directory tree; place a `graphcal.toml` in an ancestor directory to widen the project root"
-        )
-    )]
-    ImportOutsideRoot {
-        path: String,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
-        #[label("resolves outside project root")]
-        span: SourceSpan,
-    },
-
-    #[error("cannot bind `{name}`: it is a {actual_kind}, not a param")]
-    #[diagnostic(
-        code(graphcal::O001),
-        help("only `param` declarations can receive external parameter bindings")
-    )]
-    OverrideNotAParam {
-        name: DeclName,
-        actual_kind: crate::declaration_category::DeclCategory,
-    },
-
-    #[error("unknown entry parameter `{name}` in external binding")]
-    #[diagnostic(
-        code(graphcal::O002),
-        help("the name must match a `param` declared in the file")
-    )]
-    OverrideUnknownParam { name: DeclName },
-
-    #[error("required param `{name}` has no value")]
-    #[diagnostic(
-        code(graphcal::O003),
-        help(
-            "supply the entry-DAG input via `--param '{name}=<value>'`, `--params-json`, or `--params-json-file`; otherwise bind this named input port at an include/call site"
-        )
-    )]
-    RequiredParamNotProvided {
-        name: String,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
-        #[label("declared here without a default value")]
-        span: SourceSpan,
-    },
-
     #[error("unknown param `{name}` in import binding for `{file_path}`")]
     #[diagnostic(
         code(graphcal::M009),
@@ -1748,54 +1656,6 @@ pub enum GraphcalError {
         #[source_code]
         src: NamedSource<Arc<String>>,
         #[label("no {expected} input with this name")]
-        span: SourceSpan,
-    },
-
-    #[error("module path starts with `{path_first}` but package name is `{package_name}`")]
-    #[diagnostic(
-        code(graphcal::M013),
-        help("module paths must start with the package name from graphcal.toml")
-    )]
-    PackageNameMismatch {
-        path_first: String,
-        package_name: String,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
-        #[label("should start with `{package_name}`")]
-        span: SourceSpan,
-    },
-
-    #[error("standard library modules are not yet implemented")]
-    #[diagnostic(
-        code(graphcal::M014),
-        help(
-            "the graphcal standard library (graphcal/math, etc.) will be available in a future release"
-        )
-    )]
-    StdlibNotImplemented {
-        path: String,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
-        #[label("stdlib not yet available")]
-        span: SourceSpan,
-    },
-
-    #[error("failed to parse graphcal.toml: {message}")]
-    #[diagnostic(code(graphcal::M015))]
-    ManifestError { message: String },
-
-    #[error("cross-file import `{path}` from a file outside any package")]
-    #[diagnostic(
-        code(graphcal::M017),
-        help(
-            "a Graphcal file is either part of a real package (lives at `<source_dir>/<package>.gcl` or under `<source_dir>/<package>/`) or a standalone virtual-package script. Standalone files may only reference their own top-level decls (via `import <file_stem>::{{...}};`) or their own inline DAGs. To pull symbols from a sibling file, add a `graphcal.toml` and place this file inside the package's namespace directory."
-        )
-    )]
-    CrossFileImportInVirtualPackage {
-        path: String,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
-        #[label("not reachable from a virtual-package file")]
         span: SourceSpan,
     },
 
@@ -2386,32 +2246,20 @@ impl GraphcalError {
         }
     }
 
-    /// Return the `NamedSource` embedded in this error, if any.
+    /// Return the `NamedSource` this error points into.
     ///
-    /// Most variants carry a `#[source_code]` field naming the file and its
+    /// Every variant carries a `#[source_code]` field naming the file and its
     /// full source text. Exposing it as a typed accessor lets diagnostic
     /// emitters pair the error's offsets with the exact source they index
     /// into — instead of inferring (name, source) from external context,
     /// which can silently desynchronize when an imported file is the origin.
-    ///
-    /// Returns `None` for the handful of variants without a
-    /// source location: file-system errors before parsing
-    /// ([`Self::FileNotFound`], [`Self::InvalidSourcePath`],
-    /// [`Self::CircularImport`], [`Self::ManifestError`]) and CLI override errors
-    /// ([`Self::OverrideNotAParam`], [`Self::OverrideUnknownParam`]).
     #[must_use]
     #[expect(
         clippy::too_many_lines,
         reason = "exhaustive variant list; one arm per error variant"
     )]
-    pub const fn named_source(&self) -> Option<&NamedSource<Arc<String>>> {
-        let src = match self {
-            Self::FileNotFound { .. }
-            | Self::InvalidSourcePath { .. }
-            | Self::CircularImport { .. }
-            | Self::ManifestError { .. }
-            | Self::OverrideNotAParam { .. }
-            | Self::OverrideUnknownParam { .. } => return None,
+    pub const fn named_source(&self) -> &NamedSource<Arc<String>> {
+        match self {
             Self::DuplicateName { src, .. }
             | Self::DuplicateConstructorField { src, .. }
             | Self::BuiltinNameShadowed { src, .. }
@@ -2494,8 +2342,6 @@ impl GraphcalError {
             | Self::MissingVariants { src, .. }
             | Self::ExtraVariants { src, .. }
             | Self::IndexMismatch { src, .. }
-            | Self::ImportFileNotFound { src, .. }
-            | Self::FileRootSelfImport { src, .. }
             | Self::ImportNameNotFound { src, .. }
             | Self::ImportCategoryMismatch { src, .. }
             | Self::DuplicateModuleName { src, .. }
@@ -2523,14 +2369,9 @@ impl GraphcalError {
             | Self::ExpectedFailKeyIndexMismatch { src, .. }
             | Self::ExpectedFailFinitePositionOutOfBounds { src, .. }
             | Self::NegativeTolerance { src, .. }
-            | Self::ImportOutsideRoot { src, .. }
-            | Self::RequiredParamNotProvided { src, .. }
             | Self::UnknownParamBinding { src, .. }
             | Self::BindingNotAParam { src, .. }
             | Self::DagInputCategoryMismatch { src, .. }
-            | Self::PackageNameMismatch { src, .. }
-            | Self::StdlibNotImplemented { src, .. }
-            | Self::CrossFileImportInVirtualPackage { src, .. }
             | Self::InvalidTypeLevelBindingValue { src, .. }
             | Self::IndexBindingNotAnIndex { src, .. }
             | Self::IndexKindMismatch { src, .. }
@@ -2563,8 +2404,7 @@ impl GraphcalError {
             | Self::MissingDagBindings { src, .. }
             | Self::UnknownDagOutput { src, .. }
             | Self::DagArgTypeMismatch { src, .. } => src,
-        };
-        Some(src)
+        }
     }
 }
 
@@ -2663,7 +2503,6 @@ mod tests {
         }
 
         for (variant, expected) in [
-            ("InvalidSourcePath", "M023"),
             ("LinearAlgebraShapeMismatch", "D022"),
             ("AggregationCardinalityUnknown", "D027"),
             ("MaterializedShapeTooLarge", "D035"),

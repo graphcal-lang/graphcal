@@ -7,6 +7,8 @@
     reason = "GraphcalError is inherently large and only constructed on the error path"
 )]
 
+use graphcal_project::load_error::LoadError;
+
 use std::collections::HashMap;
 use std::path::Path;
 
@@ -687,7 +689,7 @@ fuel_per_call = 200000000
     assert!(
         matches!(
             err,
-            CompileError::Eval(GraphcalError::ManifestError { ref message })
+            CompileError::Load(LoadError::ManifestError { ref message })
                 if message.contains("plugins/demo.wasm (package proj).missing")
         ),
         "unexpected error: {err:?}"

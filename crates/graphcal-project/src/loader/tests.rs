@@ -1,4 +1,5 @@
 use super::*;
+use crate::load_error::LoadError;
 use std::cell::Cell;
 use std::fs;
 use std::io;
@@ -288,7 +289,7 @@ fn rooted_filesystem_rejects_invalid_explicit_root() {
 
     assert!(matches!(
         error,
-        CompileError::Eval(GraphcalError::FileNotFound { path })
+        CompileError::Load(LoadError::FileNotFound { path })
             if path == missing_root.display().to_string()
     ));
 }
@@ -919,7 +920,7 @@ fn dependency_enabled_loader_rejects_file_root_self_import() {
         .expect_err("the package-aware loader must reject an exact self-file target");
     assert!(matches!(
         error,
-        CompileError::Eval(GraphcalError::FileRootSelfImport { .. })
+        CompileError::Load(LoadError::FileRootSelfImport { .. })
     ));
 }
 
@@ -1079,7 +1080,7 @@ fn assert_outside_root(error: &CompileError, expected_path: &str) {
     assert!(
         matches!(
             error,
-            CompileError::Eval(GraphcalError::ImportOutsideRoot { path, .. })
+            CompileError::Load(LoadError::ImportOutsideRoot { path, .. })
                 if path == expected_path
         ),
         "expected an outside-root import error, got {error:?}"
@@ -1447,7 +1448,7 @@ fn snapshot_fetch_skips_unresolved_and_self_paths() {
     assert_eq!(sources.fetched(), [scripted_path("main")]);
     assert!(matches!(
         build_loaded_files(snapshot),
-        Err(CompileError::Eval(GraphcalError::ImportFileNotFound { ref path, .. })) if path == "pkg.missing"
+        Err(CompileError::Load(LoadError::ImportFileNotFound { ref path, .. })) if path == "pkg.missing"
     ));
 }
 

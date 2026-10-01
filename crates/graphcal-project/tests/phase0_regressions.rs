@@ -5,6 +5,8 @@
 //! and make the assertion pass normally.
 #![cfg(test)]
 
+use graphcal_project::load_error::LoadError;
+
 use std::collections::HashMap;
 use std::panic;
 
@@ -711,7 +713,7 @@ fn included_dynamic_unit_error_uses_producer_source() {
         panic!("expected semantic error, got {error:?}");
     };
     assert!(matches!(error, GraphcalError::UnknownGraphRef { .. }));
-    let source = error.named_source().expect("error must carry source");
+    let source = error.named_source();
     assert!(
         source.name().ends_with("lib.gcl"),
         "wrong source: {source:?}"
@@ -990,7 +992,7 @@ fn virtual_file_root_self_import_is_rejected() {
 
         assert!(matches!(
             error,
-            CompileError::Eval(GraphcalError::FileRootSelfImport { .. })
+            CompileError::Load(LoadError::FileRootSelfImport { .. })
         ));
     }
 }
@@ -1026,7 +1028,7 @@ fn fully_qualified_file_root_self_import_is_rejected() {
     .unwrap_err();
     assert!(matches!(
         error,
-        CompileError::Eval(GraphcalError::FileRootSelfImport { .. })
+        CompileError::Load(LoadError::FileRootSelfImport { .. })
     ));
 }
 

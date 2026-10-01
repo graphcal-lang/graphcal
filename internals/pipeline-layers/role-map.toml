@@ -2574,7 +2574,27 @@ role = "facade"
 
 [[module]]
 package = "project"
+path = ["binding_error"]
+role = "contracts"
+
+[[module]]
+package = "project"
+path = ["binding_error", "tests"]
+role = "contracts"
+
+[[module]]
+package = "project"
 path = ["compile_error"]
+role = "contracts"
+
+[[module]]
+package = "project"
+path = ["load_error"]
+role = "contracts"
+
+[[module]]
+package = "project"
+path = ["load_error", "tests"]
 role = "contracts"
 
 [[module]]

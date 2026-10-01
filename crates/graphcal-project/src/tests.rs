@@ -5,6 +5,8 @@ mod presentation_evidence;
 mod runtime_clones;
 mod sealed_program;
 
+use crate::binding_error::BindingError;
+
 use std::collections::HashSet;
 
 use std::collections::HashMap;
@@ -4663,7 +4665,7 @@ fn override_node_errors() {
     overrides.insert(DeclName::expect_valid("delta_v"), parse_expr("100.0 m/s"));
     let result = compile_and_eval_with_overrides(source, "test.gcl", &overrides);
     match result {
-        Err(CompileError::Eval(GraphcalError::OverrideNotAParam { name, actual_kind })) => {
+        Err(CompileError::Binding(BindingError::NotAParam { name, actual_kind })) => {
             assert_eq!(name.as_str(), "delta_v");
             assert_eq!(actual_kind.to_string(), "node");
         }
@@ -4678,7 +4680,7 @@ fn override_const_errors() {
     overrides.insert(DeclName::expect_valid("g0"), parse_expr("10.0 m/s^2"));
     let result = compile_and_eval_with_overrides(source, "test.gcl", &overrides);
     match result {
-        Err(CompileError::Eval(GraphcalError::OverrideNotAParam { name, actual_kind })) => {
+        Err(CompileError::Binding(BindingError::NotAParam { name, actual_kind })) => {
             assert_eq!(name.as_str(), "g0");
             assert_eq!(actual_kind.to_string(), "const");
         }
@@ -4693,7 +4695,7 @@ fn override_unknown_param_errors() {
     overrides.insert(DeclName::expect_valid("nonexistent"), parse_expr("100"));
     let result = compile_and_eval_with_overrides(source, "test.gcl", &overrides);
     match result {
-        Err(CompileError::Eval(GraphcalError::OverrideUnknownParam { name })) => {
+        Err(CompileError::Binding(BindingError::UnknownParam { name })) => {
             assert_eq!(name.as_str(), "nonexistent");
         }
         other => panic!("expected OverrideUnknownParam, got {other:?}"),
@@ -5301,8 +5303,8 @@ fn required_param_without_override_errors() {
     let source = "param x: Dimensionless;\nnode y: Dimensionless = @x + 1.0;";
     let result = compile_and_eval_with_overrides(source, "test.gcl", &HashMap::new());
     match result {
-        Err(CompileError::Eval(GraphcalError::RequiredParamNotProvided { name, .. })) => {
-            assert_eq!(name, "x");
+        Err(CompileError::Binding(BindingError::RequiredParamNotProvided { name, .. })) => {
+            assert_eq!(name.as_str(), "x");
         }
         other => panic!("expected RequiredParamNotProvided, got {other:?}"),
     }
@@ -9510,7 +9512,7 @@ fn eval_overrides_reject_included_implementation_params() {
     overrides.insert(DeclName::expect_valid("b_shared"), parse_expr("30.0"));
     let result = compile_and_eval_project(&root, &overrides, None, &fs());
     match result {
-        Err(CompileError::Eval(GraphcalError::OverrideNotAParam {
+        Err(CompileError::Binding(BindingError::NotAParam {
             name,
             actual_kind:
                 graphcal_compiler::declaration_category::DeclCategory::Value(

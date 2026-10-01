@@ -628,64 +628,65 @@ mod tests {
         use graphcal_compiler::datetime_literal::DatetimeLiteralExpectation;
         use graphcal_compiler::graphcal_error::GraphcalError;
         use graphcal_compiler::syntax::names::NameAtom;
+        use graphcal_project::load_error::LoadError;
         use miette::NamedSource;
 
         let src = || NamedSource::new("file:///test.gcl", Arc::new("x".to_string()));
         let span = || miette::SourceSpan::from((0, 1));
         let cases = [
             (
-                GraphcalError::InvalidSourcePath {
+                CompileError::Load(LoadError::InvalidSourcePath {
                     path: "bad.txt".to_string(),
                     reason: "wrong extension".to_string(),
-                },
+                }),
                 "graphcal::M023",
             ),
             (
-                GraphcalError::AggregationCardinalityUnknown {
+                CompileError::Eval(GraphcalError::AggregationCardinalityUnknown {
                     function: AggregationFn::Value(ValueAggregation::Product),
                     src: src(),
                     span: span(),
-                },
+                }),
                 "graphcal::D027",
             ),
             (
-                GraphcalError::MaterializedShapeTooLarge {
+                CompileError::Eval(GraphcalError::MaterializedShapeTooLarge {
                     maximum: 1_000_000,
                     src: src(),
                     span: span(),
-                },
+                }),
                 "graphcal::D035",
             ),
             (
-                GraphcalError::InvalidDatetimeLiteral {
+                CompileError::Eval(GraphcalError::InvalidDatetimeLiteral {
                     expectation: DatetimeLiteralExpectation::OffsetDateTime,
                     reason: "invalid".to_string(),
                     src: src(),
                     span: span(),
-                },
+                }),
                 "graphcal::D028",
             ),
             (
-                GraphcalError::InvalidEpochTimeScaleArgument {
+                CompileError::Eval(GraphcalError::InvalidEpochTimeScaleArgument {
                     expected: "UTC".to_string(),
                     src: src(),
                     span: span(),
-                },
+                }),
                 "graphcal::D029",
             ),
             (
-                GraphcalError::UnsupportedEpochTimeScale {
+                CompileError::Eval(GraphcalError::UnsupportedEpochTimeScale {
                     name: NameAtom::parse("BAD").unwrap(),
                     expected: "UTC".to_string(),
                     src: src(),
                     span: span(),
-                },
+                }),
                 "graphcal::D030",
             ),
         ];
 
         for (error, expected_code) in cases {
-            let diagnostics = compile_error_to_diagnostics(&CompileError::Eval(error));
+            let diagnostics = compile_error_to_diagnostics(&error);
             assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
             assert_eq!(
                 diagnostics[0].code,

@@ -6,18 +6,32 @@ use miette::{Diagnostic, NamedSource, SourceSpan};
 use thiserror::Error;
 
 use graphcal_compiler::diagnostic_render::RenderableDiagnostic;
+
+use crate::binding_error::BindingError;
+use crate::load_error::LoadError;
 use graphcal_compiler::outcome::Outcome;
 use graphcal_compiler::syntax::decl_name::DeclName;
 use graphcal_compiler::syntax::parser::{ParseError, ParseErrorKind};
 
-/// Top-level compile error for parsing, semantic evaluation, and external
-/// parameter binding.
+/// Top-level compile error, composed of the failures of each project phase:
+/// loading, parsing, semantic evaluation, and external parameter binding.
 #[derive(Debug, Error, Diagnostic)]
 pub enum CompileError {
     /// A source file failed to parse; rendered against the text it indexes.
     #[error(transparent)]
     #[diagnostic(transparent)]
     Parse(RenderableDiagnostic<ParseErrorKind>),
+
+    /// The project's files or manifests could not be read or resolved.
+    #[error(transparent)]
+    #[diagnostic(transparent)]
+    Load(#[from] LoadError),
+
+    /// An external parameter binding names no bindable entry parameter, or a
+    /// required parameter is left unbound.
+    #[error(transparent)]
+    #[diagnostic(transparent)]
+    Binding(#[from] BindingError),
 
     #[error(transparent)]
     #[diagnostic(transparent)]
@@ -69,14 +83,16 @@ impl CompileError {
     /// can build a line index over the right text without having to look it
     /// up by name.
     ///
-    /// Parse and external-binding diagnostics always carry a source;
-    /// `GraphcalError` may return `None` for a few variants representing
-    /// source-less errors (e.g. `FileNotFound`, `CircularImport`).
+    /// Parse, semantic, and external-binding diagnostics always carry a
+    /// source; loader and binding failures that precede any source (e.g.
+    /// `FileNotFound`, `CircularImport`) do not.
     #[must_use]
     pub const fn named_source(&self) -> Option<&NamedSource<Arc<String>>> {
         match self {
             Self::Parse(e) => Some(e.named_source()),
-            Self::Eval(e) => e.named_source(),
+            Self::Load(e) => e.named_source(),
+            Self::Binding(e) => e.named_source(),
+            Self::Eval(e) => Some(e.named_source()),
             Self::ExternalBinding { src, .. } => Some(src),
         }
     }
