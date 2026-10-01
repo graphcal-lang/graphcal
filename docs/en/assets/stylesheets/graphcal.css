@@ -7,6 +7,10 @@
   height: 2.2rem;
 }
 
+[data-md-color-scheme="slate"] .md-header__button.md-logo img {
+  content: url("/docs/assets/graphcal-wordmark-transparent-white-font.png");
+}
+
 @media screen and (min-width: 76.25em) {
   .md-header__title > .md-header__ellipsis > .md-header__topic:first-child {
     visibility: hidden;
