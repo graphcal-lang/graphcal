@@ -195,30 +195,28 @@ fn resolve_hir_dim_expr(
         .map(|item| resolve_hir_dim_expr_item(item, ctx))
         .collect::<Result<Vec<_>, _>>()?;
 
-    let has_generic = terms
+    // The terms fold to a concrete dimension exactly when none is generic.
+    let concrete = terms
         .iter()
-        .any(|term| matches!(term, ResolvedDimTerm::GenericParam { .. }));
-    if has_generic {
+        .map(|term| match term {
+            ResolvedDimTerm::Concrete { dim, power, op } => Some((dim.clone(), *power, *op)),
+            ResolvedDimTerm::GenericParam { .. } => None,
+        })
+        .collect::<Option<Vec<_>>>();
+    let Some(concrete) = concrete else {
         return Ok(ResolvedDim::Symbolic {
             terms,
             span: dim_expr.span,
         });
-    }
+    };
 
-    let result = terms.iter().try_fold(
+    let result = concrete.into_iter().try_fold(
         Dimension::dimensionless(),
-        |acc, term| -> Result<Dimension, SemanticError> {
-            let ResolvedDimTerm::Concrete { dim, power, op } = term else {
-                return Err(SemanticError::internal_error(
-                    "generic dimension term reached concrete dimension folding".to_string(),
-                    ctx.src,
-                    crate::diagnostic_anchor::DiagnosticAnchor::Source(dim_expr.span),
-                ));
-            };
+        |acc, (dim, power, op)| -> Result<Dimension, SemanticError> {
             let overflow_err = || {
                 SemanticError::located(ctx.src, dim_expr.span, DimensionError::DimensionOverflow)
             };
-            let powered = dim.pow(*power).map_err(|_| overflow_err())?;
+            let powered = dim.pow(power).map_err(|_| overflow_err())?;
             match op {
                 MulDivOp::Mul => (acc * powered).map_err(|_| overflow_err()),
                 MulDivOp::Div => (acc / powered).map_err(|_| overflow_err()),

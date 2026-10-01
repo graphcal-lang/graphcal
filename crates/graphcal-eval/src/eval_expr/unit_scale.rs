@@ -69,17 +69,6 @@ fn resolve_dynamic_unit_scale(
         )
     })?;
     let scale_session = session.with_src(scale.source());
-    if scale.declared_dimension() != scale.base_unit_dimension() {
-        return Err(scale_session
-            .internal_error(
-                format!(
-                    "dynamic unit `{}` has mismatched declared and base-unit dimensions",
-                    scale.spelling()
-                ),
-                scale.span(),
-            )
-            .into());
-    }
     let expression = scale.expression();
     let scale_val = evaluate(
         &scale_session.executable(expression)?,

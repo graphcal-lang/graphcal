@@ -190,8 +190,6 @@ impl UnfrozenIR {
                         unit,
                         spelling: entry.spelling.clone(),
                         expr: lower_scoped(&entry.expr)?,
-                        declared_dimension: entry.declared_dimension.clone(),
-                        base_unit_dimension: entry.base_unit_dimension.clone(),
                         span: entry.span,
                         src: entry.src,
                     })

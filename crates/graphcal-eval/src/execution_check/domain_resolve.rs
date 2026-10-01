@@ -83,8 +83,7 @@ pub(super) fn resolve_domain_constraints_for_dag(
         };
         let constraint_src = domain_bounds.get().first().src;
         let target = resolve_constraint_target(
-            &name.to_string(),
-            Some(annotation.checked().resolved().element()),
+            annotation.checked().resolved().element(),
             decl_span,
             constraint_src,
         )?;
@@ -501,8 +500,7 @@ fn resolve_application_field_constraints(
         let bound_span = first_bound.span;
         let constraint_src = &first_bound.src;
         let target = resolve_constraint_target(
-            &display_name,
-            Some(field_semantics.resolved_type().element()),
+            field_semantics.resolved_type().element(),
             bound_span,
             *constraint_src,
         )?;
@@ -774,18 +772,10 @@ fn format_runtime_value(rv: &RuntimeValue) -> String {
 
 /// Resolve the typed constraint family selected by a declaration or field type.
 fn resolve_constraint_target(
-    name: &str,
-    base_resolved: Option<&ResolvedValueType>,
+    resolved: &ResolvedValueType,
     decl_span: Span,
     src: SourceId,
 ) -> Result<ConstraintTarget, SemanticError> {
-    let Some(resolved) = base_resolved else {
-        return Err(SemanticError::internal_error(
-            format!("domain constraint target `{name}` has no resolved type"),
-            src,
-            graphcal_compiler::diagnostic_anchor::DiagnosticAnchor::Source(decl_span),
-        ));
-    };
     match resolved {
         ResolvedValueType::Quantity(_) => Ok(ConstraintTarget::Quantity),
         ResolvedValueType::Int => Ok(ConstraintTarget::Int),

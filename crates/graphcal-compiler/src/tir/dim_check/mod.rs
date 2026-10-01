@@ -169,26 +169,6 @@ fn check_dynamic_unit_scale_type(
     entry: &crate::ir::model::DynamicUnitScaleEntry,
 ) -> Result<(), Outcome<SemanticError>> {
     ctx.checkpoint()?;
-    if entry.declared_dimension != entry.base_unit_dimension {
-        return Err(SemanticError::located(
-            ctx.env.src,
-            entry.span,
-            DimensionError::UnitDefinitionDimensionMismatch {
-                name: entry.spelling.leaf().clone(),
-                declared: ctx
-                    .env
-                    .registry
-                    .dimensions
-                    .format_dimension(&entry.declared_dimension),
-                definition: ctx
-                    .env
-                    .registry
-                    .dimensions
-                    .format_dimension(&entry.base_unit_dimension),
-            },
-        )
-        .into());
-    }
     let inferred = ctx.infer_hir(&entry.expr, None)?;
     if !matches!(
         &inferred,

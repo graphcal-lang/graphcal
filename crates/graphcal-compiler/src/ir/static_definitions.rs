@@ -1027,8 +1027,6 @@ impl<'a> StaticDefinitionEvaluator<'a> {
                         unit: owner.clone(),
                         spelling: UnitRef::local(unit.name.value.clone()),
                         expr: InScope::new(def.scale_expr.clone(), owner.clone()),
-                        declared_dimension: dim.clone(),
-                        base_unit_dimension,
                         span: def.scale_expr.span,
                         src,
                     });
