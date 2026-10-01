@@ -1462,7 +1462,7 @@ fn error_extern_fn_failure_dependents_report_dependency_failed() {
     match downstream {
         Err(NodeUnavailable::DependencyFailed { failed_deps }) => {
             assert_eq!(failed_deps.len(), 1);
-            assert_eq!(failed_deps[0].as_str(), "bad");
+            assert_eq!(failed_deps[0].to_string(), "bad");
         }
         other => panic!("expected DependencyFailed for `downstream`, got {other:?}"),
     }

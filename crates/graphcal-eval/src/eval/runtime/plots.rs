@@ -126,11 +126,11 @@ pub(super) fn evaluate_root_plots(
         match evaluate_plot(unit, entry, evaluated, ctx) {
             Ok(evaluated) => plots.push(evaluated.into_spec(name, plot.visibility)),
             Err(PlotEvaluationError::Unavailable(reason)) => {
-                unavailable.insert(plot.name, reason.clone());
                 plot_errors.push(PlotError {
                     name,
-                    reason: reason.into(),
+                    reason: PlotUnavailable::Evaluation(evaluated.names.present(&reason)),
                 });
+                unavailable.insert(plot.name, reason);
             }
             Err(PlotEvaluationError::Fatal(error)) => return Err(error),
         }
@@ -228,13 +228,18 @@ impl Compositions<'_, '_> {
                 DiagnosticAnchor::WholeFile,
             )
         })?;
+        let names = self.evaluated.names;
         let reason = match composed_plots_unavailable(references, self.unavailable) {
-            Some(reason) => PlotUnavailable::from(reason),
+            Some(reason) => PlotUnavailable::ComposedPlots(
+                reason.map_names(|declaration| names.name(declaration)),
+            ),
             None => {
                 match eval_composition_fields(fields, references, self.evaluated.values, self.ctx) {
                     Ok(composed) => return Ok(Some(composed)),
                     Err(PlotEvaluationError::Fatal(error)) => return Err(error),
-                    Err(PlotEvaluationError::Unavailable(reason)) => PlotUnavailable::from(reason),
+                    Err(PlotEvaluationError::Unavailable(reason)) => {
+                        PlotUnavailable::Evaluation(names.present(&reason))
+                    }
                 }
             }
         };
@@ -374,7 +379,6 @@ fn evaluate_plot(
 ) -> Result<EvaluatedPlot, PlotEvaluationError> {
     let EvaluatedRoot {
         values,
-        errors,
         frame_presentations,
         ..
     } = evaluated;
@@ -402,7 +406,7 @@ fn evaluate_plot(
                 .map(|field| field.map(|field| &*field.value)),
         )
         .collect::<Vec<_>>();
-    check_plot_expression_dependencies(&body_exprs, errors, ctx)?;
+    check_plot_expression_dependencies(&body_exprs, evaluated, ctx)?;
 
     let owner = unit.identity();
     let channel_facts = unit.plot_channel_presentations().ok_or_else(|| {
@@ -623,7 +627,7 @@ fn plot_declared_type(
 
 fn check_plot_expression_dependencies(
     expressions: &[Scoped<'_, graphcal_compiler::hir::expr::Expr>],
-    errors: &HashMap<ResolvedDeclName, NodeUnavailable>,
+    evaluated: EvaluatedRoot<'_>,
     ctx: &EvalSession<'_>,
 ) -> Result<(), PlotEvaluationError> {
     if let Some(reason) = ctx.unavailable_dependencies(expressions.iter().copied())?
@@ -631,8 +635,12 @@ fn check_plot_expression_dependencies(
     {
         return Err(PlotEvaluationError::Unavailable(reason));
     }
-    dependency_failure_message(expressions.iter().copied(), errors)
-        .map_or(Ok(()), |message| Err(PlotEvaluationError::from(message)))
+    dependency_failure_message(
+        expressions.iter().copied(),
+        evaluated.errors,
+        evaluated.names,
+    )
+    .map_or(Ok(()), |message| Err(PlotEvaluationError::from(message)))
 }
 
 /// Evaluated fields of a figure/layer declaration.
@@ -650,7 +658,7 @@ struct CompositionFields {
 fn composed_plots_unavailable(
     references: &[Spanned<ScopedName>],
     unavailable: &UnavailablePlots<'_>,
-) -> Option<ComposedPlotsUnavailable> {
+) -> Option<ComposedPlotsUnavailable<ResolvedDeclName>> {
     ComposedPlotsUnavailable::blocked_by(references.iter().filter_map(|reference| {
         reference
             .value

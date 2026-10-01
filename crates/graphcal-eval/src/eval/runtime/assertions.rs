@@ -21,7 +21,7 @@ use crate::eval_expr::{EvalSession, RuntimeValueMap, eval_root};
 
 use super::declaration_body::declaration_body;
 use super::dependency_failures::dependency_failure_message;
-use super::root_names::{qualified_below, root_source_names};
+use super::root_names::{RootNames, qualified_below, root_source_names};
 
 /// The checked body of the assertion `owner`, in the scope of its owner.
 fn assertion_body<'tir>(
@@ -59,6 +59,7 @@ pub(super) fn evaluate_assertions(
     ctx: &EvalSession<'_>,
     values: &RuntimeValueMap,
     errors: &HashMap<ResolvedDeclName, NodeUnavailable>,
+    names: &RootNames<'_>,
 ) -> Result<Vec<(ScopedName, AssertResult, Span)>, Outcome<SemanticError>> {
     let tir = plan.tir();
     let mut assertions: Vec<(ScopedName, AssertResult, Span)> = tir
@@ -75,7 +76,7 @@ pub(super) fn evaluate_assertions(
             let (unit, body) = assertion_body(tir, &owner, src)?;
             let body = body.map(|entry| &*entry.body);
             let entry_ctx = ctx.for_decl(&owner);
-            let assert_result = match assert_dependency_failure(body, errors, &entry_ctx)? {
+            let assert_result = match assert_dependency_failure(body, errors, names, &entry_ctx)? {
                 Some(result) => result,
                 None => {
                     evaluate_assert_with_expected_fail(body, unit.expected_fail(), &mut |expr| {
@@ -83,7 +84,11 @@ pub(super) fn evaluate_assertions(
                     })?
                 }
             };
-            Ok((ScopedName::local(entry.name().clone()), assert_result, span))
+            Ok((
+                ScopedName::local(entry.name().clone()),
+                assert_result.map_names(|declaration| names.name(declaration)),
+                span,
+            ))
         })
         .collect::<Result<_, Outcome<SemanticError>>>()?;
     for (parent, instances) in plan.root().closure_instances() {
@@ -111,7 +116,11 @@ pub(super) fn evaluate_assertions(
                 let exposed = record.instance.exposed_name(projection);
                 let name = qualified_below(tir.root_dag_id(), parent_dag.dag_id(), &exposed)
                     .unwrap_or(exposed);
-                assertions.push((name, result, entry.get().span));
+                assertions.push((
+                    name,
+                    result.map_names(|declaration| names.name(declaration)),
+                    entry.get().span,
+                ));
             }
         }
     }
@@ -183,8 +192,9 @@ fn merge_assumes_maps<'a>(
 fn assert_dependency_failure(
     body: Scoped<'_, graphcal_compiler::hir::expr::AssertBody>,
     errors: &HashMap<ResolvedDeclName, NodeUnavailable>,
+    names: &RootNames<'_>,
     ctx: &EvalSession<'_>,
-) -> Result<Option<AssertResult>, Cancelled> {
+) -> Result<Option<AssertResult<ResolvedDeclName>>, Cancelled> {
     let body_exprs = match body.operands() {
         AssertionOperands::Condition(expr) => vec![expr],
         AssertionOperands::Tolerance {
@@ -200,7 +210,7 @@ fn assert_dependency_failure(
             Err(Outcome::Failed(error)) => Some(AssertResult::Error {
                 message: error.to_string(),
             }),
-            Ok(_) => dependency_failure_message(body_exprs, errors)
+            Ok(_) => dependency_failure_message(body_exprs, errors, names)
                 .map(|message| AssertResult::Error { message }),
         },
     )

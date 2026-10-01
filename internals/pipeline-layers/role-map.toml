@@ -878,6 +878,16 @@ role = "contracts"
 
 [[module]]
 package = "compiler"
+path = ["display", "include_scope_names"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["display", "include_scope_names", "tests"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
 path = ["display", "number"]
 role = "contracts"
 
@@ -2282,6 +2292,16 @@ role = "contracts"
 [[module]]
 package = "eval"
 path = ["eval", "plot_unavailable", "tests"]
+role = "contracts"
+
+[[module]]
+package = "eval"
+path = ["eval", "output_decl_name"]
+role = "contracts"
+
+[[module]]
+package = "eval"
+path = ["eval", "output_decl_name", "tests"]
 role = "contracts"
 
 [[module]]

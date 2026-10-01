@@ -657,6 +657,8 @@ fn epoch_to_jiff_timestamp(
 
 pub use graphcal_compiler::node_unavailable::NodeUnavailable;
 
+use super::output_decl_name::{OutputDeclName, OutputUnavailable};
+
 /// A plot declaration that could not be evaluated, with the reason.
 ///
 /// Plot evaluation is per-plot best-effort: one failing plot does not stop
@@ -670,11 +672,13 @@ pub struct PlotError {
     pub reason: super::plot_unavailable::PlotUnavailable,
 }
 
-/// The result of evaluating an assertion.
+/// The result of evaluating an assertion, naming the declarations a blocked
+/// assertion waits on by `N`: runtime identities during evaluation, output
+/// names ([`OutputDeclName`]) in an evaluation's result.
 #[derive(Debug, Clone, PartialEq)]
-pub enum AssertResult {
+pub enum AssertResult<N = OutputDeclName> {
     /// The assertion is not yet checkable, never an expected failure or pass.
-    Blocked { reason: NodeUnavailable },
+    Blocked { reason: NodeUnavailable<N> },
     /// The assertion passed (body evaluated to `true`).
     Pass,
     /// The assertion failed (body evaluated to `false`).
@@ -687,6 +691,25 @@ pub enum AssertResult {
         /// Human-readable error message.
         message: String,
     },
+}
+
+impl<N> AssertResult<N> {
+    /// The same result with every declaration it names renamed by `rename`.
+    #[must_use]
+    pub fn map_names<M>(&self, rename: impl FnMut(&N) -> M) -> AssertResult<M> {
+        match self {
+            Self::Blocked { reason } => AssertResult::Blocked {
+                reason: reason.map_names(rename),
+            },
+            Self::Pass => AssertResult::Pass,
+            Self::Fail { message } => AssertResult::Fail {
+                message: message.clone(),
+            },
+            Self::Error { message } => AssertResult::Error {
+                message: message.clone(),
+            },
+        }
+    }
 }
 
 /// Which evaluated values a presentation boundary should expose.
@@ -714,7 +737,7 @@ pub enum EvalOutputView {
 pub struct EvalResult {
     /// Unfinished origins reached inside invoked DAGs, including private
     /// siblings of otherwise available projected outputs.
-    pub unfinished_calls: Vec<graphcal_compiler::resolved_name::ResolvedDeclName>,
+    pub unfinished_calls: Vec<OutputDeclName>,
     /// All const, param, and node values in source order with their
     /// declaration type (may contain per-node errors). Const *values* are
     /// compile-time, but a const's display unit (e.g. a dynamic conversion
@@ -724,7 +747,7 @@ pub struct EvalResult {
     /// and [`Self::nodes`].
     pub entries: Vec<(
         ScopedName,
-        Result<Value, NodeUnavailable>,
+        Result<Value, OutputUnavailable>,
         ValueDeclCategory,
     )>,
     /// Values belonging to the entry DAG's consumer-facing output surface.
@@ -767,7 +790,7 @@ impl EvalResult {
         mut self,
         mut imported: Vec<(
             ScopedName,
-            Result<Value, NodeUnavailable>,
+            Result<Value, OutputUnavailable>,
             ValueDeclCategory,
         )>,
         output_surface: std::collections::HashSet<ScopedName>,
@@ -832,7 +855,7 @@ impl EvalResult {
     fn should_output(
         &self,
         name: &ScopedName,
-        result: &Result<Value, NodeUnavailable>,
+        result: &Result<Value, OutputUnavailable>,
         view: EvalOutputView,
     ) -> bool {
         matches!(view, EvalOutputView::All)
@@ -851,7 +874,7 @@ impl EvalResult {
     ) -> impl Iterator<
         Item = &(
             ScopedName,
-            Result<Value, NodeUnavailable>,
+            Result<Value, OutputUnavailable>,
             ValueDeclCategory,
         ),
     > {
@@ -864,7 +887,7 @@ impl EvalResult {
         &self,
         view: EvalOutputView,
         decl_type: ValueDeclCategory,
-    ) -> impl Iterator<Item = (&ScopedName, &Result<Value, NodeUnavailable>)> {
+    ) -> impl Iterator<Item = (&ScopedName, &Result<Value, OutputUnavailable>)> {
         self.entries.iter().filter_map(move |(name, result, kind)| {
             (*kind == decl_type && self.should_output(name, result, view)).then_some((name, result))
         })
@@ -874,7 +897,7 @@ impl EvalResult {
     pub fn output_consts(
         &self,
         view: EvalOutputView,
-    ) -> impl Iterator<Item = (&ScopedName, &Result<Value, NodeUnavailable>)> {
+    ) -> impl Iterator<Item = (&ScopedName, &Result<Value, OutputUnavailable>)> {
         self.output_category(view, ValueDeclCategory::Const)
     }
 
@@ -882,7 +905,7 @@ impl EvalResult {
     pub fn output_params(
         &self,
         view: EvalOutputView,
-    ) -> impl Iterator<Item = (&ScopedName, &Result<Value, NodeUnavailable>)> {
+    ) -> impl Iterator<Item = (&ScopedName, &Result<Value, OutputUnavailable>)> {
         self.output_category(view, ValueDeclCategory::Param)
     }
 
@@ -890,31 +913,31 @@ impl EvalResult {
     pub fn output_nodes(
         &self,
         view: EvalOutputView,
-    ) -> impl Iterator<Item = (&ScopedName, &Result<Value, NodeUnavailable>)> {
+    ) -> impl Iterator<Item = (&ScopedName, &Result<Value, OutputUnavailable>)> {
         self.output_category(view, ValueDeclCategory::Node)
     }
 
     fn category(
         &self,
         decl_type: ValueDeclCategory,
-    ) -> impl Iterator<Item = (&ScopedName, &Result<Value, NodeUnavailable>)> {
+    ) -> impl Iterator<Item = (&ScopedName, &Result<Value, OutputUnavailable>)> {
         self.entries
             .iter()
             .filter_map(move |(name, result, kind)| (*kind == decl_type).then_some((name, result)))
     }
 
     /// Iterate over every const value in source order.
-    pub fn consts(&self) -> impl Iterator<Item = (&ScopedName, &Result<Value, NodeUnavailable>)> {
+    pub fn consts(&self) -> impl Iterator<Item = (&ScopedName, &Result<Value, OutputUnavailable>)> {
         self.category(ValueDeclCategory::Const)
     }
 
     /// Iterate over every param value in source order.
-    pub fn params(&self) -> impl Iterator<Item = (&ScopedName, &Result<Value, NodeUnavailable>)> {
+    pub fn params(&self) -> impl Iterator<Item = (&ScopedName, &Result<Value, OutputUnavailable>)> {
         self.category(ValueDeclCategory::Param)
     }
 
     /// Iterate over every node value in source order.
-    pub fn nodes(&self) -> impl Iterator<Item = (&ScopedName, &Result<Value, NodeUnavailable>)> {
+    pub fn nodes(&self) -> impl Iterator<Item = (&ScopedName, &Result<Value, OutputUnavailable>)> {
         self.category(ValueDeclCategory::Node)
     }
 

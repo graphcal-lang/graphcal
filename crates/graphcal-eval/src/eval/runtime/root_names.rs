@@ -6,16 +6,24 @@
 //! the closure belongs to a semantic instance and is named by the instance
 //! scopes below the root, then its own leaf (`l2::reciprocal`,
 //! `outer::inner::x`); anonymous include scopes are given display names at
-//! the project boundary.
+//! the project boundary, which also supplies them to [`RootNames`] so the
+//! reasons an evaluation reports name declarations the same way.
+
+use std::collections::HashMap;
 
 use graphcal_compiler::dag_id::DagId;
 use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
+use graphcal_compiler::ir::instance::ExposedValueBody;
+use graphcal_compiler::node_unavailable::NodeUnavailable;
 use graphcal_compiler::resolved_name::ResolvedDeclName;
 use graphcal_compiler::semantic_error::SemanticError;
 use graphcal_compiler::source_id::SourceId;
 use graphcal_compiler::syntax::module_name::ScopedName;
 use graphcal_compiler::syntax::non_empty::NonEmpty;
 
+use graphcal_compiler::display::include_scope_names::{IncludeScopeNames, name_include_scopes};
+
+use crate::eval::output_decl_name::{OutputDeclName, OutputUnavailable};
 use crate::execution_plan::ExecPlan;
 
 /// `name`, written in `dag`, as the root `root` names it: qualified by the
@@ -89,6 +97,69 @@ pub(super) fn root_source_names(plan: &ExecPlan<'_>) -> Vec<(ResolvedDeclName, S
             )
     });
     own.chain(projected).collect()
+}
+
+/// The names the root gives the declarations an evaluation reports, for
+/// renaming the reasons it reports from runtime identities.
+pub(super) struct RootNames<'p> {
+    root: &'p DagId,
+    /// Values an include site exposes under a name of the root's own that
+    /// no root declaration materializes.
+    exposed: HashMap<ResolvedDeclName, ScopedName>,
+    include_scopes: &'p IncludeScopeNames,
+}
+
+impl<'p> RootNames<'p> {
+    /// The names the root of `plan` gives its declarations, with private
+    /// include scopes named by `include_scopes`.
+    pub(super) fn new(plan: &'p ExecPlan<'_>, include_scopes: &'p IncludeScopeNames) -> Self {
+        let exposed = plan
+            .root()
+            .semantic_instances()
+            .iter()
+            .flat_map(|planned| {
+                let instance = planned.instance();
+                let record = &instance.record().instance;
+                instance
+                    .output_projections()
+                    // A value materialized as a local alias is named by that
+                    // alias's own declaration, not by the instance's.
+                    .filter(|resolved| resolved.projection.body() == ExposedValueBody::Instance)
+                    .map(|resolved| (resolved.target, record.exposed_name(resolved.projection)))
+            })
+            .collect();
+        Self {
+            root: plan.tir().root_dag_id(),
+            exposed,
+            include_scopes,
+        }
+    }
+
+    /// The output name of `declaration`: the name the root exposes it under,
+    /// else its name qualified by the scopes below the root (none for the
+    /// root's own declarations), else (a declaration of an invoked module
+    /// outside the root's subtree) its identity.
+    pub(super) fn name(&self, declaration: &ResolvedDeclName) -> OutputDeclName {
+        self.exposed
+            .get(declaration)
+            .cloned()
+            .or_else(|| {
+                qualified_below(
+                    self.root,
+                    declaration.owner(),
+                    &ScopedName::local(declaration.leaf().clone()),
+                )
+            })
+            .map_or_else(
+                || OutputDeclName::Invoked(declaration.clone()),
+                |name| OutputDeclName::Root(name_include_scopes(&name, self.include_scopes)),
+            )
+    }
+
+    /// `reason`, naming its declarations as the output does.
+    pub(super) fn present(&self, reason: &NodeUnavailable) -> OutputUnavailable {
+        reason.map_names(|declaration| self.name(declaration))
+    }
 }
 
 #[cfg(test)]

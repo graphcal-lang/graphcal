@@ -32,7 +32,9 @@ use std::path::{Path, PathBuf};
 use std::process;
 use thiserror::Error;
 
-use graphcal_eval::eval::{EvalOutputView, EvalResult, KeyRendering, format_number};
+use graphcal_eval::eval::{
+    EvalOutputView, EvalResult, KeyRendering, OutputUnavailable, format_number,
+};
 use graphcal_eval::host_fns::HostFunctionRegistry;
 use graphcal_io::{
     FileSystemEntryKind, FileSystemReader, ProjectIngestionPolicy, RealFileSystem,
@@ -1066,11 +1068,10 @@ fn print_text(result: &EvalResult, output_view: EvalOutputView) {
 
     // Build output blocks preserving source order. Names render their full
     // alias-qualified path so multiple instantiations stay distinct (#813).
-    let rendered_names: Vec<(String, &Result<Value, graphcal_eval::eval::NodeUnavailable>)> =
-        result
-            .output_values(output_view)
-            .map(|(name, r, _)| (name.to_string(), r))
-            .collect();
+    let rendered_names: Vec<(String, &Result<Value, OutputUnavailable>)> = result
+        .output_values(output_view)
+        .map(|(name, r, _)| (name.to_string(), r))
+        .collect();
     let items = rendered_names.iter().map(|(n, r)| (n.as_str(), *r));
     let blocks = build_output_blocks(items);
     let max_name_len = max_flat_name_len(&blocks);
@@ -1348,7 +1349,7 @@ fn print_json(
         }
     }
 
-    fn node_error_to_json(err: &NodeUnavailable) -> serde_json::Value {
+    fn node_error_to_json(err: &OutputUnavailable) -> serde_json::Value {
         match err {
             NodeUnavailable::Todo { declaration } => serde_json::json!({
                 "status": "todo", "declaration": declaration.to_string(),
@@ -1370,10 +1371,7 @@ fn print_json(
                 })
             }
             NodeUnavailable::DependencyFailed { failed_deps } => {
-                let deps: Vec<&str> = failed_deps
-                    .iter()
-                    .map(|name| name.atom().as_str())
-                    .collect();
+                let deps: Vec<String> = failed_deps.iter().map(ToString::to_string).collect();
                 serde_json::json!({
                     "error": {
                         "kind": "dependency_failed",
@@ -1385,7 +1383,7 @@ fn print_json(
     }
 
     fn result_to_json(
-        result: &Result<Value, NodeUnavailable>,
+        result: &Result<Value, OutputUnavailable>,
         render: &graphcal_eval::eval::RenderContext,
     ) -> Result<serde_json::Value, DisplayProjectionError> {
         match result {

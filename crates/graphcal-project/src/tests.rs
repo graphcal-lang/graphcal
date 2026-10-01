@@ -2896,6 +2896,72 @@ fn include_edges_record_which_exposed_values_have_local_alias_bodies() {
     assert_quantity_value(&result, "total", 14.0);
 }
 
+/// Unavailability reasons name declarations as the output does: instance
+/// members by their scopes, a private include scope by its readable name,
+/// and an inline DAG a call invokes by its scope below the root.
+#[test]
+fn unavailability_reasons_name_declarations_as_the_output_does() {
+    let (_directory, root) = write_pipeline_project(
+        &[
+            (
+                "lib.gcl",
+                "node pending: Dimensionless = todo {};\nnode bad: Dimensionless = 1.0 / 0.0;\npub node output: Dimensionless = @pending;\npub node broken: Dimensionless = @bad;\n",
+            ),
+            (
+                "main.gcl",
+                "include pipeline.lib() as l;\ninclude pipeline.lib()::{output as picked, broken as busted};\ndag helper {\n    node inner: Dimensionless = todo {};\n    pub node out: Dimensionless = @inner;\n}\nnode total: Dimensionless = @l::output + @picked;\nnode sad: Dimensionless = @l::broken + @busted;\nnode called: Dimensionless = @helper()::out;\nassert waits = @l::output > 0.0;\nassert fails = @sad > 0.0;\n",
+            ),
+        ],
+        "main.gcl",
+    );
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap();
+    let reason = |name: &str| {
+        result
+            .entries
+            .iter()
+            .find(|(candidate, _, _)| candidate.to_string() == name)
+            .unwrap_or_else(|| panic!("missing `{name}`"))
+            .1
+            .as_ref()
+            .expect_err("unavailable")
+            .to_string()
+    };
+    assert_eq!(
+        reason("total"),
+        "BLOCKED — unfinished dependencies: lib::pending, l::pending"
+    );
+    assert_eq!(reason("sad"), "dependency failed: busted, l::broken");
+    assert_eq!(reason("busted"), "dependency failed: lib::broken");
+    assert_eq!(
+        reason("l::output"),
+        "BLOCKED — unfinished dependencies: l::pending"
+    );
+    assert_eq!(
+        reason("called"),
+        "BLOCKED — unfinished dependencies: helper::inner"
+    );
+    let assertion = |name: &str| {
+        result
+            .assertions
+            .iter()
+            .find(|(candidate, _, _)| candidate.to_string() == name)
+            .unwrap_or_else(|| panic!("missing assertion `{name}`"))
+            .1
+            .clone()
+    };
+    let AssertResult::Blocked { reason } = assertion("waits") else {
+        panic!("`waits` must be blocked");
+    };
+    assert_eq!(
+        reason.to_string(),
+        "BLOCKED — unfinished dependencies: l::pending"
+    );
+    let AssertResult::Error { message } = assertion("fails") else {
+        panic!("`fails` must report its failed dependency");
+    };
+    assert_eq!(message, "dependency failed: sad");
+}
+
 #[test]
 fn checked_tir_records_typed_template_instance_bindings() {
     use graphcal_compiler::resolved_name::ResolvedDeclName;
@@ -6088,7 +6154,10 @@ fn requested_instance_plot_reports_its_failed_instance_dependency() {
         panic!("expected an evaluation failure, got {:?}", error.reason);
     };
     assert!(
-        message.starts_with("dependency failed: inv (") && message.contains("division by zero"),
+        // The dependency is named as the output names it: the private include
+        // scope takes its readable name.
+        message.starts_with("dependency failed: div::inv (")
+            && message.contains("division by zero"),
         "expected the failed instance dependency with its root cause: {message}"
     );
 }

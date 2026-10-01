@@ -37,7 +37,7 @@ use graphcal_eval::eval_expr::{EvalSession, RuntimeValueMap};
 
 use crate::project_compiler::{
     CheckedEntryInterface, CheckedProject, CheckedProjectRuntimeParts, CompiledFile,
-    IncludeDebugNameMap, ProjectCompiler,
+    ProjectCompiler,
 };
 use graphcal_eval::host_fns::HostFunctionRegistry;
 
@@ -45,7 +45,7 @@ use super::model_schema::{
     ModelIndexKind, ModelIndexSchema, ModelSchemaGraph, ModelSchemaGraphBuilder, ModelTypeId,
     ModelValueSchema,
 };
-use super::output::{apply_include_debug_names, remap_include_debug_name};
+use super::output::apply_include_debug_names;
 
 #[path = "binding_compile.rs"]
 mod binding_compile;
@@ -232,7 +232,7 @@ impl ParameterBindingBuilder<'_> {
 }
 struct ProjectOutputAssembly {
     output_surface: HashSet<ScopedName>,
-    include_debug_names: IncludeDebugNameMap,
+    include_debug_names: graphcal_compiler::display::include_scope_names::IncludeScopeNames,
     imported_source_order: Vec<(ScopedName, DeclCategory)>,
     imported_values: HashMap<ScopedName, graphcal_eval::checked_program::ImportedConstant>,
 }
@@ -416,6 +416,7 @@ impl PreparedProject {
                 self.source,
                 &self.sources,
                 &self.host_fns,
+                &self.output_assembly.include_debug_names,
                 cancellation,
             )
             .map_err(|outcome| outcome.map_failed(|error| self.render(error)))?;
@@ -454,6 +455,7 @@ impl PreparedProject {
             self.source,
             &self.sources,
             &self.host_fns,
+            &self.output_assembly.include_debug_names,
             cancellation,
         )
         .map_err(|outcome| outcome.map_failed(|error| self.render(error)))

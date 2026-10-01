@@ -31,8 +31,8 @@ use super::module_resolve_errors::module_resolve_compile_error;
 use crate::compile_error::PipelineError;
 
 use super::model::{
-    HirFile, ImportAlias, ImportContext, IncludeDebugNameMap, IncludeInstanceRequest,
-    IncludeStaticBindings, ModuleArtifactStore, ProjectModuleBinding,
+    HirFile, ImportAlias, ImportContext, IncludeInstanceRequest, IncludeStaticBindings,
+    ModuleArtifactStore, ProjectModuleBinding,
 };
 use super::template::{ElaboratedModuleTemplate, ModuleTemplateStore};
 use graphcal_compiler::desugar::desugared_ast::{DeclKind, Declaration, Expr, ExprKind, GraphRef};
@@ -252,7 +252,9 @@ pub(super) fn validate_imported_runtime_units(
     }
 }
 
-fn include_debug_name_map(ctx: &ImportContext<'_>) -> IncludeDebugNameMap {
+fn include_debug_name_map(
+    ctx: &ImportContext<'_>,
+) -> graphcal_compiler::display::include_scope_names::IncludeScopeNames {
     let anonymous_includes = || {
         ctx.include_instances
             .iter()

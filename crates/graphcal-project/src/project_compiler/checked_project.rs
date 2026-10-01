@@ -8,7 +8,6 @@ use graphcal_compiler::source_id::SourceId;
 use graphcal_compiler::syntax::module_name::ScopedName;
 
 use super::entry_interface::CheckedEntryInterface;
-use super::model::IncludeDebugNameMap;
 
 /// Result of checking one file in project context.
 pub struct CompiledFile {
@@ -16,7 +15,8 @@ pub struct CompiledFile {
     pub(crate) entry_interface: CheckedEntryInterface,
     pub(crate) imported_source_order: Vec<(ScopedName, DeclCategory)>,
     pub(crate) output_surface: HashSet<ScopedName>,
-    pub(crate) include_debug_names: IncludeDebugNameMap,
+    pub(crate) include_debug_names:
+        graphcal_compiler::display::include_scope_names::IncludeScopeNames,
 }
 
 /// A fully checked project that has not yet been prepared or evaluated.

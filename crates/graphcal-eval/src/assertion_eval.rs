@@ -6,7 +6,10 @@
 //! value of any other shape contradicts the checked types and is reported as
 //! a violated invariant, never interpreted.
 
-use crate::eval::types::AssertResult;
+/// Assertion results evaluated here name the declarations a blocked
+/// assertion waits on by runtime identity; the output assembly renames them.
+type AssertResult =
+    crate::eval::types::AssertResult<graphcal_compiler::resolved_name::ResolvedDeclName>;
 use crate::invariant::Invariant;
 use crate::runtime_value::{IndexedValue, RuntimeValue};
 use graphcal_compiler::assertion_expectation::{ExpectedFail, ExpectedFailKey};

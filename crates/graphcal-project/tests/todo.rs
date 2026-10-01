@@ -1,6 +1,6 @@
 #![cfg(test)]
 
-use graphcal_eval::eval::{EvalResult, NodeUnavailable};
+use graphcal_eval::eval::{EvalResult, NodeUnavailable, OutputUnavailable};
 use graphcal_project::loader::LoadedProject;
 use graphcal_project::prepare::compile_and_eval;
 use graphcal_project::project_compiler::ProjectCompiler;
@@ -8,7 +8,7 @@ use graphcal_project::project_compiler::ProjectCompiler;
 fn result<'a>(
     evaluation: &'a EvalResult,
     name: &str,
-) -> &'a Result<graphcal_eval::eval::Value, NodeUnavailable> {
+) -> &'a Result<graphcal_eval::eval::Value, OutputUnavailable> {
     &evaluation
         .entries
         .iter()
