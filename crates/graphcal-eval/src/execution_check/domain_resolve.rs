@@ -21,8 +21,8 @@ use graphcal_compiler::tir::typed::{
 
 use crate::constant_pools::RuntimeValueMap;
 use crate::domain_constraint::{
-    ResolvedDomainBound as EvaluatedDomainBound, ResolvedDomainBounds as EvaluatedDomainBounds,
-    ResolvedDomainConstraint,
+    DomainInstant, ResolvedDomainBound as EvaluatedDomainBound,
+    ResolvedDomainBounds as EvaluatedDomainBounds, ResolvedDomainConstraint,
 };
 use crate::eval_expr::{EvalSession, RuntimeValue, eval_root};
 use graphcal_compiler::resolved_name::ResolvedDeclName;
@@ -188,10 +188,21 @@ fn resolve_constraint_from_bounds(
                 values,
                 ctx,
                 src,
+                // Each bound is admitted as an instant only from an epoch in
+                // the constrained scale; its display keeps the epoch.
                 |value, bound| match value {
-                    RuntimeValue::Datetime(epoch) if epoch.time_scale == scale.to_hifitime() => {
-                        Ok(*epoch)
-                    }
+                    RuntimeValue::Datetime(epoch) => DomainInstant::from_epoch(*epoch, scale)
+                        .map(|instant| (instant, *epoch))
+                        .map_err(|_| {
+                            domain_bound_value_error(
+                                display_name,
+                                bound,
+                                &format!("Datetime<{scale}>"),
+                                value,
+                                src,
+                            )
+                            .into()
+                        }),
                     other => Err(domain_bound_value_error(
                         display_name,
                         bound,
@@ -201,18 +212,12 @@ fn resolve_constraint_from_bounds(
                     )
                     .into()),
                 },
-                |_expr, epoch| epoch.to_string(),
+                |_expr, (_, epoch)| epoch.to_string(),
             )?;
-            ResolvedDomainConstraint::datetime(scale, evaluated).map_err(|error| {
-                let anchor = DiagnosticAnchor::Source(bounds.get().first().span);
-                SemanticError::internal_error(
-                    format!(
-                        "datetime domain bounds on `{display_name}` violated their checked scale invariant: {error}"
-                    ),
-                    src,
-                    anchor,
-                )
-            }).map_err(Outcome::Failed)
+            Ok(ResolvedDomainConstraint::datetime(
+                scale,
+                evaluated.map(|(instant, _)| instant),
+            ))
         }
     }
 }

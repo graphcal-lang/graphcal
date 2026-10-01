@@ -1404,36 +1404,28 @@ fn detect_cross_dag_cycles(
             (dag_id, targets)
         })
         .collect();
+    // Each call edge is labelled with its call span, so a cycle names the
+    // span of the call that re-entered its entry.
     let mut graph = crate::dependency_graph::DependencyGraph::new();
     for caller in calls.keys() {
         graph.add_node(*caller);
     }
     for (caller, targets) in &calls {
-        for target in targets.keys().filter(|target| calls.contains_key(target)) {
-            graph.add_dependency(*caller, target);
+        for (target, span) in targets
+            .iter()
+            .filter(|(target, _)| calls.contains_key(target))
+        {
+            graph.add_labelled_dependency(*caller, target, *span);
         }
     }
     let Err(cycle) = graph.into_topo_order() else {
         return Ok(());
     };
-    let entry = *cycle.entry();
-    // The last dag on the cycle path is the caller that re-entered the entry.
-    let reentering_caller = cycle.path().last().copied().unwrap_or(entry);
-    let span = calls
-        .get(reentering_caller)
-        .and_then(|targets| targets.get(entry))
-        .ok_or_else(|| {
-            SemanticError::internal_error(
-                format!("cycle entry `{entry}` has no incoming call span"),
-                src,
-                DiagnosticAnchor::WholeFile,
-            )
-        })?;
     Err(SemanticError::located(
         src,
-        *span,
+        *cycle.closing_label(),
         GraphError::CyclicDependency {
-            name: entry.to_string(),
+            name: cycle.entry().to_string(),
         },
     ))
 }

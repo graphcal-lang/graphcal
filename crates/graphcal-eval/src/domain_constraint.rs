@@ -22,14 +22,11 @@ impl<T> ResolvedDomainBound<T> {
         &self.display
     }
 
-    fn try_map<U, E>(
-        self,
-        map: impl FnOnce(T) -> Result<U, E>,
-    ) -> Result<ResolvedDomainBound<U>, E> {
-        Ok(ResolvedDomainBound {
-            value: map(self.value)?,
+    fn map<U>(self, map: impl FnOnce(T) -> U) -> ResolvedDomainBound<U> {
+        ResolvedDomainBound {
+            value: map(self.value),
             display: self.display,
-        })
+        }
     }
 }
 
@@ -54,6 +51,15 @@ impl<T> ResolvedDomainBounds<T> {
 
     pub const fn max(&self) -> Option<&ResolvedDomainBound<T>> {
         self.max.as_ref()
+    }
+
+    /// Transform both bound values, keeping their diagnostic text.
+    #[must_use]
+    pub fn map<U>(self, map: impl Fn(T) -> U) -> ResolvedDomainBounds<U> {
+        ResolvedDomainBounds {
+            min: self.min.map(|bound| bound.map(&map)),
+            max: self.max.map(|bound| bound.map(&map)),
+        }
     }
 }
 
@@ -156,24 +162,13 @@ impl ResolvedDomainConstraint {
         }
     }
 
-    pub fn datetime(
-        scale: TimeScale,
-        bounds: ResolvedDomainBounds<hifitime::Epoch>,
-    ) -> Result<Self, DomainInstantError> {
-        let min = bounds
-            .min
-            .map(|bound| bound.try_map(|epoch| DomainInstant::from_epoch(epoch, scale)))
-            .transpose()?;
-        let max = bounds
-            .max
-            .map(|bound| bound.try_map(|epoch| DomainInstant::from_epoch(epoch, scale)))
-            .transpose()?;
-        Ok(Self {
-            kind: ResolvedDomainConstraintKind::Datetime {
-                scale,
-                bounds: ResolvedDomainBounds::new(min, max),
-            },
-        })
+    /// Datetime bounds of a `Datetime<scale>` value, each instant admitted
+    /// from an epoch in `scale`.
+    #[must_use]
+    pub const fn datetime(scale: TimeScale, bounds: ResolvedDomainBounds<DomainInstant>) -> Self {
+        Self {
+            kind: ResolvedDomainConstraintKind::Datetime { scale, bounds },
+        }
     }
 }
 
@@ -182,16 +177,26 @@ mod tests {
     use super::*;
 
     #[test]
-    fn datetime_constraint_constructor_rejects_a_cross_scale_epoch() {
+    fn domain_instant_admits_only_an_epoch_in_its_scale() {
         let tt_epoch =
             hifitime::Epoch::maybe_from_gregorian(2024, 1, 1, 0, 0, 0, 0, hifitime::TimeScale::TT)
                 .unwrap();
-        let bounds = ResolvedDomainBounds::new(
-            Some(ResolvedDomainBound::new(tt_epoch, tt_epoch.to_string())),
-            None,
-        );
-        let error = ResolvedDomainConstraint::datetime(TimeScale::UTC, bounds).unwrap_err();
+        let error = DomainInstant::from_epoch(tt_epoch, TimeScale::UTC).unwrap_err();
         assert!(matches!(error, DomainInstantError::ScaleMismatch { .. }));
+        let instant = DomainInstant::from_epoch(tt_epoch, TimeScale::TT).unwrap();
+        assert_eq!(instant.duration(), tt_epoch.to_tai_duration());
+    }
+
+    #[test]
+    fn mapped_bounds_keep_their_diagnostic_text() {
+        let bounds = ResolvedDomainBounds::new(
+            Some(ResolvedDomainBound::new(1_i64, "one".to_owned())),
+            Some(ResolvedDomainBound::new(2_i64, "two".to_owned())),
+        )
+        .map(|value| value * 10);
+        let (min, max) = (bounds.min().unwrap(), bounds.max().unwrap());
+        assert_eq!((*min.value(), min.display()), (10, "one"));
+        assert_eq!((*max.value(), max.display()), (20, "two"));
     }
 
     #[test]

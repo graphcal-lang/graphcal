@@ -10,27 +10,33 @@
 //! Both results are pure functions of the insertion order of nodes and edges:
 //! no hash iteration order leaks into them. Callers that need an order that is
 //! stable across runs must therefore insert nodes and edges in a stable order.
+//!
+//! An edge may carry a label `E` (such as the source span of the reference it
+//! models); a [`Cycle`] then reports the label of the edge that closes it.
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::hash::Hash;
 
-/// A directed graph of "depends on" edges between keys.
+/// A directed graph of "depends on" edges between keys, each edge labelled
+/// by an `E`.
 ///
 /// Nodes and edges remember their insertion order, which fully determines the
 /// resulting [`TopoOrder`] or [`Cycle`]. Adding a node or an edge twice is a
-/// no-op, and a key may depend on itself (a self-loop is a cycle of length 1).
+/// no-op (an edge keeps its first label), and a key may depend on itself (a
+/// self-loop is a cycle of length 1).
 #[derive(Debug, Clone)]
-pub struct DependencyGraph<K> {
+pub struct DependencyGraph<K, E = ()> {
     keys: Vec<K>,
     positions: HashMap<K, usize>,
-    /// For each node, its dependencies in edge insertion order.
-    dependencies: Vec<Vec<usize>>,
+    /// For each node, its dependencies and their edge labels in edge
+    /// insertion order.
+    dependencies: Vec<Vec<(usize, E)>>,
     /// For each node, its dependents in edge insertion order.
     dependents: Vec<Vec<usize>>,
     edges: HashSet<(usize, usize)>,
 }
 
-impl<K> Default for DependencyGraph<K> {
+impl<K, E> Default for DependencyGraph<K, E> {
     fn default() -> Self {
         Self {
             keys: Vec::new(),
@@ -43,6 +49,15 @@ impl<K> Default for DependencyGraph<K> {
 }
 
 impl<K: Clone + Eq + Hash> DependencyGraph<K> {
+    /// Record that `dependent` depends on `dependency`, adding either key as
+    /// a node first if it is not yet present (`dependent` before
+    /// `dependency`). Recording the same edge twice is a no-op.
+    pub fn add_dependency(&mut self, dependent: K, dependency: K) {
+        self.add_labelled_dependency(dependent, dependency, ());
+    }
+}
+
+impl<K: Clone + Eq + Hash, E: Clone> DependencyGraph<K, E> {
     /// An empty graph.
     #[must_use]
     pub fn new() -> Self {
@@ -55,14 +70,15 @@ impl<K: Clone + Eq + Hash> DependencyGraph<K> {
         self.position_of(key);
     }
 
-    /// Record that `dependent` depends on `dependency`, adding either key as
-    /// a node first if it is not yet present (`dependent` before
-    /// `dependency`). Recording the same edge twice is a no-op.
-    pub fn add_dependency(&mut self, dependent: K, dependency: K) {
+    /// Record that `dependent` depends on `dependency` through an edge
+    /// labelled `label`, adding either key as a node first if it is not yet
+    /// present (`dependent` before `dependency`). Recording the same edge
+    /// twice is a no-op that keeps the first label.
+    pub fn add_labelled_dependency(&mut self, dependent: K, dependency: K, label: E) {
         let dependent = self.position_of(dependent);
         let dependency = self.position_of(dependency);
         if self.edges.insert((dependent, dependency)) {
-            self.dependencies[dependent].push(dependency);
+            self.dependencies[dependent].push((dependency, label));
             self.dependents[dependency].push(dependent);
         }
     }
@@ -95,9 +111,9 @@ impl<K: Clone + Eq + Hash> DependencyGraph<K> {
     ///
     /// Returns the [`Cycle`] found by the depth-first search of
     /// [`Self::into_depth_first_order`].
-    pub fn into_topo_order(self) -> Result<TopoOrder<K>, Cycle<K>> {
+    pub fn into_topo_order(self) -> Result<TopoOrder<K>, Cycle<K, E>> {
         if let Err(cycle) = self.depth_first() {
-            return Err(self.cycle_from_indices(&cycle));
+            return Err(self.cycle_from_indices(cycle));
         }
         let rank = self.kahn_ranks();
         let mut ranked = rank.into_iter().zip(self.keys).collect::<Vec<_>>();
@@ -119,7 +135,7 @@ impl<K: Clone + Eq + Hash> DependencyGraph<K> {
     ///
     /// Returns the first [`Cycle`] this search closes: the path from the node
     /// it re-entered to the node whose dependency re-entered it.
-    pub fn into_depth_first_order(self) -> Result<TopoOrder<K>, Cycle<K>> {
+    pub fn into_depth_first_order(self) -> Result<TopoOrder<K>, Cycle<K, E>> {
         match self.depth_first() {
             Ok(post_order) => {
                 let mut keys = self.keys.into_iter().map(Some).collect::<Vec<_>>();
@@ -130,7 +146,7 @@ impl<K: Clone + Eq + Hash> DependencyGraph<K> {
                         .collect(),
                 })
             }
-            Err(cycle) => Err(self.cycle_from_indices(&cycle)),
+            Err(cycle) => Err(self.cycle_from_indices(cycle)),
         }
     }
 
@@ -147,9 +163,10 @@ impl<K: Clone + Eq + Hash> DependencyGraph<K> {
     }
 
     /// Node indices in depth-first post-order, or the first cycle found as
-    /// the node the search re-entered and the rest of the cycle path.
-    /// Iterative, so deep graphs cannot overflow the call stack.
-    fn depth_first(&self) -> Result<Vec<usize>, (usize, Vec<usize>)> {
+    /// the node the search re-entered, the rest of the cycle path, and the
+    /// label of the edge that re-entered it. Iterative, so deep graphs cannot
+    /// overflow the call stack.
+    fn depth_first(&self) -> Result<Vec<usize>, IndexCycle<E>> {
         let mut state = vec![Visit::Unvisited; self.keys.len()];
         let mut post_order = Vec::with_capacity(self.keys.len());
         // Each frame is a node on the current path and its next edge to try.
@@ -162,13 +179,14 @@ impl<K: Clone + Eq + Hash> DependencyGraph<K> {
             path.push((root, 0));
             while let Some(frame) = path.last_mut() {
                 let (node, cursor) = *frame;
-                let Some(&dependency) = self.dependencies[node].get(cursor) else {
+                let Some((dependency, label)) = self.dependencies[node].get(cursor) else {
                     state[node] = Visit::Done;
                     post_order.push(node);
                     path.pop();
                     continue;
                 };
                 frame.1 = cursor.saturating_add(1);
+                let dependency = *dependency;
                 match state[dependency] {
                     Visit::Unvisited => {
                         state[dependency] = Visit::OnPath(path.len());
@@ -176,7 +194,11 @@ impl<K: Clone + Eq + Hash> DependencyGraph<K> {
                     }
                     Visit::OnPath(position) => {
                         let rest = path[position..].iter().skip(1).map(|(node, _)| *node);
-                        return Err((dependency, rest.collect()));
+                        return Err(IndexCycle {
+                            entry: dependency,
+                            rest: rest.collect(),
+                            closing: label.clone(),
+                        });
                     }
                     Visit::Done => {}
                 }
@@ -208,12 +230,24 @@ impl<K: Clone + Eq + Hash> DependencyGraph<K> {
         rank
     }
 
-    fn cycle_from_indices(&self, (entry, rest): &(usize, Vec<usize>)) -> Cycle<K> {
+    fn cycle_from_indices(&self, cycle: IndexCycle<E>) -> Cycle<K, E> {
         Cycle {
-            entry: self.keys[*entry].clone(),
-            rest: rest.iter().map(|&node| self.keys[node].clone()).collect(),
+            entry: self.keys[cycle.entry].clone(),
+            rest: cycle
+                .rest
+                .iter()
+                .map(|&node| self.keys[node].clone())
+                .collect(),
+            closing: cycle.closing,
         }
     }
+}
+
+/// A cycle the depth-first search found, by node index.
+struct IndexCycle<E> {
+    entry: usize,
+    rest: Vec<usize>,
+    closing: E,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -288,15 +322,17 @@ impl<'a, K> IntoIterator for &'a TopoOrder<K> {
 /// The path starts at [`Cycle::entry`], the node at which the depth-first
 /// search (roots in node insertion order, dependencies in edge insertion
 /// order) re-entered its current path. Each node depends on the next one, and
-/// the last node depends on the entry. A self-loop is a cycle whose path is
-/// just the entry.
+/// the last node depends on the entry, through the edge whose label is
+/// [`Cycle::closing_label`]. A self-loop is a cycle whose path is just the
+/// entry.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Cycle<K> {
+pub struct Cycle<K, E = ()> {
     entry: K,
     rest: Vec<K>,
+    closing: E,
 }
 
-impl<K> Cycle<K> {
+impl<K, E> Cycle<K, E> {
     /// The node the search re-entered, where the cycle path starts.
     #[must_use]
     pub const fn entry(&self) -> &K {
@@ -327,12 +363,20 @@ impl<K> Cycle<K> {
         std::iter::once(self.entry).chain(self.rest).collect()
     }
 
-    /// Transform every node, keeping the path order.
+    /// The label of the edge by which the last node on the path depends on
+    /// the entry.
     #[must_use]
-    pub fn map<U>(self, mut f: impl FnMut(K) -> U) -> Cycle<U> {
+    pub const fn closing_label(&self) -> &E {
+        &self.closing
+    }
+
+    /// Transform every node, keeping the path order and the closing label.
+    #[must_use]
+    pub fn map<U>(self, mut f: impl FnMut(K) -> U) -> Cycle<U, E> {
         Cycle {
             entry: f(self.entry),
             rest: self.rest.into_iter().map(f).collect(),
+            closing: self.closing,
         }
     }
 }
@@ -363,6 +407,19 @@ mod tests {
 
     fn cycle(graph: DependencyGraph<&'static str>) -> Vec<&'static str> {
         graph.into_topo_order().expect_err("cyclic").into_path()
+    }
+
+    #[test]
+    fn cycle_reports_the_label_of_its_closing_edge() {
+        let mut graph = DependencyGraph::new();
+        graph.add_labelled_dependency("a", "b", 1);
+        graph.add_labelled_dependency("b", "c", 2);
+        graph.add_labelled_dependency("c", "a", 3);
+        graph.add_labelled_dependency("c", "a", 4);
+        let cycle = graph.into_topo_order().unwrap_err();
+        assert_eq!(cycle.entry(), &"a");
+        assert_eq!(cycle.closing_label(), &3);
+        assert_eq!(cycle.map(str::len).closing_label(), &3);
     }
 
     #[test]

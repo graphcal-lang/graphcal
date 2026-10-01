@@ -5,7 +5,6 @@
 //! collection and [`SemanticError`](crate::semantic_error::SemanticError).
 
 use crate::desugar::desugared_ast::DeclKind;
-use crate::syntax::attribute::AttributeName;
 use crate::syntax::names::NameAtom;
 use crate::syntax::phase::never;
 
@@ -102,40 +101,6 @@ impl AttributeTarget {
     #[must_use]
     pub const fn include_item(producer: Option<DeclarationKind>, name: NameAtom) -> Self {
         Self::IncludeItem { producer, name }
-    }
-
-    /// Whether this target accepts the attribute's semantic role.
-    #[must_use]
-    pub const fn accepts(&self, attribute: AttributeName) -> bool {
-        match (self, attribute) {
-            (
-                &Self::Declaration(DeclarationKind::Param | DeclarationKind::Node),
-                AttributeName::Assumes,
-            )
-            | (
-                &Self::Declaration(DeclarationKind::Assert)
-                | &Self::IncludeItem {
-                    producer: Some(DeclarationKind::Assert),
-                    ..
-                },
-                AttributeName::ExpectedFail,
-            )
-            | (
-                &Self::Declaration(DeclarationKind::Plot)
-                | &Self::IncludeItem {
-                    producer: Some(DeclarationKind::Plot),
-                    ..
-                },
-                AttributeName::Hidden,
-            ) => true,
-            (
-                _,
-                AttributeName::Assumes
-                | AttributeName::ExpectedFail
-                | AttributeName::Hidden
-                | AttributeName::Lazy,
-            ) => false,
-        }
     }
 }
 
