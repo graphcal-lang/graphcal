@@ -22,6 +22,8 @@ pub(crate) mod execution_frame;
 pub mod execution_plan;
 pub mod host_abi;
 pub mod host_fns;
+#[cfg(test)]
+mod interpreter_tests;
 pub mod invariant;
 pub mod pipeline_metrics;
 pub mod presentation_evidence;

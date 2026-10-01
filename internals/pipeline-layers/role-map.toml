@@ -2643,6 +2643,11 @@ path = ["test_tir"]
 role = "checking"
 
 [[module]]
+package = "eval"
+path = ["interpreter_tests"]
+role = "facade"
+
+[[module]]
 package = "project"
 path = []
 role = "facade"
@@ -2675,16 +2680,6 @@ role = "contracts"
 [[module]]
 package = "project"
 path = ["tests", "exec_plan"]
-role = "facade"
-
-[[module]]
-package = "project"
-path = ["tests", "plots"]
-role = "facade"
-
-[[module]]
-package = "project"
-path = ["tests", "runtime_clones"]
 role = "facade"
 
 [[module]]
