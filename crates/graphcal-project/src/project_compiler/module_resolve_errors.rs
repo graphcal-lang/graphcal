@@ -1,6 +1,7 @@
 //! Project diagnostics for module-resolution failures.
 
 use graphcal_compiler::graphcal_error::GraphcalError;
+use graphcal_compiler::semantic_error::evaluation::EvaluationError;
 use graphcal_compiler::semantic_error::module::ModuleError;
 use graphcal_compiler::semantic_error::name::NameError;
 use graphcal_compiler::semantic_error::visibility::VisibilityError;
@@ -93,10 +94,12 @@ pub(super) fn module_resolve_compile_error(
             duplicate,
             ..
         } => duplicate_name(function.to_string(), first, duplicate, src),
-        other => PipelineError::Semantic(GraphcalError::EvalError {
-            message: other.to_string(),
+        other => PipelineError::Semantic(GraphcalError::located(
             src,
-            span: src.whole_span().into(),
-        }),
+            src.whole_span(),
+            EvaluationError::Failed {
+                message: other.to_string(),
+            },
+        )),
     }
 }

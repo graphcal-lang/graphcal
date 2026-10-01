@@ -7,6 +7,7 @@ use crate::resolved_name::{ResolvedIndexName, ResolvedStructTypeName};
 use crate::semantic::index_def::FiniteIndex;
 use crate::semantic_error::SemanticErrorKind;
 use crate::semantic_error::dimension::DimensionError;
+use crate::semantic_error::evaluation::EvaluationError;
 use crate::syntax::index_name::IndexName;
 use crate::syntax::non_empty::NonEmpty;
 use crate::syntax::type_name::{GenericParamName, StructTypeName};
@@ -257,7 +258,7 @@ fn errors_render_at_their_span() {
     ));
     assert!(matches!(
         SubstitutionError::NatOverflow { span: span() }.into_graphcal(src),
-        GraphcalError::EvalError { message, .. } if message.contains("Nat arithmetic overflow")
+        GraphcalError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Evaluation(EvaluationError::Failed { message, .. }), .. }) if message.contains("Nat arithmetic overflow")
     ));
     assert!(matches!(
         SubstitutionError::InvalidFiniteIndex {
@@ -265,6 +266,9 @@ fn errors_render_at_their_span() {
             span: span(),
         }
         .into_graphcal(src),
-        GraphcalError::EvalError { .. }
+        GraphcalError::Located(crate::diagnostic::Diagnostic {
+            kind: SemanticErrorKind::Evaluation(EvaluationError::Failed { .. }),
+            ..
+        })
     ));
 }

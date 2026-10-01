@@ -21,6 +21,7 @@ use graphcal_compiler::semantic_error::SemanticErrorKind;
 use graphcal_compiler::semantic_error::attribute::AttributeError;
 use graphcal_compiler::semantic_error::dimension::DimensionError;
 use graphcal_compiler::semantic_error::domain::DomainError;
+use graphcal_compiler::semantic_error::evaluation::EvaluationError;
 use graphcal_compiler::semantic_error::graph::GraphError;
 use graphcal_compiler::semantic_error::index::IndexError;
 use graphcal_compiler::semantic_error::module::ModuleError;
@@ -1183,11 +1184,13 @@ fn shared_frame_dependency_and_fatal_error_policies_are_explicit() {
                             graphcal_compiler::diagnostic_anchor::DiagnosticAnchor::WholeFile,
                         )
                     } else {
-                        GraphcalError::EvalError {
-                            message: "ordinary sentinel".into(),
+                        GraphcalError::located(
                             src,
-                            span: entry.body().root().span().into(),
-                        }
+                            entry.body().root().span(),
+                            EvaluationError::Failed {
+                                message: "ordinary sentinel".into(),
+                            },
+                        )
                     }
                     .into());
                 }
@@ -1978,7 +1981,7 @@ fn structural_index_binding_cardinality_must_be_closed() {
     ));
     assert!(matches!(
         compile_and_eval(&program("4294967296 * 4294967296")).unwrap_err(),
-        CompileError::Eval(RenderedGraphcalError { error: GraphcalError::EvalError { ref message, .. }, .. })
+        CompileError::Eval(RenderedGraphcalError { error: GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic { kind: SemanticErrorKind::Evaluation(EvaluationError::Failed { message, .. }), .. }), .. })
             if message.contains("type-level Nat arithmetic overflow")
     ));
 }
@@ -5889,8 +5892,8 @@ fn aliased_include_does_not_bind_the_source_module_name() {
     let error = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap_err();
     assert!(
         matches!(
-            error,
-            CompileError::Eval(RenderedGraphcalError { error: GraphcalError::EvalError { ref message, .. }, .. })
+            &error,
+            CompileError::Eval(RenderedGraphcalError { error: GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic { kind: SemanticErrorKind::Evaluation(EvaluationError::Failed { message, .. }), .. }), .. })
                 if message == "unknown module `src.app.defaults`"
         ),
         "unexpected alias-leak diagnostic: {error:?}"
@@ -6372,7 +6375,11 @@ fn project_module_includes_still_reject_duplicate_default_aliases() {
             assert_eq!(name, "shared");
         }
         Err(CompileError::Eval(RenderedGraphcalError {
-            error: GraphcalError::EvalError { message, .. },
+            error:
+                GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+                    kind: SemanticErrorKind::Evaluation(EvaluationError::Failed { message, .. }),
+                    ..
+                }),
             ..
         })) => {
             assert!(
@@ -7173,8 +7180,12 @@ fn eval_constructor_match_rejects_runtime_owner_mismatch_with_same_leaf_construc
     // A value of another owner contradicts the checked type: no arm is
     // selected by leaf name, and the violation is an internal error.
     match err {
-        Outcome::Failed(GraphcalError::InternalError { message, .. }) => {
-            assert!(message.contains("no match arm for variant"), "{message}");
+        Outcome::Failed(GraphcalError::Internal(internal)) => {
+            assert!(
+                internal.message().contains("no match arm for variant"),
+                "{}",
+                internal.message()
+            );
         }
         other => panic!("expected InternalError, got {other:?}"),
     }
@@ -8100,8 +8111,12 @@ fn eval_index_access_rejects_runtime_owner_mismatch_with_same_leaf_variant() {
     // A key of another owner contradicts the checked type: no entry is
     // selected by leaf name, and the violation is an internal error.
     match err {
-        Outcome::Failed(GraphcalError::InternalError { message, .. }) => {
-            assert!(message.contains("checked index entry"), "{message}");
+        Outcome::Failed(GraphcalError::Internal(internal)) => {
+            assert!(
+                internal.message().contains("checked index entry"),
+                "{}",
+                internal.message()
+            );
         }
         other => panic!("expected InternalError, got {other:?}"),
     }
@@ -8188,8 +8203,12 @@ fn eval_label_match_rejects_runtime_owner_mismatch_with_same_leaf_variant() {
     // A value of another owner contradicts the checked type: no arm is
     // selected by leaf name, and the violation is an internal error.
     match err {
-        Outcome::Failed(GraphcalError::InternalError { message, .. }) => {
-            assert!(message.contains("no match arm for label"), "{message}");
+        Outcome::Failed(GraphcalError::Internal(internal)) => {
+            assert!(
+                internal.message().contains("no match arm for label"),
+                "{}",
+                internal.message()
+            );
         }
         other => panic!("expected InternalError, got {other:?}"),
     }
@@ -9364,7 +9383,12 @@ fn include_closure_cycles_are_rejected_at_the_including_declaration() {
 fn recursive_dag_error(source: &str) -> (String, usize) {
     match compile_and_eval(source) {
         Err(CompileError::Eval(RenderedGraphcalError {
-            error: GraphcalError::EvalError { message, span, .. },
+            error:
+                GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+                    kind: SemanticErrorKind::Evaluation(EvaluationError::Failed { message, .. }),
+                    primary: span,
+                    ..
+                }),
             ..
         })) => (message, span.offset()),
         other => panic!("expected a recursive DAG instantiation error, got {other:?}"),
@@ -10599,7 +10623,10 @@ node bad: T<0> = T<0>(x: 0);
     assert!(matches!(
         error,
         CompileError::Eval(RenderedGraphcalError {
-            error: GraphcalError::EvalError { .. },
+            error: GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+                kind: SemanticErrorKind::Evaluation(EvaluationError::Failed { .. }),
+                ..
+            }),
             ..
         })
     ));

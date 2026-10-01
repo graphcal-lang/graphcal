@@ -12,6 +12,7 @@ use crate::diagnostic::{DiagnosticKind, SecondaryLabel};
 pub mod attribute;
 pub mod dimension;
 pub mod domain;
+pub mod evaluation;
 pub mod graph;
 pub mod index;
 pub mod module;
@@ -22,7 +23,7 @@ pub mod visibility;
 // MODULES
 
 #[cfg(test)]
-pub(crate) mod tests;
+mod tests;
 
 /// The payload of a semantic diagnostic, by family.
 #[derive(Debug, Clone)]
@@ -37,6 +38,7 @@ pub enum SemanticErrorKind {
     Plugin(plugin::PluginError),
     Dimension(dimension::DimensionError),
     Module(module::ModuleError),
+    Evaluation(evaluation::EvaluationError),
     // KINDS
 }
 
@@ -54,6 +56,7 @@ impl SemanticErrorKind {
             Self::Plugin(kind) => kind,
             Self::Dimension(kind) => kind,
             Self::Module(kind) => kind,
+            Self::Evaluation(kind) => kind,
             // DELEGATE
         }
     }
@@ -140,6 +143,12 @@ impl From<dimension::DimensionError> for SemanticErrorKind {
 impl From<module::ModuleError> for SemanticErrorKind {
     fn from(kind: module::ModuleError) -> Self {
         Self::Module(kind)
+    }
+}
+
+impl From<evaluation::EvaluationError> for SemanticErrorKind {
+    fn from(kind: evaluation::EvaluationError) -> Self {
+        Self::Evaluation(kind)
     }
 }
 

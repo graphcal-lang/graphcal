@@ -91,7 +91,7 @@ mod tests {
             .register("main.gcl", std::sync::Arc::new(String::new()));
         let error = Invariant::violated("broken").into_internal_error(src);
         assert!(
-            matches!(error, GraphcalError::InternalError { ref message, .. } if message == "broken")
+            matches!(error, GraphcalError::Internal(ref internal) if internal.message() == "broken")
         );
     }
 

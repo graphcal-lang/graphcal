@@ -6,6 +6,7 @@ use crate::hir::expr::{Expr, ExprKind};
 use crate::outcome::Outcome;
 use crate::semantic::checked_type::{IndexTypeRef, Symbolic};
 use crate::semantic_error::dimension::DimensionError;
+use crate::semantic_error::evaluation::EvaluationError;
 use crate::semantic_error::structure::StructError;
 
 use crate::semantic::checked_type::CheckedType;
@@ -53,11 +54,13 @@ impl Infer<'_> {
                 .into());
             }
             ExprKind::TypeSystemRef(name) => {
-                return Err(GraphcalError::EvalError {
-                    message: name.value.value_position_error(),
-                    src: self.env.src,
-                    span: name.span.into(),
-                }
+                return Err(GraphcalError::located(
+                    self.env.src,
+                    name.span,
+                    EvaluationError::Failed {
+                        message: name.value.value_position_error(),
+                    },
+                )
                 .into());
             }
             ExprKind::QuantityLiteral { unit, .. } => {

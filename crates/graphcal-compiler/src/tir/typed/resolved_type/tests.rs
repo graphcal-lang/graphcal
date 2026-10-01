@@ -1,6 +1,8 @@
 use super::*;
 use crate::dag_id::DagId;
 use crate::dimension::{BaseDimId, PreludeBaseDimension};
+use crate::semantic_error::SemanticErrorKind;
+use crate::semantic_error::evaluation::EvaluationError;
 use crate::syntax::index_name::IndexName;
 use crate::syntax::type_name::StructTypeName;
 
@@ -134,7 +136,10 @@ fn symbolic_complex_and_generic_args_have_no_checked_type() {
     let lone = symbolic(vec![param_term("D", Rational::ONE, MulDivOp::Mul)]);
     let squared = symbolic(vec![param_term("D", Rational::from(2), MulDivOp::Mul)]);
     let message = |ty: &ResolvedValueType| match ty.to_checked_type(src()) {
-        Err(GraphcalError::EvalError { message, .. }) => message,
+        Err(GraphcalError::Located(crate::diagnostic::Diagnostic {
+            kind: SemanticErrorKind::Evaluation(EvaluationError::Failed { message, .. }),
+            ..
+        })) => message,
         other => panic!("expected an evaluation error, got {other:?}"),
     };
     let complex = |dimension| ResolvedValueType::Complex {

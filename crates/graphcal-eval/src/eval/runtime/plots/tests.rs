@@ -68,7 +68,7 @@ fn internal_errors_abort_plot_evaluation() {
             src,
             DiagnosticAnchor::WholeFile,
         )),
-        PlotEvaluationError::Fatal(Outcome::Failed(GraphcalError::InternalError { .. }))
+        PlotEvaluationError::Fatal(Outcome::Failed(GraphcalError::Internal(_)))
     ));
 }
 

@@ -16,6 +16,7 @@ use graphcal_compiler::graphcal_error::GraphcalError;
 use graphcal_compiler::hir::expr::Expr;
 use graphcal_compiler::outcome::Outcome;
 use graphcal_compiler::resolved_name::ResolvedDeclName;
+use graphcal_compiler::semantic_error::evaluation::EvaluationError;
 use graphcal_compiler::source_id::SourceId;
 use graphcal_compiler::source_registry::SourceRegistry;
 use graphcal_compiler::syntax::span::Span;
@@ -326,11 +327,13 @@ impl<'a> EvalSession<'a> {
     }
 
     pub fn eval_error(&self, message: impl Into<String>, span: Span) -> GraphcalError {
-        GraphcalError::EvalError {
-            message: message.into(),
-            src: self.src,
-            span: span.into(),
-        }
+        GraphcalError::located(
+            self.src,
+            span,
+            EvaluationError::Failed {
+                message: message.into(),
+            },
+        )
     }
 
     #[cold]
@@ -377,11 +380,11 @@ impl EvalSession<'_> {
         );
         self.unavailable_among(|| expression.graph_refs(), std::iter::once(expression))?
             .map_or(Ok(()), |reason| {
-                Err(GraphcalError::EvaluationUnavailable {
-                    reason,
-                    src: self.src,
-                    span: expression.span().into(),
-                }
+                Err(GraphcalError::located(
+                    self.src,
+                    expression.span(),
+                    EvaluationError::Unavailable { reason },
+                )
                 .into())
             })
     }

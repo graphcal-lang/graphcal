@@ -13,6 +13,7 @@ use crate::expression_id::ExprId;
 use crate::graphcal_error::GraphcalError;
 use crate::hir::expr::Expr;
 use crate::semantic::checked_type::{CheckedType, IndexTypeRef, Symbolic};
+use crate::semantic_error::evaluation::EvaluationError;
 use crate::source_id::SourceId;
 use crate::syntax::span::Span;
 use crate::tir::texpr::map::{SymbolicView, TypeMap};
@@ -330,11 +331,13 @@ pub(super) fn specialize_bound_body(
     let tree = specializer.body(body)?;
     let checked = CheckedBody::discharge(tree, &|index| checked_index_cardinality(tir, index))
         .map_err(|error| match error {
-            crate::tir::texpr::DischargeError::StaticIndex(error) => GraphcalError::EvalError {
-                message: error.to_string(),
+            crate::tir::texpr::DischargeError::StaticIndex(error) => GraphcalError::located(
                 src,
-                span: root.span.into(),
-            },
+                root.span,
+                EvaluationError::Failed {
+                    message: error.to_string(),
+                },
+            ),
             error @ crate::tir::texpr::DischargeError::UnavailableIndex(_) => {
                 diagnostic(error.to_string())
             }

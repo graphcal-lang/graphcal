@@ -5,6 +5,7 @@ use crate::hir::types::{
     BuiltinType, DimArg, DimExpr, DimTermTarget, GenericArg, IndexRef, ValueType, ValueTypeKind,
 };
 use crate::semantic_error::dimension::DimensionError;
+use crate::semantic_error::evaluation::EvaluationError;
 use crate::source_id::SourceId;
 
 use crate::dimension::Dimension;
@@ -52,14 +53,16 @@ impl InferEnv<'_> {
                 StructTypeRef::from_resolved(name.value.clone()),
                 vec![],
             )),
-            ValueTypeKind::GenericTypeParam(param) => Err(GraphcalError::EvalError {
-                message: format!(
-                    "generic type parameter `{}` is not concretely bound",
-                    param.value.name
-                ),
-                src: self.src,
-                span: param.span.into(),
-            }),
+            ValueTypeKind::GenericTypeParam(param) => Err(GraphcalError::located(
+                self.src,
+                param.span,
+                EvaluationError::Failed {
+                    message: format!(
+                        "generic type parameter `{}` is not concretely bound",
+                        param.value.name
+                    ),
+                },
+            )),
             ValueTypeKind::TypeApplication { name, generic_args } => {
                 let type_def = self
                     .dag
@@ -67,13 +70,15 @@ impl InferEnv<'_> {
                     .type_defs
                     .struct_types
                     .get(&name.value)
-                    .ok_or_else(|| GraphcalError::InternalError {
-                        message: format!(
-                            "semantic type metadata missing generic type `{}`",
-                            name.value
-                        ),
-                        src: self.src,
-                        anchor: crate::diagnostic_anchor::DiagnosticAnchor::Source(name.span),
+                    .ok_or_else(|| {
+                        GraphcalError::internal_error(
+                            format!(
+                                "semantic type metadata missing generic type `{}`",
+                                name.value
+                            ),
+                            self.src,
+                            crate::diagnostic_anchor::DiagnosticAnchor::Source(name.span),
+                        )
                     })?;
                 Ok(CheckedType::Struct(
                     StructTypeRef::from_resolved(name.value.clone()),
@@ -111,14 +116,16 @@ fn inferred_index_from_type_arg(
 ) -> Result<IndexTypeRef<Symbolic>, GraphcalError> {
     match index {
         IndexRef::Concrete(name) => Ok(IndexTypeRef::from_resolved(name.value.clone())),
-        IndexRef::GenericParam(param) => Err(GraphcalError::EvalError {
-            message: format!(
-                "generic index parameter `{}` is not concretely bound",
-                param.value.name
-            ),
+        IndexRef::GenericParam(param) => Err(GraphcalError::located(
             src,
-            span: param.span.into(),
-        }),
+            param.span,
+            EvaluationError::Failed {
+                message: format!(
+                    "generic index parameter `{}` is not concretely bound",
+                    param.value.name
+                ),
+            },
+        )),
         IndexRef::Finite(nat_expr) => IndexTypeRef::from_finite_index_form(nat_expr.value.clone())
             .map_err(|err| finite_index_error(err, src, nat_expr.span)),
     }
@@ -147,14 +154,16 @@ fn infer_hir_dim_expr_arg(
                     (dim, item.term.power, item.term.span)
                 }
                 DimTermTarget::GenericParam(param) => {
-                    return Err(GraphcalError::EvalError {
-                        message: format!(
-                            "generic dimension parameter `{}` is not concretely bound",
-                            param.value.name
-                        ),
+                    return Err(GraphcalError::located(
                         src,
-                        span: param.span.into(),
-                    });
+                        param.span,
+                        EvaluationError::Failed {
+                            message: format!(
+                                "generic dimension parameter `{}` is not concretely bound",
+                                param.value.name
+                            ),
+                        },
+                    ));
                 }
             };
             let powered = dim.pow(power).map_err(|_| {
@@ -198,15 +207,17 @@ impl InferEnv<'_> {
             } else {
                 format!("{required_count}..{total_params}")
             };
-            return Err(GraphcalError::EvalError {
-                message: format!(
-                    "type `{}` expects {hint} generic argument(s), got {}",
-                    type_def.name(),
-                    applied_generic_args.len()
-                ),
-                src: self.src,
-                span: span.into(),
-            });
+            return Err(GraphcalError::located(
+                self.src,
+                span,
+                EvaluationError::Failed {
+                    message: format!(
+                        "type `{}` expects {hint} generic argument(s), got {}",
+                        type_def.name(),
+                        applied_generic_args.len()
+                    ),
+                },
+            ));
         }
         let mut args = Vec::with_capacity(total_params);
         for (param, arg) in type_def.generic_params().iter().zip(applied_generic_args) {
@@ -234,13 +245,17 @@ impl InferEnv<'_> {
                 .type_defs
                 .generic_defaults
                 .get(param.id())
-                .ok_or_else(|| GraphcalError::EvalError {
-                    message: format!(
-                        "internal: generic parameter `{}` has no default",
-                        param.name()
-                    ),
-                    src: self.src,
-                    span: span.into(),
+                .ok_or_else(|| {
+                    GraphcalError::located(
+                        self.src,
+                        span,
+                        EvaluationError::Failed {
+                            message: format!(
+                                "internal: generic parameter `{}` has no default",
+                                param.name()
+                            ),
+                        },
+                    )
                 })?
                 .resolved;
             let subs = generic_substitution_prefix(type_def, &args, self.src, span)?;

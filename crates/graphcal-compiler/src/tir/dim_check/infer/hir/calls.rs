@@ -3,6 +3,7 @@
 use crate::hir::expr::{Expr, FunctionRef};
 use crate::outcome::Outcome;
 use crate::semantic_error::dimension::DimensionError;
+use crate::semantic_error::evaluation::EvaluationError;
 use crate::semantic_error::name::NameError;
 use crate::source_id::SourceId;
 
@@ -43,11 +44,13 @@ fn check_builtin_arity(
             },
         )),
         arity @ BuiltinArity::OptionalTrailing { .. } if !arity.accepts(got) => {
-            Err(GraphcalError::EvalError {
-                message: format!("{function}() expects {arity} arguments, got {got}"),
+            Err(GraphcalError::located(
                 src,
-                span: span.into(),
-            })
+                span,
+                EvaluationError::Failed {
+                    message: format!("{function}() expects {arity} arguments, got {got}"),
+                },
+            ))
         }
         BuiltinArity::Exact(_) | BuiltinArity::OptionalTrailing { .. } => Ok(()),
     }

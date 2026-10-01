@@ -87,14 +87,13 @@ impl DimCheckContext<'_> {
         declaration: &ResolvedDeclName,
         span: crate::syntax::span::Span,
     ) -> Result<&crate::hir::expr::AssertBody, GraphcalError> {
-        self.env
-            .dag
-            .assert_body(declaration)
-            .ok_or_else(|| GraphcalError::InternalError {
-                message: format!("TIR assertion entry missing for `{name}`"),
-                src: self.env.src,
-                anchor: crate::diagnostic_anchor::DiagnosticAnchor::Source(span),
-            })
+        self.env.dag.assert_body(declaration).ok_or_else(|| {
+            GraphcalError::internal_error(
+                format!("TIR assertion entry missing for `{name}`"),
+                self.env.src,
+                crate::diagnostic_anchor::DiagnosticAnchor::Source(span),
+            )
+        })
     }
 
     /// Infer the type of a checked root, recording its observations in this
@@ -135,13 +134,13 @@ fn check_decl_expr_type(
         // formula to infer or expression fact to fabricate.
         return Ok(());
     }
-    let hir_expr = ctx
-        .hir_expr_for_decl(identity)
-        .ok_or_else(|| GraphcalError::InternalError {
-            message: format!("value declaration record missing while checking `{name}`"),
-            src: ctx.env.src,
-            anchor: crate::diagnostic_anchor::DiagnosticAnchor::Source(*type_ann_span),
-        })?;
+    let hir_expr = ctx.hir_expr_for_decl(identity).ok_or_else(|| {
+        GraphcalError::internal_error(
+            format!("value declaration record missing while checking `{name}`"),
+            ctx.env.src,
+            crate::diagnostic_anchor::DiagnosticAnchor::Source(*type_ann_span),
+        )
+    })?;
     if ctx
         .env
         .dag
@@ -1214,16 +1213,68 @@ fn field_constraint_definition_dag<'a>(
     src: SourceId,
     span: Span,
 ) -> Result<&'a crate::tir::typed::DagTIR, GraphcalError> {
-    tir.dags
-        .get(key.owning_type.owner())
-        .ok_or_else(|| GraphcalError::InternalError {
-            message: format!(
+    tir.dags.get(key.owning_type.owner()).ok_or_else(|| {
+        GraphcalError::internal_error(
+            format!(
                 "field-constraint owner `{}` has no checked DAG",
                 key.owning_type.owner()
             ),
             src,
-            anchor: crate::diagnostic_anchor::DiagnosticAnchor::Source(span),
+            crate::diagnostic_anchor::DiagnosticAnchor::Source(span),
+        )
+    })
+}
+
+/// The nominal type, constructor, and field a constrained-field key names.
+fn constrained_field_definition<'d>(
+    dag: &'d crate::tir::typed::DagTIR,
+    key: &crate::tir::typed::ResolvedStructFieldTypeKey,
+    src: SourceId,
+    span: Span,
+) -> Result<
+    (
+        &'d crate::hir::nominal::NominalTypeDef,
+        &'d crate::hir::nominal::NominalConstructor,
+        &'d crate::hir::nominal::NominalField,
+    ),
+    GraphcalError,
+> {
+    let type_def = dag
+        .semantic
+        .type_defs
+        .struct_types
+        .get(&key.owning_type)
+        .ok_or_else(|| {
+            GraphcalError::internal_error(
+                format!(
+                    "semantic type metadata missing constrained type `{}`",
+                    key.owning_type
+                ),
+                src,
+                crate::diagnostic_anchor::DiagnosticAnchor::Source(span),
+            )
+        })?;
+    let (variant, field) = type_def
+        .union_members()
+        .and_then(|members| {
+            members
+                .iter()
+                .flat_map(|member| member.fields().iter().map(move |field| (member, field)))
+                .find(|(member, field)| {
+                    member.name() == key.constructor && field.name() == &key.field
+                })
         })
+        .ok_or_else(|| {
+            GraphcalError::internal_error(
+                format!(
+                    "semantic type metadata missing constrained field `{}.{}`",
+                    key.constructor, key.field
+                ),
+                src,
+                crate::diagnostic_anchor::DiagnosticAnchor::Source(span),
+            )
+        })?;
+    Ok((type_def, variant, field))
 }
 
 /// Check that domain bound expressions on struct/union fields have the
@@ -1249,37 +1300,8 @@ fn check_field_domain_constraint_dimensions(
             let diagnostic_bound = first_constrained_field_bound(key, field_semantics, src)?;
             let diagnostic_src = &diagnostic_bound.src;
             let diagnostic_span = diagnostic_bound.span;
-            let type_def = dag
-                .semantic
-                .type_defs
-                .struct_types
-                .get(&key.owning_type)
-                .ok_or_else(|| GraphcalError::InternalError {
-                    message: format!(
-                        "semantic type metadata missing constrained type `{}`",
-                        key.owning_type
-                    ),
-                    src: *diagnostic_src,
-                    anchor: crate::diagnostic_anchor::DiagnosticAnchor::Source(diagnostic_span),
-                })?;
-            let (variant, field) = type_def
-                .union_members()
-                .and_then(|members| {
-                    members
-                        .iter()
-                        .flat_map(|member| member.fields().iter().map(move |field| (member, field)))
-                        .find(|(member, field)| {
-                            member.name() == key.constructor && field.name() == &key.field
-                        })
-                })
-                .ok_or_else(|| GraphcalError::InternalError {
-                    message: format!(
-                        "semantic type metadata missing constrained field `{}.{}`",
-                        key.constructor, key.field
-                    ),
-                    src: *diagnostic_src,
-                    anchor: crate::diagnostic_anchor::DiagnosticAnchor::Source(diagnostic_span),
-                })?;
+            let (type_def, variant, field) =
+                constrained_field_definition(dag, key, *diagnostic_src, diagnostic_span)?;
             let resolved_target = field_semantics.resolved_type().element();
             let expected = expected_bound_from_resolved(resolved_target);
             let deferred_generic_quantity = matches!(
@@ -1289,14 +1311,14 @@ fn check_field_domain_constraint_dimensions(
                 )
             );
             if expected.is_none() && !deferred_generic_quantity {
-                return Err(GraphcalError::InternalError {
-                    message: format!(
+                return Err(GraphcalError::internal_error(
+                    format!(
                         "constrained field target `{}` was not classified",
                         resolved_target.format(registry)
                     ),
-                    src: *diagnostic_src,
-                    anchor: crate::diagnostic_anchor::DiagnosticAnchor::Source(diagnostic_span),
-                }
+                    *diagnostic_src,
+                    crate::diagnostic_anchor::DiagnosticAnchor::Source(diagnostic_span),
+                )
                 .into());
             }
             // For a single-variant collision (record-shape) the display

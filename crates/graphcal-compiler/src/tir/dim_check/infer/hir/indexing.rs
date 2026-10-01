@@ -3,6 +3,7 @@
 use crate::hir::expr::{Expr, ForBinding, ForBindingIndex, IndexArg};
 use crate::outcome::Outcome;
 use crate::semantic_error::dimension::DimensionError;
+use crate::semantic_error::evaluation::EvaluationError;
 use crate::semantic_error::index::IndexError;
 use crate::semantic_error::structure::StructError;
 use crate::source_id::SourceId;
@@ -67,14 +68,17 @@ impl Infer<'_> {
         match kind {
             KeyFormKind::Static => {
                 let Some(form) = &finite_form else {
-                    return Err(GraphcalError::EvalError {
-                        message: "key() constructs Fin-axis keys; named-axis keys are written as \
+                    return Err(GraphcalError::located(
+                        self.env.src,
+                        axis_span,
+                        EvaluationError::Failed {
+                            message:
+                                "key() constructs Fin-axis keys; named-axis keys are written as \
                               qualified labels and coordinate keys come from argmax/argmin or \
                               the coordinate searches"
-                            .to_string(),
-                        src: self.env.src,
-                        span: axis_span.into(),
-                    }
+                                    .to_string(),
+                        },
+                    )
                     .into());
                 };
                 if arg_type != CheckedType::Int {
@@ -90,35 +94,43 @@ impl Infer<'_> {
                     .into());
                 }
                 let Some(position) = try_const_int(arg) else {
-                    return Err(GraphcalError::EvalError {
-                        message: "key() requires a static position; use fin_key() for a \
+                    return Err(GraphcalError::located(
+                        self.env.src,
+                        arg.span,
+                        EvaluationError::Failed {
+                            message: "key() requires a static position; use fin_key() for a \
                               runtime-checked position"
-                            .to_string(),
-                        src: self.env.src,
-                        span: arg.span.into(),
-                    }
+                                .to_string(),
+                        },
+                    )
                     .into());
                 };
                 if position < 0 {
-                    return Err(GraphcalError::EvalError {
-                        message: format!("key() position evaluated to negative value: {position}"),
-                        src: self.env.src,
-                        span: arg.span.into(),
-                    }
+                    return Err(GraphcalError::located(
+                        self.env.src,
+                        arg.span,
+                        EvaluationError::Failed {
+                            message: format!(
+                                "key() position evaluated to negative value: {position}"
+                            ),
+                        },
+                    )
                     .into());
                 }
                 if form.is_constant() {
                     let size = form.constant();
                     let position_u64 = u64::try_from(position).unwrap_or(u64::MAX);
                     if position_u64 >= size {
-                        return Err(GraphcalError::EvalError {
-                            message: format!(
-                                "key() position {position} is out of bounds for {}",
-                                IndexDisplayName::Finite(form.clone())
-                            ),
-                            src: self.env.src,
-                            span: arg.span.into(),
-                        }
+                        return Err(GraphcalError::located(
+                            self.env.src,
+                            arg.span,
+                            EvaluationError::Failed {
+                                message: format!(
+                                    "key() position {position} is out of bounds for {}",
+                                    IndexDisplayName::Finite(form.clone())
+                                ),
+                            },
+                        )
                         .into());
                     }
                 }
@@ -139,13 +151,15 @@ impl Infer<'_> {
             }
             KeyFormKind::Fin => {
                 if finite_form.is_none() {
-                    return Err(GraphcalError::EvalError {
-                        message: format!(
-                            "fin_key() requires a Fin(...) axis, got `{index_identity}`"
-                        ),
-                        src: self.env.src,
-                        span: axis_span.into(),
-                    }
+                    return Err(GraphcalError::located(
+                        self.env.src,
+                        axis_span,
+                        EvaluationError::Failed {
+                            message: format!(
+                                "fin_key() requires a Fin(...) axis, got `{index_identity}`"
+                            ),
+                        },
+                    )
                     .into());
                 }
                 if arg_type != CheckedType::Int {
@@ -175,15 +189,17 @@ impl Infer<'_> {
                 {
                     Some(dimension) => dimension.clone(),
                     None => {
-                        return Err(GraphcalError::EvalError {
-                            message: format!(
-                                "{}() requires a coordinate axis, got `{}`",
-                                kind.as_str(),
-                                index_identity
-                            ),
-                            src: self.env.src,
-                            span: axis_span.into(),
-                        }
+                        return Err(GraphcalError::located(
+                            self.env.src,
+                            axis_span,
+                            EvaluationError::Failed {
+                                message: format!(
+                                    "{}() requires a coordinate axis, got `{}`",
+                                    kind.as_str(),
+                                    index_identity
+                                ),
+                            },
+                        )
                         .into());
                     }
                 };
@@ -301,11 +317,13 @@ impl Infer<'_> {
         let mut current = self.infer_hir_type(inner)?;
         for arg in args {
             let CheckedType::Indexed { element, index } = current else {
-                return Err(GraphcalError::EvalError {
-                    message: "indexing a non-indexed value".to_string(),
-                    src: self.env.src,
-                    span: expr.span.into(),
-                }
+                return Err(GraphcalError::located(
+                    self.env.src,
+                    expr.span,
+                    EvaluationError::Failed {
+                        message: "indexing a non-indexed value".to_string(),
+                    },
+                )
                 .into());
             };
             match arg {
@@ -369,23 +387,21 @@ impl Infer<'_> {
                             }
                         }
                         CheckedType::Quantity(_) => {
-                            return Err(GraphcalError::EvalError {
-                                message: format!(
+                            return Err(GraphcalError::located(self.env.src, local.span, EvaluationError::Failed { message: format!(
                                     "quantity local cannot index into coordinate index `{index}`; use that coordinate index's loop variable"
-                                ),
-                                src: self.env.src,
-                                span: local.span.into(),
-                            }.into());
+                                ) }).into());
                         }
                         _ => {
-                            return Err(GraphcalError::EvalError {
-                                message: format!(
-                                    "`#{}` is not a valid index variable",
-                                    local.value.index()
-                                ),
-                                src: self.env.src,
-                                span: local.span.into(),
-                            }
+                            return Err(GraphcalError::located(
+                                self.env.src,
+                                local.span,
+                                EvaluationError::Failed {
+                                    message: format!(
+                                        "`#{}` is not a valid index variable",
+                                        local.value.index()
+                                    ),
+                                },
+                            )
                             .into());
                         }
                     }
@@ -421,13 +437,9 @@ impl Infer<'_> {
                         continue;
                     }
                     let Some(index_form) = index_form else {
-                        return Err(GraphcalError::EvalError {
-                            message: format!(
+                        return Err(GraphcalError::located(self.env.src, index_expr.span, EvaluationError::Failed { message: format!(
                                 "integer expression cannot index into non-finite-index index `{index}`"
-                            ),
-                            src: self.env.src,
-                            span: index_expr.span.into(),
-                        }.into());
+                            ) }).into());
                     };
                     match expr_type {
                         CheckedType::Int => {
@@ -435,14 +447,10 @@ impl Infer<'_> {
                             // statically discharged constant selects implicitly;
                             // a runtime Int goes through the explicit fin_key().
                             let Some(constant) = try_const_int(index_expr) else {
-                                return Err(GraphcalError::EvalError {
-                                    message: format!(
+                                return Err(GraphcalError::located(self.env.src, index_expr.span, EvaluationError::Failed { message: format!(
                                         "a runtime Int cannot index `{index}` implicitly; write \
                                      `fin_key({index}, ...)` to make the range check explicit",
-                                    ),
-                                    src: self.env.src,
-                                    span: index_expr.span.into(),
-                                }
+                                    ) })
                                 .into());
                             };
                             let position = check_constant_finite_index_index(
@@ -460,14 +468,16 @@ impl Infer<'_> {
                             );
                         }
                         _ => {
-                            return Err(GraphcalError::EvalError {
-                                message: format!(
-                                    "index expression must be an integer type, got {}",
-                                    format_checked_type(&expr_type, self.env.registry)
-                                ),
-                                src: self.env.src,
-                                span: index_expr.span.into(),
-                            }
+                            return Err(GraphcalError::located(
+                                self.env.src,
+                                index_expr.span,
+                                EvaluationError::Failed {
+                                    message: format!(
+                                        "index expression must be an integer type, got {}",
+                                        format_checked_type(&expr_type, self.env.registry)
+                                    ),
+                                },
+                            )
                             .into());
                         }
                     }
@@ -486,25 +496,29 @@ fn check_constant_finite_index_index(
     src: SourceId,
 ) -> Result<u64, GraphcalError> {
     let Ok(index_u64) = u64::try_from(index) else {
-        return Err(GraphcalError::EvalError {
-            message: format!("index expression evaluated to negative value: {index}"),
+        return Err(GraphcalError::located(
             src,
-            span: index_span.into(),
-        });
+            index_span,
+            EvaluationError::Failed {
+                message: format!("index expression evaluated to negative value: {index}"),
+            },
+        ));
     };
     if !index_form.is_constant() {
         return Ok(index_u64);
     }
     let size = index_form.constant();
     if index_u64 >= size {
-        return Err(GraphcalError::EvalError {
-            message: format!(
-                "index {index} out of bounds for {}",
-                IndexDisplayName::Finite(index_form.clone())
-            ),
+        return Err(GraphcalError::located(
             src,
-            span: index_span.into(),
-        });
+            index_span,
+            EvaluationError::Failed {
+                message: format!(
+                    "index {index} out of bounds for {}",
+                    IndexDisplayName::Finite(index_form.clone())
+                ),
+            },
+        ));
     }
     Ok(index_u64)
 }
@@ -540,13 +554,14 @@ mod finite_axis_form_tests {
 
         let error = finite_axis_form(&index, None, source, Span::new(7, 3)).unwrap_err();
         match error {
-            GraphcalError::InternalError { message, .. } => assert!(
-                message.contains(
+            GraphcalError::Internal(internal) => assert!(
+                internal.message().contains(
                     "declared indexed axis `test.Missing` has no semantic index definition"
                 ),
-                "{message}"
+                "{}",
+                internal.message()
             ),
-            other => panic!("expected internal error, got {other:?}"),
+            other @ GraphcalError::Located(_) => panic!("expected internal error, got {other:?}"),
         }
     }
 }

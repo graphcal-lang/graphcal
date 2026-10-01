@@ -14,6 +14,8 @@ use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
 use graphcal_compiler::graphcal_error::GraphcalError;
 use graphcal_compiler::outcome::Outcome;
 use graphcal_compiler::resolved_name::ResolvedDeclName;
+use graphcal_compiler::semantic_error::SemanticErrorKind;
+use graphcal_compiler::semantic_error::evaluation::EvaluationError;
 use graphcal_compiler::source_id::SourceId;
 use graphcal_compiler::syntax::span::Span;
 use graphcal_compiler::tir::texpr::TExpr;
@@ -110,17 +112,27 @@ impl<'a> ScheduledDeclaration<'a> {
 #[must_use]
 pub fn eval_failed_node_error(error: &GraphcalError) -> NodeUnavailable {
     match error {
-        GraphcalError::EvaluationUnavailable {
-            reason: NodeUnavailable::Todo { declaration },
+        GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+            kind:
+                SemanticErrorKind::Evaluation(EvaluationError::Unavailable {
+                    reason: NodeUnavailable::Todo { declaration },
+                    ..
+                }),
             ..
-        } => NodeUnavailable::Blocked {
+        }) => NodeUnavailable::Blocked {
             unfinished: graphcal_compiler::syntax::non_empty::NonEmpty::singleton(
                 declaration.clone(),
             ),
             failed_deps: Vec::new(),
         },
-        GraphcalError::EvaluationUnavailable { reason, .. } => reason.clone(),
-        GraphcalError::EvalError { message, .. } => NodeUnavailable::EvalFailed {
+        GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+            kind: SemanticErrorKind::Evaluation(EvaluationError::Unavailable { reason, .. }),
+            ..
+        }) => reason.clone(),
+        GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+            kind: SemanticErrorKind::Evaluation(EvaluationError::Failed { message, .. }),
+            ..
+        }) => NodeUnavailable::EvalFailed {
             message: message.clone(),
         },
         other => NodeUnavailable::EvalFailed {
@@ -227,9 +239,9 @@ impl<'a> ExecutionFrame<'a> {
         key: &ResolvedDeclName,
         error: GraphcalError,
     ) -> Result<(), GraphcalError> {
-        let only_incomplete = matches!(&error, GraphcalError::EvaluationUnavailable { reason, .. } if !reason.has_failure());
+        let only_incomplete = matches!(&error, GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic { kind: SemanticErrorKind::Evaluation(EvaluationError::Unavailable { reason, .. }), .. }) if !reason.has_failure());
         match (&error, self.policy) {
-            (GraphcalError::InternalError { .. }, _) => Err(error),
+            (GraphcalError::Internal(_), _) => Err(error),
             (_, FailurePolicy::Propagate) if !only_incomplete => Err(error),
             _ => {
                 self.errors
@@ -256,11 +268,13 @@ impl<'a> ExecutionFrame<'a> {
             self.presented.remove(key);
             return self.failure(
                 key,
-                GraphcalError::EvalError {
-                    message: violation.message,
-                    src: source,
-                    span: span.into(),
-                },
+                GraphcalError::located(
+                    source,
+                    span,
+                    EvaluationError::Failed {
+                        message: violation.message,
+                    },
+                ),
             );
         }
         self.store(key, value);

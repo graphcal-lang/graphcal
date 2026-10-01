@@ -5,6 +5,7 @@ use crate::hir::nominal::{NominalConstructor, NominalField, NominalTypeDef};
 use crate::hir::types::GenericArg;
 use crate::outcome::Outcome;
 use crate::resolved_name::ResolvedConstructorName;
+use crate::semantic_error::evaluation::EvaluationError;
 use crate::semantic_error::structure::StructError;
 
 use crate::graphcal_error::GraphcalError;
@@ -143,15 +144,17 @@ impl Infer<'_> {
         let mut seen_fields = std::collections::HashSet::new();
         for field in fields {
             if !seen_fields.insert(field.name.value.clone()) {
-                return Err(GraphcalError::EvalError {
-                    message: format!(
-                        "duplicate field `{}` in constructor `{}`",
-                        field.name.value,
-                        variant.name()
-                    ),
-                    src: self.env.src,
-                    span: field.name.span.into(),
-                }
+                return Err(GraphcalError::located(
+                    self.env.src,
+                    field.name.span,
+                    EvaluationError::Failed {
+                        message: format!(
+                            "duplicate field `{}` in constructor `{}`",
+                            field.name.value,
+                            variant.name()
+                        ),
+                    },
+                )
                 .into());
             }
         }
@@ -197,14 +200,18 @@ impl Infer<'_> {
                 .fields()
                 .iter()
                 .find(|field| field.name() == &field_init.name.value)
-                .ok_or_else(|| GraphcalError::EvalError {
-                    message: format!(
-                        "internal: unknown field `{}` in constructor `{}`",
-                        field_init.name.value,
-                        variant.name()
-                    ),
-                    src: self.env.src,
-                    span: field_init.name.span.into(),
+                .ok_or_else(|| {
+                    GraphcalError::located(
+                        self.env.src,
+                        field_init.name.span,
+                        EvaluationError::Failed {
+                            message: format!(
+                                "internal: unknown field `{}` in constructor `{}`",
+                                field_init.name.value,
+                                variant.name()
+                            ),
+                        },
+                    )
                 })?;
             let value_type = self.infer_hir_type(&field_init.value)?;
             let expected = resolved_field_type(

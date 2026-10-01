@@ -116,14 +116,14 @@ impl UnfrozenIR {
             .iter()
             .any(|existing| existing.instance.id().owner() == input.instance.id().owner())
         {
-            return Err(GraphcalError::InternalError {
-                message: format!(
+            return Err(GraphcalError::internal_error(
+                format!(
                     "duplicate semantic instance identity `{}`",
                     input.instance.id().owner()
                 ),
                 src,
-                anchor: crate::diagnostic_anchor::DiagnosticAnchor::Source(span),
-            });
+                crate::diagnostic_anchor::DiagnosticAnchor::Source(span),
+            ));
         }
         self.semantic_instances.push(UnfrozenSemanticInstance {
             instance: input.instance,

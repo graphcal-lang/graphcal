@@ -64,7 +64,7 @@ def measure []: nothing -> record {
         | where {|source| not ($source.path | str contains "graphcal-compiler/src/resolve/") }
     let resolver = $core | where {|source| $source.path | str contains "graphcal-compiler/src/resolve/" }
     {
-        internal_error_calls: (count-matches $core '(?<!fn )\binternal_error\(')
+        internal_error_calls: (count-matches $core '(?<!fn )\b(?:\w*(?:internal|invariant)\w*|Invariant::violated|InternalError::new)\(')
         resolved_name_from_def_outside_resolver: (count-matches $outside_resolver 'Resolved[A-Za-z]*Name::from_def\b')
         expect_valid_format: (count-matches $core 'expect_valid\(\s*&?format!\(')
         too_many_arguments_expects: (count-matches $consumers 'clippy::too_many_arguments')

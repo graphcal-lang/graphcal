@@ -9,6 +9,7 @@ use crate::resolve::error::{ModuleResolveError, NameCategory};
 use crate::semantic_error::attribute::AttributeError;
 use crate::semantic_error::dimension::DimensionError;
 use crate::semantic_error::domain::DomainError;
+use crate::semantic_error::evaluation::EvaluationError;
 use crate::semantic_error::index::IndexError;
 use crate::semantic_error::module::ModuleError;
 use crate::semantic_error::name::NameError;
@@ -281,11 +282,11 @@ pub fn expr_lower_error_to_graphcal(err: &ExprLowerError, src: SourceId) -> Grap
             reason,
             span,
         } => {
-            return GraphcalError::InternalError {
-                message: format!("validated timezone `{time_zone}` could not be loaded: {reason}"),
+            return GraphcalError::internal_error(
+                format!("validated timezone `{time_zone}` could not be loaded: {reason}"),
                 src,
-                anchor: crate::diagnostic_anchor::DiagnosticAnchor::Source(*span),
-            };
+                crate::diagnostic_anchor::DiagnosticAnchor::Source(*span),
+            );
         }
         ExprLowerError::EpochTimeScaleArgumentCount { got, span } => {
             return GraphcalError::located(
@@ -461,11 +462,13 @@ pub fn expr_lower_error_to_graphcal(err: &ExprLowerError, src: SourceId) -> Grap
         ExprLowerError::DuplicateLocalBinding { duplicate, .. }
         | ExprLowerError::LocalBindingShadowsTerm { duplicate, .. } => *duplicate,
     };
-    GraphcalError::EvalError {
-        message: err.to_string(),
+    GraphcalError::located(
         src,
-        span: span.into(),
-    }
+        span,
+        EvaluationError::Failed {
+            message: err.to_string(),
+        },
+    )
 }
 
 /// Convert a HIR type-lowering failure into a spanned diagnostic.
@@ -497,11 +500,13 @@ pub fn hir_lower_error_to_graphcal(err: &HirLowerError, src: SourceId) -> Graphc
         HirLowerError::DuplicateGenericParam { duplicate, .. }
         | HirLowerError::GenericParamShadowsStatic { duplicate, .. } => *duplicate,
     };
-    GraphcalError::EvalError {
-        message: err.to_string(),
+    GraphcalError::located(
         src,
-        span: span.into(),
-    }
+        span,
+        EvaluationError::Failed {
+            message: err.to_string(),
+        },
+    )
 }
 
 #[cfg(test)]
@@ -546,7 +551,7 @@ mod tests {
         for slot in [TypePathSlot::IndexAxis, TypePathSlot::DimensionTerm] {
             assert!(matches!(
                 unknown(path.clone(), slot),
-                GraphcalError::EvalError { message, .. }
+                GraphcalError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Evaluation(EvaluationError::Failed { message, .. }), .. })
                     if message == "unknown type-level name `lib::Foo`"
             ));
         }

@@ -5,6 +5,7 @@ use crate::hir::nominal::{NominalGenericParam, NominalTypeDef};
 use crate::resolve::error::ModuleResolveError;
 use crate::resolved_name::{ResolvedDimName, ResolvedIndexName, ResolvedStructTypeName};
 use crate::semantic_error::dimension::DimensionError;
+use crate::semantic_error::evaluation::EvaluationError;
 use crate::semantic_error::index::IndexError;
 use crate::semantic_error::structure::StructError;
 use crate::source_id::SourceId;
@@ -27,19 +28,21 @@ pub(super) fn module_resolve_error(
     src: SourceId,
     span: Span,
 ) -> GraphcalError {
-    GraphcalError::EvalError {
-        message: err.to_string(),
+    GraphcalError::located(
         src,
-        span: span.into(),
-    }
+        span,
+        EvaluationError::Failed {
+            message: err.to_string(),
+        },
+    )
 }
 
-pub(super) const fn internal_error(message: String, src: SourceId, span: Span) -> GraphcalError {
-    GraphcalError::InternalError {
+pub(super) fn internal_error(message: String, src: SourceId, span: Span) -> GraphcalError {
+    GraphcalError::internal_error(
         message,
         src,
-        anchor: crate::diagnostic_anchor::DiagnosticAnchor::Source(span),
-    }
+        crate::diagnostic_anchor::DiagnosticAnchor::Source(span),
+    )
 }
 
 #[derive(Clone, Copy)]
@@ -206,12 +209,11 @@ fn resolve_hir_dim_expr(
         Dimension::dimensionless(),
         |acc, term| -> Result<Dimension, GraphcalError> {
             let ResolvedDimTerm::Concrete { dim, power, op } = term else {
-                return Err(GraphcalError::InternalError {
-                    message: "generic dimension term reached concrete dimension folding"
-                        .to_string(),
-                    src: ctx.src,
-                    anchor: crate::diagnostic_anchor::DiagnosticAnchor::Source(dim_expr.span),
-                });
+                return Err(GraphcalError::internal_error(
+                    "generic dimension term reached concrete dimension folding".to_string(),
+                    ctx.src,
+                    crate::diagnostic_anchor::DiagnosticAnchor::Source(dim_expr.span),
+                ));
             };
             let overflow_err = || {
                 GraphcalError::located(ctx.src, dim_expr.span, DimensionError::DimensionOverflow)
@@ -289,13 +291,15 @@ fn check_type_application_arity(
         } else {
             format!("{required_count}..{total_params}")
         };
-        return Err(GraphcalError::EvalError {
-            message: format!(
-                "type `{type_name}` expects {hint} generic argument(s), got {arg_count}"
-            ),
+        return Err(GraphcalError::located(
             src,
-            span: span.into(),
-        });
+            span,
+            EvaluationError::Failed {
+                message: format!(
+                    "type `{type_name}` expects {hint} generic argument(s), got {arg_count}"
+                ),
+            },
+        ));
     }
     Ok(())
 }
@@ -321,13 +325,17 @@ fn resolve_hir_type_application(
     }
 
     for param in type_def.generic_params().iter().skip(generic_args.len()) {
-        let default = param.default().ok_or_else(|| GraphcalError::EvalError {
-            message: format!(
-                "internal: generic parameter `{}` has no default",
-                param.name()
-            ),
-            src: ctx.src,
-            span: type_ann.span.into(),
+        let default = param.default().ok_or_else(|| {
+            GraphcalError::located(
+                ctx.src,
+                type_ann.span,
+                EvaluationError::Failed {
+                    message: format!(
+                        "internal: generic parameter `{}` has no default",
+                        param.name()
+                    ),
+                },
+            )
         })?;
         // A default may name earlier parameters; instantiate it with the
         // arguments resolved so far.

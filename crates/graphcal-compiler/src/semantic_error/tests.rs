@@ -12,11 +12,12 @@ const FAMILY_SOURCES: &[(&str, &str)] = &[
     ("plugin", include_str!("plugin.rs")),
     ("dimension", include_str!("dimension.rs")),
     ("module", include_str!("module.rs")),
+    ("evaluation", include_str!("evaluation.rs")),
     // CATALOG
 ];
 
 /// Variant name → stable code, read from each family's `code()` match.
-pub fn family_code_catalog() -> BTreeMap<String, String> {
+fn family_code_catalog() -> BTreeMap<String, String> {
     let mut catalog = BTreeMap::new();
     for (family, source) in FAMILY_SOURCES {
         let Some((body, _)) = source
@@ -53,5 +54,37 @@ fn every_family_contributes_codes_with_its_own_prefix() {
             code.len() == 4 && code[1..].chars().all(|c| c.is_ascii_digit()),
             "malformed code `{code}` for `{variant}`"
         );
+    }
+}
+
+#[test]
+fn diagnostic_codes_are_unique_and_reassignments_are_pinned() {
+    let mut catalog = family_code_catalog();
+    let internal = crate::internal_error::InternalError::CODE;
+    catalog.insert(
+        "InternalError".to_owned(),
+        internal.trim_start_matches("graphcal::").to_owned(),
+    );
+    assert!(catalog.len() > 100, "incomplete catalog: {catalog:?}");
+
+    let mut variants_by_code = BTreeMap::new();
+    for (variant, code) in &catalog {
+        if let Some(previous) = variants_by_code.insert(code, variant) {
+            panic!("diagnostic code `{code}` is shared by `{previous}` and `{variant}`");
+        }
+    }
+
+    for (variant, expected) in [
+        ("LinearAlgebraShapeMismatch", "D022"),
+        ("AggregationCardinalityUnknown", "D027"),
+        ("MaterializedShapeTooLarge", "D035"),
+        ("InvalidDatetimeLiteral", "D028"),
+        ("EpochTimeScaleArgumentCount", "D023"),
+        ("InvalidEpochTimeScaleArgument", "D029"),
+        ("UnsupportedEpochTimeScale", "D030"),
+        ("ImportRuntimeItem", "M020"),
+        ("InternalError", "X001"),
+    ] {
+        assert_eq!(catalog.get(variant).map(String::as_str), Some(expected));
     }
 }

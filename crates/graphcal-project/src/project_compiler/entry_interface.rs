@@ -115,12 +115,12 @@ impl CheckedEntryInterface {
     }
 }
 
-const fn missing_interface_fact(message: String, source: SourceId, span: Span) -> PipelineError {
-    PipelineError::Semantic(GraphcalError::InternalError {
+fn missing_interface_fact(message: String, source: SourceId, span: Span) -> PipelineError {
+    PipelineError::Semantic(GraphcalError::internal_error(
         message,
-        src: source,
-        anchor: graphcal_compiler::diagnostic_anchor::DiagnosticAnchor::Source(span),
-    })
+        source,
+        graphcal_compiler::diagnostic_anchor::DiagnosticAnchor::Source(span),
+    ))
 }
 
 /// Attach checked types and runtime identities to HIR source-interface records.

@@ -4,6 +4,7 @@
 //! (`hir::lower`); inference only validates the resulting forms.
 
 use crate::graphcal_error::GraphcalError;
+use crate::semantic_error::evaluation::EvaluationError;
 use crate::source_id::SourceId;
 use crate::syntax::span::Span;
 
@@ -12,9 +13,11 @@ pub(super) fn finite_index_error(
     src: SourceId,
     span: Span,
 ) -> GraphcalError {
-    GraphcalError::EvalError {
-        message: err.describe_finite_index(),
+    GraphcalError::located(
         src,
-        span: span.into(),
-    }
+        span,
+        EvaluationError::Failed {
+            message: err.describe_finite_index(),
+        },
+    )
 }

@@ -88,11 +88,12 @@ fn missing_required_substitution_is_an_internal_error() {
     .unwrap_err();
 
     match error {
-        PipelineError::Semantic(GraphcalError::InternalError { message, .. }) => assert!(
-            message.contains(
+        PipelineError::Semantic(GraphcalError::Internal(internal)) => assert!(
+            internal.message().contains(
                 "required type binding `Element` is absent during generic-leakage analysis"
             ),
-            "{message}"
+            "{}",
+            internal.message()
         ),
         other => panic!("expected internal error, got {other:?}"),
     }

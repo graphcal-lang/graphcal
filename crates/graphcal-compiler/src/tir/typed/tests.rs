@@ -7,6 +7,7 @@ use crate::resolved_name::{ResolvedIndexName, ResolvedStructTypeName, ResolvedUn
 use crate::semantic::time_scale::TimeScale;
 use crate::semantic_error::SemanticErrorKind;
 use crate::semantic_error::dimension::DimensionError;
+use crate::semantic_error::evaluation::EvaluationError;
 use crate::semantic_error::index::IndexError;
 use crate::syntax::dimension::UnitName;
 use crate::syntax::index_name::IndexName;
@@ -56,11 +57,13 @@ fn resolve_source_type(
             key.owning_type.as_str() == "ResolutionSubject" && key.field.as_str() == "value"
         })
         .map(|(_, field)| field.resolved_type().clone())
-        .ok_or_else(|| GraphcalError::InternalError {
-            message: "test type field was not resolved through HIR".to_string(),
-            src: crate::source_registry::SourceRegistry::new()
-                .register("test.gcl", Arc::new(source)),
-            anchor: crate::diagnostic_anchor::DiagnosticAnchor::Source(Span::new(0, 0)),
+        .ok_or_else(|| {
+            GraphcalError::internal_error(
+                "test type field was not resolved through HIR".to_string(),
+                crate::source_registry::SourceRegistry::new()
+                    .register("test.gcl", Arc::new(source)),
+                crate::diagnostic_anchor::DiagnosticAnchor::Source(Span::new(0, 0)),
+            )
         })
 }
 
@@ -402,7 +405,7 @@ fn generic_dim_param_cannot_shadow_struct_type() {
     );
     assert!(matches!(
         result,
-        Err(GraphcalError::EvalError { ref message, .. })
+        Err(GraphcalError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Evaluation(EvaluationError::Failed { message, .. }), .. }))
             if message.contains("shadows a visible Static name")
     ));
 }
@@ -1217,7 +1220,7 @@ pub type Wrap<I: Index> {
 ";
     assert!(matches!(
         parse_and_type_resolve(source),
-        Err(GraphcalError::EvalError { ref message, .. })
+        Err(GraphcalError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Evaluation(EvaluationError::Failed { message, .. }), .. }))
             if message.contains("shadows a visible Static name")
     ));
 }
@@ -1432,7 +1435,7 @@ fn convert_generic_dim_param_fails() {
         .unwrap_err();
     assert!(matches!(
         err,
-        GraphcalError::EvalError { ref message, .. }
+        GraphcalError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Evaluation(EvaluationError::Failed { message, .. }), .. })
             if message == "cannot use generic dimension parameter `D` as a concrete type"
     ));
     let err = ResolvedValueType::Quantity(dimension(2))
@@ -1440,7 +1443,7 @@ fn convert_generic_dim_param_fails() {
         .unwrap_err();
     assert!(matches!(
         err,
-        GraphcalError::EvalError { ref message, .. }
+        GraphcalError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Evaluation(EvaluationError::Failed { message, .. }), .. })
             if message == "cannot use generic dimension expression as a concrete type"
     ));
 }
@@ -1456,7 +1459,13 @@ fn convert_generic_index_fails() {
     }
     .to_checked_type(make_src())
     .unwrap_err();
-    assert!(matches!(err, GraphcalError::EvalError { .. }));
+    assert!(matches!(
+        err,
+        GraphcalError::Located(crate::diagnostic::Diagnostic {
+            kind: SemanticErrorKind::Evaluation(EvaluationError::Failed { .. }),
+            ..
+        })
+    ));
 }
 
 // --- Datetime type resolution tests ---
@@ -1506,7 +1515,13 @@ fn resolve_datetime_gpst() {
 #[test]
 fn resolve_datetime_unknown_scale_error() {
     let err = resolve_source_type("Datetime<XYZ>", &[], &[], &[]).unwrap_err();
-    assert!(matches!(err, GraphcalError::EvalError { .. }));
+    assert!(matches!(
+        err,
+        GraphcalError::Located(crate::diagnostic::Diagnostic {
+            kind: SemanticErrorKind::Evaluation(EvaluationError::Failed { .. }),
+            ..
+        })
+    ));
 }
 
 #[test]
@@ -1890,7 +1905,7 @@ fn checked_tir_pairs_each_local_body_with_everything_its_check_published() {
     };
     let fails_with = |result: Result<CheckedTir, GraphcalError>, expected: &str| {
         assert!(
-            matches!(&result, Err(GraphcalError::InternalError { message, .. }) if message.contains(expected)),
+            matches!(&result, Err(GraphcalError::Internal(internal)) if internal.message().contains(expected)),
             "expected `{expected}`: {result:?}"
         );
     };

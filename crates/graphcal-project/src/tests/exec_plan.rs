@@ -64,7 +64,7 @@ fn callables_reject_missing_and_out_of_closure_locations() {
             prepare_callable_plan_for_test(tir, &scopes, root, &declarations, &cancellation)
                 .unwrap_err();
         assert!(
-            matches!(&error, Outcome::Failed(GraphcalError::InternalError { message, .. }) if message.contains(expected)),
+            matches!(&error, Outcome::Failed(GraphcalError::Internal(internal)) if internal.message().contains(expected)),
             "{error:?}"
         );
     }

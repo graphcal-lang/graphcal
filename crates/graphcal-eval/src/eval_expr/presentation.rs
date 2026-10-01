@@ -9,6 +9,8 @@ use graphcal_compiler::graphcal_error::GraphcalError;
 use graphcal_compiler::hir::expr::ResolvedUnitExpr;
 use graphcal_compiler::outcome::Outcome;
 use graphcal_compiler::semantic::unit_scale::PositiveFiniteScale;
+use graphcal_compiler::semantic_error::SemanticErrorKind;
+use graphcal_compiler::semantic_error::evaluation::EvaluationError;
 use graphcal_compiler::tir::typed::scoped_node::ScopedUnitExpr;
 
 use super::context::EvalSession;
@@ -107,12 +109,16 @@ fn resolve_request(
         .map(|scale| scaled(&request.unit, scale, &context))
     {
         Ok(leaf) => Ok(leaf),
-        Err(
-            error @ (Outcome::Cancelled | Outcome::Failed(GraphcalError::InternalError { .. })),
-        ) => Err(error),
+        Err(error @ (Outcome::Cancelled | Outcome::Failed(GraphcalError::Internal(_)))) => {
+            Err(error)
+        }
         Err(Outcome::Failed(error)) => Ok(QuantityDisplay::Failed(PresentationFailure::Scale {
             source_name: match &error {
-                GraphcalError::EvalError { src, .. } => context.source_name(*src).to_owned(),
+                GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+                    kind: SemanticErrorKind::Evaluation(EvaluationError::Failed { .. }),
+                    src,
+                    ..
+                }) => context.source_name(*src).to_owned(),
                 _ => context.source_name(context.src).to_owned(),
             },
             message: error.to_string(),

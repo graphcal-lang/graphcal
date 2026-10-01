@@ -266,11 +266,14 @@ mod tests {
             .unwrap_err();
 
         match error {
-            GraphcalError::InternalError { message, .. } => assert!(
-                message.contains("lost the parameter that binds dimension variable `D`"),
-                "{message}"
+            GraphcalError::Internal(internal) => assert!(
+                internal
+                    .message()
+                    .contains("lost the parameter that binds dimension variable `D`"),
+                "{}",
+                internal.message()
             ),
-            other => panic!("expected internal error, got {other:?}"),
+            other @ GraphcalError::Located(_) => panic!("expected internal error, got {other:?}"),
         }
     }
 

@@ -30,6 +30,7 @@ pub mod generic_param;
 pub mod graphcal_error;
 pub mod hir;
 pub mod import_cycle;
+pub mod internal_error;
 pub mod ir;
 pub mod nat;
 pub mod node_definition;

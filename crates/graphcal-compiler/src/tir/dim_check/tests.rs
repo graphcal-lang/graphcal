@@ -7,6 +7,7 @@ use crate::semantic_error::SemanticErrorKind;
 use crate::semantic_error::attribute::AttributeError;
 use crate::semantic_error::dimension::DimensionError;
 use crate::semantic_error::domain::DomainError;
+use crate::semantic_error::evaluation::EvaluationError;
 use crate::semantic_error::graph::GraphError;
 use crate::semantic_error::index::IndexError;
 use crate::semantic_error::name::NameError;
@@ -41,20 +42,22 @@ fn check(source: &str) -> Result<HashMap<ScopedName, CheckedType>, GraphcalError
     let lowered = crate::ir::lower::lower_file_with_inline_dags_for_test(&file, "test.gcl", src)?;
     let resolver = lowered.resolver;
     let mut project_types = crate::tir::typed::ProjectTypeStore::default();
-    project_types
-        .insert_graphcal_prelude()
-        .map_err(|err| GraphcalError::InternalError {
-            message: format!("test module type prelude failed: {err}"),
+    project_types.insert_graphcal_prelude().map_err(|err| {
+        GraphcalError::internal_error(
+            format!("test module type prelude failed: {err}"),
             src,
-            anchor: crate::diagnostic_anchor::DiagnosticAnchor::Source(Span::new(0, 0)),
-        })?;
+            crate::diagnostic_anchor::DiagnosticAnchor::Source(Span::new(0, 0)),
+        )
+    })?;
     for dag in std::iter::once(&lowered.root).chain(&lowered.inline_dags) {
         project_types
             .insert_module(dag.definitions())
-            .map_err(|error| GraphcalError::InternalError {
-                message: format!("test HIR type store failed: {error}"),
-                src,
-                anchor: crate::diagnostic_anchor::DiagnosticAnchor::Source(Span::new(0, 0)),
+            .map_err(|error| {
+                GraphcalError::internal_error(
+                    format!("test HIR type store failed: {error}"),
+                    src,
+                    crate::diagnostic_anchor::DiagnosticAnchor::Source(Span::new(0, 0)),
+                )
             })?;
     }
     let mut builder = crate::tir::typed::type_resolve_draft(
@@ -70,13 +73,13 @@ fn check(source: &str) -> Result<HashMap<ScopedName, CheckedType>, GraphcalError
             &resolver,
             &project_types,
         )?;
-        builder
-            .insert_dag(compiled_dag)
-            .map_err(|error| GraphcalError::InternalError {
-                message: error.to_string(),
+        builder.insert_dag(compiled_dag).map_err(|error| {
+            GraphcalError::internal_error(
+                error.to_string(),
                 src,
-                anchor: crate::diagnostic_anchor::DiagnosticAnchor::Source(Span::new(0, 0)),
-            })?;
+                crate::diagnostic_anchor::DiagnosticAnchor::Source(Span::new(0, 0)),
+            )
+        })?;
     }
     let tir = check_draft(builder, src)?;
     Ok(root_declared_types(tir.root().body()))
@@ -260,7 +263,7 @@ fn body_observations_reject_a_second_record_of_one_expression() {
         .unwrap();
     assert!(matches!(
         observations.record(expr, &ty, tir.root(), &unchecked, src),
-        Err(GraphcalError::InternalError { .. })
+        Err(GraphcalError::Internal(_))
     ));
 }
 
@@ -1021,7 +1024,7 @@ fn incomplete_large_axis_map_reports_one_bounded_missing_witness() {
 
     let error = check(&source).unwrap_err();
     assert!(
-        matches!(&error, GraphcalError::EvalError { message, .. }
+        matches!(&error, GraphcalError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Evaluation(EvaluationError::Failed { message, .. }), .. })
             if message.contains("missing 524287 entries")
                 && message.contains("first missing entry")
                 && message.contains("A18#Y")),
@@ -1371,7 +1374,11 @@ fn builtin_arity_is_checked_before_arguments_are_inferred() {
 fn optional_trailing_arity_is_checked_before_arguments_are_inferred() {
     let source = format!("node x: Datetime<UTC> = datetime({ILL_TYPED_ARG}, 1.0, 2.0);");
     let error = check(&source).unwrap_err();
-    let GraphcalError::EvalError { message, .. } = &error else {
+    let GraphcalError::Located(crate::diagnostic::Diagnostic {
+        kind: SemanticErrorKind::Evaluation(EvaluationError::Failed { message, .. }),
+        ..
+    }) = &error
+    else {
         panic!("expected optional-trailing arity diagnostic, got: {error:?}");
     };
     assert_eq!(message, "datetime() expects 1 or 2 arguments, got 3");
@@ -1948,7 +1955,13 @@ type Orbit { Orbit(altitude: Length, speed: Velocity) }
 node o: Orbit = Orbit(altitude: 400.0 km, altitude: 401.0 km, speed: 7.6 km / s);";
     let err = check(source).unwrap_err();
     assert!(
-        matches!(err, GraphcalError::EvalError { .. }),
+        matches!(
+            err,
+            GraphcalError::Located(crate::diagnostic::Diagnostic {
+                kind: SemanticErrorKind::Evaluation(EvaluationError::Failed { .. }),
+                ..
+            })
+        ),
         "got: {err:?}"
     );
 }
@@ -1980,7 +1993,13 @@ param x: Pair = Pair(a: 1.0 m, b: 2.0 m);
 node y: Length = match @x { Pair(a: left, a: right) => left + right };";
     let err = check(source).unwrap_err();
     assert!(
-        matches!(err, GraphcalError::EvalError { .. }),
+        matches!(
+            err,
+            GraphcalError::Located(crate::diagnostic::Diagnostic {
+                kind: SemanticErrorKind::Evaluation(EvaluationError::Failed { .. }),
+                ..
+            })
+        ),
         "got: {err:?}"
     );
 }
@@ -2065,7 +2084,13 @@ param x: Dimensionless = 1.0;
 node bad: Dimensionless = scan(@x, 0.0, |acc, val| acc + val);";
     let err = check(source).unwrap_err();
     assert!(
-        matches!(err, GraphcalError::EvalError { .. }),
+        matches!(
+            err,
+            GraphcalError::Located(crate::diagnostic::Diagnostic {
+                kind: SemanticErrorKind::Evaluation(EvaluationError::Failed { .. }),
+                ..
+            })
+        ),
         "got: {err:?}"
     );
 }
@@ -2135,7 +2160,13 @@ param x: Dimensionless = 1.0;
 param bad: Dimensionless = @x[Phase#Coast];";
     let err = check(source).unwrap_err();
     assert!(
-        matches!(err, GraphcalError::EvalError { .. }),
+        matches!(
+            err,
+            GraphcalError::Located(crate::diagnostic::Diagnostic {
+                kind: SemanticErrorKind::Evaluation(EvaluationError::Failed { .. }),
+                ..
+            })
+        ),
         "got: {err:?}"
     );
 }
@@ -2172,7 +2203,7 @@ param v: Dimensionless[Fin(3)] = table[Fin(3)] { 1.0; 2.0; 3.0; };
 node bad: Dimensionless = @v[5];";
     let err = check(source).unwrap_err();
     assert!(
-        matches!(&err, GraphcalError::EvalError { message, .. } if message.contains("index 5 out of bounds for Fin(3)")),
+        matches!(&err, GraphcalError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Evaluation(EvaluationError::Failed { message, .. }), .. }) if message.contains("index 5 out of bounds for Fin(3)")),
         "got: {err:?}"
     );
 }
@@ -2184,7 +2215,7 @@ param v: Dimensionless[Fin(3)] = table[Fin(3)] { 1.0; 2.0; 3.0; };
 node bad: Dimensionless = @v[0 - 1];";
     let err = check(source).unwrap_err();
     assert!(
-        matches!(&err, GraphcalError::EvalError { message, .. } if message.contains("index expression evaluated to negative value: -1")),
+        matches!(&err, GraphcalError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Evaluation(EvaluationError::Failed { message, .. }), .. }) if message.contains("index expression evaluated to negative value: -1")),
         "got: {err:?}"
     );
 }
@@ -2197,7 +2228,7 @@ pub index P = { A };
 node x: Dimensionless = A;";
     let err = check(source).unwrap_err();
     assert!(
-        matches!(&err, GraphcalError::EvalError { message, .. } if message.contains("unknown Term `A`")),
+        matches!(&err, GraphcalError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Evaluation(EvaluationError::Failed { message, .. }), .. }) if message.contains("unknown Term `A`")),
         "got: {err:?}"
     );
 }
@@ -2207,7 +2238,7 @@ fn value_position_does_not_probe_static_prelude_dimension() {
     let source = "node x: Dimensionless = Length;";
     let err = check(source).unwrap_err();
     assert!(
-        matches!(&err, GraphcalError::EvalError { message, .. } if message.contains("unknown Term `Length`")),
+        matches!(&err, GraphcalError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Evaluation(EvaluationError::Failed { message, .. }), .. }) if message.contains("unknown Term `Length`")),
         "got: {err:?}"
     );
 }
@@ -2231,7 +2262,7 @@ pub index M = { A };
 param x: M#A = 1.0;";
     let err = check(source).unwrap_err();
     assert!(
-        matches!(&err, GraphcalError::EvalError { message, .. }
+        matches!(&err, GraphcalError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Evaluation(EvaluationError::Failed { message, .. }), .. })
             if message == "index label `M#A` cannot be used as a type"),
         "got: {err:?}"
     );
@@ -2256,7 +2287,7 @@ pub index M = { A };
 param x: M<Length> = 1.0;";
     let err = check(source).unwrap_err();
     assert!(
-        matches!(&err, GraphcalError::EvalError { message, .. } if message.contains("`M` is an index, not a type")),
+        matches!(&err, GraphcalError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Evaluation(EvaluationError::Failed { message, .. }), .. }) if message.contains("`M` is an index, not a type")),
         "got: {err:?}"
     );
 }
@@ -2783,7 +2814,7 @@ node values: Dimensionless[Phase] = unfold(
 );";
     let err = check(source).unwrap_err();
     assert!(
-        matches!(&err, GraphcalError::EvalError { message, .. } if message.contains("unfold requires a coordinate index")),
+        matches!(&err, GraphcalError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Evaluation(EvaluationError::Failed { message, .. }), .. }) if message.contains("unfold requires a coordinate index")),
         "got: {err:?}"
     );
 }
@@ -3470,7 +3501,7 @@ node bad: T<1> = T<1>(x: 1);
 ";
     let error = check(source).unwrap_err();
     assert!(
-        matches!(&error, GraphcalError::EvalError { message, .. }
+        matches!(&error, GraphcalError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Evaluation(EvaluationError::Failed { message, .. }), .. })
             if message.contains("out of bounds for Fin(1)")),
         "got: {error:?}"
     );
@@ -3484,7 +3515,7 @@ node bad: T<0> = T<0>(x: 0);
 ";
     let error = check(source).unwrap_err();
     assert!(
-        matches!(&error, GraphcalError::EvalError { message, .. }
+        matches!(&error, GraphcalError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Evaluation(EvaluationError::Failed { message, .. }), .. })
             if message.contains("finite index size must be greater than zero")
                 || message.contains("Fin(0)")),
         "got: {error:?}"
@@ -3501,7 +3532,7 @@ node bad: T<1> = T<1>(x: 1);
 ";
     let error = check(source).unwrap_err();
     assert!(
-        matches!(&error, GraphcalError::EvalError { message, .. }
+        matches!(&error, GraphcalError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Evaluation(EvaluationError::Failed { message, .. }), .. })
             if message.contains("index 1 out of bounds for Fin(1)")),
         "got: {error:?}"
     );
@@ -3517,7 +3548,7 @@ node value: T<2> = T<2>(x: 1);
 ";
     let error = check(source).unwrap_err();
     assert!(
-        matches!(&error, GraphcalError::EvalError { message, .. }
+        matches!(&error, GraphcalError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Evaluation(EvaluationError::Failed { message, .. }), .. })
             if message.contains("negative value: -1")),
         "got: {error:?}"
     );
@@ -3634,7 +3665,7 @@ node y: Length = @nope(v: @src)::result;
 ";
     let err = check(source).unwrap_err();
     assert!(
-        matches!(&err, GraphcalError::EvalError { message, .. } if message.contains("unknown module")),
+        matches!(&err, GraphcalError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Evaluation(EvaluationError::Failed { message, .. }), .. }) if message.contains("unknown module")),
         "got: {err:?}"
     );
 }
@@ -4358,7 +4389,7 @@ param vals: Dimensionless[Step] = { Step#A: 1.0, Step#B: 2.0 };
 plot p = { mark: line, encode: { x: for s: Step { @vals[s] } } };";
     let err = check(source).unwrap_err();
     assert!(
-        matches!(err, GraphcalError::EvalError { ref message, .. } if message.contains("no arguments")),
+        matches!(&err, GraphcalError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Evaluation(EvaluationError::Failed { message, .. }), .. }) if message.contains("no arguments")),
         "got: {err:?}"
     );
 }

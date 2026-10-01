@@ -13,6 +13,7 @@ use crate::display::formatting_registry::FormattingRegistry;
 use crate::exact_rational::ExactRational;
 use crate::graphcal_error::GraphcalError;
 use crate::semantic_error::dimension::DimensionError;
+use crate::semantic_error::evaluation::EvaluationError;
 use crate::source_id::SourceId;
 use crate::syntax::ast::PowerExponent;
 use crate::syntax::span::Span;
@@ -99,17 +100,25 @@ fn fin_key_additive_rule(
     };
     let shifted = bound
         .add(&crate::nat::NatPolyForm::from_constant(addend))
-        .map_err(|err| GraphcalError::EvalError {
-            message: err.to_string(),
-            src,
-            span: rhs.span.into(),
+        .map_err(|err| {
+            GraphcalError::located(
+                src,
+                rhs.span,
+                EvaluationError::Failed {
+                    message: err.to_string(),
+                },
+            )
         })?;
     crate::semantic::checked_type::IndexTypeRef::from_finite_index_form(shifted)
         .map(CheckedType::Key)
-        .map_err(|err| GraphcalError::EvalError {
-            message: err.describe_finite_index(),
-            src,
-            span: rhs.span.into(),
+        .map_err(|err| {
+            GraphcalError::located(
+                src,
+                rhs.span,
+                EvaluationError::Failed {
+                    message: err.describe_finite_index(),
+                },
+            )
         })
 }
 
@@ -661,11 +670,13 @@ pub(in crate::tir::dim_check) fn match_arms_rule(
     src: SourceId,
 ) -> Result<CheckedType<Symbolic>, GraphcalError> {
     let Some(first) = arm_types.first() else {
-        return Err(GraphcalError::EvalError {
-            message: "match expression has no arms".to_string(),
+        return Err(GraphcalError::located(
             src,
-            span: expr_span.into(),
-        });
+            expr_span,
+            EvaluationError::Failed {
+                message: "match expression has no arms".to_string(),
+            },
+        ));
     };
     for (i, arm_type) in arm_types.iter().enumerate().skip(1) {
         if arm_type != first {

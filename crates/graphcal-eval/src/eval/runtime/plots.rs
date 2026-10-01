@@ -291,7 +291,7 @@ impl PlotEvaluationError {
 impl From<Outcome<GraphcalError>> for PlotEvaluationError {
     fn from(error: Outcome<GraphcalError>) -> Self {
         match error {
-            error @ (Outcome::Cancelled | Outcome::Failed(GraphcalError::InternalError { .. })) => {
+            error @ (Outcome::Cancelled | Outcome::Failed(GraphcalError::Internal(_))) => {
                 Self::Fatal(error)
             }
             Outcome::Failed(error) => Self::Unavailable(eval_failed_node_error(&error)),

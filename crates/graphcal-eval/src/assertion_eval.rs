@@ -15,6 +15,8 @@ use graphcal_compiler::graphcal_error::GraphcalError;
 use graphcal_compiler::hir::expr::{AssertBody, Expr};
 use graphcal_compiler::outcome::Outcome;
 use graphcal_compiler::semantic::checked_type::IndexTypeRef;
+use graphcal_compiler::semantic_error::SemanticErrorKind;
+use graphcal_compiler::semantic_error::evaluation::EvaluationError;
 use graphcal_compiler::syntax::index_name::IndexEntryKey;
 use graphcal_compiler::tir::typed::body_scope::Scoped;
 use graphcal_compiler::tir::typed::evaluation_unit::AssertionOperands;
@@ -80,11 +82,10 @@ type Evaluated = Result<AssertResult, Cancelled>;
 fn evaluation_error(error: Outcome<GraphcalError>) -> Evaluated {
     match error {
         Outcome::Cancelled => Err(Cancelled),
-        Outcome::Failed(GraphcalError::EvaluationUnavailable { reason, .. })
-            if reason.is_incomplete() =>
-        {
-            Ok(AssertResult::Blocked { reason })
-        }
+        Outcome::Failed(GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+            kind: SemanticErrorKind::Evaluation(EvaluationError::Unavailable { reason, .. }),
+            ..
+        })) if reason.is_incomplete() => Ok(AssertResult::Blocked { reason }),
         Outcome::Failed(error) => Ok(AssertResult::Error {
             message: error.to_string(),
         }),

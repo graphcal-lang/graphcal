@@ -2,6 +2,7 @@
 
 use crate::binding_error::BindingError;
 
+use graphcal_compiler::semantic_error::evaluation::EvaluationError;
 use graphcal_compiler::syntax::ast::{FieldInit, Ident, IdentPath, MapEntry, MapEntryKey};
 use graphcal_compiler::syntax::fin_position::FinPosition;
 use graphcal_compiler::syntax::non_empty::NonEmpty;
@@ -85,11 +86,13 @@ impl PreparedProject {
             normalize_binding_literal(expr.clone(), &port.value_schema, &self.schema_graph)
                 .map_err(|message| {
                     CompileError::semantic(
-                        GraphcalError::EvalError {
-                            message: format!("invalid binding for `{}`: {message}", port.name),
-                            src: self.source,
-                            span: expr.span.into(),
-                        },
+                        GraphcalError::located(
+                            self.source,
+                            expr.span,
+                            EvaluationError::Failed {
+                                message: format!("invalid binding for `{}`: {message}", port.name),
+                            },
+                        ),
                         &self.sources,
                     )
                 })?;
@@ -488,14 +491,16 @@ impl PreparedProject {
         let hir =
             graphcal_compiler::hir::closed_expr::ClosedExpr::try_new(hir).map_err(|message| {
                 CompileError::semantic(
-                    GraphcalError::EvalError {
-                        message: format!(
-                            "binding for `{}` is not a closed value: {message}",
-                            port.name
-                        ),
-                        src: self.source,
-                        span: span.into(),
-                    },
+                    GraphcalError::located(
+                        self.source,
+                        span,
+                        EvaluationError::Failed {
+                            message: format!(
+                                "binding for `{}` is not a closed value: {message}",
+                                port.name
+                            ),
+                        },
+                    ),
                     &self.sources,
                 )
             })?;
@@ -698,11 +703,13 @@ impl PreparedProject {
                 let entry_schema =
                     map_entry_value_schema(expected, entry.keys.len()).map_err(|message| {
                         CompileError::semantic(
-                            GraphcalError::EvalError {
-                                message: format!("invalid external map binding: {message}"),
-                                src: self.source,
-                                span: entry.value.span.into(),
-                            },
+                            GraphcalError::located(
+                                self.source,
+                                entry.value.span,
+                                EvaluationError::Failed {
+                                    message: format!("invalid external map binding: {message}"),
+                                },
+                            ),
                             &self.sources,
                         )
                     })?;
@@ -740,11 +747,11 @@ impl PreparedProject {
 
     fn binding_internal_error(&self, message: &str, span: Span) -> CompileError {
         CompileError::semantic(
-            GraphcalError::InternalError {
-                message: message.to_string(),
-                src: self.source,
-                anchor: graphcal_compiler::diagnostic_anchor::DiagnosticAnchor::Source(span),
-            },
+            GraphcalError::internal_error(
+                message.to_string(),
+                self.source,
+                graphcal_compiler::diagnostic_anchor::DiagnosticAnchor::Source(span),
+            ),
             &self.sources,
         )
     }
@@ -786,11 +793,13 @@ impl PreparedProject {
 
     pub(super) fn binding_value_error(&self, port: &ParameterPort, message: &str) -> CompileError {
         CompileError::semantic(
-            GraphcalError::EvalError {
-                message: message.to_string(),
-                src: self.source,
-                span: port.span.into(),
-            },
+            GraphcalError::located(
+                self.source,
+                port.span,
+                EvaluationError::Failed {
+                    message: message.to_string(),
+                },
+            ),
             &self.sources,
         )
     }

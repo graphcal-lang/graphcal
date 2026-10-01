@@ -11,6 +11,7 @@ use crate::semantic::checked_type::{
     CheckedGenericArg, CheckedType, IndexTypeRef, StructTypeRef, Symbolic,
 };
 use crate::semantic_error::domain::DomainError;
+use crate::semantic_error::evaluation::EvaluationError;
 use crate::semantic_error::structure::StructError;
 use crate::source_id::SourceId;
 use crate::syntax::span::Span;
@@ -151,13 +152,9 @@ fn validate(
                 if ancestor == &application {
                     return Ok(());
                 }
-                return Err(GraphcalError::EvalError {
-                    message: format!(
+                return Err(GraphcalError::located(ctx.src, ctx.span, EvaluationError::Failed { message: format!(
                         "recursive generic type `{identity}` changes its arguments; concrete field obligations cannot be discharged finitely"
-                    ),
-                    src: ctx.src,
-                    span: ctx.span.into(),
-                }.into());
+                    ) }).into());
             }
             stack.push(application);
             for member in definition.union_members().into_iter().flatten() {
@@ -213,11 +210,13 @@ fn validate(
 fn validate_index(index: &IndexTypeRef<Symbolic>, ctx: &Context<'_>) -> Result<(), GraphcalError> {
     match index.to_concrete() {
         Some(_) => Ok(()),
-        None => Err(GraphcalError::EvalError {
-            message: format!("unresolved finite-index obligation `{index}`"),
-            src: ctx.src,
-            span: ctx.span.into(),
-        }),
+        None => Err(GraphcalError::located(
+            ctx.src,
+            ctx.span,
+            EvaluationError::Failed {
+                message: format!("unresolved finite-index obligation `{index}`"),
+            },
+        )),
     }
 }
 

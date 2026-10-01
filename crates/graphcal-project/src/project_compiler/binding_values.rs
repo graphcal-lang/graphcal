@@ -4,6 +4,7 @@
 use graphcal_compiler::desugar::desugared_ast::{Expr, ExprKind};
 use graphcal_compiler::graphcal_error::GraphcalError;
 use graphcal_compiler::semantic::index_def::IndexBindingTarget;
+use graphcal_compiler::semantic_error::evaluation::EvaluationError;
 use graphcal_compiler::semantic_error::index::IndexError;
 use graphcal_compiler::semantic_error::module::ModuleError;
 use graphcal_compiler::source_id::SourceId;
@@ -41,11 +42,13 @@ pub(super) fn extract_index_binding_target(
         IndexExpr::Finite { cardinality, .. } => {
             let cardinality = closed_binding_cardinality(&cardinality, file_src)?;
             let finite = FiniteIndex::try_from_u64(cardinality).map_err(|error| {
-                PipelineError::Semantic(GraphcalError::EvalError {
-                    message: error.describe_finite_index(),
-                    src: file_src,
-                    span: expr.span.into(),
-                })
+                PipelineError::Semantic(GraphcalError::located(
+                    file_src,
+                    expr.span,
+                    EvaluationError::Failed {
+                        message: error.describe_finite_index(),
+                    },
+                ))
             })?;
             Ok(IndexBindingTarget::Finite(finite))
         }
@@ -62,10 +65,14 @@ fn closed_binding_cardinality(
     file_src: SourceId,
 ) -> Result<u64, GraphcalError> {
     use graphcal_compiler::desugar::desugared_ast::NatExpr;
-    let overflow = |span: graphcal_compiler::syntax::span::Span| GraphcalError::EvalError {
-        message: graphcal_compiler::nat::NatOverflowError.to_string(),
-        src: file_src,
-        span: span.into(),
+    let overflow = |span: graphcal_compiler::syntax::span::Span| {
+        GraphcalError::located(
+            file_src,
+            span,
+            EvaluationError::Failed {
+                message: graphcal_compiler::nat::NatOverflowError.to_string(),
+            },
+        )
     };
     match expr {
         NatExpr::Literal(value, _) => Ok(*value),

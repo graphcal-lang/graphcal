@@ -2,6 +2,7 @@
 
 use crate::hir::expr::LocalDecl;
 use crate::hir::expr::{ConstRef, ResolvedUnitExpr};
+use crate::semantic_error::evaluation::EvaluationError;
 use crate::semantic_error::name::NameError;
 use crate::source_id::SourceId;
 
@@ -68,14 +69,16 @@ impl Infer<'_> {
                     },
                 )?;
                 if !target_def.variant().fields().is_empty() {
-                    return Err(GraphcalError::EvalError {
-                        message: format!(
-                            "constructor `{}` requires field arguments",
-                            target_def.name()
-                        ),
-                        src: self.env.src,
-                        span: target.span.into(),
-                    });
+                    return Err(GraphcalError::located(
+                        self.env.src,
+                        target.span,
+                        EvaluationError::Failed {
+                            message: format!(
+                                "constructor `{}` requires field arguments",
+                                target_def.name()
+                            ),
+                        },
+                    ));
                 }
                 let type_args = self.env.resolve_applied_generic_args(
                     target_def.definition(),

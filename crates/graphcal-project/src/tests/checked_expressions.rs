@@ -33,7 +33,7 @@ fn scalar_prototypes_require_discharge_and_invalid_membership_never_publishes() 
             .map_err(Outcome::Failed)
             .and_then(|tree| graphcal_eval::eval_expr::eval_root(&tree, &values, &context));
         assert!(
-            matches!(result, Err(Outcome::Failed(GraphcalError::InternalError { ref message, .. })) if message.contains("undischarged static obligations")),
+            matches!(result, Err(Outcome::Failed(GraphcalError::Internal(ref internal))) if internal.message().contains("undischarged static obligations")),
             "prototype executed: {result:?}"
         );
         for n in [0, 1] {
@@ -118,7 +118,7 @@ fn readiness_is_checked_before_evaluating_an_earlier_sibling() {
             )
         });
     assert!(
-        matches!(result, Err(Outcome::Failed(GraphcalError::InternalError { ref message, .. })) if message.contains("undischarged static obligations")),
+        matches!(result, Err(Outcome::Failed(GraphcalError::Internal(ref internal))) if internal.message().contains("undischarged static obligations")),
         "earlier sibling ran before readiness check: {result:?}"
     );
 }
@@ -192,7 +192,7 @@ node control: Dimensionless = probe::tick() + 1.0;
         .map_err(Outcome::Failed)
         .and_then(|tree| graphcal_eval::eval_expr::eval_root(&tree, &values, &context));
     assert!(
-        matches!(result, Err(Outcome::Failed(GraphcalError::InternalError { ref message, .. })) if message.contains("undischarged static obligations")),
+        matches!(result, Err(Outcome::Failed(GraphcalError::Internal(ref internal))) if internal.message().contains("undischarged static obligations")),
         "{result:?}"
     );
     assert_eq!(

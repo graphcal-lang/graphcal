@@ -1266,13 +1266,11 @@ fn validate_index_binding_contracts(
 
     for (port, target) in &bindings.substitution.indexes {
         let site = bindings.index_sites.get(port).ok_or_else(|| {
-            PipelineError::Semantic(GraphcalError::InternalError {
-                message: format!("bound index port `{port}` has no binding site"),
-                src: sites.importer_src,
-                anchor: graphcal_compiler::diagnostic_anchor::DiagnosticAnchor::Source(
-                    sites.include_span,
-                ),
-            })
+            PipelineError::Semantic(GraphcalError::internal_error(
+                format!("bound index port `{port}` has no binding site"),
+                sites.importer_src,
+                graphcal_compiler::diagnostic_anchor::DiagnosticAnchor::Source(sites.include_span),
+            ))
         })?;
         let candidate = match target {
             InstanceIndexBindingTarget::Declared(identity) => definitions.index(identity)?,
@@ -1386,15 +1384,15 @@ fn effective_index_binding_contract(
                     }
                 })
                 .ok_or_else(|| {
-                    PipelineError::Semantic(GraphcalError::InternalError {
-                        message: format!(
+                    PipelineError::Semantic(GraphcalError::internal_error(
+                        format!(
                             "required coordinate index `{dep_index}` has no source declaration"
                         ),
-                        src: sites.importer_src,
-                        anchor: graphcal_compiler::diagnostic_anchor::DiagnosticAnchor::Source(
+                        sites.importer_src,
+                        graphcal_compiler::diagnostic_anchor::DiagnosticAnchor::Source(
                             binding_span,
                         ),
-                    })
+                    ))
                 })?;
             // The expression is the dependency's source: a reference to a
             // bound dimension port evaluates to the importer's binding target,
@@ -1422,13 +1420,11 @@ fn effective_index_binding_contract(
             Ok(IndexBindingContract::Coordinate { dimension })
         }
         IndexKind::Concrete(ConcreteIndexKind::Finite { .. }) => {
-            Err(PipelineError::Semantic(GraphcalError::InternalError {
-                message: format!("declared dependency index `{dep_index}` became structural"),
-                src: sites.importer_src,
-                anchor: graphcal_compiler::diagnostic_anchor::DiagnosticAnchor::Source(
-                    binding_span,
-                ),
-            }))
+            Err(PipelineError::Semantic(GraphcalError::internal_error(
+                format!("declared dependency index `{dep_index}` became structural"),
+                sites.importer_src,
+                graphcal_compiler::diagnostic_anchor::DiagnosticAnchor::Source(binding_span),
+            )))
         }
     }
 }

@@ -8,6 +8,7 @@ use std::collections::HashMap;
 
 use graphcal_compiler::graphcal_error::GraphcalError;
 use graphcal_compiler::semantic_error::SemanticErrorKind;
+use graphcal_compiler::semantic_error::evaluation::EvaluationError;
 use graphcal_compiler::semantic_error::module::ModuleError;
 
 use graphcal_compiler::graphcal_error::RenderedGraphcalError;
@@ -109,7 +110,12 @@ dag inner {
     let error = compile_and_eval_project(&root, &HashMap::new(), None, &RealFileSystem::default())
         .expect_err("a file root including itself through its DAG must be rejected");
     let CompileError::Eval(RenderedGraphcalError {
-        error: GraphcalError::EvalError { message, span, .. },
+        error:
+            GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+                kind: SemanticErrorKind::Evaluation(EvaluationError::Failed { message, .. }),
+                primary: span,
+                ..
+            }),
         ..
     }) = &error
     else {

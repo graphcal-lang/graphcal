@@ -6,6 +6,7 @@ use graphcal_compiler::declaration_category::DeclCategory;
 use graphcal_compiler::graphcal_error::GraphcalError;
 use graphcal_compiler::outcome::Outcome;
 use graphcal_compiler::semantic::checked_type::{CheckedType, IndexTypeRef, StructTypeRef};
+use graphcal_compiler::semantic_error::evaluation::EvaluationError;
 use graphcal_compiler::syntax::index_name::IndexEntryKey;
 use graphcal_compiler::syntax::span::{Span, Spanned};
 use graphcal_compiler::tir::texpr::{
@@ -1398,9 +1399,7 @@ fn eval_dag_call(
     let output_key = &output.value;
     let output_value = dag_values.get(output_key).ok_or_else(|| {
         if let Some(reason) = errors.get(output_key) {
-            return GraphcalError::EvaluationUnavailable {
-                reason: reason.clone(), src: ctx.src, span: output.span.into(),
-            };
+            return GraphcalError::located(ctx.src, output.span, EvaluationError::Unavailable { reason: reason.clone() });
         }
         ctx.internal_error(
             format!(
@@ -1517,11 +1516,11 @@ fn check_inline_dag_asserts(
                     .into());
             }
             crate::eval::types::AssertResult::Blocked { reason } => {
-                return Err(GraphcalError::EvaluationUnavailable {
-                    reason,
-                    src: ctx.src,
-                    span: call_span.into(),
-                }
+                return Err(GraphcalError::located(
+                    ctx.src,
+                    call_span,
+                    EvaluationError::Unavailable { reason },
+                )
                 .into());
             }
             crate::eval::types::AssertResult::Error { message } => {

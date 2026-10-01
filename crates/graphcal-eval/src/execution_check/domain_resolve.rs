@@ -2,6 +2,7 @@
 
 use graphcal_compiler::declaration_category::ValueDeclCategory;
 use graphcal_compiler::semantic_error::domain::DomainError;
+use graphcal_compiler::semantic_error::evaluation::EvaluationError;
 use graphcal_compiler::source_registry::SourceRegistry;
 use std::collections::{HashMap, HashSet};
 
@@ -287,15 +288,17 @@ fn domain_bound_value_error(
     actual: &RuntimeValue,
     src: SourceId,
 ) -> GraphcalError {
-    GraphcalError::EvalError {
-        message: format!(
-            "{} domain bound on `{display_name}` must evaluate to {expected}, got {}",
-            bound.kind,
-            actual.describe()
-        ),
+    GraphcalError::located(
         src,
-        span: bound.value.span.into(),
-    }
+        bound.value.span,
+        EvaluationError::Failed {
+            message: format!(
+                "{} domain bound on `{display_name}` must evaluate to {expected}, got {}",
+                bound.kind,
+                actual.describe()
+            ),
+        },
+    )
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -362,16 +365,16 @@ fn generic_nat_bindings(
     span: Span,
 ) -> Result<HashMap<graphcal_compiler::hir::types::GenericParamId, u64>, GraphcalError> {
     if type_def.generic_params().len() != generic_args.len() {
-        return Err(GraphcalError::InternalError {
-            message: format!(
+        return Err(GraphcalError::internal_error(
+            format!(
                 "concrete application of `{}` has {} generic arguments, expected {}",
                 type_def.name(),
                 generic_args.len(),
                 type_def.generic_params().len()
             ),
             src,
-            anchor: graphcal_compiler::diagnostic_anchor::DiagnosticAnchor::Source(span),
-        });
+            graphcal_compiler::diagnostic_anchor::DiagnosticAnchor::Source(span),
+        ));
     }
     type_def
         .generic_params()
@@ -791,11 +794,11 @@ fn resolve_constraint_target(
     src: SourceId,
 ) -> Result<ConstraintTarget, GraphcalError> {
     let Some(resolved) = base_resolved else {
-        return Err(GraphcalError::InternalError {
-            message: format!("domain constraint target `{name}` has no resolved type"),
+        return Err(GraphcalError::internal_error(
+            format!("domain constraint target `{name}` has no resolved type"),
             src,
-            anchor: graphcal_compiler::diagnostic_anchor::DiagnosticAnchor::Source(decl_span),
-        });
+            graphcal_compiler::diagnostic_anchor::DiagnosticAnchor::Source(decl_span),
+        ));
     };
     match resolved {
         ResolvedValueType::Quantity(_) => Ok(ConstraintTarget::Quantity),
@@ -851,10 +854,16 @@ fn exact_domain_int_bound(
     src: SourceId,
     span: graphcal_compiler::syntax::span::Span,
 ) -> Result<f64, GraphcalError> {
-    crate::eval_expr::numeric::exact_i64_to_f64(value).map_err(|_| GraphcalError::EvalError {
-        message: format!("domain bound integer {value} is too large for exact quantity comparison"),
-        src,
-        span: span.into(),
+    crate::eval_expr::numeric::exact_i64_to_f64(value).map_err(|_| {
+        GraphcalError::located(
+            src,
+            span,
+            EvaluationError::Failed {
+                message: format!(
+                    "domain bound integer {value} is too large for exact quantity comparison"
+                ),
+            },
+        )
     })
 }
 

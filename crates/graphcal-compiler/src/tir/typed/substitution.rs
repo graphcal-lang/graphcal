@@ -22,6 +22,7 @@ use crate::hir::nominal::NominalGenericParam;
 use crate::nat::{NatOverflowError, NatPolyForm};
 use crate::semantic::checked_type::{CheckedType, IndexTypeRef, InstantiationError, Symbolic};
 use crate::semantic_error::dimension::DimensionError;
+use crate::semantic_error::evaluation::EvaluationError;
 use crate::source_id::SourceId;
 use crate::syntax::span::Span;
 
@@ -61,19 +62,23 @@ impl SubstitutionError {
     #[must_use]
     pub fn into_graphcal(self, src: SourceId) -> GraphcalError {
         match self {
-            Self::NatOverflow { span } => GraphcalError::EvalError {
-                message: NatOverflowError.to_string(),
+            Self::NatOverflow { span } => GraphcalError::located(
                 src,
-                span: span.into(),
-            },
+                span,
+                EvaluationError::Failed {
+                    message: NatOverflowError.to_string(),
+                },
+            ),
             Self::DimensionOverflow { span } => {
                 GraphcalError::located(src, span, DimensionError::DimensionOverflow)
             }
-            Self::InvalidFiniteIndex { error, span } => GraphcalError::EvalError {
-                message: error.describe_finite_index(),
+            Self::InvalidFiniteIndex { error, span } => GraphcalError::located(
                 src,
-                span: span.into(),
-            },
+                span,
+                EvaluationError::Failed {
+                    message: error.describe_finite_index(),
+                },
+            ),
             Self::UnboundNat { param, span } => GraphcalError::internal_error(
                 format!("required Nat binding is missing: {param:?}"),
                 src,

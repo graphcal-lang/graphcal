@@ -210,12 +210,11 @@ impl Infer<'_> {
                     _ => true,
                 };
                 if !resolved_timezone_matches_argument {
-                    return Err(GraphcalError::InternalError {
-                        message: "resolved datetime timezone does not match its source argument"
-                            .to_string(),
-                        src: self.env.src,
-                        anchor: crate::diagnostic_anchor::DiagnosticAnchor::Source(span),
-                    }
+                    return Err(GraphcalError::internal_error(
+                        "resolved datetime timezone does not match its source argument".to_string(),
+                        self.env.src,
+                        crate::diagnostic_anchor::DiagnosticAnchor::Source(span),
+                    )
                     .into());
                 }
                 self.record_contextual_args(args)?;
@@ -241,11 +240,13 @@ impl Infer<'_> {
                 self.record_contextual_args(args)?;
                 epoch_scale
                     .map(CheckedType::Datetime)
-                    .ok_or_else(|| GraphcalError::InternalError {
-                        message: "epoch call reached type inference without a static time scale"
-                            .to_string(),
-                        src: self.env.src,
-                        anchor: crate::diagnostic_anchor::DiagnosticAnchor::Source(span),
+                    .ok_or_else(|| {
+                        GraphcalError::internal_error(
+                            "epoch call reached type inference without a static time scale"
+                                .to_string(),
+                            self.env.src,
+                            crate::diagnostic_anchor::DiagnosticAnchor::Source(span),
+                        )
                     })
                     .map_err(Outcome::Failed)
             }

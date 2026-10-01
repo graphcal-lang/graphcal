@@ -4,6 +4,7 @@ use crate::resolved_name::ResolvedDeclName;
 use crate::semantic::time_scale::TimeScale;
 use crate::semantic_error::SemanticErrorKind;
 use crate::semantic_error::dimension::DimensionError;
+use crate::semantic_error::evaluation::EvaluationError;
 use crate::semantic_error::name::NameError;
 use crate::semantic_error::visibility::VisibilityError;
 use crate::syntax::parser::Parser;
@@ -1153,7 +1154,7 @@ fn generic_parameter_cannot_shadow_private_static_type() {
     ";
     assert!(matches!(
         compile_to_tir(source),
-        Err(GraphcalError::EvalError { ref message, .. })
+        Err(GraphcalError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Evaluation(EvaluationError::Failed { message, .. }), .. }))
             if message.contains("shadows a visible Static name")
     ));
 }

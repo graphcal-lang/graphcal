@@ -36,6 +36,7 @@ use crate::semantic::unit_scale::{
     resolve_unit_expr_with,
 };
 use crate::semantic_error::dimension::DimensionError;
+use crate::semantic_error::evaluation::EvaluationError;
 use crate::semantic_error::index::IndexError;
 use crate::semantic_error::name::NameError;
 use crate::source_id::SourceId;
@@ -1275,11 +1276,13 @@ fn dim_expr_error(failure: DimExprFailure, src: SourceId, span: Span) -> Graphca
 }
 
 fn eval_error(message: impl Into<String>, src: SourceId, span: Span) -> GraphcalError {
-    GraphcalError::EvalError {
-        message: message.into(),
+    GraphcalError::located(
         src,
-        span: span.into(),
-    }
+        span,
+        EvaluationError::Failed {
+            message: message.into(),
+        },
+    )
 }
 
 fn scale_error(
@@ -1297,11 +1300,13 @@ fn unit_resolve_error(err: UnitResolveError, src: SourceId, span: Span) -> Graph
         UnitResolveError::UnknownUnit(name) => {
             GraphcalError::located(src, span, DimensionError::UnknownUnit { name })
         }
-        UnitResolveError::DynamicScale(name) => GraphcalError::EvalError {
-            message: format!("unit `{name}` has a dynamic scale and cannot be used here"),
+        UnitResolveError::DynamicScale(name) => GraphcalError::located(
             src,
-            span: span.into(),
-        },
+            span,
+            EvaluationError::Failed {
+                message: format!("unit `{name}` has a dynamic scale and cannot be used here"),
+            },
+        ),
         UnitResolveError::InvalidScale(err) => scale_error("compound unit scale", err, src, span),
         UnitResolveError::Overflow(_) => {
             GraphcalError::located(src, span, DimensionError::DimensionOverflow)
@@ -1896,7 +1901,10 @@ mod tests {
 
         assert!(matches!(
             evaluator.module_definitions(&Project::id("main")),
-            Err(GraphcalError::EvalError { .. })
+            Err(GraphcalError::Located(crate::diagnostic::Diagnostic {
+                kind: SemanticErrorKind::Evaluation(EvaluationError::Failed { .. }),
+                ..
+            }))
         ));
     }
 }

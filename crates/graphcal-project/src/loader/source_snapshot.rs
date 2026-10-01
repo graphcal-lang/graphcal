@@ -25,6 +25,7 @@ use graphcal_compiler::desugar::desugared_ast::{Declaration, File};
 use graphcal_compiler::graphcal_error::GraphcalError;
 use graphcal_compiler::import_cycle::ImportChainFile;
 use graphcal_compiler::outcome::Outcome;
+use graphcal_compiler::semantic_error::evaluation::EvaluationError;
 use graphcal_compiler::source_id::SourceId;
 use graphcal_compiler::source_registry::SourceRegistry;
 use graphcal_compiler::syntax::ast::{DeclKind, ModulePath};
@@ -352,13 +353,15 @@ impl ResolveFailure {
             }
             .into(),
             Self::NotLocked { message } => CompileError::semantic(
-                GraphcalError::EvalError {
-                    message: format!(
-                        "{message}; run `graphcal deps lock` after changing dependencies"
-                    ),
-                    src: source_id,
-                    span,
-                },
+                GraphcalError::located(
+                    source_id,
+                    path.span(),
+                    EvaluationError::Failed {
+                        message: format!(
+                            "{message}; run `graphcal deps lock` after changing dependencies"
+                        ),
+                    },
+                ),
                 sources,
             ),
             Self::Manifest { message } => LoadError::ManifestError {

@@ -1023,17 +1023,15 @@ fn validate_public_generic_defaults(
                         ));
                     }
                     None => {
-                        return Err(GraphcalError::InternalError {
-                            message: format!(
+                        return Err(GraphcalError::internal_error(
+                            format!(
                                 "canonical {} `{}` is missing visibility metadata",
                                 dependency.kind(),
                                 dependency.name()
                             ),
                             src,
-                            anchor: crate::diagnostic_anchor::DiagnosticAnchor::Source(
-                                dependency.span(),
-                            ),
-                        });
+                            crate::diagnostic_anchor::DiagnosticAnchor::Source(dependency.span()),
+                        ));
                     }
                 }
             }

@@ -197,13 +197,9 @@ impl Infer<'_> {
                 let Some(bound) = index_bindings.get(index) else {
                     // try_new guarantees every result index variable indexes
                     // some parameter, so this is a compiler bug.
-                    return Err(GraphcalError::InternalError {
-                        message: format!(
+                    return Err(GraphcalError::internal_error(format!(
                             "result index variable `{index}` of `{display_name}` was not bound by any argument"
-                        ),
-                        src: self.env.src,
-                        anchor: crate::diagnostic_anchor::DiagnosticAnchor::Source(callee_span),
-                    });
+                        ), self.env.src, crate::diagnostic_anchor::DiagnosticAnchor::Source(callee_span)));
                 };
                 Ok(CheckedType::Indexed {
                     element: Box::new(element),

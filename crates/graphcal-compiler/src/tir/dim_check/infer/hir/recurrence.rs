@@ -5,6 +5,7 @@ use crate::hir::expr::{Expr, LocalDef};
 use crate::outcome::Outcome;
 use crate::semantic::checked_type::{IndexTypeRef, Symbolic};
 use crate::semantic_error::dimension::DimensionError;
+use crate::semantic_error::evaluation::EvaluationError;
 
 use crate::semantic::checked_type::CheckedType;
 use crate::tir::dim_check::helpers::format_checked_type;
@@ -23,11 +24,13 @@ impl Infer<'_> {
         let source_type = self.infer_hir_type(source)?;
         let source_rank = source_type.indexed_rank();
         let CheckedType::Indexed { element, index } = source_type else {
-            return Err(GraphcalError::EvalError {
-                message: "scan source must be an indexed value".to_string(),
-                src: self.env.src,
-                span: source.span.into(),
-            }
+            return Err(GraphcalError::located(
+                self.env.src,
+                source.span,
+                EvaluationError::Failed {
+                    message: "scan source must be an indexed value".to_string(),
+                },
+            )
             .into());
         };
         if source_rank > 1 {
@@ -76,17 +79,21 @@ impl Infer<'_> {
             .env
             .tir
             .declared_index_def(&axis.value)
-            .ok_or_else(|| GraphcalError::InternalError {
-                message: format!("missing resolved unfold axis `{}`", axis.value),
-                src: self.env.src,
-                anchor: crate::diagnostic_anchor::DiagnosticAnchor::Source(axis.span),
+            .ok_or_else(|| {
+                GraphcalError::internal_error(
+                    format!("missing resolved unfold axis `{}`", axis.value),
+                    self.env.src,
+                    crate::diagnostic_anchor::DiagnosticAnchor::Source(axis.span),
+                )
             })?;
         if !idx_def.is_coordinate() {
-            return Err(GraphcalError::EvalError {
-                message: format!("unfold requires a coordinate index, got `{index}`"),
-                src: self.env.src,
-                span: axis.span.into(),
-            }
+            return Err(GraphcalError::located(
+                self.env.src,
+                axis.span,
+                EvaluationError::Failed {
+                    message: format!("unfold requires a coordinate index, got `{index}`"),
+                },
+            )
             .into());
         }
         // The recurrence coordinate binders are keys of the axis; the coordinate

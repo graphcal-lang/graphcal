@@ -15,6 +15,7 @@ use graphcal_compiler::outcome::Outcome;
 use graphcal_compiler::resolved_name::ResolvedDeclName;
 use graphcal_compiler::semantic::index_def::IndexBindingTarget;
 use graphcal_compiler::semantic_error::attribute::AttributeError;
+use graphcal_compiler::semantic_error::evaluation::EvaluationError;
 use graphcal_compiler::semantic_error::graph::GraphError;
 use graphcal_compiler::semantic_error::index::IndexError;
 use graphcal_compiler::semantic_error::module::ModuleError;
@@ -200,14 +201,16 @@ pub(super) fn process_file_body_declarations<'a>(
             continue;
         }
         let Some((target_loaded, target_dag)) = project.inline_dag(target.target()) else {
-            return Err(PipelineError::Semantic(GraphcalError::EvalError {
-                message: format!(
-                    "inline DAG target not found in project: {}",
-                    target.target()
-                ),
-                src: file_src,
-                span: include.path.span().into(),
-            })
+            return Err(PipelineError::Semantic(GraphcalError::located(
+                file_src,
+                include.path.span(),
+                EvaluationError::Failed {
+                    message: format!(
+                        "inline DAG target not found in project: {}",
+                        target.target()
+                    ),
+                },
+            ))
             .into());
         };
         if !target_dag.declaration(target_loaded).visibility.is_public()
@@ -420,11 +423,13 @@ fn validate_include_item_attributes(
         match validated.name() {
             AttributeName::Hidden => {
                 if !attr.args.is_empty() {
-                    return Err(PipelineError::Semantic(GraphcalError::EvalError {
-                        message: "`#[hidden]` takes no arguments".to_string(),
-                        src: file_src,
-                        span: attr.span.into(),
-                    }));
+                    return Err(PipelineError::Semantic(GraphcalError::located(
+                        file_src,
+                        attr.span,
+                        EvaluationError::Failed {
+                            message: "`#[hidden]` takes no arguments".to_string(),
+                        },
+                    )));
                 }
                 visibility = PlotVisibility::CompositionOnly;
             }
@@ -455,11 +460,11 @@ fn exported_bindings(
     span: Span,
 ) -> Result<Vec<graphcal_compiler::resolve::exports::ExportedBinding>, PipelineError> {
     resolver.exported_bindings(owner).map_err(|error| {
-        PipelineError::Semantic(GraphcalError::InternalError {
-            message: format!("module resolver could not enumerate exports of `{owner}`: {error}"),
-            src: file_src,
-            anchor: graphcal_compiler::diagnostic_anchor::DiagnosticAnchor::Source(span),
-        })
+        PipelineError::Semantic(GraphcalError::internal_error(
+            format!("module resolver could not enumerate exports of `{owner}`: {error}"),
+            file_src,
+            graphcal_compiler::diagnostic_anchor::DiagnosticAnchor::Source(span),
+        ))
     })
 }
 
@@ -938,13 +943,13 @@ pub(super) fn process_file_include<'a>(
     } = *including;
     let module_resolver = importer_scope.resolver();
     let dependency = project.module(target.target()).ok_or_else(|| {
-        PipelineError::Semantic(GraphcalError::InternalError {
-            message: format!("included module `{}` is not loaded", target.target()),
-            src: file_src,
-            anchor: graphcal_compiler::diagnostic_anchor::DiagnosticAnchor::Source(
+        PipelineError::Semantic(GraphcalError::internal_error(
+            format!("included module `{}` is not loaded", target.target()),
+            file_src,
+            graphcal_compiler::diagnostic_anchor::DiagnosticAnchor::Source(
                 include_decl.path.span(),
             ),
-        })
+        ))
     })?;
     let import_dag_id = dependency.dag_id();
     let dep = dependency.interface();
@@ -1430,13 +1435,11 @@ pub(super) fn process_pure_import<'a>(
     let import_path = import.path();
     let module_target = resolved_module.target();
     let dep_module = project.module(module_target).ok_or_else(|| {
-        PipelineError::Semantic(GraphcalError::InternalError {
-            message: format!("inline module `{module_target}` has no owning declaration"),
-            src: file_src,
-            anchor: graphcal_compiler::diagnostic_anchor::DiagnosticAnchor::Source(
-                import_path.span(),
-            ),
-        })
+        PipelineError::Semantic(GraphcalError::internal_error(
+            format!("inline module `{module_target}` has no owning declaration"),
+            file_src,
+            graphcal_compiler::diagnostic_anchor::DiagnosticAnchor::Source(import_path.span()),
+        ))
     })?;
     let declarations = dep_module.declarations();
     let dependency = ModuleDeclarations::new(
@@ -1447,15 +1450,13 @@ pub(super) fn process_pure_import<'a>(
     let exported_bindings = module_resolver
         .exported_bindings(module_target)
         .map_err(|error| {
-            PipelineError::Semantic(GraphcalError::InternalError {
-                message: format!(
+            PipelineError::Semantic(GraphcalError::internal_error(
+                format!(
                     "module resolver could not enumerate exports of `{module_target}`: {error}"
                 ),
-                src: file_src,
-                anchor: graphcal_compiler::diagnostic_anchor::DiagnosticAnchor::Source(
-                    import_path.span(),
-                ),
-            })
+                file_src,
+                graphcal_compiler::diagnostic_anchor::DiagnosticAnchor::Source(import_path.span()),
+            ))
         })?;
 
     match import {
@@ -1585,13 +1586,9 @@ pub(super) fn process_pure_import<'a>(
                             .and_then(|binding| binding.target.declaration())
                             .cloned()
                             .ok_or_else(|| {
-                                PipelineError::Semantic(GraphcalError::InternalError {
-                                    message: format!(
+                                PipelineError::Semantic(GraphcalError::internal_error(format!(
                                         "exported constant `{orig_name}` has no canonical declaration target"
-                                    ),
-                                    src: file_src,
-                                    anchor: graphcal_compiler::diagnostic_anchor::DiagnosticAnchor::Source(import_item.name.span),
-                                })
+                                    ), file_src, graphcal_compiler::diagnostic_anchor::DiagnosticAnchor::Source(import_item.name.span)))
                             })?;
                         import_selective_resolved_item(
                             canonical,

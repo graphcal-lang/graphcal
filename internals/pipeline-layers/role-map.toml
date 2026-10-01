@@ -873,6 +873,21 @@ role = "contracts"
 
 [[module]]
 package = "compiler"
+path = ["internal_error"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["internal_error", "tests"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["semantic_error", "evaluation"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
 path = ["graphcal_error"]
 role = "contracts"
 

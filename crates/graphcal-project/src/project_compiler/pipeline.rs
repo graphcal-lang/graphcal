@@ -11,6 +11,7 @@ use std::sync::Arc;
 use graphcal_compiler::graphcal_error::GraphcalError;
 use graphcal_compiler::ir::resolve::ImportedValueNames;
 use graphcal_compiler::outcome::Outcome;
+use graphcal_compiler::semantic_error::evaluation::EvaluationError;
 use graphcal_compiler::semantic_error::plugin::PluginError;
 use graphcal_compiler::source_id::SourceId;
 
@@ -53,11 +54,13 @@ pub(super) fn recursive_dag_instantiation(
             (src, src.whole_span())
         }
     };
-    PipelineError::Semantic(GraphcalError::EvalError {
-        message: format!("recursive DAG instantiation: {}", names.join(" -> ")),
+    PipelineError::Semantic(GraphcalError::located(
         src,
-        span: span.into(),
-    })
+        span,
+        EvaluationError::Failed {
+            message: format!("recursive DAG instantiation: {}", names.join(" -> ")),
+        },
+    ))
 }
 
 /// A template's inline-DAG path inside its file, or the file root's identity.

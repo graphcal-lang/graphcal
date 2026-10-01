@@ -20,6 +20,7 @@ use crate::resolve::namespace::Namespace;
 use crate::resolve::reserved_name::validate_reserved_name;
 use crate::resolved_name::ResolvedStructTypeName;
 use crate::semantic::time_zone::TimeZoneRegistry;
+use crate::semantic_error::evaluation::EvaluationError;
 use crate::semantic_error::name::NameError;
 use crate::source_id::SourceId;
 use crate::syntax::names::NameAtom;
@@ -171,11 +172,13 @@ fn validate_generic_params(declaration: &TypeDecl, src: SourceId) -> Result<(), 
             param.name.value.atom().clone(),
             (param.name.value.clone(), index, param.name.span),
         ) {
-            Some((name, _, _)) => Err(GraphcalError::EvalError {
-                message: format!("duplicate generic parameter `{name}`"),
+            Some((name, _, _)) => Err(GraphcalError::located(
                 src,
-                span: param.name.span.into(),
-            }),
+                param.name.span,
+                EvaluationError::Failed {
+                    message: format!("duplicate generic parameter `{name}`"),
+                },
+            )),
             None => Ok(positions),
         },
     )?;
@@ -188,26 +191,30 @@ fn validate_generic_params(declaration: &TypeDecl, src: SourceId) -> Result<(), 
                 if let Some((referenced, span)) =
                     find_non_earlier_generic_reference(default, index, &positions)
                 {
-                    return Err(GraphcalError::EvalError {
-                        message: format!(
-                            "default for generic parameter `{}` may reference only earlier generic parameters; `{referenced}` is not earlier",
-                            param.name.value
-                        ),
+                    return Err(GraphcalError::located(
                         src,
-                        span: span.into(),
-                    });
+                        span,
+                        EvaluationError::Failed {
+                            message: format!(
+                                "default for generic parameter `{}` may reference only earlier generic parameters; `{referenced}` is not earlier",
+                                param.name.value
+                            ),
+                        },
+                    ));
                 }
             }
             None => {
                 if let Some(first_defaulted) = first_defaulted {
-                    return Err(GraphcalError::EvalError {
-                        message: format!(
-                            "generic parameter `{}` without a default cannot follow defaulted parameter `{first_defaulted}`",
-                            param.name.value
-                        ),
+                    return Err(GraphcalError::located(
                         src,
-                        span: param.name.span.into(),
-                    });
+                        param.name.span,
+                        EvaluationError::Failed {
+                            message: format!(
+                                "generic parameter `{}` without a default cannot follow defaulted parameter `{first_defaulted}`",
+                                param.name.value
+                            ),
+                        },
+                    ));
                 }
             }
         }
@@ -459,12 +466,12 @@ fn lower_nominal_field(
     ))
 }
 
-const fn invariant_error(message: String, src: SourceId, span: Span) -> GraphcalError {
-    GraphcalError::InternalError {
+fn invariant_error(message: String, src: SourceId, span: Span) -> GraphcalError {
+    GraphcalError::internal_error(
         message,
         src,
-        anchor: crate::diagnostic_anchor::DiagnosticAnchor::Source(span),
-    }
+        crate::diagnostic_anchor::DiagnosticAnchor::Source(span),
+    )
 }
 
 /// Specialize a template's nominal definition as the importer-owned
@@ -765,7 +772,10 @@ mod tests {
 
     fn eval_message(result: Result<NominalTypeDef, GraphcalError>) -> String {
         match result {
-            Err(GraphcalError::EvalError { message, .. }) => message,
+            Err(GraphcalError::Located(crate::diagnostic::Diagnostic {
+                kind: SemanticErrorKind::Evaluation(EvaluationError::Failed { message, .. }),
+                ..
+            })) => message,
             other => panic!("expected an evaluation diagnostic, got {other:?}"),
         }
     }

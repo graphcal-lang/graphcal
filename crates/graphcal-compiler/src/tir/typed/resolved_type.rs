@@ -21,6 +21,7 @@ use crate::semantic::checked_type::{
 };
 use crate::semantic::index_def::FiniteIndex;
 use crate::semantic::time_scale::TimeScale;
+use crate::semantic_error::evaluation::EvaluationError;
 use crate::source_id::SourceId;
 use crate::syntax::non_empty::NonEmpty;
 use crate::syntax::span::Span;
@@ -381,11 +382,7 @@ impl ResolvedDeclType {
 }
 
 fn eval_error(message: String, src: SourceId, span: Span) -> GraphcalError {
-    GraphcalError::EvalError {
-        message,
-        src,
-        span: span.into(),
-    }
+    GraphcalError::located(src, span, EvaluationError::Failed { message })
 }
 
 pub fn resolved_generic_arg_to_declared(
