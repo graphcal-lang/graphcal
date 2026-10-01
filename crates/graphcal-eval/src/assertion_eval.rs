@@ -25,55 +25,66 @@ use graphcal_compiler::syntax::non_empty::NonEmpty;
 use graphcal_compiler::tir::typed::body_scope::Scoped;
 use graphcal_compiler::tir::typed::evaluation_unit::AssertionOperands;
 
-/// The value of a checked assertion condition.
+/// The value of a checked assertion operand of an (indexed) scalar type: a
+/// leaf of that type, or one such operand per key of an axis.
 #[derive(Debug, Clone, PartialEq)]
-enum Verdicts {
-    /// An unindexed condition.
-    Single(bool),
-    /// A condition indexed by one axis (entries may be indexed further).
+enum Leaves<T> {
+    /// An unindexed operand.
+    Single(T),
+    /// An operand indexed by one axis (entries may be indexed further).
     Indexed(IndexedValue<Self>),
 }
 
-impl Verdicts {
-    /// Read a condition's value; any shape but (indexed) `Bool` contradicts
-    /// the condition's checked type.
-    fn try_from_value(value: RuntimeValue) -> Result<Self, Invariant> {
+/// The value of a checked assertion condition.
+type Verdicts = Leaves<bool>;
+
+/// The value of a checked tolerance-assertion operand.
+type Measured = Leaves<f64>;
+
+impl<T> Leaves<T> {
+    /// Read an operand checked as `expected` (indexed) leaves, each read by
+    /// `leaf`; any other shape contradicts the operand's checked type.
+    fn read(
+        value: RuntimeValue,
+        expected: &dyn std::fmt::Display,
+        leaf: &impl Fn(RuntimeValue) -> Result<T, RuntimeValue>,
+    ) -> Result<Self, Invariant> {
         match value {
-            RuntimeValue::Bool(verdict) => Ok(Self::Single(verdict)),
             RuntimeValue::Indexed(indexed) => indexed
-                .try_map(|_, entry| Self::try_from_value(entry))
+                .try_map(|_, entry| Self::read(entry, expected, leaf))
                 .map(Self::Indexed),
-            other => Err(Invariant::violated(format_args!(
-                "assertion condition evaluated to {}, not Bool",
-                other.describe()
-            ))),
+            value => leaf(value).map(Self::Single).map_err(|other| {
+                Invariant::violated(format_args!("{expected} evaluated to {}", other.describe()))
+            }),
         }
     }
 }
 
-/// The value of a checked tolerance-assertion operand.
-#[derive(Debug, Clone)]
-enum Measured {
-    /// An unindexed quantity.
-    Single(f64),
-    /// A quantity indexed by one axis (entries may be indexed further).
-    Indexed(IndexedValue<Self>),
+impl Verdicts {
+    /// Read a condition's value.
+    fn try_from_value(value: RuntimeValue) -> Result<Self, Invariant> {
+        Self::read(
+            value,
+            &"assertion condition checked as Bool",
+            &|value| match value {
+                RuntimeValue::Bool(verdict) => Ok(verdict),
+                other => Err(other),
+            },
+        )
+    }
 }
 
 impl Measured {
-    /// Read a tolerance operand's value; any shape but (indexed) quantity
-    /// contradicts the operand's checked type.
+    /// Read a tolerance operand's value.
     fn try_from_value(value: RuntimeValue, role: &str) -> Result<Self, Invariant> {
-        match value {
-            RuntimeValue::Quantity(value) => Ok(Self::Single(value.get())),
-            RuntimeValue::Indexed(indexed) => indexed
-                .try_map(|_, entry| Self::try_from_value(entry, role))
-                .map(Self::Indexed),
-            other => Err(Invariant::violated(format_args!(
-                "tolerance {role} evaluated to {}, not a quantity",
-                other.describe()
-            ))),
-        }
+        Self::read(
+            value,
+            &format_args!("tolerance {role} checked as a quantity"),
+            &|value| match value {
+                RuntimeValue::Quantity(value) => Ok(value.get()),
+                other => Err(other),
+            },
+        )
     }
 }
 

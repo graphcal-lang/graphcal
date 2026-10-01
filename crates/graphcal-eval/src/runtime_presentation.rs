@@ -276,14 +276,14 @@ impl<L> Presented<L> {
     where
         L: PresentationLeaf,
     {
-        match (&self.0, value) {
-            (Node::Whole { leaf: None, .. }, value) => Ok(Self::plain(value)),
+        let other = match (&self.0, value) {
+            (Node::Whole { leaf: None, .. }, value) => return Ok(Self::plain(value)),
             (
                 Node::Whole {
                     leaf: Some(leaf), ..
                 },
                 value,
-            ) => Self::with_leaf(value, leaf.clone()),
+            ) => return Self::with_leaf(value, leaf.clone()),
             (Node::Struct(template), RuntimeValue::Struct(fields))
                 if template.type_name() == fields.type_name()
                     && template.generic_args() == fields.generic_args() =>
@@ -291,43 +291,31 @@ impl<L> Presented<L> {
                 if template.constructor() != fields.constructor() {
                     return Ok(Self::plain(RuntimeValue::Struct(fields)));
                 }
-                fields
-                    .try_map(|name, field| {
-                        template
-                            .field(name)
-                            .ok_or_else(|| {
-                                Invariant::violated(format_args!(
-                                    "constructor `{}` lost its field `{name}`",
-                                    template.constructor()
-                                ))
-                            })?
-                            .present_alike(field)
-                    })
-                    .map(Self::from_struct)
+                match fields.zip(template) {
+                    Ok(fields) => {
+                        return fields
+                            .try_map(|_, (field, template)| template.present_alike(field))
+                            .map(Self::from_struct);
+                    }
+                    Err(fields) => RuntimeValue::Struct(fields),
+                }
             }
-            (Node::Indexed(template), RuntimeValue::Indexed(entries))
-                if template.axis().matches(entries.axis()) =>
-            {
-                // Both walk the same axis, so each key finds its entry.
-                entries
-                    .try_map(|key, entry| {
-                        template
-                            .get(key)
-                            .ok_or_else(|| {
-                                Invariant::violated(format_args!(
-                                    "axis `{}` lost its key `{key}`",
-                                    template.index()
-                                ))
-                            })?
-                            .present_alike(entry)
-                    })
-                    .map(Self::from_indexed)
+            (Node::Indexed(template), RuntimeValue::Indexed(entries)) => {
+                match entries.zip(template) {
+                    Ok(entries) => {
+                        return entries
+                            .try_map(|_, (entry, template)| template.present_alike(entry))
+                            .map(Self::from_indexed);
+                    }
+                    Err(entries) => RuntimeValue::Indexed(entries),
+                }
             }
-            (_, value) => Err(Invariant::violated(format_args!(
-                "a presentation of another type was applied to {}",
-                value.describe()
-            ))),
-        }
+            (_, value) => value,
+        };
+        Err(Invariant::violated(format_args!(
+            "a presentation of another type was applied to {}",
+            other.describe()
+        )))
     }
 
     /// This value, or, when it has no presentation, the value presented as

@@ -209,6 +209,24 @@ impl<V> StructValue<V> {
         })
     }
 
+    /// Pair each field value with the value of the same field of `other`.
+    ///
+    /// # Errors
+    ///
+    /// Returns this value back when `other` applies another constructor
+    /// application.
+    pub fn zip<U>(self, other: &StructValue<U>) -> Result<StructValue<(V, &U)>, Self> {
+        if self.application != other.application {
+            return Err(self);
+        }
+        // One application has one field list, so the values align field by
+        // field.
+        Ok(StructValue {
+            application: self.application,
+            values: self.values.into_iter().zip(&other.values).collect(),
+        })
+    }
+
     /// The owned value of `field`.
     ///
     /// # Errors
@@ -382,6 +400,21 @@ mod tests {
             }
         });
         assert_eq!(failed.unwrap_err(), 2);
+    }
+
+    #[test]
+    fn zips_pair_fields_of_one_application_only() {
+        let value = build(vec![("left", 1), ("right", 2)]).unwrap();
+        let labels = build(vec![("right", 20), ("left", 10)]).unwrap();
+        let zipped = value.clone().zip(&labels).unwrap();
+        assert_eq!(zipped.field(&field("left")), Some(&(1, &10)));
+        assert_eq!(zipped.field(&field("right")), Some(&(2, &20)));
+        let other = StructValue::try_new(
+            Arc::new(pair("other", constructor())),
+            [(field("left"), 1), (field("right"), 2)],
+        )
+        .unwrap();
+        assert_eq!(value.clone().zip(&other).unwrap_err(), value);
     }
 
     #[test]
