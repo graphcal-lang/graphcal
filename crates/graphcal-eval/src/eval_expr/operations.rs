@@ -4,7 +4,7 @@
 //! Checking recorded the operation an operator's operand types select, so
 //! every operand here is read as the type its checked node has; a value of
 //! another shape is a violated invariant, reported at one place
-//! ([`Operands`]), and never an evaluation error.
+//! ([`read_shape`], through [`Operands`]), and never an evaluation error.
 
 use graphcal_compiler::builtin::{DatetimeField, DatetimeFromNumericFn, DatetimeToNumericFn};
 use graphcal_compiler::complex_value::ComplexValue;
@@ -24,6 +24,57 @@ use crate::runtime_value::{IndexAxis, IndexedValue, KeyElement, KeyValue, Runtim
 
 use super::EvalSession;
 use super::arithmetic::apply_ordering;
+
+/// A value whose shape a violated-invariant diagnostic describes.
+pub(super) trait Shape {
+    /// What the value is, for the diagnostic.
+    fn shape(&self) -> String;
+}
+
+impl Shape for RuntimeValue {
+    fn shape(&self) -> String {
+        self.describe().to_string()
+    }
+}
+
+impl Shape for crate::runtime_presentation::EvaluatedRuntimeValue {
+    fn shape(&self) -> String {
+        self.value().describe().to_string()
+    }
+}
+
+impl Shape
+    for crate::runtime_presentation::PresentedRef<'_, crate::presentation_evidence::PendingLeaf>
+{
+    fn shape(&self) -> String {
+        self.to_owned_with(RuntimeValue::clone).shape()
+    }
+}
+
+/// Read `value`, the value of a node checked as `expected`, as `extract`
+/// selects.
+///
+/// A value of any other shape contradicts the checked type of the node that
+/// produced it: this is the one place evaluation reports such a value, as a
+/// violated invariant.
+pub(super) fn read_shape<V: Shape, T>(
+    value: V,
+    expected: impl std::fmt::Display,
+    span: Span,
+    ctx: &EvalSession<'_>,
+    extract: impl FnOnce(V) -> Result<T, V>,
+) -> Result<T, Outcome<SemanticError>> {
+    extract(value).map_err(|other| {
+        ctx.failure_error(
+            Failure::<std::convert::Infallible>::Invariant(Invariant::violated(format_args!(
+                "operand checked as {expected} evaluated to {}",
+                other.shape()
+            ))),
+            span,
+        )
+        .into()
+    })
+}
 
 /// Evaluates the operands of typed operations of one tree, reading each as
 /// the type its checked node has.
@@ -48,19 +99,13 @@ impl<'o, 't> Operands<'o, 't> {
         expected: &str,
         extract: impl FnOnce(RuntimeValue) -> Result<T, RuntimeValue>,
     ) -> Result<T, Outcome<SemanticError>> {
-        extract((self.evaluate)(node)?)
-            .map_err(|other| {
-                self.ctx.failure_error(
-                    Failure::<std::convert::Infallible>::Invariant(Invariant::violated(
-                        format_args!(
-                            "operand checked as {expected} evaluated to {}",
-                            other.describe()
-                        ),
-                    )),
-                    node.span(),
-                )
-            })
-            .map_err(Outcome::Failed)
+        read_shape(
+            (self.evaluate)(node)?,
+            expected,
+            node.span(),
+            self.ctx,
+            extract,
+        )
     }
 
     /// The session operands are evaluated in.
@@ -124,6 +169,20 @@ impl<'o, 't> Operands<'o, 't> {
         self.read(node, "a key", |value| match value {
             RuntimeValue::Key(value) => Ok(value),
             other => Err(other),
+        })
+    }
+
+    /// The coordinate of the key of a coordinate axis `node` evaluates to.
+    fn coordinate(&self, node: ScopedNode<'t>) -> Result<FiniteQuantity, Outcome<SemanticError>> {
+        self.read(node, "a coordinate key", |value| {
+            let coordinate = match &value {
+                RuntimeValue::Key(key) => match key.element() {
+                    KeyElement::Coordinate { value, .. } => Some(value),
+                    KeyElement::Finite(_) | KeyElement::Named(_) => None,
+                },
+                _ => None,
+            };
+            coordinate.ok_or(value)
         })
     }
 }
@@ -223,15 +282,7 @@ pub(super) fn quantity<'t>(
                 .map_err(|error| ctx.eval_error(error.to_string(), arg.span()))
                 .map_err(Outcome::Failed)
         }
-        QExpr::Coordinate(arg) => {
-            let key = operands.key(arg)?;
-            match key.element() {
-                KeyElement::Coordinate { value, .. } => Ok(value),
-                KeyElement::Finite(_) | KeyElement::Named(_) => Err(ctx
-                    .internal_error("coord() received a non-coordinate key", arg.span())
-                    .into()),
-            }
-        }
+        QExpr::Coordinate(arg) => operands.coordinate(arg),
         QExpr::FromDatetime { function, arg } => {
             let epoch = operands.datetime(arg)?;
             let result = match function {

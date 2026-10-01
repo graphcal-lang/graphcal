@@ -215,9 +215,12 @@ impl<L> Presented<L> {
         }
     }
 
-    /// The presented fields of a struct value; `None` for any other value.
-    #[must_use]
-    pub(crate) fn into_fields(self) -> Option<StructValue<Self>>
+    /// The presented fields of a struct value.
+    ///
+    /// # Errors
+    ///
+    /// Returns any other value back.
+    pub(crate) fn into_fields(self) -> Result<StructValue<Self>, Self>
     where
         L: Clone,
     {
@@ -225,20 +228,23 @@ impl<L> Presented<L> {
             Node::Whole {
                 value: RuntimeValue::Struct(fields),
                 leaf,
-            } => Some(fields.map(|value| {
+            } => Ok(fields.map(|value| {
                 Self(Node::Whole {
                     value,
                     leaf: leaf.clone(),
                 })
             })),
-            Node::Struct(fields) => Some(fields),
-            Node::Whole { .. } | Node::Indexed(_) => None,
+            Node::Struct(fields) => Ok(fields),
+            node @ (Node::Whole { .. } | Node::Indexed(_)) => Err(Self(node)),
         }
     }
 
-    /// The presented entries of an indexed value; `None` for any other value.
-    #[must_use]
-    pub(crate) fn into_entries(self) -> Option<IndexedValue<Self>>
+    /// The presented entries of an indexed value.
+    ///
+    /// # Errors
+    ///
+    /// Returns any other value back.
+    pub(crate) fn into_entries(self) -> Result<IndexedValue<Self>, Self>
     where
         L: Clone,
     {
@@ -246,14 +252,14 @@ impl<L> Presented<L> {
             Node::Whole {
                 value: RuntimeValue::Indexed(entries),
                 leaf,
-            } => Some(entries.map(|value| {
+            } => Ok(entries.map(|value| {
                 Self(Node::Whole {
                     value,
                     leaf: leaf.clone(),
                 })
             })),
-            Node::Indexed(entries) => Some(entries),
-            Node::Whole { .. } | Node::Struct(_) => None,
+            Node::Indexed(entries) => Ok(entries),
+            node @ (Node::Whole { .. } | Node::Struct(_)) => Err(Self(node)),
         }
     }
 
@@ -710,7 +716,7 @@ mod tests {
             Some("km".to_owned())
         );
         assert!(entries.get(&IndexEntryKey::position(1)).unwrap().is_plain());
-        assert!(presented.clone().into_fields().is_none());
+        assert!(presented.clone().into_fields().is_err());
         let RuntimeValue::Indexed(value) = presented.into_value() else {
             panic!("indexed value");
         };
@@ -722,7 +728,7 @@ mod tests {
             Presented::plain(quantity(2.0)),
         ));
         assert!(matches!(fields.view(), PresentedView::Struct(_)));
-        assert!(fields.clone().into_entries().is_none());
+        assert!(fields.clone().into_entries().is_err());
         let fields = fields.into_fields().unwrap();
         assert_eq!(
             whole_label(fields.field(&field("left")).unwrap()),

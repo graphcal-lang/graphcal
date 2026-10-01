@@ -1,6 +1,4 @@
-use crate::runtime_value::{
-    IndexAxis, IndexedValue, KeyElement, KeyValue, RuntimeValue, StructValue,
-};
+use crate::runtime_value::{IndexAxis, IndexedValue, KeyValue, RuntimeValue};
 use graphcal_compiler::builtin::{AggregationFn, KeyAggregation};
 use graphcal_compiler::outcome::Outcome;
 use graphcal_compiler::semantic::checked_type::{IndexTypeRef, StructTypeRef};
@@ -25,6 +23,7 @@ use crate::runtime_presentation::{EvaluatedRuntimeValue, PendingPresentedMap, Pr
 use graphcal_compiler::resolved_name::ResolvedDeclName;
 
 use super::context::EvalSession;
+use super::operations::read_shape;
 use super::unit_scale::{checked_unit_scaled_value, resolve_unit_scale};
 use crate::constant_pools::RuntimeValueMap;
 
@@ -245,14 +244,7 @@ fn eval_texpr_inner(
             super::operations::datetime_literal(literal),
         ))),
         NodeKind::Aggregate { function, arg } => {
-            let RuntimeValue::Indexed(indexed) = eval_value(arg, values, local_values, ctx)? else {
-                return Err(ctx
-                    .internal_error(
-                        format!("{}() received a non-indexed argument", function.as_str()),
-                        arg.span(),
-                    )
-                    .into());
-            };
+            let indexed = operands.indexed(arg)?;
             match function {
                 AggregationFn::Key(function) => eval_extremum_key(function, &indexed, span, ctx),
                 AggregationFn::Value(function) => {
@@ -309,7 +301,21 @@ fn eval_texpr_inner(
         NodeKind::Field { expr: inner, field } => {
             let inner_val =
                 eval_texpr_evaluated(inner, values, presentation_values, local_values, ctx)?;
-            eval_field_access(inner_val.into_fields(), inner, field, ctx).map_err(Outcome::Failed)
+            // The checker proved the operand's nominal application, and a
+            // struct value carries exactly its constructor's declared fields.
+            read_shape(
+                inner_val,
+                format_args!("a struct with field `{}`", field.value),
+                field.span,
+                ctx,
+                |value| {
+                    value.into_fields().and_then(|fields| {
+                        fields
+                            .into_field(&field.value)
+                            .map_err(EvaluatedRuntimeValue::from_struct)
+                    })
+                },
+            )
         }
         NodeKind::Construct(construct) => {
             eval_constructor_call(construct, values, presentation_values, local_values, ctx)
@@ -528,15 +534,9 @@ fn coordinate_search(
 ) -> Result<KeyValue, SemanticError> {
     let keys = KeyValue::all(axis);
     let mut best: Option<(&KeyValue, f64)> = None;
-    for key in &keys {
-        let KeyElement::Coordinate { value, .. } = key.element() else {
-            return Err(type_invariant(
-                "coordinate search received a non-coordinate axis",
-                span,
-                ctx,
-            ));
-        };
-        let coordinate = value.get();
+    // A coordinate axis has one finite coordinate per key.
+    for (key, coordinate) in keys.iter().zip(axis.coordinates()) {
+        let coordinate = coordinate.get();
         let candidate = match search {
             CoordinateSearch::Floor => coordinate <= quantity,
             CoordinateSearch::Ceil => coordinate >= quantity,
@@ -679,32 +679,6 @@ fn eval_extern_fn(
             Failure::Invariant(error) => invariant(error, span),
         })
         .map_err(Outcome::Failed)
-}
-
-/// The value of `field` of `inner_val`, the struct value `inner` evaluated
-/// to (`None` when it is not a struct value).
-///
-/// The checker proved the operand's nominal application, and a struct value
-/// carries exactly its constructor's declared fields.
-fn eval_field_access<V>(
-    inner_val: Option<StructValue<V>>,
-    inner: ScopedNode<'_>,
-    field: &Spanned<graphcal_compiler::syntax::type_name::FieldName>,
-    ctx: &EvalSession<'_>,
-) -> Result<V, SemanticError> {
-    inner_val
-        .and_then(|value| value.into_field(&field.value))
-        .ok_or_else(|| {
-            type_invariant(
-                format_args!(
-                    "field `{}` read from a value without it, of checked type {:?}",
-                    field.value,
-                    inner.ty()
-                ),
-                field.span,
-                ctx,
-            )
-        })
 }
 
 /// Evaluate a constructor call: each field in written order, checked
@@ -960,9 +934,9 @@ fn eval_index_access(
     let operands = super::operations::Operands::new(&evaluate, ctx);
     let mut current = base;
     for arg in args.iter() {
-        let indexed = current
-            .entries()
-            .ok_or_else(|| type_invariant("indexed a non-indexed value", span, ctx))?;
+        let indexed = read_shape(current, "an indexed value", span, ctx, |current| {
+            current.entries().ok_or(current)
+        })?;
         let (entry, entry_key) = match arg.view() {
             // A label selects only on its own axis, never by its leaf name.
             ScopedIndexArg::Variant(variant) => {
@@ -973,15 +947,19 @@ fn eval_index_access(
                 (entry, entry_key)
             }
             ScopedIndexArg::Var(local) => {
-                let key = local_values
+                let bound = local_values
                     .get(local.value)
-                    .and_then(|bound| match &*bound.value() {
-                        RuntimeValue::Key(key) => Some(key.clone()),
-                        _ => None,
-                    })
-                    .ok_or_else(|| {
-                        type_invariant("loop variable is not a bound key", local.span, ctx)
-                    })?;
+                    .ok_or_else(|| ctx.eval_error("undefined local variable", local.span))?;
+                let key = read_shape(
+                    bound.value().into_owned(),
+                    "a key",
+                    local.span,
+                    ctx,
+                    |value| match value {
+                        RuntimeValue::Key(key) => Ok(key),
+                        other => Err(other),
+                    },
+                )?;
                 (indexed.get_key(&key), key.entry_key().clone())
             }
             ScopedIndexArg::Key(operand) => {
@@ -1019,10 +997,13 @@ fn eval_scan(
     local_values: &HirLocalValueMap<'_>,
     ctx: &EvalSession<'_>,
 ) -> Result<EvaluatedRuntimeValue, Outcome<SemanticError>> {
-    let source_entries =
-        eval_texpr_evaluated(source, values, presentation_values, local_values, ctx)?
-            .into_entries()
-            .ok_or_else(|| type_invariant("scan source is not indexed", source.span(), ctx))?;
+    let source_entries = read_shape(
+        eval_texpr_evaluated(source, values, presentation_values, local_values, ctx)?,
+        "an indexed value",
+        source.span(),
+        ctx,
+        EvaluatedRuntimeValue::into_entries,
+    )?;
     let evaluated_init =
         eval_texpr_evaluated(init, values, presentation_values, local_values, ctx)?;
     let initial = evaluated_init.clone();
@@ -1109,21 +1090,15 @@ fn match_label<'t>(
     arms: Scoped<'t, [TLabelArm]>,
     ctx: &EvalSession<'_>,
 ) -> Result<Scoped<'t, TLabelArm>, SemanticError> {
-    let KeyElement::Named(variant) = key.element() else {
-        return Err(type_invariant(
-            "match scrutinee is not a named key",
-            span,
-            ctx,
-        ));
-    };
     arms.iter()
         .find(|arm| {
             let label = &arm.get().label.variant;
-            index_ref_matches_resolved(key.index(), label.index()) && label.variant() == variant
+            index_ref_matches_resolved(key.index(), label.index())
+                && matches!(key.entry_key(), IndexEntryKey::Named(name) if name == label.variant())
         })
         .ok_or_else(|| {
             type_invariant(
-                format_args!("no match arm for label `{variant}`"),
+                format_args!("no match arm for label `{}`", key.entry_key()),
                 span,
                 ctx,
             )
@@ -1142,47 +1117,37 @@ fn eval_constructor_match(
     local_values: &HirLocalValueMap<'_>,
     ctx: &EvalSession<'_>,
 ) -> Result<EvaluatedRuntimeValue, Outcome<SemanticError>> {
-    let presented =
-        eval_texpr_evaluated(scrutinee, values, presentation_values, local_values, ctx)?;
-    let arm = {
-        let value = presented.value();
-        let RuntimeValue::Struct(union) = &*value else {
-            return Err(type_invariant(
-                "match scrutinee is not a union value",
-                scrutinee.span(),
+    let union = read_shape(
+        eval_texpr_evaluated(scrutinee, values, presentation_values, local_values, ctx)?,
+        "a union value",
+        scrutinee.span(),
+        ctx,
+        EvaluatedRuntimeValue::into_fields,
+    )?;
+    let arm = arms
+        .iter()
+        .find(|arm| {
+            let target = &arm.get().target;
+            *union.constructor() == target.constructor && *union.type_name() == target.runtime_type
+        })
+        .ok_or_else(|| {
+            type_invariant(
+                format_args!("no match arm for variant `{}`", union.type_name()),
+                span,
                 ctx,
             )
-            .into());
-        };
-        arms.iter()
-            .find(|arm| {
-                let target = &arm.get().target;
-                *union.constructor() == target.constructor
-                    && *union.type_name() == target.runtime_type
-            })
-            .ok_or_else(|| {
-                type_invariant(
-                    format_args!("no match arm for variant `{}`", union.type_name()),
-                    span,
-                    ctx,
-                )
-            })?
-    };
+        })?;
     let mut arm_locals = local_values.child(Vec::new());
     for binding in &arm.get().bindings {
         match binding {
             graphcal_compiler::hir::expr::PatternBinding::Bind { field, local } => {
-                let value = presented
-                    .as_ref()
-                    .field(&field.value)
-                    .map(|value| value.to_owned_with(RuntimeValue::clone))
-                    .ok_or_else(|| {
-                        type_invariant(
-                            format_args!("matched union value has no field `{}`", field.value),
-                            field.span,
-                            ctx,
-                        )
-                    })?;
+                let value = union.field(&field.value).cloned().ok_or_else(|| {
+                    type_invariant(
+                        format_args!("matched union value has no field `{}`", field.value),
+                        field.span,
+                        ctx,
+                    )
+                })?;
                 arm_locals.bind(local.id, value);
             }
             graphcal_compiler::hir::expr::PatternBinding::Wildcard { .. } => {}

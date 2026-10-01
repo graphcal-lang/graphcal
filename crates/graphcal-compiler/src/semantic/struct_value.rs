@@ -209,11 +209,20 @@ impl<V> StructValue<V> {
         })
     }
 
-    /// The owned value of `field`, when the constructor declares it.
-    #[must_use]
-    pub fn into_field(self, field: &FieldName) -> Option<V> {
-        let index = self.position(field)?;
-        self.values.into_iter().nth(index)
+    /// The owned value of `field`.
+    ///
+    /// # Errors
+    ///
+    /// Returns this value back when its constructor does not declare `field`.
+    pub fn into_field(self, field: &FieldName) -> Result<V, Self> {
+        match self.position(field) {
+            // One value per declared field, so a declared position has one.
+            Some(index) => {
+                let mut values = self.values;
+                Ok(values.swap_remove(index))
+            }
+            None => Err(self),
+        }
     }
 }
 
@@ -360,8 +369,11 @@ mod tests {
             value.clone().map(|value| value * 3).field(&field("right")),
             Some(&6)
         );
-        assert_eq!(value.clone().into_field(&field("right")), Some(2));
-        assert_eq!(value.clone().into_field(&field("other")), None);
+        assert_eq!(value.clone().into_field(&field("right")), Ok(2));
+        assert_eq!(
+            value.clone().into_field(&field("other")),
+            Err(value.clone())
+        );
         let failed = value.try_map(|name, value| {
             if *name == field("right") {
                 Err(value)
