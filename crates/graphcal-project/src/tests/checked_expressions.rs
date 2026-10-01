@@ -1,4 +1,5 @@
 use super::*;
+use graphcal_compiler::outcome::Outcome;
 use graphcal_compiler::resolved_name::ResolvedStructTypeName;
 use graphcal_compiler::syntax::type_name::{FieldName, StructTypeName};
 use graphcal_compiler::tir::dim_check::body_specialization::specialize_bound_expression;
@@ -27,9 +28,10 @@ fn scalar_prototypes_require_discharge_and_invalid_membership_never_publishes() 
         let values = graphcal_eval::constant_pools::RuntimeValueMap::new();
         let result = context
             .executable(bound.map(|bound| &*bound.value))
+            .map_err(Outcome::Failed)
             .and_then(|tree| graphcal_eval::eval_expr::eval_root(&tree, &values, &context));
         assert!(
-            matches!(result, Err(GraphcalError::InternalError { ref message, .. }) if message.contains("undischarged static obligations")),
+            matches!(result, Err(Outcome::Failed(GraphcalError::InternalError { ref message, .. })) if message.contains("undischarged static obligations")),
             "prototype executed: {result:?}"
         );
         for n in [0, 1] {
@@ -101,15 +103,18 @@ fn readiness_is_checked_before_evaluating_an_earlier_sibling() {
         &src,
         graphcal_compiler::cancellation::CancellationToken::unbounded(),
     );
-    let result = context.executable(bound).and_then(|tree| {
-        graphcal_eval::eval_expr::eval_root(
-            &tree,
-            &graphcal_eval::constant_pools::RuntimeValueMap::new(),
-            &context,
-        )
-    });
+    let result = context
+        .executable(bound)
+        .map_err(Outcome::Failed)
+        .and_then(|tree| {
+            graphcal_eval::eval_expr::eval_root(
+                &tree,
+                &graphcal_eval::constant_pools::RuntimeValueMap::new(),
+                &context,
+            )
+        });
     assert!(
-        matches!(result, Err(GraphcalError::InternalError { ref message, .. }) if message.contains("undischarged static obligations")),
+        matches!(result, Err(Outcome::Failed(GraphcalError::InternalError { ref message, .. })) if message.contains("undischarged static obligations")),
         "earlier sibling ran before readiness check: {result:?}"
     );
 }
@@ -174,9 +179,10 @@ node control: Dimensionless = probe::tick() + 1.0;
     let pending = runtime_expression(worker, "pending");
     let result = context
         .executable(pending)
+        .map_err(Outcome::Failed)
         .and_then(|tree| graphcal_eval::eval_expr::eval_root(&tree, &values, &context));
     assert!(
-        matches!(result, Err(GraphcalError::InternalError { ref message, .. }) if message.contains("undischarged static obligations")),
+        matches!(result, Err(Outcome::Failed(GraphcalError::InternalError { ref message, .. })) if message.contains("undischarged static obligations")),
         "{result:?}"
     );
     assert_eq!(

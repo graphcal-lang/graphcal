@@ -10,8 +10,10 @@ use crate::eval::types::AssertResult;
 use crate::invariant::Invariant;
 use crate::runtime_value::{IndexedValue, RuntimeValue};
 use graphcal_compiler::assertion_expectation::{ExpectedFail, ExpectedFailKey};
+use graphcal_compiler::cancellation::Cancelled;
 use graphcal_compiler::graphcal_error::GraphcalError;
 use graphcal_compiler::hir::expr::{AssertBody, Expr};
+use graphcal_compiler::outcome::Outcome;
 use graphcal_compiler::semantic::checked_type::IndexTypeRef;
 use graphcal_compiler::syntax::index_name::IndexEntryKey;
 use graphcal_compiler::tir::typed::body_scope::Scoped;
@@ -69,14 +71,23 @@ impl Measured {
     }
 }
 
-fn evaluation_error(error: GraphcalError) -> AssertResult {
+/// The result of an assertion whose evaluation ran to completion; a cancelled
+/// assertion has no result.
+type Evaluated = Result<AssertResult, Cancelled>;
+
+/// The result reporting a failed operand evaluation, or the cancellation that
+/// interrupted it.
+fn evaluation_error(error: Outcome<GraphcalError>) -> Evaluated {
     match error {
-        GraphcalError::EvaluationUnavailable { reason, .. } if reason.is_incomplete() => {
-            AssertResult::Blocked { reason }
+        Outcome::Cancelled => Err(Cancelled),
+        Outcome::Failed(GraphcalError::EvaluationUnavailable { reason, .. })
+            if reason.is_incomplete() =>
+        {
+            Ok(AssertResult::Blocked { reason })
         }
-        error => AssertResult::Error {
+        Outcome::Failed(error) => Ok(AssertResult::Error {
             message: error.to_string(),
-        },
+        }),
     }
 }
 
@@ -94,16 +105,22 @@ fn invariant_result(invariant: &Invariant) -> AssertResult {
 /// For `Some(ExpectedFail::Variants(keys))`: evaluate the expression to get
 /// the raw indexed verdicts, invert only the matching variant entries,
 /// then aggregate.
+///
+/// # Errors
+///
+/// Returns [`Cancelled`] when an operand evaluation was cancelled.
 pub fn evaluate_assert_with_expected_fail<'t>(
     body: Scoped<'t, AssertBody>,
     ef: Option<&ExpectedFail>,
-    evaluate_expression: &mut impl FnMut(Scoped<'t, Expr>) -> Result<RuntimeValue, GraphcalError>,
-) -> AssertResult {
+    evaluate_expression: &mut impl FnMut(
+        Scoped<'t, Expr>,
+    ) -> Result<RuntimeValue, Outcome<GraphcalError>>,
+) -> Evaluated {
     let body = body.operands();
-    match ef {
-        None => evaluate_assert_body(body, evaluate_expression),
+    Ok(match ef {
+        None => evaluate_assert_body(body, evaluate_expression)?,
         Some(ExpectedFail::All) => {
-            let result = evaluate_assert_body(body, evaluate_expression);
+            let result = evaluate_assert_body(body, evaluate_expression)?;
             match result {
                 AssertResult::Pass => AssertResult::Fail {
                     message: "assertion passed but was marked #[expected_fail]".to_string(),
@@ -121,7 +138,7 @@ pub fn evaluate_assert_with_expected_fail<'t>(
                 AssertionOperands::Condition(body_expr) => match evaluate_expression(body_expr) {
                     Ok(value) => match Verdicts::try_from_value(value) {
                         Ok(verdicts) => verdicts,
-                        Err(invariant) => return invariant_result(&invariant),
+                        Err(invariant) => return Ok(invariant_result(&invariant)),
                     },
                     Err(error) => return evaluation_error(error),
                 },
@@ -131,14 +148,14 @@ pub fn evaluate_assert_with_expected_fail<'t>(
                     tolerance,
                 } => {
                     let operands =
-                        eval_tolerance_operands(actual, expected, tolerance, evaluate_expression);
+                        eval_tolerance_operands(actual, expected, tolerance, evaluate_expression)?;
                     let (actual_val, expected_val, tolerance_val) = match operands {
                         Ok(operands) => operands,
-                        Err(result) => return result,
+                        Err(result) => return Ok(result),
                     };
                     match eval_tolerance_tree(&actual_val, &expected_val, &tolerance_val) {
                         Ok((verdicts, _)) => verdicts,
-                        Err(error) => return error.result(),
+                        Err(error) => return Ok(error.result()),
                     }
                 }
             };
@@ -154,7 +171,7 @@ pub fn evaluate_assert_with_expected_fail<'t>(
                 )),
             }
         }
-    }
+    })
 }
 
 fn expected_fail_key_matches_path(
@@ -364,17 +381,19 @@ fn collect_failing_paths(
 /// Evaluate a single assert body and return an `AssertResult`.
 fn evaluate_assert_body<'t>(
     body: AssertionOperands<'t>,
-    evaluate_expression: &mut impl FnMut(Scoped<'t, Expr>) -> Result<RuntimeValue, GraphcalError>,
-) -> AssertResult {
+    evaluate_expression: &mut impl FnMut(
+        Scoped<'t, Expr>,
+    ) -> Result<RuntimeValue, Outcome<GraphcalError>>,
+) -> Evaluated {
     match body {
         AssertionOperands::Condition(body_expr) => {
             match evaluate_expression(body_expr).map(Verdicts::try_from_value) {
-                Ok(Ok(Verdicts::Single(true))) => AssertResult::Pass,
-                Ok(Ok(Verdicts::Single(false))) => AssertResult::Fail {
+                Ok(Ok(Verdicts::Single(true))) => Ok(AssertResult::Pass),
+                Ok(Ok(Verdicts::Single(false))) => Ok(AssertResult::Fail {
                     message: "assertion evaluated to false".to_string(),
-                },
-                Ok(Ok(Verdicts::Indexed(indexed))) => check_indexed_assert(&indexed),
-                Ok(Err(invariant)) => invariant_result(&invariant),
+                }),
+                Ok(Ok(Verdicts::Indexed(indexed))) => Ok(check_indexed_assert(&indexed)),
+                Ok(Err(invariant)) => Ok(invariant_result(&invariant)),
                 Err(error) => evaluation_error(error),
             }
         }
@@ -396,45 +415,53 @@ fn evaluate_tolerance_assert<'t>(
     actual: Scoped<'t, Expr>,
     expected: Scoped<'t, Expr>,
     tolerance: Scoped<'t, Expr>,
-    evaluate_expression: &mut impl FnMut(Scoped<'t, Expr>) -> Result<RuntimeValue, GraphcalError>,
-) -> AssertResult {
+    evaluate_expression: &mut impl FnMut(
+        Scoped<'t, Expr>,
+    ) -> Result<RuntimeValue, Outcome<GraphcalError>>,
+) -> Evaluated {
     let (actual_val, expected_val, tolerance_val) =
-        match eval_tolerance_operands(actual, expected, tolerance, evaluate_expression) {
+        match eval_tolerance_operands(actual, expected, tolerance, evaluate_expression)? {
             Ok(operands) => operands,
-            Err(result) => return result,
+            Err(result) => return Ok(result),
         };
-    match eval_tolerance_tree(&actual_val, &expected_val, &tolerance_val) {
-        Err(error) => error.result(),
-        Ok((_, failures)) if failures.is_empty() => AssertResult::Pass,
-        Ok((_, failures)) => AssertResult::Fail {
-            message: format_tolerance_failures(&failures),
+    Ok(
+        match eval_tolerance_tree(&actual_val, &expected_val, &tolerance_val) {
+            Err(error) => error.result(),
+            Ok((_, failures)) if failures.is_empty() => AssertResult::Pass,
+            Ok((_, failures)) => AssertResult::Fail {
+                message: format_tolerance_failures(&failures),
+            },
         },
-    }
+    )
 }
 
 /// Evaluate the three operand expressions of a tolerance assertion.
 ///
 /// Returns the operands read as (indexed) quantities, or the
-/// `AssertResult::Error` to report.
+/// `AssertResult::Error` to report; the outer error is cancellation.
 fn eval_tolerance_operands<'t>(
     actual: Scoped<'t, Expr>,
     expected: Scoped<'t, Expr>,
     tolerance: Scoped<'t, Expr>,
-    evaluate_expression: &mut impl FnMut(Scoped<'t, Expr>) -> Result<RuntimeValue, GraphcalError>,
-) -> Result<(Measured, Measured, Measured), AssertResult> {
-    let mut operand = |expr: Scoped<'t, Expr>, role: &str| {
-        evaluate_expression(expr)
-            .map_err(evaluation_error)
-            .and_then(|value| {
-                Measured::try_from_value(value, role)
-                    .map_err(|invariant| invariant_result(&invariant))
-            })
+    evaluate_expression: &mut impl FnMut(
+        Scoped<'t, Expr>,
+    ) -> Result<RuntimeValue, Outcome<GraphcalError>>,
+) -> Result<Result<(Measured, Measured, Measured), AssertResult>, Cancelled> {
+    let mut operand =
+        |expr: Scoped<'t, Expr>, role: &str| match evaluate_expression(expr) {
+            Ok(value) => Ok(Measured::try_from_value(value, role)
+                .map_err(|invariant| invariant_result(&invariant))),
+            Err(error) => evaluation_error(error).map(Err),
+        };
+    let actual = match operand(actual, "actual")? {
+        Ok(actual) => actual,
+        Err(result) => return Ok(Err(result)),
     };
-    Ok((
-        operand(actual, "actual")?,
-        operand(expected, "expected")?,
-        operand(tolerance, "tolerance")?,
-    ))
+    let expected = match operand(expected, "expected")? {
+        Ok(expected) => expected,
+        Err(result) => return Ok(Err(result)),
+    };
+    Ok(operand(tolerance, "tolerance")?.map(|tolerance| (actual, expected, tolerance)))
 }
 
 /// A failing key of a tolerance assertion, with its numeric detail.

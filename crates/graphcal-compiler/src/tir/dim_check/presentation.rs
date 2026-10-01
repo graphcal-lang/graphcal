@@ -4,6 +4,7 @@
 use crate::dag_id::DagId;
 use crate::diagnostic_anchor::DiagnosticAnchor;
 use crate::graphcal_error::GraphcalError;
+use crate::outcome::Outcome;
 use crate::tir::presentation::DagPresentationFacts;
 use crate::tir::typed::UncheckedTir;
 use miette::NamedSource;
@@ -15,7 +16,7 @@ pub(super) fn collect_presentation_facts(
     shapes: &HashMap<DagId, super::plot::CheckedPlotChannelShapes>,
     src: &NamedSource<Arc<String>>,
     cancellation: &crate::cancellation::CancellationToken,
-) -> Result<HashMap<DagId, DagPresentationFacts>, GraphcalError> {
+) -> Result<HashMap<DagId, DagPresentationFacts>, Outcome<GraphcalError>> {
     tir.local_dags()
         .filter(|(_, dag)| !dag.is_semantic_instance())
         .map(|(owner, _)| {

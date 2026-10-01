@@ -236,14 +236,16 @@ fn validate_application_obligations(
     let metadata_dag = tir
         .dag_with_type_metadata(identity.resolved())
         .unwrap_or_else(|| tir.root());
-    super::concrete_obligations::validate_concrete_type_obligations(
-        &application.to_symbolic(),
-        metadata_dag,
-        tir,
-        definition.type_def.source(),
-        definition.type_def.span(),
-        &crate::cancellation::CancellationToken::unbounded(),
-    )?;
+    crate::outcome::without_cancellation(|cancellation| {
+        super::concrete_obligations::validate_concrete_type_obligations(
+            &application.to_symbolic(),
+            metadata_dag,
+            tir,
+            definition.type_def.source(),
+            definition.type_def.span(),
+            cancellation,
+        )
+    })?;
     Ok(())
 }
 

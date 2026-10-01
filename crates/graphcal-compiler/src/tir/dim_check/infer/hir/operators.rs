@@ -1,6 +1,7 @@
 //! Inference of conditionals, unary and binary operators, and display conversions.
 
 use crate::hir::expr::{Expr, ExprKind, ResolvedUnitExpr};
+use crate::outcome::Outcome;
 use std::sync::Arc;
 
 use miette::NamedSource;
@@ -20,7 +21,7 @@ impl Infer<'_> {
         condition: &Expr,
         then_branch: &Expr,
         else_branch: &Expr,
-    ) -> Result<CheckedType<Symbolic>, GraphcalError> {
+    ) -> Result<CheckedType<Symbolic>, Outcome<GraphcalError>> {
         let infer = |expr: &Expr| self.infer_hir_type(expr);
         let cond_type = infer(condition)?;
         let then_type = infer(then_branch)?;
@@ -41,13 +42,14 @@ impl Infer<'_> {
             self.env.registry,
             self.env.src,
         )
+        .map_err(Outcome::Failed)
     }
 
     pub(super) fn infer_hir_unary(
         &self,
         op: crate::desugar::desugared_ast::UnaryOp,
         operand: &Expr,
-    ) -> Result<CheckedType<Symbolic>, GraphcalError> {
+    ) -> Result<CheckedType<Symbolic>, Outcome<GraphcalError>> {
         let operand_type = self.infer_hir_type(operand)?;
         rules::unary_rule(
             op,
@@ -58,6 +60,7 @@ impl Infer<'_> {
             self.env.registry,
             self.env.src,
         )
+        .map_err(Outcome::Failed)
     }
 }
 
@@ -94,7 +97,7 @@ impl Infer<'_> {
         op: crate::desugar::desugared_ast::BinOp,
         lhs: &Expr,
         rhs: &Expr,
-    ) -> Result<CheckedType<Symbolic>, GraphcalError> {
+    ) -> Result<CheckedType<Symbolic>, Outcome<GraphcalError>> {
         use crate::desugar::desugared_ast::BinOp;
         let lhs_type = self.infer_hir_type(lhs)?;
         let rhs_type = self.infer_hir_type(rhs)?;
@@ -121,6 +124,7 @@ impl Infer<'_> {
             self.env.registry,
             self.env.src,
         )
+        .map_err(Outcome::Failed)
     }
 }
 
@@ -152,7 +156,7 @@ impl Infer<'_> {
         &self,
         inner: &Expr,
         target: &ResolvedUnitExpr,
-    ) -> Result<CheckedType<Symbolic>, GraphcalError> {
+    ) -> Result<CheckedType<Symbolic>, Outcome<GraphcalError>> {
         reject_nested_conversion(inner, self.env.src)?;
         let inner_type = self.infer_hir_type(inner)?;
         // `->` distributes element-wise over indexed values (#648 U1): the quantity
@@ -178,7 +182,8 @@ impl Infer<'_> {
                 expr_dim: self.env.registry.dimensions.format_dimension(&expr_dim),
                 src: self.env.src.clone(),
                 span: target.span.into(),
-            });
+            }
+            .into());
         }
 
         Ok(inner_type)
@@ -188,7 +193,7 @@ impl Infer<'_> {
         &self,
         inner: &Expr,
         timezone: &crate::semantic::time_zone::IanaTimeZoneId,
-    ) -> Result<CheckedType<Symbolic>, GraphcalError> {
+    ) -> Result<CheckedType<Symbolic>, Outcome<GraphcalError>> {
         reject_nested_conversion(inner, self.env.src)?;
         let inner_type = self.infer_hir_type(inner)?;
         if !matches!(&inner_type, CheckedType::Datetime(_)) {
@@ -200,7 +205,8 @@ impl Infer<'_> {
                 ),
                 src: self.env.src.clone(),
                 span: inner.span.into(),
-            });
+            }
+            .into());
         }
         Ok(inner_type)
     }

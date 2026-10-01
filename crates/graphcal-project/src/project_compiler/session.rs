@@ -1,5 +1,8 @@
 //! Public whole-project checking session and validated continuation.
 
+use graphcal_compiler::cancellation::CancellationToken;
+use graphcal_compiler::outcome::{Cancellable, CancellationMode, Uncancellable};
+
 use crate::compile_error::CompileError;
 use crate::loader::loaded_project::LoadedProject;
 
@@ -12,10 +15,17 @@ use super::pipeline;
 ///
 /// Configuration is accumulated before a terminal `lower`, `check`,
 /// `prepare`, or `eval` operation. The host type records whether the session
-/// owns callable implementations or signature metadata only.
-pub struct ProjectCompiler<'project, Host = graphcal_eval::host_fns::HostFunctionRegistry> {
+/// owns callable implementations or signature metadata only; the mode records
+/// whether the embedding shell can cancel it, and so whether its operations
+/// fail with an [`Outcome`](graphcal_compiler::outcome::Outcome) or with a
+/// [`CompileError`] alone.
+pub struct ProjectCompiler<
+    'project,
+    Host = graphcal_eval::host_fns::HostFunctionRegistry,
+    Mode = Uncancellable,
+> {
     project: &'project LoadedProject,
-    cancellation: graphcal_compiler::cancellation::CancellationToken,
+    mode: Mode,
     host: Host,
 }
 
@@ -25,53 +35,64 @@ impl<'project> ProjectCompiler<'project> {
     pub fn new(project: &'project LoadedProject) -> Self {
         Self {
             project,
-            cancellation: graphcal_compiler::cancellation::CancellationToken::unbounded(),
+            mode: Uncancellable,
             host: graphcal_eval::host_fns::demo_registry(),
         }
     }
 }
 
 impl<'project, Host> ProjectCompiler<'project, Host> {
-    /// Replace the cooperative cancellation capability.
+    /// Observe `cancellation`: the session's operations then report
+    /// cancellation as
+    /// [`Outcome::Cancelled`](graphcal_compiler::outcome::Outcome::Cancelled).
     #[must_use]
     pub fn cancellation(
-        mut self,
-        cancellation: &graphcal_compiler::cancellation::CancellationToken,
-    ) -> Self {
-        self.cancellation = cancellation.clone();
-        self
+        self,
+        cancellation: &CancellationToken,
+    ) -> ProjectCompiler<'project, Host, Cancellable> {
+        ProjectCompiler {
+            project: self.project,
+            mode: Cancellable(cancellation.clone()),
+            host: self.host,
+        }
     }
+}
 
+impl<'project, Host, Mode: CancellationMode> ProjectCompiler<'project, Host, Mode> {
     /// Lower every module exactly once into the authoritative HIR boundary.
     ///
     /// # Errors
     ///
-    /// Returns a loading, elaboration, canonical-resolution, or cancellation
-    /// diagnostic. Static type/dimension checks and host verification are not
-    /// performed.
-    pub fn lower(self) -> Result<HirProject<'project>, CompileError> {
-        self.cancellation.checkpoint()?;
-        let root_source = self.project.root_file().named_source();
-        let module_resolver =
-            self.project
-                .build_module_resolver()
-                .map_err(|error| match error {
-                    graphcal_compiler::resolve::error::ModuleResolveError::RecursiveIncludeExpansion {
-                        cycle,
-                    } => pipeline::recursive_dag_instantiation(self.project, &cycle),
-                    error => module_resolve_compile_error(error, root_source),
-                })?;
-        pipeline::lower_project_perfile(self.project, module_resolver, &self.cancellation)
+    /// Returns a loading, elaboration, canonical-resolution, or (for a
+    /// cancellable session) cancellation failure. Static type/dimension
+    /// checks and host verification are not performed.
+    pub fn lower(self) -> Result<HirProject<'project, Mode>, Mode::Failure<CompileError>> {
+        let Self { project, mode, .. } = self;
+        mode.clone().run(|cancellation| {
+            cancellation.checkpoint()?;
+            let root_source = project.root_file().named_source();
+            let module_resolver =
+                project
+                    .build_module_resolver()
+                    .map_err(|error| match error {
+                        graphcal_compiler::resolve::error::ModuleResolveError::RecursiveIncludeExpansion {
+                            cycle,
+                        } => pipeline::recursive_dag_instantiation(project, &cycle),
+                        error => module_resolve_compile_error(error, root_source),
+                    })?;
+            pipeline::lower_project_perfile(project, module_resolver, mode, cancellation)
+        })
     }
 
-    pub(crate) const fn cancellation_token(
-        &self,
-    ) -> &graphcal_compiler::cancellation::CancellationToken {
-        &self.cancellation
+    /// The session's cancellation.
+    pub(crate) const fn mode(&self) -> &Mode {
+        &self.mode
     }
 }
 
-impl<'project> ProjectCompiler<'project, graphcal_eval::host_fns::HostFunctionRegistry> {
+impl<'project, Mode>
+    ProjectCompiler<'project, graphcal_eval::host_fns::HostFunctionRegistry, Mode>
+{
     /// Replace callable host functions for checking and runtime preparation.
     #[must_use]
     pub fn host_fns(mut self, host: &graphcal_eval::host_fns::HostFunctionRegistry) -> Self {
@@ -84,22 +105,12 @@ impl<'project> ProjectCompiler<'project, graphcal_eval::host_fns::HostFunctionRe
     pub fn host_metadata(
         self,
         host: &graphcal_eval::host_fns::HostFunctionMetadata,
-    ) -> ProjectCompiler<'project, graphcal_eval::host_fns::HostFunctionMetadata> {
+    ) -> ProjectCompiler<'project, graphcal_eval::host_fns::HostFunctionMetadata, Mode> {
         ProjectCompiler {
             project: self.project,
-            cancellation: self.cancellation,
+            mode: self.mode,
             host: host.clone(),
         }
-    }
-
-    /// Lower and perform every mandatory static check.
-    ///
-    /// # Errors
-    ///
-    /// Returns a compile, plugin-signature, or cancellation diagnostic.
-    pub fn check(self) -> Result<CheckedProject, CompileError> {
-        let metadata = self.host.metadata();
-        self.lower()?.check_with_host_metadata(&metadata)
     }
 
     pub(crate) const fn callable_host(&self) -> &graphcal_eval::host_fns::HostFunctionRegistry {
@@ -107,41 +118,62 @@ impl<'project> ProjectCompiler<'project, graphcal_eval::host_fns::HostFunctionRe
     }
 }
 
-impl ProjectCompiler<'_, graphcal_eval::host_fns::HostFunctionMetadata> {
+impl<Mode: CancellationMode>
+    ProjectCompiler<'_, graphcal_eval::host_fns::HostFunctionRegistry, Mode>
+{
+    /// Lower and perform every mandatory static check.
+    ///
+    /// # Errors
+    ///
+    /// Returns a compile or plugin-signature diagnostic, or (for a cancellable
+    /// session) cancellation.
+    pub fn check(self) -> Result<CheckedProject, Mode::Failure<CompileError>> {
+        let metadata = self.host.metadata();
+        self.lower()?.check_with_host_metadata(&metadata)
+    }
+}
+
+impl<Mode: CancellationMode>
+    ProjectCompiler<'_, graphcal_eval::host_fns::HostFunctionMetadata, Mode>
+{
     /// Lower and check against signature-only host metadata.
     ///
     /// # Errors
     ///
-    /// Returns a compile, plugin-signature, or cancellation diagnostic.
-    pub fn check(self) -> Result<CheckedProject, CompileError> {
+    /// Returns a compile or plugin-signature diagnostic, or (for a cancellable
+    /// session) cancellation.
+    pub fn check(self) -> Result<CheckedProject, Mode::Failure<CompileError>> {
         let metadata = self.host.clone();
         self.lower()?.check_with_host_metadata(&metadata)
     }
 }
 
-impl HirProject<'_> {
-    /// Consume HIR and perform every mandatory static check.
+impl<Mode: CancellationMode> HirProject<'_, Mode> {
+    /// Consume HIR and perform every mandatory static check, observing the
+    /// cancellation of the session that lowered it.
     ///
     /// # Errors
     ///
-    /// Returns a type, dimension, policy, constant, host-signature, or
-    /// cancellation diagnostic.
+    /// Returns a type, dimension, policy, constant, or host-signature
+    /// diagnostic, or (for a cancellable session) cancellation.
     pub fn check_with_host_metadata(
         self,
         host_metadata: &graphcal_eval::host_fns::HostFunctionMetadata,
-    ) -> Result<CheckedProject, CompileError> {
-        pipeline::check_hir_project(self, host_metadata)
+    ) -> Result<CheckedProject, Mode::Failure<CompileError>> {
+        let mode = self.mode.clone();
+        mode.run(|cancellation| pipeline::check_hir_project(self, host_metadata, cancellation))
     }
 
     /// Consume HIR and check it against one executable host registry.
     ///
     /// # Errors
     ///
-    /// Returns a static-check or host-signature diagnostic.
+    /// Returns a static-check or host-signature diagnostic, or (for a
+    /// cancellable session) cancellation.
     pub fn check_with_host_fns(
         self,
         host_fns: &graphcal_eval::host_fns::HostFunctionRegistry,
-    ) -> Result<CheckedProject, CompileError> {
+    ) -> Result<CheckedProject, Mode::Failure<CompileError>> {
         self.check_with_host_metadata(&host_fns.metadata())
     }
 }

@@ -1,4 +1,5 @@
 use super::*;
+use graphcal_compiler::outcome::Outcome;
 use graphcal_eval::presentation_evidence::{
     PendingDisplayUnit, PendingLeaf, PendingQuantityDisplay, PresentationFailure, QuantityDisplay,
     ResolvedLeaf,
@@ -534,10 +535,10 @@ fn nested_presentation_computation_abort_classification_is_not_contained() {
             &values,
             &context(graphcal_compiler::cancellation::CancellationToken::unbounded())
         ),
-        Err(GraphcalError::InternalError { .. })
+        Err(Outcome::Failed(GraphcalError::InternalError { .. }))
     ));
     // The outer presentation checkpoint succeeds; the unit-body evaluator cancels.
-    assert!(matches!(graphcal_eval::eval_expr::resolve_presentation(evidence(target), &values, &context(graphcal_compiler::cancellation::CancellationToken::cancel_after_successful_checkpoints(1))), Err(GraphcalError::Cancelled(_))));
+    assert!(matches!(graphcal_eval::eval_expr::resolve_presentation(evidence(target), &values, &context(graphcal_compiler::cancellation::CancellationToken::cancel_after_successful_checkpoints(1))), Err(Outcome::Cancelled)));
 }
 
 #[test]
@@ -575,7 +576,7 @@ fn presentation_cancellation_is_never_a_notice() {
     cancellation.cancel();
     assert!(matches!(
         graphcal_eval::eval_expr::resolve_presentation(pending, &values, &context),
-        Err(GraphcalError::Cancelled(_))
+        Err(Outcome::Cancelled)
     ));
 }
 

@@ -1,6 +1,7 @@
 //! Inference and coverage checking of map literals.
 
 use crate::hir::expr::{Expr, MapEntry, MapEntryKey};
+use crate::outcome::Outcome;
 use crate::resolved_name::ResolvedIndexVariant;
 use std::sync::Arc;
 
@@ -170,7 +171,7 @@ impl Infer<'_> {
         &self,
         expr: &Expr,
         entries: &[MapEntry],
-    ) -> Result<CheckedType<Symbolic>, GraphcalError> {
+    ) -> Result<CheckedType<Symbolic>, Outcome<GraphcalError>> {
         for entry in entries {
             for key in &entry.keys {
                 if let MapEntryKey::IndexVariant(variant) = key {
@@ -186,7 +187,8 @@ impl Infer<'_> {
                 message: "empty map literal".to_string(),
                 src: self.env.src.clone(),
                 span: expr.span.into(),
-            });
+            }
+            .into());
         };
         let arity = first_entry.keys.len();
         for entry in entries.iter().skip(1) {
@@ -198,7 +200,7 @@ impl Infer<'_> {
                     ),
                     src: self.env.src.clone(),
                     span: expr.span.into(),
-                });
+                }.into());
             }
         }
 
@@ -219,7 +221,7 @@ impl Infer<'_> {
                     ),
                     src: self.env.src.clone(),
                     span: expr.span.into(),
-                });
+                }.into());
             }
             axes.push(MapLiteralAxis {
                 index,
@@ -235,7 +237,8 @@ impl Infer<'_> {
                         found: key_index.display_name(),
                         src: self.env.src.clone(),
                         span: expr.span.into(),
-                    });
+                    }
+                    .into());
                 }
             }
         }
@@ -304,7 +307,8 @@ impl Infer<'_> {
                     message: "duplicate map literal entry".to_string(),
                     src: self.env.src.clone(),
                     span: expr.span.into(),
-                });
+                }
+                .into());
             }
         }
 
@@ -320,7 +324,8 @@ impl Infer<'_> {
                     missing,
                     src: self.env.src.clone(),
                     span: expr.span.into(),
-                });
+                }
+                .into());
             }
             let first_missing = first_missing_map_tuple(&axes_variant_keys, &provided_tuples)
                 .ok_or_else(|| GraphcalError::InternalError {
@@ -347,7 +352,7 @@ impl Infer<'_> {
                 ),
                 src: self.env.src.clone(),
                 span: expr.span.into(),
-            });
+            }.into());
         }
 
         let first_type = self.infer_hir_type(&first_entry.value)?;
@@ -360,7 +365,7 @@ impl Infer<'_> {
                 message: "map literal element type must be a value type, not an indexed type; use tuple keys for multi-axis map literals".to_string(),
                 src: self.env.src.clone(),
                 span: first_entry.value.span.into(),
-            });
+            }.into());
             }
         }
         for entry in entries.iter().skip(1) {
@@ -371,7 +376,8 @@ impl Infer<'_> {
                     inferred: format_checked_type(&entry_type, self.env.registry),
                     src: self.env.src.clone(),
                     span: entry.value.span.into(),
-                });
+                }
+                .into());
             }
         }
         let mut result = first_type;

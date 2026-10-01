@@ -11,6 +11,7 @@ use graphcal_compiler::graphcal_error::GraphcalError;
 use graphcal_compiler::hir::ExprLoweringContext;
 use graphcal_compiler::hir::expr::ExprKind as HirExprKind;
 use graphcal_compiler::hir::lower::{GenericScope, ModuleScope};
+use graphcal_compiler::outcome::{CancellationMode, Outcome, without_cancellation};
 use graphcal_compiler::resolve::ModuleResolver;
 use graphcal_compiler::semantic::checked_type::CheckedType;
 use graphcal_compiler::semantic::index_def::ConcreteIndexKind;
@@ -282,7 +283,7 @@ impl PreparedProject {
         host_fns: graphcal_eval::host_fns::HostFunctionRegistry,
         module_resolver: ModuleResolver,
         cancellation: &graphcal_compiler::cancellation::CancellationToken,
-    ) -> Result<Self, CompileError> {
+    ) -> Result<Self, Outcome<CompileError>> {
         let CompiledFile {
             program,
             entry_interface,
@@ -294,7 +295,8 @@ impl PreparedProject {
             program,
             &source,
             cancellation,
-        )?;
+        )
+        .map_err(Outcome::map_into)?;
         let plan_id = NEXT_PLAN_ID.fetch_add(1, Ordering::Relaxed);
 
         let plan = prepared_plan.plan();
@@ -377,18 +379,20 @@ impl PreparedProject {
     /// Returns a compile/evaluator diagnostic for a row from another plan or
     /// an internal evaluator failure.
     pub fn evaluate(&self, row: &ParameterBindingRow) -> Result<EvalResult, CompileError> {
-        self.evaluate_with_cancellation(
-            row,
-            &graphcal_compiler::cancellation::CancellationToken::unbounded(),
-        )
+        without_cancellation(|cancellation| self.evaluate_with_cancellation(row, cancellation))
     }
 
     /// Evaluate one row with cooperative cancellation.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Outcome::Cancelled`] on cancellation, or the diagnostics of
+    /// [`Self::evaluate`].
     pub fn evaluate_with_cancellation(
         &self,
         row: &ParameterBindingRow,
         cancellation: &graphcal_compiler::cancellation::CancellationToken,
-    ) -> Result<EvalResult, CompileError> {
+    ) -> Result<EvalResult, Outcome<CompileError>> {
         self.validate_row_identity(row)?;
         let eval_result =
             graphcal_eval::eval::runtime::evaluate_plan_with_values_and_bindings_and_cancellation(
@@ -397,7 +401,8 @@ impl PreparedProject {
                 &self.source,
                 &self.host_fns,
                 cancellation,
-            )?;
+            )
+            .map_err(Outcome::map_into)?;
         self.assemble_normal_result(eval_result, cancellation)
     }
 
@@ -410,28 +415,31 @@ impl PreparedProject {
         &self,
         row: &ParameterBindingRow,
     ) -> Result<graphcal_eval::eval::RuntimeEvaluation, CompileError> {
-        self.evaluate_runtime_with_cancellation(
-            row,
-            &graphcal_compiler::cancellation::CancellationToken::unbounded(),
-        )
+        without_cancellation(|cancellation| {
+            self.evaluate_runtime_with_cancellation(row, cancellation)
+        })
     }
 
     /// Evaluate one row for debugging with cooperative cancellation.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Outcome::Cancelled`] on cancellation, or the diagnostics of
+    /// [`Self::evaluate_runtime`].
     pub fn evaluate_runtime_with_cancellation(
         &self,
         row: &ParameterBindingRow,
         cancellation: &graphcal_compiler::cancellation::CancellationToken,
-    ) -> Result<graphcal_eval::eval::RuntimeEvaluation, CompileError> {
+    ) -> Result<graphcal_eval::eval::RuntimeEvaluation, Outcome<CompileError>> {
         self.validate_row_identity(row)?;
-        Ok(
-            graphcal_eval::eval::runtime::evaluate_plan_with_values_and_bindings_and_cancellation(
-                self.plan(),
-                &row.bindings,
-                &self.source,
-                &self.host_fns,
-                cancellation,
-            )?,
+        graphcal_eval::eval::runtime::evaluate_plan_with_values_and_bindings_and_cancellation(
+            self.plan(),
+            &row.bindings,
+            &self.source,
+            &self.host_fns,
+            cancellation,
         )
+        .map_err(Outcome::map_into)
     }
 
     fn validate_row_identity(&self, row: &ParameterBindingRow) -> Result<(), CompileError> {
@@ -450,7 +458,7 @@ impl PreparedProject {
         &self,
         evaluation: graphcal_eval::eval::runtime::RuntimeEvaluation,
         cancellation: &graphcal_compiler::cancellation::CancellationToken,
-    ) -> Result<EvalResult, CompileError> {
+    ) -> Result<EvalResult, Outcome<CompileError>> {
         let (mut eval_result, presentations) = evaluation.into_result_and_presentations();
         apply_include_debug_names(&mut eval_result, &self.output_assembly.include_debug_names);
 
@@ -478,7 +486,8 @@ impl PreparedProject {
                     presented,
                     imported.declared_type(),
                 )
-                .map_err(|invariant| invariant.into_internal_error(&self.source))?;
+                .map_err(|invariant| invariant.into_internal_error(&self.source))
+                .map_err(CompileError::from)?;
                 eval_result
                     .presentation_diagnostics
                     .extend(diagnostics.into_iter().map(|detail| {
@@ -555,7 +564,7 @@ pub(super) fn prepare_checked_project(
     checked: CheckedProject,
     host_fns: &HostFunctionRegistry,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
-) -> Result<PreparedProject, CompileError> {
+) -> Result<PreparedProject, Outcome<CompileError>> {
     cancellation.checkpoint()?;
     let CheckedProjectRuntimeParts {
         compiled,
@@ -571,16 +580,18 @@ pub(super) fn prepare_checked_project(
                 ),
                 &source,
                 DiagnosticAnchor::Builtin,
-            )));
+            ))
+            .into());
         };
-        return Err(CompileError::Eval(
-            GraphcalError::RequiredStaticInputNotBound {
+        return Err(
+            CompileError::Eval(GraphcalError::RequiredStaticInputNotBound {
                 kind: StaticInputKind::Index,
                 name: index.name().to_string(),
                 src: source,
                 span: span.into(),
-            },
-        ));
+            })
+            .into(),
+        );
     }
 
     PreparedProject::from_compiled(
@@ -592,40 +603,44 @@ pub(super) fn prepare_checked_project(
     )
 }
 
-impl ProjectCompiler<'_, HostFunctionRegistry> {
+impl<Mode: CancellationMode> ProjectCompiler<'_, HostFunctionRegistry, Mode> {
     /// Check and prepare this configured session for repeated evaluation.
     ///
     /// # Errors
     ///
-    /// Returns a compile, plan, interface, plugin, or cancellation diagnostic.
-    pub fn prepare(self) -> Result<PreparedProject, CompileError> {
-        let cancellation = self.cancellation_token().clone();
+    /// Returns a compile, plan, interface, or plugin diagnostic, or (for a
+    /// cancellable session) cancellation.
+    pub fn prepare(self) -> Result<PreparedProject, Mode::Failure<CompileError>> {
+        let mode = self.mode().clone();
         let host_fns = self.callable_host().clone();
-        self.check()?
-            .prepare_with_host_fns_and_cancellation(&host_fns, &cancellation)
+        let checked = self.check()?;
+        mode.run(|cancellation| prepare_checked_project(checked, &host_fns, cancellation))
     }
 
     /// Check, prepare, bind, and evaluate one row.
     ///
     /// # Errors
     ///
-    /// Returns a compile, binding, evaluation, or cancellation diagnostic.
+    /// Returns a compile, binding, or evaluation diagnostic, or (for a
+    /// cancellable session) cancellation.
     pub fn eval(
         self,
         overrides: &std::collections::HashMap<
             graphcal_compiler::syntax::decl_name::DeclName,
             graphcal_compiler::desugar::desugared_ast::Expr,
         >,
-    ) -> Result<graphcal_eval::eval::types::EvalResult, CompileError> {
-        let cancellation = self.cancellation_token().clone();
+    ) -> Result<graphcal_eval::eval::types::EvalResult, Mode::Failure<CompileError>> {
+        let mode = self.mode().clone();
         let prepared = self.prepare()?;
-        let mut bindings = prepared.binding_builder();
-        for (name, expression) in overrides {
-            cancellation.checkpoint()?;
-            bindings.bind_expression(name, expression)?;
-        }
-        let row = bindings.finish()?;
-        prepared.evaluate_with_cancellation(&row, &cancellation)
+        mode.run(|cancellation| {
+            let mut bindings = prepared.binding_builder();
+            for (name, expression) in overrides {
+                cancellation.checkpoint()?;
+                bindings.bind_expression(name, expression)?;
+            }
+            let row = bindings.finish()?;
+            prepared.evaluate_with_cancellation(&row, cancellation)
+        })
     }
 }
 
@@ -634,12 +649,13 @@ impl CheckedProject {
     ///
     /// # Errors
     ///
-    /// Returns a plan, input-interface, plugin, or cancellation diagnostic.
+    /// Returns [`Outcome::Cancelled`] on cancellation, or a plan,
+    /// input-interface, or plugin diagnostic.
     pub fn prepare_with_host_fns_and_cancellation(
         self,
         host_fns: &HostFunctionRegistry,
         cancellation: &graphcal_compiler::cancellation::CancellationToken,
-    ) -> Result<PreparedProject, CompileError> {
+    ) -> Result<PreparedProject, Outcome<CompileError>> {
         prepare_checked_project(self, host_fns, cancellation)
     }
 
@@ -652,9 +668,8 @@ impl CheckedProject {
         self,
         host_fns: &HostFunctionRegistry,
     ) -> Result<PreparedProject, CompileError> {
-        self.prepare_with_host_fns_and_cancellation(
-            host_fns,
-            &graphcal_compiler::cancellation::CancellationToken::unbounded(),
-        )
+        without_cancellation(|cancellation| {
+            self.prepare_with_host_fns_and_cancellation(host_fns, cancellation)
+        })
     }
 }

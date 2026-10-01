@@ -14,6 +14,7 @@ use graphcal_compiler::declaration_category::{DeclCategory, ValueDeclCategory};
 use graphcal_compiler::desugar::desugared_ast::ModulePath;
 use graphcal_compiler::graphcal_error::GraphcalError;
 use graphcal_compiler::ir::resolve::{ImportedValueNames, ScopedName};
+use graphcal_compiler::outcome::Outcome;
 use graphcal_compiler::resolved_name::ResolvedDeclName;
 use graphcal_compiler::semantic::index_def::IndexBindingTarget;
 use graphcal_compiler::syntax::decl_name::DeclName;
@@ -130,7 +131,7 @@ pub(super) fn process_file_body_declarations<'a>(
     module_resolver: &graphcal_compiler::resolve::ModuleResolver,
     ctx: &mut ImportContext<'a>,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
-) -> Result<(), CompileError> {
+) -> Result<(), Outcome<CompileError>> {
     let file_dag_id = loaded_file.dag_id();
     let file_src = loaded_file.named_source();
     let including = IncludingModule {
@@ -202,7 +203,8 @@ pub(super) fn process_file_body_declarations<'a>(
                 ),
                 src: file_src.clone(),
                 span: include.path.span().into(),
-            }));
+            })
+            .into());
         };
         if !target_dag.declaration(target_loaded).visibility.is_public()
             && target.source_file() != file_dag_id
@@ -212,7 +214,8 @@ pub(super) fn process_file_body_declarations<'a>(
                 file_path: include.path.display_path(),
                 src: file_src.clone(),
                 span: include.path.leaf().span.into(),
-            }));
+            })
+            .into());
         }
         process_inline_dag_include(
             &InlineDagIncludeTarget {

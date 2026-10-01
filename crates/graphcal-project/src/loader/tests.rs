@@ -267,7 +267,9 @@ path = "{escaped_outside}"
         &cancellation,
     );
 
-    let error = result.err().expect("outside path source must be rejected");
+    let Some(Outcome::Failed(error)) = result.err() else {
+        panic!("outside path source must be rejected");
+    };
     assert!(error.to_string().contains("unsupported path source"));
     assert_eq!(
         file_system.canonicalize_calls.get(),

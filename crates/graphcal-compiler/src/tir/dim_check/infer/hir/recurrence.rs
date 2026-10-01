@@ -2,6 +2,7 @@
 
 use crate::graphcal_error::GraphcalError;
 use crate::hir::expr::{Expr, LocalDef};
+use crate::outcome::Outcome;
 use crate::semantic::checked_type::{IndexTypeRef, Symbolic};
 
 use crate::semantic::checked_type::CheckedType;
@@ -17,7 +18,7 @@ impl Infer<'_> {
         acc: &LocalDef,
         val: &LocalDef,
         body: &Expr,
-    ) -> Result<CheckedType<Symbolic>, GraphcalError> {
+    ) -> Result<CheckedType<Symbolic>, Outcome<GraphcalError>> {
         let source_type = self.infer_hir_type(source)?;
         let source_rank = source_type.indexed_rank();
         let CheckedType::Indexed { element, index } = source_type else {
@@ -25,14 +26,16 @@ impl Infer<'_> {
                 message: "scan source must be an indexed value".to_string(),
                 src: self.env.src.clone(),
                 span: source.span.into(),
-            });
+            }
+            .into());
         };
         if source_rank > 1 {
             return Err(GraphcalError::MultiAxisScanSource {
                 rank: source_rank,
                 src: self.env.src.clone(),
                 span: source.span.into(),
-            });
+            }
+            .into());
         }
         let accumulator_type = self.infer_hir_type(init)?;
         let scan_locals = self
@@ -46,7 +49,8 @@ impl Infer<'_> {
                 help: "scan body must return the same type as the accumulator".to_string(),
                 src: self.env.src.clone(),
                 span: body.span.into(),
-            });
+            }
+            .into());
         }
         Ok(CheckedType::Indexed {
             element: Box::new(accumulator_type),
@@ -62,7 +66,7 @@ impl Infer<'_> {
         prev_index: &LocalDef,
         current_index: &LocalDef,
         body: &Expr,
-    ) -> Result<CheckedType<Symbolic>, GraphcalError> {
+    ) -> Result<CheckedType<Symbolic>, Outcome<GraphcalError>> {
         let init_type = self.infer_hir_type(init)?;
         let index = IndexTypeRef::from_resolved(axis.value.clone());
         let idx_def = self
@@ -79,7 +83,8 @@ impl Infer<'_> {
                 message: format!("unfold requires a coordinate index, got `{index}`"),
                 src: self.env.src.clone(),
                 span: axis.span.into(),
-            });
+            }
+            .into());
         }
         // The recurrence coordinate binders are keys of the axis; the coordinate
         // quantity is extracted with coord().
@@ -97,7 +102,8 @@ impl Infer<'_> {
                 help: "unfold body must return the same type as the previous state".to_string(),
                 src: self.env.src.clone(),
                 span: body.span.into(),
-            });
+            }
+            .into());
         }
         Ok(CheckedType::Indexed {
             element: Box::new(init_type),

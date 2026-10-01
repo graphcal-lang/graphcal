@@ -7,6 +7,7 @@ use graphcal_compiler::dag_id::DagId;
 use graphcal_compiler::display::unit_label::format_unit_terms_canonical;
 use graphcal_compiler::graphcal_error::GraphcalError;
 use graphcal_compiler::hir::expr::ResolvedUnitExpr;
+use graphcal_compiler::outcome::Outcome;
 use graphcal_compiler::semantic::unit_scale::PositiveFiniteScale;
 use graphcal_compiler::tir::typed::scoped_node::ScopedUnitExpr;
 
@@ -63,7 +64,7 @@ pub(super) fn resolve(
     values: &RuntimeValueMap,
     ctx: &EvalSession<'_>,
     evaluate: EvaluateExecutable,
-) -> Result<ResolvedValue, GraphcalError> {
+) -> Result<ResolvedValue, Outcome<GraphcalError>> {
     presented.try_resolve(|display| match display {
         PendingQuantityDisplay::Ready(display) => Ok(display),
         PendingQuantityDisplay::Requested(request) => {
@@ -80,7 +81,7 @@ pub(super) fn resolve_frame(
     ctx: &EvalSession<'_>,
     callable: &crate::execution_plan::CallablePlan<'_>,
     evaluate: EvaluateExecutable,
-) -> Result<EvaluatedRuntimeValue, GraphcalError> {
+) -> Result<EvaluatedRuntimeValue, Outcome<GraphcalError>> {
     presented.try_map_quantity_displays(|display| match display {
         PendingQuantityDisplay::Requested(request) if callable.executes(&request.owner) => {
             resolve_request(&request, values, ctx, evaluate).map(PendingQuantityDisplay::Ready)
@@ -98,7 +99,7 @@ fn resolve_request(
     values: &RuntimeValueMap,
     ctx: &EvalSession<'_>,
     evaluate: EvaluateExecutable,
-) -> Result<QuantityDisplay, GraphcalError> {
+) -> Result<QuantityDisplay, Outcome<GraphcalError>> {
     ctx.cancellation.checkpoint()?;
     let context = ctx.with_src(&request.source);
     crate::pipeline_metrics::record(crate::pipeline_metrics::Event::PresentationEvaluation);
@@ -106,10 +107,10 @@ fn resolve_request(
         .map(|scale| scaled(&request.unit, scale, &context))
     {
         Ok(leaf) => Ok(leaf),
-        Err(error @ (GraphcalError::InternalError { .. } | GraphcalError::Cancelled(_))) => {
-            Err(error)
-        }
-        Err(error) => Ok(QuantityDisplay::Failed(PresentationFailure::Scale {
+        Err(
+            error @ (Outcome::Cancelled | Outcome::Failed(GraphcalError::InternalError { .. })),
+        ) => Err(error),
+        Err(Outcome::Failed(error)) => Ok(QuantityDisplay::Failed(PresentationFailure::Scale {
             source_name: match &error {
                 GraphcalError::EvalError { src, .. } => src.name().to_owned(),
                 _ => context.src.name().to_owned(),

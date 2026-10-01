@@ -6,6 +6,7 @@ use miette::NamedSource;
 
 use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
 use graphcal_compiler::graphcal_error::GraphcalError;
+use graphcal_compiler::outcome::Outcome;
 use graphcal_compiler::tir::typed::CheckedTir;
 
 use crate::checked_program::{EvaluatedTir, ExecutionFacts};
@@ -20,7 +21,7 @@ pub(super) fn eval_const_pool(
     inherited: &ExecutionFacts,
     src: &NamedSource<Arc<String>>,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
-) -> Result<(EvaluatedTir, PendingPresentedMap), GraphcalError> {
+) -> Result<(EvaluatedTir, PendingPresentedMap), Outcome<GraphcalError>> {
     cancellation.checkpoint()?;
     let mut presentations = inherited
         .const_presentations()
@@ -42,12 +43,13 @@ pub(super) fn eval_const_pool(
         if !presented.is_plain() {
             presentations.insert(step.key.clone(), presented);
         }
-        Ok(value)
+        Ok::<_, Outcome<GraphcalError>>(value)
     })
     .map_err(|error| match error {
         ConstPoolBuildError::Evaluation(error) => error,
         ConstPoolBuildError::Invalid(error) => {
             GraphcalError::internal_error(error.to_string(), src, DiagnosticAnchor::WholeFile)
+                .into()
         }
     })?;
     Ok((evaluated, presentations))

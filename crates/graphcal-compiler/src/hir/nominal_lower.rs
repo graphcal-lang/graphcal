@@ -36,6 +36,7 @@ use super::types::{
     DeclType, DimArg, DimExpr, DimExprItem, DimTermRef, DimTermTarget, GenericArg, GenericParamId,
     GenericParamOwner, IndexRef, ValueType, ValueTypeKind,
 };
+use crate::outcome::Outcome;
 
 /// Services one nominal lowering run needs.
 #[derive(Debug, Clone, Copy)]
@@ -59,7 +60,7 @@ pub fn lower_type_declaration(
     span: Span,
     src: &NamedSource<Arc<String>>,
     lowering: NominalLowering<'_>,
-) -> Result<NominalTypeDef, GraphcalError> {
+) -> Result<NominalTypeDef, Outcome<GraphcalError>> {
     validate_generic_params(declaration, src)?;
     let (generic_params, generic_scope) =
         lower_generic_params(declaration, &identity, src, lowering)?;
@@ -86,11 +87,11 @@ pub fn lower_type_declaration(
                         identity.constructor(member.name.value.clone()),
                         fields,
                     )
-                    .map_err(|error| member_error(error, declaration, payload, src))
+                    .map_err(|error| member_error(error, declaration, payload, src).into())
                 })
-                .collect::<Result<Vec<_>, GraphcalError>>()?;
+                .collect::<Result<Vec<_>, Outcome<GraphcalError>>>()?;
             NominalTypeDef::try_union(identity, generic_params, lowered, src.clone(), span)
-                .map_err(|error| member_error(error, declaration, &[], src))
+                .map_err(|error| member_error(error, declaration, &[], src).into())
         }
     }
 }
@@ -345,7 +346,7 @@ fn lower_generic_params(
     identity: &ResolvedStructTypeName,
     src: &NamedSource<Arc<String>>,
     lowering: NominalLowering<'_>,
-) -> Result<(Vec<NominalGenericParam>, super::lower::GenericScope), GraphcalError> {
+) -> Result<(Vec<NominalGenericParam>, super::lower::GenericScope), Outcome<GraphcalError>> {
     let generic_owner = GenericParamOwner::Type(identity.clone());
     declaration.generic_params.iter().try_fold(
         (
@@ -381,7 +382,8 @@ fn lower_generic_params(
                         duplicate: param.name.span,
                     },
                     src,
-                ));
+                )
+                .into());
             }
             scope
                 .insert_binding(super::lower::GenericParamBinding::new(
@@ -745,16 +747,18 @@ mod tests {
         let resolver = modules.build().unwrap();
         let src = NamedSource::new("main.gcl", Arc::new(source.to_string()));
         let declaration = first_type(&file);
-        lower_type_declaration(
-            declaration,
-            ResolvedStructTypeName::for_test(owner, declaration.name.value.clone()),
-            declaration.name.span,
-            &src,
-            NominalLowering {
-                resolver: &resolver,
-                cancellation: &crate::cancellation::CancellationToken::unbounded(),
-            },
-        )
+        crate::outcome::without_cancellation(|cancellation| {
+            lower_type_declaration(
+                declaration,
+                ResolvedStructTypeName::for_test(owner, declaration.name.value.clone()),
+                declaration.name.span,
+                &src,
+                NominalLowering {
+                    resolver: &resolver,
+                    cancellation,
+                },
+            )
+        })
     }
 
     fn eval_message(result: Result<NominalTypeDef, GraphcalError>) -> String {

@@ -1,6 +1,7 @@
 //! Inference of built-in function calls: arity, dispatch, and the linear-algebra and complex families.
 
 use crate::hir::expr::{Expr, FunctionRef};
+use crate::outcome::Outcome;
 use std::sync::Arc;
 
 use miette::NamedSource;
@@ -56,7 +57,7 @@ impl Infer<'_> {
         function: crate::builtin::LinearAlgebraFn,
         callee_span: Span,
         args: &[Expr],
-    ) -> Result<CheckedType<Symbolic>, GraphcalError> {
+    ) -> Result<CheckedType<Symbolic>, Outcome<GraphcalError>> {
         let argument_types = args
             .iter()
             .map(|arg| self.infer_arg(arg))
@@ -124,14 +125,14 @@ impl Infer<'_> {
             src: self.env.src.clone(),
             span: callee_span.into(),
         },
-    })
+    }).map_err(Outcome::Failed)
     }
 
     pub(super) fn infer_hir_fn_call(
         &self,
         callee: &crate::syntax::span::Spanned<FunctionRef>,
         args: &[Expr],
-    ) -> Result<CheckedType<Symbolic>, GraphcalError> {
+    ) -> Result<CheckedType<Symbolic>, Outcome<GraphcalError>> {
         let (builtin, epoch_scale) = match &callee.value {
             FunctionRef::Builtin(builtin) => (builtin.function(), None),
             FunctionRef::Epoch { scale } => (BuiltinFn::EPOCH, Some(scale.value)),
@@ -154,7 +155,8 @@ impl Infer<'_> {
                         help: format!("{}() requires an indexed value", builtin.as_str()),
                         src: self.env.src.clone(),
                         span: args[0].span.into(),
-                    });
+                    }
+                    .into());
                 };
                 let rank = arg_type.indexed_rank();
                 if rank > 1 {
@@ -163,7 +165,8 @@ impl Infer<'_> {
                         rank,
                         src: self.env.src.clone(),
                         span: args[0].span.into(),
-                    });
+                    }
+                    .into());
                 }
                 if kind == AggregationFn::Value(ValueAggregation::Count) {
                     return Ok(CheckedType::Int);
@@ -182,7 +185,8 @@ impl Infer<'_> {
                             ),
                             src: self.env.src.clone(),
                             span: args[0].span.into(),
-                        });
+                        }
+                        .into());
                     }
                     return Ok(CheckedType::Key(index.clone()));
                 }
@@ -196,7 +200,8 @@ impl Infer<'_> {
                         ),
                         src: self.env.src.clone(),
                         span: args[0].span.into(),
-                    });
+                    }
+                    .into());
                 };
                 if kind != AggregationFn::Value(ValueAggregation::Product)
                     || dimension.is_dimensionless()
@@ -221,6 +226,7 @@ impl Infer<'_> {
                         src: self.env.src.clone(),
                         span: args[0].span.into(),
                     })
+                    .map_err(Outcome::Failed)
             }
             BuiltinFn::LinearAlgebra(function) => {
                 self.infer_hir_linear_algebra_call(function, callee.span, args)
@@ -252,7 +258,8 @@ impl Infer<'_> {
                             ),
                             src: self.env.src.clone(),
                             span: args[0].span.into(),
-                        });
+                        }
+                        .into());
                     }
                 }
                 Ok(CheckedType::Datetime(
@@ -272,15 +279,15 @@ impl Infer<'_> {
         &self,
         function: crate::builtin::ComplexFn,
         args: &[Expr],
-    ) -> Result<CheckedType<Symbolic>, GraphcalError> {
+    ) -> Result<CheckedType<Symbolic>, Outcome<GraphcalError>> {
         use crate::tir::dim_check::infer::complex::ComplexTypeError;
 
         let inferred = args
             .iter()
             .map(|arg| self.infer_arg(arg))
             .collect::<Result<Vec<_>, _>>()?;
-        crate::tir::dim_check::infer::complex::infer(function, &inferred).map_err(|error| {
-            match error {
+        crate::tir::dim_check::infer::complex::infer(function, &inferred)
+            .map_err(|error| match error {
                 ComplexTypeError::ExpectedQuantity { argument } => {
                     GraphcalError::DimensionMismatch {
                         expected: "quantity type".to_string(),
@@ -341,8 +348,8 @@ impl Infer<'_> {
                         span: args[argument].span.into(),
                     }
                 }
-            }
-        })
+            })
+            .map_err(Outcome::Failed)
     }
 
     fn infer_hir_builtin_fn(
@@ -350,7 +357,7 @@ impl Infer<'_> {
         name: ScalarFn,
         callee_span: Span,
         args: &[Expr],
-    ) -> Result<CheckedType<Symbolic>, GraphcalError> {
+    ) -> Result<CheckedType<Symbolic>, Outcome<GraphcalError>> {
         let func = crate::semantic::scalar_function::scalar_function(name);
         let dimension_args = args
             .iter()
@@ -360,7 +367,7 @@ impl Infer<'_> {
                     expect_quantity(&inferred, self.env.registry, self.env.src, arg.span)?;
                 Ok(crate::syntax::span::Spanned::new(dimension, arg.span))
             })
-            .collect::<Result<Vec<_>, GraphcalError>>()?;
+            .collect::<Result<Vec<_>, Outcome<GraphcalError>>>()?;
         infer_fn_dim(
             name.into(),
             func.signature(),
@@ -370,5 +377,6 @@ impl Infer<'_> {
             self.env.src,
         )
         .map(CheckedType::Quantity)
+        .map_err(Outcome::Failed)
     }
 }

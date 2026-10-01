@@ -1,6 +1,7 @@
 //! Inference of extern (plugin) function calls against their signatures.
 
 use crate::hir::expr::{Expr, ExternFnRef};
+use crate::outcome::Outcome;
 use std::collections::HashMap;
 
 use crate::graphcal_error::GraphcalError;
@@ -21,7 +22,7 @@ impl Infer<'_> {
         ext: &ExternFnRef,
         callee_span: Span,
         args: &[Expr],
-    ) -> Result<CheckedType<Symbolic>, GraphcalError> {
+    ) -> Result<CheckedType<Symbolic>, Outcome<GraphcalError>> {
         use crate::function_signature::{ParamKind, ResultKind, ScalarValueKind};
 
         use crate::tir::dim_check::builtins::SignatureDimWalk;
@@ -32,7 +33,8 @@ impl Infer<'_> {
                 name: ext.name.clone(),
                 src: self.env.src.clone(),
                 span: callee_span.into(),
-            });
+            }
+            .into());
         };
         let sig = &function.signature;
         if args.len() != sig.arity() {
@@ -42,7 +44,8 @@ impl Infer<'_> {
                 got: args.len(),
                 src: self.env.src.clone(),
                 span: callee_span.into(),
-            });
+            }
+            .into());
         }
 
         // Boundary rendering for diagnostics only.
@@ -64,7 +67,8 @@ impl Infer<'_> {
                             help: format!("parameter `{}` requires Bool", param.name),
                             src: self.env.src.clone(),
                             span: arg.span.into(),
-                        });
+                        }
+                        .into());
                     }
                 }
                 ParamKind::Scalar(ScalarValueKind::Int) => {
@@ -75,7 +79,8 @@ impl Infer<'_> {
                             help: format!("parameter `{}` requires Int", param.name),
                             src: self.env.src.clone(),
                             span: arg.span.into(),
-                        });
+                        }
+                        .into());
                     }
                 }
                 ParamKind::Scalar(ScalarValueKind::Quantity(monomial)) => {
@@ -101,7 +106,7 @@ impl Infer<'_> {
                                 ),
                                 src: self.env.src.clone(),
                                 span: arg.span.into(),
-                            });
+                            }.into());
                         };
                         arg_indexes.push(arg_index);
                         current = element;
@@ -121,7 +126,7 @@ impl Infer<'_> {
                                     ),
                                     src: self.env.src.clone(),
                                     span: arg.span.into(),
-                                });
+                                }.into());
                             };
                             dim_walk.check_quantity_param(
                                 &param.name,
@@ -154,7 +159,7 @@ impl Infer<'_> {
                                     ),
                                     src: self.env.src.clone(),
                                     span: arg.span.into(),
-                                });
+                                }.into());
                             }
                         }
                     }
@@ -176,7 +181,7 @@ impl Infer<'_> {
                                         ),
                                         src: self.env.src.clone(),
                                         span: arg.span.into(),
-                                    });
+                                    }.into());
                                 }
                             }
                         }
@@ -188,9 +193,11 @@ impl Infer<'_> {
         match sig.result() {
             ResultKind::Value(ParamKind::Scalar(ScalarValueKind::Bool)) => Ok(CheckedType::Bool),
             ResultKind::Value(ParamKind::Scalar(ScalarValueKind::Int)) => Ok(CheckedType::Int),
-            ResultKind::Value(ParamKind::Scalar(ScalarValueKind::Quantity(monomial))) => dim_walk
-                .result(monomial, callee_span)
-                .map(CheckedType::Quantity),
+            ResultKind::Value(ParamKind::Scalar(ScalarValueKind::Quantity(monomial))) => {
+                Ok(dim_walk
+                    .result(monomial, callee_span)
+                    .map(CheckedType::Quantity)?)
+            }
             ResultKind::Value(ParamKind::Indexed { element, indexes }) => {
                 let leaf = match element {
                     ScalarValueKind::Quantity(monomial) => dim_walk
@@ -215,7 +222,7 @@ impl Infer<'_> {
                     element: Box::new(element),
                     index: bound.clone(),
                 })
-            })
+            }).map_err(Outcome::Failed)
             }
             // Extern struct returns are non-generic records, so the argument
             // list is empty.

@@ -7,6 +7,7 @@ use crate::builtin::{AggregationFn, LinearAlgebraFn};
 use crate::datetime_literal::CivilDateTimeLiteral;
 use crate::declaration_kind::{AttributeTarget, DeclarationKind};
 use crate::diagnostic_anchor::DiagnosticAnchor;
+use crate::outcome::Outcome;
 use crate::resolve::category::DeclSymbolKind;
 use crate::semantic::checked_type::IndexDisplayName;
 use crate::semantic::time_scale::TimeScale;
@@ -66,14 +67,6 @@ impl std::fmt::Display for NominalMember {
 /// Rich diagnostic error types for graphcal evaluation.
 #[derive(Debug, Clone, Error, Diagnostic)]
 pub enum GraphcalError {
-    /// Cooperative cancellation requested by the embedding shell.
-    ///
-    /// This variant is intercepted at the operation boundary and is never
-    /// rendered as a source diagnostic.
-    #[error(transparent)]
-    #[diagnostic(transparent)]
-    Cancelled(#[from] crate::cancellation::Cancelled),
-
     /// Runtime propagation of an unavailable projected value. This is not a
     /// static checking error; evaluator boundaries retain the typed reason.
     #[error("{reason}")]
@@ -2368,6 +2361,15 @@ pub enum GraphcalError {
     },
 }
 
+/// A cancellable operation that fails with a [`GraphcalError`] reports it as
+/// [`Outcome::Failed`]; cancellation only ever
+/// comes from [`Cancelled`](crate::cancellation::Cancelled).
+impl From<GraphcalError> for Outcome<GraphcalError> {
+    fn from(error: GraphcalError) -> Self {
+        Self::Failed(error)
+    }
+}
+
 impl GraphcalError {
     /// Construct an internal diagnostic with an explicit source-anchor policy.
     #[must_use]
@@ -2384,13 +2386,6 @@ impl GraphcalError {
         }
     }
 
-    /// Whether this outcome represents cooperative cancellation rather than a
-    /// Graphcal source error.
-    #[must_use]
-    pub const fn is_cancelled(&self) -> bool {
-        matches!(self, Self::Cancelled(_))
-    }
-
     /// Return the `NamedSource` embedded in this error, if any.
     ///
     /// Most variants carry a `#[source_code]` field naming the file and its
@@ -2399,8 +2394,8 @@ impl GraphcalError {
     /// into — instead of inferring (name, source) from external context,
     /// which can silently desynchronize when an imported file is the origin.
     ///
-    /// Returns `None` for control flow and the handful of variants without a
-    /// source location: [`Self::Cancelled`], file-system errors before parsing
+    /// Returns `None` for the handful of variants without a
+    /// source location: file-system errors before parsing
     /// ([`Self::FileNotFound`], [`Self::InvalidSourcePath`],
     /// [`Self::CircularImport`], [`Self::ManifestError`]) and CLI override errors
     /// ([`Self::OverrideNotAParam`], [`Self::OverrideUnknownParam`]).
@@ -2411,8 +2406,7 @@ impl GraphcalError {
     )]
     pub const fn named_source(&self) -> Option<&NamedSource<Arc<String>>> {
         let src = match self {
-            Self::Cancelled(_)
-            | Self::FileNotFound { .. }
+            Self::FileNotFound { .. }
             | Self::InvalidSourcePath { .. }
             | Self::CircularImport { .. }
             | Self::ManifestError { .. }

@@ -8,6 +8,7 @@ use std::sync::Arc;
 use miette::NamedSource;
 
 use graphcal_compiler::graphcal_error::GraphcalError;
+use graphcal_compiler::outcome::Outcome;
 use graphcal_compiler::resolved_name::ResolvedDeclName;
 use graphcal_compiler::syntax::module_name::ScopedName;
 
@@ -89,7 +90,7 @@ pub fn evaluate_plan_with_values_and_bindings_and_cancellation(
     src: &NamedSource<Arc<String>>,
     host_fns: &crate::host_fns::HostFunctionRegistry,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
-) -> Result<RuntimeEvaluation, GraphcalError> {
+) -> Result<RuntimeEvaluation, Outcome<GraphcalError>> {
     cancellation.checkpoint()?;
     let outcome = RootOutcome::evaluate(plan, bindings, src, host_fns, cancellation)?;
     cancellation.checkpoint()?;

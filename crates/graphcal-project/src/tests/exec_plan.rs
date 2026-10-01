@@ -5,6 +5,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use graphcal_compiler::graphcal_error::GraphcalError;
+use graphcal_compiler::outcome::Outcome;
 use graphcal_compiler::resolved_name::ResolvedDeclName;
 use graphcal_compiler::syntax::decl_name::DeclName;
 use graphcal_eval::exec_plan::{compile, prepare_callable_plan_for_test};
@@ -69,7 +70,7 @@ fn callables_reject_missing_and_out_of_closure_locations() {
             prepare_callable_plan_for_test(tir, &scopes, root, &declarations, &cancellation)
                 .unwrap_err();
         assert!(
-            matches!(&error, GraphcalError::InternalError { message, .. } if message.contains(expected)),
+            matches!(&error, Outcome::Failed(GraphcalError::InternalError { message, .. }) if message.contains(expected)),
             "{error:?}"
         );
     }

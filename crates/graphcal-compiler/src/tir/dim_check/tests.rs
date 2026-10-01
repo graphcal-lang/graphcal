@@ -1,5 +1,6 @@
 use super::*;
 use crate::dimension::{BaseDimId, Dimension};
+use crate::outcome::Outcome;
 use crate::resolved_name::{ResolvedDeclName, ResolvedIndexName, ResolvedStructTypeName};
 use crate::semantic::checked_type::{CheckedGenericArg, IndexTypeRef, StructTypeRef};
 use crate::syntax::decl_name::DeclName;
@@ -80,8 +81,12 @@ fn check_draft(
         .instantiate(
             &crate::tir::typed::CheckedOverrideDependencies::default(),
             src,
-        )?
-        .check(src, &crate::cancellation::CancellationToken::unbounded())
+        )
+        .and_then(|instantiated| {
+            crate::outcome::without_cancellation(|cancellation| {
+                instantiated.check(src, cancellation)
+            })
+        })
 }
 
 /// The checked declared type of every root value declaration and imported
@@ -373,7 +378,7 @@ param record: Record = Record(x: 1.0);
 
     assert!(matches!(
         collect_override_dependency_summary_with_cancellation(&tir, &src, &cancellation.token(),),
-        Err(GraphcalError::Cancelled(_))
+        Err(Outcome::Cancelled)
     ));
 }
 

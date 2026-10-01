@@ -10,7 +10,7 @@ use std::collections::{BTreeSet, HashMap};
 use std::ops::Deref;
 use std::sync::Arc;
 
-use graphcal_compiler::cancellation::{CancellationToken, Cancelled};
+use graphcal_compiler::cancellation::CancellationToken;
 use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
 use graphcal_compiler::display::formatting_registry::FormattingRegistry;
 use graphcal_compiler::graphcal_error::GraphcalError;
@@ -213,7 +213,8 @@ impl<'a> EvalSession<'a> {
     pub fn unavailable_dependencies<'e>(
         &self,
         roots: impl IntoIterator<Item = Scoped<'e, Expr>>,
-    ) -> Result<Option<graphcal_compiler::node_unavailable::NodeUnavailable>, GraphcalError> {
+    ) -> Result<Option<graphcal_compiler::node_unavailable::NodeUnavailable>, Outcome<GraphcalError>>
+    {
         let roots = roots.into_iter().collect::<Vec<_>>();
         self.unavailable_among(
             || roots.iter().flat_map(|root| root.graph_refs()).collect(),
@@ -226,7 +227,8 @@ impl<'a> EvalSession<'a> {
         &self,
         graph_refs: impl FnOnce() -> Vec<ResolvedDeclName>,
         expressions: impl IntoIterator<Item = E>,
-    ) -> Result<Option<graphcal_compiler::node_unavailable::NodeUnavailable>, GraphcalError> {
+    ) -> Result<Option<graphcal_compiler::node_unavailable::NodeUnavailable>, Outcome<GraphcalError>>
+    {
         let plan = match self.capabilities {
             Capabilities::ProvisionalConstants => None,
             Capabilities::Checked { plan, .. } => Some(plan),
@@ -340,18 +342,18 @@ impl<'a> EvalSession<'a> {
         &self,
         outcome: Outcome<Failure<impl std::fmt::Display>>,
         span: Span,
-    ) -> GraphcalError {
-        match outcome {
-            Outcome::Cancelled => GraphcalError::from(Cancelled),
-            Outcome::Failed(failure) => self.failure_error(failure, span),
-        }
+    ) -> Outcome<GraphcalError> {
+        outcome.map_failed(|failure| self.failure_error(failure, span))
     }
 }
 
 impl EvalSession<'_> {
     /// Determine, once for a whole root tree, whether every dependency it may
     /// read (including those of unselected branches) is available.
-    pub fn check_dependencies(&self, expression: ScopedNode<'_>) -> Result<(), GraphcalError> {
+    pub fn check_dependencies(
+        &self,
+        expression: ScopedNode<'_>,
+    ) -> Result<(), Outcome<GraphcalError>> {
         crate::pipeline_metrics::record(
             crate::pipeline_metrics::Event::DependencyAvailabilityCheck,
         );
@@ -361,7 +363,8 @@ impl EvalSession<'_> {
                     reason,
                     src: self.src.clone(),
                     span: expression.span().into(),
-                })
+                }
+                .into())
             })
     }
 }

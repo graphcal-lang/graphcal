@@ -304,14 +304,15 @@ impl PreparedProject {
             return Err(ModelExecutionError::PlanMismatch);
         }
 
-        let cancellation = graphcal_compiler::cancellation::CancellationToken::unbounded();
-        let outcome = RootOutcome::evaluate(
-            self.plan(),
-            &row.bindings,
-            &self.source,
-            &self.host_fns,
-            &cancellation,
-        )?;
+        let outcome = graphcal_compiler::outcome::without_cancellation(|cancellation| {
+            RootOutcome::evaluate(
+                self.plan(),
+                &row.bindings,
+                &self.source,
+                &self.host_fns,
+                cancellation,
+            )
+        })?;
         if let Some(failure) = outcome.first_failure(self.plan(), &self.source)? {
             return Ok(ModelRowOutcome::Failure(self.row_failure(failure)));
         }

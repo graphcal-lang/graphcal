@@ -36,7 +36,7 @@ pub fn resolve_presentation(
     ctx: &EvalSession<'_>,
 ) -> Result<
     crate::runtime_presentation::ResolvedValue,
-    graphcal_compiler::graphcal_error::GraphcalError,
+    graphcal_compiler::outcome::Outcome<graphcal_compiler::graphcal_error::GraphcalError>,
 > {
     presentation::resolve(presented, values, ctx, hir_eval::eval_executable)
 }

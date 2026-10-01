@@ -5,6 +5,7 @@
 //! parameters, or generic index parameters. It does not reinterpret source
 //! paths from declaration signatures.
 
+use crate::outcome::Outcome;
 use crate::resolved_name::{
     ResolvedDeclName, ResolvedDimName, ResolvedIndexName, ResolvedStructTypeName,
 };
@@ -141,7 +142,7 @@ pub fn resolve_hir_signature_with_modules_and_cancellation(
     module_resolver: &ModuleResolver,
     project_types: &ProjectTypeStore,
     cancellation: &crate::cancellation::CancellationToken,
-) -> Result<SignatureResolvedHirDag, GraphcalError> {
+) -> Result<SignatureResolvedHirDag, Outcome<GraphcalError>> {
     cancellation.checkpoint()?;
     let ctx = ModuleTypeContext::new(hir.dag_id(), module_resolver, project_types);
     let decl_types = resolve_declared_type_exprs(&hir, src, ctx, cancellation)?;
@@ -156,22 +157,23 @@ pub(crate) fn type_resolve_draft(
     module_resolver: &ModuleResolver,
     project_types: Arc<ProjectTypeStore>,
 ) -> Result<TirDraft, GraphcalError> {
-    let cancellation = crate::cancellation::CancellationToken::unbounded();
-    let signed = resolve_hir_signature_with_modules_and_cancellation(
-        dag,
-        src,
-        module_resolver,
-        &project_types,
-        &cancellation,
-    )?;
-    TirDraft::resolve_root(
-        signed,
-        HashMap::new(),
-        src,
-        module_resolver,
-        project_types,
-        &cancellation,
-    )
+    crate::outcome::without_cancellation(|cancellation| {
+        let signed = resolve_hir_signature_with_modules_and_cancellation(
+            dag,
+            src,
+            module_resolver,
+            &project_types,
+            cancellation,
+        )?;
+        TirDraft::resolve_root(
+            signed,
+            HashMap::new(),
+            src,
+            module_resolver,
+            project_types,
+            cancellation,
+        )
+    })
 }
 
 impl TirDraft {
@@ -188,7 +190,7 @@ impl TirDraft {
         module_resolver: &ModuleResolver,
         project_types: Arc<ProjectTypeStore>,
         cancellation: &crate::cancellation::CancellationToken,
-    ) -> Result<Self, GraphcalError>
+    ) -> Result<Self, Outcome<GraphcalError>>
     where
         S: std::hash::BuildHasher,
     {
@@ -224,7 +226,7 @@ impl TirDraft {
         src: &NamedSource<Arc<String>>,
         module_resolver: &ModuleResolver,
         cancellation: &crate::cancellation::CancellationToken,
-    ) -> Result<(), GraphcalError>
+    ) -> Result<(), Outcome<GraphcalError>>
     where
         S: std::hash::BuildHasher,
     {
@@ -241,9 +243,11 @@ impl TirDraft {
             &project_types,
             cancellation,
         )?;
-        self.insert_dag(dag).map_err(|error| {
-            GraphcalError::internal_error(error.to_string(), src, DiagnosticAnchor::WholeFile)
-        })
+        self.insert_dag(dag)
+            .map_err(|error| {
+                GraphcalError::internal_error(error.to_string(), src, DiagnosticAnchor::WholeFile)
+            })
+            .map_err(Outcome::Failed)
     }
 
     /// Complete assembly and materialize every semantic include edge as a
@@ -316,14 +320,14 @@ fn finalize_hir_dag(
     module_ctx: ModuleTypeContext<'_>,
     src: &NamedSource<Arc<String>>,
     cancellation: &crate::cancellation::CancellationToken,
-) -> Result<(), GraphcalError> {
+) -> Result<(), Outcome<GraphcalError>> {
     cancellation.checkpoint()?;
     augment_runtime_deps_for_dynamic_units(dag);
     dag.populate_projectable_outputs(surface);
     cancellation.checkpoint()?;
     validate_public_generic_defaults(dag, surface, module_ctx, src)?;
     cancellation.checkpoint()?;
-    check_hir_body_policies(dag, surface, module_ctx, src)
+    check_hir_body_policies(dag, surface, module_ctx, src).map_err(Outcome::Failed)
 }
 
 fn type_resolve_impl(
@@ -333,7 +337,7 @@ fn type_resolve_impl(
     module_ctx: ModuleTypeContext<'_>,
     project_types: Arc<ProjectTypeStore>,
     cancellation: &crate::cancellation::CancellationToken,
-) -> Result<TirDraft, GraphcalError> {
+) -> Result<TirDraft, Outcome<GraphcalError>> {
     cancellation.checkpoint()?;
     let SignatureResolvedHirDag {
         hir: mut ir,
@@ -390,22 +394,23 @@ pub(crate) fn type_resolve_single_with_modules(
     module_resolver: &ModuleResolver,
     project_types: &ProjectTypeStore,
 ) -> Result<DagTIR, GraphcalError> {
-    let cancellation = crate::cancellation::CancellationToken::unbounded();
-    let signed = resolve_hir_signature_with_modules_and_cancellation(
-        dag,
-        src,
-        module_resolver,
-        project_types,
-        &cancellation,
-    )?;
-    type_resolve_signed_single_with_imported_bindings_and_cancellation(
-        signed,
-        HashMap::<_, _, std::hash::RandomState>::new(),
-        src,
-        module_resolver,
-        project_types,
-        &cancellation,
-    )
+    crate::outcome::without_cancellation(|cancellation| {
+        let signed = resolve_hir_signature_with_modules_and_cancellation(
+            dag,
+            src,
+            module_resolver,
+            project_types,
+            cancellation,
+        )?;
+        type_resolve_signed_single_with_imported_bindings_and_cancellation(
+            signed,
+            HashMap::<_, _, std::hash::RandomState>::new(),
+            src,
+            module_resolver,
+            project_types,
+            cancellation,
+        )
+    })
 }
 
 /// Resolve a signature-complete non-root HIR module's bodies.
@@ -416,7 +421,7 @@ fn type_resolve_signed_single_with_imported_bindings_and_cancellation<S>(
     module_resolver: &ModuleResolver,
     project_types: &ProjectTypeStore,
     cancellation: &crate::cancellation::CancellationToken,
-) -> Result<DagTIR, GraphcalError>
+) -> Result<DagTIR, Outcome<GraphcalError>>
 where
     S: std::hash::BuildHasher,
 {
@@ -434,7 +439,7 @@ fn type_resolve_single_impl(
     src: &NamedSource<Arc<String>>,
     module_ctx: ModuleTypeContext<'_>,
     cancellation: &crate::cancellation::CancellationToken,
-) -> Result<DagTIR, GraphcalError> {
+) -> Result<DagTIR, Outcome<GraphcalError>> {
     cancellation.checkpoint()?;
     let SignatureResolvedHirDag {
         hir: mut ir,
@@ -481,7 +486,7 @@ fn resolve_declared_type_exprs(
     src: &NamedSource<Arc<String>>,
     module_ctx: ModuleTypeContext<'_>,
     cancellation: &crate::cancellation::CancellationToken,
-) -> Result<HashMap<ResolvedDeclName, CheckedDeclType>, GraphcalError> {
+) -> Result<HashMap<ResolvedDeclName, CheckedDeclType>, Outcome<GraphcalError>> {
     let decls = hir.decls();
     resolve_declared_types(
         decls
@@ -517,7 +522,7 @@ fn resolve_declared_types<'d>(
     types: &ProjectTypeStore,
     src: &NamedSource<Arc<String>>,
     cancellation: &crate::cancellation::CancellationToken,
-) -> Result<HashMap<ResolvedDeclName, CheckedDeclType>, GraphcalError> {
+) -> Result<HashMap<ResolvedDeclName, CheckedDeclType>, Outcome<GraphcalError>> {
     let projection_substitutions = semantic_instances
         .iter()
         .flat_map(|record| {
@@ -548,7 +553,8 @@ fn resolve_declared_types<'d>(
     resolved
         .into_iter()
         .map(|(identity, ty)| CheckedDeclType::new(ty, src).map(|checked| (identity, checked)))
-        .collect()
+        .collect::<Result<_, GraphcalError>>()
+        .map_err(Outcome::Failed)
 }
 
 /// The type view a template annotation is resolved in for an include with
@@ -688,7 +694,7 @@ fn type_resolve_dag(
     imported_bindings: &HashMap<ScopedName, crate::ir::imported_binding::ImportedBinding>,
     domain_bounds: DomainBounds,
     cancellation: &crate::cancellation::CancellationToken,
-) -> Result<DagTIRSeed, GraphcalError> {
+) -> Result<DagTIRSeed, Outcome<GraphcalError>> {
     cancellation.checkpoint()?;
     // A type-resolved module or inline DAG is canonical: it runs the bodies
     // it defines.
@@ -1747,15 +1753,17 @@ pub(crate) fn rigid_dimension_view(
             DiagnosticAnchor::WholeFile,
         )
     })?;
-    let resolved = resolve_declared_types(
-        rigid_dag
-            .value_decl_types()
-            .map(|(identity, annotation)| (identity, &annotation.decl_type)),
-        &rigid_dag.semantic_instances,
-        &rigid_types,
-        src,
-        &crate::cancellation::CancellationToken::unbounded(),
-    )?;
+    let resolved = crate::outcome::without_cancellation(|cancellation| {
+        resolve_declared_types(
+            rigid_dag
+                .value_decl_types()
+                .map(|(identity, annotation)| (identity, &annotation.decl_type)),
+            &rigid_dag.semantic_instances,
+            &rigid_types,
+            src,
+            cancellation,
+        )
+    })?;
     rigid_dag.replace_value_decl_types(resolved);
     rigid.replace_project_types(rigid_types);
     Ok(rigid)

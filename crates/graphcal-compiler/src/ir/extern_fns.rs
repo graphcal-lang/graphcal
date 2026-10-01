@@ -45,16 +45,18 @@ impl ExternSignatureScope<'_, '_> {
         self.definitions
             .type_declaration(identity)
             .map(|(declaration, src)| {
-                crate::hir::nominal_lower::lower_type_declaration(
-                    declaration,
-                    identity.clone(),
-                    declaration.name.span,
-                    src,
-                    crate::hir::nominal_lower::NominalLowering {
-                        resolver: self.resolver(),
-                        cancellation: &crate::cancellation::CancellationToken::unbounded(),
-                    },
-                )
+                crate::outcome::without_cancellation(|cancellation| {
+                    crate::hir::nominal_lower::lower_type_declaration(
+                        declaration,
+                        identity.clone(),
+                        declaration.name.span,
+                        src,
+                        crate::hir::nominal_lower::NominalLowering {
+                            resolver: self.resolver(),
+                            cancellation,
+                        },
+                    )
+                })
                 .map(Arc::new)
             })
             .transpose()

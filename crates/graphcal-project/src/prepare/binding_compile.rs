@@ -734,15 +734,21 @@ impl PreparedProject {
         tree: &graphcal_compiler::tir::typed::ScopedTree<'_, graphcal_compiler::tir::texpr::TExpr>,
     ) -> Result<graphcal_eval::runtime_presentation::EvaluatedRuntimeValue, CompileError> {
         let values = RuntimeValueMap::new();
-        let cancellation = graphcal_compiler::cancellation::CancellationToken::unbounded();
-        let session = EvalSession::checked(self.plan(), &self.source, &self.host_fns, cancellation)
+        graphcal_compiler::outcome::without_cancellation(|cancellation| {
+            let session = EvalSession::checked(
+                self.plan(),
+                &self.source,
+                &self.host_fns,
+                cancellation.clone(),
+            )
             .with_roots(&values, None);
-        graphcal_eval::eval_expr::eval_root_with_presentation(
-            tree,
-            &values,
-            &graphcal_eval::runtime_presentation::PendingPresentedMap::new(),
-            &session,
-        )
+            graphcal_eval::eval_expr::eval_root_with_presentation(
+                tree,
+                &values,
+                &graphcal_eval::runtime_presentation::PendingPresentedMap::new(),
+                &session,
+            )
+        })
         .map_err(CompileError::from)
     }
 

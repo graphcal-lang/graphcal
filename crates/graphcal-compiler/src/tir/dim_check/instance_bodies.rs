@@ -8,6 +8,7 @@ use std::sync::Arc;
 use crate::cancellation::CancellationToken;
 use crate::diagnostic_anchor::DiagnosticAnchor;
 use crate::graphcal_error::GraphcalError;
+use crate::outcome::Outcome;
 use crate::tir::texpr::{CheckedBodies, CheckedBody, NominalObservation, TBody};
 use crate::tir::typed::program::{TirRead, UncheckedTir};
 use crate::tir::typed::specialization::specialize_expression_type;
@@ -139,7 +140,7 @@ fn check_instance_defaults(
     template: &crate::tir::typed::model::DagTIR,
     template_bodies: &CheckedBodies,
     substitution: &crate::ir::static_substitution::StaticSubstitution,
-) -> Result<(), GraphcalError> {
+) -> Result<(), Outcome<GraphcalError>> {
     let template_defaults = inherited_defaults(template);
     for entry in ctx.env.dag.params() {
         ctx.checkpoint()?;
@@ -173,9 +174,9 @@ fn check_instance_defaults(
             CheckedBody::Deferred(TBody::Value(tree)) => tree.ty().clone(),
             CheckedBody::Executable(TBody::Contextual(_))
             | CheckedBody::Deferred(TBody::Contextual(_)) => {
-                return Err(internal(
-                    "parameter default has no value checking result".to_owned(),
-                ));
+                return Err(
+                    internal("parameter default has no value checking result".to_owned()).into(),
+                );
             }
         };
         let specialized =
@@ -187,7 +188,8 @@ fn check_instance_defaults(
                 inferred: specialized.format(&ctx.env.registry.dimensions),
                 src: ctx.env.src.clone(),
                 span: default.span.into(),
-            });
+            }
+            .into());
         }
     }
     Ok(())
@@ -210,7 +212,7 @@ pub(super) fn instance_bodies(
     canonical: &HashMap<crate::dag_id::DagId, CheckedBodies>,
     src: &NamedSource<Arc<String>>,
     cancellation: &CancellationToken,
-) -> Result<InstanceBodies, GraphcalError> {
+) -> Result<InstanceBodies, Outcome<GraphcalError>> {
     let checking = crate::tir::typed::CheckingTir {
         tir,
         bodies: canonical,

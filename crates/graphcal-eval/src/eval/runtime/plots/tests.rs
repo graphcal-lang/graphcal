@@ -52,7 +52,7 @@ fn plot_properties_preserve_cancellation_classification() {
             &values,
             &ctx
         ),
-        Err(PlotEvaluationError::Fatal(GraphcalError::Cancelled(_)))
+        Err(PlotEvaluationError::Fatal(Outcome::Cancelled))
     ));
 }
 
@@ -69,7 +69,7 @@ fn internal_errors_abort_plot_evaluation() {
             &src,
             DiagnosticAnchor::WholeFile,
         )),
-        PlotEvaluationError::Fatal(GraphcalError::InternalError { .. })
+        PlotEvaluationError::Fatal(Outcome::Failed(GraphcalError::InternalError { .. }))
     ));
 }
 
@@ -106,7 +106,7 @@ fn composition_properties_preserve_cancellation_classification() {
     for (fields, names) in compositions {
         assert!(matches!(
             eval_composition_fields(fields, names, &values, &ctx),
-            Err(PlotEvaluationError::Fatal(GraphcalError::Cancelled(_)))
+            Err(PlotEvaluationError::Fatal(Outcome::Cancelled))
         ));
     }
 }

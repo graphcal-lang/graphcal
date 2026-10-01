@@ -11,6 +11,7 @@ use graphcal_compiler::ir::instance::{
 use graphcal_compiler::ir::module_interface::ModuleInterface;
 use graphcal_compiler::ir::static_dependencies::{ModuleDeclarations, StaticScope};
 use graphcal_compiler::ir::static_substitution::StaticSubstitution;
+use graphcal_compiler::outcome::Outcome;
 use graphcal_compiler::resolved_name::{ResolvedDeclName, ResolvedDimName, ResolvedIndexName};
 
 #[allow(
@@ -280,7 +281,7 @@ pub(super) fn lower_file_to_hir(
     loaded_file: &crate::loader::loaded_file::LoadedFile,
     ctx: ImportContext<'_>,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
-) -> Result<HirFile, CompileError> {
+) -> Result<HirFile, Outcome<CompileError>> {
     cancellation.checkpoint()?;
     let file_dag_id = loaded_file.dag_id();
     let file_src = loaded_file.named_source();
@@ -308,7 +309,13 @@ pub(super) fn lower_file_to_hir(
             semantic.definitions,
             cancellation,
         )
-        .map_err(|error| remap_imported_dynamic_unit_error(error, &ctx.module_map, project))?;
+        .map_err(|outcome| {
+            outcome
+                .map_failed(|error| {
+                    remap_imported_dynamic_unit_error(error, &ctx.module_map, project)
+                })
+                .map_into()
+        })?;
 
     let output_surface: HashSet<ScopedName> = unfrozen
         .value_names()
@@ -357,7 +364,7 @@ fn lower_inline_dag_modules(
     semantic: &mut ProjectSemanticContext<'_, '_>,
     loaded_file: &crate::loader::loaded_file::LoadedFile,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
-) -> Result<Vec<graphcal_compiler::ir::model::HirDag>, CompileError> {
+) -> Result<Vec<graphcal_compiler::ir::model::HirDag>, Outcome<CompileError>> {
     let file_src = loaded_file.named_source();
     loaded_file
         .inline_dags()
@@ -384,7 +391,7 @@ fn compile_loaded_dag_module_ir(
     dag_body: &[Declaration],
     file_src: &NamedSource<Arc<String>>,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
-) -> Result<graphcal_compiler::ir::model::HirDag, CompileError> {
+) -> Result<graphcal_compiler::ir::model::HirDag, Outcome<CompileError>> {
     cancellation.checkpoint()?;
     if let Some(template) = semantic.module_templates.get(loaded_dag.dag_id()) {
         return freeze_inline_module_template(
@@ -404,7 +411,8 @@ fn compile_loaded_dag_module_ir(
         loaded_dag.resolved_imports(),
         module_resolver,
         file_src,
-    )?;
+    )
+    .map_err(CompileError::from)?;
 
     let mut ctx = ImportContext {
         imported_names: ImportedValueNames::default(),
@@ -461,7 +469,8 @@ fn compile_loaded_dag_module_ir(
             loaded_dag.dag_id(),
             semantic.definitions,
             cancellation,
-        )?;
+        )
+        .map_err(Outcome::map_into)?;
 
     elaborate_include_instances(
         semantic,
@@ -489,13 +498,12 @@ fn freeze_inline_module_template(
     definitions: &mut graphcal_compiler::ir::static_definitions::StaticDefinitionEvaluator<'_>,
     src: &NamedSource<Arc<String>>,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
-) -> Result<graphcal_compiler::ir::model::HirDag, CompileError> {
-    Ok(template.unfrozen.clone().freeze_with_cancellation(
-        dag_id,
-        definitions,
-        src,
-        cancellation,
-    )?)
+) -> Result<graphcal_compiler::ir::model::HirDag, Outcome<CompileError>> {
+    template
+        .unfrozen
+        .clone()
+        .freeze_with_cancellation(dag_id, definitions, src, cancellation)
+        .map_err(Outcome::map_into)
 }
 
 fn store_and_freeze_module_template(
@@ -504,10 +512,11 @@ fn store_and_freeze_module_template(
     unfrozen: graphcal_compiler::ir::model::UnfrozenIR,
     src: &NamedSource<Arc<String>>,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
-) -> Result<graphcal_compiler::ir::model::HirDag, CompileError> {
+) -> Result<graphcal_compiler::ir::model::HirDag, Outcome<CompileError>> {
     let template_unfrozen = unfrozen.clone();
-    let frozen =
-        unfrozen.freeze_with_cancellation(dag_id, semantic.definitions, src, cancellation)?;
+    let frozen = unfrozen
+        .freeze_with_cancellation(dag_id, semantic.definitions, src, cancellation)
+        .map_err(Outcome::map_into)?;
     semantic.module_templates.insert(
         dag_id.clone(),
         ElaboratedModuleTemplate {
@@ -975,7 +984,7 @@ fn elaborate_include_instances(
     importer: crate::loader::loaded_file::LoadedModule<'_>,
     unfrozen: &mut graphcal_compiler::ir::model::UnfrozenIR,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
-) -> Result<(), CompileError> {
+) -> Result<(), Outcome<CompileError>> {
     let project = semantic.project;
     let module_resolver = semantic.module_resolver;
     for instance in include_instances {
@@ -1027,7 +1036,7 @@ fn elaborate_include_instances(
                                 dep_dag_id,
                                 semantic.definitions,
                                 cancellation,
-                            )?;
+                            ).map_err(Outcome::map_into)?;
                 elaborate_include_instances(
                     semantic,
                     dep_dag_id,
@@ -1066,7 +1075,8 @@ fn elaborate_include_instances(
                     loaded_inline.resolved_imports(),
                     module_resolver,
                     importer_src,
-                )?;
+                )
+                .map_err(CompileError::from)?;
 
                 let mut body_ctx = ImportContext {
                     imported_names: ImportedValueNames::default(),
@@ -1120,7 +1130,7 @@ fn elaborate_include_instances(
                                 dag_id,
                                 semantic.definitions,
                                 cancellation,
-                            )?;
+                            ).map_err(Outcome::map_into)?;
                 elaborate_include_instances(
                     semantic,
                     dag_id,
@@ -1155,14 +1165,16 @@ fn elaborate_include_instances(
         )?;
 
         // ---- 4. Validation checks -----------------------------------------
-        let override_reconciliations = dep_unfrozen.include_override_reconciliations(
-            &instance.bindings,
-            &instance.static_bindings.substitution,
-            module_resolver,
-            &dep_resolution_owner,
-            importer_src,
-            instance.include_span,
-        )?;
+        let override_reconciliations = dep_unfrozen
+            .include_override_reconciliations(
+                &instance.bindings,
+                &instance.static_bindings.substitution,
+                module_resolver,
+                &dep_resolution_owner,
+                importer_src,
+                instance.include_span,
+            )
+            .map_err(CompileError::from)?;
         check_generics_leakage(
             body_decls_for_aliases,
             StaticScope::new(&dep_resolution_owner, module_resolver),

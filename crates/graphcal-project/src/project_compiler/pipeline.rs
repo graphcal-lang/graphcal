@@ -12,6 +12,7 @@ use miette::NamedSource;
 
 use graphcal_compiler::graphcal_error::GraphcalError;
 use graphcal_compiler::ir::resolve::ImportedValueNames;
+use graphcal_compiler::outcome::Outcome;
 use graphcal_compiler::syntax::span::Span;
 
 use super::{checking, imports, lowering};
@@ -82,7 +83,7 @@ fn lower_single_file_to_hir(
     semantic: &mut ProjectSemanticContext<'_, '_>,
     loaded_file: &crate::loader::loaded_file::LoadedFile,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
-) -> Result<HirFile, CompileError> {
+) -> Result<HirFile, Outcome<CompileError>> {
     cancellation.checkpoint()?;
     let mut ctx = ImportContext {
         imported_names: ImportedValueNames::default(),
@@ -111,7 +112,7 @@ fn store_module_artifact(
     file_src: &NamedSource<Arc<String>>,
     module_artifacts: &mut ModuleArtifactStore,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
-) -> Result<graphcal_eval::checked_program::ExecutionFacts, CompileError> {
+) -> Result<graphcal_eval::checked_program::ExecutionFacts, Outcome<CompileError>> {
     cancellation.checkpoint()?;
     let (tir, execution_facts) = compiled.program.into_parts();
     let local_owners = tir.local_dags().map(|(dag_id, _)| dag_id.clone()).collect();
@@ -120,7 +121,8 @@ fn store_module_artifact(
             &tir,
             file_src,
             cancellation,
-        )?;
+        )
+        .map_err(Outcome::map_into)?;
     let extern_functions = tir.extern_functions().clone();
     // The checked file is no longer needed after publication. Consume its
     // mutable assembly registry so each local body becomes one immutable
@@ -157,11 +159,12 @@ fn store_module_artifact(
 ///
 /// Dependencies contribute HIR interfaces only. No TIR construction, static
 /// body checking, constant evaluation, or host verification occurs here.
-pub(super) fn lower_project_perfile<'project>(
+pub(super) fn lower_project_perfile<'project, Mode>(
     project: &'project crate::loader::loaded_project::LoadedProject,
     module_resolver: graphcal_compiler::resolve::ModuleResolver,
+    mode: Mode,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
-) -> Result<HirProject<'project>, CompileError> {
+) -> Result<HirProject<'project, Mode>, Outcome<CompileError>> {
     cancellation.checkpoint()?;
     let mut module_templates = ModuleTemplateStore::default();
 
@@ -188,7 +191,8 @@ pub(super) fn lower_project_perfile<'project>(
                 }))
             }),
             project.root_file().named_source(),
-        )?;
+        )
+        .map_err(CompileError::from)?;
         let mut semantic = ProjectSemanticContext {
             project,
             module_resolver: &module_resolver,
@@ -227,12 +231,12 @@ pub(super) fn lower_project_perfile<'project>(
         plugins: project.plugins(),
         exported_runtime_units,
         module_resolver,
-        cancellation: cancellation.clone(),
+        mode,
     })
 }
 
-fn build_project_type_store(
-    hir: &HirProject<'_>,
+fn build_project_type_store<Mode>(
+    hir: &HirProject<'_, Mode>,
 ) -> Result<Arc<graphcal_compiler::tir::typed::ProjectTypeStore>, CompileError> {
     let root_source = &hir.files.root().source;
     let mut project_types = graphcal_compiler::tir::typed::ProjectTypeStore::default();
@@ -263,18 +267,19 @@ fn build_project_type_store(
 }
 
 /// Consume a complete HIR project and perform all mandatory static checks.
-pub(super) fn check_hir_project(
-    hir: HirProject<'_>,
+pub(super) fn check_hir_project<Mode>(
+    hir: HirProject<'_, Mode>,
     host_metadata: &graphcal_eval::host_fns::HostFunctionMetadata,
-) -> Result<CheckedProject, CompileError> {
-    hir.cancellation.checkpoint()?;
+    cancellation: &graphcal_compiler::cancellation::CancellationToken,
+) -> Result<CheckedProject, Outcome<CompileError>> {
+    cancellation.checkpoint()?;
     let project_types = build_project_type_store(&hir)?;
     let HirProject {
         files,
         plugins,
         exported_runtime_units,
         module_resolver,
-        cancellation,
+        mode: _,
     } = hir;
     let (deps, root_file) = files.into_parts();
     let mut module_artifacts = ModuleArtifactStore::default();
@@ -285,7 +290,7 @@ pub(super) fn check_hir_project(
         |hir_file: HirFile,
          module_artifacts: &ModuleArtifactStore,
          inherited_execution_facts: &graphcal_eval::checked_program::ExecutionFacts|
-         -> Result<(CompiledFile, NamedSource<Arc<String>>), CompileError> {
+         -> Result<(CompiledFile, NamedSource<Arc<String>>), Outcome<CompileError>> {
             cancellation.checkpoint()?;
             let file_src = hir_file.source.clone();
             let compiled = checking::check_hir_file(
@@ -295,14 +300,14 @@ pub(super) fn check_hir_project(
                 &exported_runtime_units,
                 &module_resolver,
                 &project_types,
-                &cancellation,
+                cancellation,
             )?;
             verify_host_functions(
                 plugins,
                 compiled.program.tir(),
                 &file_src,
                 host_metadata,
-                &cancellation,
+                cancellation,
             )?;
             Ok((compiled, file_src))
         };
@@ -316,7 +321,7 @@ pub(super) fn check_hir_project(
             &file_dag_id,
             &file_src,
             &mut module_artifacts,
-            &cancellation,
+            cancellation,
         )?;
     }
 
@@ -350,7 +355,7 @@ fn verify_host_functions(
     src: &NamedSource<Arc<String>>,
     host_metadata: &graphcal_eval::host_fns::HostFunctionMetadata,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
-) -> Result<(), CompileError> {
+) -> Result<(), Outcome<CompileError>> {
     // Deterministic reporting order: earliest declaration first.
     let mut declared: Vec<_> = tir.extern_functions().iter().collect();
     declared.sort_by_key(|(_, function)| function.name_span.offset());
@@ -369,7 +374,8 @@ fn verify_host_functions(
                 name: function.name.clone(),
                 src: src.clone(),
                 span: function.name_span.into(),
-            }));
+            })
+            .into());
         }
         if let Some(provided) = host_metadata.provided_signature(key)
             && !function.signature.structurally_equivalent(provided)
@@ -384,7 +390,8 @@ fn verify_host_functions(
                 provided: provided.format_with(format_dim),
                 src: src.clone(),
                 span: function.decl_span.into(),
-            }));
+            })
+            .into());
         }
     }
     Ok(())

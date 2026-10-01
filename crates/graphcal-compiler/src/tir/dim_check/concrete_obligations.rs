@@ -6,6 +6,7 @@ use crate::cancellation::CancellationToken;
 use crate::diagnostic_anchor::DiagnosticAnchor;
 use crate::graphcal_error::GraphcalError;
 use crate::hir::nominal::{NominalConstructor, NominalTypeDef};
+use crate::outcome::Outcome;
 use crate::semantic::checked_type::{
     CheckedGenericArg, CheckedType, IndexTypeRef, StructTypeRef, Symbolic,
 };
@@ -37,7 +38,7 @@ pub(super) fn validate_concrete_type_obligations(
     src: &NamedSource<Arc<String>>,
     span: Span,
     cancellation: &CancellationToken,
-) -> Result<(), GraphcalError> {
+) -> Result<(), Outcome<GraphcalError>> {
     validate(
         inferred,
         &Context {
@@ -55,7 +56,7 @@ pub(super) fn validate_project(
     checking: &crate::tir::typed::CheckingTir<'_>,
     src: &NamedSource<Arc<String>>,
     cancellation: &CancellationToken,
-) -> Result<(), GraphcalError> {
+) -> Result<(), Outcome<GraphcalError>> {
     let tir: &dyn TirRead = checking;
     for (dag_id, dag) in checking.tir.local_dags() {
         for (_, annotation) in dag.value_decl_types() {
@@ -117,7 +118,7 @@ fn validate(
     inferred: &CheckedType<Symbolic>,
     ctx: &Context<'_>,
     stack: &mut Vec<Application>,
-) -> Result<(), GraphcalError> {
+) -> Result<(), Outcome<GraphcalError>> {
     ctx.cancellation.checkpoint()?;
     super::expression_axes::check_materializable(inferred, ctx.tir, ctx.src, ctx.span)?;
     match inferred {
@@ -151,7 +152,7 @@ fn validate(
                     ),
                     src: ctx.src.clone(),
                     span: ctx.span.into(),
-                });
+                }.into());
             }
             stack.push(application);
             for member in definition.union_members().into_iter().flatten() {
@@ -195,7 +196,7 @@ fn validate(
             validate_index(index, ctx)?;
             validate(element, ctx, stack)
         }
-        CheckedType::Key(index) => validate_index(index, ctx),
+        CheckedType::Key(index) => Ok(validate_index(index, ctx)?),
         CheckedType::Quantity(_)
         | CheckedType::Complex(_)
         | CheckedType::Bool

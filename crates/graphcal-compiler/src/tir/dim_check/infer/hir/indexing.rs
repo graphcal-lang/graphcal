@@ -1,6 +1,7 @@
 //! Inference of key forms, for-comprehensions, and index access.
 
 use crate::hir::expr::{Expr, ForBinding, ForBindingIndex, IndexArg};
+use crate::outcome::Outcome;
 use std::sync::Arc;
 
 use miette::NamedSource;
@@ -33,7 +34,7 @@ impl Infer<'_> {
         axis: &ForBindingIndex,
         axis_span: Span,
         arg: &Expr,
-    ) -> Result<CheckedType<Symbolic>, GraphcalError> {
+    ) -> Result<CheckedType<Symbolic>, Outcome<GraphcalError>> {
         use crate::syntax::ast::KeyFormKind;
 
         let arg_type = self.infer_hir_type(arg)?;
@@ -68,7 +69,8 @@ impl Infer<'_> {
                             .to_string(),
                         src: self.env.src.clone(),
                         span: axis_span.into(),
-                    });
+                    }
+                    .into());
                 };
                 if arg_type != CheckedType::Int {
                     return Err(GraphcalError::DimensionMismatch {
@@ -77,7 +79,8 @@ impl Infer<'_> {
                         help: "key(Fin(N), position) takes an integer position".to_string(),
                         src: self.env.src.clone(),
                         span: arg.span.into(),
-                    });
+                    }
+                    .into());
                 }
                 let Some(position) = try_const_int(arg) else {
                     return Err(GraphcalError::EvalError {
@@ -86,14 +89,16 @@ impl Infer<'_> {
                             .to_string(),
                         src: self.env.src.clone(),
                         span: arg.span.into(),
-                    });
+                    }
+                    .into());
                 };
                 if position < 0 {
                     return Err(GraphcalError::EvalError {
                         message: format!("key() position evaluated to negative value: {position}"),
                         src: self.env.src.clone(),
                         span: arg.span.into(),
-                    });
+                    }
+                    .into());
                 }
                 if form.is_constant() {
                     let size = form.constant();
@@ -106,7 +111,8 @@ impl Infer<'_> {
                             ),
                             src: self.env.src.clone(),
                             span: arg.span.into(),
-                        });
+                        }
+                        .into());
                     }
                 }
                 self.control.retain_static_index(
@@ -132,7 +138,8 @@ impl Infer<'_> {
                         ),
                         src: self.env.src.clone(),
                         span: axis_span.into(),
-                    });
+                    }
+                    .into());
                 }
                 if arg_type != CheckedType::Int {
                     return Err(GraphcalError::DimensionMismatch {
@@ -143,7 +150,8 @@ impl Infer<'_> {
                             .to_string(),
                         src: self.env.src.clone(),
                         span: arg.span.into(),
-                    });
+                    }
+                    .into());
                 }
                 Ok(CheckedType::Key(index_identity))
             }
@@ -166,7 +174,8 @@ impl Infer<'_> {
                             ),
                             src: self.env.src.clone(),
                             span: axis_span.into(),
-                        });
+                        }
+                        .into());
                     }
                 };
                 let arg_dim =
@@ -178,7 +187,8 @@ impl Infer<'_> {
                         help: format!("{}() takes a quantity in the axis dimension", kind.as_str()),
                         src: self.env.src.clone(),
                         span: arg.span.into(),
-                    });
+                    }
+                    .into());
                 }
                 Ok(CheckedType::Key(index_identity))
             }
@@ -189,7 +199,7 @@ impl Infer<'_> {
         &self,
         bindings: &[ForBinding],
         body: &Expr,
-    ) -> Result<CheckedType<Symbolic>, GraphcalError> {
+    ) -> Result<CheckedType<Symbolic>, Outcome<GraphcalError>> {
         let mut inner_locals = self.locals.child(Vec::new());
         for binding in bindings {
             // Every loop variable is a key of its axis. Coordinate arithmetic
@@ -269,7 +279,7 @@ impl Infer<'_> {
         expr: &Expr,
         inner: &Expr,
         args: &[IndexArg],
-    ) -> Result<CheckedType<Symbolic>, GraphcalError> {
+    ) -> Result<CheckedType<Symbolic>, Outcome<GraphcalError>> {
         let mut current = self.infer_hir_type(inner)?;
         for arg in args {
             let CheckedType::Indexed { element, index } = current else {
@@ -277,7 +287,8 @@ impl Infer<'_> {
                     message: "indexing a non-indexed value".to_string(),
                     src: self.env.src.clone(),
                     span: expr.span.into(),
-                });
+                }
+                .into());
             };
             match arg {
                 IndexArg::Variant(variant) => {
@@ -292,7 +303,8 @@ impl Infer<'_> {
                             found: arg_index.display_name(),
                             src: self.env.src.clone(),
                             span: variant.path_span().into(),
-                        });
+                        }
+                        .into());
                     }
                 }
                 IndexArg::Var(local) => {
@@ -301,7 +313,8 @@ impl Infer<'_> {
                             name: format!("#{}", local.value.index()),
                             src: self.env.src.clone(),
                             span: local.span.into(),
-                        });
+                        }
+                        .into());
                     };
                     match var_type {
                         // Loop variables are keys of their axes: accept on axis
@@ -327,7 +340,8 @@ impl Infer<'_> {
                                     found: key_index.display_name(),
                                     src: self.env.src.clone(),
                                     span: local.span.into(),
-                                });
+                                }
+                                .into());
                             }
                         }
                         CheckedType::Quantity(_) => {
@@ -337,7 +351,7 @@ impl Infer<'_> {
                                 ),
                                 src: self.env.src.clone(),
                                 span: local.span.into(),
-                            });
+                            }.into());
                         }
                         _ => {
                             return Err(GraphcalError::EvalError {
@@ -347,7 +361,8 @@ impl Infer<'_> {
                                 ),
                                 src: self.env.src.clone(),
                                 span: local.span.into(),
-                            });
+                            }
+                            .into());
                         }
                     }
                 }
@@ -373,7 +388,8 @@ impl Infer<'_> {
                                 found: key_index.display_name(),
                                 src: self.env.src.clone(),
                                 span: index_expr.span.into(),
-                            });
+                            }
+                            .into());
                         }
                         current = *element;
                         continue;
@@ -385,7 +401,7 @@ impl Infer<'_> {
                             ),
                             src: self.env.src.clone(),
                             span: index_expr.span.into(),
-                        });
+                        }.into());
                     };
                     match expr_type {
                         CheckedType::Int => {
@@ -400,7 +416,8 @@ impl Infer<'_> {
                                     ),
                                     src: self.env.src.clone(),
                                     span: index_expr.span.into(),
-                                });
+                                }
+                                .into());
                             };
                             let position = check_constant_finite_index_index(
                                 constant,
@@ -424,7 +441,8 @@ impl Infer<'_> {
                                 ),
                                 src: self.env.src.clone(),
                                 span: index_expr.span.into(),
-                            });
+                            }
+                            .into());
                         }
                     }
                 }

@@ -2,6 +2,7 @@
 
 use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
 use graphcal_compiler::ir::imported_binding::ImportedValueKind;
+use graphcal_compiler::outcome::Outcome;
 use graphcal_compiler::resolve::ModuleResolver;
 use graphcal_compiler::resolve::category::DeclSymbolKind;
 
@@ -100,14 +101,15 @@ fn resolve_file_signatures(
     module_resolver: &graphcal_compiler::resolve::ModuleResolver,
     project_types: &graphcal_compiler::tir::typed::ProjectTypeStore,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
-) -> Result<ResolvedFileSignatures, CompileError> {
+) -> Result<ResolvedFileSignatures, Outcome<CompileError>> {
     let root = graphcal_compiler::tir::typed::resolve_hir_signature_with_modules_and_cancellation(
         root,
         file_src,
         module_resolver,
         project_types,
         cancellation,
-    )?;
+    )
+    .map_err(Outcome::map_into)?;
     let inline = inline
         .into_iter()
         .map(|dag| {
@@ -118,7 +120,7 @@ fn resolve_file_signatures(
                 project_types,
                 cancellation,
             )
-            .map_err(CompileError::from)
+            .map_err(Outcome::map_into)
         })
         .collect::<Result<Vec<_>, _>>()?;
     let interfaces = std::iter::once(&root)
@@ -160,7 +162,7 @@ pub(super) fn check_hir_file(
     module_resolver: &graphcal_compiler::resolve::ModuleResolver,
     project_types: &Arc<graphcal_compiler::tir::typed::ProjectTypeStore>,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
-) -> Result<CompiledFile, CompileError> {
+) -> Result<CompiledFile, Outcome<CompileError>> {
     cancellation.checkpoint()?;
     let file_src = &hir.source;
     let source_declarations = hir.root.source_declarations().to_vec();
@@ -195,13 +197,15 @@ pub(super) fn check_hir_file(
         module_resolver,
         Arc::clone(project_types),
         cancellation,
-    )?;
+    )
+    .map_err(Outcome::map_into)?;
     lowering::validate_imported_runtime_units(
         tir.root(),
         &hir.module_map,
         exported_runtime_units,
         file_src,
-    )?;
+    )
+    .map_err(CompileError::from)?;
 
     for signed in signed_inline {
         cancellation.checkpoint()?;
@@ -218,7 +222,8 @@ pub(super) fn check_hir_file(
             file_src,
             module_resolver,
             cancellation,
-        )?;
+        )
+        .map_err(Outcome::map_into)?;
     }
 
     lowering::install_shared_module_artifacts(&mut tir, module_artifacts, file_src)?;
@@ -230,7 +235,8 @@ pub(super) fn check_hir_file(
         inherited_execution_facts,
         file_src,
         cancellation,
-    )?;
+    )
+    .map_err(Outcome::map_into)?;
     let entry_interface = entry_interface::build_checked_entry_interface(
         &source_declarations,
         program.tir(),
@@ -253,10 +259,12 @@ fn finish_module_assembly(
     module_artifacts: &ModuleArtifactStore,
     src: &NamedSource<Arc<String>>,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
-) -> Result<graphcal_compiler::tir::typed::CheckedTir, CompileError> {
-    Ok(draft
-        .instantiate(&checked_dependency_overrides(module_artifacts), src)?
-        .check(src, cancellation)?)
+) -> Result<graphcal_compiler::tir::typed::CheckedTir, Outcome<CompileError>> {
+    draft
+        .instantiate(&checked_dependency_overrides(module_artifacts), src)
+        .map_err(CompileError::from)?
+        .check(src, cancellation)
+        .map_err(Outcome::map_into)
 }
 
 #[cfg(test)]

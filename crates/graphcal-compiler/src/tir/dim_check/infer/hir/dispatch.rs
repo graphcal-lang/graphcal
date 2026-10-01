@@ -3,6 +3,7 @@
 use crate::dimension::Dimension;
 use crate::graphcal_error::GraphcalError;
 use crate::hir::expr::{Expr, ExprKind};
+use crate::outcome::Outcome;
 use crate::semantic::checked_type::{IndexTypeRef, Symbolic};
 
 use crate::semantic::checked_type::CheckedType;
@@ -15,14 +16,17 @@ impl Infer<'_> {
     pub(super) fn infer_hir_type(
         &self,
         expr: &Expr,
-    ) -> Result<CheckedType<Symbolic>, GraphcalError> {
+    ) -> Result<CheckedType<Symbolic>, Outcome<GraphcalError>> {
         self.control.checkpoint()?;
         // Recursion choke point: inference recurses once per tree level
         // (unbounded for left-nested operator chains).
         crate::stack::with_stack_growth(|| self.outside_call().infer_hir_type_inner(expr))
     }
 
-    fn infer_hir_type_inner(&self, expr: &Expr) -> Result<CheckedType<Symbolic>, GraphcalError> {
+    fn infer_hir_type_inner(
+        &self,
+        expr: &Expr,
+    ) -> Result<CheckedType<Symbolic>, Outcome<GraphcalError>> {
         let inferred = match expr.kind() {
             ExprKind::Error(no_error) => no_error.absurd(),
             ExprKind::Number(_) => CheckedType::Quantity(Dimension::dimensionless()),
@@ -40,14 +44,16 @@ impl Infer<'_> {
                         .to_string(),
                     src: self.env.src.clone(),
                     span: expr.span.into(),
-                });
+                }
+                .into());
             }
             ExprKind::TypeSystemRef(name) => {
                 return Err(GraphcalError::EvalError {
                     message: name.value.value_position_error(),
                     src: self.env.src.clone(),
                     span: name.span.into(),
-                });
+                }
+                .into());
             }
             ExprKind::QuantityLiteral { unit, .. } => {
                 infer_hir_quantity_literal(unit, self.env.tir, self.env.src)?

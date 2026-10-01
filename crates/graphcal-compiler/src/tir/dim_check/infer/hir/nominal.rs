@@ -3,6 +3,7 @@
 use crate::hir::expr::{Expr, FieldInit};
 use crate::hir::nominal::{NominalConstructor, NominalField, NominalTypeDef};
 use crate::hir::types::GenericArg;
+use crate::outcome::Outcome;
 use crate::resolved_name::ResolvedConstructorName;
 
 use crate::graphcal_error::GraphcalError;
@@ -31,14 +32,15 @@ impl Infer<'_> {
         &self,
         inner: &Expr,
         field: &crate::syntax::span::Spanned<FieldName>,
-    ) -> Result<CheckedType<Symbolic>, GraphcalError> {
+    ) -> Result<CheckedType<Symbolic>, Outcome<GraphcalError>> {
         let inner_type = self.infer_hir_type(inner)?;
         let CheckedType::Struct(type_name, type_args) = &inner_type else {
             return Err(GraphcalError::NotAStruct {
                 name: format_checked_type(&inner_type, self.env.registry),
                 src: self.env.src.clone(),
                 span: inner.span.into(),
-            });
+            }
+            .into());
         };
         self.check_type_override_dependency(
             type_name.resolved(),
@@ -79,7 +81,8 @@ impl Infer<'_> {
                 member: crate::graphcal_error::NominalMember::Field(field.value.clone()),
                 src: self.env.src.clone(),
                 span: field.span.into(),
-            });
+            }
+            .into());
         }
         resolved_field_type(
             &resolved_type_field_key(type_name.resolved(), member, &field.value),
@@ -90,6 +93,7 @@ impl Infer<'_> {
             field.span,
         )
         .map(|ty| ty.to_symbolic())
+        .map_err(Outcome::Failed)
     }
 
     pub(super) fn infer_hir_constructor_call(
@@ -98,7 +102,7 @@ impl Infer<'_> {
         callee: &crate::syntax::span::Spanned<ResolvedConstructorName>,
         constructor_generic_args: &[GenericArg],
         fields: &[FieldInit],
-    ) -> Result<CheckedType<Symbolic>, GraphcalError> {
+    ) -> Result<CheckedType<Symbolic>, Outcome<GraphcalError>> {
         let target = self.env.resolved_constructor(&callee.value, callee.span)?;
         self.check_type_override_dependency(
             target.owning_type(),
@@ -136,7 +140,8 @@ impl Infer<'_> {
                     ),
                     src: self.env.src.clone(),
                     span: field.name.span.into(),
-                });
+                }
+                .into());
             }
         }
         let extra: Vec<FieldName> = provided_names
@@ -150,7 +155,8 @@ impl Infer<'_> {
                 extra,
                 src: self.env.src.clone(),
                 span: expr.span.into(),
-            });
+            }
+            .into());
         }
 
         let provided_set: std::collections::HashSet<&FieldName> =
@@ -167,7 +173,8 @@ impl Infer<'_> {
                 missing,
                 src: self.env.src.clone(),
                 span: expr.span.into(),
-            });
+            }
+            .into());
         }
 
         for field_init in fields {
@@ -204,7 +211,8 @@ impl Infer<'_> {
                     found,
                     src: self.env.src.clone(),
                     span: field_init.name.span.into(),
-                });
+                }
+                .into());
             }
         }
 

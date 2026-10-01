@@ -524,9 +524,8 @@ fn check_draft(
     draft: TirDraft,
     src: &NamedSource<Arc<String>>,
 ) -> Result<CheckedTir, GraphcalError> {
-    draft
-        .instantiate(&CheckedOverrideDependencies::default(), src)?
-        .check(src, &crate::cancellation::CancellationToken::unbounded())
+    let instantiated = draft.instantiate(&CheckedOverrideDependencies::default(), src)?;
+    crate::outcome::without_cancellation(|cancellation| instantiated.check(src, cancellation))
 }
 
 fn importer_tir(path: &str, stores: &[&DagStore]) -> CheckedTir {
@@ -873,22 +872,23 @@ fn parse_and_type_resolve_builder_named(
             .insert_module(dag.definitions())
             .map_err(|error| internal_error(error.to_string(), &src, Span::new(0, 0)))?;
     }
-    let cancellation = crate::cancellation::CancellationToken::unbounded();
-    let signed = resolve_hir_signature_with_modules_and_cancellation(
-        lowered.root,
-        &src,
-        &resolver,
-        &project_types,
-        &cancellation,
-    )?;
-    let mut builder = TirDraft::resolve_root(
-        signed,
-        HashMap::new(),
-        &src,
-        &resolver,
-        Arc::new(project_types.clone()),
-        &cancellation,
-    )?;
+    let mut builder = crate::outcome::without_cancellation(|cancellation| {
+        let signed = resolve_hir_signature_with_modules_and_cancellation(
+            lowered.root,
+            &src,
+            &resolver,
+            &project_types,
+            cancellation,
+        )?;
+        TirDraft::resolve_root(
+            signed,
+            HashMap::new(),
+            &src,
+            &resolver,
+            Arc::new(project_types.clone()),
+            cancellation,
+        )
+    })?;
     for dag_body_ir in lowered.inline_dags {
         let compiled_dag =
             type_resolve_single_with_modules(dag_body_ir, &src, &resolver, &project_types)?;

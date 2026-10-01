@@ -31,30 +31,31 @@ pub fn checked_tir_from_source(
     let mut project_types = ProjectTypeStore::default();
     project_types.insert_graphcal_prelude().unwrap();
     project_types.insert_module(ir.definitions()).unwrap();
-    let cancellation = graphcal_compiler::cancellation::CancellationToken::unbounded();
-    let signed =
-        graphcal_compiler::tir::typed::resolve_hir_signature_with_modules_and_cancellation(
-            ir,
+    graphcal_compiler::outcome::without_cancellation(|cancellation| {
+        let signed =
+            graphcal_compiler::tir::typed::resolve_hir_signature_with_modules_and_cancellation(
+                ir,
+                &src,
+                &resolver,
+                &project_types,
+                cancellation,
+            )
+            .unwrap();
+        graphcal_compiler::tir::typed::TirDraft::resolve_root(
+            signed,
+            std::collections::HashMap::<_, _, std::hash::RandomState>::new(),
             &src,
             &resolver,
-            &project_types,
-            &cancellation,
+            Arc::new(project_types),
+            cancellation,
         )
-        .unwrap();
-    graphcal_compiler::tir::typed::TirDraft::resolve_root(
-        signed,
-        std::collections::HashMap::<_, _, std::hash::RandomState>::new(),
-        &src,
-        &resolver,
-        Arc::new(project_types),
-        &cancellation,
-    )
-    .unwrap()
-    .instantiate(
-        &graphcal_compiler::tir::typed::CheckedOverrideDependencies::default(),
-        &src,
-    )
-    .unwrap()
-    .check(&src, &cancellation)
+        .unwrap()
+        .instantiate(
+            &graphcal_compiler::tir::typed::CheckedOverrideDependencies::default(),
+            &src,
+        )
+        .unwrap()
+        .check(&src, cancellation)
+    })
     .map(|tir| (tir, src.clone()))
 }

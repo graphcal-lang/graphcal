@@ -8,6 +8,7 @@ use miette::NamedSource;
 use graphcal_compiler::dag_id::DagId;
 use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
 use graphcal_compiler::graphcal_error::GraphcalError;
+use graphcal_compiler::outcome::Outcome;
 use graphcal_compiler::resolved_name::ResolvedDeclName;
 
 use crate::checked_program::{CheckedProgram, SealedDag};
@@ -53,11 +54,9 @@ pub fn compile(
     tir: &graphcal_compiler::tir::typed::CheckedTir,
     src: &NamedSource<Arc<String>>,
 ) -> Result<PreparedPlan, GraphcalError> {
-    compile_with_cancellation(
-        tir,
-        src,
-        &graphcal_compiler::cancellation::CancellationToken::unbounded(),
-    )
+    graphcal_compiler::outcome::without_cancellation(|cancellation| {
+        compile_with_cancellation(tir, src, cancellation)
+    })
 }
 
 /// Seal a copy of a TIR and select its root execution plan with cooperative
@@ -71,7 +70,7 @@ pub fn compile_with_cancellation(
     tir: &graphcal_compiler::tir::typed::CheckedTir,
     src: &NamedSource<Arc<String>>,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
-) -> Result<PreparedPlan, GraphcalError> {
+) -> Result<PreparedPlan, Outcome<GraphcalError>> {
     let program = crate::execution_check::seal_checked_program_with_cancellation(
         tir.clone(),
         src,
@@ -85,7 +84,7 @@ pub fn compile_checked_with_cancellation(
     program: CheckedProgram,
     src: &NamedSource<Arc<String>>,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
-) -> Result<PreparedPlan, GraphcalError> {
+) -> Result<PreparedPlan, Outcome<GraphcalError>> {
     PreparedPlan::try_new(program, |program| prepare(program, src, cancellation))
 }
 
@@ -97,7 +96,7 @@ fn prepare<'p>(
     program: &'p CheckedProgram,
     src: &NamedSource<Arc<String>>,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
-) -> Result<ExecPlan<'p>, GraphcalError> {
+) -> Result<ExecPlan<'p>, Outcome<GraphcalError>> {
     cancellation.checkpoint()?;
     let tir = program.tir();
     let scopes = program
@@ -186,7 +185,7 @@ pub fn prepare_callable_plan_for_test<'p>(
     body: SealedDag<'p>,
     declarations: &HashMap<&'p ResolvedDeclName, PlannedDeclaration<'p>>,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
-) -> Result<CallablePlan<'p>, GraphcalError> {
+) -> Result<CallablePlan<'p>, Outcome<GraphcalError>> {
     prepare_callable_plan(tir, scopes, body, declarations, cancellation)
 }
 
@@ -196,7 +195,7 @@ fn prepare_callable_plan<'p>(
     body: SealedDag<'p>,
     declarations: &HashMap<&'p ResolvedDeclName, PlannedDeclaration<'p>>,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
-) -> Result<CallablePlan<'p>, GraphcalError> {
+) -> Result<CallablePlan<'p>, Outcome<GraphcalError>> {
     cancellation.checkpoint()?;
     crate::pipeline_metrics::record(crate::pipeline_metrics::Event::PlanConstruction);
     let src = body.source();
@@ -279,6 +278,7 @@ fn prepare_callable_plan<'p>(
         scheduled,
     )
     .map_err(|error| invalid(error.to_string(), src))
+    .map_err(Outcome::Failed)
 }
 
 /// The planned declaration `key` denotes.

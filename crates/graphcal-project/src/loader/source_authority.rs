@@ -11,8 +11,9 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use graphcal_compiler::cancellation::CancellationToken;
+use graphcal_compiler::cancellation::{CancellationToken, Cancelled};
 use graphcal_compiler::dag_id::DagPackageId;
+use graphcal_compiler::outcome::Outcome;
 use graphcal_compiler::syntax::ast::ModulePath;
 use graphcal_compiler::syntax::decl_name::DeclName;
 use graphcal_io::{FileSystemReadError, FileSystemReader};
@@ -89,7 +90,7 @@ pub(super) fn fetch_source_snapshot<A: ModuleSourceAuthority>(
     root: A::Key,
     budget: &mut LoaderBudgetState,
     cancellation: &CancellationToken,
-) -> Result<SourceSnapshot<A::Key>, CompileError> {
+) -> Result<SourceSnapshot<A::Key>, Cancelled> {
     let mut files = HashMap::new();
     let mut pending = vec![root.clone()];
     while let Some(file) = pending.pop() {
@@ -115,7 +116,7 @@ fn fetch_file<A: ModuleSourceAuthority>(
     file: &A::Key,
     budget: &mut LoaderBudgetState,
     cancellation: &CancellationToken,
-) -> Result<FetchedFile<A::Key>, CompileError> {
+) -> Result<FetchedFile<A::Key>, Cancelled> {
     cancellation.checkpoint()?;
     let tree = match authority.tree(file.package()) {
         Ok(tree) => tree,
@@ -129,7 +130,8 @@ fn fetch_file<A: ModuleSourceAuthority>(
         cancellation,
     ) {
         Ok(parsed) => parsed,
-        Err(error) => return Ok(Err(error)),
+        Err(Outcome::Cancelled) => return Err(Cancelled),
+        Err(Outcome::Failed(error)) => return Ok(Err(error)),
     };
     cancellation.checkpoint()?;
     let location = ModuleLocation {
@@ -155,17 +157,19 @@ fn read_source_file(
     name: &str,
     budget: &mut LoaderBudgetState,
     cancellation: &CancellationToken,
-) -> Result<ParsedFile, CompileError> {
+) -> Result<ParsedFile, Outcome<CompileError>> {
     let source = budget
         .read_text(reader, path, LoaderArtifact::SourceFile, cancellation)
         .map_err(|error| match error {
+            LoaderReadError::Filesystem(FileSystemReadError::Cancelled) => Outcome::Cancelled,
             LoaderReadError::Filesystem(filesystem) if is_not_found(&filesystem) => {
-                io_not_found(path)
+                io_not_found(path).into()
             }
             other => loader_manifest_error(format!(
                 "could not read source `{}`: {other}",
                 path.display()
-            )),
+            ))
+            .into(),
         })?;
     ParsedFile::parse(name, Arc::new(source), cancellation)
 }

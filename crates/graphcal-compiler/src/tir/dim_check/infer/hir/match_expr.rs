@@ -2,6 +2,7 @@
 
 use crate::hir::expr::{Expr, MatchArm, MatchPattern, PatternBinding};
 use crate::hir::nominal::{NominalConstructor, NominalTypeDef};
+use crate::outcome::Outcome;
 use crate::resolved_name::ResolvedStructTypeName;
 use std::sync::Arc;
 
@@ -60,7 +61,7 @@ impl Infer<'_> {
         expr: &Expr,
         scrutinee: &Expr,
         arms: &[MatchArm],
-    ) -> Result<CheckedType<Symbolic>, GraphcalError> {
+    ) -> Result<CheckedType<Symbolic>, Outcome<GraphcalError>> {
         let scrutinee_type = self.infer_hir_type(scrutinee)?;
         match &scrutinee_type {
             CheckedType::Key(index_identity) => {
@@ -71,7 +72,7 @@ impl Infer<'_> {
                         ),
                         src: self.env.src.clone(),
                         span: scrutinee.span.into(),
-                    });
+                    }.into());
                 }
                 let index_def = crate::tir::dim_check::infer::index_def_for_inferred(
                     index_identity,
@@ -96,7 +97,7 @@ impl Infer<'_> {
                             ),
                             src: self.env.src.clone(),
                             span: scrutinee.span.into(),
-                        });
+                        }.into());
                     }
                 };
                 let mut covered = std::collections::HashSet::new();
@@ -107,7 +108,8 @@ impl Infer<'_> {
                             message: "label match arms must use index-label patterns".to_string(),
                             src: self.env.src.clone(),
                             span: arm.span.into(),
-                        });
+                        }
+                        .into());
                     };
                     self.check_index_override_dependency(
                         &IndexTypeRef::from_resolved(variant.variant.index().clone()),
@@ -119,7 +121,8 @@ impl Infer<'_> {
                             found: variant.variant.index().to_unowned_def_name().into(),
                             src: self.env.src.clone(),
                             span: (*span).into(),
-                        });
+                        }
+                        .into());
                     }
                     let variant_name = variant.variant.variant();
                     if !variants.iter().any(|v| v == variant_name) {
@@ -128,14 +131,16 @@ impl Infer<'_> {
                             variant_name: variant_name.clone(),
                             src: self.env.src.clone(),
                             span: variant.path_span().into(),
-                        });
+                        }
+                        .into());
                     }
                     if !covered.insert(variant_name.clone()) {
                         return Err(GraphcalError::EvalError {
                             message: format!("duplicate match arm for variant `{variant_name}`"),
                             src: self.env.src.clone(),
                             span: (*span).into(),
-                        });
+                        }
+                        .into());
                     }
                     arm_types.push(self.infer_hir_type(&arm.body)?);
                 }
@@ -147,10 +152,11 @@ impl Infer<'_> {
                             ),
                             src: self.env.src.clone(),
                             span: expr.span.into(),
-                        });
+                        }.into());
                     }
                 }
                 hir_arm_types_match(&arm_types, arms, self.env.registry, self.env.src, expr)
+                    .map_err(Outcome::Failed)
             }
             CheckedType::Struct(type_name, scrutinee_type_args) => {
                 let type_def =
@@ -173,7 +179,8 @@ impl Infer<'_> {
                             message: "union match arms must use constructor patterns".to_string(),
                             src: self.env.src.clone(),
                             span: arm.span.into(),
-                        });
+                        }
+                        .into());
                     };
                     let target = self
                         .env
@@ -190,7 +197,8 @@ impl Infer<'_> {
                             constructor: target.variant().name(),
                             src: self.env.src.clone(),
                             span: (*span).into(),
-                        });
+                        }
+                        .into());
                     }
                     if type_name.resolved() != target.owning_type() {
                         return Err(GraphcalError::UnknownField {
@@ -200,7 +208,8 @@ impl Infer<'_> {
                             ),
                             src: self.env.src.clone(),
                             span: constructor.span.into(),
-                        });
+                        }
+                        .into());
                     }
                     if !covered.insert(target.variant().name().clone()) {
                         return Err(GraphcalError::EvalError {
@@ -210,7 +219,8 @@ impl Infer<'_> {
                             ),
                             src: self.env.src.clone(),
                             span: (*span).into(),
-                        });
+                        }
+                        .into());
                     }
                     let mut arm_locals = self.locals.child(Vec::new());
                     let mut seen_pattern_fields = std::collections::HashSet::new();
@@ -228,7 +238,8 @@ impl Infer<'_> {
                                 ),
                                 src: self.env.src.clone(),
                                 span: field.span.into(),
-                            });
+                            }
+                            .into());
                         }
                         let field_type = self.env.constructor_field_type(
                             field,
@@ -257,7 +268,8 @@ impl Infer<'_> {
                             missing,
                             src: self.env.src.clone(),
                             span: (*span).into(),
-                        });
+                        }
+                        .into());
                     }
                     arm_types.push(self.with_locals(&arm_locals).infer_hir_type(&arm.body)?);
                 }
@@ -271,11 +283,13 @@ impl Infer<'_> {
                                 ),
                                 src: self.env.src.clone(),
                                 span: expr.span.into(),
-                            });
+                            }
+                            .into());
                         }
                     }
                 }
                 hir_arm_types_match(&arm_types, arms, self.env.registry, self.env.src, expr)
+                    .map_err(Outcome::Failed)
             }
             _ => Err(GraphcalError::EvalError {
                 message: format!(
@@ -284,7 +298,8 @@ impl Infer<'_> {
                 ),
                 src: self.env.src.clone(),
                 span: scrutinee.span.into(),
-            }),
+            }
+            .into()),
         }
     }
 }

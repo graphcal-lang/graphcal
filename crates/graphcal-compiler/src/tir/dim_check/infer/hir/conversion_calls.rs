@@ -4,6 +4,7 @@ use crate::builtin::{BuiltinFn, ConversionFn, DatetimeConstructorFn};
 use crate::dimension::Dimension;
 use crate::graphcal_error::GraphcalError;
 use crate::hir::expr::{Expr, ExprKind};
+use crate::outcome::Outcome;
 
 use crate::semantic::checked_type::{CheckedType, Symbolic};
 use crate::tir::dim_check::helpers::{expect_quantity, format_checked_type};
@@ -15,7 +16,7 @@ impl Infer<'_> {
         &self,
         kind: ConversionFn,
         args: &[Expr],
-    ) -> Result<CheckedType<Symbolic>, GraphcalError> {
+    ) -> Result<CheckedType<Symbolic>, Outcome<GraphcalError>> {
         let arg_type = self.infer_arg(&args[0])?;
         match kind {
             ConversionFn::ToFloat => {
@@ -26,7 +27,8 @@ impl Infer<'_> {
                         help: "to_float() requires an Int argument".to_string(),
                         src: self.env.src.clone(),
                         span: args[0].span.into(),
-                    });
+                    }
+                    .into());
                 }
                 Ok(CheckedType::Quantity(Dimension::dimensionless()))
             }
@@ -45,7 +47,8 @@ impl Infer<'_> {
                             .to_string(),
                         src: self.env.src.clone(),
                         span: args[0].span.into(),
-                    });
+                    }
+                    .into());
                 }
                 let dim =
                     expect_quantity(&arg_type, self.env.registry, self.env.src, args[0].span)?;
@@ -56,7 +59,8 @@ impl Infer<'_> {
                         help: "to_int() requires a Dimensionless argument".to_string(),
                         src: self.env.src.clone(),
                         span: args[0].span.into(),
-                    });
+                    }
+                    .into());
                 }
                 Ok(CheckedType::Int)
             }
@@ -70,7 +74,8 @@ impl Infer<'_> {
                             .to_string(),
                         src: self.env.src.clone(),
                         span: args[0].span.into(),
-                    });
+                    }
+                    .into());
                 };
                 if index.finite_index_form().is_some() {
                     return Err(GraphcalError::DimensionMismatch {
@@ -81,7 +86,8 @@ impl Infer<'_> {
                             .to_string(),
                         src: self.env.src.clone(),
                         span: args[0].span.into(),
-                    });
+                    }
+                    .into());
                 }
                 let index_def =
                     crate::tir::dim_check::infer::index_def_for_inferred(index, self.env.tir)
@@ -90,20 +96,23 @@ impl Infer<'_> {
                             src: self.env.src.clone(),
                             span: args[0].span.into(),
                         })?;
-                index_def.coordinate_dimension().map_or_else(
-                    || {
-                        Err(GraphcalError::DimensionMismatch {
-                            expected: "Key<C> for a coordinate axis C".to_string(),
-                            found: format_checked_type(&arg_type, self.env.registry),
-                            help: "coord() applies to coordinate-axis keys only; named \
+                index_def
+                    .coordinate_dimension()
+                    .map_or_else(
+                        || {
+                            Err(GraphcalError::DimensionMismatch {
+                                expected: "Key<C> for a coordinate axis C".to_string(),
+                                found: format_checked_type(&arg_type, self.env.registry),
+                                help: "coord() applies to coordinate-axis keys only; named \
                                keys are opaque and Fin keys expose to_int()"
-                                .to_string(),
-                            src: self.env.src.clone(),
-                            span: args[0].span.into(),
-                        })
-                    },
-                    |dimension| Ok(CheckedType::Quantity(dimension.clone())),
-                )
+                                    .to_string(),
+                                src: self.env.src.clone(),
+                                span: args[0].span.into(),
+                            })
+                        },
+                        |dimension| Ok(CheckedType::Quantity(dimension.clone())),
+                    )
+                    .map_err(Outcome::Failed)
             }
         }
     }
@@ -113,7 +122,7 @@ impl Infer<'_> {
         name: BuiltinFn,
         scale: crate::semantic::time_scale::TimeScale,
         args: &[Expr],
-    ) -> Result<CheckedType<Symbolic>, GraphcalError> {
+    ) -> Result<CheckedType<Symbolic>, Outcome<GraphcalError>> {
         let arg_type = self.infer_arg(&args[0])?;
         if !matches!(arg_type, CheckedType::Datetime(_)) {
             return Err(GraphcalError::DimensionMismatch {
@@ -122,7 +131,8 @@ impl Infer<'_> {
                 help: format!("{}() requires a Datetime argument", name.as_str()),
                 src: self.env.src.clone(),
                 span: args[0].span.into(),
-            });
+            }
+            .into());
         }
         Ok(CheckedType::Datetime(scale))
     }
@@ -133,7 +143,7 @@ impl Infer<'_> {
         epoch_scale: Option<crate::semantic::time_scale::TimeScale>,
         span: crate::syntax::span::Span,
         args: &[Expr],
-    ) -> Result<CheckedType<Symbolic>, GraphcalError> {
+    ) -> Result<CheckedType<Symbolic>, Outcome<GraphcalError>> {
         match kind {
             DatetimeConstructorFn::Datetime => {
                 let first_is_valid = match args.len() {
@@ -150,7 +160,8 @@ impl Infer<'_> {
                             .to_string(),
                         src: self.env.src.clone(),
                         span: args[0].span.into(),
-                    });
+                    }
+                    .into());
                 }
                 if args.len() == 2 && !matches!(args[1].kind(), ExprKind::IanaTimeZoneLiteral(_)) {
                     let found = self.infer_arg(&args[1])?;
@@ -161,7 +172,8 @@ impl Infer<'_> {
                             .to_string(),
                         src: self.env.src.clone(),
                         span: args[1].span.into(),
-                    });
+                    }
+                    .into());
                 }
                 let resolved_timezone_matches_argument = match args {
                     [datetime, time_zone] => match (datetime.kind(), time_zone.kind()) {
@@ -179,7 +191,8 @@ impl Infer<'_> {
                             .to_string(),
                         src: self.env.src.clone(),
                         span: span.into(),
-                    });
+                    }
+                    .into());
                 }
                 self.record_contextual_args(args)?;
                 Ok(CheckedType::Datetime(
@@ -195,7 +208,8 @@ impl Infer<'_> {
                         help: "epoch<S>() requires one civil datetime string literal".to_string(),
                         src: self.env.src.clone(),
                         span: args[0].span.into(),
-                    });
+                    }
+                    .into());
                 }
                 self.record_contextual_args(args)?;
                 epoch_scale
@@ -206,6 +220,7 @@ impl Infer<'_> {
                         src: self.env.src.clone(),
                         span: span.into(),
                     })
+                    .map_err(Outcome::Failed)
             }
         }
     }
@@ -224,7 +239,7 @@ impl Infer<'_> {
         name: BuiltinFn,
         args: &[Expr],
         result: CheckedType<Symbolic>,
-    ) -> Result<CheckedType<Symbolic>, GraphcalError> {
+    ) -> Result<CheckedType<Symbolic>, Outcome<GraphcalError>> {
         let arg_type = self.infer_arg(&args[0])?;
         if !matches!(arg_type, CheckedType::Datetime(_)) {
             return Err(GraphcalError::DimensionMismatch {
@@ -233,7 +248,8 @@ impl Infer<'_> {
                 help: format!("{}() requires a Datetime argument", name.as_str()),
                 src: self.env.src.clone(),
                 span: args[0].span.into(),
-            });
+            }
+            .into());
         }
         Ok(result)
     }

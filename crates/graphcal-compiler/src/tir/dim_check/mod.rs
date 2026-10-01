@@ -1,3 +1,4 @@
+use crate::outcome::Outcome;
 use crate::resolved_name::ResolvedDeclName;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -68,8 +69,8 @@ struct DimCheckContext<'a> {
 }
 
 impl DimCheckContext<'_> {
-    fn checkpoint(&self) -> Result<(), GraphcalError> {
-        self.cancellation.checkpoint().map_err(GraphcalError::from)
+    fn checkpoint(&self) -> Result<(), crate::cancellation::Cancelled> {
+        self.cancellation.checkpoint()
     }
 
     /// Look up the module-aware HIR expression for a local declaration.
@@ -100,7 +101,7 @@ impl DimCheckContext<'_> {
         &self,
         expr: &crate::hir::expr::Expr,
         owner: Option<&ResolvedDeclName>,
-    ) -> Result<CheckedType<Symbolic>, GraphcalError> {
+    ) -> Result<CheckedType<Symbolic>, Outcome<GraphcalError>> {
         self.env
             .infer_root(expr, owner, self.cancellation, self.observations)
     }
@@ -124,7 +125,7 @@ fn check_decl_expr_type(
     name: &DeclName,
     identity: &ResolvedDeclName,
     annotation: &crate::tir::typed::CheckedTypeAnnotation,
-) -> Result<(), GraphcalError> {
+) -> Result<(), Outcome<GraphcalError>> {
     let type_ann_span = &annotation.span;
     let declared = annotation.checked().declared();
     if ctx.env.dag.todo(identity).is_some() {
@@ -149,13 +150,16 @@ fn check_decl_expr_type(
     {
         // Projection bodies are generated from the already checked instance
         // interface. Retain that proof rather than treating them as unchecked.
-        return ctx.observations.record(
-            hir_expr,
-            &declared.to_symbolic(),
-            ctx.env.dag,
-            ctx.env.tir,
-            ctx.env.src,
-        );
+        return ctx
+            .observations
+            .record(
+                hir_expr,
+                &declared.to_symbolic(),
+                ctx.env.dag,
+                ctx.env.tir,
+                ctx.env.src,
+            )
+            .map_err(Outcome::Failed);
     }
     let inferred = ctx.infer_hir(hir_expr, Some(identity))?;
     if declared.to_symbolic() != inferred {
@@ -164,14 +168,15 @@ fn check_decl_expr_type(
             inferred: format_checked_type(&inferred, ctx.env.registry),
             src: ctx.env.src.clone(),
             span: (*type_ann_span).into(),
-        });
+        }
+        .into());
     }
     check_ineffective_conversions(hir_expr, true, ctx.env.src)?;
     Ok(())
 }
 
 /// Require every runtime unit factor to be one scalar Dimensionless quantity.
-fn check_dynamic_unit_scale_types(ctx: &DimCheckContext<'_>) -> Result<(), GraphcalError> {
+fn check_dynamic_unit_scale_types(ctx: &DimCheckContext<'_>) -> Result<(), Outcome<GraphcalError>> {
     ctx.env
         .dag
         .semantic
@@ -183,7 +188,7 @@ fn check_dynamic_unit_scale_types(ctx: &DimCheckContext<'_>) -> Result<(), Graph
 fn check_dynamic_unit_scale_type(
     ctx: &DimCheckContext<'_>,
     entry: &crate::ir::model::DynamicUnitScaleEntry,
-) -> Result<(), GraphcalError> {
+) -> Result<(), Outcome<GraphcalError>> {
     ctx.checkpoint()?;
     if entry.declared_dimension != entry.base_unit_dimension {
         return Err(GraphcalError::UnitDefinitionDimensionMismatch {
@@ -200,7 +205,8 @@ fn check_dynamic_unit_scale_type(
                 .format_dimension(&entry.base_unit_dimension),
             src: ctx.env.src.clone(),
             span: entry.span.into(),
-        });
+        }
+        .into());
     }
     let inferred = ctx.infer_hir(&entry.expr, None)?;
     if !matches!(
@@ -212,7 +218,8 @@ fn check_dynamic_unit_scale_type(
             found: format_checked_type(&inferred, ctx.env.registry),
             src: ctx.env.src.clone(),
             span: entry.expr.span.into(),
-        });
+        }
+        .into());
     }
     Ok(())
 }
@@ -374,7 +381,7 @@ fn check_hir_assert_body(
     owner: &ResolvedDeclName,
     body: &crate::hir::expr::AssertBody,
     span: crate::syntax::span::Span,
-) -> Result<AssertionIndexShape, GraphcalError> {
+) -> Result<AssertionIndexShape, Outcome<GraphcalError>> {
     let registry = ctx.env.registry;
     let src = ctx.env.src;
     match body {
@@ -385,7 +392,8 @@ fn check_hir_assert_body(
                     found: format_checked_type(&inferred, registry),
                     src: src.clone(),
                     span: span.into(),
-                });
+                }
+                .into());
             }
             Ok(AssertionIndexShape::from_bool_type(&inferred))
         }
@@ -429,7 +437,8 @@ fn check_hir_assert_body(
                         .to_string(),
                     src: src.clone(),
                     span: expected.span.into(),
-                });
+                }
+                .into());
             }
 
             let tolerance_dim = expect_quantity(tolerance_elem, registry, src, tolerance.span)?;
@@ -441,7 +450,8 @@ fn check_hir_assert_body(
                         .to_string(),
                     src: src.clone(),
                     span: tolerance.span.into(),
-                });
+                }
+                .into());
             }
 
             // A sign-negative literal tolerance is rejected even when its
@@ -459,7 +469,8 @@ fn check_hir_assert_body(
                     found,
                     src: src.clone(),
                     span: tolerance.span.into(),
-                });
+                }
+                .into());
             }
             Ok(AssertionIndexShape { axes: actual_axes })
         }
@@ -654,7 +665,7 @@ impl crate::tir::typed::InstantiatedTir {
         self,
         src: &NamedSource<Arc<String>>,
         cancellation: &crate::cancellation::CancellationToken,
-    ) -> Result<crate::tir::typed::CheckedTir, GraphcalError> {
+    ) -> Result<crate::tir::typed::CheckedTir, Outcome<GraphcalError>> {
         let tir = self.tir;
         cancellation.checkpoint()?;
         let schedules = schedules::ScheduleBuilder::build(&tir, src)?;
@@ -673,7 +684,7 @@ impl crate::tir::typed::InstantiatedTir {
                     check_dimensions_dag(dag, &tir, src, cancellation, &observations)?;
                 Ok((dag_id, dag, observations, plot_shapes))
             })
-            .collect::<Result<Vec<_>, GraphcalError>>()?;
+            .collect::<Result<Vec<_>, Outcome<GraphcalError>>>()?;
         let sinks: HashMap<_, _> = checked_dag_facts
             .iter()
             .map(|(owner, _, observations, _)| (*owner, observations))
@@ -733,6 +744,7 @@ impl crate::tir::typed::InstantiatedTir {
             },
             src,
         )
+        .map_err(Outcome::Failed)
     }
 }
 
@@ -751,11 +763,9 @@ pub fn collect_override_dependency_summary(
     tir: &crate::tir::typed::CheckedTir,
     src: &NamedSource<Arc<String>>,
 ) -> Result<OverrideDependencySummary, GraphcalError> {
-    collect_override_dependency_summary_with_cancellation(
-        tir,
-        src,
-        &crate::cancellation::CancellationToken::unbounded(),
-    )
+    crate::outcome::without_cancellation(|cancellation| {
+        collect_override_dependency_summary_with_cancellation(tir, src, cancellation)
+    })
 }
 
 /// Collect override dependencies while observing cooperative cancellation.
@@ -767,7 +777,7 @@ pub fn collect_override_dependency_summary_with_cancellation(
     tir: &crate::tir::typed::CheckedTir,
     src: &NamedSource<Arc<String>>,
     cancellation: &crate::cancellation::CancellationToken,
-) -> Result<OverrideDependencySummary, GraphcalError> {
+) -> Result<OverrideDependencySummary, Outcome<GraphcalError>> {
     let mut summary = OverrideDependencySummary::new();
 
     for (_, dag) in tir.local_dags() {
@@ -784,7 +794,8 @@ pub fn collect_override_dependency_summary_with_cancellation(
                     format!("missing checked expression: {:?}", default.id()),
                     src,
                     DiagnosticAnchor::Source(default.span),
-                ));
+                )
+                .into());
             }
             let mut dependencies: HashSet<_> = bodies
                 .nominal_uses(default.id())
@@ -862,26 +873,24 @@ fn check_callless_value_expr_type<'t>(
     src: &NamedSource<Arc<String>>,
 ) -> Result<crate::tir::typed::ScopedTree<'t, crate::tir::texpr::TExpr>, GraphcalError> {
     let observations = infer::hir::BodyObservations::default();
-    let inferred = infer::hir::InferEnv {
-        dag: tir.root().body(),
-        tir,
-        registry: tir.registry(),
-        src,
-    }
-    .infer_root(
-        expr,
-        None,
-        &crate::cancellation::CancellationToken::unbounded(),
-        &observations,
-    )?;
-    concrete_obligations::validate_concrete_type_obligations(
-        &inferred,
-        tir.root().body(),
-        tir,
-        src,
-        expr.span,
-        &crate::cancellation::CancellationToken::unbounded(),
-    )?;
+    let inferred = crate::outcome::without_cancellation(|cancellation| {
+        let inferred = infer::hir::InferEnv {
+            dag: tir.root().body(),
+            tir,
+            registry: tir.registry(),
+            src,
+        }
+        .infer_root(expr, None, cancellation, &observations)?;
+        concrete_obligations::validate_concrete_type_obligations(
+            &inferred,
+            tir.root().body(),
+            tir,
+            src,
+            expr.span,
+            cancellation,
+        )?;
+        Ok(inferred)
+    })?;
     if expected.to_symbolic() == inferred {
         observations
             .finish()
@@ -909,7 +918,7 @@ fn check_callless_value_expr_type<'t>(
     }
 }
 
-fn check_param_defaults(ctx: &DimCheckContext<'_>) -> Result<(), GraphcalError> {
+fn check_param_defaults(ctx: &DimCheckContext<'_>) -> Result<(), Outcome<GraphcalError>> {
     for entry in ctx.env.dag.params() {
         ctx.checkpoint()?;
         validate_declared_shape(ctx, &entry.type_ann)?;
@@ -929,7 +938,7 @@ fn check_dimensions_dag(
     src: &NamedSource<Arc<String>>,
     cancellation: &crate::cancellation::CancellationToken,
     observations: &infer::hir::BodyObservations,
-) -> Result<plot::CheckedPlotChannelShapes, GraphcalError> {
+) -> Result<plot::CheckedPlotChannelShapes, Outcome<GraphcalError>> {
     cancellation.checkpoint()?;
     let ctx = DimCheckContext {
         env: infer::hir::InferEnv {
@@ -1011,7 +1020,9 @@ fn check_dimensions_dag(
 ///
 /// Other targets (e.g., `Bool`) are rejected by
 /// [`check_domain_constraint_targets_dag`] before this bound check runs.
-fn check_domain_constraint_dimensions_dag(ctx: &DimCheckContext<'_>) -> Result<(), GraphcalError> {
+fn check_domain_constraint_dimensions_dag(
+    ctx: &DimCheckContext<'_>,
+) -> Result<(), Outcome<GraphcalError>> {
     let dag = ctx.env.dag;
     let decl_iter = dag
         .consts()
@@ -1208,7 +1219,7 @@ fn check_field_domain_constraint_dimensions(
     src: &NamedSource<Arc<String>>,
     cancellation: &crate::cancellation::CancellationToken,
     sinks: &HashMap<&crate::dag_id::DagId, &infer::hir::BodyObservations>,
-) -> Result<(), GraphcalError> {
+) -> Result<(), Outcome<GraphcalError>> {
     let registry = tir.registry();
     let mut seen = HashSet::new();
     for (_, dag) in tir.local_dags() {
@@ -1266,7 +1277,8 @@ fn check_field_domain_constraint_dimensions(
                     ),
                     src: diagnostic_src.clone(),
                     span: diagnostic_span.into(),
-                });
+                }
+                .into());
             }
             // For a single-variant collision (record-shape) the display
             // name is `Type.field`; for a true multi-variant union it's

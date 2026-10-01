@@ -2,6 +2,7 @@ use crate::runtime_value::RuntimeValue;
 use graphcal_compiler::graphcal_error::GraphcalError;
 use graphcal_compiler::hir::expr::ResolvedUnitExpr;
 use graphcal_compiler::hir::expr::{ResolvedUnitExprItem, ResolvedUnitRef};
+use graphcal_compiler::outcome::Outcome;
 use graphcal_compiler::resolved_name::ResolvedUnitName;
 use graphcal_compiler::semantic::unit_scale::{
     PositiveFiniteScale, PositiveFiniteScaleError, UnitScale, UnitScaleStepError, UnitScaleTerm,
@@ -22,11 +23,12 @@ use crate::constant_pools::RuntimeValueMap;
 /// A dynamic unit's scale is an ordinary expression, so resolving a unit
 /// scale re-enters the kernel. Callers hand the kernel in rather than this
 /// module naming it, so the kernel stays the only module that recurses.
-pub(super) type EvaluateExecutable = for<'a, 't, 's> fn(
-    &'a ScopedTree<'t, &'t TExpr>,
-    &'a RuntimeValueMap,
-    &'a EvalSession<'s>,
-) -> Result<RuntimeValue, GraphcalError>;
+pub(super) type EvaluateExecutable =
+    for<'a, 't, 's> fn(
+        &'a ScopedTree<'t, &'t TExpr>,
+        &'a RuntimeValueMap,
+        &'a EvalSession<'s>,
+    ) -> Result<RuntimeValue, Outcome<GraphcalError>>;
 
 fn unit_scale_error(
     context: &str,
@@ -59,7 +61,7 @@ fn resolve_dynamic_unit_scale(
     values: &RuntimeValueMap,
     session: &EvalSession<'_>,
     evaluate: EvaluateExecutable,
-) -> Result<PositiveFiniteScale, GraphcalError> {
+) -> Result<PositiveFiniteScale, Outcome<GraphcalError>> {
     let scale = session.tir.unit_scale_body(unit).ok_or_else(|| {
         session.internal_error(
             format!("dynamic unit scale for `{spelling}` could not be resolved"),
@@ -68,13 +70,15 @@ fn resolve_dynamic_unit_scale(
     })?;
     let scale_session = session.with_src(scale.source());
     if scale.declared_dimension() != scale.base_unit_dimension() {
-        return Err(scale_session.internal_error(
-            format!(
-                "dynamic unit `{}` has mismatched declared and base-unit dimensions",
-                scale.spelling()
-            ),
-            scale.span(),
-        ));
+        return Err(scale_session
+            .internal_error(
+                format!(
+                    "dynamic unit `{}` has mismatched declared and base-unit dimensions",
+                    scale.spelling()
+                ),
+                scale.span(),
+            )
+            .into());
     }
     let expression = scale.expression();
     let scale_val = evaluate(
@@ -83,10 +87,12 @@ fn resolve_dynamic_unit_scale(
         &scale_session,
     )?;
     let RuntimeValue::Quantity(scale_f64) = scale_val else {
-        return Err(scale_session.internal_error(
-            "dynamic unit scale expression must evaluate to a quantity",
-            expression.get().span,
-        ));
+        return Err(scale_session
+            .internal_error(
+                "dynamic unit scale expression must evaluate to a quantity",
+                expression.get().span,
+            )
+            .into());
     };
     let dynamic_scale = PositiveFiniteScale::new(scale_f64.get()).map_err(|error| {
         unit_scale_error(
@@ -99,6 +105,7 @@ fn resolve_dynamic_unit_scale(
     dynamic_scale
         .checked_mul(base_unit_scale)
         .map_err(|error| unit_scale_error("dynamic unit scale", error, scale.span(), session))
+        .map_err(Outcome::Failed)
 }
 
 /// Fold the scale of the unit expression spanning `span` whose terms name
@@ -110,7 +117,7 @@ fn fold_unit_scale<'u, R: 'u>(
     session: &EvalSession<'_>,
     spelling: fn(&R) -> &UnitRef,
     evaluate: EvaluateExecutable,
-) -> Result<PositiveFiniteScale, GraphcalError> {
+) -> Result<PositiveFiniteScale, Outcome<GraphcalError>> {
     try_fold_unit_scale(
         terms,
         |(item, resolved_unit)| {
@@ -132,7 +139,7 @@ fn fold_unit_scale<'u, R: 'u>(
                     evaluate,
                 )?,
             };
-            Ok(UnitScaleTerm {
+            Ok::<_, Outcome<GraphcalError>>(UnitScaleTerm {
                 op: item.op,
                 scale,
                 power: item.power,
@@ -140,10 +147,10 @@ fn fold_unit_scale<'u, R: 'u>(
         },
         |(item, _), error| match error {
             UnitScaleStepError::Power(error) => {
-                unit_scale_error("unit scale exponentiation", error, item.name.span, session)
+                unit_scale_error("unit scale exponentiation", error, item.name.span, session).into()
             }
             UnitScaleStepError::Compound(error) => {
-                unit_scale_error("compound unit scale", error, span, session)
+                unit_scale_error("compound unit scale", error, span, session).into()
             }
         },
     )
@@ -168,7 +175,7 @@ pub(super) fn resolve_unit_scale(
     values: &RuntimeValueMap,
     ctx: &EvalSession<'_>,
     evaluate: EvaluateExecutable,
-) -> Result<PositiveFiniteScale, GraphcalError> {
+) -> Result<PositiveFiniteScale, Outcome<GraphcalError>> {
     fold_unit_scale(
         unit.get().span,
         unit.terms(),
@@ -191,7 +198,7 @@ pub(super) fn resolved_unit_scale(
     values: &RuntimeValueMap,
     session: &EvalSession<'_>,
     evaluate: EvaluateExecutable,
-) -> Result<PositiveFiniteScale, GraphcalError> {
+) -> Result<PositiveFiniteScale, Outcome<GraphcalError>> {
     fold_unit_scale(
         unit.span,
         unit.terms

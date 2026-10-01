@@ -6,8 +6,10 @@ use std::sync::Arc;
 
 use miette::NamedSource;
 
+use graphcal_compiler::cancellation::Cancelled;
 use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
 use graphcal_compiler::graphcal_error::GraphcalError;
+use graphcal_compiler::outcome::Outcome;
 use graphcal_compiler::resolved_name::ResolvedDeclName;
 use graphcal_compiler::syntax::module_name::ScopedName;
 use graphcal_compiler::syntax::span::Span;
@@ -59,7 +61,7 @@ pub(super) fn evaluate_assertions(
     ctx: &EvalSession<'_>,
     values: &RuntimeValueMap,
     errors: &HashMap<ResolvedDeclName, NodeUnavailable>,
-) -> Result<Vec<(ScopedName, AssertResult, Span)>, GraphcalError> {
+) -> Result<Vec<(ScopedName, AssertResult, Span)>, Outcome<GraphcalError>> {
     let tir = plan.tir();
     let mut assertions: Vec<(ScopedName, AssertResult, Span)> = tir
         .root()
@@ -75,15 +77,17 @@ pub(super) fn evaluate_assertions(
             let (unit, body) = assertion_body(tir, &owner, src)?;
             let body = body.map(|entry| &*entry.body);
             let entry_ctx = ctx.for_decl(&owner);
-            let assert_result =
-                assert_dependency_failure(body, errors, &entry_ctx).unwrap_or_else(|| {
+            let assert_result = match assert_dependency_failure(body, errors, &entry_ctx)? {
+                Some(result) => result,
+                None => {
                     evaluate_assert_with_expected_fail(body, unit.expected_fail(), &mut |expr| {
                         eval_root(&entry_ctx.executable(expr)?, values, &entry_ctx)
-                    })
-                });
+                    })?
+                }
+            };
             Ok((ScopedName::local(entry.name().clone()), assert_result, span))
         })
-        .collect::<Result<_, GraphcalError>>()?;
+        .collect::<Result<_, Outcome<GraphcalError>>>()?;
     for (parent, instances) in plan.root().closure_instances() {
         let parent_dag = parent.dag();
         for planned in instances {
@@ -104,7 +108,7 @@ pub(super) fn evaluate_assertions(
                     entry.map(|entry| &*entry.body),
                     expected,
                     &mut |expr| eval_root(&assertion_ctx.executable(expr)?, values, &assertion_ctx),
-                );
+                )?;
                 // A parent outside the root's subtree contributes no qualifier.
                 let exposed = record.instance.exposed_name(projection);
                 let name = qualified_below(tir.root_dag_id(), parent_dag.dag_id(), &exposed)
@@ -182,7 +186,7 @@ fn assert_dependency_failure(
     body: Scoped<'_, graphcal_compiler::hir::expr::AssertBody>,
     errors: &HashMap<ResolvedDeclName, NodeUnavailable>,
     ctx: &EvalSession<'_>,
-) -> Option<AssertResult> {
+) -> Result<Option<AssertResult>, Cancelled> {
     let body_exprs = match body.operands() {
         AssertionOperands::Condition(expr) => vec![expr],
         AssertionOperands::Tolerance {
@@ -191,12 +195,15 @@ fn assert_dependency_failure(
             tolerance,
         } => vec![actual, expected, tolerance],
     };
-    match ctx.unavailable_dependencies(body_exprs.iter().copied()) {
-        Ok(Some(reason)) if reason.is_incomplete() => Some(AssertResult::Blocked { reason }),
-        Err(error) => Some(AssertResult::Error {
-            message: error.to_string(),
-        }),
-        _ => dependency_failure_message(body_exprs, errors)
-            .map(|message| AssertResult::Error { message }),
-    }
+    Ok(
+        match ctx.unavailable_dependencies(body_exprs.iter().copied()) {
+            Ok(Some(reason)) if reason.is_incomplete() => Some(AssertResult::Blocked { reason }),
+            Err(Outcome::Cancelled) => return Err(Cancelled),
+            Err(Outcome::Failed(error)) => Some(AssertResult::Error {
+                message: error.to_string(),
+            }),
+            Ok(_) => dependency_failure_message(body_exprs, errors)
+                .map(|message| AssertResult::Error { message }),
+        },
+    )
 }

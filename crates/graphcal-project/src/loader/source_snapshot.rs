@@ -17,7 +17,7 @@ use miette::NamedSource;
 
 use super::module_path::{ModulePathKey, ResolvedModuleTarget};
 use crate::compile_error::CompileError;
-use graphcal_compiler::cancellation::{CancellationToken, Cancelled};
+use graphcal_compiler::cancellation::CancellationToken;
 use graphcal_compiler::dag_id::{DagId, DagPackageId};
 use graphcal_compiler::desugar::desugared_ast::{Declaration, File};
 use graphcal_compiler::graphcal_error::GraphcalError;
@@ -154,20 +154,16 @@ impl ParsedFile {
     /// Parse and desugar `source` under the diagnostic `name`, rendering a
     /// parse failure against that same named source. This is the loader's
     /// only parse sequence.
-    ///
-    /// Until the loader returns `Outcome<_>` itself, cancellation still
-    /// travels inside `CompileError` (as `GraphcalError::Cancelled`).
     pub(super) fn parse(
         name: &str,
         source: Arc<String>,
         cancellation: &CancellationToken,
-    ) -> Result<Self, CompileError> {
+    ) -> Result<Self, Outcome<CompileError>> {
         let named_source = NamedSource::new(name, Arc::clone(&source));
         let raw_ast = Parser::new(&source)
             .parse_file_with_cancellation(cancellation)
-            .map_err(|outcome| match outcome {
-                Outcome::Cancelled => CompileError::from(Cancelled),
-                Outcome::Failed(error) => CompileError::parse(error, named_source.clone()),
+            .map_err(|outcome| {
+                outcome.map_failed(|error| CompileError::parse(error, named_source.clone()))
             })?;
         Ok(Self {
             source,

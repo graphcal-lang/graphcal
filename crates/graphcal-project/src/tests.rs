@@ -13,6 +13,7 @@ use crate::compile_error::CompileError;
 use crate::prepare::*;
 use crate::project_compiler::{ProjectCompiler, compile_to_tir, compile_to_tir_from_project};
 use graphcal_compiler::graphcal_error::GraphcalError;
+use graphcal_compiler::outcome::Outcome;
 use graphcal_compiler::syntax::attribute::AttributeName;
 use graphcal_compiler::syntax::decl_name::DeclName;
 use graphcal_compiler::syntax::index_name::IndexVariantName;
@@ -895,7 +896,7 @@ fn shared_frames_cancel_before_interpretation() {
         let outcome = frame.run(&cancellation.token(), |_, _| {
             panic!("cancelled frame must not invoke its expression adapter")
         });
-        assert!(matches!(outcome, Err(GraphcalError::Cancelled(_))));
+        assert!(matches!(outcome, Err(Outcome::Cancelled)));
     }
 }
 
@@ -1159,7 +1160,8 @@ fn shared_frame_dependency_and_fatal_error_policies_are_explicit() {
                             src: src.clone(),
                             span: entry.body().root().span().into(),
                         }
-                    });
+                    }
+                    .into());
                 }
                 assert_ne!(
                     entry.key().as_str(),
@@ -3165,7 +3167,7 @@ fn cancellation_is_observed_at_every_pipeline_checkpoint() {
             .eval(&HashMap::new())
             .expect_err("every pre-completion cancellation point must unwind");
         assert!(
-            error.is_cancelled(),
+            matches!(error, Outcome::Cancelled),
             "checkpoint {successful_checkpoints} produced the wrong outcome: {error:?}"
         );
     }
@@ -3208,7 +3210,10 @@ fn cancellation_stops_an_in_flight_evaluation() {
         .recv_timeout(Duration::from_secs(2))
         .expect("cancelled evaluation should stop promptly");
     let error = result.expect_err("the long-running evaluation should be cancelled");
-    assert!(error.is_cancelled(), "unexpected outcome: {error:?}");
+    assert!(
+        matches!(error, Outcome::Cancelled),
+        "unexpected outcome: {error:?}"
+    );
 }
 
 #[test]
@@ -6957,7 +6962,7 @@ fn eval_constructor_match_rejects_runtime_owner_mismatch_with_same_leaf_construc
     // A value of another owner contradicts the checked type: no arm is
     // selected by leaf name, and the violation is an internal error.
     match err {
-        GraphcalError::InternalError { message, .. } => {
+        Outcome::Failed(GraphcalError::InternalError { message, .. }) => {
             assert!(message.contains("no match arm for variant"), "{message}");
         }
         other => panic!("expected InternalError, got {other:?}"),
@@ -7832,7 +7837,7 @@ fn eval_index_access_rejects_runtime_owner_mismatch_with_same_leaf_variant() {
     // A key of another owner contradicts the checked type: no entry is
     // selected by leaf name, and the violation is an internal error.
     match err {
-        GraphcalError::InternalError { message, .. } => {
+        Outcome::Failed(GraphcalError::InternalError { message, .. }) => {
             assert!(message.contains("checked index entry"), "{message}");
         }
         other => panic!("expected InternalError, got {other:?}"),
@@ -7918,7 +7923,7 @@ fn eval_label_match_rejects_runtime_owner_mismatch_with_same_leaf_variant() {
     // A value of another owner contradicts the checked type: no arm is
     // selected by leaf name, and the violation is an internal error.
     match err {
-        GraphcalError::InternalError { message, .. } => {
+        Outcome::Failed(GraphcalError::InternalError { message, .. }) => {
             assert!(message.contains("no match arm for label"), "{message}");
         }
         other => panic!("expected InternalError, got {other:?}"),

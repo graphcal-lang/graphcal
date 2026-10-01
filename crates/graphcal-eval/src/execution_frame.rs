@@ -12,6 +12,7 @@ use crate::runtime_presentation::PendingPresentedMap;
 use graphcal_compiler::cancellation::CancellationToken;
 use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
 use graphcal_compiler::graphcal_error::GraphcalError;
+use graphcal_compiler::outcome::Outcome;
 use graphcal_compiler::resolved_name::ResolvedDeclName;
 use graphcal_compiler::syntax::span::Span;
 use graphcal_compiler::tir::texpr::TExpr;
@@ -229,7 +230,7 @@ impl<'a> ExecutionFrame<'a> {
     ) -> Result<(), GraphcalError> {
         let only_incomplete = matches!(&error, GraphcalError::EvaluationUnavailable { reason, .. } if !reason.has_failure());
         match (&error, self.policy) {
-            (GraphcalError::InternalError { .. } | GraphcalError::Cancelled(_), _) => Err(error),
+            (GraphcalError::InternalError { .. }, _) => Err(error),
             (_, FailurePolicy::Propagate) if !only_incomplete => Err(error),
             _ => {
                 self.errors
@@ -324,8 +325,8 @@ impl<'a> ExecutionFrame<'a> {
         mut evaluate: impl FnMut(
             ScheduledDeclaration<'a>,
             &Self,
-        ) -> Result<EvaluatedRuntimeValue, GraphcalError>,
-    ) -> Result<(), GraphcalError> {
+        ) -> Result<EvaluatedRuntimeValue, Outcome<GraphcalError>>,
+    ) -> Result<(), Outcome<GraphcalError>> {
         crate::pipeline_metrics::record(crate::pipeline_metrics::Event::FrameExecution);
         let callable = self.callable;
         for step in callable.steps() {
@@ -352,7 +353,8 @@ impl<'a> ExecutionFrame<'a> {
                         format!("TIR runtime declaration missing for `{key}`"),
                         scope.source(),
                         DiagnosticAnchor::WholeFile,
-                    ));
+                    )
+                    .into());
                 }
             };
             if let Some(reason) =
@@ -387,7 +389,8 @@ impl<'a> ExecutionFrame<'a> {
                         root.span,
                     )?;
                 }
-                Err(error) => self.failure(key, error)?,
+                Err(Outcome::Cancelled) => return Err(Outcome::Cancelled),
+                Err(Outcome::Failed(error)) => self.failure(key, error)?,
             }
         }
         Ok(())

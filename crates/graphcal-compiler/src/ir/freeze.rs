@@ -11,6 +11,7 @@ use crate::desugar::desugared_ast::{Expr, TypeExpr};
 use crate::diagnostic_anchor::DiagnosticAnchor;
 use crate::graphcal_error::GraphcalError;
 use crate::ir::instance::identity::instance_declaration;
+use crate::outcome::Outcome;
 use crate::syntax::module_name::ScopedName;
 use crate::syntax::span::Span;
 
@@ -44,19 +45,17 @@ impl UnfrozenIR {
         definitions: &mut super::static_definitions::StaticDefinitionEvaluator<'_>,
         src: &NamedSource<Arc<String>>,
     ) -> Result<HirDag, GraphcalError> {
-        self.freeze_with_cancellation(
-            owner,
-            definitions,
-            src,
-            &crate::cancellation::CancellationToken::unbounded(),
-        )
+        crate::outcome::without_cancellation(|cancellation| {
+            self.freeze_with_cancellation(owner, definitions, src, cancellation)
+        })
     }
 
     /// Freeze into IR while observing cooperative cancellation.
     ///
     /// # Errors
     ///
-    /// Returns a [`GraphcalError`] for unresolved bodies or cancellation.
+    /// Returns [`Outcome::Cancelled`] on cancellation, or a [`GraphcalError`]
+    /// for unresolved bodies.
     #[expect(
         clippy::too_many_lines,
         reason = "single lowering boundary over every declaration kind"
@@ -67,7 +66,7 @@ impl UnfrozenIR {
         definitions: &mut super::static_definitions::StaticDefinitionEvaluator<'_>,
         src: &NamedSource<Arc<String>>,
         cancellation: &crate::cancellation::CancellationToken,
-    ) -> Result<HirDag, GraphcalError> {
+    ) -> Result<HirDag, Outcome<GraphcalError>> {
         cancellation.checkpoint()?;
         let resolver = definitions.resolver();
         let time_zones = crate::semantic::time_zone::TimeZoneRegistry::bundled();
@@ -118,7 +117,8 @@ impl UnfrozenIR {
                     format!("{origin} `{name}` collides with a declaration"),
                     src,
                     DiagnosticAnchor::WholeFile,
-                ));
+                )
+                .into());
             }
         }
 
@@ -201,7 +201,7 @@ impl UnfrozenIR {
                     src: entry.src.clone(),
                 })
             })
-            .collect::<Result<Vec<_>, GraphcalError>>()?;
+            .collect::<Result<Vec<_>, Outcome<GraphcalError>>>()?;
 
         let lower_fields = |fields: &[crate::desugar::desugared_ast::PlotField],
                             resolution_owner: &crate::dag_id::DagId,
@@ -239,7 +239,7 @@ impl UnfrozenIR {
                 Decl::Figure(_) => 5,
                 Decl::Layer(_) => 6,
             },
-            |decl| -> Result<HirDecl, GraphcalError> {
+            |decl| -> Result<HirDecl, Outcome<GraphcalError>> {
                 cancellation.checkpoint()?;
                 Ok(match decl {
                     Decl::Const(entry) => Decl::Const(ConstEntry {
@@ -467,7 +467,7 @@ impl UnfrozenIR {
         definitions: &super::static_definitions::StaticDefinitionEvaluator<'_>,
         src: &NamedSource<Arc<String>>,
         cancellation: &crate::cancellation::CancellationToken,
-    ) -> Result<crate::hir::nominal::NominalTypeRegistry, GraphcalError> {
+    ) -> Result<crate::hir::nominal::NominalTypeRegistry, Outcome<GraphcalError>> {
         use crate::hir::nominal_lower::{
             NominalLowering, lower_type_declaration, specialize_nominal_type,
         };
@@ -501,7 +501,8 @@ impl UnfrozenIR {
                     return Err(invariant(
                         format!("nominal type `{source}` has no source declaration"),
                         symbol.span(),
-                    ));
+                    )
+                    .into());
                 };
                 let definition = match symbols.struct_type_projection(name) {
                     Some(projection) => {

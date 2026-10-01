@@ -11,6 +11,7 @@ use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
 use graphcal_compiler::graphcal_error::GraphcalError;
 use graphcal_compiler::hir::expr::{Expr, ExprKind, visit_expr};
 use graphcal_compiler::node_unavailable::NodeUnavailable;
+use graphcal_compiler::outcome::Outcome;
 use graphcal_compiler::resolved_name::ResolvedDeclName;
 use graphcal_compiler::syntax::non_empty::NonEmpty;
 use graphcal_compiler::tir::typed::scoped_node::{NodeKind, ScopedNode};
@@ -61,7 +62,7 @@ pub fn collect(
     plan: &ExecPlan<'_>,
     source: &NamedSource<Arc<String>>,
     cancellation: &CancellationToken,
-) -> Result<Vec<(ResolvedDeclName, NodeUnavailable)>, GraphcalError> {
+) -> Result<Vec<(ResolvedDeclName, NodeUnavailable)>, Outcome<GraphcalError>> {
     if !plan.has_unfinished_definitions() {
         return Ok(Vec::new());
     }
@@ -122,7 +123,7 @@ impl Analysis<'_> {
         &mut self,
         name: &ResolvedDeclName,
         bound: &BoundParameters,
-    ) -> Result<Origins, GraphcalError> {
+    ) -> Result<Origins, Outcome<GraphcalError>> {
         graphcal_compiler::stack::with_stack_growth(|| self.declaration_inner(name, bound))
     }
 
@@ -130,7 +131,7 @@ impl Analysis<'_> {
         &mut self,
         name: &ResolvedDeclName,
         bound: &BoundParameters,
-    ) -> Result<Origins, GraphcalError> {
+    ) -> Result<Origins, Outcome<GraphcalError>> {
         self.cancellation.checkpoint()?;
         if bound.contains(name) {
             return Ok(Origins::new());
@@ -140,7 +141,9 @@ impl Analysis<'_> {
             return Ok(origins.clone());
         }
         if !self.active.insert(query.clone()) {
-            return Err(self.invalid(format!("cyclic checked call dependency at `{name}`")));
+            return Err(self
+                .invalid(format!("cyclic checked call dependency at `{name}`"))
+                .into());
         }
         let plan = self.plan;
         let declaration = plan.declaration(name).ok_or_else(|| {

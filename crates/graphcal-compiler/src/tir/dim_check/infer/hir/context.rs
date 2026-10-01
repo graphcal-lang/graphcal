@@ -1,6 +1,7 @@
 //! The inference environment, operation-scoped control state, and inference position.
 
 use crate::hir::expr::{Expr, LocalEnv};
+use crate::outcome::Outcome;
 use crate::resolved_name::ResolvedDeclName;
 use std::sync::Arc;
 
@@ -51,7 +52,7 @@ impl<'a> InferEnv<'a> {
         owner: Option<&ResolvedDeclName>,
         cancellation: &crate::cancellation::CancellationToken,
         observations: &BodyObservations,
-    ) -> Result<CheckedType<Symbolic>, GraphcalError> {
+    ) -> Result<CheckedType<Symbolic>, Outcome<GraphcalError>> {
         let control = InferenceControl {
             cancellation,
             observations,
@@ -74,8 +75,8 @@ pub(super) struct InferenceControl<'a> {
 }
 
 impl InferenceControl<'_> {
-    pub(super) fn checkpoint(&self) -> Result<(), GraphcalError> {
-        self.cancellation.checkpoint().map_err(GraphcalError::from)
+    pub(super) fn checkpoint(&self) -> Result<(), crate::cancellation::Cancelled> {
+        self.cancellation.checkpoint()
     }
 
     pub(super) const fn observations(&self) -> &BodyObservations {
@@ -219,7 +220,10 @@ impl<'a> Infer<'a> {
 
     /// The type of an argument of the enclosing call, inferred outside the
     /// owning declaration's override checks unless it was already checked.
-    pub(super) fn infer_arg(&self, arg: &Expr) -> Result<CheckedType<Symbolic>, GraphcalError> {
+    pub(super) fn infer_arg(
+        &self,
+        arg: &Expr,
+    ) -> Result<CheckedType<Symbolic>, Outcome<GraphcalError>> {
         self.prechecked_args
             .and_then(|prechecked| prechecked.get(arg))
             .map_or_else(

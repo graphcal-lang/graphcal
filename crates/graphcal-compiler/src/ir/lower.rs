@@ -16,6 +16,7 @@ use crate::diagnostic_anchor::DiagnosticAnchor;
 use crate::graphcal_error::GraphcalError;
 use crate::ir::module_interface::ModuleInterface;
 use crate::ir::resolve::{CollectedFile, ImportedValueNames, resolve_with_imported_values};
+use crate::outcome::Outcome;
 use crate::resolved_name::ResolvedDeclName;
 use crate::syntax::module_name::ScopedName;
 
@@ -346,18 +347,20 @@ pub fn lower_module_with_imported_bindings(
     dag_id: &crate::dag_id::DagId,
     definitions: &mut StaticDefinitionEvaluator<'_>,
 ) -> Result<UnfrozenIR, GraphcalError> {
-    lower_module_with_imported_bindings_and_cancellation(
-        ModuleBody {
-            ast,
-            interface: &ModuleInterface::new(&ast.declarations),
-        },
-        src,
-        imported_names,
-        imported_bindings,
-        dag_id,
-        definitions,
-        &crate::cancellation::CancellationToken::unbounded(),
-    )
+    crate::outcome::without_cancellation(|cancellation| {
+        lower_module_with_imported_bindings_and_cancellation(
+            ModuleBody {
+                ast,
+                interface: &ModuleInterface::new(&ast.declarations),
+            },
+            src,
+            imported_names,
+            imported_bindings,
+            dag_id,
+            definitions,
+            cancellation,
+        )
+    })
 }
 
 /// Lower an AST with imported bindings and cooperative cancellation.
@@ -377,7 +380,7 @@ pub fn lower_module_with_imported_bindings_and_cancellation(
     dag_id: &crate::dag_id::DagId,
     definitions: &mut StaticDefinitionEvaluator<'_>,
     cancellation: &crate::cancellation::CancellationToken,
-) -> Result<UnfrozenIR, GraphcalError> {
+) -> Result<UnfrozenIR, Outcome<GraphcalError>> {
     cancellation.checkpoint()?;
     let ModuleBody { ast, interface } = module;
     let resolved =
@@ -425,18 +428,20 @@ pub fn lower_dag_module_with_imported_bindings(
     dag_id: &crate::dag_id::DagId,
     definitions: &mut StaticDefinitionEvaluator<'_>,
 ) -> Result<UnfrozenIR, GraphcalError> {
-    lower_dag_module_with_imported_bindings_and_cancellation(
-        ModuleBody {
-            ast: dag_body,
-            interface: &ModuleInterface::new(&dag_body.declarations),
-        },
-        imported_names,
-        imported_bindings,
-        src,
-        dag_id,
-        definitions,
-        &crate::cancellation::CancellationToken::unbounded(),
-    )
+    crate::outcome::without_cancellation(|cancellation| {
+        lower_dag_module_with_imported_bindings_and_cancellation(
+            ModuleBody {
+                ast: dag_body,
+                interface: &ModuleInterface::new(&dag_body.declarations),
+            },
+            imported_names,
+            imported_bindings,
+            src,
+            dag_id,
+            definitions,
+            cancellation,
+        )
+    })
 }
 
 /// Lower an inline DAG module with cooperative cancellation.
@@ -456,7 +461,7 @@ pub fn lower_dag_module_with_imported_bindings_and_cancellation(
     dag_id: &crate::dag_id::DagId,
     definitions: &mut StaticDefinitionEvaluator<'_>,
     cancellation: &crate::cancellation::CancellationToken,
-) -> Result<UnfrozenIR, GraphcalError> {
+) -> Result<UnfrozenIR, Outcome<GraphcalError>> {
     cancellation.checkpoint()?;
     let ModuleBody {
         ast: dag_body,
@@ -510,7 +515,7 @@ fn build_ir_from_resolved(
     dag_id: &crate::dag_id::DagId,
     definitions: &mut StaticDefinitionEvaluator<'_>,
     cancellation: &crate::cancellation::CancellationToken,
-) -> Result<UnfrozenIR, GraphcalError> {
+) -> Result<UnfrozenIR, Outcome<GraphcalError>> {
     cancellation.checkpoint()?;
     // Dimensions, units, and indexes are evaluated canonically through the
     // module resolver; nothing is registered under a source spelling.

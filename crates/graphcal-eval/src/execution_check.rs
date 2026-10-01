@@ -8,6 +8,7 @@ use miette::NamedSource;
 
 use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
 use graphcal_compiler::graphcal_error::GraphcalError;
+use graphcal_compiler::outcome::Outcome;
 use graphcal_compiler::tir::typed::CheckedTir;
 #[cfg(any(test, feature = "test-internals"))]
 use graphcal_compiler::tir::typed::StructFieldConstraintKey;
@@ -41,7 +42,7 @@ pub fn seal_checked_program_with_cancellation(
     tir: CheckedTir,
     src: &NamedSource<Arc<String>>,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
-) -> Result<CheckedProgram, GraphcalError> {
+) -> Result<CheckedProgram, Outcome<GraphcalError>> {
     seal_checked_program(tir, &ExecutionFacts::default(), src, cancellation)
 }
 
@@ -53,7 +54,7 @@ pub fn seal_checked_program(
     inherited: &ExecutionFacts,
     src: &NamedSource<Arc<String>>,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
-) -> Result<CheckedProgram, GraphcalError> {
+) -> Result<CheckedProgram, Outcome<GraphcalError>> {
     cancellation.checkpoint()?;
     let internal =
         |message: String| GraphcalError::internal_error(message, src, DiagnosticAnchor::WholeFile);
@@ -90,7 +91,7 @@ pub fn seal_checked_program(
             )
             .map(|constraints| (dag_id.clone(), constraints))
         })
-        .collect::<Result<HashMap<_, _>, GraphcalError>>()?;
+        .collect::<Result<HashMap<_, _>, Outcome<GraphcalError>>>()?;
 
     // Field-bound evaluation only needs provisional constant scopes, not fake
     // executable artifacts with missing constraints.
@@ -140,4 +141,5 @@ pub fn seal_checked_program(
             struct_field_constraints,
         })
         .map_err(|error| internal(error.to_string()))
+        .map_err(Outcome::Failed)
 }

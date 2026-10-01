@@ -3,6 +3,7 @@
 
 use crate::hir::expr::{Expr, ParamBinding};
 use crate::ir::static_substitution::StaticSubstitution;
+use crate::outcome::Outcome;
 use crate::resolved_name::ResolvedDeclName;
 use std::collections::HashMap;
 
@@ -22,7 +23,7 @@ impl Infer<'_> {
         args: &[ParamBinding],
         static_bindings: &StaticSubstitution,
         output: &crate::syntax::span::Spanned<ResolvedDeclName>,
-    ) -> Result<CheckedType<Symbolic>, GraphcalError> {
+    ) -> Result<CheckedType<Symbolic>, Outcome<GraphcalError>> {
         let display_path = target.value.to_string();
         let dag_tir = self
             .env
@@ -88,7 +89,8 @@ impl Infer<'_> {
                     found: format_checked_type(&found, self.env.registry),
                     src: self.env.src.clone(),
                     span: binding.value.span.into(),
-                });
+                }
+                .into());
             }
         }
 
@@ -104,7 +106,8 @@ impl Infer<'_> {
                 dag_name: display_path.clone(),
                 src: self.env.src.clone(),
                 span: expr.span.into(),
-            });
+            }
+            .into());
         }
 
         let output_key = &output.value;
@@ -127,7 +130,8 @@ impl Infer<'_> {
                 file_path: display_path,
                 src: self.env.src.clone(),
                 span: output.span.into(),
-            });
+            }
+            .into());
         }
         let output_decl = specialize_type(
             output_decl,
@@ -138,5 +142,6 @@ impl Infer<'_> {
         output_decl
             .to_checked_type(self.env.src)
             .map(|ty| ty.to_symbolic())
+            .map_err(Outcome::Failed)
     }
 }

@@ -8,6 +8,7 @@ use miette::NamedSource;
 
 use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
 use graphcal_compiler::graphcal_error::GraphcalError;
+use graphcal_compiler::outcome::Outcome;
 use graphcal_compiler::semantic::checked_type::{CheckedGenericArg, CheckedType, StructTypeRef};
 use graphcal_compiler::syntax::span::Span;
 use graphcal_compiler::syntax::type_name::{ConstructorName, FieldName};
@@ -39,7 +40,7 @@ pub(super) fn resolve_domain_constraints_for_dag(
     all_const_values: &RuntimeValueMap,
     src: &NamedSource<Arc<String>>,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
-) -> Result<HashMap<ResolvedDeclName, ResolvedDomainConstraint>, GraphcalError> {
+) -> Result<HashMap<ResolvedDeclName, ResolvedDomainConstraint>, Outcome<GraphcalError>> {
     cancellation.checkpoint()?;
     let visible_const_values = visible_values_with_imports(const_values, all_const_values);
 
@@ -107,7 +108,8 @@ pub(super) fn resolve_domain_constraints_for_dag(
                 violation: violation.message,
                 src: src.clone(),
                 span: decl_span.into(),
-            });
+            }
+            .into());
         }
         constraints.insert(resolved_key, resolved_constraint);
     }
@@ -137,7 +139,7 @@ fn resolve_constraint_from_bounds(
     values: &RuntimeValueMap,
     ctx: BoundCheckingContext<'_, '_>,
     src: &NamedSource<Arc<String>>,
-) -> Result<ResolvedDomainConstraint, GraphcalError> {
+) -> Result<ResolvedDomainConstraint, Outcome<GraphcalError>> {
     match target {
         ConstraintTarget::Quantity => evaluate_domain_bounds(
             bounds,
@@ -147,14 +149,15 @@ fn resolve_constraint_from_bounds(
             src,
             |value, bound| match value {
                 RuntimeValue::Quantity(value) => Ok(value.get()),
-                RuntimeValue::Int(value) => exact_domain_int_bound(*value, src, bound.value.span),
-                other => Err(domain_bound_value_error(
-                    display_name,
-                    bound,
-                    "a quantity",
-                    other,
-                    src,
-                )),
+                RuntimeValue::Int(value) => {
+                    exact_domain_int_bound(*value, src, bound.value.span).map_err(Outcome::Failed)
+                }
+                other => {
+                    Err(
+                        domain_bound_value_error(display_name, bound, "a quantity", other, src)
+                            .into(),
+                    )
+                }
             },
             |expr, value| format_quantity_bound_display(expr, *value),
         )
@@ -167,13 +170,9 @@ fn resolve_constraint_from_bounds(
             src,
             |value, bound| match value {
                 RuntimeValue::Int(value) => Ok(*value),
-                other => Err(domain_bound_value_error(
-                    display_name,
-                    bound,
-                    "Int",
-                    other,
-                    src,
-                )),
+                other => {
+                    Err(domain_bound_value_error(display_name, bound, "Int", other, src).into())
+                }
             },
             |_expr, value| value.to_string(),
         )
@@ -195,7 +194,8 @@ fn resolve_constraint_from_bounds(
                         &format!("Datetime<{scale}>"),
                         other,
                         src,
-                    )),
+                    )
+                    .into()),
                 },
                 |_expr, epoch| epoch.to_string(),
             )?;
@@ -210,7 +210,7 @@ fn resolve_constraint_from_bounds(
                     src,
                     anchor,
                 )
-            })
+            }).map_err(Outcome::Failed)
         }
     }
 }
@@ -224,16 +224,17 @@ fn evaluate_domain_bounds<T: PartialOrd>(
     convert: impl Fn(
         &RuntimeValue,
         &graphcal_compiler::tir::typed::ResolvedDomainBound,
-    ) -> Result<T, GraphcalError>,
+    ) -> Result<T, Outcome<GraphcalError>>,
     format_display: impl Fn(&graphcal_compiler::hir::expr::Expr, &T) -> String,
-) -> Result<EvaluatedDomainBounds<T>, GraphcalError> {
+) -> Result<EvaluatedDomainBounds<T>, Outcome<GraphcalError>> {
     let bounds = scoped_bounds.get();
     let Some(first) = bounds.first() else {
         return Err(GraphcalError::internal_error(
             format!("domain constraint on `{display_name}` has no bounds"),
             src,
             DiagnosticAnchor::WholeFile,
-        ));
+        )
+        .into());
     };
     let evaluated = scoped_bounds
         .iter()
@@ -247,7 +248,7 @@ fn evaluate_domain_bounds<T: PartialOrd>(
             let display = format_display(&bound.value, &value);
             Ok((bound.kind, EvaluatedDomainBound::new(value, display)))
         })
-        .collect::<Result<Vec<_>, GraphcalError>>()?;
+        .collect::<Result<Vec<_>, Outcome<GraphcalError>>>()?;
     let constraint_span = bounds
         .iter()
         .skip(1)
@@ -268,7 +269,8 @@ fn evaluate_domain_bounds<T: PartialOrd>(
             max: max.display().to_string(),
             src: src.clone(),
             span: constraint_span.into(),
-        });
+        }
+        .into());
     }
     Ok(EvaluatedDomainBounds::new(min, max))
 }
@@ -398,12 +400,9 @@ pub(super) fn resolve_struct_field_constraints(
     const_values: &RuntimeValueMap,
     src: &NamedSource<Arc<String>>,
 ) -> Result<HashMap<StructFieldConstraintKey, ResolvedDomainConstraint>, GraphcalError> {
-    resolve_struct_field_constraints_with_cancellation(
-        tir,
-        const_values,
-        src,
-        &graphcal_compiler::cancellation::CancellationToken::unbounded(),
-    )
+    graphcal_compiler::outcome::without_cancellation(|cancellation| {
+        resolve_struct_field_constraints_with_cancellation(tir, const_values, src, cancellation)
+    })
 }
 
 /// Evaluated constants whose field constraints are still being resolved.
@@ -445,7 +444,7 @@ fn application_field_constraint_key(
 fn resolve_application_field_constraints(
     application: &ConcreteNominalApplication,
     ctx: &FieldConstraintResolutionContext<'_>,
-) -> Result<ApplicationFieldConstraints, GraphcalError> {
+) -> Result<ApplicationFieldConstraints, Outcome<GraphcalError>> {
     ctx.cancellation.checkpoint()?;
     let dag_id = application.identity.resolved().owner();
     let nominal = ctx
@@ -490,7 +489,8 @@ fn resolve_application_field_constraints(
                 format!("constrained field `{display_name}` has no domain bounds"),
                 type_def.source(),
                 DiagnosticAnchor::Source(type_def.span()),
-            ));
+            )
+            .into());
         };
         let bound_span = first_bound.span;
         let constraint_src = &first_bound.src;
@@ -562,7 +562,7 @@ pub(super) fn resolve_struct_field_constraints_for_dags(
     all_const_values: &RuntimeValueMap,
     src: &NamedSource<Arc<String>>,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
-) -> Result<DagFieldConstraints, GraphcalError> {
+) -> Result<DagFieldConstraints, Outcome<GraphcalError>> {
     cancellation.checkpoint()?;
     let context = FieldConstraintResolutionContext {
         tir,
@@ -585,7 +585,7 @@ pub(super) fn resolve_struct_field_constraints_with_cancellation(
     const_values: &RuntimeValueMap,
     src: &NamedSource<Arc<String>>,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
-) -> Result<HashMap<StructFieldConstraintKey, ResolvedDomainConstraint>, GraphcalError> {
+) -> Result<HashMap<StructFieldConstraintKey, ResolvedDomainConstraint>, Outcome<GraphcalError>> {
     let empty = RuntimeValueMap::new();
     let const_scopes = tir
         .dag_registry()
