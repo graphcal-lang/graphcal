@@ -5,6 +5,7 @@ use std::sync::Arc;
 use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
 use graphcal_compiler::graphcal_error::GraphcalError;
 use graphcal_compiler::hir::source_interface::SourceDeclaration;
+use graphcal_compiler::ir::entry::Decl;
 use graphcal_compiler::ir::resolve::collected::ExternalDeclSurface;
 use graphcal_compiler::semantic::checked_type::CheckedType;
 use graphcal_compiler::syntax::ast::Visibility;
@@ -140,38 +141,31 @@ pub(super) fn build_checked_entry_interface(
 
     for declaration in source_declarations {
         match declaration {
-            SourceDeclaration::Parameter { name, span } => {
-                let entry = tir
-                    .root()
-                    .params()
-                    .find(|entry| entry.name() == name)
-                    .ok_or_else(|| {
-                        missing_interface_fact(
-                            format!("HIR entry parameter `{name}` is absent from checked TIR"),
-                            source,
-                            *span,
-                        )
-                    })?;
+            SourceDeclaration::Parameter { identity, span } => {
+                let Some(Decl::Param(entry)) = tir.root().decls().get(identity) else {
+                    return Err(missing_interface_fact(
+                        format!("HIR entry parameter `{identity}` is absent from checked TIR"),
+                        source,
+                        *span,
+                    ));
+                };
                 parameters.push(CheckedEntryParameter {
-                    name: name.clone(),
+                    name: entry.name().clone(),
                     declared_type: entry.type_ann.checked().declared().clone(),
                     has_default: entry.default.is_some(),
-                    runtime_key: entry.identity(),
+                    runtime_key: identity.clone(),
                     span: *span,
                 });
             }
-            SourceDeclaration::Node { name, span } => {
-                let entry = tir
-                    .root()
-                    .nodes()
-                    .find(|entry| entry.name() == name)
-                    .ok_or_else(|| {
-                        missing_interface_fact(
-                            format!("HIR entry node `{name}` is absent from checked TIR"),
-                            source,
-                            *span,
-                        )
-                    })?;
+            SourceDeclaration::Node { identity, span } => {
+                let Some(Decl::Node(entry)) = tir.root().decls().get(identity) else {
+                    return Err(missing_interface_fact(
+                        format!("HIR entry node `{identity}` is absent from checked TIR"),
+                        source,
+                        *span,
+                    ));
+                };
+                let name = entry.name();
                 outputs.push(CheckedEntryOutput {
                     name: name.clone(),
                     declared_type: entry.type_ann.checked().declared().clone(),
@@ -180,23 +174,20 @@ pub(super) fn build_checked_entry_interface(
                     } else {
                         Visibility::Private
                     },
-                    runtime_key: entry.identity(),
+                    runtime_key: identity.clone(),
                 });
             }
-            SourceDeclaration::Index { name, span } => {
-                let definition = tir
-                    .root_declared_indexes()
-                    .find(|definition| definition.name.declared_name() == Some(name))
-                    .ok_or_else(|| {
-                        missing_interface_fact(
-                            format!("HIR entry index `{name}` is absent from checked TIR"),
-                            source,
-                            *span,
-                        )
-                    })?;
+            SourceDeclaration::Index { identity, span } => {
+                let definition = tir.declared_index_def(identity).ok_or_else(|| {
+                    missing_interface_fact(
+                        format!("HIR entry index `{identity}` is absent from checked TIR"),
+                        source,
+                        *span,
+                    )
+                })?;
                 if required_index.is_none() && definition.is_required() {
                     required_index = Some(RequiredEntryIndex {
-                        name: name.clone(),
+                        name: identity.leaf().clone(),
                         anchor: DiagnosticAnchor::Source(*span),
                     });
                 }

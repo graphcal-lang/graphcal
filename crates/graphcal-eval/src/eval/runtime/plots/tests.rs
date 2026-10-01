@@ -4,22 +4,12 @@ use miette::NamedSource;
 
 use super::*;
 
-/// The unit of the only declaration of `tir`'s root named `name`.
+/// The unit of the declaration `owner` of `tir`'s root.
 fn root_unit<'t>(
     tir: &'t graphcal_compiler::tir::typed::CheckedTir,
-    name: &graphcal_compiler::syntax::decl_name::DeclName,
-    src: &NamedSource<Arc<String>>,
+    owner: &ResolvedDeclName,
 ) -> DeclarationBody<'t> {
-    let owner = tir
-        .root()
-        .body_for_test()
-        .require_bound_decl_identity(
-            &ScopedName::local(name.clone()),
-            src,
-            DiagnosticAnchor::WholeFile,
-        )
-        .unwrap();
-    tir.declaration_body(&owner).unwrap()
+    tir.declaration_body(owner).unwrap()
 }
 
 #[test]
@@ -27,7 +17,7 @@ fn plot_properties_preserve_cancellation_classification() {
     let source = "plot measurement = { mark: line { stroke_width: 2.0 }, encode: { x: 1.0, y: 2.0 }, width: 100.0 };";
     let tir = crate::test_tir::checked_tir_from_source(source).unwrap().0;
     let src = NamedSource::new("plot_property.gcl", Arc::new(source.to_owned()));
-    let unit = root_unit(&tir, tir.root().plots().next().unwrap().name(), &src);
+    let unit = root_unit(&tir, &tir.root().plots().next().unwrap().identity());
     let plot = unit.plot().unwrap();
     let ctx = EvalSession::provisional_constants(
         &tir,
@@ -87,14 +77,14 @@ fn composition_properties_preserve_cancellation_classification() {
     let layer = tir.root().layers().next().unwrap();
     let compositions = [
         (
-            root_unit(&tir, figure.name(), &src)
+            root_unit(&tir, &figure.identity())
                 .figure()
                 .unwrap()
                 .map(|figure| figure.fields.as_slice()),
             &figure.plot_names,
         ),
         (
-            root_unit(&tir, layer.name(), &src)
+            root_unit(&tir, &layer.identity())
                 .layer()
                 .unwrap()
                 .map(|layer| layer.fields.as_slice()),
