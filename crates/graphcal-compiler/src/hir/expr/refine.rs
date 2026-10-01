@@ -138,6 +138,7 @@ where
         ExprKind::StringLiteral(value) => ExprKind::StringLiteral(value),
         ExprKind::OffsetDateTimeLiteral(value) => ExprKind::OffsetDateTimeLiteral(value),
         ExprKind::CivilDateTimeLiteral(value) => ExprKind::CivilDateTimeLiteral(value),
+        ExprKind::EpochLiteral(value) => ExprKind::EpochLiteral(value),
         ExprKind::ZonedDateTimeLiteral(value) => ExprKind::ZonedDateTimeLiteral(value),
         ExprKind::IanaTimeZoneLiteral(value) => ExprKind::IanaTimeZoneLiteral(value),
         ExprKind::TypeSystemRef(value) => ExprKind::TypeSystemRef(value),

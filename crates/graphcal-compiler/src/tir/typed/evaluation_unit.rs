@@ -64,7 +64,7 @@ impl<'t> Scoped<'t, Expr> {
             Some(CheckedBody::Executable(TBody::Contextual(literal))) => match literal.literal() {
                 ContextualLiteral::String(text) => Ok(text),
                 ContextualLiteral::OffsetDateTime(_)
-                | ContextualLiteral::CivilDateTime(_)
+                | ContextualLiteral::Epoch(_)
                 | ContextualLiteral::ZonedDateTime(_)
                 | ContextualLiteral::TimeZone(_) => Err(CheckedStringError::NotString),
             },

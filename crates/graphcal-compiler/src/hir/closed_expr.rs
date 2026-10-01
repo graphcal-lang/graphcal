@@ -66,6 +66,7 @@ const fn validate_literal_node(expr: &Expr<Draft>) -> Result<(), ClosedExpressio
         | ExprKind::Bool(_)
         | ExprKind::OffsetDateTimeLiteral(_)
         | ExprKind::CivilDateTimeLiteral(_)
+        | ExprKind::EpochLiteral(_)
         | ExprKind::ZonedDateTimeLiteral(_)
         | ExprKind::IanaTimeZoneLiteral(_)
         | ExprKind::VariantLiteral(_)

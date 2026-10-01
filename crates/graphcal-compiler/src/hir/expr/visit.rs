@@ -62,7 +62,8 @@ macro_rules! expression_children {
             ExprKind::Error(error) => C::$error_children(error).$iter().for_each(&mut *$visitor),
             ExprKind::Number(_) | ExprKind::Integer(_) | ExprKind::Bool(_)
             | ExprKind::StringLiteral(_) | ExprKind::OffsetDateTimeLiteral(_)
-            | ExprKind::CivilDateTimeLiteral(_) | ExprKind::ZonedDateTimeLiteral(_)
+            | ExprKind::CivilDateTimeLiteral(_) | ExprKind::EpochLiteral(_)
+            | ExprKind::ZonedDateTimeLiteral(_)
             | ExprKind::IanaTimeZoneLiteral(_) | ExprKind::TypeSystemRef(_)
             | ExprKind::GraphRef(_) | ExprKind::ConstRef(_) | ExprKind::LocalRef(_)
             | ExprKind::QuantityLiteral { .. } | ExprKind::VariantLiteral(_) => {},

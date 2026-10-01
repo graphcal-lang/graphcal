@@ -38,6 +38,7 @@ impl Infer<'_> {
             ExprKind::StringLiteral(_)
             | ExprKind::OffsetDateTimeLiteral(_)
             | ExprKind::CivilDateTimeLiteral(_)
+            | ExprKind::EpochLiteral(_)
             | ExprKind::ZonedDateTimeLiteral(_)
             | ExprKind::IanaTimeZoneLiteral(_) => {
                 return Err(SemanticError::located(

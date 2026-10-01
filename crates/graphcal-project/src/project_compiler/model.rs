@@ -1,14 +1,16 @@
 //! Internal data model shared by project-checking passes.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 
 use graphcal_compiler::declaration_category::DeclCategory;
 use graphcal_compiler::desugar::desugared_ast::Expr;
 use graphcal_compiler::ir::resolve::collected::ImportedValueNames;
-use graphcal_compiler::ir::static_substitution::StaticSubstitution;
+use graphcal_compiler::ir::static_substitution::{InstanceIndexBindingTarget, StaticSubstitution};
 use graphcal_compiler::resolved_name::ResolvedDeclName;
-use graphcal_compiler::resolved_name::ResolvedIndexName;
+use graphcal_compiler::resolved_name::{
+    ResolvedDimName, ResolvedIndexName, ResolvedStructTypeName,
+};
 use graphcal_compiler::semantic::index_def::IndexBindingTarget;
 use graphcal_compiler::source_id::SourceId;
 use graphcal_compiler::syntax::decl_name::DeclName;
@@ -23,15 +25,32 @@ use graphcal_compiler::syntax::span::Span;
 /// authored name again.
 #[derive(Debug, Default)]
 pub(super) struct IncludeStaticBindings {
-    pub(super) substitution: StaticSubstitution,
-    /// Authored spelling and source site of each bound index port, for
-    /// diagnostics of its binding contract.
-    pub(super) index_sites: HashMap<ResolvedIndexName, IndexBindingSite>,
+    /// Each bound index port, with its target and binding site in one record.
+    pub(super) indexes: BTreeMap<ResolvedIndexName, BoundIndexPort>,
+    pub(super) types: BTreeMap<ResolvedStructTypeName, ResolvedStructTypeName>,
+    pub(super) dimensions: BTreeMap<ResolvedDimName, ResolvedDimName>,
 }
 
-/// Diagnostic provenance of one index port binding.
+impl IncludeStaticBindings {
+    /// The Static substitution these bindings apply to the template.
+    pub(super) fn substitution(&self) -> StaticSubstitution {
+        StaticSubstitution {
+            indexes: self
+                .indexes
+                .iter()
+                .map(|(port, bound)| (port.clone(), bound.target.clone()))
+                .collect(),
+            types: self.types.clone(),
+            dimensions: self.dimensions.clone(),
+        }
+    }
+}
+
+/// One bound index port: the canonical target, and the authored spelling and
+/// source site of the binding for diagnostics of its binding contract.
 #[derive(Debug)]
-pub(super) struct IndexBindingSite {
+pub(super) struct BoundIndexPort {
+    pub(super) target: InstanceIndexBindingTarget,
     pub(super) authored: IndexBindingTarget,
     pub(super) span: Span,
 }

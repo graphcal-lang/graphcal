@@ -324,7 +324,7 @@ fn lowers_unambiguous_timezone_datetime_to_resolved_hir() {
 }
 
 #[test]
-fn lowers_epoch_static_scale_and_civil_literal_to_typed_hir() {
+fn lowers_epoch_static_scale_and_literal_to_resolved_instant() {
     let owner = DagId::root_in_package("test", "main");
     let file = desugared_source("node t: Datetime<TT> = epoch<TT>(\"2024-11-05T12:00:00\");");
     let resolver =
@@ -349,7 +349,14 @@ fn lowers_epoch_static_scale_and_civil_literal_to_typed_hir() {
     };
     assert_eq!(scale.value, TimeScale::TT);
     assert_eq!(args.len(), 1);
-    assert!(matches!(args[0].kind(), ExprKind::CivilDateTimeLiteral(_)));
+    let ExprKind::EpochLiteral(literal) = args[0].kind() else {
+        panic!("expected a resolved epoch literal, got {:?}", args[0]);
+    };
+    assert_eq!(literal.scale(), TimeScale::TT);
+    assert_eq!(
+        literal.epoch(),
+        hifitime::Epoch::from_gregorian(2024, 11, 5, 12, 0, 0, 0, hifitime::TimeScale::TT)
+    );
 }
 
 #[test]

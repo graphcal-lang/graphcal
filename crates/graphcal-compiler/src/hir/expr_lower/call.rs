@@ -2,7 +2,7 @@
 
 use crate::builtin::{BuiltinApplication, BuiltinFn, ComplexFn, DatetimeConstructorFn, DatetimeFn};
 use crate::datetime_literal::{
-    CivilDateTimeLiteral, DatetimeLiteralExpectation, OffsetDateTimeLiteral,
+    CivilDateTimeLiteral, DatetimeLiteralExpectation, EpochLiteral, OffsetDateTimeLiteral,
     ResolveZonedDateTimeLiteralError, ZonedDateTimeLiteral,
 };
 use crate::desugar::desugared_ast as ast;
@@ -122,11 +122,7 @@ impl ExprLowerer<'_> {
                             0,
                             1,
                             ast::ExprKind::StringLiteral(source),
-                        ) => Self::lower_civil_datetime_literal(
-                            source,
-                            DatetimeLiteralExpectation::Epoch(scale.value),
-                            arg.span,
-                        ),
+                        ) => Self::lower_epoch_literal(source, scale.value, arg.span),
                         _ => Ok(self.lower_expr(arg)),
                     },
                 )
@@ -256,6 +252,23 @@ impl ExprLowerer<'_> {
                 reason: error.to_string(),
                 span,
             })
+    }
+
+    pub(super) fn lower_epoch_literal(
+        source: &str,
+        scale: TimeScale,
+        span: Span,
+    ) -> Result<Expr<Tolerant>, ExprLowerError> {
+        let invalid = |reason: String| ExprLowerError::InvalidDatetimeLiteral {
+            expectation: DatetimeLiteralExpectation::Epoch(scale),
+            reason,
+            span,
+        };
+        let civil =
+            CivilDateTimeLiteral::parse(source).map_err(|error| invalid(error.to_string()))?;
+        EpochLiteral::resolve(civil, scale)
+            .map(|literal| Expr::new(ExprKind::EpochLiteral(literal), span))
+            .map_err(|error| invalid(error.to_string()))
     }
 
     pub(super) fn lower_iana_time_zone_id(

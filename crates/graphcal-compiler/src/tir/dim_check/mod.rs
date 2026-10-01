@@ -262,12 +262,9 @@ fn check_ineffective_conversions_inner(
             }
             Ok(())
         }
-        ExprKind::ConstructorCall { fields, .. } => {
-            for init in fields {
-                check_ineffective_conversions(&init.value, display_position, src)?;
-            }
-            Ok(())
-        }
+        ExprKind::ConstructorCall { fields, .. } => fields
+            .iter()
+            .try_for_each(|init| check_ineffective_conversions(&init.value, display_position, src)),
         ExprKind::MapLiteral { entries } => {
             for entry in entries {
                 check_ineffective_conversions(&entry.value, display_position, src)?;
@@ -327,6 +324,7 @@ fn check_ineffective_conversions_inner(
         | ExprKind::StringLiteral(_)
         | ExprKind::OffsetDateTimeLiteral(_)
         | ExprKind::CivilDateTimeLiteral(_)
+        | ExprKind::EpochLiteral(_)
         | ExprKind::ZonedDateTimeLiteral(_)
         | ExprKind::IanaTimeZoneLiteral(_)
         | ExprKind::TypeSystemRef(_)

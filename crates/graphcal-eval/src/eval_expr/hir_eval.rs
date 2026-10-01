@@ -242,10 +242,9 @@ fn eval_texpr_inner(
             .cloned()
             .ok_or_else(|| ctx.eval_error("undefined local variable", local.span))
             .map_err(Outcome::Failed),
-        NodeKind::DatetimeLiteral(literal) => {
-            super::operations::datetime_literal(literal, span, ctx)
-                .map(|value| plain(RuntimeValue::Datetime(value)))
-        }
+        NodeKind::DatetimeLiteral(literal) => Ok(plain(RuntimeValue::Datetime(
+            super::operations::datetime_literal(literal),
+        ))),
         NodeKind::Aggregate { function, arg } => {
             let RuntimeValue::Indexed(indexed) = eval_value(arg, values, local_values, ctx)? else {
                 return Err(ctx

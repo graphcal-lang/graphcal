@@ -14,8 +14,9 @@ categories.workspace = true
 # Cross-crate tests may name declarations directly (`Value::*_with_owner`).
 test-identities = ["graphcal-compiler/test-identities"]
 # Cross-crate tests (`graphcal-project`) observe pipeline metrics and use
-# test-only interpreter constructors.
-test-internals = []
+# test-only interpreter constructors. They see everything `test-identities`
+# exposes too, so the two test surfaces never diverge.
+test-internals = ["test-identities"]
 
 [dependencies]
 graphcal-compiler = { workspace = true }

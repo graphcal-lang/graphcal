@@ -36,7 +36,7 @@ use super::module_resolve_errors::module_resolve_compile_error;
 use crate::compile_error::PipelineError;
 
 use super::model::{
-    ImportAlias, ImportContext, IncludeInstanceRequest, IncludeStaticBindings, IndexBindingSite,
+    BoundIndexPort, ImportAlias, ImportContext, IncludeInstanceRequest, IncludeStaticBindings,
     ProjectModuleBinding, UnitProjectionAlias,
 };
 use crate::import_surface::{
@@ -601,13 +601,14 @@ fn resolve_include_static_bindings(
             ),
             IndexBindingTarget::Finite(finite) => InstanceIndexBindingTarget::Finite(*finite),
         };
-        bindings
-            .substitution
-            .indexes
-            .insert(identity.clone(), target);
-        bindings
-            .index_sites
-            .insert(identity, IndexBindingSite { authored, span });
+        bindings.indexes.insert(
+            identity,
+            BoundIndexPort {
+                target,
+                authored,
+                span,
+            },
+        );
     }
     for (port, target) in types {
         let identity = resolver
@@ -618,7 +619,7 @@ fn resolve_include_static_bindings(
             .resolve_struct_type_path(scope.owner(), &NamePath::local(target.atom().clone()))
             .map(SymbolRef::into_resolved)
             .map_err(|error| module_resolve_compile_error(error, src))?;
-        bindings.substitution.types.insert(identity, target);
+        bindings.types.insert(identity, target);
     }
     let prelude = graphcal_compiler::resolve::prelude::prelude_type_scope();
     for (port, target) in dims {
@@ -636,7 +637,7 @@ fn resolve_include_static_bindings(
                 .resolve_dimension_path(&path)
                 .ok_or_else(|| module_resolve_compile_error(error, src))?,
         };
-        bindings.substitution.dimensions.insert(identity, target);
+        bindings.dimensions.insert(identity, target);
     }
     Ok(bindings)
 }

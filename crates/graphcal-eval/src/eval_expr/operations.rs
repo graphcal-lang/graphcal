@@ -504,24 +504,11 @@ fn from_numeric(
 }
 
 /// The instant a datetime literal denotes.
-pub(super) fn datetime_literal(
-    literal: &DatetimeLiteral,
-    span: Span,
-    ctx: &EvalSession<'_>,
-) -> Result<hifitime::Epoch, Outcome<SemanticError>> {
+pub(super) fn datetime_literal(literal: &DatetimeLiteral) -> hifitime::Epoch {
     match literal {
-        DatetimeLiteral::Offset(datetime) => Ok(super::datetime::datetime_from_offset(*datetime)),
-        DatetimeLiteral::Zoned(datetime) => Ok(super::datetime::datetime_from_zoned(datetime)),
-        DatetimeLiteral::Epoch { civil, scale } => {
-            super::datetime::epoch_from_civil_datetime(*civil, *scale)
-                .map_err(|error| {
-                    ctx.internal_error(
-                        format!("validated epoch literal failed evaluation: {error}"),
-                        span,
-                    )
-                })
-                .map_err(Outcome::Failed)
-        }
+        DatetimeLiteral::Offset(datetime) => super::datetime::datetime_from_offset(*datetime),
+        DatetimeLiteral::Zoned(datetime) => super::datetime::datetime_from_zoned(datetime),
+        DatetimeLiteral::Epoch(epoch) => epoch.epoch(),
     }
 }
 
