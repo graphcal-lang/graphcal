@@ -489,7 +489,8 @@ pub struct ModuleBody<'a> {
 /// bindings, and the body with self-import declarations stripped.
 pub struct DagBodySelfImports {
     pub names: ImportedValueNames,
-    pub bindings: HashMap<ScopedName, ResolvedDeclName>,
+    /// Each self-imported constant, with the span of the import item.
+    pub bindings: HashMap<ScopedName, crate::syntax::span::Spanned<ResolvedDeclName>>,
     pub stripped_body: Vec<crate::desugar::desugared_ast::Declaration>,
 }
 

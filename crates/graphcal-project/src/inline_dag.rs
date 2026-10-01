@@ -4,6 +4,7 @@
 //! this module keeps the self-import classification logic that needs access to
 //! parent-file visibility and values.
 
+use graphcal_compiler::syntax::span::Spanned;
 use std::collections::HashMap;
 
 use graphcal_compiler::dag_id::DagId;
@@ -81,8 +82,10 @@ pub fn preprocess_dag_body_self_imports(
             )
         })?;
     let mut names = ImportedValueNames::default();
-    let mut bindings: HashMap<ScopedName, graphcal_compiler::resolved_name::ResolvedDeclName> =
-        HashMap::new();
+    let mut bindings: HashMap<
+        ScopedName,
+        Spanned<graphcal_compiler::resolved_name::ResolvedDeclName>,
+    > = HashMap::new();
     let mut stripped_body: Vec<Declaration> = Vec::with_capacity(body.len());
 
     for decl in body {
@@ -177,7 +180,7 @@ pub fn preprocess_dag_body_self_imports(
                                         .ok_or_else(not_found)?;
                                     let scoped = ScopedName::local(local_name);
                                     names.const_names.push((scoped.clone(), span));
-                                    bindings.insert(scoped, target.clone());
+                                    bindings.insert(scoped, Spanned::new(target.clone(), span));
                                 }
                                 PureImportTermDisposition::ResolverOnly => {}
                                 PureImportTermDisposition::Reject(reason) => {
