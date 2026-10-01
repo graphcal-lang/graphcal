@@ -3310,9 +3310,7 @@ node momentum: Force * Time = @mass * @velocity;
 
     #[test]
     fn dependency_watch_inputs_include_authenticated_out_of_source_plugins() {
-        use graphcal_io::{
-            InMemoryFileSystem, NeverCancel, SourceTreeHashLimits, VirtualAbsolutePath,
-        };
+        use graphcal_io::{InMemoryFileSystem, SourceTreeHashLimits, VirtualAbsolutePath};
         let root = std::path::Path::new("/dependency");
         let mut fs = InMemoryFileSystem::new();
         for (path, text) in [
@@ -3331,7 +3329,7 @@ node momentum: Force * Time = @mass * @velocity;
             root,
             std::path::Path::new("src"),
             SourceTreeHashLimits::unbounded(),
-            &NeverCancel,
+            &graphcal_compiler::cancellation::CancellationToken::unbounded(),
         )
         .unwrap();
         snapshot
@@ -3340,7 +3338,7 @@ node momentum: Force * Time = @mass * @velocity;
                 root,
                 std::path::Path::new("plugins/kernel.wasm"),
                 SourceTreeHashLimits::unbounded(),
-                &NeverCancel,
+                &graphcal_compiler::cancellation::CancellationToken::unbounded(),
             )
             .unwrap();
         let closure = graphcal_project::loader::LoadedPackageClosure {

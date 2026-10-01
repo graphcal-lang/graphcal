@@ -7,8 +7,12 @@
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
-use graphcal_compiler::syntax::{parser::Parser, plugin::PluginSourceKind};
-use graphcal_io::{CancellationSignal, FileSystemReader, SourceTreeHashLimits, SourceTreeSnapshot};
+use graphcal_compiler::{
+    cancellation::CancellationToken,
+    outcome::Outcome,
+    syntax::{parser::Parser, plugin::PluginSourceKind},
+};
+use graphcal_io::{FileSystemReader, SourceTreeHashLimits, SourceTreeSnapshot};
 use thiserror::Error;
 
 /// Capture the source tree and every Wasm import declared anywhere inside it.
@@ -20,18 +24,16 @@ pub fn capture_package(
     root: &Path,
     source_dir: &Path,
     limits: SourceTreeHashLimits,
-    cancellation: &dyn CancellationSignal,
-) -> Result<SourceTreeSnapshot, PackageSnapshotError> {
-    let mut snapshot =
-        graphcal_io::capture_source_tree(fs, root, source_dir, limits, cancellation)?;
+    cancellation: &CancellationToken,
+) -> Result<SourceTreeSnapshot, Outcome<PackageSnapshotError>> {
+    let mut snapshot = graphcal_io::capture_source_tree(fs, root, source_dir, limits, cancellation)
+        .map_err(Outcome::map_into)?;
     let mut plugins = BTreeSet::new();
     for (path, bytes) in snapshot
         .files()
         .filter(|(path, _)| path.extension().is_some_and(|ext| ext == "gcl"))
     {
-        if cancellation.is_cancelled() {
-            return Err(graphcal_io::SourceTreeHashError::Cancelled.into());
-        }
+        cancellation.checkpoint()?;
         let source =
             std::str::from_utf8(bytes).map_err(|_| PackageSnapshotError::InvalidSource {
                 path: path.to_path_buf(),
@@ -45,20 +47,23 @@ pub fn capture_package(
         })?;
         for plugin in ast.plugin_imports() {
             if plugin.path.value.source_kind() == PluginSourceKind::WasmModule {
-                plugins.insert(graphcal_package::PluginArtifactPath::new(
-                    plugin.path.value.as_str(),
-                )?);
+                plugins.insert(
+                    graphcal_package::PluginArtifactPath::new(plugin.path.value.as_str())
+                        .map_err(PackageSnapshotError::from)?,
+                );
             }
         }
     }
     for plugin in plugins {
-        snapshot.capture_artifact(
-            fs,
-            root,
-            Path::new(&plugin.to_string()),
-            limits,
-            cancellation,
-        )?;
+        snapshot
+            .capture_artifact(
+                fs,
+                root,
+                Path::new(&plugin.to_string()),
+                limits,
+                cancellation,
+            )
+            .map_err(Outcome::map_into)?;
     }
     Ok(snapshot)
 }
@@ -66,9 +71,7 @@ pub fn capture_package(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use graphcal_io::{
-        ByteLimit, FileSystemReader, InMemoryFileSystem, NeverCancel, VirtualAbsolutePath,
-    };
+    use graphcal_io::{ByteLimit, FileSystemReader, InMemoryFileSystem, VirtualAbsolutePath};
 
     #[test]
     fn nested_imports_extend_hash_coverage_and_execution_uses_captured_bytes() {
@@ -93,7 +96,7 @@ mod tests {
             root,
             Path::new("src"),
             SourceTreeHashLimits::unbounded(),
-            &NeverCancel,
+            &CancellationToken::unbounded(),
         )
         .unwrap();
         assert_eq!(snapshot.hash().files(), 3);
@@ -107,7 +110,7 @@ mod tests {
             root,
             Path::new("src"),
             SourceTreeHashLimits::unbounded(),
-            &NeverCancel,
+            &CancellationToken::unbounded(),
         )
         .unwrap();
         assert_ne!(snapshot.hash().sha256(), changed.hash().sha256());
@@ -117,7 +120,7 @@ mod tests {
                 .read_bytes_bounded(
                     &root.join("plugins/kernel.wasm"),
                     ByteLimit::new(100),
-                    &NeverCancel
+                    &CancellationToken::unbounded()
                 )
                 .unwrap(),
             b"first"
@@ -134,4 +137,10 @@ pub enum PackageSnapshotError {
     PluginPath(#[from] graphcal_package::PluginArtifactPathError),
     #[error("could not inspect plugin imports in {}: {message}", path.display())]
     InvalidSource { path: PathBuf, message: String },
+}
+
+impl From<PackageSnapshotError> for Outcome<PackageSnapshotError> {
+    fn from(error: PackageSnapshotError) -> Self {
+        Self::Failed(error)
+    }
 }

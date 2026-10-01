@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 
 use graphcal_io::{
-    ByteLimit, EntryLimit, FileSystemEntryKind, FileSystemReadError, FileSystemReader, NeverCancel,
+    ByteLimit, EntryLimit, FileSystemEntryKind, FileSystemReadError, FileSystemReader,
     ProjectIngestionPolicy, RealFileSystem, SourceTreeHash, SourceTreeHashLimits,
     create_file_atomically, replace_file_atomically_if_unchanged,
 };
@@ -94,6 +94,25 @@ impl Default for PackageIngestionBudget {
     }
 }
 
+/// The byte cap enforced on one artifact read and the budget it reports
+/// when the read exceeds it.
+#[derive(Debug, Clone, Copy)]
+struct ReadCap {
+    limit: ByteLimit,
+    resource: IngestionResource,
+    reported_limit: u64,
+}
+
+impl ReadCap {
+    fn exceeded(self, path: &Path) -> DepsError {
+        DepsError::IngestionLimit {
+            path: path.to_path_buf(),
+            resource: self.resource,
+            limit: self.reported_limit,
+        }
+    }
+}
+
 impl PackageIngestionBudget {
     const fn new(policy: ProjectIngestionPolicy) -> Self {
         Self {
@@ -109,6 +128,27 @@ impl PackageIngestionBudget {
 
     const fn remaining_bytes(&self) -> u64 {
         self.policy.max_total_bytes().saturating_sub(self.bytes)
+    }
+
+    /// The cap for reading one artifact: its per-file limit, or the remaining
+    /// aggregate budget when that is smaller. The cap carries the budget that a
+    /// byte-limit failure reports, so the reported resource and limit cannot
+    /// disagree with the limit that was enforced.
+    const fn read_cap(&self, per_file: ByteLimit, resource: IngestionResource) -> ReadCap {
+        let remaining = self.remaining_bytes();
+        if per_file.get() <= remaining {
+            ReadCap {
+                limit: per_file,
+                resource,
+                reported_limit: per_file.get(),
+            }
+        } else {
+            ReadCap {
+                limit: ByteLimit::new(remaining),
+                resource: IngestionResource::TotalBytes,
+                reported_limit: self.policy.max_total_bytes(),
+            }
+        }
     }
 
     fn account_entry(&mut self, path: &Path) -> Result<(), DepsError> {
@@ -163,29 +203,17 @@ impl PackageIngestionBudget {
                 limit: self.policy.max_entries(),
             });
         }
-        let artifact_limit = artifact.limit(self.policy);
-        let remaining = self.remaining_bytes();
-        let (limit, exhausted) = if artifact_limit.get() <= remaining {
-            (artifact_limit, artifact.resource())
-        } else {
-            (ByteLimit::new(remaining), IngestionResource::TotalBytes)
-        };
-        let content = fs
-            .read_to_string_bounded(path, limit, &NeverCancel)
-            .map_err(|source| match source {
-                FileSystemReadError::ByteLimitExceeded { .. } => DepsError::IngestionLimit {
-                    path: path.to_path_buf(),
-                    resource: exhausted,
-                    limit: match exhausted {
-                        IngestionResource::TotalBytes => self.policy.max_total_bytes(),
-                        _ => artifact_limit.get(),
-                    },
-                },
-                other => DepsError::ArtifactRead {
-                    path: path.to_path_buf(),
-                    source: other,
-                },
-            })?;
+        let cap = self.read_cap(artifact.limit(self.policy), artifact.resource());
+        let content = graphcal_compiler::outcome::without_cancellation(|cancellation| {
+            fs.read_to_string_bounded(path, cap.limit, cancellation)
+        })
+        .map_err(|source| match source {
+            FileSystemReadError::ByteLimitExceeded { .. } => cap.exceeded(path),
+            other => DepsError::ArtifactRead {
+                path: path.to_path_buf(),
+                source: other,
+            },
+        })?;
         self.account_entry(path)?;
         self.account_bytes(path, content.len() as u64)?;
         Ok(content)
@@ -203,29 +231,17 @@ impl PackageIngestionBudget {
                 limit: self.policy.max_entries(),
             });
         }
-        let plugin_limit = self.policy.plugin();
-        let remaining = self.remaining_bytes();
-        let (limit, exhausted) = if plugin_limit.get() <= remaining {
-            (plugin_limit, IngestionResource::PluginBytes)
-        } else {
-            (ByteLimit::new(remaining), IngestionResource::TotalBytes)
-        };
-        let hash = fs
-            .hash_file_sha256_bounded(path, limit, &NeverCancel)
-            .map_err(|source| match source {
-                FileSystemReadError::ByteLimitExceeded { .. } => DepsError::IngestionLimit {
-                    path: path.to_path_buf(),
-                    resource: exhausted,
-                    limit: match exhausted {
-                        IngestionResource::TotalBytes => self.policy.max_total_bytes(),
-                        _ => plugin_limit.get(),
-                    },
-                },
-                other => DepsError::PluginFileUnreadable {
-                    path: path.to_path_buf(),
-                    source: other,
-                },
-            })?;
+        let cap = self.read_cap(self.policy.plugin(), IngestionResource::PluginBytes);
+        let hash = graphcal_compiler::outcome::without_cancellation(|cancellation| {
+            fs.hash_file_sha256_bounded(path, cap.limit, cancellation)
+        })
+        .map_err(|source| match source {
+            FileSystemReadError::ByteLimitExceeded { .. } => cap.exceeded(path),
+            other => DepsError::PluginFileUnreadable {
+                path: path.to_path_buf(),
+                source: other,
+            },
+        })?;
         self.account_entry(path)?;
         self.account_bytes(path, hash.bytes())?;
         Ok(Sha256Digest::from_bytes(hash.sha256()))
@@ -414,23 +430,24 @@ fn collect_gcl_files_bounded(
     let mut files = Vec::new();
     let mut pending = vec![root.to_path_buf()];
     while let Some(directory) = pending.pop() {
-        let mut names = fs
-            .read_directory_bounded(
+        let mut names = graphcal_compiler::outcome::without_cancellation(|cancellation| {
+            fs.read_directory_bounded(
                 &directory,
                 EntryLimit::new(budget.remaining_entries()),
-                &NeverCancel,
+                cancellation,
             )
-            .map_err(|source| match source {
-                FileSystemReadError::EntryLimitExceeded { .. } => DepsError::IngestionLimit {
-                    path: directory.clone(),
-                    resource: IngestionResource::Entries,
-                    limit: budget.policy.max_entries(),
-                },
-                other => DepsError::ArtifactRead {
-                    path: directory.clone(),
-                    source: other,
-                },
-            })?;
+        })
+        .map_err(|source| match source {
+            FileSystemReadError::EntryLimitExceeded { .. } => DepsError::IngestionLimit {
+                path: directory.clone(),
+                resource: IngestionResource::Entries,
+                limit: budget.policy.max_entries(),
+            },
+            other => DepsError::ArtifactRead {
+                path: directory.clone(),
+                source: other,
+            },
+        })?;
         names.sort();
         for name in names.into_iter().rev() {
             let path = directory.join(name);
@@ -1092,13 +1109,15 @@ fn hash_source_tree(
         path: root.to_path_buf(),
         source,
     })?;
-    let hash = graphcal_project::package_snapshot::capture_package(
-        &fs,
-        root,
-        &source_dir.to_path_buf(),
-        budget.source_tree_limits(),
-        &NeverCancel,
-    )
+    let hash = graphcal_compiler::outcome::without_cancellation(|cancellation| {
+        graphcal_project::package_snapshot::capture_package(
+            &fs,
+            root,
+            &source_dir.to_path_buf(),
+            budget.source_tree_limits(),
+            cancellation,
+        )
+    })
     .map_err(|error| match error {
         graphcal_project::package_snapshot::PackageSnapshotError::Tree(error) => {
             DepsError::SourceTreeHash(error)
@@ -1488,7 +1507,7 @@ units = { git = "https://example.com/acme/units.git", rev = "aaaaaaaaaaaaaaaaaaa
                 .read_to_string_bounded(
                     &checkout.join("src/units.gcl"),
                     ByteLimit::new(1024),
-                    &NeverCancel,
+                    &graphcal_compiler::cancellation::CancellationToken::unbounded(),
                 )
                 .unwrap(),
             old_source
@@ -1751,6 +1770,48 @@ import plugin "plugins/linked.wasm" as linked {
         ));
         let _ = std::fs::remove_dir_all(&root);
         let _ = std::fs::remove_dir_all(&outside);
+    }
+
+    #[test]
+    fn manifest_read_reports_the_aggregate_budget_when_it_is_the_tighter_cap() {
+        let root = unique_temp_dir();
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::File::create(root.join("graphcal.toml"))
+            .unwrap()
+            .set_len(9)
+            .unwrap();
+        let mut budget = test_budget(1024, 1024, 1024, 1024, 100, 8);
+
+        assert!(matches!(
+            read_manifest(&root, &mut budget),
+            Err(DepsError::IngestionLimit {
+                resource: IngestionResource::TotalBytes,
+                limit: 8,
+                ..
+            })
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn plugin_hash_reports_the_aggregate_budget_when_it_is_the_tighter_cap() {
+        let root = unique_temp_dir();
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::File::create(root.join("plugin.wasm"))
+            .unwrap()
+            .set_len(9)
+            .unwrap();
+        let mut budget = test_budget(1024, 1024, 1024, 1024, 100, 8);
+
+        assert!(matches!(
+            budget.hash_plugin(&RealFileSystem::default(), &root.join("plugin.wasm")),
+            Err(DepsError::IngestionLimit {
+                resource: IngestionResource::TotalBytes,
+                limit: 8,
+                ..
+            })
+        ));
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

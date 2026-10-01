@@ -169,16 +169,16 @@ fn read_source_file(
 ) -> Result<ParsedFile, Outcome<CompileError>> {
     let source = budget
         .read_text(reader, path, LoaderArtifact::SourceFile, cancellation)
-        .map_err(|error| match error {
-            LoaderReadError::Filesystem(FileSystemReadError::Cancelled) => Outcome::Cancelled,
-            LoaderReadError::Filesystem(filesystem) if is_not_found(&filesystem) => {
-                io_not_found(path).into()
-            }
-            other => loader_manifest_error(format!(
-                "could not read source `{}`: {other}",
-                path.display()
-            ))
-            .into(),
+        .map_err(|outcome| {
+            outcome.map_failed(|error| match error {
+                LoaderReadError::Filesystem(filesystem) if is_not_found(&filesystem) => {
+                    io_not_found(path)
+                }
+                other => loader_manifest_error(format!(
+                    "could not read source `{}`: {other}",
+                    path.display()
+                )),
+            })
         })?;
     ParsedFile::parse(sources, name, Arc::new(source), cancellation)
 }

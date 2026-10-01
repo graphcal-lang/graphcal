@@ -7,9 +7,11 @@ use std::path::{Component, Path, PathBuf};
 
 use thiserror::Error;
 
+use graphcal_compiler::{cancellation::CancellationToken, outcome::Outcome};
+
 use crate::{
-    ByteLimit, CancellationSignal, EntryLimit, FileSystemEntryKind, FileSystemReadError,
-    FileSystemReader, VirtualAbsolutePath,
+    ByteLimit, EntryLimit, FileSystemEntryKind, FileSystemReadError, FileSystemReader,
+    VirtualAbsolutePath,
 };
 
 #[derive(Debug, Clone)]
@@ -147,13 +149,11 @@ impl InMemoryFileSystem {
         &self,
         path: &VirtualAbsolutePath,
         limit: EntryLimit,
-        cancellation: &dyn CancellationSignal,
-    ) -> Result<Vec<OsString>, FileSystemReadError> {
+        cancellation: &CancellationToken,
+    ) -> Result<Vec<OsString>, Outcome<FileSystemReadError>> {
         let mut names = BTreeSet::new();
         for key in self.files.keys() {
-            if cancellation.is_cancelled() {
-                return Err(FileSystemReadError::Cancelled);
-            }
+            cancellation.checkpoint()?;
             let Ok(relative) = key.as_path().strip_prefix(path.as_path()) else {
                 continue;
             };
@@ -162,7 +162,7 @@ impl InMemoryFileSystem {
             };
             names.insert(name.to_os_string());
             if names.len() as u64 > limit.get() {
-                return Err(FileSystemReadError::EntryLimitExceeded { limit });
+                return Err(FileSystemReadError::EntryLimitExceeded { limit }.into());
             }
         }
         Ok(names.into_iter().collect())
@@ -174,19 +174,18 @@ impl FileSystemReader for InMemoryFileSystem {
         &self,
         path: &Path,
         limit: ByteLimit,
-        cancellation: &dyn CancellationSignal,
-    ) -> Result<Vec<u8>, FileSystemReadError> {
-        if cancellation.is_cancelled() {
-            return Err(FileSystemReadError::Cancelled);
-        }
-        let path = virtual_path(path)?;
+        cancellation: &CancellationToken,
+    ) -> Result<Vec<u8>, Outcome<FileSystemReadError>> {
+        cancellation.checkpoint()?;
+        let path = virtual_path(path).map_err(FileSystemReadError::Io)?;
         let bytes = self
             .files
             .get(&path)
             .map(FileContent::as_bytes)
-            .ok_or_else(|| not_found(&path))?;
+            .ok_or_else(|| not_found(&path))
+            .map_err(FileSystemReadError::Io)?;
         if bytes.len() as u64 > limit.get() {
-            return Err(FileSystemReadError::ByteLimitExceeded { limit });
+            return Err(FileSystemReadError::ByteLimitExceeded { limit }.into());
         }
         Ok(bytes.to_vec())
     }
@@ -211,14 +210,14 @@ impl FileSystemReader for InMemoryFileSystem {
         &self,
         path: &Path,
         limit: EntryLimit,
-        cancellation: &dyn CancellationSignal,
-    ) -> Result<Vec<OsString>, FileSystemReadError> {
-        let path = self.existing_path(path)?;
+        cancellation: &CancellationToken,
+    ) -> Result<Vec<OsString>, Outcome<FileSystemReadError>> {
+        let path = self.existing_path(path).map_err(FileSystemReadError::Io)?;
         if !self.is_dir(&path) {
-            return Err(io::Error::new(
+            return Err(FileSystemReadError::Io(io::Error::new(
                 io::ErrorKind::NotADirectory,
                 path.as_path().display().to_string(),
-            )
+            ))
             .into());
         }
         self.child_names_bounded(&path, limit, cancellation)
@@ -248,8 +247,15 @@ fn not_found(path: &VirtualAbsolutePath) -> io::Error {
 
 #[cfg(test)]
 mod tests {
+    fn io_kind(outcome: Outcome<FileSystemReadError>) -> Option<io::ErrorKind> {
+        match outcome {
+            Outcome::Failed(error) => error.io_kind(),
+            Outcome::Cancelled => None,
+        }
+    }
+
     use super::*;
-    use crate::{NeverCancel, RealFileSystem, VirtualPathError};
+    use crate::{RealFileSystem, VirtualPathError};
 
     const TEST_LIMIT: ByteLimit = ByteLimit::new(1024);
 
@@ -266,7 +272,11 @@ mod tests {
         )
         .unwrap();
         let content = fs
-            .read_to_string_bounded(Path::new("/project/main.gcl"), TEST_LIMIT, &NeverCancel)
+            .read_to_string_bounded(
+                Path::new("/project/main.gcl"),
+                TEST_LIMIT,
+                &CancellationToken::unbounded(),
+            )
             .unwrap();
         assert_eq!(content, "param x: Dimensionless = 1.0;");
     }
@@ -276,11 +286,15 @@ mod tests {
         let mut fs = InMemoryFileSystem::new();
         fs.add_binary_file(path("/large"), vec![0; 5]).unwrap();
         let error = fs
-            .read_bytes_bounded(Path::new("/large"), ByteLimit::new(4), &NeverCancel)
+            .read_bytes_bounded(
+                Path::new("/large"),
+                ByteLimit::new(4),
+                &CancellationToken::unbounded(),
+            )
             .unwrap_err();
         assert!(matches!(
             error,
-            FileSystemReadError::ByteLimitExceeded { .. }
+            Outcome::Failed(FileSystemReadError::ByteLimitExceeded { .. })
         ));
     }
 
@@ -291,21 +305,26 @@ mod tests {
         fs.add_binary_file(file.clone(), b"old".to_vec()).unwrap();
         fs.add_file(file.clone(), "new".to_string()).unwrap();
         assert_eq!(
-            fs.read_bytes_bounded(file.as_path(), TEST_LIMIT, &NeverCancel)
+            fs.read_bytes_bounded(file.as_path(), TEST_LIMIT, &CancellationToken::unbounded())
                 .unwrap(),
             b"new"
         );
 
         fs.add_binary_file(file.clone(), vec![0xff]).unwrap();
         assert_eq!(
-            fs.read_bytes_bounded(file.as_path(), TEST_LIMIT, &NeverCancel)
+            fs.read_bytes_bounded(file.as_path(), TEST_LIMIT, &CancellationToken::unbounded())
                 .unwrap(),
             vec![0xff]
         );
         assert_eq!(
-            fs.read_to_string_bounded(file.as_path(), TEST_LIMIT, &NeverCancel)
+            io_kind(
+                fs.read_to_string_bounded(
+                    file.as_path(),
+                    TEST_LIMIT,
+                    &CancellationToken::unbounded()
+                )
                 .unwrap_err()
-                .io_kind(),
+            ),
             Some(io::ErrorKind::InvalidData)
         );
     }
@@ -318,8 +337,12 @@ mod tests {
         fs.add_file(spelling, "model".to_string()).unwrap();
 
         assert_eq!(
-            fs.read_to_string_bounded(Path::new("/project/./model.gcl"), TEST_LIMIT, &NeverCancel)
-                .unwrap(),
+            fs.read_to_string_bounded(
+                Path::new("/project/./model.gcl"),
+                TEST_LIMIT,
+                &CancellationToken::unbounded()
+            )
+            .unwrap(),
             "model"
         );
         assert_eq!(
@@ -342,17 +365,25 @@ mod tests {
 
         let fs = InMemoryFileSystem::new();
         let error = fs
-            .read_bytes_bounded(Path::new("relative/model.gcl"), TEST_LIMIT, &NeverCancel)
+            .read_bytes_bounded(
+                Path::new("relative/model.gcl"),
+                TEST_LIMIT,
+                &CancellationToken::unbounded(),
+            )
             .unwrap_err();
-        assert_eq!(error.io_kind(), Some(io::ErrorKind::InvalidInput));
+        assert_eq!(io_kind(error), Some(io::ErrorKind::InvalidInput));
         assert!(!fs.exists(Path::new("/../model.gcl")));
     }
 
     #[test]
     fn in_memory_read_missing_file() {
         let fs = InMemoryFileSystem::new();
-        let result = fs.read_to_string_bounded(Path::new("/missing.gcl"), TEST_LIMIT, &NeverCancel);
-        assert_eq!(result.unwrap_err().io_kind(), Some(io::ErrorKind::NotFound));
+        let result = fs.read_to_string_bounded(
+            Path::new("/missing.gcl"),
+            TEST_LIMIT,
+            &CancellationToken::unbounded(),
+        );
+        assert_eq!(io_kind(result.unwrap_err()), Some(io::ErrorKind::NotFound));
     }
 
     #[test]
@@ -437,8 +468,12 @@ mod tests {
         assert!(fs.exists(Path::new("/project/sub")));
         assert!(!fs.exists(Path::new("/other")));
         assert_eq!(
-            fs.read_directory_bounded(Path::new("/project"), EntryLimit::new(2), &NeverCancel,)
-                .unwrap(),
+            fs.read_directory_bounded(
+                Path::new("/project"),
+                EntryLimit::new(2),
+                &CancellationToken::unbounded(),
+            )
+            .unwrap(),
             vec![OsString::from("other.gcl"), OsString::from("sub")]
         );
     }

@@ -18,7 +18,7 @@ use graphcal_compiler::syntax::ast::ModulePath;
 use graphcal_compiler::syntax::decl_name::DeclName;
 #[cfg(test)]
 use graphcal_io::hash_source_tree;
-use graphcal_io::{FileSystemEntryKind, FileSystemReadError, FileSystemReader, RealFileSystem};
+use graphcal_io::{FileSystemEntryKind, FileSystemReader, RealFileSystem};
 mod budget;
 pub(crate) mod budget_violation;
 mod build;
@@ -138,8 +138,7 @@ fn read_wasm_plugins<'a>(
             let identity = PluginIdentity::resolve(path, package);
             match plugins.entry(identity) {
                 std::collections::hash_map::Entry::Vacant(slot) => {
-                    let entry = read_plugin_file(package_root, path, fs, budget, cancellation);
-                    cancellation.checkpoint()?;
+                    let entry = read_plugin_file(package_root, path, fs, budget, cancellation)?;
                     slot.insert(entry);
                 }
                 std::collections::hash_map::Entry::Occupied(_) => {}
@@ -207,19 +206,29 @@ fn read_plugin_file(
     fs: &dyn FileSystemReader,
     budget: &mut LoaderBudgetState,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
-) -> PluginFileEntry {
-    let artifact = resolve_plugin_artifact_path(package_root, plugin, fs)?;
-    match budget.read_bytes(fs, &artifact.0, LoaderArtifact::Plugin, cancellation) {
-        Ok(bytes) => Ok(LoadedPlugin {
-            sha256_hex: hex_string(&Sha256::digest(&bytes)),
-            bytes: bytes.into(),
-        }),
-        Err(LoaderReadError::Budget(error)) => Err(PluginFileError::ResourceLimit(error)),
-        Err(LoaderReadError::Filesystem(error)) => Err(PluginFileError::Unreadable {
-            resolved: artifact.0,
-            message: error.to_string(),
-        }),
-    }
+) -> Result<PluginFileEntry, graphcal_compiler::cancellation::Cancelled> {
+    let artifact = match resolve_plugin_artifact_path(package_root, plugin, fs) {
+        Ok(artifact) => artifact,
+        Err(error) => return Ok(Err(error)),
+    };
+    Ok(
+        match budget.read_bytes(fs, &artifact.0, LoaderArtifact::Plugin, cancellation) {
+            Ok(bytes) => Ok(LoadedPlugin {
+                sha256_hex: hex_string(&Sha256::digest(&bytes)),
+                bytes: bytes.into(),
+            }),
+            Err(Outcome::Cancelled) => return Err(graphcal_compiler::cancellation::Cancelled),
+            Err(Outcome::Failed(LoaderReadError::Budget(error))) => {
+                Err(PluginFileError::ResourceLimit(error))
+            }
+            Err(Outcome::Failed(LoaderReadError::Filesystem(error))) => {
+                Err(PluginFileError::Unreadable {
+                    resolved: artifact.0,
+                    message: error.to_string(),
+                })
+            }
+        },
+    )
 }
 
 /// Enforce `graphcal.lock` pins on successfully read plugin files.
@@ -645,16 +654,13 @@ fn load_plugin_pins(
     let lockfile_text =
         match budget.read_text(fs, &lockfile_path, LoaderArtifact::Lockfile, cancellation) {
             Ok(text) => text,
-            Err(LoaderReadError::Filesystem(error))
+            Err(Outcome::Failed(LoaderReadError::Filesystem(error)))
                 if error.io_kind() == Some(std::io::ErrorKind::NotFound) =>
             {
                 return Ok(BTreeMap::new());
             }
-            Err(LoaderReadError::Filesystem(FileSystemReadError::Cancelled)) => {
-                cancellation.checkpoint()?;
-                return Err(loader_manifest_error("plugin lockfile read cancelled").into());
-            }
-            Err(error) => {
+            Err(Outcome::Cancelled) => return Err(Outcome::Cancelled),
+            Err(Outcome::Failed(error)) => {
                 return Err(loader_manifest_error(format!(
                     "could not read `{}`: {error}",
                     lockfile_path.display()
@@ -780,10 +786,12 @@ impl<'a> PackageLoadContext<'a> {
         let lockfile_path = project_root.join("graphcal.lock");
         let lockfile_text = budget
             .read_text(fs, &lockfile_path, LoaderArtifact::Lockfile, cancellation)
-            .map_err(|error| {
-                loader_manifest_error(format!(
+            .map_err(|outcome| {
+                outcome.map_failed(|error| {
+                    loader_manifest_error(format!(
                     "package dependencies require graphcal.lock; run `graphcal deps lock`: {error}"
-                ))
+                    ))
+                })
             })?;
         let lockfile =
             parse_lockfile_str_with_limits(&lockfile_text, budget.lockfile_parse_limits())
@@ -1057,29 +1065,15 @@ fn verify_locked_source(
         )
         .into());
     };
-    let cancellation_signal = || cancellation.is_cancelled();
     let source_dir = manifest.source_dir.to_path_buf();
     let snapshot = crate::package_snapshot::capture_package(
         fs,
         root,
         &source_dir,
         budget.source_tree_limits(),
-        &cancellation_signal,
+        cancellation,
     )
-    .map_err(|error| {
-        if matches!(
-            error,
-            crate::package_snapshot::PackageSnapshotError::Tree(
-                graphcal_io::SourceTreeHashError::Cancelled
-            )
-        ) {
-            cancellation
-                .checkpoint()
-                .map_or_else(Outcome::from, |()| loader_manifest_error(error).into())
-        } else {
-            loader_manifest_error(error).into()
-        }
-    })?;
+    .map_err(|outcome| outcome.map_failed(loader_manifest_error))?;
     let actual = snapshot.hash();
     budget
         .account_source_tree(root, actual.entries(), actual.bytes())
@@ -1102,17 +1096,19 @@ fn read_package_manifest_from_path(
     fs: &dyn FileSystemReader,
     budget: &mut LoaderBudgetState,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
-) -> Result<PackageManifest, CompileError> {
+) -> Result<PackageManifest, Outcome<CompileError>> {
     let manifest_path = root.join("graphcal.toml");
     let content = budget
         .read_text(fs, &manifest_path, LoaderArtifact::Manifest, cancellation)
-        .map_err(|error| {
-            loader_manifest_error(format!(
-                "could not read `{}`: {error}",
-                manifest_path.display()
-            ))
+        .map_err(|outcome| {
+            outcome.map_failed(|error| {
+                loader_manifest_error(format!(
+                    "could not read `{}`: {error}",
+                    manifest_path.display()
+                ))
+            })
         })?;
-    parse_manifest_str(&content).map_err(|error| loader_manifest_error(error.to_string()))
+    parse_manifest_str(&content).map_err(|error| loader_manifest_error(error.to_string()).into())
 }
 
 fn package_cache_root() -> Result<crate::package_cache::PackageCacheRoot, String> {
@@ -1237,18 +1233,20 @@ fn load_manifest_for_root<F: FileSystemReader>(
     fs: &F,
     budget: &mut LoaderBudgetState,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
-) -> Result<Option<PackageManifest>, CompileError> {
+) -> Result<Option<PackageManifest>, Outcome<CompileError>> {
     let manifest_path = project_root.join("graphcal.toml");
     if !fs.exists(&manifest_path) {
         return Ok(None);
     }
     let manifest_content = budget
         .read_text(fs, &manifest_path, LoaderArtifact::Manifest, cancellation)
-        .map_err(|error| {
-            loader_manifest_error(format!(
-                "could not read `{}`: {error}",
-                manifest_path.display()
-            ))
+        .map_err(|outcome| {
+            outcome.map_failed(|error| {
+                loader_manifest_error(format!(
+                    "could not read `{}`: {error}",
+                    manifest_path.display()
+                ))
+            })
         })?;
     let parsed = parse_manifest_str(&manifest_content)
         .map_err(|error| loader_manifest_error(error.to_string()))?;

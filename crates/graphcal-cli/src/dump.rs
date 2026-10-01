@@ -13,7 +13,7 @@ use graphcal_compiler::diagnostic_render::RenderableDiagnostic;
 use graphcal_compiler::syntax::ast::File;
 use graphcal_compiler::syntax::lexer::tokenize;
 use graphcal_compiler::syntax::parser::{ParseErrorKind, Parser};
-use graphcal_io::{ByteLimit, FileSystemReadError, FileSystemReader, NeverCancel};
+use graphcal_io::{ByteLimit, FileSystemReadError, FileSystemReader};
 use graphcal_project::compile_error::CompileError;
 use graphcal_project::loader::{build_rooted_filesystem, load_project};
 use graphcal_project::prepare::{ParameterBindingRow, PreparedProject};
@@ -266,18 +266,19 @@ struct SourceUnit {
 
 fn read_source(file: &Path, root: Option<&Path>) -> Result<SourceUnit, DumpError> {
     let fs = build_rooted_filesystem(file, root)?;
-    let bytes = fs
-        .read_bytes_bounded(file, ByteLimit::new(MAX_SOURCE_BYTES as u64), &NeverCancel)
-        .map_err(|error| match error {
-            FileSystemReadError::ByteLimitExceeded { .. } => DumpError::SourceTooLarge {
-                path: file.to_path_buf(),
-                limit: MAX_SOURCE_BYTES,
-            },
-            other => DumpError::SourceRead {
-                path: file.to_path_buf(),
-                source: std::io::Error::other(other),
-            },
-        })?;
+    let bytes = graphcal_compiler::outcome::without_cancellation(|cancellation| {
+        fs.read_bytes_bounded(file, ByteLimit::new(MAX_SOURCE_BYTES as u64), cancellation)
+    })
+    .map_err(|error| match error {
+        FileSystemReadError::ByteLimitExceeded { .. } => DumpError::SourceTooLarge {
+            path: file.to_path_buf(),
+            limit: MAX_SOURCE_BYTES,
+        },
+        other => DumpError::SourceRead {
+            path: file.to_path_buf(),
+            source: std::io::Error::other(other),
+        },
+    })?;
     let text = String::from_utf8(bytes).map_err(|_| DumpError::SourceEncoding {
         path: file.to_path_buf(),
     })?;

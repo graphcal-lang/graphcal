@@ -35,7 +35,7 @@ use thiserror::Error;
 use graphcal_eval::eval::{EvalOutputView, EvalResult, KeyRendering, format_number};
 use graphcal_eval::host_fns::HostFunctionRegistry;
 use graphcal_io::{
-    FileSystemEntryKind, FileSystemReader, NeverCancel, ProjectIngestionPolicy, RealFileSystem,
+    FileSystemEntryKind, FileSystemReader, ProjectIngestionPolicy, RealFileSystem,
     replace_file_atomically_if_unchanged,
 };
 use graphcal_project::compile_error::CompileError;
@@ -518,13 +518,16 @@ fn read_plugin_module_bounded(module_path: &Path) -> Result<Vec<u8>, String> {
         .entry_kind(module_path)
         .map_err(|error| error.to_string())?
     {
-        FileSystemEntryKind::File => fs
-            .read_bytes_bounded(
-                module_path,
-                ProjectIngestionPolicy::default().plugin(),
-                &NeverCancel,
-            )
-            .map_err(|error| error.to_string()),
+        FileSystemEntryKind::File => {
+            graphcal_compiler::outcome::without_cancellation(|cancellation| {
+                fs.read_bytes_bounded(
+                    module_path,
+                    ProjectIngestionPolicy::default().plugin(),
+                    cancellation,
+                )
+            })
+            .map_err(|error| error.to_string())
+        }
         FileSystemEntryKind::Directory
         | FileSystemEntryKind::Symlink
         | FileSystemEntryKind::Other => {

@@ -6,7 +6,8 @@ use std::path::{Path, PathBuf};
 
 use sha2::{Digest, Sha256};
 
-use crate::cancellation::CancellationSignal;
+use graphcal_compiler::{cancellation::CancellationToken, outcome::Outcome};
+
 use crate::limits::{ByteLimit, EntryLimit};
 
 /// Failure of a bounded filesystem read.
@@ -27,9 +28,6 @@ pub enum FileSystemReadError {
         /// Maximum accepted child count.
         limit: EntryLimit,
     },
-    /// The caller cancelled the read.
-    #[error("filesystem read cancelled")]
-    Cancelled,
 }
 
 impl FileSystemReadError {
@@ -38,10 +36,14 @@ impl FileSystemReadError {
     pub fn io_kind(&self) -> Option<io::ErrorKind> {
         match self {
             Self::Io(error) => Some(error.kind()),
-            Self::ByteLimitExceeded { .. } | Self::EntryLimitExceeded { .. } | Self::Cancelled => {
-                None
-            }
+            Self::ByteLimitExceeded { .. } | Self::EntryLimitExceeded { .. } => None,
         }
+    }
+}
+
+impl From<FileSystemReadError> for Outcome<FileSystemReadError> {
+    fn from(error: FileSystemReadError) -> Self {
+        Self::Failed(error)
     }
 }
 
@@ -93,13 +95,13 @@ pub enum FileSystemEntryKind {
 pub trait FileSystemReader {
     /// Read at most `limit` bytes. Implementations must reject an oversized
     /// regular file before allocating its declared full length and must check
-    /// `cancellation` while streaming.
+    /// `cancellation` while streaming and report it as [`Outcome::Cancelled`].
     fn read_bytes_bounded(
         &self,
         path: &Path,
         limit: ByteLimit,
-        cancellation: &dyn CancellationSignal,
-    ) -> Result<Vec<u8>, FileSystemReadError>;
+        cancellation: &CancellationToken,
+    ) -> Result<Vec<u8>, Outcome<FileSystemReadError>>;
 
     /// Hash one file without accepting more than `limit` bytes.
     ///
@@ -109,8 +111,8 @@ pub trait FileSystemReader {
         &self,
         path: &Path,
         limit: ByteLimit,
-        cancellation: &dyn CancellationSignal,
-    ) -> Result<BoundedFileHash, FileSystemReadError> {
+        cancellation: &CancellationToken,
+    ) -> Result<BoundedFileHash, Outcome<FileSystemReadError>> {
         let bytes = self.read_bytes_bounded(path, limit, cancellation)?;
         let digest: [u8; 32] = Sha256::digest(&bytes).into();
         Ok(BoundedFileHash::new(digest, bytes.len() as u64))
@@ -121,11 +123,11 @@ pub trait FileSystemReader {
         &self,
         path: &Path,
         limit: ByteLimit,
-        cancellation: &dyn CancellationSignal,
-    ) -> Result<String, FileSystemReadError> {
+        cancellation: &CancellationToken,
+    ) -> Result<String, Outcome<FileSystemReadError>> {
         let bytes = self.read_bytes_bounded(path, limit, cancellation)?;
         String::from_utf8(bytes).map_err(|error| {
-            FileSystemReadError::Io(io::Error::new(io::ErrorKind::InvalidData, error))
+            FileSystemReadError::Io(io::Error::new(io::ErrorKind::InvalidData, error)).into()
         })
     }
 
@@ -141,8 +143,8 @@ pub trait FileSystemReader {
         &self,
         path: &Path,
         limit: EntryLimit,
-        cancellation: &dyn CancellationSignal,
-    ) -> Result<Vec<OsString>, FileSystemReadError>;
+        cancellation: &CancellationToken,
+    ) -> Result<Vec<OsString>, Outcome<FileSystemReadError>>;
 
     /// Return `true` if `path` points to a regular file.
     fn is_file(&self, path: &Path) -> bool;
