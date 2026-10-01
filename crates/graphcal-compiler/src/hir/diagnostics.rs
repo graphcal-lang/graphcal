@@ -10,6 +10,7 @@ use crate::semantic_error::attribute::AttributeError;
 use crate::semantic_error::dimension::DimensionError;
 use crate::semantic_error::domain::DomainError;
 use crate::semantic_error::index::IndexError;
+use crate::semantic_error::module::ModuleError;
 use crate::semantic_error::name::NameError;
 use crate::semantic_error::plugin::PluginError;
 use crate::semantic_error::structure::StructError;
@@ -159,11 +160,13 @@ pub fn expr_lower_error_to_graphcal(err: &ExprLowerError, src: SourceId) -> Grap
             );
         }
         ExprLowerError::InvalidStaticBindingValue { name, span } => {
-            return GraphcalError::InvalidTypeLevelBindingValue {
-                name: name.to_string(),
+            return GraphcalError::located(
                 src,
-                span: (*span).into(),
-            };
+                *span,
+                ModuleError::InvalidTypeLevelBindingValue {
+                    name: name.to_string(),
+                },
+            );
         }
         ExprLowerError::UnknownLocalRef { name, span } => {
             return GraphcalError::located(
@@ -330,11 +333,13 @@ pub fn expr_lower_error_to_graphcal(err: &ExprLowerError, src: SourceId) -> Grap
             source: ModuleResolveError::UnknownModuleAlias { alias, .. },
             span,
         } => {
-            return GraphcalError::UnknownModule {
-                name: alias.to_string(),
+            return GraphcalError::located(
                 src,
-                span: (*span).into(),
-            };
+                *span,
+                ModuleError::UnknownModule {
+                    name: alias.to_string(),
+                },
+            );
         }
         ExprLowerError::ModuleResolve {
             source:

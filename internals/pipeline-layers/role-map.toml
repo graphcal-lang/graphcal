@@ -868,6 +868,11 @@ role = "contracts"
 
 [[module]]
 package = "compiler"
+path = ["semantic_error", "module"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
 path = ["graphcal_error"]
 role = "contracts"
 

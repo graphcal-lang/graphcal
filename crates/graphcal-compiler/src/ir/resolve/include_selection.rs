@@ -6,6 +6,7 @@ use thiserror::Error;
 
 use crate::desugar::desugared_ast::ImportItem;
 use crate::graphcal_error::GraphcalError;
+use crate::semantic_error::module::ModuleError;
 use crate::source_id::SourceId;
 use crate::syntax::import_category::ImportItemNamespace;
 use crate::syntax::names::NameAtom;
@@ -62,13 +63,15 @@ pub fn duplicate_include_producer_to_graphcal(
     error: DuplicateIncludeProducer,
     src: SourceId,
 ) -> GraphcalError {
-    GraphcalError::DuplicateIncludeSelection {
-        namespace: error.namespace,
-        name: error.name,
+    GraphcalError::located(
         src,
-        first: error.first.into(),
-        duplicate: error.duplicate.into(),
-    }
+        error.duplicate,
+        ModuleError::DuplicateIncludeSelection {
+            namespace: error.namespace,
+            name: error.name,
+            first: error.first,
+        },
+    )
 }
 
 #[cfg(test)]

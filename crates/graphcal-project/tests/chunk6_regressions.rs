@@ -7,6 +7,8 @@
 use std::collections::HashMap;
 
 use graphcal_compiler::graphcal_error::GraphcalError;
+use graphcal_compiler::semantic_error::SemanticErrorKind;
+use graphcal_compiler::semantic_error::module::ModuleError;
 
 use graphcal_compiler::graphcal_error::RenderedGraphcalError;
 use graphcal_io::RealFileSystem;
@@ -202,7 +204,10 @@ node result: Dimensionless = @calculation()::out;
     assert!(matches!(
         error,
         CompileError::Eval(RenderedGraphcalError {
-            error: GraphcalError::ImportAssertionItem { .. },
+            error: GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+                kind: SemanticErrorKind::Module(ModuleError::ImportAssertionItem { .. }),
+                ..
+            }),
             ..
         })
     ));
@@ -226,7 +231,10 @@ node result: Dimensionless = @calculation()::out;
     assert!(matches!(
         error,
         CompileError::Eval(RenderedGraphcalError {
-            error: GraphcalError::ImportPlotItem { .. },
+            error: GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+                kind: SemanticErrorKind::Module(ModuleError::ImportPlotItem { .. }),
+                ..
+            }),
             ..
         })
     ));
@@ -274,15 +282,27 @@ fn pure_import_outcome(
     match result {
         Ok(_) => PureImportOutcome::Success,
         Err(CompileError::Eval(RenderedGraphcalError {
-            error: GraphcalError::ImportRuntimeItem { .. },
+            error:
+                GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+                    kind: SemanticErrorKind::Module(ModuleError::ImportRuntimeItem { .. }),
+                    ..
+                }),
             ..
         })) => PureImportOutcome::RuntimeRejected,
         Err(CompileError::Eval(RenderedGraphcalError {
-            error: GraphcalError::ImportAssertionItem { .. },
+            error:
+                GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+                    kind: SemanticErrorKind::Module(ModuleError::ImportAssertionItem { .. }),
+                    ..
+                }),
             ..
         })) => PureImportOutcome::AssertionRejected,
         Err(CompileError::Eval(RenderedGraphcalError {
-            error: GraphcalError::ImportPlotItem { .. },
+            error:
+                GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+                    kind: SemanticErrorKind::Module(ModuleError::ImportPlotItem { .. }),
+                    ..
+                }),
             ..
         })) => PureImportOutcome::VisualizationRejected,
         Err(other) => panic!("unexpected pure-import result: {other:?}"),

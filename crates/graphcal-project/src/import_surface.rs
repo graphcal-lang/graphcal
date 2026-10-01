@@ -11,6 +11,7 @@ use graphcal_compiler::ir::module_interface::ModuleInterface;
 use graphcal_compiler::resolve::category::ExportedImportItemKind;
 use graphcal_compiler::resolve::namespace::Namespace;
 use graphcal_compiler::resolve::reserved_name::validate_reserved_name;
+use graphcal_compiler::semantic_error::module::ModuleError;
 use graphcal_compiler::semantic_error::name::NameError;
 use graphcal_compiler::source_id::SourceId;
 use graphcal_compiler::syntax::ast::{ImportItem, ImportItemNamespace};
@@ -77,17 +78,25 @@ pub fn import_item_not_found_error(
     span: Span,
 ) -> GraphcalError {
     interface.namespaces_of(name).map_or_else(
-        || GraphcalError::ImportNameNotFound {
-            name: name.to_string(),
-            file_path: file_path.to_string(),
-            src,
-            span: span.into(),
+        || {
+            GraphcalError::located(
+                src,
+                span,
+                ModuleError::ImportNameNotFound {
+                    name: name.to_string(),
+                    file_path: file_path.to_string(),
+                },
+            )
         },
-        |alternatives| GraphcalError::ImportCategoryMismatch {
-            file_path: file_path.to_string(),
-            mismatch: ImportItemCategoryMismatch::new(name.clone(), expected, alternatives),
-            src,
-            span: span.into(),
+        |alternatives| {
+            GraphcalError::located(
+                src,
+                span,
+                ModuleError::ImportCategoryMismatch {
+                    file_path: file_path.to_string(),
+                    mismatch: ImportItemCategoryMismatch::new(name.clone(), expected, alternatives),
+                },
+            )
         },
     )
 }
@@ -95,6 +104,7 @@ pub fn import_item_not_found_error(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use graphcal_compiler::semantic_error::SemanticErrorKind;
     use graphcal_compiler::syntax::parser::Parser;
 
     fn interface(source: &str) -> ModuleInterface {
@@ -121,7 +131,11 @@ mod tests {
             src(),
             Span::new(0, 3),
         ) {
-            GraphcalError::ImportCategoryMismatch { mismatch, .. } => assert_eq!(
+            GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+                kind:
+                    SemanticErrorKind::Module(ModuleError::ImportCategoryMismatch { mismatch, .. }),
+                ..
+            }) => assert_eq!(
                 mismatch,
                 ImportItemCategoryMismatch::new(
                     jpy,
@@ -143,7 +157,10 @@ mod tests {
                 src(),
                 Span::new(0, 7),
             ),
-            GraphcalError::ImportNameNotFound { .. }
+            GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+                kind: SemanticErrorKind::Module(ModuleError::ImportNameNotFound { .. }),
+                ..
+            })
         ));
     }
 }

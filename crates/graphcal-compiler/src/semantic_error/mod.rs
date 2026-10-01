@@ -14,6 +14,7 @@ pub mod dimension;
 pub mod domain;
 pub mod graph;
 pub mod index;
+pub mod module;
 pub mod name;
 pub mod plugin;
 pub mod structure;
@@ -35,6 +36,7 @@ pub enum SemanticErrorKind {
     Index(index::IndexError),
     Plugin(plugin::PluginError),
     Dimension(dimension::DimensionError),
+    Module(module::ModuleError),
     // KINDS
 }
 
@@ -51,6 +53,7 @@ impl SemanticErrorKind {
             Self::Index(kind) => kind,
             Self::Plugin(kind) => kind,
             Self::Dimension(kind) => kind,
+            Self::Module(kind) => kind,
             // DELEGATE
         }
     }
@@ -131,6 +134,12 @@ impl From<plugin::PluginError> for SemanticErrorKind {
 impl From<dimension::DimensionError> for SemanticErrorKind {
     fn from(kind: dimension::DimensionError) -> Self {
         Self::Dimension(kind)
+    }
+}
+
+impl From<module::ModuleError> for SemanticErrorKind {
+    fn from(kind: module::ModuleError) -> Self {
+        Self::Module(kind)
     }
 }
 

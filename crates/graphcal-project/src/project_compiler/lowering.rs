@@ -12,8 +12,10 @@ use graphcal_compiler::ir::static_dependencies::{ModuleDeclarations, StaticScope
 use graphcal_compiler::ir::static_substitution::StaticSubstitution;
 use graphcal_compiler::outcome::Outcome;
 use graphcal_compiler::resolved_name::{ResolvedDeclName, ResolvedDimName, ResolvedIndexName};
+use graphcal_compiler::semantic_error::SemanticErrorKind;
 use graphcal_compiler::semantic_error::dimension::DimensionError;
 use graphcal_compiler::semantic_error::index::IndexError;
+use graphcal_compiler::semantic_error::module::ModuleError;
 use graphcal_compiler::semantic_error::name::NameError;
 use graphcal_compiler::source_id::SourceId;
 
@@ -198,19 +200,18 @@ fn remap_imported_dynamic_unit_error(
         GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
             src,
             primary,
-            kind:
-                graphcal_compiler::semantic_error::SemanticErrorKind::Dimension(
-                    DimensionError::UnknownUnit { name },
-                ),
+            kind: SemanticErrorKind::Dimension(DimensionError::UnknownUnit { name }),
         }) if name.owner().is_some_and(|alias| {
             is_imported_dynamic_unit_during_lowering(alias, name.leaf(), module_map, project)
         }) =>
         {
-            GraphcalError::ImportRuntimeUnit {
-                name: name.to_string(),
+            GraphcalError::located(
                 src,
-                span: primary.into(),
-            }
+                primary,
+                ModuleError::ImportRuntimeUnit {
+                    name: name.to_string(),
+                },
+            )
         }
         other => other,
     }
@@ -240,11 +241,13 @@ pub(super) fn validate_imported_runtime_units(
         }
     });
     match invalid {
-        Some((unit, span)) => Err(GraphcalError::ImportRuntimeUnit {
-            name: unit.to_string(),
+        Some((unit, span)) => Err(GraphcalError::located(
             src,
-            span: span.into(),
-        }),
+            span,
+            ModuleError::ImportRuntimeUnit {
+                name: unit.to_string(),
+            },
+        )),
         None => Ok(()),
     }
 }
@@ -1288,14 +1291,16 @@ fn validate_index_binding_contracts(
         match contract.validate(&candidate) {
             Ok(()) => {}
             Err(IndexBindingContractError::KindMismatch { expected, found }) => {
-                return Err(PipelineError::Semantic(GraphcalError::IndexKindMismatch {
-                    dep_index: dep_index.to_string(),
-                    dep_kind: expected.to_string(),
-                    bound_index: site.authored.to_string(),
-                    bound_kind: found.to_string(),
-                    src: sites.importer_src,
-                    span: site.span.into(),
-                }));
+                return Err(PipelineError::Semantic(GraphcalError::located(
+                    sites.importer_src,
+                    site.span,
+                    ModuleError::IndexKindMismatch {
+                        dep_index: dep_index.to_string(),
+                        dep_kind: expected.to_string(),
+                        bound_index: site.authored.to_string(),
+                        bound_kind: found.to_string(),
+                    },
+                )));
             }
             Err(IndexBindingContractError::DimensionMismatch { expected, found }) => {
                 return Err(PipelineError::Semantic(GraphcalError::located(

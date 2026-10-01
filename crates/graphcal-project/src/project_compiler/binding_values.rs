@@ -5,6 +5,7 @@ use graphcal_compiler::desugar::desugared_ast::{Expr, ExprKind};
 use graphcal_compiler::graphcal_error::GraphcalError;
 use graphcal_compiler::semantic::index_def::IndexBindingTarget;
 use graphcal_compiler::semantic_error::index::IndexError;
+use graphcal_compiler::semantic_error::module::ModuleError;
 use graphcal_compiler::source_id::SourceId;
 use graphcal_compiler::syntax::index_name::IndexName;
 
@@ -23,11 +24,13 @@ pub(super) fn extract_index_binding_target(
     use graphcal_compiler::semantic::index_def::FiniteIndex;
 
     let invalid_binding = || {
-        PipelineError::Semantic(GraphcalError::InvalidTypeLevelBindingValue {
-            name: dep_index_name.to_string(),
-            src: file_src,
-            span: expr.span.into(),
-        })
+        PipelineError::Semantic(GraphcalError::located(
+            file_src,
+            expr.span,
+            ModuleError::InvalidTypeLevelBindingValue {
+                name: dep_index_name.to_string(),
+            },
+        ))
     };
     match expr.index_binding_arg().ok_or_else(invalid_binding)? {
         IndexExpr::Name(path) => path
@@ -96,11 +99,13 @@ pub(super) fn extract_type_name_from_binding_expr(
     file_src: SourceId,
 ) -> Result<String, PipelineError> {
     let invalid_binding = || {
-        PipelineError::Semantic(GraphcalError::InvalidTypeLevelBindingValue {
-            name: dep_type_name.to_string(),
-            src: file_src,
-            span: expr.span.into(),
-        })
+        PipelineError::Semantic(GraphcalError::located(
+            file_src,
+            expr.span,
+            ModuleError::InvalidTypeLevelBindingValue {
+                name: dep_type_name.to_string(),
+            },
+        ))
     };
     match &expr.kind {
         ExprKind::UnresolvedRef(graphcal_compiler::syntax::ast::UnresolvedRef::Path(path)) => path

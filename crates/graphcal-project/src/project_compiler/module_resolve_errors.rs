@@ -1,6 +1,7 @@
 //! Project diagnostics for module-resolution failures.
 
 use graphcal_compiler::graphcal_error::GraphcalError;
+use graphcal_compiler::semantic_error::module::ModuleError;
 use graphcal_compiler::semantic_error::name::NameError;
 use graphcal_compiler::semantic_error::visibility::VisibilityError;
 use graphcal_compiler::source_id::SourceId;
@@ -36,32 +37,38 @@ pub(super) fn module_resolve_compile_error(
             owner,
             mismatch,
             span,
-        } => PipelineError::Semantic(GraphcalError::ImportCategoryMismatch {
-            file_path: owner.to_string(),
-            mismatch,
+        } => PipelineError::Semantic(GraphcalError::located(
             src,
-            span: span.into(),
-        }),
+            span,
+            ModuleError::ImportCategoryMismatch {
+                file_path: owner.to_string(),
+                mismatch,
+            },
+        )),
         graphcal_compiler::resolve::error::ModuleResolveError::IncludeItemNotProjectable {
             name,
             span,
             ..
-        } => PipelineError::Semantic(GraphcalError::IncludeItemNotProjectable {
-            name: name.to_string(),
+        } => PipelineError::Semantic(GraphcalError::located(
             src,
-            span: span.into(),
-        }),
+            span,
+            ModuleError::IncludeItemNotProjectable {
+                name: name.to_string(),
+            },
+        )),
         graphcal_compiler::resolve::error::ModuleResolveError::ConstructorOwnerRebound {
             constructor,
             owner_type,
             span,
             ..
-        } => PipelineError::Semantic(GraphcalError::IncludeConstructorOwnerRebound {
-            constructor: constructor.to_string(),
-            owner_type: owner_type.to_string(),
+        } => PipelineError::Semantic(GraphcalError::located(
             src,
-            span: span.into(),
-        }),
+            span,
+            ModuleError::IncludeConstructorOwnerRebound {
+                constructor: constructor.to_string(),
+                owner_type: owner_type.to_string(),
+            },
+        )),
         graphcal_compiler::resolve::error::ModuleResolveError::DuplicateSymbol {
             name,
             first,

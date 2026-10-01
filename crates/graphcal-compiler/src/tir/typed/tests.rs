@@ -438,10 +438,7 @@ fn field_constraint_hir_error_uses_definition_source() {
         GraphcalError::Located(crate::diagnostic::Diagnostic {
             src,
             primary: span,
-            kind:
-                crate::semantic_error::SemanticErrorKind::Dimension(DimensionError::UnknownUnit {
-                    name,
-                }),
+            kind: SemanticErrorKind::Dimension(DimensionError::UnknownUnit { name }),
         }) => {
             assert_eq!(name.to_string(), "missing");
             assert_eq!(src, schema_src);

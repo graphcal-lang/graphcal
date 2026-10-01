@@ -11,6 +11,7 @@ use std::collections::{HashMap, HashSet};
 use crate::desugar::desugared_ast::{DeclKind, Declaration, ImportDecl, ImportKind};
 use crate::graphcal_error::GraphcalError;
 use crate::ir::resolve::collected::ExternalDeclSurface;
+use crate::semantic_error::module::ModuleError;
 use crate::source_id::SourceId;
 use crate::static_interface::{StaticInputKind, StaticInterface, StaticRole, static_interface};
 use crate::syntax::ast::{DeclExposure, ImportItemNamespace, IntroducedKind};
@@ -89,11 +90,16 @@ impl PureImportRejection {
     #[must_use]
     pub fn diagnostic(self, name: &NameAtom, src: SourceId, span: Span) -> GraphcalError {
         let name = name.to_string();
-        let span = span.into();
         match self {
-            Self::Runtime => GraphcalError::ImportRuntimeItem { name, src, span },
-            Self::Assertion => GraphcalError::ImportAssertionItem { name, src, span },
-            Self::Visualization => GraphcalError::ImportPlotItem { name, src, span },
+            Self::Runtime => {
+                GraphcalError::located(src, span, ModuleError::ImportRuntimeItem { name })
+            }
+            Self::Assertion => {
+                GraphcalError::located(src, span, ModuleError::ImportAssertionItem { name })
+            }
+            Self::Visualization => {
+                GraphcalError::located(src, span, ModuleError::ImportPlotItem { name })
+            }
         }
     }
 }
@@ -474,6 +480,7 @@ impl ModuleInterface {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::semantic_error::SemanticErrorKind;
     use crate::syntax::parser::Parser;
 
     fn interface(source: &str) -> ModuleInterface {
@@ -607,15 +614,24 @@ mod tests {
         let span = Span::new(0, 0);
         assert!(matches!(
             PureImportRejection::Runtime.diagnostic(&atom("x"), src, span),
-            GraphcalError::ImportRuntimeItem { .. }
+            GraphcalError::Located(crate::diagnostic::Diagnostic {
+                kind: SemanticErrorKind::Module(ModuleError::ImportRuntimeItem { .. }),
+                ..
+            })
         ));
         assert!(matches!(
             PureImportRejection::Assertion.diagnostic(&atom("x"), src, span),
-            GraphcalError::ImportAssertionItem { .. }
+            GraphcalError::Located(crate::diagnostic::Diagnostic {
+                kind: SemanticErrorKind::Module(ModuleError::ImportAssertionItem { .. }),
+                ..
+            })
         ));
         assert!(matches!(
             PureImportRejection::Visualization.diagnostic(&atom("x"), src, span),
-            GraphcalError::ImportPlotItem { .. }
+            GraphcalError::Located(crate::diagnostic::Diagnostic {
+                kind: SemanticErrorKind::Module(ModuleError::ImportPlotItem { .. }),
+                ..
+            })
         ));
     }
 

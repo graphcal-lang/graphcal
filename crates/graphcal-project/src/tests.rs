@@ -23,6 +23,7 @@ use graphcal_compiler::semantic_error::dimension::DimensionError;
 use graphcal_compiler::semantic_error::domain::DomainError;
 use graphcal_compiler::semantic_error::graph::GraphError;
 use graphcal_compiler::semantic_error::index::IndexError;
+use graphcal_compiler::semantic_error::module::ModuleError;
 use graphcal_compiler::semantic_error::name::NameError;
 use graphcal_compiler::semantic_error::structure::StructError;
 use graphcal_compiler::semantic_error::visibility::VisibilityError;
@@ -1302,7 +1303,7 @@ fn selective_import_rejects_required_static_inputs() {
         let error = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap_err();
         assert!(matches!(
             error,
-            CompileError::Eval(RenderedGraphcalError { error: GraphcalError::ImportRequiredStaticInput { kind, .. }, .. })
+            CompileError::Eval(RenderedGraphcalError { error: GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic { kind: SemanticErrorKind::Module(ModuleError::ImportRequiredStaticInput { kind, .. }), .. }), .. })
                 if kind == expected_kind
         ));
     }
@@ -1326,7 +1327,10 @@ fn qualified_import_rejects_required_static_members() {
     assert!(matches!(
         error,
         CompileError::Eval(RenderedGraphcalError {
-            error: GraphcalError::ImportRequiredStaticInput { .. },
+            error: GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+                kind: SemanticErrorKind::Module(ModuleError::ImportRequiredStaticInput { .. }),
+                ..
+            }),
             ..
         })
     ));
@@ -1354,11 +1358,7 @@ fn qualified_import_rejects_transitive_required_static_dependencies() {
     let error = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap_err();
     assert!(matches!(
         error,
-        CompileError::Eval(RenderedGraphcalError { error: GraphcalError::ImportUnresolvedStaticDependency {
-            dependency_kind: graphcal_compiler::static_interface::StaticInputKind::Type,
-            ref dependency,
-            ..
-        }, .. }) if dependency == "Element"
+        CompileError::Eval(RenderedGraphcalError { error: GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic { kind: SemanticErrorKind::Module(ModuleError::ImportUnresolvedStaticDependency { dependency_kind: graphcal_compiler::static_interface::StaticInputKind::Type, dependency, .. }), .. }), .. }) if dependency == "Element"
     ));
 }
 
@@ -1383,11 +1383,7 @@ fn qualified_import_resolves_ambiguous_static_dependencies_to_their_symbol() {
     let error = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap_err();
     assert!(matches!(
         error,
-        CompileError::Eval(RenderedGraphcalError { error: GraphcalError::ImportUnresolvedStaticDependency {
-            dependency_kind: graphcal_compiler::static_interface::StaticInputKind::Dimension,
-            ref dependency,
-            ..
-        }, .. }) if dependency == "Basis"
+        CompileError::Eval(RenderedGraphcalError { error: GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic { kind: SemanticErrorKind::Module(ModuleError::ImportUnresolvedStaticDependency { dependency_kind: graphcal_compiler::static_interface::StaticInputKind::Dimension, dependency, .. }), .. }), .. }) if dependency == "Basis"
     ));
 }
 
@@ -1411,11 +1407,7 @@ fn selective_import_rejects_transitive_required_static_dependencies() {
     let error = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap_err();
     assert!(matches!(
         error,
-        CompileError::Eval(RenderedGraphcalError { error: GraphcalError::ImportUnresolvedStaticDependency {
-            dependency_kind: graphcal_compiler::static_interface::StaticInputKind::Type,
-            ref dependency,
-            ..
-        }, .. }) if dependency == "Element"
+        CompileError::Eval(RenderedGraphcalError { error: GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic { kind: SemanticErrorKind::Module(ModuleError::ImportUnresolvedStaticDependency { dependency_kind: graphcal_compiler::static_interface::StaticInputKind::Type, dependency, .. }), .. }), .. }) if dependency == "Element"
     ));
 }
 
@@ -1945,10 +1937,7 @@ fn selective_include_rejects_dag_blueprint_projection() {
     let error = compile_and_eval(source).unwrap_err();
     assert!(matches!(
         error,
-        CompileError::Eval(RenderedGraphcalError { error: GraphcalError::IncludeItemNotProjectable {
-            ref name,
-            ..
-        }, .. }) if name == "child"
+        CompileError::Eval(RenderedGraphcalError { error: GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic { kind: SemanticErrorKind::Module(ModuleError::IncludeItemNotProjectable { name, .. }), .. }), .. }) if name == "child"
     ));
 }
 
@@ -1961,11 +1950,7 @@ fn selective_include_rejects_constructor_of_rebound_owner_type() {
     let error = compile_and_eval(source).unwrap_err();
     assert!(matches!(
         error,
-        CompileError::Eval(RenderedGraphcalError { error: GraphcalError::IncludeConstructorOwnerRebound {
-            ref constructor,
-            ref owner_type,
-            ..
-        }, .. }) if constructor == "Pick" && owner_type.ends_with("Choice")
+        CompileError::Eval(RenderedGraphcalError { error: GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic { kind: SemanticErrorKind::Module(ModuleError::IncludeConstructorOwnerRebound { constructor, owner_type, .. }), .. }), .. }) if constructor == "Pick" && owner_type.ends_with("Choice")
     ));
 }
 
@@ -2007,12 +1992,7 @@ fn include_rejects_required_static_inputs_as_binding_targets() {
     let error = compile_and_eval(source).unwrap_err();
     assert!(matches!(
         error,
-        CompileError::Eval(RenderedGraphcalError { error: GraphcalError::InvalidStaticBindingTarget {
-            kind: graphcal_compiler::static_interface::StaticInputKind::Type,
-            ref name,
-            ref target,
-            ..
-        }, .. }) if name == "Slot" && target == "Replacement"
+        CompileError::Eval(RenderedGraphcalError { error: GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic { kind: SemanticErrorKind::Module(ModuleError::InvalidStaticBindingTarget { kind: graphcal_compiler::static_interface::StaticInputKind::Type, name, target, .. }), .. }), .. }) if name == "Slot" && target == "Replacement"
     ));
 }
 
@@ -2069,10 +2049,13 @@ fn fixed_static_declarations_are_not_binding_ports() {
     assert!(matches!(
         error,
         CompileError::Eval(RenderedGraphcalError {
-            error: GraphcalError::DagInputCategoryMismatch {
-                expected: "type",
+            error: GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+                kind: SemanticErrorKind::Module(ModuleError::DagInputCategoryMismatch {
+                    expected: "type",
+                    ..
+                }),
                 ..
-            },
+            }),
             ..
         })
     ));
@@ -2444,7 +2427,10 @@ fn repeated_include_producers_are_rejected_before_metadata_maps() {
         assert!(matches!(
             error,
             CompileError::Eval(RenderedGraphcalError {
-                error: GraphcalError::DuplicateIncludeSelection { .. },
+                error: GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+                    kind: SemanticErrorKind::Module(ModuleError::DuplicateIncludeSelection { .. }),
+                    ..
+                }),
                 ..
             })
         ));
@@ -2460,7 +2446,10 @@ fn repeated_include_producers_are_rejected_before_metadata_maps() {
         assert!(matches!(
             error,
             CompileError::Eval(RenderedGraphcalError {
-                error: GraphcalError::DuplicateIncludeSelection { .. },
+                error: GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+                    kind: SemanticErrorKind::Module(ModuleError::DuplicateIncludeSelection { .. }),
+                    ..
+                }),
                 ..
             })
         ));
@@ -2774,7 +2763,10 @@ fn pure_imports_reject_assertion_outcomes_and_runtime_unit_scales() {
         matches!(
             assertion_error,
             CompileError::Eval(RenderedGraphcalError {
-                error: GraphcalError::ImportAssertionItem { .. },
+                error: GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+                    kind: SemanticErrorKind::Module(ModuleError::ImportAssertionItem { .. }),
+                    ..
+                }),
                 ..
             })
         ),
@@ -2800,7 +2792,10 @@ fn pure_imports_reject_assertion_outcomes_and_runtime_unit_scales() {
         matches!(
             unit_error,
             CompileError::Eval(RenderedGraphcalError {
-                error: GraphcalError::ImportRuntimeUnit { .. },
+                error: GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+                    kind: SemanticErrorKind::Module(ModuleError::ImportRuntimeUnit { .. }),
+                    ..
+                }),
                 ..
             })
         ),
@@ -2818,7 +2813,10 @@ fn pure_imports_reject_assertion_outcomes_and_runtime_unit_scales() {
         matches!(
             unit_definition_error,
             CompileError::Eval(RenderedGraphcalError {
-                error: GraphcalError::ImportRuntimeUnit { .. },
+                error: GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+                    kind: SemanticErrorKind::Module(ModuleError::ImportRuntimeUnit { .. }),
+                    ..
+                }),
                 ..
             })
         ),
@@ -2836,7 +2834,10 @@ fn pure_imports_reject_assertion_outcomes_and_runtime_unit_scales() {
         matches!(
             constant_scale_runtime_error,
             CompileError::Eval(RenderedGraphcalError {
-                error: GraphcalError::ImportRuntimeUnit { .. },
+                error: GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+                    kind: SemanticErrorKind::Module(ModuleError::ImportRuntimeUnit { .. }),
+                    ..
+                }),
                 ..
             })
         ),
@@ -6361,7 +6362,11 @@ fn project_module_includes_still_reject_duplicate_default_aliases() {
 
     match compile_and_eval_project(&root, &HashMap::new(), None, &fs()) {
         Err(CompileError::Eval(RenderedGraphcalError {
-            error: GraphcalError::DuplicateModuleName { name, .. },
+            error:
+                GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+                    kind: SemanticErrorKind::Module(ModuleError::DuplicateModuleName { name, .. }),
+                    ..
+                }),
             ..
         })) => {
             assert_eq!(name, "shared");
@@ -8318,11 +8323,15 @@ fn project_injectable_index_kind_mismatch() {
     match result {
         Err(CompileError::Eval(RenderedGraphcalError {
             error:
-                GraphcalError::IndexKindMismatch {
-                    dep_index,
-                    bound_index,
+                GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+                    kind:
+                        SemanticErrorKind::Module(ModuleError::IndexKindMismatch {
+                            dep_index,
+                            bound_index,
+                            ..
+                        }),
                     ..
-                },
+                }),
             ..
         })) => {
             assert_eq!(dep_index, "Phase");
@@ -8688,7 +8697,12 @@ fn selective_import_wrong_category_preserves_marker_and_alternatives() {
 
     let error = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap_err();
     let CompileError::Eval(RenderedGraphcalError {
-        error: GraphcalError::ImportCategoryMismatch { mismatch, .. },
+        error:
+            GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+                kind:
+                    SemanticErrorKind::Module(ModuleError::ImportCategoryMismatch { mismatch, .. }),
+                ..
+            }),
         ..
     }) = error
     else {
@@ -8773,13 +8787,17 @@ include pass_through(
     match result {
         Err(CompileError::Eval(RenderedGraphcalError {
             error:
-                GraphcalError::IndexKindMismatch {
-                    dep_index,
-                    dep_kind,
-                    bound_index,
-                    bound_kind,
+                GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+                    kind:
+                        SemanticErrorKind::Module(ModuleError::IndexKindMismatch {
+                            dep_index,
+                            dep_kind,
+                            bound_index,
+                            bound_kind,
+                            ..
+                        }),
                     ..
-                },
+                }),
             ..
         })) => {
             assert_eq!(dep_index, "Step");
@@ -9564,7 +9582,7 @@ fn absolute_inline_call_path_reports_imported_name_diagnostic() {
     let err = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap_err();
     assert!(matches!(
         err,
-        CompileError::Eval(RenderedGraphcalError { error: GraphcalError::UnknownModule { name, .. }, .. }) if name == "callable"
+        CompileError::Eval(RenderedGraphcalError { error: GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic { kind: SemanticErrorKind::Module(ModuleError::UnknownModule { name, .. }), .. }), .. }) if name == "callable"
     ));
 }
 

@@ -17,6 +17,7 @@ use graphcal_compiler::semantic::index_def::IndexBindingTarget;
 use graphcal_compiler::semantic_error::attribute::AttributeError;
 use graphcal_compiler::semantic_error::graph::GraphError;
 use graphcal_compiler::semantic_error::index::IndexError;
+use graphcal_compiler::semantic_error::module::ModuleError;
 use graphcal_compiler::semantic_error::name::NameError;
 use graphcal_compiler::semantic_error::visibility::VisibilityError;
 use graphcal_compiler::source_id::SourceId;
@@ -254,12 +255,14 @@ fn ensure_include_item_selectable(
                 file_path: file_path.to_string(),
             },
         ))),
-        None => Err(PipelineError::Semantic(GraphcalError::ImportNameNotFound {
-            name: name.to_string(),
-            file_path: file_path.to_string(),
-            src: file_src,
-            span: span.into(),
-        })),
+        None => Err(PipelineError::Semantic(GraphcalError::located(
+            file_src,
+            span,
+            ModuleError::ImportNameNotFound {
+                name: name.to_string(),
+                file_path: file_path.to_string(),
+            },
+        ))),
     }
 }
 
@@ -272,23 +275,27 @@ fn validate_static_import_capability(
 ) -> Result<(), PipelineError> {
     match static_import_rejection(dependency, name, namespace) {
         None => Ok(()),
-        Some(StaticImportRejection::RequiredInput { kind, name }) => Err(PipelineError::Semantic(
-            GraphcalError::ImportRequiredStaticInput {
-                kind,
-                name: name.to_string(),
+        Some(StaticImportRejection::RequiredInput { kind, name }) => {
+            Err(PipelineError::Semantic(GraphcalError::located(
                 src,
-                span: span.into(),
-            },
-        )),
-        Some(StaticImportRejection::UnresolvedDependency(dependency)) => Err(
-            PipelineError::Semantic(GraphcalError::ImportUnresolvedStaticDependency {
-                name: name.to_string(),
-                dependency_kind: dependency.kind(),
-                dependency: dependency.name().to_string(),
+                span,
+                ModuleError::ImportRequiredStaticInput {
+                    kind,
+                    name: name.to_string(),
+                },
+            )))
+        }
+        Some(StaticImportRejection::UnresolvedDependency(dependency)) => {
+            Err(PipelineError::Semantic(GraphcalError::located(
                 src,
-                span: span.into(),
-            }),
-        ),
+                span,
+                ModuleError::ImportUnresolvedStaticDependency {
+                    name: name.to_string(),
+                    dependency_kind: dependency.kind(),
+                    dependency: dependency.name().to_string(),
+                },
+            )))
+        }
     }
 }
 
@@ -335,11 +342,13 @@ fn reject_runtime_unit_import(
 ) -> Result<(), PipelineError> {
     let unit_name = graphcal_compiler::syntax::dimension::UnitName::classify(name.clone());
     if dep.runtime_units().contains(&unit_name) {
-        return Err(PipelineError::Semantic(GraphcalError::ImportRuntimeUnit {
-            name: name.to_string(),
+        return Err(PipelineError::Semantic(GraphcalError::located(
             src,
-            span: span.into(),
-        }));
+            span,
+            ModuleError::ImportRuntimeUnit {
+                name: name.to_string(),
+            },
+        )));
     }
     Ok(())
 }
@@ -574,12 +583,14 @@ fn resolve_include_static_bindings(
                     .resolve_index_path(scope.owner(), &NamePath::local(target.atom().clone()))
                     .map(SymbolRef::into_resolved)
                     .map_err(|_| {
-                        PipelineError::Semantic(GraphcalError::IndexBindingNotAnIndex {
-                            dep_index: port.to_string(),
-                            value: authored.to_string(),
+                        PipelineError::Semantic(GraphcalError::located(
                             src,
-                            span: span.into(),
-                        })
+                            span,
+                            ModuleError::IndexBindingNotAnIndex {
+                                dep_index: port.to_string(),
+                                value: authored.to_string(),
+                            },
+                        ))
                     })?,
             ),
             IndexBindingTarget::Finite(finite) => InstanceIndexBindingTarget::Finite(*finite),
@@ -691,25 +702,29 @@ fn classify_param_bindings(
             }
             InputBindingCategory::Unmarked => {
                 if let Some(kind) = non_param_binding_kind(dep, binding_name.atom()) {
-                    return Err(PipelineError::Semantic(GraphcalError::BindingNotAParam {
-                        name: binding_name.to_string(),
-                        actual_kind: kind,
-                        src: file_src,
-                        span: binding.name.span.into(),
-                    }));
+                    return Err(PipelineError::Semantic(GraphcalError::located(
+                        file_src,
+                        binding.name.span,
+                        ModuleError::BindingNotAParam {
+                            name: binding_name.to_string(),
+                            actual_kind: kind,
+                        },
+                    )));
                 }
-                return Err(PipelineError::Semantic(
-                    GraphcalError::UnknownParamBinding {
+                return Err(PipelineError::Semantic(GraphcalError::located(
+                    file_src,
+                    binding.name.span,
+                    ModuleError::UnknownParamBinding {
                         name: binding_name.to_string(),
                         file_path: dep_path_for_error.to_string(),
-                        src: file_src,
-                        span: binding.name.span.into(),
                     },
-                ));
+                )));
             }
             category => {
-                return Err(PipelineError::Semantic(
-                    GraphcalError::DagInputCategoryMismatch {
+                return Err(PipelineError::Semantic(GraphcalError::located(
+                    file_src,
+                    binding.name.span,
+                    ModuleError::DagInputCategoryMismatch {
                         name: binding_name.to_string(),
                         expected: match category {
                             InputBindingCategory::Unmarked => "param",
@@ -717,10 +732,8 @@ fn classify_param_bindings(
                             InputBindingCategory::Dimension => "dim",
                             InputBindingCategory::Index => "index",
                         },
-                        src: file_src,
-                        span: binding.name.span.into(),
                     },
-                ));
+                )));
             }
         }
     }
@@ -782,15 +795,11 @@ fn validate_concrete_static_binding_targets(
     });
     match invalid_type.or(invalid_dimension).or(invalid_index) {
         None => Ok(()),
-        Some((kind, name, target)) => Err(PipelineError::Semantic(
-            GraphcalError::InvalidStaticBindingTarget {
-                kind,
-                name,
-                target,
-                src: file_src,
-                span: include_span.into(),
-            },
-        )),
+        Some((kind, name, target)) => Err(PipelineError::Semantic(GraphcalError::located(
+            file_src,
+            include_span,
+            ModuleError::InvalidStaticBindingTarget { kind, name, target },
+        ))),
     }
 }
 
@@ -953,14 +962,14 @@ pub(super) fn process_file_include<'a>(
     let instance_scope = include_decl.instance_scope();
     if let ScopeSegment::Named(prefix) = &instance_scope {
         if let Some(first) = ctx.module_map.get(prefix) {
-            return Err(PipelineError::Semantic(
-                GraphcalError::DuplicateModuleName {
+            return Err(PipelineError::Semantic(GraphcalError::located(
+                file_src,
+                include_decl.path.span(),
+                ModuleError::DuplicateModuleName {
                     name: prefix.to_string(),
-                    first: first.span().into(),
-                    src: file_src,
-                    span: include_decl.path.span().into(),
+                    first: first.span(),
                 },
-            ));
+            )));
         }
         ctx.module_map.insert(
             prefix.clone(),
@@ -1203,14 +1212,14 @@ pub(super) fn process_inline_dag_include<'a>(
     let instance_scope = include_decl.instance_scope();
     if let ScopeSegment::Named(prefix) = &instance_scope {
         if let Some(first) = ctx.module_map.get(prefix) {
-            return Err(PipelineError::Semantic(
-                GraphcalError::DuplicateModuleName {
+            return Err(PipelineError::Semantic(GraphcalError::located(
+                file_src,
+                include_decl.path.span(),
+                ModuleError::DuplicateModuleName {
                     name: prefix.to_string(),
-                    first: first.span().into(),
-                    src: file_src,
-                    span: include_decl.path.span().into(),
+                    first: first.span(),
                 },
-            ));
+            )));
         }
         ctx.module_map.insert(
             prefix.clone(),
@@ -1545,12 +1554,14 @@ pub(super) fn process_pure_import<'a>(
                     })
                     .or_else(|| dep_interface.pure_import_term_disposition(orig_name.atom()))
                     .ok_or_else(|| {
-                        PipelineError::Semantic(GraphcalError::ImportNameNotFound {
-                            name: orig_name.to_string(),
-                            file_path: import_path.display_path(),
-                            src: file_src,
-                            span: import_item.name.span.into(),
-                        })
+                        PipelineError::Semantic(GraphcalError::located(
+                            file_src,
+                            import_item.name.span,
+                            ModuleError::ImportNameNotFound {
+                                name: orig_name.to_string(),
+                                file_path: import_path.display_path(),
+                            },
+                        ))
                     })?;
                 let is_visualization = matches!(
                     disposition,
@@ -1609,14 +1620,14 @@ pub(super) fn process_pure_import<'a>(
                 |alias_ident| alias_ident.value.clone(),
             );
             if let Some(first) = ctx.module_map.get(&module_name) {
-                return Err(PipelineError::Semantic(
-                    GraphcalError::DuplicateModuleName {
+                return Err(PipelineError::Semantic(GraphcalError::located(
+                    file_src,
+                    import_path.span(),
+                    ModuleError::DuplicateModuleName {
                         name: module_name.to_string(),
-                        first: first.span().into(),
-                        src: file_src,
-                        span: import_path.span().into(),
+                        first: first.span(),
                     },
-                ));
+                )));
             }
             validate_qualified_static_import_references(
                 importer,

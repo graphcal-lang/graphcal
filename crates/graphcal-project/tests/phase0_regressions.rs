@@ -15,6 +15,7 @@ use graphcal_compiler::semantic_error::SemanticErrorKind;
 use graphcal_compiler::semantic_error::attribute::AttributeError;
 use graphcal_compiler::semantic_error::dimension::DimensionError;
 use graphcal_compiler::semantic_error::index::IndexError;
+use graphcal_compiler::semantic_error::module::ModuleError;
 use graphcal_compiler::semantic_error::name::NameError;
 use graphcal_compiler::semantic_error::plugin::PluginError;
 
@@ -204,7 +205,10 @@ fn reexported_assertions_and_plots_keep_pure_import_rejections() {
     assert!(matches!(
         assertion,
         Err(CompileError::Eval(RenderedGraphcalError {
-            error: GraphcalError::ImportAssertionItem { .. },
+            error: GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+                kind: SemanticErrorKind::Module(ModuleError::ImportAssertionItem { .. }),
+                ..
+            }),
             ..
         }))
     ));
@@ -219,7 +223,10 @@ fn reexported_assertions_and_plots_keep_pure_import_rejections() {
     assert!(matches!(
         plot,
         Err(CompileError::Eval(RenderedGraphcalError {
-            error: GraphcalError::ImportPlotItem { .. },
+            error: GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+                kind: SemanticErrorKind::Module(ModuleError::ImportPlotItem { .. }),
+                ..
+            }),
             ..
         }))
     ));
