@@ -538,7 +538,7 @@ fn nested_presentation_computation_abort_classification_is_not_contained() {
             &values,
             &context(graphcal_compiler::cancellation::CancellationToken::unbounded())
         ),
-        Err(Outcome::Failed(GraphcalError::Internal(_)))
+        Err(Outcome::Failed(SemanticError::Internal(_)))
     ));
     // The outer presentation checkpoint succeeds; the unit-body evaluator cancels.
     assert!(matches!(graphcal_eval::eval_expr::resolve_presentation(evidence(target), &values, &context(graphcal_compiler::cancellation::CancellationToken::cancel_after_successful_checkpoints(1))), Err(Outcome::Cancelled)));

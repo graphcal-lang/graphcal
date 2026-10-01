@@ -6,12 +6,12 @@
 
 use std::collections::HashMap;
 
-use graphcal_compiler::graphcal_error::GraphcalError;
+use graphcal_compiler::semantic_error::SemanticError;
 use graphcal_compiler::semantic_error::SemanticErrorKind;
 use graphcal_compiler::semantic_error::evaluation::EvaluationError;
 use graphcal_compiler::semantic_error::module::ModuleError;
 
-use graphcal_compiler::graphcal_error::RenderedGraphcalError;
+use graphcal_compiler::semantic_error::rendered::RenderedSemanticError;
 use graphcal_io::RealFileSystem;
 use graphcal_project::compile_error::CompileError;
 use graphcal_project::loader::load_project;
@@ -109,9 +109,9 @@ dag inner {
 
     let error = compile_and_eval_project(&root, &HashMap::new(), None, &RealFileSystem::default())
         .expect_err("a file root including itself through its DAG must be rejected");
-    let CompileError::Eval(RenderedGraphcalError {
+    let CompileError::Eval(RenderedSemanticError {
         error:
-            GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+            SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
                 kind: SemanticErrorKind::Evaluation(EvaluationError::Failed { message, .. }),
                 primary: span,
                 ..
@@ -209,8 +209,8 @@ node result: Dimensionless = @calculation()::out;
 
     assert!(matches!(
         error,
-        CompileError::Eval(RenderedGraphcalError {
-            error: GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+        CompileError::Eval(RenderedSemanticError {
+            error: SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
                 kind: SemanticErrorKind::Module(ModuleError::ImportAssertionItem { .. }),
                 ..
             }),
@@ -236,8 +236,8 @@ node result: Dimensionless = @calculation()::out;
 
     assert!(matches!(
         error,
-        CompileError::Eval(RenderedGraphcalError {
-            error: GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+        CompileError::Eval(RenderedSemanticError {
+            error: SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
                 kind: SemanticErrorKind::Module(ModuleError::ImportPlotItem { .. }),
                 ..
             }),
@@ -287,25 +287,25 @@ fn pure_import_outcome(
 ) -> PureImportOutcome {
     match result {
         Ok(_) => PureImportOutcome::Success,
-        Err(CompileError::Eval(RenderedGraphcalError {
+        Err(CompileError::Eval(RenderedSemanticError {
             error:
-                GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+                SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
                     kind: SemanticErrorKind::Module(ModuleError::ImportRuntimeItem { .. }),
                     ..
                 }),
             ..
         })) => PureImportOutcome::RuntimeRejected,
-        Err(CompileError::Eval(RenderedGraphcalError {
+        Err(CompileError::Eval(RenderedSemanticError {
             error:
-                GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+                SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
                     kind: SemanticErrorKind::Module(ModuleError::ImportAssertionItem { .. }),
                     ..
                 }),
             ..
         })) => PureImportOutcome::AssertionRejected,
-        Err(CompileError::Eval(RenderedGraphcalError {
+        Err(CompileError::Eval(RenderedSemanticError {
             error:
-                GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+                SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
                     kind: SemanticErrorKind::Module(ModuleError::ImportPlotItem { .. }),
                     ..
                 }),

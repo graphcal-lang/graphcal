@@ -2,7 +2,7 @@
 //! attributes attach to.
 //!
 //! These are diagnostic and declaration-policy data shared by declaration
-//! collection and [`GraphcalError`](crate::graphcal_error::GraphcalError).
+//! collection and [`SemanticError`](crate::semantic_error::SemanticError).
 
 use crate::desugar::desugared_ast::DeclKind;
 use crate::syntax::attribute::AttributeName;

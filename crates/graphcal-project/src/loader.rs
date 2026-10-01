@@ -10,9 +10,9 @@ use crate::compile_error::CompileError;
 use crate::dependency_ordered::DependencyOrdered;
 use graphcal_compiler::dag_id::{DagId, DagPackageId};
 use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
-use graphcal_compiler::graphcal_error::GraphcalError;
 use graphcal_compiler::outcome::Outcome;
 use graphcal_compiler::plugin_identity::{ExternFnKey, PluginIdentity};
+use graphcal_compiler::semantic_error::SemanticError;
 use graphcal_compiler::source_registry::SourceRegistry;
 use graphcal_compiler::syntax::ast::ModulePath;
 use graphcal_compiler::syntax::decl_name::DeclName;
@@ -309,7 +309,7 @@ impl LoadedProject {
         };
         let dag_id = DagId::from_virtual_relative_path(semantic_path).map_err(|error| {
             CompileError::semantic(
-                GraphcalError::internal_error(
+                SemanticError::internal_error(
                     format!("invalid source name `{name}`: {error}"),
                     parsed.source_id,
                     DiagnosticAnchor::WholeFile,

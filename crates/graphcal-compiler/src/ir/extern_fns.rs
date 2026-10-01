@@ -5,8 +5,8 @@ use std::sync::Arc;
 
 use crate::desugar::desugared_ast::TypeExpr;
 use crate::extern_struct_result::ExternStructResult;
-use crate::graphcal_error::GraphcalError;
 use crate::ir::extern_function::{ExternFunctionEntry, merge_extern_function};
+use crate::semantic_error::SemanticError;
 use crate::semantic_error::dimension::DimensionError;
 use crate::semantic_error::plugin::PluginError;
 use crate::source_id::SourceId;
@@ -39,7 +39,7 @@ impl ExternSignatureScope<'_, '_> {
     fn nominal_type(
         &self,
         identity: &crate::resolved_name::ResolvedStructTypeName,
-    ) -> Result<Option<Arc<crate::hir::nominal::NominalTypeDef>>, GraphcalError> {
+    ) -> Result<Option<Arc<crate::hir::nominal::NominalTypeDef>>, SemanticError> {
         if let Some(definition) = self.nominal_types.get(identity) {
             return Ok(Some(Arc::clone(definition)));
         }
@@ -70,7 +70,7 @@ impl ExternSignatureScope<'_, '_> {
         &mut self,
         term: &crate::desugar::desugared_ast::DimTerm,
         generics: &ExternGenerics,
-    ) -> Result<Option<ExternDimTerm>, GraphcalError> {
+    ) -> Result<Option<ExternDimTerm>, SemanticError> {
         use crate::hir::types::DimTermTarget;
 
         let lowered = crate::hir::lower::lower_dim_term(term, self.type_context(generics));
@@ -141,7 +141,7 @@ impl ExternGenerics {
         key: &crate::plugin_identity::ExternFnKey,
         function: &crate::desugar::desugared_ast::ExternFnDecl,
         src: SourceId,
-    ) -> Result<Self, GraphcalError> {
+    ) -> Result<Self, SemanticError> {
         use crate::hir::lower::GenericParamBinding;
         use crate::hir::types::{GenericParamId, GenericParamOwner};
         use crate::syntax::ast::{ExternGenericBinder, GenericConstraint};
@@ -169,7 +169,7 @@ impl ExternGenerics {
                 .scope
                 .insert_binding(GenericParamBinding::new(id.clone(), constraint, span))
                 .map_err(|_| {
-                    GraphcalError::located(
+                    SemanticError::located(
                         src,
                         binder.span(),
                         PluginError::InvalidExternSignature {
@@ -203,7 +203,7 @@ pub(super) fn resolve_plugin_imports(
     decls: &[crate::desugar::desugared_ast::PluginImportDecl],
     scope: &mut ExternSignatureScope<'_, '_>,
     src: SourceId,
-) -> Result<HashMap<crate::plugin_identity::ExternFnKey, ExternFunctionEntry>, GraphcalError> {
+) -> Result<HashMap<crate::plugin_identity::ExternFnKey, ExternFunctionEntry>, SemanticError> {
     let mut map = HashMap::new();
     for decl in decls {
         for function in &decl.functions {
@@ -220,12 +220,12 @@ fn resolve_extern_value_kind(
     generics: &ExternGenerics,
     scope: &mut ExternSignatureScope<'_, '_>,
     src: SourceId,
-) -> Result<crate::function_signature::NamedParamKind, GraphcalError> {
+) -> Result<crate::function_signature::NamedParamKind, SemanticError> {
     use crate::desugar::desugared_ast::TypeExprKind;
     use crate::function_signature::ParamKind;
 
     if !type_ann.constraints.is_empty() {
-        return Err(GraphcalError::located(
+        return Err(SemanticError::located(
             src,
             type_ann.span,
             PluginError::InvalidExternSignature {
@@ -250,7 +250,7 @@ fn resolve_extern_value_kind(
         | TypeExprKind::DatetimeApplication { .. }
         | TypeExprKind::ComplexApplication { .. }
         | TypeExprKind::KeyApplication { .. }
-        | TypeExprKind::TypeApplication { .. } => Err(GraphcalError::located(src, type_ann.span, PluginError::InvalidExternSignature { message: "extern function signatures support Bool, Int, quantity types, and indexed scalar collections over one or more declared index variables"
+        | TypeExprKind::TypeApplication { .. } => Err(SemanticError::located(src, type_ann.span, PluginError::InvalidExternSignature { message: "extern function signatures support Bool, Int, quantity types, and indexed scalar collections over one or more declared index variables"
                     .to_string() })),
     }
 }
@@ -262,7 +262,7 @@ fn resolve_extern_function(
     function: &crate::desugar::desugared_ast::ExternFnDecl,
     scope: &mut ExternSignatureScope<'_, '_>,
     src: SourceId,
-) -> Result<ExternFunctionEntry, GraphcalError> {
+) -> Result<ExternFunctionEntry, SemanticError> {
     let key = crate::plugin_identity::ExternFnKey {
         plugin: crate::plugin_identity::PluginIdentity::resolve(
             &decl.path.value,
@@ -281,7 +281,7 @@ fn resolve_extern_function(
                 kind,
             })
         })
-        .collect::<Result<Vec<_>, GraphcalError>>()?;
+        .collect::<Result<Vec<_>, SemanticError>>()?;
     let result = resolve_extern_result_kind(&function.result, &generics, scope, src)?;
     let signature = crate::function_signature::FunctionSignature::try_from_parts(
         generics.dim_vars,
@@ -298,7 +298,7 @@ fn resolve_extern_function(
             && let (Some(first_param), Some(duplicate_param)) =
                 (function.params.get(*first), function.params.get(*duplicate))
         {
-            return GraphcalError::located(
+            return SemanticError::located(
                 src,
                 duplicate_param.name.span,
                 PluginError::DuplicateExternParameter {
@@ -307,7 +307,7 @@ fn resolve_extern_function(
                 },
             );
         }
-        GraphcalError::located(
+        SemanticError::located(
             src,
             function.span,
             PluginError::InvalidExternSignature {
@@ -338,7 +338,7 @@ fn resolve_extern_result_kind(
     generics: &ExternGenerics,
     scope: &mut ExternSignatureScope<'_, '_>,
     src: SourceId,
-) -> Result<crate::function_signature::NamedResultKind<ExternStructResult>, GraphcalError> {
+) -> Result<crate::function_signature::NamedResultKind<ExternStructResult>, SemanticError> {
     use crate::desugar::desugared_ast::TypeExprKind;
 
     if type_ann.constraints.is_empty()
@@ -356,7 +356,7 @@ fn resolve_extern_result_kind(
         );
     }
     if let TypeExprKind::TypeApplication { .. } = &type_ann.kind {
-        return Err(GraphcalError::located(
+        return Err(SemanticError::located(
             src,
             type_ann.span,
             PluginError::InvalidExternSignature {
@@ -376,11 +376,11 @@ pub(super) fn resolve_extern_struct_return(
     span: Span,
     scope: &mut ExternSignatureScope<'_, '_>,
     src: SourceId,
-) -> Result<crate::function_signature::NamedResultKind<ExternStructResult>, GraphcalError> {
+) -> Result<crate::function_signature::NamedResultKind<ExternStructResult>, SemanticError> {
     use crate::function_signature::{ResultKind, StructShape, StructShapeField};
 
     let invalid = |message: String| {
-        GraphcalError::located(src, span, PluginError::InvalidExternSignature { message })
+        SemanticError::located(src, span, PluginError::InvalidExternSignature { message })
     };
     let Ok(resolved_type) = scope
         .resolver()
@@ -389,7 +389,7 @@ pub(super) fn resolve_extern_struct_return(
     else {
         // Neither a dimension nor a type in scope: report it the way any
         // other unknown dimension-position name is reported.
-        return Err(GraphcalError::located(
+        return Err(SemanticError::located(
             src,
             span,
             DimensionError::UnknownDimension { name: path.clone() },
@@ -425,7 +425,7 @@ pub(super) fn resolve_extern_struct_return(
                 kind,
             })
         })
-        .collect::<Result<Vec<_>, GraphcalError>>()?;
+        .collect::<Result<Vec<_>, SemanticError>>()?;
     let shape = StructShape::try_new(shape_fields).map_err(|err| invalid(err.to_string()))?;
     Ok(ResultKind::Struct(ExternStructResult::new(
         resolved_type,
@@ -439,13 +439,13 @@ fn resolve_extern_struct_field(
     field: &crate::hir::nominal::NominalField,
     scope: &mut ExternSignatureScope<'_, '_>,
     src: SourceId,
-) -> Result<crate::function_signature::StructFieldKind, GraphcalError> {
+) -> Result<crate::function_signature::StructFieldKind, SemanticError> {
     use crate::function_signature::StructFieldKind;
     use crate::hir::types::{BuiltinType, DeclType, DimTermTarget, ValueTypeKind};
 
     let annotation = field.type_annotation();
     let unsupported = || {
-        GraphcalError::located(
+        SemanticError::located(
             src,
             annotation.span,
             PluginError::InvalidExternSignature {
@@ -473,7 +473,7 @@ fn resolve_extern_struct_field(
             // No dimension variables are in scope inside a record's fields;
             // the dimension is therefore concrete by construction.
             let overflow =
-                || GraphcalError::located(src, annotation.span, DimensionError::DimensionOverflow);
+                || SemanticError::located(src, annotation.span, DimensionError::DimensionOverflow);
             let mut dimension = crate::dimension::Dimension::dimensionless();
             for item in &expr.terms {
                 let DimTermTarget::Dimension(name) = &item.term.target else {
@@ -514,7 +514,7 @@ fn resolve_extern_array_kind(
     generics: &ExternGenerics,
     scope: &mut ExternSignatureScope<'_, '_>,
     src: SourceId,
-) -> Result<crate::function_signature::NamedParamKind, GraphcalError> {
+) -> Result<crate::function_signature::NamedParamKind, SemanticError> {
     use crate::desugar::desugared_ast::TypeExprKind;
     use crate::function_signature::{DimMonomial, ParamKind, ScalarValueKind};
 
@@ -522,7 +522,7 @@ fn resolve_extern_array_kind(
         .iter()
         .map(|index_expr| {
             scope.index_var(index_expr, generics).ok_or_else(|| {
-                GraphcalError::located(
+                SemanticError::located(
                     src,
                     index_expr.span(),
                     PluginError::InvalidExternSignature {
@@ -536,7 +536,7 @@ fn resolve_extern_array_kind(
         .collect::<Result<Vec<_>, _>>()?;
     let indexes =
         crate::syntax::non_empty::NonEmpty::try_from_vec(resolved_indexes).map_err(|_| {
-            GraphcalError::located(
+            SemanticError::located(
                 src,
                 type_ann_indexes_span(indexes, base),
                 PluginError::InvalidExternSignature {
@@ -546,7 +546,7 @@ fn resolve_extern_array_kind(
         })?;
 
     if !base.constraints.is_empty() {
-        return Err(GraphcalError::located(
+        return Err(SemanticError::located(
             src,
             base.span,
             PluginError::InvalidExternSignature {
@@ -563,7 +563,7 @@ fn resolve_extern_array_kind(
             ScalarValueKind::Quantity(resolve_extern_dim_monomial(dim_expr, generics, scope, src)?)
         }
         _ => {
-            return Err(GraphcalError::located(
+            return Err(SemanticError::located(
                 src,
                 base.span,
                 PluginError::InvalidExternSignature {
@@ -595,11 +595,11 @@ fn resolve_extern_dim_monomial(
     generics: &ExternGenerics,
     scope: &mut ExternSignatureScope<'_, '_>,
     src: SourceId,
-) -> Result<crate::function_signature::NamedDimMonomial, GraphcalError> {
+) -> Result<crate::function_signature::NamedDimMonomial, SemanticError> {
     use crate::syntax::ast::MulDivOp;
 
     let overflow =
-        |span: Span| GraphcalError::located(src, span, DimensionError::DimensionOverflow);
+        |span: Span| SemanticError::located(src, span, DimensionError::DimensionOverflow);
 
     let mut vars = Vec::new();
     let mut fixed = crate::dimension::Dimension::dimensionless();
@@ -623,7 +623,7 @@ fn resolve_extern_dim_monomial(
                 .map_err(|_| overflow(term.span))?;
             }
             None => {
-                return Err(GraphcalError::located(
+                return Err(SemanticError::located(
                     src,
                     term.name.span,
                     DimensionError::UnknownDimension {
@@ -634,7 +634,7 @@ fn resolve_extern_dim_monomial(
         }
     }
     crate::function_signature::DimMonomial::try_new(vars, fixed).map_err(|error| {
-        GraphcalError::located(
+        SemanticError::located(
             src,
             dim_expr.span,
             PluginError::InvalidExternSignature {

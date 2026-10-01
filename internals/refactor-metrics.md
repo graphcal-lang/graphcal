@@ -27,7 +27,7 @@ Counts cover production sources only: `tests.rs`, `tests/` directories, inline
 | `module_resolve_str_key_lookups` | map lookups keyed by `.as_str()`, `.as_ref()`, or `&*` in `resolve/` | Typed keys instead of string keys |
 | `pipeline_layers_exceptions` | `[[exception]]` entries in `internals/pipeline-layers/baseline.toml` | Dependency direction without exceptions |
 | `reading_order_sccs` | strongly connected components of two or more files reported by `internals/reading-order.py` | An acyclic file dependency graph |
-| `graphcal_error_variants` | variants of `GraphcalError` | Per-phase error types |
+| `semantic_error_string_payloads` | `name: String` payload fields of the semantic diagnostic families in `graphcal-compiler/src/semantic_error/` | Typed diagnostic payloads instead of pre-rendered text |
 
 The counts are textual approximations. They exist to detect direction, not to
 prove an invariant, so a metric may be refined when it miscounts, together with

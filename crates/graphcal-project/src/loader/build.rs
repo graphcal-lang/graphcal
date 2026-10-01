@@ -33,8 +33,8 @@ use graphcal_compiler::dag_id::DagId;
 use graphcal_compiler::dependency_graph::DependencyGraph;
 use graphcal_compiler::desugar::desugared_ast::Declaration;
 use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
-use graphcal_compiler::graphcal_error::GraphcalError;
 use graphcal_compiler::import_cycle::ImportCycle;
+use graphcal_compiler::semantic_error::SemanticError;
 use graphcal_compiler::source_registry::SourceRegistry;
 use graphcal_compiler::syntax::ast::ModulePath;
 
@@ -93,7 +93,7 @@ pub(super) fn build_loaded_files<K: SourceKey>(
     let files = DependencyOrdered::from_topo_order(order, &root, |file| built.remove(&file))
         .ok_or_else(|| {
             CompileError::semantic(
-                GraphcalError::internal_error(
+                SemanticError::internal_error(
                     "the loaded files do not match the acyclic import graph",
                     root_source,
                     DiagnosticAnchor::WholeFile,
@@ -173,7 +173,7 @@ impl<K: SourceKey> Builder<'_, K> {
         let dag_id = DagId::from_relative_path(location.package.clone(), &location.relative_path)
             .map_err(|error| {
             CompileError::semantic(
-                GraphcalError::internal_error(
+                SemanticError::internal_error(
                     format!(
                         "invalid module path `{}`: {error}",
                         location.relative_path.display()

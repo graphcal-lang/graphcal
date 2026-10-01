@@ -1,6 +1,6 @@
 //! Project diagnostics for module-resolution failures.
 
-use graphcal_compiler::graphcal_error::GraphcalError;
+use graphcal_compiler::semantic_error::SemanticError;
 use graphcal_compiler::semantic_error::evaluation::EvaluationError;
 use graphcal_compiler::semantic_error::module::ModuleError;
 use graphcal_compiler::semantic_error::name::NameError;
@@ -12,7 +12,7 @@ use crate::compile_error::PipelineError;
 
 /// N001 for a resolver duplicate, rendered with its spelled name.
 fn duplicate_name(name: String, first: Span, duplicate: Span, src: SourceId) -> PipelineError {
-    PipelineError::Semantic(GraphcalError::located(
+    PipelineError::Semantic(SemanticError::located(
         src,
         duplicate,
         NameError::DuplicateName { name, first },
@@ -26,7 +26,7 @@ pub(super) fn module_resolve_compile_error(
     match err {
         graphcal_compiler::resolve::error::ModuleResolveError::PrivateName {
             owner, name, ..
-        } => PipelineError::Semantic(GraphcalError::located(
+        } => PipelineError::Semantic(SemanticError::located(
             src,
             src.whole_span(),
             VisibilityError::ImportPrivateItem {
@@ -38,7 +38,7 @@ pub(super) fn module_resolve_compile_error(
             owner,
             mismatch,
             span,
-        } => PipelineError::Semantic(GraphcalError::located(
+        } => PipelineError::Semantic(SemanticError::located(
             src,
             span,
             ModuleError::ImportCategoryMismatch {
@@ -50,7 +50,7 @@ pub(super) fn module_resolve_compile_error(
             name,
             span,
             ..
-        } => PipelineError::Semantic(GraphcalError::located(
+        } => PipelineError::Semantic(SemanticError::located(
             src,
             span,
             ModuleError::IncludeItemNotProjectable {
@@ -62,7 +62,7 @@ pub(super) fn module_resolve_compile_error(
             owner_type,
             span,
             ..
-        } => PipelineError::Semantic(GraphcalError::located(
+        } => PipelineError::Semantic(SemanticError::located(
             src,
             span,
             ModuleError::IncludeConstructorOwnerRebound {
@@ -94,7 +94,7 @@ pub(super) fn module_resolve_compile_error(
             duplicate,
             ..
         } => duplicate_name(function.to_string(), first, duplicate, src),
-        other => PipelineError::Semantic(GraphcalError::located(
+        other => PipelineError::Semantic(SemanticError::located(
             src,
             src.whole_span(),
             EvaluationError::Failed {

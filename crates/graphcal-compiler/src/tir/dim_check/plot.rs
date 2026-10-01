@@ -12,11 +12,11 @@ use crate::semantic_error::dimension::DimensionError;
 use crate::semantic_error::name::NameError;
 use std::collections::HashMap;
 
-use crate::graphcal_error::GraphcalError;
 use crate::hir::expr::ExprKind;
 use crate::ir::model::{LoweredPlotField, LoweredPlotProperty};
 use crate::plot_props::{CompositionProperty, MarkProperty, PlotProperty, PlotPropertyType};
 use crate::plot_shape::{PlotChannelShape, PlotLeafKind, align_plot_channel_axes};
+use crate::semantic_error::SemanticError;
 
 use super::{
     CheckedType, DimCheckContext, check_ineffective_conversions, helpers::format_checked_type,
@@ -32,7 +32,7 @@ pub(super) type CheckedPlotChannelShapes = HashMap<
 pub(super) fn check_plot_properties_dag(
     ctx: &DimCheckContext<'_>,
     dag: &crate::tir::typed::DagTIR,
-) -> Result<CheckedPlotChannelShapes, Outcome<GraphcalError>> {
+) -> Result<CheckedPlotChannelShapes, Outcome<SemanticError>> {
     check_plot_references(ctx, dag)?;
     let mut channel_types = HashMap::new();
     for entry in dag.plots() {
@@ -54,7 +54,7 @@ pub(super) fn check_plot_entry(
         crate::resolved_name::ResolvedDeclName,
         HashMap<crate::syntax::ast::EncodingChannel, PlotChannelShape>,
     ),
-    Outcome<GraphcalError>,
+    Outcome<SemanticError>,
 > {
     let body = &entry.body;
     let owner = entry.identity();
@@ -89,7 +89,7 @@ pub(super) fn check_plot_entry(
 pub(super) fn check_figure_entry(
     ctx: &DimCheckContext<'_>,
     entry: &crate::tir::typed::TypedFigureEntry,
-) -> Result<(), Outcome<GraphcalError>> {
+) -> Result<(), Outcome<SemanticError>> {
     let owner = entry.identity();
     for field in &entry.fields {
         let LoweredPlotProperty::Composition(prop) = &field.property else {
@@ -136,7 +136,7 @@ pub(super) fn check_figure_entry(
 pub(super) fn check_layer_entry(
     ctx: &DimCheckContext<'_>,
     entry: &crate::tir::typed::TypedLayerEntry,
-) -> Result<(), Outcome<GraphcalError>> {
+) -> Result<(), Outcome<SemanticError>> {
     let owner = entry.identity();
     for field in &entry.fields {
         let LoweredPlotProperty::Composition(prop) = &field.property else {
@@ -159,7 +159,7 @@ pub(super) fn check_layer_entry(
 fn check_plot_references(
     ctx: &DimCheckContext<'_>,
     dag: &crate::tir::typed::DagTIR,
-) -> Result<(), GraphcalError> {
+) -> Result<(), SemanticError> {
     let owners = dag
         .figures()
         .map(|f| ("figure", f.name(), &f.plot_names))
@@ -179,7 +179,7 @@ fn check_plot_references(
                 };
                 return Err(actual_kind.map_or_else(
                     || {
-                        GraphcalError::located(
+                        SemanticError::located(
                             ctx.env.src,
                             reference.span,
                             NameError::UnknownPlotReference {
@@ -190,7 +190,7 @@ fn check_plot_references(
                         )
                     },
                     |actual_kind| {
-                        GraphcalError::located(
+                        SemanticError::located(
                             ctx.env.src,
                             reference.span,
                             NameError::CompositionReferencesNonPlot {
@@ -203,7 +203,7 @@ fn check_plot_references(
                 ));
             }
             if plot_names[..i].iter().any(|p| p.value == reference.value) {
-                return Err(GraphcalError::located(
+                return Err(SemanticError::located(
                     ctx.env.src,
                     reference.span,
                     NameError::DuplicatePlotReference {
@@ -222,7 +222,7 @@ fn check_plot_encodings(
     ctx: &DimCheckContext<'_>,
     owner: &crate::resolved_name::ResolvedDeclName,
     body: &crate::ir::model::LoweredPlotBody,
-) -> Result<HashMap<crate::syntax::ast::EncodingChannel, PlotChannelShape>, Outcome<GraphcalError>>
+) -> Result<HashMap<crate::syntax::ast::EncodingChannel, PlotChannelShape>, Outcome<SemanticError>>
 {
     let shapes = body
         .encodings
@@ -239,7 +239,7 @@ fn check_plot_encodings(
             }
             let inferred = infer_expression_type(ctx, owner, expr)?;
             plot_channel_shape(&inferred).ok_or_else(|| {
-                GraphcalError::located(
+                SemanticError::located(
                     ctx.env.src,
                     expr.span,
                     DimensionError::PlotEncodingTypeMismatch {
@@ -250,14 +250,14 @@ fn check_plot_encodings(
                 .into()
             })
         })
-        .collect::<Result<Vec<_>, Outcome<GraphcalError>>>()?;
+        .collect::<Result<Vec<_>, Outcome<SemanticError>>>()?;
     let axes = shapes
         .iter()
         .map(PlotChannelShape::axes)
         .collect::<Vec<_>>();
     if let Err(error) = align_plot_channel_axes(&axes) {
         let (_, expr) = &body.encodings[error.channel()];
-        return Err(GraphcalError::located(
+        return Err(SemanticError::located(
             ctx.env.src,
             expr.span,
             DimensionError::PlotEncodingAxisMismatch {
@@ -338,8 +338,8 @@ fn invalid_property(
     field: &LoweredPlotField,
     context: &'static str,
     valid: &str,
-) -> GraphcalError {
-    GraphcalError::located(
+) -> SemanticError {
+    SemanticError::located(
         ctx.env.src,
         field.name_span,
         NameError::InvalidPlotProperty {
@@ -357,10 +357,10 @@ pub(super) fn check_property_value(
     property: &'static str,
     expected: PlotPropertyType,
     field: &LoweredPlotField,
-) -> Result<(), Outcome<GraphcalError>> {
+) -> Result<(), Outcome<SemanticError>> {
     let is_string_literal = matches!(field.value.kind(), ExprKind::StringLiteral(_));
     let mismatch = |found: String| {
-        GraphcalError::located(
+        SemanticError::located(
             ctx.env.src,
             field.value.span,
             DimensionError::PlotPropertyTypeMismatch {
@@ -390,7 +390,7 @@ pub(super) fn check_property_value(
             match infer_expression_type(ctx, owner, &field.value)? {
                 CheckedType::Int => Ok(()),
                 CheckedType::Quantity(d) if d.is_dimensionless() => Ok(()),
-                CheckedType::Quantity(d) => Err(GraphcalError::located(
+                CheckedType::Quantity(d) => Err(SemanticError::located(
                     ctx.env.src,
                     field.value.span,
                     DimensionError::PlotPropertyDimensioned {
@@ -418,6 +418,6 @@ fn infer_expression_type(
     ctx: &DimCheckContext<'_>,
     owner: &crate::resolved_name::ResolvedDeclName,
     expr: &crate::hir::expr::Expr,
-) -> Result<CheckedType<Symbolic>, Outcome<GraphcalError>> {
+) -> Result<CheckedType<Symbolic>, Outcome<SemanticError>> {
     ctx.infer_hir(expr, Some(owner))
 }

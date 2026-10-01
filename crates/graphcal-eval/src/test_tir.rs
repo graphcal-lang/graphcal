@@ -3,9 +3,9 @@
 
 use std::sync::Arc;
 
-use graphcal_compiler::graphcal_error::GraphcalError;
 use graphcal_compiler::ir::lower::lower;
 use graphcal_compiler::resolve::ModuleResolver;
+use graphcal_compiler::semantic_error::SemanticError;
 use graphcal_compiler::source_id::SourceId;
 use graphcal_compiler::source_registry::SourceRegistry;
 use graphcal_compiler::syntax::parser::Parser;
@@ -21,7 +21,7 @@ pub fn checked_tir_from_source(
         SourceId,
         SourceRegistry,
     ),
-    GraphcalError,
+    SemanticError,
 > {
     let raw_file = Parser::new(source).parse_file().unwrap();
     let desugared = graphcal_compiler::desugar::desugared_ast::File::from(raw_file);

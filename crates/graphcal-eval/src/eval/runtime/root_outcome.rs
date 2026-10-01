@@ -9,9 +9,9 @@ use graphcal_compiler::source_registry::SourceRegistry;
 use std::cell::RefCell;
 use std::collections::{BTreeSet, HashMap};
 
-use graphcal_compiler::graphcal_error::GraphcalError;
 use graphcal_compiler::outcome::Outcome;
 use graphcal_compiler::resolved_name::ResolvedDeclName;
+use graphcal_compiler::semantic_error::SemanticError;
 use graphcal_compiler::source_id::SourceId;
 use graphcal_compiler::syntax::module_name::ScopedName;
 use graphcal_compiler::syntax::span::Span;
@@ -71,7 +71,7 @@ impl RootOutcome {
         sources: &SourceRegistry,
         host_fns: &HostFunctionRegistry,
         cancellation: &graphcal_compiler::cancellation::CancellationToken,
-    ) -> Result<Self, Outcome<GraphcalError>> {
+    ) -> Result<Self, Outcome<SemanticError>> {
         let EvalLoopResult {
             unfinished_calls,
             values,
@@ -148,7 +148,7 @@ impl RootOutcome {
         &self,
         plan: &ExecPlan<'_>,
         src: SourceId,
-    ) -> Result<Option<RootFailure<'_>>, GraphcalError> {
+    ) -> Result<Option<RootFailure<'_>>, SemanticError> {
         let exposed = root_source_names(plan).into_iter().find_map(|(key, name)| {
             self.errors
                 .get(&key)

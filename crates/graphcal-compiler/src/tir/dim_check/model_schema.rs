@@ -3,9 +3,9 @@
 use thiserror::Error;
 
 use crate::diagnostic_anchor::DiagnosticAnchor;
-use crate::graphcal_error::GraphcalError;
 use crate::hir::nominal::{NominalConstructor, NominalTypeDef, NominalTypeKind};
 use crate::semantic::checked_type::{CheckedGenericArg, CheckedType, IndexTypeRef, StructTypeRef};
+use crate::semantic_error::SemanticError;
 use crate::source_id::SourceId;
 use crate::syntax::ast::GenericConstraint;
 use crate::syntax::type_name::{ConstructorName, FieldName, GenericParamName};
@@ -46,7 +46,7 @@ pub enum ConcreteModelTypeError {
     #[error("required index `{index}` was not concretely bound")]
     RequiredIndex { index: IndexTypeRef },
     #[error(transparent)]
-    Compiler(#[from] GraphcalError),
+    Compiler(#[from] SemanticError),
 }
 
 impl ConcreteModelTypeError {
@@ -54,11 +54,11 @@ impl ConcreteModelTypeError {
     /// evaluation shells. Source-language failures retain their original
     /// diagnostic; malformed safe-API inputs are internal invariant failures.
     #[must_use]
-    pub fn into_graphcal_error(self, src: SourceId) -> GraphcalError {
+    pub fn into_semantic_error(self, src: SourceId) -> SemanticError {
         match self {
             Self::Compiler(error) => error,
             invariant => {
-                GraphcalError::internal_error(invariant.to_string(), src, DiagnosticAnchor::Builtin)
+                SemanticError::internal_error(invariant.to_string(), src, DiagnosticAnchor::Builtin)
             }
         }
     }
@@ -128,7 +128,7 @@ impl<'tir> ValidatedModelType<'tir> {
     pub fn constructors(
         &self,
         _src: SourceId,
-    ) -> Result<Vec<ConcreteModelConstructor>, GraphcalError> {
+    ) -> Result<Vec<ConcreteModelConstructor>, SemanticError> {
         let tir: &dyn crate::tir::typed::TirRead = self.tir;
         let metadata_dag = tir
             .dag_with_type_metadata(self.identity.resolved())
@@ -218,7 +218,7 @@ impl<'tir> ConcreteModelType<'tir> {
     pub fn constructors(
         &self,
         src: SourceId,
-    ) -> Result<Vec<ConcreteModelConstructor>, GraphcalError> {
+    ) -> Result<Vec<ConcreteModelConstructor>, SemanticError> {
         self.validated.constructors(src)
     }
 }

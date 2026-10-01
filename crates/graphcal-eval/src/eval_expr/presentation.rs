@@ -5,10 +5,10 @@
 
 use graphcal_compiler::dag_id::DagId;
 use graphcal_compiler::display::unit_label::format_unit_terms_canonical;
-use graphcal_compiler::graphcal_error::GraphcalError;
 use graphcal_compiler::hir::expr::ResolvedUnitExpr;
 use graphcal_compiler::outcome::Outcome;
 use graphcal_compiler::semantic::unit_scale::PositiveFiniteScale;
+use graphcal_compiler::semantic_error::SemanticError;
 use graphcal_compiler::semantic_error::SemanticErrorKind;
 use graphcal_compiler::semantic_error::evaluation::EvaluationError;
 use graphcal_compiler::tir::typed::scoped_node::ScopedUnitExpr;
@@ -66,7 +66,7 @@ pub(super) fn resolve(
     values: &RuntimeValueMap,
     ctx: &EvalSession<'_>,
     evaluate: EvaluateExecutable,
-) -> Result<ResolvedValue, Outcome<GraphcalError>> {
+) -> Result<ResolvedValue, Outcome<SemanticError>> {
     presented.try_resolve(|display| match display {
         PendingQuantityDisplay::Ready(display) => Ok(display),
         PendingQuantityDisplay::Requested(request) => {
@@ -83,7 +83,7 @@ pub(super) fn resolve_frame(
     ctx: &EvalSession<'_>,
     callable: &crate::execution_plan::CallablePlan<'_>,
     evaluate: EvaluateExecutable,
-) -> Result<EvaluatedRuntimeValue, Outcome<GraphcalError>> {
+) -> Result<EvaluatedRuntimeValue, Outcome<SemanticError>> {
     presented.try_map_quantity_displays(|display| match display {
         PendingQuantityDisplay::Requested(request) if callable.executes(&request.owner) => {
             resolve_request(&request, values, ctx, evaluate).map(PendingQuantityDisplay::Ready)
@@ -101,7 +101,7 @@ fn resolve_request(
     values: &RuntimeValueMap,
     ctx: &EvalSession<'_>,
     evaluate: EvaluateExecutable,
-) -> Result<QuantityDisplay, Outcome<GraphcalError>> {
+) -> Result<QuantityDisplay, Outcome<SemanticError>> {
     ctx.cancellation.checkpoint()?;
     let context = ctx.with_src(request.source);
     crate::pipeline_metrics::record(crate::pipeline_metrics::Event::PresentationEvaluation);
@@ -109,12 +109,12 @@ fn resolve_request(
         .map(|scale| scaled(&request.unit, scale, &context))
     {
         Ok(leaf) => Ok(leaf),
-        Err(error @ (Outcome::Cancelled | Outcome::Failed(GraphcalError::Internal(_)))) => {
+        Err(error @ (Outcome::Cancelled | Outcome::Failed(SemanticError::Internal(_)))) => {
             Err(error)
         }
         Err(Outcome::Failed(error)) => Ok(QuantityDisplay::Failed(PresentationFailure::Scale {
             source_name: match &error {
-                GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+                SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
                     kind: SemanticErrorKind::Evaluation(EvaluationError::Failed { .. }),
                     src,
                     ..

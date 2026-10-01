@@ -15,10 +15,10 @@ use graphcal_compiler::source_id::SourceId;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use graphcal_compiler::graphcal_error::GraphcalError;
 use graphcal_compiler::ir::imported_binding::ImportedBinding;
 use graphcal_compiler::ir::resolve::ScopedName;
 use graphcal_compiler::semantic::checked_type::CheckedType;
+use graphcal_compiler::semantic_error::SemanticError;
 
 use super::{entry_interface, lowering};
 use crate::compile_error::PipelineError;
@@ -58,7 +58,7 @@ fn resolve_imported_bindings(
         .map(|(lexical, target)| {
             let declared_type = declared_type_for_target(target, local_interfaces, module_artifacts)
                 .ok_or_else(|| {
-                    PipelineError::Semantic(GraphcalError::internal_error(
+                    PipelineError::Semantic(SemanticError::internal_error(
                         format!(
                             "checked interface for HIR import `{lexical}` targeting `{target}` is unavailable"
                         ),
@@ -67,7 +67,7 @@ fn resolve_imported_bindings(
                     ))
                 })?;
             let kind = match module_resolver.symbol(target).map(|symbol| *symbol.kind()).ok_or_else(|| {
-                PipelineError::Semantic(GraphcalError::internal_error(
+                PipelineError::Semantic(SemanticError::internal_error(
                     format!("HIR imported value `{target}` has no declaration"),
                     src,
                     DiagnosticAnchor::WholeFile,
@@ -75,7 +75,7 @@ fn resolve_imported_bindings(
             })? {
                 DeclSymbolKind::Const => ImportedValueKind::Constant,
                 DeclSymbolKind::Param | DeclSymbolKind::Node => ImportedValueKind::Runtime,
-                actual => return Err(PipelineError::Semantic(GraphcalError::internal_error(
+                actual => return Err(PipelineError::Semantic(SemanticError::internal_error(
                     format!("HIR imported value `{target}` has non-value category {actual:?}"),
                     src, DiagnosticAnchor::WholeFile,
                 ))),

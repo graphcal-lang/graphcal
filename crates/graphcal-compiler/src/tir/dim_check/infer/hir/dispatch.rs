@@ -1,10 +1,10 @@
 //! The recursive expression-kind dispatch of HIR inference.
 
 use crate::dimension::Dimension;
-use crate::graphcal_error::GraphcalError;
 use crate::hir::expr::{Expr, ExprKind};
 use crate::outcome::Outcome;
 use crate::semantic::checked_type::{IndexTypeRef, Symbolic};
+use crate::semantic_error::SemanticError;
 use crate::semantic_error::dimension::DimensionError;
 use crate::semantic_error::evaluation::EvaluationError;
 use crate::semantic_error::structure::StructError;
@@ -19,7 +19,7 @@ impl Infer<'_> {
     pub(super) fn infer_hir_type(
         &self,
         expr: &Expr,
-    ) -> Result<CheckedType<Symbolic>, Outcome<GraphcalError>> {
+    ) -> Result<CheckedType<Symbolic>, Outcome<SemanticError>> {
         self.control.checkpoint()?;
         // Recursion choke point: inference recurses once per tree level
         // (unbounded for left-nested operator chains).
@@ -29,7 +29,7 @@ impl Infer<'_> {
     fn infer_hir_type_inner(
         &self,
         expr: &Expr,
-    ) -> Result<CheckedType<Symbolic>, Outcome<GraphcalError>> {
+    ) -> Result<CheckedType<Symbolic>, Outcome<SemanticError>> {
         let inferred = match expr.kind() {
             ExprKind::Error(no_error) => no_error.absurd(),
             ExprKind::Number(_) => CheckedType::Quantity(Dimension::dimensionless()),
@@ -40,7 +40,7 @@ impl Infer<'_> {
             | ExprKind::CivilDateTimeLiteral(_)
             | ExprKind::ZonedDateTimeLiteral(_)
             | ExprKind::IanaTimeZoneLiteral(_) => {
-                return Err(GraphcalError::located(
+                return Err(SemanticError::located(
                     self.env.src,
                     expr.span,
                     DimensionError::DimensionMismatch {
@@ -54,7 +54,7 @@ impl Infer<'_> {
                 .into());
             }
             ExprKind::TypeSystemRef(name) => {
-                return Err(GraphcalError::located(
+                return Err(SemanticError::located(
                     self.env.src,
                     name.span,
                     EvaluationError::Failed {
@@ -81,7 +81,7 @@ impl Infer<'_> {
             ExprKind::ConstRef(target) => self.infer_hir_const_ref(target)?,
             ExprKind::LocalRef(local) => {
                 self.locals.get(local.value).cloned().ok_or_else(|| {
-                    GraphcalError::located(
+                    SemanticError::located(
                         self.env.src,
                         local.span,
                         StructError::UnknownLocalRef {

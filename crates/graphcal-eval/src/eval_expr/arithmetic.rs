@@ -1,6 +1,6 @@
 use graphcal_compiler::exact_rational::ExactRational;
 use graphcal_compiler::finite_value::{FiniteArithmeticError, FiniteQuantity};
-use graphcal_compiler::graphcal_error::GraphcalError;
+use graphcal_compiler::semantic_error::SemanticError;
 use graphcal_compiler::syntax::span::Span;
 use graphcal_compiler::tir::texpr::operators::{ArithOp, IntArithOp, OrderingOp};
 
@@ -16,7 +16,7 @@ pub(super) fn check_finite(
     context: &str,
     ctx: &EvalSession<'_>,
     span: Span,
-) -> Result<FiniteQuantity, GraphcalError> {
+) -> Result<FiniteQuantity, SemanticError> {
     super::numeric::computed_finite_quantity(value, context)
         .map_err(|err| ctx.eval_error(err.to_string(), span))
 }
@@ -26,7 +26,7 @@ fn check_nonzero(
     context: &str,
     ctx: &EvalSession<'_>,
     span: Span,
-) -> Result<FiniteQuantity, GraphcalError> {
+) -> Result<FiniteQuantity, SemanticError> {
     super::numeric::computed_nonzero_quantity(value, context)
         .map_err(|err| ctx.eval_error(err.to_string(), span))
 }
@@ -49,7 +49,7 @@ pub(super) fn int_arith(
     r: i64,
     ctx: &EvalSession<'_>,
     span: Span,
-) -> Result<i64, GraphcalError> {
+) -> Result<i64, SemanticError> {
     match op {
         IntArithOp::Add => l.checked_add(r),
         IntArithOp::Sub => l.checked_sub(r),
@@ -80,7 +80,7 @@ pub(super) fn int_power(
     exponent: i64,
     ctx: &EvalSession<'_>,
     span: Span,
-) -> Result<i64, GraphcalError> {
+) -> Result<i64, SemanticError> {
     if exponent < 0 {
         return Err(ctx.eval_error("integer exponent must be non-negative", span));
     }
@@ -101,7 +101,7 @@ pub(super) fn eval_exact_quantity_power(
     exponent: ExactRational,
     ctx: &EvalSession<'_>,
     span: Span,
-) -> Result<FiniteQuantity, GraphcalError> {
+) -> Result<FiniteQuantity, SemanticError> {
     let result = exponent
         .pow_f64(base.get())
         .map_err(|error| ctx.eval_error(error.to_string(), span))?;
@@ -120,7 +120,7 @@ pub(super) fn quantity_arith(
     r: FiniteQuantity,
     ctx: &EvalSession<'_>,
     span: Span,
-) -> Result<FiniteQuantity, GraphcalError> {
+) -> Result<FiniteQuantity, SemanticError> {
     let context = "arithmetic operation";
     match op {
         ArithOp::Add => l.checked_add(r),
@@ -155,7 +155,7 @@ pub(super) fn quantity_power(
     exponent: FiniteQuantity,
     ctx: &EvalSession<'_>,
     span: Span,
-) -> Result<FiniteQuantity, GraphcalError> {
+) -> Result<FiniteQuantity, SemanticError> {
     let context = "arithmetic operation";
     let result = base.get().powf(exponent.get());
     if base.get() != 0.0 && exponent.get() != 0.0 {

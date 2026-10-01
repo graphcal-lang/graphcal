@@ -7,7 +7,6 @@ use crate::assertion_expectation::ExpectedFail;
 use crate::dimension::Dimension;
 use crate::display::formatting_registry::FormattingRegistry;
 use crate::generic_param::GenericParamId;
-use crate::graphcal_error::GraphcalError;
 use crate::hir::nominal::NominalTypeDef;
 use crate::resolved_name::{
     ResolvedConstructorName, ResolvedDeclName, ResolvedDimName, ResolvedIndexName,
@@ -17,6 +16,7 @@ use crate::semantic::checked_type::{CheckedType, IndexTypeRef};
 use crate::semantic::dimension_table::BaseDimensionInfo;
 use crate::semantic::index_def::IndexDef;
 use crate::semantic::unit_scale::UnitInfo;
+use crate::semantic_error::SemanticError;
 use crate::semantic_error::evaluation::EvaluationError;
 use crate::source_id::SourceId;
 use crate::syntax::decl_name::DeclName;
@@ -27,14 +27,14 @@ use crate::syntax::type_name::{ConstructorName, FieldName};
 use super::resolved_type::{ResolvedDeclType, ResolvedGenericArg};
 
 /// Convert a [`NatOverflowError`](crate::nat::NatOverflowError)
-/// into a spanned [`GraphcalError`].
+/// into a spanned [`SemanticError`].
 #[must_use]
 pub fn nat_overflow_error(
     err: crate::nat::NatOverflowError,
     src: SourceId,
     span: Span,
-) -> GraphcalError {
-    GraphcalError::located(
+) -> SemanticError {
+    SemanticError::located(
         src,
         span,
         EvaluationError::Failed {
@@ -589,9 +589,9 @@ impl CheckedDeclType {
     ///
     /// # Errors
     ///
-    /// Returns a [`GraphcalError`] when the type contains unresolved generic
+    /// Returns a [`SemanticError`] when the type contains unresolved generic
     /// parameters.
-    pub(crate) fn new(resolved: ResolvedDeclType, src: SourceId) -> Result<Self, GraphcalError> {
+    pub(crate) fn new(resolved: ResolvedDeclType, src: SourceId) -> Result<Self, SemanticError> {
         let declared = resolved.to_checked_type(src)?;
         Ok(Self { resolved, declared })
     }

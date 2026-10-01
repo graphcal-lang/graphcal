@@ -9,8 +9,8 @@ use crate::semantic_error::evaluation::EvaluationError;
 use crate::source_id::SourceId;
 
 use crate::dimension::Dimension;
-use crate::graphcal_error::GraphcalError;
 use crate::semantic::checked_type::{IndexTypeRef, StructTypeRef, Symbolic};
+use crate::semantic_error::SemanticError;
 use crate::syntax::ast::GenericConstraint;
 use crate::syntax::names::NamePath;
 use crate::syntax::span::Span;
@@ -27,7 +27,7 @@ impl InferEnv<'_> {
     fn infer_hir_generic_type_arg(
         &self,
         value_type: &ValueType,
-    ) -> Result<CheckedType<Symbolic>, GraphcalError> {
+    ) -> Result<CheckedType<Symbolic>, SemanticError> {
         match &value_type.kind {
             ValueTypeKind::Builtin(BuiltinType::Dimensionless) => {
                 Ok(CheckedType::Quantity(Dimension::dimensionless()))
@@ -53,7 +53,7 @@ impl InferEnv<'_> {
                 StructTypeRef::from_resolved(name.value.clone()),
                 vec![],
             )),
-            ValueTypeKind::GenericTypeParam(param) => Err(GraphcalError::located(
+            ValueTypeKind::GenericTypeParam(param) => Err(SemanticError::located(
                 self.src,
                 param.span,
                 EvaluationError::Failed {
@@ -71,7 +71,7 @@ impl InferEnv<'_> {
                     .struct_types
                     .get(&name.value)
                     .ok_or_else(|| {
-                        GraphcalError::internal_error(
+                        SemanticError::internal_error(
                             format!(
                                 "semantic type metadata missing generic type `{}`",
                                 name.value
@@ -91,7 +91,7 @@ impl InferEnv<'_> {
     fn infer_hir_sorted_generic_arg(
         &self,
         arg: &GenericArg,
-    ) -> Result<CheckedGenericArg<Symbolic>, GraphcalError> {
+    ) -> Result<CheckedGenericArg<Symbolic>, SemanticError> {
         match arg {
             GenericArg::Dim(DimArg::Dimensionless(_)) => {
                 Ok(CheckedGenericArg::Dim(Dimension::dimensionless()))
@@ -113,10 +113,10 @@ impl InferEnv<'_> {
 fn inferred_index_from_type_arg(
     index: &IndexRef,
     src: SourceId,
-) -> Result<IndexTypeRef<Symbolic>, GraphcalError> {
+) -> Result<IndexTypeRef<Symbolic>, SemanticError> {
     match index {
         IndexRef::Concrete(name) => Ok(IndexTypeRef::from_resolved(name.value.clone())),
-        IndexRef::GenericParam(param) => Err(GraphcalError::located(
+        IndexRef::GenericParam(param) => Err(SemanticError::located(
             src,
             param.span,
             EvaluationError::Failed {
@@ -135,7 +135,7 @@ fn infer_hir_dim_expr_arg(
     dim_expr: &DimExpr,
     tir: &dyn crate::tir::typed::TirRead,
     src: SourceId,
-) -> Result<Dimension, GraphcalError> {
+) -> Result<Dimension, SemanticError> {
     dim_expr
         .terms
         .iter()
@@ -143,7 +143,7 @@ fn infer_hir_dim_expr_arg(
             let (dim, power, span) = match &item.term.target {
                 DimTermTarget::Dimension(target) => {
                     let dim = tir.dimension(&target.value).cloned().ok_or_else(|| {
-                        GraphcalError::located(
+                        SemanticError::located(
                             src,
                             target.span,
                             DimensionError::UnknownDimension {
@@ -154,7 +154,7 @@ fn infer_hir_dim_expr_arg(
                     (dim, item.term.power, item.term.span)
                 }
                 DimTermTarget::GenericParam(param) => {
-                    return Err(GraphcalError::located(
+                    return Err(SemanticError::located(
                         src,
                         param.span,
                         EvaluationError::Failed {
@@ -167,17 +167,17 @@ fn infer_hir_dim_expr_arg(
                 }
             };
             let powered = dim.pow(power).map_err(|_| {
-                GraphcalError::located(src, span, DimensionError::DimensionOverflow)
+                SemanticError::located(src, span, DimensionError::DimensionOverflow)
             })?;
             match item.op {
                 crate::desugar::desugared_ast::MulDivOp::Mul => {
                     acc.checked_mul(&powered).map_err(|_| {
-                        GraphcalError::located(src, span, DimensionError::DimensionOverflow)
+                        SemanticError::located(src, span, DimensionError::DimensionOverflow)
                     })
                 }
                 crate::desugar::desugared_ast::MulDivOp::Div => {
                     acc.checked_div(&powered).map_err(|_| {
-                        GraphcalError::located(src, span, DimensionError::DimensionOverflow)
+                        SemanticError::located(src, span, DimensionError::DimensionOverflow)
                     })
                 }
             }
@@ -190,7 +190,7 @@ impl InferEnv<'_> {
         type_def: &NominalTypeDef,
         applied_generic_args: &[GenericArg],
         span: Span,
-    ) -> Result<Vec<CheckedGenericArg<Symbolic>>, GraphcalError> {
+    ) -> Result<Vec<CheckedGenericArg<Symbolic>>, SemanticError> {
         if applied_generic_args.is_empty() && type_def.generic_params().is_empty() {
             return Ok(Vec::new());
         }
@@ -207,7 +207,7 @@ impl InferEnv<'_> {
             } else {
                 format!("{required_count}..{total_params}")
             };
-            return Err(GraphcalError::located(
+            return Err(SemanticError::located(
                 self.src,
                 span,
                 EvaluationError::Failed {
@@ -246,7 +246,7 @@ impl InferEnv<'_> {
                 .generic_defaults
                 .get(param.id())
                 .ok_or_else(|| {
-                    GraphcalError::located(
+                    SemanticError::located(
                         self.src,
                         span,
                         EvaluationError::Failed {

@@ -3,10 +3,10 @@
 use super::{DimCheckContext, check_decl_expr_type, check_hir_assert_body, infer};
 use crate::declaration_kind::DeclarationKind;
 use crate::diagnostic_anchor::DiagnosticAnchor;
-use crate::graphcal_error::GraphcalError;
 use crate::outcome::Outcome;
 use crate::resolved_name::{ResolvedDeclName, ResolvedStructTypeName};
 use crate::semantic::checked_type::{CheckedType, Symbolic};
+use crate::semantic_error::SemanticError;
 use crate::semantic_error::visibility::VisibilityError;
 use crate::source_id::SourceId;
 use crate::static_interface::StaticRole;
@@ -40,7 +40,7 @@ fn infer_operand(
     ctx: &DimCheckContext<'_>,
     owner: Option<&ResolvedDeclName>,
     expr: &crate::hir::expr::Expr,
-) -> Result<CheckedType<Symbolic>, Outcome<GraphcalError>> {
+) -> Result<CheckedType<Symbolic>, Outcome<SemanticError>> {
     ctx.infer_hir(expr, owner)
 }
 
@@ -49,7 +49,7 @@ fn emit_violation(
     body: &TemplateBodyIdentity,
     port: &crate::hir::source_interface::StaticPort,
     span: Span,
-) -> Result<(), GraphcalError> {
+) -> Result<(), SemanticError> {
     let check = TemplateClosureCheck {
         kind: port.identity.kind(),
         role: port.role,
@@ -57,7 +57,7 @@ fn emit_violation(
         dependency: StaticDependency::DefaultDefinition,
     };
     let violation = validate(check).map_err(|violation| {
-        GraphcalError::located(
+        SemanticError::located(
             ctx.env.src,
             span,
             VisibilityError::TemplateBodyDependsOnStaticDefault {
@@ -82,7 +82,7 @@ fn check_expr(
     ctx: &DimCheckContext<'_>,
     body: &TemplateBodyIdentity,
     expr: &crate::hir::expr::Expr,
-) -> Result<(), Outcome<GraphcalError>> {
+) -> Result<(), Outcome<SemanticError>> {
     let dependencies = ctx.observations.type_definition_dependencies(expr.id());
     dependencies
         .into_iter()
@@ -116,8 +116,8 @@ fn rigid_dimension_error(
     body: &TemplateBodyIdentity,
     failure: RigidFailure<'_>,
     span: Span,
-    result: Result<(), Outcome<GraphcalError>>,
-) -> Result<(), Outcome<GraphcalError>> {
+    result: Result<(), Outcome<SemanticError>>,
+) -> Result<(), Outcome<SemanticError>> {
     match (result, failure) {
         (Ok(()), _) => Ok(()),
         (Err(error @ Outcome::Cancelled), _) | (Err(error), RigidFailure::Propagate) => Err(error),
@@ -133,7 +133,7 @@ fn check_rigid_plot_field(
     body: &TemplateBodyIdentity,
     failure: RigidFailure<'_>,
     field: &crate::ir::model::LoweredPlotField,
-) -> Result<(), Outcome<GraphcalError>> {
+) -> Result<(), Outcome<SemanticError>> {
     let (property, expected) = match &field.property {
         crate::ir::model::LoweredPlotProperty::Mark(property) => {
             (property.name(), property.value_type())
@@ -145,7 +145,7 @@ fn check_rigid_plot_field(
             (property.name(), property.value_type())
         }
         crate::ir::model::LoweredPlotProperty::Unknown(property) => {
-            return Err(GraphcalError::internal_error(
+            return Err(SemanticError::internal_error(
                 format!("unchecked plot property `{property}` reached rigid validation"),
                 ctx.env.src,
                 DiagnosticAnchor::Source(field.name_span),
@@ -165,7 +165,7 @@ fn check_rigid_plot_field(
 fn check_rigid_value_bodies(
     ctx: &DimCheckContext<'_>,
     failure: RigidFailure<'_>,
-) -> Result<(), Outcome<GraphcalError>> {
+) -> Result<(), Outcome<SemanticError>> {
     for (kind, name, declaration, annotation, body_span) in ctx
         .env
         .dag
@@ -212,7 +212,7 @@ fn check_rigid_value_bodies(
 fn check_rigid_assertion_bodies(
     ctx: &DimCheckContext<'_>,
     failure: RigidFailure<'_>,
-) -> Result<(), Outcome<GraphcalError>> {
+) -> Result<(), Outcome<SemanticError>> {
     for entry in ctx.env.dag.asserts() {
         let Some(owner) = local_owner(ctx, entry.identity()) else {
             continue;
@@ -236,7 +236,7 @@ fn check_rigid_assertion_bodies(
 fn check_rigid_plot_bodies(
     ctx: &DimCheckContext<'_>,
     failure: RigidFailure<'_>,
-) -> Result<(), Outcome<GraphcalError>> {
+) -> Result<(), Outcome<SemanticError>> {
     for entry in ctx.env.dag.plots() {
         let Some(owner) = local_owner(ctx, entry.identity()) else {
             continue;
@@ -276,7 +276,7 @@ fn check_rigid_plot_bodies(
 fn check_rigid_composition_bodies(
     ctx: &DimCheckContext<'_>,
     failure: RigidFailure<'_>,
-) -> Result<(), Outcome<GraphcalError>> {
+) -> Result<(), Outcome<SemanticError>> {
     for (kind, name, declaration, fields) in ctx
         .env
         .dag
@@ -315,7 +315,7 @@ fn check_rigid_composition_bodies(
 fn check_rigid_unit_bodies(
     ctx: &DimCheckContext<'_>,
     failure: RigidFailure<'_>,
-) -> Result<(), Outcome<GraphcalError>> {
+) -> Result<(), Outcome<SemanticError>> {
     for entry in ctx.env.dag.semantic.dynamic_unit_scales.values() {
         if entry.unit.owner() != ctx.env.dag.dag_id() {
             continue;
@@ -346,11 +346,11 @@ fn check_in_rigid_view<R>(
     failure: RigidFailure<'_>,
     src: SourceId,
     cancellation: &crate::cancellation::CancellationToken,
-    plots: impl FnOnce(&DimCheckContext<'_>) -> Result<R, Outcome<GraphcalError>>,
-) -> Result<(R, infer::hir::FinishedObservations), Outcome<GraphcalError>> {
+    plots: impl FnOnce(&DimCheckContext<'_>) -> Result<R, Outcome<SemanticError>>,
+) -> Result<(R, infer::hir::FinishedObservations), Outcome<SemanticError>> {
     let rigid_tir = crate::tir::typed::rigid_dimension_view(tir, template.dag_id(), ports, src)?;
     let rigid_dag = rigid_tir.dags.get(template.dag_id()).ok_or_else(|| {
-        GraphcalError::internal_error(
+        SemanticError::internal_error(
             format!("rigid template DAG `{}` is unavailable", template.dag_id()),
             src,
             DiagnosticAnchor::WholeFile,
@@ -380,7 +380,7 @@ fn check_rigid_dimension_port(
     ctx: &DimCheckContext<'_>,
     port: &crate::hir::source_interface::StaticPort,
     dimension: &crate::resolved_name::ResolvedDimName,
-) -> Result<(), Outcome<GraphcalError>> {
+) -> Result<(), Outcome<SemanticError>> {
     let failure = RigidFailure::Violation(port);
     check_in_rigid_view(
         ctx.assembly,
@@ -415,7 +415,7 @@ pub(super) fn port_generic_trees(
     ports: &[crate::resolved_name::ResolvedDimName],
     src: SourceId,
     cancellation: &crate::cancellation::CancellationToken,
-) -> Result<PortGenericTrees, Outcome<GraphcalError>> {
+) -> Result<PortGenericTrees, Outcome<SemanticError>> {
     let (plot_channels, finished) = check_in_rigid_view(
         tir,
         template,
@@ -444,7 +444,7 @@ pub(super) fn port_generic_trees(
     })
 }
 
-fn check_rigid_dimensions(ctx: &DimCheckContext<'_>) -> Result<(), Outcome<GraphcalError>> {
+fn check_rigid_dimensions(ctx: &DimCheckContext<'_>) -> Result<(), Outcome<SemanticError>> {
     ctx.env
         .dag
         .static_ports()
@@ -460,7 +460,7 @@ fn check_rigid_dimensions(ctx: &DimCheckContext<'_>) -> Result<(), Outcome<Graph
         .try_for_each(|(port, identity)| check_rigid_dimension_port(ctx, port, identity))
 }
 
-fn check_template_value_bodies(ctx: &DimCheckContext<'_>) -> Result<(), Outcome<GraphcalError>> {
+fn check_template_value_bodies(ctx: &DimCheckContext<'_>) -> Result<(), Outcome<SemanticError>> {
     for (kind, name, declaration, expr) in ctx
         .env
         .dag
@@ -499,7 +499,7 @@ fn check_template_value_bodies(ctx: &DimCheckContext<'_>) -> Result<(), Outcome<
 
 fn check_template_assertion_bodies(
     ctx: &DimCheckContext<'_>,
-) -> Result<(), Outcome<GraphcalError>> {
+) -> Result<(), Outcome<SemanticError>> {
     for entry in ctx.env.dag.asserts() {
         ctx.checkpoint()?;
         if local_owner(ctx, entry.identity()).is_none() {
@@ -525,7 +525,7 @@ fn check_template_assertion_bodies(
     Ok(())
 }
 
-fn check_template_plot_bodies(ctx: &DimCheckContext<'_>) -> Result<(), Outcome<GraphcalError>> {
+fn check_template_plot_bodies(ctx: &DimCheckContext<'_>) -> Result<(), Outcome<SemanticError>> {
     for entry in ctx.env.dag.plots() {
         if local_owner(ctx, entry.identity()).is_none() {
             continue;
@@ -550,7 +550,7 @@ fn check_template_plot_bodies(ctx: &DimCheckContext<'_>) -> Result<(), Outcome<G
 
 fn check_template_composition_bodies(
     ctx: &DimCheckContext<'_>,
-) -> Result<(), Outcome<GraphcalError>> {
+) -> Result<(), Outcome<SemanticError>> {
     for (kind, name, declaration, fields) in ctx
         .env
         .dag
@@ -586,7 +586,7 @@ fn check_template_composition_bodies(
     Ok(())
 }
 
-fn check_template_unit_bodies(ctx: &DimCheckContext<'_>) -> Result<(), Outcome<GraphcalError>> {
+fn check_template_unit_bodies(ctx: &DimCheckContext<'_>) -> Result<(), Outcome<SemanticError>> {
     for entry in ctx.env.dag.semantic.dynamic_unit_scales.values() {
         if entry.unit.owner() != ctx.env.dag.dag_id() {
             continue;
@@ -603,7 +603,7 @@ fn check_template_unit_bodies(ctx: &DimCheckContext<'_>) -> Result<(), Outcome<G
 /// Validate every source-authored executable body in one reusable DAG.
 pub(super) fn check_template_body_closure(
     ctx: &DimCheckContext<'_>,
-) -> Result<(), Outcome<GraphcalError>> {
+) -> Result<(), Outcome<SemanticError>> {
     check_rigid_dimensions(ctx)?;
     check_template_value_bodies(ctx)?;
     check_template_assertion_bodies(ctx)?;

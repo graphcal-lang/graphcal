@@ -10,8 +10,8 @@
 
 use graphcal_compiler::dag_id::DagId;
 use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
-use graphcal_compiler::graphcal_error::GraphcalError;
 use graphcal_compiler::resolved_name::ResolvedDeclName;
+use graphcal_compiler::semantic_error::SemanticError;
 use graphcal_compiler::source_id::SourceId;
 use graphcal_compiler::syntax::module_name::ScopedName;
 use graphcal_compiler::syntax::non_empty::NonEmpty;
@@ -45,9 +45,9 @@ pub(super) fn instance_member_name(
     root: &DagId,
     declaration: &ResolvedDeclName,
     src: SourceId,
-) -> Result<ScopedName, GraphcalError> {
+) -> Result<ScopedName, SemanticError> {
     member_name(root, declaration).ok_or_else(|| {
-        GraphcalError::internal_error(
+        SemanticError::internal_error(
             format!("declaration `{declaration}` is not a member of an instance below the root"),
             src,
             DiagnosticAnchor::WholeFile,

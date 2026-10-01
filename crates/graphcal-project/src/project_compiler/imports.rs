@@ -9,11 +9,11 @@ use std::collections::{HashMap, HashSet};
 
 use graphcal_compiler::declaration_category::{DeclCategory, ValueDeclCategory};
 use graphcal_compiler::desugar::desugared_ast::ModulePath;
-use graphcal_compiler::graphcal_error::GraphcalError;
 use graphcal_compiler::ir::resolve::{ImportedValueNames, ScopedName};
 use graphcal_compiler::outcome::Outcome;
 use graphcal_compiler::resolved_name::ResolvedDeclName;
 use graphcal_compiler::semantic::index_def::IndexBindingTarget;
+use graphcal_compiler::semantic_error::SemanticError;
 use graphcal_compiler::semantic_error::attribute::AttributeError;
 use graphcal_compiler::semantic_error::evaluation::EvaluationError;
 use graphcal_compiler::semantic_error::graph::GraphError;
@@ -201,7 +201,7 @@ pub(super) fn process_file_body_declarations<'a>(
             continue;
         }
         let Some((target_loaded, target_dag)) = project.inline_dag(target.target()) else {
-            return Err(PipelineError::Semantic(GraphcalError::located(
+            return Err(PipelineError::Semantic(SemanticError::located(
                 file_src,
                 include.path.span(),
                 EvaluationError::Failed {
@@ -216,7 +216,7 @@ pub(super) fn process_file_body_declarations<'a>(
         if !target_dag.declaration(target_loaded).visibility.is_public()
             && target.source_file() != file_dag_id
         {
-            return Err(PipelineError::Semantic(GraphcalError::located(
+            return Err(PipelineError::Semantic(SemanticError::located(
                 file_src,
                 include.path.leaf().span,
                 VisibilityError::ImportPrivateItem {
@@ -250,7 +250,7 @@ fn ensure_include_item_selectable(
 ) -> Result<(), PipelineError> {
     match interface.exposure(name, namespace) {
         Some(DeclExposure::ExplicitExport | DeclExposure::InputPort) => Ok(()),
-        Some(DeclExposure::Private) => Err(PipelineError::Semantic(GraphcalError::located(
+        Some(DeclExposure::Private) => Err(PipelineError::Semantic(SemanticError::located(
             file_src,
             span,
             VisibilityError::ImportPrivateItem {
@@ -258,7 +258,7 @@ fn ensure_include_item_selectable(
                 file_path: file_path.to_string(),
             },
         ))),
-        None => Err(PipelineError::Semantic(GraphcalError::located(
+        None => Err(PipelineError::Semantic(SemanticError::located(
             file_src,
             span,
             ModuleError::ImportNameNotFound {
@@ -279,7 +279,7 @@ fn validate_static_import_capability(
     match static_import_rejection(dependency, name, namespace) {
         None => Ok(()),
         Some(StaticImportRejection::RequiredInput { kind, name }) => {
-            Err(PipelineError::Semantic(GraphcalError::located(
+            Err(PipelineError::Semantic(SemanticError::located(
                 src,
                 span,
                 ModuleError::ImportRequiredStaticInput {
@@ -289,7 +289,7 @@ fn validate_static_import_capability(
             )))
         }
         Some(StaticImportRejection::UnresolvedDependency(dependency)) => {
-            Err(PipelineError::Semantic(GraphcalError::located(
+            Err(PipelineError::Semantic(SemanticError::located(
                 src,
                 span,
                 ModuleError::ImportUnresolvedStaticDependency {
@@ -345,7 +345,7 @@ fn reject_runtime_unit_import(
 ) -> Result<(), PipelineError> {
     let unit_name = graphcal_compiler::syntax::dimension::UnitName::classify(name.clone());
     if dep.runtime_units().contains(&unit_name) {
-        return Err(PipelineError::Semantic(GraphcalError::located(
+        return Err(PipelineError::Semantic(SemanticError::located(
             src,
             span,
             ModuleError::ImportRuntimeUnit {
@@ -423,7 +423,7 @@ fn validate_include_item_attributes(
         match validated.name() {
             AttributeName::Hidden => {
                 if !attr.args.is_empty() {
-                    return Err(PipelineError::Semantic(GraphcalError::located(
+                    return Err(PipelineError::Semantic(SemanticError::located(
                         file_src,
                         attr.span,
                         EvaluationError::Failed {
@@ -435,14 +435,14 @@ fn validate_include_item_attributes(
             }
             AttributeName::ExpectedFail => {}
             AttributeName::Assumes => {
-                return Err(PipelineError::Semantic(GraphcalError::internal_error(
+                return Err(PipelineError::Semantic(SemanticError::internal_error(
                     "attribute applicability accepted assumes on an include item",
                     file_src,
                     graphcal_compiler::diagnostic_anchor::DiagnosticAnchor::Source(attr.span),
                 )));
             }
             AttributeName::Lazy => {
-                return Err(PipelineError::Semantic(GraphcalError::located(
+                return Err(PipelineError::Semantic(SemanticError::located(
                     file_src,
                     attr.span,
                     AttributeError::LazyNotSupported,
@@ -460,7 +460,7 @@ fn exported_bindings(
     span: Span,
 ) -> Result<Vec<graphcal_compiler::resolve::exports::ExportedBinding>, PipelineError> {
     resolver.exported_bindings(owner).map_err(|error| {
-        PipelineError::Semantic(GraphcalError::internal_error(
+        PipelineError::Semantic(SemanticError::internal_error(
             format!("module resolver could not enumerate exports of `{owner}`: {error}"),
             file_src,
             graphcal_compiler::diagnostic_anchor::DiagnosticAnchor::Source(span),
@@ -569,7 +569,7 @@ fn resolve_include_static_bindings(
     } = authored;
     let resolver = scope.resolver();
     let missing_port = |kind: &str, port: &dyn std::fmt::Display| {
-        PipelineError::Semantic(GraphcalError::internal_error(
+        PipelineError::Semantic(SemanticError::internal_error(
             format!("template {kind} port `{port}` has no canonical identity"),
             src,
             graphcal_compiler::diagnostic_anchor::DiagnosticAnchor::WholeFile,
@@ -588,7 +588,7 @@ fn resolve_include_static_bindings(
                     .resolve_index_path(scope.owner(), &NamePath::local(target.atom().clone()))
                     .map(SymbolRef::into_resolved)
                     .map_err(|_| {
-                        PipelineError::Semantic(GraphcalError::located(
+                        PipelineError::Semantic(SemanticError::located(
                             src,
                             span,
                             ModuleError::IndexBindingNotAnIndex {
@@ -707,7 +707,7 @@ fn classify_param_bindings(
             }
             InputBindingCategory::Unmarked => {
                 if let Some(kind) = non_param_binding_kind(dep, binding_name.atom()) {
-                    return Err(PipelineError::Semantic(GraphcalError::located(
+                    return Err(PipelineError::Semantic(SemanticError::located(
                         file_src,
                         binding.name.span,
                         ModuleError::BindingNotAParam {
@@ -716,7 +716,7 @@ fn classify_param_bindings(
                         },
                     )));
                 }
-                return Err(PipelineError::Semantic(GraphcalError::located(
+                return Err(PipelineError::Semantic(SemanticError::located(
                     file_src,
                     binding.name.span,
                     ModuleError::UnknownParamBinding {
@@ -726,7 +726,7 @@ fn classify_param_bindings(
                 )));
             }
             category => {
-                return Err(PipelineError::Semantic(GraphcalError::located(
+                return Err(PipelineError::Semantic(SemanticError::located(
                     file_src,
                     binding.name.span,
                     ModuleError::DagInputCategoryMismatch {
@@ -800,7 +800,7 @@ fn validate_concrete_static_binding_targets(
     });
     match invalid_type.or(invalid_dimension).or(invalid_index) {
         None => Ok(()),
-        Some((kind, name, target)) => Err(PipelineError::Semantic(GraphcalError::located(
+        Some((kind, name, target)) => Err(PipelineError::Semantic(SemanticError::located(
             file_src,
             include_span,
             ModuleError::InvalidStaticBindingTarget { kind, name, target },
@@ -858,7 +858,7 @@ fn validate_required_static_bindings(
     let Some((kind, name)) = missing.into_iter().next() else {
         return Ok(());
     };
-    Err(PipelineError::Semantic(GraphcalError::located(
+    Err(PipelineError::Semantic(SemanticError::located(
         file_src,
         include_span,
         IndexError::RequiredStaticInputNotBound { kind, name },
@@ -912,7 +912,7 @@ fn validate_required_param_bindings(
     }
 
     missing.sort();
-    Err(PipelineError::Semantic(GraphcalError::located(
+    Err(PipelineError::Semantic(SemanticError::located(
         file_src,
         include_span,
         GraphError::MissingDagBindings {
@@ -943,7 +943,7 @@ pub(super) fn process_file_include<'a>(
     } = *including;
     let module_resolver = importer_scope.resolver();
     let dependency = project.module(target.target()).ok_or_else(|| {
-        PipelineError::Semantic(GraphcalError::internal_error(
+        PipelineError::Semantic(SemanticError::internal_error(
             format!("included module `{}` is not loaded", target.target()),
             file_src,
             graphcal_compiler::diagnostic_anchor::DiagnosticAnchor::Source(
@@ -967,7 +967,7 @@ pub(super) fn process_file_include<'a>(
     let instance_scope = include_decl.instance_scope();
     if let ScopeSegment::Named(prefix) = &instance_scope {
         if let Some(first) = ctx.module_map.get(prefix) {
-            return Err(PipelineError::Semantic(GraphcalError::located(
+            return Err(PipelineError::Semantic(SemanticError::located(
                 file_src,
                 include_decl.path.span(),
                 ModuleError::DuplicateModuleName {
@@ -1217,7 +1217,7 @@ pub(super) fn process_inline_dag_include<'a>(
     let instance_scope = include_decl.instance_scope();
     if let ScopeSegment::Named(prefix) = &instance_scope {
         if let Some(first) = ctx.module_map.get(prefix) {
-            return Err(PipelineError::Semantic(GraphcalError::located(
+            return Err(PipelineError::Semantic(SemanticError::located(
                 file_src,
                 include_decl.path.span(),
                 ModuleError::DuplicateModuleName {
@@ -1435,7 +1435,7 @@ pub(super) fn process_pure_import<'a>(
     let import_path = import.path();
     let module_target = resolved_module.target();
     let dep_module = project.module(module_target).ok_or_else(|| {
-        PipelineError::Semantic(GraphcalError::internal_error(
+        PipelineError::Semantic(SemanticError::internal_error(
             format!("inline module `{module_target}` has no owning declaration"),
             file_src,
             graphcal_compiler::diagnostic_anchor::DiagnosticAnchor::Source(import_path.span()),
@@ -1450,7 +1450,7 @@ pub(super) fn process_pure_import<'a>(
     let exported_bindings = module_resolver
         .exported_bindings(module_target)
         .map_err(|error| {
-            PipelineError::Semantic(GraphcalError::internal_error(
+            PipelineError::Semantic(SemanticError::internal_error(
                 format!(
                     "module resolver could not enumerate exports of `{module_target}`: {error}"
                 ),
@@ -1481,7 +1481,7 @@ pub(super) fn process_pure_import<'a>(
                     && !dep_interface.exposes_item(orig_name.atom(), import_item.namespace)
                 {
                     if dep_interface.has_item(orig_name.atom(), import_item.namespace) {
-                        return Err(PipelineError::Semantic(GraphcalError::located(
+                        return Err(PipelineError::Semantic(SemanticError::located(
                             file_src,
                             import_item.name.span,
                             VisibilityError::ImportPrivateItem {
@@ -1555,7 +1555,7 @@ pub(super) fn process_pure_import<'a>(
                     })
                     .or_else(|| dep_interface.pure_import_term_disposition(orig_name.atom()))
                     .ok_or_else(|| {
-                        PipelineError::Semantic(GraphcalError::located(
+                        PipelineError::Semantic(SemanticError::located(
                             file_src,
                             import_item.name.span,
                             ModuleError::ImportNameNotFound {
@@ -1586,7 +1586,7 @@ pub(super) fn process_pure_import<'a>(
                             .and_then(|binding| binding.target.declaration())
                             .cloned()
                             .ok_or_else(|| {
-                                PipelineError::Semantic(GraphcalError::internal_error(format!(
+                                PipelineError::Semantic(SemanticError::internal_error(format!(
                                         "exported constant `{orig_name}` has no canonical declaration target"
                                     ), file_src, graphcal_compiler::diagnostic_anchor::DiagnosticAnchor::Source(import_item.name.span)))
                             })?;
@@ -1617,7 +1617,7 @@ pub(super) fn process_pure_import<'a>(
                 |alias_ident| alias_ident.value.clone(),
             );
             if let Some(first) = ctx.module_map.get(&module_name) {
-                return Err(PipelineError::Semantic(GraphcalError::located(
+                return Err(PipelineError::Semantic(SemanticError::located(
                     file_src,
                     import_path.span(),
                     ModuleError::DuplicateModuleName {
@@ -1680,7 +1680,7 @@ fn insert_imported_binding(
             .chain(&imported_names.node_names)
             .find_map(|(name, first_span)| (name == &lexical_name).then_some(*first_span))
             .unwrap_or(span);
-        return Err(PipelineError::Semantic(GraphcalError::located(
+        return Err(PipelineError::Semantic(SemanticError::located(
             src,
             span,
             NameError::DuplicateName {

@@ -8,8 +8,8 @@ use crate::resolved_name::ResolvedConstructorName;
 use crate::semantic_error::evaluation::EvaluationError;
 use crate::semantic_error::structure::StructError;
 
-use crate::graphcal_error::GraphcalError;
 use crate::semantic::checked_type::{StructTypeRef, Symbolic};
+use crate::semantic_error::SemanticError;
 use crate::syntax::type_name::FieldName;
 
 use crate::semantic::checked_type::CheckedType;
@@ -34,10 +34,10 @@ impl Infer<'_> {
         &self,
         inner: &Expr,
         field: &crate::syntax::span::Spanned<FieldName>,
-    ) -> Result<CheckedType<Symbolic>, Outcome<GraphcalError>> {
+    ) -> Result<CheckedType<Symbolic>, Outcome<SemanticError>> {
         let inner_type = self.infer_hir_type(inner)?;
         let CheckedType::Struct(type_name, type_args) = &inner_type else {
-            return Err(GraphcalError::located(
+            return Err(SemanticError::located(
                 self.env.src,
                 inner.span,
                 StructError::NotAStruct {
@@ -56,7 +56,7 @@ impl Infer<'_> {
         let type_def =
             struct_type_def_for_inferred(type_name, Some(self.env.dag), self.env.registry)
                 .ok_or_else(|| {
-                    GraphcalError::located(
+                    SemanticError::located(
                         self.env.src,
                         inner.span,
                         StructError::UnknownStructType {
@@ -73,7 +73,7 @@ impl Infer<'_> {
                     type_name.name()
                 )
             };
-            GraphcalError::located(
+            SemanticError::located(
                 self.env.src,
                 inner.span,
                 StructError::NotAStruct { name: detail },
@@ -84,7 +84,7 @@ impl Infer<'_> {
             .iter()
             .any(|field_def| field_def.name() == &field.value)
         {
-            return Err(GraphcalError::located(
+            return Err(SemanticError::located(
                 self.env.src,
                 field.span,
                 StructError::UnknownField {
@@ -114,7 +114,7 @@ impl Infer<'_> {
         callee: &crate::syntax::span::Spanned<ResolvedConstructorName>,
         constructor_generic_args: &[GenericArg],
         fields: &[FieldInit],
-    ) -> Result<CheckedType<Symbolic>, Outcome<GraphcalError>> {
+    ) -> Result<CheckedType<Symbolic>, Outcome<SemanticError>> {
         let target = self.env.resolved_constructor(&callee.value, callee.span)?;
         self.check_type_override_dependency(
             target.owning_type(),
@@ -144,7 +144,7 @@ impl Infer<'_> {
         let mut seen_fields = std::collections::HashSet::new();
         for field in fields {
             if !seen_fields.insert(field.name.value.clone()) {
-                return Err(GraphcalError::located(
+                return Err(SemanticError::located(
                     self.env.src,
                     field.name.span,
                     EvaluationError::Failed {
@@ -164,7 +164,7 @@ impl Infer<'_> {
             .map(|name| (*name).clone())
             .collect();
         if !extra.is_empty() {
-            return Err(GraphcalError::located(
+            return Err(SemanticError::located(
                 self.env.src,
                 expr.span,
                 StructError::ExtraFields {
@@ -184,7 +184,7 @@ impl Infer<'_> {
             .map(|field| field.name().clone())
             .collect();
         if !missing.is_empty() {
-            return Err(GraphcalError::located(
+            return Err(SemanticError::located(
                 self.env.src,
                 expr.span,
                 StructError::MissingFields {
@@ -201,7 +201,7 @@ impl Infer<'_> {
                 .iter()
                 .find(|field| field.name() == &field_init.name.value)
                 .ok_or_else(|| {
-                    GraphcalError::located(
+                    SemanticError::located(
                         self.env.src,
                         field_init.name.span,
                         EvaluationError::Failed {
@@ -226,7 +226,7 @@ impl Infer<'_> {
             if value_type != expected {
                 let (expected, found) =
                     format_distinct_types(&expected, &value_type, self.env.registry);
-                return Err(GraphcalError::located(
+                return Err(SemanticError::located(
                     self.env.src,
                     field_init.name.span,
                     StructError::FieldDimensionMismatch {

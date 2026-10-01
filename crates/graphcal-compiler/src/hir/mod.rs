@@ -38,7 +38,7 @@ pub mod source_interface;
 pub mod type_annotation;
 pub mod types;
 
-pub use diagnostics::expr_lower_error_to_graphcal;
+pub use diagnostics::expr_lower_error_to_semantic;
 pub use expr_lower::context::ExprLoweringContext;
 pub use expr_lower::context::{BindingOverlay, FrozenBindings};
 pub use expr_lower::error::ExprLowerError;

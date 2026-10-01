@@ -8,7 +8,6 @@ use super::{
 };
 use crate::diagnostic_anchor::DiagnosticAnchor;
 use crate::dimension::{BaseDimId, Dimension};
-use crate::graphcal_error::GraphcalError;
 use crate::ir::instance::HirInstanceRecord;
 use crate::ir::instance::frame::InstanceFrame;
 use crate::ir::instance::identity::{instance_declaration, projection_alias, template_declaration};
@@ -21,6 +20,7 @@ use crate::resolved_name::{
     ResolvedDeclName, ResolvedDimName, ResolvedIndexName, ResolvedStructTypeName, ResolvedUnitName,
 };
 use crate::semantic::checked_type::{Concreteness, IndexTypeRef, StructTypeRef};
+use crate::semantic_error::SemanticError;
 use crate::source_id::SourceId;
 use crate::syntax::dimension::UnitName;
 use crate::tir::presentation::DagPresentationFacts;
@@ -51,7 +51,7 @@ fn specialize_dimension(
     substitution: &StaticSubstitution,
     types: &ProjectTypeStore,
     src: SourceId,
-) -> Result<Dimension, GraphcalError> {
+) -> Result<Dimension, SemanticError> {
     dimension.iter().try_fold(
         Dimension::dimensionless(),
         |acc, (base, exponent)| {
@@ -60,7 +60,7 @@ fn specialize_dimension(
                     || Ok(Dimension::base(base.clone())),
                     |target| {
                         types.get_dimension(target).cloned().ok_or_else(|| {
-                            GraphcalError::internal_error(
+                            SemanticError::internal_error(
                                 format!(
                                     "semantic specialization dimension target `{target}` is unavailable"
                                 ),
@@ -73,14 +73,14 @@ fn specialize_dimension(
                 BaseDimId::Prelude(_) => Dimension::base(base.clone()),
             };
             let factor = factor.pow(*exponent).map_err(|error| {
-                GraphcalError::internal_error(
+                SemanticError::internal_error(
                     format!("semantic dimension substitution overflowed: {error}"),
                     src,
                     DiagnosticAnchor::WholeFile,
                 )
             })?;
             acc.checked_mul(&factor).map_err(|error| {
-                GraphcalError::internal_error(
+                SemanticError::internal_error(
                     format!("semantic dimension substitution overflowed: {error}"),
                     src,
                     DiagnosticAnchor::WholeFile,
@@ -112,7 +112,7 @@ fn specialize_dim_arg(
     substitution: &StaticSubstitution,
     types: &ProjectTypeStore,
     src: SourceId,
-) -> Result<ResolvedDim, GraphcalError> {
+) -> Result<ResolvedDim, SemanticError> {
     match dimension {
         ResolvedDim::Concrete(dimension) => {
             specialize_dimension(dimension, substitution, types, src).map(ResolvedDim::Concrete)
@@ -141,7 +141,7 @@ fn specialize_value_type(
     substitution: &StaticSubstitution,
     types: &ProjectTypeStore,
     src: SourceId,
-) -> Result<ResolvedValueType, GraphcalError> {
+) -> Result<ResolvedValueType, SemanticError> {
     match resolved {
         ResolvedValueType::Quantity(dimension) => {
             specialize_dim_arg(dimension, substitution, types, src).map(ResolvedValueType::Quantity)
@@ -200,7 +200,7 @@ pub fn specialize_type(
     substitution: &StaticSubstitution,
     types: &ProjectTypeStore,
     src: SourceId,
-) -> Result<ResolvedDeclType, GraphcalError> {
+) -> Result<ResolvedDeclType, SemanticError> {
     match resolved {
         ResolvedDeclType::Value(value_type) => {
             specialize_value_type(value_type, substitution, types, src).map(ResolvedDeclType::Value)
@@ -245,7 +245,7 @@ pub fn specialize_expression_type<V: Concreteness>(
     substitution: &StaticSubstitution,
     tir: &dyn super::TirRead,
     src: SourceId,
-) -> Result<crate::semantic::checked_type::CheckedType<V>, GraphcalError> {
+) -> Result<crate::semantic::checked_type::CheckedType<V>, SemanticError> {
     use crate::semantic::checked_type::{CheckedGenericArg, CheckedType};
     let recurse = |ty: &CheckedType<V>| specialize_expression_type(ty, substitution, tir, src);
     Ok(match ty {
@@ -286,7 +286,7 @@ pub fn specialize_expression_type<V: Concreteness>(
                         CheckedGenericArg::Nat(_) => arg.clone(),
                     })
                 })
-                .collect::<Result<_, GraphcalError>>()?,
+                .collect::<Result<_, SemanticError>>()?,
         ),
         CheckedType::Bool | CheckedType::Int | CheckedType::Datetime(_) => ty.clone(),
     })
@@ -297,7 +297,7 @@ fn specialize_plot_channel(
     substitution: &StaticSubstitution,
     tir: &UncheckedTir,
     src: SourceId,
-) -> Result<PlotChannelShape, GraphcalError> {
+) -> Result<PlotChannelShape, SemanticError> {
     let leaf = match channel.leaf() {
         crate::plot_shape::PlotLeafKind::Quantity(dimension) => {
             crate::plot_shape::PlotLeafKind::Quantity(specialize_dimension(
@@ -473,7 +473,7 @@ fn specialize_instance_declarations(
     instance: &mut DagTIR,
     edge: &HirInstanceRecord,
     src: SourceId,
-) -> Result<(), GraphcalError> {
+) -> Result<(), SemanticError> {
     let owner = edge.instance.id().owner();
     let specialization = edge.instance.specialization();
     // Bound value ports replace the template default of the parameter they
@@ -488,7 +488,7 @@ fn specialize_instance_declarations(
             decl
         })
         .map_err(|error| {
-            GraphcalError::internal_error(
+            SemanticError::internal_error(
                 format!("failed to rebase semantic instance `{owner}`: {error}"),
                 src,
                 DiagnosticAnchor::WholeFile,
@@ -526,7 +526,7 @@ fn specialize_dynamic_unit_scales(
     specialization: &StaticSpecializationId,
     tir: &UncheckedTir,
     src: SourceId,
-) -> Result<(), GraphcalError> {
+) -> Result<(), SemanticError> {
     instance.semantic.dynamic_unit_scales = instance
         .semantic
         .dynamic_unit_scales
@@ -549,7 +549,7 @@ fn specialize_dynamic_unit_scales(
             )?;
             Ok((unit, entry))
         })
-        .collect::<Result<_, GraphcalError>>()?;
+        .collect::<Result<_, SemanticError>>()?;
     Ok(())
 }
 
@@ -558,7 +558,7 @@ fn specialize_instance_semantics(
     edge: &HirInstanceRecord,
     tir: &UncheckedTir,
     src: SourceId,
-) -> Result<(), GraphcalError> {
+) -> Result<(), SemanticError> {
     let specialization = edge.instance.specialization();
     let specialized = instance
         .value_decl_types()
@@ -613,7 +613,7 @@ fn clone_checked_instance(
     runtime_units: impl IntoIterator<Item = UnitName>,
     tir: &UncheckedTir,
     src: SourceId,
-) -> Result<DagTIR, GraphcalError> {
+) -> Result<DagTIR, SemanticError> {
     // An instance rebinding a defaulted dimension port is built from the
     // template's view where that port is rigid, then specialized like a
     // required port.
@@ -626,7 +626,7 @@ fn clone_checked_instance(
     } else {
         rigid_tir = super::rigid_dimension_view(tir, template.dag_id(), &ports, src)?;
         rigid_tir.dags.get(template.dag_id()).ok_or_else(|| {
-            GraphcalError::internal_error(
+            SemanticError::internal_error(
                 format!(
                     "rigid template `{}` is unavailable for semantic instance",
                     template.dag_id()
@@ -671,7 +671,7 @@ fn specialize_instance_presentation_facts(
     presentation: &HashMap<crate::dag_id::DagId, DagPresentationFacts>,
     port_generic_plot_channels: &HashMap<crate::dag_id::DagId, PlotChannels>,
     src: SourceId,
-) -> Result<Vec<(crate::dag_id::DagId, DagPresentationFacts)>, GraphcalError> {
+) -> Result<Vec<(crate::dag_id::DagId, DagPresentationFacts)>, SemanticError> {
     tir.dags
         .local_iter()
         .filter_map(|(owner, dag)| {
@@ -682,7 +682,7 @@ fn specialize_instance_presentation_facts(
         .map(|(owner, specialization, frame)| {
             let template = checked_presentation(tir, presentation, &specialization.template)
                 .ok_or_else(|| {
-                    GraphcalError::internal_error(
+                    SemanticError::internal_error(
                         format!(
                             "semantic instance `{owner}` has no presentation template `{}`",
                             specialization.template
@@ -705,7 +705,7 @@ fn specialize_instance_presentation_facts(
                         .collect::<Result<_, _>>()
                         .map(|channels| (frame.rebase(plot), channels))
                 })
-                .collect::<Result<_, GraphcalError>>()?;
+                .collect::<Result<_, SemanticError>>()?;
             Ok((owner.clone(), DagPresentationFacts { plot_channels }))
         })
         .collect()
@@ -720,12 +720,12 @@ fn add_plot_projections_for_dag(
     visiting: &mut HashSet<crate::dag_id::DagId>,
     complete: &mut HashSet<crate::dag_id::DagId>,
     src: SourceId,
-) -> Result<(), GraphcalError> {
+) -> Result<(), SemanticError> {
     if complete.contains(parent) {
         return Ok(());
     }
     if !visiting.insert(parent.clone()) {
-        return Err(GraphcalError::internal_error(
+        return Err(SemanticError::internal_error(
             format!("semantic plot projection cycle reached `{parent}`"),
             src,
             DiagnosticAnchor::WholeFile,
@@ -735,7 +735,7 @@ fn add_plot_projections_for_dag(
         .dags
         .get(parent)
         .ok_or_else(|| {
-            GraphcalError::internal_error(
+            SemanticError::internal_error(
                 format!("semantic plot projection parent `{parent}` is unavailable"),
                 src,
                 DiagnosticAnchor::WholeFile,
@@ -769,7 +769,7 @@ fn add_plot_projections_for_dag(
             .and_then(|instance| instance.plot_channels.get(&target))
             .cloned()
             .ok_or_else(|| {
-                GraphcalError::internal_error(
+                SemanticError::internal_error(
                     format!(
                         "semantic plot projection `{target}` has no checked presentation facts"
                     ),
@@ -802,7 +802,7 @@ pub fn add_semantic_presentation_facts(
     presentation: &mut HashMap<crate::dag_id::DagId, DagPresentationFacts>,
     port_generic_plot_channels: &HashMap<crate::dag_id::DagId, PlotChannels>,
     src: SourceId,
-) -> Result<(), GraphcalError> {
+) -> Result<(), SemanticError> {
     let instances =
         specialize_instance_presentation_facts(tir, presentation, port_generic_plot_channels, src)?;
     presentation.extend(instances);
@@ -844,14 +844,14 @@ fn instantiate_semantic_edge(
     tir: &mut UncheckedTir,
     edge: &HirInstanceRecord,
     src: SourceId,
-) -> Result<(), GraphcalError> {
+) -> Result<(), SemanticError> {
     let owner = edge.instance.id().owner();
     let parent = edge.instance.id().parent();
     let template = tir
         .dags
         .get(edge.instance.id().template())
         .ok_or_else(|| {
-            GraphcalError::internal_error(
+            SemanticError::internal_error(
                 format!(
                     "checked template `{}` is unavailable for semantic instance `{owner}`",
                     edge.instance.id().template()
@@ -879,7 +879,7 @@ fn instantiate_semantic_edge(
         .map(|name| {
             let source: ResolvedUnitName = template_declaration(edge.instance.id(), name.clone());
             let mut info = tir.unit_info(&source).cloned().ok_or_else(|| {
-                GraphcalError::internal_error(
+                SemanticError::internal_error(
                     format!("template runtime unit `{source}` has no checked definition"),
                     src,
                     DiagnosticAnchor::WholeFile,
@@ -893,14 +893,14 @@ fn instantiate_semantic_edge(
             )?;
             Ok((instance_declaration(edge.instance.id(), name), info))
         })
-        .collect::<Result<Vec<_>, GraphcalError>>()?;
+        .collect::<Result<Vec<_>, SemanticError>>()?;
     // The edge is materialized in the frame of the DAG that includes it: the
     // instance's parent, whose record list holds the edge.
     let parent_frame = tir
         .dags
         .get(parent)
         .ok_or_else(|| {
-            GraphcalError::internal_error(
+            SemanticError::internal_error(
                 format!("semantic instance `{owner}` has no including DAG `{parent}`"),
                 src,
                 DiagnosticAnchor::WholeFile,
@@ -911,11 +911,11 @@ fn instantiate_semantic_edge(
         clone_checked_instance(&template, edge, parent_frame, runtime_unit_names, tir, src)?;
     for (unit, info) in runtime_unit_infos {
         tir.insert_runtime_unit(unit, info).map_err(|error| {
-            GraphcalError::internal_error(error.to_string(), src, DiagnosticAnchor::WholeFile)
+            SemanticError::internal_error(error.to_string(), src, DiagnosticAnchor::WholeFile)
         })?;
     }
     tir.insert_materialized_dag(instance).map_err(|error| {
-        GraphcalError::internal_error(error.to_string(), src, DiagnosticAnchor::WholeFile)
+        SemanticError::internal_error(error.to_string(), src, DiagnosticAnchor::WholeFile)
     })?;
     Ok(())
 }
@@ -927,7 +927,7 @@ fn instantiate_semantic_edge(
 pub fn instantiate_semantic_edges(
     tir: &mut UncheckedTir,
     src: SourceId,
-) -> Result<(), GraphcalError> {
+) -> Result<(), SemanticError> {
     loop {
         let edges = tir
             .dags

@@ -10,7 +10,7 @@ use thiserror::Error;
 
 use crate::declaration_kind::AttributeTarget;
 use crate::desugar::desugared_ast::{Attribute, AttributeArg};
-use crate::graphcal_error::GraphcalError;
+use crate::semantic_error::SemanticError;
 use crate::semantic_error::attribute::AttributeError;
 use crate::source_id::SourceId;
 use crate::syntax::attribute::AttributeName;
@@ -217,66 +217,66 @@ fn validate_assumes_arguments(
 pub fn attribute_validation_error_to_graphcal(
     error: AttributeValidationError,
     src: SourceId,
-) -> GraphcalError {
+) -> SemanticError {
     match error {
         AttributeValidationError::UnknownAttribute { name, span } => {
-            GraphcalError::located(src, span, AttributeError::UnknownAttribute { name })
+            SemanticError::located(src, span, AttributeError::UnknownAttribute { name })
         }
         AttributeValidationError::InvalidTarget { name, target, span } => match name {
-            AttributeName::Assumes => GraphcalError::located(
+            AttributeName::Assumes => SemanticError::located(
                 src,
                 span,
                 AttributeError::InvalidAssumesTarget { kind: target },
             ),
-            AttributeName::ExpectedFail => GraphcalError::located(
+            AttributeName::ExpectedFail => SemanticError::located(
                 src,
                 span,
                 AttributeError::InvalidExpectedFailTarget { kind: target },
             ),
             AttributeName::Hidden => match target {
-                AttributeTarget::IncludeItem { name, .. } => GraphcalError::located(
+                AttributeTarget::IncludeItem { name, .. } => SemanticError::located(
                     src,
                     span,
                     AttributeError::HiddenIncludeItemNotAPlot {
                         name: name.to_string(),
                     },
                 ),
-                target @ AttributeTarget::Declaration(_) => GraphcalError::located(
+                target @ AttributeTarget::Declaration(_) => SemanticError::located(
                     src,
                     span,
                     AttributeError::InvalidHiddenTarget { kind: target },
                 ),
             },
             AttributeName::Lazy => {
-                GraphcalError::located(src, span, AttributeError::LazyNotSupported)
+                SemanticError::located(src, span, AttributeError::LazyNotSupported)
             }
         },
         AttributeValidationError::RepeatedSingleton {
             name,
             first,
             duplicate,
-        } => GraphcalError::located(
+        } => SemanticError::located(
             src,
             duplicate,
             AttributeError::RepeatedSingletonAttribute { name, first },
         ),
         AttributeValidationError::EmptyAssumes { span } => {
-            GraphcalError::located(src, span, AttributeError::EmptyAssumes)
+            SemanticError::located(src, span, AttributeError::EmptyAssumes)
         }
         AttributeValidationError::InvalidAssumesArgument { span } => {
-            GraphcalError::located(src, span, AttributeError::InvalidAssumesArgument)
+            SemanticError::located(src, span, AttributeError::InvalidAssumesArgument)
         }
         AttributeValidationError::DuplicateAssumesArgument {
             name,
             first,
             duplicate,
-        } => GraphcalError::located(
+        } => SemanticError::located(
             src,
             duplicate,
             AttributeError::DuplicateAssumesArgument { name, first },
         ),
         AttributeValidationError::UnsupportedLazy { span } => {
-            GraphcalError::located(src, span, AttributeError::LazyNotSupported)
+            SemanticError::located(src, span, AttributeError::LazyNotSupported)
         }
     }
 }

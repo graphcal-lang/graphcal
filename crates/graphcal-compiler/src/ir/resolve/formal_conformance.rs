@@ -7,7 +7,7 @@ use std::env;
 use std::process::Command;
 use std::sync::Arc;
 
-use super::{CollectedWithEntries, GraphcalError, resolve};
+use super::{CollectedWithEntries, SemanticError, resolve};
 use crate::semantic_error::SemanticErrorKind;
 use crate::semantic_error::visibility::VisibilityError;
 use crate::syntax::parser::Parser;
@@ -144,7 +144,7 @@ fn load_oracle_cases() -> Result<Vec<OracleCase>, String> {
         .map_err(|error| format!("Lean oracle emitted invalid JSON: {error}"))
 }
 
-fn parse_and_resolve_case(source: &str) -> Result<CollectedWithEntries, GraphcalError> {
+fn parse_and_resolve_case(source: &str) -> Result<CollectedWithEntries, SemanticError> {
     let raw_file = Parser::new(source)
         .parse_file()
         .unwrap_or_else(|error| panic!("oracle rendered invalid Graphcal `{source}`: {error}"));
@@ -165,7 +165,7 @@ fn compare_case(case: &OracleCase) -> Result<(), String> {
                 rule: OracleRule::RequiredMustBeBindable,
                 kind: expected_kind,
             },
-            Err(GraphcalError::Located(crate::diagnostic::Diagnostic {
+            Err(SemanticError::Located(crate::diagnostic::Diagnostic {
                 kind:
                     SemanticErrorKind::Visibility(VisibilityError::RequiredItemMustBeBindable {
                         kind,

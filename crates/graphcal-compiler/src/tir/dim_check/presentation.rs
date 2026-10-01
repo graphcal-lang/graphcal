@@ -3,8 +3,8 @@
 
 use crate::dag_id::DagId;
 use crate::diagnostic_anchor::DiagnosticAnchor;
-use crate::graphcal_error::GraphcalError;
 use crate::outcome::Outcome;
+use crate::semantic_error::SemanticError;
 use crate::source_id::SourceId;
 use crate::tir::presentation::DagPresentationFacts;
 use crate::tir::typed::UncheckedTir;
@@ -15,13 +15,13 @@ pub(super) fn collect_presentation_facts(
     shapes: &HashMap<DagId, super::plot::CheckedPlotChannelShapes>,
     src: SourceId,
     cancellation: &crate::cancellation::CancellationToken,
-) -> Result<HashMap<DagId, DagPresentationFacts>, Outcome<GraphcalError>> {
+) -> Result<HashMap<DagId, DagPresentationFacts>, Outcome<SemanticError>> {
     tir.local_dags()
         .filter(|(_, dag)| !dag.is_semantic_instance())
         .map(|(owner, _)| {
             cancellation.checkpoint()?;
             let shapes = shapes.get(owner).ok_or_else(|| {
-                GraphcalError::internal_error(
+                SemanticError::internal_error(
                     format!("checked plot shapes missing for `{owner}`"),
                     src,
                     DiagnosticAnchor::WholeFile,

@@ -11,7 +11,7 @@ use crate::desugar::desugared_ast::{BinOp, UnaryOp};
 use crate::dimension::{BaseDimId, Dimension, PreludeBaseDimension, Rational};
 use crate::display::formatting_registry::FormattingRegistry;
 use crate::exact_rational::ExactRational;
-use crate::graphcal_error::GraphcalError;
+use crate::semantic_error::SemanticError;
 use crate::semantic_error::dimension::DimensionError;
 use crate::semantic_error::evaluation::EvaluationError;
 use crate::source_id::SourceId;
@@ -35,9 +35,9 @@ fn comparison_operand_type<'a>(
     operand: &'a Operand,
     registry: &FormattingRegistry,
     src: SourceId,
-) -> Result<&'a CheckedType<Symbolic>, GraphcalError> {
+) -> Result<&'a CheckedType<Symbolic>, SemanticError> {
     match &operand.ty {
-        CheckedType::Indexed { .. } => Err(GraphcalError::located(
+        CheckedType::Indexed { .. } => Err(SemanticError::located(
             src,
             operand.span,
             DimensionError::IndexedComparisonOperand {
@@ -62,9 +62,9 @@ fn fin_key_additive_rule(
     rhs_const_int: Option<i64>,
     registry: &FormattingRegistry,
     src: SourceId,
-) -> Result<CheckedType<Symbolic>, GraphcalError> {
+) -> Result<CheckedType<Symbolic>, SemanticError> {
     let reject = |help: &str| {
-        Err(GraphcalError::located(
+        Err(SemanticError::located(
             src,
             rhs.span,
             DimensionError::DimensionMismatch {
@@ -101,7 +101,7 @@ fn fin_key_additive_rule(
     let shifted = bound
         .add(&crate::nat::NatPolyForm::from_constant(addend))
         .map_err(|err| {
-            GraphcalError::located(
+            SemanticError::located(
                 src,
                 rhs.span,
                 EvaluationError::Failed {
@@ -112,7 +112,7 @@ fn fin_key_additive_rule(
     crate::semantic::checked_type::IndexTypeRef::from_finite_index_form(shifted)
         .map(CheckedType::Key)
         .map_err(|err| {
-            GraphcalError::located(
+            SemanticError::located(
                 src,
                 rhs.span,
                 EvaluationError::Failed {
@@ -140,14 +140,14 @@ pub(super) fn binop_rule(
     rhs_const_int: Option<i64>,
     registry: &FormattingRegistry,
     src: SourceId,
-) -> Result<CheckedType<Symbolic>, GraphcalError> {
+) -> Result<CheckedType<Symbolic>, SemanticError> {
     let lhs_type = &lhs.ty;
     let rhs_type = &rhs.ty;
     match op {
         // Logical operators: require Bool operands, return Bool
         BinOp::And | BinOp::Or => {
             if *lhs_type != CheckedType::Bool {
-                return Err(GraphcalError::located(
+                return Err(SemanticError::located(
                     src,
                     lhs.span,
                     DimensionError::DimensionMismatch {
@@ -158,7 +158,7 @@ pub(super) fn binop_rule(
                 ));
             }
             if *rhs_type != CheckedType::Bool {
-                return Err(GraphcalError::located(
+                return Err(SemanticError::located(
                     src,
                     rhs.span,
                     DimensionError::DimensionMismatch {
@@ -183,7 +183,7 @@ pub(super) fn binop_rule(
             {
                 return Ok(CheckedType::Bool);
             }
-            Err(GraphcalError::located(
+            Err(SemanticError::located(
                 src,
                 rhs.span,
                 DimensionError::DimensionMismatch {
@@ -201,7 +201,7 @@ pub(super) fn binop_rule(
             if matches!(lhs_type, CheckedType::Complex(_))
                 || matches!(rhs_type, CheckedType::Complex(_))
             {
-                return Err(GraphcalError::located(src, if matches!(lhs_type, CheckedType::Complex(_)) {
+                return Err(SemanticError::located(src, if matches!(lhs_type, CheckedType::Complex(_)) {
                         lhs.span
                     } else {
                         rhs.span
@@ -215,7 +215,7 @@ pub(super) fn binop_rule(
             }
             if matches!(lhs_type, CheckedType::Int) || matches!(rhs_type, CheckedType::Int) {
                 if !matches!(lhs_type, CheckedType::Int) || !matches!(rhs_type, CheckedType::Int) {
-                    return Err(GraphcalError::located(
+                    return Err(SemanticError::located(
                         src,
                         rhs.span,
                         DimensionError::DimensionMismatch {
@@ -232,7 +232,7 @@ pub(super) fn binop_rule(
                 && let CheckedType::Datetime(rs) = rhs_type
             {
                 if ls != rs {
-                    return Err(GraphcalError::located(
+                    return Err(SemanticError::located(
                         src,
                         rhs.span,
                         DimensionError::DimensionMismatch {
@@ -247,7 +247,7 @@ pub(super) fn binop_rule(
             let lhs_dim = expect_quantity(lhs_type, registry, src, lhs.span)?;
             let rhs_dim = expect_quantity(rhs_type, registry, src, rhs.span)?;
             if lhs_dim != rhs_dim {
-                return Err(GraphcalError::located(
+                return Err(SemanticError::located(
                     src,
                     rhs.span,
                     DimensionError::DimensionMismatch {
@@ -270,7 +270,7 @@ pub(super) fn binop_rule(
                 return fin_key_additive_rule(op, key_index, rhs, rhs_const_int, registry, src);
             }
             if matches!(rhs_type, CheckedType::Key(_)) {
-                return Err(GraphcalError::located(
+                return Err(SemanticError::located(
                     src,
                     rhs.span,
                     DimensionError::DimensionMismatch {
@@ -288,13 +288,13 @@ pub(super) fn binop_rule(
             match (lhs_type, rhs_type) {
                 (CheckedType::Complex(lhs_dim), CheckedType::Complex(rhs_dim)) => {
                     if lhs_dim != rhs_dim {
-                        return Err(GraphcalError::located(src, rhs.span, DimensionError::DimensionMismatch { expected: format_checked_type(lhs_type, registry), found: format_checked_type(rhs_type, registry), help: "complex operands of addition and subtraction must have the same dimension"
+                        return Err(SemanticError::located(src, rhs.span, DimensionError::DimensionMismatch { expected: format_checked_type(lhs_type, registry), found: format_checked_type(rhs_type, registry), help: "complex operands of addition and subtraction must have the same dimension"
                                 .to_string() }));
                     }
                     return Ok(CheckedType::Complex(lhs_dim.clone()));
                 }
                 (CheckedType::Complex(_), _) | (_, CheckedType::Complex(_)) => {
-                    return Err(GraphcalError::located(src, rhs.span, DimensionError::DimensionMismatch { expected: format_checked_type(lhs_type, registry), found: format_checked_type(rhs_type, registry), help: "addition and subtraction do not implicitly promote real quantities; use to_complex()"
+                    return Err(SemanticError::located(src, rhs.span, DimensionError::DimensionMismatch { expected: format_checked_type(lhs_type, registry), found: format_checked_type(rhs_type, registry), help: "addition and subtraction do not implicitly promote real quantities; use to_complex()"
                             .to_string() }));
                 }
                 _ => {}
@@ -306,7 +306,7 @@ pub(super) fn binop_rule(
                     // Datetime - Datetime -> Quantity(Time)
                     if op == BinOp::Sub {
                         if ls != rs {
-                            return Err(GraphcalError::located(
+                            return Err(SemanticError::located(
                                 src,
                                 rhs.span,
                                 DimensionError::DimensionMismatch {
@@ -320,7 +320,7 @@ pub(super) fn binop_rule(
                         return Ok(CheckedType::Quantity(time_dim));
                     }
                     // Datetime + Datetime -> error
-                    return Err(GraphcalError::located(
+                    return Err(SemanticError::located(
                         src,
                         rhs.span,
                         DimensionError::DimensionMismatch {
@@ -333,7 +333,7 @@ pub(super) fn binop_rule(
                 // Datetime +/- Quantity(Time) -> Datetime
                 let rhs_dim = expect_quantity(rhs_type, registry, src, rhs.span)?;
                 if rhs_dim != time_dim {
-                    return Err(GraphcalError::located(
+                    return Err(SemanticError::located(
                         src,
                         rhs.span,
                         DimensionError::DimensionMismatch {
@@ -352,7 +352,7 @@ pub(super) fn binop_rule(
                     let time_dim = Dimension::base(BaseDimId::Prelude(PreludeBaseDimension::Time));
                     let lhs_dim = expect_quantity(lhs_type, registry, src, lhs.span)?;
                     if lhs_dim != time_dim {
-                        return Err(GraphcalError::located(
+                        return Err(SemanticError::located(
                             src,
                             lhs.span,
                             DimensionError::DimensionMismatch {
@@ -365,7 +365,7 @@ pub(super) fn binop_rule(
                     return Ok(CheckedType::Datetime(*rs));
                 }
                 // Quantity - Datetime -> error
-                return Err(GraphcalError::located(
+                return Err(SemanticError::located(
                     src,
                     rhs.span,
                     DimensionError::DimensionMismatch {
@@ -378,7 +378,7 @@ pub(super) fn binop_rule(
             let lhs_dim = expect_quantity(lhs_type, registry, src, lhs.span)?;
             let rhs_dim = expect_quantity(rhs_type, registry, src, rhs.span)?;
             if lhs_dim != rhs_dim {
-                return Err(GraphcalError::located(
+                return Err(SemanticError::located(
                     src,
                     rhs.span,
                     DimensionError::DimensionMismatch {
@@ -404,7 +404,7 @@ pub(super) fn binop_rule(
                 _ => (expect_quantity(rhs_type, registry, src, rhs.span)?, false),
             };
             let dim = lhs_dim.checked_mul(&rhs_dim).map_err(|_| {
-                GraphcalError::located(src, expr_span, DimensionError::DimensionOverflow)
+                SemanticError::located(src, expr_span, DimensionError::DimensionOverflow)
             })?;
             if lhs_complex || rhs_complex {
                 Ok(CheckedType::Complex(dim))
@@ -425,7 +425,7 @@ pub(super) fn binop_rule(
                 _ => (expect_quantity(rhs_type, registry, src, rhs.span)?, false),
             };
             let dim = lhs_dim.checked_div(&rhs_dim).map_err(|_| {
-                GraphcalError::located(src, expr_span, DimensionError::DimensionOverflow)
+                SemanticError::located(src, expr_span, DimensionError::DimensionOverflow)
             })?;
             if lhs_complex || rhs_complex {
                 Ok(CheckedType::Complex(dim))
@@ -437,7 +437,7 @@ pub(super) fn binop_rule(
             if matches!(lhs_type, CheckedType::Int) && matches!(rhs_type, CheckedType::Int) {
                 return Ok(CheckedType::Int);
             }
-            Err(GraphcalError::located(
+            Err(SemanticError::located(
                 src,
                 expr_span,
                 DimensionError::DimensionMismatch {
@@ -465,7 +465,7 @@ pub(super) fn binop_rule(
                     if value >= 0 {
                         return Ok(CheckedType::Int);
                     }
-                    return Err(GraphcalError::located(
+                    return Err(SemanticError::located(
                         src,
                         rhs.span,
                         DimensionError::DimensionMismatch {
@@ -476,7 +476,7 @@ pub(super) fn binop_rule(
                         },
                     ));
                 }
-                return Err(GraphcalError::located(
+                return Err(SemanticError::located(
                     src,
                     rhs.span,
                     DimensionError::DimensionMismatch {
@@ -494,7 +494,7 @@ pub(super) fn binop_rule(
             if !matches!(exponent, PowerExponent::Exact(_)) {
                 let rhs_dim = expect_quantity(rhs_type, registry, src, rhs.span)?;
                 if !rhs_dim.is_dimensionless() {
-                    return Err(GraphcalError::located(
+                    return Err(SemanticError::located(
                         src,
                         rhs.span,
                         DimensionError::DimensionMismatch {
@@ -512,10 +512,10 @@ pub(super) fn binop_rule(
                         return Ok(CheckedType::Quantity(Dimension::dimensionless()));
                     }
                     let rational = Rational::try_from(exact).map_err(|_| {
-                        GraphcalError::located(src, rhs.span, DimensionError::DimensionOverflow)
+                        SemanticError::located(src, rhs.span, DimensionError::DimensionOverflow)
                     })?;
                     let dim = lhs_dim.pow(rational).map_err(|_| {
-                        GraphcalError::located(src, expr_span, DimensionError::DimensionOverflow)
+                        SemanticError::located(src, expr_span, DimensionError::DimensionOverflow)
                     })?;
                     Ok(CheckedType::Quantity(dim))
                 }
@@ -531,7 +531,7 @@ pub(super) fn binop_rule(
                         },
                         |replacement| format!("replace the float exponent with `{replacement}`"),
                     );
-                    Err(GraphcalError::located(
+                    Err(SemanticError::located(
                         src,
                         rhs.span,
                         DimensionError::FloatPowerExponent { replacement, help },
@@ -541,7 +541,7 @@ pub(super) fn binop_rule(
                     if lhs_dim.is_dimensionless() {
                         Ok(CheckedType::Quantity(Dimension::dimensionless()))
                     } else {
-                        Err(GraphcalError::located(
+                        Err(SemanticError::located(
                             src,
                             rhs.span,
                             DimensionError::RuntimeExponentForDimensionedBase,
@@ -559,11 +559,11 @@ pub(super) fn unary_rule(
     operand: &Operand,
     registry: &FormattingRegistry,
     src: SourceId,
-) -> Result<CheckedType<Symbolic>, GraphcalError> {
+) -> Result<CheckedType<Symbolic>, SemanticError> {
     match op {
         UnaryOp::Not => {
             if operand.ty != CheckedType::Bool {
-                return Err(GraphcalError::located(
+                return Err(SemanticError::located(
                     src,
                     operand.span,
                     DimensionError::DimensionMismatch {
@@ -579,7 +579,7 @@ pub(super) fn unary_rule(
             CheckedType::Quantity(_) | CheckedType::Complex(_) | CheckedType::Int => {
                 Ok(operand.ty.clone())
             }
-            other => Err(GraphcalError::located(
+            other => Err(SemanticError::located(
                 src,
                 operand.span,
                 DimensionError::DimensionMismatch {
@@ -599,9 +599,9 @@ pub(super) fn if_rule(
     else_branch: &Operand,
     registry: &FormattingRegistry,
     src: SourceId,
-) -> Result<CheckedType<Symbolic>, GraphcalError> {
+) -> Result<CheckedType<Symbolic>, SemanticError> {
     if cond.ty != CheckedType::Bool {
-        return Err(GraphcalError::located(
+        return Err(SemanticError::located(
             src,
             cond.span,
             DimensionError::DimensionMismatch {
@@ -612,7 +612,7 @@ pub(super) fn if_rule(
         ));
     }
     if then_branch.ty != else_branch.ty {
-        return Err(GraphcalError::located(
+        return Err(SemanticError::located(
             src,
             else_branch.span,
             DimensionError::DimensionMismatch {
@@ -630,14 +630,14 @@ pub(in crate::tir::dim_check) fn resolve_unit_dimension_or_diagnose(
     unit: &crate::hir::expr::ResolvedUnitExpr,
     tir: &dyn crate::tir::typed::TirRead,
     src: SourceId,
-) -> Result<Dimension, GraphcalError> {
+) -> Result<Dimension, SemanticError> {
     unit.terms
         .iter()
         .try_fold(Dimension::dimensionless(), |dimension, item| {
             let info = tir
                 .unit_info(item.name.value.static_definition())
                 .ok_or_else(|| {
-                    GraphcalError::located(
+                    SemanticError::located(
                         src,
                         item.name.span,
                         DimensionError::UnknownUnit {
@@ -647,14 +647,14 @@ pub(in crate::tir::dim_check) fn resolve_unit_dimension_or_diagnose(
                 })?;
             let exponent = item.power;
             let term_dimension = info.dimension.pow(exponent).map_err(|_| {
-                GraphcalError::located(src, item.name.span, DimensionError::DimensionOverflow)
+                SemanticError::located(src, item.name.span, DimensionError::DimensionOverflow)
             })?;
             let resolved = match item.op {
                 crate::syntax::ast::MulDivOp::Mul => dimension.checked_mul(&term_dimension),
                 crate::syntax::ast::MulDivOp::Div => dimension.checked_div(&term_dimension),
             };
             resolved.map_err(|_| {
-                GraphcalError::located(src, item.name.span, DimensionError::DimensionOverflow)
+                SemanticError::located(src, item.name.span, DimensionError::DimensionOverflow)
             })
         })
 }
@@ -668,9 +668,9 @@ pub(in crate::tir::dim_check) fn match_arms_rule(
     expr_span: Span,
     registry: &FormattingRegistry,
     src: SourceId,
-) -> Result<CheckedType<Symbolic>, GraphcalError> {
+) -> Result<CheckedType<Symbolic>, SemanticError> {
     let Some(first) = arm_types.first() else {
-        return Err(GraphcalError::located(
+        return Err(SemanticError::located(
             src,
             expr_span,
             EvaluationError::Failed {
@@ -680,7 +680,7 @@ pub(in crate::tir::dim_check) fn match_arms_rule(
     };
     for (i, arm_type) in arm_types.iter().enumerate().skip(1) {
         if arm_type != first {
-            return Err(GraphcalError::located(
+            return Err(SemanticError::located(
                 src,
                 arm_body_span(i),
                 DimensionError::DimensionMismatch {

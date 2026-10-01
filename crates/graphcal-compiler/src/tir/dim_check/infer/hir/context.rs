@@ -7,8 +7,8 @@ use crate::source_id::SourceId;
 
 use crate::display::formatting_registry::FormattingRegistry;
 use crate::expression_id::ExprId;
-use crate::graphcal_error::GraphcalError;
 use crate::semantic::checked_type::{IndexTypeRef, Symbolic};
+use crate::semantic_error::SemanticError;
 
 use crate::semantic::checked_type::CheckedType;
 
@@ -29,12 +29,12 @@ impl<'a> InferEnv<'a> {
         self,
         constructor: &crate::resolved_name::ResolvedConstructorName,
         span: crate::syntax::span::Span,
-    ) -> Result<&'a crate::hir::nominal::ResolvedConstructor, GraphcalError> {
+    ) -> Result<&'a crate::hir::nominal::ResolvedConstructor, SemanticError> {
         self.tir
             .project_type_store()
             .lookup_constructor(constructor)
             .ok_or_else(|| {
-                GraphcalError::internal_error(
+                SemanticError::internal_error(
                     format!("project type store has no constructor `{constructor}`"),
                     self.src,
                     crate::diagnostic_anchor::DiagnosticAnchor::Source(span),
@@ -50,7 +50,7 @@ impl<'a> InferEnv<'a> {
         owner: Option<&ResolvedDeclName>,
         cancellation: &crate::cancellation::CancellationToken,
         observations: &BodyObservations,
-    ) -> Result<CheckedType<Symbolic>, Outcome<GraphcalError>> {
+    ) -> Result<CheckedType<Symbolic>, Outcome<SemanticError>> {
         let control = InferenceControl {
             cancellation,
             observations,
@@ -221,7 +221,7 @@ impl<'a> Infer<'a> {
     pub(super) fn infer_arg(
         &self,
         arg: &Expr,
-    ) -> Result<CheckedType<Symbolic>, Outcome<GraphcalError>> {
+    ) -> Result<CheckedType<Symbolic>, Outcome<SemanticError>> {
         self.prechecked_args
             .and_then(|prechecked| prechecked.get(arg))
             .map_or_else(

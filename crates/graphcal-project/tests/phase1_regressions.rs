@@ -3,7 +3,7 @@
 
 use std::collections::HashMap;
 
-use graphcal_compiler::graphcal_error::GraphcalError;
+use graphcal_compiler::semantic_error::SemanticError;
 use graphcal_compiler::semantic_error::SemanticErrorKind;
 use graphcal_compiler::semantic_error::dimension::DimensionError;
 use graphcal_compiler::semantic_error::graph::GraphError;
@@ -11,12 +11,12 @@ use graphcal_compiler::semantic_error::name::NameError;
 use graphcal_compiler::semantic_error::structure::StructError;
 use graphcal_compiler::semantic_error::visibility::VisibilityError;
 
-use graphcal_compiler::graphcal_error::RenderedGraphcalError;
+use graphcal_compiler::semantic_error::rendered::RenderedSemanticError;
 use graphcal_io::RealFileSystem;
 use graphcal_project::compile_error::CompileError;
 use graphcal_project::prepare::{compile_and_eval, compile_and_eval_project};
 
-fn compile_graphcal_error(source: &str) -> GraphcalError {
+fn compile_semantic_error(source: &str) -> SemanticError {
     match compile_and_eval(source).unwrap_err() {
         CompileError::Eval(error) => error.error,
         other => panic!("expected semantic error, got {other:?}"),
@@ -58,8 +58,8 @@ layer l = { plots: [p], title: @missing };
     for source in sources {
         assert!(
             matches!(
-                compile_graphcal_error(source),
-                GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+                compile_semantic_error(source),
+                SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
                     kind: SemanticErrorKind::Name(NameError::UnknownGraphRef { .. }),
                     ..
                 })
@@ -223,7 +223,7 @@ plot p = {
         .unwrap_err();
     assert!(matches!(
         error,
-        CompileError::Eval(RenderedGraphcalError { error: GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic { kind: SemanticErrorKind::Dimension(DimensionError::PlotEncodingAxisMismatch { channels, .. }), .. }), .. })
+        CompileError::Eval(RenderedSemanticError { error: SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic { kind: SemanticErrorKind::Dimension(DimensionError::PlotEncodingAxisMismatch { channels, .. }), .. }), .. })
             if channels.contains("owner_dims.a.Axis")
                 && channels.contains("owner_dims.b.Axis")
     ));
@@ -245,9 +245,9 @@ node bad: a::Box<a::Foo> = a::Box<a::Foo>(x: 1.0 b::foo);
     let error = compile_and_eval_project(&root, &HashMap::new(), None, &RealFileSystem::default())
         .unwrap_err();
     match error {
-        CompileError::Eval(RenderedGraphcalError {
+        CompileError::Eval(RenderedSemanticError {
             error:
-                GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+                SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
                     kind:
                         SemanticErrorKind::Struct(StructError::FieldDimensionMismatch {
                             expected,
@@ -297,8 +297,8 @@ type Box { Box(value: Dimensionless(min: @helper()::min_value)) }
     ] {
         assert!(
             matches!(
-                compile_graphcal_error(source),
-                GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+                compile_semantic_error(source),
+                SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
                     kind: SemanticErrorKind::Graph(GraphError::DagCallInCompileTime { .. }),
                     ..
                 })
@@ -334,8 +334,8 @@ fn file_root_dag_call_is_also_runtime_only() {
         .unwrap_err();
     assert!(matches!(
         error,
-        CompileError::Eval(RenderedGraphcalError {
-            error: GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+        CompileError::Eval(RenderedSemanticError {
+            error: SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
                 kind: SemanticErrorKind::Graph(GraphError::DagCallInCompileTime { .. }),
                 ..
             }),
@@ -389,7 +389,7 @@ fn assert_reconciliation_error(
 ) {
     match error {
         CompileError::Eval(ref rendered) => {
-            let GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+            let SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
                 kind:
                     SemanticErrorKind::Visibility(VisibilityError::IncludeMustReconcileOverride {
                         overridden,
@@ -631,7 +631,7 @@ include reconcile.library.reusable(
 
 #[test]
 fn inline_dag_modules_use_the_same_override_reconciliation_rule() {
-    let error = compile_graphcal_error(
+    let error = compile_semantic_error(
         r"
 dag reusable {
     pub(bind) type Record { Record(x: Dimensionless) }
@@ -646,7 +646,7 @@ include reusable(type Record: Other, record: Other(x: 2.0)) as instance;
 
     assert!(matches!(
         error,
-        GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic { kind: SemanticErrorKind::Visibility(VisibilityError::IncludeMustReconcileOverride { overridden, overridden_kind, orphan_decl, .. }), .. }) if overridden == "Record"
+        SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic { kind: SemanticErrorKind::Visibility(VisibilityError::IncludeMustReconcileOverride { overridden, overridden_kind, orphan_decl, .. }), .. }) if overridden == "Record"
             && overridden_kind == "type"
             && orphan_decl == "extracted"
     ));
@@ -675,7 +675,7 @@ pub node values: Dimensionless[Item] = for item: Item {
 
 #[test]
 fn template_closure_reports_type_use_after_scoped_inference() {
-    let error = compile_graphcal_error(
+    let error = compile_semantic_error(
         r"
 pub index Item = { First, Second };
 pub(bind) type Record { Record(value: Dimensionless) }
@@ -688,7 +688,7 @@ pub node values: Dimensionless[Item] = for item: Item {
     assert!(
         matches!(
             error,
-            GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+            SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
                 kind: SemanticErrorKind::Visibility(
                     VisibilityError::TemplateBodyDependsOnStaticDefault {
                         port_kind: graphcal_compiler::static_interface::StaticInputKind::Type,
@@ -716,8 +716,8 @@ pub const node origin: Element = Element;
 ",
     ] {
         assert!(matches!(
-            compile_graphcal_error(source),
-            GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+            compile_semantic_error(source),
+            SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
                 kind: SemanticErrorKind::Visibility(
                     VisibilityError::TemplateBodyDependsOnStaticDefault {
                         port_kind: graphcal_compiler::static_interface::StaticInputKind::Type,
@@ -733,14 +733,14 @@ pub const node origin: Element = Element;
 #[test]
 fn template_body_checks_defaulted_bindable_dimensions_as_rigid() {
     assert!(matches!(
-        compile_graphcal_error(
+        compile_semantic_error(
             r"
 pub(bind) dim D = Length;
 param a: Length = 1.0 m;
 pub node out: D = @a;
 ",
         ),
-        GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+        SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
             kind: SemanticErrorKind::Visibility(
                 VisibilityError::TemplateBodyDependsOnStaticDefault {
                     port_kind: graphcal_compiler::static_interface::StaticInputKind::Dimension,
@@ -799,11 +799,11 @@ unit scaled: Length = (@factor) m;
     ];
 
     for (source, expected_body) in cases {
-        let error = compile_graphcal_error(source);
+        let error = compile_semantic_error(source);
         assert!(
             matches!(
                 error,
-                GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic { kind: SemanticErrorKind::Visibility(VisibilityError::TemplateBodyDependsOnStaticDefault { ref body_name, port_kind: graphcal_compiler::static_interface::StaticInputKind::Dimension, .. }), .. }) if body_name.as_str() == expected_body
+                SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic { kind: SemanticErrorKind::Visibility(VisibilityError::TemplateBodyDependsOnStaticDefault { ref body_name, port_kind: graphcal_compiler::static_interface::StaticInputKind::Dimension, .. }), .. }) if body_name.as_str() == expected_body
             ),
             "unexpected error for `{expected_body}`: {error:?}"
         );

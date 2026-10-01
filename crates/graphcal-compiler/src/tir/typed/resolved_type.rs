@@ -13,7 +13,6 @@ use crate::desugar::desugared_ast::MulDivOp;
 use crate::dimension::{Dimension, Rational};
 use crate::display::formatting_registry::FormattingRegistry;
 use crate::generic_param::GenericParamId;
-use crate::graphcal_error::GraphcalError;
 use crate::nat::NatPolyForm;
 use crate::resolved_name::{ResolvedIndexName, ResolvedStructTypeName};
 use crate::semantic::checked_type::{
@@ -21,6 +20,7 @@ use crate::semantic::checked_type::{
 };
 use crate::semantic::index_def::FiniteIndex;
 use crate::semantic::time_scale::TimeScale;
+use crate::semantic_error::SemanticError;
 use crate::semantic_error::evaluation::EvaluationError;
 use crate::source_id::SourceId;
 use crate::syntax::non_empty::NonEmpty;
@@ -248,9 +248,9 @@ impl ResolvedValueType {
     ///
     /// # Errors
     ///
-    /// Returns a [`GraphcalError`] if the type still mentions a generic
+    /// Returns a [`SemanticError`] if the type still mentions a generic
     /// parameter.
-    pub fn to_checked_type(&self, src: SourceId) -> Result<CheckedType, GraphcalError> {
+    pub fn to_checked_type(&self, src: SourceId) -> Result<CheckedType, SemanticError> {
         match self {
             Self::Bool => Ok(CheckedType::Bool),
             Self::Int => Ok(CheckedType::Int),
@@ -350,9 +350,9 @@ impl ResolvedDeclType {
     ///
     /// # Errors
     ///
-    /// Returns a [`GraphcalError`] if the type still mentions a generic
+    /// Returns a [`SemanticError`] if the type still mentions a generic
     /// parameter or names an invalid finite index.
-    pub fn to_checked_type(&self, src: SourceId) -> Result<CheckedType, GraphcalError> {
+    pub fn to_checked_type(&self, src: SourceId) -> Result<CheckedType, SemanticError> {
         let element = self.element().to_checked_type(src)?;
         self.indexes()
             .iter()
@@ -381,14 +381,14 @@ impl ResolvedDeclType {
     }
 }
 
-fn eval_error(message: String, src: SourceId, span: Span) -> GraphcalError {
-    GraphcalError::located(src, span, EvaluationError::Failed { message })
+fn eval_error(message: String, src: SourceId, span: Span) -> SemanticError {
+    SemanticError::located(src, span, EvaluationError::Failed { message })
 }
 
 pub fn resolved_generic_arg_to_declared(
     resolved: &ResolvedGenericArg,
     src: SourceId,
-) -> Result<CheckedGenericArg, GraphcalError> {
+) -> Result<CheckedGenericArg, SemanticError> {
     match resolved {
         ResolvedGenericArg::Dim(ResolvedDim::Concrete(dim)) => {
             Ok(CheckedGenericArg::Dim(dim.clone()))
@@ -431,7 +431,7 @@ fn finite_index(
     form: &NatPolyForm,
     src: SourceId,
     span: Span,
-) -> Result<FiniteIndex, GraphcalError> {
+) -> Result<FiniteIndex, SemanticError> {
     let size = form.constant_value().ok_or_else(|| {
         eval_error(
             format!(
@@ -446,7 +446,7 @@ fn finite_index(
         .map_err(|err| eval_error(err.describe_finite_index(), src, span))
 }
 
-fn index_type_ref(index: &ResolvedIndex, src: SourceId) -> Result<IndexTypeRef, GraphcalError> {
+fn index_type_ref(index: &ResolvedIndex, src: SourceId) -> Result<IndexTypeRef, SemanticError> {
     match index {
         ResolvedIndex::Concrete(name, _) => Ok(IndexTypeRef::from_resolved(name.clone())),
         ResolvedIndex::Finite(form, span) => {

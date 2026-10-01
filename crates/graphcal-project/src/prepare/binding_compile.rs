@@ -11,10 +11,10 @@ use graphcal_compiler::syntax::token::SourceIdentifier;
 
 use super::{
     AstExprKind, CheckedEntryInterface, CompileError, DeclName, DiagnosticAnchor, EvalSession,
-    Expr, ExprLoweringContext, GenericScope, GraphcalError, HirExprKind, ModelIndexKind,
-    ModelIndexSchema, ModelSchemaGraph, ModelSchemaGraphBuilder, ModelTypeId, ModelValueSchema,
-    ModuleScope, ParameterBindingBuilder, ParameterPort, ParameterPosition, ParameterValue,
-    PreparedProject, RuntimeParameterBinding, RuntimeParameterBindings, RuntimeValueMap, Span,
+    Expr, ExprLoweringContext, GenericScope, HirExprKind, ModelIndexKind, ModelIndexSchema,
+    ModelSchemaGraph, ModelSchemaGraphBuilder, ModelTypeId, ModelValueSchema, ModuleScope,
+    ParameterBindingBuilder, ParameterPort, ParameterPosition, ParameterValue, PreparedProject,
+    RuntimeParameterBinding, RuntimeParameterBindings, RuntimeValueMap, SemanticError, Span,
     parameter_domain,
 };
 
@@ -86,7 +86,7 @@ impl PreparedProject {
             normalize_binding_literal(expr.clone(), &port.value_schema, &self.schema_graph)
                 .map_err(|message| {
                     CompileError::semantic(
-                        GraphcalError::located(
+                        SemanticError::located(
                             self.source,
                             expr.span,
                             EvaluationError::Failed {
@@ -456,7 +456,7 @@ impl PreparedProject {
     ) -> Result<&ParameterPort, CompileError> {
         if position.plan_id != self.plan_id {
             return Err(CompileError::semantic(
-                GraphcalError::internal_error(
+                SemanticError::internal_error(
                     "parameter position belongs to another prepared project",
                     self.source,
                     DiagnosticAnchor::Builtin,
@@ -466,7 +466,7 @@ impl PreparedProject {
         }
         self.parameter_ports.get(position.index).ok_or_else(|| {
             CompileError::semantic(
-                GraphcalError::internal_error(
+                SemanticError::internal_error(
                     format!("parameter position {} is out of bounds", position.index),
                     self.source,
                     DiagnosticAnchor::Builtin,
@@ -491,7 +491,7 @@ impl PreparedProject {
         let hir =
             graphcal_compiler::hir::closed_expr::ClosedExpr::try_new(hir).map_err(|message| {
                 CompileError::semantic(
-                    GraphcalError::located(
+                    SemanticError::located(
                         self.source,
                         span,
                         EvaluationError::Failed {
@@ -703,7 +703,7 @@ impl PreparedProject {
                 let entry_schema =
                     map_entry_value_schema(expected, entry.keys.len()).map_err(|message| {
                         CompileError::semantic(
-                            GraphcalError::located(
+                            SemanticError::located(
                                 self.source,
                                 entry.value.span,
                                 EvaluationError::Failed {
@@ -739,7 +739,7 @@ impl PreparedProject {
         );
         graphcal_compiler::hir::lower_expr_draft(expr, context).map_err(|error| {
             CompileError::semantic(
-                graphcal_compiler::hir::expr_lower_error_to_graphcal(&error, self.source),
+                graphcal_compiler::hir::expr_lower_error_to_semantic(&error, self.source),
                 &self.sources,
             )
         })
@@ -747,7 +747,7 @@ impl PreparedProject {
 
     fn binding_internal_error(&self, message: &str, span: Span) -> CompileError {
         CompileError::semantic(
-            GraphcalError::internal_error(
+            SemanticError::internal_error(
                 message.to_string(),
                 self.source,
                 graphcal_compiler::diagnostic_anchor::DiagnosticAnchor::Source(span),
@@ -793,7 +793,7 @@ impl PreparedProject {
 
     pub(super) fn binding_value_error(&self, port: &ParameterPort, message: &str) -> CompileError {
         CompileError::semantic(
-            GraphcalError::located(
+            SemanticError::located(
                 self.source,
                 port.span,
                 EvaluationError::Failed {
@@ -828,7 +828,7 @@ pub(super) fn build_parameter_ports(
                 .transpose()
                 .map_err(|error| {
                     CompileError::semantic(
-                        GraphcalError::internal_error(
+                        SemanticError::internal_error(
                             format!("domain of parameter `{}`: {error}", parameter.name()),
                             plan.root().scope().source(),
                             DiagnosticAnchor::Source(parameter.span()),

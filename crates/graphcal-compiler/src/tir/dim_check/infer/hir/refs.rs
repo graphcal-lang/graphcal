@@ -7,8 +7,8 @@ use crate::semantic_error::name::NameError;
 use crate::source_id::SourceId;
 
 use crate::dimension::Dimension;
-use crate::graphcal_error::GraphcalError;
 use crate::semantic::checked_type::{StructTypeRef, Symbolic};
+use crate::semantic_error::SemanticError;
 use crate::syntax::module_name::ScopedName;
 use crate::syntax::span::Span;
 
@@ -22,7 +22,7 @@ pub(super) fn infer_hir_quantity_literal(
     unit: &ResolvedUnitExpr,
     tir: &dyn crate::tir::typed::TirRead,
     src: SourceId,
-) -> Result<CheckedType<Symbolic>, GraphcalError> {
+) -> Result<CheckedType<Symbolic>, SemanticError> {
     let dim = rules::resolve_unit_dimension_or_diagnose(unit, tir, src)?;
     Ok(CheckedType::Quantity(dim))
 }
@@ -32,12 +32,12 @@ impl InferEnv<'_> {
         &self,
         target: &LocalDecl,
         span: Span,
-    ) -> Result<CheckedType<Symbolic>, GraphcalError> {
+    ) -> Result<CheckedType<Symbolic>, SemanticError> {
         // The body is shared with its template; the frame of the DAG checked
         // here names the declaration the reference reads.
         let runtime_target = self.dag.frame().resolve(target);
         let checked = self.tir.decl_type(&runtime_target).ok_or_else(|| {
-            GraphcalError::located(
+            SemanticError::located(
                 self.src,
                 span,
                 NameError::UnknownGraphRef {
@@ -53,7 +53,7 @@ impl Infer<'_> {
     pub(super) fn infer_hir_const_ref(
         &self,
         target: &crate::syntax::span::Spanned<ConstRef>,
-    ) -> Result<CheckedType<Symbolic>, GraphcalError> {
+    ) -> Result<CheckedType<Symbolic>, SemanticError> {
         match &target.value {
             ConstRef::Decl(resolved) => {
                 self.env.infer_resolved_decl_ref_type(resolved, target.span)
@@ -69,7 +69,7 @@ impl Infer<'_> {
                     },
                 )?;
                 if !target_def.variant().fields().is_empty() {
-                    return Err(GraphcalError::located(
+                    return Err(SemanticError::located(
                         self.env.src,
                         target.span,
                         EvaluationError::Failed {

@@ -1,95 +1,43 @@
+//! Rendering a [`SemanticError`] with `miette`, through the source registry
+//! that issued its [`SourceId`](crate::source_id::SourceId).
+
 use std::sync::Arc;
 
 use miette::{Diagnostic, NamedSource};
 
-use crate::diagnostic::{Diagnostic as LocatedDiagnostic, DiagnosticKind as _};
-use crate::semantic_error::SemanticErrorKind;
-use crate::source_id::SourceId;
-use crate::source_registry::SourceRegistry;
-use crate::syntax::span::Span;
-use thiserror::Error;
-
-use crate::diagnostic_anchor::DiagnosticAnchor;
+use super::SemanticError;
+use crate::diagnostic::DiagnosticKind as _;
 use crate::internal_error::InternalError;
-use crate::outcome::Outcome;
+use crate::source_registry::SourceRegistry;
 
-/// A semantic diagnostic: a typed family payload located in one source, or
-/// a violated compiler invariant.
-#[derive(Debug, Clone, Error)]
-pub enum GraphcalError {
-    /// A diagnostic of a typed family, located by source id and span.
-    #[error("{}", .0.kind)]
-    Located(LocatedDiagnostic<SemanticErrorKind>),
-    /// An internal invariant violation that should never be reached if earlier
-    /// compiler phases (parsing, resolution, `dim_check`) are correct.
-    #[error(transparent)]
-    Internal(InternalError),
-}
-
-/// A cancellable operation that fails with a [`GraphcalError`] reports it as
-/// [`Outcome::Failed`]; cancellation only ever
-/// comes from [`Cancelled`](crate::cancellation::Cancelled).
-impl From<GraphcalError> for Outcome<GraphcalError> {
-    fn from(error: GraphcalError) -> Self {
-        Self::Failed(error)
-    }
-}
-
-impl GraphcalError {
-    /// Locate a typed family diagnostic at `primary` in `src`.
-    #[must_use]
-    pub fn located(src: SourceId, primary: Span, kind: impl Into<SemanticErrorKind>) -> Self {
-        Self::Located(LocatedDiagnostic::new(src, primary, kind.into()))
-    }
-
-    /// Construct an internal diagnostic with an explicit source-anchor policy.
-    #[must_use]
-    #[cold]
-    pub fn internal_error(
-        message: impl Into<String>,
-        src: SourceId,
-        anchor: DiagnosticAnchor,
-    ) -> Self {
-        Self::Internal(InternalError::new(message, src, anchor))
-    }
-
-    /// The source this error's spans index into.
-    #[must_use]
-    pub const fn source(&self) -> SourceId {
-        match self {
-            Self::Located(diagnostic) => diagnostic.src,
-            Self::Internal(internal) => internal.src(),
-        }
-    }
-}
-
-/// A [`GraphcalError`] together with the source text its spans index into,
+/// A [`SemanticError`] together with the source text its spans index into,
 /// ready for `miette`.
 ///
-/// The error itself names its source only by [`SourceId`]; the shell resolves
+/// The error itself names its source only by
+/// [`SourceId`](crate::source_id::SourceId); the shell resolves
 /// that id through the [`SourceRegistry`] that issued it.
 #[derive(Debug)]
-pub struct RenderedGraphcalError {
+pub struct RenderedSemanticError {
     /// The rendered error; readable (and matchable) but only constructed with
     /// its source through [`Self::new`].
-    pub error: GraphcalError,
+    pub error: SemanticError,
     source: NamedSource<Arc<String>>,
 }
 
-impl RenderedGraphcalError {
+impl RenderedSemanticError {
     /// Attach the source `error` points into, resolved through `registry`.
     ///
     /// An id from another registry has no text to point into; the error is
     /// then rendered against an empty, explicitly unknown source.
     #[must_use]
-    pub fn new(error: GraphcalError, registry: &SourceRegistry) -> Self {
+    pub fn new(error: SemanticError, registry: &SourceRegistry) -> Self {
         let source = registry.renderable(error.source());
         Self { error, source }
     }
 
     /// The rendered error.
     #[must_use]
-    pub const fn error(&self) -> &GraphcalError {
+    pub const fn error(&self) -> &SemanticError {
         &self.error
     }
 
@@ -100,29 +48,29 @@ impl RenderedGraphcalError {
     }
 }
 
-impl std::fmt::Display for RenderedGraphcalError {
+impl std::fmt::Display for RenderedSemanticError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         self.error.fmt(f)
     }
 }
 
-impl std::error::Error for RenderedGraphcalError {}
+impl std::error::Error for RenderedSemanticError {}
 
-impl Diagnostic for RenderedGraphcalError {
+impl Diagnostic for RenderedSemanticError {
     fn code<'a>(&'a self) -> Option<Box<dyn std::fmt::Display + 'a>> {
         match &self.error {
-            GraphcalError::Located(diagnostic) => Some(Box::new(diagnostic.kind.code())),
-            GraphcalError::Internal(_) => Some(Box::new(InternalError::CODE)),
+            SemanticError::Located(diagnostic) => Some(Box::new(diagnostic.kind.code())),
+            SemanticError::Internal(_) => Some(Box::new(InternalError::CODE)),
         }
     }
 
     fn help<'a>(&'a self) -> Option<Box<dyn std::fmt::Display + 'a>> {
         match &self.error {
-            GraphcalError::Located(diagnostic) => diagnostic
+            SemanticError::Located(diagnostic) => diagnostic
                 .kind
                 .help()
                 .map(|help| Box::new(help) as Box<dyn std::fmt::Display + 'a>),
-            GraphcalError::Internal(_) => Some(Box::new(InternalError::HELP)),
+            SemanticError::Internal(_) => Some(Box::new(InternalError::HELP)),
         }
     }
 
@@ -132,7 +80,7 @@ impl Diagnostic for RenderedGraphcalError {
 
     fn labels(&self) -> Option<Box<dyn Iterator<Item = miette::LabeledSpan> + '_>> {
         match &self.error {
-            GraphcalError::Located(diagnostic) => {
+            SemanticError::Located(diagnostic) => {
                 let primary = miette::LabeledSpan::new_with_span(
                     diagnostic.kind.primary_label(),
                     diagnostic.primary,
@@ -143,7 +91,7 @@ impl Diagnostic for RenderedGraphcalError {
                     });
                 Some(Box::new(std::iter::once(primary).chain(secondary)))
             }
-            GraphcalError::Internal(internal) => Some(Box::new(
+            SemanticError::Internal(internal) => Some(Box::new(
                 internal
                     .anchor()
                     .resolve(self.source.inner().len())
@@ -165,7 +113,7 @@ mod tests {
 
     use miette::Diagnostic as _;
 
-    use super::GraphcalError;
+    use super::SemanticError;
     use crate::diagnostic_anchor::DiagnosticAnchor;
     use crate::source_registry::SourceRegistry;
 
@@ -175,8 +123,8 @@ mod tests {
         let text = "node x";
         let source = registry.register("test.gcl", Arc::new(text.to_string()));
 
-        let whole_file = super::RenderedGraphcalError::new(
-            GraphcalError::internal_error("whole file", source, DiagnosticAnchor::WholeFile),
+        let whole_file = super::RenderedSemanticError::new(
+            SemanticError::internal_error("whole file", source, DiagnosticAnchor::WholeFile),
             &registry,
         );
         let whole_file_labels = whole_file
@@ -188,8 +136,8 @@ mod tests {
         assert_eq!(whole_file_labels[0].len(), text.len());
         assert_eq!(whole_file.named_source().name(), "test.gcl");
 
-        let builtin = super::RenderedGraphcalError::new(
-            GraphcalError::internal_error("builtin", source, DiagnosticAnchor::Builtin),
+        let builtin = super::RenderedSemanticError::new(
+            SemanticError::internal_error("builtin", source, DiagnosticAnchor::Builtin),
             &registry,
         );
         assert_eq!(
@@ -204,8 +152,8 @@ mod tests {
     #[test]
     fn foreign_source_ids_render_against_an_explicitly_unknown_source() {
         let source = SourceRegistry::new().register("other.gcl", Arc::new("x".to_string()));
-        let rendered = super::RenderedGraphcalError::new(
-            GraphcalError::internal_error("foreign", source, DiagnosticAnchor::WholeFile),
+        let rendered = super::RenderedSemanticError::new(
+            SemanticError::internal_error("foreign", source, DiagnosticAnchor::WholeFile),
             &SourceRegistry::new(),
         );
         assert_eq!(rendered.named_source().name(), "<unknown source>");

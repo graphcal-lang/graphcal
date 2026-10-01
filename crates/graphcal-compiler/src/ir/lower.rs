@@ -10,11 +10,11 @@ use std::collections::HashMap;
 
 use crate::desugar::desugared_ast::{DeclKind, File};
 use crate::diagnostic_anchor::DiagnosticAnchor;
-use crate::graphcal_error::GraphcalError;
 use crate::ir::module_interface::ModuleInterface;
 use crate::ir::resolve::{CollectedFile, ImportedValueNames, resolve_with_imported_values};
 use crate::outcome::Outcome;
 use crate::resolved_name::ResolvedDeclName;
+use crate::semantic_error::SemanticError;
 use crate::source_id::SourceId;
 use crate::syntax::module_name::ScopedName;
 
@@ -33,13 +33,13 @@ use super::static_definitions::StaticDefinitionEvaluator;
 ///
 /// # Errors
 ///
-/// Returns a [`GraphcalError`] if declaration collection or registry construction fails
+/// Returns a [`SemanticError`] if declaration collection or registry construction fails
 /// (e.g., unknown dimension in a type annotation, duplicate names, etc.).
 /// `name` is the virtual relative path that names the module.
-pub fn lower(ast: &File, name: &str, src: SourceId) -> Result<HirDag, GraphcalError> {
+pub fn lower(ast: &File, name: &str, src: SourceId) -> Result<HirDag, SemanticError> {
     let dag_id = crate::dag_id::DagId::from_virtual_relative_path(std::path::Path::new(name))
         .map_err(|error| {
-            GraphcalError::internal_error(
+            SemanticError::internal_error(
                 format!("invalid source name `{name}`: {error}"),
                 src,
                 DiagnosticAnchor::WholeFile,
@@ -92,9 +92,9 @@ pub fn definition_evaluator<'a>(
         ),
     >,
     src: SourceId,
-) -> Result<StaticDefinitionEvaluator<'a>, GraphcalError> {
+) -> Result<StaticDefinitionEvaluator<'a>, SemanticError> {
     StaticDefinitionEvaluator::new(resolver, sources, src).map_err(|error| {
-        GraphcalError::internal_error(
+        SemanticError::internal_error(
             format!("prelude failed to load: {error}"),
             src,
             DiagnosticAnchor::Builtin,
@@ -118,10 +118,10 @@ pub(crate) fn lower_file_with_inline_dags_for_test(
     ast: &File,
     name: &str,
     src: SourceId,
-) -> Result<LoweredTestFile, GraphcalError> {
+) -> Result<LoweredTestFile, SemanticError> {
     let dag_id = crate::dag_id::DagId::from_virtual_relative_path(std::path::Path::new(name))
         .map_err(|error| {
-            GraphcalError::internal_error(
+            SemanticError::internal_error(
                 format!("invalid source name `{name}`: {error}"),
                 src,
                 DiagnosticAnchor::WholeFile,
@@ -158,7 +158,7 @@ pub(crate) fn lower_file_with_inline_dags_for_test(
         }
     }
     let resolver = modules.build().map_err(|error| {
-        GraphcalError::internal_error(
+        SemanticError::internal_error(
             format!("test module resolver failed: {error}"),
             src,
             DiagnosticAnchor::WholeFile,
@@ -207,7 +207,7 @@ pub(crate) fn lower_file_with_inline_dags_for_test(
                 )?;
                 unresolved.freeze(owner, &mut definitions, src)
             })
-            .collect::<Result<Vec<_>, GraphcalError>>()?;
+            .collect::<Result<Vec<_>, SemanticError>>()?;
         (root, inline_dags)
     };
     Ok(LoweredTestFile {
@@ -226,7 +226,7 @@ fn single_module_resolver(
     ast: &File,
     dag_id: &crate::dag_id::DagId,
     src: SourceId,
-) -> Result<crate::resolve::ModuleResolver, GraphcalError> {
+) -> Result<crate::resolve::ModuleResolver, SemanticError> {
     let mut tables = crate::resolve::builder::SymbolTables::default();
     tables
         .add_file(dag_id.clone(), &ast.declarations)
@@ -236,7 +236,7 @@ fn single_module_resolver(
                 .freeze()
         })
         .map_err(|error| {
-            GraphcalError::internal_error(error.to_string(), src, DiagnosticAnchor::WholeFile)
+            SemanticError::internal_error(error.to_string(), src, DiagnosticAnchor::WholeFile)
         })
 }
 
@@ -334,7 +334,7 @@ fn collect_source_declarations(
 ///
 /// # Errors
 ///
-/// Returns a [`GraphcalError`] if declaration collection or registry construction fails.
+/// Returns a [`SemanticError`] if declaration collection or registry construction fails.
 #[expect(
     clippy::implicit_hasher,
     reason = "internal API always uses default hasher"
@@ -346,7 +346,7 @@ pub fn lower_module_with_imported_bindings(
     imported_bindings: HashMap<ScopedName, ResolvedDeclName>,
     dag_id: &crate::dag_id::DagId,
     definitions: &mut StaticDefinitionEvaluator<'_>,
-) -> Result<UnfrozenIR, GraphcalError> {
+) -> Result<UnfrozenIR, SemanticError> {
     crate::outcome::without_cancellation(|cancellation| {
         lower_module_with_imported_bindings_and_cancellation(
             ModuleBody {
@@ -367,7 +367,7 @@ pub fn lower_module_with_imported_bindings(
 ///
 /// # Errors
 ///
-/// Returns a [`GraphcalError`] for invalid source or cancellation.
+/// Returns a [`SemanticError`] for invalid source or cancellation.
 #[expect(
     clippy::implicit_hasher,
     reason = "internal API always uses default hasher"
@@ -380,7 +380,7 @@ pub fn lower_module_with_imported_bindings_and_cancellation(
     dag_id: &crate::dag_id::DagId,
     definitions: &mut StaticDefinitionEvaluator<'_>,
     cancellation: &crate::cancellation::CancellationToken,
-) -> Result<UnfrozenIR, Outcome<GraphcalError>> {
+) -> Result<UnfrozenIR, Outcome<SemanticError>> {
     cancellation.checkpoint()?;
     let ModuleBody { ast, interface } = module;
     let resolved =
@@ -414,7 +414,7 @@ pub fn lower_module_with_imported_bindings_and_cancellation(
 ///
 /// # Errors
 ///
-/// Returns a [`GraphcalError`] if declaration collection or type-system construction
+/// Returns a [`SemanticError`] if declaration collection or type-system construction
 /// fails for the dag body.
 #[expect(
     clippy::implicit_hasher,
@@ -427,7 +427,7 @@ pub fn lower_dag_module_with_imported_bindings(
     src: SourceId,
     dag_id: &crate::dag_id::DagId,
     definitions: &mut StaticDefinitionEvaluator<'_>,
-) -> Result<UnfrozenIR, GraphcalError> {
+) -> Result<UnfrozenIR, SemanticError> {
     crate::outcome::without_cancellation(|cancellation| {
         lower_dag_module_with_imported_bindings_and_cancellation(
             ModuleBody {
@@ -448,7 +448,7 @@ pub fn lower_dag_module_with_imported_bindings(
 ///
 /// # Errors
 ///
-/// Returns a [`GraphcalError`] for invalid source or cancellation.
+/// Returns a [`SemanticError`] for invalid source or cancellation.
 #[expect(
     clippy::implicit_hasher,
     reason = "internal API always uses default hasher"
@@ -461,7 +461,7 @@ pub fn lower_dag_module_with_imported_bindings_and_cancellation(
     dag_id: &crate::dag_id::DagId,
     definitions: &mut StaticDefinitionEvaluator<'_>,
     cancellation: &crate::cancellation::CancellationToken,
-) -> Result<UnfrozenIR, Outcome<GraphcalError>> {
+) -> Result<UnfrozenIR, Outcome<SemanticError>> {
     cancellation.checkpoint()?;
     let ModuleBody {
         ast: dag_body,
@@ -515,7 +515,7 @@ fn build_ir_from_resolved(
     dag_id: &crate::dag_id::DagId,
     definitions: &mut StaticDefinitionEvaluator<'_>,
     cancellation: &crate::cancellation::CancellationToken,
-) -> Result<UnfrozenIR, Outcome<GraphcalError>> {
+) -> Result<UnfrozenIR, Outcome<SemanticError>> {
     cancellation.checkpoint()?;
     // Dimensions, units, and indexes are evaluated canonically through the
     // module resolver; nothing is registered under a source spelling.
@@ -538,7 +538,7 @@ fn build_ir_from_resolved(
         ))
     })
     .map_err(|error| {
-        GraphcalError::internal_error(error.to_string(), src, DiagnosticAnchor::WholeFile)
+        SemanticError::internal_error(error.to_string(), src, DiagnosticAnchor::WholeFile)
     })?;
 
     let unfrozen = UnfrozenIR {
@@ -605,7 +605,7 @@ mod tests {
             .register("test.gcl", std::sync::Arc::new(source.to_string()))
     }
 
-    fn parse_and_lower(source: &str) -> Result<HirDag, GraphcalError> {
+    fn parse_and_lower(source: &str) -> Result<HirDag, SemanticError> {
         let raw_file = Parser::new(source).parse_file().unwrap();
         let desugared = crate::desugar::desugared_ast::File::from(raw_file);
         let file = desugared;
@@ -731,7 +731,7 @@ mod tests {
         let err = parse_and_lower(source).unwrap_err();
         assert!(matches!(
             err,
-            GraphcalError::Located(crate::diagnostic::Diagnostic {
+            SemanticError::Located(crate::diagnostic::Diagnostic {
                 kind: SemanticErrorKind::Name(NameError::UnknownGraphRef { .. }),
                 ..
             })
@@ -744,7 +744,7 @@ mod tests {
             .unwrap_err();
         assert!(matches!(
             err,
-            GraphcalError::Located(crate::diagnostic::Diagnostic {
+            SemanticError::Located(crate::diagnostic::Diagnostic {
                 kind: SemanticErrorKind::Name(NameError::DuplicateName { .. }),
                 ..
             })
@@ -758,7 +758,7 @@ mod tests {
                 .unwrap_err();
         assert!(matches!(
             err,
-            GraphcalError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Name(NameError::DuplicateConstructorField { type_name, constructor, field, .. }), .. }) if type_name.as_str() == "Pair"
+            SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Name(NameError::DuplicateConstructorField { type_name, constructor, field, .. }), .. }) if type_name.as_str() == "Pair"
                 && constructor.as_str() == "Pair"
                 && field.as_str() == "value"
         ));
@@ -774,7 +774,7 @@ mod tests {
         let err = parse_and_lower("unit foo: Blah = 1.0 m;").unwrap_err();
         assert!(matches!(
             err,
-            GraphcalError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Dimension(DimensionError::UnknownDimension { name, .. }), .. }) if name.to_string() == "Blah"
+            SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Dimension(DimensionError::UnknownDimension { name, .. }), .. }) if name.to_string() == "Blah"
         ));
     }
 
@@ -783,7 +783,7 @@ mod tests {
         let err = parse_and_lower("dim Foo = Bar * Baz;").unwrap_err();
         assert!(matches!(
             err,
-            GraphcalError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Dimension(DimensionError::UnknownDimension { name, .. }), .. }) if name.to_string() == "Bar"
+            SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Dimension(DimensionError::UnknownDimension { name, .. }), .. }) if name.to_string() == "Bar"
         ));
     }
 
@@ -805,7 +805,7 @@ mod tests {
         assert!(
             matches!(
                 &err,
-                GraphcalError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Plugin(PluginError::InvalidExternSignature { message, .. }), .. })
+                SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Plugin(PluginError::InvalidExternSignature { message, .. }), .. })
                     if message.contains("different result type")
             ),
             "{err:?}"
@@ -841,7 +841,7 @@ mod tests {
         assert!(
             matches!(
                 &error,
-                GraphcalError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Dimension(DimensionError::UnknownDimension { name, .. }), .. })
+                SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Dimension(DimensionError::UnknownDimension { name, .. }), .. })
                     if name.qualifier().iter().map(NameAtom::as_str).eq(["missing"])
                         && name.leaf().as_str() == "Dimension"
             ),
@@ -854,7 +854,7 @@ mod tests {
         let err = parse_and_lower("const unit wrong: Length = 1.0 h;").unwrap_err();
         assert!(matches!(
             err,
-            GraphcalError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Dimension(DimensionError::UnitDefinitionDimensionMismatch { name, declared, definition, .. }), .. }) if name.as_str() == "wrong"
+            SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Dimension(DimensionError::UnitDefinitionDimensionMismatch { name, declared, definition, .. }), .. }) if name.as_str() == "wrong"
                 && declared == "Length"
                 && definition == "Time"
         ));
@@ -868,7 +868,7 @@ mod tests {
         .unwrap_err();
         assert!(matches!(
             err,
-            GraphcalError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Dimension(DimensionError::UnitDefinitionDimensionMismatch { name, .. }), .. })
+            SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Dimension(DimensionError::UnitDefinitionDimensionMismatch { name, .. }), .. })
                 if name.as_str() == "wrong"
         ));
     }
@@ -906,7 +906,7 @@ mod tests {
         for _ in 0..2 {
             assert!(matches!(
                 definitions.unit(&wrong),
-                Err(GraphcalError::Located(crate::diagnostic::Diagnostic {
+                Err(SemanticError::Located(crate::diagnostic::Diagnostic {
                     kind: SemanticErrorKind::Dimension(
                         DimensionError::UnitDefinitionDimensionMismatch { .. }
                     ),
@@ -916,7 +916,7 @@ mod tests {
         }
         assert!(matches!(
             definitions.module_definitions(&owner),
-            Err(GraphcalError::Located(crate::diagnostic::Diagnostic {
+            Err(SemanticError::Located(crate::diagnostic::Diagnostic {
                 kind: SemanticErrorKind::Dimension(
                     DimensionError::UnitDefinitionDimensionMismatch { .. }
                 ),

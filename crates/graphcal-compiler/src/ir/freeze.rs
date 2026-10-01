@@ -6,9 +6,9 @@ use std::collections::HashMap;
 use crate::declaration_category::DeclCategory;
 use crate::desugar::desugared_ast::{Expr, TypeExpr};
 use crate::diagnostic_anchor::DiagnosticAnchor;
-use crate::graphcal_error::GraphcalError;
 use crate::ir::instance::identity::instance_declaration;
 use crate::outcome::Outcome;
+use crate::semantic_error::SemanticError;
 use crate::semantic_error::evaluation::EvaluationError;
 use crate::source_id::SourceId;
 use crate::syntax::module_name::ScopedName;
@@ -36,14 +36,14 @@ impl UnfrozenIR {
     ///
     /// # Errors
     ///
-    /// Returns a [`GraphcalError`] if any body contains a reference that
+    /// Returns a [`SemanticError`] if any body contains a reference that
     /// cannot be resolved.
     pub fn freeze(
         self,
         owner: &crate::dag_id::DagId,
         definitions: &mut super::static_definitions::StaticDefinitionEvaluator<'_>,
         src: SourceId,
-    ) -> Result<HirDag, GraphcalError> {
+    ) -> Result<HirDag, SemanticError> {
         crate::outcome::without_cancellation(|cancellation| {
             self.freeze_with_cancellation(owner, definitions, src, cancellation)
         })
@@ -53,7 +53,7 @@ impl UnfrozenIR {
     ///
     /// # Errors
     ///
-    /// Returns [`Outcome::Cancelled`] on cancellation, or a [`GraphcalError`]
+    /// Returns [`Outcome::Cancelled`] on cancellation, or a [`SemanticError`]
     /// for unresolved bodies.
     #[expect(
         clippy::too_many_lines,
@@ -65,7 +65,7 @@ impl UnfrozenIR {
         definitions: &mut super::static_definitions::StaticDefinitionEvaluator<'_>,
         src: SourceId,
         cancellation: &crate::cancellation::CancellationToken,
-    ) -> Result<HirDag, Outcome<GraphcalError>> {
+    ) -> Result<HirDag, Outcome<SemanticError>> {
         cancellation.checkpoint()?;
         let resolver = definitions.resolver();
         let time_zones = crate::semantic::time_zone::TimeZoneRegistry::bundled();
@@ -84,7 +84,7 @@ impl UnfrozenIR {
             .collect::<HashMap<_, _>>();
         let nominal_types = self.lower_nominal_types(owner, definitions, src, cancellation)?;
         let table = DeclTable::new(owner, self.decls).map_err(|error| {
-            GraphcalError::internal_error(error.to_string(), src, DiagnosticAnchor::WholeFile)
+            SemanticError::internal_error(error.to_string(), src, DiagnosticAnchor::WholeFile)
         })?;
         // Value expressions may reference local values (never assertions or
         // visualizations), semantic instance ports, and imported values.
@@ -112,7 +112,7 @@ impl UnfrozenIR {
         for (name, target, origin) in instance_ports.chain(imported) {
             cancellation.checkpoint()?;
             if decl_bindings.insert(name.clone(), target).is_some() {
-                return Err(GraphcalError::internal_error(
+                return Err(SemanticError::internal_error(
                     format!("{origin} `{name}` collides with a declaration"),
                     src,
                     DiagnosticAnchor::WholeFile,
@@ -138,12 +138,12 @@ impl UnfrozenIR {
                 overlay,
             );
             crate::hir::expr_lower::lower::lower_expr(expr, expr_ctx)
-                .map_err(|err| crate::hir::diagnostics::expr_lower_error_to_graphcal(&err, src))
+                .map_err(|err| crate::hir::diagnostics::expr_lower_error_to_semantic(&err, src))
         };
         let lower_scoped = |expr: &InScope<Expr>| lower_in(&expr.syntax, &expr.resolution_owner);
         let lower_type_annotation = |type_ann: &InScope<TypeExpr>| -> Result<
             crate::hir::type_annotation::TypeAnnotation,
-            GraphcalError,
+            SemanticError,
         > {
             let InScope {
                 syntax: type_ann,
@@ -166,7 +166,7 @@ impl UnfrozenIR {
                         span: bound.span,
                     })
                 })
-                .collect::<Result<_, GraphcalError>>()?;
+                .collect::<Result<_, SemanticError>>()?;
             Ok(crate::hir::type_annotation::TypeAnnotation {
                 decl_type,
                 domain_bounds,
@@ -182,7 +182,7 @@ impl UnfrozenIR {
                     let unit = resolver
                     .resolve_unit_path(&entry.unit, &entry.spelling.to_name_path())
                     .map(crate::resolve::symbols::SymbolRef::into_resolved)
-                    .map_err(|err| GraphcalError::internal_error(format!(
+                    .map_err(|err| SemanticError::internal_error(format!(
                             "registered dynamic unit `{}` did not resolve canonically: {err}",
                             entry.spelling
                         ), src, crate::diagnostic_anchor::DiagnosticAnchor::Source(entry.span)))?;
@@ -196,7 +196,7 @@ impl UnfrozenIR {
                         src: entry.src,
                     })
                 })
-                .collect::<Result<Vec<_>, Outcome<GraphcalError>>>()?;
+                .collect::<Result<Vec<_>, Outcome<SemanticError>>>()?;
 
         let lower_fields = |fields: &[crate::desugar::desugared_ast::PlotField],
                             resolution_owner: &crate::dag_id::DagId,
@@ -212,7 +212,7 @@ impl UnfrozenIR {
                         value: lower_in(&field.value, resolution_owner)?,
                     })
                 })
-                .collect::<Result<Vec<_>, GraphcalError>>()
+                .collect::<Result<Vec<_>, SemanticError>>()
         };
         let lower_composition_fields =
             |fields: &InScope<Vec<crate::desugar::desugared_ast::PlotField>>| {
@@ -234,7 +234,7 @@ impl UnfrozenIR {
                 Decl::Figure(_) => 5,
                 Decl::Layer(_) => 6,
             },
-            |decl| -> Result<HirDecl, Outcome<GraphcalError>> {
+            |decl| -> Result<HirDecl, Outcome<SemanticError>> {
                 cancellation.checkpoint()?;
                 Ok(match decl {
                     Decl::Const(entry) => Decl::Const(ConstEntry {
@@ -265,7 +265,7 @@ impl UnfrozenIR {
                             ),
                         )
                         .map_err(|error| {
-                            crate::hir::diagnostics::expr_lower_error_to_graphcal(&error, src)
+                            crate::hir::diagnostics::expr_lower_error_to_semantic(&error, src)
                         })?,
                         identity: entry.identity,
                         span: entry.span,
@@ -284,7 +284,7 @@ impl UnfrozenIR {
                             ),
                         )
                         .map_err(|err| {
-                            crate::hir::diagnostics::expr_lower_error_to_graphcal(&err, src)
+                            crate::hir::diagnostics::expr_lower_error_to_semantic(&err, src)
                         })?,
                         identity: entry.identity,
                         span: entry.span,
@@ -305,7 +305,7 @@ impl UnfrozenIR {
                                 lower_in(&encoding.value, resolution_owner)
                                     .map(|lowered| (encoding.channel, lowered))
                             })
-                            .collect::<Result<Vec<_>, GraphcalError>>()?;
+                            .collect::<Result<Vec<_>, SemanticError>>()?;
                         Decl::Plot(PlotEntry {
                             body: LoweredPlotBody {
                                 encodings,
@@ -359,7 +359,7 @@ impl UnfrozenIR {
                     })
                 })
                 .ok_or_else(|| {
-                    GraphcalError::internal_error(
+                    SemanticError::internal_error(
                         format!("attribute target `{name}` has no canonical declaration"),
                         src,
                         DiagnosticAnchor::WholeFile,
@@ -375,10 +375,10 @@ impl UnfrozenIR {
                     assumers
                         .iter()
                         .map(&lookup_assertion)
-                        .collect::<Result<Vec<_>, GraphcalError>>()?,
+                        .collect::<Result<Vec<_>, SemanticError>>()?,
                 ))
             })
-            .collect::<Result<HashMap<_, _>, GraphcalError>>()?;
+            .collect::<Result<HashMap<_, _>, SemanticError>>()?;
         let expected_fail = self
             .expected_fail
             .into_iter()
@@ -388,7 +388,7 @@ impl UnfrozenIR {
                     metadata.resolve(resolver, src)?,
                 ))
             })
-            .collect::<Result<HashMap<_, _>, GraphcalError>>()?;
+            .collect::<Result<HashMap<_, _>, SemanticError>>()?;
 
         cancellation.checkpoint()?;
 
@@ -411,7 +411,7 @@ impl UnfrozenIR {
                     override_reconciliations: record.override_reconciliations.clone(),
                 })
             })
-            .collect::<Result<Vec<_>, GraphcalError>>()?;
+            .collect::<Result<Vec<_>, SemanticError>>()?;
 
         let extern_functions = resolve_plugin_imports(
             &self.plugin_imports,
@@ -429,7 +429,7 @@ impl UnfrozenIR {
             nominal_types,
         )
         .map_err(|error| {
-            GraphcalError::internal_error(error.to_string(), src, DiagnosticAnchor::WholeFile)
+            SemanticError::internal_error(error.to_string(), src, DiagnosticAnchor::WholeFile)
         })?;
 
         Ok(HirDag {
@@ -462,7 +462,7 @@ impl UnfrozenIR {
         definitions: &super::static_definitions::StaticDefinitionEvaluator<'_>,
         src: SourceId,
         cancellation: &crate::cancellation::CancellationToken,
-    ) -> Result<crate::hir::nominal::NominalTypeRegistry, Outcome<GraphcalError>> {
+    ) -> Result<crate::hir::nominal::NominalTypeRegistry, Outcome<SemanticError>> {
         use crate::hir::nominal_lower::{
             NominalLowering, lower_type_declaration, specialize_nominal_type,
         };
@@ -476,7 +476,7 @@ impl UnfrozenIR {
             cancellation,
         };
         let invariant = |message: String, span: Span| {
-            GraphcalError::internal_error(
+            SemanticError::internal_error(
                 message,
                 src,
                 crate::diagnostic_anchor::DiagnosticAnchor::Source(span),
@@ -582,7 +582,7 @@ impl ParsedExpectedFailMetadata {
         self,
         resolver: &crate::resolve::ModuleResolver,
         src: SourceId,
-    ) -> Result<ResolvedExpectedFailMetadata, GraphcalError> {
+    ) -> Result<ResolvedExpectedFailMetadata, SemanticError> {
         use crate::assertion_expectation::{ExpectedFail, ExpectedFailKeyPart};
 
         let Self {
@@ -603,7 +603,7 @@ impl ParsedExpectedFailMetadata {
                             .resolve_index_variant_parts(&resolution_owner, &index, &variant)
                             .map(|resolved| ExpectedFailKeyPart::resolved(resolved, span))
                             .map_err(|err| {
-                                GraphcalError::located(
+                                SemanticError::located(
                                     src,
                                     span,
                                     EvaluationError::Failed {
@@ -615,7 +615,7 @@ impl ParsedExpectedFailMetadata {
                             Ok(ExpectedFailKeyPart::FinitePosition { position, span })
                         }
                     })
-                    .collect::<Result<_, GraphcalError>>()
+                    .collect::<Result<_, SemanticError>>()
             })?),
         };
         Ok(ResolvedExpectedFailMetadata {

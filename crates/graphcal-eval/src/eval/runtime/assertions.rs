@@ -5,9 +5,9 @@ use std::collections::HashMap;
 
 use graphcal_compiler::cancellation::Cancelled;
 use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
-use graphcal_compiler::graphcal_error::GraphcalError;
 use graphcal_compiler::outcome::Outcome;
 use graphcal_compiler::resolved_name::ResolvedDeclName;
+use graphcal_compiler::semantic_error::SemanticError;
 use graphcal_compiler::source_id::SourceId;
 use graphcal_compiler::syntax::module_name::ScopedName;
 use graphcal_compiler::syntax::span::Span;
@@ -33,11 +33,11 @@ fn assertion_body<'tir>(
         DeclarationBody<'tir>,
         Scoped<'tir, graphcal_compiler::tir::typed::TypedAssertEntry>,
     ),
-    GraphcalError,
+    SemanticError,
 > {
     let unit = declaration_body(tir, owner, src)?;
     let entry = unit.assertion().ok_or_else(|| {
-        GraphcalError::internal_error(
+        SemanticError::internal_error(
             format!("assertion `{owner}` has no checked body"),
             src,
             DiagnosticAnchor::WholeFile,
@@ -59,7 +59,7 @@ pub(super) fn evaluate_assertions(
     ctx: &EvalSession<'_>,
     values: &RuntimeValueMap,
     errors: &HashMap<ResolvedDeclName, NodeUnavailable>,
-) -> Result<Vec<(ScopedName, AssertResult, Span)>, Outcome<GraphcalError>> {
+) -> Result<Vec<(ScopedName, AssertResult, Span)>, Outcome<SemanticError>> {
     let tir = plan.tir();
     let mut assertions: Vec<(ScopedName, AssertResult, Span)> = tir
         .root()
@@ -85,7 +85,7 @@ pub(super) fn evaluate_assertions(
             };
             Ok((ScopedName::local(entry.name().clone()), assert_result, span))
         })
-        .collect::<Result<_, Outcome<GraphcalError>>>()?;
+        .collect::<Result<_, Outcome<SemanticError>>>()?;
     for (parent, instances) in plan.root().closure_instances() {
         let parent_dag = parent.dag();
         for planned in instances {
@@ -123,13 +123,13 @@ pub(super) fn evaluate_assertions(
 pub(super) fn root_assumes_map(
     plan: &crate::execution_plan::ExecPlan<'_>,
     src: SourceId,
-) -> Result<HashMap<ScopedName, Vec<ScopedName>>, GraphcalError> {
+) -> Result<HashMap<ScopedName, Vec<ScopedName>>, SemanticError> {
     let source_names_by_key = root_source_names(plan)
         .into_iter()
         .collect::<HashMap<_, _>>();
     let source_name = |key: &ResolvedDeclName, role: &str| {
         source_names_by_key.get(key).cloned().ok_or_else(|| {
-            GraphcalError::internal_error(
+            SemanticError::internal_error(
                 format!("{role} `{key}` is missing from checked source order"),
                 src,
                 DiagnosticAnchor::WholeFile,
@@ -147,7 +147,7 @@ pub(super) fn root_assumes_map(
         let assumer_names = assumers
             .iter()
             .map(|assumer| source_name(assumer, "assertion assumer"))
-            .collect::<Result<Vec<_>, GraphcalError>>()?;
+            .collect::<Result<Vec<_>, SemanticError>>()?;
         Ok((source_name(assertion, "assertion")?, assumer_names))
     })
     .collect()

@@ -12,7 +12,6 @@ use std::collections::HashMap;
 
 use crate::desugar::desugared_ast::{self as ast, TypeDecl, TypeDeclBody};
 use crate::diagnostic_anchor::DiagnosticAnchor;
-use crate::graphcal_error::GraphcalError;
 use crate::ir::static_substitution::{InstanceIndexBindingTarget, StaticSubstitution};
 use crate::nat::{NatOverflowError, NatPolyForm};
 use crate::resolve::ModuleResolver;
@@ -20,6 +19,7 @@ use crate::resolve::namespace::Namespace;
 use crate::resolve::reserved_name::validate_reserved_name;
 use crate::resolved_name::ResolvedStructTypeName;
 use crate::semantic::time_zone::TimeZoneRegistry;
+use crate::semantic_error::SemanticError;
 use crate::semantic_error::evaluation::EvaluationError;
 use crate::semantic_error::name::NameError;
 use crate::source_id::SourceId;
@@ -52,7 +52,7 @@ pub struct NominalLowering<'a> {
 ///
 /// # Errors
 ///
-/// Returns a [`GraphcalError`] for an invalid generic parameter list, a
+/// Returns a [`SemanticError`] for an invalid generic parameter list, a
 /// duplicate constructor or payload field, or an unresolvable signature.
 pub fn lower_type_declaration(
     declaration: &TypeDecl,
@@ -60,7 +60,7 @@ pub fn lower_type_declaration(
     span: Span,
     src: SourceId,
     lowering: NominalLowering<'_>,
-) -> Result<NominalTypeDef, Outcome<GraphcalError>> {
+) -> Result<NominalTypeDef, Outcome<SemanticError>> {
     validate_generic_params(declaration, src)?;
     let (generic_params, generic_scope) =
         lower_generic_params(declaration, &identity, src, lowering)?;
@@ -82,14 +82,14 @@ pub fn lower_type_declaration(
                         .map(|field| {
                             lower_nominal_field(field, &identity, &generic_scope, src, lowering)
                         })
-                        .collect::<Result<Vec<_>, GraphcalError>>()?;
+                        .collect::<Result<Vec<_>, SemanticError>>()?;
                     NominalConstructor::try_new(
                         identity.constructor(member.name.value.clone()),
                         fields,
                     )
                     .map_err(|error| member_error(error, declaration, payload, src).into())
                 })
-                .collect::<Result<Vec<_>, Outcome<GraphcalError>>>()?;
+                .collect::<Result<Vec<_>, Outcome<SemanticError>>>()?;
             NominalTypeDef::try_union(identity, generic_params, lowered, src, span)
                 .map_err(|error| member_error(error, declaration, &[], src).into())
         }
@@ -102,7 +102,7 @@ fn member_error(
     declaration: &TypeDecl,
     payload: &[ast::FieldDecl],
     src: SourceId,
-) -> GraphcalError {
+) -> SemanticError {
     match error {
         NominalTypeError::DuplicateConstructorField {
             constructor,
@@ -110,7 +110,7 @@ fn member_error(
             first_index,
             duplicate_index,
         } => match (payload.get(first_index), payload.get(duplicate_index)) {
-            (Some(first), Some(duplicate)) => GraphcalError::located(
+            (Some(first), Some(duplicate)) => SemanticError::located(
                 src,
                 duplicate.name.span,
                 NameError::DuplicateConstructorField {
@@ -138,7 +138,7 @@ fn member_error(
             .into_iter();
             let first = members.next().unwrap_or(declaration.name.span);
             let duplicate = members.next().unwrap_or(first);
-            GraphcalError::located(
+            SemanticError::located(
                 src,
                 duplicate,
                 NameError::DuplicateName {
@@ -165,14 +165,14 @@ fn member_error(
 ///
 /// A default may reference only earlier parameters, and a parameter without
 /// a default cannot follow a defaulted one.
-fn validate_generic_params(declaration: &TypeDecl, src: SourceId) -> Result<(), GraphcalError> {
+fn validate_generic_params(declaration: &TypeDecl, src: SourceId) -> Result<(), SemanticError> {
     let positions = declaration.generic_params.iter().enumerate().try_fold(
         HashMap::new(),
         |mut positions, (index, param)| match positions.insert(
             param.name.value.atom().clone(),
             (param.name.value.clone(), index, param.name.span),
         ) {
-            Some((name, _, _)) => Err(GraphcalError::located(
+            Some((name, _, _)) => Err(SemanticError::located(
                 src,
                 param.name.span,
                 EvaluationError::Failed {
@@ -191,7 +191,7 @@ fn validate_generic_params(declaration: &TypeDecl, src: SourceId) -> Result<(), 
                 if let Some((referenced, span)) =
                     find_non_earlier_generic_reference(default, index, &positions)
                 {
-                    return Err(GraphcalError::located(
+                    return Err(SemanticError::located(
                         src,
                         span,
                         EvaluationError::Failed {
@@ -205,7 +205,7 @@ fn validate_generic_params(declaration: &TypeDecl, src: SourceId) -> Result<(), 
             }
             None => {
                 if let Some(first_defaulted) = first_defaulted {
-                    return Err(GraphcalError::located(
+                    return Err(SemanticError::located(
                         src,
                         param.name.span,
                         EvaluationError::Failed {
@@ -353,7 +353,7 @@ fn lower_generic_params(
     identity: &ResolvedStructTypeName,
     src: SourceId,
     lowering: NominalLowering<'_>,
-) -> Result<(Vec<NominalGenericParam>, super::lower::GenericScope), Outcome<GraphcalError>> {
+) -> Result<(Vec<NominalGenericParam>, super::lower::GenericScope), Outcome<SemanticError>> {
     let generic_owner = GenericParamOwner::Type(identity.clone());
     declaration.generic_params.iter().try_fold(
         (
@@ -375,7 +375,7 @@ fn lower_generic_params(
                 .resolver
                 .visible_span(identity.owner(), Namespace::Static, atom)
                 .map_err(|error| {
-                    GraphcalError::internal_error(
+                    SemanticError::internal_error(
                         format!("failed to inspect Static scope for `{atom}`: {error}"),
                         src,
                         DiagnosticAnchor::Source(param.name.span),
@@ -410,7 +410,7 @@ fn lower_generic_default(
     scope: &super::lower::GenericScope,
     src: SourceId,
     lowering: NominalLowering<'_>,
-) -> Result<Option<GenericArg>, GraphcalError> {
+) -> Result<Option<GenericArg>, SemanticError> {
     param
         .default
         .as_ref()
@@ -435,7 +435,7 @@ fn lower_nominal_field(
     generic_scope: &super::lower::GenericScope,
     src: SourceId,
     lowering: NominalLowering<'_>,
-) -> Result<NominalField, GraphcalError> {
+) -> Result<NominalField, SemanticError> {
     super::diagnostics::validate_type_annotation(&field.type_ann, src)?;
     let scope = super::lower::ModuleScope::new(identity.owner(), lowering.resolver, generic_scope);
     let decl_type = super::lower::lower_decl_type(&field.type_ann, scope)
@@ -450,12 +450,12 @@ fn lower_nominal_field(
             Ok(super::type_annotation::DomainBound {
                 kind: bound.kind,
                 value: super::expr_lower::lower::lower_expr(&bound.value, expr_ctx).map_err(
-                    |error| super::diagnostics::expr_lower_error_to_graphcal(&error, src),
+                    |error| super::diagnostics::expr_lower_error_to_semantic(&error, src),
                 )?,
                 span: bound.span,
             })
         })
-        .collect::<Result<Vec<_>, GraphcalError>>()?;
+        .collect::<Result<Vec<_>, SemanticError>>()?;
     Ok(NominalField::new(
         field.name.value.clone(),
         TypeAnnotation {
@@ -466,8 +466,8 @@ fn lower_nominal_field(
     ))
 }
 
-fn invariant_error(message: String, src: SourceId, span: Span) -> GraphcalError {
-    GraphcalError::internal_error(
+fn invariant_error(message: String, src: SourceId, span: Span) -> SemanticError {
+    SemanticError::internal_error(
         message,
         src,
         crate::diagnostic_anchor::DiagnosticAnchor::Source(span),
@@ -747,7 +747,7 @@ mod tests {
     }
 
     /// Lower the first type declaration of a one-module project.
-    fn lower_first(source: &str) -> Result<NominalTypeDef, GraphcalError> {
+    fn lower_first(source: &str) -> Result<NominalTypeDef, SemanticError> {
         let owner = DagId::root_in_package("test", "main");
         let file = parse(source);
         let mut modules = TestModules::default();
@@ -770,9 +770,9 @@ mod tests {
         })
     }
 
-    fn eval_message(result: Result<NominalTypeDef, GraphcalError>) -> String {
+    fn eval_message(result: Result<NominalTypeDef, SemanticError>) -> String {
         match result {
-            Err(GraphcalError::Located(crate::diagnostic::Diagnostic {
+            Err(SemanticError::Located(crate::diagnostic::Diagnostic {
                 kind: SemanticErrorKind::Evaluation(EvaluationError::Failed { message, .. }),
                 ..
             })) => message,
@@ -803,7 +803,7 @@ mod tests {
         assert!(
             matches!(
                 &error,
-                GraphcalError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Name(NameError::DuplicateConstructorField { type_name, field, .. }), .. })
+                SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Name(NameError::DuplicateConstructorField { type_name, field, .. }), .. })
                     if type_name.as_str() == "Pair" && field.as_str() == "value"
             ),
             "{error:?}"

@@ -12,10 +12,10 @@ use std::ops::Deref;
 use graphcal_compiler::cancellation::CancellationToken;
 use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
 use graphcal_compiler::display::formatting_registry::FormattingRegistry;
-use graphcal_compiler::graphcal_error::GraphcalError;
 use graphcal_compiler::hir::expr::Expr;
 use graphcal_compiler::outcome::Outcome;
 use graphcal_compiler::resolved_name::ResolvedDeclName;
+use graphcal_compiler::semantic_error::SemanticError;
 use graphcal_compiler::semantic_error::evaluation::EvaluationError;
 use graphcal_compiler::source_id::SourceId;
 use graphcal_compiler::source_registry::SourceRegistry;
@@ -163,19 +163,19 @@ impl<'a> EvalSession<'a> {
     pub fn executable<'t>(
         &self,
         root: Scoped<'t, Expr>,
-    ) -> Result<ScopedTree<'t, &'t TExpr>, GraphcalError> {
+    ) -> Result<ScopedTree<'t, &'t TExpr>, SemanticError> {
         root.executable()
             .map_err(|error| self.internal_error(error.to_string(), root.get().span))
     }
 
     /// The text of an expression root of an evaluation unit checked as a
     /// contextual string.
-    pub fn checked_string<'t>(&self, root: Scoped<'t, Expr>) -> Result<&'t str, GraphcalError> {
+    pub fn checked_string<'t>(&self, root: Scoped<'t, Expr>) -> Result<&'t str, SemanticError> {
         root.checked_string()
             .map_err(|error| self.internal_error(error.to_string(), root.get().span))
     }
 
-    pub fn execution_plan(&self) -> Result<&'a ExecPlan<'a>, GraphcalError> {
+    pub fn execution_plan(&self) -> Result<&'a ExecPlan<'a>, SemanticError> {
         match self.capabilities {
             Capabilities::ProvisionalConstants => Err(self.internal_error(
                 "provisional constant evaluation has no callable execution plans",
@@ -232,7 +232,7 @@ impl<'a> EvalSession<'a> {
     pub fn unavailable_dependencies<'e>(
         &self,
         roots: impl IntoIterator<Item = Scoped<'e, Expr>>,
-    ) -> Result<Option<graphcal_compiler::node_unavailable::NodeUnavailable>, Outcome<GraphcalError>>
+    ) -> Result<Option<graphcal_compiler::node_unavailable::NodeUnavailable>, Outcome<SemanticError>>
     {
         let roots = roots.into_iter().collect::<Vec<_>>();
         self.unavailable_among(
@@ -246,7 +246,7 @@ impl<'a> EvalSession<'a> {
         &self,
         graph_refs: impl FnOnce() -> Vec<ResolvedDeclName>,
         expressions: impl IntoIterator<Item = E>,
-    ) -> Result<Option<graphcal_compiler::node_unavailable::NodeUnavailable>, Outcome<GraphcalError>>
+    ) -> Result<Option<graphcal_compiler::node_unavailable::NodeUnavailable>, Outcome<SemanticError>>
     {
         let plan = match self.capabilities {
             Capabilities::ProvisionalConstants => None,
@@ -326,8 +326,8 @@ impl<'a> EvalSession<'a> {
         session
     }
 
-    pub fn eval_error(&self, message: impl Into<String>, span: Span) -> GraphcalError {
-        GraphcalError::located(
+    pub fn eval_error(&self, message: impl Into<String>, span: Span) -> SemanticError {
+        SemanticError::located(
             self.src,
             span,
             EvaluationError::Failed {
@@ -341,8 +341,8 @@ impl<'a> EvalSession<'a> {
         &self,
         message: impl Into<String>,
         anchor: impl Into<DiagnosticAnchor>,
-    ) -> GraphcalError {
-        GraphcalError::internal_error(message, self.src, anchor.into())
+    ) -> SemanticError {
+        SemanticError::internal_error(message, self.src, anchor.into())
     }
 
     /// The diagnostic for a failed runtime operation: a user-facing failure
@@ -351,7 +351,7 @@ impl<'a> EvalSession<'a> {
         &self,
         failure: Failure<impl std::fmt::Display>,
         span: Span,
-    ) -> GraphcalError {
+    ) -> SemanticError {
         match failure {
             Failure::Error(error) => self.eval_error(error.to_string(), span),
             Failure::Invariant(invariant) => self.internal_error(invariant.to_string(), span),
@@ -363,7 +363,7 @@ impl<'a> EvalSession<'a> {
         &self,
         outcome: Outcome<Failure<impl std::fmt::Display>>,
         span: Span,
-    ) -> Outcome<GraphcalError> {
+    ) -> Outcome<SemanticError> {
         outcome.map_failed(|failure| self.failure_error(failure, span))
     }
 }
@@ -374,13 +374,13 @@ impl EvalSession<'_> {
     pub fn check_dependencies(
         &self,
         expression: ScopedNode<'_>,
-    ) -> Result<(), Outcome<GraphcalError>> {
+    ) -> Result<(), Outcome<SemanticError>> {
         crate::pipeline_metrics::record(
             crate::pipeline_metrics::Event::DependencyAvailabilityCheck,
         );
         self.unavailable_among(|| expression.graph_refs(), std::iter::once(expression))?
             .map_or(Ok(()), |reason| {
-                Err(GraphcalError::located(
+                Err(SemanticError::located(
                     self.src,
                     expression.span(),
                     EvaluationError::Unavailable { reason },

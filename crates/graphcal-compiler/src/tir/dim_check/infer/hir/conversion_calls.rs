@@ -2,9 +2,9 @@
 
 use crate::builtin::{BuiltinFn, ConversionFn, DatetimeConstructorFn};
 use crate::dimension::Dimension;
-use crate::graphcal_error::GraphcalError;
 use crate::hir::expr::{Expr, ExprKind};
 use crate::outcome::Outcome;
+use crate::semantic_error::SemanticError;
 use crate::semantic_error::dimension::DimensionError;
 use crate::semantic_error::index::IndexError;
 
@@ -18,12 +18,12 @@ impl Infer<'_> {
         &self,
         kind: ConversionFn,
         args: &[Expr],
-    ) -> Result<CheckedType<Symbolic>, Outcome<GraphcalError>> {
+    ) -> Result<CheckedType<Symbolic>, Outcome<SemanticError>> {
         let arg_type = self.infer_arg(&args[0])?;
         match kind {
             ConversionFn::ToFloat => {
                 if arg_type != CheckedType::Int {
-                    return Err(GraphcalError::located(
+                    return Err(SemanticError::located(
                         self.env.src,
                         args[0].span,
                         DimensionError::DimensionMismatch {
@@ -43,7 +43,7 @@ impl Infer<'_> {
                     if index.finite_index_form().is_some() {
                         return Ok(CheckedType::Int);
                     }
-                    return Err(GraphcalError::located(
+                    return Err(SemanticError::located(
                         self.env.src,
                         args[0].span,
                         DimensionError::DimensionMismatch {
@@ -59,7 +59,7 @@ impl Infer<'_> {
                 let dim =
                     expect_quantity(&arg_type, self.env.registry, self.env.src, args[0].span)?;
                 if !dim.is_dimensionless() {
-                    return Err(GraphcalError::located(
+                    return Err(SemanticError::located(
                         self.env.src,
                         args[0].span,
                         DimensionError::DimensionMismatch {
@@ -74,7 +74,7 @@ impl Infer<'_> {
             }
             ConversionFn::Coord => {
                 let CheckedType::Key(index) = &arg_type else {
-                    return Err(GraphcalError::located(
+                    return Err(SemanticError::located(
                         self.env.src,
                         args[0].span,
                         DimensionError::DimensionMismatch {
@@ -88,7 +88,7 @@ impl Infer<'_> {
                     .into());
                 };
                 if index.finite_index_form().is_some() {
-                    return Err(GraphcalError::located(
+                    return Err(SemanticError::located(
                         self.env.src,
                         args[0].span,
                         DimensionError::DimensionMismatch {
@@ -104,7 +104,7 @@ impl Infer<'_> {
                 let index_def =
                     crate::tir::dim_check::infer::index_def_for_inferred(index, self.env.tir)
                         .ok_or_else(|| {
-                            GraphcalError::located(
+                            SemanticError::located(
                                 self.env.src,
                                 args[0].span,
                                 IndexError::UnknownIndex {
@@ -116,7 +116,7 @@ impl Infer<'_> {
                     .coordinate_dimension()
                     .map_or_else(
                         || {
-                            Err(GraphcalError::located(
+                            Err(SemanticError::located(
                                 self.env.src,
                                 args[0].span,
                                 DimensionError::DimensionMismatch {
@@ -140,10 +140,10 @@ impl Infer<'_> {
         name: BuiltinFn,
         scale: crate::semantic::time_scale::TimeScale,
         args: &[Expr],
-    ) -> Result<CheckedType<Symbolic>, Outcome<GraphcalError>> {
+    ) -> Result<CheckedType<Symbolic>, Outcome<SemanticError>> {
         let arg_type = self.infer_arg(&args[0])?;
         if !matches!(arg_type, CheckedType::Datetime(_)) {
-            return Err(GraphcalError::located(
+            return Err(SemanticError::located(
                 self.env.src,
                 args[0].span,
                 DimensionError::DimensionMismatch {
@@ -163,7 +163,7 @@ impl Infer<'_> {
         epoch_scale: Option<crate::semantic::time_scale::TimeScale>,
         span: crate::syntax::span::Span,
         args: &[Expr],
-    ) -> Result<CheckedType<Symbolic>, Outcome<GraphcalError>> {
+    ) -> Result<CheckedType<Symbolic>, Outcome<SemanticError>> {
         match kind {
             DatetimeConstructorFn::Datetime => {
                 let first_is_valid = match args.len() {
@@ -173,7 +173,7 @@ impl Infer<'_> {
                 };
                 if !first_is_valid {
                     let found = self.infer_arg(&args[0])?;
-                    return Err(GraphcalError::located(
+                    return Err(SemanticError::located(
                         self.env.src,
                         args[0].span,
                         DimensionError::DimensionMismatch {
@@ -187,7 +187,7 @@ impl Infer<'_> {
                 }
                 if args.len() == 2 && !matches!(args[1].kind(), ExprKind::IanaTimeZoneLiteral(_)) {
                     let found = self.infer_arg(&args[1])?;
-                    return Err(GraphcalError::located(
+                    return Err(SemanticError::located(
                         self.env.src,
                         args[1].span,
                         DimensionError::DimensionMismatch {
@@ -210,7 +210,7 @@ impl Infer<'_> {
                     _ => true,
                 };
                 if !resolved_timezone_matches_argument {
-                    return Err(GraphcalError::internal_error(
+                    return Err(SemanticError::internal_error(
                         "resolved datetime timezone does not match its source argument".to_string(),
                         self.env.src,
                         crate::diagnostic_anchor::DiagnosticAnchor::Source(span),
@@ -225,7 +225,7 @@ impl Infer<'_> {
             DatetimeConstructorFn::Epoch => {
                 if !matches!(args[0].kind(), ExprKind::CivilDateTimeLiteral(_)) {
                     let found = self.infer_arg(&args[0])?;
-                    return Err(GraphcalError::located(
+                    return Err(SemanticError::located(
                         self.env.src,
                         args[0].span,
                         DimensionError::DimensionMismatch {
@@ -241,7 +241,7 @@ impl Infer<'_> {
                 epoch_scale
                     .map(CheckedType::Datetime)
                     .ok_or_else(|| {
-                        GraphcalError::internal_error(
+                        SemanticError::internal_error(
                             "epoch call reached type inference without a static time scale"
                                 .to_string(),
                             self.env.src,
@@ -254,7 +254,7 @@ impl Infer<'_> {
     }
 
     /// Record the contextual literal arguments a datetime constructor accepted.
-    fn record_contextual_args(&self, args: &[Expr]) -> Result<(), GraphcalError> {
+    fn record_contextual_args(&self, args: &[Expr]) -> Result<(), SemanticError> {
         args.iter().try_for_each(|arg| {
             self.control
                 .observations()
@@ -267,10 +267,10 @@ impl Infer<'_> {
         name: BuiltinFn,
         args: &[Expr],
         result: CheckedType<Symbolic>,
-    ) -> Result<CheckedType<Symbolic>, Outcome<GraphcalError>> {
+    ) -> Result<CheckedType<Symbolic>, Outcome<SemanticError>> {
         let arg_type = self.infer_arg(&args[0])?;
         if !matches!(arg_type, CheckedType::Datetime(_)) {
-            return Err(GraphcalError::located(
+            return Err(SemanticError::located(
                 self.env.src,
                 args[0].span,
                 DimensionError::DimensionMismatch {

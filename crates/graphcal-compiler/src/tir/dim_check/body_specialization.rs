@@ -10,9 +10,9 @@ use std::sync::Arc;
 
 use crate::diagnostic_anchor::DiagnosticAnchor;
 use crate::expression_id::ExprId;
-use crate::graphcal_error::GraphcalError;
 use crate::hir::expr::Expr;
 use crate::semantic::checked_type::{CheckedType, IndexTypeRef, Symbolic};
+use crate::semantic_error::SemanticError;
 use crate::semantic_error::evaluation::EvaluationError;
 use crate::source_id::SourceId;
 use crate::syntax::span::Span;
@@ -42,7 +42,7 @@ impl BodySubstitution<'_> {
         tir: &dyn TirRead,
         src: SourceId,
         span: Span,
-    ) -> Result<CheckedType<Symbolic>, GraphcalError> {
+    ) -> Result<CheckedType<Symbolic>, SemanticError> {
         match self {
             Self::Static(substitution) => specialize_expression_type(ty, substitution, tir, src),
             Self::Generic(substitution) => substitution
@@ -57,7 +57,7 @@ impl BodySubstitution<'_> {
         index: &IndexTypeRef<Symbolic>,
         src: SourceId,
         span: Span,
-    ) -> Result<IndexTypeRef<Symbolic>, GraphcalError> {
+    ) -> Result<IndexTypeRef<Symbolic>, SemanticError> {
         match self {
             Self::Static(substitution) => Ok(specialize_index_ref(index, substitution)),
             Self::Generic(substitution) => substitution
@@ -87,8 +87,8 @@ struct Specializer<'a> {
 }
 
 /// A specialization invariant the checker established was violated.
-fn internal(src: SourceId, message: impl Into<String>, anchor: DiagnosticAnchor) -> GraphcalError {
-    GraphcalError::internal_error(message, src, anchor)
+fn internal(src: SourceId, message: impl Into<String>, anchor: DiagnosticAnchor) -> SemanticError {
+    SemanticError::internal_error(message, src, anchor)
 }
 
 impl Specializer<'_> {
@@ -101,13 +101,13 @@ impl Specializer<'_> {
 }
 
 impl<V: SymbolicView> TypeMap<V, Symbolic> for Specializer<'_> {
-    type Error = GraphcalError;
+    type Error = SemanticError;
 
     fn node_type(
         &mut self,
         ty: &CheckedType<V>,
         span: Span,
-    ) -> Result<CheckedType<Symbolic>, GraphcalError> {
+    ) -> Result<CheckedType<Symbolic>, SemanticError> {
         let span = self.span(span);
         let ty = self
             .substitution
@@ -121,7 +121,7 @@ impl<V: SymbolicView> TypeMap<V, Symbolic> for Specializer<'_> {
         application: &ConstructorApplication<V>,
         ty: &CheckedType<Symbolic>,
         span: Span,
-    ) -> Result<ConstructorApplication<Symbolic>, GraphcalError> {
+    ) -> Result<ConstructorApplication<Symbolic>, SemanticError> {
         let CheckedType::Struct(_, args) = ty else {
             return Err(internal(
                 self.src,
@@ -152,7 +152,7 @@ impl<V: SymbolicView> TypeMap<V, Symbolic> for Specializer<'_> {
         &mut self,
         position: &StaticPosition<V>,
         span: Span,
-    ) -> Result<StaticPosition<Symbolic>, GraphcalError> {
+    ) -> Result<StaticPosition<Symbolic>, SemanticError> {
         Ok(StaticPosition {
             axis: self.substitution.index(
                 &V::symbolic_index(&position.axis),
@@ -179,7 +179,7 @@ impl<V: SymbolicView> TypeMap<V, Symbolic> for Specializer<'_> {
 }
 
 impl Specializer<'_> {
-    fn body(&mut self, body: &CheckedBody) -> Result<TBody<Symbolic>, GraphcalError> {
+    fn body(&mut self, body: &CheckedBody) -> Result<TBody<Symbolic>, SemanticError> {
         match body {
             CheckedBody::Executable(body) => body.map_types(self),
             CheckedBody::Deferred(body) => body.map_types(self),
@@ -216,7 +216,7 @@ pub(super) fn specialize_instance_bodies(
     port_generic: &DerivedTrees,
     substitution: &crate::ir::static_substitution::StaticSubstitution,
     src: SourceId,
-) -> Result<CheckedBodies, GraphcalError> {
+) -> Result<CheckedBodies, SemanticError> {
     let mut specializer = Specializer {
         substitution: BodySubstitution::Static(substitution),
         dag,
@@ -285,7 +285,7 @@ pub fn specialize_bound_expression<'t>(
     tir: &crate::tir::typed::CheckedTir,
     bound: crate::tir::typed::body_scope::Scoped<'t, crate::tir::typed::ResolvedDomainBound>,
     bindings: &HashMap<crate::hir::types::GenericParamId, u64>,
-) -> Result<crate::tir::typed::ScopedTree<'t, crate::tir::texpr::TExpr>, GraphcalError> {
+) -> Result<crate::tir::typed::ScopedTree<'t, crate::tir::texpr::TExpr>, SemanticError> {
     let scope = bound.scope();
     let dag = scope.dag();
     let bound = bound.get();
@@ -315,7 +315,7 @@ pub(super) fn specialize_bound_body(
     root: &Expr,
     bindings: &HashMap<crate::hir::types::GenericParamId, u64>,
     src: SourceId,
-) -> Result<crate::tir::texpr::TExpr, GraphcalError> {
+) -> Result<crate::tir::texpr::TExpr, SemanticError> {
     let substitution = crate::tir::typed::Substitution::for_nats(bindings);
     let mut specializer = Specializer {
         substitution: BodySubstitution::Generic(&substitution),
@@ -331,7 +331,7 @@ pub(super) fn specialize_bound_body(
     let tree = specializer.body(body)?;
     let checked = CheckedBody::discharge(tree, &|index| checked_index_cardinality(tir, index))
         .map_err(|error| match error {
-            crate::tir::texpr::DischargeError::StaticIndex(error) => GraphcalError::located(
+            crate::tir::texpr::DischargeError::StaticIndex(error) => SemanticError::located(
                 src,
                 root.span,
                 EvaluationError::Failed {

@@ -14,7 +14,7 @@ use crate::function_signature::{
     DimBinder, DimMonomial, DimMonomialEvalError, FunctionSignature, ParamKind, ResultKind,
     ScalarValueKind, StructResult,
 };
-use crate::graphcal_error::GraphcalError;
+use crate::semantic_error::SemanticError;
 use crate::semantic_error::dimension::DimensionError;
 use crate::semantic_error::name::NameError;
 use crate::source_id::SourceId;
@@ -34,13 +34,13 @@ pub(super) fn infer_fn_dim(
     call_span: Span,
     registry: &FormattingRegistry,
     src: SourceId,
-) -> Result<Dimension, GraphcalError> {
+) -> Result<Dimension, SemanticError> {
     if args.len() != sig.arity() {
         let error_span = args
             .get(sig.arity())
             .or_else(|| args.last())
             .map_or(call_span, |arg| arg.span);
-        return Err(GraphcalError::located(
+        return Err(SemanticError::located(
             src,
             error_span,
             NameError::WrongArity {
@@ -56,7 +56,7 @@ pub(super) fn infer_fn_dim(
 
     for (param, arg) in sig.params().iter().zip(args) {
         let ParamKind::Scalar(ScalarValueKind::Quantity(monomial)) = &param.kind else {
-            return Err(GraphcalError::internal_error(
+            return Err(SemanticError::internal_error(
                 format!(
                     "signature for `{fn_name}` has a non-quantity parameter `{}` in the quantity checking path",
                     param.name
@@ -70,7 +70,7 @@ pub(super) fn infer_fn_dim(
 
     let ResultKind::Value(ParamKind::Scalar(ScalarValueKind::Quantity(result))) = sig.result()
     else {
-        return Err(GraphcalError::internal_error(
+        return Err(SemanticError::internal_error(
             format!(
                 "signature for `{fn_name}` has a non-quantity result in the quantity checking path"
             ),
@@ -116,12 +116,12 @@ impl<'a, S: StructResult> SignatureDimWalk<'a, S> {
         monomial: &DimMonomial,
         arg_dim: &Dimension,
         arg_span: Span,
-    ) -> Result<(), GraphcalError> {
+    ) -> Result<(), SemanticError> {
         if let Some(var) = monomial.as_bare_var() {
             if let Some(bound) = self.bindings.get(var) {
                 if arg_dim != bound {
                     let bind_param_name = first_binding_param(self.sig, var).ok_or_else(|| {
-                        GraphcalError::internal_error(
+                        SemanticError::internal_error(
                             format!(
                                 "signature for `{}` lost the parameter that binds dimension variable `{var}`",
                                 self.fn_name
@@ -130,7 +130,7 @@ impl<'a, S: StructResult> SignatureDimWalk<'a, S> {
                             DiagnosticAnchor::Source(arg_span),
                         )
                     })?;
-                    return Err(GraphcalError::located(
+                    return Err(SemanticError::located(
                         self.src,
                         arg_span,
                         DimensionError::DimensionMismatch {
@@ -150,7 +150,7 @@ impl<'a, S: StructResult> SignatureDimWalk<'a, S> {
 
         let expected = eval_monomial(self.fn_name, monomial, &self.bindings, self.src, arg_span)?;
         if *arg_dim != expected {
-            return Err(GraphcalError::located(
+            return Err(SemanticError::located(
                 self.src,
                 arg_span,
                 DimensionError::DimensionMismatch {
@@ -171,7 +171,7 @@ impl<'a, S: StructResult> SignatureDimWalk<'a, S> {
         &self,
         result: &DimMonomial,
         span: Span,
-    ) -> Result<Dimension, GraphcalError> {
+    ) -> Result<Dimension, SemanticError> {
         eval_monomial(self.fn_name, result, &self.bindings, self.src, span)
     }
 }
@@ -182,7 +182,7 @@ fn eval_monomial(
     bindings: &HashMap<DimBinder, Dimension>,
     src: SourceId,
     span: Span,
-) -> Result<Dimension, GraphcalError> {
+) -> Result<Dimension, SemanticError> {
     monomial
         .eval(|var| bindings.get(var))
         .map_err(|err| match err {
@@ -190,7 +190,7 @@ fn eval_monomial(
             // use or result without a matching bare binding occurrence) — the
             // signature validator rejects that shape, so surface an internal
             // error rather than panicking.
-            DimMonomialEvalError::UnboundVar { var } => GraphcalError::internal_error(
+            DimMonomialEvalError::UnboundVar { var } => SemanticError::internal_error(
                 format!(
                     "builtin `{fn_name}` references unbound dim variable `{var}` in its signature"
                 ),
@@ -198,7 +198,7 @@ fn eval_monomial(
                 DiagnosticAnchor::Source(span),
             ),
             DimMonomialEvalError::Overflow(_) => {
-                GraphcalError::located(src, span, DimensionError::DimensionOverflow)
+                SemanticError::located(src, span, DimensionError::DimensionOverflow)
             }
         })
 }
@@ -266,14 +266,14 @@ mod tests {
             .unwrap_err();
 
         match error {
-            GraphcalError::Internal(internal) => assert!(
+            SemanticError::Internal(internal) => assert!(
                 internal
                     .message()
                     .contains("lost the parameter that binds dimension variable `D`"),
                 "{}",
                 internal.message()
             ),
-            other @ GraphcalError::Located(_) => panic!("expected internal error, got {other:?}"),
+            other @ SemanticError::Located(_) => panic!("expected internal error, got {other:?}"),
         }
     }
 
@@ -301,7 +301,7 @@ mod tests {
             source,
         )
         .unwrap_err();
-        let GraphcalError::Located(crate::diagnostic::Diagnostic {
+        let SemanticError::Located(crate::diagnostic::Diagnostic {
             kind: SemanticErrorKind::Name(NameError::WrongArity { .. }),
             primary: span,
             ..

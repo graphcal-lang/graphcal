@@ -7,7 +7,7 @@
 )]
 use std::collections::{HashMap, HashSet};
 
-use graphcal_compiler::graphcal_error::GraphcalError;
+use graphcal_compiler::semantic_error::SemanticError;
 use graphcal_compiler::semantic_error::visibility::VisibilityError;
 use graphcal_compiler::syntax::span::Span;
 
@@ -188,7 +188,7 @@ pub(super) fn check_generics_leakage(
                 }
                 ReferenceSubstitution::Unbound => {
                     if let Some(namespace) = required_bindings.get(reference_name) {
-                        return Err(PipelineError::Semantic(GraphcalError::internal_error(
+                        return Err(PipelineError::Semantic(SemanticError::internal_error(
                             format!(
                                 "required {} binding `{reference_name}` is absent during generic-leakage analysis",
                                 namespace_diagnostic_name(*namespace),
@@ -212,7 +212,7 @@ pub(super) fn check_generics_leakage(
                     .external_surface()
                     .is_static_explicit_export(substituted.atom())
             {
-                return Err(PipelineError::Semantic(GraphcalError::located(
+                return Err(PipelineError::Semantic(SemanticError::located(
                     importer_src,
                     include_span,
                     VisibilityError::GenericsLeakage {

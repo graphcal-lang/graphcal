@@ -5,8 +5,8 @@ use graphcal_compiler::source_registry::SourceRegistry;
 use std::collections::HashMap;
 
 use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
-use graphcal_compiler::graphcal_error::GraphcalError;
 use graphcal_compiler::outcome::Outcome;
+use graphcal_compiler::semantic_error::SemanticError;
 use graphcal_compiler::source_id::SourceId;
 use graphcal_compiler::tir::typed::CheckedTir;
 #[cfg(any(test, feature = "test-internals"))]
@@ -32,7 +32,7 @@ pub fn resolve_struct_field_constraints(
     const_values: &RuntimeValueMap,
     src: SourceId,
     sources: &SourceRegistry,
-) -> Result<HashMap<StructFieldConstraintKey, ResolvedDomainConstraint>, GraphcalError> {
+) -> Result<HashMap<StructFieldConstraintKey, ResolvedDomainConstraint>, SemanticError> {
     domain_resolve::resolve_struct_field_constraints(tir, const_values, src, sources)
 }
 
@@ -43,7 +43,7 @@ pub fn seal_checked_program_with_cancellation(
     src: SourceId,
     sources: &SourceRegistry,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
-) -> Result<CheckedProgram, Outcome<GraphcalError>> {
+) -> Result<CheckedProgram, Outcome<SemanticError>> {
     seal_checked_program(tir, &ExecutionFacts::default(), src, sources, cancellation)
 }
 
@@ -56,10 +56,10 @@ pub fn seal_checked_program(
     src: SourceId,
     sources: &SourceRegistry,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
-) -> Result<CheckedProgram, Outcome<GraphcalError>> {
+) -> Result<CheckedProgram, Outcome<SemanticError>> {
     cancellation.checkpoint()?;
     let internal =
-        |message: String| GraphcalError::internal_error(message, src, DiagnosticAnchor::WholeFile);
+        |message: String| SemanticError::internal_error(message, src, DiagnosticAnchor::WholeFile);
     // Newly evaluated constants and constraints are provisional until every
     // mandatory check has succeeded; sealing is the last step.
     let (evaluated, const_presentations) =
@@ -94,7 +94,7 @@ pub fn seal_checked_program(
             )
             .map(|constraints| (dag_id.clone(), constraints))
         })
-        .collect::<Result<HashMap<_, _>, Outcome<GraphcalError>>>()?;
+        .collect::<Result<HashMap<_, _>, Outcome<SemanticError>>>()?;
 
     // Field-bound evaluation only needs provisional constant scopes, not fake
     // executable artifacts with missing constraints.
@@ -109,7 +109,7 @@ pub fn seal_checked_program(
                 },
             ))
         })
-        .collect::<Result<HashMap<_, _>, GraphcalError>>()?;
+        .collect::<Result<HashMap<_, _>, SemanticError>>()?;
     cancellation.checkpoint()?;
     let struct_field_constraints = resolve_struct_field_constraints_for_dags(
         tir,

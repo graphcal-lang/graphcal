@@ -27,7 +27,7 @@ pub use hir_eval::{reset_cloned_runtime_node_count, take_cloned_runtime_node_cou
 ///
 /// # Errors
 ///
-/// Returns a [`GraphcalError`](graphcal_compiler::graphcal_error::GraphcalError)
+/// Returns a [`SemanticError`](graphcal_compiler::semantic_error::SemanticError)
 /// for an invariant violation or cancellation; an ordinary display failure is
 /// kept on its leaf.
 pub fn resolve_presentation(
@@ -36,7 +36,7 @@ pub fn resolve_presentation(
     ctx: &EvalSession<'_>,
 ) -> Result<
     crate::runtime_presentation::ResolvedValue,
-    graphcal_compiler::outcome::Outcome<graphcal_compiler::graphcal_error::GraphcalError>,
+    graphcal_compiler::outcome::Outcome<graphcal_compiler::semantic_error::SemanticError>,
 > {
     presentation::resolve(presented, values, ctx, hir_eval::eval_executable)
 }

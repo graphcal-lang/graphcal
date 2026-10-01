@@ -5,9 +5,9 @@
 use graphcal_compiler::source_registry::SourceRegistry;
 use std::collections::HashMap;
 
-use graphcal_compiler::graphcal_error::GraphcalError;
 use graphcal_compiler::outcome::Outcome;
 use graphcal_compiler::resolved_name::ResolvedDeclName;
+use graphcal_compiler::semantic_error::SemanticError;
 use graphcal_compiler::source_id::SourceId;
 use graphcal_compiler::syntax::module_name::ScopedName;
 
@@ -90,7 +90,7 @@ pub fn evaluate_plan_with_values_and_bindings_and_cancellation(
     sources: &SourceRegistry,
     host_fns: &crate::host_fns::HostFunctionRegistry,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
-) -> Result<RuntimeEvaluation, Outcome<GraphcalError>> {
+) -> Result<RuntimeEvaluation, Outcome<SemanticError>> {
     cancellation.checkpoint()?;
     let outcome = RootOutcome::evaluate(plan, bindings, src, sources, host_fns, cancellation)?;
     cancellation.checkpoint()?;

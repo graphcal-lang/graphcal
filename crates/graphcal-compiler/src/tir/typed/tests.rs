@@ -32,7 +32,7 @@ fn resolve_source_type(
     dim_params: &[GenericParamName],
     index_params: &[GenericParamName],
     nat_params: &[GenericParamName],
-) -> Result<ResolvedDeclType, GraphcalError> {
+) -> Result<ResolvedDeclType, SemanticError> {
     let params = dim_params
         .iter()
         .map(|name| format!("{name}: Dim"))
@@ -58,7 +58,7 @@ fn resolve_source_type(
         })
         .map(|(_, field)| field.resolved_type().clone())
         .ok_or_else(|| {
-            GraphcalError::internal_error(
+            SemanticError::internal_error(
                 "test type field was not resolved through HIR".to_string(),
                 crate::source_registry::SourceRegistry::new()
                     .register("test.gcl", Arc::new(source)),
@@ -67,7 +67,7 @@ fn resolve_source_type(
         })
 }
 
-fn resolved_param_type(program: &str, name: &str) -> Result<ResolvedDeclType, GraphcalError> {
+fn resolved_param_type(program: &str, name: &str) -> Result<ResolvedDeclType, SemanticError> {
     let tir = parse_and_type_resolve(program)?;
     Ok(root_decl_type(&tir, name).clone())
 }
@@ -364,7 +364,7 @@ fn resolve_unknown_dimension_error() {
     let err = resolve_source_type("UnknownDim", &[], &[], &[]).unwrap_err();
     assert!(matches!(
         err,
-        GraphcalError::Located(crate::diagnostic::Diagnostic {
+        SemanticError::Located(crate::diagnostic::Diagnostic {
             kind: SemanticErrorKind::Dimension(DimensionError::UnknownDimension { .. }),
             ..
         })
@@ -376,7 +376,7 @@ fn quantity_is_semantic_not_a_source_type_constructor() {
     let error = resolve_source_type("Quantity", &[], &[], &[]).unwrap_err();
     assert!(matches!(
         error,
-        GraphcalError::Located(crate::diagnostic::Diagnostic {
+        SemanticError::Located(crate::diagnostic::Diagnostic {
             kind: SemanticErrorKind::Dimension(DimensionError::UnknownDimension { .. }),
             ..
         })
@@ -388,7 +388,7 @@ fn resolve_unknown_index_error() {
     let err = resolve_source_type("Length[UnknownIdx]", &[], &[], &[]).unwrap_err();
     assert!(matches!(
         err,
-        GraphcalError::Located(crate::diagnostic::Diagnostic {
+        SemanticError::Located(crate::diagnostic::Diagnostic {
             kind: SemanticErrorKind::Index(IndexError::UnknownIndex { .. }),
             ..
         })
@@ -405,7 +405,7 @@ fn generic_dim_param_cannot_shadow_struct_type() {
     );
     assert!(matches!(
         result,
-        Err(GraphcalError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Evaluation(EvaluationError::Failed { message, .. }), .. }))
+        Err(SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Evaluation(EvaluationError::Failed { message, .. }), .. }))
             if message.contains("shadows a visible Static name")
     ));
 }
@@ -438,7 +438,7 @@ fn field_constraint_hir_error_uses_definition_source() {
     let error = crate::ir::lower::lower(&file, "schema.gcl", schema_src).unwrap_err();
 
     match error {
-        GraphcalError::Located(crate::diagnostic::Diagnostic {
+        SemanticError::Located(crate::diagnostic::Diagnostic {
             src,
             primary: span,
             kind: SemanticErrorKind::Dimension(DimensionError::UnknownUnit { name }),
@@ -555,7 +555,7 @@ fn dag_store_clones_share_canonical_body_handles() {
 fn check_draft(
     draft: TirDraft,
     src: crate::source_id::SourceId,
-) -> Result<CheckedTir, GraphcalError> {
+) -> Result<CheckedTir, SemanticError> {
     let instantiated = draft.instantiate(&CheckedOverrideDependencies::default(), src)?;
     crate::outcome::without_cancellation(|cancellation| instantiated.check(src, cancellation))
 }
@@ -871,7 +871,7 @@ fn tir_builder_accepts_identical_externs_and_rejects_competing_signatures() {
 /// directly (no self-import preprocessing — fixtures exercised here
 /// either don't use self-imports or are expected to surface errors that
 /// fall out of the unprocessed body).
-fn parse_and_type_resolve(source: &str) -> Result<CheckedTir, GraphcalError> {
+fn parse_and_type_resolve(source: &str) -> Result<CheckedTir, SemanticError> {
     let draft = parse_and_type_resolve_builder(source)?;
     check_draft(
         draft,
@@ -880,14 +880,14 @@ fn parse_and_type_resolve(source: &str) -> Result<CheckedTir, GraphcalError> {
     )
 }
 
-fn parse_and_type_resolve_builder(source: &str) -> Result<TirDraft, GraphcalError> {
+fn parse_and_type_resolve_builder(source: &str) -> Result<TirDraft, SemanticError> {
     parse_and_type_resolve_builder_named(source, "test.gcl")
 }
 
 fn parse_and_type_resolve_builder_named(
     source: &str,
     path: &str,
-) -> Result<TirDraft, GraphcalError> {
+) -> Result<TirDraft, SemanticError> {
     let raw_file = Parser::new(source).parse_file().unwrap();
     let desugared = crate::desugar::desugared_ast::File::from(raw_file);
     let file = desugared;
@@ -1220,7 +1220,7 @@ pub type Wrap<I: Index> {
 ";
     assert!(matches!(
         parse_and_type_resolve(source),
-        Err(GraphcalError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Evaluation(EvaluationError::Failed { message, .. }), .. }))
+        Err(SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Evaluation(EvaluationError::Failed { message, .. }), .. }))
             if message.contains("shadows a visible Static name")
     ));
 }
@@ -1435,7 +1435,7 @@ fn convert_generic_dim_param_fails() {
         .unwrap_err();
     assert!(matches!(
         err,
-        GraphcalError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Evaluation(EvaluationError::Failed { message, .. }), .. })
+        SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Evaluation(EvaluationError::Failed { message, .. }), .. })
             if message == "cannot use generic dimension parameter `D` as a concrete type"
     ));
     let err = ResolvedValueType::Quantity(dimension(2))
@@ -1443,7 +1443,7 @@ fn convert_generic_dim_param_fails() {
         .unwrap_err();
     assert!(matches!(
         err,
-        GraphcalError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Evaluation(EvaluationError::Failed { message, .. }), .. })
+        SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Evaluation(EvaluationError::Failed { message, .. }), .. })
             if message == "cannot use generic dimension expression as a concrete type"
     ));
 }
@@ -1461,7 +1461,7 @@ fn convert_generic_index_fails() {
     .unwrap_err();
     assert!(matches!(
         err,
-        GraphcalError::Located(crate::diagnostic::Diagnostic {
+        SemanticError::Located(crate::diagnostic::Diagnostic {
             kind: SemanticErrorKind::Evaluation(EvaluationError::Failed { .. }),
             ..
         })
@@ -1517,7 +1517,7 @@ fn resolve_datetime_unknown_scale_error() {
     let err = resolve_source_type("Datetime<XYZ>", &[], &[], &[]).unwrap_err();
     assert!(matches!(
         err,
-        GraphcalError::Located(crate::diagnostic::Diagnostic {
+        SemanticError::Located(crate::diagnostic::Diagnostic {
             kind: SemanticErrorKind::Evaluation(EvaluationError::Failed { .. }),
             ..
         })
@@ -1903,9 +1903,9 @@ fn checked_tir_pairs_each_local_body_with_everything_its_check_published() {
             .tir
             .into_checked(parts, src)
     };
-    let fails_with = |result: Result<CheckedTir, GraphcalError>, expected: &str| {
+    let fails_with = |result: Result<CheckedTir, SemanticError>, expected: &str| {
         assert!(
-            matches!(&result, Err(GraphcalError::Internal(internal)) if internal.message().contains(expected)),
+            matches!(&result, Err(SemanticError::Internal(internal)) if internal.message().contains(expected)),
             "expected `{expected}`: {result:?}"
         );
     };

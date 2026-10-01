@@ -3,9 +3,9 @@
 use graphcal_eval::eval::runtime::{RootFailure, RootOutcome};
 
 use super::{
-    Arc, CheckedType, CompileError, ConcreteIndexKind, DeclName, Error, GraphcalError, HashSet,
-    IndexVariantName, ModelSchemaGraph, ModelValueSchema, ParameterBindingRow, ParameterPosition,
-    PreparedProject, ResolvedDeclName, Span, TimeScale, Value, remap_include_debug_name,
+    Arc, CheckedType, CompileError, ConcreteIndexKind, DeclName, Error, HashSet, IndexVariantName,
+    ModelSchemaGraph, ModelValueSchema, ParameterBindingRow, ParameterPosition, PreparedProject,
+    ResolvedDeclName, SemanticError, Span, TimeScale, Value, remap_include_debug_name,
 };
 use graphcal_eval::runtime_value::IndexAxis;
 
@@ -626,7 +626,7 @@ pub enum ModelExecutionError {
     #[error(transparent)]
     Compile(#[from] CompileError),
     #[error(transparent)]
-    Graphcal(#[from] GraphcalError),
+    Graphcal(#[from] SemanticError),
     #[error("model projection belongs to another prepared project")]
     PlanMismatch,
     #[error("internal model projection invariant failed: {0}")]

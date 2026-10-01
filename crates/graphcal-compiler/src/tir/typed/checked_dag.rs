@@ -3,8 +3,8 @@
 use std::collections::HashMap;
 
 use crate::diagnostic_anchor::DiagnosticAnchor;
-use crate::graphcal_error::GraphcalError;
 use crate::resolved_name::{ResolvedDeclName, ResolvedStructTypeName};
+use crate::semantic_error::SemanticError;
 use crate::source_id::SourceId;
 use crate::tir::presentation::DagPresentationFacts;
 use crate::tir::schedule::RuntimeSchedule;
@@ -45,9 +45,9 @@ impl CheckedDag {
         body: DagTIR,
         published: PublishedDag,
         src: SourceId,
-    ) -> Result<Self, GraphcalError> {
+    ) -> Result<Self, SemanticError> {
         let internal = |message: String| {
-            GraphcalError::internal_error(
+            SemanticError::internal_error(
                 format!("DAG `{}`: {message}", body.dag_id()),
                 src,
                 DiagnosticAnchor::WholeFile,

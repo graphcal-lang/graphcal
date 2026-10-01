@@ -9,7 +9,7 @@
 )]
 #![expect(
     clippy::result_large_err,
-    reason = "GraphcalError is inherently large and only constructed on the error path"
+    reason = "SemanticError is inherently large and only constructed on the error path"
 )]
 #![allow(
     clippy::disallowed_methods,

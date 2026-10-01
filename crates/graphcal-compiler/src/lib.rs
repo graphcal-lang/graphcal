@@ -1,7 +1,7 @@
 //! Graphcal Compiler: syntax, semantic core, IR, and TIR.
 #![expect(
     clippy::result_large_err,
-    reason = "GraphcalError is inherently large and only constructed on the error path"
+    reason = "SemanticError is inherently large and only constructed on the error path"
 )]
 
 pub mod assertion_expectation;
@@ -27,7 +27,6 @@ pub mod finite_value;
 pub(crate) mod fresh_identity;
 pub mod function_signature;
 pub mod generic_param;
-pub mod graphcal_error;
 pub mod hir;
 pub mod import_cycle;
 pub mod internal_error;
