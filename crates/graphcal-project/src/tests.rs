@@ -2834,6 +2834,68 @@ fn shared_modules_keep_equal_static_instances_and_dynamic_units_independent() {
     }
 }
 
+/// A selective include item is materialized as a local alias in the
+/// including DAG, and the include edge records that, so the exposed name
+/// denotes the alias rather than the instance declaration; a whole-module
+/// include member denotes the instance declaration.
+#[test]
+fn include_edges_record_which_exposed_values_have_local_alias_bodies() {
+    use graphcal_compiler::ir::instance::ExposedValueBody;
+
+    let (_directory, root) = write_pipeline_project(
+        &[
+            (
+                "lib.gcl",
+                "param factor: Dimensionless;\npub node output: Dimensionless = @factor * 2.0;\n",
+            ),
+            (
+                "main.gcl",
+                "include pipeline.lib(factor: 2.0)::{output as renamed};\ninclude pipeline.lib(factor: 5.0) as high;\nnode total: Dimensionless = @renamed + @high::output;\n",
+            ),
+        ],
+        "main.gcl",
+    );
+
+    let (tir, _project) = compile_to_tir_project(&root, None, &fs()).unwrap();
+    let body = tir.root().body_for_test();
+    let bodies = body
+        .semantic_instances()
+        .iter()
+        .flat_map(|record| {
+            tir.dag_registry()
+                .semantic_instance(record)
+                .expect("materialized instance")
+                .output_projections()
+                .map(|resolved| {
+                    (
+                        record.instance.exposed_name(resolved.projection),
+                        resolved.projection.body(),
+                        resolved.target,
+                    )
+                })
+        })
+        .collect::<Vec<_>>();
+    let renamed = scoped_name("renamed");
+    let (_, renamed_body, _) = bodies
+        .iter()
+        .find(|(name, ..)| name == &renamed)
+        .expect("the selected projection");
+    assert_eq!(*renamed_body, ExposedValueBody::LocalAlias);
+    let alias = body.bound_decl_identity(&renamed).unwrap();
+    assert_eq!(alias.owner(), tir.root_dag_id());
+
+    let member = member_name(&["high"], "output");
+    let (_, member_body, member_target) = bodies
+        .iter()
+        .find(|(name, ..)| name == &member)
+        .expect("the member projection");
+    assert_eq!(*member_body, ExposedValueBody::Instance);
+    assert_eq!(body.bound_decl_identity(&member), Some(member_target));
+
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap();
+    assert_quantity_value(&result, "total", 14.0);
+}
+
 #[test]
 fn checked_tir_records_typed_template_instance_bindings() {
     use graphcal_compiler::resolved_name::ResolvedDeclName;

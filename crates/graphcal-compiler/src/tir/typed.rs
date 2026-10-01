@@ -100,7 +100,10 @@ impl DagTIR {
         )
     }
 
-    /// Borrow an authoritative declaration identity, if one is bound.
+    /// Borrow the declaration identity bound to a source-facing name, for
+    /// tests that name a declaration by its spelling. Production code
+    /// resolves declarations by identity.
+    #[cfg(any(test, feature = "test-identities"))]
     #[must_use]
     pub fn bound_decl_identity(&self, name: &ScopedName) -> Option<&ResolvedDeclName> {
         self.semantic.decl_bindings.get(name)
@@ -512,7 +515,9 @@ fn resolve_declared_types<'d>(
             record
                 .output_projections
                 .iter()
-                .filter_map(|projection| projection.exposure.selected())
+                .filter_map(|projection| {
+                    crate::ir::instance::InstanceProjection::exposure(projection).selected()
+                })
                 .map(|exposed| (exposed, record.instance.substitution()))
         })
         .collect::<HashMap<_, _>>();

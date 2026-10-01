@@ -811,16 +811,19 @@ fn install_semantic_projection_bindings(tir: &mut UncheckedTir) {
     for dag in tir.dags.values_mut() {
         for edge in dag.semantic_instances.clone() {
             for projection in &edge.output_projections {
-                let exposed_name = edge.instance.exposed_name(projection);
-                let has_local_body = dag
-                    .bound_decl_identity(&exposed_name)
-                    .and_then(|identity| dag.value_expr(identity))
-                    .is_some();
-                if !has_local_body {
-                    dag.semantic.decl_bindings.insert(
-                        exposed_name,
-                        instance_declaration(edge.instance.id(), projection.target.leaf().clone()),
-                    );
+                match projection.body() {
+                    crate::ir::instance::ExposedValueBody::LocalAlias => {}
+                    crate::ir::instance::ExposedValueBody::Instance => {
+                        dag.semantic.decl_bindings.insert(
+                            edge.instance.exposed_name(projection),
+                            instance_declaration(
+                                edge.instance.id(),
+                                crate::ir::instance::InstanceProjection::target(projection)
+                                    .leaf()
+                                    .clone(),
+                            ),
+                        );
+                    }
                 }
             }
             for projection in &edge.assertion_projections {
