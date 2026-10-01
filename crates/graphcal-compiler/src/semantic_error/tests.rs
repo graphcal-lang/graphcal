@@ -104,3 +104,35 @@ fn found_nats_render_their_spelling_and_compare_by_expression() {
     assert_eq!(three, moved_three);
     assert_ne!(three, parameter);
 }
+
+#[test]
+fn map_entry_coordinates_and_type_spellings_render_their_source_form() {
+    use super::index::{IndexError, MapEntryCoordinate};
+    use crate::nat::NatPolyForm;
+    use crate::semantic::checked_type::{CheckedType, IndexDisplayName, Symbolic};
+
+    let position = MapEntryCoordinate::Position {
+        axis: IndexDisplayName::Finite(NatPolyForm::from_constant(3)),
+        position: 2,
+    };
+    assert_eq!(position.to_string(), "Fin(3).#2");
+    let missing = IndexError::NonExhaustiveMapLiteral {
+        missing_count: std::num::NonZeroUsize::new(2).unwrap(),
+        witness: vec![position.clone(), position],
+    };
+    assert_eq!(
+        missing.to_string(),
+        "non-exhaustive map literal: missing 2 entries; first missing entry is (Fin(3).#2, Fin(3).#2)"
+    );
+
+    let registry = crate::display::formatting_registry::FormattingRegistry::new(
+        std::collections::BTreeMap::new(),
+        Vec::new(),
+    );
+    let found = CheckedType::<Symbolic>::Bool.spelling(&registry.dimensions);
+    assert_eq!(found.to_string(), "Bool");
+    assert_eq!(
+        IndexError::NonIntegerIndexExpression { found }.to_string(),
+        "index expression must be an integer type, got Bool"
+    );
+}

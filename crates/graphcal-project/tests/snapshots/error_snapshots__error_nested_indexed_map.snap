@@ -14,4 +14,4 @@ snippet line 14:         Phase#Burn: 2.46 km/s,
 snippet line 15:     },
     label ending at line 15, column 5: error here
 snippet line 16:     Maneuver#Correction: {
-diagnostic code: graphcal::E001
+diagnostic code: graphcal::I034

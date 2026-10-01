@@ -22,6 +22,7 @@ use crate::semantic::index_def::FiniteIndex;
 use crate::semantic::time_scale::TimeScale;
 use crate::semantic_error::SemanticError;
 use crate::semantic_error::evaluation::EvaluationError;
+use crate::semantic_error::index::IndexError;
 use crate::source_id::SourceId;
 use crate::syntax::non_empty::NonEmpty;
 use crate::syntax::span::Span;
@@ -442,8 +443,13 @@ fn finite_index(
             span,
         )
     })?;
-    FiniteIndex::try_from_u64(size)
-        .map_err(|err| eval_error(err.describe_finite_index(), src, span))
+    FiniteIndex::try_from_u64(size).map_err(|error| {
+        SemanticError::located(
+            src,
+            span,
+            IndexError::InvalidFiniteIndexCardinality { error },
+        )
+    })
 }
 
 fn index_type_ref(index: &ResolvedIndex, src: SourceId) -> Result<IndexTypeRef, SemanticError> {

@@ -1378,10 +1378,13 @@ fn concrete_nat_value(expr: &ast::NatExpr, src: SourceId) -> Result<Option<u64>,
         ast::NatExpr::Add(operands, span) => {
             operands.iter().try_fold(Some(0_u64), |sum, operand| {
                 match (sum, concrete_nat_value(operand, src)?) {
-                    (Some(sum), Some(value)) => sum
-                        .checked_add(value)
-                        .map(Some)
-                        .ok_or_else(|| eval_error("Fin cardinality addition overflow", src, *span)),
+                    (Some(sum), Some(value)) => sum.checked_add(value).map(Some).ok_or_else(|| {
+                        SemanticError::located(
+                            src,
+                            *span,
+                            IndexError::FinCardinalityAdditionOverflow,
+                        )
+                    }),
                     _ => Ok(None),
                 }
             })
@@ -1391,7 +1394,11 @@ fn concrete_nat_value(expr: &ast::NatExpr, src: SourceId) -> Result<Option<u64>,
                 match (product, concrete_nat_value(operand, src)?) {
                     (Some(product), Some(value)) => {
                         product.checked_mul(value).map(Some).ok_or_else(|| {
-                            eval_error("Fin cardinality multiplication overflow", src, *span)
+                            SemanticError::located(
+                                src,
+                                *span,
+                                IndexError::FinCardinalityMultiplicationOverflow,
+                            )
                         })
                     }
                     _ => Ok(None),
@@ -1408,7 +1415,13 @@ fn validate_finite_cardinality(
 ) -> Result<(), SemanticError> {
     FiniteIndex::try_from_u64(cardinality)
         .map(|_| ())
-        .map_err(|error| eval_error(error.describe_finite_index(), src, span))
+        .map_err(|error| {
+            SemanticError::located(
+                src,
+                span,
+                IndexError::InvalidFiniteIndexCardinality { error },
+            )
+        })
 }
 
 fn validate_index_expr_finite_indexes(
@@ -1900,7 +1913,7 @@ mod tests {
         assert!(matches!(
             evaluator.module_definitions(&Project::id("main")),
             Err(SemanticError::Located(crate::diagnostic::Diagnostic {
-                kind: SemanticErrorKind::Evaluation(EvaluationError::Failed { .. }),
+                kind: SemanticErrorKind::Index(IndexError::InvalidFiniteIndexCardinality { .. }),
                 ..
             }))
         ));

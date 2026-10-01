@@ -920,6 +920,20 @@ impl<V: Concreteness> CheckedGenericArg<V> {
     }
 }
 
+/// The diagnostic spelling of a [`CheckedType`].
+///
+/// Named dimensions are visible per module, so a type is spelled where it is
+/// diagnosed, through [`CheckedType::spelling`]; a diagnostic payload holding a
+/// `TypeSpelling` therefore always names a checked type, never free text.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TypeSpelling(String);
+
+impl std::fmt::Display for TypeSpelling {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
 /// A checked type: the semantic type of a declaration or an expression.
 ///
 /// Declarations and inferred expressions share this one representation, so a
@@ -1050,6 +1064,13 @@ impl<V: Concreteness> CheckedType<V> {
     #[must_use]
     pub fn format(&self, dims: &DimensionFormattingRegistry) -> String {
         self.format_with(dims, DiagnosticNameQualification::Leaf)
+    }
+
+    /// The diagnostic spelling of this type, with the named dimensions of the
+    /// module that diagnoses it.
+    #[must_use]
+    pub fn spelling(&self, dims: &DimensionFormattingRegistry) -> TypeSpelling {
+        TypeSpelling(self.format(dims))
     }
 
     /// Format every nominal identity with its canonical owner.

@@ -11,6 +11,7 @@ use crate::semantic::checked_type::{
 use crate::semantic_error::SemanticError;
 use crate::semantic_error::domain::DomainError;
 use crate::semantic_error::evaluation::EvaluationError;
+use crate::semantic_error::index::IndexError;
 use crate::semantic_error::structure::StructError;
 use crate::source_id::SourceId;
 use crate::syntax::span::Span;
@@ -191,8 +192,8 @@ fn validate_index(index: &IndexTypeRef<Symbolic>, ctx: &Context<'_>) -> Result<(
         None => Err(SemanticError::located(
             ctx.src,
             ctx.span,
-            EvaluationError::Failed {
-                message: format!("unresolved finite-index obligation `{index}`"),
+            IndexError::UnresolvedFiniteIndexObligation {
+                index: index.display_name(),
             },
         )),
     }

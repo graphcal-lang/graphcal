@@ -1027,10 +1027,10 @@ fn incomplete_large_axis_map_reports_one_bounded_missing_witness() {
 
     let error = check(&source).unwrap_err();
     assert!(
-        matches!(&error, SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Evaluation(EvaluationError::Failed { message, .. }), .. })
-            if message.contains("missing 524287 entries")
-                && message.contains("first missing entry")
-                && message.contains("A18#Y")),
+        matches!(&error, SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Index(kind @ IndexError::NonExhaustiveMapLiteral { .. }), .. })
+            if kind.to_string().contains("missing 524287 entries")
+                && kind.to_string().contains("first missing entry")
+                && kind.to_string().contains("A18#Y")),
         "got: {error:?}"
     );
 }
@@ -2090,7 +2090,7 @@ node bad: Dimensionless = scan(@x, 0.0, |acc, val| acc + val);";
         matches!(
             err,
             SemanticError::Located(crate::diagnostic::Diagnostic {
-                kind: SemanticErrorKind::Evaluation(EvaluationError::Failed { .. }),
+                kind: SemanticErrorKind::Index(IndexError::ScanSourceNotIndexed),
                 ..
             })
         ),
@@ -2166,7 +2166,7 @@ param bad: Dimensionless = @x[Phase#Coast];";
         matches!(
             err,
             SemanticError::Located(crate::diagnostic::Diagnostic {
-                kind: SemanticErrorKind::Evaluation(EvaluationError::Failed { .. }),
+                kind: SemanticErrorKind::Index(IndexError::IndexingNonIndexedValue),
                 ..
             })
         ),
@@ -2206,7 +2206,7 @@ param v: Dimensionless[Fin(3)] = table[Fin(3)] { 1.0; 2.0; 3.0; };
 node bad: Dimensionless = @v[5];";
     let err = check(source).unwrap_err();
     assert!(
-        matches!(&err, SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Evaluation(EvaluationError::Failed { message, .. }), .. }) if message.contains("index 5 out of bounds for Fin(3)")),
+        matches!(&err, SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Index(kind @ IndexError::IndexOutOfBounds { .. }), .. }) if kind.to_string().contains("index 5 out of bounds for Fin(3)")),
         "got: {err:?}"
     );
 }
@@ -2218,7 +2218,7 @@ param v: Dimensionless[Fin(3)] = table[Fin(3)] { 1.0; 2.0; 3.0; };
 node bad: Dimensionless = @v[0 - 1];";
     let err = check(source).unwrap_err();
     assert!(
-        matches!(&err, SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Evaluation(EvaluationError::Failed { message, .. }), .. }) if message.contains("index expression evaluated to negative value: -1")),
+        matches!(&err, SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Index(kind @ IndexError::NegativeIndex { .. }), .. }) if kind.to_string().contains("index expression evaluated to negative value: -1")),
         "got: {err:?}"
     );
 }
@@ -2817,7 +2817,7 @@ node values: Dimensionless[Phase] = unfold(
 );";
     let err = check(source).unwrap_err();
     assert!(
-        matches!(&err, SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Evaluation(EvaluationError::Failed { message, .. }), .. }) if message.contains("unfold requires a coordinate index")),
+        matches!(&err, SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Index(kind @ IndexError::UnfoldRequiresCoordinateIndex { .. }), .. }) if kind.to_string().contains("unfold requires a coordinate index")),
         "got: {err:?}"
     );
 }
@@ -3504,8 +3504,8 @@ node bad: T<1> = T<1>(x: 1);
 ";
     let error = check(source).unwrap_err();
     assert!(
-        matches!(&error, SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Evaluation(EvaluationError::Failed { message, .. }), .. })
-            if message.contains("out of bounds for Fin(1)")),
+        matches!(&error, SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Index(kind), .. })
+            if kind.to_string().contains("out of bounds for Fin(1)")),
         "got: {error:?}"
     );
 }
@@ -3518,9 +3518,9 @@ node bad: T<0> = T<0>(x: 0);
 ";
     let error = check(source).unwrap_err();
     assert!(
-        matches!(&error, SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Evaluation(EvaluationError::Failed { message, .. }), .. })
-            if message.contains("finite index size must be greater than zero")
-                || message.contains("Fin(0)")),
+        matches!(&error, SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Index(kind @ IndexError::InvalidFiniteIndexCardinality { .. }), .. })
+            if kind.to_string().contains("finite index size must be greater than zero")
+                || kind.to_string().contains("Fin(0)")),
         "got: {error:?}"
     );
 }
@@ -3535,8 +3535,8 @@ node bad: T<1> = T<1>(x: 1);
 ";
     let error = check(source).unwrap_err();
     assert!(
-        matches!(&error, SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Evaluation(EvaluationError::Failed { message, .. }), .. })
-            if message.contains("index 1 out of bounds for Fin(1)")),
+        matches!(&error, SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Index(kind), .. })
+            if kind.to_string().contains("index 1 out of bounds for Fin(1)")),
         "got: {error:?}"
     );
 }
@@ -3551,8 +3551,8 @@ node value: T<2> = T<2>(x: 1);
 ";
     let error = check(source).unwrap_err();
     assert!(
-        matches!(&error, SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Evaluation(EvaluationError::Failed { message, .. }), .. })
-            if message.contains("negative value: -1")),
+        matches!(&error, SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Index(kind @ IndexError::NegativeIndex { .. }), .. })
+            if kind.to_string().contains("negative value: -1")),
         "got: {error:?}"
     );
 }

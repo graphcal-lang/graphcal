@@ -1626,8 +1626,8 @@ fn structural_index_binding_cardinality_must_be_closed() {
     ));
     assert!(matches!(
         compile_and_eval(&program("4294967296 * 4294967296")).unwrap_err(),
-        CompileError::Eval(RenderedSemanticError { error: SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic { kind: SemanticErrorKind::Evaluation(EvaluationError::Failed { message, .. }), .. }), .. })
-            if message.contains("type-level Nat arithmetic overflow")
+        CompileError::Eval(RenderedSemanticError { error: SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic { kind: SemanticErrorKind::Index(kind @ IndexError::NatOverflow { .. }), .. }), .. })
+            if kind.to_string().contains("type-level Nat arithmetic overflow")
     ));
 }
 
@@ -8851,7 +8851,7 @@ node bad: T<0> = T<0>(x: 0);
         error,
         CompileError::Eval(RenderedSemanticError {
             error: SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
-                kind: SemanticErrorKind::Evaluation(EvaluationError::Failed { .. }),
+                kind: SemanticErrorKind::Index(IndexError::InvalidFiniteIndexCardinality { .. }),
                 ..
             }),
             ..

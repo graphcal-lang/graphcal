@@ -5,7 +5,7 @@ use crate::outcome::Outcome;
 use crate::semantic::checked_type::{IndexTypeRef, Symbolic};
 use crate::semantic_error::SemanticError;
 use crate::semantic_error::dimension::DimensionError;
-use crate::semantic_error::evaluation::EvaluationError;
+use crate::semantic_error::index::IndexError;
 
 use crate::semantic::checked_type::CheckedType;
 use crate::tir::dim_check::helpers::format_checked_type;
@@ -27,9 +27,7 @@ impl Infer<'_> {
             return Err(SemanticError::located(
                 self.env.src,
                 source.span,
-                EvaluationError::Failed {
-                    message: "scan source must be an indexed value".to_string(),
-                },
+                IndexError::ScanSourceNotIndexed,
             )
             .into());
         };
@@ -90,8 +88,8 @@ impl Infer<'_> {
             return Err(SemanticError::located(
                 self.env.src,
                 axis.span,
-                EvaluationError::Failed {
-                    message: format!("unfold requires a coordinate index, got `{index}`"),
+                IndexError::UnfoldRequiresCoordinateIndex {
+                    index: index.display_name(),
                 },
             )
             .into());

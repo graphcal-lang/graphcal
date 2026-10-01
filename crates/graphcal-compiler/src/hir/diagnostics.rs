@@ -473,14 +473,23 @@ pub fn expr_lower_error_to_semantic(err: &ExprLowerError, src: SourceId) -> Sema
 
 /// Convert a HIR type-lowering failure into a spanned diagnostic.
 pub fn hir_lower_error_to_graphcal(err: &HirLowerError, src: SourceId) -> SemanticError {
-    if let HirLowerError::ExpectedIndexFoundNat { expression, span } = err {
-        return SemanticError::located(
-            src,
-            *span,
-            IndexError::ExpectedIndexFoundNat {
-                expression: expression.clone(),
-            },
-        );
+    match err {
+        HirLowerError::ExpectedIndexFoundNat { expression, span } => {
+            return SemanticError::located(
+                src,
+                *span,
+                IndexError::ExpectedIndexFoundNat {
+                    expression: expression.clone(),
+                },
+            );
+        }
+        HirLowerError::NestedIndexedType { span } => {
+            return SemanticError::located(src, *span, IndexError::NestedIndexedType);
+        }
+        HirLowerError::NatOverflow { source, span } => {
+            return SemanticError::located(src, *span, IndexError::NatOverflow { error: *source });
+        }
+        _ => {}
     }
     let span = match &err {
         HirLowerError::ModuleResolve { span, .. }

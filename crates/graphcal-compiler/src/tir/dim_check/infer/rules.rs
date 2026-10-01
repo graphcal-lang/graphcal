@@ -14,6 +14,7 @@ use crate::exact_rational::ExactRational;
 use crate::semantic_error::SemanticError;
 use crate::semantic_error::dimension::DimensionError;
 use crate::semantic_error::evaluation::EvaluationError;
+use crate::semantic_error::index::IndexError;
 use crate::source_id::SourceId;
 use crate::syntax::ast::PowerExponent;
 use crate::syntax::span::Span;
@@ -101,13 +102,7 @@ fn fin_key_additive_rule(
     let shifted = bound
         .add(&crate::nat::NatPolyForm::from_constant(addend))
         .map_err(|err| {
-            SemanticError::located(
-                src,
-                rhs.span,
-                EvaluationError::Failed {
-                    message: err.to_string(),
-                },
-            )
+            SemanticError::located(src, rhs.span, IndexError::NatOverflow { error: err })
         })?;
     crate::semantic::checked_type::IndexTypeRef::from_finite_index_form(shifted)
         .map(CheckedType::Key)
@@ -115,9 +110,7 @@ fn fin_key_additive_rule(
             SemanticError::located(
                 src,
                 rhs.span,
-                EvaluationError::Failed {
-                    message: err.describe_finite_index(),
-                },
+                IndexError::InvalidFiniteIndexCardinality { error: err },
             )
         })
 }
