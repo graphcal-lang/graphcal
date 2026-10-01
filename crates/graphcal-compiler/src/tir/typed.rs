@@ -159,7 +159,7 @@ pub fn resolve_hir_signature_with_modules_and_cancellation(
     cancellation: &crate::cancellation::CancellationToken,
 ) -> Result<SignatureResolvedHirDag, Outcome<SemanticError>> {
     cancellation.checkpoint()?;
-    let ctx = ModuleTypeContext::new(hir.dag_id(), module_resolver, project_types);
+    let ctx = ModuleTypeContext::try_new(hir.dag_id(), module_resolver, project_types, src)?;
     let decl_types = resolve_declared_type_exprs(&hir, src, ctx, cancellation)?;
     Ok(SignatureResolvedHirDag { hir, decl_types })
 }
@@ -210,7 +210,7 @@ impl TirDraft {
         let imported_bindings = checked_imported_bindings(signed.hir(), imported_types, src)?;
         let dag_id = signed.dag_id().clone();
         let context_types = Arc::clone(&project_types);
-        let ctx = ModuleTypeContext::new(&dag_id, module_resolver, &context_types);
+        let ctx = ModuleTypeContext::try_new(&dag_id, module_resolver, &context_types, src)?;
         type_resolve_impl(
             signed,
             imported_bindings,
@@ -419,7 +419,7 @@ fn type_resolve_signed_single_with_imported_bindings_and_cancellation(
     cancellation.checkpoint()?;
     let imported_bindings = checked_imported_bindings(signed.hir(), imported_types, src)?;
     let dag_id = signed.dag_id().clone();
-    let ctx = ModuleTypeContext::new(&dag_id, module_resolver, project_types);
+    let ctx = ModuleTypeContext::try_new(&dag_id, module_resolver, project_types, src)?;
     type_resolve_single_impl(signed, imported_bindings, src, ctx, cancellation)
 }
 
@@ -702,7 +702,7 @@ fn type_resolve_dag(
         imported_bindings,
         module_ctx,
     )?;
-    let bindable_nominals = collect_bindable_nominals(module_ctx, src)?;
+    let bindable_nominals = collect_bindable_nominals(module_ctx);
 
     let semantic = DagSemanticBody {
         domain_bounds,
@@ -722,18 +722,9 @@ fn type_resolve_dag(
     })
 }
 
-fn collect_bindable_nominals(
-    ctx: ModuleTypeContext<'_>,
-    src: SourceId,
-) -> Result<HashSet<BindableNominalIdentity>, SemanticError> {
-    let symbols = ctx.resolver.symbols(ctx.owner).ok_or_else(|| {
-        SemanticError::internal_error(
-            format!("module symbol table missing for DAG `{}`", ctx.owner),
-            src,
-            DiagnosticAnchor::WholeFile,
-        )
-    })?;
-    Ok(symbols
+fn collect_bindable_nominals(ctx: ModuleTypeContext<'_>) -> HashSet<BindableNominalIdentity> {
+    let symbols = ctx.symbols();
+    symbols
         .indexes()
         .values()
         .filter(|symbol| symbol.visibility().is_bindable())
@@ -745,7 +736,7 @@ fn collect_bindable_nominals(
                 .filter(|symbol| symbol.visibility().is_bindable())
                 .map(|symbol| BindableNominalIdentity::Type(symbol.resolved().clone())),
         )
-        .collect())
+        .collect()
 }
 
 fn override_reconciliations<'a>(
@@ -764,10 +755,8 @@ fn collect_resolved_type_defs<'a>(
 ) -> Result<ResolvedTypeDefs, SemanticError> {
     let mut defs = ResolvedTypeDefs::default();
     let mut collector = TypeDefCollector::new(ctx, &mut defs);
-    if let Some(symbols) = ctx.resolver.symbols(ctx.owner) {
-        for symbol in symbols.struct_types().values() {
-            collector.record(symbol.resolved())?;
-        }
+    for symbol in ctx.symbols().struct_types().values() {
+        collector.record(symbol.resolved())?;
     }
     for annotation in annotations {
         collector.resolved_type(annotation.checked().resolved().element())?;
@@ -954,24 +943,19 @@ fn validate_public_generic_defaults(
     ctx: ModuleTypeContext<'_>,
     src: SourceId,
 ) -> Result<(), SemanticError> {
-    for nominal in dag.semantic.type_defs.nominals() {
-        let (type_name, type_def) = (nominal.identity(), nominal.definition());
+    for symbol in ctx.symbols().struct_types().values() {
+        let type_name = symbol.resolved();
         if type_name.owner() != ctx.owner
             || !external_surface.is_static_explicit_export(type_name.atom())
         {
             continue;
         }
-        let pub_span = ctx
-            .resolver
-            .symbol(type_name)
-            .map(SymbolRef::span)
-            .ok_or_else(|| {
-                SemanticError::internal_error(
-                    format!("module resolver lost source span for public type `{type_name}`"),
-                    src,
-                    DiagnosticAnchor::WholeFile,
-                )
-            })?;
+        // A type the project store does not define has no recorded nominal.
+        let Some(nominal) = dag.semantic.type_defs.nominal(type_name) else {
+            continue;
+        };
+        let type_def = nominal.definition();
+        let pub_span = symbol.span();
         for param in type_def.generic_params() {
             let Some(default) = param.default() else {
                 continue;
@@ -1598,9 +1582,9 @@ impl HirPolicyChecker<'_> {
         }
         let is_pub_bind = self
             .ctx
-            .resolver
-            .symbols(self.ctx.owner)
-            .and_then(|symbols| symbols.indexes().get(&index.to_unowned_def_name()))
+            .symbols()
+            .indexes()
+            .get(&index.to_unowned_def_name())
             .is_some_and(|symbol| {
                 // A bindable index with declared variants.
                 symbol.visibility().is_bindable() && !symbol.data().is_empty()
