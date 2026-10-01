@@ -42,7 +42,7 @@ impl ExprLowerer<'_> {
     pub(super) fn lower_function_application(
         function_ref: UnappliedFunctionRef,
         generic_args: &[ast::GenericArg],
-        path: String,
+        path: crate::syntax::names::NamePath,
         callee_span: Span,
     ) -> Result<FunctionRef, ExprLowerError> {
         let applied = match function_ref {

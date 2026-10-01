@@ -6,7 +6,7 @@ use crate::outcome::Outcome;
 use crate::semantic::checked_type::{IndexTypeRef, Symbolic};
 use crate::semantic_error::SemanticError;
 use crate::semantic_error::dimension::DimensionError;
-use crate::semantic_error::evaluation::EvaluationError;
+use crate::semantic_error::name::NameError;
 use crate::semantic_error::structure::StructError;
 
 use crate::semantic::checked_type::CheckedType;
@@ -58,8 +58,8 @@ impl Infer<'_> {
                 return Err(SemanticError::located(
                     self.env.src,
                     name.span,
-                    EvaluationError::Failed {
-                        message: name.value.value_position_error(),
+                    NameError::TypeSystemRefAsValue {
+                        reference: name.value.clone(),
                     },
                 )
                 .into());

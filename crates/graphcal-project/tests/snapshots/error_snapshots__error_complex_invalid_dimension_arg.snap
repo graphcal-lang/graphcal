@@ -8,4 +8,4 @@ Begin snippet for complex_invalid_dimension_arg.gcl starting at line 1, column 1
 
 snippet line 1: node invalid: Complex<Bool> = complex(true, false);
     label at line 1, columns 23 to 26: error here
-diagnostic code: graphcal::E001
+diagnostic code: graphcal::N025

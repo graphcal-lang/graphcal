@@ -419,6 +419,62 @@ pub fn expr_lower_error_to_semantic(err: &ExprLowerError, src: SourceId) -> Sema
                 },
             );
         }
+        ExprLowerError::TooManyLocals { span } => {
+            return SemanticError::located(src, *span, NameError::TooManyLocals);
+        }
+        ExprLowerError::ExpressionIdentity { source, span } => {
+            return SemanticError::located(
+                src,
+                *span,
+                NameError::ExpressionIdentity {
+                    source: source.clone(),
+                },
+            );
+        }
+        ExprLowerError::EmptyMapEntry { span } => {
+            return SemanticError::located(src, *span, IndexError::EmptyMapEntry);
+        }
+        ExprLowerError::UnknownPattern { path, span } => {
+            return SemanticError::located(
+                src,
+                *span,
+                NameError::UnknownPattern { path: path.clone() },
+            );
+        }
+        ExprLowerError::PositionalArgumentsOnConstructor { constructor, span } => {
+            return SemanticError::located(
+                src,
+                *span,
+                NameError::PositionalArgumentsOnConstructor {
+                    constructor: constructor.clone(),
+                },
+            );
+        }
+        ExprLowerError::UnsupportedFunctionGenericArgs { path, span } => {
+            return SemanticError::located(
+                src,
+                *span,
+                NameError::UnsupportedFunctionGenericArgs { path: path.clone() },
+            );
+        }
+        ExprLowerError::DuplicateLocalBinding {
+            name, duplicate, ..
+        } => {
+            return SemanticError::located(
+                src,
+                *duplicate,
+                NameError::DuplicateLocalBinding { name: name.clone() },
+            );
+        }
+        ExprLowerError::LocalBindingShadowsTerm {
+            name, duplicate, ..
+        } => {
+            return SemanticError::located(
+                src,
+                *duplicate,
+                NameError::LocalBindingShadowsTerm { name: name.clone() },
+            );
+        }
         ExprLowerError::EmptyParenthesizedConstructor { constructor, span } => {
             return SemanticError::located(
                 src,
@@ -472,6 +528,10 @@ pub fn expr_lower_error_to_semantic(err: &ExprLowerError, src: SourceId) -> Sema
 }
 
 /// Convert a HIR type-lowering failure into a spanned diagnostic.
+#[expect(
+    clippy::too_many_lines,
+    reason = "exhaustive mapping from type-lowering diagnostics to spanned errors"
+)]
 pub fn hir_lower_error_to_graphcal(err: &HirLowerError, src: SourceId) -> SemanticError {
     match err {
         HirLowerError::ExpectedIndexFoundNat { expression, span } => {
@@ -488,6 +548,105 @@ pub fn hir_lower_error_to_graphcal(err: &HirLowerError, src: SourceId) -> Semant
         }
         HirLowerError::NatOverflow { source, span } => {
             return SemanticError::located(src, *span, IndexError::NatOverflow { error: *source });
+        }
+        HirLowerError::UnknownTypePath { path, span, .. } => {
+            return SemanticError::located(
+                src,
+                *span,
+                NameError::UnknownTypeName { path: path.clone() },
+            );
+        }
+        HirLowerError::IndexLabelAsType { index, label, span } => {
+            return SemanticError::located(
+                src,
+                *span,
+                NameError::IndexLabelAsType {
+                    index: index.clone(),
+                    label: label.clone(),
+                },
+            );
+        }
+        HirLowerError::IndexAsType { index } => {
+            return SemanticError::located(
+                src,
+                index.span(),
+                NameError::IndexAsType {
+                    index: index.clone(),
+                },
+            );
+        }
+        HirLowerError::GenericConstraintMismatch {
+            name,
+            actual,
+            expected,
+            span,
+        } => {
+            return SemanticError::located(
+                src,
+                *span,
+                NameError::GenericConstraintMismatch {
+                    name: name.clone(),
+                    actual: *actual,
+                    expected,
+                },
+            );
+        }
+        HirLowerError::UnknownGenericParam { name, span } => {
+            return SemanticError::located(
+                src,
+                *span,
+                NameError::UnknownGenericParam { name: name.clone() },
+            );
+        }
+        HirLowerError::WrongGenericArgCount {
+            target,
+            expected,
+            got,
+            span,
+        } => {
+            return SemanticError::located(
+                src,
+                *span,
+                NameError::WrongGenericArgCount {
+                    target: target.clone(),
+                    expected: *expected,
+                    got: *got,
+                },
+            );
+        }
+        HirLowerError::GenericArgumentSortMismatch {
+            parameter,
+            expected,
+            actual,
+            span,
+        } => {
+            return SemanticError::located(
+                src,
+                *span,
+                NameError::GenericArgumentSortMismatch {
+                    parameter: parameter.clone(),
+                    expected: *expected,
+                    actual,
+                },
+            );
+        }
+        HirLowerError::DuplicateGenericParam {
+            name, duplicate, ..
+        } => {
+            return SemanticError::located(
+                src,
+                *duplicate,
+                NameError::DuplicateGenericParam { name: name.clone() },
+            );
+        }
+        HirLowerError::GenericParamShadowsStatic {
+            name, duplicate, ..
+        } => {
+            return SemanticError::located(
+                src,
+                *duplicate,
+                NameError::GenericParamShadowsStatic { name: name.clone() },
+            );
         }
         _ => {}
     }
@@ -560,8 +719,8 @@ mod tests {
         for slot in [TypePathSlot::IndexAxis, TypePathSlot::DimensionTerm] {
             assert!(matches!(
                 unknown(path.clone(), slot),
-                SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Evaluation(EvaluationError::Failed { message, .. }), .. })
-                    if message == "unknown type-level name `lib::Foo`"
+                SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Name(kind @ NameError::UnknownTypeName { .. }), .. })
+                    if kind.to_string() == "unknown type-level name `lib::Foo`"
             ));
         }
     }

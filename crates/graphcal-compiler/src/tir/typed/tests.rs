@@ -9,6 +9,7 @@ use crate::semantic_error::SemanticErrorKind;
 use crate::semantic_error::dimension::DimensionError;
 use crate::semantic_error::evaluation::EvaluationError;
 use crate::semantic_error::index::IndexError;
+use crate::semantic_error::name::NameError;
 use crate::semantic_error::structure::StructError;
 use crate::syntax::dimension::UnitName;
 use crate::syntax::index_name::IndexName;
@@ -410,8 +411,8 @@ fn generic_dim_param_cannot_shadow_struct_type() {
     );
     assert!(matches!(
         result,
-        Err(SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Evaluation(EvaluationError::Failed { message, .. }), .. }))
-            if message.contains("shadows a visible Static name")
+        Err(SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Name(kind @ NameError::GenericParamShadowsStatic { .. }), .. }))
+            if kind.to_string().contains("shadows a visible Static name")
     ));
 }
 
@@ -1216,8 +1217,8 @@ pub type Wrap<I: Index> {
 ";
     assert!(matches!(
         parse_and_type_resolve(source),
-        Err(SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Evaluation(EvaluationError::Failed { message, .. }), .. }))
-            if message.contains("shadows a visible Static name")
+        Err(SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Name(kind @ NameError::GenericParamShadowsStatic { .. }), .. }))
+            if kind.to_string().contains("shadows a visible Static name")
     ));
 }
 

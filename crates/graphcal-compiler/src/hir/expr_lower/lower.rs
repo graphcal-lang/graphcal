@@ -312,7 +312,7 @@ impl ExprLowerer<'_> {
                     let function_ref = Self::lower_function_application(
                         function_ref,
                         generic_args,
-                        callee.display_path(),
+                        callee.to_name_path(),
                         callee.span(),
                     )?;
                     Self::check_function_arity(&function_ref, args.len(), callee.span())?;
@@ -747,7 +747,7 @@ impl ExprLowerer<'_> {
         };
         let resolved = constructor.into_resolved();
         let lowered_args = lower_generic_args(
-            crate::hir::lower::GenericApplicationTarget::Constructor(resolved.clone()),
+            crate::generic_param::GenericApplicationTarget::Constructor(resolved.clone()),
             constructor.kind().generic_params(),
             generic_args,
             span,
@@ -948,7 +948,7 @@ impl ExprLowerer<'_> {
                 ModuleResolveError::UnknownName { .. }
                 | ModuleResolveError::UnknownModuleAlias { .. }
                 | ModuleResolveError::UnknownModule { .. } => Err(ExprLowerError::UnknownPattern {
-                    path: path.display_path(),
+                    path: name_path,
                     span,
                 }),
                 source => Err(ExprLowerError::ModuleResolve { source, span }),

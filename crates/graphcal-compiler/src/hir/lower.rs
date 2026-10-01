@@ -5,7 +5,6 @@
 //! `ResolvedName<Ns>` values or lexical `GenericParamId`s instead of carrying
 //! syntax paths forward.
 
-use crate::resolved_name::{ResolvedConstructorName, ResolvedStructTypeName};
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 
@@ -13,7 +12,9 @@ use thiserror::Error;
 
 use crate::dag_id::DagId;
 use crate::desugar::desugared_ast as ast;
-use crate::generic_param::GenericArgArity;
+use crate::generic_param::{
+    GenericApplicationTarget, GenericArgArity, render_accepted_constraints,
+};
 use crate::resolve::ModuleResolver;
 use crate::resolve::category::SurfaceNameKind;
 use crate::resolve::error::ModuleResolveError;
@@ -30,15 +31,6 @@ use super::types::{
     GenericParamId, IndexRef, ValueType, ValueTypeKind,
 };
 use crate::nat::{NatOverflowError, NatPolyForm};
-
-/// Render accepted generic constraints as `A or B` at the diagnostic boundary.
-fn render_accepted_constraints(accepted: &[GenericConstraint]) -> String {
-    accepted
-        .iter()
-        .map(|constraint| constraint.as_str())
-        .collect::<Vec<_>>()
-        .join(" or ")
-}
 
 /// Errors produced while lowering syntax type expressions into HIR.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
@@ -158,30 +150,6 @@ pub enum TypePathSlot {
     IndexAxis,
     /// A term of a dimension expression in a type position: `L` in `L / T`.
     DimensionTerm,
-}
-
-/// The generic type or constructor a generic argument list is applied to.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum GenericApplicationTarget {
-    /// A user-declared generic struct type.
-    StructType(ResolvedStructTypeName),
-    /// A constructor of a user-declared generic type.
-    Constructor(ResolvedConstructorName),
-    /// The built-in `Complex<D>` type.
-    Complex,
-    /// The built-in `Key<I>` type.
-    Key,
-}
-
-impl std::fmt::Display for GenericApplicationTarget {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::StructType(name) => f.write_str(name.as_str()),
-            Self::Constructor(name) => f.write_str(name.as_str()),
-            Self::Complex => f.write_str("Complex"),
-            Self::Key => f.write_str("Key"),
-        }
-    }
 }
 
 /// A generic parameter binding in a lexical generic scope.

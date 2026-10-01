@@ -21,7 +21,6 @@ use crate::resolve::reserved_name::validate_reserved_name;
 use crate::resolved_name::ResolvedStructTypeName;
 use crate::semantic::time_zone::TimeZoneRegistry;
 use crate::semantic_error::SemanticError;
-use crate::semantic_error::evaluation::EvaluationError;
 use crate::semantic_error::name::NameError;
 use crate::source_id::SourceId;
 use crate::syntax::names::NameAtom;
@@ -176,9 +175,7 @@ fn validate_generic_params(declaration: &TypeDecl, src: SourceId) -> Result<(), 
             Some((name, _, _)) => Err(SemanticError::located(
                 src,
                 param.name.span,
-                EvaluationError::Failed {
-                    message: format!("duplicate generic parameter `{name}`"),
-                },
+                NameError::DuplicateGenericParam { name },
             )),
             None => Ok(positions),
         },

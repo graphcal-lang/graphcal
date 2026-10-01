@@ -13,7 +13,7 @@ use crate::semantic::time_zone::IanaTimeZoneId;
 use crate::syntax::index_name::{IndexName, IndexVariantName};
 use crate::syntax::local_name::LocalName;
 use crate::syntax::module_name::{ModuleAliasName, ScopedName};
-use crate::syntax::names::NameAtom;
+use crate::syntax::names::{NameAtom, NamePath};
 use crate::syntax::span::Span;
 use crate::syntax::type_name::FieldName;
 
@@ -104,7 +104,7 @@ pub enum ExprLowerError {
     },
     /// A function call supplied generic arguments that no function signature consumes.
     #[error("function `{path}` does not accept generic arguments")]
-    UnsupportedFunctionGenericArgs { path: String, span: Span },
+    UnsupportedFunctionGenericArgs { path: NamePath, span: Span },
     /// Positional call syntax targeted a constructor, whose payload fields must
     /// be named explicitly.
     #[error("constructor `{constructor}` requires named field arguments")]
@@ -181,5 +181,5 @@ pub enum ExprLowerError {
     UnknownUnit { name: SyntaxUnitRef, span: Span },
     /// A path-pattern could not be resolved to a constructor or index label.
     #[error("unknown match pattern `{path}`")]
-    UnknownPattern { path: String, span: Span },
+    UnknownPattern { path: NamePath, span: Span },
 }

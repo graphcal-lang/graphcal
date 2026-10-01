@@ -1378,13 +1378,16 @@ fn optional_trailing_arity_is_checked_before_arguments_are_inferred() {
     let source = format!("node x: Datetime<UTC> = datetime({ILL_TYPED_ARG}, 1.0, 2.0);");
     let error = check(&source).unwrap_err();
     let SemanticError::Located(crate::diagnostic::Diagnostic {
-        kind: SemanticErrorKind::Evaluation(EvaluationError::Failed { message, .. }),
+        kind: SemanticErrorKind::Name(kind @ NameError::WrongOptionalArity { .. }),
         ..
     }) = &error
     else {
         panic!("expected optional-trailing arity diagnostic, got: {error:?}");
     };
-    assert_eq!(message, "datetime() expects 1 or 2 arguments, got 3");
+    assert_eq!(
+        kind.to_string(),
+        "datetime() expects 1 or 2 arguments, got 3"
+    );
 }
 
 #[test]
@@ -2265,8 +2268,8 @@ pub index M = { A };
 param x: M#A = 1.0;";
     let err = check(source).unwrap_err();
     assert!(
-        matches!(&err, SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Evaluation(EvaluationError::Failed { message, .. }), .. })
-            if message == "index label `M#A` cannot be used as a type"),
+        matches!(&err, SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Name(kind @ NameError::IndexLabelAsType { .. }), .. })
+            if kind.to_string() == "index label `M#A` cannot be used as a type"),
         "got: {err:?}"
     );
 }

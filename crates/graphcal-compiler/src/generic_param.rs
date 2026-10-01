@@ -8,8 +8,42 @@
 //! same-spelled parameters of different owners can never be confused.
 
 use crate::plugin_identity::ExternFnKey;
-use crate::resolved_name::ResolvedStructTypeName;
+use crate::resolved_name::{ResolvedConstructorName, ResolvedStructTypeName};
+use crate::syntax::ast::GenericConstraint;
 use crate::syntax::type_name::GenericParamName;
+
+/// Render accepted generic constraints as `A or B` at the diagnostic boundary.
+pub(crate) fn render_accepted_constraints(accepted: &[GenericConstraint]) -> String {
+    accepted
+        .iter()
+        .map(|constraint| constraint.as_str())
+        .collect::<Vec<_>>()
+        .join(" or ")
+}
+
+/// The generic type or constructor a generic argument list is applied to.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GenericApplicationTarget {
+    /// A user-declared generic struct type.
+    StructType(ResolvedStructTypeName),
+    /// A constructor of a user-declared generic type.
+    Constructor(ResolvedConstructorName),
+    /// The built-in `Complex<D>` type.
+    Complex,
+    /// The built-in `Key<I>` type.
+    Key,
+}
+
+impl std::fmt::Display for GenericApplicationTarget {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::StructType(name) => f.write_str(name.as_str()),
+            Self::Constructor(name) => f.write_str(name.as_str()),
+            Self::Complex => f.write_str("Complex"),
+            Self::Key => f.write_str("Key"),
+        }
+    }
+}
 
 /// The accepted number of generic arguments: every parameter up to the last
 /// one without a default is required.
