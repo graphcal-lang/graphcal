@@ -323,7 +323,11 @@ impl Infer<'_> {
             }
         }
 
-        if provided_tuples.len() < expected_cardinality.get() {
+        if let Some(missing_count) = std::num::NonZeroUsize::new(
+            expected_cardinality
+                .get()
+                .saturating_sub(provided_tuples.len()),
+        ) {
             if arity == 1 {
                 let missing = axes_variant_keys[0]
                     .iter()
@@ -353,16 +357,6 @@ impl Infer<'_> {
                 .map(MapLiteralVariantKey::display)
                 .collect::<Vec<_>>()
                 .join(", ");
-            let missing_count = expected_cardinality
-                .get()
-                .checked_sub(provided_tuples.len())
-                .ok_or_else(|| {
-                    SemanticError::internal_error(
-                        "map coverage cardinality underflow".to_string(),
-                        self.env.src,
-                        crate::diagnostic_anchor::DiagnosticAnchor::Source(expr.span),
-                    )
-                })?;
             return Err(SemanticError::located(self.env.src, expr.span, EvaluationError::Failed { message: format!(
                     "non-exhaustive map literal: missing {missing_count} entries; first missing entry is ({witness})"
                 ) }).into());

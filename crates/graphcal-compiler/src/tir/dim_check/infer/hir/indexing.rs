@@ -105,7 +105,7 @@ impl Infer<'_> {
                     )
                     .into());
                 };
-                if position < 0 {
+                let Ok(position_u64) = u64::try_from(position) else {
                     return Err(SemanticError::located(
                         self.env.src,
                         arg.span,
@@ -116,10 +116,9 @@ impl Infer<'_> {
                         },
                     )
                     .into());
-                }
+                };
                 if form.is_constant() {
                     let size = form.constant();
-                    let position_u64 = u64::try_from(position).unwrap_or(u64::MAX);
                     if position_u64 >= size {
                         return Err(SemanticError::located(
                             self.env.src,
@@ -138,13 +137,7 @@ impl Infer<'_> {
                     expr,
                     arg,
                     &index_identity,
-                    u64::try_from(position).map_err(|_| {
-                        SemanticError::internal_error(
-                            "checked position is negative",
-                            self.env.src,
-                            DiagnosticAnchor::Source(arg.span),
-                        )
-                    })?,
+                    position_u64,
                     crate::tir::static_index::StaticIndexUse::Key,
                 );
                 Ok(CheckedType::Key(index_identity))

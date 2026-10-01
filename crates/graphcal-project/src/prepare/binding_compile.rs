@@ -3,9 +3,12 @@
 use crate::binding_error::BindingError;
 
 use graphcal_compiler::semantic_error::evaluation::EvaluationError;
-use graphcal_compiler::syntax::ast::{FieldInit, Ident, IdentPath, MapEntry, MapEntryKey};
+use graphcal_compiler::syntax::ast::{
+    FieldInit, GenericArg, Ident, IdentPath, MapEntry, MapEntryKey,
+};
 use graphcal_compiler::syntax::fin_position::FinPosition;
 use graphcal_compiler::syntax::non_empty::NonEmpty;
+use graphcal_compiler::syntax::phase::Desugared;
 use graphcal_compiler::syntax::span::Spanned;
 use graphcal_compiler::syntax::token::SourceIdentifier;
 
@@ -430,6 +433,16 @@ pub struct ParameterBindingRow {
     pub(super) bindings: RuntimeParameterBindings,
 }
 
+/// A bare constructor call written for an algebraic external value, with the
+/// parts the binding dispatch matched.
+#[derive(Clone, Copy)]
+struct CanonicalConstructorCall<'a> {
+    expr: &'a Expr,
+    callee: &'a IdentPath,
+    generic_args: &'a [GenericArg<Desugared>],
+    fields: &'a [FieldInit<Desugared>],
+}
+
 impl PreparedProject {
     fn parameter_index(&self, name: &DeclName) -> Result<usize, CompileError> {
         self.parameter_lookup.get(name).copied().ok_or_else(|| {
@@ -529,11 +542,23 @@ impl PreparedProject {
     ) -> Result<graphcal_compiler::hir::expr::Expr<graphcal_compiler::hir::expr::Draft>, CompileError>
     {
         match (&expr.kind, expected) {
-            (AstExprKind::ConstructorCall { callee, .. }, ModelValueSchema::Algebraic(_))
-                if callee.as_bare().is_some() =>
-            {
-                self.lower_canonical_constructor_binding(expr, expected, owner)
-            }
+            (
+                AstExprKind::ConstructorCall {
+                    callee,
+                    generic_args,
+                    fields,
+                },
+                ModelValueSchema::Algebraic(type_id),
+            ) if callee.as_bare().is_some() => self.lower_canonical_constructor_binding(
+                CanonicalConstructorCall {
+                    expr,
+                    callee,
+                    generic_args,
+                    fields,
+                },
+                type_id,
+                owner,
+            ),
             (
                 AstExprKind::UnresolvedRef(graphcal_compiler::syntax::ast::UnresolvedRef::Path(
                     path,
@@ -560,8 +585,8 @@ impl PreparedProject {
                 );
                 self.lower_closed_binding_expr(&constructor_expr, expected, owner)
             }
-            (AstExprKind::MapLiteral { .. }, ModelValueSchema::Indexed { .. }) => {
-                self.lower_closed_map_binding(expr, expected, owner)
+            (AstExprKind::MapLiteral { entries }, ModelValueSchema::Indexed { .. }) => {
+                self.lower_closed_map_binding(entries, expr.span, expected, owner)
             }
             _ => self.lower_binding_expr_in_owner(expr, owner),
         }
@@ -569,28 +594,17 @@ impl PreparedProject {
 
     fn lower_canonical_constructor_binding(
         &self,
-        expr: &Expr,
-        expected: &ModelValueSchema,
+        call: CanonicalConstructorCall<'_>,
+        type_id: &ModelTypeId,
         owner: &graphcal_compiler::dag_id::DagId,
     ) -> Result<graphcal_compiler::hir::expr::Expr<graphcal_compiler::hir::expr::Draft>, CompileError>
     {
-        let AstExprKind::ConstructorCall {
+        let CanonicalConstructorCall {
+            expr,
             callee,
             generic_args,
             fields,
-        } = &expr.kind
-        else {
-            return Err(self.binding_internal_error(
-                "canonical external constructor has a non-constructor syntax node",
-                expr.span,
-            ));
-        };
-        let ModelValueSchema::Algebraic(type_id) = expected else {
-            return Err(self.binding_internal_error(
-                "canonical external constructor has a non-algebraic schema",
-                expr.span,
-            ));
-        };
+        } = call;
         let Some(definition) = self.schema_graph.definition(type_id) else {
             return Err(self.binding_internal_error(
                 "canonical external constructor references a missing algebraic definition",
@@ -608,7 +622,7 @@ impl PreparedProject {
         let signature_expr = Expr::new(
             AstExprKind::ConstructorCall {
                 callee: callee.clone(),
-                generic_args: generic_args.clone(),
+                generic_args: generic_args.to_vec(),
                 fields: Vec::new(),
             },
             expr.span,
@@ -660,17 +674,12 @@ impl PreparedProject {
 
     fn lower_closed_map_binding(
         &self,
-        expr: &Expr,
+        entries: &[MapEntry<Desugared>],
+        span: Span,
         expected: &ModelValueSchema,
         owner: &graphcal_compiler::dag_id::DagId,
     ) -> Result<graphcal_compiler::hir::expr::Expr<graphcal_compiler::hir::expr::Draft>, CompileError>
     {
-        let AstExprKind::MapLiteral { entries } = &expr.kind else {
-            return Err(self.binding_internal_error(
-                "external map binding has a non-map syntax node",
-                expr.span,
-            ));
-        };
         let entries = entries
             .iter()
             .map(|entry| {
@@ -682,7 +691,7 @@ impl PreparedProject {
                     AstExprKind::MapLiteral {
                         entries: vec![key_entry],
                     },
-                    expr.span,
+                    span,
                 );
                 let lowered_key = self.lower_binding_expr_in_owner(&key_expr, owner)?;
                 let HirExprKind::MapLiteral {
@@ -691,13 +700,13 @@ impl PreparedProject {
                 else {
                     return Err(self.binding_internal_error(
                         "external map key did not lower to a map literal",
-                        expr.span,
+                        span,
                     ));
                 };
                 let Some(lowered_entry) = lowered_entries.into_iter().next() else {
                     return Err(self.binding_internal_error(
                         "external map key lowering produced no entry",
-                        expr.span,
+                        span,
                     ));
                 };
                 let entry_schema =
@@ -722,7 +731,7 @@ impl PreparedProject {
             .collect::<Result<Vec<_>, CompileError>>()?;
         Ok(graphcal_compiler::hir::expr::Expr::new(
             HirExprKind::MapLiteral { entries },
-            expr.span,
+            span,
         ))
     }
 
@@ -768,8 +777,7 @@ impl PreparedProject {
                 &self.sources,
                 &self.host_fns,
                 cancellation.clone(),
-            )
-            .with_roots(&values, None);
+            );
             graphcal_eval::eval_expr::eval_root_with_presentation(
                 tree,
                 &values,

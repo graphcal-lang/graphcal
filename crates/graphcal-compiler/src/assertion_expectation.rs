@@ -107,8 +107,8 @@ impl ExpectedFailKeyPart<IndexTypeRef> {
     }
 }
 
-/// One expected-fail key, in the assertion's axis order.
-pub type ExpectedFailKey<I = IndexTypeRef> = Vec<ExpectedFailKeyPart<I>>;
+/// One expected-fail key, in the assertion's axis order: at least one part.
+pub type ExpectedFailKey<I = IndexTypeRef> = NonEmpty<ExpectedFailKeyPart<I>>;
 
 /// Whether the whole scalar assertion or selected indexed entries should fail.
 #[derive(Debug, Clone, PartialEq, Eq)]

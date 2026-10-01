@@ -593,29 +593,27 @@ impl ParsedExpectedFailMetadata {
         let expected = match expected {
             ExpectedFail::All => ExpectedFail::All,
             ExpectedFail::Variants(keys) => ExpectedFail::Variants(keys.try_map(|key| {
-                key.into_iter()
-                    .map(|part| match part {
-                        ExpectedFailKeyPart::Named {
-                            index,
-                            variant,
-                            span,
-                        } => resolver
-                            .resolve_index_variant_parts(&resolution_owner, &index, &variant)
-                            .map(|resolved| ExpectedFailKeyPart::resolved(resolved, span))
-                            .map_err(|err| {
-                                SemanticError::located(
-                                    src,
-                                    span,
-                                    EvaluationError::Failed {
-                                        message: err.to_string(),
-                                    },
-                                )
-                            }),
-                        ExpectedFailKeyPart::FinitePosition { position, span } => {
-                            Ok(ExpectedFailKeyPart::FinitePosition { position, span })
-                        }
-                    })
-                    .collect::<Result<_, SemanticError>>()
+                key.try_map(|part| match part {
+                    ExpectedFailKeyPart::Named {
+                        index,
+                        variant,
+                        span,
+                    } => resolver
+                        .resolve_index_variant_parts(&resolution_owner, &index, &variant)
+                        .map(|resolved| ExpectedFailKeyPart::resolved(resolved, span))
+                        .map_err(|err| {
+                            SemanticError::located(
+                                src,
+                                span,
+                                EvaluationError::Failed {
+                                    message: err.to_string(),
+                                },
+                            )
+                        }),
+                    ExpectedFailKeyPart::FinitePosition { position, span } => {
+                        Ok(ExpectedFailKeyPart::FinitePosition { position, span })
+                    }
+                })
             })?),
         };
         Ok(ResolvedExpectedFailMetadata {

@@ -2549,7 +2549,11 @@ pub fn enrich_from_tir(table: &mut SymbolTable, tir: &CheckedTir, dag_id: &DagId
                 let type_desc = type_desc.map_or_else(
                     || resolved_type.format(registry),
                     |constraints| {
-                        format_type_with_constraints(resolved_type, constraints, registry)
+                        format_type_with_constraints(
+                            resolved_type,
+                            constraints.as_slice(),
+                            registry,
+                        )
                     },
                 );
                 def.type_description = Some(type_desc);

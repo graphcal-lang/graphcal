@@ -1,10 +1,6 @@
 //! Static checking from authoritative project HIR to checked TIR.
 
-use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
-use graphcal_compiler::ir::imported_binding::ImportedValueKind;
 use graphcal_compiler::outcome::Outcome;
-use graphcal_compiler::resolve::ModuleResolver;
-use graphcal_compiler::resolve::category::DeclSymbolKind;
 use graphcal_compiler::source_id::SourceId;
 
 #[allow(
@@ -15,10 +11,7 @@ use graphcal_compiler::source_id::SourceId;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use graphcal_compiler::ir::imported_binding::ImportedBinding;
-use graphcal_compiler::ir::resolve::ScopedName;
 use graphcal_compiler::semantic::checked_type::CheckedType;
-use graphcal_compiler::semantic_error::SemanticError;
 
 use super::{entry_interface, lowering};
 use crate::compile_error::PipelineError;
@@ -44,46 +37,6 @@ fn declared_type_for_target(
                 .map(graphcal_compiler::tir::typed::CheckedDeclType::declared)
         })
         .cloned()
-}
-
-fn resolve_imported_bindings(
-    hir: &graphcal_compiler::ir::model::HirDag,
-    local_interfaces: &LocalInterfaces,
-    module_artifacts: &ModuleArtifactStore,
-    module_resolver: &ModuleResolver,
-    src: SourceId,
-) -> Result<HashMap<ScopedName, ImportedBinding>, PipelineError> {
-    hir.imported_bindings()
-        .iter()
-        .map(|(lexical, target)| {
-            let declared_type = declared_type_for_target(target, local_interfaces, module_artifacts)
-                .ok_or_else(|| {
-                    PipelineError::Semantic(SemanticError::internal_error(
-                        format!(
-                            "checked interface for HIR import `{lexical}` targeting `{target}` is unavailable"
-                        ),
-                        src,
-                        DiagnosticAnchor::WholeFile,
-                    ))
-                })?;
-            let kind = match module_resolver.symbol(target).map(|symbol| *symbol.kind()).ok_or_else(|| {
-                PipelineError::Semantic(SemanticError::internal_error(
-                    format!("HIR imported value `{target}` has no declaration"),
-                    src,
-                    DiagnosticAnchor::WholeFile,
-                ))
-            })? {
-                DeclSymbolKind::Const => ImportedValueKind::Constant,
-                DeclSymbolKind::Param | DeclSymbolKind::Node => ImportedValueKind::Runtime,
-                actual => return Err(PipelineError::Semantic(SemanticError::internal_error(
-                    format!("HIR imported value `{target}` has non-value category {actual:?}"),
-                    src, DiagnosticAnchor::WholeFile,
-                ))),
-            };
-            let checked = ImportedBinding::new(target.clone(), declared_type, kind);
-            Ok((lexical.clone(), checked))
-        })
-        .collect()
 }
 
 struct ResolvedFileSignatures {
@@ -196,16 +149,11 @@ pub(super) fn check_hir_file(
     )?;
 
     // Pass 2 resolves bodies using exactly the signatures retained above.
-    let root_bindings = resolve_imported_bindings(
-        signed_root.hir(),
-        &local_interfaces,
-        module_artifacts,
-        module_resolver,
-        *file_src,
-    )?;
+    let imported_types =
+        |target: &_| declared_type_for_target(target, &local_interfaces, module_artifacts);
     let mut tir = graphcal_compiler::tir::typed::TirDraft::resolve_root(
         signed_root,
-        root_bindings,
+        &imported_types,
         *file_src,
         module_resolver,
         Arc::clone(project_types),
@@ -222,16 +170,9 @@ pub(super) fn check_hir_file(
 
     for signed in signed_inline {
         cancellation.checkpoint()?;
-        let imported_bindings = resolve_imported_bindings(
-            signed.hir(),
-            &local_interfaces,
-            module_artifacts,
-            module_resolver,
-            *file_src,
-        )?;
         tir.add_inline_dag(
             signed,
-            imported_bindings,
+            &imported_types,
             *file_src,
             module_resolver,
             cancellation,

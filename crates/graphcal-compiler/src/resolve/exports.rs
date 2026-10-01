@@ -40,11 +40,15 @@ impl ExportedBindingTarget {
         }
     }
 
-    /// Canonical declaration identity when this target inhabits the Term declaration namespace.
+    /// Canonical declaration identity when this target is a constant
+    /// declaration, the only kind of declaration a value import binds.
     #[must_use]
-    pub const fn declaration(&self) -> Option<&ResolvedDeclName> {
+    pub const fn constant(&self) -> Option<&ResolvedDeclName> {
         match self {
-            Self::Decl { identity, .. } => Some(identity),
+            Self::Decl {
+                identity,
+                kind: DeclSymbolKind::Const,
+            } => Some(identity),
             _ => None,
         }
     }

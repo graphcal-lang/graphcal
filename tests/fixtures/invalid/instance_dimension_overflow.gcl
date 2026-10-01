@@ -1,0 +1,11 @@
+// error: binding a dimension port raises the template's exponents past the
+// exponent range
+dim Big = Length^2000000000;
+
+dag t {
+    pub(bind) dim D;
+    param p: D^2000000000 = 1.0;
+    pub node q: D^2000000000 = @p;
+}
+
+include t(dim D: Big) as x;

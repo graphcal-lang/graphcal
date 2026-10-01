@@ -12,7 +12,7 @@ use graphcal_compiler::source_id::SourceId;
 use crate::checked_program::{CheckedProgram, SealedDag};
 use crate::execution_plan::{
     CallablePlan, ExecPlan, PlannedBody, PlannedDeclaration, PlannedInstance,
-    PreparedConstantImport, PreparedImports,
+    PreparedConstantImport,
 };
 
 self_cell::self_cell!(
@@ -269,7 +269,7 @@ fn prepare_callable_plan<'p>(
         .into_iter()
         .map(|parent| Ok((parent, plan_instances(parent)?)))
         .collect::<Result<Vec<_>, SemanticError>>()?;
-    let imports = prepare_imports(&execution_dags, declarations, src)?;
+    let imports = prepare_imports(&execution_dags);
     CallablePlan::new(
         body,
         execution_dags,
@@ -296,38 +296,19 @@ fn located<'a, 'p>(
     })
 }
 
-/// Select the imports of a callable's execution DAGs: the constants the
-/// program resolved when it was sealed, and the explicit runtime imports.
-fn prepare_imports(
-    dags: &[SealedDag<'_>],
-    declarations: &HashMap<&ResolvedDeclName, PlannedDeclaration<'_>>,
-    source: SourceId,
-) -> Result<PreparedImports, SemanticError> {
-    use graphcal_compiler::ir::imported_binding::ImportedValueKind;
-    let mut result = PreparedImports::default();
-    for dag in dags {
-        result
-            .constants
-            .extend(
-                dag.imported_constants()
-                    .iter()
-                    .map(|constant| PreparedConstantImport {
-                        destination: dag.dag().imported_destination(constant.value().key()),
-                        value: constant.value().clone(),
-                    }),
-            );
-        for binding in dag
-            .dag()
-            .imported_bindings()
-            .values()
-            .filter(|binding| matches!(binding.kind(), ImportedValueKind::Runtime))
-        {
-            let target = binding.target();
-            located(declarations, target, source)?;
-            result.runtime.push(target.clone());
-        }
-    }
-    Ok(result)
+/// Select the constant imports of a callable's execution DAGs, which the
+/// program resolved when it was sealed.
+fn prepare_imports(dags: &[SealedDag<'_>]) -> Vec<PreparedConstantImport> {
+    dags.iter()
+        .flat_map(|dag| {
+            dag.imported_constants()
+                .iter()
+                .map(|constant| PreparedConstantImport {
+                    destination: dag.dag().imported_destination(constant.value().key()),
+                    value: constant.value().clone(),
+                })
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -434,7 +415,7 @@ mod tests {
             root.execution_dags().to_vec(),
             root.semantic_instances().to_vec(),
             root.closure_instances().to_vec(),
-            PreparedImports::default(),
+            Vec::new(),
             scheduled,
         )
     }

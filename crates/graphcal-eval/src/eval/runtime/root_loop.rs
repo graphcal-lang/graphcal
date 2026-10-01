@@ -43,7 +43,6 @@ pub fn run_eval_loop_with_bindings(
         // Root declarations keep their existing work allowance; nested calls
         // share this context's budget through immutable scope reselection.
         let root = EvalSession::checked(plan, src, sources, host_fns, cancellation.clone())
-            .with_roots(frame.values(), Some(frame.presentations()))
             .with_unavailable(frame.errors())
             .with_unfinished_calls(&unfinished_calls);
         let session = root.for_declaration(&entry);

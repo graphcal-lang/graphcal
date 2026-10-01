@@ -548,10 +548,10 @@ fn generic_nat_services_cannot_cross_type_owners_with_the_same_parameter_name() 
         .clone();
     assert_eq!(a.name, b.name);
     assert_ne!(a, b);
-    let (key, field) = nominal_a.constrained_fields().next().unwrap();
+    let (key, _, bounds) = nominal_a.constrained_fields().next().unwrap();
     assert_eq!(key.constructor, ConstructorName::expect_valid("A"));
     assert_eq!(key.field, FieldName::expect_valid("value"));
-    let bound = field.map(|field| &field.domain_bounds()[0]);
+    let bound = bounds.map(graphcal_compiler::syntax::non_empty::NonEmpty::first);
     let context = graphcal_eval::eval_expr::EvalSession::provisional_constants(
         &tir,
         src,
@@ -989,113 +989,6 @@ fn frame_arguments_are_domain_checked_and_keep_presentation_only_when_bound() {
 }
 
 #[test]
-fn frame_runtime_imports_seed_only_unbound_prepared_imports() {
-    use graphcal_eval::execution_frame::{ExecutionFrame, FailurePolicy, FrameValues};
-    use graphcal_eval::execution_plan::{CallImport, ImportSource, PlannedCall};
-    use graphcal_eval::runtime_value::RuntimeValue;
-    let source = "dag scaled { param factor: Dimensionless; pub node result: Dimensionless = @factor * 2.0; } node out: Dimensionless = @scaled(factor: 4.0)::result;";
-    let tir = compile_to_tir(source, "frame.gcl").unwrap();
-    let mut sources = graphcal_compiler::source_registry::SourceRegistry::new();
-    let src = sources.register("frame.gcl", std::sync::Arc::new(source.to_string()));
-    let prepared = graphcal_eval::exec_plan::compile(&tir, src, &sources).unwrap();
-    let plan = prepared.plan();
-    // Runtime imports are classified from checked import bindings when the
-    // plan is prepared; classify one directly so the frame's contract is
-    // exercised on its own.
-    let inline = plan
-        .callables()
-        .find(|callable| callable.scope().dag().dag_id() != tir.root_dag_id())
-        .expect("the inline DAG is callable");
-    let import = inline
-        .scope()
-        .dag()
-        .body_for_test()
-        .params()
-        .next()
-        .map(graphcal_compiler::tir::typed::TypedParamEntry::identity)
-        .unwrap();
-    let inline_id = inline.scope().dag().dag_id();
-    let from_caller = CallImport::classify(&import, inline_id, tir.root_dag_id()).unwrap();
-    assert_eq!(from_caller.source(), ImportSource::Caller);
-    let from_root = CallImport::classify(&import, tir.root_dag_id(), inline_id).unwrap();
-    assert_eq!(from_root.source(), ImportSource::Root);
-    assert!(CallImport::classify(&import, tir.root_dag_id(), tir.root_dag_id()).is_none());
-
-    let frame_of = |value: f64| {
-        graphcal_eval::constant_pools::RuntimeValueMap::from([(
-            import.clone(),
-            RuntimeValue::quantity(value).unwrap(),
-        )])
-    };
-    let caller = frame_of(5.0);
-    let root = frame_of(6.0);
-    let caller = FrameValues {
-        values: &caller,
-        presentations: None,
-    };
-    let root = FrameValues {
-        values: &root,
-        presentations: None,
-    };
-    let seeded = |imports: &[CallImport], root: Option<FrameValues<'_>>| {
-        let mut frame = ExecutionFrame::called(
-            plan,
-            PlannedCall::for_test(inline, imports),
-            FailurePolicy::Propagate,
-        );
-        frame.seed_runtime_imports(caller, root);
-        let presented = frame.presentations().contains_key(&import);
-        let value = frame
-            .values()
-            .get(&import)
-            .and_then(|value| value.expect_quantity("import").ok())
-            .map(graphcal_compiler::finite_value::FiniteQuantity::get);
-        (value, presented)
-    };
-    assert_eq!(
-        seeded(std::slice::from_ref(&from_caller), Some(root)),
-        (Some(5.0), false)
-    );
-    assert_eq!(
-        seeded(std::slice::from_ref(&from_root), Some(root)),
-        (Some(6.0), false)
-    );
-    // Before the root frame is available, a root import is not seeded.
-    assert_eq!(
-        seeded(std::slice::from_ref(&from_root), None),
-        (None, false)
-    );
-
-    // An import already bound keeps its value.
-    let span = graphcal_compiler::syntax::span::Span::new(0, 0);
-    let imports = [from_caller];
-    let mut frame = ExecutionFrame::called(
-        plan,
-        PlannedCall::for_test(inline, &imports),
-        FailurePolicy::Propagate,
-    );
-    frame
-        .bind_argument(
-            &import,
-            graphcal_eval::runtime_presentation::EvaluatedRuntimeValue::plain(
-                RuntimeValue::quantity(7.0).unwrap(),
-            ),
-            src,
-            span,
-        )
-        .unwrap();
-    frame.seed_runtime_imports(caller, Some(root));
-    assert_eq!(
-        frame
-            .values()
-            .get(&import)
-            .and_then(|value| value.expect_quantity("import").ok())
-            .map(graphcal_compiler::finite_value::FiniteQuantity::get),
-        Some(7.0)
-    );
-}
-
-#[test]
 fn prepared_imports_and_instance_constant_pools_borrow_canonical_values() {
     let source = "pub const node OUTER: Dimensionless = 2.0; dag helper { import pools::{OUTER}; const node LOCAL: Dimensionless = 3.0; pub node value: Dimensionless = @OUTER + @LOCAL; } include helper() as one; include helper() as two; node output: Dimensionless = @one::value + @two::value + @helper()::value;";
     let tir = compile_to_tir(source, "pools.gcl").unwrap();
@@ -1124,7 +1017,7 @@ fn prepared_imports_and_instance_constant_pools_borrow_canonical_values() {
                 constants += 1;
             }
         }
-        for import in &callable.imports().constants {
+        for import in callable.constant_imports() {
             let value = import.value.value();
             assert!(plan.tir().dag_registry().keys().any(|dag_id| {
                 plan.program()
@@ -7172,7 +7065,6 @@ fn eval_constructor_match_rejects_runtime_owner_mismatch_with_same_leaf_construc
         sources,
         graphcal_compiler::cancellation::CancellationToken::unbounded(),
     )
-    .with_roots(&values, None)
     .for_decl(&expr_key);
 
     let err = graphcal_eval::eval_expr::eval_root(&ctx.executable(expr).unwrap(), &values, &ctx)
@@ -8103,7 +7995,6 @@ fn eval_index_access_rejects_runtime_owner_mismatch_with_same_leaf_variant() {
         sources,
         graphcal_compiler::cancellation::CancellationToken::unbounded(),
     )
-    .with_roots(&values, None)
     .for_decl(&expr_key);
 
     let err = graphcal_eval::eval_expr::eval_root(&ctx.executable(expr).unwrap(), &values, &ctx)
@@ -8194,7 +8085,6 @@ fn eval_label_match_rejects_runtime_owner_mismatch_with_same_leaf_variant() {
         sources,
         graphcal_compiler::cancellation::CancellationToken::unbounded(),
     )
-    .with_roots(&values, None)
     .for_decl(&expr_key);
 
     let err =

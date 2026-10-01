@@ -205,12 +205,8 @@ impl CheckedDag {
     pub fn domain_bounds(
         &self,
         identity: &ResolvedDeclName,
-    ) -> Option<&[super::model::ResolvedDomainBound]> {
-        self.body
-            .semantic()
-            .domain_bounds
-            .get(identity)
-            .map(Vec::as_slice)
+    ) -> Option<&crate::syntax::non_empty::NonEmpty<super::model::ResolvedDomainBound>> {
+        self.body.semantic().domain_bounds.get(identity)
     }
 
     /// The constant and runtime dependencies of this DAG's declarations.
@@ -246,12 +242,6 @@ impl CheckedDag {
     /// Identities of this DAG's value declarations, in source order.
     pub fn value_declaration_identities(&self) -> impl Iterator<Item = &ResolvedDeclName> {
         self.body.value_declaration_identities()
-    }
-
-    /// Whether `key` is a const declaration of this DAG.
-    #[must_use]
-    pub fn is_constant(&self, key: &ResolvedDeclName) -> bool {
-        self.body.const_expr(key).is_some()
     }
 
     /// The unfinished-definition marker of a declaration, if it is a TODO.

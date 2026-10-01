@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use graphcal_compiler::dag_id::DagId;
-use graphcal_compiler::ir::imported_binding::{ImportedBinding, ImportedValueKind};
+use graphcal_compiler::ir::imported_binding::ImportedBinding;
 use graphcal_compiler::resolved_name::ResolvedDeclName;
 use graphcal_compiler::syntax::decl_name::DeclName;
 use graphcal_compiler::syntax::module_name::ScopedName;
@@ -119,78 +119,34 @@ fn const_pools_reject_inherited_pools_for_scheduled_dags() {
 }
 
 #[test]
-fn imported_constants_resolve_once_and_runtime_imports_resolve_to_none() {
-    let tir = compile_to_tir(
-        "const node C: Dimensionless = 2.0; param x: Dimensionless;",
-        "test.gcl",
-    )
-    .unwrap();
+fn imported_constants_resolve_once() {
+    let tir = compile_to_tir("const node C: Dimensionless = 2.0;", "test.gcl").unwrap();
     let evaluated = EvaluatedTir::evaluate(tir, &ExecutionFacts::default(), one()).unwrap();
     let (tir, consts) = (evaluated.tir(), evaluated.consts());
-    let binding = |name: &str, kind| {
-        let target = key(tir, name);
-        ImportedBinding::new(
-            target.clone(),
-            tir.decl_type(&target).unwrap().declared().clone(),
-            kind,
-        )
-    };
+    let target = key(tir, "C");
+    let binding = ImportedBinding::new(
+        target.clone(),
+        tir.decl_type(&target).unwrap().declared().clone(),
+    );
     let local = ScopedName::local(DeclName::expect_valid("local"));
-    let constant = resolve_imported_constant(
-        tir,
-        consts,
-        &local,
-        &binding("C", ImportedValueKind::Constant),
-    )
-    .unwrap()
-    .unwrap();
+    let constant = resolve_imported_constant(consts, &local, &binding).unwrap();
     assert_eq!(constant.name(), &local);
-    assert_eq!(constant.value().key(), &key(tir, "C"));
+    assert_eq!(constant.value().key(), &target);
     assert!(std::ptr::eq(
         constant.value().value(),
         consts
             .for_dag(tir.root_dag_id())
             .unwrap()
-            .get(&key(tir, "C"))
+            .get(&target)
             .unwrap()
     ));
-    assert!(
-        resolve_imported_constant(
-            tir,
-            consts,
-            &local,
-            &binding("x", ImportedValueKind::Runtime)
-        )
-        .unwrap()
-        .is_none()
-    );
-    for wrong in [
-        binding("C", ImportedValueKind::Runtime),
-        binding("x", ImportedValueKind::Constant),
-    ] {
-        assert!(matches!(
-            resolve_imported_constant(tir, consts, &local, &wrong),
-            Err(SealError::WrongImportedKind { .. })
-        ));
-    }
-    let absent = ImportedBinding::new(
-        key(tir, "absent"),
-        binding("C", ImportedValueKind::Constant)
-            .declared_type()
-            .clone(),
-        ImportedValueKind::Constant,
-    );
+    let absent = ImportedBinding::new(key(tir, "absent"), binding.declared_type().clone());
     assert!(matches!(
-        resolve_imported_constant(tir, consts, &local, &absent),
-        Err(SealError::MissingDeclaration(_))
+        resolve_imported_constant(consts, &local, &absent),
+        Err(SealError::MissingConstant(_))
     ));
     assert!(matches!(
-        resolve_imported_constant(
-            tir,
-            &ConstPool::default(),
-            &local,
-            &binding("C", ImportedValueKind::Constant)
-        ),
+        resolve_imported_constant(&ConstPool::default(), &local, &binding),
         Err(SealError::MissingConstant(_))
     ));
 }

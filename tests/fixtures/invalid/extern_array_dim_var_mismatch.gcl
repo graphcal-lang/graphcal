@@ -1,0 +1,11 @@
+// Array elements sharing one dimension variable must have the same dimension;
+// the help names the argument that bound it.
+index Maneuver = { Departure, Correction, Insertion };
+
+import plugin "graphcal:demo" as demo {
+    fn dot<D: Dim, I: Index>(xs: D[I], ys: D[I]) -> D;
+}
+
+node a: Velocity[Maneuver] = { Maneuver#Departure: 1.0 km/s, Maneuver#Correction: 0.5 km/s, Maneuver#Insertion: 1.5 km/s };
+node b: Length[Maneuver] = { Maneuver#Departure: 1.0 km, Maneuver#Correction: 0.5 km, Maneuver#Insertion: 1.5 km };
+node bad: Velocity = demo::dot(@a, @b);

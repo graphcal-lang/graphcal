@@ -57,8 +57,7 @@ impl Infer<'_> {
 
         // Boundary rendering for diagnostics only.
         let display_name = ext.to_string();
-        let mut dim_walk =
-            SignatureDimWalk::new(&display_name, sig, self.env.registry, self.env.src);
+        let mut dim_walk = SignatureDimWalk::new(&display_name, self.env.registry, self.env.src);
         let mut index_bindings: HashMap<
             crate::function_signature::IndexBinder,
             IndexTypeRef<Symbolic>,

@@ -1,5 +1,6 @@
 //! Checked-DAG specialization for semantic include instances.
 
+use crate::semantic_error::dimension::DimensionError;
 use std::collections::{BTreeSet, HashMap, HashSet};
 
 use super::{
@@ -72,20 +73,12 @@ fn specialize_dimension(
                 )?,
                 BaseDimId::Prelude(_) => Dimension::base(base.clone()),
             };
-            let factor = factor.pow(*exponent).map_err(|error| {
-                SemanticError::internal_error(
-                    format!("semantic dimension substitution overflowed: {error}"),
-                    src,
-                    DiagnosticAnchor::WholeFile,
-                )
-            })?;
-            acc.checked_mul(&factor).map_err(|error| {
-                SemanticError::internal_error(
-                    format!("semantic dimension substitution overflowed: {error}"),
-                    src,
-                    DiagnosticAnchor::WholeFile,
-                )
-            })
+            // A bound dimension raised to the template's exponents can
+            // leave the exponent range, like any other dimension arithmetic.
+            let overflow =
+                |_| SemanticError::located(src, src.whole_span(), DimensionError::DimensionOverflow);
+            let factor = factor.pow(*exponent).map_err(overflow)?;
+            acc.checked_mul(&factor).map_err(overflow)
         },
     )
 }

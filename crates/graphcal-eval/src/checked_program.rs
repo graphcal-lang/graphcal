@@ -13,7 +13,7 @@ use std::sync::Arc;
 use thiserror::Error;
 
 use graphcal_compiler::dag_id::DagId;
-use graphcal_compiler::ir::imported_binding::{ImportedBinding, ImportedValueKind};
+use graphcal_compiler::ir::imported_binding::ImportedBinding;
 use graphcal_compiler::resolved_name::ResolvedDeclName;
 use graphcal_compiler::semantic::checked_type::CheckedType;
 use graphcal_compiler::source_id::SourceId;
@@ -44,13 +44,6 @@ pub enum SealError {
     UncoveredDag(DagId),
     #[error("DAG `{0}` has incomplete execution checks")]
     MissingDomainConstraints(DagId),
-    #[error("imported declaration `{0}` has no containing body")]
-    MissingDeclaration(ResolvedDeclName),
-    #[error("imported declaration `{target}` is not a checked {kind:?} value")]
-    WrongImportedKind {
-        target: ResolvedDeclName,
-        kind: ImportedValueKind,
-    },
     #[error("imported constant `{0}` has no checked value in its defining body's pool")]
     MissingConstant(ResolvedDeclName),
 }
@@ -289,7 +282,7 @@ impl EvaluatedTir {
                             .remove(dag_id)
                             .ok_or_else(|| SealError::MissingDomainConstraints(dag_id.clone()))?,
                     ),
-                    imported_constants: resolve_imported_constants(&tir, &consts, dag)?,
+                    imported_constants: resolve_imported_constants(&consts, dag)?,
                 })
             };
             by_position.push((Arc::clone(const_values), Arc::clone(&facts)));
@@ -361,46 +354,29 @@ impl CheckedProgram {
 
 /// Resolve the imported constants of one DAG in `consts`.
 fn resolve_imported_constants(
-    tir: &CheckedTir,
     consts: &ConstPool,
     dag: &CheckedDag,
 ) -> Result<Vec<ImportedConstant>, SealError> {
     dag.imported_bindings()
         .iter()
-        .filter_map(|(name, binding)| {
-            resolve_imported_constant(tir, consts, name, binding).transpose()
-        })
+        .map(|(name, binding)| resolve_imported_constant(consts, name, binding))
         .collect()
 }
 
-/// Resolve one imported value binding: its constant in `consts`, or `None`
-/// for a runtime import of a runtime declaration.
+/// Resolve one imported constant binding to its value in `consts`.
 pub fn resolve_imported_constant(
-    tir: &CheckedTir,
     consts: &ConstPool,
     name: &ScopedName,
     binding: &ImportedBinding,
-) -> Result<Option<ImportedConstant>, SealError> {
+) -> Result<ImportedConstant, SealError> {
     crate::pipeline_metrics::record(crate::pipeline_metrics::Event::ImportedSourceResolution);
     let target = binding.target();
-    let defining = tir
-        .dag_containing_declaration(target)
-        .ok_or_else(|| SealError::MissingDeclaration(target.clone()))?;
-    match (binding.kind(), defining.is_constant(target)) {
-        (ImportedValueKind::Runtime, false) => Ok(None),
-        (ImportedValueKind::Constant, true) => consts
-            .reference(target)
-            .map(|value| {
-                Some(ImportedConstant {
-                    name: name.clone(),
-                    declared_type: binding.declared_type().clone(),
-                    value,
-                })
-            })
-            .ok_or_else(|| SealError::MissingConstant(target.clone())),
-        (kind, _) => Err(SealError::WrongImportedKind {
-            target: target.clone(),
-            kind,
-        }),
-    }
+    consts
+        .reference(target)
+        .map(|value| ImportedConstant {
+            name: name.clone(),
+            declared_type: binding.declared_type().clone(),
+            value,
+        })
+        .ok_or_else(|| SealError::MissingConstant(target.clone()))
 }

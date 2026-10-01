@@ -365,9 +365,22 @@ fn eval_texpr_inner(
         NodeKind::Scan(scan_node) => {
             eval_scan(scan_node, values, presentation_values, local_values, ctx)
         }
-        NodeKind::Unfold { .. } => {
-            eval_unfold(expr, values, presentation_values, local_values, ctx)
-        }
+        NodeKind::Unfold {
+            recurrence,
+            init,
+            body,
+        } => eval_unfold(
+            ScopedUnfold {
+                node: expr,
+                recurrence,
+                init,
+                body,
+            },
+            values,
+            presentation_values,
+            local_values,
+            ctx,
+        ),
         NodeKind::Key { form, arg, .. } => {
             let CheckedType::Key(axis) = expr.ty() else {
                 return Err(ctx
@@ -1162,23 +1175,26 @@ fn eval_scan(
     Ok(EvaluatedRuntimeValue::from_indexed(result_entries))
 }
 
+/// An unfold node with its operands.
+struct ScopedUnfold<'t> {
+    node: ScopedNode<'t>,
+    recurrence: &'t graphcal_compiler::hir::expr::UnfoldRecurrence,
+    init: ScopedNode<'t>,
+    body: ScopedNode<'t>,
+}
+
 fn eval_unfold(
-    expr: ScopedNode<'_>,
+    ScopedUnfold {
+        node: expr,
+        recurrence,
+        init,
+        body,
+    }: ScopedUnfold<'_>,
     values: &RuntimeValueMap,
     presentation_values: Option<&PendingPresentedMap>,
     local_values: &HirLocalValueMap<'_>,
     ctx: &EvalSession<'_>,
 ) -> Result<EvaluatedRuntimeValue, Outcome<SemanticError>> {
-    let NodeKind::Unfold {
-        recurrence,
-        init,
-        body,
-    } = expr.kind()
-    else {
-        return Err(ctx
-            .internal_error("unfold evaluator received another operation", expr.span())
-            .into());
-    };
     let axis = &recurrence.axis;
     let CheckedType::Indexed { index, .. } = expr.ty() else {
         return Err(ctx
@@ -1340,12 +1356,11 @@ fn eval_dag_call(
 ) -> Result<EvaluatedRuntimeValue, Outcome<SemanticError>> {
     let target = call.target();
     let plan = ctx.execution_plan()?;
-    let planned = plan.call(call);
-    let callable = planned.callable();
+    let callable = plan.call(call);
 
-    let mut frame = crate::execution_frame::ExecutionFrame::called(
+    let mut frame = crate::execution_frame::ExecutionFrame::new(
         plan,
-        planned,
+        callable,
         crate::execution_frame::FailurePolicy::Propagate,
     );
     for scoped_binding in args.iter() {
@@ -1359,13 +1374,6 @@ fn eval_dag_call(
         )?;
         frame.bind_argument(&binding.target, evaluated, ctx.src, binding.value.span())?;
     }
-    frame.seed_runtime_imports(
-        crate::execution_frame::FrameValues {
-            values: caller_values,
-            presentations: caller_presentations,
-        },
-        ctx.root,
-    );
 
     let evaluated = frame.run(&ctx.cancellation, |entry, frame| {
         let session = ctx.for_declaration(&entry).with_unavailable(frame.errors());

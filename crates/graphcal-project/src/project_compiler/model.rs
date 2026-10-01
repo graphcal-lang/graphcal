@@ -172,10 +172,25 @@ impl ProjectModuleBinding {
     }
 }
 
+/// The canonical constant each imported lexical name binds, with the span
+/// of the import that bound it.
+pub(super) type ImportedBindings =
+    HashMap<ScopedName, graphcal_compiler::syntax::span::Spanned<ResolvedDeclName>>;
+
+/// The bindings HIR records: each imported lexical name's canonical constant.
+pub(super) fn hir_imported_bindings(
+    bindings: ImportedBindings,
+) -> HashMap<ScopedName, ResolvedDeclName> {
+    bindings
+        .into_iter()
+        .map(|(name, binding)| (name, binding.value))
+        .collect()
+}
+
 /// Mutable state accumulated while processing one body's imports.
 pub(super) struct ImportContext<'a> {
     pub(super) imported_names: ImportedValueNames,
-    pub(super) imported_bindings: HashMap<ScopedName, ResolvedDeclName>,
+    pub(super) imported_bindings: ImportedBindings,
     pub(super) imported_source_order: Vec<(ScopedName, DeclCategory)>,
     pub(super) module_map: HashMap<ModuleAliasName, ProjectModuleBinding>,
     pub(super) include_instances: Vec<IncludeInstanceRequest<'a>>,

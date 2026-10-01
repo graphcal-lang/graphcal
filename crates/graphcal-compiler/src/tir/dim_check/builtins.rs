@@ -12,7 +12,7 @@ use crate::dimension::Dimension;
 use crate::display::formatting_registry::FormattingRegistry;
 use crate::function_signature::{
     DimBinder, DimMonomial, DimMonomialEvalError, FunctionSignature, ParamKind, ResultKind,
-    ScalarValueKind, StructResult,
+    ScalarValueKind,
 };
 use crate::semantic_error::SemanticError;
 use crate::semantic_error::dimension::DimensionError;
@@ -52,7 +52,7 @@ pub(super) fn infer_fn_dim(
     }
 
     let fn_name = function.as_str();
-    let mut walk = SignatureDimWalk::new(fn_name, sig, registry, src);
+    let mut walk = SignatureDimWalk::new(fn_name, registry, src);
 
     for (param, arg) in sig.params().iter().zip(args) {
         let ParamKind::Scalar(ScalarValueKind::Quantity(monomial)) = &param.kind else {
@@ -83,25 +83,25 @@ pub(super) fn infer_fn_dim(
 
 /// Dimension-variable bindings accumulated while checking one call against
 /// its signature. Shared by built-in and extern call checking.
-pub(super) struct SignatureDimWalk<'a, S: StructResult = crate::function_signature::StructShape> {
+pub(super) struct SignatureDimWalk<'a> {
     fn_name: &'a str,
-    sig: &'a FunctionSignature<S>,
-    bindings: HashMap<DimBinder, Dimension>,
+    bindings: HashMap<DimBinder, DimBinding>,
     registry: &'a FormattingRegistry,
     src: SourceId,
 }
 
-impl<'a, S: StructResult> SignatureDimWalk<'a, S> {
-    /// Start walking `sig` with no dimension variables bound.
-    pub(super) fn new(
-        fn_name: &'a str,
-        sig: &'a FunctionSignature<S>,
-        registry: &'a FormattingRegistry,
-        src: SourceId,
-    ) -> Self {
+/// The dimension a variable is bound to, and the parameter whose argument
+/// bound it.
+struct DimBinding {
+    dimension: Dimension,
+    parameter: crate::syntax::function_name::FnParamName,
+}
+
+impl<'a> SignatureDimWalk<'a> {
+    /// Start walking a call of `fn_name` with no dimension variables bound.
+    pub(super) fn new(fn_name: &'a str, registry: &'a FormattingRegistry, src: SourceId) -> Self {
         Self {
             fn_name,
-            sig,
             bindings: HashMap::new(),
             registry,
             src,
@@ -119,31 +119,28 @@ impl<'a, S: StructResult> SignatureDimWalk<'a, S> {
     ) -> Result<(), SemanticError> {
         if let Some(var) = monomial.as_bare_var() {
             if let Some(bound) = self.bindings.get(var) {
-                if arg_dim != bound {
-                    let bind_param_name = first_binding_param(self.sig, var).ok_or_else(|| {
-                        SemanticError::internal_error(
-                            format!(
-                                "signature for `{}` lost the parameter that binds dimension variable `{var}`",
-                                self.fn_name
-                            ),
-                            self.src,
-                            DiagnosticAnchor::Source(arg_span),
-                        )
-                    })?;
+                if *arg_dim != bound.dimension {
                     return Err(SemanticError::located(
                         self.src,
                         arg_span,
                         DimensionError::DimensionMismatch {
-                            expected: self.registry.dimensions.format_dimension(bound),
+                            expected: self.registry.dimensions.format_dimension(&bound.dimension),
                             found: self.registry.dimensions.format_dimension(arg_dim),
                             help: format!(
-                                "parameter `{param_name}` must have the same dimension as `{bind_param_name}`",
+                                "parameter `{param_name}` must have the same dimension as `{}`",
+                                bound.parameter
                             ),
                         },
                     ));
                 }
             } else {
-                self.bindings.insert(var.clone(), arg_dim.clone());
+                self.bindings.insert(
+                    var.clone(),
+                    DimBinding {
+                        dimension: arg_dim.clone(),
+                        parameter: param_name.clone(),
+                    },
+                );
             }
             return Ok(());
         }
@@ -179,12 +176,12 @@ impl<'a, S: StructResult> SignatureDimWalk<'a, S> {
 fn eval_monomial(
     fn_name: &str,
     monomial: &DimMonomial,
-    bindings: &HashMap<DimBinder, Dimension>,
+    bindings: &HashMap<DimBinder, DimBinding>,
     src: SourceId,
     span: Span,
 ) -> Result<Dimension, SemanticError> {
     monomial
-        .eval(|var| bindings.get(var))
+        .eval(|var| bindings.get(var).map(|binding| &binding.dimension))
         .map_err(|err| match err {
             // A missing binding here means the signature is malformed (a compound
             // use or result without a matching bare binding occurrence) — the
@@ -203,22 +200,6 @@ fn eval_monomial(
         })
 }
 
-/// Find the display name of the first parameter that binds `var` as a bare
-/// variable, for "must have the same dimension as `x`" diagnostics.
-fn first_binding_param<'a, S: StructResult>(
-    sig: &'a FunctionSignature<S>,
-    var: &DimBinder,
-) -> Option<&'a str> {
-    sig.params().iter().find_map(|p| match &p.kind {
-        ParamKind::Scalar(ScalarValueKind::Quantity(monomial))
-            if monomial.as_bare_var() == Some(var) =>
-        {
-            Some(p.name.as_str())
-        }
-        _ => None,
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -226,55 +207,49 @@ mod tests {
     use crate::semantic_error::SemanticErrorKind;
     use crate::syntax::function_name::FnParamName;
 
+    fn quantity_param(
+        signature: &FunctionSignature,
+        position: usize,
+    ) -> (&FnParamName, &DimMonomial) {
+        let param = &signature.params()[position];
+        let ParamKind::Scalar(ScalarValueKind::Quantity(monomial)) = &param.kind else {
+            panic!("expected a quantity parameter");
+        };
+        (&param.name, monomial)
+    }
+
+    /// A mismatch names the parameter whose argument bound the variable,
+    /// whichever kind of parameter it was.
     #[test]
-    fn missing_dimension_binding_parameter_is_an_internal_error() {
-        let signature = FunctionSignature::fixed_to_fixed(
-            FnParamName::expect_valid("declared"),
-            Dimension::dimensionless(),
-            Dimension::dimensionless(),
-        );
+    fn dimension_mismatch_names_the_binding_parameter() {
+        let signature = FunctionSignature::same_dim(&["first", "second"]);
         let registry = crate::display::formatting_registry::FormattingRegistry::new(
             std::collections::BTreeMap::new(),
             Vec::new(),
         );
         let source = crate::source_registry::SourceRegistry::new()
             .register("test.gcl", std::sync::Arc::new("f(1.0, 2.0)".to_string()));
-        let argument_span = Span::new(7, 3);
-        // A binder from a different signature: `signature` has no parameter
-        // binding it.
-        let foreign = FunctionSignature::passthrough("x");
-        let ParamKind::Scalar(ScalarValueKind::Quantity(foreign_monomial)) =
-            &foreign.params()[0].kind
-        else {
-            panic!("passthrough takes a quantity");
-        };
-        let variable = foreign_monomial.as_bare_var().unwrap().clone();
-        let mut walk = SignatureDimWalk::new("f", &signature, &registry, source);
-        walk.bindings = HashMap::from([(
-            variable.clone(),
-            Dimension::base(BaseDimId::Prelude(PreludeBaseDimension::Length)),
-        )]);
-        let argument_dimension = Dimension::base(BaseDimId::Prelude(PreludeBaseDimension::Time));
-
+        let length = Dimension::base(BaseDimId::Prelude(PreludeBaseDimension::Length));
+        let time = Dimension::base(BaseDimId::Prelude(PreludeBaseDimension::Time));
+        let mut walk = SignatureDimWalk::new("f", &registry, source);
+        let (first, monomial) = quantity_param(&signature, 0);
+        walk.check_quantity_param(first, monomial, &length, Span::new(2, 3))
+            .unwrap();
+        let (second, monomial) = quantity_param(&signature, 1);
         let error = walk
-            .check_quantity_param(
-                &FnParamName::expect_valid("value"),
-                &DimMonomial::var(variable),
-                &argument_dimension,
-                argument_span,
-            )
+            .check_quantity_param(second, monomial, &time, Span::new(7, 3))
             .unwrap_err();
-
-        match error {
-            SemanticError::Internal(internal) => assert!(
-                internal
-                    .message()
-                    .contains("lost the parameter that binds dimension variable `D`"),
-                "{}",
-                internal.message()
-            ),
-            other @ SemanticError::Located(_) => panic!("expected internal error, got {other:?}"),
-        }
+        let SemanticError::Located(crate::diagnostic::Diagnostic {
+            kind: SemanticErrorKind::Dimension(DimensionError::DimensionMismatch { help, .. }),
+            ..
+        }) = error
+        else {
+            panic!("expected a dimension mismatch, got {error:?}");
+        };
+        assert_eq!(
+            help,
+            "parameter `second` must have the same dimension as `first`"
+        );
     }
 
     #[test]

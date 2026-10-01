@@ -177,7 +177,7 @@ fn validate(
                         )
                     })?;
                     let ty = substitutions.field_type(semantics.resolved_type(), ctx.src)?;
-                    for bound in semantics.domain_bounds() {
+                    for bound in semantics.domain_bounds().into_iter().flatten() {
                         check_bound(
                             &key,
                             definition,

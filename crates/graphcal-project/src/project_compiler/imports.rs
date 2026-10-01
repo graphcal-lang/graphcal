@@ -5,6 +5,7 @@
     clippy::allow_attributes,
     reason = "project compiler pass uses the shared internal model"
 )]
+use graphcal_compiler::syntax::span::Spanned;
 use std::collections::{HashMap, HashSet};
 
 use graphcal_compiler::declaration_category::{DeclCategory, ValueDeclCategory};
@@ -1583,7 +1584,7 @@ pub(super) fn process_pure_import<'a>(
                     PureImportTermDisposition::BindConstant => {
                         validate_reserved_alias(Namespace::Term, import_item, file_src)?;
                         let canonical = resolved_export
-                            .and_then(|binding| binding.target.declaration())
+                            .and_then(|binding| binding.target.constant())
                             .cloned()
                             .ok_or_else(|| {
                                 PipelineError::Semantic(SemanticError::internal_error(format!(
@@ -1665,31 +1666,23 @@ pub(super) fn process_pure_import<'a>(
 }
 
 fn insert_imported_binding(
-    imported_bindings: &mut HashMap<ScopedName, ResolvedDeclName>,
-    imported_names: &ImportedValueNames,
+    imported_bindings: &mut super::model::ImportedBindings,
     lexical_name: ScopedName,
     binding: ResolvedDeclName,
     src: SourceId,
     span: Span,
 ) -> Result<(), PipelineError> {
-    if imported_bindings.contains_key(&lexical_name) {
-        let first = imported_names
-            .const_names
-            .iter()
-            .chain(&imported_names.param_names)
-            .chain(&imported_names.node_names)
-            .find_map(|(name, first_span)| (name == &lexical_name).then_some(*first_span))
-            .unwrap_or(span);
+    if let Some(first) = imported_bindings.get(&lexical_name) {
         return Err(PipelineError::Semantic(SemanticError::located(
             src,
             span,
             NameError::DuplicateName {
                 name: lexical_name.to_string(),
-                first,
+                first: first.span,
             },
         )));
     }
-    imported_bindings.insert(lexical_name, binding);
+    imported_bindings.insert(lexical_name, Spanned::new(binding, span));
     Ok(())
 }
 
@@ -1700,7 +1693,7 @@ fn import_selective_resolved_item(
     span: Span,
     src: SourceId,
     imported_names: &mut ImportedValueNames,
-    imported_bindings: &mut HashMap<ScopedName, ResolvedDeclName>,
+    imported_bindings: &mut super::model::ImportedBindings,
     imported_source_order: Option<&mut Vec<(ScopedName, DeclCategory)>>,
 ) -> Result<(), PipelineError> {
     let scoped = ScopedName::local(local_name.clone());
@@ -1711,14 +1704,7 @@ fn import_selective_resolved_item(
             DeclCategory::Value(ValueDeclCategory::Const),
         ));
     }
-    insert_imported_binding(
-        imported_bindings,
-        imported_names,
-        scoped,
-        canonical,
-        src,
-        span,
-    )
+    insert_imported_binding(imported_bindings, scoped, canonical, src, span)
 }
 
 /// Import all resolver-visible exported constants under a module prefix.
@@ -1728,7 +1714,7 @@ fn import_module_values_from_resolver(
     import_span: Span,
     src: SourceId,
     imported_names: &mut ImportedValueNames,
-    imported_bindings: &mut HashMap<ScopedName, ResolvedDeclName>,
+    imported_bindings: &mut super::model::ImportedBindings,
     mut imported_source_order: Option<&mut Vec<(ScopedName, DeclCategory)>>,
 ) -> Result<(), PipelineError> {
     for binding in exported_bindings {
@@ -1752,7 +1738,6 @@ fn import_module_values_from_resolver(
         }
         insert_imported_binding(
             imported_bindings,
-            imported_names,
             scoped,
             canonical.clone(),
             src,

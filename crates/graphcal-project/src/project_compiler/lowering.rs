@@ -309,7 +309,7 @@ pub(super) fn lower_file_to_hir(
             },
             file_src,
             &ctx.imported_names,
-            ctx.imported_bindings,
+            super::model::hir_imported_bindings(ctx.imported_bindings),
             file_dag_id,
             semantic.definitions,
             cancellation,
@@ -445,12 +445,7 @@ fn compile_loaded_dag_module_ir(
     )?;
 
     extend_imported_value_names(&mut ctx.imported_names, self_imports.names);
-    extend_imported_bindings(
-        &mut ctx.imported_bindings,
-        self_imports.bindings,
-        &ctx.imported_names,
-        file_src,
-    )?;
+    extend_imported_bindings(&mut ctx.imported_bindings, self_imports.bindings, file_src)?;
 
     let dag_ast = graphcal_compiler::desugar::desugared_ast::File {
         declarations: self_imports.stripped_body,
@@ -469,7 +464,7 @@ fn compile_loaded_dag_module_ir(
                 interface: loaded_dag.interface(),
             },
             &ctx.imported_names,
-            ctx.imported_bindings,
+            super::model::hir_imported_bindings(ctx.imported_bindings),
             file_src,
             loaded_dag.dag_id(),
             semantic.definitions,
@@ -539,39 +534,18 @@ fn extend_imported_value_names(target: &mut ImportedValueNames, source: Imported
 }
 
 fn extend_imported_bindings(
-    target: &mut HashMap<ScopedName, ResolvedDeclName>,
-    source: HashMap<ScopedName, ResolvedDeclName>,
-    imported_names: &ImportedValueNames,
+    target: &mut super::model::ImportedBindings,
+    source: super::model::ImportedBindings,
     src: SourceId,
 ) -> Result<(), PipelineError> {
     for (name, binding) in source {
-        if target.contains_key(&name) {
-            let mut spans = imported_names
-                .const_names
-                .iter()
-                .chain(&imported_names.param_names)
-                .chain(&imported_names.node_names)
-                .filter_map(|(candidate, span)| (candidate == &name).then_some(*span));
-            let Some(first) = spans.next() else {
-                return Err(PipelineError::Semantic(SemanticError::internal_error(
-                    format!("duplicate imported binding `{name}` has no source provenance"),
-                    src,
-                    DiagnosticAnchor::WholeFile,
-                )));
-            };
-            let Some(duplicate) = spans.next_back() else {
-                return Err(PipelineError::Semantic(SemanticError::internal_error(
-                    format!("duplicate imported binding `{name}` has only one source location"),
-                    src,
-                    DiagnosticAnchor::Source(first),
-                )));
-            };
+        if let Some(first) = target.get(&name) {
             return Err(PipelineError::Semantic(SemanticError::located(
                 src,
-                duplicate,
+                binding.span,
                 NameError::DuplicateName {
                     name: name.to_string(),
-                    first,
+                    first: first.span,
                 },
             )));
         }
@@ -750,25 +724,24 @@ fn resolve_projection_expected_fail(
                 ExpectedFail::All => Ok(ExpectedFail::All),
                 ExpectedFail::Variants(keys) => keys
                     .try_map(|key| {
-                        key.into_iter()
-                            .map(|part| match part {
-                                ExpectedFailKeyPart::Named {
-                                    index,
+                        key.try_map(|part| match part {
+                            ExpectedFailKeyPart::Named {
+                                index,
+                                variant,
+                                span,
+                            } => module_resolver
+                                .resolve_index_path(importer, &index)
+                                .map(graphcal_compiler::resolve::symbols::SymbolRef::into_resolved)
+                                .map(|index| ExpectedFailKeyPart::Named {
+                                    index: IndexTypeRef::from_resolved(index),
                                     variant,
                                     span,
-                                } => module_resolver
-                                    .resolve_index_path(importer, &index).map(graphcal_compiler::resolve::symbols::SymbolRef::into_resolved)
-                                    .map(|index| ExpectedFailKeyPart::Named {
-                                        index: IndexTypeRef::from_resolved(index),
-                                        variant,
-                                        span,
-                                    })
-                                    .map_err(|error| module_resolve_compile_error(error, src)),
-                                ExpectedFailKeyPart::FinitePosition { position, span } => {
-                                    Ok(ExpectedFailKeyPart::FinitePosition { position, span })
-                                }
-                            })
-                            .collect::<Result<Vec<_>, PipelineError>>()
+                                })
+                                .map_err(|error| module_resolve_compile_error(error, src)),
+                            ExpectedFailKeyPart::FinitePosition { position, span } => {
+                                Ok(ExpectedFailKeyPart::FinitePosition { position, span })
+                            }
+                        })
                     })
                     .map(ExpectedFail::Variants),
             }
@@ -1039,7 +1012,7 @@ fn elaborate_include_instances(
                                 },
                                 dep_src,
                                 &body_ctx.imported_names,
-                                body_ctx.imported_bindings,
+                                super::model::hir_imported_bindings(body_ctx.imported_bindings),
                                 dep_dag_id,
                                 semantic.definitions,
                                 cancellation,
@@ -1113,7 +1086,6 @@ fn elaborate_include_instances(
                 extend_imported_bindings(
                     &mut imported_bindings,
                     self_imports.bindings,
-                    &body_ctx.imported_names,
                     importer_src,
                 )?;
                 let stripped_body = graphcal_compiler::desugar::desugared_ast::File {
@@ -1132,7 +1104,7 @@ fn elaborate_include_instances(
                                     interface: loaded_inline.interface(),
                                 },
                                 &body_ctx.imported_names,
-                                imported_bindings,
+                                super::model::hir_imported_bindings(imported_bindings),
                                 importer_src,
                                 dag_id,
                                 semantic.definitions,

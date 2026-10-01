@@ -145,7 +145,7 @@ fn selective_import_records_only_the_canonical_hir_target() {
 
     let lexical = ScopedName::local(DeclName::expect_valid("local_g0"));
     assert_eq!(
-        &imported_bindings[&lexical],
+        &imported_bindings[&lexical].value,
         &graphcal_compiler::resolved_name::ResolvedDeclName::for_test(
             owner,
             DeclName::expect_valid("g0"),

@@ -20,11 +20,11 @@ pub fn parse_expected_fail_args(
         .iter()
         .map(|arg| match arg {
             AttributeArg::IndexLabel { index, label, span } => {
-                Ok(vec![ExpectedFailKeyPart::Named {
+                Ok(NonEmpty::singleton(ExpectedFailKeyPart::Named {
                     index: index.value.clone(),
                     variant: label.value.clone(),
                     span: *span,
-                }])
+                }))
             }
             AttributeArg::Path { path } => Err(SemanticError::located(
                 src,
@@ -32,13 +32,13 @@ pub fn parse_expected_fail_args(
                 AttributeError::ExpectedFailInvalidArg,
             )),
             AttributeArg::FinitePosition { position, span } => {
-                Ok(vec![ExpectedFailKeyPart::FinitePosition {
+                Ok(NonEmpty::singleton(ExpectedFailKeyPart::FinitePosition {
                     position: *position,
                     span: *span,
-                }])
+                }))
             }
             AttributeArg::Group { elements, span } => {
-                let key: Result<ParsedExpectedFailKey, SemanticError> = elements
+                let key: Result<Vec<_>, SemanticError> = elements
                     .iter()
                     .map(|elem| match elem {
                         AttributeArg::IndexLabel { index, label, span } => {
@@ -66,16 +66,9 @@ pub fn parse_expected_fail_args(
                         )),
                     })
                     .collect();
-                let key = key?;
-                if key.is_empty() {
-                    Err(SemanticError::located(
-                        src,
-                        *span,
-                        AttributeError::ExpectedFailInvalidArg,
-                    ))
-                } else {
-                    Ok(key)
-                }
+                NonEmpty::try_from_vec(key?).map_err(|_| {
+                    SemanticError::located(src, *span, AttributeError::ExpectedFailInvalidArg)
+                })
             }
         })
         .collect::<Result<_, _>>()?;

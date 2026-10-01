@@ -82,9 +82,8 @@ without asserting independent invocation order.
   rejection of unit overlays without a defining body.
 - An explicit equal-Static specialization test retains distinct runtime instance
   IDs, parameter values, SI results, and dynamic display scales.
-- Required imported constants are distinguished from deferred runtime imports;
-  missing pools/values or a category mismatch fail rather than disappearing or
-  falling back to caller values.
+- Required imported constants with missing pools/values fail rather than
+  disappearing or falling back to caller values.
 
 Independent temporary mutations reintroduced each of: a duplicate shared ID,
 a copied imported unit, a copied imported body, and a copied project type store.

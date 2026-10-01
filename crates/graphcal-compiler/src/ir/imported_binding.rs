@@ -1,20 +1,19 @@
-//! Canonical imported value bindings at the HIR/TIR boundary.
+//! Canonical imported constant bindings at the HIR/TIR boundary.
 //!
-//! HIR records only a lexical binding's canonical target. Checked type facts
-//! are attached when HIR becomes TIR; compile-time values remain in owner
-//! execution-fact stores.
+//! HIR records only a lexical binding's canonical target. Only constants can
+//! be imported as values: every import site binds a resolver export whose
+//! category is a constant declaration. Checked type facts are attached when
+//! HIR becomes TIR; compile-time values remain in owner execution-fact stores.
 
 use crate::resolved_name::ResolvedDeclName;
 use crate::semantic::checked_type::CheckedType;
 
-/// Whether an imported value comes from checked constants or a runtime frame.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ImportedValueKind {
-    Constant,
-    Runtime,
-}
+/// The checked declared type of an imported constant, as published by the
+/// module that defines it, or `None` when no checked interface is available.
+pub type ImportedConstantTypes<'a> = dyn Fn(&ResolvedDeclName) -> Option<CheckedType> + 'a;
 
-/// Checked interface metadata attached to one source-visible imported binding.
+/// Checked interface metadata attached to one source-visible imported
+/// constant.
 ///
 /// Compile-time values are facts of the defining body's checked constant pool,
 /// not mutable fields on this binding. This keeps a published body independent
@@ -23,31 +22,19 @@ pub enum ImportedValueKind {
 pub struct ImportedBinding {
     target: ResolvedDeclName,
     declared_type: CheckedType,
-    kind: ImportedValueKind,
 }
 
 impl ImportedBinding {
-    /// Preserve the checked interface and the authoritative declaration category.
+    /// Preserve the checked interface of the canonical constant.
     #[must_use]
-    pub const fn new(
-        target: ResolvedDeclName,
-        declared_type: CheckedType,
-        kind: ImportedValueKind,
-    ) -> Self {
+    pub const fn new(target: ResolvedDeclName, declared_type: CheckedType) -> Self {
         Self {
             target,
             declared_type,
-            kind,
         }
     }
 
-    /// Select a checked constant pool or a deferred runtime environment.
-    #[must_use]
-    pub const fn kind(&self) -> ImportedValueKind {
-        self.kind
-    }
-
-    /// Canonical declaration selected by this lexical binding.
+    /// Canonical constant declaration selected by this lexical binding.
     #[must_use]
     pub const fn target(&self) -> &ResolvedDeclName {
         &self.target
