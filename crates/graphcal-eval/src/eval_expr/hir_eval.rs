@@ -1399,7 +1399,7 @@ fn eval_dag_call(
     let output_value = dag_values.get(output_key).ok_or_else(|| {
         if let Some(reason) = errors.get(output_key) {
             return GraphcalError::EvaluationUnavailable {
-                reason: reason.clone(), src: ctx.src.clone(), span: output.span.into(),
+                reason: reason.clone(), src: ctx.src, span: output.span.into(),
             };
         }
         ctx.internal_error(
@@ -1519,7 +1519,7 @@ fn check_inline_dag_asserts(
             crate::eval::types::AssertResult::Blocked { reason } => {
                 return Err(GraphcalError::EvaluationUnavailable {
                     reason,
-                    src: ctx.src.clone(),
+                    src: ctx.src,
                     span: call_span.into(),
                 }
                 .into());

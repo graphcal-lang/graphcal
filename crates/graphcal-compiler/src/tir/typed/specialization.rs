@@ -1,9 +1,6 @@
 //! Checked-DAG specialization for semantic include instances.
 
 use std::collections::{BTreeSet, HashMap, HashSet};
-use std::sync::Arc;
-
-use miette::NamedSource;
 
 use super::{
     DagTIR, ProjectTypeStore, ResolvedDeclType, ResolvedDim, ResolvedDimTerm, ResolvedGenericArg,
@@ -24,6 +21,7 @@ use crate::resolved_name::{
     ResolvedDeclName, ResolvedDimName, ResolvedIndexName, ResolvedStructTypeName, ResolvedUnitName,
 };
 use crate::semantic::checked_type::{Concreteness, IndexTypeRef, StructTypeRef};
+use crate::source_id::SourceId;
 use crate::syntax::dimension::UnitName;
 use crate::tir::presentation::DagPresentationFacts;
 
@@ -52,7 +50,7 @@ fn specialize_dimension(
     dimension: &Dimension,
     substitution: &StaticSubstitution,
     types: &ProjectTypeStore,
-    src: &NamedSource<Arc<String>>,
+    src: SourceId,
 ) -> Result<Dimension, GraphcalError> {
     dimension.iter().try_fold(
         Dimension::dimensionless(),
@@ -113,7 +111,7 @@ fn specialize_dim_arg(
     dimension: &ResolvedDim,
     substitution: &StaticSubstitution,
     types: &ProjectTypeStore,
-    src: &NamedSource<Arc<String>>,
+    src: SourceId,
 ) -> Result<ResolvedDim, GraphcalError> {
     match dimension {
         ResolvedDim::Concrete(dimension) => {
@@ -142,7 +140,7 @@ fn specialize_value_type(
     resolved: &ResolvedValueType,
     substitution: &StaticSubstitution,
     types: &ProjectTypeStore,
-    src: &NamedSource<Arc<String>>,
+    src: SourceId,
 ) -> Result<ResolvedValueType, GraphcalError> {
     match resolved {
         ResolvedValueType::Quantity(dimension) => {
@@ -201,7 +199,7 @@ pub fn specialize_type(
     resolved: &ResolvedDeclType,
     substitution: &StaticSubstitution,
     types: &ProjectTypeStore,
-    src: &NamedSource<Arc<String>>,
+    src: SourceId,
 ) -> Result<ResolvedDeclType, GraphcalError> {
     match resolved {
         ResolvedDeclType::Value(value_type) => {
@@ -246,7 +244,7 @@ pub fn specialize_expression_type<V: Concreteness>(
     ty: &crate::semantic::checked_type::CheckedType<V>,
     substitution: &StaticSubstitution,
     tir: &dyn super::TirRead,
-    src: &NamedSource<Arc<String>>,
+    src: SourceId,
 ) -> Result<crate::semantic::checked_type::CheckedType<V>, GraphcalError> {
     use crate::semantic::checked_type::{CheckedGenericArg, CheckedType};
     let recurse = |ty: &CheckedType<V>| specialize_expression_type(ty, substitution, tir, src);
@@ -298,7 +296,7 @@ fn specialize_plot_channel(
     channel: &PlotChannelShape,
     substitution: &StaticSubstitution,
     tir: &UncheckedTir,
-    src: &NamedSource<Arc<String>>,
+    src: SourceId,
 ) -> Result<PlotChannelShape, GraphcalError> {
     let leaf = match channel.leaf() {
         crate::plot_shape::PlotLeafKind::Quantity(dimension) => {
@@ -474,7 +472,7 @@ fn initialize_instance_identity(
 fn specialize_instance_declarations(
     instance: &mut DagTIR,
     edge: &HirInstanceRecord,
-    src: &NamedSource<Arc<String>>,
+    src: SourceId,
 ) -> Result<(), GraphcalError> {
     let owner = edge.instance.id().owner();
     let specialization = edge.instance.specialization();
@@ -527,7 +525,7 @@ fn specialize_dynamic_unit_scales(
     instance: &mut DagTIR,
     specialization: &StaticSpecializationId,
     tir: &UncheckedTir,
-    src: &NamedSource<Arc<String>>,
+    src: SourceId,
 ) -> Result<(), GraphcalError> {
     instance.semantic.dynamic_unit_scales = instance
         .semantic
@@ -559,7 +557,7 @@ fn specialize_instance_semantics(
     instance: &mut DagTIR,
     edge: &HirInstanceRecord,
     tir: &UncheckedTir,
-    src: &NamedSource<Arc<String>>,
+    src: SourceId,
 ) -> Result<(), GraphcalError> {
     let specialization = edge.instance.specialization();
     let specialized = instance
@@ -614,7 +612,7 @@ fn clone_checked_instance(
     parent: &InstanceFrame,
     runtime_units: impl IntoIterator<Item = UnitName>,
     tir: &UncheckedTir,
-    src: &NamedSource<Arc<String>>,
+    src: SourceId,
 ) -> Result<DagTIR, GraphcalError> {
     // An instance rebinding a defaulted dimension port is built from the
     // template's view where that port is rigid, then specialized like a
@@ -672,7 +670,7 @@ fn specialize_instance_presentation_facts(
     tir: &UncheckedTir,
     presentation: &HashMap<crate::dag_id::DagId, DagPresentationFacts>,
     port_generic_plot_channels: &HashMap<crate::dag_id::DagId, PlotChannels>,
-    src: &NamedSource<Arc<String>>,
+    src: SourceId,
 ) -> Result<Vec<(crate::dag_id::DagId, DagPresentationFacts)>, GraphcalError> {
     tir.dags
         .local_iter()
@@ -721,7 +719,7 @@ fn add_plot_projections_for_dag(
     parent: &crate::dag_id::DagId,
     visiting: &mut HashSet<crate::dag_id::DagId>,
     complete: &mut HashSet<crate::dag_id::DagId>,
-    src: &NamedSource<Arc<String>>,
+    src: SourceId,
 ) -> Result<(), GraphcalError> {
     if complete.contains(parent) {
         return Ok(());
@@ -803,7 +801,7 @@ pub fn add_semantic_presentation_facts(
     tir: &UncheckedTir,
     presentation: &mut HashMap<crate::dag_id::DagId, DagPresentationFacts>,
     port_generic_plot_channels: &HashMap<crate::dag_id::DagId, PlotChannels>,
-    src: &NamedSource<Arc<String>>,
+    src: SourceId,
 ) -> Result<(), GraphcalError> {
     let instances =
         specialize_instance_presentation_facts(tir, presentation, port_generic_plot_channels, src)?;
@@ -845,7 +843,7 @@ fn install_semantic_projection_bindings(tir: &mut UncheckedTir) {
 fn instantiate_semantic_edge(
     tir: &mut UncheckedTir,
     edge: &HirInstanceRecord,
-    src: &NamedSource<Arc<String>>,
+    src: SourceId,
 ) -> Result<(), GraphcalError> {
     let owner = edge.instance.id().owner();
     let parent = edge.instance.id().parent();
@@ -928,7 +926,7 @@ fn instantiate_semantic_edge(
 /// signatures, concrete owners, and value-binding environments are specialized.
 pub fn instantiate_semantic_edges(
     tir: &mut UncheckedTir,
-    src: &NamedSource<Arc<String>>,
+    src: SourceId,
 ) -> Result<(), GraphcalError> {
     loop {
         let edges = tir

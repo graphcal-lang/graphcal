@@ -91,7 +91,7 @@ impl Infer<'_> {
                     overridden_kind: "type".to_string(),
                     orphan_decl: reconciliation.orphan_decl().to_string(),
                     detail,
-                    src: reconciliation.src.clone(),
+                    src: reconciliation.src,
                     span: reconciliation.include_span.into(),
                 });
             }
@@ -155,7 +155,7 @@ impl Infer<'_> {
                     overridden_kind: "index".to_string(),
                     orphan_decl: reconciliation.orphan_decl().to_string(),
                     detail,
-                    src: reconciliation.src.clone(),
+                    src: reconciliation.src,
                     span: reconciliation.include_span.into(),
                 });
             }

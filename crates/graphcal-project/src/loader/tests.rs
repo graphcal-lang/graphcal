@@ -459,7 +459,14 @@ fn from_source_keeps_absolute_diagnostic_label_out_of_semantic_identity() {
             .unwrap();
     let root_file = project.root_file();
 
-    assert_eq!(root_file.named_source.name(), "/virtual/project/main.gcl");
+    assert_eq!(
+        project
+            .sources()
+            .named_source(root_file.source_id())
+            .unwrap()
+            .name(),
+        "/virtual/project/main.gcl"
+    );
     assert_eq!(project.root_id().package(), &DagPackageId::new("main"));
     assert_eq!(project.root_id().to_string(), "main");
 }
@@ -1410,7 +1417,7 @@ fn snapshot_fetch_follows_depth_first_load_order_once_per_file() {
         ["main", "b", "c", "d"].map(scripted_path)
     );
     assert_eq!(snapshot.files.len(), 4);
-    let files = build_loaded_files(snapshot).unwrap();
+    let files = build_files(snapshot).unwrap();
     assert_eq!(
         files
             .iter()
@@ -1431,10 +1438,7 @@ fn snapshot_fetch_stops_after_first_unreadable_file() {
 
     assert_eq!(sources.fetched(), ["main", "b"].map(scripted_path));
     assert!(snapshot.files[&scripted_path("b")].is_err());
-    assert!(matches!(
-        build_loaded_files(snapshot),
-        Err(CompileError::Parse(_))
-    ));
+    assert!(matches!(build_files(snapshot), Err(CompileError::Parse(_))));
 }
 
 #[test]
@@ -1447,7 +1451,7 @@ fn snapshot_fetch_skips_unresolved_and_self_paths() {
 
     assert_eq!(sources.fetched(), [scripted_path("main")]);
     assert!(matches!(
-        build_loaded_files(snapshot),
+        build_files(snapshot),
         Err(CompileError::Load(LoadError::ImportFileNotFound { ref path, .. })) if path == "pkg.missing"
     ));
 }
@@ -1523,4 +1527,14 @@ fn project_module_resolution_is_typed_and_span_free() {
         ),
         ModuleResolution::Failed(ResolveFailure::CrossFileImportInVirtualPackage)
     );
+}
+
+/// Build the loaded files of `snapshot`, without its source registry.
+fn build_files<K: super::source_snapshot::SourceKey>(
+    snapshot: super::source_snapshot::SourceSnapshot<K>,
+) -> Result<
+    crate::dependency_ordered::DependencyOrdered<super::loaded_file::LoadedFile>,
+    CompileError,
+> {
+    super::build::build_loaded_files(snapshot).map(|(files, _)| files)
 }

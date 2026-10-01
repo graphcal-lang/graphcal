@@ -1,24 +1,16 @@
 //! Project diagnostics for module-resolution failures.
 
-use std::sync::Arc;
-
-use miette::NamedSource;
-
 use graphcal_compiler::graphcal_error::GraphcalError;
+use graphcal_compiler::source_id::SourceId;
 use graphcal_compiler::syntax::span::Span;
 
-use crate::compile_error::CompileError;
+use crate::compile_error::PipelineError;
 
 /// N001 for a resolver duplicate, rendered with its spelled name.
-fn duplicate_name(
-    name: String,
-    first: Span,
-    duplicate: Span,
-    src: &NamedSource<Arc<String>>,
-) -> CompileError {
-    CompileError::Eval(GraphcalError::DuplicateName {
+fn duplicate_name(name: String, first: Span, duplicate: Span, src: SourceId) -> PipelineError {
+    PipelineError::Semantic(GraphcalError::DuplicateName {
         name,
-        src: src.clone(),
+        src,
         duplicate: duplicate.into(),
         first: first.into(),
     })
@@ -26,34 +18,34 @@ fn duplicate_name(
 
 pub(super) fn module_resolve_compile_error(
     err: graphcal_compiler::resolve::error::ModuleResolveError,
-    src: &NamedSource<Arc<String>>,
-) -> CompileError {
+    src: SourceId,
+) -> PipelineError {
     match err {
         graphcal_compiler::resolve::error::ModuleResolveError::PrivateName {
             owner, name, ..
-        } => CompileError::Eval(GraphcalError::ImportPrivateItem {
+        } => PipelineError::Semantic(GraphcalError::ImportPrivateItem {
             name: name.to_string(),
             file_path: owner.to_string(),
-            src: src.clone(),
-            span: Span::new(0, src.inner().len()).into(),
+            src,
+            span: src.whole_span().into(),
         }),
         graphcal_compiler::resolve::error::ModuleResolveError::WrongImportCategory {
             owner,
             mismatch,
             span,
-        } => CompileError::Eval(GraphcalError::ImportCategoryMismatch {
+        } => PipelineError::Semantic(GraphcalError::ImportCategoryMismatch {
             file_path: owner.to_string(),
             mismatch,
-            src: src.clone(),
+            src,
             span: span.into(),
         }),
         graphcal_compiler::resolve::error::ModuleResolveError::IncludeItemNotProjectable {
             name,
             span,
             ..
-        } => CompileError::Eval(GraphcalError::IncludeItemNotProjectable {
+        } => PipelineError::Semantic(GraphcalError::IncludeItemNotProjectable {
             name: name.to_string(),
-            src: src.clone(),
+            src,
             span: span.into(),
         }),
         graphcal_compiler::resolve::error::ModuleResolveError::ConstructorOwnerRebound {
@@ -61,10 +53,10 @@ pub(super) fn module_resolve_compile_error(
             owner_type,
             span,
             ..
-        } => CompileError::Eval(GraphcalError::IncludeConstructorOwnerRebound {
+        } => PipelineError::Semantic(GraphcalError::IncludeConstructorOwnerRebound {
             constructor: constructor.to_string(),
             owner_type: owner_type.to_string(),
-            src: src.clone(),
+            src,
             span: span.into(),
         }),
         graphcal_compiler::resolve::error::ModuleResolveError::DuplicateSymbol {
@@ -91,10 +83,10 @@ pub(super) fn module_resolve_compile_error(
             duplicate,
             ..
         } => duplicate_name(function.to_string(), first, duplicate, src),
-        other => CompileError::Eval(GraphcalError::EvalError {
+        other => PipelineError::Semantic(GraphcalError::EvalError {
             message: other.to_string(),
-            src: src.clone(),
-            span: Span::new(0, src.inner().len()).into(),
+            src,
+            span: src.whole_span().into(),
         }),
     }
 }

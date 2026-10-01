@@ -25,7 +25,7 @@ impl Infer<'_> {
                         expected: "Int".to_string(),
                         found: format_checked_type(&arg_type, self.env.registry),
                         help: "to_float() requires an Int argument".to_string(),
-                        src: self.env.src.clone(),
+                        src: self.env.src,
                         span: args[0].span.into(),
                     }
                     .into());
@@ -45,7 +45,7 @@ impl Infer<'_> {
                         help: "to_int() extracts positions from Fin-axis keys only; \
                            named and coordinate keys have no ordinal"
                             .to_string(),
-                        src: self.env.src.clone(),
+                        src: self.env.src,
                         span: args[0].span.into(),
                     }
                     .into());
@@ -57,7 +57,7 @@ impl Infer<'_> {
                         expected: "Dimensionless".to_string(),
                         found: self.env.registry.dimensions.format_dimension(&dim),
                         help: "to_int() requires a Dimensionless argument".to_string(),
-                        src: self.env.src.clone(),
+                        src: self.env.src,
                         span: args[0].span.into(),
                     }
                     .into());
@@ -72,7 +72,7 @@ impl Infer<'_> {
                         help: "coord() extracts the coordinate quantity of a \
                            coordinate-axis key"
                             .to_string(),
-                        src: self.env.src.clone(),
+                        src: self.env.src,
                         span: args[0].span.into(),
                     }
                     .into());
@@ -84,7 +84,7 @@ impl Infer<'_> {
                         help: "coord() applies to coordinate-axis keys only; named \
                            keys are opaque and Fin keys expose to_int()"
                             .to_string(),
-                        src: self.env.src.clone(),
+                        src: self.env.src,
                         span: args[0].span.into(),
                     }
                     .into());
@@ -93,7 +93,7 @@ impl Infer<'_> {
                     crate::tir::dim_check::infer::index_def_for_inferred(index, self.env.tir)
                         .ok_or_else(|| GraphcalError::UnknownIndex {
                             name: index.display_name(),
-                            src: self.env.src.clone(),
+                            src: self.env.src,
                             span: args[0].span.into(),
                         })?;
                 index_def
@@ -106,7 +106,7 @@ impl Infer<'_> {
                                 help: "coord() applies to coordinate-axis keys only; named \
                                keys are opaque and Fin keys expose to_int()"
                                     .to_string(),
-                                src: self.env.src.clone(),
+                                src: self.env.src,
                                 span: args[0].span.into(),
                             })
                         },
@@ -129,7 +129,7 @@ impl Infer<'_> {
                 expected: "Datetime".to_string(),
                 found: format_checked_type(&arg_type, self.env.registry),
                 help: format!("{}() requires a Datetime argument", name.as_str()),
-                src: self.env.src.clone(),
+                src: self.env.src,
                 span: args[0].span.into(),
             }
             .into());
@@ -158,7 +158,7 @@ impl Infer<'_> {
                         found: format_checked_type(&found, self.env.registry),
                         help: "datetime() requires a contextual datetime string literal"
                             .to_string(),
-                        src: self.env.src.clone(),
+                        src: self.env.src,
                         span: args[0].span.into(),
                     }
                     .into());
@@ -170,7 +170,7 @@ impl Infer<'_> {
                         found: format_checked_type(&found, self.env.registry),
                         help: "datetime() second argument must be an IANA timezone literal"
                             .to_string(),
-                        src: self.env.src.clone(),
+                        src: self.env.src,
                         span: args[1].span.into(),
                     }
                     .into());
@@ -189,8 +189,8 @@ impl Infer<'_> {
                     return Err(GraphcalError::InternalError {
                         message: "resolved datetime timezone does not match its source argument"
                             .to_string(),
-                        src: self.env.src.clone(),
-                        span: span.into(),
+                        src: self.env.src,
+                        anchor: crate::diagnostic_anchor::DiagnosticAnchor::Source(span),
                     }
                     .into());
                 }
@@ -206,7 +206,7 @@ impl Infer<'_> {
                         expected: "scale-free datetime literal".to_string(),
                         found: format_checked_type(&found, self.env.registry),
                         help: "epoch<S>() requires one civil datetime string literal".to_string(),
-                        src: self.env.src.clone(),
+                        src: self.env.src,
                         span: args[0].span.into(),
                     }
                     .into());
@@ -217,8 +217,8 @@ impl Infer<'_> {
                     .ok_or_else(|| GraphcalError::InternalError {
                         message: "epoch call reached type inference without a static time scale"
                             .to_string(),
-                        src: self.env.src.clone(),
-                        span: span.into(),
+                        src: self.env.src,
+                        anchor: crate::diagnostic_anchor::DiagnosticAnchor::Source(span),
                     })
                     .map_err(Outcome::Failed)
             }
@@ -246,7 +246,7 @@ impl Infer<'_> {
                 expected: "Datetime".to_string(),
                 found: format_checked_type(&arg_type, self.env.registry),
                 help: format!("{}() requires a Datetime argument", name.as_str()),
-                src: self.env.src.clone(),
+                src: self.env.src,
                 span: args[0].span.into(),
             }
             .into());

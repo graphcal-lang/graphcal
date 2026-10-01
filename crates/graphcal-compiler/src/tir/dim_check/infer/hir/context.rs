@@ -3,9 +3,7 @@
 use crate::hir::expr::{Expr, LocalEnv};
 use crate::outcome::Outcome;
 use crate::resolved_name::ResolvedDeclName;
-use std::sync::Arc;
-
-use miette::NamedSource;
+use crate::source_id::SourceId;
 
 use crate::display::formatting_registry::FormattingRegistry;
 use crate::expression_id::ExprId;
@@ -22,7 +20,7 @@ pub(in crate::tir::dim_check) struct InferEnv<'a> {
     pub(in crate::tir::dim_check) dag: &'a crate::tir::typed::DagTIR,
     pub(in crate::tir::dim_check) tir: &'a dyn crate::tir::typed::TirRead,
     pub(in crate::tir::dim_check) registry: &'a FormattingRegistry,
-    pub(in crate::tir::dim_check) src: &'a NamedSource<Arc<String>>,
+    pub(in crate::tir::dim_check) src: SourceId,
 }
 
 impl<'a> InferEnv<'a> {

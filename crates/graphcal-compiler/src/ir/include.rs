@@ -1,9 +1,6 @@
 //! Include assembly and typed substitution for unfrozen per-DAG IR.
 
 use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
-
-use miette::NamedSource;
 
 use crate::declaration_category::DeclCategory;
 use crate::desugar::desugared_ast::{Expr, ExprKind, TypeExpr};
@@ -14,6 +11,7 @@ use crate::ir::instance::{
     InstanceAssertionProjection, InstancePlotProjection, InstanceRecord, InstanceValueProjection,
 };
 use crate::resolved_name::ResolvedDeclName;
+use crate::source_id::SourceId;
 use crate::syntax::decl_name::DeclName;
 use crate::syntax::dimension::{UnitName, UnitRef};
 use crate::syntax::index_name::IndexName;
@@ -109,7 +107,7 @@ impl UnfrozenIR {
     pub fn record_semantic_instance(
         &mut self,
         input: SemanticInstanceInput,
-        src: &NamedSource<Arc<String>>,
+        src: SourceId,
         span: Span,
     ) -> Result<(), GraphcalError> {
         if self
@@ -122,8 +120,8 @@ impl UnfrozenIR {
                     "duplicate semantic instance identity `{}`",
                     input.instance.id().owner()
                 ),
-                src: src.clone(),
-                span: span.into(),
+                src,
+                anchor: crate::diagnostic_anchor::DiagnosticAnchor::Source(span),
             });
         }
         self.semantic_instances.push(UnfrozenSemanticInstance {
@@ -263,7 +261,7 @@ impl UnfrozenIR {
         substitution: &crate::ir::static_substitution::StaticSubstitution,
         resolver: &crate::resolve::ModuleResolver,
         dependency_owner: &crate::dag_id::DagId,
-        importer_src: &NamedSource<Arc<String>>,
+        importer_src: SourceId,
         include_span: Span,
     ) -> Result<IncludeOverrideReconciliations, GraphcalError> {
         self.params()
@@ -286,7 +284,7 @@ impl UnfrozenIR {
                         crate::ir::override_reconciliation::OverrideReconciliation::new(
                             param.identity(),
                             substitution,
-                            importer_src.clone(),
+                            importer_src,
                             include_span,
                         ),
                     );
@@ -314,7 +312,7 @@ struct NominalOverridePreflight<'a> {
     resolver: &'a crate::resolve::ModuleResolver,
     dependency_owner: &'a crate::dag_id::DagId,
     orphan_decl: &'a DeclName,
-    importer_src: &'a NamedSource<Arc<String>>,
+    importer_src: SourceId,
     include_span: Span,
 }
 
@@ -334,7 +332,7 @@ impl NominalOverridePreflight<'_> {
             overridden_kind: "index".to_string(),
             orphan_decl: self.orphan_decl.to_string(),
             detail,
-            src: self.importer_src.clone(),
+            src: self.importer_src,
             span: self.include_span.into(),
         })
     }
@@ -360,7 +358,7 @@ impl NominalOverridePreflight<'_> {
             overridden_kind: "type".to_string(),
             orphan_decl: self.orphan_decl.to_string(),
             detail,
-            src: self.importer_src.clone(),
+            src: self.importer_src,
             span: self.include_span.into(),
         })
     }

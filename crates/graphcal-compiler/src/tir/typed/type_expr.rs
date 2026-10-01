@@ -1,13 +1,10 @@
-use std::sync::Arc;
-
-use miette::NamedSource;
-
 use crate::desugar::desugared_ast::MulDivOp;
 use crate::dimension::Dimension;
 use crate::graphcal_error::GraphcalError;
 use crate::hir::nominal::{NominalGenericParam, NominalTypeDef};
 use crate::resolve::error::ModuleResolveError;
 use crate::resolved_name::{ResolvedDimName, ResolvedIndexName, ResolvedStructTypeName};
+use crate::source_id::SourceId;
 use crate::syntax::ast::GenericConstraint;
 use crate::syntax::index_name::IndexName;
 use crate::syntax::names::NamePath;
@@ -24,31 +21,27 @@ use super::{
 
 pub(super) fn module_resolve_error(
     err: &ModuleResolveError,
-    src: &NamedSource<Arc<String>>,
+    src: SourceId,
     span: Span,
 ) -> GraphcalError {
     GraphcalError::EvalError {
         message: err.to_string(),
-        src: src.clone(),
+        src,
         span: span.into(),
     }
 }
 
-pub(super) fn internal_error(
-    message: String,
-    src: &NamedSource<Arc<String>>,
-    span: Span,
-) -> GraphcalError {
+pub(super) const fn internal_error(message: String, src: SourceId, span: Span) -> GraphcalError {
     GraphcalError::InternalError {
         message,
-        src: src.clone(),
-        span: span.into(),
+        src,
+        anchor: crate::diagnostic_anchor::DiagnosticAnchor::Source(span),
     }
 }
 
 #[derive(Clone, Copy)]
 struct HirTypeResolutionContext<'a> {
-    src: &'a NamedSource<Arc<String>>,
+    src: SourceId,
     project_types: &'a ProjectTypeStore,
 }
 
@@ -61,7 +54,7 @@ struct HirTypeResolutionContext<'a> {
 /// source-path lookup itself.
 pub fn resolve_hir_decl_type(
     decl_type: &crate::hir::types::DeclType,
-    src: &NamedSource<Arc<String>>,
+    src: SourceId,
     module_ctx: ModuleTypeContext<'_>,
 ) -> Result<ResolvedDeclType, GraphcalError> {
     resolve_hir_decl_type_with_project_types(decl_type, src, module_ctx.types)
@@ -69,7 +62,7 @@ pub fn resolve_hir_decl_type(
 
 pub(super) fn resolve_hir_decl_type_with_project_types(
     decl_type: &crate::hir::types::DeclType,
-    src: &NamedSource<Arc<String>>,
+    src: SourceId,
     project_types: &ProjectTypeStore,
 ) -> Result<ResolvedDeclType, GraphcalError> {
     let ctx = HirTypeResolutionContext { src, project_types };
@@ -143,7 +136,7 @@ fn hir_dimension(
         .cloned()
         .ok_or_else(|| GraphcalError::UnknownDimension {
             name: NamePath::from(name.atom().clone()),
-            src: ctx.src.clone(),
+            src: ctx.src,
             span: span.into(),
         })
 }
@@ -158,7 +151,7 @@ fn hir_index_name(
     } else {
         Err(GraphcalError::UnknownIndex {
             name: name.to_unowned_def_name().into(),
-            src: ctx.src.clone(),
+            src: ctx.src,
             span: span.into(),
         })
     }
@@ -173,7 +166,7 @@ fn hir_struct_type_def<'a>(
         .get_struct_type(name)
         .ok_or_else(|| GraphcalError::UnknownStructType {
             name: name.to_string(),
-            src: ctx.src.clone(),
+            src: ctx.src,
             span: span.into(),
         })
 }
@@ -205,12 +198,12 @@ fn resolve_hir_dim_expr(
                 return Err(GraphcalError::InternalError {
                     message: "generic dimension term reached concrete dimension folding"
                         .to_string(),
-                    src: ctx.src.clone(),
-                    span: dim_expr.span.into(),
+                    src: ctx.src,
+                    anchor: crate::diagnostic_anchor::DiagnosticAnchor::Source(dim_expr.span),
                 });
             };
             let overflow_err = || GraphcalError::DimensionOverflow {
-                src: ctx.src.clone(),
+                src: ctx.src,
                 span: dim_expr.span.into(),
             };
             let powered = dim.pow(*power).map_err(|_| overflow_err())?;
@@ -272,7 +265,7 @@ fn check_type_application_arity(
     type_def: &NominalTypeDef,
     arg_count: usize,
     span: Span,
-    src: &NamedSource<Arc<String>>,
+    src: SourceId,
 ) -> Result<(), GraphcalError> {
     let total_params = type_def.generic_params().len();
     let required_count = type_def
@@ -290,7 +283,7 @@ fn check_type_application_arity(
             message: format!(
                 "type `{type_name}` expects {hint} generic argument(s), got {arg_count}"
             ),
-            src: src.clone(),
+            src,
             span: span.into(),
         });
     }
@@ -323,7 +316,7 @@ fn resolve_hir_type_application(
                 "internal: generic parameter `{}` has no default",
                 param.name()
             ),
-            src: ctx.src.clone(),
+            src: ctx.src,
             span: type_ann.span.into(),
         })?;
         // A default may name earlier parameters; instantiate it with the
@@ -345,7 +338,7 @@ fn resolve_hir_type_application(
 pub(super) fn resolve_hir_generic_arg(
     param: &NominalGenericParam,
     arg: &crate::hir::types::GenericArg,
-    src: &NamedSource<Arc<String>>,
+    src: SourceId,
     module_ctx: ModuleTypeContext<'_>,
 ) -> Result<ResolvedGenericArg, GraphcalError> {
     resolve_hir_generic_arg_for_param(

@@ -6,7 +6,6 @@
 //! in display strings.
 
 use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
 
 use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
 use graphcal_compiler::graphcal_error::GraphcalError;
@@ -15,12 +14,12 @@ use graphcal_compiler::semantic::checked_type::{
 };
 use graphcal_compiler::semantic::index_def::{ConcreteIndexKind, FiniteIndex};
 use graphcal_compiler::semantic::time_scale::TimeScale;
+use graphcal_compiler::source_id::SourceId;
 
 use graphcal_compiler::syntax::index_name::IndexVariantName;
 use graphcal_compiler::syntax::non_empty::NonEmptyUnique;
 use graphcal_compiler::syntax::type_name::{ConstructorName, FieldName};
 use graphcal_eval::runtime_value::IndexAxis;
-use miette::NamedSource;
 
 /// Concrete fixed-axis schema retained by the generic model interface.
 #[derive(Debug, Clone, PartialEq)]
@@ -364,7 +363,7 @@ fn collect_schema_type_refs<'schema>(
 
 pub(super) struct ModelSchemaGraphBuilder<'a> {
     tir: &'a graphcal_compiler::tir::typed::CheckedTir,
-    source: &'a NamedSource<Arc<String>>,
+    source: SourceId,
     graph: ModelSchemaGraph,
     building: HashSet<ModelTypeId>,
 }
@@ -372,7 +371,7 @@ pub(super) struct ModelSchemaGraphBuilder<'a> {
 impl<'a> ModelSchemaGraphBuilder<'a> {
     pub(super) fn new(
         tir: &'a graphcal_compiler::tir::typed::CheckedTir,
-        source: &'a NamedSource<Arc<String>>,
+        source: SourceId,
     ) -> Self {
         Self {
             tir,
@@ -498,7 +497,7 @@ fn model_quantity_schema(
 fn model_index_schema(
     index: &IndexTypeRef,
     tir: &graphcal_compiler::tir::typed::CheckedTir,
-    source: &NamedSource<Arc<String>>,
+    source: SourceId,
 ) -> Result<ModelIndexSchema, GraphcalError> {
     if let Some(finite) = index.finite_index() {
         return Ok(ModelIndexSchema {

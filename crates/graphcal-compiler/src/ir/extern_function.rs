@@ -2,12 +2,10 @@
 //! the rule that merges repeated declarations of one plugin function.
 
 use std::collections::HashMap;
-use std::sync::Arc;
-
-use miette::NamedSource;
 
 use crate::extern_struct_result::ExternStructResult;
 use crate::graphcal_error::GraphcalError;
+use crate::source_id::SourceId;
 use crate::syntax::span::Span;
 
 /// A resolved extern function declared by an `import plugin` block.
@@ -72,7 +70,7 @@ impl ExternFunctionEntry {
 pub(crate) fn merge_extern_function(
     map: &mut HashMap<crate::plugin_identity::ExternFnKey, ExternFunctionEntry>,
     entry: ExternFunctionEntry,
-    src: &NamedSource<Arc<String>>,
+    src: SourceId,
 ) -> Result<(), GraphcalError> {
     use std::collections::hash_map::Entry;
 
@@ -87,7 +85,7 @@ pub(crate) fn merge_extern_function(
                         "function `{}` of plugin \"{}\" is declared elsewhere with a different signature",
                         entry.name, entry.plugin
                     ),
-                    src: src.clone(),
+                    src,
                     span: entry.decl_span.into(),
                 });
             }
@@ -103,7 +101,7 @@ pub(crate) fn merge_extern_function(
                         "function `{}` of plugin \"{}\" is declared elsewhere with a different result type",
                         entry.name, entry.plugin
                     ),
-                    src: src.clone(),
+                    src,
                     span: entry.decl_span.into(),
                 });
             }

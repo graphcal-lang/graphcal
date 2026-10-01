@@ -2,9 +2,7 @@
 
 use crate::hir::expr::{Expr, ForBinding, ForBindingIndex, IndexArg};
 use crate::outcome::Outcome;
-use std::sync::Arc;
-
-use miette::NamedSource;
+use crate::source_id::SourceId;
 
 use crate::diagnostic_anchor::DiagnosticAnchor;
 use crate::graphcal_error::GraphcalError;
@@ -46,7 +44,7 @@ impl Infer<'_> {
                     crate::tir::dim_check::infer::index_def_for_inferred(&identity, self.env.tir)
                         .ok_or_else(|| GraphcalError::UnknownIndex {
                         name: identity.display_name(),
-                        src: self.env.src.clone(),
+                        src: self.env.src,
                         span: index.span.into(),
                     })?;
                 let finite_form = idx_def.finite_index_size().map(NatPolyForm::from_constant);
@@ -67,7 +65,7 @@ impl Infer<'_> {
                               qualified labels and coordinate keys come from argmax/argmin or \
                               the coordinate searches"
                             .to_string(),
-                        src: self.env.src.clone(),
+                        src: self.env.src,
                         span: axis_span.into(),
                     }
                     .into());
@@ -77,7 +75,7 @@ impl Infer<'_> {
                         expected: "a static Nat position".to_string(),
                         found: format_checked_type(&arg_type, self.env.registry),
                         help: "key(Fin(N), position) takes an integer position".to_string(),
-                        src: self.env.src.clone(),
+                        src: self.env.src,
                         span: arg.span.into(),
                     }
                     .into());
@@ -87,7 +85,7 @@ impl Infer<'_> {
                         message: "key() requires a static position; use fin_key() for a \
                               runtime-checked position"
                             .to_string(),
-                        src: self.env.src.clone(),
+                        src: self.env.src,
                         span: arg.span.into(),
                     }
                     .into());
@@ -95,7 +93,7 @@ impl Infer<'_> {
                 if position < 0 {
                     return Err(GraphcalError::EvalError {
                         message: format!("key() position evaluated to negative value: {position}"),
-                        src: self.env.src.clone(),
+                        src: self.env.src,
                         span: arg.span.into(),
                     }
                     .into());
@@ -109,7 +107,7 @@ impl Infer<'_> {
                                 "key() position {position} is out of bounds for {}",
                                 IndexDisplayName::Finite(form.clone())
                             ),
-                            src: self.env.src.clone(),
+                            src: self.env.src,
                             span: arg.span.into(),
                         }
                         .into());
@@ -136,7 +134,7 @@ impl Infer<'_> {
                         message: format!(
                             "fin_key() requires a Fin(...) axis, got `{index_identity}`"
                         ),
-                        src: self.env.src.clone(),
+                        src: self.env.src,
                         span: axis_span.into(),
                     }
                     .into());
@@ -148,7 +146,7 @@ impl Infer<'_> {
                         help: "fin_key(Fin(N), position) takes an Int position, checked at \
                            runtime"
                             .to_string(),
-                        src: self.env.src.clone(),
+                        src: self.env.src,
                         span: arg.span.into(),
                     }
                     .into());
@@ -172,7 +170,7 @@ impl Infer<'_> {
                                 kind.as_str(),
                                 index_identity
                             ),
-                            src: self.env.src.clone(),
+                            src: self.env.src,
                             span: axis_span.into(),
                         }
                         .into());
@@ -185,7 +183,7 @@ impl Infer<'_> {
                         expected: self.env.registry.dimensions.format_dimension(&dimension),
                         found: self.env.registry.dimensions.format_dimension(&arg_dim),
                         help: format!("{}() takes a quantity in the axis dimension", kind.as_str()),
-                        src: self.env.src.clone(),
+                        src: self.env.src,
                         span: arg.span.into(),
                     }
                     .into());
@@ -213,7 +211,7 @@ impl Infer<'_> {
                     )
                     .ok_or_else(|| GraphcalError::UnknownIndex {
                         name: index_identity.display_name(),
-                        src: self.env.src.clone(),
+                        src: self.env.src,
                         span: index.span.into(),
                     })?;
                     CheckedType::Key(index_identity)
@@ -250,7 +248,7 @@ impl Infer<'_> {
 fn finite_axis_form(
     index: &IndexTypeRef<Symbolic>,
     declared_definition: Option<&crate::semantic::index_def::IndexDef>,
-    src: &NamedSource<Arc<String>>,
+    src: SourceId,
     span: Span,
 ) -> Result<Option<NatPolyForm>, GraphcalError> {
     match index {
@@ -285,7 +283,7 @@ impl Infer<'_> {
             let CheckedType::Indexed { element, index } = current else {
                 return Err(GraphcalError::EvalError {
                     message: "indexing a non-indexed value".to_string(),
-                    src: self.env.src.clone(),
+                    src: self.env.src,
                     span: expr.span.into(),
                 }
                 .into());
@@ -301,7 +299,7 @@ impl Infer<'_> {
                         return Err(GraphcalError::IndexMismatch {
                             expected: index.display_name(),
                             found: arg_index.display_name(),
-                            src: self.env.src.clone(),
+                            src: self.env.src,
                             span: variant.path_span().into(),
                         }
                         .into());
@@ -311,7 +309,7 @@ impl Infer<'_> {
                     let Some(var_type) = self.locals.get(local.value) else {
                         return Err(GraphcalError::UnknownLocalRef {
                             name: format!("#{}", local.value.index()),
-                            src: self.env.src.clone(),
+                            src: self.env.src,
                             span: local.span.into(),
                         }
                         .into());
@@ -338,7 +336,7 @@ impl Infer<'_> {
                                 return Err(GraphcalError::IndexMismatch {
                                     expected: index.display_name(),
                                     found: key_index.display_name(),
-                                    src: self.env.src.clone(),
+                                    src: self.env.src,
                                     span: local.span.into(),
                                 }
                                 .into());
@@ -349,7 +347,7 @@ impl Infer<'_> {
                                 message: format!(
                                     "quantity local cannot index into coordinate index `{index}`; use that coordinate index's loop variable"
                                 ),
-                                src: self.env.src.clone(),
+                                src: self.env.src,
                                 span: local.span.into(),
                             }.into());
                         }
@@ -359,7 +357,7 @@ impl Infer<'_> {
                                     "`#{}` is not a valid index variable",
                                     local.value.index()
                                 ),
-                                src: self.env.src.clone(),
+                                src: self.env.src,
                                 span: local.span.into(),
                             }
                             .into());
@@ -386,7 +384,7 @@ impl Infer<'_> {
                             return Err(GraphcalError::IndexMismatch {
                                 expected: index.display_name(),
                                 found: key_index.display_name(),
-                                src: self.env.src.clone(),
+                                src: self.env.src,
                                 span: index_expr.span.into(),
                             }
                             .into());
@@ -399,7 +397,7 @@ impl Infer<'_> {
                             message: format!(
                                 "integer expression cannot index into non-finite-index index `{index}`"
                             ),
-                            src: self.env.src.clone(),
+                            src: self.env.src,
                             span: index_expr.span.into(),
                         }.into());
                     };
@@ -414,7 +412,7 @@ impl Infer<'_> {
                                         "a runtime Int cannot index `{index}` implicitly; write \
                                      `fin_key({index}, ...)` to make the range check explicit",
                                     ),
-                                    src: self.env.src.clone(),
+                                    src: self.env.src,
                                     span: index_expr.span.into(),
                                 }
                                 .into());
@@ -439,7 +437,7 @@ impl Infer<'_> {
                                     "index expression must be an integer type, got {}",
                                     format_checked_type(&expr_type, self.env.registry)
                                 ),
-                                src: self.env.src.clone(),
+                                src: self.env.src,
                                 span: index_expr.span.into(),
                             }
                             .into());
@@ -457,12 +455,12 @@ fn check_constant_finite_index_index(
     index: i64,
     index_span: Span,
     index_form: &NatPolyForm,
-    src: &NamedSource<Arc<String>>,
+    src: SourceId,
 ) -> Result<u64, GraphcalError> {
     let Ok(index_u64) = u64::try_from(index) else {
         return Err(GraphcalError::EvalError {
             message: format!("index expression evaluated to negative value: {index}"),
-            src: src.clone(),
+            src,
             span: index_span.into(),
         });
     };
@@ -476,7 +474,7 @@ fn check_constant_finite_index_index(
                 "index {index} out of bounds for {}",
                 IndexDisplayName::Finite(index_form.clone())
             ),
-            src: src.clone(),
+            src,
             span: index_span.into(),
         });
     }
@@ -493,24 +491,26 @@ mod finite_axis_form_tests {
 
     #[test]
     fn structural_finite_axis_does_not_require_a_registry_definition() {
-        let source = NamedSource::new("test.gcl", Arc::new(String::new()));
+        let source = crate::source_registry::SourceRegistry::new()
+            .register("test.gcl", std::sync::Arc::new(String::new()));
         let form = NatPolyForm::from_constant(5);
         let index = IndexTypeRef::from_finite_index_form(form.clone()).unwrap();
 
         assert_eq!(
-            finite_axis_form(&index, None, &source, Span::new(0, 0)).unwrap(),
+            finite_axis_form(&index, None, source, Span::new(0, 0)).unwrap(),
             Some(form)
         );
     }
 
     #[test]
     fn declared_axis_without_a_semantic_definition_is_an_internal_error() {
-        let source = NamedSource::new("test.gcl", Arc::new("values[key]".to_string()));
+        let source = crate::source_registry::SourceRegistry::new()
+            .register("test.gcl", std::sync::Arc::new("values[key]".to_string()));
         let owner = DagId::from_virtual_relative_path(Path::new("test.gcl")).unwrap();
         let resolved = ResolvedIndexName::for_test(owner, IndexName::expect_valid("Missing"));
         let index = IndexTypeRef::from_resolved(resolved);
 
-        let error = finite_axis_form(&index, None, &source, Span::new(7, 3)).unwrap_err();
+        let error = finite_axis_form(&index, None, source, Span::new(7, 3)).unwrap_err();
         match error {
             GraphcalError::InternalError { message, .. } => assert!(
                 message.contains(

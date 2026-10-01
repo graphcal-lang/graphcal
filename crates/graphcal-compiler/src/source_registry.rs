@@ -39,7 +39,7 @@ impl SourceRegistry {
 
     /// Register a source text under its display name.
     pub fn register(&mut self, name: impl AsRef<str>, text: Arc<String>) -> SourceId {
-        let id = SourceId::new(self.identity, self.sources.len());
+        let id = SourceId::new(self.identity, self.sources.len(), text.len());
         self.sources.push(NamedSource::new(name, text));
         id
     }
@@ -54,6 +54,19 @@ impl SourceRegistry {
             return Err(ForeignSourceId);
         }
         self.sources.get(id.index()).ok_or(ForeignSourceId)
+    }
+}
+
+impl SourceRegistry {
+    /// The named source registered as `id`, for rendering; an id this
+    /// registry did not issue renders against an empty, explicitly unknown
+    /// source instead of an unrelated one.
+    #[must_use]
+    pub fn renderable(&self, id: SourceId) -> NamedSource<Arc<String>> {
+        self.named_source(id).map_or_else(
+            |ForeignSourceId| NamedSource::new("<unknown source>", Arc::new(String::new())),
+            Clone::clone,
+        )
     }
 }
 

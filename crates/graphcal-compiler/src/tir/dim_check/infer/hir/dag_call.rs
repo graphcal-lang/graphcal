@@ -31,7 +31,7 @@ impl Infer<'_> {
             .dag(&target.value)
             .ok_or_else(|| GraphcalError::UnknownDag {
                 name: display_path.clone(),
-                src: self.env.src.clone(),
+                src: self.env.src,
                 span: target.span.into(),
             })?;
 
@@ -66,7 +66,7 @@ impl Infer<'_> {
                 GraphcalError::UnknownDagParam {
                     name: target_key.as_str().to_string(),
                     dag_name: display_path.clone(),
-                    src: self.env.src.clone(),
+                    src: self.env.src,
                     span: binding.target.span.into(),
                 }
             })?;
@@ -87,7 +87,7 @@ impl Infer<'_> {
                     param_name: target_key.as_str().to_string(),
                     expected: expected.format(self.env.registry),
                     found: format_checked_type(&found, self.env.registry),
-                    src: self.env.src.clone(),
+                    src: self.env.src,
                     span: binding.value.span.into(),
                 }
                 .into());
@@ -104,7 +104,7 @@ impl Infer<'_> {
             return Err(GraphcalError::MissingDagBindings {
                 missing,
                 dag_name: display_path.clone(),
-                src: self.env.src.clone(),
+                src: self.env.src,
                 span: expr.span.into(),
             }
             .into());
@@ -117,7 +117,7 @@ impl Infer<'_> {
             .ok_or_else(|| GraphcalError::UnknownDagOutput {
                 name: output_key.as_str().to_string(),
                 dag_name: display_path.clone(),
-                src: self.env.src.clone(),
+                src: self.env.src,
                 span: output.span.into(),
             })?;
         let output_name = output_key.as_str();
@@ -128,7 +128,7 @@ impl Infer<'_> {
             return Err(GraphcalError::ImportPrivateItem {
                 name: output_name.to_string(),
                 file_path: display_path,
-                src: self.env.src.clone(),
+                src: self.env.src,
                 span: output.span.into(),
             }
             .into());

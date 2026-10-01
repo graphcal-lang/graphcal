@@ -1,23 +1,17 @@
 //! Conversions from HIR lowering diagnostics to spanned [`GraphcalError`]s.
 
-use std::sync::Arc;
-
-use miette::NamedSource;
-
 use crate::desugar::desugared_ast::{TypeExpr, TypeExprKind};
 use crate::graphcal_error::GraphcalError;
 use crate::hir::expr_lower::error::ExprLowerError;
 use crate::hir::lower::{HirLowerError, TypePathSlot};
 use crate::resolve::category::SymbolTable;
 use crate::resolve::error::{ModuleResolveError, NameCategory};
+use crate::source_id::SourceId;
 use crate::syntax::index_name::IndexName;
 use crate::syntax::names::NamePath;
 
 /// Reject source-only type syntax that has no valid HIR representation.
-pub fn validate_type_annotation(
-    type_expr: &TypeExpr,
-    src: &NamedSource<Arc<String>>,
-) -> Result<(), GraphcalError> {
+pub fn validate_type_annotation(type_expr: &TypeExpr, src: SourceId) -> Result<(), GraphcalError> {
     match &type_expr.kind {
         TypeExprKind::Indexed { base, .. } => validate_type_annotation(base, src),
         TypeExprKind::TypeApplication { generic_args, .. } => {
@@ -30,7 +24,7 @@ pub fn validate_type_annotation(
         TypeExprKind::DatetimeApplication { type_args } => type_args.iter().try_for_each(|arg| {
             if let Some(bound) = arg.constraints.first() {
                 return Err(GraphcalError::GenericTypeArgDomainConstraint {
-                    src: src.clone(),
+                    src,
                     span: bound.span.into(),
                 });
             }
@@ -47,13 +41,13 @@ pub fn validate_type_annotation(
 
 fn validate_generic_args<'a>(
     generic_args: impl IntoIterator<Item = &'a crate::desugar::desugared_ast::GenericArg>,
-    src: &NamedSource<Arc<String>>,
+    src: SourceId,
 ) -> Result<(), GraphcalError> {
     generic_args.into_iter().try_for_each(|arg| match arg {
         crate::desugar::desugared_ast::GenericArg::Type(type_expr) => {
             if let Some(bound) = type_expr.constraints.first() {
                 return Err(GraphcalError::GenericTypeArgDomainConstraint {
-                    src: src.clone(),
+                    src,
                     span: bound.span.into(),
                 });
             }
@@ -69,22 +63,19 @@ fn validate_generic_args<'a>(
 ///
 /// An unknown path in an index axis or a dimension term is reported as the
 /// missing index or dimension; its slot says which namespace was searched.
-pub fn type_lower_error_to_graphcal(
-    err: &HirLowerError,
-    src: &NamedSource<Arc<String>>,
-) -> GraphcalError {
+pub fn type_lower_error_to_graphcal(err: &HirLowerError, src: SourceId) -> GraphcalError {
     if let HirLowerError::UnknownTypePath { path, slot, span } = err
         && let Some(atom) = path.as_bare()
     {
         return match slot {
             TypePathSlot::IndexAxis => GraphcalError::UnknownIndex {
                 name: IndexName::classify(atom.clone()).into(),
-                src: src.clone(),
+                src,
                 span: (*span).into(),
             },
             TypePathSlot::DimensionTerm => GraphcalError::UnknownDimension {
                 name: NamePath::local(atom.clone()),
-                src: src.clone(),
+                src,
                 span: (*span).into(),
             },
         };
@@ -98,15 +89,12 @@ pub fn type_lower_error_to_graphcal(
     reason = "exhaustive mapping from lowering diagnostics to spanned errors"
 )]
 #[must_use]
-pub fn expr_lower_error_to_graphcal(
-    err: &ExprLowerError,
-    src: &NamedSource<Arc<String>>,
-) -> GraphcalError {
+pub fn expr_lower_error_to_graphcal(err: &ExprLowerError, src: SourceId) -> GraphcalError {
     match err {
         ExprLowerError::UnknownFunction { path, span } => {
             return GraphcalError::UnknownFunction {
                 name: path.clone(),
-                src: src.clone(),
+                src,
                 span: (*span).into(),
             };
         }
@@ -114,7 +102,7 @@ pub fn expr_lower_error_to_graphcal(
             return GraphcalError::UnknownExternFunction {
                 alias: alias.clone(),
                 name: name.clone(),
-                src: src.clone(),
+                src,
                 span: (*span).into(),
             };
         }
@@ -132,7 +120,7 @@ pub fn expr_lower_error_to_graphcal(
             return GraphcalError::NamedArgumentsOnFunction {
                 positional_call: format!("{name}({positional_args})"),
                 name,
-                src: src.clone(),
+                src,
                 span: (*span).into(),
             };
         }
@@ -146,28 +134,28 @@ pub fn expr_lower_error_to_graphcal(
                 name: crate::graphcal_error::CalledFunction::Builtin(*name),
                 expected: *expected,
                 got: *got,
-                src: src.clone(),
+                src,
                 span: (*span).into(),
             };
         }
         ExprLowerError::InvalidStaticBindingValue { name, span } => {
             return GraphcalError::InvalidTypeLevelBindingValue {
                 name: name.to_string(),
-                src: src.clone(),
+                src,
                 span: (*span).into(),
             };
         }
         ExprLowerError::UnknownLocalRef { name, span } => {
             return GraphcalError::UnknownLocalRef {
                 name: name.to_string(),
-                src: src.clone(),
+                src,
                 span: (*span).into(),
             };
         }
         ExprLowerError::UnknownGraphRef { name, span } => {
             return GraphcalError::UnknownGraphRef {
                 name: name.clone(),
-                src: src.clone(),
+                src,
                 span: (*span).into(),
             };
         }
@@ -175,21 +163,21 @@ pub fn expr_lower_error_to_graphcal(
             return GraphcalError::BareGraphDeclarationRef {
                 name: name.clone(),
                 kind: *kind,
-                src: src.clone(),
+                src,
                 span: (*span).into(),
             };
         }
         ExprLowerError::TimeScaleInValuePosition { scale, span } => {
             return GraphcalError::TimeScaleInValuePosition {
                 scale: *scale,
-                src: src.clone(),
+                src,
                 span: (*span).into(),
             };
         }
         ExprLowerError::UnknownUnit { name, span } => {
             return GraphcalError::UnknownUnit {
                 name: name.clone(),
-                src: src.clone(),
+                src,
                 span: (*span).into(),
             };
         }
@@ -201,7 +189,7 @@ pub fn expr_lower_error_to_graphcal(
             return GraphcalError::InvalidTimezone {
                 timezone: timezone.clone(),
                 tzdb_version,
-                src: src.clone(),
+                src,
                 span: (*span).into(),
             };
         }
@@ -213,7 +201,7 @@ pub fn expr_lower_error_to_graphcal(
             return GraphcalError::InvalidDatetimeLiteral {
                 expectation: *expectation,
                 reason: reason.clone(),
-                src: src.clone(),
+                src,
                 span: (*span).into(),
             };
         }
@@ -230,7 +218,7 @@ pub fn expr_lower_error_to_graphcal(
                 time_zone: time_zone.clone(),
                 before: *before,
                 after: *after,
-                src: src.clone(),
+                src,
                 datetime_span: (*datetime_span).into(),
                 time_zone_span: (*time_zone_span).into(),
             };
@@ -248,7 +236,7 @@ pub fn expr_lower_error_to_graphcal(
                 time_zone: time_zone.clone(),
                 before: *before,
                 after: *after,
-                src: src.clone(),
+                src,
                 datetime_span: (*datetime_span).into(),
                 time_zone_span: (*time_zone_span).into(),
             };
@@ -260,21 +248,21 @@ pub fn expr_lower_error_to_graphcal(
         } => {
             return GraphcalError::InternalError {
                 message: format!("validated timezone `{time_zone}` could not be loaded: {reason}"),
-                src: src.clone(),
-                span: (*span).into(),
+                src,
+                anchor: crate::diagnostic_anchor::DiagnosticAnchor::Source(*span),
             };
         }
         ExprLowerError::EpochTimeScaleArgumentCount { got, span } => {
             return GraphcalError::EpochTimeScaleArgumentCount {
                 got: *got,
-                src: src.clone(),
+                src,
                 span: (*span).into(),
             };
         }
         ExprLowerError::InvalidEpochTimeScaleArgument { span } => {
             return GraphcalError::InvalidEpochTimeScaleArgument {
                 expected: crate::semantic::time_scale::TimeScale::expected_names(),
-                src: src.clone(),
+                src,
                 span: (*span).into(),
             };
         }
@@ -282,7 +270,7 @@ pub fn expr_lower_error_to_graphcal(
             return GraphcalError::UnsupportedEpochTimeScale {
                 name: name.clone(),
                 expected: crate::semantic::time_scale::TimeScale::expected_names(),
-                src: src.clone(),
+                src,
                 span: (*span).into(),
             };
         }
@@ -296,7 +284,7 @@ pub fn expr_lower_error_to_graphcal(
                 extra: vec![crate::syntax::index_name::IndexEntryKey::named(
                     variant_name.clone(),
                 )],
-                src: src.clone(),
+                src,
                 span: (*span).into(),
             };
         }
@@ -306,7 +294,7 @@ pub fn expr_lower_error_to_graphcal(
         } => {
             return GraphcalError::UnknownModule {
                 name: alias.to_string(),
-                src: src.clone(),
+                src,
                 span: (*span).into(),
             };
         }
@@ -321,7 +309,7 @@ pub fn expr_lower_error_to_graphcal(
         } => {
             return GraphcalError::GraphRefToAssert {
                 name: name.to_unowned_def_name(),
-                src: src.clone(),
+                src,
                 span: (*span).into(),
             };
         }
@@ -332,7 +320,7 @@ pub fn expr_lower_error_to_graphcal(
             return GraphcalError::ImportPrivateItem {
                 name: name.to_string(),
                 file_path: owner.to_string(),
-                src: src.clone(),
+                src,
                 span: (*span).into(),
             };
         }
@@ -343,7 +331,7 @@ pub fn expr_lower_error_to_graphcal(
             return GraphcalError::UnknownVariant {
                 index_name: index.to_unowned_def_name().into(),
                 variant_name: variant.clone(),
-                src: src.clone(),
+                src,
                 span: (*span).into(),
             };
         }
@@ -358,7 +346,7 @@ pub fn expr_lower_error_to_graphcal(
         } => {
             return GraphcalError::UnknownIndex {
                 name: IndexName::classify(name.clone()).into(),
-                src: src.clone(),
+                src,
                 span: (*span).into(),
             };
         }
@@ -373,14 +361,14 @@ pub fn expr_lower_error_to_graphcal(
         } => {
             return GraphcalError::UnknownLocalRef {
                 name: name.to_string(),
-                src: src.clone(),
+                src,
                 span: (*span).into(),
             };
         }
         ExprLowerError::EmptyParenthesizedConstructor { constructor, span } => {
             return GraphcalError::EmptyParenthesizedConstructor {
                 constructor: constructor.to_unowned_def_name(),
-                src: src.clone(),
+                src,
                 span: (*span).into(),
             };
         }
@@ -420,20 +408,17 @@ pub fn expr_lower_error_to_graphcal(
     };
     GraphcalError::EvalError {
         message: err.to_string(),
-        src: src.clone(),
+        src,
         span: span.into(),
     }
 }
 
 /// Convert a HIR type-lowering failure into a spanned diagnostic.
-pub fn hir_lower_error_to_graphcal(
-    err: &HirLowerError,
-    src: &NamedSource<Arc<String>>,
-) -> GraphcalError {
+pub fn hir_lower_error_to_graphcal(err: &HirLowerError, src: SourceId) -> GraphcalError {
     if let HirLowerError::ExpectedIndexFoundNat { expression, span } = err {
         return GraphcalError::ExpectedIndexFoundNat {
             expression: expression.clone(),
-            src: src.clone(),
+            src,
             span: (*span).into(),
         };
     }
@@ -457,7 +442,7 @@ pub fn hir_lower_error_to_graphcal(
     };
     GraphcalError::EvalError {
         message: err.to_string(),
-        src: src.clone(),
+        src,
         span: span.into(),
     }
 }
@@ -470,13 +455,14 @@ mod tests {
     use crate::syntax::span::Span;
 
     fn unknown(path: NamePath, slot: TypePathSlot) -> GraphcalError {
-        let src = NamedSource::new("main.gcl", Arc::new(String::new()));
+        let src = crate::source_registry::SourceRegistry::new()
+            .register("main.gcl", std::sync::Arc::new(String::new()));
         let error = HirLowerError::UnknownTypePath {
             path,
             slot,
             span: Span::new(2, 3),
         };
-        type_lower_error_to_graphcal(&error, &src)
+        type_lower_error_to_graphcal(&error, src)
     }
 
     fn atom(name: &str) -> NameAtom {

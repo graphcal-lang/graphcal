@@ -13,6 +13,7 @@ use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
 use graphcal_compiler::graphcal_error::GraphcalError;
 use graphcal_compiler::outcome::Outcome;
 use graphcal_compiler::plugin_identity::{ExternFnKey, PluginIdentity};
+use graphcal_compiler::source_registry::SourceRegistry;
 use graphcal_compiler::syntax::ast::ModulePath;
 use graphcal_compiler::syntax::decl_name::DeclName;
 #[cfg(test)]
@@ -277,7 +278,13 @@ impl LoadedProject {
         cancellation: &graphcal_compiler::cancellation::CancellationToken,
     ) -> Result<Self, Outcome<CompileError>> {
         cancellation.checkpoint()?;
-        let parsed = ParsedFile::parse(name, Arc::new(source.to_string()), cancellation)?;
+        let mut sources = SourceRegistry::new();
+        let parsed = ParsedFile::parse(
+            &mut sources,
+            name,
+            Arc::new(source.to_string()),
+            cancellation,
+        )?;
         cancellation.checkpoint()?;
         let path = PathBuf::from(name);
         let stem = file_stem(&path);
@@ -301,11 +308,14 @@ impl LoadedProject {
             _ => path.as_path(),
         };
         let dag_id = DagId::from_virtual_relative_path(semantic_path).map_err(|error| {
-            CompileError::Eval(GraphcalError::internal_error(
-                format!("invalid source name `{name}`: {error}"),
-                &parsed.named_source,
-                DiagnosticAnchor::WholeFile,
-            ))
+            CompileError::semantic(
+                GraphcalError::internal_error(
+                    format!("invalid source name `{name}`: {error}"),
+                    parsed.source_id,
+                    DiagnosticAnchor::WholeFile,
+                ),
+                &sources,
+            )
         })?;
         // No project root or manifest in single-file mode — only the
         // file-stem self-reference (Concept 7) can be detected here.
@@ -322,18 +332,19 @@ impl LoadedProject {
             })
             .collect();
         cancellation.checkpoint()?;
-        let (source, named_source, ast) = parsed.into_parts();
+        let (source, source_id, ast) = parsed.into_parts();
         let loaded_file = LoadedFile::new(
             path,
             dag_id,
             source,
-            named_source,
+            source_id,
             ast,
             HashMap::new(),
             inline_dags,
         );
         Ok(Self::from_parts(
             DependencyOrdered::root_only(loaded_file),
+            sources,
             plugins,
             PluginCallPolicy::default(),
         ))
@@ -585,7 +596,7 @@ fn load_project_with_budget_state<F: FileSystemReader>(
     };
     let snapshot = fetch_source_snapshot(&authority, root_canonical, budget, cancellation)?;
     cancellation.checkpoint()?;
-    let files = build_loaded_files(snapshot)?;
+    let (files, sources) = build_loaded_files(snapshot)?;
     cancellation.checkpoint()?;
     // Single-package project: every loaded file belongs to the root package,
     // so every declared wasm plugin resolves against the project root.
@@ -613,6 +624,7 @@ fn load_project_with_budget_state<F: FileSystemReader>(
     cancellation.checkpoint()?;
     Ok(LoadedProject::from_parts(
         files,
+        sources,
         plugins,
         plugin_call_policy,
     ))
@@ -707,7 +719,7 @@ fn load_locked_package_project<F: FileSystemReader>(
     };
     let snapshot = fetch_source_snapshot(&context, root_file, budget, cancellation)?;
     cancellation.checkpoint()?;
-    let files = build_loaded_files(snapshot)?;
+    let (files, sources) = build_loaded_files(snapshot)?;
     cancellation.checkpoint()?;
     // Each artifact resolves within its declaring package's authority. Root
     // plugins use explicit pins; dependency binaries need verified coverage.
@@ -734,7 +746,7 @@ fn load_locked_package_project<F: FileSystemReader>(
     }
     validate_plugin_call_policy(&files, &plugin_call_policy)?;
     cancellation.checkpoint()?;
-    let mut project = LoadedProject::from_parts(files, plugins, plugin_call_policy);
+    let mut project = LoadedProject::from_parts(files, sources, plugins, plugin_call_policy);
     project.package_closure = Some(context.closure);
     Ok(project)
 }

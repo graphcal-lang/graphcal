@@ -5,6 +5,7 @@ use graphcal_compiler::ir::imported_binding::ImportedValueKind;
 use graphcal_compiler::outcome::Outcome;
 use graphcal_compiler::resolve::ModuleResolver;
 use graphcal_compiler::resolve::category::DeclSymbolKind;
+use graphcal_compiler::source_id::SourceId;
 
 #[allow(
     clippy::wildcard_imports,
@@ -14,15 +15,13 @@ use graphcal_compiler::resolve::category::DeclSymbolKind;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use miette::NamedSource;
-
 use graphcal_compiler::graphcal_error::GraphcalError;
 use graphcal_compiler::ir::imported_binding::ImportedBinding;
 use graphcal_compiler::ir::resolve::ScopedName;
 use graphcal_compiler::semantic::checked_type::CheckedType;
 
 use super::{entry_interface, lowering};
-use crate::compile_error::CompileError;
+use crate::compile_error::PipelineError;
 
 use super::checked_project::CompiledFile;
 use super::model::{HirFile, ModuleArtifactStore};
@@ -52,14 +51,14 @@ fn resolve_imported_bindings(
     local_interfaces: &LocalInterfaces,
     module_artifacts: &ModuleArtifactStore,
     module_resolver: &ModuleResolver,
-    src: &NamedSource<Arc<String>>,
-) -> Result<HashMap<ScopedName, ImportedBinding>, CompileError> {
+    src: SourceId,
+) -> Result<HashMap<ScopedName, ImportedBinding>, PipelineError> {
     hir.imported_bindings()
         .iter()
         .map(|(lexical, target)| {
             let declared_type = declared_type_for_target(target, local_interfaces, module_artifacts)
                 .ok_or_else(|| {
-                    CompileError::Eval(GraphcalError::internal_error(
+                    PipelineError::Semantic(GraphcalError::internal_error(
                         format!(
                             "checked interface for HIR import `{lexical}` targeting `{target}` is unavailable"
                         ),
@@ -68,7 +67,7 @@ fn resolve_imported_bindings(
                     ))
                 })?;
             let kind = match module_resolver.symbol(target).map(|symbol| *symbol.kind()).ok_or_else(|| {
-                CompileError::Eval(GraphcalError::internal_error(
+                PipelineError::Semantic(GraphcalError::internal_error(
                     format!("HIR imported value `{target}` has no declaration"),
                     src,
                     DiagnosticAnchor::WholeFile,
@@ -76,7 +75,7 @@ fn resolve_imported_bindings(
             })? {
                 DeclSymbolKind::Const => ImportedValueKind::Constant,
                 DeclSymbolKind::Param | DeclSymbolKind::Node => ImportedValueKind::Runtime,
-                actual => return Err(CompileError::Eval(GraphcalError::internal_error(
+                actual => return Err(PipelineError::Semantic(GraphcalError::internal_error(
                     format!("HIR imported value `{target}` has non-value category {actual:?}"),
                     src, DiagnosticAnchor::WholeFile,
                 ))),
@@ -97,11 +96,11 @@ struct ResolvedFileSignatures {
 fn resolve_file_signatures(
     root: graphcal_compiler::ir::model::HirDag,
     inline: Vec<graphcal_compiler::ir::model::HirDag>,
-    file_src: &NamedSource<Arc<String>>,
+    file_src: SourceId,
     module_resolver: &graphcal_compiler::resolve::ModuleResolver,
     project_types: &graphcal_compiler::tir::typed::ProjectTypeStore,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
-) -> Result<ResolvedFileSignatures, Outcome<CompileError>> {
+) -> Result<ResolvedFileSignatures, Outcome<PipelineError>> {
     let root = graphcal_compiler::tir::typed::resolve_hir_signature_with_modules_and_cancellation(
         root,
         file_src,
@@ -150,19 +149,33 @@ fn checked_dependency_overrides(
     graphcal_compiler::tir::typed::CheckedOverrideDependencies::new(dependencies, checked_owners)
 }
 
+/// Project-wide facts every file of one checking session is checked against.
+#[derive(Clone, Copy)]
+pub(super) struct FileCheckEnvironment<'a> {
+    pub(super) exported_runtime_units: &'a HashMap<
+        graphcal_compiler::dag_id::DagId,
+        HashSet<graphcal_compiler::syntax::dimension::UnitName>,
+    >,
+    pub(super) module_resolver: &'a graphcal_compiler::resolve::ModuleResolver,
+    pub(super) project_types: &'a Arc<graphcal_compiler::tir::typed::ProjectTypeStore>,
+    /// The registry every source id of the project resolves in.
+    pub(super) sources: &'a graphcal_compiler::source_registry::SourceRegistry,
+}
+
 /// Check one physical file's root and inline-DAG HIR modules.
 pub(super) fn check_hir_file(
     hir: HirFile,
     module_artifacts: &ModuleArtifactStore,
     inherited_execution_facts: &graphcal_eval::checked_program::ExecutionFacts,
-    exported_runtime_units: &HashMap<
-        graphcal_compiler::dag_id::DagId,
-        HashSet<graphcal_compiler::syntax::dimension::UnitName>,
-    >,
-    module_resolver: &graphcal_compiler::resolve::ModuleResolver,
-    project_types: &Arc<graphcal_compiler::tir::typed::ProjectTypeStore>,
+    environment: FileCheckEnvironment<'_>,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
-) -> Result<CompiledFile, Outcome<CompileError>> {
+) -> Result<CompiledFile, Outcome<PipelineError>> {
+    let FileCheckEnvironment {
+        exported_runtime_units,
+        module_resolver,
+        project_types,
+        sources,
+    } = environment;
     cancellation.checkpoint()?;
     let file_src = &hir.source;
     let source_declarations = hir.root.source_declarations().to_vec();
@@ -176,7 +189,7 @@ pub(super) fn check_hir_file(
     } = resolve_file_signatures(
         hir.root,
         hir.inline_dags,
-        file_src,
+        *file_src,
         module_resolver,
         project_types.as_ref(),
         cancellation,
@@ -188,12 +201,12 @@ pub(super) fn check_hir_file(
         &local_interfaces,
         module_artifacts,
         module_resolver,
-        file_src,
+        *file_src,
     )?;
     let mut tir = graphcal_compiler::tir::typed::TirDraft::resolve_root(
         signed_root,
         root_bindings,
-        file_src,
+        *file_src,
         module_resolver,
         Arc::clone(project_types),
         cancellation,
@@ -203,9 +216,9 @@ pub(super) fn check_hir_file(
         tir.root(),
         &hir.module_map,
         exported_runtime_units,
-        file_src,
+        *file_src,
     )
-    .map_err(CompileError::from)?;
+    .map_err(PipelineError::from)?;
 
     for signed in signed_inline {
         cancellation.checkpoint()?;
@@ -214,26 +227,27 @@ pub(super) fn check_hir_file(
             &local_interfaces,
             module_artifacts,
             module_resolver,
-            file_src,
+            *file_src,
         )?;
         tir.add_inline_dag(
             signed,
             imported_bindings,
-            file_src,
+            *file_src,
             module_resolver,
             cancellation,
         )
         .map_err(Outcome::map_into)?;
     }
 
-    lowering::install_shared_module_artifacts(&mut tir, module_artifacts, file_src)?;
-    let tir = finish_module_assembly(tir, module_artifacts, file_src, cancellation)?;
+    lowering::install_shared_module_artifacts(&mut tir, module_artifacts, *file_src)?;
+    let tir = finish_module_assembly(tir, module_artifacts, *file_src, cancellation)?;
     #[cfg(test)]
     observe_shared_artifacts(&tir, project_types, module_artifacts);
     let program = graphcal_eval::execution_check::seal_checked_program(
         tir,
         inherited_execution_facts,
-        file_src,
+        *file_src,
+        sources,
         cancellation,
     )
     .map_err(Outcome::map_into)?;
@@ -241,7 +255,7 @@ pub(super) fn check_hir_file(
         &source_declarations,
         program.tir(),
         &entry_external_surface,
-        file_src,
+        *file_src,
     )?;
 
     Ok(CompiledFile {
@@ -257,12 +271,12 @@ pub(super) fn check_hir_file(
 fn finish_module_assembly(
     draft: graphcal_compiler::tir::typed::TirDraft,
     module_artifacts: &ModuleArtifactStore,
-    src: &NamedSource<Arc<String>>,
+    src: SourceId,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
-) -> Result<graphcal_compiler::tir::typed::CheckedTir, Outcome<CompileError>> {
+) -> Result<graphcal_compiler::tir::typed::CheckedTir, Outcome<PipelineError>> {
     draft
         .instantiate(&checked_dependency_overrides(module_artifacts), src)
-        .map_err(CompileError::from)?
+        .map_err(PipelineError::from)?
         .check(src, cancellation)
         .map_err(Outcome::map_into)
 }

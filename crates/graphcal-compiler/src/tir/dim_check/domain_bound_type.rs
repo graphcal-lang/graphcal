@@ -1,14 +1,11 @@
 //! The type a domain bound expression must have for its constrained target,
 //! and the check that an inferred bound type has it.
 
-use std::sync::Arc;
-
-use miette::NamedSource;
-
 use crate::dimension::Dimension;
 use crate::display::formatting_registry::FormattingRegistry;
 use crate::graphcal_error::GraphcalError;
 use crate::semantic::checked_type::{CheckedType, Concrete, Concreteness};
+use crate::source_id::SourceId;
 
 use super::helpers::format_checked_type;
 
@@ -61,7 +58,7 @@ pub(super) fn check_one_bound_with_display_name<V: Concreteness>(
     inferred: &CheckedType<V>,
     expected: &ExpectedBound,
     registry: &FormattingRegistry,
-    src: &NamedSource<Arc<String>>,
+    src: SourceId,
 ) -> Result<(), GraphcalError> {
     match expected {
         ExpectedBound::Quantity(target_dim) => {
@@ -81,7 +78,7 @@ pub(super) fn check_one_bound_with_display_name<V: Concreteness>(
                 type_dim: registry.dimensions.format_dimension(target_dim),
                 bound_name: bound.kind.to_string(),
                 bound_dim: bound_dim_str,
-                src: src.clone(),
+                src,
                 span: bound.span.into(),
             })
         }
@@ -93,7 +90,7 @@ pub(super) fn check_one_bound_with_display_name<V: Concreteness>(
                 name: display_name.to_string(),
                 bound_name: bound.kind.to_string(),
                 bound_type: format_checked_type(inferred, registry),
-                src: src.clone(),
+                src,
                 span: bound.span.into(),
             })
         }
@@ -110,7 +107,7 @@ pub(super) fn check_one_bound_with_display_name<V: Concreteness>(
                 ),
                 bound_name: bound.kind.to_string(),
                 bound_type: format_checked_type(inferred, registry),
-                src: src.clone(),
+                src,
                 span: bound.span.into(),
             })
         }

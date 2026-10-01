@@ -6,25 +6,29 @@ use std::sync::Arc;
 use graphcal_compiler::graphcal_error::GraphcalError;
 use graphcal_compiler::ir::lower::lower;
 use graphcal_compiler::resolve::ModuleResolver;
+use graphcal_compiler::source_id::SourceId;
+use graphcal_compiler::source_registry::SourceRegistry;
 use graphcal_compiler::syntax::parser::Parser;
 use graphcal_compiler::tir::typed::ProjectTypeStore;
-use miette::NamedSource;
 
-/// Check a single-file program named `test.gcl`.
+/// Check a single-file program named `test.gcl`, together with the source
+/// registry its source ids resolve in.
 pub fn checked_tir_from_source(
     source: &str,
 ) -> Result<
     (
         graphcal_compiler::tir::typed::CheckedTir,
-        NamedSource<Arc<String>>,
+        SourceId,
+        SourceRegistry,
     ),
     GraphcalError,
 > {
     let raw_file = Parser::new(source).parse_file().unwrap();
     let desugared = graphcal_compiler::desugar::desugared_ast::File::from(raw_file);
     let file = desugared;
-    let src = NamedSource::new("test.gcl", Arc::new(source.to_string()));
-    let ir = lower(&file, &src).unwrap();
+    let mut sources = SourceRegistry::new();
+    let src = sources.register("test.gcl", Arc::new(source.to_string()));
+    let ir = lower(&file, "test.gcl", src).unwrap();
     let resolver =
         ModuleResolver::without_edges([(ir.dag_id().clone(), file.declarations.as_slice())])
             .unwrap();
@@ -35,7 +39,7 @@ pub fn checked_tir_from_source(
         let signed =
             graphcal_compiler::tir::typed::resolve_hir_signature_with_modules_and_cancellation(
                 ir,
-                &src,
+                src,
                 &resolver,
                 &project_types,
                 cancellation,
@@ -44,7 +48,7 @@ pub fn checked_tir_from_source(
         graphcal_compiler::tir::typed::TirDraft::resolve_root(
             signed,
             std::collections::HashMap::<_, _, std::hash::RandomState>::new(),
-            &src,
+            src,
             &resolver,
             Arc::new(project_types),
             cancellation,
@@ -52,10 +56,10 @@ pub fn checked_tir_from_source(
         .unwrap()
         .instantiate(
             &graphcal_compiler::tir::typed::CheckedOverrideDependencies::default(),
-            &src,
+            src,
         )
         .unwrap()
-        .check(&src, cancellation)
+        .check(src, cancellation)
     })
-    .map(|tir| (tir, src.clone()))
+    .map(|tir| (tir, src, sources))
 }

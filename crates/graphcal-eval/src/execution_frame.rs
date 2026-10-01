@@ -14,12 +14,11 @@ use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
 use graphcal_compiler::graphcal_error::GraphcalError;
 use graphcal_compiler::outcome::Outcome;
 use graphcal_compiler::resolved_name::ResolvedDeclName;
+use graphcal_compiler::source_id::SourceId;
 use graphcal_compiler::syntax::span::Span;
 use graphcal_compiler::tir::texpr::TExpr;
 use graphcal_compiler::tir::typed::evaluation_unit::ScopedTree;
-use miette::NamedSource;
 use std::collections::HashMap;
-use std::sync::Arc;
 
 #[derive(Clone, Copy)]
 pub enum FailurePolicy {
@@ -84,7 +83,7 @@ pub struct FrameOutcome {
 /// declaration, so the adapter evaluates it in that scope.
 pub struct ScheduledDeclaration<'a> {
     key: &'a ResolvedDeclName,
-    source: &'a NamedSource<Arc<String>>,
+    source: SourceId,
     body: ScopedTree<'a, &'a TExpr>,
 }
 
@@ -103,7 +102,7 @@ impl<'a> ScheduledDeclaration<'a> {
 
     /// The source the declaration's diagnostics point into.
     #[must_use]
-    pub const fn source(&self) -> &'a NamedSource<Arc<String>> {
+    pub const fn source(&self) -> SourceId {
         self.source
     }
 }
@@ -247,7 +246,7 @@ impl<'a> ExecutionFrame<'a> {
         key: &ResolvedDeclName,
         domain: Option<&ResolvedDomainConstraint>,
         value: EvaluatedRuntimeValue,
-        source: &NamedSource<Arc<String>>,
+        source: SourceId,
         span: Span,
     ) -> Result<(), GraphcalError> {
         if let Some(constraint) = domain
@@ -259,7 +258,7 @@ impl<'a> ExecutionFrame<'a> {
                 key,
                 GraphcalError::EvalError {
                     message: violation.message,
-                    src: source.clone(),
+                    src: source,
                     span: span.into(),
                 },
             );
@@ -287,7 +286,7 @@ impl<'a> ExecutionFrame<'a> {
         &mut self,
         key: &ResolvedDeclName,
         value: EvaluatedRuntimeValue,
-        source: &NamedSource<Arc<String>>,
+        source: SourceId,
         span: Span,
     ) -> Result<(), GraphcalError> {
         let domain = self.plan.domain_constraint(key);

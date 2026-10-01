@@ -4,7 +4,6 @@
 //! and no hypothetical runtime value is introduced during this analysis.
 
 use std::collections::{BTreeSet, HashMap, HashSet};
-use std::sync::Arc;
 
 use graphcal_compiler::cancellation::CancellationToken;
 use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
@@ -13,9 +12,9 @@ use graphcal_compiler::hir::expr::{Expr, ExprKind, visit_expr};
 use graphcal_compiler::node_unavailable::NodeUnavailable;
 use graphcal_compiler::outcome::Outcome;
 use graphcal_compiler::resolved_name::ResolvedDeclName;
+use graphcal_compiler::source_id::SourceId;
 use graphcal_compiler::syntax::non_empty::NonEmpty;
 use graphcal_compiler::tir::typed::scoped_node::{NodeKind, ScopedNode};
-use miette::NamedSource;
 
 use crate::execution_plan::{ExecPlan, PlannedBody};
 
@@ -60,7 +59,7 @@ impl ExpressionDependencies for ScopedNode<'_> {
 pub fn collect(
     expression: &(impl ExpressionDependencies + ?Sized),
     plan: &ExecPlan<'_>,
-    source: &NamedSource<Arc<String>>,
+    source: SourceId,
     cancellation: &CancellationToken,
 ) -> Result<Vec<(ResolvedDeclName, NodeUnavailable)>, Outcome<GraphcalError>> {
     if !plan.has_unfinished_definitions() {
@@ -108,7 +107,7 @@ fn calls(expression: &Expr, bound: &BoundParameters) -> Vec<Query> {
 
 struct Analysis<'a> {
     plan: &'a ExecPlan<'a>,
-    source: &'a NamedSource<Arc<String>>,
+    source: SourceId,
     cancellation: &'a CancellationToken,
     memo: HashMap<Query, Origins>,
     active: HashSet<Query>,

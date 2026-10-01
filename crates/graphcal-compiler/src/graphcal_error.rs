@@ -1,6 +1,9 @@
 use std::sync::Arc;
 
 use miette::{Diagnostic, NamedSource, SourceSpan};
+
+use crate::source_id::SourceId;
+use crate::source_registry::SourceRegistry;
 use thiserror::Error;
 
 use crate::builtin::{AggregationFn, LinearAlgebraFn};
@@ -20,7 +23,6 @@ use crate::syntax::import_category::{ImportItemCategoryMismatch, ImportItemNames
 use crate::syntax::index_name::{IndexEntryKey, IndexName, IndexVariantName};
 use crate::syntax::module_name::ScopedName;
 use crate::syntax::names::{NameAtom, NamePath};
-use crate::syntax::span::Span;
 use crate::syntax::type_name::{ConstructorName, FieldName, StructTypeName};
 
 fn format_index_entry_keys(keys: &[IndexEntryKey]) -> String {
@@ -73,8 +75,7 @@ pub enum GraphcalError {
     #[diagnostic(code(graphcal::E050))]
     EvaluationUnavailable {
         reason: crate::node_unavailable::NodeUnavailable,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
+        src: SourceId,
         #[label("value unavailable here")]
         span: SourceSpan,
     },
@@ -83,8 +84,7 @@ pub enum GraphcalError {
     #[diagnostic(code(graphcal::N001), help("each name must be unique within a file"))]
     DuplicateName {
         name: String,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
+        src: SourceId,
         #[label("duplicate definition here")]
         duplicate: SourceSpan,
         #[label("first defined here")]
@@ -101,8 +101,7 @@ pub enum GraphcalError {
         type_name: StructTypeName,
         constructor: ConstructorName,
         field: FieldName,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
+        src: SourceId,
         #[label("duplicate `{field}` field in `{type_name}.{constructor}`")]
         duplicate: SourceSpan,
         #[label("first `{field}` field declared here")]
@@ -119,8 +118,7 @@ pub enum GraphcalError {
     BuiltinNameShadowed {
         kind: &'static str,
         name: String,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
+        src: SourceId,
         #[label("shadows a built-in name")]
         span: SourceSpan,
     },
@@ -132,8 +130,7 @@ pub enum GraphcalError {
         context: &'static str,
         /// Preformatted help listing the valid property set for `context`.
         valid: String,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
+        src: SourceId,
         #[label("not a {context} property")]
         span: SourceSpan,
     },
@@ -144,8 +141,7 @@ pub enum GraphcalError {
         property: &'static str,
         expected: &'static str,
         found: String,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
+        src: SourceId,
         #[label("this is {found}")]
         span: SourceSpan,
     },
@@ -162,8 +158,7 @@ pub enum GraphcalError {
     PlotPropertyDimensioned {
         property: &'static str,
         dimension: String,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
+        src: SourceId,
         #[label("dimensioned value")]
         span: SourceSpan,
     },
@@ -178,8 +173,7 @@ pub enum GraphcalError {
     PlotEncodingTypeMismatch {
         channel: crate::syntax::ast::EncodingChannel,
         found: String,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
+        src: SourceId,
         #[label("not a plottable value")]
         span: SourceSpan,
     },
@@ -192,8 +186,7 @@ pub enum GraphcalError {
     PlotEncodingAxisMismatch {
         /// Preformatted channel/axis list at the diagnostic boundary.
         channels: String,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
+        src: SourceId,
         #[label("this channel cannot align with the shared plot rows")]
         span: SourceSpan,
     },
@@ -207,8 +200,7 @@ pub enum GraphcalError {
     )]
     ImportPlotItem {
         name: String,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
+        src: SourceId,
         #[label("plots cannot travel through `import`")]
         span: SourceSpan,
     },
@@ -222,8 +214,7 @@ pub enum GraphcalError {
     )]
     ImportAssertionItem {
         name: String,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
+        src: SourceId,
         #[label("an imported module has no assertion outcome")]
         span: SourceSpan,
     },
@@ -237,8 +228,7 @@ pub enum GraphcalError {
     )]
     ImportRuntimeUnit {
         name: String,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
+        src: SourceId,
         #[label("a plain `unit` belongs to a runtime instance")]
         span: SourceSpan,
     },
@@ -251,8 +241,7 @@ pub enum GraphcalError {
     ImportRequiredStaticInput {
         kind: crate::static_interface::StaticInputKind,
         name: String,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
+        src: SourceId,
         #[label("required Static input has no blueprint-stable target")]
         span: SourceSpan,
     },
@@ -270,8 +259,7 @@ pub enum GraphcalError {
         name: String,
         dependency_kind: crate::static_interface::StaticInputKind,
         dependency: String,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
+        src: SourceId,
         #[label("declaration is not blueprint-closed")]
         span: SourceSpan,
     },
@@ -285,8 +273,7 @@ pub enum GraphcalError {
         kind: crate::static_interface::StaticInputKind,
         name: String,
         target: String,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
+        src: SourceId,
         #[label("required Static inputs are holes, not concrete targets")]
         span: SourceSpan,
     },
@@ -300,8 +287,7 @@ pub enum GraphcalError {
     )]
     IncludeItemNotProjectable {
         name: String,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
+        src: SourceId,
         #[label("this declaration is not an instance projection")]
         span: SourceSpan,
     },
@@ -318,8 +304,7 @@ pub enum GraphcalError {
     IncludeConstructorOwnerRebound {
         constructor: String,
         owner_type: String,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
+        src: SourceId,
         #[label("source constructor no longer belongs to the projected type")]
         span: SourceSpan,
     },
@@ -332,8 +317,7 @@ pub enum GraphcalError {
     DuplicateIncludeSelection {
         namespace: ImportItemNamespace,
         name: NameAtom,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
+        src: SourceId,
         #[label("duplicate producer selection")]
         duplicate: SourceSpan,
         #[label("first selected here")]
@@ -347,8 +331,7 @@ pub enum GraphcalError {
     )]
     HiddenIncludeItemNotAPlot {
         name: String,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
+        src: SourceId,
         #[label("not a plot item")]
         span: SourceSpan,
     },
@@ -362,8 +345,7 @@ pub enum GraphcalError {
         owner_kind: &'static str,
         owner: crate::syntax::decl_name::DeclName,
         name: ScopedName,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
+        src: SourceId,
         #[label("no plot with this name")]
         span: SourceSpan,
     },
@@ -377,8 +359,7 @@ pub enum GraphcalError {
         owner_kind: &'static str,
         actual_kind: &'static str,
         name: ScopedName,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
+        src: SourceId,
         #[label("this names a {actual_kind}")]
         span: SourceSpan,
     },
@@ -392,8 +373,7 @@ pub enum GraphcalError {
         owner_kind: &'static str,
         owner: crate::syntax::decl_name::DeclName,
         name: ScopedName,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
+        src: SourceId,
         #[label("duplicate entry")]
         span: SourceSpan,
     },
@@ -405,8 +385,7 @@ pub enum GraphcalError {
     )]
     UnknownGraphRef {
         name: ScopedName,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
+        src: SourceId,
         #[label("not found")]
         span: SourceSpan,
     },
@@ -416,8 +395,7 @@ pub enum GraphcalError {
     BareGraphDeclarationRef {
         name: ScopedName,
         kind: DeclSymbolKind,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
+        src: SourceId,
         #[label("missing `@` sigil")]
         span: SourceSpan,
     },
@@ -431,8 +409,7 @@ pub enum GraphcalError {
     )]
     TimeScaleInValuePosition {
         scale: TimeScale,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
+        src: SourceId,
         #[label("no Term named `{scale}` is in scope")]
         span: SourceSpan,
     },
@@ -444,8 +421,7 @@ pub enum GraphcalError {
     )]
     UnknownFunction {
         name: String,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
+        src: SourceId,
         #[label("unknown function")]
         span: SourceSpan,
     },
@@ -460,8 +436,7 @@ pub enum GraphcalError {
     UnknownExternFunction {
         alias: crate::syntax::module_name::ModuleAliasName,
         name: crate::syntax::function_name::FnName,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
+        src: SourceId,
         #[label("unknown extern function")]
         span: SourceSpan,
     },
@@ -471,8 +446,7 @@ pub enum GraphcalError {
     NamedArgumentsOnFunction {
         name: String,
         positional_call: String,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
+        src: SourceId,
         #[label("named arguments are not allowed in function calls")]
         span: SourceSpan,
     },
@@ -486,8 +460,7 @@ pub enum GraphcalError {
     )]
     InvalidExternSignature {
         message: String,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
+        src: SourceId,
         #[label("invalid signature")]
         span: SourceSpan,
     },
@@ -499,8 +472,7 @@ pub enum GraphcalError {
     )]
     DuplicateExternParameter {
         name: FnParamName,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
+        src: SourceId,
         #[label("duplicate parameter")]
         duplicate: SourceSpan,
         #[label("first declared here")]
@@ -517,8 +489,7 @@ pub enum GraphcalError {
     MissingHostFunction {
         plugin: crate::plugin_identity::PluginIdentity,
         name: crate::syntax::function_name::FnName,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
+        src: SourceId,
         #[label("missing host function")]
         span: SourceSpan,
     },
@@ -533,8 +504,7 @@ pub enum GraphcalError {
     ExternCallNotAllowed {
         name: String,
         context: String,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
+        src: SourceId,
         #[label("extern call not allowed here")]
         span: SourceSpan,
     },
@@ -553,8 +523,7 @@ pub enum GraphcalError {
         name: crate::syntax::function_name::FnName,
         declared: String,
         provided: String,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
+        src: SourceId,
         #[label("signature does not match the plugin manifest")]
         span: SourceSpan,
     },
@@ -569,8 +538,7 @@ pub enum GraphcalError {
     PluginLoadFailed {
         plugin: crate::plugin_identity::PluginIdentity,
         reason: String,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
+        src: SourceId,
         #[label("plugin failed to load")]
         span: SourceSpan,
     },
@@ -586,8 +554,7 @@ pub enum GraphcalError {
         plugin: crate::plugin_identity::PluginIdentity,
         import_module: String,
         import_name: String,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
+        src: SourceId,
         #[label("plugin declares a forbidden import")]
         span: SourceSpan,
     },
@@ -601,8 +568,7 @@ pub enum GraphcalError {
     )]
     PluginNotPinned {
         plugin: crate::plugin_identity::PluginIdentity,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
+        src: SourceId,
         #[label("plugin has no graphcal.lock pin")]
         span: SourceSpan,
     },
@@ -620,8 +586,7 @@ pub enum GraphcalError {
         plugin: crate::plugin_identity::PluginIdentity,
         expected: String,
         actual: String,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
+        src: SourceId,
         #[label("plugin file does not match its pin")]
         span: SourceSpan,
     },
@@ -635,8 +600,7 @@ pub enum GraphcalError {
     )]
     GraphRefInConst {
         name: ScopedName,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
+        src: SourceId,
         #[label("@ reference not allowed here")]
         span: SourceSpan,
     },
@@ -650,8 +614,7 @@ pub enum GraphcalError {
     )]
     DagCallInCompileTime {
         name: String,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
+        src: SourceId,
         #[label("runtime DAG instantiation is not allowed here")]
         span: SourceSpan,
     },
@@ -665,8 +628,7 @@ pub enum GraphcalError {
     )]
     GraphRefInConstUnit {
         name: ScopedName,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
+        src: SourceId,
         #[label("@ reference not allowed in a const unit")]
         span: SourceSpan,
     },
@@ -680,8 +642,7 @@ pub enum GraphcalError {
     )]
     NonConstUnitInConst {
         name: UnitRef,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
+        src: SourceId,
         #[label("unit is not const")]
         span: SourceSpan,
     },
@@ -692,8 +653,7 @@ pub enum GraphcalError {
         name: CalledFunction,
         expected: usize,
         got: usize,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
+        src: SourceId,
         #[label("wrong number of arguments")]
         span: SourceSpan,
     },
@@ -705,8 +665,7 @@ pub enum GraphcalError {
     )]
     CyclicDependency {
         name: String,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
+        src: SourceId,
         #[label("involved in cycle")]
         span: SourceSpan,
     },
@@ -715,8 +674,7 @@ pub enum GraphcalError {
     #[diagnostic(code(graphcal::E001))]
     EvalError {
         message: String,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
+        src: SourceId,
         #[label("error here")]
         span: SourceSpan,
     },
@@ -730,10 +688,10 @@ pub enum GraphcalError {
     )]
     InternalError {
         message: String,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
-        #[label("unexpected state here")]
-        span: Option<Span>,
+        src: SourceId,
+        /// Where the violation is reported; resolved against the source text
+        /// only when rendered.
+        anchor: DiagnosticAnchor,
     },
 
     #[error("dimension exponent overflow")]
@@ -742,8 +700,7 @@ pub enum GraphcalError {
         help("dimension exponents are stored as `i32`; reduce the magnitude of the exponent")
     )]
     DimensionOverflow {
-        #[source_code]
-        src: NamedSource<Arc<String>>,
+        src: SourceId,
         #[label("overflow here")]
         span: SourceSpan,
     },
@@ -753,8 +710,7 @@ pub enum GraphcalError {
     DimensionMismatch {
         expected: String,
         found: String,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
+        src: SourceId,
         #[label("has dimension {found}")]
         span: SourceSpan,
         #[help]
@@ -772,8 +728,7 @@ pub enum GraphcalError {
         context: String,
         lhs: String,
         rhs: String,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
+        src: SourceId,
         #[label("has type {rhs}")]
         span: SourceSpan,
     },
@@ -785,8 +740,7 @@ pub enum GraphcalError {
         expected: String,
         found: String,
         help: String,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
+        src: SourceId,
         #[label("found {found}")]
         span: SourceSpan,
     },
@@ -800,8 +754,7 @@ pub enum GraphcalError {
     )]
     IndexedComparisonOperand {
         found: String,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
+        src: SourceId,
         #[label("indexed operand has type {found}")]
         span: SourceSpan,
     },
@@ -816,8 +769,7 @@ pub enum GraphcalError {
     MultiAxisAggregation {
         function: AggregationFn,
         rank: usize,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
+        src: SourceId,
         #[label("rank-{rank} input")]
         span: SourceSpan,
     },
@@ -831,8 +783,7 @@ pub enum GraphcalError {
     )]
     MultiAxisScanSource {
         rank: usize,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
+        src: SourceId,
         #[label("rank-{rank} source")]
         span: SourceSpan,
     },
@@ -848,8 +799,7 @@ pub enum GraphcalError {
     )]
     AggregationCardinalityUnknown {
         function: AggregationFn,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
+        src: SourceId,
         #[label("axis cardinality is abstract here")]
         span: SourceSpan,
     },
@@ -861,8 +811,7 @@ pub enum GraphcalError {
     )]
     MaterializedShapeTooLarge {
         maximum: usize,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
+        src: SourceId,
         #[label("this indexed expression would materialize too many values")]
         span: SourceSpan,
     },
@@ -875,8 +824,7 @@ pub enum GraphcalError {
     DimensionMismatchInAnnotation {
         declared: String,
         inferred: String,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
+        src: SourceId,
         #[label("declared as {declared}")]
         span: SourceSpan,
     },
@@ -892,8 +840,7 @@ pub enum GraphcalError {
         name: UnitName,
         declared: String,
         definition: String,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
+        src: SourceId,
         #[label("this unit expression has dimension {definition}")]
         span: SourceSpan,
     },
@@ -908,8 +855,7 @@ pub enum GraphcalError {
     DynamicUnitScaleTypeMismatch {
         name: UnitRef,
         found: String,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
+        src: SourceId,
         #[label("this scale expression has type {found}")]
         span: SourceSpan,
     },
@@ -923,8 +869,7 @@ pub enum GraphcalError {
     )]
     UnknownUnit {
         name: UnitRef,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
+        src: SourceId,
         #[label("unknown unit")]
         span: SourceSpan,
     },
@@ -936,8 +881,7 @@ pub enum GraphcalError {
     )]
     UnknownDimension {
         name: NamePath,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
+        src: SourceId,
         #[label("unknown dimension")]
         span: SourceSpan,
     },
@@ -949,8 +893,7 @@ pub enum GraphcalError {
     )]
     CyclicDimension {
         name: DimName,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
+        src: SourceId,
         #[label("involved in cycle")]
         span: SourceSpan,
     },
@@ -959,8 +902,7 @@ pub enum GraphcalError {
     #[diagnostic(code(graphcal::D009), help("units cannot form dependency cycles"))]
     CyclicUnit {
         name: UnitName,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
+        src: SourceId,
         #[label("involved in cycle")]
         span: SourceSpan,
     },
@@ -971,8 +913,7 @@ pub enum GraphcalError {
         help("use an exact integer such as `2` or a parenthesized rational such as `(3/2)`")
     )]
     RuntimeExponentForDimensionedBase {
-        #[source_code]
-        src: NamedSource<Arc<String>>,
+        src: SourceId,
         #[label("runtime exponent cannot determine the result dimension")]
         span: SourceSpan,
     },
@@ -983,8 +924,7 @@ pub enum GraphcalError {
         /// Exact source replacement when the decimal value fits the dimension
         /// rational model. Also carried as structured LSP diagnostic data.
         replacement: Option<String>,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
+        src: SourceId,
         #[label("exact rational syntax is required here")]
         span: SourceSpan,
         #[help]
@@ -999,8 +939,7 @@ pub enum GraphcalError {
     ConversionDimensionMismatch {
         target: String,
         expr_dim: String,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
+        src: SourceId,
         #[label("target unit has different dimension")]
         span: SourceSpan,
     },
@@ -1013,8 +952,7 @@ pub enum GraphcalError {
         )
     )]
     NestedConversion {
-        #[source_code]
-        src: NamedSource<Arc<String>>,
+        src: SourceId,
         #[label("the operand of this conversion is itself a conversion")]
         span: SourceSpan,
     },
@@ -1027,8 +965,7 @@ pub enum GraphcalError {
         )
     )]
     IneffectiveConversion {
-        #[source_code]
-        src: NamedSource<Arc<String>>,
+        src: SourceId,
         #[label("this conversion's display target is discarded")]
         span: SourceSpan,
     },
@@ -1040,8 +977,7 @@ pub enum GraphcalError {
         dim: String,
         reason: String,
         help: String,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
+        src: SourceId,
         #[label("{reason}")]
         span: SourceSpan,
     },
@@ -1055,8 +991,7 @@ pub enum GraphcalError {
     )]
     AffineProneUnitDefinition {
         dim: String,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
+        src: SourceId,
         #[label("unit defined on an affine-prone dimension")]
         span: SourceSpan,
     },
@@ -1068,8 +1003,7 @@ pub enum GraphcalError {
     )]
     UnknownStructType {
         name: String,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
+        src: SourceId,
         #[label("not found")]
         span: SourceSpan,
     },
@@ -1079,8 +1013,7 @@ pub enum GraphcalError {
     UnknownField {
         type_name: StructTypeName,
         member: NominalMember,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
+        src: SourceId,
         #[label("no such field")]
         span: SourceSpan,
     },
@@ -1093,8 +1026,7 @@ pub enum GraphcalError {
     MissingFields {
         type_name: StructTypeName,
         missing: Vec<FieldName>,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
+        src: SourceId,
         #[label("incomplete construction")]
         span: SourceSpan,
     },
@@ -1109,8 +1041,7 @@ pub enum GraphcalError {
     MissingPatternFields {
         constructor: ConstructorName,
         missing: Vec<FieldName>,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
+        src: SourceId,
         #[label("incomplete pattern")]
         span: SourceSpan,
     },
@@ -1124,8 +1055,7 @@ pub enum GraphcalError {
     )]
     EmptyParenthesizedConstructor {
         constructor: ConstructorName,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
+        src: SourceId,
         #[label("empty parentheses are invalid here")]
         span: SourceSpan,
     },
@@ -1138,8 +1068,7 @@ pub enum GraphcalError {
     ExtraFields {
         type_name: StructTypeName,
         extra: Vec<FieldName>,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
+        src: SourceId,
         #[label("unexpected fields")]
         span: SourceSpan,
     },
@@ -1151,8 +1080,7 @@ pub enum GraphcalError {
         field_name: FieldName,
         expected: String,
         found: String,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
+        src: SourceId,
         #[label("has dimension {found}")]
         span: SourceSpan,
     },
@@ -1164,8 +1092,7 @@ pub enum GraphcalError {
     )]
     NotAStruct {
         name: String,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
+        src: SourceId,
         #[label("not a struct")]
         span: SourceSpan,
     },
@@ -1179,8 +1106,7 @@ pub enum GraphcalError {
     )]
     UnknownLocalRef {
         name: String,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
+        src: SourceId,
         #[label("not found")]
         span: SourceSpan,
     },
@@ -1194,8 +1120,7 @@ pub enum GraphcalError {
     )]
     UnknownIndex {
         name: IndexDisplayName,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
+        src: SourceId,
         #[label("unknown index")]
         span: SourceSpan,
     },
@@ -1205,8 +1130,7 @@ pub enum GraphcalError {
     UnknownVariant {
         index_name: IndexDisplayName,
         variant_name: IndexVariantName,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
+        src: SourceId,
         #[label("not a variant of `{index_name}`")]
         span: SourceSpan,
     },
@@ -1222,8 +1146,7 @@ pub enum GraphcalError {
     MissingVariants {
         index_name: IndexDisplayName,
         missing: Vec<IndexEntryKey>,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
+        src: SourceId,
         #[label("incomplete map literal")]
         span: SourceSpan,
     },
@@ -1239,8 +1162,7 @@ pub enum GraphcalError {
     ExtraVariants {
         index_name: IndexDisplayName,
         extra: Vec<IndexEntryKey>,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
+        src: SourceId,
         #[label("unexpected variants")]
         span: SourceSpan,
     },
@@ -1250,8 +1172,7 @@ pub enum GraphcalError {
     IndexMismatch {
         expected: IndexDisplayName,
         found: IndexDisplayName,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
+        src: SourceId,
         #[label("wrong index")]
         span: SourceSpan,
     },
@@ -1264,8 +1185,7 @@ pub enum GraphcalError {
     ImportNameNotFound {
         name: String,
         file_path: String,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
+        src: SourceId,
         #[label("not found in imported file")]
         span: SourceSpan,
     },
@@ -1275,8 +1195,7 @@ pub enum GraphcalError {
     ImportCategoryMismatch {
         file_path: String,
         mismatch: ImportItemCategoryMismatch,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
+        src: SourceId,
         #[label("wrong import category")]
         span: SourceSpan,
     },
@@ -1285,8 +1204,7 @@ pub enum GraphcalError {
     #[diagnostic(code(graphcal::M005))]
     DuplicateModuleName {
         name: String,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
+        src: SourceId,
         #[label("duplicate module import")]
         span: SourceSpan,
         #[label("first imported here")]
@@ -1302,8 +1220,7 @@ pub enum GraphcalError {
     )]
     UnknownModule {
         name: String,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
+        src: SourceId,
         #[label("unknown module")]
         span: SourceSpan,
     },
@@ -1316,8 +1233,7 @@ pub enum GraphcalError {
     CoordinateIndexDimensionMismatch {
         name: IndexName,
         message: String,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
+        src: SourceId,
         #[label("dimension mismatch")]
         span: SourceSpan,
     },
@@ -1328,8 +1244,7 @@ pub enum GraphcalError {
         name: IndexName,
         message: String,
         help: String,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
+        src: SourceId,
         #[label("invalid coordinate index")]
         span: SourceSpan,
     },
@@ -1341,8 +1256,7 @@ pub enum GraphcalError {
     )]
     ExpectedIndexFoundNat {
         expression: String,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
+        src: SourceId,
         #[label("Nat is not implicitly converted to Index")]
         span: SourceSpan,
     },
@@ -1354,8 +1268,7 @@ pub enum GraphcalError {
     )]
     GraphRefToAssert {
         name: DeclName,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
+        src: SourceId,
         #[label("`@{name}` is an assert, not a param or node")]
         span: SourceSpan,
     },
@@ -1367,8 +1280,7 @@ pub enum GraphcalError {
     )]
     AssertBodyNotBool {
         found: String,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
+        src: SourceId,
         #[label("expected Bool, found {found}")]
         span: SourceSpan,
     },
@@ -1380,8 +1292,7 @@ pub enum GraphcalError {
     )]
     UnknownAssertInAssumes {
         name: String,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
+        src: SourceId,
         #[label("not an assert declaration")]
         span: SourceSpan,
     },
@@ -1393,8 +1304,7 @@ pub enum GraphcalError {
     )]
     InvalidAssumesTarget {
         kind: AttributeTarget,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
+        src: SourceId,
         #[label("not a node or param")]
         span: SourceSpan,
     },
@@ -1406,8 +1316,7 @@ pub enum GraphcalError {
     )]
     RepeatedSingletonAttribute {
         name: AttributeName,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
+        src: SourceId,
         #[label("duplicate `#[{name}]` attribute")]
         duplicate: SourceSpan,
         #[label("first `#[{name}]` attribute")]
@@ -1420,8 +1329,7 @@ pub enum GraphcalError {
         help("name one or more distinct assertions, or remove the inert attribute")
     )]
     EmptyAssumes {
-        #[source_code]
-        src: NamedSource<Arc<String>>,
+        src: SourceId,
         #[label("no assertions named")]
         span: SourceSpan,
     },
@@ -1433,8 +1341,7 @@ pub enum GraphcalError {
     )]
     DuplicateAssumesArgument {
         name: DeclName,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
+        src: SourceId,
         #[label("duplicate assertion name")]
         duplicate: SourceSpan,
         #[label("first named here")]
@@ -1447,8 +1354,7 @@ pub enum GraphcalError {
         help("name assertions directly, for example `#[assumes(first_check, second_check)]`")
     )]
     InvalidAssumesArgument {
-        #[source_code]
-        src: NamedSource<Arc<String>>,
+        src: SourceId,
         #[label("not a plain assertion name")]
         span: SourceSpan,
     },
@@ -1459,8 +1365,7 @@ pub enum GraphcalError {
         help("remove `#[lazy]`; Graphcal currently evaluates nodes eagerly")
     )]
     LazyNotSupported {
-        #[source_code]
-        src: NamedSource<Arc<String>>,
+        src: SourceId,
         #[label("lazy evaluation is not implemented")]
         span: SourceSpan,
     },
@@ -1474,8 +1379,7 @@ pub enum GraphcalError {
     )]
     InvalidHiddenTarget {
         kind: AttributeTarget,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
+        src: SourceId,
         #[label("not a plot")]
         span: SourceSpan,
     },
@@ -1489,8 +1393,7 @@ pub enum GraphcalError {
     )]
     UnknownAttribute {
         name: String,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
+        src: SourceId,
         #[label("unknown attribute")]
         span: SourceSpan,
     },
@@ -1502,8 +1405,7 @@ pub enum GraphcalError {
     )]
     InvalidExpectedFailTarget {
         kind: AttributeTarget,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
+        src: SourceId,
         #[label("not an assert")]
         span: SourceSpan,
     },
@@ -1513,8 +1415,7 @@ pub enum GraphcalError {
     )]
     #[diagnostic(code(graphcal::A009))]
     ExpectedFailInvalidArg {
-        #[source_code]
-        src: NamedSource<Arc<String>>,
+        src: SourceId,
         #[label("invalid argument")]
         span: SourceSpan,
     },
@@ -1525,8 +1426,7 @@ pub enum GraphcalError {
         help("use `#[expected_fail]` without arguments for non-indexed assertions")
     )]
     ExpectedFailNotIndexed {
-        #[source_code]
-        src: NamedSource<Arc<String>>,
+        src: SourceId,
         #[label("this assertion is not indexed")]
         span: SourceSpan,
     },
@@ -1539,8 +1439,7 @@ pub enum GraphcalError {
         )
     )]
     ExpectedFailAllOnIndexed {
-        #[source_code]
-        src: NamedSource<Arc<String>>,
+        src: SourceId,
         #[label("this assertion is indexed")]
         span: SourceSpan,
     },
@@ -1548,8 +1447,7 @@ pub enum GraphcalError {
     #[error("duplicate key in `#[expected_fail(...)]`")]
     #[diagnostic(code(graphcal::A012), help("each expected-fail key must be unique"))]
     ExpectedFailDuplicateKey {
-        #[source_code]
-        src: NamedSource<Arc<String>>,
+        src: SourceId,
         #[label("duplicate expected-fail key")]
         span: SourceSpan,
     },
@@ -1564,8 +1462,7 @@ pub enum GraphcalError {
     ExpectedFailKeyShapeMismatch {
         expected: usize,
         found: usize,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
+        src: SourceId,
         #[label("expected {expected} index axis/axes, found {found}")]
         span: SourceSpan,
     },
@@ -1578,8 +1475,7 @@ pub enum GraphcalError {
     ExpectedFailKeyIndexMismatch {
         expected: String,
         found: String,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
+        src: SourceId,
         #[label("expected index `{expected}`, found `{found}`")]
         span: SourceSpan,
     },
@@ -1594,8 +1490,7 @@ pub enum GraphcalError {
     ExpectedFailFinitePositionOutOfBounds {
         position: u64,
         size: u64,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
+        src: SourceId,
         #[label("position #{position} on an axis of size {size}")]
         span: SourceSpan,
     },
@@ -1609,8 +1504,7 @@ pub enum GraphcalError {
     )]
     NegativeTolerance {
         found: String,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
+        src: SourceId,
         #[label("tolerance is {found}")]
         span: SourceSpan,
     },
@@ -1623,8 +1517,7 @@ pub enum GraphcalError {
     UnknownParamBinding {
         name: String,
         file_path: String,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
+        src: SourceId,
         #[label("not a param in the imported file")]
         span: SourceSpan,
     },
@@ -1637,8 +1530,7 @@ pub enum GraphcalError {
     BindingNotAParam {
         name: String,
         actual_kind: DeclarationKind,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
+        src: SourceId,
         #[label("targets a {actual_kind}, not a param")]
         span: SourceSpan,
     },
@@ -1653,8 +1545,7 @@ pub enum GraphcalError {
     DagInputCategoryMismatch {
         name: String,
         expected: &'static str,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
+        src: SourceId,
         #[label("no {expected} input with this name")]
         span: SourceSpan,
     },
@@ -1668,8 +1559,7 @@ pub enum GraphcalError {
     )]
     InvalidTypeLevelBindingValue {
         name: String,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
+        src: SourceId,
         #[label("expected a compatible type-level binding argument")]
         span: SourceSpan,
     },
@@ -1684,8 +1574,7 @@ pub enum GraphcalError {
     IndexBindingNotAnIndex {
         dep_index: String,
         value: String,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
+        src: SourceId,
         #[label("not a known index")]
         span: SourceSpan,
     },
@@ -1702,8 +1591,7 @@ pub enum GraphcalError {
         dep_kind: String,
         bound_index: String,
         bound_kind: String,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
+        src: SourceId,
         #[label("kind mismatch")]
         span: SourceSpan,
     },
@@ -1720,8 +1608,7 @@ pub enum GraphcalError {
         expected_dim: String,
         bound_index: String,
         found_dim: String,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
+        src: SourceId,
         #[label("dimension mismatch")]
         span: SourceSpan,
     },
@@ -1737,8 +1624,7 @@ pub enum GraphcalError {
     RequiredStaticInputNotBound {
         kind: crate::static_interface::StaticInputKind,
         name: String,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
+        src: SourceId,
         #[label("required {kind} input is not bound")]
         span: SourceSpan,
     },
@@ -1752,8 +1638,7 @@ pub enum GraphcalError {
     )]
     ImportRuntimeItem {
         name: String,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
+        src: SourceId,
         #[label("runtime item cannot be imported")]
         span: SourceSpan,
     },
@@ -1769,8 +1654,7 @@ pub enum GraphcalError {
     InvalidTimezone {
         timezone: String,
         tzdb_version: &'static str,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
+        src: SourceId,
         #[label("not a recognized IANA timezone")]
         span: SourceSpan,
     },
@@ -1780,8 +1664,7 @@ pub enum GraphcalError {
     InvalidDatetimeLiteral {
         expectation: crate::datetime_literal::DatetimeLiteralExpectation,
         reason: String,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
+        src: SourceId,
         #[label("does not satisfy this constructor's datetime literal contract")]
         span: SourceSpan,
     },
@@ -1795,8 +1678,7 @@ pub enum GraphcalError {
     )]
     EpochTimeScaleArgumentCount {
         got: usize,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
+        src: SourceId,
         #[label("expected exactly one time scale here")]
         span: SourceSpan,
     },
@@ -1805,8 +1687,7 @@ pub enum GraphcalError {
     #[diagnostic(code(graphcal::D029), help("use one of {expected}"))]
     InvalidEpochTimeScaleArgument {
         expected: String,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
+        src: SourceId,
         #[label("expected a supported bare time-scale name")]
         span: SourceSpan,
     },
@@ -1816,8 +1697,7 @@ pub enum GraphcalError {
     UnsupportedEpochTimeScale {
         name: NameAtom,
         expected: String,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
+        src: SourceId,
         #[label("not a supported time scale")]
         span: SourceSpan,
     },
@@ -1834,8 +1714,7 @@ pub enum GraphcalError {
         time_zone: IanaTimeZoneId,
         before: jiff::tz::Offset,
         after: jiff::tz::Offset,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
+        src: SourceId,
         #[label("this local time is skipped")]
         datetime_span: SourceSpan,
         #[label("gap occurs in this timezone")]
@@ -1854,8 +1733,7 @@ pub enum GraphcalError {
         time_zone: IanaTimeZoneId,
         before: jiff::tz::Offset,
         after: jiff::tz::Offset,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
+        src: SourceId,
         #[label("this local time is repeated")]
         datetime_span: SourceSpan,
         #[label("fold occurs in this timezone")]
@@ -1871,8 +1749,7 @@ pub enum GraphcalError {
         name: String,
         value: String,
         violation: String,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
+        src: SourceId,
         #[label("value out of declared domain")]
         span: SourceSpan,
     },
@@ -1889,8 +1766,7 @@ pub enum GraphcalError {
         type_dim: String,
         bound_name: String,
         bound_dim: String,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
+        src: SourceId,
         #[label("dimension mismatch in domain bound")]
         span: SourceSpan,
     },
@@ -1904,8 +1780,7 @@ pub enum GraphcalError {
         name: String,
         min: String,
         max: String,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
+        src: SourceId,
         #[label("min > max")]
         span: SourceSpan,
     },
@@ -1917,8 +1792,7 @@ pub enum GraphcalError {
     )]
     InvalidDomainTarget {
         type_kind: String,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
+        src: SourceId,
         #[label("constraints not valid here")]
         span: SourceSpan,
     },
@@ -1932,8 +1806,7 @@ pub enum GraphcalError {
         name: String,
         bound_name: String,
         bound_type: String,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
+        src: SourceId,
         #[label("Int bound must have type Int")]
         span: SourceSpan,
     },
@@ -1946,8 +1819,7 @@ pub enum GraphcalError {
         )
     )]
     GenericTypeArgDomainConstraint {
-        #[source_code]
-        src: NamedSource<Arc<String>>,
+        src: SourceId,
         #[label("constraint not allowed here")]
         span: SourceSpan,
     },
@@ -1966,8 +1838,7 @@ pub enum GraphcalError {
         target_type: String,
         bound_name: String,
         bound_type: String,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
+        src: SourceId,
         #[label("datetime bound has the wrong time scale or value type")]
         span: SourceSpan,
     },
@@ -1982,8 +1853,7 @@ pub enum GraphcalError {
     ImportPrivateItem {
         name: String,
         file_path: String,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
+        src: SourceId,
         #[label("not visible — item is private")]
         span: SourceSpan,
     },
@@ -2002,8 +1872,7 @@ pub enum GraphcalError {
     RequiredItemMustBeBindable {
         kind: String,
         name: String,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
+        src: SourceId,
         #[label("required item must be `pub(bind)`")]
         span: SourceSpan,
     },
@@ -2028,8 +1897,7 @@ pub enum GraphcalError {
         pub_name: NameAtom,
         ref_kind: DeclarationKind,
         ref_name: NameAtom,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
+        src: SourceId,
         #[label("references private `{ref_name}`")]
         ref_span: SourceSpan,
         #[label("visible declaration is here")]
@@ -2055,8 +1923,7 @@ pub enum GraphcalError {
     PubIndexVariantLiteral {
         index: String,
         variant: String,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
+        src: SourceId,
         #[label("variant literal of pub(bind) index")]
         span: SourceSpan,
     },
@@ -2085,8 +1952,7 @@ pub enum GraphcalError {
         overridden_kind: String,
         orphan_decl: String,
         detail: String,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
+        src: SourceId,
         #[label("include is missing a binding for `{orphan_decl}`")]
         span: SourceSpan,
     },
@@ -2115,8 +1981,7 @@ pub enum GraphcalError {
         reexport_name: String,
         leaked_kind: String,
         leaked_name: String,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
+        src: SourceId,
         #[label("leaks private `{leaked_name}` across the include boundary")]
         span: SourceSpan,
     },
@@ -2140,8 +2005,7 @@ pub enum GraphcalError {
         body_name: NameAtom,
         port_kind: crate::static_interface::StaticInputKind,
         port_name: NameAtom,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
+        src: SourceId,
         #[label("uses the bindable port's default definition")]
         span: SourceSpan,
     },
@@ -2153,8 +2017,7 @@ pub enum GraphcalError {
     )]
     UnknownDag {
         name: String,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
+        src: SourceId,
         #[label("unknown dag")]
         span: SourceSpan,
     },
@@ -2167,8 +2030,7 @@ pub enum GraphcalError {
     UnknownDagParam {
         name: String,
         dag_name: String,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
+        src: SourceId,
         #[label("not a param in `{dag_name}`")]
         span: SourceSpan,
     },
@@ -2183,8 +2045,7 @@ pub enum GraphcalError {
     MissingDagBindings {
         missing: Vec<String>,
         dag_name: String,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
+        src: SourceId,
         #[label("missing binding(s)")]
         span: SourceSpan,
     },
@@ -2199,8 +2060,7 @@ pub enum GraphcalError {
     UnknownDagOutput {
         name: String,
         dag_name: String,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
+        src: SourceId,
         #[label("not a projectable value in `{dag_name}`")]
         span: SourceSpan,
     },
@@ -2214,8 +2074,7 @@ pub enum GraphcalError {
         param_name: String,
         expected: String,
         found: String,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
+        src: SourceId,
         #[label("type mismatch")]
         span: SourceSpan,
     },
@@ -2236,29 +2095,23 @@ impl GraphcalError {
     #[cold]
     pub fn internal_error(
         message: impl Into<String>,
-        src: &NamedSource<Arc<String>>,
+        src: SourceId,
         anchor: DiagnosticAnchor,
     ) -> Self {
         Self::InternalError {
             message: message.into(),
-            src: src.clone(),
-            span: anchor.resolve(src.inner().len()),
+            src,
+            anchor,
         }
     }
 
-    /// Return the `NamedSource` this error points into.
-    ///
-    /// Every variant carries a `#[source_code]` field naming the file and its
-    /// full source text. Exposing it as a typed accessor lets diagnostic
-    /// emitters pair the error's offsets with the exact source they index
-    /// into — instead of inferring (name, source) from external context,
-    /// which can silently desynchronize when an imported file is the origin.
+    /// The source this error's spans index into.
     #[must_use]
     #[expect(
         clippy::too_many_lines,
         reason = "exhaustive variant list; one arm per error variant"
     )]
-    pub const fn named_source(&self) -> &NamedSource<Arc<String>> {
+    pub const fn source(&self) -> SourceId {
         match self {
             Self::DuplicateName { src, .. }
             | Self::DuplicateConstructorField { src, .. }
@@ -2403,7 +2256,83 @@ impl GraphcalError {
             | Self::UnknownDagParam { src, .. }
             | Self::MissingDagBindings { src, .. }
             | Self::UnknownDagOutput { src, .. }
-            | Self::DagArgTypeMismatch { src, .. } => src,
+            | Self::DagArgTypeMismatch { src, .. } => *src,
+        }
+    }
+}
+
+/// A [`GraphcalError`] together with the source text its spans index into,
+/// ready for `miette`.
+///
+/// The error itself names its source only by [`SourceId`]; the shell resolves
+/// that id through the [`SourceRegistry`] that issued it.
+#[derive(Debug)]
+pub struct RenderedGraphcalError {
+    /// The rendered error; readable (and matchable) but only constructed with
+    /// its source through [`Self::new`].
+    pub error: GraphcalError,
+    source: NamedSource<Arc<String>>,
+}
+
+impl RenderedGraphcalError {
+    /// Attach the source `error` points into, resolved through `registry`.
+    ///
+    /// An id from another registry has no text to point into; the error is
+    /// then rendered against an empty, explicitly unknown source.
+    #[must_use]
+    pub fn new(error: GraphcalError, registry: &SourceRegistry) -> Self {
+        let source = registry.renderable(error.source());
+        Self { error, source }
+    }
+
+    /// The rendered error.
+    #[must_use]
+    pub const fn error(&self) -> &GraphcalError {
+        &self.error
+    }
+
+    /// The named source the error's labels index into.
+    #[must_use]
+    pub const fn named_source(&self) -> &NamedSource<Arc<String>> {
+        &self.source
+    }
+}
+
+impl std::fmt::Display for RenderedGraphcalError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.error.fmt(f)
+    }
+}
+
+impl std::error::Error for RenderedGraphcalError {}
+
+impl Diagnostic for RenderedGraphcalError {
+    fn code<'a>(&'a self) -> Option<Box<dyn std::fmt::Display + 'a>> {
+        self.error.code()
+    }
+
+    fn help<'a>(&'a self) -> Option<Box<dyn std::fmt::Display + 'a>> {
+        self.error.help()
+    }
+
+    fn source_code(&self) -> Option<&dyn miette::SourceCode> {
+        Some(&self.source)
+    }
+
+    fn labels(&self) -> Option<Box<dyn Iterator<Item = miette::LabeledSpan> + '_>> {
+        match &self.error {
+            GraphcalError::InternalError { anchor, .. } => Some(Box::new(
+                anchor
+                    .resolve(self.source.inner().len())
+                    .map(|span| {
+                        miette::LabeledSpan::new_with_span(
+                            Some("unexpected state here".to_owned()),
+                            span,
+                        )
+                    })
+                    .into_iter(),
+            )),
+            error => error.labels(),
         }
     }
 }
@@ -2413,10 +2342,11 @@ mod tests {
     use std::collections::BTreeMap;
     use std::sync::Arc;
 
-    use miette::{Diagnostic as _, NamedSource};
+    use miette::Diagnostic as _;
 
     use super::GraphcalError;
     use crate::diagnostic_anchor::DiagnosticAnchor;
+    use crate::source_registry::SourceRegistry;
 
     fn diagnostic_code_catalog() -> BTreeMap<String, String> {
         let source = include_str!("graphcal_error.rs");
@@ -2468,19 +2398,27 @@ mod tests {
 
     #[test]
     fn internal_error_renders_whole_file_and_builtin_anchors_honestly() {
-        let source = NamedSource::new("test.gcl", Arc::new("node x".to_string()));
+        let mut registry = SourceRegistry::new();
+        let text = "node x";
+        let source = registry.register("test.gcl", Arc::new(text.to_string()));
 
-        let whole_file =
-            GraphcalError::internal_error("whole file", &source, DiagnosticAnchor::WholeFile);
+        let whole_file = super::RenderedGraphcalError::new(
+            GraphcalError::internal_error("whole file", source, DiagnosticAnchor::WholeFile),
+            &registry,
+        );
         let whole_file_labels = whole_file
             .labels()
             .expect("internal diagnostics expose a label iterator")
             .collect::<Vec<_>>();
         assert_eq!(whole_file_labels.len(), 1);
         assert_eq!(whole_file_labels[0].offset(), 0);
-        assert_eq!(whole_file_labels[0].len(), source.inner().len());
+        assert_eq!(whole_file_labels[0].len(), text.len());
+        assert_eq!(whole_file.named_source().name(), "test.gcl");
 
-        let builtin = GraphcalError::internal_error("builtin", &source, DiagnosticAnchor::Builtin);
+        let builtin = super::RenderedGraphcalError::new(
+            GraphcalError::internal_error("builtin", source, DiagnosticAnchor::Builtin),
+            &registry,
+        );
         assert_eq!(
             builtin
                 .labels()
@@ -2488,6 +2426,17 @@ mod tests {
                 .count(),
             0
         );
+    }
+
+    #[test]
+    fn foreign_source_ids_render_against_an_explicitly_unknown_source() {
+        let source = SourceRegistry::new().register("other.gcl", Arc::new("x".to_string()));
+        let rendered = super::RenderedGraphcalError::new(
+            GraphcalError::internal_error("foreign", source, DiagnosticAnchor::WholeFile),
+            &SourceRegistry::new(),
+        );
+        assert_eq!(rendered.named_source().name(), "<unknown source>");
+        assert_eq!(rendered.error().source(), source);
     }
 
     #[test]

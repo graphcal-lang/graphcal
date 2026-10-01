@@ -7,13 +7,11 @@
 //! [`ModuleInterface`] instead of re-walking the module's AST.
 
 use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
-
-use miette::NamedSource;
 
 use crate::desugar::desugared_ast::{DeclKind, Declaration, ImportDecl, ImportKind};
 use crate::graphcal_error::GraphcalError;
 use crate::ir::resolve::collected::ExternalDeclSurface;
+use crate::source_id::SourceId;
 use crate::static_interface::{StaticInputKind, StaticInterface, StaticRole, static_interface};
 use crate::syntax::ast::{DeclExposure, ImportItemNamespace, IntroducedKind};
 use crate::syntax::decl_name::DeclName;
@@ -89,14 +87,8 @@ pub enum PureImportRejection {
 impl PureImportRejection {
     /// Build the diagnostic shared by cross-file and inline-self imports.
     #[must_use]
-    pub fn diagnostic(
-        self,
-        name: &NameAtom,
-        src: &NamedSource<Arc<String>>,
-        span: Span,
-    ) -> GraphcalError {
+    pub fn diagnostic(self, name: &NameAtom, src: SourceId, span: Span) -> GraphcalError {
         let name = name.to_string();
-        let src = src.clone();
         let span = span.into();
         match self {
             Self::Runtime => GraphcalError::ImportRuntimeItem { name, src, span },
@@ -610,18 +602,19 @@ mod tests {
 
     #[test]
     fn rejection_diagnostics_name_their_boundary() {
-        let src = NamedSource::new("main.gcl", Arc::new(String::new()));
+        let src = crate::source_registry::SourceRegistry::new()
+            .register("main.gcl", std::sync::Arc::new(String::new()));
         let span = Span::new(0, 0);
         assert!(matches!(
-            PureImportRejection::Runtime.diagnostic(&atom("x"), &src, span),
+            PureImportRejection::Runtime.diagnostic(&atom("x"), src, span),
             GraphcalError::ImportRuntimeItem { .. }
         ));
         assert!(matches!(
-            PureImportRejection::Assertion.diagnostic(&atom("x"), &src, span),
+            PureImportRejection::Assertion.diagnostic(&atom("x"), src, span),
             GraphcalError::ImportAssertionItem { .. }
         ));
         assert!(matches!(
-            PureImportRejection::Visualization.diagnostic(&atom("x"), &src, span),
+            PureImportRejection::Visualization.diagnostic(&atom("x"), src, span),
             GraphcalError::ImportPlotItem { .. }
         ));
     }

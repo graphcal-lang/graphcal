@@ -308,12 +308,13 @@ impl PreparedProject {
             RootOutcome::evaluate(
                 self.plan(),
                 &row.bindings,
-                &self.source,
+                self.source,
+                &self.sources,
                 &self.host_fns,
                 cancellation,
             )
         })?;
-        if let Some(failure) = outcome.first_failure(self.plan(), &self.source)? {
+        if let Some(failure) = outcome.first_failure(self.plan(), self.source)? {
             return Ok(ModelRowOutcome::Failure(self.row_failure(failure)));
         }
         self.project_model_outputs(model, outcome.values())
@@ -364,7 +365,7 @@ impl PreparedProject {
                 )
                 .map(|(value, _)| value)
                 .map_err(|invariant| {
-                    ModelExecutionError::from(invariant.into_internal_error(&self.source))
+                    ModelExecutionError::from(invariant.into_internal_error(self.source))
                 })
             })
             .collect()

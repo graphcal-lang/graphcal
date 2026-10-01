@@ -1,11 +1,9 @@
-use std::sync::Arc;
-
 use crate::assertion_expectation::{ExpectedFail, ExpectedFailKeyPart};
 use crate::desugar::desugared_ast::AttributeArg;
 use crate::graphcal_error::GraphcalError;
 use crate::ir::resolve::collected::{ParsedExpectedFail, ParsedExpectedFailKey};
+use crate::source_id::SourceId;
 use crate::syntax::non_empty::NonEmpty;
-use miette::NamedSource;
 
 /// Parse `#[expected_fail]` attribute arguments into an [`ExpectedFail`] value.
 ///
@@ -15,7 +13,7 @@ use miette::NamedSource;
 /// - `Group` args produce multi-axis keys
 pub fn parse_expected_fail_args(
     args: &[AttributeArg],
-    src: &NamedSource<Arc<String>>,
+    src: SourceId,
 ) -> Result<ParsedExpectedFail, GraphcalError> {
     let keys: Vec<ParsedExpectedFailKey> = args
         .iter()
@@ -28,7 +26,7 @@ pub fn parse_expected_fail_args(
                 }])
             }
             AttributeArg::Path { path } => Err(GraphcalError::ExpectedFailInvalidArg {
-                src: src.clone(),
+                src,
                 span: path.span.into(),
             }),
             AttributeArg::FinitePosition { position, span } => {
@@ -49,7 +47,7 @@ pub fn parse_expected_fail_args(
                             })
                         }
                         AttributeArg::Path { path } => Err(GraphcalError::ExpectedFailInvalidArg {
-                            src: src.clone(),
+                            src,
                             span: path.span.into(),
                         }),
                         AttributeArg::FinitePosition { position, span } => {
@@ -60,7 +58,7 @@ pub fn parse_expected_fail_args(
                         }
                         AttributeArg::Group { span: g_span, .. } => {
                             Err(GraphcalError::ExpectedFailInvalidArg {
-                                src: src.clone(),
+                                src,
                                 span: (*g_span).into(),
                             })
                         }
@@ -69,7 +67,7 @@ pub fn parse_expected_fail_args(
                 let key = key?;
                 if key.is_empty() {
                     Err(GraphcalError::ExpectedFailInvalidArg {
-                        src: src.clone(),
+                        src,
                         span: (*span).into(),
                     })
                 } else {

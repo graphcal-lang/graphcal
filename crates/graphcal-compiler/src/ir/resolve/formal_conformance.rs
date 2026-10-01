@@ -1,13 +1,11 @@
 //! Differential conformance test between the Lean V002 oracle and the
 //! production declaration-shell validator.
 
+use serde::Deserialize;
 use std::collections::HashSet;
 use std::env;
 use std::process::Command;
 use std::sync::Arc;
-
-use miette::NamedSource;
-use serde::Deserialize;
 
 use super::{CollectedWithEntries, GraphcalError, resolve};
 use crate::syntax::parser::Parser;
@@ -149,8 +147,9 @@ fn parse_and_resolve_case(source: &str) -> Result<CollectedWithEntries, Graphcal
         .parse_file()
         .unwrap_or_else(|error| panic!("oracle rendered invalid Graphcal `{source}`: {error}"));
     let file = crate::desugar::desugared_ast::File::from(raw_file);
-    let src = NamedSource::new("lean-oracle-case.gcl", Arc::new(source.to_string()));
-    resolve(&file, &src)
+    let src = crate::source_registry::SourceRegistry::new()
+        .register("lean-oracle-case.gcl", Arc::new(source.to_string()));
+    resolve(&file, src)
 }
 
 fn compare_case(case: &OracleCase) -> Result<(), String> {

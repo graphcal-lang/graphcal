@@ -3,12 +3,11 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use miette::NamedSource;
-
 use crate::desugar::desugared_ast::TypeExpr;
 use crate::extern_struct_result::ExternStructResult;
 use crate::graphcal_error::GraphcalError;
 use crate::ir::extern_function::{ExternFunctionEntry, merge_extern_function};
+use crate::source_id::SourceId;
 use crate::syntax::names::NamePath;
 use crate::syntax::span::Span;
 
@@ -139,7 +138,7 @@ impl ExternGenerics {
     fn new(
         key: &crate::plugin_identity::ExternFnKey,
         function: &crate::desugar::desugared_ast::ExternFnDecl,
-        src: &NamedSource<Arc<String>>,
+        src: SourceId,
     ) -> Result<Self, GraphcalError> {
         use crate::hir::lower::GenericParamBinding;
         use crate::hir::types::{GenericParamId, GenericParamOwner};
@@ -169,7 +168,7 @@ impl ExternGenerics {
                 .insert_binding(GenericParamBinding::new(id.clone(), constraint, span))
                 .map_err(|_| GraphcalError::InvalidExternSignature {
                     message: format!("generic binder `{atom}` is declared more than once"),
-                    src: src.clone(),
+                    src,
                     span: binder.span().into(),
                 })?;
             match binder {
@@ -197,7 +196,7 @@ impl ExternGenerics {
 pub(super) fn resolve_plugin_imports(
     decls: &[crate::desugar::desugared_ast::PluginImportDecl],
     scope: &mut ExternSignatureScope<'_, '_>,
-    src: &NamedSource<Arc<String>>,
+    src: SourceId,
 ) -> Result<HashMap<crate::plugin_identity::ExternFnKey, ExternFunctionEntry>, GraphcalError> {
     let mut map = HashMap::new();
     for decl in decls {
@@ -214,7 +213,7 @@ fn resolve_extern_value_kind(
     type_ann: &TypeExpr,
     generics: &ExternGenerics,
     scope: &mut ExternSignatureScope<'_, '_>,
-    src: &NamedSource<Arc<String>>,
+    src: SourceId,
 ) -> Result<crate::function_signature::NamedParamKind, GraphcalError> {
     use crate::desugar::desugared_ast::TypeExprKind;
     use crate::function_signature::ParamKind;
@@ -222,7 +221,7 @@ fn resolve_extern_value_kind(
     if !type_ann.constraints.is_empty() {
         return Err(GraphcalError::InvalidExternSignature {
             message: "domain constraints are not allowed in extern function signatures".to_string(),
-            src: src.clone(),
+            src,
             span: type_ann.span.into(),
         });
     }
@@ -246,7 +245,7 @@ fn resolve_extern_value_kind(
             message:
                 "extern function signatures support Bool, Int, quantity types, and indexed scalar collections over one or more declared index variables"
                     .to_string(),
-            src: src.clone(),
+            src,
             span: type_ann.span.into(),
         }),
     }
@@ -258,7 +257,7 @@ fn resolve_extern_function(
     decl: &crate::desugar::desugared_ast::PluginImportDecl,
     function: &crate::desugar::desugared_ast::ExternFnDecl,
     scope: &mut ExternSignatureScope<'_, '_>,
-    src: &NamedSource<Arc<String>>,
+    src: SourceId,
 ) -> Result<ExternFunctionEntry, GraphcalError> {
     let key = crate::plugin_identity::ExternFnKey {
         plugin: crate::plugin_identity::PluginIdentity::resolve(
@@ -297,14 +296,14 @@ fn resolve_extern_function(
         {
             return GraphcalError::DuplicateExternParameter {
                 name: name.clone(),
-                src: src.clone(),
+                src,
                 duplicate: duplicate_param.name.span.into(),
                 first: first_param.name.span.into(),
             };
         }
         GraphcalError::InvalidExternSignature {
             message: err.to_string(),
-            src: src.clone(),
+            src,
             span: function.span.into(),
         }
     })?;
@@ -330,7 +329,7 @@ fn resolve_extern_result_kind(
     type_ann: &TypeExpr,
     generics: &ExternGenerics,
     scope: &mut ExternSignatureScope<'_, '_>,
-    src: &NamedSource<Arc<String>>,
+    src: SourceId,
 ) -> Result<crate::function_signature::NamedResultKind<ExternStructResult>, GraphcalError> {
     use crate::desugar::desugared_ast::TypeExprKind;
 
@@ -353,7 +352,7 @@ fn resolve_extern_result_kind(
             message: "generic struct returns are not supported in this phase; use a record \
                       type with concrete field types"
                 .to_string(),
-            src: src.clone(),
+            src,
             span: type_ann.span.into(),
         });
     }
@@ -366,13 +365,13 @@ pub(super) fn resolve_extern_struct_return(
     path: &NamePath,
     span: Span,
     scope: &mut ExternSignatureScope<'_, '_>,
-    src: &NamedSource<Arc<String>>,
+    src: SourceId,
 ) -> Result<crate::function_signature::NamedResultKind<ExternStructResult>, GraphcalError> {
     use crate::function_signature::{ResultKind, StructShape, StructShapeField};
 
     let invalid = |message: String| GraphcalError::InvalidExternSignature {
         message,
-        src: src.clone(),
+        src,
         span: span.into(),
     };
     let Ok(resolved_type) = scope
@@ -384,7 +383,7 @@ pub(super) fn resolve_extern_struct_return(
         // other unknown dimension-position name is reported.
         return Err(GraphcalError::UnknownDimension {
             name: path.clone(),
-            src: src.clone(),
+            src,
             span: span.into(),
         });
     };
@@ -431,7 +430,7 @@ pub(super) fn resolve_extern_struct_return(
 fn resolve_extern_struct_field(
     field: &crate::hir::nominal::NominalField,
     scope: &mut ExternSignatureScope<'_, '_>,
-    src: &NamedSource<Arc<String>>,
+    src: SourceId,
 ) -> Result<crate::function_signature::StructFieldKind, GraphcalError> {
     use crate::function_signature::StructFieldKind;
     use crate::hir::types::{BuiltinType, DeclType, DimTermTarget, ValueTypeKind};
@@ -443,7 +442,7 @@ fn resolve_extern_struct_field(
              fields support Bool, Int, and quantity types in this phase",
             field.name()
         ),
-        src: src.clone(),
+        src,
         span: annotation.span.into(),
     };
     if !annotation.domain_bounds.is_empty() {
@@ -462,7 +461,7 @@ fn resolve_extern_struct_field(
             // No dimension variables are in scope inside a record's fields;
             // the dimension is therefore concrete by construction.
             let overflow = || GraphcalError::DimensionOverflow {
-                src: src.clone(),
+                src,
                 span: annotation.span.into(),
             };
             let mut dimension = crate::dimension::Dimension::dimensionless();
@@ -504,7 +503,7 @@ fn resolve_extern_array_kind(
     indexes: &[crate::syntax::ast::IndexExpr],
     generics: &ExternGenerics,
     scope: &mut ExternSignatureScope<'_, '_>,
-    src: &NamedSource<Arc<String>>,
+    src: SourceId,
 ) -> Result<crate::function_signature::NamedParamKind, GraphcalError> {
     use crate::desugar::desugared_ast::TypeExprKind;
     use crate::function_signature::{DimMonomial, ParamKind, ScalarValueKind};
@@ -517,7 +516,7 @@ fn resolve_extern_array_kind(
                     message: "extern array axes must name the signature's `Index` binders \
                           (concrete indexes and `Fin(N)` axes cannot appear in the declaration)"
                         .to_string(),
-                    src: src.clone(),
+                    src,
                     span: index_expr.span().into(),
                 }
             })
@@ -527,7 +526,7 @@ fn resolve_extern_array_kind(
         crate::syntax::non_empty::NonEmpty::try_from_vec(resolved_indexes).map_err(|_| {
             GraphcalError::InvalidExternSignature {
                 message: "extern arrays must have at least one axis".to_string(),
-                src: src.clone(),
+                src,
                 span: type_ann_indexes_span(indexes, base),
             }
         })?;
@@ -535,7 +534,7 @@ fn resolve_extern_array_kind(
     if !base.constraints.is_empty() {
         return Err(GraphcalError::InvalidExternSignature {
             message: "domain constraints are not allowed in extern function signatures".to_string(),
-            src: src.clone(),
+            src,
             span: base.span.into(),
         });
     }
@@ -549,7 +548,7 @@ fn resolve_extern_array_kind(
         _ => {
             return Err(GraphcalError::InvalidExternSignature {
                 message: "extern array elements must be Bool, Int, or quantities".to_string(),
-                src: src.clone(),
+                src,
                 span: base.span.into(),
             });
         }
@@ -576,12 +575,12 @@ fn resolve_extern_dim_monomial(
     dim_expr: &crate::desugar::desugared_ast::DimExpr,
     generics: &ExternGenerics,
     scope: &mut ExternSignatureScope<'_, '_>,
-    src: &NamedSource<Arc<String>>,
+    src: SourceId,
 ) -> Result<crate::function_signature::NamedDimMonomial, GraphcalError> {
     use crate::syntax::ast::MulDivOp;
 
     let overflow = |span: Span| GraphcalError::DimensionOverflow {
-        src: src.clone(),
+        src,
         span: span.into(),
     };
 
@@ -609,7 +608,7 @@ fn resolve_extern_dim_monomial(
             None => {
                 return Err(GraphcalError::UnknownDimension {
                     name: term.name.value.clone(),
-                    src: src.clone(),
+                    src,
                     span: term.name.span.into(),
                 });
             }
@@ -618,7 +617,7 @@ fn resolve_extern_dim_monomial(
     crate::function_signature::DimMonomial::try_new(vars, fixed).map_err(|error| {
         GraphcalError::InvalidExternSignature {
             message: crate::function_signature::SignatureError::from(error).to_string(),
-            src: src.clone(),
+            src,
             span: dim_expr.span.into(),
         }
     })

@@ -7,15 +7,12 @@
 //! had already drifted (HIR accepted `-` on Bool) when each carried its own
 //! copy.
 
-use std::sync::Arc;
-
-use miette::NamedSource;
-
 use crate::desugar::desugared_ast::{BinOp, UnaryOp};
 use crate::dimension::{BaseDimId, Dimension, PreludeBaseDimension, Rational};
 use crate::display::formatting_registry::FormattingRegistry;
 use crate::exact_rational::ExactRational;
 use crate::graphcal_error::GraphcalError;
+use crate::source_id::SourceId;
 use crate::syntax::ast::PowerExponent;
 use crate::syntax::span::Span;
 
@@ -35,12 +32,12 @@ pub(super) struct Operand {
 fn comparison_operand_type<'a>(
     operand: &'a Operand,
     registry: &FormattingRegistry,
-    src: &NamedSource<Arc<String>>,
+    src: SourceId,
 ) -> Result<&'a CheckedType<Symbolic>, GraphcalError> {
     match &operand.ty {
         CheckedType::Indexed { .. } => Err(GraphcalError::IndexedComparisonOperand {
             found: format_checked_type(&operand.ty, registry),
-            src: src.clone(),
+            src,
             span: operand.span.into(),
         }),
         ty => Ok(ty),
@@ -60,14 +57,14 @@ fn fin_key_additive_rule(
     rhs: &Operand,
     rhs_const_int: Option<i64>,
     registry: &FormattingRegistry,
-    src: &NamedSource<Arc<String>>,
+    src: SourceId,
 ) -> Result<CheckedType<Symbolic>, GraphcalError> {
     let reject = |help: &str| {
         Err(GraphcalError::DimensionMismatch {
             expected: "a static Nat constant".to_string(),
             found: format_checked_type(&rhs.ty, registry),
             help: help.to_string(),
-            src: src.clone(),
+            src,
             span: rhs.span.into(),
         })
     };
@@ -99,14 +96,14 @@ fn fin_key_additive_rule(
         .add(&crate::nat::NatPolyForm::from_constant(addend))
         .map_err(|err| GraphcalError::EvalError {
             message: err.to_string(),
-            src: src.clone(),
+            src,
             span: rhs.span.into(),
         })?;
     crate::semantic::checked_type::IndexTypeRef::from_finite_index_form(shifted)
         .map(CheckedType::Key)
         .map_err(|err| GraphcalError::EvalError {
             message: err.describe_finite_index(),
-            src: src.clone(),
+            src,
             span: rhs.span.into(),
         })
 }
@@ -128,7 +125,7 @@ pub(super) fn binop_rule(
     rhs: &Operand,
     rhs_const_int: Option<i64>,
     registry: &FormattingRegistry,
-    src: &NamedSource<Arc<String>>,
+    src: SourceId,
 ) -> Result<CheckedType<Symbolic>, GraphcalError> {
     let lhs_type = &lhs.ty;
     let rhs_type = &rhs.ty;
@@ -140,7 +137,7 @@ pub(super) fn binop_rule(
                     expected: "Bool".to_string(),
                     found: format_checked_type(lhs_type, registry),
                     help: "boolean operators require Bool operands".to_string(),
-                    src: src.clone(),
+                    src,
                     span: lhs.span.into(),
                 });
             }
@@ -149,7 +146,7 @@ pub(super) fn binop_rule(
                     expected: "Bool".to_string(),
                     found: format_checked_type(rhs_type, registry),
                     help: "boolean operators require Bool operands".to_string(),
-                    src: src.clone(),
+                    src,
                     span: rhs.span.into(),
                 });
             }
@@ -172,7 +169,7 @@ pub(super) fn binop_rule(
                 expected: format_checked_type(lhs_type, registry),
                 found: format_checked_type(rhs_type, registry),
                 help: "equality operands must have the same type".to_string(),
-                src: src.clone(),
+                src,
                 span: rhs.span.into(),
             })
         }
@@ -193,7 +190,7 @@ pub(super) fn binop_rule(
                     },
                     help: "complex quantities are unordered; compare re(), im(), abs(), or phase() explicitly"
                         .to_string(),
-                    src: src.clone(),
+                    src,
                     span: if matches!(lhs_type, CheckedType::Complex(_)) {
                         lhs.span
                     } else {
@@ -208,7 +205,7 @@ pub(super) fn binop_rule(
                         expected: format_checked_type(lhs_type, registry),
                         found: format_checked_type(rhs_type, registry),
                         help: "comparison operands must have the same type".to_string(),
-                        src: src.clone(),
+                        src,
                         span: rhs.span.into(),
                     });
                 }
@@ -223,7 +220,7 @@ pub(super) fn binop_rule(
                         expected: format_checked_type(lhs_type, registry),
                         found: format_checked_type(rhs_type, registry),
                         help: "cannot compare datetimes with different time scales".to_string(),
-                        src: src.clone(),
+                        src,
                         span: rhs.span.into(),
                     });
                 }
@@ -236,7 +233,7 @@ pub(super) fn binop_rule(
                     expected: registry.dimensions.format_dimension(&lhs_dim),
                     found: registry.dimensions.format_dimension(&rhs_dim),
                     help: "comparison operands must have the same dimension".to_string(),
-                    src: src.clone(),
+                    src,
                     span: rhs.span.into(),
                 });
             }
@@ -259,7 +256,7 @@ pub(super) fn binop_rule(
                     help: "Fin-key arithmetic is written key-first: `k + c` with a \
                            static Nat constant"
                         .to_string(),
-                    src: src.clone(),
+                    src,
                     span: rhs.span.into(),
                 });
             }
@@ -274,7 +271,7 @@ pub(super) fn binop_rule(
                             found: format_checked_type(rhs_type, registry),
                             help: "complex operands of addition and subtraction must have the same dimension"
                                 .to_string(),
-                            src: src.clone(),
+                            src,
                             span: rhs.span.into(),
                         });
                     }
@@ -286,7 +283,7 @@ pub(super) fn binop_rule(
                         found: format_checked_type(rhs_type, registry),
                         help: "addition and subtraction do not implicitly promote real quantities; use to_complex()"
                             .to_string(),
-                        src: src.clone(),
+                        src,
                         span: rhs.span.into(),
                     });
                 }
@@ -304,7 +301,7 @@ pub(super) fn binop_rule(
                                 found: format_checked_type(rhs_type, registry),
                                 help: "cannot subtract datetimes with different time scales"
                                     .to_string(),
-                                src: src.clone(),
+                                src,
                                 span: rhs.span.into(),
                             });
                         }
@@ -315,7 +312,7 @@ pub(super) fn binop_rule(
                         expected: "Quantity(Time)".to_string(),
                         found: format_checked_type(rhs_type, registry),
                         help: "cannot add two datetimes; did you mean to subtract?".to_string(),
-                        src: src.clone(),
+                        src,
                         span: rhs.span.into(),
                     });
                 }
@@ -327,7 +324,7 @@ pub(super) fn binop_rule(
                         found: registry.dimensions.format_dimension(&rhs_dim),
                         help: "can only add/subtract a Time duration to/from a Datetime"
                             .to_string(),
-                        src: src.clone(),
+                        src,
                         span: rhs.span.into(),
                     });
                 }
@@ -343,7 +340,7 @@ pub(super) fn binop_rule(
                             expected: "Time".to_string(),
                             found: registry.dimensions.format_dimension(&lhs_dim),
                             help: "can only add a Time duration to a Datetime".to_string(),
-                            src: src.clone(),
+                            src,
                             span: lhs.span.into(),
                         });
                     }
@@ -354,7 +351,7 @@ pub(super) fn binop_rule(
                     expected: format_checked_type(lhs_type, registry),
                     found: format_checked_type(rhs_type, registry),
                     help: "cannot subtract a Datetime from a quantity".to_string(),
-                    src: src.clone(),
+                    src,
                     span: rhs.span.into(),
                 });
             }
@@ -366,7 +363,7 @@ pub(super) fn binop_rule(
                     found: registry.dimensions.format_dimension(&rhs_dim),
                     help: "operands of addition and subtraction must have the same dimension"
                         .to_string(),
-                    src: src.clone(),
+                    src,
                     span: rhs.span.into(),
                 });
             }
@@ -388,7 +385,7 @@ pub(super) fn binop_rule(
                 lhs_dim
                     .checked_mul(&rhs_dim)
                     .map_err(|_| GraphcalError::DimensionOverflow {
-                        src: src.clone(),
+                        src,
                         span: expr_span.into(),
                     })?;
             if lhs_complex || rhs_complex {
@@ -413,7 +410,7 @@ pub(super) fn binop_rule(
                 lhs_dim
                     .checked_div(&rhs_dim)
                     .map_err(|_| GraphcalError::DimensionOverflow {
-                        src: src.clone(),
+                        src,
                         span: expr_span.into(),
                     })?;
             if lhs_complex || rhs_complex {
@@ -434,7 +431,7 @@ pub(super) fn binop_rule(
                     format_checked_type(rhs_type, registry)
                 ),
                 help: "modulo operator requires Int operands".to_string(),
-                src: src.clone(),
+                src,
                 span: expr_span.into(),
             })
         }
@@ -457,7 +454,7 @@ pub(super) fn binop_rule(
                         found: value.to_string(),
                         help: "integer power requires a non-negative exact integer exponent"
                             .to_string(),
-                        src: src.clone(),
+                        src,
                         span: rhs.span.into(),
                     });
                 }
@@ -466,7 +463,7 @@ pub(super) fn binop_rule(
                     found: format_checked_type(rhs_type, registry),
                     help: "integer power requires an exact integer exponent such as `2`"
                         .to_string(),
-                    src: src.clone(),
+                    src,
                     span: rhs.span.into(),
                 });
             }
@@ -481,7 +478,7 @@ pub(super) fn binop_rule(
                         expected: "Dimensionless exponent".to_string(),
                         found: registry.dimensions.format_dimension(&rhs_dim),
                         help: "the exponent of a power must be dimensionless".to_string(),
-                        src: src.clone(),
+                        src,
                         span: rhs.span.into(),
                     });
                 }
@@ -494,7 +491,7 @@ pub(super) fn binop_rule(
                     }
                     let rational = Rational::try_from(exact).map_err(|_| {
                         GraphcalError::DimensionOverflow {
-                            src: src.clone(),
+                            src,
                             span: rhs.span.into(),
                         }
                     })?;
@@ -502,7 +499,7 @@ pub(super) fn binop_rule(
                         lhs_dim
                             .pow(rational)
                             .map_err(|_| GraphcalError::DimensionOverflow {
-                                src: src.clone(),
+                                src,
                                 span: expr_span.into(),
                             })?;
                     Ok(CheckedType::Quantity(dim))
@@ -522,7 +519,7 @@ pub(super) fn binop_rule(
                     Err(GraphcalError::FloatPowerExponent {
                         replacement,
                         help,
-                        src: src.clone(),
+                        src,
                         span: rhs.span.into(),
                     })
                 }
@@ -531,7 +528,7 @@ pub(super) fn binop_rule(
                         Ok(CheckedType::Quantity(Dimension::dimensionless()))
                     } else {
                         Err(GraphcalError::RuntimeExponentForDimensionedBase {
-                            src: src.clone(),
+                            src,
                             span: rhs.span.into(),
                         })
                     }
@@ -546,7 +543,7 @@ pub(super) fn unary_rule(
     op: UnaryOp,
     operand: &Operand,
     registry: &FormattingRegistry,
-    src: &NamedSource<Arc<String>>,
+    src: SourceId,
 ) -> Result<CheckedType<Symbolic>, GraphcalError> {
     match op {
         UnaryOp::Not => {
@@ -555,7 +552,7 @@ pub(super) fn unary_rule(
                     expected: "Bool".to_string(),
                     found: format_checked_type(&operand.ty, registry),
                     help: "logical NOT requires a Bool operand".to_string(),
-                    src: src.clone(),
+                    src,
                     span: operand.span.into(),
                 });
             }
@@ -569,7 +566,7 @@ pub(super) fn unary_rule(
                 expected: "Int or Quantity".to_string(),
                 found: format_checked_type(other, registry),
                 help: "negation requires a numeric quantity or Int operand".to_string(),
-                src: src.clone(),
+                src,
                 span: operand.span.into(),
             }),
         },
@@ -582,14 +579,14 @@ pub(super) fn if_rule(
     then_branch: &Operand,
     else_branch: &Operand,
     registry: &FormattingRegistry,
-    src: &NamedSource<Arc<String>>,
+    src: SourceId,
 ) -> Result<CheckedType<Symbolic>, GraphcalError> {
     if cond.ty != CheckedType::Bool {
         return Err(GraphcalError::DimensionMismatch {
             expected: "Bool".to_string(),
             found: format_checked_type(&cond.ty, registry),
             help: "if/else condition must be Bool".to_string(),
-            src: src.clone(),
+            src,
             span: cond.span.into(),
         });
     }
@@ -598,7 +595,7 @@ pub(super) fn if_rule(
             expected: format_checked_type(&then_branch.ty, registry),
             found: format_checked_type(&else_branch.ty, registry),
             help: "both branches of if/else must have the same dimension".to_string(),
-            src: src.clone(),
+            src,
             span: else_branch.span.into(),
         });
     }
@@ -609,7 +606,7 @@ pub(super) fn if_rule(
 pub(in crate::tir::dim_check) fn resolve_unit_dimension_or_diagnose(
     unit: &crate::hir::expr::ResolvedUnitExpr,
     tir: &dyn crate::tir::typed::TirRead,
-    src: &NamedSource<Arc<String>>,
+    src: SourceId,
 ) -> Result<Dimension, GraphcalError> {
     unit.terms
         .iter()
@@ -618,7 +615,7 @@ pub(in crate::tir::dim_check) fn resolve_unit_dimension_or_diagnose(
                 .unit_info(item.name.value.static_definition())
                 .ok_or_else(|| GraphcalError::UnknownUnit {
                     name: item.name.value.spelling().clone(),
-                    src: src.clone(),
+                    src,
                     span: item.name.span.into(),
                 })?;
             let exponent = item.power;
@@ -626,7 +623,7 @@ pub(in crate::tir::dim_check) fn resolve_unit_dimension_or_diagnose(
                 info.dimension
                     .pow(exponent)
                     .map_err(|_| GraphcalError::DimensionOverflow {
-                        src: src.clone(),
+                        src,
                         span: item.name.span.into(),
                     })?;
             let resolved = match item.op {
@@ -634,7 +631,7 @@ pub(in crate::tir::dim_check) fn resolve_unit_dimension_or_diagnose(
                 crate::syntax::ast::MulDivOp::Div => dimension.checked_div(&term_dimension),
             };
             resolved.map_err(|_| GraphcalError::DimensionOverflow {
-                src: src.clone(),
+                src,
                 span: item.name.span.into(),
             })
         })
@@ -648,12 +645,12 @@ pub(in crate::tir::dim_check) fn match_arms_rule(
     arm_body_span: impl Fn(usize) -> Span,
     expr_span: Span,
     registry: &FormattingRegistry,
-    src: &NamedSource<Arc<String>>,
+    src: SourceId,
 ) -> Result<CheckedType<Symbolic>, GraphcalError> {
     let Some(first) = arm_types.first() else {
         return Err(GraphcalError::EvalError {
             message: "match expression has no arms".to_string(),
-            src: src.clone(),
+            src,
             span: expr_span.into(),
         });
     };
@@ -663,7 +660,7 @@ pub(in crate::tir::dim_check) fn match_arms_rule(
                 expected: format_checked_type(first, registry),
                 found: format_checked_type(arm_type, registry),
                 help: "all match arms must return the same type".to_string(),
-                src: src.clone(),
+                src,
                 span: arm_body_span(i).into(),
             });
         }

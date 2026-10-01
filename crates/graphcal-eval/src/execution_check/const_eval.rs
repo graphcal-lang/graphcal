@@ -1,12 +1,11 @@
 //! Constant evaluation in the checker's constant schedule.
 
-use std::sync::Arc;
-
-use miette::NamedSource;
+use graphcal_compiler::source_registry::SourceRegistry;
 
 use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
 use graphcal_compiler::graphcal_error::GraphcalError;
 use graphcal_compiler::outcome::Outcome;
+use graphcal_compiler::source_id::SourceId;
 use graphcal_compiler::tir::typed::CheckedTir;
 
 use crate::checked_program::{EvaluatedTir, ExecutionFacts};
@@ -19,7 +18,8 @@ use crate::runtime_presentation::PendingPresentedMap;
 pub(super) fn eval_const_pool(
     tir: CheckedTir,
     inherited: &ExecutionFacts,
-    src: &NamedSource<Arc<String>>,
+    src: SourceId,
+    sources: &SourceRegistry,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<(EvaluatedTir, PendingPresentedMap), Outcome<GraphcalError>> {
     cancellation.checkpoint()?;
@@ -29,9 +29,10 @@ pub(super) fn eval_const_pool(
         .collect::<PendingPresentedMap>();
     let evaluated = EvaluatedTir::evaluate(tir, inherited, |step| {
         cancellation.checkpoint()?;
-        let session = EvalSession::provisional_constants(step.tir, src, cancellation.clone())
-            .with_roots(step.visible, None)
-            .for_decl(step.key);
+        let session =
+            EvalSession::provisional_constants(step.tir, src, sources, cancellation.clone())
+                .with_roots(step.visible, None)
+                .for_decl(step.key);
         reject_constant_call(step.expression.get(), src)?;
         let presented = eval_root_with_presentation(
             &session.executable(step.expression)?,
@@ -57,12 +58,12 @@ pub(super) fn eval_const_pool(
 
 fn reject_constant_call(
     expr: &graphcal_compiler::hir::expr::Expr,
-    src: &NamedSource<Arc<String>>,
+    src: SourceId,
 ) -> Result<(), GraphcalError> {
     match graphcal_compiler::hir::expr::find_dag_call(expr) {
         Some((target, span)) => Err(GraphcalError::DagCallInCompileTime {
             name: target.to_string(),
-            src: src.clone(),
+            src,
             span: span.into(),
         }),
         None => Ok(()),

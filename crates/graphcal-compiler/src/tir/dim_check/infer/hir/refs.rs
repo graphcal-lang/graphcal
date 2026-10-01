@@ -2,9 +2,7 @@
 
 use crate::hir::expr::LocalDecl;
 use crate::hir::expr::{ConstRef, ResolvedUnitExpr};
-use std::sync::Arc;
-
-use miette::NamedSource;
+use crate::source_id::SourceId;
 
 use crate::dimension::Dimension;
 use crate::graphcal_error::GraphcalError;
@@ -21,7 +19,7 @@ use super::override_deps::TypeNominalUse;
 pub(super) fn infer_hir_quantity_literal(
     unit: &ResolvedUnitExpr,
     tir: &dyn crate::tir::typed::TirRead,
-    src: &NamedSource<Arc<String>>,
+    src: SourceId,
 ) -> Result<CheckedType<Symbolic>, GraphcalError> {
     let dim = rules::resolve_unit_dimension_or_diagnose(unit, tir, src)?;
     Ok(CheckedType::Quantity(dim))
@@ -41,7 +39,7 @@ impl InferEnv<'_> {
                 .decl_type(&runtime_target)
                 .ok_or_else(|| GraphcalError::UnknownGraphRef {
                     name: ScopedName::local(runtime_target.to_unowned_def_name()),
-                    src: self.src.clone(),
+                    src: self.src,
                     span: span.into(),
                 })?;
         Ok(checked.declared().to_symbolic())
@@ -73,7 +71,7 @@ impl Infer<'_> {
                             "constructor `{}` requires field arguments",
                             target_def.name()
                         ),
-                        src: self.env.src.clone(),
+                        src: self.env.src,
                         span: target.span.into(),
                     });
                 }

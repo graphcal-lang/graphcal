@@ -8,7 +8,6 @@
 
 use std::collections::{BTreeSet, HashMap};
 use std::ops::Deref;
-use std::sync::Arc;
 
 use graphcal_compiler::cancellation::CancellationToken;
 use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
@@ -17,6 +16,8 @@ use graphcal_compiler::graphcal_error::GraphcalError;
 use graphcal_compiler::hir::expr::Expr;
 use graphcal_compiler::outcome::Outcome;
 use graphcal_compiler::resolved_name::ResolvedDeclName;
+use graphcal_compiler::source_id::SourceId;
+use graphcal_compiler::source_registry::SourceRegistry;
 use graphcal_compiler::syntax::span::Span;
 use graphcal_compiler::tir::texpr::TExpr;
 use graphcal_compiler::tir::typed::body_scope::Scoped;
@@ -24,7 +25,6 @@ use graphcal_compiler::tir::typed::checked::CheckedTir;
 use graphcal_compiler::tir::typed::evaluation_unit::ScopedTree;
 use graphcal_compiler::tir::typed::model::StructFieldConstraintKey;
 use graphcal_compiler::tir::typed::scoped_node::ScopedNode;
-use miette::NamedSource;
 
 use crate::constant_pools::RuntimeValueMap;
 use crate::domain_constraint::ResolvedDomainConstraint;
@@ -57,7 +57,10 @@ pub struct EvalEnvironment<'a> {
     pub cancellation: CancellationToken,
     pub(super) work_budget: WorkBudget,
     pub registry: &'a FormattingRegistry,
-    pub src: &'a NamedSource<Arc<String>>,
+    pub src: SourceId,
+    /// Names of the sources `src` and every diagnostic id resolve in, for
+    /// runtime presentation messages.
+    pub sources: &'a SourceRegistry,
     pub tir: &'a CheckedTir,
     pub current_decl: Option<ResolvedDeclName>,
     /// The root frame's values, which calls read root-owned runtime imports
@@ -70,6 +73,17 @@ pub struct EvalEnvironment<'a> {
         >,
     >,
     pub unfinished_calls: Option<&'a std::cell::RefCell<BTreeSet<ResolvedDeclName>>>,
+}
+
+impl EvalEnvironment<'_> {
+    /// The display name of a registered source, for runtime presentation
+    /// messages.
+    #[must_use]
+    pub fn source_name(&self, source: SourceId) -> &str {
+        self.sources
+            .named_source(source)
+            .map_or("<unknown source>", miette::NamedSource::name)
+    }
 }
 
 /// An immutable environment whose capabilities can only be selected by phase.
@@ -93,7 +107,8 @@ impl<'a> Deref for EvalSession<'a> {
 impl<'a> EvalSession<'a> {
     fn environment(
         tir: &'a CheckedTir,
-        src: &'a NamedSource<Arc<String>>,
+        src: SourceId,
+        sources: &'a SourceRegistry,
         cancellation: CancellationToken,
     ) -> EvalEnvironment<'a> {
         EvalEnvironment {
@@ -101,6 +116,7 @@ impl<'a> EvalSession<'a> {
             work_budget: WorkBudget::default(),
             registry: tir.registry(),
             src,
+            sources,
             tir,
             current_decl: None,
             root: None,
@@ -115,11 +131,12 @@ impl<'a> EvalSession<'a> {
     #[must_use]
     pub fn provisional_constants(
         tir: &'a CheckedTir,
-        src: &'a NamedSource<Arc<String>>,
+        src: SourceId,
+        sources: &'a SourceRegistry,
         cancellation: CancellationToken,
     ) -> Self {
         Self {
-            environment: Self::environment(tir, src, cancellation),
+            environment: Self::environment(tir, src, sources, cancellation),
             capabilities: Capabilities::ProvisionalConstants,
         }
     }
@@ -130,12 +147,13 @@ impl<'a> EvalSession<'a> {
     #[must_use]
     pub fn checked(
         plan: &'a ExecPlan<'a>,
-        src: &'a NamedSource<Arc<String>>,
+        src: SourceId,
+        sources: &'a SourceRegistry,
         host: &'a HostFunctionRegistry,
         cancellation: CancellationToken,
     ) -> Self {
         Self {
-            environment: Self::environment(plan.tir(), src, cancellation),
+            environment: Self::environment(plan.tir(), src, sources, cancellation),
             capabilities: Capabilities::Checked { plan, host },
         }
     }
@@ -277,7 +295,7 @@ impl<'a> EvalSession<'a> {
     }
 
     #[must_use]
-    pub fn with_src<'b>(&'b self, src: &'b NamedSource<Arc<String>>) -> EvalSession<'b>
+    pub fn with_src<'b>(&'b self, src: SourceId) -> EvalSession<'b>
     where
         'a: 'b,
     {
@@ -310,7 +328,7 @@ impl<'a> EvalSession<'a> {
     pub fn eval_error(&self, message: impl Into<String>, span: Span) -> GraphcalError {
         GraphcalError::EvalError {
             message: message.into(),
-            src: self.src.clone(),
+            src: self.src,
             span: span.into(),
         }
     }
@@ -361,7 +379,7 @@ impl EvalSession<'_> {
             .map_or(Ok(()), |reason| {
                 Err(GraphcalError::EvaluationUnavailable {
                     reason,
-                    src: self.src.clone(),
+                    src: self.src,
                     span: expression.span().into(),
                 }
                 .into())

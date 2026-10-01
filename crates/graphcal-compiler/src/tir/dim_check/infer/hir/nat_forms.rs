@@ -3,21 +3,18 @@
 //! Normalization itself happens at the AST-to-HIR boundary
 //! (`hir::lower`); inference only validates the resulting forms.
 
-use std::sync::Arc;
-
-use miette::NamedSource;
-
 use crate::graphcal_error::GraphcalError;
+use crate::source_id::SourceId;
 use crate::syntax::span::Span;
 
 pub(super) fn finite_index_error(
     err: crate::semantic::index_def::IndexCardinalityError,
-    src: &NamedSource<Arc<String>>,
+    src: SourceId,
     span: Span,
 ) -> GraphcalError {
     GraphcalError::EvalError {
         message: err.describe_finite_index(),
-        src: src.clone(),
+        src,
         span: span.into(),
     }
 }

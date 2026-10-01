@@ -4,9 +4,7 @@ use crate::hir::nominal::NominalTypeDef;
 use crate::hir::types::{
     BuiltinType, DimArg, DimExpr, DimTermTarget, GenericArg, IndexRef, ValueType, ValueTypeKind,
 };
-use std::sync::Arc;
-
-use miette::NamedSource;
+use crate::source_id::SourceId;
 
 use crate::dimension::Dimension;
 use crate::graphcal_error::GraphcalError;
@@ -58,7 +56,7 @@ impl InferEnv<'_> {
                     "generic type parameter `{}` is not concretely bound",
                     param.value.name
                 ),
-                src: self.src.clone(),
+                src: self.src,
                 span: param.span.into(),
             }),
             ValueTypeKind::TypeApplication { name, generic_args } => {
@@ -73,8 +71,8 @@ impl InferEnv<'_> {
                             "semantic type metadata missing generic type `{}`",
                             name.value
                         ),
-                        src: self.src.clone(),
-                        span: name.span.into(),
+                        src: self.src,
+                        anchor: crate::diagnostic_anchor::DiagnosticAnchor::Source(name.span),
                     })?;
                 Ok(CheckedType::Struct(
                     StructTypeRef::from_resolved(name.value.clone()),
@@ -108,7 +106,7 @@ impl InferEnv<'_> {
 
 fn inferred_index_from_type_arg(
     index: &IndexRef,
-    src: &NamedSource<Arc<String>>,
+    src: SourceId,
 ) -> Result<IndexTypeRef<Symbolic>, GraphcalError> {
     match index {
         IndexRef::Concrete(name) => Ok(IndexTypeRef::from_resolved(name.value.clone())),
@@ -117,7 +115,7 @@ fn inferred_index_from_type_arg(
                 "generic index parameter `{}` is not concretely bound",
                 param.value.name
             ),
-            src: src.clone(),
+            src,
             span: param.span.into(),
         }),
         IndexRef::Finite(nat_expr) => IndexTypeRef::from_finite_index_form(nat_expr.value.clone())
@@ -128,7 +126,7 @@ fn inferred_index_from_type_arg(
 fn infer_hir_dim_expr_arg(
     dim_expr: &DimExpr,
     tir: &dyn crate::tir::typed::TirRead,
-    src: &NamedSource<Arc<String>>,
+    src: SourceId,
 ) -> Result<Dimension, GraphcalError> {
     dim_expr
         .terms
@@ -139,7 +137,7 @@ fn infer_hir_dim_expr_arg(
                     let dim = tir.dimension(&target.value).cloned().ok_or_else(|| {
                         GraphcalError::UnknownDimension {
                             name: NamePath::from(target.value.atom().clone()),
-                            src: src.clone(),
+                            src,
                             span: target.span.into(),
                         }
                     })?;
@@ -151,7 +149,7 @@ fn infer_hir_dim_expr_arg(
                             "generic dimension parameter `{}` is not concretely bound",
                             param.value.name
                         ),
-                        src: src.clone(),
+                        src,
                         span: param.span.into(),
                     });
                 }
@@ -159,21 +157,21 @@ fn infer_hir_dim_expr_arg(
             let powered = dim
                 .pow(power)
                 .map_err(|_| GraphcalError::DimensionOverflow {
-                    src: src.clone(),
+                    src,
                     span: span.into(),
                 })?;
             match item.op {
                 crate::desugar::desugared_ast::MulDivOp::Mul => {
                     acc.checked_mul(&powered)
                         .map_err(|_| GraphcalError::DimensionOverflow {
-                            src: src.clone(),
+                            src,
                             span: span.into(),
                         })
                 }
                 crate::desugar::desugared_ast::MulDivOp::Div => {
                     acc.checked_div(&powered)
                         .map_err(|_| GraphcalError::DimensionOverflow {
-                            src: src.clone(),
+                            src,
                             span: span.into(),
                         })
                 }
@@ -210,7 +208,7 @@ impl InferEnv<'_> {
                     type_def.name(),
                     applied_generic_args.len()
                 ),
-                src: self.src.clone(),
+                src: self.src,
                 span: span.into(),
             });
         }
@@ -245,7 +243,7 @@ impl InferEnv<'_> {
                         "internal: generic parameter `{}` has no default",
                         param.name()
                     ),
-                    src: self.src.clone(),
+                    src: self.src,
                     span: span.into(),
                 })?
                 .resolved;

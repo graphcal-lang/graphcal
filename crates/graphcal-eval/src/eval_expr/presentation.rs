@@ -29,7 +29,7 @@ pub(super) fn pending(
 ) -> PendingQuantityDisplay {
     PendingQuantityDisplay::Requested(Box::new(PendingDisplayUnit {
         owner: owner.clone(),
-        source: ctx.src.clone(),
+        source: ctx.src,
         unit: unit.resolved(),
     }))
 }
@@ -48,7 +48,7 @@ pub(super) fn scaled<R: std::fmt::Display>(
     ) {
         Ok(label) => QuantityDisplay::Unit { label, scale },
         Err(error) => QuantityDisplay::Failed(PresentationFailure::Formatting {
-            source_name: ctx.src.name().to_owned(),
+            source_name: ctx.source_name(ctx.src).to_owned(),
             error,
         }),
     }
@@ -101,7 +101,7 @@ fn resolve_request(
     evaluate: EvaluateExecutable,
 ) -> Result<QuantityDisplay, Outcome<GraphcalError>> {
     ctx.cancellation.checkpoint()?;
-    let context = ctx.with_src(&request.source);
+    let context = ctx.with_src(request.source);
     crate::pipeline_metrics::record(crate::pipeline_metrics::Event::PresentationEvaluation);
     match resolved_unit_scale(&request.unit, values, &context, evaluate)
         .map(|scale| scaled(&request.unit, scale, &context))
@@ -112,8 +112,8 @@ fn resolve_request(
         ) => Err(error),
         Err(Outcome::Failed(error)) => Ok(QuantityDisplay::Failed(PresentationFailure::Scale {
             source_name: match &error {
-                GraphcalError::EvalError { src, .. } => src.name().to_owned(),
-                _ => context.src.name().to_owned(),
+                GraphcalError::EvalError { src, .. } => context.source_name(*src).to_owned(),
+                _ => context.source_name(context.src).to_owned(),
             },
             message: error.to_string(),
         })),

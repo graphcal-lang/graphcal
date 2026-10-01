@@ -4,8 +4,9 @@ use crate::resolved_name::ResolvedDeclName;
 use crate::semantic::time_scale::TimeScale;
 use crate::syntax::parser::Parser;
 
-fn make_src(source: &str) -> NamedSource<Arc<String>> {
-    NamedSource::new("test", Arc::new(source.to_string()))
+fn make_src(source: &str) -> crate::source_id::SourceId {
+    crate::source_registry::SourceRegistry::new()
+        .register("test", std::sync::Arc::new(source.to_string()))
 }
 
 fn parse_and_desugar(source: &str) -> crate::desugar::desugared_ast::File {
@@ -15,22 +16,23 @@ fn parse_and_desugar(source: &str) -> crate::desugar::desugared_ast::File {
 
 fn parse_and_resolve(source: &str) -> Result<CollectedWithEntries, GraphcalError> {
     let file = parse_and_desugar(source);
-    resolve(&file, &make_src(source))
+    resolve(&file, make_src(source))
 }
 
 /// Run the full per-file pipeline (desugar → IR → HIR/TIR) so tests can
 /// observe reference resolution and the HIR-derived dependency graph.
 fn compile_to_tir(source: &str) -> Result<crate::tir::typed::UncheckedTir, GraphcalError> {
     let file = parse_and_desugar(source);
-    let src = NamedSource::new("test.gcl", Arc::new(source.to_string()));
-    let ir = crate::ir::lower::lower(&file, &src)?;
+    let src = crate::source_registry::SourceRegistry::new()
+        .register("test.gcl", std::sync::Arc::new(source.to_string()));
+    let ir = crate::ir::lower::lower(&file, "test.gcl", src)?;
     let mut modules = crate::resolve::builder::TestModules::default();
     modules.add(ir.dag_id().clone(), &file.declarations);
     let resolver = modules.build().unwrap();
     let mut project_types = crate::tir::typed::ProjectTypeStore::default();
     project_types.insert_graphcal_prelude().unwrap();
     project_types.insert_module(ir.definitions()).unwrap();
-    crate::tir::typed::type_resolve_draft(ir, &src, &resolver, Arc::new(project_types))
+    crate::tir::typed::type_resolve_draft(ir, src, &resolver, std::sync::Arc::new(project_types))
         .map(crate::tir::typed::TirDraft::finish)
 }
 
@@ -92,7 +94,7 @@ fn source_level_extreme_dimension_exponent_formats_exactly() {
 fn resolve_rocket_ksr() {
     let source = include_str!("../../../../../tests/fixtures/valid/rocket.gcl");
     let file = parse_and_desugar(source);
-    let resolved = resolve(&file, &make_src(source)).unwrap();
+    let resolved = resolve(&file, make_src(source)).unwrap();
     assert_eq!(resolved.consts().len(), 1);
     assert_eq!(resolved.params().len(), 3);
     assert_eq!(resolved.nodes().len(), 3);
@@ -102,7 +104,7 @@ fn resolve_rocket_ksr() {
 fn resolve_constants_ksr() {
     let source = include_str!("../../../../../tests/fixtures/valid/constants.gcl");
     let file = parse_and_desugar(source);
-    let resolved = resolve(&file, &make_src(source)).unwrap();
+    let resolved = resolve(&file, make_src(source)).unwrap();
     assert_eq!(resolved.consts().len(), 4);
     assert_eq!(resolved.params().len(), 1);
     assert_eq!(resolved.nodes().len(), 2);
@@ -552,7 +554,7 @@ fn resolve_import_decl_skipped() {
     // import declarations should not be treated as param/node/const
     let source = "import helper::{something};";
     let file = parse_and_desugar(source);
-    let resolved = resolve(&file, &make_src(source)).unwrap();
+    let resolved = resolve(&file, make_src(source)).unwrap();
     assert!(resolved.params().is_empty());
     assert!(resolved.nodes().is_empty());
     assert!(resolved.consts().is_empty());

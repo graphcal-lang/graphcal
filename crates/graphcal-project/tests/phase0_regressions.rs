@@ -11,6 +11,8 @@ use std::collections::HashMap;
 use std::panic;
 
 use graphcal_compiler::graphcal_error::GraphcalError;
+
+use graphcal_compiler::graphcal_error::RenderedGraphcalError;
 use graphcal_eval::eval::{EvalResult, Value};
 use graphcal_io::RealFileSystem;
 use graphcal_project::compile_error::CompileError;
@@ -19,7 +21,7 @@ use miette::Diagnostic;
 
 fn compile_graphcal_error(source: &str) -> GraphcalError {
     match compile_and_eval(source).unwrap_err() {
-        CompileError::Eval(err) => err,
+        CompileError::Eval(err) => err.error,
         other => panic!("expected semantic error, got {other:?}"),
     }
 }
@@ -195,9 +197,10 @@ fn reexported_assertions_and_plots_keep_pure_import_rejections() {
     );
     assert!(matches!(
         assertion,
-        Err(CompileError::Eval(
-            GraphcalError::ImportAssertionItem { .. }
-        ))
+        Err(CompileError::Eval(RenderedGraphcalError {
+            error: GraphcalError::ImportAssertionItem { .. },
+            ..
+        }))
     ));
 
     let (_plot_dir, plot_root) = write_test_project("reexport_roles", &files, "plot_main.gcl");
@@ -209,7 +212,10 @@ fn reexported_assertions_and_plots_keep_pure_import_rejections() {
     );
     assert!(matches!(
         plot,
-        Err(CompileError::Eval(GraphcalError::ImportPlotItem { .. }))
+        Err(CompileError::Eval(RenderedGraphcalError {
+            error: GraphcalError::ImportPlotItem { .. },
+            ..
+        }))
     ));
 }
 
@@ -712,7 +718,7 @@ fn included_dynamic_unit_error_uses_producer_source() {
     let CompileError::Eval(error) = error else {
         panic!("expected semantic error, got {error:?}");
     };
-    assert!(matches!(error, GraphcalError::UnknownGraphRef { .. }));
+    assert!(matches!(error.error, GraphcalError::UnknownGraphRef { .. }));
     let source = error.named_source();
     assert!(
         source.name().ends_with("lib.gcl"),
@@ -747,7 +753,11 @@ fn include_binding_lowering_error_uses_importer_source() {
 
     let result = compile_and_eval_project(&root, &HashMap::new(), None, &RealFileSystem::default());
     match result {
-        Err(CompileError::Eval(GraphcalError::UnknownGraphRef { name, src, span })) => {
+        Err(CompileError::Eval(rendered)) => {
+            let GraphcalError::UnknownGraphRef { name, span, .. } = &rendered.error else {
+                panic!("expected UnknownGraphRef, got {:?}", rendered.error);
+            };
+            let src = rendered.named_source();
             assert_eq!(name.leaf().as_str(), "missing");
             assert!(
                 src.name().ends_with("main.gcl"),
@@ -846,7 +856,7 @@ include pkg.lib()::{ cost };
     assert!(
         matches!(
             &result,
-            Err(CompileError::Eval(GraphcalError::RequiredStaticInputNotBound { name, .. }))
+            Err(CompileError::Eval(RenderedGraphcalError { error: GraphcalError::RequiredStaticInputNotBound { name, .. }, .. }))
                 if name == "Phase"
         ),
         "explicit instance should report its unsatisfied index: {result:?}",

@@ -180,14 +180,14 @@ fn check_plot_references(
                         owner_kind,
                         owner: owner.clone(),
                         name: reference.value.clone(),
-                        src: ctx.env.src.clone(),
+                        src: ctx.env.src,
                         span: reference.span.into(),
                     },
                     |actual_kind| GraphcalError::CompositionReferencesNonPlot {
                         owner_kind,
                         actual_kind,
                         name: reference.value.clone(),
-                        src: ctx.env.src.clone(),
+                        src: ctx.env.src,
                         span: reference.span.into(),
                     },
                 ));
@@ -197,7 +197,7 @@ fn check_plot_references(
                     owner_kind,
                     owner: owner.clone(),
                     name: reference.value.clone(),
-                    src: ctx.env.src.clone(),
+                    src: ctx.env.src,
                     span: reference.span.into(),
                 });
             }
@@ -230,7 +230,7 @@ fn check_plot_encodings(
                 GraphcalError::PlotEncodingTypeMismatch {
                     channel: *channel,
                     found: format_checked_type(&inferred, ctx.env.registry),
-                    src: ctx.env.src.clone(),
+                    src: ctx.env.src,
                     span: expr.span.into(),
                 }
                 .into()
@@ -245,7 +245,7 @@ fn check_plot_encodings(
         let (_, expr) = &body.encodings[error.channel()];
         return Err(GraphcalError::PlotEncodingAxisMismatch {
             channels: describe_channel_axes(body, &shapes),
-            src: ctx.env.src.clone(),
+            src: ctx.env.src,
             span: expr.span.into(),
         }
         .into());
@@ -327,7 +327,7 @@ fn invalid_property(
         property: field.property.name().to_string(),
         context,
         valid: valid.to_string(),
-        src: ctx.env.src.clone(),
+        src: ctx.env.src,
         span: field.name_span.into(),
     }
 }
@@ -345,7 +345,7 @@ pub(super) fn check_property_value(
         property,
         expected: expected.describe(),
         found,
-        src: ctx.env.src.clone(),
+        src: ctx.env.src,
         span: field.value.span.into(),
     };
 
@@ -371,7 +371,7 @@ pub(super) fn check_property_value(
                 CheckedType::Quantity(d) => Err(GraphcalError::PlotPropertyDimensioned {
                     property,
                     dimension: ctx.env.registry.dimensions.format_dimension(&d),
-                    src: ctx.env.src.clone(),
+                    src: ctx.env.src,
                     span: field.value.span.into(),
                 }
                 .into()),

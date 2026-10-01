@@ -15,6 +15,7 @@ use crate::compile_error::CompileError;
 use crate::prepare::*;
 use crate::project_compiler::{ProjectCompiler, compile_to_tir, compile_to_tir_from_project};
 use graphcal_compiler::graphcal_error::GraphcalError;
+use graphcal_compiler::graphcal_error::RenderedGraphcalError;
 use graphcal_compiler::outcome::Outcome;
 use graphcal_compiler::syntax::attribute::AttributeName;
 use graphcal_compiler::syntax::decl_name::DeclName;
@@ -482,11 +483,13 @@ node measured: Length = if probe::toggle() { 1000.0 m -> km } else { 2.0 m -> m 
 fn context_capabilities_are_phase_selected_and_checked_scopes_fail_closed() {
     let source = "type Bounded { Bounded(value: Dimensionless(min: 1.0)), } node x: Bounded = Bounded(value: 2.0);";
     let tir = compile_to_tir(source, "capabilities.gcl").unwrap();
-    let src = miette::NamedSource::new("capabilities.gcl", std::sync::Arc::new(source.to_string()));
+    let mut sources = graphcal_compiler::source_registry::SourceRegistry::new();
+    let src = sources.register("capabilities.gcl", std::sync::Arc::new(source.to_string()));
     let cancellation = graphcal_compiler::cancellation::CancellationToken::unbounded();
     let provisional = graphcal_eval::eval_expr::EvalSession::provisional_constants(
         &tir,
-        &src,
+        src,
+        &sources,
         cancellation.clone(),
     );
     assert!(provisional.host_fns().is_none());
@@ -494,10 +497,12 @@ fn context_capabilities_are_phase_selected_and_checked_scopes_fail_closed() {
     assert!(provisional.execution_plan().is_err());
 
     let prepared =
-        graphcal_eval::exec_plan::compile_with_cancellation(&tir, &src, &cancellation).unwrap();
+        graphcal_eval::exec_plan::compile_with_cancellation(&tir, src, &sources, &cancellation)
+            .unwrap();
     let plan = prepared.plan();
     let host = graphcal_eval::host_fns::HostFunctionRegistry::new();
-    let context = graphcal_eval::eval_expr::EvalSession::checked(plan, &src, &host, cancellation);
+    let context =
+        graphcal_eval::eval_expr::EvalSession::checked(plan, src, &sources, &host, cancellation);
     assert!(std::ptr::eq(context.tir, plan.tir()));
     assert!(std::ptr::eq(
         context.struct_field_constraints().unwrap(),
@@ -513,7 +518,8 @@ fn generic_nat_services_cannot_cross_type_owners_with_the_same_parameter_name() 
     use graphcal_compiler::syntax::type_name::{ConstructorName, FieldName, StructTypeName};
     let source = "type A<N: Nat> { A(value: Dimensionless(min: sum(for p: Fin(N) { 1.0 }))), } type B<N: Nat> { B(value: Dimensionless), }";
     let tir = compile_to_tir(source, "nat-scopes.gcl").unwrap();
-    let src = miette::NamedSource::new("nat-scopes.gcl", std::sync::Arc::new(source.to_string()));
+    let mut sources = graphcal_compiler::source_registry::SourceRegistry::new();
+    let src = sources.register("nat-scopes.gcl", std::sync::Arc::new(source.to_string()));
     let type_id = |name| {
         ResolvedStructTypeName::for_test(
             tir.root_dag_id().clone(),
@@ -537,7 +543,8 @@ fn generic_nat_services_cannot_cross_type_owners_with_the_same_parameter_name() 
     let bound = field.map(|field| &field.domain_bounds()[0]);
     let context = graphcal_eval::eval_expr::EvalSession::provisional_constants(
         &tir,
-        &src,
+        src,
+        &sources,
         graphcal_compiler::cancellation::CancellationToken::unbounded(),
     );
     let own = std::collections::HashMap::from([(a, 3)]);
@@ -609,16 +616,18 @@ fn pure_plugin_values_agree_across_source_orders_and_root_call_execution() {
 
 fn callable_plan_fixture() -> (
     graphcal_compiler::tir::typed::CheckedTir,
-    miette::NamedSource<std::sync::Arc<String>>,
+    graphcal_compiler::source_id::SourceId,
+    graphcal_compiler::source_registry::SourceRegistry,
 ) {
     let source = "const node BASE: Dimensionless = 3.0; dag helper { const node LOCAL: Dimensionless = 20.0; pub node out: Dimensionless = @LOCAL; } node value: Dimensionless = @helper()::out + @BASE;";
     let tir = compile_to_tir(source, "call-plans.gcl").unwrap();
-    let src = miette::NamedSource::new("call-plans.gcl", std::sync::Arc::new(source.to_string()));
+    let mut sources = graphcal_compiler::source_registry::SourceRegistry::new();
+    let src = sources.register("call-plans.gcl", std::sync::Arc::new(source.to_string()));
     assert!(
         tir.dag_registry().len() > 1,
         "fixture must contain a real callable body"
     );
-    (tir, src)
+    (tir, src, sources)
 }
 
 #[test]
@@ -626,8 +635,9 @@ fn plans_have_one_callable_for_every_dag_at_its_position() {
     let source =
         "dag unused { pub node out: Dimensionless = 1.0; } node value: Dimensionless = 2.0;";
     let tir = compile_to_tir(source, "uncalled.gcl").unwrap();
-    let src = miette::NamedSource::new("uncalled.gcl", std::sync::Arc::new(source.to_string()));
-    let prepared = graphcal_eval::exec_plan::compile(&tir, &src).unwrap();
+    let mut sources = graphcal_compiler::source_registry::SourceRegistry::new();
+    let src = sources.register("uncalled.gcl", std::sync::Arc::new(source.to_string()));
+    let prepared = graphcal_eval::exec_plan::compile(&tir, src, &sources).unwrap();
     let owners = prepared
         .plan()
         .callables()
@@ -644,8 +654,8 @@ fn plans_have_one_callable_for_every_dag_at_its_position() {
 
 #[test]
 fn call_slots_resolve_to_the_callable_of_their_target() {
-    let (tir, src) = callable_plan_fixture();
-    let prepared = graphcal_eval::exec_plan::compile(&tir, &src).unwrap();
+    let (tir, src, sources) = callable_plan_fixture();
+    let prepared = graphcal_eval::exec_plan::compile(&tir, src, &sources).unwrap();
     let plan = prepared.plan();
     let targets = tir
         .root()
@@ -708,11 +718,12 @@ fn instances_sharing_a_template_body_keep_its_callees() {
                   include inner(input: @other()::out) as third; \
                   node output: Dimensionless = @first::value + @second::value + @third::value;";
     let tir = compile_to_tir(source, "shared-callees.gcl").unwrap();
-    let src = miette::NamedSource::new(
+    let mut sources = graphcal_compiler::source_registry::SourceRegistry::new();
+    let src = sources.register(
         "shared-callees.gcl",
         std::sync::Arc::new(source.to_string()),
     );
-    let prepared = graphcal_eval::exec_plan::compile(&tir, &src).unwrap();
+    let prepared = graphcal_eval::exec_plan::compile(&tir, src, &sources).unwrap();
     let plan = prepared.plan();
     let callees = |dag: &graphcal_compiler::tir::typed::CheckedDag| {
         plan.callees_of(dag.dag_id())
@@ -767,9 +778,9 @@ fn instances_sharing_a_template_body_keep_its_callees() {
 
 #[test]
 fn every_body_has_one_prepared_callable_with_retained_single_body_pools() {
-    let (tir, src) = callable_plan_fixture();
+    let (tir, src, sources) = callable_plan_fixture();
     let (prepared, counts) = graphcal_eval::pipeline_metrics::measure(|| {
-        graphcal_eval::exec_plan::compile(&tir, &src).unwrap()
+        graphcal_eval::exec_plan::compile(&tir, src, &sources).unwrap()
     });
     let plan = prepared.plan();
     assert_eq!(
@@ -868,13 +879,15 @@ fn dependency_availability_is_determined_once_per_declaration() {
                   node b: Dimensionless = if @a > 0.0 { @a * (@a + 1.0) } else { -@a }; \
                   node c: Dimensionless = abs(@a - @b) + sqrt(@b * 2.0);";
     let tir = compile_to_tir(source, "availability.gcl").unwrap();
-    let src = miette::NamedSource::new("availability.gcl", std::sync::Arc::new(source.to_string()));
-    let prepared = graphcal_eval::exec_plan::compile(&tir, &src).unwrap();
+    let mut sources = graphcal_compiler::source_registry::SourceRegistry::new();
+    let src = sources.register("availability.gcl", std::sync::Arc::new(source.to_string()));
+    let prepared = graphcal_eval::exec_plan::compile(&tir, src, &sources).unwrap();
     let (runtime, counts) = graphcal_eval::pipeline_metrics::measure(|| {
         graphcal_eval::eval::runtime::run_eval_loop_with_bindings(
             prepared.plan(),
             &graphcal_eval::eval::bindings::RuntimeParameterBindings::new(),
-            &src,
+            src,
+            &sources,
             &graphcal_eval::host_fns::HostFunctionRegistry::new(),
             &graphcal_compiler::cancellation::CancellationToken::unbounded(),
         )
@@ -888,8 +901,8 @@ fn dependency_availability_is_determined_once_per_declaration() {
 #[test]
 fn shared_frames_cancel_before_interpretation() {
     use graphcal_eval::execution_frame::{ExecutionFrame, FailurePolicy};
-    let (tir, src) = callable_plan_fixture();
-    let prepared = graphcal_eval::exec_plan::compile(&tir, &src).unwrap();
+    let (tir, src, sources) = callable_plan_fixture();
+    let prepared = graphcal_eval::exec_plan::compile(&tir, src, &sources).unwrap();
     let plan = prepared.plan();
     for policy in [FailurePolicy::Contain, FailurePolicy::Propagate] {
         let mut frame = ExecutionFrame::new(plan, plan.root(), policy);
@@ -912,8 +925,9 @@ fn frame_arguments_are_domain_checked_and_keep_presentation_only_when_bound() {
     use graphcal_eval::runtime_value::RuntimeValue;
     let source = "param p: Dimensionless(min: 0.0) = 1.0; node n: Dimensionless = @p;";
     let tir = compile_to_tir(source, "frame.gcl").unwrap();
-    let src = miette::NamedSource::new("frame.gcl", std::sync::Arc::new(source.to_string()));
-    let prepared = graphcal_eval::exec_plan::compile(&tir, &src).unwrap();
+    let mut sources = graphcal_compiler::source_registry::SourceRegistry::new();
+    let src = sources.register("frame.gcl", std::sync::Arc::new(source.to_string()));
+    let prepared = graphcal_eval::exec_plan::compile(&tir, src, &sources).unwrap();
     let plan = prepared.plan();
     let key = tir
         .root()
@@ -936,16 +950,14 @@ fn frame_arguments_are_domain_checked_and_keep_presentation_only_when_bound() {
     let span = graphcal_compiler::syntax::span::Span::new(0, 0);
 
     let mut frame = ExecutionFrame::new(plan, plan.root(), FailurePolicy::Contain);
-    frame
-        .bind_argument(&key, labelled(2.0), &src, span)
-        .unwrap();
+    frame.bind_argument(&key, labelled(2.0), src, span).unwrap();
     assert!(frame.values().contains_key(&key));
     assert!(frame.presentations().contains_key(&key));
     assert!(frame.errors().is_empty());
 
     let mut frame = ExecutionFrame::new(plan, plan.root(), FailurePolicy::Contain);
     frame
-        .bind_argument(&key, labelled(-1.0), &src, span)
+        .bind_argument(&key, labelled(-1.0), src, span)
         .unwrap();
     assert!(!frame.values().contains_key(&key));
     assert!(!frame.presentations().contains_key(&key));
@@ -960,7 +972,7 @@ fn frame_arguments_are_domain_checked_and_keep_presentation_only_when_bound() {
     let mut frame = ExecutionFrame::new(plan, plan.root(), FailurePolicy::Propagate);
     assert!(
         frame
-            .bind_argument(&key, labelled(-1.0), &src, span)
+            .bind_argument(&key, labelled(-1.0), src, span)
             .is_err()
     );
 }
@@ -972,8 +984,9 @@ fn frame_runtime_imports_seed_only_unbound_prepared_imports() {
     use graphcal_eval::runtime_value::RuntimeValue;
     let source = "dag scaled { param factor: Dimensionless; pub node result: Dimensionless = @factor * 2.0; } node out: Dimensionless = @scaled(factor: 4.0)::result;";
     let tir = compile_to_tir(source, "frame.gcl").unwrap();
-    let src = miette::NamedSource::new("frame.gcl", std::sync::Arc::new(source.to_string()));
-    let prepared = graphcal_eval::exec_plan::compile(&tir, &src).unwrap();
+    let mut sources = graphcal_compiler::source_registry::SourceRegistry::new();
+    let src = sources.register("frame.gcl", std::sync::Arc::new(source.to_string()));
+    let prepared = graphcal_eval::exec_plan::compile(&tir, src, &sources).unwrap();
     let plan = prepared.plan();
     // Runtime imports are classified from checked import bindings when the
     // plan is prepared; classify one directly so the frame's contract is
@@ -1056,7 +1069,7 @@ fn frame_runtime_imports_seed_only_unbound_prepared_imports() {
             graphcal_eval::runtime_presentation::EvaluatedRuntimeValue::plain(
                 RuntimeValue::quantity(7.0).unwrap(),
             ),
-            &src,
+            src,
             span,
         )
         .unwrap();
@@ -1075,9 +1088,10 @@ fn frame_runtime_imports_seed_only_unbound_prepared_imports() {
 fn prepared_imports_and_instance_constant_pools_borrow_canonical_values() {
     let source = "pub const node OUTER: Dimensionless = 2.0; dag helper { import pools::{OUTER}; const node LOCAL: Dimensionless = 3.0; pub node value: Dimensionless = @OUTER + @LOCAL; } include helper() as one; include helper() as two; node output: Dimensionless = @one::value + @two::value + @helper()::value;";
     let tir = compile_to_tir(source, "pools.gcl").unwrap();
-    let src = miette::NamedSource::new("pools.gcl", std::sync::Arc::new(source.to_string()));
+    let mut sources = graphcal_compiler::source_registry::SourceRegistry::new();
+    let src = sources.register("pools.gcl", std::sync::Arc::new(source.to_string()));
     let (prepared, preparation) = graphcal_eval::pipeline_metrics::measure(|| {
-        graphcal_eval::exec_plan::compile(&tir, &src).unwrap()
+        graphcal_eval::exec_plan::compile(&tir, src, &sources).unwrap()
     });
     let plan = prepared.plan();
     assert!(preparation.imported_source_resolutions > 0);
@@ -1117,7 +1131,8 @@ fn prepared_imports_and_instance_constant_pools_borrow_canonical_values() {
         graphcal_eval::eval::runtime::run_eval_loop_with_bindings(
             plan,
             &graphcal_eval::eval::bindings::RuntimeParameterBindings::new(),
-            &src,
+            src,
+            &sources,
             &graphcal_eval::host_fns::HostFunctionRegistry::new(),
             &graphcal_compiler::cancellation::CancellationToken::unbounded(),
         )
@@ -1141,8 +1156,9 @@ fn shared_frame_dependency_and_fatal_error_policies_are_explicit() {
     use graphcal_eval::execution_frame::{ExecutionFrame, FailurePolicy};
     let source = "node a: Dimensionless = 1.0; node dependent: Dimensionless = @a; node independent: Dimensionless = 2.0;";
     let tir = compile_to_tir(source, "frame.gcl").unwrap();
-    let src = miette::NamedSource::new("frame.gcl", std::sync::Arc::new(source.to_string()));
-    let prepared = graphcal_eval::exec_plan::compile(&tir, &src).unwrap();
+    let mut sources = graphcal_compiler::source_registry::SourceRegistry::new();
+    let src = sources.register("frame.gcl", std::sync::Arc::new(source.to_string()));
+    let prepared = graphcal_eval::exec_plan::compile(&tir, src, &sources).unwrap();
     let plan = prepared.plan();
     let token = graphcal_compiler::cancellation::CancellationToken::unbounded();
     for policy in [FailurePolicy::Contain, FailurePolicy::Propagate] {
@@ -1153,13 +1169,13 @@ fn shared_frame_dependency_and_fatal_error_policies_are_explicit() {
                     return Err(if fatal {
                         GraphcalError::internal_error(
                             "fatal sentinel",
-                            &src,
+                            src,
                             graphcal_compiler::diagnostic_anchor::DiagnosticAnchor::WholeFile,
                         )
                     } else {
                         GraphcalError::EvalError {
                             message: "ordinary sentinel".into(),
-                            src: src.clone(),
+                            src,
                             span: entry.body().root().span().into(),
                         }
                     }
@@ -1277,7 +1293,7 @@ fn selective_import_rejects_required_static_inputs() {
         let error = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap_err();
         assert!(matches!(
             error,
-            CompileError::Eval(GraphcalError::ImportRequiredStaticInput { kind, .. })
+            CompileError::Eval(RenderedGraphcalError { error: GraphcalError::ImportRequiredStaticInput { kind, .. }, .. })
                 if kind == expected_kind
         ));
     }
@@ -1300,7 +1316,10 @@ fn qualified_import_rejects_required_static_members() {
     let error = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap_err();
     assert!(matches!(
         error,
-        CompileError::Eval(GraphcalError::ImportRequiredStaticInput { .. })
+        CompileError::Eval(RenderedGraphcalError {
+            error: GraphcalError::ImportRequiredStaticInput { .. },
+            ..
+        })
     ));
 }
 
@@ -1326,11 +1345,11 @@ fn qualified_import_rejects_transitive_required_static_dependencies() {
     let error = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap_err();
     assert!(matches!(
         error,
-        CompileError::Eval(GraphcalError::ImportUnresolvedStaticDependency {
+        CompileError::Eval(RenderedGraphcalError { error: GraphcalError::ImportUnresolvedStaticDependency {
             dependency_kind: graphcal_compiler::static_interface::StaticInputKind::Type,
             ref dependency,
             ..
-        }) if dependency == "Element"
+        }, .. }) if dependency == "Element"
     ));
 }
 
@@ -1355,11 +1374,11 @@ fn qualified_import_resolves_ambiguous_static_dependencies_to_their_symbol() {
     let error = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap_err();
     assert!(matches!(
         error,
-        CompileError::Eval(GraphcalError::ImportUnresolvedStaticDependency {
+        CompileError::Eval(RenderedGraphcalError { error: GraphcalError::ImportUnresolvedStaticDependency {
             dependency_kind: graphcal_compiler::static_interface::StaticInputKind::Dimension,
             ref dependency,
             ..
-        }) if dependency == "Basis"
+        }, .. }) if dependency == "Basis"
     ));
 }
 
@@ -1383,11 +1402,11 @@ fn selective_import_rejects_transitive_required_static_dependencies() {
     let error = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap_err();
     assert!(matches!(
         error,
-        CompileError::Eval(GraphcalError::ImportUnresolvedStaticDependency {
+        CompileError::Eval(RenderedGraphcalError { error: GraphcalError::ImportUnresolvedStaticDependency {
             dependency_kind: graphcal_compiler::static_interface::StaticInputKind::Type,
             ref dependency,
             ..
-        }) if dependency == "Element"
+        }, .. }) if dependency == "Element"
     ));
 }
 
@@ -1476,7 +1495,10 @@ fn renamed_include_projection_does_not_bind_the_source_name_in_declarations() {
         ),
     ] {
         match compile_and_eval(&format!("{target}{body}")) {
-            Err(CompileError::Eval(GraphcalError::UnknownDimension { name, .. })) => {
+            Err(CompileError::Eval(RenderedGraphcalError {
+                error: GraphcalError::UnknownDimension { name, .. },
+                ..
+            })) => {
                 assert_eq!(name.to_string(), expected, "{body}");
             }
             other => panic!("expected UnknownDimension for {expected} in {body}, got {other:?}"),
@@ -1489,7 +1511,10 @@ fn renamed_include_projection_does_not_bind_the_source_name_in_declarations() {
          unit quad_metre: Length = 2.0 double_metre;",
     ] {
         match compile_and_eval(&format!("{target}{body}")) {
-            Err(CompileError::Eval(GraphcalError::UnknownUnit { name, .. })) => {
+            Err(CompileError::Eval(RenderedGraphcalError {
+                error: GraphcalError::UnknownUnit { name, .. },
+                ..
+            })) => {
                 assert_eq!(name.to_string(), "double_metre", "{body}");
             }
             other => panic!("expected UnknownUnit for double_metre in {body}, got {other:?}"),
@@ -1531,7 +1556,10 @@ const DERIVED_FROM_BINDABLE_DIM_DAG: &str = "dag blib {\n\
 
 fn expect_annotation_mismatch(source: &str) {
     match compile_and_eval(source) {
-        Err(CompileError::Eval(GraphcalError::DimensionMismatchInAnnotation { .. })) => {}
+        Err(CompileError::Eval(RenderedGraphcalError {
+            error: GraphcalError::DimensionMismatchInAnnotation { .. },
+            ..
+        })) => {}
         other => panic!("expected DimensionMismatchInAnnotation for\n{source}\ngot {other:?}"),
     }
 }
@@ -1607,7 +1635,10 @@ fn derived_dimension_projection_from_file_module_follows_the_include_binding() {
         match (result, expected) {
             (Ok(result), Some(value)) => assert_quantity_value(&result, "y", value),
             (
-                Err(CompileError::Eval(GraphcalError::DimensionMismatchInAnnotation { .. })),
+                Err(CompileError::Eval(RenderedGraphcalError {
+                    error: GraphcalError::DimensionMismatchInAnnotation { .. },
+                    ..
+                })),
                 None,
             ) => {}
             (other, _) => panic!("unexpected result for\n{main}\n{other:?}"),
@@ -1696,7 +1727,10 @@ fn defaulted_bindable_dimension_follows_the_include_binding_in_file_modules() {
                 assert_quantity_value(&result, "y", y);
             }
             (
-                Err(CompileError::Eval(GraphcalError::DimensionMismatchInAnnotation { .. })),
+                Err(CompileError::Eval(RenderedGraphcalError {
+                    error: GraphcalError::DimensionMismatchInAnnotation { .. },
+                    ..
+                })),
                 None,
             ) => {}
             (other, _) => panic!("unexpected result for\n{main}\n{other:?}"),
@@ -1834,10 +1868,10 @@ fn constructor_empty_parentheses_are_rejected() {
         assert!(
             matches!(
                 &error,
-                CompileError::Eval(GraphcalError::EmptyParenthesizedConstructor {
+                CompileError::Eval(RenderedGraphcalError { error: GraphcalError::EmptyParenthesizedConstructor {
                     constructor,
                     ..
-                }) if constructor.as_str() == expected_constructor
+                }, .. }) if constructor.as_str() == expected_constructor
             ),
             "unexpected error: {error:?}"
         );
@@ -1856,7 +1890,7 @@ fn payload_constructor_empty_pattern_keeps_missing_field_diagnostic() {
     assert!(
         matches!(
             &error,
-            CompileError::Eval(GraphcalError::MissingPatternFields { constructor, .. })
+            CompileError::Eval(RenderedGraphcalError { error: GraphcalError::MissingPatternFields { constructor, .. }, .. })
                 if constructor.as_str() == "Present"
         ),
         "unexpected error: {error:?}"
@@ -1873,10 +1907,10 @@ fn selective_include_rejects_dag_blueprint_projection() {
     let error = compile_and_eval(source).unwrap_err();
     assert!(matches!(
         error,
-        CompileError::Eval(GraphcalError::IncludeItemNotProjectable {
+        CompileError::Eval(RenderedGraphcalError { error: GraphcalError::IncludeItemNotProjectable {
             ref name,
             ..
-        }) if name == "child"
+        }, .. }) if name == "child"
     ));
 }
 
@@ -1889,11 +1923,11 @@ fn selective_include_rejects_constructor_of_rebound_owner_type() {
     let error = compile_and_eval(source).unwrap_err();
     assert!(matches!(
         error,
-        CompileError::Eval(GraphcalError::IncludeConstructorOwnerRebound {
+        CompileError::Eval(RenderedGraphcalError { error: GraphcalError::IncludeConstructorOwnerRebound {
             ref constructor,
             ref owner_type,
             ..
-        }) if constructor == "Pick" && owner_type.ends_with("Choice")
+        }, .. }) if constructor == "Pick" && owner_type.ends_with("Choice")
     ));
 }
 
@@ -1917,11 +1951,11 @@ fn structural_index_binding_cardinality_must_be_closed() {
     compile_and_eval(&program("1 + 2 * 3")).expect("a closed cardinality binds");
     assert!(matches!(
         compile_and_eval(&program("N + 1")).unwrap_err(),
-        CompileError::Eval(GraphcalError::UnknownIndex { ref name, .. }) if name.to_string() == "N"
+        CompileError::Eval(RenderedGraphcalError { error: GraphcalError::UnknownIndex { ref name, .. }, .. }) if name.to_string() == "N"
     ));
     assert!(matches!(
         compile_and_eval(&program("4294967296 * 4294967296")).unwrap_err(),
-        CompileError::Eval(GraphcalError::EvalError { ref message, .. })
+        CompileError::Eval(RenderedGraphcalError { error: GraphcalError::EvalError { ref message, .. }, .. })
             if message.contains("type-level Nat arithmetic overflow")
     ));
 }
@@ -1935,12 +1969,12 @@ fn include_rejects_required_static_inputs_as_binding_targets() {
     let error = compile_and_eval(source).unwrap_err();
     assert!(matches!(
         error,
-        CompileError::Eval(GraphcalError::InvalidStaticBindingTarget {
+        CompileError::Eval(RenderedGraphcalError { error: GraphcalError::InvalidStaticBindingTarget {
             kind: graphcal_compiler::static_interface::StaticInputKind::Type,
             ref name,
             ref target,
             ..
-        }) if name == "Slot" && target == "Replacement"
+        }, .. }) if name == "Slot" && target == "Replacement"
     ));
 }
 
@@ -1973,7 +2007,7 @@ fn include_requires_every_required_static_input_category() {
         let error = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap_err();
         assert!(matches!(
             error,
-            CompileError::Eval(GraphcalError::RequiredStaticInputNotBound { kind, .. })
+            CompileError::Eval(RenderedGraphcalError { error: GraphcalError::RequiredStaticInputNotBound { kind, .. }, .. })
                 if kind == expected_kind
         ));
     }
@@ -1996,8 +2030,11 @@ fn fixed_static_declarations_are_not_binding_ports() {
     let error = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap_err();
     assert!(matches!(
         error,
-        CompileError::Eval(GraphcalError::DagInputCategoryMismatch {
-            expected: "type",
+        CompileError::Eval(RenderedGraphcalError {
+            error: GraphcalError::DagInputCategoryMismatch {
+                expected: "type",
+                ..
+            },
             ..
         })
     ));
@@ -2043,7 +2080,7 @@ fn bare_graph_declaration_refs_fail_before_dependency_planning() {
         assert!(
             matches!(
                 error,
-                CompileError::Eval(GraphcalError::BareGraphDeclarationRef { name, .. })
+                CompileError::Eval(RenderedGraphcalError { error: GraphcalError::BareGraphDeclarationRef { name, .. }, .. })
                     if name.to_string() == expected_name
             ),
             "case: {case}"
@@ -2059,8 +2096,11 @@ fn safety_attributes_reject_repetition_and_invalid_assumptions() {
     let error = compile_and_eval_named(repeated_expected_fail, "test.gcl").unwrap_err();
     assert!(matches!(
         error,
-        CompileError::Eval(GraphcalError::RepeatedSingletonAttribute {
-            name: AttributeName::ExpectedFail,
+        CompileError::Eval(RenderedGraphcalError {
+            error: GraphcalError::RepeatedSingletonAttribute {
+                name: AttributeName::ExpectedFail,
+                ..
+            },
             ..
         })
     ));
@@ -2096,8 +2136,11 @@ fn repeated_expected_fail_is_rejected_on_file_and_inline_include_items() {
     let file_error = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap_err();
     assert!(matches!(
         file_error,
-        CompileError::Eval(GraphcalError::RepeatedSingletonAttribute {
-            name: AttributeName::ExpectedFail,
+        CompileError::Eval(RenderedGraphcalError {
+            error: GraphcalError::RepeatedSingletonAttribute {
+                name: AttributeName::ExpectedFail,
+                ..
+            },
             ..
         })
     ));
@@ -2111,8 +2154,11 @@ fn repeated_expected_fail_is_rejected_on_file_and_inline_include_items() {
     let inline_error = compile_and_eval_named(inline, "test.gcl").unwrap_err();
     assert!(matches!(
         inline_error,
-        CompileError::Eval(GraphcalError::RepeatedSingletonAttribute {
-            name: AttributeName::ExpectedFail,
+        CompileError::Eval(RenderedGraphcalError {
+            error: GraphcalError::RepeatedSingletonAttribute {
+                name: AttributeName::ExpectedFail,
+                ..
+            },
             ..
         })
     ));
@@ -2127,8 +2173,11 @@ fn repeated_hidden_is_rejected_on_plots_and_include_items() {
     let declaration_error = compile_and_eval_named(declaration, "test.gcl").unwrap_err();
     assert!(matches!(
         declaration_error,
-        CompileError::Eval(GraphcalError::RepeatedSingletonAttribute {
-            name: AttributeName::Hidden,
+        CompileError::Eval(RenderedGraphcalError {
+            error: GraphcalError::RepeatedSingletonAttribute {
+                name: AttributeName::Hidden,
+                ..
+            },
             ..
         })
     ));
@@ -2148,8 +2197,11 @@ fn repeated_hidden_is_rejected_on_plots_and_include_items() {
     let include_error = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap_err();
     assert!(matches!(
         include_error,
-        CompileError::Eval(GraphcalError::RepeatedSingletonAttribute {
-            name: AttributeName::Hidden,
+        CompileError::Eval(RenderedGraphcalError {
+            error: GraphcalError::RepeatedSingletonAttribute {
+                name: AttributeName::Hidden,
+                ..
+            },
             ..
         })
     ));
@@ -2208,7 +2260,7 @@ fn time_scale_spellings_are_disjoint_from_graph_value_namespaces() {
     .unwrap_err();
     assert!(matches!(
         bare_error,
-        CompileError::Eval(GraphcalError::BareGraphDeclarationRef { name, .. })
+        CompileError::Eval(RenderedGraphcalError { error: GraphcalError::BareGraphDeclarationRef { name, .. }, .. })
             if name.to_string() == "UTC"
     ));
 }
@@ -2240,7 +2292,7 @@ fn reserved_name_policy_covers_import_include_and_reexport_aliases() {
         let error = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap_err();
         assert!(matches!(
             error,
-            CompileError::Eval(GraphcalError::BuiltinNameShadowed { name, .. })
+            CompileError::Eval(RenderedGraphcalError { error: GraphcalError::BuiltinNameShadowed { name, .. }, .. })
                 if name == expected_name
         ));
     }
@@ -2261,7 +2313,7 @@ fn reserved_name_policy_covers_import_include_and_reexport_aliases() {
         };
         assert!(matches!(
             error,
-            CompileError::Eval(GraphcalError::BuiltinNameShadowed { name, .. }) if name == "E"
+            CompileError::Eval(RenderedGraphcalError { error: GraphcalError::BuiltinNameShadowed { name, .. }, .. }) if name == "E"
         ));
     }
 
@@ -2276,7 +2328,7 @@ fn reserved_name_policy_covers_import_include_and_reexport_aliases() {
     let reexport_error = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap_err();
     assert!(matches!(
         reexport_error,
-        CompileError::Eval(GraphcalError::BuiltinNameShadowed { name, .. }) if name == "E"
+        CompileError::Eval(RenderedGraphcalError { error: GraphcalError::BuiltinNameShadowed { name, .. }, .. }) if name == "E"
     ));
 
     let (_directory, root) = write_pipeline_project(
@@ -2291,7 +2343,7 @@ fn reserved_name_policy_covers_import_include_and_reexport_aliases() {
         compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap_err();
     assert!(matches!(
         constructor_reexport_error,
-        CompileError::Eval(GraphcalError::BuiltinNameShadowed { name, .. }) if name == "sum"
+        CompileError::Eval(RenderedGraphcalError { error: GraphcalError::BuiltinNameShadowed { name, .. }, .. }) if name == "sum"
     ));
 
     let (_directory, root) = write_pipeline_project(
@@ -2312,7 +2364,7 @@ fn reserved_name_policy_covers_import_include_and_reexport_aliases() {
         compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap_err();
     assert!(matches!(
         self_import_error,
-        CompileError::Eval(GraphcalError::BuiltinNameShadowed { name, .. }) if name == "E"
+        CompileError::Eval(RenderedGraphcalError { error: GraphcalError::BuiltinNameShadowed { name, .. }, .. }) if name == "E"
     ));
 }
 
@@ -2338,7 +2390,10 @@ fn repeated_include_producers_are_rejected_before_metadata_maps() {
         let error = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap_err();
         assert!(matches!(
             error,
-            CompileError::Eval(GraphcalError::DuplicateIncludeSelection { .. })
+            CompileError::Eval(RenderedGraphcalError {
+                error: GraphcalError::DuplicateIncludeSelection { .. },
+                ..
+            })
         ));
     }
 
@@ -2351,7 +2406,10 @@ fn repeated_include_producers_are_rejected_before_metadata_maps() {
         let error = compile_and_eval_named(&source, "test.gcl").unwrap_err();
         assert!(matches!(
             error,
-            CompileError::Eval(GraphcalError::DuplicateIncludeSelection { .. })
+            CompileError::Eval(RenderedGraphcalError {
+                error: GraphcalError::DuplicateIncludeSelection { .. },
+                ..
+            })
         ));
     }
 }
@@ -2386,7 +2444,10 @@ fn lazy_attribute_is_rejected_on_declarations_and_include_items() {
         let error = compile_and_eval_named(source, "test.gcl").unwrap_err();
         assert!(matches!(
             error,
-            CompileError::Eval(GraphcalError::LazyNotSupported { .. })
+            CompileError::Eval(RenderedGraphcalError {
+                error: GraphcalError::LazyNotSupported { .. },
+                ..
+            })
         ));
     }
 
@@ -2400,7 +2461,10 @@ fn lazy_attribute_is_rejected_on_declarations_and_include_items() {
     let file_error = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap_err();
     assert!(matches!(
         file_error,
-        CompileError::Eval(GraphcalError::LazyNotSupported { .. })
+        CompileError::Eval(RenderedGraphcalError {
+            error: GraphcalError::LazyNotSupported { .. },
+            ..
+        })
     ));
 
     let inline_error = compile_and_eval_named(
@@ -2411,7 +2475,10 @@ fn lazy_attribute_is_rejected_on_declarations_and_include_items() {
     .unwrap_err();
     assert!(matches!(
         inline_error,
-        CompileError::Eval(GraphcalError::LazyNotSupported { .. })
+        CompileError::Eval(RenderedGraphcalError {
+            error: GraphcalError::LazyNotSupported { .. },
+            ..
+        })
     ));
 }
 
@@ -2421,8 +2488,12 @@ fn assert_missing_dag_bindings(
     expected_missing: &[&str],
 ) {
     match error {
-        CompileError::Eval(GraphcalError::MissingDagBindings {
-            missing, dag_name, ..
+        CompileError::Eval(RenderedGraphcalError {
+            error:
+                GraphcalError::MissingDagBindings {
+                    missing, dag_name, ..
+                },
+            ..
         }) => {
             assert_eq!(dag_name, expected_dag_name);
             assert_eq!(
@@ -2634,7 +2705,10 @@ fn pure_imports_reject_assertion_outcomes_and_runtime_unit_scales() {
     assert!(
         matches!(
             assertion_error,
-            CompileError::Eval(GraphcalError::ImportAssertionItem { .. })
+            CompileError::Eval(RenderedGraphcalError {
+                error: GraphcalError::ImportAssertionItem { .. },
+                ..
+            })
         ),
         "unexpected assertion-import error: {assertion_error:?}"
     );
@@ -2657,7 +2731,10 @@ fn pure_imports_reject_assertion_outcomes_and_runtime_unit_scales() {
     assert!(
         matches!(
             unit_error,
-            CompileError::Eval(GraphcalError::ImportRuntimeUnit { .. })
+            CompileError::Eval(RenderedGraphcalError {
+                error: GraphcalError::ImportRuntimeUnit { .. },
+                ..
+            })
         ),
         "unexpected runtime-unit import error: {unit_error:?}"
     );
@@ -2672,7 +2749,10 @@ fn pure_imports_reject_assertion_outcomes_and_runtime_unit_scales() {
     assert!(
         matches!(
             unit_definition_error,
-            CompileError::Eval(GraphcalError::ImportRuntimeUnit { .. })
+            CompileError::Eval(RenderedGraphcalError {
+                error: GraphcalError::ImportRuntimeUnit { .. },
+                ..
+            })
         ),
         "unexpected unit-definition import error: {unit_definition_error:?}"
     );
@@ -2687,7 +2767,10 @@ fn pure_imports_reject_assertion_outcomes_and_runtime_unit_scales() {
     assert!(
         matches!(
             constant_scale_runtime_error,
-            CompileError::Eval(GraphcalError::ImportRuntimeUnit { .. })
+            CompileError::Eval(RenderedGraphcalError {
+                error: GraphcalError::ImportRuntimeUnit { .. },
+                ..
+            })
         ),
         "unexpected constant-scale runtime-unit error: {constant_scale_runtime_error:?}"
     );
@@ -3703,7 +3786,7 @@ fn assert_literal_negative_zero_tolerance_is_rejected() {
     .unwrap_err();
     assert!(matches!(
         error,
-        CompileError::Eval(GraphcalError::NegativeTolerance { ref found, .. }) if found == "-0"
+        CompileError::Eval(RenderedGraphcalError { error: GraphcalError::NegativeTolerance { ref found, .. }, .. }) if found == "-0"
     ));
 }
 
@@ -4075,7 +4158,10 @@ fn dst_gaps_and_folds_are_rejected_during_checking() {
     .unwrap_err();
     assert!(matches!(
         gap,
-        CompileError::Eval(GraphcalError::NonexistentCivilDateTime { .. })
+        CompileError::Eval(RenderedGraphcalError {
+            error: GraphcalError::NonexistentCivilDateTime { .. },
+            ..
+        })
     ));
 
     let fold = compile_to_tir(
@@ -4091,7 +4177,10 @@ node fold: Datetime = if true {
     .unwrap_err();
     assert!(matches!(
         fold,
-        CompileError::Eval(GraphcalError::RepeatedCivilDateTime { .. })
+        CompileError::Eval(RenderedGraphcalError {
+            error: GraphcalError::RepeatedCivilDateTime { .. },
+            ..
+        })
     ));
 }
 
@@ -5726,7 +5815,7 @@ fn aliased_include_does_not_bind_the_source_module_name() {
     assert!(
         matches!(
             error,
-            CompileError::Eval(GraphcalError::EvalError { ref message, .. })
+            CompileError::Eval(RenderedGraphcalError { error: GraphcalError::EvalError { ref message, .. }, .. })
                 if message == "unknown module `src.app.defaults`"
         ),
         "unexpected alias-leak diagnostic: {error:?}"
@@ -6150,7 +6239,10 @@ fn module_aliases_and_same_named_nodes_are_duplicate_names() {
     ] {
         let source = format!("{velocity}{alias_decl}\nnode parking: Dimensionless = 2.0;\n");
         match compile_and_eval(&source) {
-            Err(CompileError::Eval(GraphcalError::DuplicateName { name, .. })) => {
+            Err(CompileError::Eval(RenderedGraphcalError {
+                error: GraphcalError::DuplicateName { name, .. },
+                ..
+            })) => {
                 assert_eq!(name, "parking", "{alias_decl}");
             }
             other => panic!("expected N001 for `{alias_decl}`, got {other:?}"),
@@ -6190,10 +6282,16 @@ fn project_module_includes_still_reject_duplicate_default_aliases() {
     );
 
     match compile_and_eval_project(&root, &HashMap::new(), None, &fs()) {
-        Err(CompileError::Eval(GraphcalError::DuplicateModuleName { name, .. })) => {
+        Err(CompileError::Eval(RenderedGraphcalError {
+            error: GraphcalError::DuplicateModuleName { name, .. },
+            ..
+        })) => {
             assert_eq!(name, "shared");
         }
-        Err(CompileError::Eval(GraphcalError::EvalError { message, .. })) => {
+        Err(CompileError::Eval(RenderedGraphcalError {
+            error: GraphcalError::EvalError { message, .. },
+            ..
+        })) => {
             assert!(
                 message.contains("duplicate module") && message.contains("shared"),
                 "unexpected duplicate-alias diagnostic: {message}",
@@ -6285,7 +6383,10 @@ fn project_selective_import_item_rejects_unknown_attribute() {
     .unwrap();
 
     match compile_and_eval_project(&root, &HashMap::new(), None, &fs()) {
-        Err(CompileError::Eval(GraphcalError::UnknownAttribute { name, .. })) => {
+        Err(CompileError::Eval(RenderedGraphcalError {
+            error: GraphcalError::UnknownAttribute { name, .. },
+            ..
+        })) => {
             assert_eq!(name, "bogus");
         }
         other => panic!("expected UnknownAttribute, got {other:?}"),
@@ -6755,7 +6856,10 @@ fn selectively_imported_unit_does_not_expose_its_backing_dimension_name() {
     );
 
     match compile_to_tir_project(&root, None, &fs()) {
-        Err(CompileError::Eval(GraphcalError::UnknownDimension { name, .. })) => {
+        Err(CompileError::Eval(RenderedGraphcalError {
+            error: GraphcalError::UnknownDimension { name, .. },
+            ..
+        })) => {
             assert_eq!(name.to_string(), "Score");
         }
         other => panic!("expected UnknownDimension for Score, got {other:?}"),
@@ -6810,7 +6914,10 @@ fn project_struct_type_rejects_same_leaf_wrong_owner_constructor() {
     );
 
     match compile_to_tir_project(&root, None, &fs()) {
-        Err(CompileError::Eval(GraphcalError::DimensionMismatchInAnnotation { .. })) => {}
+        Err(CompileError::Eval(RenderedGraphcalError {
+            error: GraphcalError::DimensionMismatchInAnnotation { .. },
+            ..
+        })) => {}
         other => panic!("expected DimensionMismatchInAnnotation, got {other:?}"),
     }
 }
@@ -6950,10 +7057,12 @@ fn eval_constructor_match_rejects_runtime_owner_mismatch_with_same_leaf_construc
             ),
         ),
     )]);
-    let src = &project.root_file().named_source();
+    let src = project.root_file().source_id();
+    let sources = project.sources();
     let ctx = graphcal_eval::eval_expr::EvalSession::provisional_constants(
         &tir,
         src,
+        sources,
         graphcal_compiler::cancellation::CancellationToken::unbounded(),
     )
     .with_roots(&values, None)
@@ -7069,11 +7178,13 @@ fn project_struct_field_constraints_preserve_same_leaf_struct_owner() {
     );
 
     let (tir, project) = compile_to_tir_project(&root, None, &fs()).unwrap();
-    let src = &project.root_file().named_source();
+    let src = project.root_file().source_id();
+    let sources = project.sources();
     let constraints = graphcal_eval::execution_check::resolve_struct_field_constraints(
         &tir,
         &HashMap::new(),
         src,
+        sources,
     )
     .unwrap();
     let a_id = loaded_file_dag_id(&project, "a.gcl");
@@ -7465,7 +7576,10 @@ fn project_index_access_rejects_same_leaf_wrong_owner() {
     );
 
     match compile_to_tir_project(&root, None, &fs()) {
-        Err(CompileError::Eval(GraphcalError::IndexMismatch { .. })) => {}
+        Err(CompileError::Eval(RenderedGraphcalError {
+            error: GraphcalError::IndexMismatch { .. },
+            ..
+        })) => {}
         other => panic!("expected IndexMismatch, got {other:?}"),
     }
 }
@@ -7479,7 +7593,10 @@ fn project_for_comp_rejects_same_leaf_wrong_owner() {
     );
 
     match compile_to_tir_project(&root, None, &fs()) {
-        Err(CompileError::Eval(GraphcalError::DimensionMismatchInAnnotation { .. })) => {}
+        Err(CompileError::Eval(RenderedGraphcalError {
+            error: GraphcalError::DimensionMismatchInAnnotation { .. },
+            ..
+        })) => {}
         other => panic!("expected DimensionMismatchInAnnotation, got {other:?}"),
     }
 }
@@ -7510,7 +7627,10 @@ fn project_map_literal_rejects_same_leaf_wrong_owner_key() {
     );
 
     match compile_to_tir_project(&root, None, &fs()) {
-        Err(CompileError::Eval(GraphcalError::IndexMismatch { .. })) => {}
+        Err(CompileError::Eval(RenderedGraphcalError {
+            error: GraphcalError::IndexMismatch { .. },
+            ..
+        })) => {}
         other => panic!("expected IndexMismatch, got {other:?}"),
     }
 }
@@ -7526,7 +7646,10 @@ fn project_map_literal_missing_variants_uses_resolved_owner() {
     );
 
     match compile_to_tir_project(&root, None, &fs()) {
-        Err(CompileError::Eval(GraphcalError::MissingVariants { missing, .. })) => {
+        Err(CompileError::Eval(RenderedGraphcalError {
+            error: GraphcalError::MissingVariants { missing, .. },
+            ..
+        })) => {
             assert_eq!(missing.len(), 1);
             assert_eq!(
                 missing[0]
@@ -7601,7 +7724,10 @@ fn project_label_match_rejects_same_leaf_wrong_owner_pattern() {
     );
 
     match compile_to_tir_project(&root, None, &fs()) {
-        Err(CompileError::Eval(GraphcalError::IndexMismatch { .. })) => {}
+        Err(CompileError::Eval(RenderedGraphcalError {
+            error: GraphcalError::IndexMismatch { .. },
+            ..
+        })) => {}
         other => panic!("expected IndexMismatch, got {other:?}"),
     }
 }
@@ -7668,7 +7794,10 @@ fn project_expected_fail_keys_reject_same_leaf_wrong_owner() {
     );
 
     match compile_and_eval_project(&root, &HashMap::new(), None, &fs()) {
-        Err(CompileError::Eval(GraphcalError::ExpectedFailKeyIndexMismatch { .. })) => {}
+        Err(CompileError::Eval(RenderedGraphcalError {
+            error: GraphcalError::ExpectedFailKeyIndexMismatch { .. },
+            ..
+        })) => {}
         other => {
             panic!(
                 "expected ExpectedFailKeyIndexMismatch for foreign expected_fail key, got {other:?}"
@@ -7825,10 +7954,12 @@ fn eval_index_access_rejects_runtime_owner_mismatch_with_same_leaf_variant() {
             .unwrap(),
         graphcal_eval::eval_expr::RuntimeValue::Indexed(entries),
     )]);
-    let src = &project.root_file().named_source();
+    let src = project.root_file().source_id();
+    let sources = project.sources();
     let ctx = graphcal_eval::eval_expr::EvalSession::provisional_constants(
         &tir,
         src,
+        sources,
         graphcal_compiler::cancellation::CancellationToken::unbounded(),
     )
     .with_roots(&values, None)
@@ -7910,10 +8041,12 @@ fn eval_label_match_rejects_runtime_owner_mismatch_with_same_leaf_variant() {
             ),
         ),
     )]);
-    let src = &project.root_file().named_source();
+    let src = project.root_file().source_id();
+    let sources = project.sources();
     let ctx = graphcal_eval::eval_expr::EvalSession::provisional_constants(
         &tir,
         src,
+        sources,
         graphcal_compiler::cancellation::CancellationToken::unbounded(),
     )
     .with_roots(&values, None)
@@ -8058,9 +8191,13 @@ fn project_injectable_index_kind_mismatch() {
         .join("../../tests/fixtures/invalid/multi/injectable_index_kind_mismatch/src/lib/main.gcl");
     let result = compile_and_eval_project(&root, &HashMap::new(), None, &fs());
     match result {
-        Err(CompileError::Eval(GraphcalError::IndexKindMismatch {
-            dep_index,
-            bound_index,
+        Err(CompileError::Eval(RenderedGraphcalError {
+            error:
+                GraphcalError::IndexKindMismatch {
+                    dep_index,
+                    bound_index,
+                    ..
+                },
             ..
         })) => {
             assert_eq!(dep_index, "Phase");
@@ -8137,10 +8274,14 @@ fn project_include_overrides_index_no_param_binding_v005() {
     );
     let result = compile_and_eval_project(&root, &HashMap::new(), None, &fs());
     match result {
-        Err(CompileError::Eval(GraphcalError::IncludeMustReconcileOverride {
-            overridden,
-            overridden_kind,
-            orphan_decl,
+        Err(CompileError::Eval(RenderedGraphcalError {
+            error:
+                GraphcalError::IncludeMustReconcileOverride {
+                    overridden,
+                    overridden_kind,
+                    orphan_decl,
+                    ..
+                },
             ..
         })) => {
             assert_eq!(overridden, "Phase");
@@ -8176,13 +8317,17 @@ fn template_closure_error_renders_against_dependency_source() {
         .join("../../tests/fixtures/invalid/multi/merged_dep_body_dim_mismatch/src/lib/main.gcl");
     let result = compile_and_eval_project(&root, &HashMap::new(), None, &fs());
     match result {
-        Err(CompileError::Eval(GraphcalError::TemplateBodyDependsOnStaticDefault {
-            body_name,
-            port_name,
-            src,
-            span,
-            ..
-        })) => {
+        Err(CompileError::Eval(rendered)) => {
+            let GraphcalError::TemplateBodyDependsOnStaticDefault {
+                body_name,
+                port_name,
+                span,
+                ..
+            } = &rendered.error
+            else {
+                panic!("expected V007, got {:?}", rendered.error);
+            };
+            let src = rendered.named_source();
             assert_eq!(body_name.as_str(), "v");
             assert_eq!(port_name.as_str(), "Speed");
             assert!(
@@ -8213,10 +8358,14 @@ fn project_selective_include_leaks_private_type_v006() {
     );
     let result = compile_and_eval_project(&root, &HashMap::new(), None, &fs());
     match result {
-        Err(CompileError::Eval(GraphcalError::GenericsLeakage {
-            reexport_name,
-            leaked_name,
-            leaked_kind,
+        Err(CompileError::Eval(RenderedGraphcalError {
+            error:
+                GraphcalError::GenericsLeakage {
+                    reexport_name,
+                    leaked_name,
+                    leaked_kind,
+                    ..
+                },
             ..
         })) => {
             assert_eq!(reexport_name, "origin");
@@ -8234,10 +8383,14 @@ fn project_selective_include_rejects_private_generic_default_binding() {
     );
     let result = compile_and_eval_project(&root, &HashMap::new(), None, &fs());
     match result {
-        Err(CompileError::Eval(GraphcalError::GenericsLeakage {
-            reexport_name,
-            leaked_name,
-            leaked_kind,
+        Err(CompileError::Eval(RenderedGraphcalError {
+            error:
+                GraphcalError::GenericsLeakage {
+                    reexport_name,
+                    leaked_name,
+                    leaked_kind,
+                    ..
+                },
             ..
         })) => {
             assert_eq!(reexport_name, "Wrapper");
@@ -8322,7 +8475,10 @@ fn imported_generic_field_obligation_is_checked_in_the_consumer() {
     let error = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap_err();
     assert!(matches!(
         error,
-        CompileError::Eval(GraphcalError::DomainDimensionMismatch { .. })
+        CompileError::Eval(RenderedGraphcalError {
+            error: GraphcalError::DomainDimensionMismatch { .. },
+            ..
+        })
     ));
 }
 
@@ -8338,7 +8494,10 @@ node bad: Bad = Bad(value: Wrapper<Length>(value: -1.0 m));
     .unwrap_err();
     assert!(matches!(
         error,
-        CompileError::Eval(GraphcalError::GenericTypeArgDomainConstraint { .. })
+        CompileError::Eval(RenderedGraphcalError {
+            error: GraphcalError::GenericTypeArgDomainConstraint { .. },
+            ..
+        })
     ));
 }
 
@@ -8356,7 +8515,10 @@ dag nested {
     .unwrap_err();
     assert!(matches!(
         error,
-        CompileError::Eval(GraphcalError::GenericTypeArgDomainConstraint { .. })
+        CompileError::Eval(RenderedGraphcalError {
+            error: GraphcalError::GenericTypeArgDomainConstraint { .. },
+            ..
+        })
     ));
 }
 
@@ -8375,7 +8537,11 @@ fn selective_import_wrong_category_preserves_marker_and_alternatives() {
     );
 
     let error = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap_err();
-    let CompileError::Eval(GraphcalError::ImportCategoryMismatch { mismatch, .. }) = error else {
+    let CompileError::Eval(RenderedGraphcalError {
+        error: GraphcalError::ImportCategoryMismatch { mismatch, .. },
+        ..
+    }) = error
+    else {
         panic!("expected category mismatch, got {error:?}");
     };
     assert_eq!(mismatch.name().as_str(), "JPY");
@@ -8410,11 +8576,15 @@ include pass_through(
 
     let result = compile_and_eval(source);
     match result {
-        Err(CompileError::Eval(GraphcalError::IndexBindingDimensionMismatch {
-            dep_index,
-            expected_dim,
-            bound_index,
-            found_dim,
+        Err(CompileError::Eval(RenderedGraphcalError {
+            error:
+                GraphcalError::IndexBindingDimensionMismatch {
+                    dep_index,
+                    expected_dim,
+                    bound_index,
+                    found_dim,
+                    ..
+                },
             ..
         })) => {
             assert_eq!(dep_index, "Step");
@@ -8447,11 +8617,15 @@ include pass_through(
 
     let result = compile_and_eval(source);
     match result {
-        Err(CompileError::Eval(GraphcalError::IndexKindMismatch {
-            dep_index,
-            dep_kind,
-            bound_index,
-            bound_kind,
+        Err(CompileError::Eval(RenderedGraphcalError {
+            error:
+                GraphcalError::IndexKindMismatch {
+                    dep_index,
+                    dep_kind,
+                    bound_index,
+                    bound_kind,
+                    ..
+                },
             ..
         })) => {
             assert_eq!(dep_index, "Step");
@@ -8477,7 +8651,10 @@ include pass_through(samples: 1.0 m) as output;
 
     let result = compile_and_eval(source);
     match result {
-        Err(CompileError::Eval(GraphcalError::RequiredStaticInputNotBound { name, .. })) => {
+        Err(CompileError::Eval(RenderedGraphcalError {
+            error: GraphcalError::RequiredStaticInputNotBound { name, .. },
+            ..
+        })) => {
             assert_eq!(name, "Step");
         }
         other => panic!("expected RequiredStaticInputNotBound, got {other:?}"),
@@ -8589,9 +8766,10 @@ include sem.library.pass_through(
     assert!(
         matches!(
             result,
-            Err(CompileError::Eval(
-                GraphcalError::IndexBindingDimensionMismatch { .. }
-            ))
+            Err(CompileError::Eval(RenderedGraphcalError {
+                error: GraphcalError::IndexBindingDimensionMismatch { .. },
+                ..
+            }))
         ),
         "expected coordinate dimension mismatch, got {result:?}"
     );
@@ -8769,7 +8947,7 @@ node used: Force = @internal_scratch;
     let error = compile_and_eval(source).unwrap_err();
     assert!(matches!(
         error,
-        CompileError::Eval(GraphcalError::ImportPrivateItem { name, .. })
+        CompileError::Eval(RenderedGraphcalError { error: GraphcalError::ImportPrivateItem { name, .. }, .. })
             if name == "internal_scratch"
     ));
 }
@@ -8790,7 +8968,7 @@ node used: Force = @inst::internal_scratch;
     let error = compile_and_eval(source).unwrap_err();
     assert!(matches!(
         error,
-        CompileError::Eval(GraphcalError::ImportPrivateItem { name, .. })
+        CompileError::Eval(RenderedGraphcalError { error: GraphcalError::ImportPrivateItem { name, .. }, .. })
             if name == "internal_scratch"
     ));
 }
@@ -8982,7 +9160,10 @@ fn include_closure_cycles_are_rejected_at_the_including_declaration() {
                   include lib(x: @a) as inst;\n\
                   node a: Dimensionless = @inst::out;";
     match compile_and_eval(source) {
-        Err(CompileError::Eval(GraphcalError::CyclicDependency { name, span, .. })) => {
+        Err(CompileError::Eval(RenderedGraphcalError {
+            error: GraphcalError::CyclicDependency { name, span, .. },
+            ..
+        })) => {
             assert_eq!(name, "a");
             assert_eq!(span.offset(), source.find("node a").unwrap());
         }
@@ -8993,9 +9174,10 @@ fn include_closure_cycles_are_rejected_at_the_including_declaration() {
 /// Message and label start of the E001 a recursive inline-DAG source reports.
 fn recursive_dag_error(source: &str) -> (String, usize) {
     match compile_and_eval(source) {
-        Err(CompileError::Eval(GraphcalError::EvalError { message, span, .. })) => {
-            (message, span.offset())
-        }
+        Err(CompileError::Eval(RenderedGraphcalError {
+            error: GraphcalError::EvalError { message, span, .. },
+            ..
+        })) => (message, span.offset()),
         other => panic!("expected a recursive DAG instantiation error, got {other:?}"),
     }
 }
@@ -9211,7 +9393,7 @@ fn absolute_inline_call_path_reports_imported_name_diagnostic() {
     let err = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap_err();
     assert!(matches!(
         err,
-        CompileError::Eval(GraphcalError::UnknownModule { name, .. }) if name == "callable"
+        CompileError::Eval(RenderedGraphcalError { error: GraphcalError::UnknownModule { name, .. }, .. }) if name == "callable"
     ));
 }
 
@@ -9266,7 +9448,7 @@ fn dot_member_access_on_include_alias_is_rejected_everywhere() {
         assert!(
             matches!(
                 &error,
-                CompileError::Eval(GraphcalError::UnknownGraphRef { name, .. })
+                CompileError::Eval(RenderedGraphcalError { error: GraphcalError::UnknownGraphRef { name, .. }, .. })
                     if name == &scoped_name("inst")
             ),
             "`{body}`: unexpected error: {error:?}"
@@ -9986,7 +10168,10 @@ node event: EventSpec = EventSpec(at: epoch<TT>("2024-06-01T00:00:00"));
     .unwrap_err();
     assert!(matches!(
         error,
-        CompileError::Eval(GraphcalError::DatetimeDomainBoundTypeMismatch { .. })
+        CompileError::Eval(RenderedGraphcalError {
+            error: GraphcalError::DatetimeDomainBoundTypeMismatch { .. },
+            ..
+        })
     ));
 }
 
@@ -10036,7 +10221,10 @@ param event: Datetime(min: @start) = datetime("2024-06-01T00:00:00Z");
     .unwrap_err();
     assert!(matches!(
         error,
-        CompileError::Eval(GraphcalError::GraphRefInConst { .. })
+        CompileError::Eval(RenderedGraphcalError {
+            error: GraphcalError::GraphRefInConst { .. },
+            ..
+        })
     ));
 }
 
@@ -10075,8 +10263,11 @@ type Spec { Spec(mass: Mass(min: 100.0 kg, max: 2000.0 kg)) }
 const node SAT: Spec = Spec(mass: 5000.0 kg);
 ";
     let err = compile_and_eval(source).unwrap_err();
-    let CompileError::Eval(GraphcalError::DomainViolation {
-        name, violation, ..
+    let CompileError::Eval(RenderedGraphcalError {
+        error: GraphcalError::DomainViolation {
+            name, violation, ..
+        },
+        ..
     }) = err
     else {
         panic!("expected DomainViolation, got {err:?}");
@@ -10147,7 +10338,10 @@ node bad: Box<Time> = Box<Time>(x: 1.0 s);
     .unwrap_err();
     assert!(matches!(
         error,
-        CompileError::Eval(GraphcalError::DomainDimensionMismatch { .. })
+        CompileError::Eval(RenderedGraphcalError {
+            error: GraphcalError::DomainDimensionMismatch { .. },
+            ..
+        })
     ));
 }
 
@@ -10199,7 +10393,10 @@ node bad: T<0> = T<0>(x: 0);
     .unwrap_err();
     assert!(matches!(
         error,
-        CompileError::Eval(GraphcalError::EvalError { .. })
+        CompileError::Eval(RenderedGraphcalError {
+            error: GraphcalError::EvalError { .. },
+            ..
+        })
     ));
 }
 
@@ -10274,7 +10471,11 @@ node good: T<2> = T<2>(x: 1);
 fn struct_field_min_exceeds_max_at_compile_time() {
     let source = "type Foo { Foo(x: Mass(min: 100.0 kg, max: 50.0 kg)) }";
     let err = compile_and_eval(source).unwrap_err();
-    let CompileError::Eval(GraphcalError::DomainMinExceedsMax { name, .. }) = err else {
+    let CompileError::Eval(RenderedGraphcalError {
+        error: GraphcalError::DomainMinExceedsMax { name, .. },
+        ..
+    }) = err
+    else {
         panic!("expected DomainMinExceedsMax, got {err:?}");
     };
     assert_eq!(name, "Foo.x");
@@ -10287,7 +10488,10 @@ fn struct_field_invalid_target_at_compile_time() {
     assert!(
         matches!(
             err,
-            CompileError::Eval(GraphcalError::InvalidDomainTarget { .. })
+            CompileError::Eval(RenderedGraphcalError {
+                error: GraphcalError::InvalidDomainTarget { .. },
+                ..
+            })
         ),
         "expected InvalidDomainTarget, got {err:?}"
     );
@@ -10297,7 +10501,11 @@ fn struct_field_invalid_target_at_compile_time() {
 fn struct_field_dim_mismatch_at_compile_time() {
     let source = "type Foo { Foo(x: Length(min: 1.0 s)) }";
     let err = compile_and_eval(source).unwrap_err();
-    let CompileError::Eval(GraphcalError::DomainDimensionMismatch { name, .. }) = err else {
+    let CompileError::Eval(RenderedGraphcalError {
+        error: GraphcalError::DomainDimensionMismatch { name, .. },
+        ..
+    }) = err
+    else {
         panic!("expected DomainDimensionMismatch, got {err:?}");
     };
     assert_eq!(name, "Foo.x");
@@ -10316,7 +10524,10 @@ param p: Vec3<Length(min: 0.0 m), Eci> = Vec3<Length, Eci>(x: 1.0 m, y: 2.0 m, z
     assert!(
         matches!(
             err,
-            CompileError::Eval(GraphcalError::GenericTypeArgDomainConstraint { .. })
+            CompileError::Eval(RenderedGraphcalError {
+                error: GraphcalError::GenericTypeArgDomainConstraint { .. },
+                ..
+            })
         ),
         "expected GenericTypeArgDomainConstraint, got {err:?}"
     );
@@ -10356,7 +10567,10 @@ include bumper(v: 5.0 m/s)::{ out };
     assert!(
         matches!(
             err,
-            CompileError::Eval(GraphcalError::DomainDimensionMismatch { .. })
+            CompileError::Eval(RenderedGraphcalError {
+                error: GraphcalError::DomainDimensionMismatch { .. },
+                ..
+            })
         ),
         "expected DomainDimensionMismatch, got {err:?}"
     );

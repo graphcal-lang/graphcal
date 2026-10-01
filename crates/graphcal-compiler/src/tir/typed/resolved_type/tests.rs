@@ -4,8 +4,9 @@ use crate::dimension::{BaseDimId, PreludeBaseDimension};
 use crate::syntax::index_name::IndexName;
 use crate::syntax::type_name::StructTypeName;
 
-fn src() -> NamedSource<Arc<String>> {
-    NamedSource::new("test.gcl", Arc::new(String::new()))
+fn src() -> crate::source_id::SourceId {
+    crate::source_registry::SourceRegistry::new()
+        .register("test.gcl", std::sync::Arc::new(String::new()))
 }
 
 fn registry() -> FormattingRegistry {
@@ -121,7 +122,7 @@ fn decl_type_exposes_element_and_axes() {
     assert_eq!(indexed.element(), &element);
     assert_eq!(indexed.indexes().len(), 2);
     assert_eq!(indexed.format(&registry()), "Length[Phase, Phase]");
-    let CheckedType::Indexed { element: outer, .. } = indexed.to_checked_type(&src()).unwrap()
+    let CheckedType::Indexed { element: outer, .. } = indexed.to_checked_type(src()).unwrap()
     else {
         panic!("expected an indexed checked type");
     };
@@ -132,7 +133,7 @@ fn decl_type_exposes_element_and_axes() {
 fn symbolic_complex_and_generic_args_have_no_checked_type() {
     let lone = symbolic(vec![param_term("D", Rational::ONE, MulDivOp::Mul)]);
     let squared = symbolic(vec![param_term("D", Rational::from(2), MulDivOp::Mul)]);
-    let message = |ty: &ResolvedValueType| match ty.to_checked_type(&src()) {
+    let message = |ty: &ResolvedValueType| match ty.to_checked_type(src()) {
         Err(GraphcalError::EvalError { message, .. }) => message,
         other => panic!("expected an evaluation error, got {other:?}"),
     };

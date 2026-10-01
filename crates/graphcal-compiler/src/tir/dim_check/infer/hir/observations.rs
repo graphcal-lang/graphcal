@@ -9,12 +9,11 @@
 
 use crate::hir::expr::{ConstRef, Expr, ExprKind, FunctionRef, MatchPattern};
 use crate::resolved_name::{ResolvedConstructorName, ResolvedStructTypeName};
+use crate::source_id::SourceId;
 use crate::tir::texpr::ExternSignature;
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-
-use miette::NamedSource;
 
 use crate::diagnostic_anchor::DiagnosticAnchor;
 use crate::expression_id::ExprId;
@@ -177,12 +176,7 @@ impl BodyObservations {
     }
 
     /// Record one checked expression's typed node.
-    fn insert(
-        &self,
-        expr: &Expr,
-        node: CheckedNode,
-        src: &NamedSource<Arc<String>>,
-    ) -> Result<(), GraphcalError> {
+    fn insert(&self, expr: &Expr, node: CheckedNode, src: SourceId) -> Result<(), GraphcalError> {
         self.try_insert(expr, node).map_err(|error| {
             GraphcalError::internal_error(
                 error.to_string(),
@@ -232,7 +226,7 @@ impl BodyObservations {
     pub(in crate::tir::dim_check) fn record_contextual(
         &self,
         expr: &Expr,
-        src: &NamedSource<Arc<String>>,
+        src: SourceId,
     ) -> Result<(), GraphcalError> {
         self.insert(expr, CheckedNode::Contextual, src)
     }
@@ -243,7 +237,7 @@ impl BodyObservations {
         inferred: &CheckedType<Symbolic>,
         dag: &crate::tir::typed::DagTIR,
         tir: &dyn crate::tir::typed::TirRead,
-        src: &NamedSource<Arc<String>>,
+        src: SourceId,
     ) -> Result<(), GraphcalError> {
         let checked_type = inferred.clone();
         crate::tir::dim_check::expression_axes::check_materializable(

@@ -4,6 +4,8 @@ use std::collections::HashMap;
 use std::fmt::Write as _;
 
 use graphcal_compiler::graphcal_error::GraphcalError;
+
+use graphcal_compiler::graphcal_error::RenderedGraphcalError;
 use graphcal_eval::eval::EvalResult;
 use graphcal_io::RealFileSystem;
 use graphcal_project::compile_error::CompileError;
@@ -89,7 +91,10 @@ node called: Dimensionless = @bounded()::result;
 
     assert!(matches!(
         error,
-        CompileError::Eval(GraphcalError::DomainViolation { .. })
+        CompileError::Eval(RenderedGraphcalError {
+            error: GraphcalError::DomainViolation { .. },
+            ..
+        })
     ));
 }
 
@@ -265,12 +270,13 @@ node grid: Dimensionless[Fin(1000000), Fin(1000000)] =
 
     assert!(matches!(
         error,
-        graphcal_project::compile_error::CompileError::Eval(
-            graphcal_compiler::graphcal_error::GraphcalError::MaterializedShapeTooLarge {
+        graphcal_project::compile_error::CompileError::Eval(RenderedGraphcalError {
+            error: graphcal_compiler::graphcal_error::GraphcalError::MaterializedShapeTooLarge {
                 maximum: 1_000_000,
                 ..
-            }
-        )
+            },
+            ..
+        })
     ));
 }
 
@@ -288,12 +294,13 @@ param matrix: Matrix<1000000>;
 
     assert!(matches!(
         error,
-        graphcal_project::compile_error::CompileError::Eval(
-            graphcal_compiler::graphcal_error::GraphcalError::MaterializedShapeTooLarge {
+        graphcal_project::compile_error::CompileError::Eval(RenderedGraphcalError {
+            error: graphcal_compiler::graphcal_error::GraphcalError::MaterializedShapeTooLarge {
                 maximum: 1_000_000,
                 ..
-            }
-        )
+            },
+            ..
+        })
     ));
 }
 
@@ -315,12 +322,13 @@ node unreachable: Dimensionless = count(@giant::values);
 
     assert!(matches!(
         error,
-        graphcal_project::compile_error::CompileError::Eval(
-            graphcal_compiler::graphcal_error::GraphcalError::MaterializedShapeTooLarge {
+        graphcal_project::compile_error::CompileError::Eval(RenderedGraphcalError {
+            error: graphcal_compiler::graphcal_error::GraphcalError::MaterializedShapeTooLarge {
                 maximum: 1_000_000,
                 ..
-            }
-        )
+            },
+            ..
+        })
     ));
 }
 
@@ -345,12 +353,14 @@ node unreachable: Dimensionless = count(@giant::values);
     assert!(
         matches!(
             error,
-            graphcal_project::compile_error::CompileError::Eval(
-                graphcal_compiler::graphcal_error::GraphcalError::MaterializedShapeTooLarge {
-                    maximum: 1_000_000,
-                    ..
-                }
-            )
+            graphcal_project::compile_error::CompileError::Eval(RenderedGraphcalError {
+                error:
+                    graphcal_compiler::graphcal_error::GraphcalError::MaterializedShapeTooLarge {
+                        maximum: 1_000_000,
+                        ..
+                    },
+                ..
+            })
         ),
         "unexpected error: {error:?}"
     );

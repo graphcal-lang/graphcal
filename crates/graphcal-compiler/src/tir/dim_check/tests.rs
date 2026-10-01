@@ -8,8 +8,9 @@ use crate::syntax::module_name::ScopedName;
 use crate::syntax::parser::Parser;
 use crate::syntax::span::Span;
 
-fn make_src(source: &str) -> NamedSource<Arc<String>> {
-    NamedSource::new("test.gcl", Arc::new(source.to_string()))
+fn make_src(source: &str) -> crate::source_id::SourceId {
+    crate::source_registry::SourceRegistry::new()
+        .register("test.gcl", std::sync::Arc::new(source.to_string()))
 }
 
 fn test_dag_id() -> crate::dag_id::DagId {
@@ -28,35 +29,35 @@ fn check(source: &str) -> Result<HashMap<ScopedName, CheckedType>, GraphcalError
     let desugared = crate::desugar::desugared_ast::File::from(raw_file);
     let file = desugared;
     let src = make_src(source);
-    let lowered = crate::ir::lower::lower_file_with_inline_dags_for_test(&file, &src)?;
+    let lowered = crate::ir::lower::lower_file_with_inline_dags_for_test(&file, "test.gcl", src)?;
     let resolver = lowered.resolver;
     let mut project_types = crate::tir::typed::ProjectTypeStore::default();
     project_types
         .insert_graphcal_prelude()
         .map_err(|err| GraphcalError::InternalError {
             message: format!("test module type prelude failed: {err}"),
-            src: src.clone(),
-            span: Span::new(0, 0).into(),
+            src,
+            anchor: crate::diagnostic_anchor::DiagnosticAnchor::Source(Span::new(0, 0)),
         })?;
     for dag in std::iter::once(&lowered.root).chain(&lowered.inline_dags) {
         project_types
             .insert_module(dag.definitions())
             .map_err(|error| GraphcalError::InternalError {
                 message: format!("test HIR type store failed: {error}"),
-                src: src.clone(),
-                span: Span::new(0, 0).into(),
+                src,
+                anchor: crate::diagnostic_anchor::DiagnosticAnchor::Source(Span::new(0, 0)),
             })?;
     }
     let mut builder = crate::tir::typed::type_resolve_draft(
         lowered.root,
-        &src,
+        src,
         &resolver,
-        Arc::new(project_types.clone()),
+        std::sync::Arc::new(project_types.clone()),
     )?;
     for dag_body_ir in lowered.inline_dags {
         let compiled_dag = crate::tir::typed::type_resolve_single_with_modules(
             dag_body_ir,
-            &src,
+            src,
             &resolver,
             &project_types,
         )?;
@@ -64,18 +65,18 @@ fn check(source: &str) -> Result<HashMap<ScopedName, CheckedType>, GraphcalError
             .insert_dag(compiled_dag)
             .map_err(|error| GraphcalError::InternalError {
                 message: error.to_string(),
-                src: src.clone(),
-                span: Span::new(0, 0).into(),
+                src,
+                anchor: crate::diagnostic_anchor::DiagnosticAnchor::Source(Span::new(0, 0)),
             })?;
     }
-    let tir = check_draft(builder, &src)?;
+    let tir = check_draft(builder, src)?;
     Ok(root_declared_types(tir.root().body()))
 }
 
 /// Instantiate and check a draft without external override summaries.
 fn check_draft(
     draft: crate::tir::typed::TirDraft,
-    src: &NamedSource<Arc<String>>,
+    src: crate::source_id::SourceId,
 ) -> Result<crate::tir::typed::CheckedTir, GraphcalError> {
     draft
         .instantiate(
@@ -118,20 +119,25 @@ fn edit_root_decls(
     tir.root_mut().decls.update(edit);
 }
 
-fn module_aware_tir(source: &str) -> (crate::tir::typed::TirDraft, NamedSource<Arc<String>>) {
+fn module_aware_tir(source: &str) -> (crate::tir::typed::TirDraft, crate::source_id::SourceId) {
     let raw_file = Parser::new(source).parse_file().unwrap();
     let desugared = crate::desugar::desugared_ast::File::from(raw_file);
     let file = desugared;
     let src = make_src(source);
-    let ir = crate::ir::lower::lower(&file, &src).unwrap();
+    let ir = crate::ir::lower::lower(&file, "test.gcl", src).unwrap();
     let mut modules = crate::resolve::builder::TestModules::default();
     modules.add(ir.dag_id().clone(), &file.declarations);
     let resolver = modules.build().unwrap();
     let mut project_types = crate::tir::typed::ProjectTypeStore::default();
     project_types.insert_graphcal_prelude().unwrap();
     project_types.insert_module(ir.definitions()).unwrap();
-    let tir = crate::tir::typed::type_resolve_draft(ir, &src, &resolver, Arc::new(project_types))
-        .unwrap();
+    let tir = crate::tir::typed::type_resolve_draft(
+        ir,
+        src,
+        &resolver,
+        std::sync::Arc::new(project_types),
+    )
+    .unwrap();
     (tir, src)
 }
 
@@ -180,7 +186,7 @@ fn one_checking_pass_records_every_expression_once() {
             ")".repeat(depth)
         );
         let (tir, src) = module_aware_tir(&source);
-        let tir = check_draft(tir, &src).unwrap();
+        let tir = check_draft(tir, src).unwrap();
         assert_eq!(count_nodes(tir.root().bodies(), |_| true), depth + 1);
     }
 }
@@ -189,7 +195,7 @@ fn one_checking_pass_records_every_expression_once() {
 fn consuming_rules_record_contextual_literals() {
     let (tir, src) =
         module_aware_tir("node value: Datetime<UTC> = datetime(\"2026-01-01T00:00:00Z\");");
-    let tir = check_draft(tir, &src).unwrap();
+    let tir = check_draft(tir, src).unwrap();
     // The literal argument is parsed into the typed datetime it builds.
     assert_eq!(count_contextual(tir.root().bodies()), 0);
     let node = tir.root().body().nodes().next().unwrap();
@@ -197,7 +203,7 @@ fn consuming_rules_record_contextual_literals() {
         &tir,
         node.definition.formula().unwrap(),
         node.type_ann.checked().declared(),
-        &src,
+        src,
     )
     .unwrap();
     assert!(matches!(
@@ -219,7 +225,7 @@ fn consuming_rules_record_contextual_literals() {
              title: \"Values\",\n\
          };",
     );
-    let tir = check_draft(tir, &src).unwrap();
+    let tir = check_draft(tir, src).unwrap();
     // The string encoding and the string property; datetime constructor
     // arguments are parsed into the typed datetimes they build.
     assert_eq!(count_contextual(tir.root().bodies()), 2);
@@ -241,10 +247,10 @@ fn body_observations_reject_a_second_record_of_one_expression() {
     let ty = CheckedType::Quantity(Dimension::dimensionless());
     let unchecked = tir.clone().finish();
     observations
-        .record(expr, &ty, tir.root(), &unchecked, &src)
+        .record(expr, &ty, tir.root(), &unchecked, src)
         .unwrap();
     assert!(matches!(
-        observations.record(expr, &ty, tir.root(), &unchecked, &src),
+        observations.record(expr, &ty, tir.root(), &unchecked, src),
         Err(GraphcalError::InternalError { .. })
     ));
 }
@@ -273,7 +279,7 @@ fn template_closure_reports_the_first_observed_type_definition_use() {
                   pub node plain: Dimensionless = 1.0;\n\
                   pub node read: Dimensionless = @r.x + @r.x;";
     let (tir, src) = module_aware_tir(source);
-    let error = check_draft(tir, &src).unwrap_err();
+    let error = check_draft(tir, src).unwrap_err();
     let GraphcalError::TemplateBodyDependsOnStaticDefault {
         body_name, span, ..
     } = error
@@ -288,7 +294,7 @@ fn model_port_application(
     source: &str,
 ) -> (
     crate::tir::typed::TirDraft,
-    NamedSource<Arc<String>>,
+    crate::source_id::SourceId,
     StructTypeRef,
     Vec<CheckedGenericArg>,
 ) {
@@ -328,9 +334,9 @@ param fixed_wrapped: Wrapper<Fixed, FixedAxis> =
     Wrapper<Fixed, FixedAxis>(value: @fixed, values: @fixed_values);
 ";
     let (tir, src) = module_aware_tir(source);
-    let tir = check_draft(tir, &src).unwrap();
+    let tir = check_draft(tir, src).unwrap();
 
-    let summary = collect_override_dependency_summary(&tir, &src).unwrap();
+    let summary = collect_override_dependency_summary(&tir, src).unwrap();
     let owner = test_dag_id();
     let record = NominalOverrideIdentity::Type(ResolvedStructTypeName::for_test(
         owner.clone(),
@@ -372,12 +378,12 @@ pub(bind) type Record { Record(x: Dimensionless) }
 param record: Record = Record(x: 1.0);
 ";
     let (tir, src) = module_aware_tir(source);
-    let tir = check_draft(tir, &src).unwrap();
+    let tir = check_draft(tir, src).unwrap();
     let cancellation = crate::cancellation::CancellationSource::new();
     cancellation.cancel();
 
     assert!(matches!(
-        collect_override_dependency_summary_with_cancellation(&tir, &src, &cancellation.token(),),
+        collect_override_dependency_summary_with_cancellation(&tir, src, &cancellation.token(),),
         Err(Outcome::Cancelled)
     ));
 }
@@ -406,7 +412,7 @@ fn cycle_detection_uses_semantic_dependencies() {
 
     tir.root_mut().semantic.dependencies = resolved;
 
-    check_draft(tir, &src).unwrap();
+    check_draft(tir, src).unwrap();
 }
 
 #[test]
@@ -440,7 +446,7 @@ fn materialized_shape_identity_survives_equal_and_shifted_source_coordinates() {
                 .map_spans_for_test(|_| Span::new(0, 1));
         }
     });
-    let tir = check_draft(draft.clone(), &src).unwrap();
+    let tir = check_draft(draft.clone(), src).unwrap();
     // The executable tree nodes checked for `ids`, in pre-order.
     let nodes = |tir: &crate::tir::typed::CheckedTir| {
         let formula = tir
@@ -490,10 +496,10 @@ fn materialized_shape_identity_survives_equal_and_shifted_source_coordinates() {
                 .map_spans_for_test(|_| Span::new(2, 3));
         }
     });
-    let tir = check_draft(draft, &src).unwrap();
+    let tir = check_draft(draft, src).unwrap();
     assert_eq!(totals(&tir), vec![2, 3]);
     let (rebuilt, rebuilt_src) = module_aware_tir(source);
-    let rebuilt = check_draft(rebuilt, &rebuilt_src).unwrap();
+    let rebuilt = check_draft(rebuilt, rebuilt_src).unwrap();
     assert!(nodes(&rebuilt).is_empty());
 }
 
@@ -512,7 +518,7 @@ fn node_entry_body_is_authoritative_for_hir_dimension_check() {
         }
     });
 
-    assert!(check_draft(tir, &src).is_err());
+    assert!(check_draft(tir, src).is_err());
 }
 
 #[test]
@@ -533,7 +539,7 @@ fn indexed_node_entry_body_is_authoritative_for_hir_dimension_check() {
         }
     });
 
-    assert!(check_draft(tir, &src).is_err());
+    assert!(check_draft(tir, src).is_err());
 }
 
 #[test]
@@ -550,7 +556,7 @@ fn assert_entry_body_is_authoritative_for_hir_dimension_check() {
         }
     });
 
-    assert!(check_draft(tir, &src).is_err());
+    assert!(check_draft(tir, src).is_err());
 }
 
 #[test]
@@ -2777,9 +2783,9 @@ param port: Box<Time>;
     let (_, _, _, invalid_args) = model_port_application(source);
     let (tir, src, identity, valid_args) =
         model_port_application(&source.replace("Box<Time>", "Box<Length>"));
-    let tir = check_draft(tir, &src).unwrap();
-    ConcreteModelType::try_new(&tir, &identity, &valid_args, &src).unwrap();
-    let error = ConcreteModelType::try_new(&tir, &identity, &invalid_args, &src).unwrap_err();
+    let tir = check_draft(tir, src).unwrap();
+    ConcreteModelType::try_new(&tir, &identity, &valid_args, src).unwrap();
+    let error = ConcreteModelType::try_new(&tir, &identity, &invalid_args, src).unwrap_err();
     assert!(
         matches!(
             error,
@@ -2796,10 +2802,10 @@ pub type Phantom<N: Nat> { Phantom }
 param port: Phantom<1>;
 ";
     let (tir, src, identity, generic_args) = model_port_application(source);
-    let tir = check_draft(tir, &src).unwrap();
+    let tir = check_draft(tir, src).unwrap();
     assert_eq!(generic_args.len(), 1);
 
-    let too_few = ConcreteModelType::try_new(&tir, &identity, &[], &src).unwrap_err();
+    let too_few = ConcreteModelType::try_new(&tir, &identity, &[], src).unwrap_err();
     assert!(matches!(
         too_few,
         ConcreteModelTypeError::GenericArityMismatch {
@@ -2810,7 +2816,7 @@ param port: Phantom<1>;
     ));
 
     let too_many_args = vec![generic_args[0].clone(), generic_args[0].clone()];
-    let too_many = ConcreteModelType::try_new(&tir, &identity, &too_many_args, &src).unwrap_err();
+    let too_many = ConcreteModelType::try_new(&tir, &identity, &too_many_args, src).unwrap_err();
     assert!(matches!(
         too_many,
         ConcreteModelTypeError::GenericArityMismatch {
@@ -2828,10 +2834,10 @@ pub type Phantom<N: Nat> { Phantom }
 param port: Phantom<1>;
 ";
     let (tir, src, identity, _) = model_port_application(source);
-    let tir = check_draft(tir, &src).unwrap();
+    let tir = check_draft(tir, src).unwrap();
     let wrong_sort = [CheckedGenericArg::Type(CheckedType::Int)];
 
-    let error = ConcreteModelType::try_new(&tir, &identity, &wrong_sort, &src).unwrap_err();
+    let error = ConcreteModelType::try_new(&tir, &identity, &wrong_sort, src).unwrap_err();
     assert!(matches!(
         error,
         ConcreteModelTypeError::GenericSortMismatch {
@@ -2849,10 +2855,10 @@ pub type Defaults<N: Nat = 2, T: Type = Int> { Defaults(value: T) }
 param port: Defaults;
 ";
     let (tir, src, identity, generic_args) = model_port_application(source);
-    let tir = check_draft(tir, &src).unwrap();
+    let tir = check_draft(tir, src).unwrap();
     assert_eq!(generic_args.len(), 2);
 
-    let omitted_defaults = ConcreteModelType::try_new(&tir, &identity, &[], &src).unwrap_err();
+    let omitted_defaults = ConcreteModelType::try_new(&tir, &identity, &[], src).unwrap_err();
     assert!(matches!(
         omitted_defaults,
         ConcreteModelTypeError::GenericArityMismatch {
@@ -2862,8 +2868,8 @@ param port: Defaults;
         }
     ));
 
-    let model_type = ConcreteModelType::try_new(&tir, &identity, &generic_args, &src).unwrap();
-    let constructors = model_type.constructors(&src).unwrap();
+    let model_type = ConcreteModelType::try_new(&tir, &identity, &generic_args, src).unwrap();
+    let constructors = model_type.constructors(src).unwrap();
     assert_eq!(constructors.len(), 1);
     assert_eq!(constructors[0].fields().len(), 1);
     assert_eq!(
@@ -2880,9 +2886,9 @@ pub type Outer<T: Type> { Outer(value: Inner<T>) }
 param port: Outer<Int>;
 ";
     let (tir, src, identity, generic_args) = model_port_application(source);
-    let tir = check_draft(tir, &src).unwrap();
-    let model_type = ConcreteModelType::try_new(&tir, &identity, &generic_args, &src).unwrap();
-    let constructors = model_type.constructors(&src).unwrap();
+    let tir = check_draft(tir, src).unwrap();
+    let model_type = ConcreteModelType::try_new(&tir, &identity, &generic_args, src).unwrap();
+    let constructors = model_type.constructors(src).unwrap();
 
     assert!(matches!(
         constructors[0].fields()[0].declared_type(),
@@ -2899,12 +2905,12 @@ pub type Vector<I: Index> { Vector(values: Dimensionless[I]) }
 param port: Vector<Axis>;
 ";
     let (tir, src, identity, generic_args) = model_port_application(source);
-    let tir = check_draft(tir, &src).unwrap();
+    let tir = check_draft(tir, src).unwrap();
 
-    let validated = ValidatedModelType::try_new(&tir, &identity, &generic_args, &src).unwrap();
-    assert_eq!(validated.constructors(&src).unwrap().len(), 1);
+    let validated = ValidatedModelType::try_new(&tir, &identity, &generic_args, src).unwrap();
+    assert_eq!(validated.constructors(src).unwrap().len(), 1);
 
-    let error = ConcreteModelType::try_new(&tir, &identity, &generic_args, &src).unwrap_err();
+    let error = ConcreteModelType::try_new(&tir, &identity, &generic_args, src).unwrap_err();
     assert!(matches!(
         error,
         ConcreteModelTypeError::RequiredIndex { .. }
@@ -3813,7 +3819,7 @@ fn checker_retains_dependency_then_source_ordered_schedules() {
                   node m: Dimensionless = @p + 1.0;\n\
                   node q: Dimensionless = 2.0;";
     let (draft, src) = module_aware_tir(source);
-    let tir = check_draft(draft.clone(), &src).unwrap();
+    let tir = check_draft(draft.clone(), src).unwrap();
 
     let constants = tir.const_schedule();
     assert_eq!(constants.dags(), [test_dag_id()]);
@@ -3853,7 +3859,7 @@ fn checker_retains_dependency_then_source_ordered_schedules() {
     assert_eq!(runtime.dependencies_of(&root_decl("c")), None);
 
     // A new checking revision rebuilds the same schedules.
-    let retained = check_draft(draft, &src).unwrap();
+    let retained = check_draft(draft, src).unwrap();
     assert_eq!(retained.root().runtime_schedule(), runtime);
     assert_eq!(retained.const_schedule(), constants);
 }
@@ -3882,7 +3888,7 @@ fn declaration_cycles_are_reported_deterministically_at_the_closing_declaration(
     ] {
         for _ in 0..4 {
             let (tir, src) = module_aware_tir(source);
-            let error = check_draft(tir, &src).unwrap_err();
+            let error = check_draft(tir, src).unwrap_err();
             assert!(
                 matches!(&error, GraphcalError::CyclicDependency { name, .. } if name == expected),
                 "{source}: {error:?}"
@@ -3899,14 +3905,14 @@ fn call_arguments_prechecked_for_override_reconciliation_are_inferred_once() {
     let reconciliation = crate::ir::override_reconciliation::OverrideReconciliation::new(
         root_decl("value"),
         &crate::ir::static_substitution::StaticSubstitution::default(),
-        src.clone(),
+        src,
         Span::new(0, 0),
     );
     tir.root_mut()
         .semantic
         .override_reconciliations
         .insert(owner, vec![reconciliation]);
-    let tir = check_draft(tir, &src).unwrap();
+    let tir = check_draft(tir, src).unwrap();
     assert_eq!(count_nodes(tir.root().bodies(), |_| true), 5);
 }
 
@@ -3926,7 +3932,7 @@ fn inference_emits_typed_trees_carrying_node_facts() {
                   node when: Datetime<UTC> = datetime(\"2026-01-01T00:00:00Z\");\n\
                   plot p = { mark: point, encode: { x: @v, y: @v, color: \"red\" } };";
     let (tir, src) = module_aware_tir(source);
-    let tir = check_draft(tir, &src).unwrap();
+    let tir = check_draft(tir, src).unwrap();
     let dag = tir.root();
     let bodies = dag.bodies();
     let root = |name: &str| {

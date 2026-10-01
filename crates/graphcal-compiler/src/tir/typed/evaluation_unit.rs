@@ -17,6 +17,7 @@ use std::borrow::Borrow;
 use crate::hir::expr::{AssertBody, Expr};
 use crate::ir::entry::Decl;
 use crate::resolved_name::{ResolvedDeclName, ResolvedStructTypeName, ResolvedUnitName};
+use crate::source_id::SourceId;
 use crate::tir::texpr::{CheckedBody, ContextualLiteral, ExecutableBodyError, TBody, TExpr};
 
 use super::body_scope::{BodyScope, Scoped};
@@ -313,7 +314,7 @@ pub struct UnitScaleBody<'t> {
     declared_dimension: &'t crate::dimension::Dimension,
     base_unit_dimension: &'t crate::dimension::Dimension,
     span: crate::syntax::span::Span,
-    source: &'t miette::NamedSource<std::sync::Arc<String>>,
+    source: SourceId,
 }
 
 impl<'t> UnitScaleBody<'t> {
@@ -349,7 +350,7 @@ impl<'t> UnitScaleBody<'t> {
 
     /// The source of the defining module, which the spans index.
     #[must_use]
-    pub const fn source(self) -> &'t miette::NamedSource<std::sync::Arc<String>> {
+    pub const fn source(self) -> SourceId {
         self.source
     }
 }
@@ -395,7 +396,7 @@ impl CheckedTir {
                 declared_dimension: &scale.declared_dimension,
                 base_unit_dimension: &scale.base_unit_dimension,
                 span: scale.span,
-                source: &scale.src,
+                source: scale.src,
             })
     }
 

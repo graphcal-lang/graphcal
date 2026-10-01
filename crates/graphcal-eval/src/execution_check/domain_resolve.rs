@@ -1,15 +1,14 @@
 //! Domain-bound resolution and compile-time constraint validation.
 
 use graphcal_compiler::declaration_category::ValueDeclCategory;
+use graphcal_compiler::source_registry::SourceRegistry;
 use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
-
-use miette::NamedSource;
 
 use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
 use graphcal_compiler::graphcal_error::GraphcalError;
 use graphcal_compiler::outcome::Outcome;
 use graphcal_compiler::semantic::checked_type::{CheckedGenericArg, CheckedType, StructTypeRef};
+use graphcal_compiler::source_id::SourceId;
 use graphcal_compiler::syntax::span::Span;
 use graphcal_compiler::syntax::type_name::{ConstructorName, FieldName};
 use graphcal_compiler::tir::typed::{
@@ -38,13 +37,14 @@ pub(super) fn resolve_domain_constraints_for_dag(
     dag: &CheckedDag,
     const_values: &RuntimeValueMap,
     all_const_values: &RuntimeValueMap,
-    src: &NamedSource<Arc<String>>,
+    src: SourceId,
+    sources: &SourceRegistry,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<HashMap<ResolvedDeclName, ResolvedDomainConstraint>, Outcome<GraphcalError>> {
     cancellation.checkpoint()?;
     let visible_const_values = visible_values_with_imports(const_values, all_const_values);
 
-    let ctx = EvalSession::provisional_constants(tir, src, cancellation.clone())
+    let ctx = EvalSession::provisional_constants(tir, src, sources, cancellation.clone())
         .with_roots(&visible_const_values, None);
     let mut constraints = HashMap::new();
     // Constants first, then parameters, then nodes, each in source order.
@@ -79,7 +79,7 @@ pub(super) fn resolve_domain_constraints_for_dag(
         else {
             continue;
         };
-        let constraint_src = domain_bounds.get().first().map_or(src, |bound| &bound.src);
+        let constraint_src = domain_bounds.get().first().map_or(src, |bound| bound.src);
         let target = resolve_constraint_target(
             &name.to_string(),
             Some(annotation.checked().resolved().element()),
@@ -106,7 +106,7 @@ pub(super) fn resolve_domain_constraints_for_dag(
                 name: name.to_string(),
                 value: format_runtime_value(value),
                 violation: violation.message,
-                src: src.clone(),
+                src,
                 span: decl_span.into(),
             }
             .into());
@@ -138,7 +138,7 @@ fn resolve_constraint_from_bounds(
     target: ConstraintTarget,
     values: &RuntimeValueMap,
     ctx: BoundCheckingContext<'_, '_>,
-    src: &NamedSource<Arc<String>>,
+    src: SourceId,
 ) -> Result<ResolvedDomainConstraint, Outcome<GraphcalError>> {
     match target {
         ConstraintTarget::Quantity => evaluate_domain_bounds(
@@ -220,7 +220,7 @@ fn evaluate_domain_bounds<T: PartialOrd>(
     display_name: &str,
     values: &RuntimeValueMap,
     ctx: BoundCheckingContext<'_, '_>,
-    src: &NamedSource<Arc<String>>,
+    src: SourceId,
     convert: impl Fn(
         &RuntimeValue,
         &graphcal_compiler::tir::typed::ResolvedDomainBound,
@@ -267,7 +267,7 @@ fn evaluate_domain_bounds<T: PartialOrd>(
             name: display_name.to_string(),
             min: min.display().to_string(),
             max: max.display().to_string(),
-            src: src.clone(),
+            src,
             span: constraint_span.into(),
         }
         .into());
@@ -280,7 +280,7 @@ fn domain_bound_value_error(
     bound: &graphcal_compiler::tir::typed::ResolvedDomainBound,
     expected: &str,
     actual: &RuntimeValue,
-    src: &NamedSource<Arc<String>>,
+    src: SourceId,
 ) -> GraphcalError {
     GraphcalError::EvalError {
         message: format!(
@@ -288,7 +288,7 @@ fn domain_bound_value_error(
             bound.kind,
             actual.describe()
         ),
-        src: src.clone(),
+        src,
         span: bound.value.span.into(),
     }
 }
@@ -302,7 +302,7 @@ struct ConcreteNominalApplication {
 fn collect_concrete_nominal_applications(
     declared: &CheckedType,
     tir: &CheckedTir,
-    src: &NamedSource<Arc<String>>,
+    src: SourceId,
     applications: &mut HashSet<ConcreteNominalApplication>,
 ) -> Result<(), GraphcalError> {
     match declared {
@@ -353,7 +353,7 @@ fn collect_concrete_nominal_applications(
 fn generic_nat_bindings(
     type_def: &graphcal_compiler::hir::nominal::NominalTypeDef,
     generic_args: &[CheckedGenericArg],
-    src: &NamedSource<Arc<String>>,
+    src: SourceId,
     span: Span,
 ) -> Result<HashMap<graphcal_compiler::hir::types::GenericParamId, u64>, GraphcalError> {
     if type_def.generic_params().len() != generic_args.len() {
@@ -364,8 +364,8 @@ fn generic_nat_bindings(
                 generic_args.len(),
                 type_def.generic_params().len()
             ),
-            src: src.clone(),
-            span: span.into(),
+            src,
+            anchor: graphcal_compiler::diagnostic_anchor::DiagnosticAnchor::Source(span),
         });
     }
     type_def
@@ -398,10 +398,17 @@ fn generic_nat_bindings(
 pub(super) fn resolve_struct_field_constraints(
     tir: &CheckedTir,
     const_values: &RuntimeValueMap,
-    src: &NamedSource<Arc<String>>,
+    src: SourceId,
+    sources: &SourceRegistry,
 ) -> Result<HashMap<StructFieldConstraintKey, ResolvedDomainConstraint>, GraphcalError> {
     graphcal_compiler::outcome::without_cancellation(|cancellation| {
-        resolve_struct_field_constraints_with_cancellation(tir, const_values, src, cancellation)
+        resolve_struct_field_constraints_with_cancellation(
+            tir,
+            const_values,
+            src,
+            sources,
+            cancellation,
+        )
     })
 }
 
@@ -409,14 +416,15 @@ pub(super) fn resolve_struct_field_constraints(
 /// This is deliberately not an executable/checked DAG artifact.
 pub(super) struct DagConstScope<'a> {
     pub values: &'a RuntimeValueMap,
-    pub source: &'a NamedSource<Arc<String>>,
+    pub source: SourceId,
 }
 
 struct FieldConstraintResolutionContext<'a> {
     tir: &'a CheckedTir,
     const_scopes: &'a HashMap<graphcal_compiler::dag_id::DagId, DagConstScope<'a>>,
     all_const_values: &'a RuntimeValueMap,
-    fallback_src: &'a NamedSource<Arc<String>>,
+    fallback_src: SourceId,
+    sources: &'a SourceRegistry,
     cancellation: &'a graphcal_compiler::cancellation::CancellationToken,
 }
 
@@ -476,9 +484,13 @@ fn resolve_application_field_constraints(
         type_def.source(),
         type_def.span(),
     )?;
-    let application_ctx =
-        EvalSession::provisional_constants(ctx.tir, owner_src, ctx.cancellation.clone())
-            .with_roots(&visible_const_values, None);
+    let application_ctx = EvalSession::provisional_constants(
+        ctx.tir,
+        owner_src,
+        ctx.sources,
+        ctx.cancellation.clone(),
+    )
+    .with_roots(&visible_const_values, None);
     let mut constraints = Vec::new();
     for (key, scoped_field) in nominal.constrained_fields() {
         let field_semantics = scoped_field.get();
@@ -498,7 +510,7 @@ fn resolve_application_field_constraints(
             &display_name,
             Some(field_semantics.resolved_type().element()),
             bound_span,
-            constraint_src,
+            *constraint_src,
         )?;
         let constraint = resolve_constraint_from_bounds(
             bounds,
@@ -506,10 +518,10 @@ fn resolve_application_field_constraints(
             target,
             &visible_const_values,
             BoundCheckingContext {
-                evaluation: &application_ctx.with_src(constraint_src),
+                evaluation: &application_ctx.with_src(*constraint_src),
                 bindings: &nat_bindings,
             },
-            constraint_src,
+            *constraint_src,
         )?;
         constraints.push((
             application_field_constraint_key(application, key),
@@ -521,7 +533,7 @@ fn resolve_application_field_constraints(
 
 fn collect_field_constraint_applications(
     tir: &CheckedTir,
-    src: &NamedSource<Arc<String>>,
+    src: SourceId,
 ) -> Result<HashSet<ConcreteNominalApplication>, GraphcalError> {
     let mut applications = HashSet::new();
     // The entry DAG's own declarations and the imported values visible in it.
@@ -560,7 +572,8 @@ pub(super) fn resolve_struct_field_constraints_for_dags(
     tir: &CheckedTir,
     const_scopes: &HashMap<graphcal_compiler::dag_id::DagId, DagConstScope<'_>>,
     all_const_values: &RuntimeValueMap,
-    src: &NamedSource<Arc<String>>,
+    src: SourceId,
+    sources: &SourceRegistry,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<DagFieldConstraints, Outcome<GraphcalError>> {
     cancellation.checkpoint()?;
@@ -569,6 +582,7 @@ pub(super) fn resolve_struct_field_constraints_for_dags(
         const_scopes,
         all_const_values,
         fallback_src: src,
+        sources,
         cancellation,
     };
     let mut grouped = DagFieldConstraints::new();
@@ -583,7 +597,8 @@ pub(super) fn resolve_struct_field_constraints_for_dags(
 pub(super) fn resolve_struct_field_constraints_with_cancellation(
     tir: &CheckedTir,
     const_values: &RuntimeValueMap,
-    src: &NamedSource<Arc<String>>,
+    src: SourceId,
+    sources: &SourceRegistry,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<HashMap<StructFieldConstraintKey, ResolvedDomainConstraint>, Outcome<GraphcalError>> {
     let empty = RuntimeValueMap::new();
@@ -611,6 +626,7 @@ pub(super) fn resolve_struct_field_constraints_with_cancellation(
         &const_scopes,
         &all_const_values,
         src,
+        sources,
         cancellation,
     )
     .map(|grouped| grouped.into_values().flatten().collect())
@@ -620,7 +636,7 @@ pub(super) fn check_dag_const_struct_field_constraints_at_compile_time(
     dag: &CheckedDag,
     const_values: &RuntimeValueMap,
     field_constraints: &HashMap<StructFieldConstraintKey, ResolvedDomainConstraint>,
-    src: &NamedSource<Arc<String>>,
+    src: SourceId,
 ) -> Result<(), GraphcalError> {
     for (entry, declared) in dag.declarations().filter_map(|entry| {
         entry
@@ -686,7 +702,7 @@ fn check_const_struct_field_constraints(
     decl_span: Span,
     owning_type: Option<&StructTypeRef>,
     field_constraints: &HashMap<StructFieldConstraintKey, ResolvedDomainConstraint>,
-    src: &NamedSource<Arc<String>>,
+    src: SourceId,
 ) -> Result<(), GraphcalError> {
     match value {
         RuntimeValue::Struct(value) => {
@@ -706,7 +722,7 @@ fn check_const_struct_field_constraints(
                         name: format!("{decl_name}.{field_name}"),
                         value: format_runtime_value(field_value),
                         violation: violation.message,
-                        src: src.clone(),
+                        src,
                         span: decl_span.into(),
                     });
                 }
@@ -765,13 +781,13 @@ fn resolve_constraint_target(
     name: &str,
     base_resolved: Option<&ResolvedValueType>,
     decl_span: Span,
-    src: &NamedSource<Arc<String>>,
+    src: SourceId,
 ) -> Result<ConstraintTarget, GraphcalError> {
     let Some(resolved) = base_resolved else {
         return Err(GraphcalError::InternalError {
             message: format!("domain constraint target `{name}` has no resolved type"),
-            src: src.clone(),
-            span: decl_span.into(),
+            src,
+            anchor: graphcal_compiler::diagnostic_anchor::DiagnosticAnchor::Source(decl_span),
         });
     };
     match resolved {
@@ -780,29 +796,29 @@ fn resolve_constraint_target(
         ResolvedValueType::Datetime(scale) => Ok(ConstraintTarget::Datetime(*scale)),
         ResolvedValueType::Bool => Err(GraphcalError::InvalidDomainTarget {
             type_kind: "Bool".to_string(),
-            src: src.clone(),
+            src,
             span: decl_span.into(),
         }),
         ResolvedValueType::Complex { .. } => Err(GraphcalError::InvalidDomainTarget {
             type_kind: "Complex".to_string(),
-            src: src.clone(),
+            src,
             span: decl_span.into(),
         }),
         ResolvedValueType::Key { .. } => Err(GraphcalError::InvalidDomainTarget {
             type_kind: "Key".to_string(),
-            src: src.clone(),
+            src,
             span: decl_span.into(),
         }),
         ResolvedValueType::Struct {
             name: struct_name, ..
         } => Err(GraphcalError::InvalidDomainTarget {
             type_kind: format!("struct `{}`", struct_name.as_str()),
-            src: src.clone(),
+            src,
             span: decl_span.into(),
         }),
         ResolvedValueType::GenericTypeParam(param, _) => Err(GraphcalError::InvalidDomainTarget {
             type_kind: format!("generic Type parameter `{param}`"),
-            src: src.clone(),
+            src,
             span: decl_span.into(),
         }),
     }
@@ -815,12 +831,12 @@ fn resolve_constraint_target(
 /// pre-evaluated SI value is displayed as a fallback — no re-evaluation needed.
 fn exact_domain_int_bound(
     value: i64,
-    src: &NamedSource<Arc<String>>,
+    src: SourceId,
     span: graphcal_compiler::syntax::span::Span,
 ) -> Result<f64, GraphcalError> {
     crate::eval_expr::numeric::exact_i64_to_f64(value).map_err(|_| GraphcalError::EvalError {
         message: format!("domain bound integer {value} is too large for exact quantity comparison"),
-        src: src.clone(),
+        src,
         span: span.into(),
     })
 }

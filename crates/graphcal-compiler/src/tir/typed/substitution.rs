@@ -13,9 +13,6 @@
 //! [`super::specialization`].
 
 use std::collections::HashMap;
-use std::sync::Arc;
-
-use miette::NamedSource;
 
 use crate::desugar::desugared_ast::MulDivOp;
 use crate::dimension::{Dimension, Rational};
@@ -24,6 +21,7 @@ use crate::graphcal_error::GraphcalError;
 use crate::hir::nominal::NominalGenericParam;
 use crate::nat::{NatOverflowError, NatPolyForm};
 use crate::semantic::checked_type::{CheckedType, IndexTypeRef, InstantiationError, Symbolic};
+use crate::source_id::SourceId;
 use crate::syntax::span::Span;
 
 use super::{
@@ -60,20 +58,20 @@ pub enum SubstitutionError {
 impl SubstitutionError {
     /// Render the failure at its source span.
     #[must_use]
-    pub fn into_graphcal(self, src: &NamedSource<Arc<String>>) -> GraphcalError {
+    pub fn into_graphcal(self, src: SourceId) -> GraphcalError {
         match self {
             Self::NatOverflow { span } => GraphcalError::EvalError {
                 message: NatOverflowError.to_string(),
-                src: src.clone(),
+                src,
                 span: span.into(),
             },
             Self::DimensionOverflow { span } => GraphcalError::DimensionOverflow {
-                src: src.clone(),
+                src,
                 span: span.into(),
             },
             Self::InvalidFiniteIndex { error, span } => GraphcalError::EvalError {
                 message: error.describe_finite_index(),
-                src: src.clone(),
+                src,
                 span: span.into(),
             },
             Self::UnboundNat { param, span } => GraphcalError::internal_error(

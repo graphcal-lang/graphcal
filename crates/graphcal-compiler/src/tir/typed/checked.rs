@@ -5,7 +5,6 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use indexmap::IndexMap;
-use miette::NamedSource;
 
 use crate::dag_id::DagId;
 use crate::diagnostic_anchor::DiagnosticAnchor;
@@ -19,6 +18,7 @@ use crate::resolved_name::{
 use crate::semantic::checked_type::IndexTypeRef;
 use crate::semantic::index_def::IndexDef;
 use crate::semantic::unit_scale::UnitInfo;
+use crate::source_id::SourceId;
 use crate::tir::presentation::DagPresentationFacts;
 use crate::tir::schedule::{ConstSchedule, RuntimeSchedule};
 use crate::tir::texpr::CheckedBodies;
@@ -230,7 +230,7 @@ impl UncheckedTir {
     pub(crate) fn into_checked(
         self,
         parts: CheckedParts,
-        src: &NamedSource<Arc<String>>,
+        src: SourceId,
     ) -> Result<CheckedTir, GraphcalError> {
         let CheckedParts {
             mut bodies,

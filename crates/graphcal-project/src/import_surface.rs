@@ -11,18 +11,17 @@ use graphcal_compiler::ir::module_interface::ModuleInterface;
 use graphcal_compiler::resolve::category::ExportedImportItemKind;
 use graphcal_compiler::resolve::namespace::Namespace;
 use graphcal_compiler::resolve::reserved_name::validate_reserved_name;
+use graphcal_compiler::source_id::SourceId;
 use graphcal_compiler::syntax::ast::{ImportItem, ImportItemNamespace};
 use graphcal_compiler::syntax::import_category::ImportItemCategoryMismatch;
 use graphcal_compiler::syntax::names::NameAtom;
 use graphcal_compiler::syntax::span::Span;
-use miette::NamedSource;
-use std::sync::Arc;
 
 /// Validate the source-visible local spelling introduced by one selective item.
 pub fn validate_constructor_alias(
     kind: ExportedImportItemKind,
     import_item: &ImportItem,
-    src: &NamedSource<Arc<String>>,
+    src: SourceId,
 ) -> Result<(), GraphcalError> {
     match kind {
         ExportedImportItemKind::Constructor => {
@@ -40,7 +39,7 @@ pub fn validate_constructor_alias(
 pub fn validate_reserved_alias(
     namespace: Namespace,
     import_item: &ImportItem,
-    src: &NamedSource<Arc<String>>,
+    src: SourceId,
 ) -> Result<(), GraphcalError> {
     let local_name = import_item.local_name_atom();
     validate_reserved_name(namespace, local_name).map_err(|_| {
@@ -57,7 +56,7 @@ pub fn validate_reserved_alias(
         GraphcalError::BuiltinNameShadowed {
             kind,
             name: local_name.to_string(),
-            src: src.clone(),
+            src,
             span: import_item.local_span().into(),
         }
     })
@@ -71,20 +70,20 @@ pub fn import_item_not_found_error(
     name: &NameAtom,
     expected: ImportItemNamespace,
     file_path: &str,
-    src: &NamedSource<Arc<String>>,
+    src: SourceId,
     span: Span,
 ) -> GraphcalError {
     interface.namespaces_of(name).map_or_else(
         || GraphcalError::ImportNameNotFound {
             name: name.to_string(),
             file_path: file_path.to_string(),
-            src: src.clone(),
+            src,
             span: span.into(),
         },
         |alternatives| GraphcalError::ImportCategoryMismatch {
             file_path: file_path.to_string(),
             mismatch: ImportItemCategoryMismatch::new(name.clone(), expected, alternatives),
-            src: src.clone(),
+            src,
             span: span.into(),
         },
     )
@@ -102,8 +101,9 @@ mod tests {
         )
     }
 
-    fn src() -> NamedSource<Arc<String>> {
-        NamedSource::new("main.gcl", Arc::new(String::new()))
+    fn src() -> SourceId {
+        graphcal_compiler::source_registry::SourceRegistry::new()
+            .register("main.gcl", std::sync::Arc::new(String::new()))
     }
 
     #[test]
@@ -115,7 +115,7 @@ mod tests {
             &jpy,
             ImportItemNamespace::Type,
             "pkg.lib",
-            &src(),
+            src(),
             Span::new(0, 3),
         ) {
             GraphcalError::ImportCategoryMismatch { mismatch, .. } => assert_eq!(
@@ -137,7 +137,7 @@ mod tests {
                 &NameAtom::parse("missing").unwrap(),
                 ImportItemNamespace::Term,
                 "pkg.lib",
-                &src(),
+                src(),
                 Span::new(0, 7),
             ),
             GraphcalError::ImportNameNotFound { .. }

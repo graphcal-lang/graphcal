@@ -1,4 +1,5 @@
 use crate::load_error::LoadError;
+use graphcal_compiler::graphcal_error::RenderedGraphcalError;
 use std::path::{Path, PathBuf};
 
 use graphcal_compiler::dag_id::DagPackageId;
@@ -28,6 +29,7 @@ fn resolved(name: &str, inline: &[&str]) -> ModuleResolution<PathBuf> {
 
 fn parse(file: &Path, text: &str) -> ParsedFile {
     ParsedFile::parse(
+        &mut graphcal_compiler::source_registry::SourceRegistry::new(),
         &file.display().to_string(),
         Arc::new(text.to_string()),
         &graphcal_compiler::cancellation::CancellationToken::unbounded(),
@@ -81,6 +83,7 @@ fn snapshot<const N: usize>(
     SourceSnapshot {
         root: key(root),
         files: files.into_iter().collect(),
+        sources: graphcal_compiler::source_registry::SourceRegistry::new(),
     }
 }
 
@@ -89,7 +92,7 @@ fn dag_id(name: &str) -> DagId {
 }
 
 fn build_error<K: SourceKey>(snapshot: SourceSnapshot<K>) -> CompileError {
-    match build_loaded_files(snapshot) {
+    match build_files(snapshot) {
         Err(error) => error,
         Ok(_) => panic!("expected the build to fail"),
     }
@@ -107,7 +110,7 @@ fn import_targets(file: &LoadedFile) -> Vec<ResolvedModuleTarget> {
 
 #[test]
 fn dependencies_precede_dependents_in_post_order() {
-    let files = build_loaded_files(snapshot(
+    let files = build_files(snapshot(
         "main",
         [
             fetched(
@@ -128,7 +131,6 @@ fn dependencies_precede_dependents_in_post_order() {
         root.source.as_str(),
         "import pkg.b::{y};\nimport pkg.c::{z};"
     );
-    assert_eq!(root.named_source.name(), "/p/src/main.gcl");
     assert_eq!(
         import_targets(root),
         [
@@ -140,7 +142,7 @@ fn dependencies_precede_dependents_in_post_order() {
 
 #[test]
 fn diamond_dependency_is_built_once() {
-    let files = build_loaded_files(snapshot(
+    let files = build_files(snapshot(
         "main",
         [
             fetched(
@@ -167,7 +169,7 @@ fn diamond_dependency_is_built_once() {
 
 #[test]
 fn inline_path_targets_nested_dag_in_owner_file() {
-    let files = build_loaded_files(snapshot(
+    let files = build_files(snapshot(
         "main",
         [
             fetched(
@@ -257,6 +259,7 @@ fn package_import_cycle_labels_files_with_their_package() {
         ]
         .into_iter()
         .collect(),
+        sources: graphcal_compiler::source_registry::SourceRegistry::new(),
     });
     assert_eq!(
         error.to_string(),
@@ -375,7 +378,7 @@ fn resolution_failures_render_at_the_import_site() {
     assert!(
         matches!(
             error,
-            CompileError::Eval(GraphcalError::EvalError { ref message, .. })
+            CompileError::Eval(RenderedGraphcalError { error: GraphcalError::EvalError { ref message, .. }, .. })
                 if message == "no dependency `b`; run `graphcal deps lock` after changing dependencies"
         ),
         "{error:?}"
@@ -419,7 +422,7 @@ fn file_root_self_import_is_rejected() {
 
 #[test]
 fn self_references_through_inline_paths_and_includes_are_allowed() {
-    let files = build_loaded_files(snapshot(
+    let files = build_files(snapshot(
         "main",
         [fetched(
             "main",
@@ -437,7 +440,7 @@ fn self_references_through_inline_paths_and_includes_are_allowed() {
         )
     );
 
-    let files = build_loaded_files(snapshot(
+    let files = build_files(snapshot(
         "main",
         [fetched(
             "main",
@@ -452,7 +455,7 @@ fn self_references_through_inline_paths_and_includes_are_allowed() {
 
 #[test]
 fn same_file_dag_references_are_not_dependencies() {
-    let files = build_loaded_files(snapshot(
+    let files = build_files(snapshot(
         "main",
         [fetched(
             "main",
@@ -485,7 +488,7 @@ fn outside_root_is_rejected_at_file_root_and_in_dag_bodies() {
 
 #[test]
 fn dag_body_imports_load_dependencies_and_keep_failures_unresolved() {
-    let files = build_loaded_files(snapshot(
+    let files = build_files(snapshot(
             "main",
             [
                 fetched(
@@ -539,7 +542,7 @@ fn dag_body_imports_load_dependencies_and_keep_failures_unresolved() {
 fn dag_body_reference_to_an_unloaded_file_stays_unresolved() {
     // A single-segment body path naming a same-file DAG outside lexical
     // scope never loads the file it would resolve to.
-    let files = build_loaded_files(snapshot(
+    let files = build_files(snapshot(
         "main",
         [
             fetched(
@@ -581,6 +584,7 @@ fn invalid_module_location_is_an_error() {
     let error = build_error(SourceSnapshot {
         root: file.clone(),
         files: std::iter::once((file, Ok(fetched))).collect(),
+        sources: graphcal_compiler::source_registry::SourceRegistry::new(),
     });
     assert!(
         error
@@ -588,4 +592,11 @@ fn invalid_module_location_is_an_error() {
             .contains("invalid module path `src/main.txt`"),
         "{error}"
     );
+}
+
+/// Build the loaded files of `snapshot`, without its source registry.
+fn build_files<K: SourceKey>(
+    snapshot: SourceSnapshot<K>,
+) -> Result<DependencyOrdered<LoadedFile>, CompileError> {
+    build_loaded_files(snapshot).map(|(files, _)| files)
 }

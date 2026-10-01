@@ -9,12 +9,10 @@
 //! evaluator always reports as internal errors. A cancellable operation
 //! returns `Outcome<Failure<E>>`, keeping cancellation out of both.
 
-use std::sync::Arc;
-
 use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
 use graphcal_compiler::graphcal_error::GraphcalError;
 use graphcal_compiler::outcome::Outcome;
-use miette::NamedSource;
+use graphcal_compiler::source_id::SourceId;
 
 /// A violated evaluator invariant.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -30,7 +28,7 @@ impl Invariant {
     /// Report this violated invariant as an internal error of the whole of
     /// `src`, for an operation with no narrower source location.
     #[must_use]
-    pub fn into_internal_error(self, src: &NamedSource<Arc<String>>) -> GraphcalError {
+    pub fn into_internal_error(self, src: SourceId) -> GraphcalError {
         GraphcalError::internal_error(self.0, src, DiagnosticAnchor::WholeFile)
     }
 }
@@ -89,8 +87,9 @@ mod tests {
 
     #[test]
     fn invariants_report_as_internal_errors() {
-        let src = miette::NamedSource::new("main.gcl", std::sync::Arc::new(String::new()));
-        let error = Invariant::violated("broken").into_internal_error(&src);
+        let src = graphcal_compiler::source_registry::SourceRegistry::new()
+            .register("main.gcl", std::sync::Arc::new(String::new()));
+        let error = Invariant::violated("broken").into_internal_error(src);
         assert!(
             matches!(error, GraphcalError::InternalError { ref message, .. } if message == "broken")
         );

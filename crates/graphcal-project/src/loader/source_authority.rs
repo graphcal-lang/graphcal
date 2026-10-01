@@ -14,6 +14,7 @@ use std::sync::Arc;
 use graphcal_compiler::cancellation::{CancellationToken, Cancelled};
 use graphcal_compiler::dag_id::DagPackageId;
 use graphcal_compiler::outcome::Outcome;
+use graphcal_compiler::source_registry::SourceRegistry;
 use graphcal_compiler::syntax::ast::ModulePath;
 use graphcal_compiler::syntax::decl_name::DeclName;
 use graphcal_io::{FileSystemReadError, FileSystemReader};
@@ -92,12 +93,13 @@ pub(super) fn fetch_source_snapshot<A: ModuleSourceAuthority>(
     cancellation: &CancellationToken,
 ) -> Result<SourceSnapshot<A::Key>, Cancelled> {
     let mut files = HashMap::new();
+    let mut sources = SourceRegistry::new();
     let mut pending = vec![root.clone()];
     while let Some(file) = pending.pop() {
         if files.contains_key(&file) {
             continue;
         }
-        let fetched = fetch_file(authority, &file, budget, cancellation)?;
+        let fetched = fetch_file(authority, &file, &mut sources, budget, cancellation)?;
         let Ok(parsed) = &fetched else {
             files.insert(file, fetched);
             break;
@@ -105,7 +107,11 @@ pub(super) fn fetch_source_snapshot<A: ModuleSourceAuthority>(
         pending.extend(parsed.dependency_files(&file).into_iter().rev().cloned());
         files.insert(file, fetched);
     }
-    Ok(SourceSnapshot { root, files })
+    Ok(SourceSnapshot {
+        root,
+        files,
+        sources,
+    })
 }
 
 /// Read, parse, and resolve the dependency paths of one file. Read and parse
@@ -114,6 +120,7 @@ pub(super) fn fetch_source_snapshot<A: ModuleSourceAuthority>(
 fn fetch_file<A: ModuleSourceAuthority>(
     authority: &A,
     file: &A::Key,
+    sources: &mut SourceRegistry,
     budget: &mut LoaderBudgetState,
     cancellation: &CancellationToken,
 ) -> Result<FetchedFile<A::Key>, Cancelled> {
@@ -126,6 +133,7 @@ fn fetch_file<A: ModuleSourceAuthority>(
         tree.reader,
         file.path(),
         &file.diagnostic_name(),
+        sources,
         budget,
         cancellation,
     ) {
@@ -155,6 +163,7 @@ fn read_source_file(
     reader: &dyn FileSystemReader,
     path: &Path,
     name: &str,
+    sources: &mut SourceRegistry,
     budget: &mut LoaderBudgetState,
     cancellation: &CancellationToken,
 ) -> Result<ParsedFile, Outcome<CompileError>> {
@@ -171,7 +180,7 @@ fn read_source_file(
             ))
             .into(),
         })?;
-    ParsedFile::parse(name, Arc::new(source), cancellation)
+    ParsedFile::parse(sources, name, Arc::new(source), cancellation)
 }
 
 fn is_not_found(error: &FileSystemReadError) -> bool {

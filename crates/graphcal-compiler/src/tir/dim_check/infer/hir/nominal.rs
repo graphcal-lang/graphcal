@@ -37,7 +37,7 @@ impl Infer<'_> {
         let CheckedType::Struct(type_name, type_args) = &inner_type else {
             return Err(GraphcalError::NotAStruct {
                 name: format_checked_type(&inner_type, self.env.registry),
-                src: self.env.src.clone(),
+                src: self.env.src,
                 span: inner.span.into(),
             }
             .into());
@@ -53,7 +53,7 @@ impl Infer<'_> {
             struct_type_def_for_inferred(type_name, Some(self.env.dag), self.env.registry)
                 .ok_or_else(|| GraphcalError::UnknownStructType {
                     name: type_name.to_string(),
-                    src: self.env.src.clone(),
+                    src: self.env.src,
                     span: inner.span.into(),
                 })?;
         let member = record_member(type_def).ok_or_else(|| {
@@ -67,7 +67,7 @@ impl Infer<'_> {
             };
             GraphcalError::NotAStruct {
                 name: detail,
-                src: self.env.src.clone(),
+                src: self.env.src,
                 span: inner.span.into(),
             }
         })?;
@@ -79,7 +79,7 @@ impl Infer<'_> {
             return Err(GraphcalError::UnknownField {
                 type_name: type_name.name().clone(),
                 member: crate::graphcal_error::NominalMember::Field(field.value.clone()),
-                src: self.env.src.clone(),
+                src: self.env.src,
                 span: field.span.into(),
             }
             .into());
@@ -138,7 +138,7 @@ impl Infer<'_> {
                         field.name.value,
                         variant.name()
                     ),
-                    src: self.env.src.clone(),
+                    src: self.env.src,
                     span: field.name.span.into(),
                 }
                 .into());
@@ -153,7 +153,7 @@ impl Infer<'_> {
             return Err(GraphcalError::ExtraFields {
                 type_name: owning_type_name,
                 extra,
-                src: self.env.src.clone(),
+                src: self.env.src,
                 span: expr.span.into(),
             }
             .into());
@@ -171,7 +171,7 @@ impl Infer<'_> {
             return Err(GraphcalError::MissingFields {
                 type_name: owning_type_name,
                 missing,
-                src: self.env.src.clone(),
+                src: self.env.src,
                 span: expr.span.into(),
             }
             .into());
@@ -188,7 +188,7 @@ impl Infer<'_> {
                         field_init.name.value,
                         variant.name()
                     ),
-                    src: self.env.src.clone(),
+                    src: self.env.src,
                     span: field_init.name.span.into(),
                 })?;
             let value_type = self.infer_hir_type(&field_init.value)?;
@@ -209,7 +209,7 @@ impl Infer<'_> {
                     field_name: field_init.name.value.clone(),
                     expected,
                     found,
-                    src: self.env.src.clone(),
+                    src: self.env.src,
                     span: field_init.name.span.into(),
                 }
                 .into());

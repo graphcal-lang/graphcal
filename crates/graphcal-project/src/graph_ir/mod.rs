@@ -369,14 +369,15 @@ mod tests {
     use graphcal_compiler::resolve::ModuleResolver;
     use graphcal_compiler::syntax::parser::Parser;
     use graphcal_compiler::tir::typed::ProjectTypeStore;
-    use miette::NamedSource;
+
     use std::sync::Arc;
 
     fn tir_from_source(source: &str) -> CheckedTir {
         let raw_file = Parser::new(source).parse_file().unwrap();
         let file = graphcal_compiler::desugar::desugared_ast::File::from(raw_file);
-        let src = NamedSource::new("test.gcl", Arc::new(source.to_string()));
-        let ir = lower(&file, &src).unwrap();
+        let mut sources = graphcal_compiler::source_registry::SourceRegistry::new();
+        let src = sources.register("test.gcl", Arc::new(source.to_string()));
+        let ir = lower(&file, "test.gcl", src).unwrap();
         let resolver =
             ModuleResolver::without_edges([(ir.dag_id().clone(), file.declarations.as_slice())])
                 .unwrap();
@@ -387,7 +388,7 @@ mod tests {
         let signed =
             graphcal_compiler::tir::typed::resolve_hir_signature_with_modules_and_cancellation(
                 ir,
-                &src,
+                src,
                 &resolver,
                 &project_types,
                 &cancellation,
@@ -396,7 +397,7 @@ mod tests {
         graphcal_compiler::tir::typed::TirDraft::resolve_root(
             signed,
             std::collections::HashMap::<_, _, std::hash::RandomState>::new(),
-            &src,
+            src,
             &resolver,
             Arc::new(project_types),
             &cancellation,
@@ -404,10 +405,10 @@ mod tests {
         .unwrap()
         .instantiate(
             &graphcal_compiler::tir::typed::CheckedOverrideDependencies::default(),
-            &src,
+            src,
         )
         .unwrap()
-        .check(&src, &cancellation)
+        .check(src, &cancellation)
         .unwrap()
     }
 

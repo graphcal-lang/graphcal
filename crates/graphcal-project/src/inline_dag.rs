@@ -5,9 +5,6 @@
 //! parent-file visibility and values.
 
 use std::collections::HashMap;
-use std::sync::Arc;
-
-use miette::NamedSource;
 
 use graphcal_compiler::dag_id::DagId;
 use graphcal_compiler::desugar::desugared_ast::{DeclKind, Declaration};
@@ -17,6 +14,7 @@ use graphcal_compiler::ir::lower::DagBodySelfImports;
 use graphcal_compiler::ir::module_interface::{ModuleInterface, PureImportTermDisposition};
 use graphcal_compiler::ir::resolve::{ImportedValueNames, ScopedName};
 use graphcal_compiler::resolve::ModuleResolver;
+use graphcal_compiler::source_id::SourceId;
 use graphcal_compiler::syntax::ast::{DeclExposure, ImportItemNamespace};
 use graphcal_compiler::syntax::decl_name::DeclName;
 
@@ -68,7 +66,7 @@ pub fn preprocess_dag_body_self_imports(
         crate::loader::module_path::InlineBodyImportResolution,
     >,
     module_resolver: &ModuleResolver,
-    src: &NamedSource<Arc<String>>,
+    src: SourceId,
 ) -> Result<DagBodySelfImports, GraphcalError> {
     let exported_bindings = module_resolver
         .exported_bindings(parent_dag_id)
@@ -130,7 +128,7 @@ pub fn preprocess_dag_body_self_imports(
                             return Err(GraphcalError::ImportPrivateItem {
                                 name: orig_name.to_string(),
                                 file_path: import_decl.path().display_path(),
-                                src: src.clone(),
+                                src,
                                 span: span.into(),
                             });
                         }

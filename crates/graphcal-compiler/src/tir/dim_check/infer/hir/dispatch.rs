@@ -42,7 +42,7 @@ impl Infer<'_> {
                     found: "contextual string literal".to_string(),
                     help: "string literals can only be used in their declared datetime contexts"
                         .to_string(),
-                    src: self.env.src.clone(),
+                    src: self.env.src,
                     span: expr.span.into(),
                 }
                 .into());
@@ -50,7 +50,7 @@ impl Infer<'_> {
             ExprKind::TypeSystemRef(name) => {
                 return Err(GraphcalError::EvalError {
                     message: name.value.value_position_error(),
-                    src: self.env.src.clone(),
+                    src: self.env.src,
                     span: name.span.into(),
                 }
                 .into());
@@ -75,7 +75,7 @@ impl Infer<'_> {
                 self.locals.get(local.value).cloned().ok_or_else(|| {
                     GraphcalError::UnknownLocalRef {
                         name: format!("#{}", local.value.index()),
-                        src: self.env.src.clone(),
+                        src: self.env.src,
                         span: local.span.into(),
                     }
                 })?

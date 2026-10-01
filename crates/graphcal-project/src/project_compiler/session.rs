@@ -1,9 +1,9 @@
 //! Public whole-project checking session and validated continuation.
 
 use graphcal_compiler::cancellation::CancellationToken;
-use graphcal_compiler::outcome::{Cancellable, CancellationMode, Uncancellable};
+use graphcal_compiler::outcome::{Cancellable, CancellationMode, Outcome, Uncancellable};
 
-use crate::compile_error::CompileError;
+use crate::compile_error::{CompileError, PipelineError};
 use crate::loader::loaded_project::LoadedProject;
 
 pub use super::checked_project::CheckedProject;
@@ -17,7 +17,7 @@ use super::pipeline;
 /// `prepare`, or `eval` operation. The host type records whether the session
 /// owns callable implementations or signature metadata only; the mode records
 /// whether the embedding shell can cancel it, and so whether its operations
-/// fail with an [`Outcome`](graphcal_compiler::outcome::Outcome) or with a
+/// fail with an [`Outcome`] or with a
 /// [`CompileError`] alone.
 pub struct ProjectCompiler<
     'project,
@@ -44,7 +44,7 @@ impl<'project> ProjectCompiler<'project> {
 impl<'project, Host> ProjectCompiler<'project, Host> {
     /// Observe `cancellation`: the session's operations then report
     /// cancellation as
-    /// [`Outcome::Cancelled`](graphcal_compiler::outcome::Outcome::Cancelled).
+    /// [`Outcome::Cancelled`].
     #[must_use]
     pub fn cancellation(
         self,
@@ -69,18 +69,8 @@ impl<'project, Host, Mode: CancellationMode> ProjectCompiler<'project, Host, Mod
     pub fn lower(self) -> Result<HirProject<'project, Mode>, Mode::Failure<CompileError>> {
         let Self { project, mode, .. } = self;
         mode.clone().run(|cancellation| {
-            cancellation.checkpoint()?;
-            let root_source = project.root_file().named_source();
-            let module_resolver =
-                project
-                    .build_module_resolver()
-                    .map_err(|error| match error {
-                        graphcal_compiler::resolve::error::ModuleResolveError::RecursiveIncludeExpansion {
-                            cycle,
-                        } => pipeline::recursive_dag_instantiation(project, &cycle),
-                        error => module_resolve_compile_error(error, root_source),
-                    })?;
-            pipeline::lower_project_perfile(project, module_resolver, mode, cancellation)
+            lower_project(project, mode, cancellation)
+                .map_err(|outcome| outcome.map_failed(|error| error.render(project.sources())))
         })
     }
 
@@ -148,6 +138,25 @@ impl<Mode: CancellationMode>
     }
 }
 
+/// Lower every module of `project` into the authoritative HIR boundary.
+fn lower_project<'project, Mode>(
+    project: &'project LoadedProject,
+    mode: Mode,
+    cancellation: &CancellationToken,
+) -> Result<HirProject<'project, Mode>, Outcome<PipelineError>> {
+    cancellation.checkpoint()?;
+    let root_source = project.root_file().source_id();
+    let module_resolver = project
+        .build_module_resolver()
+        .map_err(|error| match error {
+            graphcal_compiler::resolve::error::ModuleResolveError::RecursiveIncludeExpansion {
+                cycle,
+            } => pipeline::recursive_dag_instantiation(project, &cycle),
+            error => module_resolve_compile_error(error, root_source),
+        })?;
+    pipeline::lower_project_perfile(project, module_resolver, mode, cancellation)
+}
+
 impl<Mode: CancellationMode> HirProject<'_, Mode> {
     /// Consume HIR and perform every mandatory static check, observing the
     /// cancellation of the session that lowered it.
@@ -161,7 +170,11 @@ impl<Mode: CancellationMode> HirProject<'_, Mode> {
         host_metadata: &graphcal_eval::host_fns::HostFunctionMetadata,
     ) -> Result<CheckedProject, Mode::Failure<CompileError>> {
         let mode = self.mode.clone();
-        mode.run(|cancellation| pipeline::check_hir_project(self, host_metadata, cancellation))
+        let sources = std::sync::Arc::clone(&self.sources);
+        mode.run(|cancellation| {
+            pipeline::check_hir_project(self, host_metadata, cancellation)
+                .map_err(|outcome| outcome.map_failed(|error| error.render(&sources)))
+        })
     }
 
     /// Consume HIR and check it against one executable host registry.

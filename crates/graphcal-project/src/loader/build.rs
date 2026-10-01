@@ -35,6 +35,7 @@ use graphcal_compiler::desugar::desugared_ast::Declaration;
 use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
 use graphcal_compiler::graphcal_error::GraphcalError;
 use graphcal_compiler::import_cycle::ImportCycle;
+use graphcal_compiler::source_registry::SourceRegistry;
 use graphcal_compiler::syntax::ast::ModulePath;
 
 /// Build every loaded file reachable from the snapshot root, dependencies
@@ -50,12 +51,16 @@ use graphcal_compiler::syntax::ast::ModulePath;
 /// a file-root self import, an import cycle, or an invalid module path.
 pub(super) fn build_loaded_files<K: SourceKey>(
     snapshot: SourceSnapshot<K>,
-) -> Result<DependencyOrdered<LoadedFile>, CompileError> {
-    let SourceSnapshot { root, mut files } = snapshot;
+) -> Result<(DependencyOrdered<LoadedFile>, SourceRegistry), CompileError> {
+    let SourceSnapshot {
+        root,
+        mut files,
+        sources,
+    } = snapshot;
     let root_parsed = files
         .remove(&root)
         .ok_or_else(|| io_not_found(root.path()))??;
-    let root_source = root_parsed.named_source().clone();
+    let root_source = root_parsed.source_id();
     let mut graph = DependencyGraph::new();
     graph.add_node(root.clone());
     let mut builder = Builder {
@@ -63,6 +68,7 @@ pub(super) fn build_loaded_files<K: SourceKey>(
         loading: Vec::new(),
         graph,
         built: HashMap::new(),
+        sources: &sources,
     };
     match builder.build_parsed(&root, root_parsed) {
         Ok(_) | Err(Stop::ReEntered) => {}
@@ -84,16 +90,23 @@ pub(super) fn build_loaded_files<K: SourceKey>(
             cycle: ImportCycle::new(lead_in, cycle.map(|file| file.chain_file())),
         })
     })?;
-    DependencyOrdered::from_topo_order(order, &root, |file| built.remove(&file)).ok_or_else(|| {
-        CompileError::Eval(GraphcalError::internal_error(
-            "the loaded files do not match the acyclic import graph",
-            &root_source,
-            DiagnosticAnchor::WholeFile,
-        ))
-    })
+    let files = DependencyOrdered::from_topo_order(order, &root, |file| built.remove(&file))
+        .ok_or_else(|| {
+            CompileError::semantic(
+                GraphcalError::internal_error(
+                    "the loaded files do not match the acyclic import graph",
+                    root_source,
+                    DiagnosticAnchor::WholeFile,
+                ),
+                &sources,
+            )
+        })?;
+    Ok((files, sources))
 }
 
-struct Builder<K> {
+struct Builder<'s, K> {
+    /// Every fetched source text, for rendering the builder's diagnostics.
+    sources: &'s SourceRegistry,
     /// Fetched files not yet built.
     unbuilt: HashMap<K, FetchedFile<K>>,
     /// Files being built, from the root to the current file.
@@ -127,7 +140,7 @@ enum ImportOwner {
     Dependency(DagId),
 }
 
-impl<K: SourceKey> Builder<K> {
+impl<K: SourceKey> Builder<'_, K> {
     /// Identity of `file`, which `dependent` imports/includes, building it
     /// (and its dependencies) first when needed.
     fn dependency(&mut self, dependent: &K, file: &K) -> Result<DagId, Stop> {
@@ -159,14 +172,17 @@ impl<K: SourceKey> Builder<K> {
         let location = parsed.location();
         let dag_id = DagId::from_relative_path(location.package.clone(), &location.relative_path)
             .map_err(|error| {
-            CompileError::Eval(GraphcalError::internal_error(
-                format!(
-                    "invalid module path `{}`: {error}",
-                    location.relative_path.display()
+            CompileError::semantic(
+                GraphcalError::internal_error(
+                    format!(
+                        "invalid module path `{}`: {error}",
+                        location.relative_path.display()
+                    ),
+                    parsed.source_id(),
+                    DiagnosticAnchor::WholeFile,
                 ),
-                named_source,
-                DiagnosticAnchor::WholeFile,
-            ))
+                self.sources,
+            )
         })?;
         let resolved_imports = imports
             .into_iter()
@@ -194,12 +210,12 @@ impl<K: SourceKey> Builder<K> {
 
         self.loading.pop();
         self.built.insert(file.clone(), {
-            let (source, named_source, ast) = parsed.into_file().into_parts();
+            let (source, source_id, ast) = parsed.into_file().into_parts();
             LoadedFile::new(
                 file.path().to_path_buf(),
                 dag_id.clone(),
                 source,
-                named_source,
+                source_id,
                 ast,
                 resolved_imports,
                 inline_dags,
@@ -229,9 +245,15 @@ impl<K: SourceKey> Builder<K> {
                     return Err(CompileError::Load(outside_root(path, src.clone())).into());
                 }
                 Some(ModuleResolution::Failed(failure)) => {
-                    return Err(failure.to_error(path, src).into());
+                    return Err(failure
+                        .to_error(path, src, parsed.source_id(), self.sources)
+                        .into());
                 }
-                None => return Err(ResolveFailure::FileNotFound.to_error(path, src).into()),
+                None => {
+                    return Err(ResolveFailure::FileNotFound
+                        .to_error(path, src, parsed.source_id(), self.sources)
+                        .into());
+                }
             };
             let owner = if resolved.file == *file {
                 if kind == FileRootDependencyKind::Import && resolved.inline_path.is_empty() {

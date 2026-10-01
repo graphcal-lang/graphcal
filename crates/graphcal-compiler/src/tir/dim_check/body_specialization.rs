@@ -8,13 +8,12 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use miette::NamedSource;
-
 use crate::diagnostic_anchor::DiagnosticAnchor;
 use crate::expression_id::ExprId;
 use crate::graphcal_error::GraphcalError;
 use crate::hir::expr::Expr;
 use crate::semantic::checked_type::{CheckedType, IndexTypeRef, Symbolic};
+use crate::source_id::SourceId;
 use crate::syntax::span::Span;
 use crate::tir::texpr::map::{SymbolicView, TypeMap};
 use crate::tir::texpr::{
@@ -40,7 +39,7 @@ impl BodySubstitution<'_> {
         &self,
         ty: &CheckedType<Symbolic>,
         tir: &dyn TirRead,
-        src: &NamedSource<Arc<String>>,
+        src: SourceId,
         span: Span,
     ) -> Result<CheckedType<Symbolic>, GraphcalError> {
         match self {
@@ -55,7 +54,7 @@ impl BodySubstitution<'_> {
     fn index(
         &self,
         index: &IndexTypeRef<Symbolic>,
-        src: &NamedSource<Arc<String>>,
+        src: SourceId,
         span: Span,
     ) -> Result<IndexTypeRef<Symbolic>, GraphcalError> {
         match self {
@@ -82,16 +81,12 @@ struct Specializer<'a> {
     substitution: BodySubstitution<'a>,
     dag: &'a DagTIR,
     tir: &'a dyn TirRead,
-    src: &'a NamedSource<Arc<String>>,
+    src: SourceId,
     report_at: ReportAt,
 }
 
 /// A specialization invariant the checker established was violated.
-fn internal(
-    src: &NamedSource<Arc<String>>,
-    message: impl Into<String>,
-    anchor: DiagnosticAnchor,
-) -> GraphcalError {
+fn internal(src: SourceId, message: impl Into<String>, anchor: DiagnosticAnchor) -> GraphcalError {
     GraphcalError::internal_error(message, src, anchor)
 }
 
@@ -219,7 +214,7 @@ pub(super) fn specialize_instance_bodies(
     template: &CheckedBodies,
     port_generic: &DerivedTrees,
     substitution: &crate::ir::static_substitution::StaticSubstitution,
-    src: &NamedSource<Arc<String>>,
+    src: SourceId,
 ) -> Result<CheckedBodies, GraphcalError> {
     let mut specializer = Specializer {
         substitution: BodySubstitution::Static(substitution),
@@ -299,7 +294,7 @@ pub fn specialize_bound_expression<'t>(
         dag.bodies(),
         &bound.value,
         bindings,
-        &bound.src,
+        bound.src,
     )
     .map(|tree| crate::tir::typed::ScopedTree::new(scope, tree))
 }
@@ -318,7 +313,7 @@ pub(super) fn specialize_bound_body(
     bodies: &CheckedBodies,
     root: &Expr,
     bindings: &HashMap<crate::hir::types::GenericParamId, u64>,
-    src: &NamedSource<Arc<String>>,
+    src: SourceId,
 ) -> Result<crate::tir::texpr::TExpr, GraphcalError> {
     let substitution = crate::tir::typed::Substitution::for_nats(bindings);
     let mut specializer = Specializer {
@@ -337,7 +332,7 @@ pub(super) fn specialize_bound_body(
         .map_err(|error| match error {
             crate::tir::texpr::DischargeError::StaticIndex(error) => GraphcalError::EvalError {
                 message: error.to_string(),
-                src: src.clone(),
+                src,
                 span: root.span.into(),
             },
             error @ crate::tir::texpr::DischargeError::UnavailableIndex(_) => {

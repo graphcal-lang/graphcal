@@ -244,13 +244,14 @@ fn symbolic_types_instantiate_only_under_complete_nat_bindings() {
 
 #[test]
 fn errors_render_at_their_span() {
-    let src = NamedSource::new("test.gcl", Arc::new(String::new()));
+    let src = crate::source_registry::SourceRegistry::new()
+        .register("test.gcl", std::sync::Arc::new(String::new()));
     assert!(matches!(
-        SubstitutionError::DimensionOverflow { span: span() }.into_graphcal(&src),
+        SubstitutionError::DimensionOverflow { span: span() }.into_graphcal(src),
         GraphcalError::DimensionOverflow { .. }
     ));
     assert!(matches!(
-        SubstitutionError::NatOverflow { span: span() }.into_graphcal(&src),
+        SubstitutionError::NatOverflow { span: span() }.into_graphcal(src),
         GraphcalError::EvalError { message, .. } if message.contains("Nat arithmetic overflow")
     ));
     assert!(matches!(
@@ -258,7 +259,7 @@ fn errors_render_at_their_span() {
             error: crate::semantic::index_def::IndexCardinalityError::Empty,
             span: span(),
         }
-        .into_graphcal(&src),
+        .into_graphcal(src),
         GraphcalError::EvalError { .. }
     ));
 }

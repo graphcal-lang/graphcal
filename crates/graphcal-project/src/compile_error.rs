@@ -6,6 +6,8 @@ use miette::{Diagnostic, NamedSource, SourceSpan};
 use thiserror::Error;
 
 use graphcal_compiler::diagnostic_render::RenderableDiagnostic;
+use graphcal_compiler::graphcal_error::{GraphcalError, RenderedGraphcalError};
+use graphcal_compiler::source_registry::SourceRegistry;
 
 use crate::binding_error::BindingError;
 use crate::load_error::LoadError;
@@ -33,9 +35,11 @@ pub enum CompileError {
     #[diagnostic(transparent)]
     Binding(#[from] BindingError),
 
+    /// A semantic or evaluation diagnostic, rendered against the project
+    /// source it points into.
     #[error(transparent)]
     #[diagnostic(transparent)]
-    Eval(#[from] graphcal_compiler::graphcal_error::GraphcalError),
+    Eval(RenderedGraphcalError),
 
     /// A value supplied through an external binding format failed semantic
     /// validation. The boundary source and parameter span deliberately replace
@@ -64,7 +68,70 @@ impl From<CompileError> for Outcome<CompileError> {
     }
 }
 
+/// A failure inside the project pipeline.
+///
+/// Semantic errors name their source only by id; they become a renderable
+/// [`CompileError`] at the project's public boundary, where the registry that
+/// issued the id is at hand ([`Self::render`]).
+#[derive(Debug)]
+pub(crate) enum PipelineError {
+    /// A failure that is already renderable on its own.
+    Compile(CompileError),
+    /// A semantic or evaluation error about a registered source.
+    Semantic(GraphcalError),
+}
+
+impl PipelineError {
+    /// Render this failure against the registry that issued its source ids.
+    #[must_use]
+    pub(crate) fn render(self, sources: &SourceRegistry) -> CompileError {
+        match self {
+            Self::Compile(error) => error,
+            Self::Semantic(error) => CompileError::semantic(error, sources),
+        }
+    }
+}
+
+impl From<CompileError> for PipelineError {
+    fn from(error: CompileError) -> Self {
+        Self::Compile(error)
+    }
+}
+
+impl From<GraphcalError> for PipelineError {
+    fn from(error: GraphcalError) -> Self {
+        Self::Semantic(error)
+    }
+}
+
+impl From<LoadError> for PipelineError {
+    fn from(error: LoadError) -> Self {
+        Self::Compile(CompileError::Load(error))
+    }
+}
+
+impl From<BindingError> for PipelineError {
+    fn from(error: BindingError) -> Self {
+        Self::Compile(CompileError::Binding(error))
+    }
+}
+
+/// A cancellable pipeline operation that fails with a [`PipelineError`]
+/// reports it as [`Outcome::Failed`].
+impl From<PipelineError> for Outcome<PipelineError> {
+    fn from(error: PipelineError) -> Self {
+        Self::Failed(error)
+    }
+}
+
 impl CompileError {
+    /// Render a semantic error against the project sources that issued its
+    /// source id.
+    #[must_use]
+    pub fn semantic(error: GraphcalError, sources: &SourceRegistry) -> Self {
+        Self::Eval(RenderedGraphcalError::new(error, sources))
+    }
+
     /// Attach the named source a parse error was produced from.
     #[must_use]
     pub fn parse(error: ParseError, source: NamedSource<Arc<String>>) -> Self {
@@ -76,7 +143,7 @@ impl CompileError {
     /// Return the `NamedSource` embedded in this error, if any.
     ///
     /// Forwards to the parse diagnostic's attached source or
-    /// [`GraphcalError::named_source`](graphcal_compiler::graphcal_error::GraphcalError::named_source).
+    /// [`RenderedGraphcalError::named_source`].
     /// When present, the returned
     /// `NamedSource` pairs the file's name with the exact source text whose
     /// byte offsets the error's labels index into — so diagnostic emitters

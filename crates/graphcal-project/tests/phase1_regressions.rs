@@ -4,13 +4,15 @@
 use std::collections::HashMap;
 
 use graphcal_compiler::graphcal_error::GraphcalError;
+
+use graphcal_compiler::graphcal_error::RenderedGraphcalError;
 use graphcal_io::RealFileSystem;
 use graphcal_project::compile_error::CompileError;
 use graphcal_project::prepare::{compile_and_eval, compile_and_eval_project};
 
 fn compile_graphcal_error(source: &str) -> GraphcalError {
     match compile_and_eval(source).unwrap_err() {
-        CompileError::Eval(error) => error,
+        CompileError::Eval(error) => error.error,
         other => panic!("expected semantic error, got {other:?}"),
     }
 }
@@ -212,7 +214,7 @@ plot p = {
         .unwrap_err();
     assert!(matches!(
         error,
-        CompileError::Eval(GraphcalError::PlotEncodingAxisMismatch { ref channels, .. })
+        CompileError::Eval(RenderedGraphcalError { error: GraphcalError::PlotEncodingAxisMismatch { ref channels, .. }, .. })
             if channels.contains("owner_dims.a.Axis")
                 && channels.contains("owner_dims.b.Axis")
     ));
@@ -234,8 +236,12 @@ node bad: a::Box<a::Foo> = a::Box<a::Foo>(x: 1.0 b::foo);
     let error = compile_and_eval_project(&root, &HashMap::new(), None, &RealFileSystem::default())
         .unwrap_err();
     match error {
-        CompileError::Eval(GraphcalError::FieldDimensionMismatch {
-            expected, found, ..
+        CompileError::Eval(RenderedGraphcalError {
+            error:
+                GraphcalError::FieldDimensionMismatch {
+                    expected, found, ..
+                },
+            ..
         }) => {
             assert_ne!(expected, found);
             assert!(expected.contains("owner_dims.a.Foo"), "{expected}");
@@ -310,7 +316,10 @@ fn file_root_dag_call_is_also_runtime_only() {
         .unwrap_err();
     assert!(matches!(
         error,
-        CompileError::Eval(GraphcalError::DagCallInCompileTime { .. })
+        CompileError::Eval(RenderedGraphcalError {
+            error: GraphcalError::DagCallInCompileTime { .. },
+            ..
+        })
     ));
 }
 
@@ -358,14 +367,21 @@ fn assert_reconciliation_error(
     expected_orphan: &str,
 ) {
     match error {
-        CompileError::Eval(GraphcalError::IncludeMustReconcileOverride {
-            overridden,
-            overridden_kind,
-            orphan_decl,
-            src,
-            span,
-            ..
-        }) => {
+        CompileError::Eval(ref rendered) => {
+            let GraphcalError::IncludeMustReconcileOverride {
+                overridden,
+                overridden_kind,
+                orphan_decl,
+                span,
+                ..
+            } = &rendered.error
+            else {
+                panic!(
+                    "expected typed V005 reconciliation error, got {:?}",
+                    rendered.error
+                );
+            };
+            let src = rendered.named_source();
             assert_eq!(overridden, expected_override);
             assert_eq!(overridden_kind, expected_kind);
             assert_eq!(orphan_decl, expected_orphan);

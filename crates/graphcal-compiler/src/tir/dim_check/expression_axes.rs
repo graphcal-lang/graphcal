@@ -1,12 +1,10 @@
 //! Materialization facts directly from checked types, without rebuilding inferred types.
 
-use miette::NamedSource;
-use std::sync::Arc;
-
 use crate::diagnostic_anchor::DiagnosticAnchor;
 use crate::graphcal_error::GraphcalError;
 use crate::semantic::checked_type::{CheckedType, IndexTypeRef, Symbolic};
 use crate::semantic::index_def::IndexCardinality;
+use crate::source_id::SourceId;
 use crate::syntax::span::Span;
 use crate::tir::materialized_shape::MaterializedShapeError;
 use crate::tir::static_index::UnavailableIndex;
@@ -44,7 +42,7 @@ impl From<MaterializedShapeError> for MaterializationError {
 pub(super) fn check_materializable(
     ty: &CheckedType<Symbolic>,
     tir: &dyn TirRead,
-    src: &NamedSource<Arc<String>>,
+    src: SourceId,
     span: Span,
 ) -> Result<(), GraphcalError> {
     ty.materialized_shape(|axis| {
@@ -58,7 +56,7 @@ pub(super) fn check_materializable(
         MaterializationError::Shape(MaterializedShapeError::ExceedsLimit { maximum }) => {
             GraphcalError::MaterializedShapeTooLarge {
                 maximum,
-                src: src.clone(),
+                src,
                 span: span.into(),
             }
         }

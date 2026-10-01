@@ -2,9 +2,7 @@
 
 use crate::hir::expr::{Expr, FunctionRef};
 use crate::outcome::Outcome;
-use std::sync::Arc;
-
-use miette::NamedSource;
+use crate::source_id::SourceId;
 
 use crate::builtin::{
     AggregationFn, BuiltinArity, BuiltinFn, DatetimeFn, ScalarFn, ValueAggregation,
@@ -30,20 +28,20 @@ fn check_builtin_arity(
     function: BuiltinFn,
     got: usize,
     span: Span,
-    src: &NamedSource<Arc<String>>,
+    src: SourceId,
 ) -> Result<(), GraphcalError> {
     match function.entry().arity() {
         BuiltinArity::Exact(expected) if got != expected => Err(GraphcalError::WrongArity {
             name: crate::graphcal_error::CalledFunction::Builtin(function),
             expected,
             got,
-            src: src.clone(),
+            src,
             span: span.into(),
         }),
         arity @ BuiltinArity::OptionalTrailing { .. } if !arity.accepts(got) => {
             Err(GraphcalError::EvalError {
                 message: format!("{function}() expects {arity} arguments, got {got}"),
-                src: src.clone(),
+                src,
                 span: span.into(),
             })
         }
@@ -76,7 +74,7 @@ impl Infer<'_> {
                     function.as_str(),
                     argument.saturating_add(1)
                 ),
-                src: self.env.src.clone(),
+                src: self.env.src,
                 span: args[argument].span.into(),
             }
         }
@@ -90,7 +88,7 @@ impl Infer<'_> {
             found: found.to_string(),
             help: "linear-algebra contractions match axes by typed identity; use the same declared index (or the same Fin(N) structural index) at both contracted positions"
                 .to_string(),
-            src: self.env.src.clone(),
+            src: self.env.src,
             span: args[argument].span.into(),
         },
         LinearAlgebraTypeError::CardinalityMismatch {
@@ -105,7 +103,7 @@ impl Infer<'_> {
                 |cardinality| format!("an axis with {cardinality} entries"),
             ),
             help: format!("{}() is defined only for three-component vectors", function.as_str()),
-            src: self.env.src.clone(),
+            src: self.env.src,
             span: args[argument].span.into(),
         },
         LinearAlgebraTypeError::ConcreteCardinalityRequired { argument } => {
@@ -117,12 +115,12 @@ impl Infer<'_> {
                     "{}() needs a concrete matrix size because its result dimension depends on that size",
                     function.as_str()
                 ),
-                src: self.env.src.clone(),
+                src: self.env.src,
                 span: args[argument].span.into(),
             }
         }
         LinearAlgebraTypeError::DimensionOverflow => GraphcalError::DimensionOverflow {
-            src: self.env.src.clone(),
+            src: self.env.src,
             span: callee_span.into(),
         },
     }).map_err(Outcome::Failed)
@@ -153,7 +151,7 @@ impl Infer<'_> {
                         expected: "indexed collection".to_string(),
                         found: format_checked_type(&arg_type, self.env.registry),
                         help: format!("{}() requires an indexed value", builtin.as_str()),
-                        src: self.env.src.clone(),
+                        src: self.env.src,
                         span: args[0].span.into(),
                     }
                     .into());
@@ -163,7 +161,7 @@ impl Infer<'_> {
                     return Err(GraphcalError::MultiAxisAggregation {
                         function: kind,
                         rank,
-                        src: self.env.src.clone(),
+                        src: self.env.src,
                         span: args[0].span.into(),
                     }
                     .into());
@@ -183,7 +181,7 @@ impl Infer<'_> {
                                 "{}() requires every indexed element to be quantity",
                                 builtin.as_str()
                             ),
-                            src: self.env.src.clone(),
+                            src: self.env.src,
                             span: args[0].span.into(),
                         }
                         .into());
@@ -198,7 +196,7 @@ impl Infer<'_> {
                             "{}() requires every indexed element to be quantity",
                             builtin.as_str()
                         ),
-                        src: self.env.src.clone(),
+                        src: self.env.src,
                         span: args[0].span.into(),
                     }
                     .into());
@@ -214,7 +212,7 @@ impl Infer<'_> {
                 )
                 .ok_or_else(|| GraphcalError::AggregationCardinalityUnknown {
                     function: kind,
-                    src: self.env.src.clone(),
+                    src: self.env.src,
                     span: args[0].span.into(),
                 })?;
                 i32::try_from(cardinality)
@@ -223,7 +221,7 @@ impl Infer<'_> {
                     .and_then(|exponent| dimension.pow(exponent).ok())
                     .map(CheckedType::Quantity)
                     .ok_or_else(|| GraphcalError::DimensionOverflow {
-                        src: self.env.src.clone(),
+                        src: self.env.src,
                         span: args[0].span.into(),
                     })
                     .map_err(Outcome::Failed)
@@ -256,7 +254,7 @@ impl Infer<'_> {
                                 "{}() requires a dimensionless numeric argument",
                                 builtin.as_str()
                             ),
-                            src: self.env.src.clone(),
+                            src: self.env.src,
                             span: args[0].span.into(),
                         }
                         .into());
@@ -297,7 +295,7 @@ impl Infer<'_> {
                             function.as_str(),
                             argument.saturating_add(1)
                         ),
-                        src: self.env.src.clone(),
+                        src: self.env.src,
                         span: args[argument].span.into(),
                     }
                 }
@@ -306,7 +304,7 @@ impl Infer<'_> {
                         expected: "Complex<D>".to_string(),
                         found: format_checked_type(&inferred[argument], self.env.registry),
                         help: format!("{}() requires a complex quantity", function.as_str()),
-                        src: self.env.src.clone(),
+                        src: self.env.src,
                         span: args[argument].span.into(),
                     }
                 }
@@ -318,7 +316,7 @@ impl Infer<'_> {
                             "{}() requires a real or complex quantity",
                             function.as_str()
                         ),
-                        src: self.env.src.clone(),
+                        src: self.env.src,
                         span: args[argument].span.into(),
                     }
                 }
@@ -328,7 +326,7 @@ impl Infer<'_> {
                         found: format_checked_type(&inferred[right], self.env.registry),
                         help: "real and imaginary components must have the same dimension"
                             .to_string(),
-                        src: self.env.src.clone(),
+                        src: self.env.src,
                         span: args[right].span.into(),
                     }
                 }
@@ -336,7 +334,7 @@ impl Infer<'_> {
                     expected: "Angle".to_string(),
                     found: format_checked_type(&inferred[argument], self.env.registry),
                     help: "polar() phase must be an Angle quantity".to_string(),
-                    src: self.env.src.clone(),
+                    src: self.env.src,
                     span: args[argument].span.into(),
                 },
                 ComplexTypeError::ExpectedDimensionless { argument } => {
@@ -344,7 +342,7 @@ impl Infer<'_> {
                         expected: "Dimensionless or Complex<Dimensionless>".to_string(),
                         found: format_checked_type(&inferred[argument], self.env.registry),
                         help: "exp() requires a dimensionless real or complex argument".to_string(),
-                        src: self.env.src.clone(),
+                        src: self.env.src,
                         span: args[argument].span.into(),
                     }
                 }

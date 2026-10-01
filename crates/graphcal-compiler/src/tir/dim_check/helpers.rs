@@ -1,11 +1,8 @@
-use std::sync::Arc;
-
-use miette::NamedSource;
-
 use crate::dimension::Dimension;
 use crate::display::formatting_registry::FormattingRegistry;
 use crate::graphcal_error::GraphcalError;
 use crate::hir::nominal::NominalTypeDef;
+use crate::source_id::SourceId;
 
 use crate::semantic::checked_type::{CheckedType, Concreteness, StructTypeRef, Symbolic};
 
@@ -62,7 +59,7 @@ pub(super) fn format_distinct_types(
 pub fn expect_quantity<V: Concreteness>(
     inferred: &CheckedType<V>,
     registry: &FormattingRegistry,
-    src: &NamedSource<Arc<String>>,
+    src: SourceId,
     span: crate::syntax::span::Span,
 ) -> Result<Dimension, GraphcalError> {
     let found_kind = match inferred {
@@ -79,7 +76,7 @@ pub fn expect_quantity<V: Concreteness>(
         expected: "quantity type".to_string(),
         found: format_checked_type(inferred, registry),
         help: format!("expected a quantity value, not {found_kind}"),
-        src: src.clone(),
+        src,
         span: span.into(),
     })
 }

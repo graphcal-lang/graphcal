@@ -2,14 +2,13 @@
 //! its public result in stages — values, assertions, plots and their
 //! compositions, and the per-declaration tables.
 
+use graphcal_compiler::source_registry::SourceRegistry;
 use std::collections::HashMap;
-use std::sync::Arc;
-
-use miette::NamedSource;
 
 use graphcal_compiler::graphcal_error::GraphcalError;
 use graphcal_compiler::outcome::Outcome;
 use graphcal_compiler::resolved_name::ResolvedDeclName;
+use graphcal_compiler::source_id::SourceId;
 use graphcal_compiler::syntax::module_name::ScopedName;
 
 use crate::domain_constraint::ResolvedDomainConstraint;
@@ -87,14 +86,15 @@ impl RuntimeEvaluation {
 pub fn evaluate_plan_with_values_and_bindings_and_cancellation(
     plan: &ExecPlan<'_>,
     bindings: &super::bindings::RuntimeParameterBindings,
-    src: &NamedSource<Arc<String>>,
+    src: SourceId,
+    sources: &SourceRegistry,
     host_fns: &crate::host_fns::HostFunctionRegistry,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<RuntimeEvaluation, Outcome<GraphcalError>> {
     cancellation.checkpoint()?;
-    let outcome = RootOutcome::evaluate(plan, bindings, src, host_fns, cancellation)?;
+    let outcome = RootOutcome::evaluate(plan, bindings, src, sources, host_fns, cancellation)?;
     cancellation.checkpoint()?;
-    let ctx = outcome.session(plan, src, host_fns, cancellation);
+    let ctx = outcome.session(plan, src, sources, host_fns, cancellation);
     let presentations = outcome
         .presentations()
         .iter()

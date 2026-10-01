@@ -5,14 +5,13 @@
 //! that must be identical at every attribute boundary.
 
 use std::collections::{HashMap, hash_map::Entry};
-use std::sync::Arc;
 
-use miette::NamedSource;
 use thiserror::Error;
 
 use crate::declaration_kind::AttributeTarget;
 use crate::desugar::desugared_ast::{Attribute, AttributeArg};
 use crate::graphcal_error::GraphcalError;
+use crate::source_id::SourceId;
 use crate::syntax::attribute::AttributeName;
 use crate::syntax::decl_name::DeclName;
 use crate::syntax::span::{Span, Spanned};
@@ -216,43 +215,43 @@ fn validate_assumes_arguments(
 #[must_use]
 pub fn attribute_validation_error_to_graphcal(
     error: AttributeValidationError,
-    src: &NamedSource<Arc<String>>,
+    src: SourceId,
 ) -> GraphcalError {
     match error {
         AttributeValidationError::UnknownAttribute { name, span } => {
             GraphcalError::UnknownAttribute {
                 name,
-                src: src.clone(),
+                src,
                 span: span.into(),
             }
         }
         AttributeValidationError::InvalidTarget { name, target, span } => match name {
             AttributeName::Assumes => GraphcalError::InvalidAssumesTarget {
                 kind: target,
-                src: src.clone(),
+                src,
                 span: span.into(),
             },
             AttributeName::ExpectedFail => GraphcalError::InvalidExpectedFailTarget {
                 kind: target,
-                src: src.clone(),
+                src,
                 span: span.into(),
             },
             AttributeName::Hidden => match target {
                 AttributeTarget::IncludeItem { name, .. } => {
                     GraphcalError::HiddenIncludeItemNotAPlot {
                         name: name.to_string(),
-                        src: src.clone(),
+                        src,
                         span: span.into(),
                     }
                 }
                 target @ AttributeTarget::Declaration(_) => GraphcalError::InvalidHiddenTarget {
                     kind: target,
-                    src: src.clone(),
+                    src,
                     span: span.into(),
                 },
             },
             AttributeName::Lazy => GraphcalError::LazyNotSupported {
-                src: src.clone(),
+                src,
                 span: span.into(),
             },
         },
@@ -262,17 +261,17 @@ pub fn attribute_validation_error_to_graphcal(
             duplicate,
         } => GraphcalError::RepeatedSingletonAttribute {
             name,
-            src: src.clone(),
+            src,
             first: first.into(),
             duplicate: duplicate.into(),
         },
         AttributeValidationError::EmptyAssumes { span } => GraphcalError::EmptyAssumes {
-            src: src.clone(),
+            src,
             span: span.into(),
         },
         AttributeValidationError::InvalidAssumesArgument { span } => {
             GraphcalError::InvalidAssumesArgument {
-                src: src.clone(),
+                src,
                 span: span.into(),
             }
         }
@@ -282,12 +281,12 @@ pub fn attribute_validation_error_to_graphcal(
             duplicate,
         } => GraphcalError::DuplicateAssumesArgument {
             name,
-            src: src.clone(),
+            src,
             first: first.into(),
             duplicate: duplicate.into(),
         },
         AttributeValidationError::UnsupportedLazy { span } => GraphcalError::LazyNotSupported {
-            src: src.clone(),
+            src,
             span: span.into(),
         },
     }

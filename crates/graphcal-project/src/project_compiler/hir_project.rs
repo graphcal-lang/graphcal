@@ -32,6 +32,8 @@ pub struct HirProject<'project, Mode = Uncancellable> {
     /// boundary. Full frontend registries are discarded after HIR lowering.
     pub(super) exported_runtime_units: HashMap<DagId, HashSet<UnitName>>,
     pub(super) module_resolver: graphcal_compiler::resolve::ModuleResolver,
+    /// The registry every source id of the lowered modules resolves in.
+    pub(super) sources: std::sync::Arc<graphcal_compiler::source_registry::SourceRegistry>,
     pub(super) mode: Mode,
 }
 

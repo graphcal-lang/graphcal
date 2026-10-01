@@ -1,14 +1,12 @@
 //! Concrete nominal-type expansion for transport-independent model schemas.
 
-use std::sync::Arc;
-
-use miette::NamedSource;
 use thiserror::Error;
 
 use crate::diagnostic_anchor::DiagnosticAnchor;
 use crate::graphcal_error::GraphcalError;
 use crate::hir::nominal::{NominalConstructor, NominalTypeDef, NominalTypeKind};
 use crate::semantic::checked_type::{CheckedGenericArg, CheckedType, IndexTypeRef, StructTypeRef};
+use crate::source_id::SourceId;
 use crate::syntax::ast::GenericConstraint;
 use crate::syntax::type_name::{ConstructorName, FieldName, GenericParamName};
 
@@ -56,7 +54,7 @@ impl ConcreteModelTypeError {
     /// evaluation shells. Source-language failures retain their original
     /// diagnostic; malformed safe-API inputs are internal invariant failures.
     #[must_use]
-    pub fn into_graphcal_error(self, src: &NamedSource<Arc<String>>) -> GraphcalError {
+    pub fn into_graphcal_error(self, src: SourceId) -> GraphcalError {
         match self {
             Self::Compiler(error) => error,
             invariant => {
@@ -100,7 +98,7 @@ impl<'tir> ValidatedModelType<'tir> {
         tir: &'tir crate::tir::typed::CheckedTir,
         identity: &StructTypeRef,
         generic_args: &[CheckedGenericArg],
-        src: &NamedSource<Arc<String>>,
+        src: SourceId,
     ) -> Result<Self, ConcreteModelTypeError> {
         let definition = validate_model_type_definition(tir, identity, generic_args)?;
         validate_application_obligations(tir, identity, generic_args, &definition, src)?;
@@ -129,7 +127,7 @@ impl<'tir> ValidatedModelType<'tir> {
     /// Returns a compiler diagnostic if checked TIR field metadata is missing.
     pub fn constructors(
         &self,
-        _src: &NamedSource<Arc<String>>,
+        _src: SourceId,
     ) -> Result<Vec<ConcreteModelConstructor>, GraphcalError> {
         let tir: &dyn crate::tir::typed::TirRead = self.tir;
         let metadata_dag = tir
@@ -195,7 +193,7 @@ impl<'tir> ConcreteModelType<'tir> {
         tir: &'tir crate::tir::typed::CheckedTir,
         identity: &StructTypeRef,
         generic_args: &[CheckedGenericArg],
-        src: &NamedSource<Arc<String>>,
+        src: SourceId,
     ) -> Result<Self, ConcreteModelTypeError> {
         let validated = ValidatedModelType::try_new(tir, identity, generic_args, src)?;
         validate_bound_generic_arguments(tir, identity, generic_args)?;
@@ -219,7 +217,7 @@ impl<'tir> ConcreteModelType<'tir> {
     /// Returns a compiler diagnostic if checked TIR field metadata is missing.
     pub fn constructors(
         &self,
-        src: &NamedSource<Arc<String>>,
+        src: SourceId,
     ) -> Result<Vec<ConcreteModelConstructor>, GraphcalError> {
         self.validated.constructors(src)
     }
@@ -230,7 +228,7 @@ fn validate_application_obligations(
     identity: &StructTypeRef,
     generic_args: &[CheckedGenericArg],
     definition: &ModelTypeDefinition<'_>,
-    _src: &NamedSource<Arc<String>>,
+    _src: SourceId,
 ) -> Result<(), ConcreteModelTypeError> {
     let application = CheckedType::Struct(identity.clone(), generic_args.to_vec());
     let metadata_dag = tir

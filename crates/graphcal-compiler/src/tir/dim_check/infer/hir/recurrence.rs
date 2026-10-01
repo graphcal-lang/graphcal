@@ -24,7 +24,7 @@ impl Infer<'_> {
         let CheckedType::Indexed { element, index } = source_type else {
             return Err(GraphcalError::EvalError {
                 message: "scan source must be an indexed value".to_string(),
-                src: self.env.src.clone(),
+                src: self.env.src,
                 span: source.span.into(),
             }
             .into());
@@ -32,7 +32,7 @@ impl Infer<'_> {
         if source_rank > 1 {
             return Err(GraphcalError::MultiAxisScanSource {
                 rank: source_rank,
-                src: self.env.src.clone(),
+                src: self.env.src,
                 span: source.span.into(),
             }
             .into());
@@ -47,7 +47,7 @@ impl Infer<'_> {
                 expected: format_checked_type(&accumulator_type, self.env.registry),
                 found: format_checked_type(&body_type, self.env.registry),
                 help: "scan body must return the same type as the accumulator".to_string(),
-                src: self.env.src.clone(),
+                src: self.env.src,
                 span: body.span.into(),
             }
             .into());
@@ -75,13 +75,13 @@ impl Infer<'_> {
             .declared_index_def(&axis.value)
             .ok_or_else(|| GraphcalError::InternalError {
                 message: format!("missing resolved unfold axis `{}`", axis.value),
-                src: self.env.src.clone(),
-                span: axis.span.into(),
+                src: self.env.src,
+                anchor: crate::diagnostic_anchor::DiagnosticAnchor::Source(axis.span),
             })?;
         if !idx_def.is_coordinate() {
             return Err(GraphcalError::EvalError {
                 message: format!("unfold requires a coordinate index, got `{index}`"),
-                src: self.env.src.clone(),
+                src: self.env.src,
                 span: axis.span.into(),
             }
             .into());
@@ -100,7 +100,7 @@ impl Infer<'_> {
                 expected: format_checked_type(&init_type, self.env.registry),
                 found: format_checked_type(&body_type, self.env.registry),
                 help: "unfold body must return the same type as the previous state".to_string(),
-                src: self.env.src.clone(),
+                src: self.env.src,
                 span: body.span.into(),
             }
             .into());

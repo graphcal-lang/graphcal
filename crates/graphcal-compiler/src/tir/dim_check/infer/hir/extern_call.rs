@@ -31,7 +31,7 @@ impl Infer<'_> {
             return Err(GraphcalError::UnknownExternFunction {
                 alias: ext.alias.clone(),
                 name: ext.name.clone(),
-                src: self.env.src.clone(),
+                src: self.env.src,
                 span: callee_span.into(),
             }
             .into());
@@ -42,7 +42,7 @@ impl Infer<'_> {
                 name: crate::graphcal_error::CalledFunction::Extern(ext.name.clone()),
                 expected: sig.arity(),
                 got: args.len(),
-                src: self.env.src.clone(),
+                src: self.env.src,
                 span: callee_span.into(),
             }
             .into());
@@ -65,7 +65,7 @@ impl Infer<'_> {
                             expected: "Bool".to_string(),
                             found: format_checked_type(&arg_type, self.env.registry),
                             help: format!("parameter `{}` requires Bool", param.name),
-                            src: self.env.src.clone(),
+                            src: self.env.src,
                             span: arg.span.into(),
                         }
                         .into());
@@ -77,7 +77,7 @@ impl Infer<'_> {
                             expected: "Int".to_string(),
                             found: format_checked_type(&arg_type, self.env.registry),
                             help: format!("parameter `{}` requires Int", param.name),
-                            src: self.env.src.clone(),
+                            src: self.env.src,
                             span: arg.span.into(),
                         }
                         .into());
@@ -104,7 +104,7 @@ impl Infer<'_> {
                                     "parameter `{}` of `{display_name}` takes one axis for each declared index variable",
                                     param.name
                                 ),
-                                src: self.env.src.clone(),
+                                src: self.env.src,
                                 span: arg.span.into(),
                             }.into());
                         };
@@ -124,7 +124,7 @@ impl Infer<'_> {
                                         "parameter `{}` of `{display_name}` requires quantity elements",
                                         param.name
                                     ),
-                                    src: self.env.src.clone(),
+                                    src: self.env.src,
                                     span: arg.span.into(),
                                 }.into());
                             };
@@ -157,7 +157,7 @@ impl Infer<'_> {
                                         "parameter `{}` of `{display_name}` requires {name} elements",
                                         param.name
                                     ),
-                                    src: self.env.src.clone(),
+                                    src: self.env.src,
                                     span: arg.span.into(),
                                 }.into());
                             }
@@ -179,7 +179,7 @@ impl Infer<'_> {
                                         help: format!(
                                             "axes sharing index variable `{index}` of `{display_name}` must use the same typed index"
                                         ),
-                                        src: self.env.src.clone(),
+                                        src: self.env.src,
                                         span: arg.span.into(),
                                     }.into());
                                 }
@@ -214,8 +214,8 @@ impl Infer<'_> {
                         message: format!(
                             "result index variable `{index}` of `{display_name}` was not bound by any argument"
                         ),
-                        src: self.env.src.clone(),
-                        span: callee_span.into(),
+                        src: self.env.src,
+                        anchor: crate::diagnostic_anchor::DiagnosticAnchor::Source(callee_span),
                     });
                 };
                 Ok(CheckedType::Indexed {

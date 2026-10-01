@@ -8,14 +8,11 @@
 //! `outer::inner::x`); anonymous include scopes are given display names at
 //! the project boundary.
 
-use std::sync::Arc;
-
-use miette::NamedSource;
-
 use graphcal_compiler::dag_id::DagId;
 use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
 use graphcal_compiler::graphcal_error::GraphcalError;
 use graphcal_compiler::resolved_name::ResolvedDeclName;
+use graphcal_compiler::source_id::SourceId;
 use graphcal_compiler::syntax::module_name::ScopedName;
 use graphcal_compiler::syntax::non_empty::NonEmpty;
 
@@ -47,7 +44,7 @@ pub(super) fn qualified_below(root: &DagId, dag: &DagId, name: &ScopedName) -> O
 pub(super) fn instance_member_name(
     root: &DagId,
     declaration: &ResolvedDeclName,
-    src: &NamedSource<Arc<String>>,
+    src: SourceId,
 ) -> Result<ScopedName, GraphcalError> {
     member_name(root, declaration).ok_or_else(|| {
         GraphcalError::internal_error(

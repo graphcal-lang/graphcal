@@ -6,9 +6,6 @@
     reason = "project compiler pass uses the shared internal model"
 )]
 use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
-
-use miette::NamedSource;
 
 use graphcal_compiler::declaration_category::{DeclCategory, ValueDeclCategory};
 use graphcal_compiler::desugar::desugared_ast::ModulePath;
@@ -17,6 +14,7 @@ use graphcal_compiler::ir::resolve::{ImportedValueNames, ScopedName};
 use graphcal_compiler::outcome::Outcome;
 use graphcal_compiler::resolved_name::ResolvedDeclName;
 use graphcal_compiler::semantic::index_def::IndexBindingTarget;
+use graphcal_compiler::source_id::SourceId;
 use graphcal_compiler::syntax::decl_name::DeclName;
 use graphcal_compiler::syntax::dimension::DimName;
 use graphcal_compiler::syntax::index_name::IndexName;
@@ -27,7 +25,7 @@ use graphcal_compiler::syntax::type_name::StructTypeName;
 use super::binding_values::{extract_index_binding_target, extract_type_name_from_binding_expr};
 use super::including_module::IncludingModule;
 use super::module_resolve_errors::module_resolve_compile_error;
-use crate::compile_error::CompileError;
+use crate::compile_error::PipelineError;
 
 use super::model::{
     ImportAlias, ImportContext, IncludeInstanceRequest, IncludeStaticBindings, IndexBindingSite,
@@ -131,9 +129,9 @@ pub(super) fn process_file_body_declarations<'a>(
     module_resolver: &graphcal_compiler::resolve::ModuleResolver,
     ctx: &mut ImportContext<'a>,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
-) -> Result<(), Outcome<CompileError>> {
+) -> Result<(), Outcome<PipelineError>> {
     let file_dag_id = loaded_file.dag_id();
-    let file_src = loaded_file.named_source();
+    let file_src = loaded_file.source_id();
     let including = IncludingModule {
         interface: loaded_file.interface(),
         source: file_src,
@@ -196,12 +194,12 @@ pub(super) fn process_file_body_declarations<'a>(
             continue;
         }
         let Some((target_loaded, target_dag)) = project.inline_dag(target.target()) else {
-            return Err(CompileError::Eval(GraphcalError::EvalError {
+            return Err(PipelineError::Semantic(GraphcalError::EvalError {
                 message: format!(
                     "inline DAG target not found in project: {}",
                     target.target()
                 ),
-                src: file_src.clone(),
+                src: file_src,
                 span: include.path.span().into(),
             })
             .into());
@@ -209,10 +207,10 @@ pub(super) fn process_file_body_declarations<'a>(
         if !target_dag.declaration(target_loaded).visibility.is_public()
             && target.source_file() != file_dag_id
         {
-            return Err(CompileError::Eval(GraphcalError::ImportPrivateItem {
+            return Err(PipelineError::Semantic(GraphcalError::ImportPrivateItem {
                 name: target.target().leaf().to_string(),
                 file_path: include.path.display_path(),
-                src: file_src.clone(),
+                src: file_src,
                 span: include.path.leaf().span.into(),
             })
             .into());
@@ -236,21 +234,23 @@ fn ensure_include_item_selectable(
     name: &NameAtom,
     namespace: ImportItemNamespace,
     file_path: &str,
-    file_src: &NamedSource<Arc<String>>,
+    file_src: SourceId,
     span: Span,
-) -> Result<(), CompileError> {
+) -> Result<(), PipelineError> {
     match interface.exposure(name, namespace) {
         Some(DeclExposure::ExplicitExport | DeclExposure::InputPort) => Ok(()),
-        Some(DeclExposure::Private) => Err(CompileError::Eval(GraphcalError::ImportPrivateItem {
+        Some(DeclExposure::Private) => {
+            Err(PipelineError::Semantic(GraphcalError::ImportPrivateItem {
+                name: name.to_string(),
+                file_path: file_path.to_string(),
+                src: file_src,
+                span: span.into(),
+            }))
+        }
+        None => Err(PipelineError::Semantic(GraphcalError::ImportNameNotFound {
             name: name.to_string(),
             file_path: file_path.to_string(),
-            src: file_src.clone(),
-            span: span.into(),
-        })),
-        None => Err(CompileError::Eval(GraphcalError::ImportNameNotFound {
-            name: name.to_string(),
-            file_path: file_path.to_string(),
-            src: file_src.clone(),
+            src: file_src,
             span: span.into(),
         })),
     }
@@ -260,28 +260,28 @@ fn validate_static_import_capability(
     dependency: ModuleDeclarations<'_>,
     name: &NameAtom,
     namespace: ImportItemNamespace,
-    src: &NamedSource<Arc<String>>,
+    src: SourceId,
     span: Span,
-) -> Result<(), CompileError> {
+) -> Result<(), PipelineError> {
     match static_import_rejection(dependency, name, namespace) {
         None => Ok(()),
-        Some(StaticImportRejection::RequiredInput { kind, name }) => Err(CompileError::Eval(
+        Some(StaticImportRejection::RequiredInput { kind, name }) => Err(PipelineError::Semantic(
             GraphcalError::ImportRequiredStaticInput {
                 kind,
                 name: name.to_string(),
-                src: src.clone(),
+                src,
                 span: span.into(),
             },
         )),
-        Some(StaticImportRejection::UnresolvedDependency(dependency)) => Err(CompileError::Eval(
-            GraphcalError::ImportUnresolvedStaticDependency {
+        Some(StaticImportRejection::UnresolvedDependency(dependency)) => Err(
+            PipelineError::Semantic(GraphcalError::ImportUnresolvedStaticDependency {
                 name: name.to_string(),
                 dependency_kind: dependency.kind(),
                 dependency: dependency.name().to_string(),
-                src: src.clone(),
+                src,
                 span: span.into(),
-            },
-        )),
+            }),
+        ),
     }
 }
 
@@ -299,9 +299,9 @@ fn validate_qualified_static_import_references(
     dependency: ModuleDeclarations<'_>,
     dependency_interface: &ModuleInterface,
     module_name: &ModuleAliasName,
-    src: &NamedSource<Arc<String>>,
+    src: SourceId,
     span: Span,
-) -> Result<(), CompileError> {
+) -> Result<(), PipelineError> {
     consumer
         .declarations()
         .iter()
@@ -323,14 +323,14 @@ fn validate_qualified_static_import_references(
 fn reject_runtime_unit_import(
     dep: &ModuleInterface,
     name: &NameAtom,
-    src: &NamedSource<Arc<String>>,
+    src: SourceId,
     span: Span,
-) -> Result<(), CompileError> {
+) -> Result<(), PipelineError> {
     let unit_name = graphcal_compiler::syntax::dimension::UnitName::classify(name.clone());
     if dep.runtime_units().contains(&unit_name) {
-        return Err(CompileError::Eval(GraphcalError::ImportRuntimeUnit {
+        return Err(PipelineError::Semantic(GraphcalError::ImportRuntimeUnit {
             name: name.to_string(),
-            src: src.clone(),
+            src,
             span: span.into(),
         }));
     }
@@ -377,8 +377,8 @@ fn validate_include_item_attributes(
     import_item: &graphcal_compiler::desugar::desugared_ast::ImportItem,
     is_plot: bool,
     is_assert: bool,
-    file_src: &NamedSource<Arc<String>>,
-) -> Result<PlotVisibility, CompileError> {
+    file_src: SourceId,
+) -> Result<PlotVisibility, PipelineError> {
     let mut visibility = PlotVisibility::Standalone;
     let producer = match (is_plot, is_assert) {
         (true, _) => Some(DeclarationKind::Plot),
@@ -392,7 +392,7 @@ fn validate_include_item_attributes(
             &target,
         )
         .map_err(|error| {
-            CompileError::Eval(
+            PipelineError::Semantic(
                 graphcal_compiler::ir::resolve::attribute_validation::attribute_validation_error_to_graphcal(
                     error,
                     file_src,
@@ -404,9 +404,9 @@ fn validate_include_item_attributes(
         match validated.name() {
             AttributeName::Hidden => {
                 if !attr.args.is_empty() {
-                    return Err(CompileError::Eval(GraphcalError::EvalError {
+                    return Err(PipelineError::Semantic(GraphcalError::EvalError {
                         message: "`#[hidden]` takes no arguments".to_string(),
-                        src: file_src.clone(),
+                        src: file_src,
                         span: attr.span.into(),
                     }));
                 }
@@ -414,15 +414,15 @@ fn validate_include_item_attributes(
             }
             AttributeName::ExpectedFail => {}
             AttributeName::Assumes => {
-                return Err(CompileError::Eval(GraphcalError::internal_error(
+                return Err(PipelineError::Semantic(GraphcalError::internal_error(
                     "attribute applicability accepted assumes on an include item",
                     file_src,
                     graphcal_compiler::diagnostic_anchor::DiagnosticAnchor::Source(attr.span),
                 )));
             }
             AttributeName::Lazy => {
-                return Err(CompileError::Eval(GraphcalError::LazyNotSupported {
-                    src: file_src.clone(),
+                return Err(PipelineError::Semantic(GraphcalError::LazyNotSupported {
+                    src: file_src,
                     span: attr.span.into(),
                 }));
             }
@@ -434,25 +434,25 @@ fn validate_include_item_attributes(
 fn exported_bindings(
     resolver: &graphcal_compiler::resolve::ModuleResolver,
     owner: &graphcal_compiler::dag_id::DagId,
-    file_src: &NamedSource<Arc<String>>,
+    file_src: SourceId,
     span: Span,
-) -> Result<Vec<graphcal_compiler::resolve::exports::ExportedBinding>, CompileError> {
+) -> Result<Vec<graphcal_compiler::resolve::exports::ExportedBinding>, PipelineError> {
     resolver.exported_bindings(owner).map_err(|error| {
-        CompileError::Eval(GraphcalError::InternalError {
+        PipelineError::Semantic(GraphcalError::InternalError {
             message: format!("module resolver could not enumerate exports of `{owner}`: {error}"),
-            src: file_src.clone(),
-            span: span.into(),
+            src: file_src,
+            anchor: graphcal_compiler::diagnostic_anchor::DiagnosticAnchor::Source(span),
         })
     })
 }
 
 fn validate_include_producers(
     items: &[graphcal_compiler::desugar::desugared_ast::ImportItem],
-    file_src: &NamedSource<Arc<String>>,
-) -> Result<(), CompileError> {
+    file_src: SourceId,
+) -> Result<(), PipelineError> {
     graphcal_compiler::ir::resolve::include_selection::validate_unique_include_producers(items)
         .map_err(|error| {
-            CompileError::Eval(
+            PipelineError::Semantic(
                 graphcal_compiler::ir::resolve::include_selection::duplicate_include_producer_to_graphcal(
                     error,
                     file_src,
@@ -532,9 +532,9 @@ fn resolve_include_static_bindings(
     authored: AuthoredStaticBindings,
     template: &graphcal_compiler::dag_id::DagId,
     scope: StaticScope<'_>,
-    src: &NamedSource<Arc<String>>,
+    src: SourceId,
     include_span: Span,
-) -> Result<IncludeStaticBindings, CompileError> {
+) -> Result<IncludeStaticBindings, PipelineError> {
     use graphcal_compiler::ir::static_substitution::InstanceIndexBindingTarget;
     use graphcal_compiler::resolve::symbols::SymbolRef;
     use graphcal_compiler::syntax::names::NamePath;
@@ -547,7 +547,7 @@ fn resolve_include_static_bindings(
     } = authored;
     let resolver = scope.resolver();
     let missing_port = |kind: &str, port: &dyn std::fmt::Display| {
-        CompileError::Eval(GraphcalError::internal_error(
+        PipelineError::Semantic(GraphcalError::internal_error(
             format!("template {kind} port `{port}` has no canonical identity"),
             src,
             graphcal_compiler::diagnostic_anchor::DiagnosticAnchor::WholeFile,
@@ -566,10 +566,10 @@ fn resolve_include_static_bindings(
                     .resolve_index_path(scope.owner(), &NamePath::local(target.atom().clone()))
                     .map(SymbolRef::into_resolved)
                     .map_err(|_| {
-                        CompileError::Eval(GraphcalError::IndexBindingNotAnIndex {
+                        PipelineError::Semantic(GraphcalError::IndexBindingNotAnIndex {
                             dep_index: port.to_string(),
                             value: authored.to_string(),
-                            src: src.clone(),
+                            src,
                             span: span.into(),
                         })
                     })?,
@@ -622,9 +622,9 @@ fn resolve_include_static_bindings(
 fn classify_param_bindings(
     param_bindings: &[graphcal_compiler::desugar::desugared_ast::ParamBinding],
     dep: &ModuleInterface,
-    file_src: &NamedSource<Arc<String>>,
+    file_src: SourceId,
     dep_path_for_error: &str,
-) -> Result<ClassifiedBindings, CompileError> {
+) -> Result<ClassifiedBindings, PipelineError> {
     let mut out = ClassifiedBindings {
         params: HashMap::new(),
         indexes: HashMap::new(),
@@ -683,22 +683,24 @@ fn classify_param_bindings(
             }
             InputBindingCategory::Unmarked => {
                 if let Some(kind) = non_param_binding_kind(dep, binding_name.atom()) {
-                    return Err(CompileError::Eval(GraphcalError::BindingNotAParam {
+                    return Err(PipelineError::Semantic(GraphcalError::BindingNotAParam {
                         name: binding_name.to_string(),
                         actual_kind: kind,
-                        src: file_src.clone(),
+                        src: file_src,
                         span: binding.name.span.into(),
                     }));
                 }
-                return Err(CompileError::Eval(GraphcalError::UnknownParamBinding {
-                    name: binding_name.to_string(),
-                    file_path: dep_path_for_error.to_string(),
-                    src: file_src.clone(),
-                    span: binding.name.span.into(),
-                }));
+                return Err(PipelineError::Semantic(
+                    GraphcalError::UnknownParamBinding {
+                        name: binding_name.to_string(),
+                        file_path: dep_path_for_error.to_string(),
+                        src: file_src,
+                        span: binding.name.span.into(),
+                    },
+                ));
             }
             category => {
-                return Err(CompileError::Eval(
+                return Err(PipelineError::Semantic(
                     GraphcalError::DagInputCategoryMismatch {
                         name: binding_name.to_string(),
                         expected: match category {
@@ -707,7 +709,7 @@ fn classify_param_bindings(
                             InputBindingCategory::Dimension => "dim",
                             InputBindingCategory::Index => "index",
                         },
-                        src: file_src.clone(),
+                        src: file_src,
                         span: binding.name.span.into(),
                     },
                 ));
@@ -736,9 +738,9 @@ fn validate_concrete_static_binding_targets(
     type_bindings: &HashMap<StructTypeName, StructTypeName>,
     dim_bindings: &HashMap<DimName, DimName>,
     index_bindings: &HashMap<IndexName, IndexBindingTarget>,
-    file_src: &NamedSource<Arc<String>>,
+    file_src: SourceId,
     include_span: Span,
-) -> Result<(), CompileError> {
+) -> Result<(), PipelineError> {
     let invalid_type = type_bindings.iter().find_map(|(input, target)| {
         let source = dep.static_interface(StaticInputKind::Type, input.atom())?;
         let target_interface = importer.static_interface(StaticInputKind::Type, target.atom())?;
@@ -772,12 +774,12 @@ fn validate_concrete_static_binding_targets(
     });
     match invalid_type.or(invalid_dimension).or(invalid_index) {
         None => Ok(()),
-        Some((kind, name, target)) => Err(CompileError::Eval(
+        Some((kind, name, target)) => Err(PipelineError::Semantic(
             GraphcalError::InvalidStaticBindingTarget {
                 kind,
                 name,
                 target,
-                src: file_src.clone(),
+                src: file_src,
                 span: include_span.into(),
             },
         )),
@@ -804,9 +806,9 @@ fn validate_required_static_bindings(
     type_bindings: &HashMap<StructTypeName, StructTypeName>,
     dim_bindings: &HashMap<DimName, DimName>,
     index_bindings: &HashMap<IndexName, IndexBindingTarget>,
-    file_src: &NamedSource<Arc<String>>,
+    file_src: SourceId,
     include_span: Span,
-) -> Result<(), CompileError> {
+) -> Result<(), PipelineError> {
     let mut missing = dep
         .static_declarations()
         .filter(|(kind, name, role)| {
@@ -834,11 +836,11 @@ fn validate_required_static_bindings(
     let Some((kind, name)) = missing.into_iter().next() else {
         return Ok(());
     };
-    Err(CompileError::Eval(
+    Err(PipelineError::Semantic(
         GraphcalError::RequiredStaticInputNotBound {
             kind,
             name,
-            src: file_src.clone(),
+            src: file_src,
             span: include_span.into(),
         },
     ))
@@ -849,9 +851,9 @@ pub(super) fn validate_direct_dag_call_bindings(
     dependency: &ModuleInterface,
     importer: &ModuleInterface,
     dag_name: &str,
-    file_src: &NamedSource<Arc<String>>,
+    file_src: SourceId,
     span: Span,
-) -> Result<(), CompileError> {
+) -> Result<(), PipelineError> {
     let collected = classify_param_bindings(args, dependency, file_src, dag_name)?;
     validate_concrete_static_binding_targets(
         importer,
@@ -877,9 +879,9 @@ fn validate_required_param_bindings(
     dep: &ModuleInterface,
     bindings: &HashMap<DeclName, graphcal_compiler::desugar::desugared_ast::Expr>,
     dag_name: &str,
-    file_src: &NamedSource<Arc<String>>,
+    file_src: SourceId,
     include_span: Span,
-) -> Result<(), CompileError> {
+) -> Result<(), PipelineError> {
     let mut missing = dep
         .required_params()
         .iter()
@@ -891,10 +893,10 @@ fn validate_required_param_bindings(
     }
 
     missing.sort();
-    Err(CompileError::Eval(GraphcalError::MissingDagBindings {
+    Err(PipelineError::Semantic(GraphcalError::MissingDagBindings {
         missing,
         dag_name: dag_name.to_string(),
-        src: file_src.clone(),
+        src: file_src,
         span: include_span.into(),
     }))
 }
@@ -912,7 +914,7 @@ pub(super) fn process_file_include<'a>(
     decl: &graphcal_compiler::desugar::desugared_ast::Declaration,
     including: &IncludingModule<'_>,
     ctx: &mut ImportContext<'a>,
-) -> Result<(), CompileError> {
+) -> Result<(), PipelineError> {
     let IncludingModule {
         interface: importer,
         source: file_src,
@@ -920,10 +922,12 @@ pub(super) fn process_file_include<'a>(
     } = *including;
     let module_resolver = importer_scope.resolver();
     let dependency = project.module(target.target()).ok_or_else(|| {
-        CompileError::Eval(GraphcalError::InternalError {
+        PipelineError::Semantic(GraphcalError::InternalError {
             message: format!("included module `{}` is not loaded", target.target()),
-            src: file_src.clone(),
-            span: include_decl.path.span().into(),
+            src: file_src,
+            anchor: graphcal_compiler::diagnostic_anchor::DiagnosticAnchor::Source(
+                include_decl.path.span(),
+            ),
         })
     })?;
     let import_dag_id = dependency.dag_id();
@@ -942,12 +946,14 @@ pub(super) fn process_file_include<'a>(
     let instance_scope = include_decl.instance_scope();
     if let ScopeSegment::Named(prefix) = &instance_scope {
         if let Some(first) = ctx.module_map.get(prefix) {
-            return Err(CompileError::Eval(GraphcalError::DuplicateModuleName {
-                name: prefix.to_string(),
-                first: first.span().into(),
-                src: file_src.clone(),
-                span: include_decl.path.span().into(),
-            }));
+            return Err(PipelineError::Semantic(
+                GraphcalError::DuplicateModuleName {
+                    name: prefix.to_string(),
+                    first: first.span().into(),
+                    src: file_src,
+                    span: include_decl.path.span().into(),
+                },
+            ));
         }
         ctx.module_map.insert(
             prefix.clone(),
@@ -1170,7 +1176,7 @@ pub(super) fn process_inline_dag_include<'a>(
     decl: &graphcal_compiler::desugar::desugared_ast::Declaration,
     including: &IncludingModule<'_>,
     ctx: &mut ImportContext<'a>,
-) -> Result<(), CompileError> {
+) -> Result<(), PipelineError> {
     use graphcal_compiler::desugar::desugared_ast::ImportKind;
 
     let IncludingModule {
@@ -1190,12 +1196,14 @@ pub(super) fn process_inline_dag_include<'a>(
     let instance_scope = include_decl.instance_scope();
     if let ScopeSegment::Named(prefix) = &instance_scope {
         if let Some(first) = ctx.module_map.get(prefix) {
-            return Err(CompileError::Eval(GraphcalError::DuplicateModuleName {
-                name: prefix.to_string(),
-                first: first.span().into(),
-                src: file_src.clone(),
-                span: include_decl.path.span().into(),
-            }));
+            return Err(PipelineError::Semantic(
+                GraphcalError::DuplicateModuleName {
+                    name: prefix.to_string(),
+                    first: first.span().into(),
+                    src: file_src,
+                    span: include_decl.path.span().into(),
+                },
+            ));
         }
         ctx.module_map.insert(
             prefix.clone(),
@@ -1399,17 +1407,19 @@ pub(super) fn process_pure_import<'a>(
     resolved_module: &crate::loader::module_path::ResolvedModuleTarget,
     import: &graphcal_compiler::desugar::desugared_ast::ImportDecl,
     importer: ModuleDeclarations<'_>,
-    file_src: &NamedSource<Arc<String>>,
+    file_src: SourceId,
     module_resolver: &graphcal_compiler::resolve::ModuleResolver,
     ctx: &mut ImportContext<'a>,
-) -> Result<(), CompileError> {
+) -> Result<(), PipelineError> {
     let import_path = import.path();
     let module_target = resolved_module.target();
     let dep_module = project.module(module_target).ok_or_else(|| {
-        CompileError::Eval(GraphcalError::InternalError {
+        PipelineError::Semantic(GraphcalError::InternalError {
             message: format!("inline module `{module_target}` has no owning declaration"),
-            src: file_src.clone(),
-            span: import_path.span().into(),
+            src: file_src,
+            anchor: graphcal_compiler::diagnostic_anchor::DiagnosticAnchor::Source(
+                import_path.span(),
+            ),
         })
     })?;
     let declarations = dep_module.declarations();
@@ -1421,12 +1431,14 @@ pub(super) fn process_pure_import<'a>(
     let exported_bindings = module_resolver
         .exported_bindings(module_target)
         .map_err(|error| {
-            CompileError::Eval(GraphcalError::InternalError {
+            PipelineError::Semantic(GraphcalError::InternalError {
                 message: format!(
                     "module resolver could not enumerate exports of `{module_target}`: {error}"
                 ),
-                src: file_src.clone(),
-                span: import_path.span().into(),
+                src: file_src,
+                anchor: graphcal_compiler::diagnostic_anchor::DiagnosticAnchor::Source(
+                    import_path.span(),
+                ),
             })
         })?;
 
@@ -1452,14 +1464,14 @@ pub(super) fn process_pure_import<'a>(
                     && !dep_interface.exposes_item(orig_name.atom(), import_item.namespace)
                 {
                     if dep_interface.has_item(orig_name.atom(), import_item.namespace) {
-                        return Err(CompileError::Eval(GraphcalError::ImportPrivateItem {
+                        return Err(PipelineError::Semantic(GraphcalError::ImportPrivateItem {
                             name: orig_name.to_string(),
                             file_path: import_path.display_path(),
-                            src: file_src.clone(),
+                            src: file_src,
                             span: import_item.name.span.into(),
                         }));
                     }
-                    return Err(CompileError::Eval(import_item_not_found_error(
+                    return Err(PipelineError::Semantic(import_item_not_found_error(
                         dep_interface,
                         orig_name.atom(),
                         import_item.namespace,
@@ -1524,10 +1536,10 @@ pub(super) fn process_pure_import<'a>(
                     })
                     .or_else(|| dep_interface.pure_import_term_disposition(orig_name.atom()))
                     .ok_or_else(|| {
-                        CompileError::Eval(GraphcalError::ImportNameNotFound {
+                        PipelineError::Semantic(GraphcalError::ImportNameNotFound {
                             name: orig_name.to_string(),
                             file_path: import_path.display_path(),
-                            src: file_src.clone(),
+                            src: file_src,
                             span: import_item.name.span.into(),
                         })
                     })?;
@@ -1553,12 +1565,12 @@ pub(super) fn process_pure_import<'a>(
                             .and_then(|binding| binding.target.declaration())
                             .cloned()
                             .ok_or_else(|| {
-                                CompileError::Eval(GraphcalError::InternalError {
+                                PipelineError::Semantic(GraphcalError::InternalError {
                                     message: format!(
                                         "exported constant `{orig_name}` has no canonical declaration target"
                                     ),
-                                    src: file_src.clone(),
-                                    span: import_item.name.span.into(),
+                                    src: file_src,
+                                    anchor: graphcal_compiler::diagnostic_anchor::DiagnosticAnchor::Source(import_item.name.span),
                                 })
                             })?;
                         import_selective_resolved_item(
@@ -1573,7 +1585,7 @@ pub(super) fn process_pure_import<'a>(
                     }
                     PureImportTermDisposition::ResolverOnly => {}
                     PureImportTermDisposition::Reject(reason) => {
-                        return Err(CompileError::Eval(reason.diagnostic(
+                        return Err(PipelineError::Semantic(reason.diagnostic(
                             orig_name.atom(),
                             file_src,
                             import_item.name.span,
@@ -1588,12 +1600,14 @@ pub(super) fn process_pure_import<'a>(
                 |alias_ident| alias_ident.value.clone(),
             );
             if let Some(first) = ctx.module_map.get(&module_name) {
-                return Err(CompileError::Eval(GraphcalError::DuplicateModuleName {
-                    name: module_name.to_string(),
-                    first: first.span().into(),
-                    src: file_src.clone(),
-                    span: import_path.span().into(),
-                }));
+                return Err(PipelineError::Semantic(
+                    GraphcalError::DuplicateModuleName {
+                        name: module_name.to_string(),
+                        first: first.span().into(),
+                        src: file_src,
+                        span: import_path.span().into(),
+                    },
+                ));
             }
             validate_qualified_static_import_references(
                 importer,
@@ -1638,9 +1652,9 @@ fn insert_imported_binding(
     imported_names: &ImportedValueNames,
     lexical_name: ScopedName,
     binding: ResolvedDeclName,
-    src: &NamedSource<Arc<String>>,
+    src: SourceId,
     span: Span,
-) -> Result<(), CompileError> {
+) -> Result<(), PipelineError> {
     if imported_bindings.contains_key(&lexical_name) {
         let first = imported_names
             .const_names
@@ -1649,9 +1663,9 @@ fn insert_imported_binding(
             .chain(&imported_names.node_names)
             .find_map(|(name, first_span)| (name == &lexical_name).then_some(*first_span))
             .unwrap_or(span);
-        return Err(CompileError::Eval(GraphcalError::DuplicateName {
+        return Err(PipelineError::Semantic(GraphcalError::DuplicateName {
             name: lexical_name.to_string(),
-            src: src.clone(),
+            src,
             duplicate: span.into(),
             first: first.into(),
         }));
@@ -1665,11 +1679,11 @@ fn import_selective_resolved_item(
     canonical: graphcal_compiler::resolved_name::ResolvedDeclName,
     local_name: &DeclName,
     span: Span,
-    src: &NamedSource<Arc<String>>,
+    src: SourceId,
     imported_names: &mut ImportedValueNames,
     imported_bindings: &mut HashMap<ScopedName, ResolvedDeclName>,
     imported_source_order: Option<&mut Vec<(ScopedName, DeclCategory)>>,
-) -> Result<(), CompileError> {
+) -> Result<(), PipelineError> {
     let scoped = ScopedName::local(local_name.clone());
     imported_names.const_names.push((scoped.clone(), span));
     if let Some(source_order) = imported_source_order {
@@ -1693,11 +1707,11 @@ fn import_module_values_from_resolver(
     exported_bindings: &[graphcal_compiler::resolve::exports::ExportedBinding],
     module_name: &ModuleAliasName,
     import_span: Span,
-    src: &NamedSource<Arc<String>>,
+    src: SourceId,
     imported_names: &mut ImportedValueNames,
     imported_bindings: &mut HashMap<ScopedName, ResolvedDeclName>,
     mut imported_source_order: Option<&mut Vec<(ScopedName, DeclCategory)>>,
-) -> Result<(), CompileError> {
+) -> Result<(), PipelineError> {
     for binding in exported_bindings {
         let ExportedBindingTarget::Decl {
             identity: canonical,

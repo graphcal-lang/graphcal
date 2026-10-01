@@ -4,9 +4,7 @@ use crate::hir::expr::{Expr, MatchArm, MatchPattern, PatternBinding};
 use crate::hir::nominal::{NominalConstructor, NominalTypeDef};
 use crate::outcome::Outcome;
 use crate::resolved_name::ResolvedStructTypeName;
-use std::sync::Arc;
-
-use miette::NamedSource;
+use crate::source_id::SourceId;
 
 use crate::display::formatting_registry::FormattingRegistry;
 use crate::graphcal_error::GraphcalError;
@@ -38,7 +36,7 @@ impl InferEnv<'_> {
             return Err(GraphcalError::UnknownField {
                 type_name: type_def.name(),
                 member: crate::graphcal_error::NominalMember::Field(field.value.clone()),
-                src: self.src.clone(),
+                src: self.src,
                 span: field.span.into(),
             });
         }
@@ -70,7 +68,7 @@ impl Infer<'_> {
                         message: format!(
                             "cannot match on `Key<{index_identity}>`; only named-axis keys support label matching"
                         ),
-                        src: self.env.src.clone(),
+                        src: self.env.src,
                         span: scrutinee.span.into(),
                     }.into());
                 }
@@ -80,7 +78,7 @@ impl Infer<'_> {
                 )
                 .ok_or_else(|| GraphcalError::UnknownIndex {
                     name: index_identity.display_name(),
-                    src: self.env.src.clone(),
+                    src: self.env.src,
                     span: scrutinee.span.into(),
                 })?;
                 let variants = match &index_def.kind {
@@ -95,7 +93,7 @@ impl Infer<'_> {
                             message: format!(
                                 "cannot match on coordinate index `{index_identity}`; only named indexes can be matched"
                             ),
-                            src: self.env.src.clone(),
+                            src: self.env.src,
                             span: scrutinee.span.into(),
                         }.into());
                     }
@@ -106,7 +104,7 @@ impl Infer<'_> {
                     let MatchPattern::IndexLabel { variant, span } = &arm.pattern else {
                         return Err(GraphcalError::EvalError {
                             message: "label match arms must use index-label patterns".to_string(),
-                            src: self.env.src.clone(),
+                            src: self.env.src,
                             span: arm.span.into(),
                         }
                         .into());
@@ -119,7 +117,7 @@ impl Infer<'_> {
                         return Err(GraphcalError::IndexMismatch {
                             expected: index_identity.display_name(),
                             found: variant.variant.index().to_unowned_def_name().into(),
-                            src: self.env.src.clone(),
+                            src: self.env.src,
                             span: (*span).into(),
                         }
                         .into());
@@ -129,7 +127,7 @@ impl Infer<'_> {
                         return Err(GraphcalError::UnknownVariant {
                             index_name: index_identity.display_name(),
                             variant_name: variant_name.clone(),
-                            src: self.env.src.clone(),
+                            src: self.env.src,
                             span: variant.path_span().into(),
                         }
                         .into());
@@ -137,7 +135,7 @@ impl Infer<'_> {
                     if !covered.insert(variant_name.clone()) {
                         return Err(GraphcalError::EvalError {
                             message: format!("duplicate match arm for variant `{variant_name}`"),
-                            src: self.env.src.clone(),
+                            src: self.env.src,
                             span: (*span).into(),
                         }
                         .into());
@@ -150,7 +148,7 @@ impl Infer<'_> {
                             message: format!(
                                 "non-exhaustive match: variant `{index_identity}#{variant}` not covered"
                             ),
-                            src: self.env.src.clone(),
+                            src: self.env.src,
                             span: expr.span.into(),
                         }.into());
                     }
@@ -163,7 +161,7 @@ impl Infer<'_> {
                     struct_type_def_for_inferred(type_name, Some(self.env.dag), self.env.registry)
                         .ok_or_else(|| GraphcalError::UnknownStructType {
                             name: type_name.to_string(),
-                            src: self.env.src.clone(),
+                            src: self.env.src,
                             span: scrutinee.span.into(),
                         })?;
                 let mut covered = std::collections::HashSet::new();
@@ -177,7 +175,7 @@ impl Infer<'_> {
                     else {
                         return Err(GraphcalError::EvalError {
                             message: "union match arms must use constructor patterns".to_string(),
-                            src: self.env.src.clone(),
+                            src: self.env.src,
                             span: arm.span.into(),
                         }
                         .into());
@@ -195,7 +193,7 @@ impl Infer<'_> {
                     if bindings.is_explicit_empty() && target.variant().fields().is_empty() {
                         return Err(GraphcalError::EmptyParenthesizedConstructor {
                             constructor: target.variant().name(),
-                            src: self.env.src.clone(),
+                            src: self.env.src,
                             span: (*span).into(),
                         }
                         .into());
@@ -206,7 +204,7 @@ impl Infer<'_> {
                             member: crate::graphcal_error::NominalMember::Constructor(
                                 target.name(),
                             ),
-                            src: self.env.src.clone(),
+                            src: self.env.src,
                             span: constructor.span.into(),
                         }
                         .into());
@@ -217,7 +215,7 @@ impl Infer<'_> {
                                 "duplicate match arm for `{}`",
                                 target.variant().name()
                             ),
-                            src: self.env.src.clone(),
+                            src: self.env.src,
                             span: (*span).into(),
                         }
                         .into());
@@ -236,7 +234,7 @@ impl Infer<'_> {
                                     field.value,
                                     target.variant().name()
                                 ),
-                                src: self.env.src.clone(),
+                                src: self.env.src,
                                 span: field.span.into(),
                             }
                             .into());
@@ -266,7 +264,7 @@ impl Infer<'_> {
                         return Err(GraphcalError::MissingPatternFields {
                             constructor: target.variant().name(),
                             missing,
-                            src: self.env.src.clone(),
+                            src: self.env.src,
                             span: (*span).into(),
                         }
                         .into());
@@ -281,7 +279,7 @@ impl Infer<'_> {
                                     "non-exhaustive match: member `{}` not covered",
                                     member.name()
                                 ),
-                                src: self.env.src.clone(),
+                                src: self.env.src,
                                 span: expr.span.into(),
                             }
                             .into());
@@ -296,7 +294,7 @@ impl Infer<'_> {
                     "cannot match on type `{}`; expected a tagged union or label value",
                     format_checked_type(&scrutinee_type, self.env.registry)
                 ),
-                src: self.env.src.clone(),
+                src: self.env.src,
                 span: scrutinee.span.into(),
             }
             .into()),
@@ -308,7 +306,7 @@ fn hir_arm_types_match(
     arm_types: &[CheckedType<Symbolic>],
     arms: &[MatchArm],
     registry: &FormattingRegistry,
-    src: &NamedSource<Arc<String>>,
+    src: SourceId,
     expr: &Expr,
 ) -> Result<CheckedType<Symbolic>, GraphcalError> {
     rules::match_arms_rule(arm_types, |i| arms[i].body.span, expr.span, registry, src)

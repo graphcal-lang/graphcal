@@ -2,11 +2,10 @@
 //! LSP, and runtime preparation.
 
 use std::collections::HashSet;
-use std::sync::Arc;
 
 use graphcal_compiler::declaration_category::DeclCategory;
+use graphcal_compiler::source_id::SourceId;
 use graphcal_compiler::syntax::module_name::ScopedName;
-use miette::NamedSource;
 
 use super::entry_interface::CheckedEntryInterface;
 use super::model::IncludeDebugNameMap;
@@ -27,7 +26,9 @@ pub struct CompiledFile {
 /// fabricating a value that skipped mandatory checks.
 pub struct CheckedProject {
     pub(super) compiled: CompiledFile,
-    pub(super) source: NamedSource<Arc<String>>,
+    pub(super) source: SourceId,
+    /// The registry every source id of the checked program resolves in.
+    pub(super) sources: std::sync::Arc<graphcal_compiler::source_registry::SourceRegistry>,
     pub(super) module_resolver: graphcal_compiler::resolve::ModuleResolver,
 }
 
@@ -54,6 +55,14 @@ impl CheckedProject {
         &self.module_resolver
     }
 
+    /// The registry every source id of the checked program resolves in.
+    #[must_use]
+    pub const fn sources(
+        &self,
+    ) -> &std::sync::Arc<graphcal_compiler::source_registry::SourceRegistry> {
+        &self.sources
+    }
+
     /// Whether the entry DAG still requires runtime inputs.
     #[must_use]
     pub fn is_library(&self) -> bool {
@@ -65,6 +74,7 @@ impl CheckedProject {
         CheckedProjectRuntimeParts {
             compiled: self.compiled,
             source: self.source,
+            sources: self.sources,
             module_resolver: self.module_resolver,
         }
     }
@@ -73,6 +83,7 @@ impl CheckedProject {
 /// Checked semantic products needed to construct a runtime plan.
 pub struct CheckedProjectRuntimeParts {
     pub(crate) compiled: CompiledFile,
-    pub(crate) source: NamedSource<Arc<String>>,
+    pub(crate) source: SourceId,
+    pub(crate) sources: std::sync::Arc<graphcal_compiler::source_registry::SourceRegistry>,
     pub(crate) module_resolver: graphcal_compiler::resolve::ModuleResolver,
 }

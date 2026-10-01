@@ -1,7 +1,5 @@
 use std::sync::Arc;
 
-use miette::NamedSource;
-
 use super::*;
 
 /// The unit of the declaration `owner` of `tir`'s root.
@@ -15,8 +13,7 @@ fn root_unit<'t>(
 #[test]
 fn plot_properties_preserve_cancellation_classification() {
     let source = "plot measurement = { mark: line { stroke_width: 2.0 }, encode: { x: 1.0, y: 2.0 }, width: 100.0 };";
-    let tir = crate::test_tir::checked_tir_from_source(source).unwrap().0;
-    let src = NamedSource::new("plot_property.gcl", Arc::new(source.to_owned()));
+    let (tir, src, sources) = crate::test_tir::checked_tir_from_source(source).unwrap();
     let unit = root_unit(
         &tir,
         &tir.root()
@@ -29,7 +26,8 @@ fn plot_properties_preserve_cancellation_classification() {
     let plot = unit.plot().unwrap();
     let ctx = EvalSession::provisional_constants(
         &tir,
-        &src,
+        src,
+        &sources,
         graphcal_compiler::cancellation::CancellationToken::unbounded(),
     );
     let values = RuntimeValueMap::new();
@@ -44,7 +42,7 @@ fn plot_properties_preserve_cancellation_classification() {
     };
     assert!(evaluate_plot(unit, plot, evaluated, &ctx).is_ok());
     let cancellation = graphcal_compiler::cancellation::CancellationSource::new();
-    let ctx = EvalSession::provisional_constants(&tir, &src, cancellation.token());
+    let ctx = EvalSession::provisional_constants(&tir, src, &sources, cancellation.token());
     cancellation.cancel();
     assert!(matches!(
         eval_plot_property(
@@ -62,11 +60,12 @@ fn plot_properties_preserve_cancellation_classification() {
 /// plot.
 #[test]
 fn internal_errors_abort_plot_evaluation() {
-    let src = NamedSource::new("plot_property.gcl", Arc::new(String::new()));
+    let src = graphcal_compiler::source_registry::SourceRegistry::new()
+        .register("plot_property.gcl", Arc::new(String::new()));
     assert!(matches!(
         PlotEvaluationError::from(GraphcalError::internal_error(
             "missing checked expression",
-            &src,
+            src,
             DiagnosticAnchor::WholeFile,
         )),
         PlotEvaluationError::Fatal(Outcome::Failed(GraphcalError::InternalError { .. }))
@@ -76,11 +75,10 @@ fn internal_errors_abort_plot_evaluation() {
 #[test]
 fn composition_properties_preserve_cancellation_classification() {
     let source = "plot curve = { mark: line { stroke_width: 2.0 }, encode: { x: 1.0, y: 2.0 } }; figure comparison = { plots: [curve], title: \"Comparison\" }; layer overlay = { plots: [curve], title: \"Overlay\", width: 400.0 };";
-    let tir = crate::test_tir::checked_tir_from_source(source).unwrap().0;
-    let src = NamedSource::new("composition.gcl", Arc::new(source.to_owned()));
+    let (tir, src, sources) = crate::test_tir::checked_tir_from_source(source).unwrap();
     let values = RuntimeValueMap::new();
     let cancellation = graphcal_compiler::cancellation::CancellationSource::new();
-    let ctx = EvalSession::provisional_constants(&tir, &src, cancellation.token());
+    let ctx = EvalSession::provisional_constants(&tir, src, &sources, cancellation.token());
     let figure = tir.root().body_for_test().figures().next().unwrap();
     let layer = tir.root().body_for_test().layers().next().unwrap();
     let compositions = [

@@ -25,6 +25,8 @@ use graphcal_compiler::desugar::desugared_ast::{Declaration, File};
 use graphcal_compiler::graphcal_error::GraphcalError;
 use graphcal_compiler::import_cycle::ImportChainFile;
 use graphcal_compiler::outcome::Outcome;
+use graphcal_compiler::source_id::SourceId;
+use graphcal_compiler::source_registry::SourceRegistry;
 use graphcal_compiler::syntax::ast::{DeclKind, ModulePath};
 use graphcal_compiler::syntax::decl_name::DeclName;
 use graphcal_compiler::syntax::parser::Parser;
@@ -124,6 +126,8 @@ impl SourceKey for PackageFileKey {
 pub(super) struct SourceSnapshot<K> {
     pub(super) root: K,
     pub(super) files: HashMap<K, FetchedFile<K>>,
+    /// Every fetched source text, registered as it was read.
+    pub(super) sources: SourceRegistry,
 }
 
 /// One fetched file: its parsed content, or the read/parse failure the
@@ -139,28 +143,35 @@ pub(super) struct ModuleLocation {
     pub(super) relative_path: PathBuf,
 }
 
-/// One parsed and desugared source text with its diagnostic name.
+/// One parsed and desugared source text, registered under its diagnostic
+/// name.
 #[derive(Debug)]
 pub(super) struct ParsedFile {
     pub(super) source: Arc<String>,
+    /// Identity of the text in the project's source registry; core
+    /// diagnostics refer to it.
+    pub(super) source_id: SourceId,
+    /// The registered text under its name, for the loader's own diagnostics.
     pub(super) named_source: NamedSource<Arc<String>>,
     pub(super) ast: File,
 }
 
 impl ParsedFile {
-    /// The source text, its diagnostic name, and the desugared AST.
-    pub(super) fn into_parts(self) -> (Arc<String>, NamedSource<Arc<String>>, File) {
-        (self.source, self.named_source, self.ast)
+    /// The source text, its registered identity, and the desugared AST.
+    pub(super) fn into_parts(self) -> (Arc<String>, SourceId, File) {
+        (self.source, self.source_id, self.ast)
     }
 
-    /// Parse and desugar `source` under the diagnostic `name`, rendering a
-    /// parse failure against that same named source. This is the loader's
-    /// only parse sequence.
+    /// Register `source` under the diagnostic `name` in `sources`, then parse
+    /// and desugar it, rendering a parse failure against the registered text.
+    /// This is the loader's only parse sequence.
     pub(super) fn parse(
+        sources: &mut SourceRegistry,
         name: &str,
         source: Arc<String>,
         cancellation: &CancellationToken,
     ) -> Result<Self, Outcome<CompileError>> {
+        let source_id = sources.register(name, Arc::clone(&source));
         let named_source = NamedSource::new(name, Arc::clone(&source));
         let raw_ast = Parser::new(&source)
             .parse_file_with_cancellation(cancellation)
@@ -169,6 +180,7 @@ impl ParsedFile {
             })?;
         Ok(Self {
             source,
+            source_id,
             named_source,
             ast: File::from(raw_ast),
         })
@@ -215,6 +227,11 @@ impl<K: SourceKey> ParsedSource<K> {
 
     pub(super) const fn named_source(&self) -> &NamedSource<Arc<String>> {
         &self.file.named_source
+    }
+
+    /// Identity of this file's text in the project's source registry.
+    pub(super) const fn source_id(&self) -> SourceId {
+        self.file.source_id
     }
 
     pub(super) const fn ast(&self) -> &File {
@@ -303,6 +320,8 @@ impl ResolveFailure {
         &self,
         path: &ModulePath,
         src: &NamedSource<Arc<String>>,
+        source_id: SourceId,
+        sources: &SourceRegistry,
     ) -> CompileError {
         let src = src.clone();
         let span = path.span().into();
@@ -332,12 +351,16 @@ impl ResolveFailure {
                 span,
             }
             .into(),
-            Self::NotLocked { message } => GraphcalError::EvalError {
-                message: format!("{message}; run `graphcal deps lock` after changing dependencies"),
-                src,
-                span,
-            }
-            .into(),
+            Self::NotLocked { message } => CompileError::semantic(
+                GraphcalError::EvalError {
+                    message: format!(
+                        "{message}; run `graphcal deps lock` after changing dependencies"
+                    ),
+                    src: source_id,
+                    span,
+                },
+                sources,
+            ),
             Self::Manifest { message } => LoadError::ManifestError {
                 message: message.clone(),
             }

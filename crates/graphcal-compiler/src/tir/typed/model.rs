@@ -1,7 +1,6 @@
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
 
-use miette::NamedSource;
 use thiserror::Error;
 
 use crate::assertion_expectation::ExpectedFail;
@@ -18,6 +17,7 @@ use crate::semantic::checked_type::{CheckedType, IndexTypeRef};
 use crate::semantic::dimension_table::BaseDimensionInfo;
 use crate::semantic::index_def::IndexDef;
 use crate::semantic::unit_scale::UnitInfo;
+use crate::source_id::SourceId;
 use crate::syntax::decl_name::DeclName;
 use crate::syntax::module_name::ScopedName;
 use crate::syntax::span::Span;
@@ -30,12 +30,12 @@ use super::resolved_type::{ResolvedDeclType, ResolvedGenericArg};
 #[must_use]
 pub fn nat_overflow_error(
     err: crate::nat::NatOverflowError,
-    src: &NamedSource<Arc<String>>,
+    src: SourceId,
     span: Span,
 ) -> GraphcalError {
     GraphcalError::EvalError {
         message: err.to_string(),
-        src: src.clone(),
+        src,
         span: span.into(),
     }
 }
@@ -567,7 +567,7 @@ pub struct ResolvedDomainBound {
     /// Span of the whole bound.
     pub span: Span,
     /// Source file whose bytes are indexed by `span` and the expression spans.
-    pub src: NamedSource<Arc<String>>,
+    pub src: SourceId,
 }
 
 /// The checked type of one value declaration.
@@ -588,10 +588,7 @@ impl CheckedDeclType {
     ///
     /// Returns a [`GraphcalError`] when the type contains unresolved generic
     /// parameters.
-    pub(crate) fn new(
-        resolved: ResolvedDeclType,
-        src: &NamedSource<Arc<String>>,
-    ) -> Result<Self, GraphcalError> {
+    pub(crate) fn new(resolved: ResolvedDeclType, src: SourceId) -> Result<Self, GraphcalError> {
         let declared = resolved.to_checked_type(src)?;
         Ok(Self { resolved, declared })
     }

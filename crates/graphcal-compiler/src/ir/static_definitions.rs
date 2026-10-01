@@ -10,9 +10,6 @@
 //! merge of one module's tables into another's.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::sync::Arc;
-
-use miette::NamedSource;
 
 use crate::dag_id::DagId;
 use crate::desugar::desugared_ast::{
@@ -38,6 +35,7 @@ use crate::semantic::unit_scale::{
     PositiveFiniteScale, PositiveFiniteScaleError, UnitInfo, UnitResolveError, UnitScale,
     resolve_unit_expr_with,
 };
+use crate::source_id::SourceId;
 use crate::syntax::ast::{BindableVisibility, UnitConstness};
 use crate::syntax::dimension::{DimName, DimRef, UnitName, UnitRef};
 use crate::syntax::index_name::IndexName;
@@ -50,7 +48,7 @@ use super::entry::{DynamicUnitScaleEntry, InScope, Syntax};
 #[derive(Debug, Clone, Copy)]
 pub struct DefinitionSource<'a> {
     pub declarations: &'a [Declaration],
-    pub src: &'a NamedSource<Arc<String>>,
+    pub src: SourceId,
 }
 
 /// A dimension expression that could not be evaluated.
@@ -78,11 +76,11 @@ pub(crate) struct ModuleStaticDefinitions {
 enum CycleSite<'a> {
     Dimension {
         name: &'a Spanned<DimName>,
-        src: &'a NamedSource<Arc<String>>,
+        src: SourceId,
     },
     Unit {
         name: &'a Spanned<UnitName>,
-        src: &'a NamedSource<Arc<String>>,
+        src: SourceId,
     },
 }
 
@@ -91,12 +89,12 @@ impl CycleSite<'_> {
         match self {
             Self::Dimension { name, src } => GraphcalError::CyclicDimension {
                 name: name.value.clone(),
-                src: src.clone(),
+                src,
                 span: name.span.into(),
             },
             Self::Unit { name, src } => GraphcalError::CyclicUnit {
                 name: name.value.clone(),
-                src: src.clone(),
+                src,
                 span: name.span.into(),
             },
         }
@@ -134,7 +132,7 @@ enum DimensionSource<'a> {
 /// Declarations of one module indexed by the name they introduce.
 #[derive(Debug)]
 struct ModuleSource<'a> {
-    src: &'a NamedSource<Arc<String>>,
+    src: SourceId,
     declarations: &'a [Declaration],
     dimensions: HashMap<DimName, DimensionSource<'a>>,
     units: HashMap<UnitName, &'a UnitDecl>,
@@ -227,6 +225,9 @@ pub struct StaticDefinitionEvaluator<'a> {
     base_annotations: HashMap<DagId, Vec<BaseDimId>>,
     dynamic_unit_scales: HashMap<DagId, Vec<DynamicUnitScaleEntry<Syntax>>>,
     in_progress: HashSet<StaticItem>,
+    /// Source an invariant violation is reported against when the offending
+    /// definition has no declaring module (the entry file).
+    fallback_src: SourceId,
 }
 
 impl<'a> StaticDefinitionEvaluator<'a> {
@@ -238,6 +239,7 @@ impl<'a> StaticDefinitionEvaluator<'a> {
     pub fn new(
         resolver: &'a ModuleResolver,
         sources: impl IntoIterator<Item = (DagId, DefinitionSource<'a>)>,
+        fallback_src: SourceId,
     ) -> Result<Self, PreludeDefinitionError> {
         let prelude_definitions = crate::ir::prelude_definitions::prelude_definitions()?;
         let prelude_dimensions = prelude_definitions
@@ -274,6 +276,7 @@ impl<'a> StaticDefinitionEvaluator<'a> {
             base_annotations: HashMap::new(),
             dynamic_unit_scales: HashMap::new(),
             in_progress: HashSet::new(),
+            fallback_src,
         })
     }
 
@@ -295,7 +298,7 @@ impl<'a> StaticDefinitionEvaluator<'a> {
     pub fn type_declaration(
         &self,
         identity: &crate::resolved_name::ResolvedStructTypeName,
-    ) -> Option<(&'a ast::TypeDecl, &'a NamedSource<Arc<String>>)> {
+    ) -> Option<(&'a ast::TypeDecl, SourceId)> {
         let module = self.modules.get(identity.owner())?;
         module
             .types
@@ -443,8 +446,9 @@ impl<'a> StaticDefinitionEvaluator<'a> {
         }
 
         let mut definitions = StaticDefinitions::new(owner.clone());
+        let fallback_src = self.fallback_src;
         let foreign = |error: crate::ir::module_definitions::ForeignDefinitionError| {
-            missing_definition_error(&error.to_string(), &empty_source())
+            missing_definition_error(&error.to_string(), fallback_src)
         };
         if let Some(symbols) = self.resolver.symbols(owner) {
             for symbol in symbols.dimensions().values() {
@@ -699,7 +703,7 @@ impl<'a> StaticDefinitionEvaluator<'a> {
                 src,
             }
             .error(),
-            None => missing_definition_error(&identity.to_string(), &empty_source()),
+            None => missing_definition_error(&identity.to_string(), self.fallback_src),
         }
     }
 
@@ -716,7 +720,7 @@ impl<'a> StaticDefinitionEvaluator<'a> {
         }) else {
             return Err(missing_definition_error(
                 &identity.to_string(),
-                &empty_source(),
+                self.fallback_src,
             ));
         };
         match source {
@@ -792,7 +796,7 @@ impl<'a> StaticDefinitionEvaluator<'a> {
         let src = self
             .modules
             .get(owner)
-            .map_or_else(empty_source, |module| module.src.clone());
+            .map_or(self.fallback_src, |module| module.src);
         factors
             .into_iter()
             .try_fold(Dimension::dimensionless(), |acc, (factor, exponent)| {
@@ -801,7 +805,7 @@ impl<'a> StaticDefinitionEvaluator<'a> {
                     .and_then(|factor| acc.checked_mul(&factor))
             })
             .map_err(|_| GraphcalError::DimensionOverflow {
-                span: Span::new(0, src.inner().len()).into(),
+                span: src.whole_span().into(),
                 src,
             })
     }
@@ -859,7 +863,7 @@ impl<'a> StaticDefinitionEvaluator<'a> {
         }) else {
             return Err(missing_definition_error(
                 &identity.to_string(),
-                &empty_source(),
+                self.fallback_src,
             ));
         };
         if self.in_progress.contains(&item) {
@@ -886,7 +890,7 @@ impl<'a> StaticDefinitionEvaluator<'a> {
         &mut self,
         identity: &ResolvedUnitName,
         unit: &'a UnitDecl,
-        src: &'a NamedSource<Arc<String>>,
+        src: SourceId,
     ) -> Result<UnitInfo, GraphcalError> {
         let owner = identity.owner();
         let site = CycleSite::Unit {
@@ -935,7 +939,7 @@ impl<'a> StaticDefinitionEvaluator<'a> {
                     dim: self.format_dimension(owner, &dim),
                     reason,
                     help,
-                    src: src.clone(),
+                    src,
                     span: unit.name.span.into(),
                 });
             }
@@ -955,7 +959,7 @@ impl<'a> StaticDefinitionEvaluator<'a> {
         {
             return Err(GraphcalError::AffineProneUnitDefinition {
                 dim: self.format_dimension(owner, &dim),
-                src: src.clone(),
+                src,
                 span: unit.name.span.into(),
             });
         }
@@ -964,7 +968,7 @@ impl<'a> StaticDefinitionEvaluator<'a> {
             if let UnitScaleSource::Dynamic { first_graph_ref } = &scale_source {
                 return Err(GraphcalError::GraphRefInConstUnit {
                     name: first_graph_ref.value.clone(),
-                    src: src.clone(),
+                    src,
                     span: first_graph_ref.span.into(),
                 });
             }
@@ -976,7 +980,7 @@ impl<'a> StaticDefinitionEvaluator<'a> {
                 if info.is_some_and(|info| !info.scale.constness().is_const()) {
                     return Err(GraphcalError::NonConstUnitInConst {
                         name: term.name.value.clone(),
-                        src: src.clone(),
+                        src,
                         span: term.name.span.into(),
                     });
                 }
@@ -990,7 +994,7 @@ impl<'a> StaticDefinitionEvaluator<'a> {
                 name: unit.name.value.clone(),
                 declared: self.format_dimension(owner, &dim),
                 definition: self.format_dimension(owner, &base_unit_dimension),
-                src: src.clone(),
+                src,
                 span: def.unit_expr.span.into(),
             });
         }
@@ -1009,7 +1013,7 @@ impl<'a> StaticDefinitionEvaluator<'a> {
                         declared_dimension: dim.clone(),
                         base_unit_dimension,
                         span: def.scale_expr.span,
-                        src: src.clone(),
+                        src,
                     });
                 UnitScale::Dynamic {
                     base_unit_scale: base_scale,
@@ -1064,7 +1068,7 @@ impl<'a> StaticDefinitionEvaluator<'a> {
     fn index_declaration(
         &self,
         identity: &ResolvedIndexName,
-    ) -> Result<(&'a IndexDecl, Span, &'a NamedSource<Arc<String>>), GraphcalError> {
+    ) -> Result<(&'a IndexDecl, Span, SourceId), GraphcalError> {
         self.modules
             .get(identity.owner())
             .and_then(|module| {
@@ -1073,7 +1077,7 @@ impl<'a> StaticDefinitionEvaluator<'a> {
                     .get(&identity.to_unowned_def_name())
                     .map(|(declaration, span)| (*declaration, *span, module.src))
             })
-            .ok_or_else(|| missing_definition_error(&identity.to_string(), &empty_source()))
+            .ok_or_else(|| missing_definition_error(&identity.to_string(), self.fallback_src))
     }
 
     fn index_definition(
@@ -1081,7 +1085,7 @@ impl<'a> StaticDefinitionEvaluator<'a> {
         owner: &DagId,
         index: &'a IndexDecl,
         decl_span: Span,
-        src: &'a NamedSource<Arc<String>>,
+        src: SourceId,
     ) -> Result<IndexDef, GraphcalError> {
         let kind = match &index.kind {
             IndexDeclKind::Named { variants } => {
@@ -1093,7 +1097,7 @@ impl<'a> StaticDefinitionEvaluator<'a> {
                                     .value
                                     .qualified_by(&index.name.value)
                                     .to_string(),
-                                src: src.clone(),
+                                src,
                                 duplicate: variants[duplicate].span.into(),
                                 first: variants[first].span.into(),
                             }
@@ -1180,14 +1184,14 @@ impl<'a> StaticDefinitionEvaluator<'a> {
         owner: &DagId,
         name: &IndexName,
         axis: &CoordinateAxisExpr,
-        src: &NamedSource<Arc<String>>,
+        src: SourceId,
         decl_span: Span,
     ) -> Result<IndexKind, GraphcalError> {
         let dimension_mismatch =
             |message: String| GraphcalError::CoordinateIndexDimensionMismatch {
                 name: name.clone(),
                 message,
-                src: src.clone(),
+                src,
                 span: decl_span.into(),
             };
         axis.evaluate()
@@ -1214,7 +1218,7 @@ impl<'a> StaticDefinitionEvaluator<'a> {
                         name: name.clone(),
                         message: error.to_string(),
                         help: error.help(),
-                        src: src.clone(),
+                        src,
                         span: point_count.unwrap_or(decl_span).into(),
                     }
                 }
@@ -1222,13 +1226,9 @@ impl<'a> StaticDefinitionEvaluator<'a> {
     }
 }
 
-fn empty_source() -> NamedSource<Arc<String>> {
-    NamedSource::new("<unknown>", Arc::new(String::new()))
-}
-
 /// A resolver symbol has no valid definition source: the evaluator was not
 /// given the declaring module, or the symbol belongs to another module.
-fn missing_definition_error(detail: &str, src: &NamedSource<Arc<String>>) -> GraphcalError {
+fn missing_definition_error(detail: &str, src: SourceId) -> GraphcalError {
     GraphcalError::internal_error(
         format!("resolved definition has no owned source declaration: {detail}"),
         src,
@@ -1237,33 +1237,25 @@ fn missing_definition_error(detail: &str, src: &NamedSource<Arc<String>>) -> Gra
 }
 
 /// Render a dimension-expression failure at its declaration.
-fn dim_expr_error(
-    failure: DimExprFailure,
-    src: &NamedSource<Arc<String>>,
-    span: Span,
-) -> GraphcalError {
+fn dim_expr_error(failure: DimExprFailure, src: SourceId, span: Span) -> GraphcalError {
     match failure {
         DimExprFailure::Unknown(name) => GraphcalError::UnknownDimension {
             name: name.to_name_path(),
-            src: src.clone(),
+            src,
             span: span.into(),
         },
         DimExprFailure::Overflow => GraphcalError::DimensionOverflow {
-            src: src.clone(),
+            src,
             span: span.into(),
         },
         DimExprFailure::Definition(error) => *error,
     }
 }
 
-fn eval_error(
-    message: impl Into<String>,
-    src: &NamedSource<Arc<String>>,
-    span: Span,
-) -> GraphcalError {
+fn eval_error(message: impl Into<String>, src: SourceId, span: Span) -> GraphcalError {
     GraphcalError::EvalError {
         message: message.into(),
-        src: src.clone(),
+        src,
         span: span.into(),
     }
 }
@@ -1271,43 +1263,39 @@ fn eval_error(
 fn scale_error(
     context: &str,
     err: PositiveFiniteScaleError,
-    src: &NamedSource<Arc<String>>,
+    src: SourceId,
     span: Span,
 ) -> GraphcalError {
     eval_error(format!("{context} {err}"), src, span)
 }
 
 /// Convert a typed unit-resolution failure into a spanned diagnostic.
-fn unit_resolve_error(
-    err: UnitResolveError,
-    src: &NamedSource<Arc<String>>,
-    span: Span,
-) -> GraphcalError {
+fn unit_resolve_error(err: UnitResolveError, src: SourceId, span: Span) -> GraphcalError {
     match err {
         UnitResolveError::UnknownUnit(name) => GraphcalError::UnknownUnit {
             name,
-            src: src.clone(),
+            src,
             span: span.into(),
         },
         UnitResolveError::DynamicScale(name) => GraphcalError::EvalError {
             message: format!("unit `{name}` has a dynamic scale and cannot be used here"),
-            src: src.clone(),
+            src,
             span: span.into(),
         },
         UnitResolveError::InvalidScale(err) => scale_error("compound unit scale", err, src, span),
         UnitResolveError::Overflow(_) => GraphcalError::DimensionOverflow {
-            src: src.clone(),
+            src,
             span: span.into(),
         },
     }
 }
 
 /// Render a constant-expression failure at the definition boundary.
-fn const_expr_error(error: ConstExprError, src: &NamedSource<Arc<String>>) -> GraphcalError {
+fn const_expr_error(error: ConstExprError, src: SourceId) -> GraphcalError {
     match error {
         ConstExprError::Unit { error, span } => unit_resolve_error(error, src, span),
         ConstExprError::DimensionOverflow { span } => GraphcalError::DimensionOverflow {
-            src: src.clone(),
+            src,
             span: span.into(),
         },
         error => eval_error(error.to_string(), src, error.span()),
@@ -1318,7 +1306,7 @@ fn const_expr_error(error: ConstExprError, src: &NamedSource<Arc<String>>) -> Gr
 /// position or finite comprehension of one module.
 fn validate_structural_finite_indexes(
     declarations: &[Declaration],
-    src: &NamedSource<Arc<String>>,
+    src: SourceId,
 ) -> Result<(), GraphcalError> {
     for decl in declarations {
         match &decl.kind {
@@ -1362,10 +1350,7 @@ fn validate_structural_finite_indexes(
     Ok(())
 }
 
-fn concrete_nat_value(
-    expr: &ast::NatExpr,
-    src: &NamedSource<Arc<String>>,
-) -> Result<Option<u64>, GraphcalError> {
+fn concrete_nat_value(expr: &ast::NatExpr, src: SourceId) -> Result<Option<u64>, GraphcalError> {
     match expr {
         ast::NatExpr::Literal(value, _) => Ok(Some(*value)),
         ast::NatExpr::Var(_) => Ok(None),
@@ -1398,7 +1383,7 @@ fn concrete_nat_value(
 fn validate_finite_cardinality(
     cardinality: u64,
     span: Span,
-    src: &NamedSource<Arc<String>>,
+    src: SourceId,
 ) -> Result<(), GraphcalError> {
     FiniteIndex::try_from_u64(cardinality)
         .map(|_| ())
@@ -1407,7 +1392,7 @@ fn validate_finite_cardinality(
 
 fn validate_index_expr_finite_indexes(
     index: &ast::IndexExpr,
-    src: &NamedSource<Arc<String>>,
+    src: SourceId,
 ) -> Result<(), GraphcalError> {
     match index {
         ast::IndexExpr::Finite { cardinality, span } => {
@@ -1422,7 +1407,7 @@ fn validate_index_expr_finite_indexes(
 
 fn validate_generic_arg_finite_indexes(
     arg: &ast::GenericArg,
-    src: &NamedSource<Arc<String>>,
+    src: SourceId,
 ) -> Result<(), GraphcalError> {
     match arg {
         ast::GenericArg::Type(type_expr) => validate_type_expr_finite_indexes(type_expr, src),
@@ -1433,7 +1418,7 @@ fn validate_generic_arg_finite_indexes(
 
 fn validate_type_expr_finite_indexes(
     type_expr: &ast::TypeExpr,
-    src: &NamedSource<Arc<String>>,
+    src: SourceId,
 ) -> Result<(), GraphcalError> {
     match &type_expr.kind {
         ast::TypeExprKind::Indexed { base, indexes } => {
@@ -1458,17 +1443,14 @@ fn validate_type_expr_finite_indexes(
 }
 
 /// Reject invalid concrete `Fin(N)` identities used by comprehensions and tables.
-fn validate_expr_finite_indexes(
-    expr: &ast::Expr,
-    src: &NamedSource<Arc<String>>,
-) -> Result<(), GraphcalError> {
+fn validate_expr_finite_indexes(expr: &ast::Expr, src: SourceId) -> Result<(), GraphcalError> {
     use crate::syntax::visitor::ExprVisitor;
 
-    struct FiniteValidator<'a> {
-        src: &'a NamedSource<Arc<String>>,
+    struct FiniteValidator {
+        src: SourceId,
     }
 
-    impl ExprVisitor<crate::syntax::phase::Desugared> for FiniteValidator<'_> {
+    impl ExprVisitor<crate::syntax::phase::Desugared> for FiniteValidator {
         type Error = GraphcalError;
 
         fn visit_expr(&mut self, expr: &ast::Expr) -> Result<(), GraphcalError> {
@@ -1520,8 +1502,9 @@ mod tests {
         ast::File::from(Parser::new(source).parse_file().unwrap())
     }
 
-    fn src(name: &str, source: &str) -> NamedSource<Arc<String>> {
-        NamedSource::new(name, Arc::new(source.to_string()))
+    fn src(name: &str, source: &str) -> SourceId {
+        crate::source_registry::SourceRegistry::new()
+            .register(name, std::sync::Arc::new(source.to_string()))
     }
 
     fn base(dimension: PreludeBaseDimension) -> Dimension {
@@ -1530,7 +1513,7 @@ mod tests {
 
     /// Modules of one test project: identity, parsed body, and source.
     struct Project {
-        modules: Vec<(DagId, ast::File, NamedSource<Arc<String>>)>,
+        modules: Vec<(DagId, ast::File, SourceId)>,
     }
 
     impl Project {
@@ -1579,10 +1562,17 @@ mod tests {
                         owner.clone(),
                         DefinitionSource {
                             declarations: &file.declarations,
-                            src,
+                            src: *src,
                         },
                     )
                 }),
+                self.modules.first().map_or_else(
+                    || {
+                        crate::source_registry::SourceRegistry::new()
+                            .register("<empty>", std::sync::Arc::new(String::new()))
+                    },
+                    |(_, _, src)| *src,
+                ),
             )
             .unwrap()
         }

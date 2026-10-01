@@ -1,22 +1,20 @@
 //! Checked runtime interface of one directly authored entry DAG.
 
-use std::sync::Arc;
-
 use graphcal_compiler::declaration_category::ValueDeclCategory;
 use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
 use graphcal_compiler::graphcal_error::GraphcalError;
 use graphcal_compiler::hir::source_interface::SourceDeclaration;
 use graphcal_compiler::ir::resolve::collected::ExternalDeclSurface;
 use graphcal_compiler::semantic::checked_type::CheckedType;
+use graphcal_compiler::source_id::SourceId;
 use graphcal_compiler::syntax::ast::Visibility;
 use graphcal_compiler::syntax::decl_name::DeclName;
 use graphcal_compiler::syntax::index_name::IndexName;
 use graphcal_compiler::syntax::span::Span;
 use graphcal_compiler::tir::typed::CheckedTir;
 use graphcal_compiler::tir::typed::declaration_view::{DeclarationView, ValueDeclaration};
-use miette::NamedSource;
 
-use crate::compile_error::CompileError;
+use crate::compile_error::PipelineError;
 use graphcal_compiler::resolved_name::ResolvedDeclName;
 
 /// One checked entry-DAG parameter in direct source order.
@@ -117,15 +115,11 @@ impl CheckedEntryInterface {
     }
 }
 
-fn missing_interface_fact(
-    message: String,
-    source: &NamedSource<Arc<String>>,
-    span: Span,
-) -> CompileError {
-    CompileError::Eval(GraphcalError::InternalError {
+const fn missing_interface_fact(message: String, source: SourceId, span: Span) -> PipelineError {
+    PipelineError::Semantic(GraphcalError::InternalError {
         message,
-        src: source.clone(),
-        span: span.into(),
+        src: source,
+        anchor: graphcal_compiler::diagnostic_anchor::DiagnosticAnchor::Source(span),
     })
 }
 
@@ -134,8 +128,8 @@ pub(super) fn build_checked_entry_interface(
     source_declarations: &[SourceDeclaration],
     tir: &CheckedTir,
     external_surface: &ExternalDeclSurface,
-    source: &NamedSource<Arc<String>>,
-) -> Result<CheckedEntryInterface, CompileError> {
+    source: SourceId,
+) -> Result<CheckedEntryInterface, PipelineError> {
     let mut parameters = Vec::new();
     let mut outputs = Vec::new();
     let mut required_index = None;

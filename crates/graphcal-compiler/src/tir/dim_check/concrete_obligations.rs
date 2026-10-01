@@ -10,12 +10,11 @@ use crate::outcome::Outcome;
 use crate::semantic::checked_type::{
     CheckedGenericArg, CheckedType, IndexTypeRef, StructTypeRef, Symbolic,
 };
+use crate::source_id::SourceId;
 use crate::syntax::span::Span;
 use crate::tir::texpr::{CheckedBody, TBody, TNodeRef, visit_tnodes};
 use crate::tir::typed::model::{DagTIR, ResolvedStructFieldTypeKey};
 use crate::tir::typed::program::TirRead;
-use miette::NamedSource;
-use std::sync::Arc;
 
 #[derive(Clone, PartialEq, Eq)]
 struct Application {
@@ -26,7 +25,7 @@ struct Application {
 struct Context<'a> {
     dag: &'a DagTIR,
     tir: &'a dyn TirRead,
-    src: &'a NamedSource<Arc<String>>,
+    src: SourceId,
     span: Span,
     cancellation: &'a CancellationToken,
 }
@@ -35,7 +34,7 @@ pub(super) fn validate_concrete_type_obligations(
     inferred: &CheckedType<Symbolic>,
     dag: &DagTIR,
     tir: &dyn TirRead,
-    src: &NamedSource<Arc<String>>,
+    src: SourceId,
     span: Span,
     cancellation: &CancellationToken,
 ) -> Result<(), Outcome<GraphcalError>> {
@@ -54,7 +53,7 @@ pub(super) fn validate_concrete_type_obligations(
 
 pub(super) fn validate_project(
     checking: &crate::tir::typed::CheckingTir<'_>,
-    src: &NamedSource<Arc<String>>,
+    src: SourceId,
     cancellation: &CancellationToken,
 ) -> Result<(), Outcome<GraphcalError>> {
     let tir: &dyn TirRead = checking;
@@ -133,7 +132,7 @@ fn validate(
                 .struct_type_def(identity.resolved())
                 .ok_or_else(|| GraphcalError::UnknownStructType {
                     name: identity.to_string(),
-                    src: ctx.src.clone(),
+                    src: ctx.src,
                     span: ctx.span.into(),
                 })?;
             let application = Application {
@@ -150,7 +149,7 @@ fn validate(
                     message: format!(
                         "recursive generic type `{identity}` changes its arguments; concrete field obligations cannot be discharged finitely"
                     ),
-                    src: ctx.src.clone(),
+                    src: ctx.src,
                     span: ctx.span.into(),
                 }.into());
             }
@@ -210,7 +209,7 @@ fn validate_index(index: &IndexTypeRef<Symbolic>, ctx: &Context<'_>) -> Result<(
         Some(_) => Ok(()),
         None => Err(GraphcalError::EvalError {
             message: format!("unresolved finite-index obligation `{index}`"),
-            src: ctx.src.clone(),
+            src: ctx.src,
             span: ctx.span.into(),
         }),
     }
@@ -229,7 +228,7 @@ fn check_bound(
         super::domain_bound_type::expected_bound_from_inferred(target).ok_or_else(|| {
             GraphcalError::InvalidDomainTarget {
                 type_kind: super::format_checked_type(target, ctx.tir.registry()),
-                src: bound.src.clone(),
+                src: bound.src,
                 span: bound.span.into(),
             }
         })?;
@@ -244,7 +243,7 @@ fn check_bound(
     ) else {
         return Err(GraphcalError::internal_error(
             "field-constraint owner has no checked DAG",
-            &bound.src,
+            bound.src,
             DiagnosticAnchor::Source(bound.span),
         ));
     };
@@ -254,7 +253,7 @@ fn check_bound(
         bodies,
         &bound.value,
         nats,
-        &bound.src,
+        bound.src,
     )?;
     super::domain_bound_type::check_one_bound_with_display_name(
         &display,
@@ -262,6 +261,6 @@ fn check_bound(
         tree.ty(),
         &expected,
         ctx.tir.registry(),
-        &bound.src,
+        bound.src,
     )
 }

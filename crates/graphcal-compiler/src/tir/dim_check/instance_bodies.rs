@@ -1,14 +1,13 @@
 //! Check each semantic instance's own bodies and specialize the rest of its
 //! checked trees from its template's, without re-inferring the template.
 
-use miette::NamedSource;
 use std::collections::HashMap;
-use std::sync::Arc;
 
 use crate::cancellation::CancellationToken;
 use crate::diagnostic_anchor::DiagnosticAnchor;
 use crate::graphcal_error::GraphcalError;
 use crate::outcome::Outcome;
+use crate::source_id::SourceId;
 use crate::tir::texpr::{CheckedBodies, CheckedBody, NominalObservation, TBody};
 use crate::tir::typed::program::{TirRead, UncheckedTir};
 use crate::tir::typed::specialization::specialize_expression_type;
@@ -93,7 +92,7 @@ fn check_retained_reconciliations(
                         overridden_kind: kind.to_string(),
                         orphan_decl: reconciliation.orphan_decl().to_string(),
                         detail,
-                        src: reconciliation.src.clone(),
+                        src: reconciliation.src,
                         span: reconciliation.include_span.into(),
                     });
                 }
@@ -186,7 +185,7 @@ fn check_instance_defaults(
             return Err(GraphcalError::DimensionMismatchInAnnotation {
                 declared: expected.format(&ctx.env.registry.dimensions),
                 inferred: specialized.format(&ctx.env.registry.dimensions),
-                src: ctx.env.src.clone(),
+                src: ctx.env.src,
                 span: default.span.into(),
             }
             .into());
@@ -210,7 +209,7 @@ pub(super) struct InstanceBodies {
 pub(super) fn instance_bodies(
     tir: &UncheckedTir,
     canonical: &HashMap<crate::dag_id::DagId, CheckedBodies>,
-    src: &NamedSource<Arc<String>>,
+    src: SourceId,
     cancellation: &CancellationToken,
 ) -> Result<InstanceBodies, Outcome<GraphcalError>> {
     let checking = crate::tir::typed::CheckingTir {

@@ -7,6 +7,7 @@ use crate::graphcal_error::GraphcalError;
 use crate::outcome::Outcome;
 use crate::resolved_name::{ResolvedDeclName, ResolvedStructTypeName};
 use crate::semantic::checked_type::{CheckedType, Symbolic};
+use crate::source_id::SourceId;
 use crate::static_interface::StaticRole;
 use crate::syntax::names::NameAtom;
 use crate::syntax::span::Span;
@@ -61,7 +62,7 @@ fn emit_violation(
                 body_name: body.name.clone(),
                 port_kind: violation.kind,
                 port_name: port.identity.name().clone(),
-                src: ctx.env.src.clone(),
+                src: ctx.env.src,
                 span: span.into(),
             },
         );
@@ -341,7 +342,7 @@ fn check_in_rigid_view<R>(
     template: &crate::tir::typed::DagTIR,
     ports: &[crate::resolved_name::ResolvedDimName],
     failure: RigidFailure<'_>,
-    src: &miette::NamedSource<std::sync::Arc<String>>,
+    src: SourceId,
     cancellation: &crate::cancellation::CancellationToken,
     plots: impl FnOnce(&DimCheckContext<'_>) -> Result<R, Outcome<GraphcalError>>,
 ) -> Result<(R, infer::hir::FinishedObservations), Outcome<GraphcalError>> {
@@ -410,7 +411,7 @@ pub(super) fn port_generic_trees(
     tir: &crate::tir::typed::UncheckedTir,
     template: &crate::tir::typed::DagTIR,
     ports: &[crate::resolved_name::ResolvedDimName],
-    src: &miette::NamedSource<std::sync::Arc<String>>,
+    src: SourceId,
     cancellation: &crate::cancellation::CancellationToken,
 ) -> Result<PortGenericTrees, Outcome<GraphcalError>> {
     let (plot_channels, finished) = check_in_rigid_view(

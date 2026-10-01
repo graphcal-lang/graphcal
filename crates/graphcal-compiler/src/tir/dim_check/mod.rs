@@ -1,9 +1,7 @@
 use crate::outcome::Outcome;
 use crate::resolved_name::ResolvedDeclName;
+use crate::source_id::SourceId;
 use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
-
-use miette::NamedSource;
 
 use crate::assertion_expectation::{ExpectedFail, ExpectedFailKey, ExpectedFailKeyPart};
 use crate::diagnostic_anchor::DiagnosticAnchor;
@@ -90,8 +88,8 @@ impl DimCheckContext<'_> {
             .assert_body(declaration)
             .ok_or_else(|| GraphcalError::InternalError {
                 message: format!("TIR assertion entry missing for `{name}`"),
-                src: self.env.src.clone(),
-                span: span.into(),
+                src: self.env.src,
+                anchor: crate::diagnostic_anchor::DiagnosticAnchor::Source(span),
             })
     }
 
@@ -137,8 +135,8 @@ fn check_decl_expr_type(
         .hir_expr_for_decl(identity)
         .ok_or_else(|| GraphcalError::InternalError {
             message: format!("value declaration record missing while checking `{name}`"),
-            src: ctx.env.src.clone(),
-            span: (*type_ann_span).into(),
+            src: ctx.env.src,
+            anchor: crate::diagnostic_anchor::DiagnosticAnchor::Source(*type_ann_span),
         })?;
     if ctx
         .env
@@ -166,7 +164,7 @@ fn check_decl_expr_type(
         return Err(GraphcalError::DimensionMismatchInAnnotation {
             declared: format_checked_type(declared, ctx.env.registry),
             inferred: format_checked_type(&inferred, ctx.env.registry),
-            src: ctx.env.src.clone(),
+            src: ctx.env.src,
             span: (*type_ann_span).into(),
         }
         .into());
@@ -203,7 +201,7 @@ fn check_dynamic_unit_scale_type(
                 .registry
                 .dimensions
                 .format_dimension(&entry.base_unit_dimension),
-            src: ctx.env.src.clone(),
+            src: ctx.env.src,
             span: entry.span.into(),
         }
         .into());
@@ -216,7 +214,7 @@ fn check_dynamic_unit_scale_type(
         return Err(GraphcalError::DynamicUnitScaleTypeMismatch {
             name: entry.spelling.clone(),
             found: format_checked_type(&inferred, ctx.env.registry),
-            src: ctx.env.src.clone(),
+            src: ctx.env.src,
             span: entry.expr.span.into(),
         }
         .into());
@@ -236,7 +234,7 @@ fn check_dynamic_unit_scale_type(
 fn check_ineffective_conversions(
     expr: &crate::hir::expr::Expr,
     display_position: bool,
-    src: &NamedSource<Arc<String>>,
+    src: SourceId,
 ) -> Result<(), GraphcalError> {
     // Recursion choke point: recurses once per tree level.
     crate::stack::with_stack_growth(|| {
@@ -247,14 +245,14 @@ fn check_ineffective_conversions(
 fn check_ineffective_conversions_inner(
     expr: &crate::hir::expr::Expr,
     display_position: bool,
-    src: &NamedSource<Arc<String>>,
+    src: SourceId,
 ) -> Result<(), GraphcalError> {
     use crate::hir::expr::ExprKind;
     match expr.kind() {
         ExprKind::Convert { expr: inner, .. } | ExprKind::DisplayTimezone { expr: inner, .. } => {
             if !display_position {
                 return Err(GraphcalError::IneffectiveConversion {
-                    src: src.clone(),
+                    src,
                     span: expr.span.into(),
                 });
             }
@@ -390,7 +388,7 @@ fn check_hir_assert_body(
             if !is_bool_type(&inferred) {
                 return Err(GraphcalError::AssertBodyNotBool {
                     found: format_checked_type(&inferred, registry),
-                    src: src.clone(),
+                    src,
                     span: span.into(),
                 }
                 .into());
@@ -435,7 +433,7 @@ fn check_hir_assert_body(
                     found: registry.dimensions.format_dimension(&expected_dim),
                     help: "actual and expected in tolerance assertion must have the same dimension"
                         .to_string(),
-                    src: src.clone(),
+                    src,
                     span: expected.span.into(),
                 }
                 .into());
@@ -448,7 +446,7 @@ fn check_hir_assert_body(
                     found: format_checked_type(&tolerance_type, registry),
                     help: "absolute tolerance must have the same dimension as actual/expected"
                         .to_string(),
-                    src: src.clone(),
+                    src,
                     span: tolerance.span.into(),
                 }
                 .into());
@@ -467,7 +465,7 @@ fn check_hir_assert_body(
                 };
                 return Err(GraphcalError::NegativeTolerance {
                     found,
-                    src: src.clone(),
+                    src,
                     span: tolerance.span.into(),
                 }
                 .into());
@@ -500,7 +498,7 @@ fn broadcast_operand_element<'a>(
     operand_type: &'a CheckedType<Symbolic>,
     operand_span: crate::syntax::span::Span,
     registry: &FormattingRegistry,
-    src: &NamedSource<Arc<String>>,
+    src: SourceId,
 ) -> Result<&'a CheckedType<Symbolic>, GraphcalError> {
     let (operand_axes, operand_elem) = peel_index_axes(operand_type);
     if !operand_axes.is_empty() && operand_axes != *actual_axes {
@@ -508,7 +506,7 @@ fn broadcast_operand_element<'a>(
             context: "tolerance assertion".to_string(),
             lhs: format_checked_type(actual_type, registry),
             rhs: format_checked_type(operand_type, registry),
-            src: src.clone(),
+            src,
             span: operand_span.into(),
         });
     }
@@ -537,10 +535,7 @@ fn statically_known_tolerance(expr: &crate::hir::expr::Expr) -> Option<f64> {
     }
 }
 
-fn expected_fail_key_span(
-    key: &ExpectedFailKey,
-    src: &NamedSource<Arc<String>>,
-) -> Result<Span, GraphcalError> {
+fn expected_fail_key_span(key: &ExpectedFailKey, src: SourceId) -> Result<Span, GraphcalError> {
     let mut parts = key.iter().map(ExpectedFailKeyPart::span);
     let first = parts.next().ok_or_else(|| {
         GraphcalError::internal_error(
@@ -563,13 +558,13 @@ fn expected_fail_key_signature(
 fn validate_expected_fail_key(
     key: &ExpectedFailKey,
     shape: &AssertionIndexShape,
-    src: &NamedSource<Arc<String>>,
+    src: SourceId,
 ) -> Result<(), GraphcalError> {
     if key.len() != shape.rank() {
         return Err(GraphcalError::ExpectedFailKeyShapeMismatch {
             expected: shape.rank(),
             found: key.len(),
-            src: src.clone(),
+            src,
             span: expected_fail_key_span(key, src)?.into(),
         });
     }
@@ -581,7 +576,7 @@ fn validate_expected_fail_key(
                     return Err(GraphcalError::ExpectedFailKeyIndexMismatch {
                         expected: expected_axis.display_name().to_string(),
                         found: part.display(),
-                        src: src.clone(),
+                        src,
                         span: part.span().into(),
                     });
                 }
@@ -591,7 +586,7 @@ fn validate_expected_fail_key(
                     return Err(GraphcalError::ExpectedFailKeyIndexMismatch {
                         expected: expected_axis.display_name().to_string(),
                         found: part.display(),
-                        src: src.clone(),
+                        src,
                         span: (*span).into(),
                     });
                 };
@@ -603,7 +598,7 @@ fn validate_expected_fail_key(
                     return Err(GraphcalError::ExpectedFailFinitePositionOutOfBounds {
                         position: *position,
                         size: concrete.size_u64(),
-                        src: src.clone(),
+                        src,
                         span: (*span).into(),
                     });
                 }
@@ -617,19 +612,19 @@ fn validate_expected_fail_key(
 fn validate_expected_fail(
     expected_fail: &ExpectedFail,
     shape: &AssertionIndexShape,
-    src: &NamedSource<Arc<String>>,
+    src: SourceId,
     attribute_span: crate::syntax::span::Span,
 ) -> Result<(), GraphcalError> {
     match expected_fail {
         ExpectedFail::All if shape.is_indexed() => Err(GraphcalError::ExpectedFailAllOnIndexed {
-            src: src.clone(),
+            src,
             span: attribute_span.into(),
         }),
         ExpectedFail::All => Ok(()),
         ExpectedFail::Variants(keys) if !shape.is_indexed() => {
             let span = expected_fail_key_span(keys.first(), src)?;
             Err(GraphcalError::ExpectedFailNotIndexed {
-                src: src.clone(),
+                src,
                 span: span.into(),
             })
         }
@@ -639,7 +634,7 @@ fn validate_expected_fail(
                 validate_expected_fail_key(key, shape, src)?;
                 if !seen.insert(expected_fail_key_signature(key)) {
                     return Err(GraphcalError::ExpectedFailDuplicateKey {
-                        src: src.clone(),
+                        src,
                         span: expected_fail_key_span(key, src)?.into(),
                     });
                 }
@@ -663,7 +658,7 @@ impl crate::tir::typed::InstantiatedTir {
     /// Returns a [`GraphcalError`] for invalid dimensions or cancellation.
     pub fn check(
         self,
-        src: &NamedSource<Arc<String>>,
+        src: SourceId,
         cancellation: &crate::cancellation::CancellationToken,
     ) -> Result<crate::tir::typed::CheckedTir, Outcome<GraphcalError>> {
         let tir = self.tir;
@@ -761,7 +756,7 @@ impl crate::tir::typed::InstantiatedTir {
 /// Returns a compiler diagnostic if retained checking results are unavailable.
 pub fn collect_override_dependency_summary(
     tir: &crate::tir::typed::CheckedTir,
-    src: &NamedSource<Arc<String>>,
+    src: SourceId,
 ) -> Result<OverrideDependencySummary, GraphcalError> {
     crate::outcome::without_cancellation(|cancellation| {
         collect_override_dependency_summary_with_cancellation(tir, src, cancellation)
@@ -775,7 +770,7 @@ pub fn collect_override_dependency_summary(
 /// Returns a compiler diagnostic for inconsistent TIR or cancellation.
 pub fn collect_override_dependency_summary_with_cancellation(
     tir: &crate::tir::typed::CheckedTir,
-    src: &NamedSource<Arc<String>>,
+    src: SourceId,
     cancellation: &crate::cancellation::CancellationToken,
 ) -> Result<OverrideDependencySummary, Outcome<GraphcalError>> {
     let mut summary = OverrideDependencySummary::new();
@@ -858,7 +853,7 @@ pub fn check_external_value_expr_type<'t>(
     tir: &'t crate::tir::typed::CheckedTir,
     expr: &crate::hir::closed_expr::ClosedExpr,
     expected: &CheckedType,
-    src: &NamedSource<Arc<String>>,
+    src: SourceId,
 ) -> Result<crate::tir::typed::ScopedTree<'t, crate::tir::texpr::TExpr>, GraphcalError> {
     check_callless_value_expr_type(tir, expr, expected, src)
 }
@@ -870,7 +865,7 @@ fn check_callless_value_expr_type<'t>(
     tir: &'t crate::tir::typed::CheckedTir,
     expr: &crate::hir::expr::Expr,
     expected: &CheckedType,
-    src: &NamedSource<Arc<String>>,
+    src: SourceId,
 ) -> Result<crate::tir::typed::ScopedTree<'t, crate::tir::texpr::TExpr>, GraphcalError> {
     let observations = infer::hir::BodyObservations::default();
     let inferred = crate::outcome::without_cancellation(|cancellation| {
@@ -912,7 +907,7 @@ fn check_callless_value_expr_type<'t>(
         Err(GraphcalError::DimensionMismatchInAnnotation {
             declared: format_checked_type(expected, tir.registry()),
             inferred: format_checked_type(&inferred, tir.registry()),
-            src: src.clone(),
+            src,
             span: expr.span.into(),
         })
     }
@@ -935,7 +930,7 @@ fn check_param_defaults(ctx: &DimCheckContext<'_>) -> Result<(), Outcome<Graphca
 fn check_dimensions_dag(
     dag: &crate::tir::typed::DagTIR,
     tir: &crate::tir::typed::UncheckedTir,
-    src: &NamedSource<Arc<String>>,
+    src: SourceId,
     cancellation: &crate::cancellation::CancellationToken,
     observations: &infer::hir::BodyObservations,
 ) -> Result<plot::CheckedPlotChannelShapes, Outcome<GraphcalError>> {
@@ -1064,7 +1059,7 @@ fn check_one_bound(
     inferred: &CheckedType<Symbolic>,
     expected: &ExpectedBound,
     registry: &FormattingRegistry,
-    src: &NamedSource<Arc<String>>,
+    src: SourceId,
 ) -> Result<(), GraphcalError> {
     check_one_bound_with_display_name(&name.to_string(), bound, inferred, expected, registry, src)
 }
@@ -1077,7 +1072,7 @@ fn check_one_bound(
 /// rather than runtime resolution.
 fn check_domain_constraint_targets_dag(
     dag: &crate::tir::typed::DagTIR,
-    src: &NamedSource<Arc<String>>,
+    src: SourceId,
 ) -> Result<(), GraphcalError> {
     let decl_iter = dag
         .consts()
@@ -1098,7 +1093,7 @@ fn check_domain_constraint_targets_dag(
         if let Some(type_kind) = invalid_domain_target_kind(annotation.checked().resolved()) {
             return Err(GraphcalError::InvalidDomainTarget {
                 type_kind,
-                src: src.clone(),
+                src,
                 span: decl_span.into(),
             });
         }
@@ -1132,7 +1127,7 @@ fn invalid_domain_target_kind(resolved: &crate::tir::typed::ResolvedDeclType) ->
 fn first_constrained_field_bound<'a>(
     key: &crate::tir::typed::ResolvedStructFieldTypeKey,
     field: &'a crate::tir::typed::ResolvedStructFieldSemantics,
-    src: &NamedSource<Arc<String>>,
+    src: SourceId,
 ) -> Result<&'a crate::tir::typed::ResolvedDomainBound, GraphcalError> {
     field.domain_bounds().first().ok_or_else(|| {
         GraphcalError::internal_error(
@@ -1148,7 +1143,7 @@ fn first_constrained_field_bound<'a>(
 
 fn check_field_domain_constraint_targets(
     tir: &crate::tir::typed::UncheckedTir,
-    src: &NamedSource<Arc<String>>,
+    src: SourceId,
 ) -> Result<(), GraphcalError> {
     let mut seen = std::collections::HashSet::new();
     for (_, dag) in tir.local_dags() {
@@ -1165,7 +1160,7 @@ fn check_field_domain_constraint_targets(
                 .map_or(first_bound.span, |field| field.type_annotation().span);
             return Err(GraphcalError::InvalidDomainTarget {
                 type_kind,
-                src: first_bound.src.clone(),
+                src: first_bound.src,
                 span: span.into(),
             });
         }
@@ -1192,7 +1187,7 @@ fn field_type_annotation<'a>(
 fn field_constraint_definition_dag<'a>(
     tir: &'a crate::tir::typed::UncheckedTir,
     key: &crate::tir::typed::ResolvedStructFieldTypeKey,
-    src: &NamedSource<Arc<String>>,
+    src: SourceId,
     span: Span,
 ) -> Result<&'a crate::tir::typed::DagTIR, GraphcalError> {
     tir.dags
@@ -1202,8 +1197,8 @@ fn field_constraint_definition_dag<'a>(
                 "field-constraint owner `{}` has no checked DAG",
                 key.owning_type.owner()
             ),
-            src: src.clone(),
-            span: span.into(),
+            src,
+            anchor: crate::diagnostic_anchor::DiagnosticAnchor::Source(span),
         })
 }
 
@@ -1216,7 +1211,7 @@ fn field_constraint_definition_dag<'a>(
 /// from several DAGs, so a seen-set dedupes the checks.
 fn check_field_domain_constraint_dimensions(
     tir: &crate::tir::typed::UncheckedTir,
-    src: &NamedSource<Arc<String>>,
+    src: SourceId,
     cancellation: &crate::cancellation::CancellationToken,
     sinks: &HashMap<&crate::dag_id::DagId, &infer::hir::BodyObservations>,
 ) -> Result<(), Outcome<GraphcalError>> {
@@ -1240,8 +1235,8 @@ fn check_field_domain_constraint_dimensions(
                         "semantic type metadata missing constrained type `{}`",
                         key.owning_type
                     ),
-                    src: diagnostic_src.clone(),
-                    span: diagnostic_span.into(),
+                    src: *diagnostic_src,
+                    anchor: crate::diagnostic_anchor::DiagnosticAnchor::Source(diagnostic_span),
                 })?;
             let (variant, field) = type_def
                 .union_members()
@@ -1258,8 +1253,8 @@ fn check_field_domain_constraint_dimensions(
                         "semantic type metadata missing constrained field `{}.{}`",
                         key.constructor, key.field
                     ),
-                    src: diagnostic_src.clone(),
-                    span: diagnostic_span.into(),
+                    src: *diagnostic_src,
+                    anchor: crate::diagnostic_anchor::DiagnosticAnchor::Source(diagnostic_span),
                 })?;
             let resolved_target = field_semantics.resolved_type().element();
             let expected = expected_bound_from_resolved(resolved_target);
@@ -1275,8 +1270,8 @@ fn check_field_domain_constraint_dimensions(
                         "constrained field target `{}` was not classified",
                         resolved_target.format(registry)
                     ),
-                    src: diagnostic_src.clone(),
-                    span: diagnostic_span.into(),
+                    src: *diagnostic_src,
+                    anchor: crate::diagnostic_anchor::DiagnosticAnchor::Source(diagnostic_span),
                 }
                 .into());
             }
@@ -1290,7 +1285,7 @@ fn check_field_domain_constraint_dimensions(
                 format!("{}.{}.{}", type_def.name(), variant.name(), field.name())
             };
             let definition_dag =
-                field_constraint_definition_dag(tir, key, diagnostic_src, diagnostic_span)?;
+                field_constraint_definition_dag(tir, key, *diagnostic_src, diagnostic_span)?;
             let Some(observations) = sinks.get(definition_dag.dag_id()) else {
                 // Imported definitions already carry their canonical proof.
                 continue;
@@ -1300,7 +1295,7 @@ fn check_field_domain_constraint_dimensions(
                     dag: definition_dag,
                     tir,
                     registry,
-                    src: &bound.src,
+                    src: bound.src,
                 }
                 .infer_root(&bound.value, None, cancellation, observations)?;
                 match &expected {
@@ -1310,7 +1305,7 @@ fn check_field_domain_constraint_dimensions(
                         &inferred,
                         expected,
                         registry,
-                        &bound.src,
+                        bound.src,
                     )?,
                     None => check_deferred_generic_quantity_bound(
                         &display_name,
@@ -1341,7 +1336,7 @@ fn check_deferred_generic_quantity_bound(
         type_dim: resolved_target.format(registry),
         bound_name: bound.kind.to_string(),
         bound_dim: format_checked_type(inferred, registry),
-        src: bound.src.clone(),
+        src: bound.src,
         span: bound.span.into(),
     })
 }
@@ -1372,7 +1367,7 @@ fn collect_dag_call_targets_from_dag(
 /// a single file or spans multiple files.
 fn detect_cross_dag_cycles(
     tir: &crate::tir::typed::UncheckedTir,
-    src: &NamedSource<Arc<String>>,
+    src: SourceId,
 ) -> Result<(), GraphcalError> {
     use std::collections::BTreeMap;
 
@@ -1414,7 +1409,7 @@ fn detect_cross_dag_cycles(
         })?;
     Err(GraphcalError::CyclicDependency {
         name: entry.to_string(),
-        src: src.clone(),
+        src,
         span: (*span).into(),
     })
 }

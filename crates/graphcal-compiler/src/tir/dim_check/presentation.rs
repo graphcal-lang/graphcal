@@ -5,16 +5,15 @@ use crate::dag_id::DagId;
 use crate::diagnostic_anchor::DiagnosticAnchor;
 use crate::graphcal_error::GraphcalError;
 use crate::outcome::Outcome;
+use crate::source_id::SourceId;
 use crate::tir::presentation::DagPresentationFacts;
 use crate::tir::typed::UncheckedTir;
-use miette::NamedSource;
 use std::collections::HashMap;
-use std::sync::Arc;
 
 pub(super) fn collect_presentation_facts(
     tir: &UncheckedTir,
     shapes: &HashMap<DagId, super::plot::CheckedPlotChannelShapes>,
-    src: &NamedSource<Arc<String>>,
+    src: SourceId,
     cancellation: &crate::cancellation::CancellationToken,
 ) -> Result<HashMap<DagId, DagPresentationFacts>, Outcome<GraphcalError>> {
     tir.local_dags()

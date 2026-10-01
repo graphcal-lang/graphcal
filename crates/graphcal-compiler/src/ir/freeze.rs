@@ -2,9 +2,6 @@
 //! to HIR in the scope that authored it, producing a frozen [`HirDag`].
 
 use std::collections::HashMap;
-use std::sync::Arc;
-
-use miette::NamedSource;
 
 use crate::declaration_category::DeclCategory;
 use crate::desugar::desugared_ast::{Expr, TypeExpr};
@@ -12,6 +9,7 @@ use crate::diagnostic_anchor::DiagnosticAnchor;
 use crate::graphcal_error::GraphcalError;
 use crate::ir::instance::identity::instance_declaration;
 use crate::outcome::Outcome;
+use crate::source_id::SourceId;
 use crate::syntax::module_name::ScopedName;
 use crate::syntax::span::Span;
 
@@ -43,7 +41,7 @@ impl UnfrozenIR {
         self,
         owner: &crate::dag_id::DagId,
         definitions: &mut super::static_definitions::StaticDefinitionEvaluator<'_>,
-        src: &NamedSource<Arc<String>>,
+        src: SourceId,
     ) -> Result<HirDag, GraphcalError> {
         crate::outcome::without_cancellation(|cancellation| {
             self.freeze_with_cancellation(owner, definitions, src, cancellation)
@@ -64,7 +62,7 @@ impl UnfrozenIR {
         self,
         owner: &crate::dag_id::DagId,
         definitions: &mut super::static_definitions::StaticDefinitionEvaluator<'_>,
-        src: &NamedSource<Arc<String>>,
+        src: SourceId,
         cancellation: &crate::cancellation::CancellationToken,
     ) -> Result<HirDag, Outcome<GraphcalError>> {
         cancellation.checkpoint()?;
@@ -188,8 +186,8 @@ impl UnfrozenIR {
                             "registered dynamic unit `{}` did not resolve canonically: {err}",
                             entry.spelling
                         ),
-                        src: src.clone(),
-                        span: entry.span.into(),
+                        src,
+                        anchor: crate::diagnostic_anchor::DiagnosticAnchor::Source(entry.span),
                     })?;
                 Ok(DynamicUnitScaleEntry {
                     unit,
@@ -198,7 +196,7 @@ impl UnfrozenIR {
                     declared_dimension: entry.declared_dimension.clone(),
                     base_unit_dimension: entry.base_unit_dimension.clone(),
                     span: entry.span,
-                    src: entry.src.clone(),
+                    src: entry.src,
                 })
             })
             .collect::<Result<Vec<_>, Outcome<GraphcalError>>>()?;
@@ -465,7 +463,7 @@ impl UnfrozenIR {
         &self,
         owner: &crate::dag_id::DagId,
         definitions: &super::static_definitions::StaticDefinitionEvaluator<'_>,
-        src: &NamedSource<Arc<String>>,
+        src: SourceId,
         cancellation: &crate::cancellation::CancellationToken,
     ) -> Result<crate::hir::nominal::NominalTypeRegistry, Outcome<GraphcalError>> {
         use crate::hir::nominal_lower::{
@@ -482,8 +480,8 @@ impl UnfrozenIR {
         };
         let invariant = |message: String, span: Span| GraphcalError::InternalError {
             message,
-            src: src.clone(),
-            span: span.into(),
+            src,
+            anchor: crate::diagnostic_anchor::DiagnosticAnchor::Source(span),
         };
         let mut declarations = symbols.struct_types().iter().collect::<Vec<_>>();
         declarations.sort_by_key(|(_, symbol)| symbol.span().offset());
@@ -525,7 +523,7 @@ impl UnfrozenIR {
                             &template,
                             identity,
                             &substitution,
-                            src.clone(),
+                            src,
                             symbol.span(),
                         )
                         .map_err(|error| invariant(error.to_string(), symbol.span()))?
@@ -584,7 +582,7 @@ impl ParsedExpectedFailMetadata {
     pub(super) fn resolve(
         self,
         resolver: &crate::resolve::ModuleResolver,
-        src: &NamedSource<Arc<String>>,
+        src: SourceId,
     ) -> Result<ResolvedExpectedFailMetadata, GraphcalError> {
         use crate::assertion_expectation::{ExpectedFail, ExpectedFailKeyPart};
 
@@ -607,7 +605,7 @@ impl ParsedExpectedFailMetadata {
                             .map(|resolved| ExpectedFailKeyPart::resolved(resolved, span))
                             .map_err(|err| GraphcalError::EvalError {
                                 message: err.to_string(),
-                                src: src.clone(),
+                                src,
                                 span: span.into(),
                             }),
                         ExpectedFailKeyPart::FinitePosition { position, span } => {

@@ -6,16 +6,13 @@
 //! [`GraphcalError::CyclicDependency`] under `graphcal check`, and the orders
 //! are retained for evaluation.
 
-use std::sync::Arc;
-
-use miette::NamedSource;
-
 use crate::dag_id::DagId;
 use crate::dependency_graph::Cycle;
 use crate::diagnostic_anchor::DiagnosticAnchor;
 use crate::graphcal_error::GraphcalError;
 use crate::ir::entry::Decl;
 use crate::resolved_name::ResolvedDeclName;
+use crate::source_id::SourceId;
 use crate::tir::schedule::{ConstSchedule, RuntimeSchedule, RuntimeScheduleError};
 use crate::tir::typed::UncheckedTir;
 
@@ -34,10 +31,7 @@ impl ScheduleBuilder {
     ///
     /// Returns [`GraphcalError::CyclicDependency`] for the first cycle found,
     /// at the declaration that closes it.
-    pub(super) fn build(
-        tir: &UncheckedTir,
-        src: &NamedSource<Arc<String>>,
-    ) -> Result<Self, GraphcalError> {
+    pub(super) fn build(tir: &UncheckedTir, src: SourceId) -> Result<Self, GraphcalError> {
         let constants = ConstSchedule::build(tir.dags.local_iter().map(|(_, dag)| dag))
             .map_err(|cycle| cyclic_dependency(tir, &cycle, None, src))?;
         let mut callables = tir
@@ -92,7 +86,7 @@ fn cyclic_dependency(
     tir: &UncheckedTir,
     cycle: &Cycle<ResolvedDeclName>,
     callable: Option<&DagId>,
-    src: &NamedSource<Arc<String>>,
+    src: SourceId,
 ) -> GraphcalError {
     let closing = callable
         .and_then(|owner| {
@@ -116,7 +110,7 @@ fn cyclic_dependency(
     match site {
         Some((name, span)) => GraphcalError::CyclicDependency {
             name: name.to_string(),
-            src: src.clone(),
+            src,
             span: span.into(),
         },
         None => GraphcalError::internal_error(

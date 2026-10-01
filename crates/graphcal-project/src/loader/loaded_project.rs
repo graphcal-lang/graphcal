@@ -7,6 +7,7 @@ use std::sync::Arc;
 
 use graphcal_compiler::dag_id::{DagId, DagPackageId};
 use graphcal_compiler::plugin_identity::{ExternFnKey, PluginIdentity};
+use graphcal_compiler::source_registry::SourceRegistry;
 use graphcal_compiler::syntax::function_name::FnName;
 use graphcal_compiler::syntax::plugin::PluginPath;
 use graphcal_package::PackageInstanceId;
@@ -78,6 +79,9 @@ impl PluginCallPolicy {
 pub struct LoadedProject {
     /// All loaded files in topological load order, ending with the root file.
     pub(super) files: LoadedFiles,
+    /// Every loaded source text under its diagnostic name; the source ids of
+    /// the loaded files and of every diagnostic about them resolve here.
+    pub(super) sources: Arc<SourceRegistry>,
     /// WASM plugin files referenced by `import plugin "….wasm"` declarations
     /// keyed by the declaring package instance and artifact path.
     ///
@@ -252,11 +256,13 @@ pub enum PluginFileError {
 impl LoadedProject {
     pub(super) fn from_parts(
         files: DependencyOrdered<LoadedFile>,
+        sources: SourceRegistry,
         plugins: HashMap<PluginIdentity, PluginFileEntry>,
         plugin_call_policy: PluginCallPolicy,
     ) -> Self {
         Self {
             files: LoadedFiles::new(files),
+            sources: Arc::new(sources),
             plugins,
             plugin_call_policy,
             package_closure: None,
@@ -273,6 +279,12 @@ impl LoadedProject {
     #[must_use]
     pub const fn files(&self) -> &LoadedFiles {
         &self.files
+    }
+
+    /// The registry every source id of this project resolves in.
+    #[must_use]
+    pub const fn sources(&self) -> &Arc<SourceRegistry> {
+        &self.sources
     }
 
     /// Look up one loaded source file by semantic identity.

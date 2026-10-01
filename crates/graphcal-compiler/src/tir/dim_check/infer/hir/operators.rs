@@ -2,9 +2,7 @@
 
 use crate::hir::expr::{Expr, ExprKind, ResolvedUnitExpr};
 use crate::outcome::Outcome;
-use std::sync::Arc;
-
-use miette::NamedSource;
+use crate::source_id::SourceId;
 
 use crate::graphcal_error::GraphcalError;
 use crate::syntax::ast::UnaryOp;
@@ -135,16 +133,13 @@ impl Infer<'_> {
 /// target ever took effect, so the inner one is either a typo or dead code.
 /// Parens are flattened in HIR, so a direct nested `Convert`/`DisplayTimezone`
 /// operand is exactly the parenthesized-chain shape.
-fn reject_nested_conversion(
-    inner: &Expr,
-    src: &NamedSource<Arc<String>>,
-) -> Result<(), GraphcalError> {
+fn reject_nested_conversion(inner: &Expr, src: SourceId) -> Result<(), GraphcalError> {
     if matches!(
         inner.kind(),
         ExprKind::Convert { .. } | ExprKind::DisplayTimezone { .. }
     ) {
         return Err(GraphcalError::NestedConversion {
-            src: src.clone(),
+            src,
             span: inner.span.into(),
         });
     }
@@ -180,7 +175,7 @@ impl Infer<'_> {
             return Err(GraphcalError::ConversionDimensionMismatch {
                 target: self.env.registry.dimensions.format_dimension(&target_dim),
                 expr_dim: self.env.registry.dimensions.format_dimension(&expr_dim),
-                src: self.env.src.clone(),
+                src: self.env.src,
                 span: target.span.into(),
             }
             .into());
@@ -203,7 +198,7 @@ impl Infer<'_> {
                 help: format!(
                     "timezone display `-> \"{timezone}\"` requires a Datetime expression"
                 ),
-                src: self.env.src.clone(),
+                src: self.env.src,
                 span: inner.span.into(),
             }
             .into());

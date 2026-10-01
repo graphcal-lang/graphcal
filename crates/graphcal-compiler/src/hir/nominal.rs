@@ -7,11 +7,11 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use miette::NamedSource;
 use thiserror::Error;
 
 use crate::ir::static_substitution::StaticSubstitution;
 use crate::resolved_name::{ResolvedConstructorName, ResolvedStructTypeName};
+use crate::source_id::SourceId;
 use crate::syntax::ast::GenericConstraint;
 use crate::syntax::span::Span;
 use crate::syntax::type_name::{ConstructorName, FieldName, GenericParamName, StructTypeName};
@@ -162,7 +162,7 @@ pub struct NominalTypeDef {
     identity: ResolvedStructTypeName,
     generic_params: Vec<NominalGenericParam>,
     kind: NominalTypeKind,
-    source: NamedSource<Arc<String>>,
+    source: SourceId,
     span: Span,
     /// For a definition an include projects from its template, the include's
     /// canonical substitution. Signature names are already substituted; the
@@ -176,7 +176,7 @@ impl NominalTypeDef {
     pub(crate) const fn required(
         identity: ResolvedStructTypeName,
         generic_params: Vec<NominalGenericParam>,
-        source: NamedSource<Arc<String>>,
+        source: SourceId,
         span: Span,
     ) -> Self {
         Self {
@@ -193,7 +193,7 @@ impl NominalTypeDef {
         identity: ResolvedStructTypeName,
         generic_params: Vec<NominalGenericParam>,
         members: Vec<NominalConstructor>,
-        source: NamedSource<Arc<String>>,
+        source: SourceId,
         span: Span,
     ) -> Result<Self, NominalTypeError> {
         let mut constructors = HashSet::new();
@@ -281,8 +281,8 @@ impl NominalTypeDef {
     }
 
     #[must_use]
-    pub const fn source(&self) -> &NamedSource<Arc<String>> {
-        &self.source
+    pub const fn source(&self) -> SourceId {
+        self.source
     }
 
     #[must_use]

@@ -242,10 +242,11 @@ pub fn compile_error_to_diagnostics_grouped(
 /// along with the diagnostic to the `textDocument/codeAction` request.
 fn structured_data(error: &CompileError) -> Option<serde_json::Value> {
     use graphcal_compiler::graphcal_error::GraphcalError;
+
     let CompileError::Eval(e) = error else {
         return None;
     };
-    match e {
+    match e.error() {
         // V003: the private item that needs `pub`.
         GraphcalError::PrivateInPublic { ref_name, .. } => {
             Some(serde_json::json!({ "referencedName": ref_name.as_str() }))
@@ -382,7 +383,7 @@ mod tests {
     use graphcal_compiler::syntax::span::Span;
     use graphcal_io::RealFileSystem;
     use graphcal_project::prepare::{compile_and_eval_named, compile_and_eval_project};
-    use miette::NamedSource;
+
     use tower_lsp::lsp_types::Position;
 
     use super::*;
@@ -424,12 +425,16 @@ mod tests {
     #[test]
     fn source_less_internal_anchor_uses_the_whole_document_range() {
         let source = "node x";
-        let named_source = NamedSource::new("test.gcl", Arc::new(source.to_string()));
-        let error = CompileError::Eval(GraphcalError::internal_error(
-            "synthetic failure",
-            &named_source,
-            DiagnosticAnchor::Builtin,
-        ));
+        let mut sources = graphcal_compiler::source_registry::SourceRegistry::new();
+        let named_source = sources.register("test.gcl", Arc::new(source.to_string()));
+        let error = CompileError::semantic(
+            GraphcalError::internal_error(
+                "synthetic failure",
+                named_source,
+                DiagnosticAnchor::Builtin,
+            ),
+            &sources,
+        );
 
         let diagnostics = compile_error_to_diagnostics(&error);
         assert_eq!(diagnostics.len(), 1);
@@ -443,16 +448,20 @@ mod tests {
     #[test]
     fn qualified_unknown_dimension_retains_its_path_without_auto_import_data() {
         let source = "missing::Dimension";
-        let named_source = NamedSource::new("test.gcl", Arc::new(source.to_string()));
+        let mut sources = graphcal_compiler::source_registry::SourceRegistry::new();
+        let named_source = sources.register("test.gcl", Arc::new(source.to_string()));
         let path = NamePath::qualified(
             NonEmpty::singleton(NameAtom::parse("missing").unwrap()),
             NameAtom::parse("Dimension").unwrap(),
         );
-        let error = CompileError::Eval(GraphcalError::UnknownDimension {
-            name: path,
-            src: named_source,
-            span: Span::new(0, source.len()).into(),
-        });
+        let error = CompileError::semantic(
+            GraphcalError::UnknownDimension {
+                name: path,
+                src: named_source,
+                span: Span::new(0, source.len()).into(),
+            },
+            &sources,
+        );
         let diagnostics = compile_error_to_diagnostics(&error);
         let [diagnostic] = diagnostics.as_slice() else {
             panic!("expected one unknown-dimension diagnostic");
@@ -629,9 +638,10 @@ mod tests {
         use graphcal_compiler::graphcal_error::GraphcalError;
         use graphcal_compiler::syntax::names::NameAtom;
         use graphcal_project::load_error::LoadError;
-        use miette::NamedSource;
 
-        let src = || NamedSource::new("file:///test.gcl", Arc::new("x".to_string()));
+        let mut sources = graphcal_compiler::source_registry::SourceRegistry::new();
+        let id = sources.register("file:///test.gcl", Arc::new("x".to_string()));
+        let src = || id;
         let span = || miette::SourceSpan::from((0, 1));
         let cases = [
             (
@@ -642,45 +652,60 @@ mod tests {
                 "graphcal::M023",
             ),
             (
-                CompileError::Eval(GraphcalError::AggregationCardinalityUnknown {
-                    function: AggregationFn::Value(ValueAggregation::Product),
-                    src: src(),
-                    span: span(),
-                }),
+                CompileError::semantic(
+                    GraphcalError::AggregationCardinalityUnknown {
+                        function: AggregationFn::Value(ValueAggregation::Product),
+                        src: src(),
+                        span: span(),
+                    },
+                    &sources,
+                ),
                 "graphcal::D027",
             ),
             (
-                CompileError::Eval(GraphcalError::MaterializedShapeTooLarge {
-                    maximum: 1_000_000,
-                    src: src(),
-                    span: span(),
-                }),
+                CompileError::semantic(
+                    GraphcalError::MaterializedShapeTooLarge {
+                        maximum: 1_000_000,
+                        src: src(),
+                        span: span(),
+                    },
+                    &sources,
+                ),
                 "graphcal::D035",
             ),
             (
-                CompileError::Eval(GraphcalError::InvalidDatetimeLiteral {
-                    expectation: DatetimeLiteralExpectation::OffsetDateTime,
-                    reason: "invalid".to_string(),
-                    src: src(),
-                    span: span(),
-                }),
+                CompileError::semantic(
+                    GraphcalError::InvalidDatetimeLiteral {
+                        expectation: DatetimeLiteralExpectation::OffsetDateTime,
+                        reason: "invalid".to_string(),
+                        src: src(),
+                        span: span(),
+                    },
+                    &sources,
+                ),
                 "graphcal::D028",
             ),
             (
-                CompileError::Eval(GraphcalError::InvalidEpochTimeScaleArgument {
-                    expected: "UTC".to_string(),
-                    src: src(),
-                    span: span(),
-                }),
+                CompileError::semantic(
+                    GraphcalError::InvalidEpochTimeScaleArgument {
+                        expected: "UTC".to_string(),
+                        src: src(),
+                        span: span(),
+                    },
+                    &sources,
+                ),
                 "graphcal::D029",
             ),
             (
-                CompileError::Eval(GraphcalError::UnsupportedEpochTimeScale {
-                    name: NameAtom::parse("BAD").unwrap(),
-                    expected: "UTC".to_string(),
-                    src: src(),
-                    span: span(),
-                }),
+                CompileError::semantic(
+                    GraphcalError::UnsupportedEpochTimeScale {
+                        name: NameAtom::parse("BAD").unwrap(),
+                        expected: "UTC".to_string(),
+                        src: src(),
+                        span: span(),
+                    },
+                    &sources,
+                ),
                 "graphcal::D030",
             ),
         ];

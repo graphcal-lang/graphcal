@@ -10,7 +10,8 @@ fn scalar_prototypes_require_discharge_and_invalid_membership_never_publishes() 
         let source = format!("type T<N: Nat> {{ T(x: Int(min: {body})) }}");
         let tir =
             compile_to_tir(&source, "scalar-prototype.gcl").expect("unused prototype is valid");
-        let src = miette::NamedSource::new("scalar-prototype.gcl", std::sync::Arc::new(source));
+        let mut sources = graphcal_compiler::source_registry::SourceRegistry::new();
+        let src = sources.register("scalar-prototype.gcl", std::sync::Arc::new(source));
         let identity = ResolvedStructTypeName::for_test(
             tir.root_dag_id().clone(),
             StructTypeName::expect_valid("T"),
@@ -22,7 +23,8 @@ fn scalar_prototypes_require_discharge_and_invalid_membership_never_publishes() 
         let bound = field.map(|field| &field.domain_bounds()[0]);
         let context = graphcal_eval::eval_expr::EvalSession::provisional_constants(
             &tir,
-            &src,
+            src,
+            &sources,
             graphcal_compiler::cancellation::CancellationToken::unbounded(),
         );
         let values = graphcal_eval::constant_pools::RuntimeValueMap::new();
@@ -86,7 +88,8 @@ fn normalized_nat_axes_do_not_replay_source_arithmetic() {
 fn readiness_is_checked_before_evaluating_an_earlier_sibling() {
     let source = "type T<N: Nat> { T(x: Int(min: 1 / 0 + to_int(key(Fin(N), 1)))) }".to_string();
     let tir = compile_to_tir(&source, "readiness.gcl").unwrap();
-    let src = miette::NamedSource::new("readiness.gcl", std::sync::Arc::new(source));
+    let mut sources = graphcal_compiler::source_registry::SourceRegistry::new();
+    let src = sources.register("readiness.gcl", std::sync::Arc::new(source));
     let identity = ResolvedStructTypeName::for_test(
         tir.root_dag_id().clone(),
         StructTypeName::expect_valid("T"),
@@ -100,7 +103,8 @@ fn readiness_is_checked_before_evaluating_an_earlier_sibling() {
     let bound = field.map(|field| &*field.domain_bounds()[0].value);
     let context = graphcal_eval::eval_expr::EvalSession::provisional_constants(
         &tir,
-        &src,
+        src,
+        &sources,
         graphcal_compiler::cancellation::CancellationToken::unbounded(),
     );
     let result = context
@@ -134,7 +138,7 @@ dag worker {
 node control: Dimensionless = probe::tick() + 1.0;
 "#;
     let project = crate::loader::LoadedProject::from_source(source, "host-readiness.gcl").unwrap();
-    let calls = Arc::new(AtomicUsize::new(0));
+    let calls = std::sync::Arc::new(AtomicUsize::new(0));
     let observed = Arc::clone(&calls);
     let mut host = graphcal_eval::host_fns::HostFunctionRegistry::new();
     host.register_for_test(
@@ -150,10 +154,15 @@ node control: Dimensionless = probe::tick() + 1.0;
         .check()
         .unwrap();
     let tir = checked.tir();
-    let src = miette::NamedSource::new("host-readiness.gcl", Arc::new(source.to_string()));
+    let mut sources = graphcal_compiler::source_registry::SourceRegistry::new();
+    let src = sources.register(
+        "host-readiness.gcl",
+        std::sync::Arc::new(source.to_string()),
+    );
     let cancellation = graphcal_compiler::cancellation::CancellationToken::unbounded();
     let prepared =
-        graphcal_eval::exec_plan::compile_with_cancellation(tir, &src, &cancellation).unwrap();
+        graphcal_eval::exec_plan::compile_with_cancellation(tir, src, &sources, &cancellation)
+            .unwrap();
     let plan = prepared.plan();
     let worker = tir
         .dag_registry()
@@ -165,7 +174,8 @@ node control: Dimensionless = probe::tick() + 1.0;
         })
         .unwrap();
     let values = graphcal_eval::constant_pools::RuntimeValueMap::new();
-    let context = graphcal_eval::eval_expr::EvalSession::checked(plan, &src, &host, cancellation);
+    let context =
+        graphcal_eval::eval_expr::EvalSession::checked(plan, src, &sources, &host, cancellation);
     let runtime_expression = |dag: &graphcal_compiler::tir::typed::CheckedDag, name: &str| {
         tir.declaration_body(
             dag.body_for_test()

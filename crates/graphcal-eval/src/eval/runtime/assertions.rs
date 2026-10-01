@@ -2,15 +2,13 @@
 //! DAG reports, and the `#[assumes]` table keyed by the root's source names.
 
 use std::collections::HashMap;
-use std::sync::Arc;
-
-use miette::NamedSource;
 
 use graphcal_compiler::cancellation::Cancelled;
 use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
 use graphcal_compiler::graphcal_error::GraphcalError;
 use graphcal_compiler::outcome::Outcome;
 use graphcal_compiler::resolved_name::ResolvedDeclName;
+use graphcal_compiler::source_id::SourceId;
 use graphcal_compiler::syntax::module_name::ScopedName;
 use graphcal_compiler::syntax::span::Span;
 use graphcal_compiler::tir::typed::{
@@ -29,7 +27,7 @@ use super::root_names::{qualified_below, root_source_names};
 fn assertion_body<'tir>(
     tir: &'tir graphcal_compiler::tir::typed::CheckedTir,
     owner: &ResolvedDeclName,
-    src: &NamedSource<Arc<String>>,
+    src: SourceId,
 ) -> Result<
     (
         DeclarationBody<'tir>,
@@ -57,7 +55,7 @@ fn assertion_body<'tir>(
 /// value map where the failed name is simply absent (#814).
 pub(super) fn evaluate_assertions(
     plan: &crate::execution_plan::ExecPlan<'_>,
-    src: &NamedSource<Arc<String>>,
+    src: SourceId,
     ctx: &EvalSession<'_>,
     values: &RuntimeValueMap,
     errors: &HashMap<ResolvedDeclName, NodeUnavailable>,
@@ -124,7 +122,7 @@ pub(super) fn evaluate_assertions(
 /// by the root source names of the assertions and their assumers.
 pub(super) fn root_assumes_map(
     plan: &crate::execution_plan::ExecPlan<'_>,
-    src: &NamedSource<Arc<String>>,
+    src: SourceId,
 ) -> Result<HashMap<ScopedName, Vec<ScopedName>>, GraphcalError> {
     let source_names_by_key = root_source_names(plan)
         .into_iter()

@@ -16,6 +16,8 @@ use graphcal_compiler::resolve::ModuleResolver;
 use graphcal_compiler::semantic::checked_type::CheckedType;
 use graphcal_compiler::semantic::index_def::ConcreteIndexKind;
 use graphcal_compiler::semantic::time_scale::TimeScale;
+use graphcal_compiler::source_id::SourceId;
+use graphcal_compiler::source_registry::SourceRegistry;
 use graphcal_compiler::static_interface::StaticInputKind;
 use graphcal_compiler::syntax::decl_name::DeclName;
 use graphcal_compiler::syntax::index_name::{IndexEntryKey, IndexVariantName};
@@ -133,11 +135,14 @@ impl ParameterBindingBuilder<'_> {
     /// Bind an already validated opaque parameter value.
     pub fn bind_value(&mut self, value: ParameterValue) -> Result<(), CompileError> {
         if value.plan_id != self.project.plan_id {
-            return Err(CompileError::Eval(GraphcalError::internal_error(
-                "parameter value belongs to another prepared project",
-                &self.project.source,
-                DiagnosticAnchor::Builtin,
-            )));
+            return Err(CompileError::semantic(
+                GraphcalError::internal_error(
+                    "parameter value belongs to another prepared project",
+                    self.project.source,
+                    DiagnosticAnchor::Builtin,
+                ),
+                &self.project.sources,
+            ));
         }
         self.insert(value.position, value.binding)
     }
@@ -235,7 +240,9 @@ struct ProjectOutputAssembly {
 pub struct PreparedProject {
     plan_id: u64,
     plan: graphcal_eval::exec_plan::PreparedPlan,
-    source: NamedSource<Arc<String>>,
+    source: SourceId,
+    /// The registry every source id of the prepared program resolves in.
+    sources: Arc<SourceRegistry>,
     host_fns: graphcal_eval::host_fns::HostFunctionRegistry,
     module_resolver: ModuleResolver,
     parameter_ports: Vec<ParameterPort>,
@@ -279,7 +286,8 @@ impl PreparedProject {
 
     pub(super) fn from_compiled(
         compiled: CompiledFile,
-        source: NamedSource<Arc<String>>,
+        source: SourceId,
+        sources: Arc<SourceRegistry>,
         host_fns: graphcal_eval::host_fns::HostFunctionRegistry,
         module_resolver: ModuleResolver,
         cancellation: &graphcal_compiler::cancellation::CancellationToken,
@@ -293,10 +301,10 @@ impl PreparedProject {
         } = compiled;
         let prepared_plan = graphcal_eval::exec_plan::compile_checked_with_cancellation(
             program,
-            &source,
+            source,
             cancellation,
         )
-        .map_err(Outcome::map_into)?;
+        .map_err(|outcome| outcome.map_failed(|error| CompileError::semantic(error, &sources)))?;
         let plan_id = NEXT_PLAN_ID.fetch_add(1, Ordering::Relaxed);
 
         let plan = prepared_plan.plan();
@@ -308,21 +316,27 @@ impl PreparedProject {
             .iter()
             .map(|constant| (constant.name().clone(), constant.clone()))
             .collect();
-        let mut schema_builder = ModelSchemaGraphBuilder::new(tir, &source);
-        let parameter_ports =
-            build_parameter_ports(plan_id, &entry_interface, plan, &mut schema_builder)?;
+        let mut schema_builder = ModelSchemaGraphBuilder::new(tir, source);
+        let parameter_ports = build_parameter_ports(
+            plan_id,
+            &entry_interface,
+            plan,
+            &sources,
+            &mut schema_builder,
+        )?;
         let parameter_lookup = parameter_ports
             .iter()
             .enumerate()
             .map(|(index, port)| (port.name.clone(), index))
             .collect();
-        let output_ports = build_output_ports(&entry_interface, &mut schema_builder)?;
+        let output_ports = build_output_ports(&entry_interface, &sources, &mut schema_builder)?;
         let schema_graph = Arc::new(schema_builder.finish());
 
         Ok(Self {
             plan_id,
             plan: prepared_plan,
             source,
+            sources,
             host_fns,
             module_resolver,
             parameter_ports,
@@ -398,11 +412,12 @@ impl PreparedProject {
             graphcal_eval::eval::runtime::evaluate_plan_with_values_and_bindings_and_cancellation(
                 self.plan(),
                 &row.bindings,
-                &self.source,
+                self.source,
+                &self.sources,
                 &self.host_fns,
                 cancellation,
             )
-            .map_err(Outcome::map_into)?;
+            .map_err(|outcome| outcome.map_failed(|error| self.render(error)))?;
         self.assemble_normal_result(eval_result, cancellation)
     }
 
@@ -435,22 +450,31 @@ impl PreparedProject {
         graphcal_eval::eval::runtime::evaluate_plan_with_values_and_bindings_and_cancellation(
             self.plan(),
             &row.bindings,
-            &self.source,
+            self.source,
+            &self.sources,
             &self.host_fns,
             cancellation,
         )
-        .map_err(Outcome::map_into)
+        .map_err(|outcome| outcome.map_failed(|error| self.render(error)))
+    }
+
+    /// Render a semantic error against this project's sources.
+    pub(super) fn render(&self, error: GraphcalError) -> CompileError {
+        CompileError::semantic(error, &self.sources)
     }
 
     fn validate_row_identity(&self, row: &ParameterBindingRow) -> Result<(), CompileError> {
         if row.plan_id == self.plan_id {
             Ok(())
         } else {
-            Err(CompileError::Eval(GraphcalError::internal_error(
-                "parameter binding row belongs to another prepared project",
-                &self.source,
-                DiagnosticAnchor::Builtin,
-            )))
+            Err(CompileError::semantic(
+                GraphcalError::internal_error(
+                    "parameter binding row belongs to another prepared project",
+                    self.source,
+                    DiagnosticAnchor::Builtin,
+                ),
+                &self.sources,
+            ))
         }
     }
 
@@ -486,8 +510,7 @@ impl PreparedProject {
                     presented,
                     imported.declared_type(),
                 )
-                .map_err(|invariant| invariant.into_internal_error(&self.source))
-                .map_err(CompileError::from)?;
+                .map_err(|invariant| self.render(invariant.into_internal_error(self.source)))?;
                 eval_result
                     .presentation_diagnostics
                     .extend(diagnostics.into_iter().map(|detail| {
@@ -507,6 +530,7 @@ impl PreparedProject {
 
 fn build_output_ports(
     entry_interface: &CheckedEntryInterface,
+    sources: &SourceRegistry,
     schemas: &mut ModelSchemaGraphBuilder<'_>,
 ) -> Result<Vec<ModelOutputPort>, CompileError> {
     entry_interface
@@ -516,7 +540,7 @@ fn build_output_ports(
             let declared_type = output.declared_type().clone();
             let value_schema = schemas
                 .value_schema(&declared_type)
-                .map_err(CompileError::Eval)?;
+                .map_err(|error| CompileError::semantic(error, sources))?;
             Ok(ModelOutputPort {
                 name: output.name().clone(),
                 declared_type,
@@ -569,34 +593,40 @@ pub(super) fn prepare_checked_project(
     let CheckedProjectRuntimeParts {
         compiled,
         source,
+        sources,
         module_resolver,
     } = checked.into_runtime_parts();
     if let Some(index) = compiled.entry_interface.required_index() {
-        let Some(span) = index.anchor().resolve(source.inner().len()) else {
-            return Err(CompileError::Eval(GraphcalError::internal_error(
-                format!(
-                    "required index `{}` has no diagnostic source anchor",
-                    index.name()
+        let Some(span) = index.anchor().resolve(source.whole_span().len()) else {
+            return Err(CompileError::semantic(
+                GraphcalError::internal_error(
+                    format!(
+                        "required index `{}` has no diagnostic source anchor",
+                        index.name()
+                    ),
+                    source,
+                    DiagnosticAnchor::Builtin,
                 ),
-                &source,
-                DiagnosticAnchor::Builtin,
-            ))
+                &sources,
+            )
             .into());
         };
-        return Err(
-            CompileError::Eval(GraphcalError::RequiredStaticInputNotBound {
+        return Err(CompileError::semantic(
+            GraphcalError::RequiredStaticInputNotBound {
                 kind: StaticInputKind::Index,
                 name: index.name().to_string(),
                 src: source,
                 span: span.into(),
-            })
-            .into(),
-        );
+            },
+            &sources,
+        )
+        .into());
     }
 
     PreparedProject::from_compiled(
         compiled,
         source,
+        sources,
         host_fns.clone(),
         module_resolver,
         cancellation,

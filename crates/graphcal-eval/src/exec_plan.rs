@@ -1,15 +1,13 @@
 //! Runtime execution-plan preparation from a sealed checked program.
 
 use std::collections::HashMap;
-use std::sync::Arc;
-
-use miette::NamedSource;
 
 use graphcal_compiler::dag_id::DagId;
 use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
 use graphcal_compiler::graphcal_error::GraphcalError;
 use graphcal_compiler::outcome::Outcome;
 use graphcal_compiler::resolved_name::ResolvedDeclName;
+use graphcal_compiler::source_id::SourceId;
 
 use crate::checked_program::{CheckedProgram, SealedDag};
 use crate::execution_plan::{
@@ -52,10 +50,11 @@ impl std::fmt::Debug for PreparedPlan {
 #[cfg(any(test, feature = "test-internals"))]
 pub fn compile(
     tir: &graphcal_compiler::tir::typed::CheckedTir,
-    src: &NamedSource<Arc<String>>,
+    src: SourceId,
+    sources: &graphcal_compiler::source_registry::SourceRegistry,
 ) -> Result<PreparedPlan, GraphcalError> {
     graphcal_compiler::outcome::without_cancellation(|cancellation| {
-        compile_with_cancellation(tir, src, cancellation)
+        compile_with_cancellation(tir, src, sources, cancellation)
     })
 }
 
@@ -68,12 +67,14 @@ pub fn compile(
 #[cfg(any(test, feature = "test-internals"))]
 pub fn compile_with_cancellation(
     tir: &graphcal_compiler::tir::typed::CheckedTir,
-    src: &NamedSource<Arc<String>>,
+    src: SourceId,
+    sources: &graphcal_compiler::source_registry::SourceRegistry,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<PreparedPlan, Outcome<GraphcalError>> {
     let program = crate::execution_check::seal_checked_program_with_cancellation(
         tir.clone(),
         src,
+        sources,
         cancellation,
     )?;
     compile_checked_with_cancellation(program, src, cancellation)
@@ -82,19 +83,19 @@ pub fn compile_with_cancellation(
 /// Prepare the callable plans of a sealed program.
 pub fn compile_checked_with_cancellation(
     program: CheckedProgram,
-    src: &NamedSource<Arc<String>>,
+    src: SourceId,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<PreparedPlan, Outcome<GraphcalError>> {
     PreparedPlan::try_new(program, |program| prepare(program, src, cancellation))
 }
 
-fn invalid(message: impl Into<String>, src: &NamedSource<Arc<String>>) -> GraphcalError {
+fn invalid(message: impl Into<String>, src: SourceId) -> GraphcalError {
     GraphcalError::internal_error(message, src, DiagnosticAnchor::WholeFile)
 }
 
 fn prepare<'p>(
     program: &'p CheckedProgram,
-    src: &NamedSource<Arc<String>>,
+    src: SourceId,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<ExecPlan<'p>, Outcome<GraphcalError>> {
     cancellation.checkpoint()?;
@@ -115,7 +116,7 @@ fn prepare<'p>(
 fn prepare_declarations<'p>(
     tir: &'p graphcal_compiler::tir::typed::CheckedTir,
     scopes: impl IntoIterator<Item = SealedDag<'p>>,
-    src: &NamedSource<Arc<String>>,
+    src: SourceId,
 ) -> Result<HashMap<&'p ResolvedDeclName, PlannedDeclaration<'p>>, GraphcalError> {
     let mut declarations = HashMap::<&ResolvedDeclName, PlannedDeclaration<'p>>::new();
     for scope in scopes {
@@ -285,7 +286,7 @@ fn prepare_callable_plan<'p>(
 fn located<'a, 'p>(
     declarations: &'a HashMap<&'p ResolvedDeclName, PlannedDeclaration<'p>>,
     key: &ResolvedDeclName,
-    src: &NamedSource<Arc<String>>,
+    src: SourceId,
 ) -> Result<&'a PlannedDeclaration<'p>, GraphcalError> {
     declarations.get(key).ok_or_else(|| {
         invalid(
@@ -300,7 +301,7 @@ fn located<'a, 'p>(
 fn prepare_imports(
     dags: &[SealedDag<'_>],
     declarations: &HashMap<&ResolvedDeclName, PlannedDeclaration<'_>>,
-    source: &NamedSource<Arc<String>>,
+    source: SourceId,
 ) -> Result<PreparedImports, GraphcalError> {
     use graphcal_compiler::ir::imported_binding::ImportedValueKind;
     let mut result = PreparedImports::default();
@@ -339,15 +340,16 @@ mod tests {
     use std::collections::HashSet;
 
     fn compile_source(source: &str) -> Result<PreparedPlan, GraphcalError> {
-        let (tir, src) = checked_tir_from_source(source)?;
-        compile(&tir, &src)
+        let (tir, src, sources) = checked_tir_from_source(source)?;
+        compile(&tir, src, &sources)
     }
 
     fn tir_from_source(
         source: &str,
     ) -> (
         graphcal_compiler::tir::typed::CheckedTir,
-        NamedSource<Arc<String>>,
+        SourceId,
+        graphcal_compiler::source_registry::SourceRegistry,
     ) {
         checked_tir_from_source(source).unwrap()
     }
@@ -366,10 +368,10 @@ mod tests {
 
     #[test]
     fn prepared_declarations_include_parameters_without_defaults() {
-        let (tir, src) = tir_from_source(
+        let (tir, src, sources) = tir_from_source(
             "param input: Dimensionless; node doubled: Dimensionless = 2.0 * @input;",
         );
-        let prepared = compile(&tir, &src).unwrap();
+        let prepared = compile(&tir, src, &sources).unwrap();
         let input = resolved_key("input");
         assert!(tir.root().body_for_test().runtime_expr(&input).is_none());
         let declaration = prepared.plan().declaration(&input).unwrap();
@@ -396,13 +398,13 @@ mod tests {
 
     #[test]
     fn steps_depend_on_earlier_scheduled_reads_only() {
-        let (tir, src) = tir_from_source(
+        let (tir, src, sources) = tir_from_source(
             "const node BASE: Dimensionless = 1.0;\n\
              param input: Dimensionless = @BASE;\n\
              node doubled: Dimensionless = 2.0 * @input + @BASE;\n\
              node independent: Dimensionless = 3.0;",
         );
-        let prepared = compile(&tir, &src).unwrap();
+        let prepared = compile(&tir, src, &sources).unwrap();
         let root = prepared.plan().root();
         let deps_of = |name: &str| {
             let step = root
@@ -436,11 +438,11 @@ mod tests {
 
     #[test]
     fn step_indexing_rejects_duplicate_and_unordered_schedules() {
-        let (tir, src) = tir_from_source(
+        let (tir, src, sources) = tir_from_source(
             "node a: Dimensionless = 1.0;\n\
              node b: Dimensionless = @a + 1.0;",
         );
-        let prepared = compile(&tir, &src).unwrap();
+        let prepared = compile(&tir, src, &sources).unwrap();
         let plan = prepared.plan();
         let root = plan.root();
         let a = plan.declaration(&resolved_key("a")).unwrap().clone();
@@ -498,11 +500,11 @@ mod tests {
 
     #[test]
     fn sealed_fact_stores_are_reused_by_runtime_planning() {
-        let (tir, src) = tir_from_source(
+        let (tir, src, sources) = tir_from_source(
             "const node lower: Dimensionless = 1.0;\n\
              param x: Dimensionless(min: @lower, max: 3.0) = 2.0;",
         );
-        let prepared = compile(&tir, &src).unwrap();
+        let prepared = compile(&tir, src, &sources).unwrap();
         let plan = prepared.plan();
         let root = plan.program().dag(tir.root_dag_id()).unwrap();
 
@@ -520,10 +522,10 @@ mod tests {
 
     #[test]
     fn constructor_application_constraints_match_resolved_field_contracts() {
-        let (tir, src) = tir_from_source(
+        let (tir, src, sources) = tir_from_source(
             "type Bounded { Bounded(value: Dimensionless(min: 1.0)), } node item: Bounded = Bounded(value: 2.0);",
         );
-        let prepared = compile(&tir, &src).unwrap();
+        let prepared = compile(&tir, src, &sources).unwrap();
         let field_constraints = prepared.plan().program().facts().struct_field_constraints();
         assert_eq!(field_constraints.len(), 1);
         let mut applications = Vec::new();
@@ -592,11 +594,11 @@ mod tests {
 
     #[test]
     fn compile_uses_collected_semantic_const_deps() {
-        let (tir, src) = tir_from_source(
+        let (tir, src, sources) = tir_from_source(
             "const node a: Dimensionless = 1.0;\n\
              const node b: Dimensionless = @a + 1.0;",
         );
-        let prepared = compile(&tir, &src).unwrap();
+        let prepared = compile(&tir, src, &sources).unwrap();
         assert!(
             (quantity(root_constant(
                 prepared.plan(),
@@ -609,11 +611,11 @@ mod tests {
 
     #[test]
     fn compile_uses_collected_semantic_runtime_deps() {
-        let (tir, src) = tir_from_source(
+        let (tir, src, sources) = tir_from_source(
             "node a: Dimensionless = 1.0;\n\
              node b: Dimensionless = @a + 1.0;",
         );
-        let prepared = compile(&tir, &src).unwrap();
+        let prepared = compile(&tir, src, &sources).unwrap();
         let order = root_order(prepared.plan());
         let a_pos = order
             .iter()

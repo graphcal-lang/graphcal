@@ -10,13 +10,13 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use miette::NamedSource;
 use thiserror::Error;
 
 use graphcal_compiler::dag_id::DagId;
 use graphcal_compiler::ir::imported_binding::{ImportedBinding, ImportedValueKind};
 use graphcal_compiler::resolved_name::ResolvedDeclName;
 use graphcal_compiler::semantic::checked_type::CheckedType;
+use graphcal_compiler::source_id::SourceId;
 use graphcal_compiler::syntax::module_name::ScopedName;
 use graphcal_compiler::tir::typed::checked::CheckedTir;
 use graphcal_compiler::tir::typed::checked_dag::CheckedDag;
@@ -86,7 +86,7 @@ impl ImportedConstant {
 /// Execution facts of one DAG besides its constants.
 #[derive(Debug)]
 struct DagExecutionFacts {
-    source: NamedSource<Arc<String>>,
+    source: SourceId,
     /// Compile-time selections only; dynamic display requests have no invocation state.
     const_presentations: PendingPresentedMap,
     domain_constraints: Arc<DomainConstraints>,
@@ -105,8 +105,8 @@ pub struct ExecutionFacts {
 impl ExecutionFacts {
     /// The diagnostic source of one DAG.
     #[must_use]
-    pub fn source(&self, dag_id: &DagId) -> Option<&NamedSource<Arc<String>>> {
-        self.by_dag.get(dag_id).map(|facts| &facts.source)
+    pub fn source(&self, dag_id: &DagId) -> Option<SourceId> {
+        self.by_dag.get(dag_id).map(|facts| facts.source)
     }
 
     /// The compile-time presented value of every constant with a
@@ -129,7 +129,7 @@ impl ExecutionFacts {
 /// Facts one check derived from the constants of the DAGs it scheduled.
 pub struct ScheduledChecks {
     /// The checked file's source, the diagnostic source of every scheduled DAG.
-    pub source: NamedSource<Arc<String>>,
+    pub source: SourceId,
     /// Compile-time presentations of the evaluated constants.
     pub const_presentations: PendingPresentedMap,
     /// Domain constraints of every scheduled DAG.
@@ -172,8 +172,8 @@ impl<'a> SealedDag<'a> {
 
     /// The source the DAG's diagnostics point into.
     #[must_use]
-    pub const fn source(self) -> &'a NamedSource<Arc<String>> {
-        &self.facts.source
+    pub const fn source(self) -> SourceId {
+        self.facts.source
     }
 
     /// The DAG's evaluated constants.
@@ -275,7 +275,7 @@ impl EvaluatedTir {
                 Arc::clone(facts)
             } else {
                 Arc::new(DagExecutionFacts {
-                    source: source.clone(),
+                    source,
                     const_presentations: const_values
                         .keys()
                         .filter_map(|key| {

@@ -9,10 +9,6 @@
 //! symbolic dimension. Indexing is a declaration-level shape, never a value
 //! type, so an indexed type cannot nest or appear as a `Type` argument.
 
-use std::sync::Arc;
-
-use miette::NamedSource;
-
 use crate::desugar::desugared_ast::MulDivOp;
 use crate::dimension::{Dimension, Rational};
 use crate::display::formatting_registry::FormattingRegistry;
@@ -25,6 +21,7 @@ use crate::semantic::checked_type::{
 };
 use crate::semantic::index_def::FiniteIndex;
 use crate::semantic::time_scale::TimeScale;
+use crate::source_id::SourceId;
 use crate::syntax::non_empty::NonEmpty;
 use crate::syntax::span::Span;
 
@@ -252,10 +249,7 @@ impl ResolvedValueType {
     ///
     /// Returns a [`GraphcalError`] if the type still mentions a generic
     /// parameter.
-    pub fn to_checked_type(
-        &self,
-        src: &NamedSource<Arc<String>>,
-    ) -> Result<CheckedType, GraphcalError> {
+    pub fn to_checked_type(&self, src: SourceId) -> Result<CheckedType, GraphcalError> {
         match self {
             Self::Bool => Ok(CheckedType::Bool),
             Self::Int => Ok(CheckedType::Int),
@@ -357,10 +351,7 @@ impl ResolvedDeclType {
     ///
     /// Returns a [`GraphcalError`] if the type still mentions a generic
     /// parameter or names an invalid finite index.
-    pub fn to_checked_type(
-        &self,
-        src: &NamedSource<Arc<String>>,
-    ) -> Result<CheckedType, GraphcalError> {
+    pub fn to_checked_type(&self, src: SourceId) -> Result<CheckedType, GraphcalError> {
         let element = self.element().to_checked_type(src)?;
         self.indexes()
             .iter()
@@ -389,17 +380,17 @@ impl ResolvedDeclType {
     }
 }
 
-fn eval_error(message: String, src: &NamedSource<Arc<String>>, span: Span) -> GraphcalError {
+fn eval_error(message: String, src: SourceId, span: Span) -> GraphcalError {
     GraphcalError::EvalError {
         message,
-        src: src.clone(),
+        src,
         span: span.into(),
     }
 }
 
 pub fn resolved_generic_arg_to_declared(
     resolved: &ResolvedGenericArg,
-    src: &NamedSource<Arc<String>>,
+    src: SourceId,
 ) -> Result<CheckedGenericArg, GraphcalError> {
     match resolved {
         ResolvedGenericArg::Dim(ResolvedDim::Concrete(dim)) => {
@@ -441,7 +432,7 @@ pub fn resolved_generic_arg_to_declared(
 /// The validated structural axis of a constant `Fin(N)` cardinality.
 fn finite_index(
     form: &NatPolyForm,
-    src: &NamedSource<Arc<String>>,
+    src: SourceId,
     span: Span,
 ) -> Result<FiniteIndex, GraphcalError> {
     let size = form.constant_value().ok_or_else(|| {
@@ -458,10 +449,7 @@ fn finite_index(
         .map_err(|err| eval_error(err.describe_finite_index(), src, span))
 }
 
-fn index_type_ref(
-    index: &ResolvedIndex,
-    src: &NamedSource<Arc<String>>,
-) -> Result<IndexTypeRef, GraphcalError> {
+fn index_type_ref(index: &ResolvedIndex, src: SourceId) -> Result<IndexTypeRef, GraphcalError> {
     match index {
         ResolvedIndex::Concrete(name, _) => Ok(IndexTypeRef::from_resolved(name.clone())),
         ResolvedIndex::Finite(form, span) => {

@@ -7,9 +7,6 @@
 //! HIR — a frozen DAG carries no syntax-AST expression.
 
 use std::collections::HashMap;
-use std::sync::Arc;
-
-use miette::NamedSource;
 
 use crate::desugar::desugared_ast::{DeclKind, File};
 use crate::diagnostic_anchor::DiagnosticAnchor;
@@ -18,6 +15,7 @@ use crate::ir::module_interface::ModuleInterface;
 use crate::ir::resolve::{CollectedFile, ImportedValueNames, resolve_with_imported_values};
 use crate::outcome::Outcome;
 use crate::resolved_name::ResolvedDeclName;
+use crate::source_id::SourceId;
 use crate::syntax::module_name::ScopedName;
 
 #[cfg(test)]
@@ -37,11 +35,12 @@ use super::static_definitions::StaticDefinitionEvaluator;
 ///
 /// Returns a [`GraphcalError`] if declaration collection or registry construction fails
 /// (e.g., unknown dimension in a type annotation, duplicate names, etc.).
-pub fn lower(ast: &File, src: &NamedSource<Arc<String>>) -> Result<HirDag, GraphcalError> {
-    let dag_id = crate::dag_id::DagId::from_virtual_relative_path(std::path::Path::new(src.name()))
+/// `name` is the virtual relative path that names the module.
+pub fn lower(ast: &File, name: &str, src: SourceId) -> Result<HirDag, GraphcalError> {
+    let dag_id = crate::dag_id::DagId::from_virtual_relative_path(std::path::Path::new(name))
         .map_err(|error| {
             GraphcalError::internal_error(
-                format!("invalid source name `{}`: {error}", src.name()),
+                format!("invalid source name `{name}`: {error}"),
                 src,
                 DiagnosticAnchor::WholeFile,
             )
@@ -92,9 +91,9 @@ pub fn definition_evaluator<'a>(
             super::static_definitions::DefinitionSource<'a>,
         ),
     >,
-    src: &NamedSource<Arc<String>>,
+    src: SourceId,
 ) -> Result<StaticDefinitionEvaluator<'a>, GraphcalError> {
-    StaticDefinitionEvaluator::new(resolver, sources).map_err(|error| {
+    StaticDefinitionEvaluator::new(resolver, sources, src).map_err(|error| {
         GraphcalError::internal_error(
             format!("prelude failed to load: {error}"),
             src,
@@ -117,12 +116,13 @@ pub(crate) struct LoweredTestFile {
 #[cfg(test)]
 pub(crate) fn lower_file_with_inline_dags_for_test(
     ast: &File,
-    src: &NamedSource<Arc<String>>,
+    name: &str,
+    src: SourceId,
 ) -> Result<LoweredTestFile, GraphcalError> {
-    let dag_id = crate::dag_id::DagId::from_virtual_relative_path(std::path::Path::new(src.name()))
+    let dag_id = crate::dag_id::DagId::from_virtual_relative_path(std::path::Path::new(name))
         .map_err(|error| {
             GraphcalError::internal_error(
-                format!("invalid source name `{}`: {error}", src.name()),
+                format!("invalid source name `{name}`: {error}"),
                 src,
                 DiagnosticAnchor::WholeFile,
             )
@@ -225,7 +225,7 @@ pub(crate) fn lower_file_with_inline_dags_for_test(
 fn single_module_resolver(
     ast: &File,
     dag_id: &crate::dag_id::DagId,
-    src: &NamedSource<Arc<String>>,
+    src: SourceId,
 ) -> Result<crate::resolve::ModuleResolver, GraphcalError> {
     let mut tables = crate::resolve::builder::SymbolTables::default();
     tables
@@ -341,7 +341,7 @@ fn collect_source_declarations(
 )]
 pub fn lower_module_with_imported_bindings(
     ast: &File,
-    src: &NamedSource<Arc<String>>,
+    src: SourceId,
     imported_names: &ImportedValueNames,
     imported_bindings: HashMap<ScopedName, ResolvedDeclName>,
     dag_id: &crate::dag_id::DagId,
@@ -374,7 +374,7 @@ pub fn lower_module_with_imported_bindings(
 )]
 pub fn lower_module_with_imported_bindings_and_cancellation(
     module: ModuleBody<'_>,
-    src: &NamedSource<Arc<String>>,
+    src: SourceId,
     imported_names: &ImportedValueNames,
     imported_bindings: HashMap<ScopedName, ResolvedDeclName>,
     dag_id: &crate::dag_id::DagId,
@@ -424,7 +424,7 @@ pub fn lower_dag_module_with_imported_bindings(
     dag_body: &File,
     imported_names: &ImportedValueNames,
     imported_bindings: HashMap<ScopedName, ResolvedDeclName>,
-    src: &NamedSource<Arc<String>>,
+    src: SourceId,
     dag_id: &crate::dag_id::DagId,
     definitions: &mut StaticDefinitionEvaluator<'_>,
 ) -> Result<UnfrozenIR, GraphcalError> {
@@ -457,7 +457,7 @@ pub fn lower_dag_module_with_imported_bindings_and_cancellation(
     module: ModuleBody<'_>,
     imported_names: &ImportedValueNames,
     imported_bindings: HashMap<ScopedName, ResolvedDeclName>,
-    src: &NamedSource<Arc<String>>,
+    src: SourceId,
     dag_id: &crate::dag_id::DagId,
     definitions: &mut StaticDefinitionEvaluator<'_>,
     cancellation: &crate::cancellation::CancellationToken,
@@ -509,7 +509,7 @@ pub struct DagBodySelfImports {
 /// `UnfrozenIR` from the collected declaration entries.
 fn build_ir_from_resolved(
     ast: &File,
-    src: &NamedSource<Arc<String>>,
+    src: SourceId,
     resolved: CollectedFile,
     imported_bindings: HashMap<ScopedName, ResolvedDeclName>,
     dag_id: &crate::dag_id::DagId,
@@ -595,17 +595,17 @@ mod tests {
     use crate::syntax::decl_name::DeclName;
     use crate::syntax::names::{NameAtom, NamePath};
     use crate::syntax::parser::Parser;
-    use crate::syntax::span::Span;
 
-    fn make_src(source: &str) -> NamedSource<Arc<String>> {
-        NamedSource::new("test.gcl", Arc::new(source.to_string()))
+    fn make_src(source: &str) -> SourceId {
+        crate::source_registry::SourceRegistry::new()
+            .register("test.gcl", std::sync::Arc::new(source.to_string()))
     }
 
     fn parse_and_lower(source: &str) -> Result<HirDag, GraphcalError> {
         let raw_file = Parser::new(source).parse_file().unwrap();
         let desugared = crate::desugar::desugared_ast::File::from(raw_file);
         let file = desugared;
-        lower(&file, &make_src(source))
+        lower(&file, "test.gcl", make_src(source))
     }
 
     #[test]
@@ -672,11 +672,12 @@ mod tests {
 
     #[test]
     fn nominal_signatures_are_canonical_hir() {
-        let hir = parse_and_lower(
-            "type Marker { Marker }\n\
-             type Box<T: Type = Marker> { Box(value: T) }\n",
-        )
-        .unwrap();
+        let source = "type Marker { Marker }\n\
+             type Box<T: Type = Marker> { Box(value: T) }\n";
+        let hir_source = make_src(source);
+        let file =
+            crate::desugar::desugared_ast::File::from(Parser::new(source).parse_file().unwrap());
+        let hir = lower(&file, "test.gcl", hir_source).unwrap();
         let identity = crate::resolved_name::ResolvedStructTypeName::for_test(
             hir.dag_id().clone(),
             crate::syntax::type_name::StructTypeName::expect_valid("Box"),
@@ -713,7 +714,7 @@ mod tests {
                 ..
             }) if &field_param.value == parameter.id()
         ));
-        assert_eq!(definition.source().name(), "test.gcl");
+        assert_eq!(definition.source(), hir_source);
     }
 
     #[test]
@@ -811,18 +812,18 @@ mod tests {
                 .unwrap();
         let resolver = crate::resolve::ModuleResolver::default();
         let source = make_src("missing.Dimension");
-        let mut definitions = definition_evaluator(&resolver, [], &source).unwrap();
+        let mut definitions = definition_evaluator(&resolver, [], source).unwrap();
         let nominal_types = crate::hir::nominal::NominalTypeRegistry::default();
 
         let error = resolve_extern_struct_return(
             &path,
-            Span::new(0, source.inner().len()),
+            source.whole_span(),
             &mut super::super::extern_fns::ExternSignatureScope {
                 owner: &owner,
                 nominal_types: &nominal_types,
                 definitions: &mut definitions,
             },
-            &source,
+            source,
         )
         .unwrap_err();
 
@@ -878,17 +879,17 @@ mod tests {
         let raw_file = Parser::new(source).parse_file().unwrap();
         let file = crate::desugar::desugared_ast::File::from(raw_file);
         let owner = crate::dag_id::DagId::root_in_package("test", "main");
-        let resolver = single_module_resolver(&file, &owner, &src).unwrap();
+        let resolver = single_module_resolver(&file, &owner, src).unwrap();
         let mut definitions = definition_evaluator(
             &resolver,
             [(
                 owner.clone(),
                 super::super::static_definitions::DefinitionSource {
                     declarations: &file.declarations,
-                    src: &src,
+                    src,
                 },
             )],
-            &src,
+            src,
         )
         .unwrap();
         let wrong = resolver

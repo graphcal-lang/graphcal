@@ -6,9 +6,6 @@
 //! compute the result monomial from the bindings.
 
 use std::collections::HashMap;
-use std::sync::Arc;
-
-use miette::NamedSource;
 
 use crate::diagnostic_anchor::DiagnosticAnchor;
 use crate::dimension::Dimension;
@@ -18,6 +15,7 @@ use crate::function_signature::{
     ScalarValueKind, StructResult,
 };
 use crate::graphcal_error::GraphcalError;
+use crate::source_id::SourceId;
 use crate::syntax::span::{Span, Spanned};
 
 /// Check quantity argument dimensions against `sig` and compute the result
@@ -33,7 +31,7 @@ pub(super) fn infer_fn_dim(
     args: &[Spanned<Dimension>],
     call_span: Span,
     registry: &FormattingRegistry,
-    src: &NamedSource<Arc<String>>,
+    src: SourceId,
 ) -> Result<Dimension, GraphcalError> {
     if args.len() != sig.arity() {
         let error_span = args
@@ -44,7 +42,7 @@ pub(super) fn infer_fn_dim(
             name: crate::graphcal_error::CalledFunction::Builtin(function),
             expected: sig.arity(),
             got: args.len(),
-            src: src.clone(),
+            src,
             span: error_span.into(),
         });
     }
@@ -86,7 +84,7 @@ pub(super) struct SignatureDimWalk<'a, S: StructResult = crate::function_signatu
     sig: &'a FunctionSignature<S>,
     bindings: HashMap<DimBinder, Dimension>,
     registry: &'a FormattingRegistry,
-    src: &'a NamedSource<Arc<String>>,
+    src: SourceId,
 }
 
 impl<'a, S: StructResult> SignatureDimWalk<'a, S> {
@@ -95,7 +93,7 @@ impl<'a, S: StructResult> SignatureDimWalk<'a, S> {
         fn_name: &'a str,
         sig: &'a FunctionSignature<S>,
         registry: &'a FormattingRegistry,
-        src: &'a NamedSource<Arc<String>>,
+        src: SourceId,
     ) -> Self {
         Self {
             fn_name,
@@ -134,7 +132,7 @@ impl<'a, S: StructResult> SignatureDimWalk<'a, S> {
                         help: format!(
                             "parameter `{param_name}` must have the same dimension as `{bind_param_name}`",
                         ),
-                        src: self.src.clone(),
+                        src: self.src,
                         span: arg_span.into(),
                     });
                 }
@@ -153,7 +151,7 @@ impl<'a, S: StructResult> SignatureDimWalk<'a, S> {
                     "parameter `{param_name}` requires {}",
                     self.registry.dimensions.format_dimension(&expected),
                 ),
-                src: self.src.clone(),
+                src: self.src,
                 span: arg_span.into(),
             });
         }
@@ -174,7 +172,7 @@ fn eval_monomial(
     fn_name: &str,
     monomial: &DimMonomial,
     bindings: &HashMap<DimBinder, Dimension>,
-    src: &NamedSource<Arc<String>>,
+    src: SourceId,
     span: Span,
 ) -> Result<Dimension, GraphcalError> {
     monomial
@@ -192,7 +190,7 @@ fn eval_monomial(
                 DiagnosticAnchor::Source(span),
             ),
             DimMonomialEvalError::Overflow(_) => GraphcalError::DimensionOverflow {
-                src: src.clone(),
+                src,
                 span: span.into(),
             },
         })
@@ -231,7 +229,8 @@ mod tests {
             std::collections::BTreeMap::new(),
             Vec::new(),
         );
-        let source = NamedSource::new("test.gcl", Arc::new("f(1.0, 2.0)".to_string()));
+        let source = crate::source_registry::SourceRegistry::new()
+            .register("test.gcl", std::sync::Arc::new("f(1.0, 2.0)".to_string()));
         let argument_span = Span::new(7, 3);
         // A binder from a different signature: `signature` has no parameter
         // binding it.
@@ -242,7 +241,7 @@ mod tests {
             panic!("passthrough takes a quantity");
         };
         let variable = foreign_monomial.as_bare_var().unwrap().clone();
-        let mut walk = SignatureDimWalk::new("f", &signature, &registry, &source);
+        let mut walk = SignatureDimWalk::new("f", &signature, &registry, source);
         walk.bindings = HashMap::from([(
             variable.clone(),
             Dimension::base(BaseDimId::Prelude(PreludeBaseDimension::Length)),
@@ -278,7 +277,8 @@ mod tests {
             std::collections::BTreeMap::new(),
             Vec::new(),
         );
-        let source = NamedSource::new("test.gcl", Arc::new("f()".to_string()));
+        let source = crate::source_registry::SourceRegistry::new()
+            .register("test.gcl", std::sync::Arc::new("f()".to_string()));
         let call_span = Span::new(0, 3);
 
         let error = infer_fn_dim(
@@ -287,7 +287,7 @@ mod tests {
             &[],
             call_span,
             &registry,
-            &source,
+            source,
         )
         .unwrap_err();
         let GraphcalError::WrongArity { span, .. } = error else {

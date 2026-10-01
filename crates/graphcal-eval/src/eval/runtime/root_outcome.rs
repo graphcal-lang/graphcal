@@ -5,15 +5,14 @@
 //! of `graphcal eval` and the model-row path, which reports only the first
 //! failure of the row.
 
+use graphcal_compiler::source_registry::SourceRegistry;
 use std::cell::RefCell;
 use std::collections::{BTreeSet, HashMap};
-use std::sync::Arc;
-
-use miette::NamedSource;
 
 use graphcal_compiler::graphcal_error::GraphcalError;
 use graphcal_compiler::outcome::Outcome;
 use graphcal_compiler::resolved_name::ResolvedDeclName;
+use graphcal_compiler::source_id::SourceId;
 use graphcal_compiler::syntax::module_name::ScopedName;
 use graphcal_compiler::syntax::span::Span;
 
@@ -68,7 +67,8 @@ impl RootOutcome {
     pub fn evaluate(
         plan: &ExecPlan<'_>,
         bindings: &crate::eval::bindings::RuntimeParameterBindings,
-        src: &NamedSource<Arc<String>>,
+        src: SourceId,
+        sources: &SourceRegistry,
         host_fns: &HostFunctionRegistry,
         cancellation: &graphcal_compiler::cancellation::CancellationToken,
     ) -> Result<Self, Outcome<GraphcalError>> {
@@ -77,7 +77,7 @@ impl RootOutcome {
             values,
             presentations,
             errors,
-        } = run_eval_loop_with_bindings(plan, bindings, src, host_fns, cancellation)?;
+        } = run_eval_loop_with_bindings(plan, bindings, src, sources, host_fns, cancellation)?;
         cancellation.checkpoint()?;
         let mut outcome = Self {
             unfinished_calls,
@@ -86,7 +86,7 @@ impl RootOutcome {
             errors,
             assertions: Vec::new(),
         };
-        let ctx = outcome.session(plan, src, host_fns, cancellation);
+        let ctx = outcome.session(plan, src, sources, host_fns, cancellation);
         let assertions = evaluate_assertions(plan, src, &ctx, &outcome.values, &outcome.errors)?;
         outcome.assertions = assertions;
         Ok(outcome)
@@ -97,11 +97,12 @@ impl RootOutcome {
     pub fn session<'a>(
         &'a self,
         plan: &'a ExecPlan<'a>,
-        src: &'a NamedSource<Arc<String>>,
+        src: SourceId,
+        sources: &'a SourceRegistry,
         host_fns: &'a HostFunctionRegistry,
         cancellation: &graphcal_compiler::cancellation::CancellationToken,
     ) -> EvalSession<'a> {
-        EvalSession::checked(plan, src, host_fns, cancellation.clone())
+        EvalSession::checked(plan, src, sources, host_fns, cancellation.clone())
             .with_roots(&self.values, Some(&self.presentations))
             .with_unavailable(&self.errors)
             .with_unfinished_calls(&self.unfinished_calls)
@@ -146,7 +147,7 @@ impl RootOutcome {
     pub fn first_failure(
         &self,
         plan: &ExecPlan<'_>,
-        src: &NamedSource<Arc<String>>,
+        src: SourceId,
     ) -> Result<Option<RootFailure<'_>>, GraphcalError> {
         let exposed = root_source_names(plan).into_iter().find_map(|(key, name)| {
             self.errors

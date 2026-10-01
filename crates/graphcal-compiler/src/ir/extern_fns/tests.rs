@@ -1,7 +1,5 @@
 use std::sync::Arc;
 
-use miette::NamedSource;
-
 use crate::function_signature::FunctionSignature;
 use crate::graphcal_error::GraphcalError;
 use crate::ir::lower::{LoweredTestFile, lower_file_with_inline_dags_for_test};
@@ -14,8 +12,9 @@ fn lower(source: &str) -> Result<LoweredTestFile, GraphcalError> {
         .parse_file()
         .expect("source parses");
     let ast = crate::desugar::desugared_ast::File::from(parsed);
-    let src = NamedSource::new("main.gcl", Arc::new(source.to_string()));
-    lower_file_with_inline_dags_for_test(&ast, &src)
+    let src = crate::source_registry::SourceRegistry::new()
+        .register("main.gcl", Arc::new(source.to_string()));
+    lower_file_with_inline_dags_for_test(&ast, "main.gcl", src)
 }
 
 fn only_signature(dag: &HirDag) -> &FunctionSignature<ExternStructResult> {
