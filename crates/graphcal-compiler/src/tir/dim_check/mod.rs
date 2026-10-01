@@ -355,7 +355,7 @@ fn check_hir_assert_body(
                     src,
                     span,
                     AttributeError::AssertBodyNotBool {
-                        found: format_checked_type(&inferred, registry),
+                        found: inferred.spelling(&registry.dimensions),
                     },
                 )
                 .into());
@@ -539,7 +539,7 @@ fn validate_expected_fail_key(
                         src,
                         part.span(),
                         AttributeError::ExpectedFailKeyIndexMismatch {
-                            expected: expected_axis.display_name().to_string(),
+                            expected: expected_axis.display_name(),
                             found: part.display(),
                         },
                     ));
@@ -551,7 +551,7 @@ fn validate_expected_fail_key(
                         src,
                         *span,
                         AttributeError::ExpectedFailKeyIndexMismatch {
-                            expected: expected_axis.display_name().to_string(),
+                            expected: expected_axis.display_name(),
                             found: part.display(),
                         },
                     ));

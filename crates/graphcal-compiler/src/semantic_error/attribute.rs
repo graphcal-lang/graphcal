@@ -8,21 +8,23 @@ use thiserror::Error;
 
 use crate::declaration_kind::AttributeTarget;
 use crate::diagnostic::{DiagnosticKind, SecondaryLabel};
+use crate::semantic::checked_type::{IndexDisplayName, TypeSpelling};
 use crate::syntax::attribute::AttributeName;
 use crate::syntax::decl_name::DeclName;
+use crate::syntax::names::NameAtom;
 use crate::syntax::span::Span;
 
 /// Diagnostics of declaration attributes and assertion annotations.
 #[derive(Debug, Clone, Error)]
 pub enum AttributeError {
     #[error("attribute `hidden` does not apply to include item `{name}`")]
-    HiddenIncludeItemNotAPlot { name: String },
+    HiddenIncludeItemNotAPlot { name: NameAtom },
     #[error("cannot reference assert `{name}` with `@`")]
     GraphRefToAssert { name: DeclName },
     #[error("assert body must evaluate to Bool, got {found}")]
-    AssertBodyNotBool { found: String },
+    AssertBodyNotBool { found: TypeSpelling },
     #[error("unknown assert `{name}` in #[assumes(...)]")]
-    UnknownAssertInAssumes { name: String },
+    UnknownAssertInAssumes { name: DeclName },
     #[error("`#[assumes(...)]` is not valid on `{kind}` declarations")]
     InvalidAssumesTarget { kind: AttributeTarget },
     #[error("attribute `#[{name}]` appears more than once")]
@@ -54,7 +56,10 @@ pub enum AttributeError {
     #[error("`#[expected_fail(...)]` key has the wrong index shape")]
     ExpectedFailKeyShapeMismatch { expected: usize, found: usize },
     #[error("`#[expected_fail(...)]` key does not belong to the assertion index")]
-    ExpectedFailKeyIndexMismatch { expected: String, found: String },
+    ExpectedFailKeyIndexMismatch {
+        expected: IndexDisplayName,
+        found: String,
+    },
     #[error("`#[expected_fail(...)]` finite-index position `#{position}` is out of bounds")]
     ExpectedFailFinitePositionOutOfBounds { position: u64, size: u64 },
     #[error("negative tolerance in tolerance assertion")]

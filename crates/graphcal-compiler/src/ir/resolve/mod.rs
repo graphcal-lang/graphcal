@@ -593,7 +593,7 @@ fn validate_declaration_attributes(
                             src,
                             argument.span,
                             AttributeError::UnknownAssertInAssumes {
-                                name: argument.value.to_string(),
+                                name: argument.value.clone(),
                             },
                         ));
                     }

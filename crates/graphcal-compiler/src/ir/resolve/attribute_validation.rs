@@ -348,9 +348,7 @@ pub fn attribute_validation_error_to_graphcal(
                 AttributeTarget::IncludeItem { name, .. } => SemanticError::located(
                     src,
                     span,
-                    AttributeError::HiddenIncludeItemNotAPlot {
-                        name: name.to_string(),
-                    },
+                    AttributeError::HiddenIncludeItemNotAPlot { name },
                 ),
                 target @ AttributeTarget::Declaration(_) => SemanticError::located(
                     src,
