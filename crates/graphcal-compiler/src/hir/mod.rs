@@ -42,5 +42,7 @@ pub use diagnostics::expr_lower_error_to_semantic;
 pub use expr_lower::context::ExprLoweringContext;
 pub use expr_lower::context::{BindingOverlay, FrozenBindings};
 pub use expr_lower::error::ExprLowerError;
-pub use expr_lower::lower::{lower_expr_draft, lower_expr_tolerant};
+pub use expr_lower::lower::{
+    lower_constructor_head, lower_expr_draft, lower_expr_tolerant, lower_map_entry_keys,
+};
 pub use expr_lower::tolerant::{LoweringFailure, Tolerant};

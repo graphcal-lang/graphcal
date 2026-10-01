@@ -55,6 +55,43 @@ pub fn lower_expr_draft(
     into_draft(lower_expr_tolerant(expr, ctx))
 }
 
+/// Lower the callee and generic arguments of a constructor application
+/// spanning `span`, for a caller that lowers the field values itself.
+///
+/// # Errors
+///
+/// Returns an [`ExprLowerError`] when `callee` does not resolve to a
+/// constructor or a generic argument does not lower.
+pub fn lower_constructor_head(
+    callee: &crate::syntax::ast::IdentPath,
+    generic_args: &[ast::GenericArg],
+    span: Span,
+    ctx: ExprLoweringContext<'_>,
+) -> Result<
+    (
+        Spanned<crate::resolved_name::ResolvedConstructorName>,
+        Vec<crate::hir::types::GenericArg>,
+    ),
+    ExprLowerError,
+> {
+    ExprLowerer::new(ctx).lower_constructor_head(callee, generic_args, &[], span)
+}
+
+/// Lower the keys of one entry of a map literal spanning `map_span`, for a
+/// caller that lowers the entry value itself.
+///
+/// # Errors
+///
+/// Returns an [`ExprLowerError`] when a key does not resolve or the entry has
+/// no key.
+pub fn lower_map_entry_keys(
+    entry: &ast::MapEntry,
+    map_span: Span,
+    ctx: ExprLoweringContext<'_>,
+) -> Result<NonEmpty<MapEntryKey>, ExprLowerError> {
+    ExprLowerer::new(ctx).lower_map_entry_keys(entry, map_span)
+}
+
 /// Lower a syntax expression into a finished strict HIR body.
 ///
 /// This is the batch-pipeline boundary.
@@ -333,30 +370,11 @@ impl ExprLowerer<'_> {
                 generic_args,
                 fields,
             } => {
-                let constructor = match self.resolve_callable(callee)? {
-                    ResolvedCallable::Constructor(constructor) => constructor,
-                    ResolvedCallable::Function(function) => {
-                        return Err(ExprLowerError::NamedArgumentsOnFunction {
-                            function,
-                            argument_names: fields
-                                .iter()
-                                .map(|field| field.name.value.clone())
-                                .collect(),
-                            span: expr.span,
-                        });
-                    }
-                };
-                let resolved = constructor.into_resolved();
-                let lowered_args = lower_generic_args(
-                    crate::hir::lower::GenericApplicationTarget::Constructor(resolved.clone()),
-                    constructor.kind().generic_params(),
-                    generic_args,
-                    expr.span,
-                    self.ctx.scope,
-                )?;
+                let (callee, generic_args) =
+                    self.lower_constructor_head(callee, generic_args, fields, expr.span)?;
                 ExprKind::ConstructorCall {
-                    callee: Spanned::new(resolved, callee.span()),
-                    generic_args: lowered_args,
+                    callee,
+                    generic_args,
                     fields: fields
                         .iter()
                         .map(|field| self.lower_field_init(field))
@@ -673,6 +691,18 @@ impl ExprLowerer<'_> {
         entry: &ast::MapEntry,
         map_span: Span,
     ) -> Result<MapEntry<Tolerant>, ExprLowerError> {
+        Ok(MapEntry {
+            keys: self.lower_map_entry_keys(entry, map_span)?,
+            value: self.lower_expr(&entry.value),
+        })
+    }
+
+    /// The keys of one map entry, in source order.
+    fn lower_map_entry_keys(
+        &self,
+        entry: &ast::MapEntry,
+        map_span: Span,
+    ) -> Result<NonEmpty<MapEntryKey>, ExprLowerError> {
         let keys = entry
             .keys
             .iter()
@@ -684,10 +714,46 @@ impl ExprLowerer<'_> {
                 span: entry.value.span,
             });
         };
-        Ok(MapEntry {
-            keys: NonEmpty::new(first, keys.collect()),
-            value: self.lower_expr(&entry.value),
-        })
+        Ok(NonEmpty::new(first, keys.collect()))
+    }
+
+    /// The callee and generic arguments of a constructor application with
+    /// `fields`, spanning `span`.
+    fn lower_constructor_head(
+        &self,
+        callee: &crate::syntax::ast::IdentPath,
+        generic_args: &[ast::GenericArg],
+        fields: &[ast::FieldInit],
+        span: Span,
+    ) -> Result<
+        (
+            Spanned<crate::resolved_name::ResolvedConstructorName>,
+            Vec<crate::hir::types::GenericArg>,
+        ),
+        ExprLowerError,
+    > {
+        let constructor = match self.resolve_callable(callee)? {
+            ResolvedCallable::Constructor(constructor) => constructor,
+            ResolvedCallable::Function(function) => {
+                return Err(ExprLowerError::NamedArgumentsOnFunction {
+                    function,
+                    argument_names: fields
+                        .iter()
+                        .map(|field| field.name.value.clone())
+                        .collect(),
+                    span,
+                });
+            }
+        };
+        let resolved = constructor.into_resolved();
+        let lowered_args = lower_generic_args(
+            crate::hir::lower::GenericApplicationTarget::Constructor(resolved.clone()),
+            constructor.kind().generic_params(),
+            generic_args,
+            span,
+            self.ctx.scope,
+        )?;
+        Ok((Spanned::new(resolved, callee.span()), lowered_args))
     }
 
     pub(super) fn lower_map_entry_key(
