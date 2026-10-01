@@ -3,7 +3,8 @@
 //! A root is published [`Executable`](CheckedBody::Executable) when every
 //! node of its tree has a concrete type whose axes all have a known
 //! cardinality and every static position it relies on is proven in range;
-//! evaluation reads only such trees. Otherwise the root is
+//! each node that introduces keys or entries of an axis is then given that
+//! concrete axis. Evaluation reads only such trees. Otherwise the root is
 //! [`Deferred`](CheckedBody::Deferred): its symbolic tree awaits the Static or
 //! generic bindings that specialization supplies.
 
@@ -15,16 +16,22 @@ use thiserror::Error;
 
 use crate::expression_id::ExprId;
 use crate::hir::expr::Expr;
-use crate::semantic::checked_type::{CheckedType, Concrete, Symbolic};
+use crate::semantic::checked_type::{CheckedType, Concrete, IndexTypeRef, Symbolic};
+use crate::semantic::index_axis::IndexAxis;
+use crate::semantic::index_def::IndexCardinality;
+use crate::semantic::key_value::KeyValue;
+use crate::syntax::index_name::IndexEntryKey;
+use crate::syntax::span::Span;
 use crate::tir::static_index::{
-    AxisCardinality, Readiness, StaticIndexError, UnavailableIndex, check_static_position,
+    AxisDefinition, Readiness, StaticIndexError, UnavailableIndex, check_static_position,
 };
 
 use super::assembly::PendingNodes;
-use super::call_targets::CallTargets;
-use super::map::ToConcrete;
+use super::call_targets::{CallSlot, CallTargets};
+use super::map::{KeyEntry, TypeMap};
 use super::model::{StaticPosition, TArg, TBody, TContextual, TExpr, TNodeRef};
 use super::nominal::NominalObservation;
+use super::nominal::{ConstructorApplication, ConstructorMatch};
 
 /// Why the typed trees of one checking pass cannot be published.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
@@ -42,6 +49,15 @@ pub enum DischargeError {
     UnavailableIndex(#[from] UnavailableIndex),
     #[error(transparent)]
     StaticIndex(#[from] StaticIndexError),
+    #[error("a typed node at {0:?} has no axis where its form relies on one")]
+    AxisShape(Span),
+    #[error("checked expression relies on an axis with a non-finite coordinate: {0}")]
+    NonFiniteAxis(Box<IndexTypeRef<Concrete>>),
+    #[error("a constant key at {span:?} names no entry of its axis `{axis}`")]
+    KeyOutsideAxis {
+        axis: Box<IndexTypeRef<Concrete>>,
+        span: Span,
+    },
 }
 
 /// Why a root cannot be evaluated.
@@ -73,23 +89,181 @@ impl CheckedBody {
     ///
     /// # Errors
     ///
-    /// Returns a [`DischargeError`] for an unavailable index or a static
-    /// position outside its now-known axis.
+    /// Returns a [`DischargeError`] for an unavailable index, a static
+    /// position outside its now-known axis, or an axis a node relies on that
+    /// cannot be given to it.
     pub(crate) fn discharge(
         body: TBody<Symbolic>,
-        cardinality: &AxisCardinality<'_>,
+        definition: &AxisDefinition<'_>,
+    ) -> Result<Self, DischargeError> {
+        Self::discharge_with(body, definition, &mut ToConcrete::new(definition))
+    }
+
+    fn discharge_with(
+        body: TBody<Symbolic>,
+        definition: &AxisDefinition<'_>,
+        concrete: &mut ToConcrete<'_, '_>,
     ) -> Result<Self, DischargeError> {
         let expr = match body {
             TBody::Contextual(literal) => return Ok(Self::Executable(TBody::Contextual(literal))),
             TBody::Value(expr) => expr,
         };
-        if !ready(&expr, cardinality)? {
+        if !ready(&expr, &|index| {
+            Ok(definition(index)?.map(|kind| kind.cardinality()))
+        })? {
             return Ok(Self::Deferred(TBody::Value(expr)));
         }
-        Ok(match expr.map_types(&mut ToConcrete) {
-            Ok(concrete) => Self::Executable(TBody::Value(Box::new(concrete))),
-            Err(super::map::NotConcrete) => Self::Deferred(TBody::Value(expr)),
+        match expr.map_types(concrete) {
+            Ok(concrete) => Ok(Self::Executable(TBody::Value(Box::new(concrete)))),
+            Err(NotConcrete::Waiting) => Ok(Self::Deferred(TBody::Value(expr))),
+            Err(NotConcrete::Discharge(error)) => Err(error),
+        }
+    }
+}
+
+/// The cardinality of an axis, or `None` while it awaits a binding.
+type AxisCardinality<'a> =
+    dyn Fn(&IndexTypeRef<Symbolic>) -> Result<Option<IndexCardinality>, UnavailableIndex> + 'a;
+
+/// Why a symbolic tree has no concrete form.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NotConcrete {
+    /// Some of its types still mention a `Nat` variable, or an axis it relies
+    /// on still awaits its binding: the tree waits.
+    Waiting,
+    /// An axis it relies on cannot be given to it.
+    Discharge(DischargeError),
+}
+
+impl From<UnavailableIndex> for NotConcrete {
+    fn from(error: UnavailableIndex) -> Self {
+        Self::Discharge(error.into())
+    }
+}
+
+/// Close every type of a symbolic tree that mentions no `Nat` variable, and
+/// give each node the concrete axes and keys it relies on.
+///
+/// Each axis is built once per tree from its definition.
+pub struct ToConcrete<'d, 'a> {
+    definition: &'d AxisDefinition<'a>,
+    axes: HashMap<IndexTypeRef<Concrete>, IndexAxis>,
+}
+
+impl<'d, 'a> ToConcrete<'d, 'a> {
+    /// Close trees whose axes are defined by `definition`.
+    pub(crate) fn new(definition: &'d AxisDefinition<'a>) -> Self {
+        Self {
+            definition,
+            axes: HashMap::new(),
+        }
+    }
+
+    /// The concrete axis of `index`, a concrete index of a node's type.
+    fn concrete_axis(
+        &mut self,
+        index: Option<&IndexTypeRef<Concrete>>,
+        span: Span,
+    ) -> Result<IndexAxis, NotConcrete> {
+        let index = index.ok_or(NotConcrete::Discharge(DischargeError::AxisShape(span)))?;
+        if let Some(axis) = self.axes.get(index) {
+            return Ok(axis.clone());
+        }
+        let kind = (self.definition)(&index.to_symbolic())?.ok_or(NotConcrete::Waiting)?;
+        let axis = IndexAxis::from_concrete(index.clone(), kind.into_owned()).ok_or_else(|| {
+            NotConcrete::Discharge(DischargeError::NonFiniteAxis(Box::new(index.clone())))
+        })?;
+        self.axes.insert(index.clone(), axis.clone());
+        Ok(axis)
+    }
+}
+
+impl TypeMap<Symbolic, Concrete> for ToConcrete<'_, '_> {
+    type Error = NotConcrete;
+
+    fn node_type(
+        &mut self,
+        ty: &CheckedType<Symbolic>,
+        _span: Span,
+    ) -> Result<CheckedType<Concrete>, NotConcrete> {
+        ty.to_concrete().ok_or(NotConcrete::Waiting)
+    }
+
+    fn application(
+        &mut self,
+        application: &ConstructorApplication<Symbolic>,
+        _ty: &CheckedType<Concrete>,
+        _span: Span,
+    ) -> Result<ConstructorApplication<Concrete>, NotConcrete> {
+        let applied = &application.applied;
+        let generic_args = applied
+            .generic_args()
+            .iter()
+            .map(crate::semantic::checked_type::CheckedGenericArg::to_concrete)
+            .collect::<Option<_>>()
+            .ok_or(NotConcrete::Waiting)?;
+        Ok(ConstructorApplication {
+            constructor: application.constructor.clone(),
+            applied: std::sync::Arc::new(applied.try_map_types(
+                applied.runtime_type().clone(),
+                generic_args,
+                |ty| ty.to_concrete().ok_or(NotConcrete::Waiting),
+            )?),
         })
+    }
+
+    fn static_position(
+        &mut self,
+        position: &StaticPosition<Symbolic>,
+        _span: Span,
+    ) -> Result<StaticPosition<Concrete>, NotConcrete> {
+        Ok(StaticPosition {
+            axis: position.axis.to_concrete().ok_or(NotConcrete::Waiting)?,
+            position: position.position,
+            usage: position.usage,
+        })
+    }
+
+    fn axis(
+        &mut self,
+        (): &(),
+        index: Option<&IndexTypeRef<Concrete>>,
+        span: Span,
+    ) -> Result<IndexAxis, NotConcrete> {
+        self.concrete_axis(index, span)
+    }
+
+    fn key(
+        &mut self,
+        (): &(),
+        index: Option<&IndexTypeRef<Concrete>>,
+        entry: KeyEntry<'_>,
+        span: Span,
+    ) -> Result<KeyValue, NotConcrete> {
+        let axis = self.concrete_axis(index, span)?;
+        let index = axis.index().clone();
+        match entry {
+            KeyEntry::Position(position) => usize::try_from(position)
+                .ok()
+                .and_then(|position| KeyValue::at(axis, position)),
+            KeyEntry::Label(label) => {
+                KeyValue::for_entry(axis, &IndexEntryKey::named(label.clone()))
+            }
+        }
+        .ok_or_else(|| {
+            NotConcrete::Discharge(DischargeError::KeyOutsideAxis {
+                axis: Box::new(index),
+                span,
+            })
+        })
+    }
+
+    fn match_target(&mut self, target: &ConstructorMatch) -> ConstructorMatch {
+        target.clone()
+    }
+
+    fn call_slot(&mut self, slot: CallSlot) -> CallSlot {
+        slot
     }
 }
 
@@ -156,7 +330,7 @@ fn static_positions<V: crate::semantic::checked_type::Concreteness>(
             })
             .collect(),
         super::model::TExprKind::Key {
-            form: super::model::TKeyForm::Static(position),
+            form: super::model::TKeyForm::Static { position, .. },
             ..
         } => vec![position],
         _ => Vec::new(),
@@ -186,12 +360,13 @@ impl CheckedBodies {
     pub(crate) fn discharge(
         claimed: ClaimedRoots,
         mut nominal_uses: HashMap<ExprId, Arc<[NominalObservation]>>,
-        cardinality: &AxisCardinality<'_>,
+        definition: &AxisDefinition<'_>,
     ) -> Result<Self, DischargeError> {
         let ClaimedRoots { roots, calls } = claimed;
         let mut published = IndexMap::with_capacity(roots.len());
+        let mut concrete = ToConcrete::new(definition);
         for (id, body) in roots {
-            let body = CheckedBody::discharge(body, cardinality)?;
+            let body = CheckedBody::discharge_with(body, definition, &mut concrete)?;
             published.insert(id, body);
         }
         nominal_uses.retain(|root, _| published.contains_key(root));

@@ -14,19 +14,22 @@ use crate::builtin::AggregationFn;
 use crate::dag_id::DagId;
 use crate::expression_id::ExprId;
 use crate::hir::expr::{
-    ExternFnRef, ForBinding, ForBindingIndex, IndexVariantRef, LocalDef, LocalId, LocalUnit,
-    ResolvedUnitExpr, ResolvedUnitExprItem, ResolvedUnitRef, UnfoldRecurrence,
+    ExternFnRef, IndexVariantRef, LocalDef, LocalId, LocalUnit, ResolvedUnitExpr,
+    ResolvedUnitExprItem, ResolvedUnitRef, UnfoldRecurrence,
 };
 use crate::resolved_name::{ResolvedDeclName, ResolvedUnitName};
 use crate::semantic::checked_type::CheckedType;
+use crate::semantic::index_axis::IndexAxis;
+use crate::semantic::key_value::KeyValue;
 use crate::semantic::time_zone::IanaTimeZoneId;
+use crate::syntax::non_empty::NonEmpty;
 use crate::syntax::span::{Span, Spanned};
 use crate::syntax::type_name::FieldName;
 use crate::tir::texpr::operators::{BExpr, CExpr, DExpr, IExpr, LinearAlgebraCall, QExpr};
 use crate::tir::texpr::{
     CallSlot, ConstructorApplication, DatetimeLiteral, StaticPosition, TConstRef, TConstructorArm,
-    TExpr, TExprKind, TExternArg, TFieldInit, TIndexArg, TKeyForm, TLabelArm, TMapEntry,
-    TMatchArms, TNodeRef, TParamBinding, visit_tnodes,
+    TExpr, TExprKind, TExternArg, TFieldInit, TForBinding, TIndexArg, TKeyForm, TLabelArm,
+    TMapEntry, TMatchArms, TNodeRef, TParamBinding, visit_tnodes,
 };
 
 use super::body_scope::Scoped;
@@ -51,6 +54,7 @@ pub enum NodeKind<'t> {
     KeyShift {
         key: ScopedNode<'t>,
         addend: ScopedNode<'t>,
+        axis: &'t IndexAxis,
     },
     /// `@name`: the declaration it denotes in the node's scope.
     GraphRef(Spanned<ResolvedDeclName>),
@@ -92,9 +96,10 @@ pub enum NodeKind<'t> {
     },
     Map {
         entries: Scoped<'t, [TMapEntry]>,
+        axes: &'t [IndexAxis],
     },
     For {
-        bindings: &'t [ForBinding],
+        bindings: &'t NonEmpty<TForBinding>,
         body: ScopedNode<'t>,
     },
     Index {
@@ -106,17 +111,19 @@ pub enum NodeKind<'t> {
         recurrence: &'t UnfoldRecurrence,
         init: ScopedNode<'t>,
         body: ScopedNode<'t>,
+        axis: &'t IndexAxis,
     },
     Key {
         form: &'t TKeyForm,
-        axis: &'t ForBindingIndex,
         arg: ScopedNode<'t>,
+        axis: &'t IndexAxis,
     },
     Match {
         scrutinee: ScopedNode<'t>,
         arms: ScopedMatchArms<'t>,
     },
-    Variant(&'t IndexVariantRef),
+    /// A qualified label, as the key it denotes.
+    Variant(&'t KeyValue),
     DagCall {
         /// The call target, named by its slot in the scope's body.
         call: ScopedCall<'t>,
@@ -246,9 +253,10 @@ impl<'t> Scoped<'t, TExpr> {
                 let Ok(operation) = operation.try_map(operand);
                 NodeKind::Datetime(operation)
             }
-            TExprKind::KeyShift { key, addend } => NodeKind::KeyShift {
+            TExprKind::KeyShift { key, addend, axis } => NodeKind::KeyShift {
                 key: node(key),
                 addend: node(addend),
+                axis,
             },
             TExprKind::GraphRef(target) => {
                 NodeKind::GraphRef(Spanned::new(resolve(&target.value), target.span))
@@ -307,8 +315,9 @@ impl<'t> Scoped<'t, TExpr> {
                 application,
                 fields: Scoped::new(scope, fields.as_slice()),
             },
-            TExprKind::Map { entries } => NodeKind::Map {
+            TExprKind::Map { entries, axes } => NodeKind::Map {
                 entries: Scoped::new(scope, entries.as_slice()),
+                axes,
             },
             TExprKind::For { bindings, body } => NodeKind::For {
                 bindings,
@@ -335,15 +344,17 @@ impl<'t> Scoped<'t, TExpr> {
                 recurrence,
                 init,
                 body,
+                axis,
             } => NodeKind::Unfold {
                 recurrence,
                 init: node(init),
                 body: node(body),
-            },
-            TExprKind::Key { form, axis, arg } => NodeKind::Key {
-                form,
                 axis,
+            },
+            TExprKind::Key { form, arg, axis } => NodeKind::Key {
+                form,
                 arg: node(arg),
+                axis,
             },
             TExprKind::Match { scrutinee, arms } => NodeKind::Match {
                 scrutinee: node(scrutinee),
@@ -356,7 +367,7 @@ impl<'t> Scoped<'t, TExpr> {
                     }
                 },
             },
-            TExprKind::Variant(variant) => NodeKind::Variant(variant),
+            TExprKind::Variant { key, .. } => NodeKind::Variant(key),
             TExprKind::DagCall {
                 slot, args, output, ..
             } => NodeKind::DagCall {

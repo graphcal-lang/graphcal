@@ -1,8 +1,10 @@
 //! Materialization facts directly from checked types, without rebuilding inferred types.
 
+use std::borrow::Cow;
+
 use crate::diagnostic_anchor::DiagnosticAnchor;
 use crate::semantic::checked_type::{CheckedType, IndexTypeRef, Symbolic};
-use crate::semantic::index_def::IndexCardinality;
+use crate::semantic::index_def::{ConcreteIndexKind, IndexCardinality};
 use crate::semantic_error::SemanticError;
 use crate::semantic_error::dimension::DimensionError;
 use crate::source_id::SourceId;
@@ -11,19 +13,30 @@ use crate::tir::materialized_shape::MaterializedShapeError;
 use crate::tir::static_index::UnavailableIndex;
 use crate::tir::typed::program::TirRead;
 
-pub(super) fn checked_index_cardinality(
-    tir: &dyn TirRead,
+/// The concrete definition of an axis of a checked type, or `None` while its
+/// cardinality or definition awaits a Static or generic binding.
+pub(super) fn concrete_index_kind<'t>(
+    tir: &'t dyn TirRead,
     index: &IndexTypeRef<Symbolic>,
-) -> Result<Option<IndexCardinality>, UnavailableIndex> {
+) -> Result<Option<Cow<'t, ConcreteIndexKind>>, UnavailableIndex> {
     if index
         .finite_index_form()
         .is_some_and(|form| form.constant_value().is_none())
     {
         return Ok(None);
     }
-    tir.index_def(index)
-        .map(|definition| definition.concrete_cardinality())
-        .ok_or_else(|| UnavailableIndex(Box::new(index.clone())))
+    match tir.index_def(index) {
+        Some(Cow::Borrowed(definition)) => Ok(definition.concrete().map(Cow::Borrowed)),
+        Some(Cow::Owned(definition)) => Ok(definition.concrete().cloned().map(Cow::Owned)),
+        None => Err(UnavailableIndex(Box::new(index.clone()))),
+    }
+}
+
+fn checked_index_cardinality(
+    tir: &dyn TirRead,
+    index: &IndexTypeRef<Symbolic>,
+) -> Result<Option<IndexCardinality>, UnavailableIndex> {
+    Ok(concrete_index_kind(tir, index)?.map(|kind| kind.cardinality()))
 }
 
 /// Why a checked type cannot be materialized eagerly.

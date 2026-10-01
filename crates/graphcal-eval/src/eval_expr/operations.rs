@@ -10,7 +10,6 @@ use graphcal_compiler::builtin::{DatetimeField, DatetimeFromNumericFn, DatetimeT
 use graphcal_compiler::complex_value::ComplexValue;
 use graphcal_compiler::finite_value::FiniteQuantity;
 use graphcal_compiler::outcome::Outcome;
-use graphcal_compiler::semantic::checked_type::IndexTypeRef;
 use graphcal_compiler::semantic_error::SemanticError;
 use graphcal_compiler::syntax::span::Span;
 use graphcal_compiler::tir::texpr::DatetimeLiteral;
@@ -515,7 +514,7 @@ pub(super) fn datetime_literal(literal: &DatetimeLiteral) -> hifitime::Epoch {
 /// Evaluate `k + c` on a `Fin` key: the key at position `k + c` of the wider
 /// target axis `Fin(N + c)`, which the checker derived from the static addend.
 pub(super) fn key_shift<'t>(
-    target: &IndexTypeRef,
+    target: &IndexAxis,
     key: ScopedNode<'t>,
     addend: ScopedNode<'t>,
     span: Span,
@@ -524,19 +523,16 @@ pub(super) fn key_shift<'t>(
     let ctx = operands.ctx;
     let key = operands.key(key)?;
     let addend = operands.int(addend)?;
-    let axis = IndexAxis::resolve(ctx.tir, target).ok_or_else(|| {
-        ctx.internal_error(
-            format!("key axis `{target}` has no concrete definition"),
-            span,
-        )
-    })?;
     usize::try_from(addend)
         .ok()
         .and_then(|addend| key.position().checked_add(addend))
-        .and_then(|position| KeyValue::at(axis, position))
+        .and_then(|position| KeyValue::at(target.clone(), position))
         .ok_or_else(|| {
             ctx.internal_error(
-                format!("key shifted by {addend} left its checked axis `{target}`"),
+                format!(
+                    "key shifted by {addend} left its checked axis `{}`",
+                    target.index()
+                ),
                 span,
             )
         })

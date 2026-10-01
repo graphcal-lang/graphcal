@@ -5,8 +5,10 @@
 //! waits for the Static or generic binding that fixes the axis.
 
 use crate::expression_id::ExprId;
+use std::borrow::Cow;
+
 use crate::semantic::checked_type::{IndexTypeRef, Symbolic};
-use crate::semantic::index_def::{FiniteIndex, IndexCardinality};
+use crate::semantic::index_def::{ConcreteIndexKind, FiniteIndex, IndexCardinality};
 use thiserror::Error;
 
 /// An axis whose definition is unavailable to the checked program.
@@ -14,9 +16,10 @@ use thiserror::Error;
 #[error("checked expression references an unavailable index: {0}")]
 pub struct UnavailableIndex(pub Box<IndexTypeRef<Symbolic>>);
 
-/// The cardinality of an axis, or `None` while it awaits a Static or generic binding.
-pub type AxisCardinality<'a> =
-    dyn Fn(&IndexTypeRef<Symbolic>) -> Result<Option<IndexCardinality>, UnavailableIndex> + 'a;
+/// The concrete definition of an axis, or `None` while it awaits a Static or
+/// generic binding.
+pub type AxisDefinition<'a> = dyn Fn(&IndexTypeRef<Symbolic>) -> Result<Option<Cow<'a, ConcreteIndexKind>>, UnavailableIndex>
+    + 'a;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StaticIndexUse {

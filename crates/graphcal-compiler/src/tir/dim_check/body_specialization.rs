@@ -12,11 +12,13 @@ use crate::diagnostic_anchor::DiagnosticAnchor;
 use crate::expression_id::ExprId;
 use crate::hir::expr::Expr;
 use crate::semantic::checked_type::{CheckedType, IndexTypeRef, Symbolic};
+use crate::semantic::index_axis::IndexAxis;
+use crate::semantic::key_value::KeyValue;
 use crate::semantic_error::SemanticError;
 use crate::semantic_error::evaluation::EvaluationError;
 use crate::source_id::SourceId;
 use crate::syntax::span::Span;
-use crate::tir::texpr::map::{SymbolicView, TypeMap};
+use crate::tir::texpr::map::{KeyEntry, SymbolicView, TypeMap};
 use crate::tir::texpr::{
     CallSlot, CallTargets, CheckedBodies, CheckedBody, ClaimedRoots, ConstructorApplication,
     ConstructorMatch, NominalObservation, StaticPosition, TBody,
@@ -25,7 +27,7 @@ use crate::tir::typed::model::DagTIR;
 use crate::tir::typed::program::TirRead;
 use crate::tir::typed::specialization::{specialize_expression_type, specialize_index_ref};
 
-use super::expression_axes::{check_materializable, checked_index_cardinality};
+use super::expression_axes::{check_materializable, concrete_index_kind};
 
 /// The bindings a specialization applies.
 enum BodySubstitution<'a> {
@@ -164,6 +166,27 @@ impl<V: SymbolicView> TypeMap<V, Symbolic> for Specializer<'_> {
         })
     }
 
+    /// A specialized tree is symbolic again: its axes are given when it is
+    /// discharged.
+    fn axis(
+        &mut self,
+        _carried: &V::Discharged<IndexAxis>,
+        _index: Option<&IndexTypeRef<Symbolic>>,
+        _span: Span,
+    ) -> Result<(), SemanticError> {
+        Ok(())
+    }
+
+    fn key(
+        &mut self,
+        _carried: &V::Discharged<KeyValue>,
+        _index: Option<&IndexTypeRef<Symbolic>>,
+        _entry: KeyEntry<'_>,
+        _span: Span,
+    ) -> Result<(), SemanticError> {
+        Ok(())
+    }
+
     fn match_target(&mut self, target: &ConstructorMatch) -> ConstructorMatch {
         ConstructorMatch {
             definition: target.definition.clone(),
@@ -260,7 +283,7 @@ pub(super) fn specialize_instance_bodies(
         roots.push((id.clone(), body));
     }
     CheckedBodies::discharge(ClaimedRoots { roots, calls }, nominal_uses, &|index| {
-        checked_index_cardinality(tir, index)
+        concrete_index_kind(tir, index)
     })
     .map_err(|error| internal(src, error.to_string(), DiagnosticAnchor::WholeFile))
 }
@@ -329,8 +352,8 @@ pub(super) fn specialize_bound_body(
         .get(root.id())
         .ok_or_else(|| diagnostic(format!("missing checked expression: {:?}", root.id())))?;
     let tree = specializer.body(body)?;
-    let checked = CheckedBody::discharge(tree, &|index| checked_index_cardinality(tir, index))
-        .map_err(|error| match error {
+    let checked = CheckedBody::discharge(tree, &|index| concrete_index_kind(tir, index)).map_err(
+        |error| match error {
             crate::tir::texpr::DischargeError::StaticIndex(error) => SemanticError::located(
                 src,
                 root.span,
@@ -338,10 +361,14 @@ pub(super) fn specialize_bound_body(
                     message: error.to_string(),
                 },
             ),
-            error @ crate::tir::texpr::DischargeError::UnavailableIndex(_) => {
+            error @ (crate::tir::texpr::DischargeError::UnavailableIndex(_)
+            | crate::tir::texpr::DischargeError::AxisShape(_)
+            | crate::tir::texpr::DischargeError::NonFiniteAxis(_)
+            | crate::tir::texpr::DischargeError::KeyOutsideAxis { .. }) => {
                 diagnostic(error.to_string())
             }
-        })?;
+        },
+    )?;
     match checked {
         CheckedBody::Executable(TBody::Value(expr)) => Ok(*expr),
         CheckedBody::Executable(TBody::Contextual(_)) => Err(diagnostic(

@@ -12,12 +12,24 @@ use std::borrow::Cow;
 use super::call_targets::{CallSlot, CallTargets};
 use super::nominal::{ConstructorApplication, ConstructorMatch};
 use crate::semantic::checked_type::{CheckedType, Concrete, Concreteness, IndexTypeRef, Symbolic};
+use crate::semantic::index_axis::IndexAxis;
+use crate::semantic::key_value::KeyValue;
+use crate::syntax::index_name::IndexVariantName;
 use crate::syntax::span::{Span, Spanned};
 
 use super::model::{
     StaticPosition, TBody, TConstRef, TConstructorArm, TExpr, TExprKind, TExternArg, TFieldInit,
-    TIndexArg, TKeyForm, TLabelArm, TMapEntry, TMatchArms, TParamBinding,
+    TForBinding, TIndexArg, TKeyForm, TLabelArm, TMapEntry, TMatchArms, TParamBinding,
 };
+
+/// The entry of its axis a constant key a node carries names.
+#[derive(Debug, Clone, Copy)]
+pub enum KeyEntry<'a> {
+    /// A static `key(Axis, position)` position.
+    Position(u64),
+    /// A qualified label.
+    Label(&'a IndexVariantName),
+}
 
 /// How a structure-preserving map rewrites the types a tree carries.
 ///
@@ -46,6 +58,26 @@ pub trait TypeMap<V: Concreteness, W: Concreteness> {
         position: &StaticPosition<V>,
         span: Span,
     ) -> Result<StaticPosition<W>, Self::Error>;
+
+    /// The axis a node ranges over or introduces keys of, given the axis it
+    /// carried and the index its mapped type names there (`None` when that
+    /// type has no axis at that place).
+    fn axis(
+        &mut self,
+        carried: &V::Discharged<IndexAxis>,
+        index: Option<&IndexTypeRef<W>>,
+        span: Span,
+    ) -> Result<W::Discharged<IndexAxis>, Self::Error>;
+
+    /// The constant key naming `entry` of the axis `index` a node carries,
+    /// given the key it carried.
+    fn key(
+        &mut self,
+        carried: &V::Discharged<KeyValue>,
+        index: Option<&IndexTypeRef<W>>,
+        entry: KeyEntry<'_>,
+        span: Span,
+    ) -> Result<W::Discharged<KeyValue>, Self::Error>;
 
     /// A constructor match arm's resolved target.
     fn match_target(&mut self, target: &ConstructorMatch) -> ConstructorMatch;
@@ -88,6 +120,25 @@ impl<V: Concreteness> TypeMap<V, V> for Rehome<'_> {
         _span: Span,
     ) -> Result<StaticPosition<V>, Self::Error> {
         Ok(position.clone())
+    }
+
+    fn axis(
+        &mut self,
+        carried: &V::Discharged<IndexAxis>,
+        _index: Option<&IndexTypeRef<V>>,
+        _span: Span,
+    ) -> Result<V::Discharged<IndexAxis>, Self::Error> {
+        Ok(carried.clone())
+    }
+
+    fn key(
+        &mut self,
+        carried: &V::Discharged<KeyValue>,
+        _index: Option<&IndexTypeRef<V>>,
+        _entry: KeyEntry<'_>,
+        _span: Span,
+    ) -> Result<V::Discharged<KeyValue>, Self::Error> {
+        Ok(carried.clone())
     }
 
     fn match_target(&mut self, target: &ConstructorMatch) -> ConstructorMatch {
@@ -163,65 +214,27 @@ impl<'a, V: Concreteness, W: Concreteness> PreparedIndexArg<'a, V, W> {
     }
 }
 
-/// A symbolic tree some of whose types still mention a `Nat` variable.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct NotConcrete;
-
-/// Close every type of a symbolic tree that mentions no `Nat` variable.
-pub struct ToConcrete;
-
-impl TypeMap<Symbolic, Concrete> for ToConcrete {
-    type Error = NotConcrete;
-
-    fn node_type(
-        &mut self,
-        ty: &CheckedType<Symbolic>,
-        _span: Span,
-    ) -> Result<CheckedType<Concrete>, NotConcrete> {
-        ty.to_concrete().ok_or(NotConcrete)
+/// The index of the `depth`-th axis of `ty`, outermost first, when `ty` has
+/// that many indexed levels.
+fn nested_index<W: Concreteness>(ty: &CheckedType<W>, depth: usize) -> Option<&IndexTypeRef<W>> {
+    let mut current = ty;
+    for _ in 0..depth {
+        let CheckedType::Indexed { element, .. } = current else {
+            return None;
+        };
+        current = element;
     }
-
-    fn application(
-        &mut self,
-        application: &ConstructorApplication<Symbolic>,
-        _ty: &CheckedType<Concrete>,
-        _span: Span,
-    ) -> Result<ConstructorApplication<Concrete>, NotConcrete> {
-        let applied = &application.applied;
-        let generic_args = applied
-            .generic_args()
-            .iter()
-            .map(crate::semantic::checked_type::CheckedGenericArg::to_concrete)
-            .collect::<Option<_>>()
-            .ok_or(NotConcrete)?;
-        Ok(ConstructorApplication {
-            constructor: application.constructor.clone(),
-            applied: std::sync::Arc::new(applied.try_map_types(
-                applied.runtime_type().clone(),
-                generic_args,
-                |ty| ty.to_concrete().ok_or(NotConcrete),
-            )?),
-        })
+    match current {
+        CheckedType::Indexed { index, .. } => Some(index),
+        _ => None,
     }
+}
 
-    fn static_position(
-        &mut self,
-        position: &StaticPosition<Symbolic>,
-        _span: Span,
-    ) -> Result<StaticPosition<Concrete>, NotConcrete> {
-        Ok(StaticPosition {
-            axis: position.axis.to_concrete().ok_or(NotConcrete)?,
-            position: position.position,
-            usage: position.usage,
-        })
-    }
-
-    fn match_target(&mut self, target: &ConstructorMatch) -> ConstructorMatch {
-        target.clone()
-    }
-
-    fn call_slot(&mut self, slot: CallSlot) -> CallSlot {
-        slot
+/// The index of a key type.
+const fn key_index<W: Concreteness>(ty: &CheckedType<W>) -> Option<&IndexTypeRef<W>> {
+    match ty {
+        CheckedType::Key(index) => Some(index),
+        _ => None,
     }
 }
 
@@ -289,10 +302,14 @@ impl<V: Concreteness> TExpr<V> {
             TExprKind::Datetime(operation) => {
                 TExprKind::Datetime(operation.try_map(|operand| operand.boxed(map))?)
             }
-            TExprKind::KeyShift { key, addend } => TExprKind::KeyShift {
-                key: key.boxed(map)?,
-                addend: addend.boxed(map)?,
-            },
+            TExprKind::KeyShift { key, addend, axis } => {
+                let axis = map.axis(axis, key_index(ty), span)?;
+                TExprKind::KeyShift {
+                    key: key.boxed(map)?,
+                    addend: addend.boxed(map)?,
+                    axis,
+                }
+            }
             TExprKind::GraphRef(target) => TExprKind::GraphRef(target.clone()),
             TExprKind::Const(target) => TExprKind::Const(Spanned::new(
                 match &target.value {
@@ -365,21 +382,40 @@ impl<V: Concreteness> TExpr<V> {
                     })
                     .collect::<Result<_, M::Error>>()?,
             },
-            TExprKind::Map { entries } => TExprKind::Map {
-                entries: entries
+            TExprKind::Map { entries, axes } => {
+                let axes = axes
                     .iter()
-                    .map(|entry| {
-                        Ok(TMapEntry {
-                            keys: entry.keys.clone(),
-                            value: entry.value.map_types(map)?,
+                    .enumerate()
+                    .map(|(depth, axis)| map.axis(axis, nested_index(ty, depth), span))
+                    .collect::<Result<_, M::Error>>()?;
+                TExprKind::Map {
+                    entries: entries
+                        .iter()
+                        .map(|entry| {
+                            Ok(TMapEntry {
+                                keys: entry.keys.clone(),
+                                value: entry.value.map_types(map)?,
+                            })
                         })
+                        .collect::<Result<_, M::Error>>()?,
+                    axes,
+                }
+            }
+            TExprKind::For { bindings, body } => {
+                let mut depth = 0;
+                let bindings = bindings.try_map_ref(|binding| {
+                    let axis = map.axis(&binding.axis, nested_index(ty, depth), span)?;
+                    depth += 1;
+                    Ok::<_, M::Error>(TForBinding {
+                        binding: binding.binding.clone(),
+                        axis,
                     })
-                    .collect::<Result<_, M::Error>>()?,
-            },
-            TExprKind::For { bindings, body } => TExprKind::For {
-                bindings: bindings.clone(),
-                body: body.boxed(map)?,
-            },
+                })?;
+                TExprKind::For {
+                    bindings,
+                    body: body.boxed(map)?,
+                }
+            }
             TExprKind::Index { expr, args } => {
                 // The node's own proofs precede its children.
                 let (first, rest) = args.split_first();
@@ -420,23 +456,36 @@ impl<V: Concreteness> TExpr<V> {
                 recurrence,
                 init,
                 body,
-            } => TExprKind::Unfold {
-                recurrence: recurrence.clone(),
-                init: init.boxed(map)?,
-                body: body.boxed(map)?,
-            },
-            TExprKind::Key { form, axis, arg } => {
+                axis,
+            } => {
+                let axis = map.axis(axis, nested_index(ty, 0), span)?;
+                TExprKind::Unfold {
+                    recurrence: recurrence.clone(),
+                    init: init.boxed(map)?,
+                    body: body.boxed(map)?,
+                    axis,
+                }
+            }
+            TExprKind::Key { form, arg, axis } => {
                 let form = match form {
-                    TKeyForm::Static(position) => {
-                        TKeyForm::Static(map.static_position(position, span)?)
+                    TKeyForm::Static { position, key } => {
+                        let position = map.static_position(position, span)?;
+                        let key = map.key(
+                            key,
+                            key_index(ty),
+                            KeyEntry::Position(position.position),
+                            span,
+                        )?;
+                        TKeyForm::Static { position, key }
                     }
                     TKeyForm::Fin => TKeyForm::Fin,
                     TKeyForm::Search(search) => TKeyForm::Search(*search),
                 };
+                let axis = map.axis(axis, key_index(ty), span)?;
                 TExprKind::Key {
                     form,
-                    axis: axis.clone(),
                     arg: arg.boxed(map)?,
+                    axis,
                 }
             }
             TExprKind::Match { scrutinee, arms } => {
@@ -477,7 +526,18 @@ impl<V: Concreteness> TExpr<V> {
                 };
                 TExprKind::Match { scrutinee, arms }
             }
-            TExprKind::Variant(variant) => TExprKind::Variant(variant.clone()),
+            TExprKind::Variant { variant, key } => {
+                let index = IndexTypeRef::from_resolved(variant.variant.index().clone());
+                TExprKind::Variant {
+                    variant: variant.clone(),
+                    key: map.key(
+                        key,
+                        Some(&index),
+                        KeyEntry::Label(variant.variant.variant()),
+                        span,
+                    )?,
+                }
+            }
             TExprKind::DagCall {
                 slot,
                 args,

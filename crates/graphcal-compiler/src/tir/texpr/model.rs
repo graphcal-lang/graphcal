@@ -8,11 +8,13 @@ use crate::function_signature::{
     FunctionParam, IndexBinder, ParamKind, ResultKind, ScalarValueKind,
 };
 use crate::hir::expr::{
-    ExternFnRef, ForBinding, ForBindingIndex, IndexVariantRef, LocalDef, LocalId, MapEntryKey,
-    PatternBinding, ResolvedUnitExpr, UnfoldRecurrence,
+    ExternFnRef, ForBinding, IndexVariantRef, LocalDef, LocalId, MapEntryKey, PatternBinding,
+    ResolvedUnitExpr, UnfoldRecurrence,
 };
 use crate::resolved_name::ResolvedDeclName;
 use crate::semantic::checked_type::{CheckedType, Concrete, Concreteness, IndexTypeRef};
+use crate::semantic::index_axis::IndexAxis;
+use crate::semantic::key_value::KeyValue;
 use crate::semantic::time_zone::IanaTimeZoneId;
 use crate::syntax::function_name::FnParamName;
 use crate::syntax::non_empty::NonEmpty;
@@ -113,13 +115,13 @@ impl<V: Concreteness> TExpr<V> {
             | TExprKind::GraphRef(_)
             | TExprKind::Const(_)
             | TExprKind::Local(_)
-            | TExprKind::Variant(_) => Vec::new(),
+            | TExprKind::Variant { .. } => Vec::new(),
             TExprKind::Quantity(operation) => unbox(operation.operands()),
             TExprKind::Int(operation) => unbox(operation.operands()),
             TExprKind::Bool(operation) => unbox(operation.operands()),
             TExprKind::Complex(operation) => unbox(operation.operands()),
             TExprKind::Datetime(operation) => unbox(operation.operands()),
-            TExprKind::KeyShift { key, addend } => vec![&**key, &**addend],
+            TExprKind::KeyShift { key, addend, .. } => vec![&**key, &**addend],
             TExprKind::Convert { expr: operand, .. }
             | TExprKind::DisplayTimezone { expr: operand, .. }
             | TExprKind::Field { expr: operand, .. }
@@ -137,7 +139,7 @@ impl<V: Concreteness> TExpr<V> {
             TExprKind::Construct { fields, .. } => {
                 fields.iter().map(|field| &field.value).collect()
             }
-            TExprKind::Map { entries } => entries.iter().map(|entry| &entry.value).collect(),
+            TExprKind::Map { entries, .. } => entries.iter().map(|entry| &entry.value).collect(),
             TExprKind::Index { expr, args } => std::iter::once(&**expr)
                 .chain(args.iter().filter_map(|arg| match arg {
                     TIndexArg::Key(operand) | TIndexArg::Position { operand, .. } => {
@@ -199,6 +201,11 @@ pub fn visit_tnodes<'a, V: Concreteness>(
 /// Operators are recorded as the operation their operand types select
 /// ([`QExpr`], [`IExpr`], [`BExpr`], [`CExpr`], [`DExpr`], and the Fin-key
 /// shift), grouped by the checked result type.
+///
+/// A node that introduces keys or entries of an axis carries, once the tree
+/// is concrete, that axis's [`IndexAxis`] (and a constant key its
+/// [`KeyValue`]), established when the tree was discharged; a symbolic tree
+/// carries nothing in their place (see [`Concreteness::Discharged`]).
 #[derive(Debug, Clone)]
 pub enum TExprKind<V: Concreteness = Concrete> {
     /// A quantity literal with its unit.
@@ -216,6 +223,7 @@ pub enum TExprKind<V: Concreteness = Concrete> {
     KeyShift {
         key: Box<TExpr<V>>,
         addend: Box<TExpr<V>>,
+        axis: V::Discharged<IndexAxis>,
     },
     GraphRef(Spanned<crate::hir::expr::LocalDecl>),
     Const(Spanned<TConstRef<V>>),
@@ -259,11 +267,14 @@ pub enum TExprKind<V: Concreteness = Concrete> {
         application: ConstructorApplication<V>,
         fields: Vec<TFieldInit<V>>,
     },
+    /// A map literal; `axes` are the axes its entry keys select on, outermost
+    /// first.
     Map {
         entries: Vec<TMapEntry<V>>,
+        axes: Vec<V::Discharged<IndexAxis>>,
     },
     For {
-        bindings: Vec<ForBinding>,
+        bindings: NonEmpty<TForBinding<V>>,
         body: Box<TExpr<V>>,
     },
     Index {
@@ -281,18 +292,23 @@ pub enum TExprKind<V: Concreteness = Concrete> {
         recurrence: Box<UnfoldRecurrence>,
         init: Box<TExpr<V>>,
         body: Box<TExpr<V>>,
+        axis: V::Discharged<IndexAxis>,
     },
     /// A key introduction of the axis `axis` from `arg`.
     Key {
         form: TKeyForm<V>,
-        axis: ForBindingIndex,
         arg: Box<TExpr<V>>,
+        axis: V::Discharged<IndexAxis>,
     },
     Match {
         scrutinee: Box<TExpr<V>>,
         arms: TMatchArms<V>,
     },
-    Variant(IndexVariantRef),
+    /// A qualified label (`Maneuver#Departure`), with the key it denotes.
+    Variant {
+        variant: IndexVariantRef,
+        key: V::Discharged<KeyValue>,
+    },
     /// An inline call of the DAG `slot` names in the call targets of the
     /// body that holds this node.
     DagCall {
@@ -314,11 +330,22 @@ pub enum DatetimeLiteral {
     Epoch(EpochLiteral),
 }
 
+/// One binding of a comprehension, with the axis it ranges over.
+#[derive(Debug, Clone)]
+pub struct TForBinding<V: Concreteness = Concrete> {
+    pub binding: ForBinding,
+    pub axis: V::Discharged<IndexAxis>,
+}
+
 /// How a key introduction selects its key.
 #[derive(Debug, Clone)]
 pub enum TKeyForm<V: Concreteness = Concrete> {
-    /// `key(Axis, position)`: the position, proved in range of the axis.
-    Static(StaticPosition<V>),
+    /// `key(Axis, position)`: the position, proved in range of the axis, and
+    /// the key at it.
+    Static {
+        position: StaticPosition<V>,
+        key: V::Discharged<KeyValue>,
+    },
     /// `fin_key(Fin(N), position)`: a runtime position, range-checked.
     Fin,
     /// A search of a coordinate axis for a quantity.

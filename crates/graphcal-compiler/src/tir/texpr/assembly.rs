@@ -21,6 +21,7 @@ use crate::hir::expr::{ConstRef, Expr, ExprKind, IndexArg, MatchPattern};
 use crate::resolved_name::ResolvedConstructorName;
 use crate::semantic::checked_type::{CheckedType, Symbolic};
 use crate::syntax::ast::{BinOp, PowerExponent, UnaryOp};
+use crate::syntax::non_empty::NonEmpty;
 use crate::syntax::span::Spanned;
 use crate::tir::static_index::StaticIndexRequirement;
 
@@ -28,8 +29,8 @@ use super::call_targets::CallTargets;
 use super::model::ExternSignature;
 use super::model::{
     ContextualLiteral, CoordinateSearch, DatetimeLiteral, ExternArgKind, StaticPosition, TArg,
-    TConstRef, TConstructorArm, TContextual, TExpr, TExprKind, TExternArg, TFieldInit, TIndexArg,
-    TKeyForm, TLabelArm, TMapEntry, TMatchArms, TParamBinding,
+    TConstRef, TConstructorArm, TContextual, TExpr, TExprKind, TExternArg, TFieldInit, TForBinding,
+    TIndexArg, TKeyForm, TLabelArm, TMapEntry, TMatchArms, TParamBinding,
 };
 use super::nominal::{ConstructorApplication, ConstructorMatch};
 use super::operators::{
@@ -230,7 +231,10 @@ impl PendingNodes {
                 value: *value,
                 unit: unit.clone(),
             },
-            ExprKind::VariantLiteral(variant) => TExprKind::Variant(variant.clone()),
+            ExprKind::VariantLiteral(variant) => TExprKind::Variant {
+                variant: variant.clone(),
+                key: (),
+            },
             ExprKind::GraphRef(target) => TExprKind::GraphRef(target.clone()),
             ExprKind::ConstRef(target) => match &target.value {
                 ConstRef::Decl(declaration) => TExprKind::Const(Spanned::new(
@@ -300,6 +304,9 @@ impl PendingNodes {
                     .collect::<Result<_, AssemblyError>>()?,
             },
             ExprKind::MapLiteral { entries } => TExprKind::Map {
+                axes: entries
+                    .first()
+                    .map_or_else(Vec::new, |entry| vec![(); entry.keys.len()]),
                 entries: entries
                     .iter()
                     .map(|entry| {
@@ -311,7 +318,16 @@ impl PendingNodes {
                     .collect::<Result<_, AssemblyError>>()?,
             },
             ExprKind::ForComp { bindings, body } => TExprKind::For {
-                bindings: bindings.clone(),
+                bindings: NonEmpty::try_from_vec(
+                    bindings
+                        .iter()
+                        .map(|binding| TForBinding {
+                            binding: binding.clone(),
+                            axis: (),
+                        })
+                        .collect(),
+                )
+                .map_err(|_| AssemblyError::UncheckedOperands(id()))?,
                 body: self.take_boxed(expr, body)?,
             },
             ExprKind::IndexAccess { expr: inner, args } => TExprKind::Index {
@@ -355,13 +371,12 @@ impl PendingNodes {
                 recurrence: recurrence.clone(),
                 init: self.take_boxed(expr, init)?,
                 body: self.take_boxed(expr, body)?,
+                axis: (),
             },
-            ExprKind::KeyForm {
-                kind, axis, arg, ..
-            } => {
+            ExprKind::KeyForm { kind, arg, .. } => {
                 use crate::syntax::ast::KeyFormKind;
                 let form = match (kind, positions.take(arg.id())) {
-                    (KeyFormKind::Static, Some(position)) => TKeyForm::Static(position),
+                    (KeyFormKind::Static, Some(position)) => TKeyForm::Static { position, key: () },
                     (KeyFormKind::Fin, None) => TKeyForm::Fin,
                     (KeyFormKind::Floor, None) => TKeyForm::Search(CoordinateSearch::Floor),
                     (KeyFormKind::Ceil, None) => TKeyForm::Search(CoordinateSearch::Ceil),
@@ -370,8 +385,8 @@ impl PendingNodes {
                 };
                 TExprKind::Key {
                     form,
-                    axis: axis.clone(),
                     arg: self.take_boxed(expr, arg)?,
+                    axis: (),
                 }
             }
             ExprKind::Match { scrutinee, arms } => {
@@ -559,6 +574,7 @@ fn binary(
         BinaryOperation::KeyShift => TExprKind::KeyShift {
             key: lhs,
             addend: rhs,
+            axis: (),
         },
         BinaryOperation::Int(op) => TExprKind::Int(IExpr::Arith { op, lhs, rhs }),
         BinaryOperation::IntExactPower(exponent) => TExprKind::Int(IExpr::ExactPower {

@@ -3,14 +3,14 @@ use crate::runtime_value::{
 };
 use graphcal_compiler::builtin::{AggregationFn, KeyAggregation};
 use graphcal_compiler::outcome::Outcome;
-use graphcal_compiler::semantic::checked_type::{CheckedType, IndexTypeRef, StructTypeRef};
+use graphcal_compiler::semantic::checked_type::{IndexTypeRef, StructTypeRef};
 use graphcal_compiler::semantic_error::SemanticError;
 use graphcal_compiler::semantic_error::evaluation::EvaluationError;
 use graphcal_compiler::syntax::index_name::IndexEntryKey;
 use graphcal_compiler::syntax::span::{Span, Spanned};
 use graphcal_compiler::tir::texpr::{
-    CoordinateSearch, TConstructorArm, TExpr, TExternArg, TFieldInit, TIndexArg, TKeyForm,
-    TLabelArm, TParamBinding,
+    CoordinateSearch, TConstructorArm, TExpr, TExternArg, TFieldInit, TForBinding, TIndexArg,
+    TKeyForm, TLabelArm, TParamBinding,
 };
 use graphcal_compiler::tir::typed::body_scope::Scoped;
 use graphcal_compiler::tir::typed::evaluation_unit::{BodyKind, ScopedTree};
@@ -203,13 +203,8 @@ fn eval_texpr_inner(
             .map(|value| plain(RuntimeValue::Complex(value))),
         NodeKind::Datetime(operation) => super::operations::datetime(&operation, span, &operands)
             .map(|value| plain(RuntimeValue::Datetime(value))),
-        NodeKind::KeyShift { key, addend } => {
-            let CheckedType::Key(target) = expr.ty() else {
-                return Err(ctx
-                    .internal_error("key shift has no retained key type", span)
-                    .into());
-            };
-            super::operations::key_shift(target, key, addend, span, &operands)
+        NodeKind::KeyShift { key, addend, axis } => {
+            super::operations::key_shift(axis, key, addend, span, &operands)
                 .map(|value| plain(RuntimeValue::Key(value)))
         }
         NodeKind::QuantityLiteral { value, unit } => {
@@ -324,7 +319,7 @@ fn eval_texpr_inner(
             local_values,
             ctx,
         ),
-        NodeKind::Map { entries } => {
+        NodeKind::Map { entries, axes } => {
             let entries = entries
                 .iter()
                 .map(|entry| {
@@ -333,7 +328,7 @@ fn eval_texpr_inner(
                 })
                 .collect::<Vec<_>>();
             eval_map_literal(
-                expr.ty(),
+                axes,
                 span,
                 &entries,
                 values,
@@ -342,15 +337,18 @@ fn eval_texpr_inner(
                 ctx,
             )
         }
-        NodeKind::For { bindings, body } => eval_for_comp_bindings(
-            expr.ty(),
-            bindings,
-            body,
-            values,
-            presentation_values,
-            local_values,
-            ctx,
-        ),
+        NodeKind::For { bindings, body } => {
+            let (first, remaining) = bindings.split_first();
+            eval_for_comp_bindings(
+                first,
+                remaining,
+                body,
+                values,
+                presentation_values,
+                local_values,
+                ctx,
+            )
+        }
         NodeKind::Index { expr: inner, args } => eval_index_access(
             span,
             inner,
@@ -367,27 +365,21 @@ fn eval_texpr_inner(
             recurrence,
             init,
             body,
+            axis,
         } => eval_unfold(
             ScopedUnfold {
-                node: expr,
                 recurrence,
                 init,
                 body,
+                axis,
             },
             values,
             presentation_values,
             local_values,
             ctx,
         ),
-        NodeKind::Key { form, arg, .. } => {
-            let CheckedType::Key(axis) = expr.ty() else {
-                return Err(ctx
-                    .internal_error("key expression has no retained axis", span)
-                    .into());
-            };
-            eval_key_form(form, axis, arg, span, &operands)
-                .map(|key| EvaluatedRuntimeValue::plain(RuntimeValue::Key(key)))
-        }
+        NodeKind::Key { form, arg, axis } => eval_key_form(form, axis, arg, span, &operands)
+            .map(|key| EvaluatedRuntimeValue::plain(RuntimeValue::Key(key))),
         NodeKind::Match { scrutinee, arms } => match arms {
             ScopedMatchArms::Labels(arms) => {
                 let arm = match_label(span, &operands.key(scrutinee)?, arms, ctx)?;
@@ -409,9 +401,7 @@ fn eval_texpr_inner(
                 ctx,
             ),
         },
-        NodeKind::Variant(variant) => named_key(&variant.variant, span, ctx)
-            .map(EvaluatedRuntimeValue::plain)
-            .map_err(Outcome::Failed),
+        NodeKind::Variant(key) => Ok(plain(RuntimeValue::Key(key.clone()))),
         NodeKind::DagCall { call, args, output } => eval_dag_call(
             call,
             args,
@@ -542,42 +532,23 @@ fn apply_constructor(
 /// coordinates with the documented policies.
 fn eval_key_form<'t>(
     form: &TKeyForm,
-    axis_ref: &IndexTypeRef,
+    axis: &IndexAxis,
     arg: ScopedNode<'t>,
     span: Span,
     operands: &super::operations::Operands<'_, 't>,
 ) -> Result<KeyValue, Outcome<SemanticError>> {
     let ctx = operands.ctx();
-    let axis = index_axis_for_ref(axis_ref, ctx).ok_or_else(|| {
-        ctx.internal_error(
-            format!("key axis `{axis_ref}` has no concrete definition"),
-            span,
-        )
-    })?;
     match form {
-        // The position was proved in range at compile time.
-        TKeyForm::Static(position) => usize::try_from(position.position)
-            .ok()
-            .and_then(|position| KeyValue::at(axis, position))
-            .ok_or_else(|| {
-                type_invariant(
-                    format_args!(
-                        "static key position {} escaped its checked range",
-                        position.position
-                    ),
-                    arg.span(),
-                    ctx,
-                )
-            })
-            .map_err(Outcome::Failed),
+        // The key was proved on its axis when the tree was discharged.
+        TKeyForm::Static { key, .. } => Ok(key.clone()),
         TKeyForm::Fin => {
             let position = operands.int(arg)?;
             usize::try_from(position)
                 .ok()
-                .and_then(|position| KeyValue::at(axis, position))
+                .and_then(|position| KeyValue::at(axis.clone(), position))
                 .ok_or_else(|| {
                     ctx.eval_error(
-                        format!("fin_key: {position} out of bounds for {axis_ref}"),
+                        format!("fin_key: {position} out of bounds for {}", axis.index()),
                         span,
                     )
                 })
@@ -585,8 +556,7 @@ fn eval_key_form<'t>(
         }
         TKeyForm::Search(search) => {
             let quantity = operands.quantity(arg)?.get();
-            coordinate_search(*search, &axis, quantity, axis_ref, span, ctx)
-                .map_err(Outcome::Failed)
+            coordinate_search(*search, axis, quantity, span, ctx).map_err(Outcome::Failed)
         }
     }
 }
@@ -596,7 +566,6 @@ fn coordinate_search(
     search: CoordinateSearch,
     axis: &IndexAxis,
     quantity: f64,
-    axis_ref: &IndexTypeRef,
     span: Span,
     ctx: &EvalSession<'_>,
 ) -> Result<KeyValue, SemanticError> {
@@ -638,8 +607,9 @@ fn coordinate_search(
     best.map(|(key, _)| key.clone()).ok_or_else(|| {
         ctx.eval_error(
             format!(
-                "{}: no coordinate of `{axis_ref}` is {} the target",
+                "{}: no coordinate of `{}` is {} the target",
                 search.kind().as_str(),
+                axis.index(),
                 if search == CoordinateSearch::Floor {
                     "at or below"
                 } else {
@@ -662,29 +632,6 @@ fn eval_extremum_key(
     super::aggregations::extremum_key(kind, indexed)
         .map(RuntimeValue::Key)
         .map_err(|error| ctx.eval_error(error.to_string(), span))
-}
-
-/// The constant key a qualified label denotes (`Maneuver#Departure`).
-fn named_key(
-    variant: &graphcal_compiler::resolved_name::ResolvedIndexVariant,
-    span: Span,
-    ctx: &EvalSession<'_>,
-) -> Result<RuntimeValue, SemanticError> {
-    let index = IndexTypeRef::from_resolved(variant.index().clone());
-    index_axis_for_ref(&index, ctx)
-        .and_then(|axis| {
-            KeyValue::for_entry(axis, &IndexEntryKey::named(variant.variant().clone()))
-        })
-        .map(RuntimeValue::Key)
-        .ok_or_else(|| {
-            ctx.internal_error(
-                format!(
-                    "label `{index}#{}` is not an entry of a concrete index",
-                    variant.variant()
-                ),
-                span,
-            )
-        })
 }
 
 /// The expression of one plugin-call argument, in the argument's scope.
@@ -867,11 +814,6 @@ fn eval_constructor_call(
         .map_err(Outcome::Failed)
 }
 
-/// The concrete axis of `index_ref`, when it has one.
-fn index_axis_for_ref(index_ref: &IndexTypeRef, ctx: &EvalSession<'_>) -> Option<IndexAxis> {
-    IndexAxis::resolve(ctx.tir, index_ref)
-}
-
 fn ensure_index_ref_matches_resolved(
     actual: &IndexTypeRef,
     expected: &graphcal_compiler::resolved_name::ResolvedIndexName,
@@ -912,13 +854,6 @@ fn map_entry_variant_for_axis(
     }
 }
 
-fn map_entry_key_span(key: &graphcal_compiler::hir::expr::MapEntryKey) -> Span {
-    match key {
-        graphcal_compiler::hir::expr::MapEntryKey::IndexVariant(variant) => variant.path_span(),
-        graphcal_compiler::hir::expr::MapEntryKey::FinitePosition { position, .. } => position.span,
-    }
-}
-
 /// One map-literal entry still to place: its key on the current axis, its
 /// keys on the remaining axes, and its value.
 type MapLiteralEntry<'a> = (
@@ -928,7 +863,7 @@ type MapLiteralEntry<'a> = (
 );
 
 fn eval_map_literal(
-    checked_type: &CheckedType,
+    axes: &[IndexAxis],
     map_span: Span,
     entries: &[MapLiteralEntry<'_>],
     values: &RuntimeValueMap,
@@ -936,32 +871,21 @@ fn eval_map_literal(
     local_values: &HirLocalValueMap<'_>,
     ctx: &EvalSession<'_>,
 ) -> Result<EvaluatedRuntimeValue, Outcome<SemanticError>> {
-    let first = entries
-        .first()
-        .ok_or_else(|| ctx.internal_error("empty map literal", map_span))?;
-    let (first_key, first_rest, _) = first;
-    let arity = first_rest.len().saturating_add(1);
-    let CheckedType::Indexed { element, index } = checked_type else {
+    let Some((outer, inner)) = axes.split_first() else {
         return Err(ctx
-            .internal_error("map has no retained indexed type", map_span)
+            .internal_error("map literal selects on no axis", map_span)
             .into());
     };
-    let idx_name = index.clone();
-    let axis = index_axis_for_ref(&idx_name, ctx).ok_or_else(|| {
-        ctx.internal_error(
-            format!("unknown index `{idx_name}`"),
-            map_entry_key_span(first_key),
-        )
-    })?;
-    if arity == 1 {
+    let idx_name = outer.index();
+    if inner.is_empty() {
         let mut evaluated = IndexMap::new();
         for (key, _, value) in entries {
-            let variant = map_entry_variant_for_axis(key, &idx_name, ctx)?;
+            let variant = map_entry_variant_for_axis(key, idx_name, ctx)?;
             let value =
                 eval_texpr_evaluated(*value, values, presentation_values, local_values, ctx)?;
             evaluated.insert(variant, value);
         }
-        let result = IndexedValue::try_from_axis(axis, |key| {
+        let result = IndexedValue::try_from_axis(outer.clone(), |key| {
             let variant = key.entry_key();
             let evaluated = evaluated.swap_remove(variant).ok_or_else(|| {
                 ctx.internal_error(
@@ -976,79 +900,65 @@ fn eval_map_literal(
         return Ok(EvaluatedRuntimeValue::from_indexed(result));
     }
 
-    let outer = IndexedValue::try_from_axis(axis, |key| -> Result<_, Outcome<SemanticError>> {
-        let variant = key.entry_key();
-        let mut sub_entries = Vec::new();
-        for (first_entry_key, rest, value) in entries {
-            if map_entry_variant_for_axis(first_entry_key, &idx_name, ctx)? != *variant {
-                continue;
+    let nested =
+        IndexedValue::try_from_axis(outer.clone(), |key| -> Result<_, Outcome<SemanticError>> {
+            let variant = key.entry_key();
+            let mut sub_entries = Vec::new();
+            for (first_entry_key, rest, value) in entries {
+                if map_entry_variant_for_axis(first_entry_key, idx_name, ctx)? != *variant {
+                    continue;
+                }
+                let Some((next_key, rest)) = rest.split_first() else {
+                    return Err(ctx
+                        .internal_error("multi-axis map literal entry lost all keys", value.span())
+                        .into());
+                };
+                sub_entries.push((next_key, rest, *value));
             }
-            let Some((next_key, rest)) = rest.split_first() else {
-                return Err(ctx
-                    .internal_error("multi-axis map literal entry lost all keys", value.span())
-                    .into());
-            };
-            sub_entries.push((next_key, rest, *value));
-        }
-        if sub_entries.is_empty() {
-            return Err(ctx.internal_error(
+            if sub_entries.is_empty() {
+                return Err(ctx.internal_error(
                 format!(
                     "map literal for index `{idx_name}` is missing entries for variant `{variant}`"
                 ),
                 map_span,
             )
             .into());
-        }
-        eval_map_literal(
-            element,
-            map_span,
-            &sub_entries,
-            values,
-            presentation_values,
-            local_values,
-            ctx,
-        )
-    })?;
-    Ok(EvaluatedRuntimeValue::from_indexed(outer))
+            }
+            eval_map_literal(
+                inner,
+                map_span,
+                &sub_entries,
+                values,
+                presentation_values,
+                local_values,
+                ctx,
+            )
+        })?;
+    Ok(EvaluatedRuntimeValue::from_indexed(nested))
 }
 
+/// Evaluate a comprehension over `binding`'s axis and, inside each of its
+/// keys, over the `remaining` bindings' axes.
 fn eval_for_comp_bindings(
-    checked_type: &CheckedType,
-    bindings: &[graphcal_compiler::hir::expr::ForBinding],
+    binding: &TForBinding,
+    remaining: &[TForBinding],
     body: ScopedNode<'_>,
     values: &RuntimeValueMap,
     presentation_values: Option<&PendingPresentedMap>,
     local_values: &HirLocalValueMap<'_>,
     ctx: &EvalSession<'_>,
 ) -> Result<EvaluatedRuntimeValue, Outcome<SemanticError>> {
-    let binding = &bindings[0];
-    let CheckedType::Indexed { element, index } = checked_type else {
-        return Err(ctx
-            .internal_error(
-                "comprehension binding has no retained indexed type",
-                binding.local.span,
-            )
-            .into());
-    };
-    let idx_name = index.clone();
-    let error_span = binding.local.span;
-
-    let axis = index_axis_for_ref(&idx_name, ctx)
-        .ok_or_else(|| ctx.internal_error(format!("unknown index `{idx_name}`"), error_span))?;
-
-    let remaining = &bindings[1..];
+    let TForBinding { binding, axis } = binding;
     let mut inner_locals = local_values.child(Vec::new());
-    let entries = IndexedValue::try_from_axis(axis, |key| {
+    let entries = IndexedValue::try_from_axis(axis.clone(), |key| {
         let binding_value = RuntimeValue::Key(key.clone());
         inner_locals.bind(
             binding.local.id,
             EvaluatedRuntimeValue::plain(binding_value),
         );
-        if remaining.is_empty() {
-            eval_texpr_evaluated(body, values, presentation_values, &inner_locals, ctx)
-        } else {
+        if let Some((next, remaining)) = remaining.split_first() {
             eval_for_comp_bindings(
-                element,
+                next,
                 remaining,
                 body,
                 values,
@@ -1056,6 +966,8 @@ fn eval_for_comp_bindings(
                 &inner_locals,
                 ctx,
             )
+        } else {
+            eval_texpr_evaluated(body, values, presentation_values, &inner_locals, ctx)
         }
     })?;
     Ok(EvaluatedRuntimeValue::from_indexed(entries))
@@ -1173,46 +1085,34 @@ fn eval_scan(
     Ok(EvaluatedRuntimeValue::from_indexed(result_entries))
 }
 
-/// An unfold node with its operands.
+/// An unfold node with its operands and the axis it unfolds along.
 struct ScopedUnfold<'t> {
-    node: ScopedNode<'t>,
     recurrence: &'t graphcal_compiler::hir::expr::UnfoldRecurrence,
     init: ScopedNode<'t>,
     body: ScopedNode<'t>,
+    axis: &'t IndexAxis,
 }
 
 fn eval_unfold(
     ScopedUnfold {
-        node: expr,
         recurrence,
         init,
         body,
+        axis: index_axis,
     }: ScopedUnfold<'_>,
     values: &RuntimeValueMap,
     presentation_values: Option<&PendingPresentedMap>,
     local_values: &HirLocalValueMap<'_>,
     ctx: &EvalSession<'_>,
 ) -> Result<EvaluatedRuntimeValue, Outcome<SemanticError>> {
-    let axis = &recurrence.axis;
-    let CheckedType::Indexed { index, .. } = expr.ty() else {
-        return Err(ctx
-            .internal_error("unfold has no retained indexed type", expr.span())
-            .into());
-    };
-    let index_ref = index.clone();
-    let index_axis = index_axis_for_ref(&index_ref, ctx).ok_or_else(|| {
-        ctx.internal_error(
-            format!("missing resolved unfold axis `{}`", axis.value),
-            axis.span,
-        )
-    })?;
     if index_axis.coordinate_data().is_none() {
         return Err(ctx
             .eval_error(
                 format!(
-                    "unfold requires a coordinate index, but `{index_ref}` is not coordinate-valued"
+                    "unfold requires a coordinate index, but `{}` is not coordinate-valued",
+                    index_axis.index()
                 ),
-                axis.span,
+                recurrence.axis.span,
             )
             .into());
     }

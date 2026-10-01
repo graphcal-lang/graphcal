@@ -678,7 +678,7 @@ impl crate::tir::typed::InstantiatedTir {
                     .finish()
                     .publish(
                         &dag.owned_expression_roots().collect::<Vec<_>>(),
-                        &|index| expression_axes::checked_index_cardinality(&tir, index),
+                        &|index| expression_axes::concrete_index_kind(&tir, index),
                     )
                     .map_err(|error| {
                         SemanticError::internal_error(
@@ -862,7 +862,7 @@ fn check_callless_value_expr_type<'t>(
         observations
             .finish()
             .publish(&[expr], &|index| {
-                expression_axes::checked_index_cardinality(tir, index)
+                expression_axes::concrete_index_kind(tir, index)
             })
             .map_err(|error| error.to_string())
             .and_then(|bodies| {

@@ -6801,9 +6801,10 @@ fn eval_label_match_rejects_runtime_owner_mismatch_with_same_leaf_variant() {
     else {
         panic!("expected `code` to be a for-comprehension, got {tree:?}");
     };
-    let [binding] = bindings else {
+    let [binding] = bindings.as_slice() else {
         panic!("expected one for-comprehension binding, got {bindings:?}");
     };
+    let binding = &binding.binding;
     let b_owner = graphcal_compiler::resolved_name::ResolvedName::for_test(
         loaded_file_dag_id(&project, "b.gcl"),
         graphcal_compiler::syntax::index_name::IndexName::expect_valid("Phase"),

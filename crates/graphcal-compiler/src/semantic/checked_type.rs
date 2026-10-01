@@ -228,6 +228,9 @@ pub trait Concreteness:
     type Finite: FiniteAxis;
     /// A `Nat`-sorted generic argument.
     type Nat: NatArgument;
+    /// A fact only a concrete tree carries, such as the concrete axis a node
+    /// relies on: `T` itself once concrete, nothing while symbolic.
+    type Discharged<T: std::fmt::Debug + Clone>: std::fmt::Debug + Clone;
 }
 
 /// Fully bound checked types (see [`Concreteness`]).
@@ -244,11 +247,13 @@ impl sealed::Sealed for Symbolic {}
 impl Concreteness for Concrete {
     type Finite = FiniteIndex;
     type Nat = u64;
+    type Discharged<T: std::fmt::Debug + Clone> = T;
 }
 
 impl Concreteness for Symbolic {
     type Finite = FiniteIndexRef;
     type Nat = NatPolyForm;
+    type Discharged<T: std::fmt::Debug + Clone> = ();
 }
 
 /// The identity of a structural `Fin(N)` axis at some [`Concreteness`].
