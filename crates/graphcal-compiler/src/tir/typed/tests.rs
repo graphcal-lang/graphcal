@@ -997,6 +997,87 @@ fn closing_a_registry_resolves_every_call_slot_or_names_the_missing_callee() {
 }
 
 #[test]
+fn declaration_views_expose_each_kind_without_bodies() {
+    use super::declaration_view::{DeclarationKind, ValueDeclaration};
+    use crate::declaration_category::{DeclCategory, ValueDeclCategory};
+    use crate::plot_visibility::PlotVisibility;
+
+    let tir = parse_and_type_resolve(
+        "const node BASE: Dimensionless = 1.0;\n\
+         param required: Dimensionless;\n\
+         param defaulted: Dimensionless = 2.0;\n\
+         node total: Dimensionless = @BASE + @required + @defaulted;\n\
+         assert positive = @total > 0.0;\n\
+         plot trend = { mark: line, encode: { x: @total, y: @total } };\n\
+         figure summary = { plots: [trend] };",
+    )
+    .unwrap();
+    let dag = tir.root();
+    let views = dag.declarations().collect::<Vec<_>>();
+    assert_eq!(
+        views
+            .iter()
+            .map(|view| view.name().as_str())
+            .collect::<Vec<_>>(),
+        [
+            "BASE",
+            "required",
+            "defaulted",
+            "total",
+            "positive",
+            "trend",
+            "summary"
+        ]
+    );
+    let value = |index: usize| views[index].value().unwrap();
+    let categories = (0..4)
+        .map(|index| {
+            let ValueDeclaration {
+                category,
+                has_default,
+                ..
+            } = value(index);
+            (category, has_default)
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        categories,
+        [
+            (ValueDeclCategory::Const, false),
+            (ValueDeclCategory::Param, false),
+            (ValueDeclCategory::Param, true),
+            (ValueDeclCategory::Node, false),
+        ]
+    );
+    assert_eq!(
+        views[3].category(),
+        DeclCategory::Value(ValueDeclCategory::Node)
+    );
+    assert!(matches!(views[4].kind(), DeclarationKind::Assert { .. }));
+    assert_eq!(views[4].category(), DeclCategory::Assert);
+    assert!(views[4].value().is_none());
+    assert!(matches!(
+        views[5].kind(),
+        DeclarationKind::Plot {
+            visibility: PlotVisibility::Standalone
+        }
+    ));
+    assert_eq!(views[5].category(), DeclCategory::Plot);
+    let DeclarationKind::Figure { plot_names } = views[6].kind() else {
+        panic!("a figure view lists its plots");
+    };
+    assert_eq!(plot_names.len(), 1);
+    assert_eq!(views[6].category(), DeclCategory::Figure);
+
+    for view in &views {
+        let found = dag.declaration(view.identity()).unwrap();
+        assert_eq!(found.identity(), view.identity());
+        assert_eq!(found.category(), view.category());
+        assert_eq!(view.identity().owner(), tir.root_dag_id());
+    }
+}
+
+#[test]
 fn module_aware_type_resolve_records_semantic_deps() {
     let source = "const node C: Dimensionless = 1.0;\n\
                   const node D: Dimensionless = @C;\n\

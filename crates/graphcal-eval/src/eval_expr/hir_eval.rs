@@ -1445,12 +1445,12 @@ fn check_inline_dag_asserts(
     call_span: Span,
     ctx: &EvalSession<'_>,
 ) -> Result<(), GraphcalError> {
-    for entry in dag_tir.decls().iter() {
+    for entry in dag_tir.declarations() {
         if !matches!(entry.category(), DeclCategory::Assert) {
             continue;
         }
-        let name = &entry.name();
-        let key = entry.identity();
+        let name = entry.name();
+        let key = entry.identity().clone();
         let unit = ctx.tir.declaration_body(&key);
         let Some(body) = unit.and_then(DeclarationBody::assertion) else {
             return Err(ctx.internal_error(

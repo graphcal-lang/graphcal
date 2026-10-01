@@ -35,6 +35,7 @@ pub mod checked_dag;
 pub use checked_dag::*;
 pub mod dag_position;
 pub mod dag_store;
+pub mod declaration_view;
 pub use dag_store::*;
 pub mod freeze;
 pub use freeze::*;

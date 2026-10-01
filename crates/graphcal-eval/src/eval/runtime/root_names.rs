@@ -73,12 +73,12 @@ fn member_name(root: &DagId, declaration: &ResolvedDeclName) -> Option<ScopedNam
 /// are absent; [`instance_member_name`] names them.
 pub(super) fn root_source_names(plan: &ExecPlan<'_>) -> Vec<(ResolvedDeclName, ScopedName)> {
     let root = plan.root();
-    let own = root
-        .scope()
-        .dag()
-        .decls()
-        .iter()
-        .map(|entry| (entry.identity(), ScopedName::local(entry.name().clone())));
+    let own = root.scope().dag().declarations().map(|entry| {
+        (
+            entry.identity().clone(),
+            ScopedName::local(entry.name().clone()),
+        )
+    });
     let projected = root.semantic_instances().iter().flat_map(|planned| {
         let instance = planned.instance();
         let record = &instance.record().instance;

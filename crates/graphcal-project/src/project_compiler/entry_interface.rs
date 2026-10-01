@@ -2,10 +2,10 @@
 
 use std::sync::Arc;
 
+use graphcal_compiler::declaration_category::ValueDeclCategory;
 use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
 use graphcal_compiler::graphcal_error::GraphcalError;
 use graphcal_compiler::hir::source_interface::SourceDeclaration;
-use graphcal_compiler::ir::entry::Decl;
 use graphcal_compiler::ir::resolve::collected::ExternalDeclSurface;
 use graphcal_compiler::semantic::checked_type::CheckedType;
 use graphcal_compiler::syntax::ast::Visibility;
@@ -13,6 +13,7 @@ use graphcal_compiler::syntax::decl_name::DeclName;
 use graphcal_compiler::syntax::index_name::IndexName;
 use graphcal_compiler::syntax::span::Span;
 use graphcal_compiler::tir::typed::CheckedTir;
+use graphcal_compiler::tir::typed::declaration_view::{DeclarationView, ValueDeclaration};
 use miette::NamedSource;
 
 use crate::compile_error::CompileError;
@@ -142,7 +143,16 @@ pub(super) fn build_checked_entry_interface(
     for declaration in source_declarations {
         match declaration {
             SourceDeclaration::Parameter { identity, span } => {
-                let Some(Decl::Param(entry)) = tir.root().decls().get(identity) else {
+                let Some(ValueDeclaration {
+                    category: ValueDeclCategory::Param,
+                    annotation,
+                    has_default,
+                    ..
+                }) = tir
+                    .root()
+                    .declaration(identity)
+                    .and_then(DeclarationView::value)
+                else {
                     return Err(missing_interface_fact(
                         format!("HIR entry parameter `{identity}` is absent from checked TIR"),
                         source,
@@ -150,25 +160,33 @@ pub(super) fn build_checked_entry_interface(
                     ));
                 };
                 parameters.push(CheckedEntryParameter {
-                    name: entry.name().clone(),
-                    declared_type: entry.type_ann.checked().declared().clone(),
-                    has_default: entry.default.is_some(),
+                    name: identity.leaf().clone(),
+                    declared_type: annotation.checked().declared().clone(),
+                    has_default,
                     runtime_key: identity.clone(),
                     span: *span,
                 });
             }
             SourceDeclaration::Node { identity, span } => {
-                let Some(Decl::Node(entry)) = tir.root().decls().get(identity) else {
+                let Some(ValueDeclaration {
+                    category: ValueDeclCategory::Node,
+                    annotation,
+                    ..
+                }) = tir
+                    .root()
+                    .declaration(identity)
+                    .and_then(DeclarationView::value)
+                else {
                     return Err(missing_interface_fact(
                         format!("HIR entry node `{identity}` is absent from checked TIR"),
                         source,
                         *span,
                     ));
                 };
-                let name = entry.name();
+                let name = identity.leaf();
                 outputs.push(CheckedEntryOutput {
                     name: name.clone(),
-                    declared_type: entry.type_ann.checked().declared().clone(),
+                    declared_type: annotation.checked().declared().clone(),
                     visibility: if external_surface.is_explicit_export(name) {
                         Visibility::Public
                     } else {

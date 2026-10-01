@@ -211,7 +211,7 @@ layer overlay = { plots: [curve], title: "Overlay", width: 400.0 };
                     .unwrap()
                     .is_some_and(|shape| shape.total().get() == size))
             }));
-            assert_eq!(dag.semantic().dynamic_unit_scales.len(), 1);
+            assert_eq!(dag.body_for_test().semantic().dynamic_unit_scales.len(), 1);
             assert!(nodes.values().any(|(_, _, contextual)| *contextual));
             old_ids = ids.into_iter().collect();
             let prepared = checked
@@ -914,6 +914,7 @@ fn frame_arguments_are_domain_checked_and_keep_presentation_only_when_bound() {
     let plan = prepared.plan();
     let key = tir
         .root()
+        .body_for_test()
         .params()
         .next()
         .map(graphcal_compiler::tir::typed::TypedParamEntry::identity)
@@ -981,6 +982,7 @@ fn frame_runtime_imports_seed_only_unbound_prepared_imports() {
     let import = inline
         .scope()
         .dag()
+        .body_for_test()
         .params()
         .next()
         .map(graphcal_compiler::tir::typed::TypedParamEntry::identity)
@@ -2826,7 +2828,7 @@ fn checked_tir_records_typed_template_instance_bindings() {
             instance.id().scope().clone(),
             DeclName::expect_valid("output"),
         );
-        let output = &tir.root().semantic().decl_bindings[&output_name];
+        let output = &tir.root().body_for_test().semantic().decl_bindings[&output_name];
         assert_eq!(output.owner(), instance.id().owner());
 
         // Projections are read resolved in the instance's own frame.
@@ -3967,6 +3969,7 @@ node displayed: Datetime = @meeting -> "america/new_york";
     let tir = compile_to_tir(source, "test.gcl").unwrap();
     let graphcal_compiler::hir::expr::ExprKind::FnCall { args, .. } = tir
         .root()
+        .body_for_test()
         .nodes()
         .next()
         .unwrap()

@@ -18,7 +18,7 @@ pub mod dot;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 use graphcal_compiler::dag_id::DagId;
-use graphcal_compiler::declaration_category::{DeclCategory, ValueDeclCategory};
+use graphcal_compiler::declaration_category::ValueDeclCategory;
 use graphcal_compiler::syntax::decl_name::DeclName;
 use graphcal_compiler::tir::typed::{CheckedDag, CheckedTir, DiagnosticDeclProbe};
 use thiserror::Error;
@@ -187,7 +187,7 @@ pub fn project_tir(tir: &CheckedTir) -> Result<GraphIr, GraphProjectionError> {
 
     let mut edges = BTreeSet::<GraphEdge>::new();
     for dag in &local_dags {
-        let deps = &dag.semantic().dependencies;
+        let deps = dag.dependencies();
         for (dependent, dep_set) in deps.const_deps.iter().chain(deps.runtime_deps.iter()) {
             for dep in dep_set {
                 edges.insert(GraphEdge {
@@ -333,22 +333,17 @@ fn project_dag_nodes(
     dag: &CheckedDag,
     output_names: &BTreeMap<DagId, HashSet<DeclName>>,
 ) -> Vec<GraphNode> {
-    dag.decls()
-        .iter()
+    dag.declarations()
         .filter_map(|entry| {
-            let kind = match entry.category() {
-                DeclCategory::Value(ValueDeclCategory::Const) => GraphNodeKind::Const,
-                DeclCategory::Value(ValueDeclCategory::Param) => GraphNodeKind::Param,
-                DeclCategory::Value(ValueDeclCategory::Node) => GraphNodeKind::Node,
-                DeclCategory::Assert
-                | DeclCategory::Plot
-                | DeclCategory::Figure
-                | DeclCategory::Layer => return None,
+            let kind = match entry.value()?.category {
+                ValueDeclCategory::Const => GraphNodeKind::Const,
+                ValueDeclCategory::Param => GraphNodeKind::Param,
+                ValueDeclCategory::Node => GraphNodeKind::Node,
             };
             Some((entry, kind))
         })
         .map(|(entry, kind)| {
-            let id = entry.identity();
+            let id = entry.identity().clone();
             let is_public_output = kind == GraphNodeKind::Node
                 && output_names
                     .get(id.owner())

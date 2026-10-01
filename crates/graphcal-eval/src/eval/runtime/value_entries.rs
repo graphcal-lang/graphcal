@@ -9,7 +9,7 @@
 use std::collections::{HashMap, HashSet};
 
 use graphcal_compiler::dag_id::DagId;
-use graphcal_compiler::declaration_category::{DeclCategory, ValueDeclCategory};
+use graphcal_compiler::declaration_category::ValueDeclCategory;
 use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
 use graphcal_compiler::graphcal_error::GraphcalError;
 use graphcal_compiler::resolved_name::ResolvedDeclName;
@@ -115,17 +115,6 @@ pub(super) fn assemble_value_entries(
     ValueEntries::collect(root.into_iter().chain(projected), ctx)
 }
 
-/// The category of a runtime value declaration, or `None` for an assertion,
-/// plot, figure or layer.
-const fn value_category(category: DeclCategory) -> Option<ValueDeclCategory> {
-    match category {
-        DeclCategory::Value(category) => Some(category),
-        DeclCategory::Assert | DeclCategory::Plot | DeclCategory::Figure | DeclCategory::Layer => {
-            None
-        }
-    }
-}
-
 /// The root's own value declarations, in source order.
 fn root_entries(
     plan: &ExecPlan<'_>,
@@ -135,11 +124,10 @@ fn root_entries(
     let scope = plan.root().scope();
     scope
         .dag()
-        .decls()
-        .iter()
-        .filter_map(|entry| value_category(entry.category()).map(|category| (entry, category)))
+        .declarations()
+        .filter_map(|entry| entry.value().map(|value| (entry, value.category)))
         .map(|(entry, category)| {
-            let key = entry.identity();
+            let key = entry.identity().clone();
             let (result, diagnostics) = match category {
                 ValueDeclCategory::Const => {
                     let runtime = scope.const_values().get(&key);
@@ -197,10 +185,9 @@ fn declared_value_category(
     declaration: &ResolvedDeclName,
     ctx: &EvalSession<'_>,
 ) -> Result<ValueDeclCategory, GraphcalError> {
-    dag.decls()
-        .iter()
-        .find(|entry| &entry.identity() == declaration)
-        .and_then(|entry| value_category(entry.category()))
+    dag.declaration(declaration)
+        .and_then(graphcal_compiler::tir::typed::declaration_view::DeclarationView::value)
+        .map(|value| value.category)
         .ok_or_else(|| {
             ctx.internal_error(
                 format!("projected declaration `{declaration}` is not a runtime value"),
@@ -221,11 +208,10 @@ fn debug_entries(
     planned
         .instance()
         .dag()
-        .decls()
-        .iter()
-        .filter_map(|entry| value_category(entry.category()).map(|category| (entry, category)))
+        .declarations()
+        .filter_map(|entry| entry.value().map(|value| (entry, value.category)))
         .map(|(entry, category)| {
-            let key = entry.identity();
+            let key = entry.identity().clone();
             let name = instance_member_name(root, &key, ctx.src)?;
             let (result, diagnostics) = evaluated_value(&key, evaluated, &instance_ctx)?;
             Ok(ValueEntry {

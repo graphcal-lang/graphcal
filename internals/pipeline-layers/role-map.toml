@@ -2544,6 +2544,11 @@ role = "contracts"
 
 [[module]]
 package = "compiler"
+path = ["tir", "typed", "declaration_view"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
 path = ["tir", "typed", "dag_position"]
 role = "contracts"
 

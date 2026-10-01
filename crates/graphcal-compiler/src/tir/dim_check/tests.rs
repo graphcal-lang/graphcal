@@ -187,7 +187,7 @@ fn consuming_rules_record_contextual_literals() {
     let tir = check_draft(tir, &src).unwrap();
     // The literal argument is parsed into the typed datetime it builds.
     assert_eq!(count_contextual(tir.root().bodies()), 0);
-    let node = tir.root().nodes().next().unwrap();
+    let node = tir.root().body().nodes().next().unwrap();
     let independent = check_callless_value_expr_type(
         &tir,
         node.definition.formula().unwrap(),
@@ -440,6 +440,7 @@ fn materialized_shape_identity_survives_equal_and_shifted_source_coordinates() {
     let nodes = |tir: &crate::tir::typed::CheckedTir| {
         let formula = tir
             .root()
+            .body()
             .nodes()
             .next()
             .unwrap()
@@ -3925,6 +3926,7 @@ fn inference_emits_typed_trees_carrying_node_facts() {
     let bodies = dag.bodies();
     let root = |name: &str| {
         let formula = dag
+            .body()
             .nodes()
             .find(|entry| entry.name().as_str() == name)
             .and_then(|entry| entry.definition.formula())
@@ -3979,7 +3981,7 @@ fn inference_emits_typed_trees_carrying_node_facts() {
         TExprKind::DatetimeLiteral(DatetimeLiteral::Offset(_))
     ));
 
-    let plot = dag.plots().next().unwrap();
+    let plot = dag.body().plots().next().unwrap();
     let color = plot
         .body
         .encodings

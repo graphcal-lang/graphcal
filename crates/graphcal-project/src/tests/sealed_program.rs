@@ -211,7 +211,7 @@ fn sealing_pairs_every_dag_with_its_own_facts() {
         assert_eq!(sealed.source().name(), "test.gcl");
         assert_eq!(
             sealed.const_values().len(),
-            dag.consts().count(),
+            dag.body_for_test().consts().count(),
             "every constant of `{dag_id}` is evaluated exactly once"
         );
     }
