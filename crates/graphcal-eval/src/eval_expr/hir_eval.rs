@@ -9,7 +9,7 @@ use graphcal_compiler::semantic_error::evaluation::EvaluationError;
 use graphcal_compiler::syntax::index_name::IndexEntryKey;
 use graphcal_compiler::syntax::span::{Span, Spanned};
 use graphcal_compiler::tir::texpr::{
-    CoordinateSearch, TConstructorArm, TExpr, TExternArg, TFieldInit, TForBinding, TIndexArg,
+    CoordinateSearch, TConstruct, TConstructorArm, TExpr, TExternArg, TForBinding, TIndexArg,
     TKeyForm, TLabelArm, TParamBinding,
 };
 use graphcal_compiler::tir::typed::body_scope::Scoped;
@@ -223,15 +223,19 @@ fn eval_texpr_inner(
             Ok(presented_ref(presentation_values, &target.value, value)
                 .to_owned_with(clone_graph_ref_value))
         }
-        NodeKind::Const(target) => {
-            let value = eval_const_ref(&target, values, ctx)?;
-            Ok(match &target.value {
-                ConstRef::Decl(target) => presentation_values
-                    .and_then(|presented| presented.get(target))
-                    .map_or_else(|| EvaluatedRuntimeValue::plain(value), Clone::clone),
-                ConstRef::Constructor(_) => EvaluatedRuntimeValue::plain(value),
-            })
-        }
+        NodeKind::Const(target) => match target.value {
+            ConstRef::Decl(declaration) => {
+                let value = values.get(&declaration).cloned().ok_or_else(|| {
+                    ctx.eval_error(format!("undefined constant `{declaration}`"), target.span)
+                })?;
+                Ok(presentation_values
+                    .and_then(|presented| presented.get(&declaration))
+                    .map_or_else(|| EvaluatedRuntimeValue::plain(value), Clone::clone))
+            }
+            ConstRef::Constructor(construct) => {
+                eval_constructor_call(construct, values, presentation_values, local_values, ctx)
+            }
+        },
         NodeKind::Local(local) => local_values
             .get(local.value)
             .cloned()
@@ -307,18 +311,9 @@ fn eval_texpr_inner(
                 eval_texpr_evaluated(inner, values, presentation_values, local_values, ctx)?;
             eval_field_access(inner_val.into_fields(), inner, field, ctx).map_err(Outcome::Failed)
         }
-        NodeKind::Construct {
-            application,
-            fields,
-        } => eval_constructor_call(
-            expr.span(),
-            application,
-            fields,
-            values,
-            presentation_values,
-            local_values,
-            ctx,
-        ),
+        NodeKind::Construct(construct) => {
+            eval_constructor_call(construct, values, presentation_values, local_values, ctx)
+        }
         NodeKind::Map { entries, axes } => {
             let entries = entries
                 .iter()
@@ -485,44 +480,6 @@ pub fn reset_cloned_runtime_node_count() {
 #[must_use]
 pub fn take_cloned_runtime_node_count() -> usize {
     CLONED_RUNTIME_NODES.with(|count| count.replace(0))
-}
-
-fn eval_const_ref(
-    target: &Spanned<ConstRef<'_>>,
-    values: &RuntimeValueMap,
-    ctx: &EvalSession<'_>,
-) -> Result<RuntimeValue, SemanticError> {
-    match &target.value {
-        ConstRef::Decl(resolved) => values
-            .get(resolved)
-            .cloned()
-            .ok_or_else(|| ctx.eval_error(format!("undefined constant `{resolved}`"), target.span)),
-        ConstRef::Constructor(application) => nullary_constructor(application, target.span, ctx),
-    }
-}
-
-fn nullary_constructor(
-    application: &graphcal_compiler::tir::texpr::ConstructorApplication,
-    span: Span,
-    ctx: &EvalSession<'_>,
-) -> Result<RuntimeValue, SemanticError> {
-    crate::pipeline_metrics::record(crate::pipeline_metrics::Event::ConstructorFactConsumption);
-    apply_constructor(application, Vec::new(), span, ctx)
-}
-
-/// Apply a checked constructor to its evaluated fields.
-fn apply_constructor(
-    application: &graphcal_compiler::tir::texpr::ConstructorApplication,
-    fields: Vec<(
-        graphcal_compiler::syntax::type_name::FieldName,
-        RuntimeValue,
-    )>,
-    span: Span,
-    ctx: &EvalSession<'_>,
-) -> Result<RuntimeValue, SemanticError> {
-    StructValue::try_from_application(&application.applied, fields)
-        .map(RuntimeValue::Struct)
-        .map_err(|error| ctx.internal_error(error.to_string(), span))
 }
 
 /// Evaluate a key introduction form.
@@ -750,68 +707,65 @@ fn eval_field_access<V>(
         })
 }
 
+/// Evaluate a constructor call: each field in written order, checked
+/// against its field constraint, at its declared place.
 fn eval_constructor_call(
-    span: Span,
-    application: &graphcal_compiler::tir::texpr::ConstructorApplication,
-    fields: Scoped<'_, [TFieldInit]>,
+    construct: Scoped<'_, TConstruct>,
     values: &RuntimeValueMap,
     presentation_values: Option<&PendingPresentedMap>,
     local_values: &HirLocalValueMap<'_>,
     ctx: &EvalSession<'_>,
 ) -> Result<EvaluatedRuntimeValue, Outcome<SemanticError>> {
     crate::pipeline_metrics::record(crate::pipeline_metrics::Event::ConstructorFactConsumption);
+    let application = construct.application();
     let constructor_name = application.constructor.name();
     let owning_type = StructTypeRef::from_resolved(application.definition().clone());
-    let mut field_values = Vec::with_capacity(fields.len());
-    for scoped_init in fields.iter() {
-        let field_init = scoped_init.get();
-        let evaluated = eval_texpr_evaluated(
-            scoped_init.map(|init| &init.value),
-            values,
-            presentation_values,
-            local_values,
-            ctx,
-        )?;
-        if application.constructor.constrains(&field_init.name)
-            && let Some(field_constraints) = ctx.struct_field_constraints()
-        {
-            let key =
-                graphcal_compiler::tir::typed::model::StructFieldConstraintKey::for_application(
-                    owning_type.clone(),
-                    application.generic_args().to_vec(),
-                    constructor_name.clone(),
-                    field_init.name.clone(),
-                );
-            let constraint = field_constraints.get(&key).ok_or_else(|| {
-                ctx.internal_error(
-                    format!(
-                        "required field constraint `{constructor_name}.{}` is missing",
-                        field_init.name
-                    ),
-                    field_init.value.span(),
-                )
-            })?;
-            if let Err(violation) =
-                crate::domain_check::check_domain_constraint(&evaluated.value(), constraint)
+    construct
+        .apply(|scoped_init| {
+            let field_init = scoped_init.get();
+            let evaluated = eval_texpr_evaluated(
+                scoped_init.map(|init| &init.value),
+                values,
+                presentation_values,
+                local_values,
+                ctx,
+            )?;
+            if application.constructor.constrains(&field_init.name)
+                && let Some(field_constraints) = ctx.struct_field_constraints()
             {
-                return Err(ctx
-                    .eval_error(
+                let key =
+                    graphcal_compiler::tir::typed::model::StructFieldConstraintKey::for_application(
+                        owning_type.clone(),
+                        application.generic_args().to_vec(),
+                        constructor_name.clone(),
+                        field_init.name.clone(),
+                    );
+                let constraint = field_constraints.get(&key).ok_or_else(|| {
+                    ctx.internal_error(
                         format!(
-                            "field `{constructor_name}.{}` {}",
-                            field_init.name, violation.message
+                            "required field constraint `{constructor_name}.{}` is missing",
+                            field_init.name
                         ),
                         field_init.value.span(),
                     )
-                    .into());
+                })?;
+                if let Err(violation) =
+                    crate::domain_check::check_domain_constraint(&evaluated.value(), constraint)
+                {
+                    return Err(ctx
+                        .eval_error(
+                            format!(
+                                "field `{constructor_name}.{}` {}",
+                                field_init.name, violation.message
+                            ),
+                            field_init.value.span(),
+                        )
+                        .into());
+                }
             }
-        }
-        field_values.push((field_init.name.clone(), evaluated));
-    }
-    // The checker admits a constructor call only with its declared fields.
-    StructValue::try_from_application(&application.applied, field_values)
+            Ok::<_, Outcome<SemanticError>>(evaluated)
+        })
         .map(EvaluatedRuntimeValue::from_struct)
-        .map_err(|error| invariant_error(Invariant::violated(error), span, ctx))
-        .map_err(Outcome::Failed)
 }
 
 fn ensure_index_ref_matches_resolved(

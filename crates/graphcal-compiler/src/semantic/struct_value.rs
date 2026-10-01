@@ -47,17 +47,18 @@ pub enum StructFieldsError {
 }
 
 impl<V> StructValue<V> {
-    /// Apply a checked constructor application to evaluated field values.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`StructFieldsError`] when `fields` is not exactly the
-    /// constructor's declared field set.
-    pub fn try_from_application(
-        application: &Arc<AppliedConstructor>,
-        fields: impl IntoIterator<Item = (FieldName, V)>,
-    ) -> Result<Self, StructFieldsError> {
-        Self::try_new(Arc::clone(application), fields)
+    /// Apply `application` to one value per declared field, in declaration
+    /// order. Only a checked constructor call, which places each of its
+    /// initializers at its declared field once, applies a constructor this
+    /// way.
+    pub(crate) const fn from_declared(
+        application: Arc<AppliedConstructor>,
+        values: Vec<V>,
+    ) -> Self {
+        Self {
+            application,
+            values,
+        }
     }
 
     /// Build the record an extern function returned, whose declaration bound

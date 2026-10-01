@@ -15,6 +15,7 @@ use crate::resolved_name::ResolvedDeclName;
 use crate::semantic::checked_type::{CheckedType, Concrete, Concreteness, IndexTypeRef};
 use crate::semantic::index_axis::IndexAxis;
 use crate::semantic::key_value::KeyValue;
+use crate::semantic::struct_value::{StructFieldsError, StructValue};
 use crate::semantic::time_zone::IanaTimeZoneId;
 use crate::syntax::function_name::FnParamName;
 use crate::syntax::non_empty::NonEmpty;
@@ -93,11 +94,11 @@ impl<V: Concreteness> TExpr<V> {
     #[must_use]
     pub const fn application(&self) -> Option<&ConstructorApplication<V>> {
         match &self.kind {
-            TExprKind::Construct { application, .. }
+            TExprKind::Construct(construct)
             | TExprKind::Const(Spanned {
-                value: TConstRef::Constructor(application),
+                value: TConstRef::Constructor(construct),
                 ..
-            }) => Some(application),
+            }) => Some(construct.application()),
             _ => None,
         }
     }
@@ -136,8 +137,8 @@ impl<V: Concreteness> TExpr<V> {
                 then_branch,
                 else_branch,
             } => vec![&**condition, &**then_branch, &**else_branch],
-            TExprKind::Construct { fields, .. } => {
-                fields.iter().map(|field| &field.value).collect()
+            TExprKind::Construct(construct) => {
+                construct.fields().map(|field| &field.value).collect()
             }
             TExprKind::Map { entries, .. } => entries.iter().map(|entry| &entry.value).collect(),
             TExprKind::Index { expr, args } => std::iter::once(&**expr)
@@ -263,10 +264,7 @@ pub enum TExprKind<V: Concreteness = Concrete> {
         field: Spanned<FieldName>,
     },
     /// A constructor call with its checked nominal application.
-    Construct {
-        application: ConstructorApplication<V>,
-        fields: Vec<TFieldInit<V>>,
-    },
+    Construct(TConstruct<V>),
     /// A map literal; `axes` are the axes its entry keys select on, outermost
     /// first.
     Map {
@@ -379,8 +377,8 @@ impl CoordinateSearch {
 #[derive(Debug, Clone)]
 pub enum TConstRef<V: Concreteness = Concrete> {
     Decl(crate::hir::expr::LocalDecl),
-    /// A field-less constructor used as a value, with its checked application.
-    Constructor(ConstructorApplication<V>),
+    /// A field-less constructor used as a value: a call with no fields.
+    Constructor(TConstruct<V>),
 }
 
 /// A function argument: a value, or a contextual literal the callee accepts.
@@ -509,6 +507,107 @@ pub struct TExternArg<V: Concreteness = Concrete> {
 pub struct TFieldInit<V: Concreteness = Concrete> {
     pub name: FieldName,
     pub value: TExpr<V>,
+}
+
+/// A constructor call: its checked application and its field initializers
+/// in written order, each placed at the declared field it initializes.
+///
+/// Built only by `TConstruct::try_new`, which admits exactly the
+/// application's declared fields; a type map rewrites the application's
+/// field types but never its field names, so applying a call to its
+/// evaluated fields always yields a [`StructValue`].
+#[derive(Debug, Clone)]
+pub struct TConstruct<V: Concreteness = Concrete> {
+    pub(super) application: ConstructorApplication<V>,
+    /// Each initializer, in written order, with the declaration position of
+    /// the field it initializes.
+    pub(super) fields: Vec<(usize, TFieldInit<V>)>,
+}
+
+impl<V: Concreteness> TConstruct<V> {
+    /// A call of `application` with `fields`, in written order.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`StructFieldsError`] when `fields` is not exactly the
+    /// application's declared field set.
+    pub(crate) fn try_new(
+        application: ConstructorApplication<V>,
+        fields: Vec<TFieldInit<V>>,
+    ) -> Result<Self, StructFieldsError> {
+        let declared = application.applied.fields();
+        let constructor = || application.applied.constructor().clone();
+        let mut placed = vec![false; declared.len()];
+        let fields = fields
+            .into_iter()
+            .map(|init| {
+                let slot = declared
+                    .iter()
+                    .position(|field| *field.name() == init.name)
+                    .ok_or_else(|| StructFieldsError::Unexpected {
+                        constructor: constructor(),
+                        field: init.name.clone(),
+                    })?;
+                if std::mem::replace(&mut placed[slot], true) {
+                    return Err(StructFieldsError::Duplicate {
+                        constructor: constructor(),
+                        field: init.name,
+                    });
+                }
+                Ok((slot, init))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        if let Some(missing) = declared
+            .iter()
+            .zip(&placed)
+            .find_map(|(field, placed)| (!placed).then_some(field))
+        {
+            return Err(StructFieldsError::Missing {
+                constructor: constructor(),
+                field: missing.name().clone(),
+            });
+        }
+        Ok(Self {
+            application,
+            fields,
+        })
+    }
+
+    /// The checked application.
+    #[must_use]
+    pub const fn application(&self) -> &ConstructorApplication<V> {
+        &self.application
+    }
+
+    /// The field initializers, in written order.
+    #[must_use]
+    pub fn fields(&self) -> impl ExactSizeIterator<Item = &TFieldInit<V>> {
+        self.fields.iter().map(|(_, init)| init)
+    }
+}
+
+impl TConstruct {
+    /// The value of this call: each field's value as `value` produces it,
+    /// evaluated in written order, at the field's declared place.
+    ///
+    /// # Errors
+    ///
+    /// Returns the first error `value` returns, in written order.
+    pub fn apply<'s, T, E>(
+        &'s self,
+        mut value: impl FnMut(&'s TFieldInit) -> Result<T, E>,
+    ) -> Result<StructValue<T>, E> {
+        let mut values = self
+            .fields
+            .iter()
+            .map(|(slot, init)| Ok((*slot, value(init)?)))
+            .collect::<Result<Vec<_>, E>>()?;
+        values.sort_by_key(|(slot, _)| *slot);
+        Ok(StructValue::from_declared(
+            std::sync::Arc::clone(&self.application.applied),
+            values.into_iter().map(|(_, value)| value).collect(),
+        ))
+    }
 }
 
 /// A checked map-literal entry.

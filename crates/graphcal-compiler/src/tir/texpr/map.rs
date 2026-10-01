@@ -18,8 +18,8 @@ use crate::syntax::index_name::IndexVariantName;
 use crate::syntax::span::{Span, Spanned};
 
 use super::model::{
-    StaticPosition, TBody, TConstRef, TConstructorArm, TExpr, TExprKind, TExternArg, TFieldInit,
-    TForBinding, TIndexArg, TKeyForm, TLabelArm, TMapEntry, TMatchArms, TParamBinding,
+    StaticPosition, TBody, TConstRef, TConstruct, TConstructorArm, TExpr, TExprKind, TExternArg,
+    TFieldInit, TForBinding, TIndexArg, TKeyForm, TLabelArm, TMapEntry, TMatchArms, TParamBinding,
 };
 
 /// The entry of its axis a constant key a node carries names.
@@ -238,6 +238,36 @@ const fn key_index<W: Concreteness>(ty: &CheckedType<W>) -> Option<&IndexTypeRef
     }
 }
 
+impl<V: Concreteness> TConstruct<V> {
+    /// This call with its application and field values rewritten by `map`.
+    ///
+    /// A type map keeps the application's field names, so each initializer
+    /// keeps its declared place.
+    fn map_types<W: Concreteness, M: TypeMap<V, W>>(
+        &self,
+        ty: &CheckedType<W>,
+        span: Span,
+        map: &mut M,
+    ) -> Result<TConstruct<W>, M::Error> {
+        Ok(TConstruct {
+            application: map.application(&self.application, ty, span)?,
+            fields: self
+                .fields
+                .iter()
+                .map(|(slot, field)| {
+                    Ok((
+                        *slot,
+                        TFieldInit {
+                            name: field.name.clone(),
+                            value: field.value.map_types(map)?,
+                        },
+                    ))
+                })
+                .collect::<Result<_, M::Error>>()?,
+        })
+    }
+}
+
 impl<V: Concreteness> TBody<V> {
     /// Rewrite this body's types with `map`.
     pub(crate) fn map_types<W: Concreteness, M: TypeMap<V, W>>(
@@ -314,8 +344,8 @@ impl<V: Concreteness> TExpr<V> {
             TExprKind::Const(target) => TExprKind::Const(Spanned::new(
                 match &target.value {
                     TConstRef::Decl(declaration) => TConstRef::Decl(declaration.clone()),
-                    TConstRef::Constructor(application) => {
-                        TConstRef::Constructor(map.application(application, ty, span)?)
+                    TConstRef::Constructor(construct) => {
+                        TConstRef::Constructor(construct.map_types(ty, span, map)?)
                     }
                 },
                 target.span,
@@ -367,21 +397,9 @@ impl<V: Concreteness> TExpr<V> {
                 expr: expr.boxed(map)?,
                 field: field.clone(),
             },
-            TExprKind::Construct {
-                application,
-                fields,
-            } => TExprKind::Construct {
-                application: map.application(application, ty, span)?,
-                fields: fields
-                    .iter()
-                    .map(|field| {
-                        Ok(TFieldInit {
-                            name: field.name.clone(),
-                            value: field.value.map_types(map)?,
-                        })
-                    })
-                    .collect::<Result<_, M::Error>>()?,
-            },
+            TExprKind::Construct(construct) => {
+                TExprKind::Construct(construct.map_types(ty, span, map)?)
+            }
             TExprKind::Map { entries, axes } => {
                 let axes = axes
                     .iter()

@@ -29,8 +29,8 @@ use super::call_targets::CallTargets;
 use super::model::ExternSignature;
 use super::model::{
     ContextualLiteral, CoordinateSearch, DatetimeLiteral, ExternArgKind, StaticPosition, TArg,
-    TConstRef, TConstructorArm, TContextual, TExpr, TExprKind, TExternArg, TFieldInit, TForBinding,
-    TIndexArg, TKeyForm, TLabelArm, TMapEntry, TMatchArms, TParamBinding,
+    TConstRef, TConstruct, TConstructorArm, TContextual, TExpr, TExprKind, TExternArg, TFieldInit,
+    TForBinding, TIndexArg, TKeyForm, TLabelArm, TMapEntry, TMatchArms, TParamBinding,
 };
 use super::nominal::{ConstructorApplication, ConstructorMatch};
 use super::operators::{
@@ -61,6 +61,8 @@ pub enum AssemblyError {
     UnplacedStaticPosition(ExprId),
     #[error("expression {0:?} has no operation for its checked operand types")]
     UncheckedOperands(ExprId),
+    #[error("constructor call {0:?} does not initialize exactly its declared fields")]
+    ConstructorFields(ExprId),
 }
 
 /// The node-specific facts checking established for one value expression.
@@ -243,7 +245,10 @@ impl PendingNodes {
                 )),
                 ConstRef::Builtin(constant) => TExprKind::Quantity(QExpr::Constant(*constant)),
                 ConstRef::Constructor(_) => TExprKind::Const(Spanned::new(
-                    TConstRef::Constructor(application()?),
+                    TConstRef::Constructor(
+                        TConstruct::try_new(application()?, Vec::new())
+                            .map_err(|_| AssemblyError::ConstructorFields(id()))?,
+                    ),
                     target.span,
                 )),
             },
@@ -291,18 +296,21 @@ impl PendingNodes {
                 expr: self.take_boxed(expr, inner)?,
                 field: field.clone(),
             },
-            ExprKind::ConstructorCall { fields, .. } => TExprKind::Construct {
-                application: application()?,
-                fields: fields
-                    .iter()
-                    .map(|field| {
-                        Ok(TFieldInit {
-                            name: field.name.value.clone(),
-                            value: self.take_value(expr, &field.value)?,
+            ExprKind::ConstructorCall { fields, .. } => TExprKind::Construct(
+                TConstruct::try_new(
+                    application()?,
+                    fields
+                        .iter()
+                        .map(|field| {
+                            Ok(TFieldInit {
+                                name: field.name.value.clone(),
+                                value: self.take_value(expr, &field.value)?,
+                            })
                         })
-                    })
-                    .collect::<Result<_, AssemblyError>>()?,
-            },
+                        .collect::<Result<_, AssemblyError>>()?,
+                )
+                .map_err(|_| AssemblyError::ConstructorFields(id()))?,
+            ),
             ExprKind::MapLiteral { entries } => TExprKind::Map {
                 axes: entries
                     .first()

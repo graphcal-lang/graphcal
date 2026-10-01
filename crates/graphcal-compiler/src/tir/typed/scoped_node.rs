@@ -21,15 +21,16 @@ use crate::resolved_name::{ResolvedDeclName, ResolvedUnitName};
 use crate::semantic::checked_type::CheckedType;
 use crate::semantic::index_axis::IndexAxis;
 use crate::semantic::key_value::KeyValue;
+use crate::semantic::struct_value::StructValue;
 use crate::semantic::time_zone::IanaTimeZoneId;
 use crate::syntax::non_empty::NonEmpty;
 use crate::syntax::span::{Span, Spanned};
 use crate::syntax::type_name::FieldName;
 use crate::tir::texpr::operators::{BExpr, CExpr, DExpr, IExpr, LinearAlgebraCall, QExpr};
 use crate::tir::texpr::{
-    CallSlot, ConstructorApplication, DatetimeLiteral, StaticPosition, TConstRef, TConstructorArm,
-    TExpr, TExprKind, TExternArg, TFieldInit, TForBinding, TIndexArg, TKeyForm, TLabelArm,
-    TMapEntry, TMatchArms, TNodeRef, TParamBinding, visit_tnodes,
+    CallSlot, ConstructorApplication, DatetimeLiteral, StaticPosition, TConstRef, TConstruct,
+    TConstructorArm, TExpr, TExprKind, TExternArg, TFieldInit, TForBinding, TIndexArg, TKeyForm,
+    TLabelArm, TMapEntry, TMatchArms, TNodeRef, TParamBinding, visit_tnodes,
 };
 
 use super::body_scope::Scoped;
@@ -90,10 +91,7 @@ pub enum NodeKind<'t> {
         expr: ScopedNode<'t>,
         field: &'t Spanned<FieldName>,
     },
-    Construct {
-        application: &'t ConstructorApplication,
-        fields: Scoped<'t, [TFieldInit]>,
-    },
+    Construct(Scoped<'t, TConstruct>),
     Map {
         entries: Scoped<'t, [TMapEntry]>,
         axes: &'t [IndexAxis],
@@ -147,7 +145,31 @@ pub struct ScopedScan<'t> {
 #[derive(Debug, Clone)]
 pub enum ConstRef<'t> {
     Decl(ResolvedDeclName),
-    Constructor(&'t ConstructorApplication),
+    /// A field-less constructor used as a value: a call with no fields.
+    Constructor(Scoped<'t, TConstruct>),
+}
+
+impl<'t> Scoped<'t, TConstruct> {
+    /// The checked application of this call.
+    #[must_use]
+    pub const fn application(self) -> &'t ConstructorApplication {
+        self.get().application()
+    }
+
+    /// The value of this call: each field's value as `value` produces it from
+    /// the field's initializer in this call's scope, evaluated in written
+    /// order, at the field's declared place.
+    ///
+    /// # Errors
+    ///
+    /// Returns the first error `value` returns, in written order.
+    pub fn apply<T, E>(
+        self,
+        mut value: impl FnMut(Scoped<'t, TFieldInit>) -> Result<T, E>,
+    ) -> Result<StructValue<T>, E> {
+        let scope = self.scope();
+        self.get().apply(|init| value(Scoped::new(scope, init)))
+    }
 }
 
 /// A unit expression of a node, whose terms resolve in the node's scope.
@@ -264,7 +286,9 @@ impl<'t> Scoped<'t, TExpr> {
             TExprKind::Const(target) => NodeKind::Const(Spanned::new(
                 match &target.value {
                     TConstRef::Decl(handle) => ConstRef::Decl(resolve(handle)),
-                    TConstRef::Constructor(application) => ConstRef::Constructor(application),
+                    TConstRef::Constructor(construct) => {
+                        ConstRef::Constructor(Scoped::new(scope, construct))
+                    }
                 },
                 target.span,
             )),
@@ -308,13 +332,7 @@ impl<'t> Scoped<'t, TExpr> {
                 expr: node(expr),
                 field,
             },
-            TExprKind::Construct {
-                application,
-                fields,
-            } => NodeKind::Construct {
-                application,
-                fields: Scoped::new(scope, fields.as_slice()),
-            },
+            TExprKind::Construct(construct) => NodeKind::Construct(Scoped::new(scope, construct)),
             TExprKind::Map { entries, axes } => NodeKind::Map {
                 entries: Scoped::new(scope, entries.as_slice()),
                 axes,

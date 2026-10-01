@@ -34,9 +34,9 @@ pub use checked_bodies::{
 pub(crate) use checked_bodies::{ClaimedRoots, claim_roots};
 pub use model::{
     ContextualLiteral, CoordinateSearch, DatetimeLiteral, ExternArgKind, ExternSignature,
-    StaticPosition, TArg, TBody, TConstRef, TConstructorArm, TContextual, TExpr, TExprKind,
-    TExternArg, TFieldInit, TForBinding, TIndexArg, TKeyForm, TLabelArm, TMapEntry, TMatchArms,
-    TNodeRef, TParamBinding, visit_tnodes,
+    StaticPosition, TArg, TBody, TConstRef, TConstruct, TConstructorArm, TContextual, TExpr,
+    TExprKind, TExternArg, TFieldInit, TForBinding, TIndexArg, TKeyForm, TLabelArm, TMapEntry,
+    TMatchArms, TNodeRef, TParamBinding, visit_tnodes,
 };
 pub use nominal::{ConstructorApplication, ConstructorMatch, NominalObservation};
 
