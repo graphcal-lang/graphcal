@@ -75,27 +75,6 @@ impl DimCheckContext<'_> {
         self.cancellation.checkpoint()
     }
 
-    /// Look up the module-aware HIR expression for a local declaration.
-    fn hir_expr_for_decl(&self, declaration: &ResolvedDeclName) -> Option<&crate::hir::expr::Expr> {
-        self.env.dag.value_expr(declaration)
-    }
-
-    /// Look up the module-aware HIR assertion body for a local assertion.
-    fn hir_assert_body(
-        &self,
-        name: &DeclName,
-        declaration: &ResolvedDeclName,
-        span: crate::syntax::span::Span,
-    ) -> Result<&crate::hir::expr::AssertBody, SemanticError> {
-        self.env.dag.assert_body(declaration).ok_or_else(|| {
-            SemanticError::internal_error(
-                format!("TIR assertion entry missing for `{name}`"),
-                self.env.src,
-                crate::diagnostic_anchor::DiagnosticAnchor::Source(span),
-            )
-        })
-    }
-
     /// Infer the type of a checked root, recording its observations in this
     /// context's sink.
     fn infer_hir(
@@ -120,27 +99,20 @@ fn validate_declared_shape(
     )
 }
 
-/// Check that a declaration's expression type matches its declared type annotation.
+/// Check that a declaration's expression type matches its declared type
+/// annotation.
+///
+/// An unfinished node (`todo`) has no expression: its explicit declaration
+/// type is the entire contract, so it is not checked here.
 fn check_decl_expr_type(
     ctx: &DimCheckContext<'_>,
     name: &DeclName,
     identity: &ResolvedDeclName,
     annotation: &crate::tir::typed::CheckedTypeAnnotation,
+    hir_expr: &crate::hir::expr::Expr,
 ) -> Result<(), Outcome<SemanticError>> {
     let type_ann_span = &annotation.span;
     let declared = annotation.checked().declared();
-    if ctx.env.dag.todo(identity).is_some() {
-        // The explicit declaration type is the entire contract; there is no
-        // formula to infer or expression fact to fabricate.
-        return Ok(());
-    }
-    let hir_expr = ctx.hir_expr_for_decl(identity).ok_or_else(|| {
-        SemanticError::internal_error(
-            format!("value declaration record missing while checking `{name}`"),
-            ctx.env.src,
-            crate::diagnostic_anchor::DiagnosticAnchor::Source(*type_ann_span),
-        )
-    })?;
     if ctx
         .env
         .dag
@@ -936,10 +908,16 @@ fn check_param_defaults(ctx: &DimCheckContext<'_>) -> Result<(), Outcome<Semanti
     for entry in ctx.env.dag.params() {
         ctx.checkpoint()?;
         validate_declared_shape(ctx, &entry.type_ann)?;
-        if entry.default.is_none() {
+        let Some(default) = &entry.default else {
             continue;
-        }
-        check_decl_expr_type(ctx, entry.name(), &entry.identity(), &entry.type_ann)?;
+        };
+        check_decl_expr_type(
+            ctx,
+            entry.name(),
+            &entry.identity(),
+            &entry.type_ann,
+            default,
+        )?;
     }
     Ok(())
 }
@@ -969,12 +947,26 @@ fn check_dimensions_dag(
     for entry in dag.consts() {
         ctx.checkpoint()?;
         validate_declared_shape(&ctx, &entry.type_ann)?;
-        check_decl_expr_type(&ctx, entry.name(), &entry.identity(), &entry.type_ann)?;
+        check_decl_expr_type(
+            &ctx,
+            entry.name(),
+            &entry.identity(),
+            &entry.type_ann,
+            &entry.expr,
+        )?;
     }
     for entry in dag.nodes() {
         ctx.checkpoint()?;
         validate_declared_shape(&ctx, &entry.type_ann)?;
-        check_decl_expr_type(&ctx, entry.name(), &entry.identity(), &entry.type_ann)?;
+        if let Some(formula) = entry.definition.formula() {
+            check_decl_expr_type(
+                &ctx,
+                entry.name(),
+                &entry.identity(),
+                &entry.type_ann,
+                formula,
+            )?;
+        }
     }
     check_param_defaults(&ctx)?;
 
@@ -984,7 +976,7 @@ fn check_dimensions_dag(
     for entry in dag.asserts() {
         ctx.checkpoint()?;
         let owner = entry.identity();
-        let body = ctx.hir_assert_body(entry.name(), &owner, entry.span)?;
+        let body = &*entry.body;
         let shape = check_hir_assert_body(&ctx, &owner, body, entry.span)?;
         if let Some(metadata) = dag.expected_fail.get(&owner) {
             validate_expected_fail(&metadata.expected, &shape, src, metadata.attribute_span)?;

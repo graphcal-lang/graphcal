@@ -15,7 +15,7 @@ use graphcal_compiler::hir::expr::Expr;
 use graphcal_compiler::resolved_name::ResolvedDeclName;
 use graphcal_compiler::tir::typed::body_scope::Scoped;
 use graphcal_compiler::tir::typed::checked::CheckedTir;
-use graphcal_compiler::tir::typed::evaluation_unit::DeclarationBody;
+use graphcal_compiler::tir::typed::evaluation_unit::BodyKind;
 use thiserror::Error;
 
 pub type RuntimeValueMap = HashMap<ResolvedDeclName, RuntimeValue>;
@@ -108,7 +108,10 @@ impl ConstPool {
         for key in schedule.order() {
             let (Some(expression), Some(pool)) = (
                 tir.declaration_body(key)
-                    .and_then(DeclarationBody::const_expression),
+                    .and_then(|body| match body.kind() {
+                        BodyKind::Const(expression) => Some(expression),
+                        _ => None,
+                    }),
                 fresh.get_mut(key.owner()),
             ) else {
                 return invalid(ConstantPoolError::MissingDeclaration(key.clone()));

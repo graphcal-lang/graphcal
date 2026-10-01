@@ -12,7 +12,7 @@ use graphcal_compiler::source_id::SourceId;
 use graphcal_compiler::syntax::module_name::ScopedName;
 use graphcal_compiler::syntax::span::Span;
 use graphcal_compiler::tir::typed::{
-    AssertionOperands, DeclarationBody, ResolvedProjection, Scoped,
+    AssertionOperands, BodyKind, DeclarationBody, ResolvedProjection, Scoped,
 };
 
 use crate::assertion_eval::evaluate_assert_with_expected_fail;
@@ -36,7 +36,11 @@ fn assertion_body<'tir>(
     SemanticError,
 > {
     let unit = declaration_body(tir, owner, src)?;
-    let entry = unit.assertion().ok_or_else(|| {
+    let entry = match unit.kind() {
+        BodyKind::Assert(entry) => Some(entry),
+        _ => None,
+    }
+    .ok_or_else(|| {
         SemanticError::internal_error(
             format!("assertion `{owner}` has no checked body"),
             src,

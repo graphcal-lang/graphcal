@@ -8,6 +8,7 @@ use graphcal_compiler::outcome::Outcome;
 use graphcal_compiler::resolved_name::ResolvedDeclName;
 use graphcal_compiler::semantic_error::SemanticError;
 use graphcal_compiler::source_id::SourceId;
+use graphcal_compiler::tir::typed::evaluation_unit::{BodyKind, NodeBody};
 
 use crate::checked_program::{CheckedProgram, SealedDag};
 use crate::execution_plan::{
@@ -128,14 +129,22 @@ fn prepare_declarations<'p>(
                     scope.source(),
                 )
             })?;
-            let body = match (unit.is_todo(), unit.runtime_expression()) {
-                (true, _) => PlannedBody::Todo,
-                (false, Some(root)) => PlannedBody::Expression {
+            let body = match unit.kind() {
+                BodyKind::Node(NodeBody::Todo) => PlannedBody::Todo,
+                BodyKind::Node(NodeBody::Formula(root))
+                | BodyKind::Param {
+                    default: Some(root),
+                } => PlannedBody::Expression {
                     root,
                     tree: root.executable(),
                 },
                 // Required ports have no default; constants are pooled.
-                (false, None) => PlannedBody::Supplied,
+                BodyKind::Param { default: None }
+                | BodyKind::Const(_)
+                | BodyKind::Assert(_)
+                | BodyKind::Plot(_)
+                | BodyKind::Figure(_)
+                | BodyKind::Layer(_) => PlannedBody::Supplied,
             };
             let reads = match (&body, dag.runtime_schedule().dependencies_of(key)) {
                 (_, Some(reads)) => reads,

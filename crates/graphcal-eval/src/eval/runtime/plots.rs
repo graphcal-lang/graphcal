@@ -18,7 +18,7 @@ use graphcal_compiler::semantic_error::SemanticError;
 use graphcal_compiler::syntax::decl_name::DeclName;
 use graphcal_compiler::syntax::module_name::ScopedName;
 use graphcal_compiler::syntax::span::{Span, Spanned};
-use graphcal_compiler::tir::typed::{DeclarationBody, ResolvedProjection, Scoped};
+use graphcal_compiler::tir::typed::{BodyKind, DeclarationBody, ResolvedProjection, Scoped};
 
 use crate::eval::plot_unavailable::{ComposedPlotsUnavailable, PlotUnavailable};
 use crate::eval::public_projection;
@@ -116,7 +116,11 @@ pub(super) fn evaluate_root_plots(
         // The plot runs in the DAG that owns it, which may be an instance
         // nested in the requesting one when a template forwards its own plot.
         let unit = declaration_body(tir, &plot.identity, ctx.src)?;
-        let entry = unit.plot().ok_or_else(|| {
+        let entry = match unit.kind() {
+            BodyKind::Plot(entry) => Some(entry),
+            _ => None,
+        }
+        .ok_or_else(|| {
             ctx.internal_error(
                 format!("plot `{}` has no checked body", plot.identity),
                 DiagnosticAnchor::WholeFile,
@@ -154,9 +158,10 @@ pub(super) fn evaluate_root_plots(
         })
         .map(|(entry, plot_names)| {
             let owner = entry.identity().clone();
-            let fields = declaration_body(tir, &owner, ctx.src)?
-                .figure()
-                .map(|figure| figure.map(|figure| figure.fields.as_slice()));
+            let fields = match declaration_body(tir, &owner, ctx.src)?.kind() {
+                BodyKind::Figure(figure) => Some(figure.map(|figure| figure.fields.as_slice())),
+                _ => None,
+            };
             Ok(compositions
                 .compose(&owner, entry.name(), fields, plot_names)?
                 .map(|composed| FigureSpec {
@@ -180,9 +185,10 @@ pub(super) fn evaluate_root_plots(
         })
         .map(|(entry, plot_names)| {
             let owner = entry.identity().clone();
-            let fields = declaration_body(tir, &owner, ctx.src)?
-                .layer()
-                .map(|layer| layer.map(|layer| layer.fields.as_slice()));
+            let fields = match declaration_body(tir, &owner, ctx.src)?.kind() {
+                BodyKind::Layer(layer) => Some(layer.map(|layer| layer.fields.as_slice())),
+                _ => None,
+            };
             Ok(compositions
                 .compose(&owner, entry.name(), fields, plot_names)?
                 .map(|composed| LayerSpec {

@@ -166,7 +166,7 @@ fn check_rigid_value_bodies(
     ctx: &DimCheckContext<'_>,
     failure: RigidFailure<'_>,
 ) -> Result<(), Outcome<SemanticError>> {
-    for (kind, name, declaration, annotation, body_span) in ctx
+    for (kind, name, declaration, annotation, expression) in ctx
         .env
         .dag
         .consts()
@@ -176,7 +176,7 @@ fn check_rigid_value_bodies(
                 entry.name(),
                 entry.identity(),
                 &entry.type_ann,
-                entry.expr.span,
+                &*entry.expr,
             )
         })
         .chain(ctx.env.dag.nodes().filter_map(|entry| {
@@ -186,7 +186,7 @@ fn check_rigid_value_bodies(
                     entry.name(),
                     entry.identity(),
                     &entry.type_ann,
-                    expression.span,
+                    &**expression,
                 )
             })
         }))
@@ -202,8 +202,8 @@ fn check_rigid_value_bodies(
             ctx,
             &body,
             failure,
-            body_span,
-            check_decl_expr_type(ctx, name, &declaration, annotation),
+            expression.span,
+            check_decl_expr_type(ctx, name, &declaration, annotation, expression),
         )?;
     }
     Ok(())
@@ -217,7 +217,7 @@ fn check_rigid_assertion_bodies(
         let Some(owner) = local_owner(ctx, entry.identity()) else {
             continue;
         };
-        let assertion = ctx.hir_assert_body(entry.name(), &owner, entry.span)?;
+        let assertion = &*entry.body;
         let body = TemplateBodyIdentity {
             kind: DeclarationKind::Assert,
             name: entry.name().atom().clone(),

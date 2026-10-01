@@ -106,6 +106,23 @@ impl CheckedDagRegistry {
             .map(|(position, dag)| BodyScope::of(dag, position, &self.callees[position.index()]))
     }
 
+    /// The scope of the DAG at `position`.
+    ///
+    /// # Panics
+    ///
+    /// Panics when `position` is a position of another registry with more
+    /// DAGs.
+    pub(super) fn scope_at(&self, position: DagPosition) -> BodyScope<'_> {
+        let index = position.index();
+        let locals = self.other_dags.len();
+        let dag = match index {
+            0 => &self.root,
+            index if index <= locals => &self.other_dags[index - 1],
+            index => self.shared_dags[index - 1 - locals].as_ref(),
+        };
+        BodyScope::of(dag, position, &self.callees[index])
+    }
+
     /// The scope of the root DAG.
     pub(super) fn root_scope(&self) -> BodyScope<'_> {
         BodyScope::of(

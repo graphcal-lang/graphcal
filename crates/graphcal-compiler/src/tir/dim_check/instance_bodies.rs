@@ -153,7 +153,13 @@ fn check_instance_defaults(
         let id = default.id();
         let inherited = template_defaults.contains(id);
         if !inherited {
-            check_decl_expr_type(ctx, entry.name(), &entry.identity(), &entry.type_ann)?;
+            check_decl_expr_type(
+                ctx,
+                entry.name(),
+                &entry.identity(),
+                &entry.type_ann,
+                default,
+            )?;
             continue;
         }
         let internal = |message: String| {

@@ -14,7 +14,7 @@ use graphcal_compiler::tir::texpr::{
     TLabelArm, TParamBinding,
 };
 use graphcal_compiler::tir::typed::body_scope::Scoped;
-use graphcal_compiler::tir::typed::evaluation_unit::{DeclarationBody, ScopedTree};
+use graphcal_compiler::tir::typed::evaluation_unit::{BodyKind, DeclarationBody, ScopedTree};
 use graphcal_compiler::tir::typed::scoped_node::{
     ConstRef, NodeKind, ScopedCall, ScopedIndexArg, ScopedMatchArms, ScopedNode, ScopedScan,
 };
@@ -1495,7 +1495,10 @@ fn check_inline_dag_asserts(
         let name = entry.name();
         let key = entry.identity().clone();
         let unit = ctx.tir.declaration_body(&key);
-        let Some(body) = unit.and_then(DeclarationBody::assertion) else {
+        let Some(body) = unit.and_then(|unit| match unit.kind() {
+            BodyKind::Assert(entry) => Some(entry),
+            _ => None,
+        }) else {
             return Err(ctx
                 .internal_error(
                     format!("TIR assertion entry missing for DAG assertion `{name}`"),
