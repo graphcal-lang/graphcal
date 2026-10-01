@@ -362,7 +362,7 @@ impl Infer<'_> {
             .collect::<Result<Vec<_>, Outcome<SemanticError>>>()?;
         infer_fn_dim(
             name.into(),
-            func.signature(),
+            func.quantity_signature(),
             &dimension_args,
             callee_span,
             self.env.registry,

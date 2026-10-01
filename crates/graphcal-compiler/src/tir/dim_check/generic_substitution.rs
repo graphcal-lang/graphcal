@@ -58,68 +58,66 @@ pub(in crate::tir::dim_check) fn generic_substitution_prefix(
     };
     let mut subs = Substitution::default();
     for (param, arg) in type_def.generic_params().iter().zip(type_args) {
-        match param.constraint() {
-            GenericConstraint::Dim => match arg {
-                CheckedGenericArg::Dim(dim) => subs.bind(
-                    param.id().clone(),
-                    bound(param, &CheckedGenericArg::Dim(dim.clone()))?,
-                ),
-                _ => return Err(generic_arg_internal_sort_error(param, src, span)),
-            },
-            GenericConstraint::Index => match arg {
-                CheckedGenericArg::Index(index) => match index.to_concrete() {
-                    Some(concrete) => subs.bind(
-                        param.id().clone(),
-                        bound(param, &CheckedGenericArg::Index(concrete))?,
-                    ),
-                    None => {
-                        return Err(non_concrete_generic_argument(
-                            param.name(),
-                            &index.to_string(),
-                            src,
-                            span,
-                        ));
-                    }
-                },
-                _ => return Err(generic_arg_internal_sort_error(param, src, span)),
-            },
-            GenericConstraint::Nat => match arg {
-                CheckedGenericArg::Nat(form) => {
-                    let Some(value) = form.constant_value() else {
-                        return Err(non_concrete_generic_argument(
-                            param.name(),
-                            &form.format(),
-                            src,
-                            span,
-                        ));
-                    };
-                    subs.bind(
-                        param.id().clone(),
-                        bound(param, &CheckedGenericArg::Nat(value))?,
-                    );
-                }
-                _ => return Err(generic_arg_internal_sort_error(param, src, span)),
-            },
-            GenericConstraint::Type => match arg {
-                CheckedGenericArg::Type(type_expr) => match type_expr.to_concrete() {
-                    Some(concrete) => subs.bind(
-                        param.id().clone(),
-                        bound(param, &CheckedGenericArg::Type(concrete))?,
-                    ),
-                    None => {
-                        return Err(non_concrete_generic_argument(
-                            param.name(),
-                            &format!("{type_expr:?}"),
-                            src,
-                            span,
-                        ));
-                    }
-                },
-                _ => return Err(generic_arg_internal_sort_error(param, src, span)),
-            },
-        }
+        let sorted = SortedGenericArg::of(param, arg)
+            .ok_or_else(|| generic_arg_internal_sort_error(param, src, span))?;
+        let concrete = match sorted {
+            SortedGenericArg::Dim(dim) => CheckedGenericArg::Dim(dim.clone()),
+            SortedGenericArg::Index(index) => {
+                CheckedGenericArg::Index(index.to_concrete().ok_or_else(|| {
+                    non_concrete_generic_argument(param.name(), &index.to_string(), src, span)
+                })?)
+            }
+            SortedGenericArg::Nat(form) => {
+                CheckedGenericArg::Nat(form.constant_value().ok_or_else(|| {
+                    non_concrete_generic_argument(param.name(), &form.format(), src, span)
+                })?)
+            }
+            SortedGenericArg::Type(type_expr) => {
+                CheckedGenericArg::Type(type_expr.to_concrete().ok_or_else(|| {
+                    non_concrete_generic_argument(
+                        param.name(),
+                        &format!("{type_expr:?}"),
+                        src,
+                        span,
+                    )
+                })?)
+            }
+        };
+        subs.bind(param.id().clone(), bound(param, &concrete)?);
     }
     Ok(subs)
+}
+
+/// A generic argument of the sort its parameter declares.
+#[derive(Debug, Clone, Copy)]
+pub(in crate::tir::dim_check) enum SortedGenericArg<'a> {
+    Dim(&'a crate::dimension::Dimension),
+    Index(&'a crate::semantic::checked_type::IndexTypeRef<Symbolic>),
+    Nat(&'a crate::nat::NatPolyForm),
+    Type(&'a CheckedType<Symbolic>),
+}
+
+impl<'a> SortedGenericArg<'a> {
+    /// `arg` as an argument of `param`, or `None` when its sort is not the
+    /// one `param` declares.
+    pub(in crate::tir::dim_check) const fn of(
+        param: &NominalGenericParam,
+        arg: &'a CheckedGenericArg<Symbolic>,
+    ) -> Option<Self> {
+        match (param.constraint(), arg) {
+            (GenericConstraint::Dim, CheckedGenericArg::Dim(dim)) => Some(Self::Dim(dim)),
+            (GenericConstraint::Index, CheckedGenericArg::Index(index)) => Some(Self::Index(index)),
+            (GenericConstraint::Nat, CheckedGenericArg::Nat(form)) => Some(Self::Nat(form)),
+            (GenericConstraint::Type, CheckedGenericArg::Type(ty)) => Some(Self::Type(ty)),
+            (
+                GenericConstraint::Dim
+                | GenericConstraint::Index
+                | GenericConstraint::Nat
+                | GenericConstraint::Type,
+                _,
+            ) => None,
+        }
+    }
 }
 
 pub(in crate::tir::dim_check) fn concrete_generic_substitutions(
@@ -256,4 +254,43 @@ pub(in crate::tir::dim_check) fn resolved_field_type(
         )
     })?;
     concrete_generic_substitutions(type_def, type_args, src, span)?.field_type(resolved, src)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::generic_param::test_support::type_param;
+
+    fn param(constraint: GenericConstraint) -> NominalGenericParam {
+        NominalGenericParam::new(type_param("P"), constraint, None, Span::new(0, 1))
+    }
+
+    #[test]
+    fn a_generic_argument_is_sorted_only_by_its_parameters_sort() {
+        let args = [
+            CheckedGenericArg::Dim(crate::dimension::Dimension::dimensionless()),
+            CheckedGenericArg::Nat(crate::nat::NatPolyForm::from_constant(2)),
+            CheckedGenericArg::Type(CheckedType::Bool),
+        ];
+        let constraints = [
+            GenericConstraint::Dim,
+            GenericConstraint::Nat,
+            GenericConstraint::Type,
+        ];
+        for (arg_position, arg) in args.iter().enumerate() {
+            for (param_position, constraint) in constraints.iter().enumerate() {
+                let sorted = SortedGenericArg::of(&param(*constraint), arg);
+                assert_eq!(
+                    sorted.is_some(),
+                    arg_position == param_position,
+                    "{arg:?} for a {constraint:?} parameter"
+                );
+            }
+            assert!(SortedGenericArg::of(&param(GenericConstraint::Index), arg).is_none());
+        }
+        assert!(matches!(
+            SortedGenericArg::of(&param(GenericConstraint::Nat), &args[1]),
+            Some(SortedGenericArg::Nat(form)) if form.constant_value() == Some(2)
+        ));
+    }
 }
