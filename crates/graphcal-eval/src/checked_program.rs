@@ -154,6 +154,7 @@ impl std::fmt::Debug for CheckedProgram {
 #[derive(Debug, Clone, Copy)]
 pub struct SealedDag<'a> {
     dag: &'a CheckedDag,
+    position: DagPosition,
     const_values: &'a Arc<RuntimeValueMap>,
     facts: &'a DagExecutionFacts,
 }
@@ -162,6 +163,12 @@ impl<'a> SealedDag<'a> {
     #[must_use]
     pub const fn dag(self) -> &'a CheckedDag {
         self.dag
+    }
+
+    /// The DAG's position in its program's registry.
+    #[must_use]
+    pub const fn position(self) -> DagPosition {
+        self.position
     }
 
     /// The source the DAG's diagnostics point into.
@@ -340,6 +347,7 @@ impl CheckedProgram {
         let (const_values, facts) = &self.by_position[position.index()];
         SealedDag {
             dag,
+            position,
             const_values,
             facts,
         }

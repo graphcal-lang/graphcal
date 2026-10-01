@@ -16,7 +16,7 @@ use graphcal_compiler::source_id::SourceId;
 use graphcal_compiler::syntax::non_empty::NonEmpty;
 use graphcal_compiler::tir::typed::scoped_node::{NodeKind, ScopedNode};
 
-use crate::execution_plan::{ExecPlan, PlannedBody};
+use crate::execution_plan::{ComputedBody, ExecPlan, PlannedBody};
 
 type BoundParameters = BTreeSet<ResolvedDeclName>;
 /// A call output and the parameters its call binds explicitly.
@@ -152,10 +152,10 @@ impl Analysis<'_> {
         })?;
         let mut origins = Origins::new();
         match declaration.body() {
-            PlannedBody::Todo => {
+            PlannedBody::Computed(ComputedBody::Todo) => {
                 origins.insert(name.clone());
             }
-            PlannedBody::Expression { root, .. } => {
+            PlannedBody::Computed(ComputedBody::Expression { root, .. }) => {
                 for dependency in declaration.reads() {
                     origins.extend(self.declaration(dependency, bound)?);
                 }

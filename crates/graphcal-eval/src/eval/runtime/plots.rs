@@ -52,8 +52,10 @@ pub(super) struct PlotOutputs {
 /// One plot the root DAG displays or composes: a plot the root declares, or
 /// an instance plot an include site requests under a local alias.
 struct RootPlot<'p> {
-    /// The plot declaration, owned by the DAG that runs it.
-    identity: ResolvedDeclName,
+    /// The plot declaration, in the scope of the DAG that runs it.
+    unit: DeclarationBody<'p>,
+    /// The plot's checked body.
+    entry: Scoped<'p, graphcal_compiler::tir::typed::TypedPlotEntry>,
     /// The name the plot has in the root's namespace.
     name: &'p DeclName,
     /// Whether it renders standalone: the declaration's own visibility for a
@@ -63,19 +65,19 @@ struct RootPlot<'p> {
 
 /// The plots of the root DAG, in output order: its own plots in source
 /// order, then the plots each semantic instance's include site requests.
-fn root_plots<'p>(plan: &'p crate::execution_plan::ExecPlan<'p>) -> Vec<RootPlot<'p>> {
-    let own = plan
-        .root()
-        .scope()
-        .dag()
-        .declarations()
-        .filter_map(|entry| match entry.kind() {
-            graphcal_compiler::tir::typed::declaration_view::DeclarationKind::Plot {
-                visibility,
-            } => Some(RootPlot {
-                identity: entry.identity().clone(),
-                name: entry.name(),
-                visibility,
+fn root_plots<'p>(
+    plan: &'p crate::execution_plan::ExecPlan<'p>,
+    ctx: &EvalSession<'_>,
+) -> Result<Vec<RootPlot<'p>>, SemanticError> {
+    let tir = plan.tir();
+    let own = tir
+        .declaration_bodies(plan.root().scope().position())
+        .filter_map(|unit| match unit.kind() {
+            BodyKind::Plot(entry) => Some(RootPlot {
+                unit,
+                entry,
+                name: unit.identity().leaf(),
+                visibility: entry.get().visibility,
             }),
             _ => None,
         });
@@ -83,13 +85,26 @@ fn root_plots<'p>(plan: &'p crate::execution_plan::ExecPlan<'p>) -> Vec<RootPlot
         planned
             .instance()
             .plot_projections()
-            .map(|ResolvedProjection { target, projection }| RootPlot {
-                identity: target,
-                name: &projection.alias,
-                visibility: projection.visibility,
+            .map(|ResolvedProjection { target, projection }| {
+                // The plot runs in the DAG that owns it, which may be an
+                // instance nested in the requesting one when a template
+                // forwards its own plot.
+                let unit = declaration_body(tir, &target, ctx.src)?;
+                let BodyKind::Plot(entry) = unit.kind() else {
+                    return Err(ctx.internal_error(
+                        format!("plot `{target}` has no checked body"),
+                        DiagnosticAnchor::WholeFile,
+                    ));
+                };
+                Ok(RootPlot {
+                    unit,
+                    entry,
+                    name: &projection.alias,
+                    visibility: projection.visibility,
+                })
             })
     });
-    own.chain(requested).collect()
+    own.map(Ok).chain(requested).collect()
 }
 
 /// The root plots that could not be rendered, by their name in the root's
@@ -108,26 +123,13 @@ pub(super) fn evaluate_root_plots(
     ctx: &EvalSession<'_>,
 ) -> Result<PlotOutputs, Outcome<SemanticError>> {
     let tir = plan.tir();
-    let root_plots = root_plots(plan);
+    let root_plots = root_plots(plan, ctx)?;
     let mut plots = Vec::new();
     let mut plot_errors = Vec::new();
     let mut unavailable = UnavailablePlots::new();
     for plot in &root_plots {
-        // The plot runs in the DAG that owns it, which may be an instance
-        // nested in the requesting one when a template forwards its own plot.
-        let unit = declaration_body(tir, &plot.identity, ctx.src)?;
-        let entry = match unit.kind() {
-            BodyKind::Plot(entry) => Some(entry),
-            _ => None,
-        }
-        .ok_or_else(|| {
-            ctx.internal_error(
-                format!("plot `{}` has no checked body", plot.identity),
-                DiagnosticAnchor::WholeFile,
-            )
-        })?;
         let name = ScopedName::local(plot.name.clone());
-        match evaluate_plot(unit, entry, evaluated, ctx) {
+        match evaluate_plot(plot.unit, plot.entry, evaluated, ctx) {
             Ok(evaluated) => plots.push(evaluated.into_spec(name, plot.visibility)),
             Err(PlotEvaluationError::Unavailable(reason)) => {
                 plot_errors.push(PlotError {
@@ -147,25 +149,23 @@ pub(super) fn evaluate_root_plots(
         ctx,
         plot_errors: &mut plot_errors,
     };
+    let root = plan.root().scope().position();
     let figures = tir
-        .root()
-        .declarations()
-        .filter_map(|entry| match entry.kind() {
-            graphcal_compiler::tir::typed::declaration_view::DeclarationKind::Figure {
-                plot_names,
-            } => Some((entry, plot_names)),
+        .declaration_bodies(root)
+        .filter_map(|unit| match unit.kind() {
+            BodyKind::Figure(figure) => Some((unit, figure)),
             _ => None,
         })
-        .map(|(entry, plot_names)| {
-            let owner = entry.identity().clone();
-            let fields = match declaration_body(tir, &owner, ctx.src)?.kind() {
-                BodyKind::Figure(figure) => Some(figure.map(|figure| figure.fields.as_slice())),
-                _ => None,
-            };
+        .map(|(unit, figure)| {
+            let name = unit.identity().leaf();
             Ok(compositions
-                .compose(&owner, entry.name(), fields, plot_names)?
+                .compose(
+                    name,
+                    figure.map(|figure| figure.fields.as_slice()),
+                    &figure.get().plot_names,
+                )?
                 .map(|composed| FigureSpec {
-                    name: ScopedName::local(entry.name().clone()),
+                    name: ScopedName::local(name.clone()),
                     plot_names: composed.plot_names,
                     properties: composed.properties,
                 }))
@@ -175,24 +175,21 @@ pub(super) fn evaluate_root_plots(
         .flatten()
         .collect();
     let layers = tir
-        .root()
-        .declarations()
-        .filter_map(|entry| match entry.kind() {
-            graphcal_compiler::tir::typed::declaration_view::DeclarationKind::Layer {
-                plot_names,
-            } => Some((entry, plot_names)),
+        .declaration_bodies(root)
+        .filter_map(|unit| match unit.kind() {
+            BodyKind::Layer(layer) => Some((unit, layer)),
             _ => None,
         })
-        .map(|(entry, plot_names)| {
-            let owner = entry.identity().clone();
-            let fields = match declaration_body(tir, &owner, ctx.src)?.kind() {
-                BodyKind::Layer(layer) => Some(layer.map(|layer| layer.fields.as_slice())),
-                _ => None,
-            };
+        .map(|(unit, layer)| {
+            let name = unit.identity().leaf();
             Ok(compositions
-                .compose(&owner, entry.name(), fields, plot_names)?
+                .compose(
+                    name,
+                    layer.map(|layer| layer.fields.as_slice()),
+                    &layer.get().plot_names,
+                )?
                 .map(|composed| LayerSpec {
-                    name: ScopedName::local(entry.name().clone()),
+                    name: ScopedName::local(name.clone()),
                     plot_names: composed.plot_names,
                     properties: composed.properties,
                 }))
@@ -219,21 +216,14 @@ struct Compositions<'a, 'p> {
 }
 
 impl Compositions<'_, '_> {
-    /// Evaluate the figure or layer `owner`, named `name` in the root, over
-    /// its checked `fields`; an unavailable one is reported as a plot error.
+    /// Evaluate a figure or layer, named `name` in the root, over its
+    /// checked `fields`; an unavailable one is reported as a plot error.
     fn compose(
         &mut self,
-        owner: &ResolvedDeclName,
         name: &DeclName,
-        fields: Option<Scoped<'_, [graphcal_compiler::tir::typed::LoweredPlotField]>>,
+        fields: Scoped<'_, [graphcal_compiler::tir::typed::LoweredPlotField]>,
         references: &[Spanned<ScopedName>],
     ) -> Result<Option<CompositionFields>, Outcome<SemanticError>> {
-        let fields = fields.ok_or_else(|| {
-            self.ctx.internal_error(
-                format!("composition `{owner}` has no checked body"),
-                DiagnosticAnchor::WholeFile,
-            )
-        })?;
         let names = self.evaluated.names;
         let reason = match composed_plots_unavailable(references, self.unavailable) {
             Some(reason) => PlotUnavailable::ComposedPlots(
@@ -415,12 +405,9 @@ fn evaluate_plot(
     check_plot_expression_dependencies(&body_exprs, evaluated, ctx)?;
 
     let owner = unit.identity();
-    let channel_facts = unit.plot_channel_presentations().ok_or_else(|| {
-        PlotEvaluationError::fatal(ctx.internal_error(
-            format!("checked presentation facts are missing for plot `{owner}`"),
-            DiagnosticAnchor::WholeFile,
-        ))
-    })?;
+    // Checking publishes the shape of every channel of every plot; a plot
+    // without published facts has none of its channels'.
+    let channel_facts = unit.plot_channel_presentations();
     let mut encoding_meta = Vec::new();
     let mut presentation_diagnostics = Vec::new();
 
@@ -428,12 +415,14 @@ fn evaluate_plot(
     // row alignment. Numeric projection and axis labels consume the same fact.
     let mut channel_data = Vec::new();
     for (channel, expr) in encodings {
-        let fact = channel_facts.get(&channel).ok_or_else(|| {
-            PlotEvaluationError::fatal(ctx.internal_error(
-                format!("checked presentation is missing channel `{channel}`"),
-                expr.get().span,
-            ))
-        })?;
+        let fact = channel_facts
+            .and_then(|facts| facts.get(&channel))
+            .ok_or_else(|| {
+                PlotEvaluationError::fatal(ctx.internal_error(
+                    format!("checked presentation is missing channel `{channel}`"),
+                    expr.get().span,
+                ))
+            })?;
         let (data, unit_label, diagnostics) =
             evaluate_plot_channel(channel, expr, fact, values, frame_presentations, ctx)?;
 

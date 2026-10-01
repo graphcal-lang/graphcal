@@ -4,11 +4,10 @@ use crate::constant_pools::RuntimeValueMap;
 use crate::domain_check::check_domain_constraint;
 use crate::domain_constraint::ResolvedDomainConstraint;
 use crate::eval::types::NodeUnavailable;
-use crate::execution_plan::{CallablePlan, ExecPlan, PlannedBody};
+use crate::execution_plan::{CallablePlan, ComputedBody, ExecPlan};
 use crate::runtime_presentation::EvaluatedRuntimeValue;
 use crate::runtime_presentation::PendingPresentedMap;
 use graphcal_compiler::cancellation::CancellationToken;
-use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
 use graphcal_compiler::outcome::Outcome;
 use graphcal_compiler::resolved_name::ResolvedDeclName;
 use graphcal_compiler::semantic_error::SemanticError;
@@ -279,8 +278,8 @@ impl<'a> ExecutionFrame<'a> {
                 continue;
             }
             let scope = declaration.scope();
-            let (root, tree) = match declaration.body() {
-                PlannedBody::Todo => {
+            let (root, tree) = match step.body() {
+                ComputedBody::Todo => {
                     self.errors.insert(
                         key.clone(),
                         NodeUnavailable::Todo {
@@ -289,15 +288,7 @@ impl<'a> ExecutionFrame<'a> {
                     );
                     continue;
                 }
-                PlannedBody::Expression { root, tree } => (root.get(), tree),
-                PlannedBody::Supplied => {
-                    return Err(SemanticError::internal_error(
-                        format!("TIR runtime declaration missing for `{key}`"),
-                        scope.source(),
-                        DiagnosticAnchor::WholeFile,
-                    )
-                    .into());
-                }
+                ComputedBody::Expression { root, tree } => (root.get(), tree),
             };
             if let Some(reason) =
                 NodeUnavailable::blocked_by(step.deps().iter().filter_map(|dep| {

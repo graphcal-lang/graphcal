@@ -67,18 +67,15 @@ pub(super) fn evaluate_assertions(
 ) -> Result<Vec<(ScopedName, AssertResult, Span)>, Outcome<SemanticError>> {
     let tir = plan.tir();
     let mut assertions: Vec<(ScopedName, AssertResult, Span)> = tir
-        .root()
-        .declarations()
-        .filter_map(|entry| match entry.kind() {
-            graphcal_compiler::tir::typed::declaration_view::DeclarationKind::Assert { span } => {
-                Some((entry, span))
-            }
+        .declaration_bodies(plan.root().scope().position())
+        .filter_map(|unit| match unit.kind() {
+            BodyKind::Assert(entry) => Some((unit, entry)),
             _ => None,
         })
-        .map(|(entry, span)| {
-            let owner = entry.identity().clone();
-            let (unit, body) = assertion_body(tir, &owner, src)?;
-            let body = body.map(|entry| &*entry.body);
+        .map(|(unit, entry)| {
+            let owner = unit.identity().clone();
+            let span = entry.get().span;
+            let body = entry.map(|entry| &*entry.body);
             let entry_ctx = ctx.for_decl(&owner);
             let assert_result = match assert_dependency_failure(body, errors, names, &entry_ctx)? {
                 Some(result) => result,
@@ -89,7 +86,7 @@ pub(super) fn evaluate_assertions(
                 }
             };
             Ok((
-                ScopedName::local(entry.name().clone()),
+                ScopedName::local(owner.leaf().clone()),
                 assert_result.map_names(|declaration| names.name(declaration)),
                 span,
             ))

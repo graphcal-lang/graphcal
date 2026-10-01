@@ -12,7 +12,7 @@ use graphcal_compiler::tir::typed::evaluation_unit::{BodyKind, NodeBody};
 
 use crate::checked_program::{CheckedProgram, SealedDag};
 use crate::execution_plan::{
-    CallablePlan, ExecPlan, PlannedBody, PlannedDeclaration, PlannedInstance,
+    CallablePlan, ComputedBody, ExecPlan, PlannedBody, PlannedDeclaration, PlannedInstance,
     PreparedConstantImport,
 };
 
@@ -130,14 +130,14 @@ fn prepare_declarations<'p>(
                 )
             })?;
             let body = match unit.kind() {
-                BodyKind::Node(NodeBody::Todo) => PlannedBody::Todo,
+                BodyKind::Node(NodeBody::Todo) => PlannedBody::Computed(ComputedBody::Todo),
                 BodyKind::Node(NodeBody::Formula(root))
                 | BodyKind::Param {
                     default: Some(root),
-                } => PlannedBody::Expression {
+                } => PlannedBody::Computed(ComputedBody::Expression {
                     root,
                     tree: root.executable(),
-                },
+                }),
                 // Required ports have no default; constants are pooled.
                 BodyKind::Param { default: None }
                 | BodyKind::Const(_)
@@ -149,7 +149,7 @@ fn prepare_declarations<'p>(
             let reads = match (&body, dag.runtime_schedule().dependencies_of(key)) {
                 (_, Some(reads)) => reads,
                 (PlannedBody::Supplied, None) => &[],
-                (PlannedBody::Todo | PlannedBody::Expression { .. }, None) => {
+                (PlannedBody::Computed(_), None) => {
                     return Err(invalid(
                         format!("checked declaration `{key}` has no dependencies"),
                         scope.source(),
@@ -387,6 +387,45 @@ mod tests {
             assert!(debug.contains(kind), "{kind} in {debug}");
         }
         assert!(prepared.plan().has_unfinished_definitions());
+    }
+
+    #[test]
+    fn callables_have_steps_only_for_the_declarations_they_compute() {
+        let prepared = compile_source(
+            "param input: Dimensionless;\n\
+             param scale: Dimensionless = 2.0;\n\
+             node doubled: Dimensionless = @scale * @input;\n\
+             node pending: Dimensionless = todo { @doubled };",
+        )
+        .unwrap();
+        let root = prepared.plan().root();
+        // The required port is supplied, so no step computes it and no step
+        // depends on it.
+        assert_eq!(
+            root_order(prepared.plan())
+                .iter()
+                .map(|key| key.as_str())
+                .collect::<Vec<_>>(),
+            ["scale", "doubled", "pending"]
+        );
+        let doubled = root
+            .steps()
+            .find(|step| step.declaration().key().as_str() == "doubled")
+            .unwrap();
+        assert!(matches!(doubled.body(), ComputedBody::Expression { .. }));
+        assert_eq!(
+            doubled
+                .deps()
+                .iter()
+                .map(|dep| root.step(*dep).declaration().key().as_str())
+                .collect::<Vec<_>>(),
+            ["scale"]
+        );
+        let pending = root
+            .steps()
+            .find(|step| step.declaration().key().as_str() == "pending")
+            .unwrap();
+        assert!(matches!(pending.body(), ComputedBody::Todo));
     }
 
     #[test]
