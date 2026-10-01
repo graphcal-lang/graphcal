@@ -609,6 +609,29 @@ fn imported_store_diamonds_share_bodies_and_units_without_republishing_imports()
 }
 
 #[test]
+fn registry_positions_follow_identity_order_whatever_the_install_order() {
+    let stores = ["b.gcl", "c.gcl", "a.gcl"]
+        .map(|path| importer_tir(path, &[]).freeze_local_dag_store().unwrap());
+    let positions = |order: [usize; 3]| {
+        let tir = importer_tir("root.gcl", &order.map(|store| &stores[store]));
+        tir.dag_registry()
+            .positioned()
+            .map(|(position, dag)| (position.index(), dag.dag_id().clone()))
+            .collect::<Vec<_>>()
+    };
+    let forward = positions([0, 1, 2]);
+    assert_eq!(forward, positions([2, 1, 0]));
+    assert_eq!(forward, positions([1, 2, 0]));
+    let imported = forward[1..]
+        .iter()
+        .map(|(_, dag)| dag.clone())
+        .collect::<Vec<_>>();
+    let mut sorted = imported.clone();
+    sorted.sort();
+    assert_eq!(imported, sorted);
+}
+
+#[test]
 fn installed_stores_bring_every_dag_their_bodies_call() {
     let leaf = importer_tir("leaf.gcl", &[])
         .freeze_local_dag_store()

@@ -37,7 +37,8 @@ use super::program::{TirRead, UncheckedTir};
 /// insertion, removal, or mutation.
 ///
 /// Every DAG has a [`DagPosition`]: the root first, then the local DAGs,
-/// then the imported ones, in insertion order.
+/// then the imported ones, each in [`DagId`] order, so a program numbers its
+/// DAGs the same way in every run.
 ///
 /// The registry is closed under calls: every DAG a body calls is in the
 /// registry, and the callee of each call slot of each body is resolved to
