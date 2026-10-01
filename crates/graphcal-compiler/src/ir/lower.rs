@@ -120,13 +120,7 @@ pub(crate) fn lower_file_with_inline_dags_for_test(
     src: SourceId,
 ) -> Result<LoweredTestFile, SemanticError> {
     let dag_id = crate::dag_id::DagId::from_virtual_relative_path(std::path::Path::new(name))
-        .map_err(|error| {
-            SemanticError::internal_error(
-                format!("invalid source name `{name}`: {error}"),
-                src,
-                DiagnosticAnchor::WholeFile,
-            )
-        })?;
+        .unwrap_or_else(|error| panic!("test source name `{name}` is invalid: {error}"));
     let interface = ModuleInterface::new(&ast.declarations);
     resolve_with_imported_values(
         ast,
@@ -157,13 +151,9 @@ pub(crate) fn lower_file_with_inline_dags_for_test(
             }
         }
     }
-    let resolver = modules.build().map_err(|error| {
-        SemanticError::internal_error(
-            format!("test module resolver failed: {error}"),
-            src,
-            DiagnosticAnchor::WholeFile,
-        )
-    })?;
+    let resolver = modules
+        .build()
+        .unwrap_or_else(|error| panic!("test module resolver failed: {error}"));
     let (root, inline_dags) = {
         let mut definitions = definition_evaluator(
             &resolver,
