@@ -69,7 +69,7 @@ The compiler is the language's first user — its own implementation must hold i
 
 ### Functional core, imperative shell
 
-Treat the compiler as a functional core (parser → AST → IR → TIR → eval plan) with imperative shells at the I/O edges (file loader, LSP server, CLI). The core holds typed values and pure functions over them; the shell handles disk reads, process spawns, network calls, and any necessary serialization. A flat string that exists _only_ because the shell uses one (e.g., `HashMap<DeclName, …>` lookups) is acceptable transitionally, but it is a _boundary_ concern — not a license to spread the convention upstream.
+Treat the compiler as a functional core (parser → AST → IR/HIR → TIR → execution plan) with imperative shells at the I/O edges (the `graphcal-project` loader, LSP server, CLI). The core holds typed values and pure functions over them; the shell handles disk reads, process spawns, network calls, and any necessary serialization. A flat string that exists _only_ because the shell uses one (e.g., `HashMap<DeclName, …>` lookups) is acceptable transitionally, but it is a _boundary_ concern — not a license to spread the convention upstream.
 
 The conceptual source-file ordering is maintained in the "Suggested Reading Order" section of `internals/codebase-reading-guide.md` as a topologically sorted list in library-consumer order; regenerate it with `./internals/reading-order.py --write-guide` when refactors change the dependency graph. A file should only consume upstream files (ones that come before it in that list), and should be implemented as a library whose API makes invalid or wrong use impossible wherever practical, rather than relying on downstream consumers to call it correctly. This rule makes it easy to review the codebase in topological order because we can focus on making each file correct as a library implementation before tackling its consumers, rather than reasoning about a tightly-coupled codebase as a whole.
 
@@ -79,7 +79,7 @@ Prefer small modules with a single, atomic responsibility over broad domain grab
 
 Before adding a type to an existing module, ask:
 
-1. Is this type at the same abstraction layer as the existing contents (syntax, HIR, TIR, registry, eval, CLI, etc.)?
+1. Is this type at the same abstraction layer as the existing contents (syntax, HIR, TIR, semantic core, eval, project, CLI, etc.)?
 2. Does it depend on the same upstream concepts, or would it pull in unrelated dependencies?
 3. Would moving it to a smaller focused module make dependency direction clearer?
 4. Is the module name still accurate after adding it?
@@ -106,7 +106,7 @@ Stop. Ask yourself:
 2. Will multiple sites need to construct or destructure it the same way?
 3. If the convention changed (separator, casing rule, prefix), how many sites would I have to touch?
 
-If any answer is "yes / many", introduce a type. A namespace-tagged name for opaque identifiers (see `NameDef<Ns>` / `ResolvedName<Ns>` in `crates/graphcal-compiler/src/syntax/names.rs` and a namespace marker such as `crates/graphcal-compiler/src/syntax/decl_name.rs`), an enum for finite variants, a struct for composites. Place it where the data lives in the layering, not where it's first consumed.
+If any answer is "yes / many", introduce a type. A namespace-tagged name for opaque identifiers (see `NameDef<Ns>` in `crates/graphcal-compiler/src/syntax/names.rs`, `ResolvedName<Ns>` in `crates/graphcal-compiler/src/resolved_name.rs`, and a namespace marker such as `crates/graphcal-compiler/src/syntax/decl_name.rs`), an enum for finite variants, a struct for composites. Place it where the data lives in the layering, not where it's first consumed.
 
 ### When the rule conflicts with adjacent code
 
