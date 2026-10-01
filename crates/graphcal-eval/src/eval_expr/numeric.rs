@@ -6,12 +6,12 @@ use thiserror::Error;
 /// Failure to project an `i64` into binary64 without changing its value.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 #[error("integer {value} cannot be represented exactly as binary64")]
-pub struct ExactI64ToF64Error {
+pub(crate) struct ExactI64ToF64Error {
     value: i64,
 }
 
 /// Convert an integer to binary64 only when the conversion is exact.
-pub const fn exact_i64_to_f64(value: i64) -> Result<f64, ExactI64ToF64Error> {
+pub(crate) const fn exact_i64_to_f64(value: i64) -> Result<f64, ExactI64ToF64Error> {
     #[expect(
         clippy::cast_precision_loss,
         reason = "the following wider-integer round trip proves whether this specific value is exact"
@@ -32,7 +32,7 @@ pub const fn exact_i64_to_f64(value: i64) -> Result<f64, ExactI64ToF64Error> {
 
 /// Error returned by pure quantity validation helpers.
 #[derive(Debug, Clone, PartialEq, Error)]
-pub enum QuantityValidationError {
+pub(crate) enum QuantityValidationError {
     /// A value that must be finite was NaN or infinite.
     #[error("{context} must be finite, got {value}")]
     NonFinite { context: String, value: f64 },
@@ -80,13 +80,13 @@ pub(super) fn finite_quantity(
 /// values, so callers can divide by the mathematical total without first
 /// materializing an overflowing total.
 #[derive(Debug, Clone, Copy)]
-pub struct ScaledSum {
+pub(crate) struct ScaledSum {
     scale: f64,
     normalized_sum: f64,
 }
 
 impl ScaledSum {
-    pub fn from_values(
+    pub(crate) fn from_values(
         values: &[f64],
         context: impl Into<String>,
     ) -> Result<Self, QuantityValidationError> {
@@ -108,11 +108,11 @@ impl ScaledSum {
     }
 
     #[must_use]
-    pub fn is_zero(self) -> bool {
+    pub(crate) fn is_zero(self) -> bool {
         self.scale == 0.0 || self.normalized_sum == 0.0
     }
 
-    pub fn normalized_ratio(
+    pub(crate) fn normalized_ratio(
         self,
         value: f64,
         context: impl Into<String>,
@@ -149,7 +149,7 @@ fn compensated_sum(values: impl IntoIterator<Item = f64>) -> f64 {
     clippy::arithmetic_side_effects,
     reason = "arbitrary-precision rationals cannot overflow; the checked nonempty slice gives a positive divisor"
 )]
-pub fn exact_mean(
+pub(crate) fn exact_mean(
     values: &[f64],
     context: impl Into<String>,
 ) -> Result<FiniteQuantity, QuantityValidationError> {
@@ -331,7 +331,7 @@ pub(super) fn root_sum_square(
 }
 
 /// Validate the result of a computation whose non-finite output indicates an error.
-pub fn computed_finite_quantity(
+pub(crate) fn computed_finite_quantity(
     value: f64,
     context: impl Into<String>,
 ) -> Result<FiniteQuantity, QuantityValidationError> {
@@ -351,7 +351,7 @@ pub fn computed_finite_quantity(
 /// Callers must establish that the operation and its inputs have that property.
 /// This keeps legitimate zero results, such as cancellation, separate from
 /// complete floating-point underflow.
-pub fn computed_nonzero_quantity(
+pub(crate) fn computed_nonzero_quantity(
     value: f64,
     context: impl Into<String>,
 ) -> Result<FiniteQuantity, QuantityValidationError> {

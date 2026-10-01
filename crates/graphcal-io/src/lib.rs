@@ -7,12 +7,14 @@
 //! - [`InMemoryFileSystem`] — for tests and WASM
 //! - [`OverlayFileSystem`] — layers in-memory editor buffers over a base reader
 //!
-//! Reads always carry an explicit byte limit and cancellation signal. This
-//! keeps callers from accidentally allocating an unbounded file before they
-//! can enforce a policy.
+//! Reads always carry an explicit byte limit and the caller's
+//! [`CancellationToken`](graphcal_compiler::cancellation::CancellationToken);
+//! a cancelled read fails with
+//! [`Outcome::Cancelled`](graphcal_compiler::outcome::Outcome::Cancelled),
+//! never with a read error. This keeps callers from accidentally allocating an
+//! unbounded file before they can enforce a policy.
 
 mod atomic_write;
-mod cancellation;
 mod in_memory_fs;
 mod ingestion;
 mod limits;
@@ -25,7 +27,6 @@ mod virtual_path;
 pub use atomic_write::{
     AtomicWriteError, create_file_atomically, replace_file_atomically_if_unchanged,
 };
-pub use cancellation::{CancellationSignal, NeverCancel};
 pub use in_memory_fs::{InMemoryFileSystem, InMemoryFileSystemError};
 pub use ingestion::ProjectIngestionPolicy;
 pub use limits::{ByteLimit, EntryLimit};

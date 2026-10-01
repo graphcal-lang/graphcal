@@ -25,7 +25,6 @@ pub(crate) use checked_project::CheckedProjectRuntimeParts;
 pub(crate) use checked_project::CompiledFile;
 pub(crate) use entry_interface::CheckedEntryInterface;
 pub use hir_project::HirProject;
-pub(crate) use model::IncludeDebugNameMap;
 pub use session::{ProjectCompiler, check_project};
 #[cfg(test)]
 pub(crate) use session::{compile_to_tir, compile_to_tir_from_project};

@@ -23,7 +23,9 @@ use crate::dims;
 use crate::parse::{
     DimExprAst, DimTermAst, ExponentAst, MulOp, PluginFnDecl, PluginInput, ResultAst, TypeAst,
 };
-use crate::rational::Rational;
+/// Dimension exponents are computed in the wide exact range and narrowed to
+/// the manifest's `i32` range only when the manifest is built.
+pub type Rational = graphcal_ratio::Ratio<i64>;
 
 /// The validated `plugin!` block.
 pub struct PluginIr {
@@ -508,10 +510,19 @@ fn lower_type(
 
 /// Accumulator for monomial folding; zero-power variables are removed at
 /// the end so `D * D^-1` cancels instead of emitting a zero factor.
-#[derive(Default)]
 struct MonomialAcc {
     vars: Vec<VarFactor>,
     fixed: [Rational; 8],
+}
+
+impl Default for MonomialAcc {
+    /// The empty product.
+    fn default() -> Self {
+        Self {
+            vars: Vec::new(),
+            fixed: [Rational::ZERO; 8],
+        }
+    }
 }
 
 impl MonomialAcc {
@@ -519,10 +530,7 @@ impl MonomialAcc {
         let key = name.to_string();
         match self.vars.iter_mut().find(|factor| factor.name == key) {
             Some(factor) => {
-                factor.power = factor
-                    .power
-                    .checked_add(power)
-                    .ok_or_else(|| overflow_error(name.span()))?;
+                factor.power = (factor.power + power).map_err(|_| overflow_error(name.span()))?;
             }
             None => self.vars.push(VarFactor {
                 name: key,
@@ -534,9 +542,7 @@ impl MonomialAcc {
     }
 
     fn mul_base(&mut self, index: usize, power: Rational, span: Span) -> syn::Result<()> {
-        self.fixed[index] = self.fixed[index]
-            .checked_add(power)
-            .ok_or_else(|| overflow_error(span))?;
+        self.fixed[index] = (self.fixed[index] + power).map_err(|_| overflow_error(span))?;
         Ok(())
     }
 
@@ -562,9 +568,7 @@ fn lower_expr(
     for (op, term) in &expr.rest {
         let signed = match op {
             MulOp::Mul => outer,
-            MulOp::Div => outer
-                .checked_neg()
-                .ok_or_else(|| overflow_error(term_span(term)))?,
+            MulOp::Div => -outer,
         };
         lower_term(term, binders, signed, acc)?;
     }
@@ -583,9 +587,7 @@ fn lower_term(
             None => Rational::ONE,
         },
     };
-    let effective = outer
-        .checked_mul(power)
-        .ok_or_else(|| overflow_error(term_span(term)))?;
+    let effective = (outer * power).map_err(|_| overflow_error(term_span(term)))?;
 
     match term {
         DimTermAst::Group { inner, .. } => lower_expr(inner, binders, effective, acc),
@@ -602,9 +604,8 @@ fn lower_term(
             }
             if let Some(factors) = dims::derived_dimension_factors(&key) {
                 for (index, exponent) in factors {
-                    let power = effective
-                        .checked_mul(integer_rational(*exponent, name.span())?)
-                        .ok_or_else(|| overflow_error(name.span()))?;
+                    let power = (effective * integer_rational(*exponent, name.span())?)
+                        .map_err(|_| overflow_error(name.span()))?;
                     acc.mul_base(*index, power, name.span())?;
                 }
                 return Ok(());
@@ -643,8 +644,8 @@ fn exponent_to_rational(exponent: &ExponentAst) -> syn::Result<Rational> {
             "exponent denominator cannot be zero",
         ));
     }
-    let value = Rational::new(exponent.num, exponent.den.unwrap_or(1))
-        .ok_or_else(|| overflow_error(exponent.span))?;
+    let value = Rational::try_new(exponent.num, exponent.den.unwrap_or(1))
+        .map_err(|_| overflow_error(exponent.span))?;
     if value.is_zero() {
         return Err(syn::Error::new(
             exponent.span,
@@ -655,7 +656,7 @@ fn exponent_to_rational(exponent: &ExponentAst) -> syn::Result<Rational> {
 }
 
 fn integer_rational(value: i64, span: Span) -> syn::Result<Rational> {
-    Rational::new(value, 1).ok_or_else(|| overflow_error(span))
+    Rational::integer(value).map_err(|_| overflow_error(span))
 }
 
 fn overflow_error(span: Span) -> syn::Error {

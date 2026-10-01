@@ -10,7 +10,8 @@
 //! chooses the frame they are resolved in.
 
 use crate::ir::instance::{
-    HirInstanceRecord, InstanceAssertionProjection, InstancePlotProjection, InstanceValueProjection,
+    HirInstanceRecord, InstanceAssertionProjection, InstancePlotProjection, InstanceProjection,
+    InstanceValueProjection,
 };
 use crate::resolved_name::ResolvedDeclName;
 
@@ -82,7 +83,7 @@ impl<'t> CheckedInstance<'t> {
         self,
     ) -> impl Iterator<Item = ResolvedProjection<'t, InstanceValueProjection>> + 't {
         self.resolved(&self.record.output_projections, |projection| {
-            &projection.target
+            InstanceProjection::target(projection)
         })
     }
 

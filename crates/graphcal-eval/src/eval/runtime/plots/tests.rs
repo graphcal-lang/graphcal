@@ -34,9 +34,13 @@ fn plot_properties_preserve_cancellation_classification() {
     let presentations = crate::runtime_presentation::ResolvedPresentedMap::new();
     let frame_presentations = PendingPresentedMap::new();
     let errors = HashMap::new();
+    let prepared = crate::exec_plan::compile(&tir, src, &sources).unwrap();
+    let include_scopes = graphcal_compiler::display::include_scope_names::IncludeScopeNames::new();
+    let names = super::super::root_names::RootNames::new(prepared.plan(), &include_scopes);
     let evaluated = EvaluatedRoot {
         values: &values,
         errors: &errors,
+        names: &names,
         presentations: &presentations,
         frame_presentations: &frame_presentations,
     };

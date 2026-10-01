@@ -177,9 +177,52 @@ pub trait InstanceProjection {
 pub struct InstanceValueProjection {
     /// Template declaration materialized by the instance, as the template
     /// names it; the instance's frame resolves it.
-    pub target: LocalDecl,
+    target: LocalDecl,
     /// Where the including DAG exposes the value.
-    pub exposure: ProjectionExposure,
+    exposure: ProjectionExposure,
+    /// Whether the including DAG declares the exposed name itself.
+    body: ExposedValueBody,
+}
+
+/// How the including DAG gives an exposed instance value its body.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExposedValueBody {
+    /// The including DAG declares a projection alias under the selected
+    /// name, whose body reads the instance's output; the alias, not the
+    /// instance declaration, is what the name denotes.
+    LocalAlias,
+    /// The exposed name denotes the instance's declaration directly.
+    Instance,
+}
+
+impl InstanceValueProjection {
+    /// A member of a whole-module include, reached through the include's
+    /// instance scope. The including DAG never declares it.
+    #[must_use]
+    pub const fn member(target: LocalDecl) -> Self {
+        Self {
+            target,
+            exposure: ProjectionExposure::Member,
+            body: ExposedValueBody::Instance,
+        }
+    }
+
+    /// A selective include item exposed under `name`, with `body` recording
+    /// whether the including DAG materializes it as a local alias.
+    #[must_use]
+    pub const fn selected(target: LocalDecl, name: DeclName, body: ExposedValueBody) -> Self {
+        Self {
+            target,
+            exposure: ProjectionExposure::Selected(name),
+            body,
+        }
+    }
+
+    /// How the including DAG gives the exposed name its body.
+    #[must_use]
+    pub const fn body(&self) -> ExposedValueBody {
+        self.body
+    }
 }
 
 /// One instance assertion exposed through the including DAG.
@@ -295,11 +338,19 @@ mod tests {
         let record = InstanceRecord::new(id.clone(), StaticSubstitution::default(), []);
         let target = template_reference(&id, DeclName::expect_valid("output"));
 
-        let member = InstanceValueProjection {
-            target: target.clone(),
-            exposure: ProjectionExposure::Member,
-        };
-        assert_eq!(member.exposure.selected(), None);
+        let member = InstanceValueProjection::member(target.clone());
+        assert_eq!(member.exposure().selected(), None);
+        assert_eq!(member.body(), ExposedValueBody::Instance);
+        let aliased = InstanceValueProjection::selected(
+            target.clone(),
+            DeclName::expect_valid("alias"),
+            ExposedValueBody::LocalAlias,
+        );
+        assert_eq!(aliased.body(), ExposedValueBody::LocalAlias);
+        assert_eq!(
+            record.exposed_name(&aliased),
+            ScopedName::local(DeclName::expect_valid("alias"))
+        );
         assert_eq!(
             record.exposed_name(&member),
             ScopedName::in_scope(named("inst"), DeclName::expect_valid("output"))

@@ -4,8 +4,8 @@ use std::collections::{HashMap, HashSet};
 
 use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
 use graphcal_compiler::ir::instance::{
-    InstanceAssertionProjection, InstancePlotProjection, InstanceRecord, InstanceValueProjection,
-    ProjectionExposure, template_declaration, template_reference,
+    ExposedValueBody, InstanceAssertionProjection, InstancePlotProjection, InstanceRecord,
+    InstanceValueProjection, ProjectionExposure, template_declaration, template_reference,
 };
 use graphcal_compiler::ir::module_interface::ModuleInterface;
 use graphcal_compiler::ir::static_dependencies::{ModuleDeclarations, StaticScope};
@@ -31,8 +31,8 @@ use super::module_resolve_errors::module_resolve_compile_error;
 use crate::compile_error::PipelineError;
 
 use super::model::{
-    HirFile, ImportAlias, ImportContext, IncludeDebugNameMap, IncludeInstanceRequest,
-    IncludeStaticBindings, ModuleArtifactStore, ProjectModuleBinding,
+    HirFile, ImportAlias, ImportContext, IncludeInstanceRequest, IncludeStaticBindings,
+    ModuleArtifactStore, ProjectModuleBinding,
 };
 use super::template::{ElaboratedModuleTemplate, ModuleTemplateStore};
 use graphcal_compiler::desugar::desugared_ast::{DeclKind, Declaration, Expr, ExprKind, GraphRef};
@@ -252,7 +252,9 @@ pub(super) fn validate_imported_runtime_units(
     }
 }
 
-fn include_debug_name_map(ctx: &ImportContext<'_>) -> IncludeDebugNameMap {
+fn include_debug_name_map(
+    ctx: &ImportContext<'_>,
+) -> graphcal_compiler::display::include_scope_names::IncludeScopeNames {
     let anonymous_includes = || {
         ctx.include_instances
             .iter()
@@ -797,29 +799,38 @@ fn instance_substitution(
     substitution
 }
 
+/// The values an include site exposes. A selected value whose producer
+/// declaration is in `alias_declarations` is materialized as a local alias
+/// in the importer (`add_selective_aliases_inner`), so the edge records it.
 fn semantic_output_projections(
     request: &IncludeInstanceRequest,
     instance: &graphcal_compiler::dag_id::InstanceId,
+    alias_declarations: &HashMap<DeclName, graphcal_compiler::ir::model::IncludeAliasDeclaration>,
 ) -> Vec<InstanceValueProjection> {
     request
         .surface_outputs
         .iter()
         .map(|exposed_name| {
             let local = exposed_name.leaf();
-            let (source_name, exposure) = request.selective_names.as_ref().map_or_else(
-                || (local.clone(), ProjectionExposure::Member),
+            request.selective_names.as_ref().map_or_else(
+                || InstanceValueProjection::member(template_reference(instance, local.clone())),
                 |aliases| {
                     let source_name = aliases
                         .iter()
                         .find(|alias| &alias.local == local)
                         .map_or_else(|| local.clone(), |alias| alias.original.clone());
-                    (source_name, ProjectionExposure::Selected(local.clone()))
+                    let body = if alias_declarations.contains_key(&source_name) {
+                        ExposedValueBody::LocalAlias
+                    } else {
+                        ExposedValueBody::Instance
+                    };
+                    InstanceValueProjection::selected(
+                        template_reference(instance, source_name),
+                        local.clone(),
+                        body,
+                    )
                 },
-            );
-            InstanceValueProjection {
-                target: template_reference(instance, source_name),
-                exposure,
-            }
+            )
         })
         .collect()
 }
@@ -889,6 +900,28 @@ fn semantic_plot_projections(
         .collect()
 }
 
+/// The producer declarations a selective include materializes as local
+/// aliases in the importer, keyed by their names in the producer. Both the
+/// include edge and the alias materialization read this one table.
+fn selective_alias_declarations(
+    request: &IncludeInstanceRequest,
+    template: &graphcal_compiler::ir::model::UnfrozenIR,
+) -> HashMap<DeclName, graphcal_compiler::ir::model::IncludeAliasDeclaration> {
+    request
+        .selective_names
+        .as_ref()
+        .map_or_else(HashMap::new, |selective| {
+            selective
+                .iter()
+                .filter_map(|alias| {
+                    template
+                        .include_alias_declaration(&alias.original)
+                        .map(|declaration| (alias.original.clone(), declaration))
+                })
+                .collect()
+        })
+}
+
 fn record_semantic_instance(
     unfrozen: &mut graphcal_compiler::ir::model::UnfrozenIR,
     request: &IncludeInstanceRequest,
@@ -906,7 +939,11 @@ fn record_semantic_instance(
     );
     let value_bindings = semantic_value_bindings(request, &instance_id);
     let substitution = instance_substitution(request, importer, module_resolver);
-    let output_projections = semantic_output_projections(request, &instance_id);
+    let output_projections = semantic_output_projections(
+        request,
+        &instance_id,
+        &selective_alias_declarations(request, template),
+    );
     let assertion_projections = semantic_assertion_projections(
         request,
         template,
@@ -1168,20 +1205,7 @@ fn elaborate_include_instances(
         )?;
 
         // ---- 5. Retain one typed semantic edge -------------------------------
-        let selective_alias_declarations =
-            instance
-                .selective_names
-                .as_ref()
-                .map_or_else(HashMap::new, |selective| {
-                    selective
-                        .iter()
-                        .filter_map(|alias| {
-                            dep_unfrozen
-                                .include_alias_declaration(&alias.original)
-                                .map(|declaration| (alias.original.clone(), declaration))
-                        })
-                        .collect::<HashMap<_, _>>()
-                });
+        let selective_alias_declarations = selective_alias_declarations(instance, dep_unfrozen);
         record_semantic_instance(
             unfrozen,
             instance,

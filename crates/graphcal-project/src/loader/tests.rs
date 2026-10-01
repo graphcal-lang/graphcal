@@ -4,11 +4,12 @@ use std::cell::Cell;
 use std::fs;
 use std::io;
 
+use graphcal_compiler::cancellation::CancellationToken;
 use graphcal_compiler::syntax::function_name::FnName;
 use graphcal_compiler::syntax::non_empty::NonEmpty;
 use graphcal_compiler::syntax::plugin::PluginPath;
 use graphcal_io::{
-    ByteLimit, CancellationSignal, EntryLimit, NeverCancel, RealFileSystem, SourceTreeHashLimits,
+    ByteLimit, EntryLimit, FileSystemReadError, RealFileSystem, SourceTreeHashLimits,
 };
 use graphcal_package::Sha256Digest;
 
@@ -82,8 +83,8 @@ impl FileSystemReader for CanonicalizeCountingFileSystem {
         &self,
         path: &Path,
         limit: ByteLimit,
-        cancellation: &dyn CancellationSignal,
-    ) -> Result<Vec<u8>, FileSystemReadError> {
+        cancellation: &CancellationToken,
+    ) -> Result<Vec<u8>, Outcome<FileSystemReadError>> {
         self.inner.read_bytes_bounded(path, limit, cancellation)
     }
 
@@ -105,8 +106,8 @@ impl FileSystemReader for CanonicalizeCountingFileSystem {
         &self,
         path: &Path,
         limit: EntryLimit,
-        cancellation: &dyn CancellationSignal,
-    ) -> Result<Vec<std::ffi::OsString>, FileSystemReadError> {
+        cancellation: &CancellationToken,
+    ) -> Result<Vec<std::ffi::OsString>, Outcome<FileSystemReadError>> {
         self.inner.read_directory_bounded(path, limit, cancellation)
     }
 
@@ -138,19 +139,17 @@ impl FileSystemReader for MutatingManifestFileSystem {
         &self,
         path: &Path,
         limit: ByteLimit,
-        cancellation: &dyn CancellationSignal,
-    ) -> Result<Vec<u8>, FileSystemReadError> {
+        cancellation: &CancellationToken,
+    ) -> Result<Vec<u8>, Outcome<FileSystemReadError>> {
         if path.file_name() == Some(std::ffi::OsStr::new("graphcal.toml")) {
-            let read = self
-                .manifest_reads
-                .get()
-                .checked_add(1)
-                .ok_or_else(|| io::Error::other("manifest read counter overflow"))?;
+            let read = self.manifest_reads.get().checked_add(1).ok_or_else(|| {
+                FileSystemReadError::Io(io::Error::other("manifest read counter overflow"))
+            })?;
             self.manifest_reads.set(read);
             if read > 1 {
                 let bytes = b"[package]\nname = \"mutated\"\n";
                 if bytes.len() as u64 > limit.get() {
-                    return Err(FileSystemReadError::ByteLimitExceeded { limit });
+                    return Err(FileSystemReadError::ByteLimitExceeded { limit }.into());
                 }
                 return Ok(bytes.to_vec());
             }
@@ -170,8 +169,8 @@ impl FileSystemReader for MutatingManifestFileSystem {
         &self,
         path: &Path,
         limit: EntryLimit,
-        cancellation: &dyn CancellationSignal,
-    ) -> Result<Vec<std::ffi::OsString>, FileSystemReadError> {
+        cancellation: &CancellationToken,
+    ) -> Result<Vec<std::ffi::OsString>, Outcome<FileSystemReadError>> {
         self.inner.read_directory_bounded(path, limit, cancellation)
     }
 
@@ -305,12 +304,16 @@ fn rooted_filesystem_confines_loose_file_to_its_parent() {
     let fs = build_rooted_filesystem(&main, None).unwrap();
 
     assert!(
-        fs.read_bytes_bounded(&main, ByteLimit::new(1024), &NeverCancel)
+        fs.read_bytes_bounded(&main, ByteLimit::new(1024), &CancellationToken::unbounded())
             .is_ok()
     );
     assert!(
-        fs.read_bytes_bounded(&outside, ByteLimit::new(1024), &NeverCancel)
-            .is_err()
+        fs.read_bytes_bounded(
+            &outside,
+            ByteLimit::new(1024),
+            &CancellationToken::unbounded()
+        )
+        .is_err()
     );
 }
 
@@ -800,7 +803,7 @@ fn install_dependency_cache_generation(
             &staging,
             &manifest.source_dir.to_path_buf(),
             SourceTreeHashLimits::unbounded(),
-            &graphcal_io::NeverCancel,
+            &CancellationToken::unbounded(),
         )
         .unwrap()
         .sha256(),
@@ -1173,7 +1176,7 @@ fn unrooted_plugin_reader_rejects_symlink_escape() {
         &mut budget,
         &cancellation,
     );
-    assert!(matches!(result, Err(PluginFileError::OutsideRoot)));
+    assert!(matches!(result, Ok(Err(PluginFileError::OutsideRoot))));
 }
 
 #[cfg(unix)]
@@ -1226,7 +1229,10 @@ fn plugin_reader_rejects_oversized_module_before_loading() {
         &mut budget,
         &cancellation,
     );
-    assert!(result.is_err(), "oversized plugin was read into memory");
+    assert!(
+        matches!(result, Ok(Err(PluginFileError::ResourceLimit(_)))),
+        "oversized plugin was read into memory"
+    );
 }
 
 struct LockReadFailureFileSystem(RealFileSystem);
@@ -1236,13 +1242,13 @@ impl FileSystemReader for LockReadFailureFileSystem {
         &self,
         path: &Path,
         limit: ByteLimit,
-        cancellation: &dyn CancellationSignal,
-    ) -> Result<Vec<u8>, FileSystemReadError> {
+        cancellation: &CancellationToken,
+    ) -> Result<Vec<u8>, Outcome<FileSystemReadError>> {
         if path.file_name() == Some(std::ffi::OsStr::new("graphcal.lock")) {
-            return Err(io::Error::new(
+            return Err(FileSystemReadError::Io(io::Error::new(
                 io::ErrorKind::PermissionDenied,
                 "lockfile denied by test filesystem",
-            )
+            ))
             .into());
         }
         self.0.read_bytes_bounded(path, limit, cancellation)
@@ -1260,8 +1266,8 @@ impl FileSystemReader for LockReadFailureFileSystem {
         &self,
         path: &Path,
         limit: EntryLimit,
-        cancellation: &dyn CancellationSignal,
-    ) -> Result<Vec<std::ffi::OsString>, FileSystemReadError> {
+        cancellation: &CancellationToken,
+    ) -> Result<Vec<std::ffi::OsString>, Outcome<FileSystemReadError>> {
         self.0.read_directory_bounded(path, limit, cancellation)
     }
 
@@ -1318,8 +1324,8 @@ impl FileSystemReader for RecordingFileSystem {
         &self,
         path: &Path,
         limit: ByteLimit,
-        cancellation: &dyn CancellationSignal,
-    ) -> Result<Vec<u8>, FileSystemReadError> {
+        cancellation: &CancellationToken,
+    ) -> Result<Vec<u8>, Outcome<FileSystemReadError>> {
         self.fetched.borrow_mut().push(path.to_path_buf());
         self.inner.read_bytes_bounded(path, limit, cancellation)
     }
@@ -1336,8 +1342,8 @@ impl FileSystemReader for RecordingFileSystem {
         &self,
         path: &Path,
         limit: EntryLimit,
-        cancellation: &dyn CancellationSignal,
-    ) -> Result<Vec<std::ffi::OsString>, FileSystemReadError> {
+        cancellation: &CancellationToken,
+    ) -> Result<Vec<std::ffi::OsString>, Outcome<FileSystemReadError>> {
         self.inner.read_directory_bounded(path, limit, cancellation)
     }
 
@@ -1537,4 +1543,39 @@ fn build_files<K: super::source_snapshot::SourceKey>(
     CompileError,
 > {
     super::build::build_loaded_files(snapshot).map(|(files, _)| files)
+}
+
+/// Cancellation observed inside a bounded read (manifest, lockfile, plugin,
+/// or source) unwinds as [`Outcome::Cancelled`], never as a read diagnostic.
+#[test]
+fn cancellation_during_any_package_read_is_never_reported_as_a_diagnostic() {
+    let directory = setup_temp_dir(&[
+        ("graphcal.toml", "[package]\nname = \"mission\"\n"),
+        (
+            "src/mission/main.gcl",
+            "import plugin \"plugin.wasm\" as plugin {\nfn value() -> Dimensionless;\n}\nnode x: Dimensionless = 1.0;",
+        ),
+        ("plugin.wasm", "not wasm"),
+    ]);
+    let root = directory.path().join("src/mission/main.gcl");
+    let load = |successful_checkpoints| {
+        load_project_with_cancellation(
+            &root,
+            None,
+            &RealFileSystem::default(),
+            &CancellationToken::cancel_after_successful_checkpoints(successful_checkpoints),
+        )
+    };
+    let checkpoints = (0..256)
+        .find(|successful_checkpoints| load(*successful_checkpoints).is_ok())
+        .expect("the load must complete within the sweep");
+    assert!(checkpoints > 1, "loading must expose internal checkpoints");
+    for successful_checkpoints in 0..checkpoints {
+        let result = load(successful_checkpoints);
+        assert!(
+            matches!(result, Err(Outcome::Cancelled)),
+            "checkpoint {successful_checkpoints} produced {:?}",
+            result.err()
+        );
+    }
 }

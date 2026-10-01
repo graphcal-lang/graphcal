@@ -3,7 +3,7 @@
 use graphcal_compiler::complex_value::ComplexValue;
 use graphcal_compiler::finite_value::{FiniteQuantity, NonFiniteQuantity};
 
-pub mod dense_array;
+pub(crate) mod dense_array;
 mod index_axis;
 mod indexed;
 mod key_value;
@@ -16,7 +16,7 @@ pub use struct_value::{StructFieldsError, StructValue};
 
 /// Error returned when a [`RuntimeValue`] accessor is called on an incompatible variant.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RuntimeValueError {
+pub(crate) struct RuntimeValueError {
     /// What kind of value was expected (e.g. "quantity", "Bool").
     expected: &'static str,
     /// A description of what the value was being used for.
@@ -82,7 +82,10 @@ impl RuntimeValue {
 
     /// Extract quantity value, returning a structured error if this is not a quantity.
     /// (Type mismatches should be caught by `dim_check`; this is defense-in-depth.)
-    pub fn expect_quantity(&self, context: &str) -> Result<FiniteQuantity, RuntimeValueError> {
+    pub(crate) fn expect_quantity(
+        &self,
+        context: &str,
+    ) -> Result<FiniteQuantity, RuntimeValueError> {
         match self {
             Self::Quantity(v) => Ok(*v),
             other => Err(RuntimeValueError {

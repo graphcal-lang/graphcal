@@ -13,7 +13,6 @@ use graphcal_compiler::semantic::index_def::IndexBindingTarget;
 use graphcal_compiler::source_id::SourceId;
 use graphcal_compiler::syntax::decl_name::DeclName;
 use graphcal_compiler::syntax::dimension::UnitName;
-use graphcal_compiler::syntax::module_name::IncludeInstanceId;
 use graphcal_compiler::syntax::module_name::{ModuleAliasName, ScopeSegment, ScopedName};
 use graphcal_compiler::syntax::span::Span;
 
@@ -37,9 +36,6 @@ pub(super) struct IndexBindingSite {
     pub(super) span: Span,
 }
 
-/// Presentation aliases for private selective-include scopes.
-pub type IncludeDebugNameMap = HashMap<IncludeInstanceId, ModuleAliasName>;
-
 /// A selective import/include alias with explicit source and local roles.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct ImportAlias {
@@ -57,7 +53,8 @@ pub(super) struct HirFile {
     pub(super) inline_dags: Vec<graphcal_compiler::ir::model::HirDag>,
     pub(super) imported_source_order: Vec<(ScopedName, DeclCategory)>,
     pub(super) output_surface: HashSet<ScopedName>,
-    pub(super) include_debug_names: IncludeDebugNameMap,
+    pub(super) include_debug_names:
+        graphcal_compiler::display::include_scope_names::IncludeScopeNames,
     pub(super) module_map: HashMap<ModuleAliasName, ProjectModuleBinding>,
 }
 

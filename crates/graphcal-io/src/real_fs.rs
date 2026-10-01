@@ -10,13 +10,14 @@ use std::sync::Arc;
 
 #[cfg(not(target_arch = "wasm32"))]
 use cap_std::{ambient_authority, fs::Dir};
+use graphcal_compiler::{cancellation::CancellationToken, outcome::Outcome};
 use sha2::{Digest, Sha256};
 
 #[cfg(not(target_arch = "wasm32"))]
 use crate::VirtualAbsolutePath;
 use crate::{
-    BoundedFileHash, ByteLimit, CancellationSignal, EntryLimit, FileSystemEntryKind,
-    FileSystemReadError, FileSystemReader,
+    BoundedFileHash, ByteLimit, EntryLimit, FileSystemEntryKind, FileSystemReadError,
+    FileSystemReader,
 };
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -119,36 +120,39 @@ impl RealFileSystem {
         mut file: impl Read,
         declared_len: u64,
         limit: ByteLimit,
-        cancellation: &dyn CancellationSignal,
-    ) -> Result<Vec<u8>, FileSystemReadError> {
+        cancellation: &CancellationToken,
+    ) -> Result<Vec<u8>, Outcome<FileSystemReadError>> {
         if declared_len > limit.get() {
-            return Err(FileSystemReadError::ByteLimitExceeded { limit });
+            return Err(FileSystemReadError::ByteLimitExceeded { limit }.into());
         }
-        let capacity = usize::try_from(declared_len).map_err(|_| {
-            io::Error::new(
-                io::ErrorKind::OutOfMemory,
-                "file length cannot be represented on this platform",
-            )
-        })?;
+        let capacity = usize::try_from(declared_len)
+            .map_err(|_| {
+                io::Error::new(
+                    io::ErrorKind::OutOfMemory,
+                    "file length cannot be represented on this platform",
+                )
+            })
+            .map_err(FileSystemReadError::Io)?;
         let mut bytes = Vec::new();
-        bytes.try_reserve_exact(capacity).map_err(|error| {
-            io::Error::new(
-                io::ErrorKind::OutOfMemory,
-                format!("could not reserve bounded file buffer: {error}"),
-            )
-        })?;
+        bytes
+            .try_reserve_exact(capacity)
+            .map_err(|error| {
+                io::Error::new(
+                    io::ErrorKind::OutOfMemory,
+                    format!("could not reserve bounded file buffer: {error}"),
+                )
+            })
+            .map_err(FileSystemReadError::Io)?;
         let mut chunk = [0_u8; 8 * 1024];
         loop {
-            if cancellation.is_cancelled() {
-                return Err(FileSystemReadError::Cancelled);
-            }
-            let read = file.read(&mut chunk)?;
+            cancellation.checkpoint()?;
+            let read = file.read(&mut chunk).map_err(FileSystemReadError::Io)?;
             if read == 0 {
                 return Ok(bytes);
             }
             let next_len = (bytes.len() as u64).saturating_add(read as u64);
             if next_len > limit.get() {
-                return Err(FileSystemReadError::ByteLimitExceeded { limit });
+                return Err(FileSystemReadError::ByteLimitExceeded { limit }.into());
             }
             bytes.extend_from_slice(&chunk[..read]);
         }
@@ -158,27 +162,28 @@ impl RealFileSystem {
         mut file: impl Read,
         declared_len: u64,
         limit: ByteLimit,
-        cancellation: &dyn CancellationSignal,
-    ) -> Result<BoundedFileHash, FileSystemReadError> {
+        cancellation: &CancellationToken,
+    ) -> Result<BoundedFileHash, Outcome<FileSystemReadError>> {
         if declared_len > limit.get() {
-            return Err(FileSystemReadError::ByteLimitExceeded { limit });
+            return Err(FileSystemReadError::ByteLimitExceeded { limit }.into());
         }
         let mut hasher = Sha256::new();
         let mut bytes = 0_u64;
         let mut chunk = [0_u8; 8 * 1024];
         loop {
-            if cancellation.is_cancelled() {
-                return Err(FileSystemReadError::Cancelled);
-            }
-            let read = file.read(&mut chunk)?;
+            cancellation.checkpoint()?;
+            let read = file.read(&mut chunk).map_err(FileSystemReadError::Io)?;
             if read == 0 {
                 return Ok(BoundedFileHash::new(hasher.finalize().into(), bytes));
             }
-            bytes = bytes.checked_add(read as u64).ok_or_else(|| {
-                io::Error::new(io::ErrorKind::FileTooLarge, "file byte count overflow")
-            })?;
+            bytes = bytes
+                .checked_add(read as u64)
+                .ok_or_else(|| {
+                    io::Error::new(io::ErrorKind::FileTooLarge, "file byte count overflow")
+                })
+                .map_err(FileSystemReadError::Io)?;
             if bytes > limit.get() {
-                return Err(FileSystemReadError::ByteLimitExceeded { limit });
+                return Err(FileSystemReadError::ByteLimitExceeded { limit }.into());
             }
             hasher.update(&chunk[..read]);
         }
@@ -245,14 +250,14 @@ impl RealFileSystem {
         &self,
         path: &Path,
         limit: ByteLimit,
-        cancellation: &dyn CancellationSignal,
+        cancellation: &CancellationToken,
         before_open: impl FnOnce(),
-    ) -> Result<Vec<u8>, FileSystemReadError> {
-        if cancellation.is_cancelled() {
-            return Err(FileSystemReadError::Cancelled);
-        }
-        let file = self.open_regular_with_hook(path, before_open)?;
-        let declared_len = file.metadata()?.len();
+    ) -> Result<Vec<u8>, Outcome<FileSystemReadError>> {
+        cancellation.checkpoint()?;
+        let file = self
+            .open_regular_with_hook(path, before_open)
+            .map_err(FileSystemReadError::Io)?;
+        let declared_len = file.metadata().map_err(FileSystemReadError::Io)?.len();
         Self::read_file_bounded(file, declared_len, limit, cancellation)
     }
 
@@ -260,42 +265,43 @@ impl RealFileSystem {
         &self,
         path: &Path,
         limit: EntryLimit,
-        cancellation: &dyn CancellationSignal,
+        cancellation: &CancellationToken,
         before_open: impl FnOnce(),
-    ) -> Result<Vec<OsString>, FileSystemReadError> {
-        if cancellation.is_cancelled() {
-            return Err(FileSystemReadError::Cancelled);
-        }
+    ) -> Result<Vec<OsString>, Outcome<FileSystemReadError>> {
+        cancellation.checkpoint()?;
         let mut names = Vec::new();
         #[cfg(not(target_arch = "wasm32"))]
         if let Some(root) = &self.root {
-            let relative = Self::rooted_relative_path(root, path)?;
+            let relative =
+                Self::rooted_relative_path(root, path).map_err(FileSystemReadError::Io)?;
             before_open();
             for entry in root
                 .directory
                 .read_dir(relative)
-                .map_err(normalize_rooted_error)?
+                .map_err(normalize_rooted_error)
+                .map_err(FileSystemReadError::Io)?
             {
-                if cancellation.is_cancelled() {
-                    return Err(FileSystemReadError::Cancelled);
-                }
+                cancellation.checkpoint()?;
                 if names.len() as u64 >= limit.get() {
-                    return Err(FileSystemReadError::EntryLimitExceeded { limit });
+                    return Err(FileSystemReadError::EntryLimitExceeded { limit }.into());
                 }
-                names.push(entry.map_err(normalize_rooted_error)?.file_name());
+                names.push(
+                    entry
+                        .map_err(normalize_rooted_error)
+                        .map_err(FileSystemReadError::Io)?
+                        .file_name(),
+                );
             }
             return Ok(names);
         }
 
         before_open();
-        for entry in std::fs::read_dir(path)? {
-            if cancellation.is_cancelled() {
-                return Err(FileSystemReadError::Cancelled);
-            }
+        for entry in std::fs::read_dir(path).map_err(FileSystemReadError::Io)? {
+            cancellation.checkpoint()?;
             if names.len() as u64 >= limit.get() {
-                return Err(FileSystemReadError::EntryLimitExceeded { limit });
+                return Err(FileSystemReadError::EntryLimitExceeded { limit }.into());
             }
-            names.push(entry?.file_name());
+            names.push(entry.map_err(FileSystemReadError::Io)?.file_name());
         }
         Ok(names)
     }
@@ -343,8 +349,8 @@ impl FileSystemReader for RealFileSystem {
         &self,
         path: &Path,
         limit: ByteLimit,
-        cancellation: &dyn CancellationSignal,
-    ) -> Result<Vec<u8>, FileSystemReadError> {
+        cancellation: &CancellationToken,
+    ) -> Result<Vec<u8>, Outcome<FileSystemReadError>> {
         self.read_bytes_bounded_with_hook(path, limit, cancellation, || {})
     }
 
@@ -352,20 +358,20 @@ impl FileSystemReader for RealFileSystem {
         &self,
         path: &Path,
         limit: ByteLimit,
-        cancellation: &dyn CancellationSignal,
-    ) -> Result<BoundedFileHash, FileSystemReadError> {
-        if cancellation.is_cancelled() {
-            return Err(FileSystemReadError::Cancelled);
-        }
-        if self.entry_kind(path)? != FileSystemEntryKind::File {
-            return Err(io::Error::new(
+        cancellation: &CancellationToken,
+    ) -> Result<BoundedFileHash, Outcome<FileSystemReadError>> {
+        cancellation.checkpoint()?;
+        if self.entry_kind(path).map_err(FileSystemReadError::Io)? != FileSystemEntryKind::File {
+            return Err(FileSystemReadError::Io(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 format!("cannot hash non-regular file `{}`", path.display()),
-            )
+            ))
             .into());
         }
-        let file = self.open_regular_with_hook(path, || {})?;
-        let metadata = file.metadata()?;
+        let file = self
+            .open_regular_with_hook(path, || {})
+            .map_err(FileSystemReadError::Io)?;
+        let metadata = file.metadata().map_err(FileSystemReadError::Io)?;
         Self::hash_file_bounded(file, metadata.len(), limit, cancellation)
     }
 
@@ -410,8 +416,8 @@ impl FileSystemReader for RealFileSystem {
         &self,
         path: &Path,
         limit: EntryLimit,
-        cancellation: &dyn CancellationSignal,
-    ) -> Result<Vec<OsString>, FileSystemReadError> {
+        cancellation: &CancellationToken,
+    ) -> Result<Vec<OsString>, Outcome<FileSystemReadError>> {
         self.read_directory_bounded_with_hook(path, limit, cancellation, || {})
     }
 
@@ -436,8 +442,14 @@ impl FileSystemReader for RealFileSystem {
 
 #[cfg(test)]
 mod tests {
+    fn io_kind(outcome: Outcome<FileSystemReadError>) -> Option<io::ErrorKind> {
+        match outcome {
+            Outcome::Failed(error) => error.io_kind(),
+            Outcome::Cancelled => None,
+        }
+    }
+
     use super::*;
-    use crate::NeverCancel;
     use std::fs;
 
     const TEST_LIMIT: ByteLimit = ByteLimit::new(1024);
@@ -450,7 +462,7 @@ mod tests {
 
         let fs_reader = RealFileSystem::default();
         let content = fs_reader
-            .read_to_string_bounded(&file, TEST_LIMIT, &NeverCancel)
+            .read_to_string_bounded(&file, TEST_LIMIT, &CancellationToken::unbounded())
             .unwrap();
         assert!(content.contains("param x"));
     }
@@ -465,7 +477,7 @@ mod tests {
         let fs_reader = RealFileSystem::rooted(&root).unwrap();
         assert_eq!(
             fs_reader
-                .read_to_string_bounded(&file, TEST_LIMIT, &NeverCancel)
+                .read_to_string_bounded(&file, TEST_LIMIT, &CancellationToken::unbounded())
                 .unwrap(),
             "hello"
         );
@@ -507,31 +519,48 @@ mod tests {
                     };
                     assert!(
                         reader
-                            .read_bytes_bounded_with_hook(&path, TEST_LIMIT, &NeverCancel, || {
-                                if swap {
-                                    fs::remove_file(&path).unwrap();
-                                    fifo();
+                            .read_bytes_bounded_with_hook(
+                                &path,
+                                TEST_LIMIT,
+                                &CancellationToken::unbounded(),
+                                || {
+                                    if swap {
+                                        fs::remove_file(&path).unwrap();
+                                        fifo();
+                                    }
                                 }
-                            })
+                            )
                             .is_err()
                     );
                     assert!(
                         reader
-                            .hash_file_sha256_bounded(&path, TEST_LIMIT, &NeverCancel)
+                            .hash_file_sha256_bounded(
+                                &path,
+                                TEST_LIMIT,
+                                &CancellationToken::unbounded()
+                            )
                             .is_err()
                     );
                     let socket = root.join("socket");
                     let _listener = std::os::unix::net::UnixListener::bind(&socket).unwrap();
                     assert!(
                         reader
-                            .read_bytes_bounded(&socket, TEST_LIMIT, &NeverCancel)
+                            .read_bytes_bounded(
+                                &socket,
+                                TEST_LIMIT,
+                                &CancellationToken::unbounded()
+                            )
                             .is_err()
                     );
                 }
             }
             assert!(
                 RealFileSystem::default()
-                    .read_bytes_bounded(Path::new("/dev/null"), TEST_LIMIT, &NeverCancel)
+                    .read_bytes_bounded(
+                        Path::new("/dev/null"),
+                        TEST_LIMIT,
+                        &CancellationToken::unbounded()
+                    )
                     .is_err()
             );
             return;
@@ -570,11 +599,11 @@ mod tests {
         handle.set_len(1025).unwrap();
 
         let error = RealFileSystem::default()
-            .read_bytes_bounded(&file, TEST_LIMIT, &NeverCancel)
+            .read_bytes_bounded(&file, TEST_LIMIT, &CancellationToken::unbounded())
             .unwrap_err();
         assert!(matches!(
             error,
-            FileSystemReadError::ByteLimitExceeded { .. }
+            Outcome::Failed(FileSystemReadError::ByteLimitExceeded { .. })
         ));
     }
 
@@ -586,7 +615,7 @@ mod tests {
 
         let hash = RealFileSystem::rooted(dir.path())
             .unwrap()
-            .hash_file_sha256_bounded(&file, TEST_LIMIT, &NeverCancel)
+            .hash_file_sha256_bounded(&file, TEST_LIMIT, &CancellationToken::unbounded())
             .unwrap();
 
         assert_eq!(hash.bytes(), 21);
@@ -604,30 +633,25 @@ mod tests {
         assert!(matches!(
             RealFileSystem::rooted(dir.path())
                 .unwrap()
-                .hash_file_sha256_bounded(&file, TEST_LIMIT, &NeverCancel),
-            Err(FileSystemReadError::ByteLimitExceeded { .. })
+                .hash_file_sha256_bounded(&file, TEST_LIMIT, &CancellationToken::unbounded()),
+            Err(Outcome::Failed(
+                FileSystemReadError::ByteLimitExceeded { .. }
+            ))
         ));
     }
 
     #[test]
     fn bounded_hash_observes_cancellation_before_streaming_completes() {
-        use std::cell::Cell;
-
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("plugin.wasm");
         fs::write(&file, vec![7_u8; 32 * 1024]).unwrap();
-        let checks = Cell::new(0_u8);
-        let cancellation = || {
-            let next = checks.get().saturating_add(1);
-            checks.set(next);
-            next > 2
-        };
+        let cancellation = CancellationToken::cancel_after_successful_checkpoints(2);
 
         assert!(matches!(
             RealFileSystem::rooted(dir.path())
                 .unwrap()
                 .hash_file_sha256_bounded(&file, ByteLimit::new(64 * 1024), &cancellation),
-            Err(FileSystemReadError::Cancelled)
+            Err(Outcome::Cancelled)
         ));
     }
 
@@ -648,10 +672,15 @@ mod tests {
 
         for rejected in [linked, socket] {
             assert_eq!(
-                reader
-                    .hash_file_sha256_bounded(&rejected, TEST_LIMIT, &NeverCancel)
-                    .unwrap_err()
-                    .io_kind(),
+                io_kind(
+                    reader
+                        .hash_file_sha256_bounded(
+                            &rejected,
+                            TEST_LIMIT,
+                            &CancellationToken::unbounded()
+                        )
+                        .unwrap_err()
+                ),
                 Some(io::ErrorKind::InvalidInput)
             );
         }
@@ -670,9 +699,9 @@ mod tests {
 
         let fs_reader = RealFileSystem::rooted(&project).unwrap();
         let error = fs_reader
-            .read_to_string_bounded(&secret, TEST_LIMIT, &NeverCancel)
+            .read_to_string_bounded(&secret, TEST_LIMIT, &CancellationToken::unbounded())
             .unwrap_err();
-        assert_eq!(error.io_kind(), Some(io::ErrorKind::NotFound));
+        assert_eq!(io_kind(error), Some(io::ErrorKind::NotFound));
         assert!(!fs_reader.is_file(&secret));
         assert!(!fs_reader.exists(&secret));
     }
@@ -696,9 +725,9 @@ mod tests {
 
         let fs_reader = RealFileSystem::rooted(&project).unwrap();
         let error = fs_reader
-            .read_to_string_bounded(&link, TEST_LIMIT, &NeverCancel)
+            .read_to_string_bounded(&link, TEST_LIMIT, &CancellationToken::unbounded())
             .unwrap_err();
-        assert_eq!(error.io_kind(), Some(io::ErrorKind::NotFound));
+        assert_eq!(io_kind(error), Some(io::ErrorKind::NotFound));
         assert_eq!(
             fs_reader.entry_kind(&link).unwrap(),
             FileSystemEntryKind::Symlink
@@ -721,13 +750,18 @@ mod tests {
         let reader = RealFileSystem::rooted(&project).unwrap();
 
         let error = reader
-            .read_bytes_bounded_with_hook(&victim, TEST_LIMIT, &NeverCancel, || {
-                fs::remove_file(&victim).unwrap();
-                symlink(&external, &victim).unwrap();
-            })
+            .read_bytes_bounded_with_hook(
+                &victim,
+                TEST_LIMIT,
+                &CancellationToken::unbounded(),
+                || {
+                    fs::remove_file(&victim).unwrap();
+                    symlink(&external, &victim).unwrap();
+                },
+            )
             .unwrap_err();
 
-        assert!(matches!(error, FileSystemReadError::Io(_)));
+        assert!(matches!(error, Outcome::Failed(FileSystemReadError::Io(_))));
     }
 
     #[cfg(unix)]
@@ -748,13 +782,18 @@ mod tests {
         let parked = project.join("parked");
 
         let error = reader
-            .read_bytes_bounded_with_hook(&requested, TEST_LIMIT, &NeverCancel, || {
-                fs::rename(&directory, &parked).unwrap();
-                symlink(&external, &directory).unwrap();
-            })
+            .read_bytes_bounded_with_hook(
+                &requested,
+                TEST_LIMIT,
+                &CancellationToken::unbounded(),
+                || {
+                    fs::rename(&directory, &parked).unwrap();
+                    symlink(&external, &directory).unwrap();
+                },
+            )
             .unwrap_err();
 
-        assert!(matches!(error, FileSystemReadError::Io(_)));
+        assert!(matches!(error, Outcome::Failed(FileSystemReadError::Io(_))));
     }
 
     #[cfg(unix)]
@@ -774,13 +813,18 @@ mod tests {
         let parked = project.join("parked");
 
         let error = reader
-            .read_directory_bounded_with_hook(&directory, EntryLimit::new(10), &NeverCancel, || {
-                fs::rename(&directory, &parked).unwrap();
-                symlink(&external, &directory).unwrap();
-            })
+            .read_directory_bounded_with_hook(
+                &directory,
+                EntryLimit::new(10),
+                &CancellationToken::unbounded(),
+                || {
+                    fs::rename(&directory, &parked).unwrap();
+                    symlink(&external, &directory).unwrap();
+                },
+            )
             .unwrap_err();
 
-        assert!(matches!(error, FileSystemReadError::Io(_)));
+        assert!(matches!(error, Outcome::Failed(FileSystemReadError::Io(_))));
     }
 
     #[test]
@@ -794,7 +838,7 @@ mod tests {
         assert!(fs_reader.is_file(&file));
         assert_eq!(
             fs_reader
-                .read_to_string_bounded(&file, TEST_LIMIT, &NeverCancel)
+                .read_to_string_bounded(&file, TEST_LIMIT, &CancellationToken::unbounded())
                 .unwrap(),
             "loose"
         );

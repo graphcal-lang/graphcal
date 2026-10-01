@@ -10,9 +10,10 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
+use graphcal_compiler::{cancellation::CancellationToken, outcome::Outcome};
 use graphcal_io::{
-    BoundedFileHash, ByteLimit, CancellationSignal, EntryLimit, FileSystemEntryKind,
-    FileSystemReadError, FileSystemReader,
+    BoundedFileHash, ByteLimit, EntryLimit, FileSystemEntryKind, FileSystemReadError,
+    FileSystemReader,
 };
 use tower_lsp::lsp_types::{
     DidChangeWatchedFilesRegistrationOptions, FileSystemWatcher, GlobPattern, Registration,
@@ -113,8 +114,8 @@ impl<F: FileSystemReader> FileSystemReader for TrackingFileSystem<F> {
         &self,
         path: &Path,
         limit: ByteLimit,
-        cancellation: &dyn CancellationSignal,
-    ) -> Result<Vec<u8>, FileSystemReadError> {
+        cancellation: &CancellationToken,
+    ) -> Result<Vec<u8>, Outcome<FileSystemReadError>> {
         self.record(path);
         self.inner.read_bytes_bounded(path, limit, cancellation)
     }
@@ -123,8 +124,8 @@ impl<F: FileSystemReader> FileSystemReader for TrackingFileSystem<F> {
         &self,
         path: &Path,
         limit: ByteLimit,
-        cancellation: &dyn CancellationSignal,
-    ) -> Result<BoundedFileHash, FileSystemReadError> {
+        cancellation: &CancellationToken,
+    ) -> Result<BoundedFileHash, Outcome<FileSystemReadError>> {
         self.record(path);
         self.inner
             .hash_file_sha256_bounded(path, limit, cancellation)
@@ -144,8 +145,8 @@ impl<F: FileSystemReader> FileSystemReader for TrackingFileSystem<F> {
         &self,
         path: &Path,
         limit: EntryLimit,
-        cancellation: &dyn CancellationSignal,
-    ) -> Result<Vec<OsString>, FileSystemReadError> {
+        cancellation: &CancellationToken,
+    ) -> Result<Vec<OsString>, Outcome<FileSystemReadError>> {
         self.inner.read_directory_bounded(path, limit, cancellation)
     }
 

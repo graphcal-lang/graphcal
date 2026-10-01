@@ -1,4 +1,5 @@
 pub mod bindings;
+mod output_decl_name;
 mod plot_data;
 mod plot_unavailable;
 pub mod public_projection;
@@ -8,6 +9,7 @@ pub mod types;
 pub use graphcal_compiler::display::number::format_number;
 
 pub use crate::runtime_value::KeyValue;
+pub use output_decl_name::{OutputDeclName, OutputUnavailable};
 pub use plot_unavailable::{ComposedPlotsUnavailable, PlotUnavailable};
 pub use runtime::RuntimeEvaluation;
 pub use types::{

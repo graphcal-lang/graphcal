@@ -82,7 +82,7 @@ impl<'a> ScheduledDeclaration<'a> {
 }
 
 #[must_use]
-pub fn eval_failed_node_error(error: &SemanticError) -> NodeUnavailable {
+pub(crate) fn eval_failed_node_error(error: &SemanticError) -> NodeUnavailable {
     match error {
         SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
             kind:
@@ -178,7 +178,7 @@ impl<'a> ExecutionFrame<'a> {
         }
     }
 
-    pub fn unfinished_origins(
+    pub(crate) fn unfinished_origins(
         &self,
     ) -> impl Iterator<Item = &graphcal_compiler::resolved_name::ResolvedDeclName> {
         self.errors.values().flat_map(NodeUnavailable::unfinished)

@@ -7,9 +7,11 @@ use std::path::{Component, Path, PathBuf};
 
 use thiserror::Error;
 
+use graphcal_compiler::{cancellation::CancellationToken, outcome::Outcome};
+
 use crate::{
-    ByteLimit, CancellationSignal, EntryLimit, FileSystemEntryKind, FileSystemReadError,
-    FileSystemReader, VirtualAbsolutePath, VirtualPathError,
+    ByteLimit, EntryLimit, FileSystemEntryKind, FileSystemReadError, FileSystemReader,
+    VirtualAbsolutePath, VirtualPathError,
 };
 
 #[derive(Debug)]
@@ -291,14 +293,12 @@ impl<F: FileSystemReader> FileSystemReader for OverlayFileSystem<F> {
         &self,
         path: &Path,
         limit: ByteLimit,
-        cancellation: &dyn CancellationSignal,
-    ) -> Result<Vec<u8>, FileSystemReadError> {
+        cancellation: &CancellationToken,
+    ) -> Result<Vec<u8>, Outcome<FileSystemReadError>> {
         if let Some(OverlayPath::File(entry)) = self.overlay_path(path) {
-            if cancellation.is_cancelled() {
-                return Err(FileSystemReadError::Cancelled);
-            }
+            cancellation.checkpoint()?;
             if entry.content.len() as u64 > limit.get() {
-                return Err(FileSystemReadError::ByteLimitExceeded { limit });
+                return Err(FileSystemReadError::ByteLimitExceeded { limit }.into());
             }
             Ok(entry.content.as_bytes().to_vec())
         } else {
@@ -326,17 +326,15 @@ impl<F: FileSystemReader> FileSystemReader for OverlayFileSystem<F> {
         &self,
         path: &Path,
         limit: EntryLimit,
-        cancellation: &dyn CancellationSignal,
-    ) -> Result<Vec<OsString>, FileSystemReadError> {
-        if cancellation.is_cancelled() {
-            return Err(FileSystemReadError::Cancelled);
-        }
+        cancellation: &CancellationToken,
+    ) -> Result<Vec<OsString>, Outcome<FileSystemReadError>> {
+        cancellation.checkpoint()?;
         let canonical = match self.overlay_path(path) {
             Some(OverlayPath::File(entry)) => {
-                return Err(io::Error::new(
+                return Err(FileSystemReadError::Io(io::Error::new(
                     io::ErrorKind::NotADirectory,
                     entry.canonical().as_path().display().to_string(),
-                )
+                ))
                 .into());
             }
             Some(OverlayPath::Directory(canonical)) => canonical,
@@ -350,14 +348,16 @@ impl<F: FileSystemReader> FileSystemReader for OverlayFileSystem<F> {
                 .read_directory_bounded(canonical.as_path(), limit, cancellation)
             {
                 Ok(names) => names.into_iter().collect::<BTreeSet<_>>(),
-                Err(FileSystemReadError::Io(error)) if error.kind() == io::ErrorKind::NotFound => {
+                Err(Outcome::Failed(FileSystemReadError::Io(error)))
+                    if error.kind() == io::ErrorKind::NotFound =>
+                {
                     BTreeSet::new()
                 }
                 Err(error) => return Err(error),
             };
         names.extend(self.overlay_child_names(&canonical));
         if names.len() as u64 > limit.get() {
-            return Err(FileSystemReadError::EntryLimitExceeded { limit });
+            return Err(FileSystemReadError::EntryLimitExceeded { limit }.into());
         }
         Ok(names.into_iter().collect())
     }
@@ -475,7 +475,7 @@ impl OverlayFileSystemError {
 
 #[cfg(test)]
 mod tests {
-    use crate::{InMemoryFileSystem, NeverCancel, RealFileSystem};
+    use crate::{InMemoryFileSystem, RealFileSystem};
 
     use super::*;
 
@@ -509,8 +509,12 @@ mod tests {
         .unwrap();
 
         assert_eq!(
-            fs.read_to_string_bounded(Path::new("/project/main.gcl"), TEST_LIMIT, &NeverCancel)
-                .unwrap(),
+            fs.read_to_string_bounded(
+                Path::new("/project/main.gcl"),
+                TEST_LIMIT,
+                &CancellationToken::unbounded()
+            )
+            .unwrap(),
             "overlay content"
         );
     }
@@ -536,8 +540,12 @@ mod tests {
         .unwrap();
 
         assert_eq!(
-            fs.read_to_string_bounded(Path::new("/project/helper.gcl"), TEST_LIMIT, &NeverCancel)
-                .unwrap(),
+            fs.read_to_string_bounded(
+                Path::new("/project/helper.gcl"),
+                TEST_LIMIT,
+                &CancellationToken::unbounded()
+            )
+            .unwrap(),
             "helper content"
         );
     }
@@ -568,8 +576,12 @@ mod tests {
         .unwrap();
 
         assert_eq!(
-            fs.read_to_string_bounded(Path::new("/project/main.gcl"), TEST_LIMIT, &NeverCancel)
-                .unwrap(),
+            fs.read_to_string_bounded(
+                Path::new("/project/main.gcl"),
+                TEST_LIMIT,
+                &CancellationToken::unbounded()
+            )
+            .unwrap(),
             "first"
         );
     }
@@ -675,7 +687,7 @@ mod tests {
 
         assert_eq!(fs.canonicalize(&unsaved).unwrap(), unsaved);
         assert_eq!(
-            fs.read_to_string_bounded(&unsaved, TEST_LIMIT, &NeverCancel)
+            fs.read_to_string_bounded(&unsaved, TEST_LIMIT, &CancellationToken::unbounded())
                 .unwrap(),
             "overlay"
         );
@@ -683,7 +695,7 @@ mod tests {
             fs.read_directory_bounded(
                 &canonical_project.join("nested"),
                 EntryLimit::new(1),
-                &NeverCancel,
+                &CancellationToken::unbounded(),
             )
             .unwrap(),
             vec![OsString::from("unsaved.gcl")]

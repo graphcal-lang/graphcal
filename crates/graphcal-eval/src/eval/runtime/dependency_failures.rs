@@ -8,9 +8,12 @@ use graphcal_compiler::tir::typed::Scoped;
 
 use crate::eval::types::NodeUnavailable;
 
+use super::root_names::RootNames;
+
 /// If any declaration referenced by the given expressions failed to
 /// evaluate, render a `dependency failed: ...` message naming each failed
-/// dependency (direct failures carry their root cause inline).
+/// dependency as the root names it (direct failures carry their root cause
+/// inline).
 ///
 /// Shared by assertions (#814) and plots (#842): a reference to a failed
 /// declaration is not "undefined", it is unevaluable, and the report must
@@ -18,6 +21,7 @@ use crate::eval::types::NodeUnavailable;
 pub(super) fn dependency_failure_message<'a>(
     exprs: impl IntoIterator<Item = Scoped<'a, graphcal_compiler::hir::expr::Expr>>,
     errors: &HashMap<ResolvedDeclName, NodeUnavailable>,
+    names: &RootNames<'_>,
 ) -> Option<String> {
     if errors.is_empty() {
         return None;
@@ -26,19 +30,20 @@ pub(super) fn dependency_failure_message<'a>(
         .into_iter()
         .flat_map(Scoped::<'_, graphcal_compiler::hir::expr::Expr>::graph_refs)
         .collect();
-    let failed: Vec<String> =
-        deps.iter()
-            .filter_map(|dep| {
-                errors.get(dep).map(|err| {
-                    let leaf = dep.atom();
-                    match err {
-                        NodeUnavailable::EvalFailed { message } => format!("{leaf} ({message})"),
-                        NodeUnavailable::DependencyFailed { .. } => leaf.to_string(),
-                        reason @ (NodeUnavailable::Todo { .. }
-                        | NodeUnavailable::Blocked { .. }) => format!("{leaf} ({reason})"),
+    let failed: Vec<String> = deps
+        .iter()
+        .filter_map(|dep| {
+            errors.get(dep).map(|err| {
+                let name = names.name(dep);
+                match err {
+                    NodeUnavailable::EvalFailed { message } => format!("{name} ({message})"),
+                    NodeUnavailable::DependencyFailed { .. } => name.to_string(),
+                    reason @ (NodeUnavailable::Todo { .. } | NodeUnavailable::Blocked { .. }) => {
+                        format!("{name} ({})", names.present(reason))
                     }
-                })
+                }
             })
-            .collect();
+        })
+        .collect();
     (!failed.is_empty()).then(|| format!("dependency failed: {}", failed.join(", ")))
 }

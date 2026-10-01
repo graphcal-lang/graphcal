@@ -5,7 +5,7 @@ use graphcal_eval::eval::runtime::{RootFailure, RootOutcome};
 use super::{
     Arc, CheckedType, CompileError, ConcreteIndexKind, DeclName, Error, HashSet, IndexVariantName,
     ModelSchemaGraph, ModelValueSchema, ParameterBindingRow, ParameterPosition, PreparedProject,
-    ResolvedDeclName, Span, TimeScale, Value, remap_include_debug_name,
+    ResolvedDeclName, Span, TimeScale, Value,
 };
 use graphcal_eval::runtime_value::IndexAxis;
 
@@ -311,12 +311,17 @@ impl PreparedProject {
                 self.source,
                 &self.sources,
                 &self.host_fns,
+                &self.output_assembly.include_debug_names,
                 cancellation,
             )
         })
         .map_err(|error| self.render(error))?;
         if let Some(failure) = outcome
-            .first_failure(self.plan(), self.source)
+            .first_failure(
+                self.plan(),
+                self.source,
+                &self.output_assembly.include_debug_names,
+            )
             .map_err(|error| self.render(error))?
         {
             return Ok(ModelRowOutcome::Failure(self.row_failure(failure)));
@@ -329,7 +334,10 @@ impl PreparedProject {
     /// evaluation, naming private include scopes as the project displays them.
     fn row_failure(&self, failure: RootFailure<'_>) -> ModelRowFailure {
         let display = |name: &graphcal_compiler::syntax::module_name::ScopedName| {
-            remap_include_debug_name(name, &self.output_assembly.include_debug_names)
+            graphcal_compiler::display::include_scope_names::name_include_scopes(
+                name,
+                &self.output_assembly.include_debug_names,
+            )
         };
         let message = match failure {
             RootFailure::Declaration { name, reason } => format!("{}: {reason}", display(&name)),

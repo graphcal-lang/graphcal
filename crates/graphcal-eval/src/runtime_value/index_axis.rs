@@ -71,7 +71,7 @@ impl IndexAxis {
     /// The axis of a named index whose identity is given directly, for tests.
     #[cfg(test)]
     #[must_use]
-    pub fn named_for_test(
+    pub(crate) fn named_for_test(
         owner: graphcal_compiler::dag_id::DagId,
         index: &str,
         variants: &[&str],
@@ -95,7 +95,7 @@ impl IndexAxis {
     /// tests.
     #[cfg(test)]
     #[must_use]
-    pub fn coordinate_for_test(
+    pub(crate) fn coordinate_for_test(
         owner: graphcal_compiler::dag_id::DagId,
         index: &str,
         data: CoordinateIndexData,
@@ -144,7 +144,7 @@ impl IndexAxis {
 
     /// Coordinate data, when this is a coordinate axis.
     #[must_use]
-    pub fn coordinate_data(&self) -> Option<&CoordinateIndexData> {
+    pub(crate) fn coordinate_data(&self) -> Option<&CoordinateIndexData> {
         match &self.0.kind {
             ConcreteIndexKind::Coordinate(data) => Some(data),
             ConcreteIndexKind::Named { .. } | ConcreteIndexKind::Finite { .. } => None,
@@ -165,12 +165,6 @@ impl IndexAxis {
     )]
     pub fn len(&self) -> usize {
         self.0.keys.len()
-    }
-
-    /// The entry key at `position`, when the axis has that many entries.
-    #[must_use]
-    pub fn key_at(&self, position: usize) -> Option<&IndexEntryKey> {
-        self.0.keys.as_slice().get(position)
     }
 
     /// The finite coordinates of a coordinate axis, one per key in axis
@@ -200,7 +194,7 @@ impl IndexAxis {
     /// `Fin(M)` axis with `N <= M`. Positions of an admitted key are
     /// positions of this axis.
     #[must_use]
-    pub fn admits(&self, key_axis: &Self) -> bool {
+    pub(crate) fn admits(&self, key_axis: &Self) -> bool {
         match (&self.0.kind, &key_axis.0.kind) {
             (ConcreteIndexKind::Finite { .. }, ConcreteIndexKind::Finite { .. }) => {
                 key_axis.len() <= self.len()
@@ -263,8 +257,11 @@ mod tests {
             .map(|coordinate| coordinate.get())
             .collect::<Vec<_>>();
         assert_eq!(coordinates, vec![0.0, 1.0, 2.0]);
-        assert_eq!(axis.key_at(2), Some(&IndexEntryKey::position(2)));
-        assert_eq!(axis.key_at(3), None);
+        assert_eq!(
+            axis.keys().as_slice().get(2),
+            Some(&IndexEntryKey::position(2))
+        );
+        assert_eq!(axis.keys().len(), 3);
         assert!(
             IndexAxis::named_for_test(owner(), "Phase", &["A"])
                 .coordinates()

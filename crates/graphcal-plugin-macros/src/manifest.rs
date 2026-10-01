@@ -13,9 +13,9 @@ use proc_macro2::Span;
 
 use crate::dims;
 use crate::lower::{
-    FieldKindIr, FunctionIr, MonomialIr, ParamKindIr, PluginIr, ResultKindIr, ScalarKindIr,
+    FieldKindIr, FunctionIr, MonomialIr, ParamKindIr, PluginIr, Rational, ResultKindIr,
+    ScalarKindIr,
 };
-use crate::rational::Rational;
 
 /// Serialize the signature IR as the manifest JSON payload.
 pub fn build_manifest_json(ir: &PluginIr) -> syn::Result<String> {
@@ -167,19 +167,17 @@ fn monomial_to_manifest(
     Ok(ManifestMonomial { vars, fixed })
 }
 
+/// Narrow a folded exponent to the manifest's range: the same symmetric
+/// `i32` range the host accepts when it converts the manifest.
 fn rational_to_manifest(power: Rational, span: Span) -> syn::Result<ManifestRational> {
-    let out_of_range = |part: &str| {
+    let narrowed = graphcal_ratio::Ratio::<i32>::try_from(power).map_err(|_| {
         syn::Error::new(
             span,
-            format!(
-                "dimension exponent {part} {num}/{den} does not fit the manifest's i32 range",
-                num = power.num(),
-                den = power.den()
-            ),
+            format!("dimension exponent {power} does not fit the manifest's i32 range"),
         )
-    };
+    })?;
     Ok(ManifestRational {
-        num: i32::try_from(power.num()).map_err(|_| out_of_range("numerator"))?,
-        den: i32::try_from(power.den()).map_err(|_| out_of_range("denominator"))?,
+        num: narrowed.num(),
+        den: narrowed.den(),
     })
 }

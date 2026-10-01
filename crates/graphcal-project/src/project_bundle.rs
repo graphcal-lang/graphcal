@@ -422,7 +422,7 @@ mod tests {
             fs.read_to_string_bounded(
                 &root.join("main.gcl"),
                 graphcal_io::ByteLimit::new(1),
-                &graphcal_io::NeverCancel,
+                &graphcal_compiler::cancellation::CancellationToken::unbounded(),
             )
         };
         assert!(read(&first.filesystem, &first.root).is_ok());

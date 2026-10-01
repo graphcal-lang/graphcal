@@ -16,6 +16,9 @@ use graphcal_compiler::source_id::SourceId;
 use graphcal_compiler::syntax::module_name::ScopedName;
 use graphcal_compiler::syntax::span::Span;
 
+use graphcal_compiler::display::include_scope_names::IncludeScopeNames;
+
+use crate::eval::output_decl_name::{OutputDeclName, OutputUnavailable};
 use crate::eval::types::{AssertResult, NodeUnavailable};
 use crate::eval_expr::{EvalSession, RuntimeValueMap};
 use crate::execution_plan::ExecPlan;
@@ -24,7 +27,7 @@ use crate::runtime_presentation::PendingPresentedMap;
 
 use super::assertions::evaluate_assertions;
 use super::root_loop::{EvalLoopResult, run_eval_loop_with_bindings};
-use super::root_names::{instance_member_name, root_source_names};
+use super::root_names::{RootNames, instance_member_name, root_source_names};
 
 /// One evaluation of the root DAG with one row of bindings.
 pub struct RootOutcome {
@@ -50,7 +53,7 @@ pub enum RootFailure<'o> {
     /// A declaration failed, or is unavailable, under its root name.
     Declaration {
         name: ScopedName,
-        reason: &'o NodeUnavailable,
+        reason: OutputUnavailable,
     },
     /// An assertion did not pass.
     Assertion {
@@ -58,18 +61,19 @@ pub enum RootFailure<'o> {
         message: String,
     },
     /// A call reached unfinished formulas of the DAG it invoked.
-    UnfinishedCalls(Vec<ResolvedDeclName>),
+    UnfinishedCalls(Vec<OutputDeclName>),
 }
 
 impl RootOutcome {
     /// Run the root's plan with `bindings`, then evaluate every assertion the
-    /// root reports.
+    /// root reports, naming private include scopes by `include_scopes`.
     pub fn evaluate(
         plan: &ExecPlan<'_>,
         bindings: &crate::eval::bindings::RuntimeParameterBindings,
         src: SourceId,
         sources: &SourceRegistry,
         host_fns: &HostFunctionRegistry,
+        include_scopes: &IncludeScopeNames,
         cancellation: &graphcal_compiler::cancellation::CancellationToken,
     ) -> Result<Self, Outcome<SemanticError>> {
         let EvalLoopResult {
@@ -87,7 +91,14 @@ impl RootOutcome {
             assertions: Vec::new(),
         };
         let ctx = outcome.session(plan, src, sources, host_fns, cancellation);
-        let assertions = evaluate_assertions(plan, src, &ctx, &outcome.values, &outcome.errors)?;
+        let assertions = evaluate_assertions(
+            plan,
+            src,
+            &ctx,
+            &outcome.values,
+            &outcome.errors,
+            &RootNames::new(plan, include_scopes),
+        )?;
         outcome.assertions = assertions;
         Ok(outcome)
     }
@@ -147,11 +158,16 @@ impl RootOutcome {
         &self,
         plan: &ExecPlan<'_>,
         src: SourceId,
+        include_scopes: &IncludeScopeNames,
     ) -> Result<Option<RootFailure<'_>>, SemanticError> {
+        let names = RootNames::new(plan, include_scopes);
         let exposed = root_source_names(plan).into_iter().find_map(|(key, name)| {
             self.errors
                 .get(&key)
-                .map(|reason| RootFailure::Declaration { name, reason })
+                .map(|reason| RootFailure::Declaration {
+                    name,
+                    reason: names.present(reason),
+                })
         });
         let declaration = match exposed {
             Some(failure) => Some(failure),
@@ -160,8 +176,12 @@ impl RootOutcome {
                 .iter()
                 .min_by(|(left, _), (right, _)| left.cmp(right))
                 .map(|(key, reason)| {
-                    instance_member_name(plan.tir().root_dag_id(), key, src)
-                        .map(|name| RootFailure::Declaration { name, reason })
+                    instance_member_name(plan.tir().root_dag_id(), key, src).map(|name| {
+                        RootFailure::Declaration {
+                            name,
+                            reason: names.present(reason),
+                        }
+                    })
                 })
                 .transpose()?,
         };
@@ -179,8 +199,14 @@ impl RootOutcome {
         };
         let unfinished = || {
             let calls = self.unfinished_calls.borrow();
-            (!calls.is_empty())
-                .then(|| RootFailure::UnfinishedCalls(calls.iter().cloned().collect()))
+            (!calls.is_empty()).then(|| {
+                RootFailure::UnfinishedCalls(
+                    calls
+                        .iter()
+                        .map(|declaration| names.name(declaration))
+                        .collect(),
+                )
+            })
         };
         Ok(declaration.or_else(assertion).or_else(unfinished))
     }

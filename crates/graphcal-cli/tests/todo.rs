@@ -72,3 +72,39 @@ fn allowing_incomplete_never_suppresses_real_failures() {
         assert!(!output.status.success());
     }
 }
+
+/// Unavailability reasons name declarations as the output does, never by
+/// their internal identities (`input.unfinished`, `input.inner.pending`).
+#[test]
+fn unavailability_reasons_name_declarations_as_the_output_does() {
+    let source = "dag inner { node pending: Length = todo {}; pub node out: Length = @pending; } \
+                  include inner() as inst; \
+                  node unfinished: Length = todo {}; \
+                  node blocked: Length = @unfinished + @inst::out; \
+                  node bad: Length = 1.0 m / 0.0; \
+                  node failed: Length = @bad + @inst::out;";
+    let output = run(source, &["eval", "--allow-incomplete"]);
+    let text = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        text.contains("BLOCKED — unfinished dependencies: unfinished, inst::pending"),
+        "{text}"
+    );
+    assert!(!text.contains("model.inner"), "{text}");
+    assert!(!text.contains("model.unfinished"), "{text}");
+
+    let output = run(source, &["eval", "--allow-incomplete", "--format", "json"]);
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(json["node"]["unfinished"]["declaration"], "unfinished");
+    assert_eq!(
+        json["node"]["blocked"]["unfinished"],
+        serde_json::json!(["unfinished", "inst::pending"])
+    );
+    assert_eq!(
+        json["node"]["inst::out"]["unfinished"],
+        serde_json::json!(["inst::pending"])
+    );
+    assert_eq!(
+        json["node"]["failed"]["failed_deps"],
+        serde_json::json!(["bad"])
+    );
+}

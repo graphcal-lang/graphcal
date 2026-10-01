@@ -5,6 +5,8 @@ use crate::load_error::LoadError;
 
 use std::path::Path;
 
+use graphcal_compiler::outcome::Outcome;
+
 use graphcal_io::{
     ByteLimit, FileSystemReadError, FileSystemReader, ProjectIngestionPolicy, SourceTreeHashLimits,
 };
@@ -183,13 +185,13 @@ impl LoaderBudgetState {
         path: &Path,
         artifact: LoaderArtifact,
         cancellation: &graphcal_compiler::cancellation::CancellationToken,
-    ) -> Result<Vec<u8>, LoaderReadError> {
+    ) -> Result<Vec<u8>, Outcome<LoaderReadError>> {
         if self.files_read >= self.policy.max_files {
-            return Err(Self::exceeded(
+            return Err(Outcome::Failed(Self::exceeded(
                 path,
                 LoaderResource::FileCount,
                 self.policy.max_files,
-            ));
+            )));
         }
         let artifact_limit = artifact.byte_limit(self.policy.artifacts);
         let total_remaining = self.policy.max_total_bytes.saturating_sub(self.total_bytes);
@@ -198,19 +200,20 @@ impl LoaderBudgetState {
         } else {
             (total_remaining, LoaderResource::TotalBytes)
         };
-        let cancellation_signal = || cancellation.is_cancelled();
         let bytes = fs
-            .read_bytes_bounded(path, ByteLimit::new(read_limit), &cancellation_signal)
-            .map_err(|error| match error {
-                FileSystemReadError::ByteLimitExceeded { .. } => Self::exceeded(
-                    path,
-                    exhausted_resource,
-                    match exhausted_resource {
-                        LoaderResource::TotalBytes => self.policy.max_total_bytes,
-                        _ => artifact_limit,
-                    },
-                ),
-                other => LoaderReadError::Filesystem(other),
+            .read_bytes_bounded(path, ByteLimit::new(read_limit), cancellation)
+            .map_err(|outcome| {
+                outcome.map_failed(|error| match error {
+                    FileSystemReadError::ByteLimitExceeded { .. } => Self::exceeded(
+                        path,
+                        exhausted_resource,
+                        match exhausted_resource {
+                            LoaderResource::TotalBytes => self.policy.max_total_bytes,
+                            _ => artifact_limit,
+                        },
+                    ),
+                    other => LoaderReadError::Filesystem(other),
+                })
             })?;
         self.files_read = self.files_read.saturating_add(1);
         self.total_bytes = self.total_bytes.saturating_add(bytes.len() as u64);
@@ -223,12 +226,11 @@ impl LoaderBudgetState {
         path: &Path,
         artifact: LoaderArtifact,
         cancellation: &graphcal_compiler::cancellation::CancellationToken,
-    ) -> Result<String, LoaderReadError> {
+    ) -> Result<String, Outcome<LoaderReadError>> {
         let bytes = self.read_bytes(fs, path, artifact, cancellation)?;
         String::from_utf8(bytes).map_err(|error| {
-            LoaderReadError::Filesystem(FileSystemReadError::Io(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                error,
+            Outcome::Failed(LoaderReadError::Filesystem(FileSystemReadError::Io(
+                std::io::Error::new(std::io::ErrorKind::InvalidData, error),
             )))
         })
     }

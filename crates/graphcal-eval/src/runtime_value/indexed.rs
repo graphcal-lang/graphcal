@@ -25,7 +25,7 @@ impl<V> IndexedValue<V> {
     /// Build one entry per axis key, in axis order.
     ///
     /// `entry` receives each key of the axis.
-    pub fn try_from_axis<E>(
+    pub(crate) fn try_from_axis<E>(
         axis: IndexAxis,
         entry: impl FnMut(&KeyValue) -> Result<V, E>,
     ) -> Result<Self, E> {
@@ -50,7 +50,7 @@ impl<V> IndexedValue<V> {
     /// tests.
     #[cfg(test)]
     #[must_use]
-    pub fn finite_for_test(entries: Vec<V>) -> Self {
+    pub(crate) fn finite_for_test(entries: Vec<V>) -> Self {
         let cardinality = u64::try_from(entries.len()).unwrap();
         let index =
             graphcal_compiler::semantic::index_def::FiniteIndex::try_from_u64(cardinality).unwrap();
@@ -60,7 +60,7 @@ impl<V> IndexedValue<V> {
     }
 
     /// Derive a value over the same axis from each entry and its key.
-    pub fn try_map_ref<U, E>(
+    pub(crate) fn try_map_ref<U, E>(
         &self,
         mut entry: impl FnMut(&IndexEntryKey, &V) -> Result<U, E>,
     ) -> Result<IndexedValue<U>, E> {
@@ -117,7 +117,7 @@ impl<V> IndexedValue<V> {
     /// The entry `key` selects: a key of this axis, or a narrower `Fin` key
     /// widened onto it (see [`IndexAxis::admits`]).
     #[must_use]
-    pub fn get_key(&self, key: &KeyValue) -> Option<&V> {
+    pub(crate) fn get_key(&self, key: &KeyValue) -> Option<&V> {
         if self.axis.admits(key.axis()) {
             self.entries.as_slice().get(key.position())
         } else {

@@ -78,7 +78,7 @@ impl KeyValue {
 
     /// The entry key this key selects on its axis.
     #[must_use]
-    pub fn entry_key(&self) -> &IndexEntryKey {
+    pub(crate) fn entry_key(&self) -> &IndexEntryKey {
         &self.axis.keys().as_slice()[self.position]
     }
 

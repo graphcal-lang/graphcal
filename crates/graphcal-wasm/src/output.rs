@@ -4,7 +4,8 @@ use graphcal_compiler::finite_value::FiniteQuantity;
 use graphcal_compiler::syntax::index_name::IndexEntryKey;
 use graphcal_eval::eval::{
     AssertResult, DisplayProjectionError, DisplayUnit, EvalOutputView, EvalResult, KeyRendering,
-    NodeUnavailable, RenderContext, Value, datetime_literal, format_number, quantity_display_value,
+    NodeUnavailable, OutputUnavailable, RenderContext, Value, datetime_literal, format_number,
+    quantity_display_value,
 };
 use serde::Serialize;
 
@@ -170,7 +171,7 @@ pub enum DeclarationOutcomeView {
 }
 
 impl DeclarationOutcomeView {
-    fn from_result(result: &Result<Value, NodeUnavailable>, render: &RenderContext) -> Self {
+    fn from_result(result: &Result<Value, OutputUnavailable>, render: &RenderContext) -> Self {
         match result {
             Ok(value) => ValueView::from_value(value, render)
                 .and_then(|view| {
@@ -504,8 +505,8 @@ pub enum NodeUnavailableView {
     },
 }
 
-impl From<&NodeUnavailable> for NodeUnavailableView {
-    fn from(error: &NodeUnavailable) -> Self {
+impl From<&OutputUnavailable> for NodeUnavailableView {
+    fn from(error: &OutputUnavailable) -> Self {
         match error {
             NodeUnavailable::Todo { declaration } => Self::Todo {
                 declaration: declaration.to_string(),
@@ -523,10 +524,7 @@ impl From<&NodeUnavailable> for NodeUnavailableView {
                 message: message.clone(),
             },
             NodeUnavailable::DependencyFailed { failed_deps } => Self::DependencyFailed {
-                failed_dependencies: failed_deps
-                    .iter()
-                    .map(|name| name.as_str().to_string())
-                    .collect(),
+                failed_dependencies: failed_deps.iter().map(ToString::to_string).collect(),
             },
         }
     }

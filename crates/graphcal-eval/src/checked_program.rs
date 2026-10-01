@@ -32,10 +32,11 @@ use crate::domain_constraint::ResolvedDomainConstraint;
 use crate::runtime_presentation::{EvaluatedRuntimeValue, PendingPresentedMap};
 
 /// Resolved domain constraints of one DAG's declarations.
-pub type DomainConstraints = HashMap<ResolvedDeclName, ResolvedDomainConstraint>;
+pub(crate) type DomainConstraints = HashMap<ResolvedDeclName, ResolvedDomainConstraint>;
 
 /// Resolved domain constraints of struct fields, per concrete application.
-pub type StructFieldConstraints = HashMap<StructFieldConstraintKey, ResolvedDomainConstraint>;
+pub(crate) type StructFieldConstraints =
+    HashMap<StructFieldConstraintKey, ResolvedDomainConstraint>;
 
 /// Why a checked TIR could not be sealed with its execution facts.
 #[derive(Debug, Error)]

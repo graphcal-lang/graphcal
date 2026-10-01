@@ -44,7 +44,7 @@ pub enum Failure<E> {
 
 impl<E> Failure<E> {
     /// Re-type the user-facing failure, keeping a violated invariant.
-    pub fn map_error<F>(self, map: impl FnOnce(E) -> F) -> Failure<F> {
+    pub(crate) fn map_error<F>(self, map: impl FnOnce(E) -> F) -> Failure<F> {
         match self {
             Self::Error(error) => Failure::Error(map(error)),
             Self::Invariant(invariant) => Failure::Invariant(invariant),

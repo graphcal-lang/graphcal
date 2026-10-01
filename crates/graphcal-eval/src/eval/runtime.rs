@@ -78,7 +78,8 @@ impl RuntimeEvaluation {
 }
 
 /// Evaluate a plan with one row of runtime parameter bindings, then assemble
-/// the root's public result.
+/// the root's public result, naming private include scopes by
+/// `include_scopes`.
 ///
 /// Runtime errors are contained per-node: if a node fails, independent nodes
 /// still evaluate, and dependent nodes receive a `DependencyFailed` error.
@@ -89,10 +90,19 @@ pub fn evaluate_plan_with_values_and_bindings_and_cancellation(
     src: SourceId,
     sources: &SourceRegistry,
     host_fns: &crate::host_fns::HostFunctionRegistry,
+    include_scopes: &graphcal_compiler::display::include_scope_names::IncludeScopeNames,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<RuntimeEvaluation, Outcome<SemanticError>> {
     cancellation.checkpoint()?;
-    let outcome = RootOutcome::evaluate(plan, bindings, src, sources, host_fns, cancellation)?;
+    let outcome = RootOutcome::evaluate(
+        plan,
+        bindings,
+        src,
+        sources,
+        host_fns,
+        include_scopes,
+        cancellation,
+    )?;
     cancellation.checkpoint()?;
     let ctx = outcome.session(plan, src, sources, host_fns, cancellation);
     let presentations = outcome
@@ -103,9 +113,11 @@ pub fn evaluate_plan_with_values_and_bindings_and_cancellation(
                 .map(|presentation| (key.clone(), presentation))
         })
         .collect::<Result<ResolvedPresentedMap, _>>()?;
+    let names = root_names::RootNames::new(plan, include_scopes);
     let evaluated = EvaluatedRoot {
         values: outcome.values(),
         errors: outcome.errors(),
+        names: &names,
         presentations: &presentations,
         frame_presentations: outcome.presentations(),
     };
@@ -138,7 +150,10 @@ pub fn evaluate_plan_with_values_and_bindings_and_cancellation(
         assertions,
     } = outcome.into_parts();
     let result = EvalResult {
-        unfinished_calls: unfinished_calls.into_iter().collect(),
+        unfinished_calls: unfinished_calls
+            .iter()
+            .map(|declaration| names.name(declaration))
+            .collect(),
         entries,
         output_surface,
         assertions,

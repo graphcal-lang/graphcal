@@ -40,6 +40,22 @@ pub trait MonomialExponent: Copy + Eq {
     fn checked_mul(self, rhs: Self) -> Result<Self, Self::Error>;
 }
 
+impl<T: crate::ratio::RatioInt> MonomialExponent for crate::ratio::Ratio<T> {
+    type Error = crate::ratio::RatioError;
+
+    fn is_zero(self) -> bool {
+        Self::is_zero(self)
+    }
+
+    fn checked_add(self, rhs: Self) -> Result<Self, Self::Error> {
+        self + rhs
+    }
+
+    fn checked_mul(self, rhs: Self) -> Result<Self, Self::Error> {
+        self * rhs
+    }
+}
+
 /// A product of distinct keys raised to non-zero exponents.
 ///
 /// The empty monomial is the multiplicative unit (the dimensionless

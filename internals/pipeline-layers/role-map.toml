@@ -242,27 +242,7 @@ role = "contracts"
 
 [[module]]
 package = "compiler"
-path = ["ratio", "sealed"]
-role = "contracts"
-
-[[module]]
-package = "compiler"
-path = ["ratio", "tests"]
-role = "contracts"
-
-[[module]]
-package = "compiler"
-path = ["ratio", "tests", "prop"]
-role = "contracts"
-
-[[module]]
-package = "compiler"
 path = ["exact_rational"]
-role = "contracts"
-
-[[module]]
-package = "compiler"
-path = ["exact_rational", "tests"]
 role = "contracts"
 
 [[module]]
@@ -894,6 +874,16 @@ role = "contracts"
 [[module]]
 package = "compiler"
 path = ["semantic_error", "rendered", "tests"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["display", "include_scope_names"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["display", "include_scope_names", "tests"]
 role = "contracts"
 
 [[module]]
@@ -2306,6 +2296,16 @@ role = "contracts"
 
 [[module]]
 package = "eval"
+path = ["eval", "output_decl_name"]
+role = "contracts"
+
+[[module]]
+package = "eval"
+path = ["eval", "output_decl_name", "tests"]
+role = "contracts"
+
+[[module]]
+package = "eval"
 path = ["invariant"]
 role = "contracts"
 
@@ -2643,6 +2643,11 @@ path = ["test_tir"]
 role = "checking"
 
 [[module]]
+package = "eval"
+path = ["interpreter_tests"]
+role = "facade"
+
+[[module]]
 package = "project"
 path = []
 role = "facade"
@@ -2675,16 +2680,6 @@ role = "contracts"
 [[module]]
 package = "project"
 path = ["tests", "exec_plan"]
-role = "facade"
-
-[[module]]
-package = "project"
-path = ["tests", "plots"]
-role = "facade"
-
-[[module]]
-package = "project"
-path = ["tests", "runtime_clones"]
 role = "facade"
 
 [[module]]

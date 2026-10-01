@@ -76,13 +76,13 @@ pub type ResolvedValue = Presented<ResolvedLeaf>;
 /// The presented values of evaluated declarations, kept only for values with
 /// a presentation. A frame holds every value in its value map too, for the
 /// computations that need no presentation.
-pub type PresentedMap<L> = HashMap<ResolvedDeclName, Presented<L>>;
+pub(crate) type PresentedMap<L> = HashMap<ResolvedDeclName, Presented<L>>;
 
 /// Pending presented values of evaluated declarations.
 pub type PendingPresentedMap = PresentedMap<PendingLeaf>;
 
 /// Resolved presented values of evaluated declarations.
-pub type ResolvedPresentedMap = PresentedMap<ResolvedLeaf>;
+pub(crate) type ResolvedPresentedMap = PresentedMap<ResolvedLeaf>;
 
 impl<L: Clone> Clone for Presented<L> {
     fn clone(&self) -> Self {
@@ -368,7 +368,7 @@ impl<L> Presented<L> {
     /// Active retention metric: presentation nodes, excluding plain values.
     #[cfg(any(test, feature = "test-internals"))]
     #[must_use]
-    pub fn retained_nodes(&self) -> usize {
+    pub(crate) fn retained_nodes(&self) -> usize {
         match &self.0 {
             Node::Whole { leaf: None, .. } => 0,
             Node::Whole { leaf: Some(_), .. } => 1,
@@ -537,7 +537,7 @@ impl<'a, L> PresentedRef<'a, L> {
     /// An owned copy of this part; `clone_value` copies a part of a whole
     /// value.
     #[must_use]
-    pub fn to_owned_with(
+    pub(crate) fn to_owned_with(
         self,
         clone_value: impl FnOnce(&RuntimeValue) -> RuntimeValue,
     ) -> Presented<L>
@@ -577,7 +577,7 @@ impl<'a, L> EntriesRef<'a, L> {
 
     /// The entry `key` selects (see [`IndexedValue::get_key`]).
     #[must_use]
-    pub fn get_key(self, key: &KeyValue) -> Option<PresentedRef<'a, L>> {
+    pub(crate) fn get_key(self, key: &KeyValue) -> Option<PresentedRef<'a, L>> {
         match self.0 {
             EntriesNode::Whole { entries, leaf } => entries
                 .get_key(key)

@@ -20,7 +20,7 @@
 //! * [`FlatEntry`] / [`OutputBlock`] are the data types the renderer walks.
 
 use graphcal_compiler::dimension::Dimension;
-use graphcal_eval::eval::{KeyRendering, NodeUnavailable, RenderContext, UnitLabel, Value};
+use graphcal_eval::eval::{KeyRendering, OutputUnavailable, RenderContext, UnitLabel, Value};
 
 /// One line of flat output: either a successfully-evaluated value or an error.
 ///
@@ -32,7 +32,7 @@ pub enum FlatEntry<'a> {
     /// a single entry.
     Value(String, &'a Value),
     /// A node that failed to evaluate — rendered as `name = ERROR: <msg>`.
-    Error(String, &'a NodeUnavailable),
+    Error(String, &'a OutputUnavailable),
 }
 
 /// A visual block of the text output.
@@ -207,7 +207,7 @@ pub fn flatten_value<'a>(prefix: &str, value: &'a Value, entries: &mut Vec<FlatE
     }
 }
 
-/// Group a sequence of `(name, Result<Value, NodeUnavailable>)` items into output
+/// Group a sequence of `(name, Result<Value, OutputUnavailable>)` items into output
 /// blocks in source order.
 ///
 /// Each 2D-or-deeper indexed value flushes the current flat run and becomes
@@ -215,7 +215,7 @@ pub fn flatten_value<'a>(prefix: &str, value: &'a Value, entries: &mut Vec<FlatE
 /// [`flatten_value`] into the current flat run.
 #[must_use]
 pub fn build_output_blocks<'a>(
-    items: impl IntoIterator<Item = (&'a str, &'a Result<Value, NodeUnavailable>)>,
+    items: impl IntoIterator<Item = (&'a str, &'a Result<Value, OutputUnavailable>)>,
 ) -> Vec<OutputBlock<'a>> {
     let mut blocks: Vec<OutputBlock<'a>> = Vec::new();
     let mut current_flat: Vec<FlatEntry<'a>> = Vec::new();
@@ -600,7 +600,7 @@ mod tests {
         let inner = indexed_1d("Col", &[("X", quantity(10.0))]);
         let b = Ok(indexed_1d("Row", &[("R1", inner)]));
         let c = Ok(quantity(3.0));
-        let items: Vec<(&str, &Result<Value, NodeUnavailable>)> =
+        let items: Vec<(&str, &Result<Value, OutputUnavailable>)> =
             vec![("a", &a), ("b", &b), ("c", &c)];
         let blocks = build_output_blocks(items);
         assert_eq!(blocks.len(), 3);
@@ -615,7 +615,7 @@ mod tests {
         let inner = indexed_1d("Col", &[("X", quantity(10.0))]);
         let b = Ok(indexed_1d("Row", &[("R1", inner)]));
         let long = Ok(quantity(3.0));
-        let items: Vec<(&str, &Result<Value, NodeUnavailable>)> = vec![
+        let items: Vec<(&str, &Result<Value, OutputUnavailable>)> = vec![
             ("a", &a),
             ("b_is_a_table_and_should_be_ignored", &b),
             ("cc", &long),

@@ -5,12 +5,10 @@ use std::fmt::Write as _;
 use std::io;
 use std::path::{Component, Path, PathBuf};
 
+use graphcal_compiler::{cancellation::CancellationToken, outcome::Outcome};
 use sha2::{Digest, Sha256};
 
-use crate::{
-    ByteLimit, CancellationSignal, EntryLimit, FileSystemEntryKind, FileSystemReadError,
-    FileSystemReader,
-};
+use crate::{ByteLimit, EntryLimit, FileSystemEntryKind, FileSystemReadError, FileSystemReader};
 
 /// Resource limits for one source-tree hash traversal.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -148,9 +146,12 @@ pub enum SourceTreeHashError {
         /// Configured maximum.
         limit: u64,
     },
-    /// Cooperative cancellation interrupted traversal.
-    #[error("source-tree hash cancelled")]
-    Cancelled,
+}
+
+impl From<SourceTreeHashError> for Outcome<SourceTreeHashError> {
+    fn from(error: SourceTreeHashError) -> Self {
+        Self::Failed(error)
+    }
 }
 
 /// Bounded resource category used by [`SourceTreeHashError::ResourceLimit`].
@@ -230,7 +231,6 @@ fn canonical_inside(
 
 fn map_directory_error(path: &Path, error: FileSystemReadError) -> SourceTreeHashError {
     match error {
-        FileSystemReadError::Cancelled => SourceTreeHashError::Cancelled,
         FileSystemReadError::EntryLimitExceeded { limit } => SourceTreeHashError::ResourceLimit {
             resource: SourceTreeResource::Entries,
             limit: limit.get(),
@@ -243,12 +243,9 @@ fn map_directory_error(path: &Path, error: FileSystemReadError) -> SourceTreeHas
 }
 
 fn map_file_error(path: &Path, error: FileSystemReadError) -> SourceTreeHashError {
-    match error {
-        FileSystemReadError::Cancelled => SourceTreeHashError::Cancelled,
-        source => SourceTreeHashError::ReadFile {
-            path: path.to_path_buf(),
-            source,
-        },
+    SourceTreeHashError::ReadFile {
+        path: path.to_path_buf(),
+        source: error,
     }
 }
 
@@ -268,8 +265,8 @@ pub fn hash_source_tree(
     root: &Path,
     source_dir: &Path,
     limits: SourceTreeHashLimits,
-    cancellation: &dyn CancellationSignal,
-) -> Result<SourceTreeHash, SourceTreeHashError> {
+    cancellation: &CancellationToken,
+) -> Result<SourceTreeHash, Outcome<SourceTreeHashError>> {
     capture_source_tree(fs, root, source_dir, limits, cancellation).map(|snapshot| snapshot.hash())
 }
 
@@ -282,8 +279,8 @@ pub fn capture_source_tree(
     root: &Path,
     source_dir: &Path,
     limits: SourceTreeHashLimits,
-    cancellation: &dyn CancellationSignal,
-) -> Result<SourceTreeSnapshot, SourceTreeHashError> {
+    cancellation: &CancellationToken,
+) -> Result<SourceTreeSnapshot, Outcome<SourceTreeHashError>> {
     let canonical_root =
         fs.canonicalize(root)
             .map_err(|source| SourceTreeHashError::Canonicalize {
@@ -295,9 +292,7 @@ pub fn capture_source_tree(
     let mut entries = 0_u64;
 
     while let Some(relative) = pending.pop() {
-        if cancellation.is_cancelled() {
-            return Err(SourceTreeHashError::Cancelled);
-        }
+        cancellation.checkpoint()?;
         if contains_git_component(&relative) {
             continue;
         }
@@ -325,15 +320,17 @@ pub fn capture_source_tree(
                 let remaining = limits.entries.saturating_sub(entries);
                 let mut children = fs
                     .read_directory_bounded(&canonical, EntryLimit::new(remaining), cancellation)
-                    .map_err(|error| map_directory_error(&canonical, error))?;
+                    .map_err(|error| {
+                        error.map_failed(|error| map_directory_error(&canonical, error))
+                    })?;
                 children.sort();
                 pending.extend(children.into_iter().rev().map(|child| relative.join(child)));
             }
             FileSystemEntryKind::Symlink => {
-                return Err(SourceTreeHashError::Symlink { path });
+                return Err(SourceTreeHashError::Symlink { path }.into());
             }
             FileSystemEntryKind::Other => {
-                return Err(SourceTreeHashError::UnsupportedEntry { path });
+                return Err(SourceTreeHashError::UnsupportedEntry { path }.into());
             }
         }
     }
@@ -341,14 +338,12 @@ pub fn capture_source_tree(
     let mut captured = BTreeMap::new();
     let mut total_bytes = 0_u64;
     for (relative, path) in &files {
-        if cancellation.is_cancelled() {
-            return Err(SourceTreeHashError::Cancelled);
-        }
+        cancellation.checkpoint()?;
         let remaining = limits.total_bytes.saturating_sub(total_bytes);
         let limit = ByteLimit::new(limits.file_bytes.get().min(remaining));
         let bytes = fs
             .read_bytes_bounded(path, limit, cancellation)
-            .map_err(|error| map_file_error(path, error))?;
+            .map_err(|error| error.map_failed(|error| map_file_error(path, error)))?;
         total_bytes = total_bytes.checked_add(bytes.len() as u64).ok_or(
             SourceTreeHashError::ResourceLimit {
                 resource: SourceTreeResource::Bytes,
@@ -359,7 +354,8 @@ pub fn capture_source_tree(
             return Err(SourceTreeHashError::ResourceLimit {
                 resource: SourceTreeResource::Bytes,
                 limit: limits.total_bytes,
-            });
+            }
+            .into());
         }
         captured.insert(relative.clone(), bytes);
     }
@@ -429,13 +425,14 @@ impl SourceTreeSnapshot {
         root: &Path,
         relative: &Path,
         limits: SourceTreeHashLimits,
-        cancellation: &dyn CancellationSignal,
-    ) -> Result<(), SourceTreeHashError> {
+        cancellation: &CancellationToken,
+    ) -> Result<(), Outcome<SourceTreeHashError>> {
         let key = portable_relative_path(relative)?;
         if contains_git_component(relative) || key.0.is_empty() {
             return Err(SourceTreeHashError::UnsupportedEntry {
                 path: relative.to_path_buf(),
-            });
+            }
+            .into());
         }
         if self.files.contains_key(&key) {
             return Ok(());
@@ -448,9 +445,7 @@ impl SourceTreeSnapshot {
                 })?;
         let mut path = canonical_root.clone();
         for component in Path::new(&key.0).components() {
-            if cancellation.is_cancelled() {
-                return Err(SourceTreeHashError::Cancelled);
-            }
+            cancellation.checkpoint()?;
             self.entries = self
                 .entries
                 .checked_add(1)
@@ -466,15 +461,17 @@ impl SourceTreeSnapshot {
                     path: path.clone(),
                     source,
                 })? {
-                FileSystemEntryKind::Symlink => return Err(SourceTreeHashError::Symlink { path }),
+                FileSystemEntryKind::Symlink => {
+                    return Err(SourceTreeHashError::Symlink { path }.into());
+                }
                 FileSystemEntryKind::File | FileSystemEntryKind::Directory => {}
                 FileSystemEntryKind::Other => {
-                    return Err(SourceTreeHashError::UnsupportedEntry { path });
+                    return Err(SourceTreeHashError::UnsupportedEntry { path }.into());
                 }
             }
         }
         if !matches!(fs.entry_kind(&path), Ok(FileSystemEntryKind::File)) {
-            return Err(SourceTreeHashError::UnsupportedEntry { path });
+            return Err(SourceTreeHashError::UnsupportedEntry { path }.into());
         }
         let path = canonical_inside(fs, &path, &canonical_root)?;
         let limit = ByteLimit::new(
@@ -485,7 +482,7 @@ impl SourceTreeSnapshot {
         );
         let bytes = fs
             .read_bytes_bounded(&path, limit, cancellation)
-            .map_err(|error| map_file_error(&path, error))?;
+            .map_err(|error| error.map_failed(|error| map_file_error(&path, error)))?;
         self.bytes = self
             .bytes
             .checked_add(bytes.len() as u64)
@@ -526,7 +523,7 @@ fn hex_string(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{NeverCancel, RealFileSystem};
+    use crate::RealFileSystem;
 
     #[test]
     fn hashes_files_in_portable_relative_order() {
@@ -542,7 +539,7 @@ mod tests {
             directory.path(),
             Path::new("src"),
             SourceTreeHashLimits::unbounded(),
-            &NeverCancel,
+            &CancellationToken::unbounded(),
         )
         .unwrap();
         let second = hash_source_tree(
@@ -550,7 +547,7 @@ mod tests {
             directory.path(),
             Path::new("src"),
             SourceTreeHashLimits::unbounded(),
-            &NeverCancel,
+            &CancellationToken::unbounded(),
         )
         .unwrap();
         assert_eq!(first, second);
@@ -572,7 +569,7 @@ mod tests {
             root,
             Path::new("src"),
             SourceTreeHashLimits::unbounded(),
-            &NeverCancel,
+            &CancellationToken::unbounded(),
         )
         .unwrap();
         assert!(matches!(
@@ -581,9 +578,9 @@ mod tests {
                 root,
                 Path::new("plugins/kernel.wasm"),
                 SourceTreeHashLimits::unbounded(),
-                &NeverCancel
+                &CancellationToken::unbounded()
             ),
-            Err(SourceTreeHashError::Symlink { .. })
+            Err(Outcome::Failed(SourceTreeHashError::Symlink { .. }))
         ));
         assert!(
             snapshot
@@ -592,7 +589,7 @@ mod tests {
                     root,
                     Path::new("../kernel.wasm"),
                     SourceTreeHashLimits::unbounded(),
-                    &NeverCancel
+                    &CancellationToken::unbounded()
                 )
                 .is_err()
         );
@@ -623,10 +620,13 @@ mod tests {
                 directory.path(),
                 Path::new("src"),
                 SourceTreeHashLimits::unbounded(),
-                &NeverCancel,
+                &CancellationToken::unbounded(),
             )
             .unwrap_err();
-            assert!(matches!(error, SourceTreeHashError::Symlink { .. }));
+            assert!(matches!(
+                error,
+                Outcome::Failed(SourceTreeHashError::Symlink { .. })
+            ));
         }
     }
 }

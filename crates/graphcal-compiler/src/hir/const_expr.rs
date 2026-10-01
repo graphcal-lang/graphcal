@@ -23,8 +23,9 @@ use thiserror::Error;
 use crate::builtin::BuiltinConst;
 use crate::dimension::Dimension;
 use crate::display::unit_label::format_unit_expr_with_config;
-use crate::exact_rational::{ExactPowerError, ExactRational};
+use crate::exact_rational::ExactRational;
 use crate::hir::types::NatExpr;
+use crate::ratio::ExactPowerError;
 use crate::semantic::index_def::{
     CoordinateDisplayUnit, CoordinateIndexData, CoordinateIndexError,
 };

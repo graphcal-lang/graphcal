@@ -332,6 +332,7 @@ name = "graphcal-compiler"
 version = "0.0.1-alpha.31"
 dependencies = [
  "graphcal-ast-derive",
+ "graphcal-ratio",
  "hifitime",
  "indexmap",
  "jiff",
@@ -387,6 +388,7 @@ name = "graphcal-io"
 version = "0.0.1-alpha.31"
 dependencies = [
  "cap-std",
+ "graphcal-compiler",
  "libc",
  "sha2",
  "tempfile",
@@ -426,6 +428,13 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "thiserror",
+]
+
+[[package]]
+name = "graphcal-ratio"
+version = "0.0.1-alpha.31"
+dependencies = [
  "thiserror",
 ]
 

@@ -386,11 +386,9 @@ fn capture_metadata(
     .into_iter()
     .try_fold(Vec::new(), |mut files, (name, maximum)| {
         let path = root.join(name);
-        match fs.read_to_string_bounded(
-            &path,
-            graphcal_io::ByteLimit::new(maximum),
-            &graphcal_io::NeverCancel,
-        ) {
+        match graphcal_compiler::outcome::without_cancellation(|cancellation| {
+            fs.read_to_string_bounded(&path, graphcal_io::ByteLimit::new(maximum), cancellation)
+        }) {
             Ok(content) => files.push((path, content)),
             Err(graphcal_io::FileSystemReadError::Io(error))
                 if error.kind() == std::io::ErrorKind::NotFound => {}

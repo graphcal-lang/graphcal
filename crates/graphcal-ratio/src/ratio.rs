@@ -1,9 +1,8 @@
 //! Reduced rational numbers over a symmetric fixed-width integer range.
 //!
 //! [`Ratio<T>`] is the single rational implementation shared by dimension
-//! exponents (`Ratio<i32>`, see [`crate::dimension::Rational`]) and exact
-//! source-level power exponents (`Ratio<i64>`, see
-//! [`crate::exact_rational::ExactRational`]).
+//! exponents (`Ratio<i32>`) and exact source-level power exponents
+//! (`Ratio<i64>`).
 //!
 //! Invariants, enforced by every constructor:
 //!
@@ -19,8 +18,6 @@ use std::hash::Hash;
 use std::ops::Neg;
 
 use thiserror::Error;
-
-use crate::sparse_monomial::MonomialExponent;
 
 mod sealed {
     pub trait Sealed {}
@@ -125,7 +122,7 @@ impl<T: RatioInt> Ratio<T> {
     /// # Errors
     ///
     /// See [`Self::try_new`].
-    pub(crate) fn try_from_wide(num: i128, den: i128) -> Result<Self, RatioError> {
+    pub fn try_from_wide(num: i128, den: i128) -> Result<Self, RatioError> {
         if den == 0 {
             return Err(RatioError::ZeroDenominator);
         }
@@ -186,15 +183,6 @@ impl<T: RatioInt> Ratio<T> {
         self.num.widen() < 0
     }
 
-    /// The reciprocal `den / num`.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`RatioError::ZeroDenominator`] for zero.
-    pub fn recip(self) -> Result<Self, RatioError> {
-        Self::try_new(self.den, self.num)
-    }
-
     /// Render the value as it is spelled in an exponent position of source
     /// syntax: `2`, `-3`, or the parenthesized `(1/2)`.
     #[must_use]
@@ -233,22 +221,6 @@ impl<T: RatioInt> Ratio<T> {
             }
             _ => Err(RatioError::Overflow),
         }
-    }
-}
-
-impl<T: RatioInt> MonomialExponent for Ratio<T> {
-    type Error = RatioError;
-
-    fn is_zero(self) -> bool {
-        Self::is_zero(self)
-    }
-
-    fn checked_add(self, rhs: Self) -> Result<Self, RatioError> {
-        self + rhs
-    }
-
-    fn checked_mul(self, rhs: Self) -> Result<Self, RatioError> {
-        self * rhs
     }
 }
 

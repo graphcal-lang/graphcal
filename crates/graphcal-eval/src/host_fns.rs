@@ -156,7 +156,8 @@ impl HostFnValue {
 }
 
 /// A host-native extern function implementation.
-pub type HostFn = Arc<dyn Fn(&[HostArgument]) -> Result<HostFnValue, HostFnError> + Send + Sync>;
+pub(crate) type HostFn =
+    Arc<dyn Fn(&[HostArgument]) -> Result<HostFnValue, HostFnError> + Send + Sync>;
 
 /// Why a plugin failed to register its functions.
 ///

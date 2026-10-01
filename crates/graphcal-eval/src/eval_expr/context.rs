@@ -75,7 +75,7 @@ impl EvalEnvironment<'_> {
     /// The display name of a registered source, for runtime presentation
     /// messages.
     #[must_use]
-    pub fn source_name(&self, source: SourceId) -> &str {
+    pub(crate) fn source_name(&self, source: SourceId) -> &str {
         self.sources
             .named_source(source)
             .map_or("<unknown source>", miette::NamedSource::name)
@@ -164,7 +164,10 @@ impl<'a> EvalSession<'a> {
 
     /// The text of an expression root of an evaluation unit checked as a
     /// contextual string.
-    pub fn checked_string<'t>(&self, root: Scoped<'t, Expr>) -> Result<&'t str, SemanticError> {
+    pub(crate) fn checked_string<'t>(
+        &self,
+        root: Scoped<'t, Expr>,
+    ) -> Result<&'t str, SemanticError> {
         root.checked_string()
             .map_err(|error| self.internal_error(error.to_string(), root.get().span))
     }
@@ -200,7 +203,7 @@ impl<'a> EvalSession<'a> {
     }
 
     #[must_use]
-    pub const fn with_unavailable(
+    pub(crate) const fn with_unavailable(
         mut self,
         unavailable: &'a HashMap<
             graphcal_compiler::resolved_name::ResolvedDeclName,
@@ -212,7 +215,7 @@ impl<'a> EvalSession<'a> {
     }
 
     #[must_use]
-    pub const fn with_unfinished_calls(
+    pub(crate) const fn with_unfinished_calls(
         mut self,
         calls: &'a std::cell::RefCell<BTreeSet<ResolvedDeclName>>,
     ) -> Self {
@@ -223,7 +226,7 @@ impl<'a> EvalSession<'a> {
     /// Static dependency availability of expression roots of evaluation
     /// units, including references in unselected branches. Each root's
     /// references are resolved in its own scope.
-    pub fn unavailable_dependencies<'e>(
+    pub(crate) fn unavailable_dependencies<'e>(
         &self,
         roots: impl IntoIterator<Item = Scoped<'e, Expr>>,
     ) -> Result<Option<graphcal_compiler::node_unavailable::NodeUnavailable>, Outcome<SemanticError>>
@@ -277,7 +280,7 @@ impl<'a> EvalSession<'a> {
     }
 
     #[must_use]
-    pub fn with_src<'b>(&'b self, src: SourceId) -> EvalSession<'b>
+    pub(crate) fn with_src<'b>(&'b self, src: SourceId) -> EvalSession<'b>
     where
         'a: 'b,
     {
@@ -290,7 +293,7 @@ impl<'a> EvalSession<'a> {
     /// capabilities and enclosing work. The step's tree carries its own
     /// scope.
     #[must_use]
-    pub fn for_declaration<'b>(&'b self, step: &ScheduledDeclaration<'b>) -> EvalSession<'b>
+    pub(crate) fn for_declaration<'b>(&'b self, step: &ScheduledDeclaration<'b>) -> EvalSession<'b>
     where
         'a: 'b,
     {
@@ -328,7 +331,7 @@ impl<'a> EvalSession<'a> {
 
     /// The diagnostic for a failed runtime operation: a user-facing failure
     /// is an evaluation error, a violated invariant an internal error.
-    pub fn failure_error(
+    pub(crate) fn failure_error(
         &self,
         failure: Failure<impl std::fmt::Display>,
         span: Span,
@@ -340,7 +343,7 @@ impl<'a> EvalSession<'a> {
     }
 
     /// Like [`Self::failure_error`], keeping cancellation as control flow.
-    pub fn outcome_error(
+    pub(crate) fn outcome_error(
         &self,
         outcome: Outcome<Failure<impl std::fmt::Display>>,
         span: Span,
@@ -352,7 +355,7 @@ impl<'a> EvalSession<'a> {
 impl EvalSession<'_> {
     /// Determine, once for a whole root tree, whether every dependency it may
     /// read (including those of unselected branches) is available.
-    pub fn check_dependencies(
+    pub(crate) fn check_dependencies(
         &self,
         expression: ScopedNode<'_>,
     ) -> Result<(), Outcome<SemanticError>> {

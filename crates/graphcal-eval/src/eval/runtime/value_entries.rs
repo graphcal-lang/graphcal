@@ -11,13 +11,15 @@ use std::collections::{HashMap, HashSet};
 use graphcal_compiler::dag_id::DagId;
 use graphcal_compiler::declaration_category::ValueDeclCategory;
 use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
+use graphcal_compiler::ir::instance::ExposedValueBody;
 use graphcal_compiler::resolved_name::ResolvedDeclName;
 use graphcal_compiler::semantic_error::SemanticError;
 use graphcal_compiler::syntax::module_name::ScopedName;
 use graphcal_compiler::tir::typed::{CheckedDag, ResolvedProjection};
 
+use crate::eval::output_decl_name::OutputUnavailable;
 use crate::eval::public_projection;
-use crate::eval::types::{NodeUnavailable, Value};
+use crate::eval::types::Value;
 use crate::eval_expr::{EvalSession, RuntimeValue};
 use crate::execution_plan::{ExecPlan, PlannedInstance};
 use crate::presentation_evidence::PresentationDiagnostic;
@@ -38,7 +40,7 @@ enum OutputExposure {
 struct ValueEntry {
     key: ResolvedDeclName,
     name: ScopedName,
-    result: Result<Value, NodeUnavailable>,
+    result: Result<Value, OutputUnavailable>,
     category: ValueDeclCategory,
     exposure: OutputExposure,
     diagnostics: Vec<PresentationDiagnostic>,
@@ -48,7 +50,7 @@ struct ValueEntry {
 pub(super) struct ValueEntries {
     pub entries: Vec<(
         ScopedName,
-        Result<Value, NodeUnavailable>,
+        Result<Value, OutputUnavailable>,
         ValueDeclCategory,
     )>,
     pub output_surface: HashSet<ScopedName>,
@@ -152,8 +154,8 @@ fn root_entries(
 
 /// The values an include site exposes through the instance's scope.
 ///
-/// A selected value is declared by the including DAG itself (a projection
-/// alias), whose own root entry reports it.
+/// A value the including DAG declares itself (a projection alias) is
+/// reported by the including DAG's own entry.
 fn projection_entries(
     planned: PlannedInstance<'_>,
     evaluated: EvaluatedRoot<'_>,
@@ -163,7 +165,7 @@ fn projection_entries(
     let instance_ctx = ctx.with_src(planned.scope().source());
     instance
         .output_projections()
-        .filter(|resolved| resolved.projection.exposure.selected().is_none())
+        .filter(|resolved| resolved.projection.body() == ExposedValueBody::Instance)
         .map(|ResolvedProjection { target, projection }| {
             let category = declared_value_category(instance.dag(), &target, ctx)?;
             let (result, diagnostics) = evaluated_value(&target, evaluated, &instance_ctx)?;
@@ -232,9 +234,15 @@ fn evaluated_value(
     key: &ResolvedDeclName,
     evaluated: EvaluatedRoot<'_>,
     ctx: &EvalSession<'_>,
-) -> Result<(Result<Value, NodeUnavailable>, Vec<PresentationDiagnostic>), SemanticError> {
+) -> Result<
+    (
+        Result<Value, OutputUnavailable>,
+        Vec<PresentationDiagnostic>,
+    ),
+    SemanticError,
+> {
     if let Some(error) = evaluated.errors.get(key) {
-        return Ok((Err(error.clone()), Vec::new()));
+        return Ok((Err(evaluated.names.present(error)), Vec::new()));
     }
     let (value, diagnostics) = project_value(key, evaluated.values.get(key), evaluated, ctx)?;
     Ok((Ok(value), diagnostics))
