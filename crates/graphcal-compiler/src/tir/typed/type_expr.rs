@@ -1,5 +1,6 @@
 use crate::desugar::desugared_ast::MulDivOp;
 use crate::dimension::Dimension;
+use crate::generic_param::GenericArgArity;
 use crate::hir::nominal::{NominalGenericParam, NominalTypeDef};
 use crate::resolve::error::ModuleResolveError;
 use crate::resolved_name::{ResolvedDimName, ResolvedIndexName, ResolvedStructTypeName};
@@ -13,6 +14,7 @@ use crate::syntax::ast::GenericConstraint;
 use crate::syntax::index_name::IndexName;
 use crate::syntax::names::NamePath;
 use crate::syntax::span::Span;
+use crate::syntax::type_name::StructTypeName;
 
 use super::{
     ModuleTypeContext, ProjectTypeStore, ResolvedDeclType, ResolvedDim, ResolvedDimTerm,
@@ -271,31 +273,26 @@ fn resolve_hir_index_ref(
 /// reach the last non-defaulted parameter, and at most the total count.
 /// Shared by the HIR and syntax type-application resolvers.
 fn check_type_application_arity(
-    type_name: &str,
+    type_name: StructTypeName,
     type_def: &NominalTypeDef,
     arg_count: usize,
     span: Span,
     src: SourceId,
 ) -> Result<(), SemanticError> {
-    let total_params = type_def.generic_params().len();
-    let required_count = type_def
-        .generic_params()
-        .iter()
-        .rposition(|param| param.default().is_none())
-        .map_or(0, |index| index.saturating_add(1));
-    if arg_count < required_count || arg_count > total_params {
-        let hint = if required_count == total_params {
-            format!("{total_params}")
-        } else {
-            format!("{required_count}..{total_params}")
-        };
+    let arity = GenericArgArity::of_defaults(
+        type_def
+            .generic_params()
+            .iter()
+            .map(|param| param.default().is_some()),
+    );
+    if !arity.accepts(arg_count) {
         return Err(SemanticError::located(
             src,
             span,
-            EvaluationError::Failed {
-                message: format!(
-                    "type `{type_name}` expects {hint} generic argument(s), got {arg_count}"
-                ),
+            StructError::GenericArgCount {
+                type_name,
+                expected: arity,
+                got: arg_count,
             },
         ));
     }
@@ -310,7 +307,7 @@ fn resolve_hir_type_application(
 ) -> Result<ResolvedValueType, SemanticError> {
     let type_def = hir_struct_type_def(&name.value, name.span, ctx)?;
     check_type_application_arity(
-        name.value.as_str(),
+        name.value.to_unowned_def_name(),
         type_def,
         generic_args.len(),
         type_ann.span,
@@ -327,11 +324,8 @@ fn resolve_hir_type_application(
             SemanticError::located(
                 ctx.src,
                 type_ann.span,
-                EvaluationError::Failed {
-                    message: format!(
-                        "internal: generic parameter `{}` has no default",
-                        param.name()
-                    ),
+                StructError::MissingGenericDefault {
+                    param: param.name().clone(),
                 },
             )
         })?;

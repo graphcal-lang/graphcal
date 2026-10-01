@@ -8,6 +8,7 @@
 //! through the include's canonical substitution; no source spelling is
 //! rewritten.
 
+use crate::semantic_error::structure::StructError;
 use std::collections::HashMap;
 
 use crate::desugar::desugared_ast::{self as ast, TypeDecl, TypeDeclBody};
@@ -194,11 +195,9 @@ fn validate_generic_params(declaration: &TypeDecl, src: SourceId) -> Result<(), 
                     return Err(SemanticError::located(
                         src,
                         span,
-                        EvaluationError::Failed {
-                            message: format!(
-                                "default for generic parameter `{}` may reference only earlier generic parameters; `{referenced}` is not earlier",
-                                param.name.value
-                            ),
+                        StructError::GenericDefaultForwardReference {
+                            param: param.name.value.clone(),
+                            referenced,
                         },
                     ));
                 }
@@ -208,11 +207,9 @@ fn validate_generic_params(declaration: &TypeDecl, src: SourceId) -> Result<(), 
                     return Err(SemanticError::located(
                         src,
                         param.name.span,
-                        EvaluationError::Failed {
-                            message: format!(
-                                "generic parameter `{}` without a default cannot follow defaulted parameter `{first_defaulted}`",
-                                param.name.value
-                            ),
+                        StructError::RequiredGenericAfterDefault {
+                            param: param.name.value.clone(),
+                            first_defaulted: first_defaulted.clone(),
                         },
                     ));
                 }
@@ -772,11 +769,8 @@ mod tests {
 
     fn eval_message(result: Result<NominalTypeDef, SemanticError>) -> String {
         match result {
-            Err(SemanticError::Located(crate::diagnostic::Diagnostic {
-                kind: SemanticErrorKind::Evaluation(EvaluationError::Failed { message, .. }),
-                ..
-            })) => message,
-            other => panic!("expected an evaluation diagnostic, got {other:?}"),
+            Err(SemanticError::Located(diagnostic)) => diagnostic.kind.to_string(),
+            other => panic!("expected a located diagnostic, got {other:?}"),
         }
     }
 

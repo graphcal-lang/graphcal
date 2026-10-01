@@ -13,8 +13,8 @@ use crate::display::formatting_registry::FormattingRegistry;
 use crate::exact_rational::ExactRational;
 use crate::semantic_error::SemanticError;
 use crate::semantic_error::dimension::DimensionError;
-use crate::semantic_error::evaluation::EvaluationError;
 use crate::semantic_error::index::IndexError;
+use crate::semantic_error::structure::StructError;
 use crate::source_id::SourceId;
 use crate::syntax::ast::PowerExponent;
 use crate::syntax::span::Span;
@@ -666,9 +666,7 @@ pub(in crate::tir::dim_check) fn match_arms_rule(
         return Err(SemanticError::located(
             src,
             expr_span,
-            EvaluationError::Failed {
-                message: "match expression has no arms".to_string(),
-            },
+            StructError::EmptyMatch,
         ));
     };
     for (i, arm_type) in arm_types.iter().enumerate().skip(1) {

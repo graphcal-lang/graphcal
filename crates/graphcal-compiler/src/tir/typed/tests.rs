@@ -9,6 +9,7 @@ use crate::semantic_error::SemanticErrorKind;
 use crate::semantic_error::dimension::DimensionError;
 use crate::semantic_error::evaluation::EvaluationError;
 use crate::semantic_error::index::IndexError;
+use crate::semantic_error::structure::StructError;
 use crate::syntax::dimension::UnitName;
 use crate::syntax::index_name::IndexName;
 use crate::syntax::non_empty::NonEmpty;
@@ -1430,16 +1431,16 @@ fn convert_generic_dim_param_fails() {
         .unwrap_err();
     assert!(matches!(
         err,
-        SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Evaluation(EvaluationError::Failed { message, .. }), .. })
-            if message == "cannot use generic dimension parameter `D` as a concrete type"
+        SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Struct(kind @ StructError::UnboundGenericInConcreteType { .. }), .. })
+            if kind.to_string() == "cannot use generic dimension parameter `D` as a concrete type"
     ));
     let err = ResolvedValueType::Quantity(dimension(2))
         .to_checked_type(make_src())
         .unwrap_err();
     assert!(matches!(
         err,
-        SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Evaluation(EvaluationError::Failed { message, .. }), .. })
-            if message == "cannot use generic dimension expression as a concrete type"
+        SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Struct(kind @ StructError::UnboundGenericInConcreteType { .. }), .. })
+            if kind.to_string() == "cannot use generic dimension expression as a concrete type"
     ));
 }
 
@@ -1457,7 +1458,7 @@ fn convert_generic_index_fails() {
     assert!(matches!(
         err,
         SemanticError::Located(crate::diagnostic::Diagnostic {
-            kind: SemanticErrorKind::Evaluation(EvaluationError::Failed { .. }),
+            kind: SemanticErrorKind::Struct(StructError::UnboundGenericInConcreteType { .. }),
             ..
         })
     ));

@@ -2,7 +2,7 @@ use super::*;
 use crate::dag_id::DagId;
 use crate::dimension::{BaseDimId, PreludeBaseDimension};
 use crate::semantic_error::SemanticErrorKind;
-use crate::semantic_error::evaluation::EvaluationError;
+use crate::semantic_error::structure::StructError;
 use crate::syntax::index_name::IndexName;
 use crate::syntax::type_name::StructTypeName;
 
@@ -137,10 +137,10 @@ fn symbolic_complex_and_generic_args_have_no_checked_type() {
     let squared = symbolic(vec![param_term("D", Rational::from(2), MulDivOp::Mul)]);
     let message = |ty: &ResolvedValueType| match ty.to_checked_type(src()) {
         Err(SemanticError::Located(crate::diagnostic::Diagnostic {
-            kind: SemanticErrorKind::Evaluation(EvaluationError::Failed { message, .. }),
+            kind: SemanticErrorKind::Struct(kind @ StructError::UnboundGenericInConcreteType { .. }),
             ..
-        })) => message,
-        other => panic!("expected an evaluation error, got {other:?}"),
+        })) => kind.to_string(),
+        other => panic!("expected an unbound generic, got {other:?}"),
     };
     let complex = |dimension| ResolvedValueType::Complex {
         dimension,

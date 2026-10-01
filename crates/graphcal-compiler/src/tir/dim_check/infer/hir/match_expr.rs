@@ -2,7 +2,6 @@
 
 use crate::hir::expr::{Expr, MatchArm, MatchPattern, PatternBinding};
 use crate::outcome::Outcome;
-use crate::semantic_error::evaluation::EvaluationError;
 use crate::semantic_error::index::IndexError;
 use crate::semantic_error::structure::StructError;
 use crate::source_id::SourceId;
@@ -13,7 +12,7 @@ use crate::semantic_error::SemanticError;
 use crate::syntax::type_name::FieldName;
 
 use crate::semantic::checked_type::{CheckedGenericArg, CheckedType};
-use crate::tir::dim_check::helpers::{format_checked_type, nominal_for_inferred};
+use crate::tir::dim_check::helpers::nominal_for_inferred;
 use crate::tir::dim_check::infer::rules;
 
 use super::context::{Infer, InferEnv};
@@ -57,9 +56,14 @@ impl Infer<'_> {
         match &scrutinee_type {
             CheckedType::Key(index_identity) => {
                 if index_identity.finite_index_form().is_some() {
-                    return Err(SemanticError::located(self.env.src, scrutinee.span, EvaluationError::Failed { message: format!(
-                            "cannot match on `Key<{index_identity}>`; only named-axis keys support label matching"
-                        ) }).into());
+                    return Err(SemanticError::located(
+                        self.env.src,
+                        scrutinee.span,
+                        StructError::CannotMatchFiniteKey {
+                            index: index_identity.display_name(),
+                        },
+                    )
+                    .into());
                 }
                 let index_def = crate::tir::dim_check::infer::index_def_for_inferred(
                     index_identity,
@@ -82,9 +86,14 @@ impl Infer<'_> {
                         crate::semantic::index_def::RequiredIndexKind::Named,
                     ) => vec![],
                     _ => {
-                        return Err(SemanticError::located(self.env.src, scrutinee.span, EvaluationError::Failed { message: format!(
-                                "cannot match on coordinate index `{index_identity}`; only named indexes can be matched"
-                            ) }).into());
+                        return Err(SemanticError::located(
+                            self.env.src,
+                            scrutinee.span,
+                            StructError::CannotMatchCoordinateIndex {
+                                index: index_identity.display_name(),
+                            },
+                        )
+                        .into());
                     }
                 };
                 let mut covered = std::collections::HashSet::new();
@@ -94,10 +103,7 @@ impl Infer<'_> {
                         return Err(SemanticError::located(
                             self.env.src,
                             arm.span,
-                            EvaluationError::Failed {
-                                message: "label match arms must use index-label patterns"
-                                    .to_string(),
-                            },
+                            StructError::LabelArmNotLabelPattern,
                         )
                         .into());
                     };
@@ -132,10 +138,8 @@ impl Infer<'_> {
                         return Err(SemanticError::located(
                             self.env.src,
                             *span,
-                            EvaluationError::Failed {
-                                message: format!(
-                                    "duplicate match arm for variant `{variant_name}`"
-                                ),
+                            StructError::DuplicateLabelArm {
+                                variant: variant_name.clone(),
                             },
                         )
                         .into());
@@ -144,9 +148,15 @@ impl Infer<'_> {
                 }
                 for variant in variants {
                     if !covered.contains(&variant) {
-                        return Err(SemanticError::located(self.env.src, expr.span, EvaluationError::Failed { message: format!(
-                                "non-exhaustive match: variant `{index_identity}#{variant}` not covered"
-                            ) }).into());
+                        return Err(SemanticError::located(
+                            self.env.src,
+                            expr.span,
+                            StructError::NonExhaustiveLabelMatch {
+                                index: index_identity.display_name(),
+                                variant,
+                            },
+                        )
+                        .into());
                     }
                 }
                 hir_arm_types_match(&arm_types, arms, self.env.registry, self.env.src, expr)
@@ -174,10 +184,7 @@ impl Infer<'_> {
                         return Err(SemanticError::located(
                             self.env.src,
                             arm.span,
-                            EvaluationError::Failed {
-                                message: "union match arms must use constructor patterns"
-                                    .to_string(),
-                            },
+                            StructError::UnionArmNotConstructorPattern,
                         )
                         .into());
                     };
@@ -219,11 +226,8 @@ impl Infer<'_> {
                         return Err(SemanticError::located(
                             self.env.src,
                             *span,
-                            EvaluationError::Failed {
-                                message: format!(
-                                    "duplicate match arm for `{}`",
-                                    target.variant().name()
-                                ),
+                            StructError::DuplicateConstructorArm {
+                                constructor: target.variant().name(),
                             },
                         )
                         .into());
@@ -239,12 +243,9 @@ impl Infer<'_> {
                             return Err(SemanticError::located(
                                 self.env.src,
                                 field.span,
-                                EvaluationError::Failed {
-                                    message: format!(
-                                        "duplicate pattern binding for field `{}` in `{}`",
-                                        field.value,
-                                        target.variant().name()
-                                    ),
+                                StructError::DuplicatePatternBinding {
+                                    field: field.value.clone(),
+                                    constructor: target.variant().name(),
                                 },
                             )
                             .into());
@@ -285,11 +286,7 @@ impl Infer<'_> {
                         return Err(SemanticError::located(
                             self.env.src,
                             expr.span,
-                            EvaluationError::Failed {
-                                message: format!(
-                                    "non-exhaustive match: member `{name}` not covered"
-                                ),
-                            },
+                            StructError::NonExhaustiveUnionMatch { member: name },
                         )
                         .into());
                     }
@@ -300,11 +297,8 @@ impl Infer<'_> {
             _ => Err(SemanticError::located(
                 self.env.src,
                 scrutinee.span,
-                EvaluationError::Failed {
-                    message: format!(
-                        "cannot match on type `{}`; expected a tagged union or label value",
-                        format_checked_type(&scrutinee_type, self.env.registry)
-                    ),
+                StructError::UnmatchableType {
+                    found: scrutinee_type.spelling(&self.env.registry.dimensions),
                 },
             )
             .into()),

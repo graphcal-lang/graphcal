@@ -136,3 +136,63 @@ fn map_entry_coordinates_and_type_spellings_render_their_source_form() {
         "index expression must be an integer type, got Bool"
     );
 }
+
+#[test]
+fn unbound_generics_and_symbolic_arguments_render_their_source_form() {
+    use super::structure::{GenericSort, StructError, SymbolicGenericArgument, UnboundGeneric};
+    use crate::nat::NatPolyForm;
+    use crate::semantic::checked_type::IndexDisplayName;
+    use crate::syntax::type_name::GenericParamName;
+
+    let name = GenericParamName::expect_valid("N");
+    for (sort, expected) in [
+        (
+            GenericSort::Type,
+            "generic type parameter `N` is not concretely bound",
+        ),
+        (
+            GenericSort::Index,
+            "generic index parameter `N` is not concretely bound",
+        ),
+        (
+            GenericSort::Dimension,
+            "generic dimension parameter `N` is not concretely bound",
+        ),
+    ] {
+        let generic = UnboundGeneric::NotConcretelyBound {
+            sort,
+            name: name.clone(),
+        };
+        assert_eq!(
+            StructError::UnboundGenericInConcreteType {
+                generic: Box::new(generic)
+            }
+            .to_string(),
+            expected
+        );
+    }
+    let form = NatPolyForm::from_constant(4);
+    assert_eq!(
+        UnboundGeneric::NatArgument(form.clone()).to_string(),
+        "generic Nat argument `4` is not concrete"
+    );
+    assert_eq!(
+        UnboundGeneric::NatAxis(form.clone()).to_string(),
+        "cannot use generic nat expression `4` as a concrete type"
+    );
+    assert_eq!(SymbolicGenericArgument::Nat(form.clone()).to_string(), "4");
+    assert_eq!(
+        SymbolicGenericArgument::Index(IndexDisplayName::Finite(form)).to_string(),
+        "Fin(4)"
+    );
+    assert_eq!(
+        StructError::NonConcreteGenericArgument {
+            parameter: name,
+            argument: Box::new(SymbolicGenericArgument::Type(
+                crate::semantic::checked_type::CheckedType::Bool
+            )),
+        }
+        .to_string(),
+        "generic argument `Bool` for `N` is not concrete"
+    );
+}

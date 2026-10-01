@@ -1961,7 +1961,7 @@ node o: Orbit = Orbit(altitude: 400.0 km, altitude: 401.0 km, speed: 7.6 km / s)
         matches!(
             err,
             SemanticError::Located(crate::diagnostic::Diagnostic {
-                kind: SemanticErrorKind::Evaluation(EvaluationError::Failed { .. }),
+                kind: SemanticErrorKind::Struct(StructError::DuplicateConstructionField { .. }),
                 ..
             })
         ),
@@ -1999,7 +1999,7 @@ node y: Length = match @x { Pair(a: left, a: right) => left + right };";
         matches!(
             err,
             SemanticError::Located(crate::diagnostic::Diagnostic {
-                kind: SemanticErrorKind::Evaluation(EvaluationError::Failed { .. }),
+                kind: SemanticErrorKind::Struct(StructError::DuplicatePatternBinding { .. }),
                 ..
             })
         ),

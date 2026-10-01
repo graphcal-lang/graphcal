@@ -5,7 +5,6 @@ use crate::hir::nominal::NominalField;
 use crate::hir::types::GenericArg;
 use crate::outcome::Outcome;
 use crate::resolved_name::ResolvedConstructorName;
-use crate::semantic_error::evaluation::EvaluationError;
 use crate::semantic_error::structure::StructError;
 
 use crate::semantic::checked_type::{StructTypeRef, Symbolic};
@@ -125,12 +124,9 @@ impl Infer<'_> {
                 return Err(SemanticError::located(
                     self.env.src,
                     field.name.span,
-                    EvaluationError::Failed {
-                        message: format!(
-                            "duplicate field `{}` in constructor `{}`",
-                            field.name.value,
-                            variant.name()
-                        ),
+                    StructError::DuplicateConstructionField {
+                        field: field.name.value.clone(),
+                        constructor: variant.name(),
                     },
                 )
                 .into());
@@ -185,12 +181,9 @@ impl Infer<'_> {
                     SemanticError::located(
                         self.env.src,
                         field_init.name.span,
-                        EvaluationError::Failed {
-                            message: format!(
-                                "internal: unknown field `{}` in constructor `{}`",
-                                field_init.name.value,
-                                variant.name()
-                            ),
+                        StructError::UnresolvedConstructionField {
+                            field: field_init.name.value.clone(),
+                            constructor: variant.name(),
                         },
                     )
                 })?;

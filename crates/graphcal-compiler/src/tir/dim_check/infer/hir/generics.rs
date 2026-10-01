@@ -1,11 +1,13 @@
 //! Generic-argument inference and substitution for nominal types.
 
+use crate::generic_param::GenericArgArity;
 use crate::hir::nominal::NominalTypeDef;
 use crate::hir::types::{
     BuiltinType, DimArg, DimExpr, DimTermTarget, GenericArg, IndexRef, ValueType, ValueTypeKind,
 };
 use crate::semantic_error::dimension::DimensionError;
-use crate::semantic_error::evaluation::EvaluationError;
+use crate::semantic_error::structure::StructError;
+use crate::semantic_error::structure::{GenericSort, UnboundGeneric};
 use crate::source_id::SourceId;
 
 use crate::dimension::Dimension;
@@ -56,11 +58,11 @@ impl InferEnv<'_> {
             ValueTypeKind::GenericTypeParam(param) => Err(SemanticError::located(
                 self.src,
                 param.span,
-                EvaluationError::Failed {
-                    message: format!(
-                        "generic type parameter `{}` is not concretely bound",
-                        param.value.name
-                    ),
+                StructError::UnboundGenericInConcreteType {
+                    generic: Box::new(UnboundGeneric::NotConcretelyBound {
+                        sort: GenericSort::Type,
+                        name: param.value.name.clone(),
+                    }),
                 },
             )),
             ValueTypeKind::TypeApplication { name, generic_args } => {
@@ -119,11 +121,11 @@ fn inferred_index_from_type_arg(
         IndexRef::GenericParam(param) => Err(SemanticError::located(
             src,
             param.span,
-            EvaluationError::Failed {
-                message: format!(
-                    "generic index parameter `{}` is not concretely bound",
-                    param.value.name
-                ),
+            StructError::UnboundGenericInConcreteType {
+                generic: Box::new(UnboundGeneric::NotConcretelyBound {
+                    sort: GenericSort::Index,
+                    name: param.value.name.clone(),
+                }),
             },
         )),
         IndexRef::Finite(nat_expr) => IndexTypeRef::from_finite_index_form(nat_expr.value.clone())
@@ -157,11 +159,11 @@ fn infer_hir_dim_expr_arg(
                     return Err(SemanticError::located(
                         src,
                         param.span,
-                        EvaluationError::Failed {
-                            message: format!(
-                                "generic dimension parameter `{}` is not concretely bound",
-                                param.value.name
-                            ),
+                        StructError::UnboundGenericInConcreteType {
+                            generic: Box::new(UnboundGeneric::NotConcretelyBound {
+                                sort: GenericSort::Dimension,
+                                name: param.value.name.clone(),
+                            }),
                         },
                     ));
                 }
@@ -195,27 +197,20 @@ impl InferEnv<'_> {
             return Ok(Vec::new());
         }
         let total_params = type_def.generic_params().len();
-        let required_count = type_def
-            .generic_params()
-            .iter()
-            .rposition(|param| param.default().is_none())
-            .map_or(0, |index| index.saturating_add(1));
-        if applied_generic_args.len() < required_count || applied_generic_args.len() > total_params
-        {
-            let hint = if required_count == total_params {
-                format!("{total_params}")
-            } else {
-                format!("{required_count}..{total_params}")
-            };
+        let arity = GenericArgArity::of_defaults(
+            type_def
+                .generic_params()
+                .iter()
+                .map(|param| param.default().is_some()),
+        );
+        if !arity.accepts(applied_generic_args.len()) {
             return Err(SemanticError::located(
                 self.src,
                 span,
-                EvaluationError::Failed {
-                    message: format!(
-                        "type `{}` expects {hint} generic argument(s), got {}",
-                        type_def.name(),
-                        applied_generic_args.len()
-                    ),
+                StructError::GenericArgCount {
+                    type_name: type_def.name(),
+                    expected: arity,
+                    got: applied_generic_args.len(),
                 },
             ));
         }
@@ -242,11 +237,8 @@ impl InferEnv<'_> {
                     SemanticError::located(
                         self.src,
                         span,
-                        EvaluationError::Failed {
-                            message: format!(
-                                "internal: generic parameter `{}` has no default",
-                                param.name()
-                            ),
+                        StructError::MissingGenericDefault {
+                            param: param.name().clone(),
                         },
                     )
                 })?

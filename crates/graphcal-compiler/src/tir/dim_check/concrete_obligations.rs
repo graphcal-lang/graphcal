@@ -10,7 +10,6 @@ use crate::semantic::checked_type::{
 };
 use crate::semantic_error::SemanticError;
 use crate::semantic_error::domain::DomainError;
-use crate::semantic_error::evaluation::EvaluationError;
 use crate::semantic_error::index::IndexError;
 use crate::semantic_error::structure::StructError;
 use crate::source_id::SourceId;
@@ -146,9 +145,14 @@ fn validate(
                 if ancestor == &application {
                     return Ok(());
                 }
-                return Err(SemanticError::located(ctx.src, ctx.span, EvaluationError::Failed { message: format!(
-                        "recursive generic type `{identity}` changes its arguments; concrete field obligations cannot be discharged finitely"
-                    ) }).into());
+                return Err(SemanticError::located(
+                    ctx.src,
+                    ctx.span,
+                    StructError::RecursiveGenericTypeArguments {
+                        type_name: identity.name().clone(),
+                    },
+                )
+                .into());
             }
             stack.push(application);
             // A type whose constructors have no fields needs no field
