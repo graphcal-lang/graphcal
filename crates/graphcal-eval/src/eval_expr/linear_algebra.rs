@@ -20,7 +20,6 @@ use graphcal_compiler::syntax::non_empty::NonEmpty;
 use graphcal_compiler::syntax::span::Span;
 use graphcal_compiler::tir::texpr::operators::LinearAlgebraCall;
 use graphcal_compiler::tir::typed::scoped_node::ScopedNode;
-use thiserror::Error;
 
 use crate::runtime_value::dense_array::{DenseArray, DenseShapeError};
 use crate::runtime_value::{IndexAxis, RuntimeValue};
@@ -28,9 +27,10 @@ use crate::runtime_value::{IndexAxis, RuntimeValue};
 use graphcal_compiler::outcome::Outcome;
 
 use super::EvalSession;
+use super::linear_algebra_error::LinearAlgebraError;
 use super::linear_algebra_lu::{LuFailure, SquareMatrix};
 use super::numeric::{self, QuantityValidationError};
-use super::work_budget::{KernelCheckpoint, WorkAmount, WorkAmountError, WorkBudgetError};
+use super::work_budget::{KernelCheckpoint, WorkAmount, WorkAmountError};
 use crate::invariant::{Failure, Invariant};
 
 /// Reads the operands of a linear-algebra call as the vectors and matrices
@@ -144,22 +144,6 @@ fn operand_invariant(message: impl std::fmt::Display) -> Invariant {
     Invariant::violated(format_args!(
         "linear-algebra operand invariant failed: {message}"
     ))
-}
-
-#[derive(Debug, Error)]
-pub(super) enum LinearAlgebraError {
-    #[error(transparent)]
-    Numeric(#[from] QuantityValidationError),
-    #[error(transparent)]
-    Algorithm(#[from] super::linear_algebra_lu::LuError),
-    #[error("linear-algebra work estimate failed: {0}")]
-    WorkAmount(#[from] WorkAmountError),
-    #[error("`{function}()` {source}")]
-    WorkBudget {
-        function: LinearAlgebraFn,
-        #[source]
-        source: WorkBudgetError,
-    },
 }
 
 /// Why a linear-algebra operation did not produce a value.

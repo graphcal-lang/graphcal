@@ -5,6 +5,7 @@ use graphcal_compiler::syntax::span::Span;
 use graphcal_compiler::tir::texpr::operators::{ArithOp, IntArithOp, OrderingOp};
 
 use super::EvalSession;
+use super::runtime_failure::{IntegerFailure, RuntimeFailure};
 
 // ---------------------------------------------------------------------------
 // Helper functions
@@ -18,7 +19,7 @@ pub(super) fn check_finite(
     span: Span,
 ) -> Result<FiniteQuantity, SemanticError> {
     super::numeric::computed_finite_quantity(value, context)
-        .map_err(|err| ctx.eval_error(err.to_string(), span))
+        .map_err(|err| ctx.runtime_error(err, span))
 }
 
 fn check_nonzero(
@@ -28,7 +29,7 @@ fn check_nonzero(
     span: Span,
 ) -> Result<FiniteQuantity, SemanticError> {
     super::numeric::computed_nonzero_quantity(value, context)
-        .map_err(|err| ctx.eval_error(err.to_string(), span))
+        .map_err(|err| ctx.runtime_error(err, span))
 }
 
 /// Dispatch an ordering operator (`<`, `>`, `<=`, `>=`) to the
@@ -56,13 +57,13 @@ pub(super) fn int_arith(
         IntArithOp::Mul => l.checked_mul(r),
         IntArithOp::Div => {
             if r == 0 {
-                return Err(ctx.eval_error("integer division by zero", span));
+                return Err(ctx.runtime_error(IntegerFailure::DivisionByZero, span));
             }
             l.checked_div(r)
         }
         IntArithOp::Mod => {
             if r == 0 {
-                return Err(ctx.eval_error("integer modulo by zero", span));
+                return Err(ctx.runtime_error(IntegerFailure::ModuloByZero, span));
             }
             // The mathematical remainder is zero for every dividend when the
             // divisor is -1. `checked_rem` nevertheless returns `None` for
@@ -71,7 +72,7 @@ pub(super) fn int_arith(
             if r == -1 { Some(0) } else { l.checked_rem(r) }
         }
     }
-    .ok_or_else(|| ctx.eval_error("integer arithmetic overflow", span))
+    .ok_or_else(|| ctx.runtime_error(IntegerFailure::Overflow, span))
 }
 
 /// Raise an integer to an integer power with checked arithmetic.
@@ -82,12 +83,12 @@ pub(super) fn int_power(
     span: Span,
 ) -> Result<i64, SemanticError> {
     if exponent < 0 {
-        return Err(ctx.eval_error("integer exponent must be non-negative", span));
+        return Err(ctx.runtime_error(IntegerFailure::NegativeExponent, span));
     }
-    let exponent =
-        u32::try_from(exponent).map_err(|_| ctx.eval_error("integer exponent too large", span))?;
+    let exponent = u32::try_from(exponent)
+        .map_err(|_| ctx.runtime_error(IntegerFailure::ExponentTooLarge, span))?;
     base.checked_pow(exponent)
-        .ok_or_else(|| ctx.eval_error("integer arithmetic overflow", span))
+        .ok_or_else(|| ctx.runtime_error(IntegerFailure::Overflow, span))
 }
 
 /// Evaluate an exact rational power without discarding the rational metadata.
@@ -104,7 +105,7 @@ pub(super) fn eval_exact_quantity_power(
 ) -> Result<FiniteQuantity, SemanticError> {
     let result = exponent
         .pow_f64(base.get())
-        .map_err(|error| ctx.eval_error(error.to_string(), span))?;
+        .map_err(|error| ctx.runtime_error(error, span))?;
     if base.get() == 0.0 {
         check_finite(result, "power operation", ctx, span)
     } else {
@@ -129,22 +130,22 @@ pub(super) fn quantity_arith(
         ArithOp::Div => l.checked_div(r),
     }
     .map_err(|error| {
-        let message = match error {
-            FiniteArithmeticError::DivisionByZero => "division by zero".to_string(),
+        let failure = match error {
+            FiniteArithmeticError::DivisionByZero => RuntimeFailure::QuantityDivisionByZero,
             FiniteArithmeticError::Infinite => {
                 super::numeric::QuantityValidationError::InfiniteResult {
                     context: context.to_string(),
                 }
-                .to_string()
+                .into()
             }
             FiniteArithmeticError::Underflow => {
                 super::numeric::QuantityValidationError::UnderflowToZero {
                     context: context.to_string(),
                 }
-                .to_string()
+                .into()
             }
         };
-        ctx.eval_error(message, span)
+        ctx.runtime_error(failure, span)
     })
 }
 

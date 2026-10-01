@@ -868,6 +868,11 @@ role = "contracts"
 
 [[module]]
 package = "compiler"
+path = ["semantic_error", "evaluation", "tests"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
 path = ["semantic_error", "rendered"]
 role = "contracts"
 
@@ -2100,6 +2105,11 @@ role = "interpreter"
 
 [[module]]
 package = "eval"
+path = ["eval_expr", "linear_algebra_error"]
+role = "interpreter"
+
+[[module]]
+package = "eval"
 path = ["eval_expr", "linear_algebra", "tests"]
 role = "interpreter"
 
@@ -2444,6 +2454,16 @@ role = "contracts"
 [[module]]
 package = "eval"
 path = ["eval_expr", "presentation"]
+role = "interpreter"
+
+[[module]]
+package = "eval"
+path = ["eval_expr", "runtime_failure"]
+role = "interpreter"
+
+[[module]]
+package = "eval"
+path = ["eval_expr", "runtime_failure", "tests"]
 role = "interpreter"
 
 [[module]]

@@ -24,6 +24,7 @@ use crate::runtime_value::{IndexAxis, IndexedValue, KeyElement, KeyValue, Runtim
 
 use super::EvalSession;
 use super::arithmetic::apply_ordering;
+use super::runtime_failure::{IntegerFailure, RuntimeFailure};
 
 /// A value whose shape a violated-invariant diagnostic describes.
 pub(super) trait Shape {
@@ -257,11 +258,11 @@ pub(super) fn quantity<'t>(
     let ctx = operands.ctx;
     match *operation {
         QExpr::Number(value) => super::numeric::finite_quantity(value, "numeric literal")
-            .map_err(|error| ctx.eval_error(error.to_string(), span))
+            .map_err(|error| ctx.runtime_error(error, span))
             .map_err(Outcome::Failed),
         QExpr::Constant(constant) => {
             super::numeric::finite_quantity(constant.value(), "built-in constant")
-                .map_err(|error| ctx.eval_error(error.to_string(), span))
+                .map_err(|error| ctx.runtime_error(error, span))
                 .map_err(Outcome::Failed)
         }
         QExpr::Arith { op, lhs, rhs } => {
@@ -284,9 +285,9 @@ pub(super) fn quantity<'t>(
             let lhs = operands.datetime(lhs)?;
             let rhs = operands.datetime(rhs)?;
             let seconds = super::datetime::checked_epoch_difference_seconds(lhs, rhs)
-                .map_err(|error| ctx.eval_error(error.to_string(), span))?;
+                .map_err(|error| ctx.runtime_error(error, span))?;
             super::numeric::finite_quantity(seconds, "datetime difference")
-                .map_err(|error| ctx.eval_error(error.to_string(), span))
+                .map_err(|error| ctx.runtime_error(error, span))
                 .map_err(Outcome::Failed)
         }
         QExpr::Scalar { function, ref args } => {
@@ -297,17 +298,17 @@ pub(super) fn quantity<'t>(
             let result = graphcal_compiler::semantic::scalar_function::scalar_function(function)
                 .eval(&arguments)
                 .map_err(|error| {
-                    ctx.eval_error(format!("builtin function `{function}` {error}"), span)
+                    ctx.runtime_error(RuntimeFailure::ScalarFunction { function, error }, span)
                 })?;
             super::arithmetic::check_finite(result, function.as_str(), ctx, span)
                 .map_err(Outcome::Failed)
         }
         QExpr::ComplexPart { part, arg } => super::complex::part(part, operands.complex(arg)?)
-            .map_err(|error| ctx.eval_error(error.to_string(), span).into()),
+            .map_err(|error| ctx.runtime_error(error, span).into()),
         QExpr::Abs(arg) => super::complex::real_abs(operands.quantity(arg)?)
-            .map_err(|error| ctx.eval_error(error.to_string(), span).into()),
+            .map_err(|error| ctx.runtime_error(error, span).into()),
         QExpr::Exp(arg) => super::complex::real_exp(operands.quantity(arg)?)
-            .map_err(|error| ctx.eval_error(error.to_string(), span).into()),
+            .map_err(|error| ctx.runtime_error(error, span).into()),
         QExpr::FromInt(arg) => {
             let value = operands.int(arg)?;
             #[expect(
@@ -315,7 +316,7 @@ pub(super) fn quantity<'t>(
                 reason = "explicit Int to float conversion"
             )]
             super::numeric::finite_quantity(value as f64, "to_float()")
-                .map_err(|error| ctx.eval_error(error.to_string(), arg.span()))
+                .map_err(|error| ctx.runtime_error(error, arg.span()))
                 .map_err(Outcome::Failed)
         }
         QExpr::Coordinate(arg) => operands.coordinate(arg),
@@ -327,7 +328,7 @@ pub(super) fn quantity<'t>(
                 DatetimeToNumericFn::Unix => epoch.to_unix_seconds(),
             };
             super::numeric::finite_quantity(result, "datetime conversion")
-                .map_err(|error| ctx.eval_error(error.to_string(), arg.span()))
+                .map_err(|error| ctx.runtime_error(error, arg.span()))
                 .map_err(Outcome::Failed)
         }
     }
@@ -359,22 +360,12 @@ pub(super) fn int<'t>(
         IExpr::Neg(operand) => operands
             .int(operand)?
             .checked_neg()
-            .ok_or_else(|| ctx.eval_error("integer negation overflow", span))
+            .ok_or_else(|| ctx.runtime_error(IntegerFailure::NegationOverflow, span))
             .map_err(Outcome::Failed),
         IExpr::FromQuantity(arg) => {
             let value = operands.quantity(arg)?.get();
             super::conversions::exact_f64_to_i64(value)
-                .map_err(|error| {
-                    let rounding_help = if matches!(
-                        &error,
-                        super::conversions::ExactIntConversionError::NonInteger { .. }
-                    ) {
-                        "; apply trunc(), floor(), ceil(), or round() explicitly before to_int()"
-                    } else {
-                        ""
-                    };
-                    ctx.eval_error(format!("to_int() argument {error}{rounding_help}"), span)
-                })
+                .map_err(|error| ctx.runtime_error(RuntimeFailure::ToInt(error), span))
                 .map_err(Outcome::Failed)
         }
         IExpr::FinPosition(arg) => {
@@ -516,7 +507,7 @@ pub(super) fn complex<'t>(
         CExpr::Exp(arg) => super::complex::exp(operands.complex(arg)?),
     };
     result
-        .map_err(|error| operands.ctx.eval_error(error.to_string(), span))
+        .map_err(|error| operands.ctx.runtime_error(error, span))
         .map_err(Outcome::Failed)
 }
 
@@ -551,11 +542,8 @@ pub(super) fn datetime<'t>(
         DExpr::FromInt { function, arg } => {
             let value = operands.int(arg)?;
             let value = super::numeric::exact_i64_to_f64(value).map_err(|_| {
-                operands.ctx.eval_error(
-                    format!(
-                        "{}() integer argument {value} is too large for exact conversion",
-                        function.as_str()
-                    ),
+                operands.ctx.runtime_error(
+                    RuntimeFailure::DatetimeIntegerTooLarge(function, value),
                     arg.span(),
                 )
             })?;
@@ -568,7 +556,7 @@ pub(super) fn datetime<'t>(
         }
     };
     result
-        .map_err(|error| operands.ctx.eval_error(error.to_string(), span))
+        .map_err(|error| operands.ctx.runtime_error(error, span))
         .map_err(Outcome::Failed)
 }
 
@@ -585,7 +573,7 @@ fn from_numeric(
         DatetimeFromNumericFn::Unix => super::datetime::NumericEpochKind::UnixSeconds,
     };
     super::datetime::checked_epoch_from_numeric(value, kind)
-        .map_err(|error| ctx.eval_error(error.to_string(), span))
+        .map_err(|error| ctx.runtime_error(error, span))
         .map_err(Outcome::Failed)
 }
 

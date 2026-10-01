@@ -23,6 +23,9 @@ use graphcal_compiler::resolved_name::ResolvedDeclName;
 
 use super::context::EvalSession;
 use super::operations::read_shape;
+use super::runtime_failure::{
+    ExternFailure, InlineAssertionFailure, RuntimeFailure, UnboundReference,
+};
 use super::unit_scale::{checked_unit_scaled_value, resolve_unit_scale};
 use crate::constant_pools::RuntimeValueMap;
 use graphcal_compiler::tir::texpr::MapLayout;
@@ -225,7 +228,7 @@ fn eval_texpr_inner(
         NodeKind::Const(target) => match target.value {
             ConstRef::Decl(declaration) => {
                 let value = values.get(&declaration).cloned().ok_or_else(|| {
-                    ctx.eval_error(format!("undefined constant `{declaration}`"), target.span)
+                    ctx.runtime_error(UnboundReference::Constant(declaration.clone()), target.span)
                 })?;
                 Ok(presentation_values
                     .and_then(|presented| presented.get(&declaration))
@@ -238,7 +241,7 @@ fn eval_texpr_inner(
         NodeKind::Local(local) => local_values
             .get(local.value)
             .cloned()
-            .ok_or_else(|| ctx.eval_error("undefined local variable", local.span))
+            .ok_or_else(|| ctx.runtime_error(UnboundReference::Local, local.span))
             .map_err(Outcome::Failed),
         NodeKind::DatetimeLiteral(literal) => Ok(plain(RuntimeValue::Datetime(
             super::operations::datetime_literal(literal),
@@ -409,8 +412,8 @@ fn resolve_graph_ref<'a>(
     ctx: &EvalSession<'_>,
 ) -> Result<&'a RuntimeValue, SemanticError> {
     values.get(&target.value).ok_or_else(|| {
-        ctx.eval_error(
-            format!("undefined graph reference `@{}`", target.value),
+        ctx.runtime_error(
+            UnboundReference::GraphRef(target.value.clone()),
             target.span,
         )
     })
@@ -498,8 +501,11 @@ fn eval_key_form<'t>(
                 .ok()
                 .and_then(|position| KeyValue::at(axis.clone(), position))
                 .ok_or_else(|| {
-                    ctx.eval_error(
-                        format!("fin_key: {position} out of bounds for {}", axis.index()),
+                    ctx.runtime_error(
+                        RuntimeFailure::FinKeyOutOfBounds {
+                            position,
+                            axis: axis.index().clone(),
+                        },
                         span,
                     )
                 })
@@ -550,17 +556,11 @@ fn coordinate_search(
         }
     }
     best.map(|(key, _)| key.clone()).ok_or_else(|| {
-        ctx.eval_error(
-            format!(
-                "{}: no coordinate of `{}` is {} the target",
-                search.kind().as_str(),
-                axis.index(),
-                if search == CoordinateSearch::Floor {
-                    "at or below"
-                } else {
-                    "at or above"
-                },
-            ),
+        ctx.runtime_error(
+            RuntimeFailure::NoCoordinate {
+                search,
+                axis: axis.index().clone(),
+            },
             span,
         )
     })
@@ -576,7 +576,7 @@ fn eval_extremum_key(
 ) -> Result<RuntimeValue, SemanticError> {
     super::aggregations::extremum_key(kind, indexed)
         .map(RuntimeValue::Key)
-        .map_err(|error| ctx.eval_error(error.to_string(), span))
+        .map_err(|error| ctx.runtime_error(error, span))
 }
 
 /// The expression of one plugin-call argument, in the argument's scope.
@@ -609,21 +609,14 @@ fn eval_extern_fn(
     use crate::invariant::Failure;
 
     let Some(registry) = ctx.host_fns() else {
-        return Err(ctx.eval_error(
-            format!("extern function `{ext}` cannot be evaluated in this context (no host function registry)"),
-            span,
-        ).into());
+        return Err(ctx
+            .runtime_error(ExternFailure::NoHost(ext.clone()), span)
+            .into());
     };
     let key = ext.key();
     let Some(host_fn) = registry.get(&key) else {
         return Err(ctx
-            .eval_error(
-                format!(
-                    "extern function `{}` (plugin \"{}\") is not provided by the host",
-                    ext.name, ext.plugin
-                ),
-                span,
-            )
+            .runtime_error(ExternFailure::NotProvided(ext.clone()), span)
             .into());
     };
     let invariant =
@@ -643,19 +636,25 @@ fn eval_extern_fn(
                 .nth(position)
                 .map_or(span, |arg| argument_node(arg).span());
             match failure {
-                Failure::Error(error) => ctx.eval_error(error.describe(ext), span),
+                Failure::Error(error) => ctx.runtime_error(
+                    ExternFailure::Argument {
+                        function: ext.clone(),
+                        error,
+                    },
+                    span,
+                ),
                 Failure::Invariant(error) => invariant(error, span),
             }
             .into()
         }
     })?;
 
-    let result = host_fn(arguments.values()).map_err(|err| {
-        ctx.eval_error(
-            format!(
-                "extern function `{}` (plugin \"{}\") failed: {}",
-                ext, ext.plugin, err.message
-            ),
+    let result = host_fn(arguments.values()).map_err(|error| {
+        ctx.runtime_error(
+            ExternFailure::Host {
+                function: ext.clone(),
+                error,
+            },
             span,
         )
     })?;
@@ -663,7 +662,13 @@ fn eval_extern_fn(
     arguments
         .decode(&result)
         .map_err(|failure| match failure {
-            Failure::Error(error) => ctx.eval_error(error.describe(ext), span),
+            Failure::Error(error) => ctx.runtime_error(
+                ExternFailure::Result {
+                    function: ext.clone(),
+                    error,
+                },
+                span,
+            ),
             Failure::Invariant(error) => invariant(error, span),
         })
         .map_err(Outcome::Failed)
@@ -715,11 +720,12 @@ fn eval_constructor_call(
                     crate::domain_check::check_domain_constraint(&evaluated.value(), constraint)
                 {
                     return Err(ctx
-                        .eval_error(
-                            format!(
-                                "field `{constructor_name}.{}` {}",
-                                field_init.name, violation.message
-                            ),
+                        .runtime_error(
+                            RuntimeFailure::FieldConstraint {
+                                constructor: constructor_name.clone(),
+                                field: field_init.name.clone(),
+                                violation,
+                            },
                             field_init.value.span(),
                         )
                         .into());
@@ -868,7 +874,7 @@ fn eval_index_access(
             ScopedIndexArg::Var(local) => {
                 let bound = local_values
                     .get(local.value)
-                    .ok_or_else(|| ctx.eval_error("undefined local variable", local.span))?;
+                    .ok_or_else(|| ctx.runtime_error(UnboundReference::Local, local.span))?;
                 let key = read_shape(
                     bound.value().into_owned(),
                     "a key",
@@ -961,11 +967,8 @@ fn eval_unfold(
 ) -> Result<EvaluatedRuntimeValue, Outcome<SemanticError>> {
     if index_axis.coordinate_data().is_none() {
         return Err(ctx
-            .eval_error(
-                format!(
-                    "unfold requires a coordinate index, but `{}` is not coordinate-valued",
-                    index_axis.index()
-                ),
+            .runtime_error(
+                RuntimeFailure::UnfoldWithoutCoordinates(index_axis.index().clone()),
                 recurrence.axis.span,
             )
             .into());
@@ -1241,11 +1244,12 @@ fn check_inline_dag_asserts(
             crate::eval::types::AssertResult::Pass => {}
             crate::eval::types::AssertResult::Fail { message } => {
                 return Err(ctx
-                    .eval_error(
-                        format!(
-                            "assertion `{name}` failed in inline call of dag `{}` ({message})",
-                            target.leaf()
-                        ),
+                    .runtime_error(
+                        InlineAssertionFailure::Failed {
+                            assertion: name.clone(),
+                            dag: target.leaf().clone(),
+                            message,
+                        },
                         call_span,
                     )
                     .into());
@@ -1260,11 +1264,12 @@ fn check_inline_dag_asserts(
             }
             crate::eval::types::AssertResult::Error { message } => {
                 return Err(ctx
-                    .eval_error(
-                        format!(
-                            "assertion `{name}` errored in inline call of dag `{}` ({message})",
-                            target.leaf()
-                        ),
+                    .runtime_error(
+                        InlineAssertionFailure::Errored {
+                            assertion: name.clone(),
+                            dag: target.leaf().clone(),
+                            message,
+                        },
                         call_span,
                     )
                     .into());

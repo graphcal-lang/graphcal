@@ -220,9 +220,11 @@ impl<'a> ExecutionFrame<'a> {
                 SemanticError::located(
                     source,
                     span,
-                    EvaluationError::Failed {
-                        message: violation.message,
-                    },
+                    EvaluationError::Runtime(
+                        graphcal_compiler::semantic_error::evaluation::EvaluatorFailure::new(
+                            violation,
+                        ),
+                    ),
                 ),
             );
         }
