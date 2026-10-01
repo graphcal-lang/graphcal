@@ -3714,7 +3714,7 @@ node y: Length = @scale(v: @src)::result;
 ";
     let err = check(source).unwrap_err();
     assert!(
-        matches!(&err, SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Graph(GraphError::MissingDagBindings { missing, .. }), .. }) if missing == &vec!["factor".to_string()]),
+        matches!(&err, SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Graph(GraphError::MissingDagBindings { missing, .. }), .. }) if missing.iter().map(ToString::to_string).collect::<Vec<_>>() == ["factor"]),
         "got: {err:?}"
     );
 }
@@ -3938,7 +3938,7 @@ node y: Length = @a(v: @src)::out;
     else {
         panic!("expected CyclicDependency, got: {err:?}");
     };
-    assert!(name.ends_with('a'), "{name}");
+    assert!(name.to_string().ends_with('a'), "{name}");
     let dag_b = source.find("dag b").unwrap();
     let param_src = source.find("param src").unwrap();
     assert!((dag_b..param_src).contains(&span.offset()), "{span:?}");
@@ -4651,7 +4651,7 @@ fn declaration_cycles_are_reported_deterministically_at_the_closing_declaration(
             let (tir, src) = module_aware_tir(source);
             let error = check_draft(tir, src).unwrap_err();
             assert!(
-                matches!(&error, SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Graph(GraphError::CyclicDependency { name, .. }), .. }) if name == expected),
+                matches!(&error, SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Graph(GraphError::CyclicDependency { name, .. }), .. }) if name.to_string() == expected),
                 "{source}: {error:?}"
             );
         }

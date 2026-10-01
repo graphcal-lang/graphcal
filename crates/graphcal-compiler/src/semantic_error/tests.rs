@@ -253,3 +253,33 @@ fn time_scale_and_unit_scale_diagnostics_keep_their_lowering_text() {
     );
     assert_eq!(DimensionError::ExpectedTimeScale.code(), "graphcal::D040");
 }
+
+#[test]
+fn graph_payloads_render_their_names_as_before() {
+    use super::graph::{CycleMember, GraphError};
+    use crate::dag_id::DagId;
+    use crate::syntax::decl_name::DeclName;
+
+    let dag = DagId::root_in_package("test", "lib");
+    assert_eq!(CycleMember::Dag(dag.clone()).to_string(), dag.to_string());
+    assert_eq!(
+        CycleMember::Declaration(DeclName::expect_valid("a")).to_string(),
+        "a"
+    );
+    assert_eq!(
+        GraphError::MissingDagBindings {
+            missing: vec![DeclName::expect_valid("x"), DeclName::expect_valid("y")],
+            dag_name: "lib".to_owned(),
+        }
+        .to_string(),
+        "missing required binding(s) [\"x\", \"y\"] when instantiating DAG `lib`"
+    );
+    assert_eq!(
+        GraphError::UnknownDagParam {
+            name: DeclName::expect_valid("x"),
+            dag_name: dag.clone(),
+        }
+        .to_string(),
+        format!("unknown param `x` in DAG call to `{dag}`")
+    );
+}

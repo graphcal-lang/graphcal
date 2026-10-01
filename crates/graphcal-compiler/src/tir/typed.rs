@@ -1494,7 +1494,7 @@ impl HirPolicyChecker<'_> {
                         self.src,
                         expr.span,
                         GraphError::DagCallInCompileTime {
-                            name: target.value.to_string(),
+                            name: target.value.clone(),
                         },
                     ));
                 }

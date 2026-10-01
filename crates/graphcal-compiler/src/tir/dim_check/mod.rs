@@ -3,6 +3,7 @@ use crate::resolved_name::ResolvedDeclName;
 use crate::semantic_error::attribute::AttributeError;
 use crate::semantic_error::dimension::DimensionError;
 use crate::semantic_error::domain::DomainError;
+use crate::semantic_error::graph::CycleMember;
 use crate::semantic_error::graph::GraphError;
 use crate::source_id::SourceId;
 use std::collections::{HashMap, HashSet};
@@ -1333,7 +1334,7 @@ fn detect_cross_dag_cycles(
         src,
         *cycle.closing_label(),
         GraphError::CyclicDependency {
-            name: cycle.entry().to_string(),
+            name: CycleMember::Dag((*cycle.entry()).clone()),
         },
     ))
 }

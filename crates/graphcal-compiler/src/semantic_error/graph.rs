@@ -8,30 +8,56 @@ use thiserror::Error;
 
 use crate::dag_id::DagId;
 use crate::diagnostic::{DiagnosticKind, SecondaryLabel};
+use crate::semantic::checked_type::TypeSpelling;
+use crate::syntax::decl_name::DeclName;
+
+/// The member a dependency cycle is reported at: a DAG that inline-calls
+/// itself, or a declaration that depends on itself.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CycleMember {
+    Dag(DagId),
+    Declaration(DeclName),
+}
+
+impl std::fmt::Display for CycleMember {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Dag(dag) => dag.fmt(f),
+            Self::Declaration(name) => name.fmt(f),
+        }
+    }
+}
 
 /// Diagnostics of the declaration graph and of DAG calls.
 #[derive(Debug, Clone, Error)]
 pub enum GraphError {
     #[error("DAG call `{name}` is not allowed in a compile-time expression")]
-    DagCallInCompileTime { name: String },
+    DagCallInCompileTime { name: DagId },
     #[error("cyclic dependency involving `{name}`")]
-    CyclicDependency { name: String },
+    CyclicDependency { name: CycleMember },
     #[error("unknown dag `{name}`")]
-    UnknownDag { name: String },
+    UnknownDag { name: DagId },
     #[error("unknown param `{name}` in DAG call to `{dag_name}`")]
-    UnknownDagParam { name: String, dag_name: String },
-    #[error("missing required binding(s) {missing:?} when instantiating DAG `{dag_name}`")]
+    UnknownDagParam { name: DeclName, dag_name: DagId },
+    #[error(
+        "missing required binding(s) {} when instantiating DAG `{dag_name}`",
+        format_missing_bindings(missing)
+    )]
     MissingDagBindings {
-        missing: Vec<String>,
+        /// Sorted by spelling.
+        missing: Vec<DeclName>,
+        // TODO(S15 leftover): include sites name the DAG by its written
+        // path or inline declaration; type them once the include validators
+        // carry those identities instead of `&str`.
         dag_name: String,
     },
     #[error("unknown output `{name}` in DAG call to `{dag_name}`")]
-    UnknownDagOutput { name: String, dag_name: String },
+    UnknownDagOutput { name: DeclName, dag_name: DagId },
     #[error("DAG call binding `{param_name}`: expected {expected}, found {found}")]
     DagArgTypeMismatch {
-        param_name: String,
+        param_name: DeclName,
         expected: String,
-        found: String,
+        found: TypeSpelling,
     },
     #[error("inline DAG target not found in project: {target}")]
     InlineDagTargetNotFound { target: DagId },
@@ -102,6 +128,15 @@ impl DiagnosticKind for GraphError {
             | Self::RecursiveDagInstantiation { .. } => Vec::new(),
         }
     }
+}
+
+/// Render missing bindings as the quoted, bracketed list diagnostics have
+/// always shown (`["a", "b"]`).
+fn format_missing_bindings(missing: &[DeclName]) -> String {
+    format!(
+        "{:?}",
+        missing.iter().map(ToString::to_string).collect::<Vec<_>>()
+    )
 }
 
 /// Each template is named by its path inside its file (`outer.inner`), or by

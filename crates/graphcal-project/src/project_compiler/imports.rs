@@ -889,13 +889,13 @@ fn validate_required_param_bindings(
         .required_params()
         .iter()
         .filter(|name| !bindings.contains_key(*name))
-        .map(ToString::to_string)
+        .cloned()
         .collect::<Vec<_>>();
     if missing.is_empty() {
         return Ok(());
     }
 
-    missing.sort();
+    missing.sort_by_key(ToString::to_string);
     Err(PipelineError::Semantic(SemanticError::located(
         file_src,
         include_span,

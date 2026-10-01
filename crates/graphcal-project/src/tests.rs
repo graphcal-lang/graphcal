@@ -2201,7 +2201,7 @@ fn assert_missing_dag_bindings(
         }) => {
             assert_eq!(dag_name, expected_dag_name);
             assert_eq!(
-                missing,
+                missing.iter().map(ToString::to_string).collect::<Vec<_>>(),
                 expected_missing
                     .iter()
                     .map(ToString::to_string)
@@ -7860,7 +7860,7 @@ fn include_closure_cycles_are_rejected_at_the_including_declaration() {
                 }),
             ..
         })) => {
-            assert_eq!(name, "a");
+            assert_eq!(name.to_string(), "a");
             assert_eq!(span.offset(), source.find("node a").unwrap());
         }
         other => panic!("expected a cyclic dependency, got {other:?}"),

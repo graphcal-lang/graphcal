@@ -13,7 +13,6 @@ use crate::semantic_error::SemanticError;
 use crate::tir::typed::specialization::specialize_type;
 
 use crate::semantic::checked_type::{CheckedType, Symbolic};
-use crate::tir::dim_check::helpers::format_checked_type;
 
 use super::context::Infer;
 
@@ -32,7 +31,7 @@ impl Infer<'_> {
                 self.env.src,
                 target.span,
                 GraphError::UnknownDag {
-                    name: display_path.clone(),
+                    name: target.value.clone(),
                 },
             )
         })?;
@@ -69,8 +68,8 @@ impl Infer<'_> {
                     self.env.src,
                     binding.target.span,
                     GraphError::UnknownDagParam {
-                        name: target_key.as_str().to_string(),
-                        dag_name: display_path.clone(),
+                        name: target_key.to_unowned_def_name(),
+                        dag_name: target.value.clone(),
                     },
                 )
             })?;
@@ -91,28 +90,28 @@ impl Infer<'_> {
                     self.env.src,
                     binding.value.span,
                     GraphError::DagArgTypeMismatch {
-                        param_name: target_key.as_str().to_string(),
+                        param_name: target_key.to_unowned_def_name(),
                         expected: expected.format(self.env.registry),
-                        found: format_checked_type(&found, self.env.registry),
+                        found: found.spelling(&self.env.registry.dimensions),
                     },
                 )
                 .into());
             }
         }
 
-        let mut missing: Vec<String> = required_param_keys
+        let mut missing: Vec<_> = required_param_keys
             .iter()
             .filter(|param| !bound_resolved_names.contains(*param))
-            .map(|param| param.as_str().to_string())
+            .map(ResolvedDeclName::to_unowned_def_name)
             .collect();
         if !missing.is_empty() {
-            missing.sort();
+            missing.sort_by_key(ToString::to_string);
             return Err(SemanticError::located(
                 self.env.src,
                 expr.span,
                 GraphError::MissingDagBindings {
                     missing,
-                    dag_name: display_path.clone(),
+                    dag_name: display_path,
                 },
             )
             .into());
@@ -127,8 +126,8 @@ impl Infer<'_> {
                     self.env.src,
                     output.span,
                     GraphError::UnknownDagOutput {
-                        name: output_key.as_str().to_string(),
-                        dag_name: display_path.clone(),
+                        name: output_key.to_unowned_def_name(),
+                        dag_name: target.value.clone(),
                     },
                 )
             })?;
