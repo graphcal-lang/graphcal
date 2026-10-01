@@ -12,6 +12,7 @@
 //! that holds it ([`ScopedNode`]): no public API resolves
 //! a handle in a scope chosen apart from its tree.
 
+use crate::syntax::non_empty::NonEmpty;
 use std::borrow::Borrow;
 
 use crate::hir::expr::{AssertBody, Expr};
@@ -197,13 +198,13 @@ impl<'t> DeclarationBody<'t> {
 
     /// The domain bounds of the declaration's type annotation.
     #[must_use]
-    pub fn domain_bounds(self) -> Option<Scoped<'t, [ResolvedDomainBound]>> {
+    pub fn domain_bounds(self) -> Option<Scoped<'t, NonEmpty<ResolvedDomainBound>>> {
         self.scope
             .dag()
             .semantic()
             .domain_bounds
             .get(self.identity)
-            .map(|bounds| Scoped::new(self.scope, bounds.as_slice()))
+            .map(|bounds| Scoped::new(self.scope, bounds))
     }
 
     /// The assertion this declaration is.
@@ -281,13 +282,14 @@ impl<'t> NominalTypeBody<'t> {
         self.definition
     }
 
-    /// Every field of the type that carries domain bounds.
+    /// Every field of the type that carries domain bounds, with its bounds.
     pub fn constrained_fields(
         self,
     ) -> impl Iterator<
         Item = (
             &'t ResolvedStructFieldTypeKey,
             Scoped<'t, ResolvedStructFieldSemantics>,
+            Scoped<'t, NonEmpty<ResolvedDomainBound>>,
         ),
     > + use<'t> {
         let (scope, identity) = (self.scope, self.identity);
@@ -296,8 +298,10 @@ impl<'t> NominalTypeBody<'t> {
             .semantic()
             .type_defs
             .constrained_fields()
-            .filter(move |(key, _)| key.owning_type == *identity)
-            .map(move |(key, field)| (key, Scoped::new(scope, field)))
+            .filter(move |(key, _, _)| key.owning_type == *identity)
+            .map(move |(key, field, bounds)| {
+                (key, Scoped::new(scope, field), Scoped::new(scope, bounds))
+            })
     }
 }
 

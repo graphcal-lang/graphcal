@@ -1,3 +1,4 @@
+use crate::syntax::non_empty::NonEmpty;
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
 
@@ -456,18 +457,18 @@ pub(crate) struct ResolvedGenericDefault {
 #[derive(Debug, Clone)]
 pub struct ResolvedStructFieldSemantics {
     resolved_type: ResolvedDeclType,
-    domain_bounds: Vec<ResolvedDomainBound>,
+    /// The field's domain bounds; `None` when the field is unconstrained.
+    domain_bounds: Option<NonEmpty<ResolvedDomainBound>>,
 }
 
 impl ResolvedStructFieldSemantics {
+    /// A field of `resolved_type`, constrained when `domain_bounds` is not
+    /// empty.
     #[must_use]
-    pub const fn new(
-        resolved_type: ResolvedDeclType,
-        domain_bounds: Vec<ResolvedDomainBound>,
-    ) -> Self {
+    pub fn new(resolved_type: ResolvedDeclType, domain_bounds: Vec<ResolvedDomainBound>) -> Self {
         Self {
             resolved_type,
-            domain_bounds,
+            domain_bounds: NonEmpty::try_from_vec(domain_bounds).ok(),
         }
     }
 
@@ -477,10 +478,11 @@ impl ResolvedStructFieldSemantics {
         &self.resolved_type
     }
 
-    /// Return domain bounds lowered in the same owning generic scope.
+    /// Return domain bounds lowered in the same owning generic scope, when
+    /// the field is constrained.
     #[must_use]
-    pub fn domain_bounds(&self) -> &[ResolvedDomainBound] {
-        &self.domain_bounds
+    pub const fn domain_bounds(&self) -> Option<&NonEmpty<ResolvedDomainBound>> {
+        self.domain_bounds.as_ref()
     }
 }
 
@@ -539,13 +541,22 @@ impl ResolvedTypeDefs {
         self.fields.iter()
     }
 
-    /// Visit only fields that carry domain bounds.
+    /// Visit only fields that carry domain bounds, with their bounds.
     pub fn constrained_fields(
         &self,
-    ) -> impl Iterator<Item = (&ResolvedStructFieldTypeKey, &ResolvedStructFieldSemantics)> {
-        self.fields
-            .iter()
-            .filter(|(_, field)| !field.domain_bounds.is_empty())
+    ) -> impl Iterator<
+        Item = (
+            &ResolvedStructFieldTypeKey,
+            &ResolvedStructFieldSemantics,
+            &NonEmpty<ResolvedDomainBound>,
+        ),
+    > {
+        self.fields.iter().filter_map(|(key, field)| {
+            field
+                .domain_bounds
+                .as_ref()
+                .map(|bounds| (key, field, bounds))
+        })
     }
 
     /// Return a field annotation resolved in its owning type's generic scope.
@@ -734,7 +745,7 @@ impl DeclarationIdentityLookup {
 #[derive(Debug, Clone, Default)]
 pub struct DagSemanticBody {
     /// Domain bounds per declaration, lowered to HIR, in source order.
-    pub domain_bounds: HashMap<ResolvedDeclName, Vec<ResolvedDomainBound>>,
+    pub domain_bounds: HashMap<ResolvedDeclName, NonEmpty<ResolvedDomainBound>>,
     /// Source-qualified dynamic unit definitions keyed by canonical unit identity.
     ///
     /// Each entry carries the validated declared/base dimensions and strictly
@@ -1177,8 +1188,8 @@ impl DagTIR {
         self.semantic
             .type_defs
             .constrained_fields()
-            .filter(move |(key, _)| self.field_bound_scope(key) == scope)
-            .flat_map(|(_, field)| field.domain_bounds().iter())
+            .filter(move |(key, _, _)| self.field_bound_scope(key) == scope)
+            .flat_map(|(_, _, bounds)| bounds.iter())
             .map(|bound| &*bound.value)
     }
 

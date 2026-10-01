@@ -750,25 +750,24 @@ fn resolve_projection_expected_fail(
                 ExpectedFail::All => Ok(ExpectedFail::All),
                 ExpectedFail::Variants(keys) => keys
                     .try_map(|key| {
-                        key.into_iter()
-                            .map(|part| match part {
-                                ExpectedFailKeyPart::Named {
-                                    index,
+                        key.try_map(|part| match part {
+                            ExpectedFailKeyPart::Named {
+                                index,
+                                variant,
+                                span,
+                            } => module_resolver
+                                .resolve_index_path(importer, &index)
+                                .map(graphcal_compiler::resolve::symbols::SymbolRef::into_resolved)
+                                .map(|index| ExpectedFailKeyPart::Named {
+                                    index: IndexTypeRef::from_resolved(index),
                                     variant,
                                     span,
-                                } => module_resolver
-                                    .resolve_index_path(importer, &index).map(graphcal_compiler::resolve::symbols::SymbolRef::into_resolved)
-                                    .map(|index| ExpectedFailKeyPart::Named {
-                                        index: IndexTypeRef::from_resolved(index),
-                                        variant,
-                                        span,
-                                    })
-                                    .map_err(|error| module_resolve_compile_error(error, src)),
-                                ExpectedFailKeyPart::FinitePosition { position, span } => {
-                                    Ok(ExpectedFailKeyPart::FinitePosition { position, span })
-                                }
-                            })
-                            .collect::<Result<Vec<_>, PipelineError>>()
+                                })
+                                .map_err(|error| module_resolve_compile_error(error, src)),
+                            ExpectedFailKeyPart::FinitePosition { position, span } => {
+                                Ok(ExpectedFailKeyPart::FinitePosition { position, span })
+                            }
+                        })
                     })
                     .map(ExpectedFail::Variants),
             }

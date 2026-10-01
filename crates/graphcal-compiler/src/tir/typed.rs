@@ -16,6 +16,7 @@ use crate::semantic_error::name::NameError;
 use crate::semantic_error::plugin::PluginError;
 use crate::semantic_error::visibility::VisibilityError;
 use crate::source_id::SourceId;
+use crate::syntax::non_empty::NonEmpty;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
@@ -573,7 +574,7 @@ fn resolve_instance_decl_type(
 }
 
 /// Declaration domain bounds keyed by the canonical declaration they bound.
-type DomainBounds = HashMap<ResolvedDeclName, Vec<ResolvedDomainBound>>;
+type DomainBounds = HashMap<ResolvedDeclName, NonEmpty<ResolvedDomainBound>>;
 
 /// Attach each value declaration's checked type to its record, moving its
 /// domain bounds into a table keyed by canonical identity.
@@ -595,18 +596,16 @@ fn attach_checked_types(
                 DiagnosticAnchor::Source(annotation.span),
             )
         })?;
-        if !annotation.domain_bounds.is_empty() {
-            let bounds = annotation
-                .domain_bounds
-                .into_iter()
-                .map(|bound| ResolvedDomainBound {
+        if let Ok(bounds) = NonEmpty::try_from_vec(annotation.domain_bounds) {
+            domain_bounds.insert(
+                identity,
+                bounds.map(|bound| ResolvedDomainBound {
                     kind: bound.kind,
                     value: bound.value,
                     span: bound.span,
                     src,
-                })
-                .collect();
-            domain_bounds.insert(identity, bounds);
+                }),
+            );
         }
         Ok::<_, SemanticError>(CheckedTypeAnnotation {
             decl_type: annotation.decl_type,
@@ -1240,10 +1239,10 @@ fn check_domain_bound_policies(
         Ok(())
     };
     for (key, bounds) in &semantic.domain_bounds {
-        check_bounds(bounds, key.owner() == ctx.owner)?;
+        check_bounds(bounds.as_slice(), key.owner() == ctx.owner)?;
     }
-    for (_, field) in semantic.type_defs.constrained_fields() {
-        check_bounds(field.domain_bounds(), false)?;
+    for (_, _, bounds) in semantic.type_defs.constrained_fields() {
+        check_bounds(bounds.as_slice(), false)?;
     }
     Ok(())
 }

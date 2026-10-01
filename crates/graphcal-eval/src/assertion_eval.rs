@@ -18,6 +18,7 @@ use graphcal_compiler::semantic_error::SemanticError;
 use graphcal_compiler::semantic_error::SemanticErrorKind;
 use graphcal_compiler::semantic_error::evaluation::EvaluationError;
 use graphcal_compiler::syntax::index_name::IndexEntryKey;
+use graphcal_compiler::syntax::non_empty::NonEmpty;
 use graphcal_compiler::tir::typed::body_scope::Scoped;
 use graphcal_compiler::tir::typed::evaluation_unit::AssertionOperands;
 
@@ -211,8 +212,8 @@ fn invert_indexed_variants(
                 // then strip the first element and recurse.
                 let sub_keys: Vec<ExpectedFailKey> = keys
                     .iter()
-                    .filter(|key| key.len() >= 2 && key[0].matches_entry(index_name, variant))
-                    .map(|key| key[1..].to_vec())
+                    .filter(|key| key.first().matches_entry(index_name, variant))
+                    .filter_map(|key| NonEmpty::try_from_vec(key.split_first().1.to_vec()).ok())
                     .collect();
                 if sub_keys.is_empty() {
                     // No expected-fail keys apply to this subtree — leave as-is

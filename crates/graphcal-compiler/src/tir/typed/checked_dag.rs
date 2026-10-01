@@ -205,12 +205,8 @@ impl CheckedDag {
     pub fn domain_bounds(
         &self,
         identity: &ResolvedDeclName,
-    ) -> Option<&[super::model::ResolvedDomainBound]> {
-        self.body
-            .semantic()
-            .domain_bounds
-            .get(identity)
-            .map(Vec::as_slice)
+    ) -> Option<&crate::syntax::non_empty::NonEmpty<super::model::ResolvedDomainBound>> {
+        self.body.semantic().domain_bounds.get(identity)
     }
 
     /// The constant and runtime dependencies of this DAG's declarations.

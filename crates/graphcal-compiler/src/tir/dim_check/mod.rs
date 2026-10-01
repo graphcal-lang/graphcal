@@ -545,16 +545,11 @@ fn statically_known_tolerance(expr: &crate::hir::expr::Expr) -> Option<f64> {
     }
 }
 
-fn expected_fail_key_span(key: &ExpectedFailKey, src: SourceId) -> Result<Span, SemanticError> {
-    let mut parts = key.iter().map(ExpectedFailKeyPart::span);
-    let first = parts.next().ok_or_else(|| {
-        SemanticError::internal_error(
-            "resolved expected-fail key is empty",
-            src,
-            DiagnosticAnchor::WholeFile,
-        )
-    })?;
-    Ok(parts.fold(first, Span::merge))
+fn expected_fail_key_span(key: &ExpectedFailKey) -> Span {
+    let (first, rest) = key.split_first();
+    rest.iter()
+        .map(ExpectedFailKeyPart::span)
+        .fold(first.span(), Span::merge)
 }
 
 fn expected_fail_key_signature(
@@ -573,7 +568,7 @@ fn validate_expected_fail_key(
     if key.len() != shape.rank() {
         return Err(SemanticError::located(
             src,
-            expected_fail_key_span(key, src)?,
+            expected_fail_key_span(key),
             AttributeError::ExpectedFailKeyShapeMismatch {
                 expected: shape.rank(),
                 found: key.len(),
@@ -641,7 +636,7 @@ fn validate_expected_fail(
         )),
         ExpectedFail::All => Ok(()),
         ExpectedFail::Variants(keys) if !shape.is_indexed() => {
-            let span = expected_fail_key_span(keys.first(), src)?;
+            let span = expected_fail_key_span(keys.first());
             Err(SemanticError::located(
                 src,
                 span,
@@ -655,7 +650,7 @@ fn validate_expected_fail(
                 if !seen.insert(expected_fail_key_signature(key)) {
                     return Err(SemanticError::located(
                         src,
-                        expected_fail_key_span(key, src)?,
+                        expected_fail_key_span(key),
                         AttributeError::ExpectedFailDuplicateKey,
                     ));
                 }
@@ -705,8 +700,8 @@ impl crate::tir::typed::InstantiatedTir {
             .iter()
             .map(|(owner, _, observations, _)| (*owner, observations))
             .collect();
-        check_field_domain_constraint_targets(&tir, src)?;
-        check_field_domain_constraint_dimensions(&tir, src, cancellation, &sinks)?;
+        check_field_domain_constraint_targets(&tir)?;
+        check_field_domain_constraint_dimensions(&tir, cancellation, &sinks)?;
         drop(sinks);
         let mut bodies = HashMap::new();
         let mut checked_plot_shapes = HashMap::new();
@@ -1147,30 +1142,12 @@ fn invalid_domain_target_kind(resolved: &crate::tir::typed::ResolvedDeclType) ->
 /// constrainable value families. This mirrors
 /// [`check_domain_constraint_targets_dag`] using the field's resolved semantic
 /// type rather than reclassifying source names.
-fn first_constrained_field_bound<'a>(
-    key: &crate::tir::typed::ResolvedStructFieldTypeKey,
-    field: &'a crate::tir::typed::ResolvedStructFieldSemantics,
-    src: SourceId,
-) -> Result<&'a crate::tir::typed::ResolvedDomainBound, SemanticError> {
-    field.domain_bounds().first().ok_or_else(|| {
-        SemanticError::internal_error(
-            format!(
-                "constrained field `{}.{}` has no domain bounds",
-                key.owning_type, key.field
-            ),
-            src,
-            DiagnosticAnchor::WholeFile,
-        )
-    })
-}
-
 fn check_field_domain_constraint_targets(
     tir: &crate::tir::typed::UncheckedTir,
-    src: SourceId,
 ) -> Result<(), SemanticError> {
     let mut seen = std::collections::HashSet::new();
     for (_, dag) in tir.local_dags() {
-        for (key, field_semantics) in dag.semantic.type_defs.constrained_fields() {
+        for (key, field_semantics, bounds) in dag.semantic.type_defs.constrained_fields() {
             if !seen.insert(key) {
                 continue;
             }
@@ -1178,7 +1155,7 @@ fn check_field_domain_constraint_targets(
             else {
                 continue;
             };
-            let first_bound = first_constrained_field_bound(key, field_semantics, src)?;
+            let first_bound = bounds.first();
             let span = field_type_annotation(dag, key)
                 .map_or(first_bound.span, |field| field.type_annotation().span);
             return Err(SemanticError::located(
@@ -1286,18 +1263,17 @@ fn constrained_field_definition<'d>(
 /// from several DAGs, so a seen-set dedupes the checks.
 fn check_field_domain_constraint_dimensions(
     tir: &crate::tir::typed::UncheckedTir,
-    src: SourceId,
     cancellation: &crate::cancellation::CancellationToken,
     sinks: &HashMap<&crate::dag_id::DagId, &infer::hir::BodyObservations>,
 ) -> Result<(), Outcome<SemanticError>> {
     let registry = tir.registry();
     let mut seen = HashSet::new();
     for (_, dag) in tir.local_dags() {
-        for (key, field_semantics) in dag.semantic.type_defs.constrained_fields() {
+        for (key, field_semantics, bounds) in dag.semantic.type_defs.constrained_fields() {
             if !seen.insert(key) {
                 continue;
             }
-            let diagnostic_bound = first_constrained_field_bound(key, field_semantics, src)?;
+            let diagnostic_bound = bounds.first();
             let diagnostic_src = &diagnostic_bound.src;
             let diagnostic_span = diagnostic_bound.span;
             let (type_def, variant, field) =
@@ -1336,7 +1312,7 @@ fn check_field_domain_constraint_dimensions(
                 // Imported definitions already carry their canonical proof.
                 continue;
             };
-            for bound in field_semantics.domain_bounds() {
+            for bound in bounds {
                 let inferred = infer::hir::InferEnv {
                     dag: definition_dag,
                     tir,
