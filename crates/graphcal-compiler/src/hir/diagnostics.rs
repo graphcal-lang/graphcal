@@ -300,7 +300,7 @@ pub fn expr_lower_error_to_semantic(err: &ExprLowerError, src: SourceId) -> Sema
             src,
             *span,
             ModuleError::UnknownModule {
-                name: alias.to_string(),
+                name: alias.clone(),
             },
         ),
         ExprLowerError::ModuleResolve {

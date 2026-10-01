@@ -52,9 +52,7 @@ pub(super) fn module_resolve_compile_error(
         } => PipelineError::Semantic(SemanticError::located(
             src,
             span,
-            ModuleError::IncludeItemNotProjectable {
-                name: name.to_string(),
-            },
+            ModuleError::IncludeItemNotProjectable { name },
         )),
         graphcal_compiler::resolve::error::ModuleResolveError::ConstructorOwnerRebound {
             constructor,
@@ -65,8 +63,8 @@ pub(super) fn module_resolve_compile_error(
             src,
             span,
             ModuleError::IncludeConstructorOwnerRebound {
-                constructor: constructor.to_string(),
-                owner_type: owner_type.to_string(),
+                constructor,
+                owner_type,
             },
         )),
         graphcal_compiler::resolve::error::ModuleResolveError::DuplicateSymbol {

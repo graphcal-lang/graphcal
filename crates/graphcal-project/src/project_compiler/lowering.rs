@@ -205,13 +205,7 @@ fn remap_imported_dynamic_unit_error(
             is_imported_dynamic_unit_during_lowering(alias, name.leaf(), module_map, project)
         }) =>
         {
-            SemanticError::located(
-                src,
-                primary,
-                ModuleError::ImportRuntimeUnit {
-                    name: name.to_string(),
-                },
-            )
+            SemanticError::located(src, primary, ModuleError::ImportRuntimeUnit { name })
         }
         other => other,
     }
@@ -245,7 +239,7 @@ pub(super) fn validate_imported_runtime_units(
             src,
             span,
             ModuleError::ImportRuntimeUnit {
-                name: unit.to_string(),
+                name: unit.spelling().clone(),
             },
         )),
         None => Ok(()),

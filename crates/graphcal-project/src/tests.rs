@@ -1584,7 +1584,7 @@ fn selective_include_rejects_dag_blueprint_projection() {
     let error = compile_and_eval(source).unwrap_err();
     assert!(matches!(
         error,
-        CompileError::Eval(RenderedSemanticError { error: SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic { kind: SemanticErrorKind::Module(ModuleError::IncludeItemNotProjectable { name, .. }), .. }), .. }) if name == "child"
+        CompileError::Eval(RenderedSemanticError { error: SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic { kind: SemanticErrorKind::Module(ModuleError::IncludeItemNotProjectable { name, .. }), .. }), .. }) if name.as_str() == "child"
     ));
 }
 
@@ -1597,7 +1597,7 @@ fn selective_include_rejects_constructor_of_rebound_owner_type() {
     let error = compile_and_eval(source).unwrap_err();
     assert!(matches!(
         error,
-        CompileError::Eval(RenderedSemanticError { error: SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic { kind: SemanticErrorKind::Module(ModuleError::IncludeConstructorOwnerRebound { constructor, owner_type, .. }), .. }), .. }) if constructor == "Pick" && owner_type.ends_with("Choice")
+        CompileError::Eval(RenderedSemanticError { error: SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic { kind: SemanticErrorKind::Module(ModuleError::IncludeConstructorOwnerRebound { constructor, owner_type, .. }), .. }), .. }) if constructor.as_str() == "Pick" && owner_type.to_string().ends_with("Choice")
     ));
 }
 
@@ -4861,7 +4861,7 @@ fn project_module_includes_still_reject_duplicate_default_aliases() {
                 }),
             ..
         })) => {
-            assert_eq!(name, "shared");
+            assert_eq!(name.as_str(), "shared");
         }
         Err(CompileError::Eval(RenderedSemanticError {
             error:
@@ -8095,7 +8095,7 @@ fn absolute_inline_call_path_reports_imported_name_diagnostic() {
     let err = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap_err();
     assert!(matches!(
         err,
-        CompileError::Eval(RenderedSemanticError { error: SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic { kind: SemanticErrorKind::Module(ModuleError::UnknownModule { name, .. }), .. }), .. }) if name == "callable"
+        CompileError::Eval(RenderedSemanticError { error: SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic { kind: SemanticErrorKind::Module(ModuleError::UnknownModule { name, .. }), .. }), .. }) if name.as_str() == "callable"
     ));
 }
 

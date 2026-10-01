@@ -348,7 +348,7 @@ fn reject_runtime_unit_import(
             src,
             span,
             ModuleError::ImportRuntimeUnit {
-                name: name.to_string(),
+                name: graphcal_compiler::syntax::dimension::UnitRef::local(unit_name),
             },
         )));
     }
@@ -955,7 +955,7 @@ pub(super) fn process_file_include<'a>(
                 file_src,
                 include_decl.path.span(),
                 ModuleError::DuplicateModuleName {
-                    name: prefix.to_string(),
+                    name: prefix.clone(),
                     first: first.span(),
                 },
             )));
@@ -1205,7 +1205,7 @@ pub(super) fn process_inline_dag_include<'a>(
                 file_src,
                 include_decl.path.span(),
                 ModuleError::DuplicateModuleName {
-                    name: prefix.to_string(),
+                    name: prefix.clone(),
                     first: first.span(),
                 },
             )));
@@ -1605,7 +1605,7 @@ pub(super) fn process_pure_import<'a>(
                     file_src,
                     import_path.span(),
                     ModuleError::DuplicateModuleName {
-                        name: module_name.to_string(),
+                        name: module_name.clone(),
                         first: first.span(),
                     },
                 )));

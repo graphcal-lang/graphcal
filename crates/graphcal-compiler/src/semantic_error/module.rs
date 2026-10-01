@@ -10,9 +10,13 @@ use crate::dag_id::DagId;
 use crate::declaration_kind::DeclarationKind;
 use crate::diagnostic::{DiagnosticKind, SecondaryLabel};
 use crate::resolve::error::ModuleResolveError;
+use crate::resolved_name::ResolvedStructTypeName;
+use crate::syntax::dimension::UnitRef;
 use crate::syntax::import_category::{ImportItemCategoryMismatch, ImportItemNamespace};
+use crate::syntax::module_name::ModuleAliasName;
 use crate::syntax::names::NameAtom;
 use crate::syntax::span::Span;
+use crate::syntax::type_name::ConstructorName;
 
 /// Module diagnostics: imports, includes, module bindings, and DAG inputs.
 #[derive(Debug, Clone, Error)]
@@ -22,7 +26,7 @@ pub enum ModuleError {
     #[error("cannot `import` assertion `{name}` from a module blueprint")]
     ImportAssertionItem { name: String },
     #[error("cannot `import` runtime unit `{name}`")]
-    ImportRuntimeUnit { name: String },
+    ImportRuntimeUnit { name: UnitRef },
     #[error("cannot `import` required {kind} input `{name}`")]
     ImportRequiredStaticInput {
         kind: crate::static_interface::StaticInputKind,
@@ -43,13 +47,13 @@ pub enum ModuleError {
         target: String,
     },
     #[error("cannot project `{name}` from a configured DAG instance")]
-    IncludeItemNotProjectable { name: String },
+    IncludeItemNotProjectable { name: NameAtom },
     #[error(
         "cannot project constructor `{constructor}` because its owning type `{owner_type}` is rebound"
     )]
     IncludeConstructorOwnerRebound {
-        constructor: String,
-        owner_type: String,
+        constructor: ConstructorName,
+        owner_type: ResolvedStructTypeName,
     },
     #[error("selective include chooses {namespace} producer `{name}` more than once")]
     DuplicateIncludeSelection {
@@ -65,9 +69,9 @@ pub enum ModuleError {
         mismatch: ImportItemCategoryMismatch,
     },
     #[error("duplicate module name `{name}`")]
-    DuplicateModuleName { name: String, first: Span },
+    DuplicateModuleName { name: ModuleAliasName, first: Span },
     #[error("unknown module `{name}`")]
-    UnknownModule { name: String },
+    UnknownModule { name: ModuleAliasName },
     #[error("unknown param `{name}` in import binding for `{file_path}`")]
     UnknownParamBinding { name: String, file_path: String },
     #[error("binding target `{name}` is a {actual_kind}, not a param")]
