@@ -51,7 +51,7 @@ alternate = [
 [project.theme]
 custom_dir = "internals/docs-theme"
 language = "ja"
-logo = "/docs/assets/graphcal-wordmark-white-background.png"
+logo = "/docs/assets/graphcal-wordmark-transparent.png"
 features = [
   "announce.dismiss",
   "content.code.annotate",

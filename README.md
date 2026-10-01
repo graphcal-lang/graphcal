@@ -1,5 +1,8 @@
 <h1 align="center">
-  <img alt="Graphcal" src="docs/en/assets/graphcal-wordmark-white-background.png" width="400">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/en/assets/graphcal-wordmark-transparent-white-font.png">
+    <img alt="Graphcal" src="docs/en/assets/graphcal-wordmark-transparent.png" width="400">
+  </picture>
 </h1>
 
 > [!WARNING]
