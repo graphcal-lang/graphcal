@@ -16,7 +16,6 @@ mod dims;
 mod lower;
 mod manifest;
 mod parse;
-mod rational;
 
 /// Declare a graphcal plugin's exported functions.
 ///
@@ -223,6 +222,31 @@ mod tests {
             message.contains("shadows the prelude name"),
             "got: {message}"
         );
+    }
+
+    #[test]
+    fn exponents_outside_the_symmetric_manifest_range_are_rejected_at_expansion() {
+        // The host converts manifest exponents into the compiler's symmetric
+        // `i32` range, which excludes `i32::MIN`; the macro rejects it first.
+        let message = error_of(quote! {
+            fn f(x: Length^-2147483648) -> Dimensionless { x }
+        });
+        assert!(
+            message.contains("does not fit the manifest's i32 range"),
+            "got: {message}"
+        );
+        let message = error_of(quote! {
+            fn f(x: Length^(1/2147483648)) -> Dimensionless { x }
+        });
+        assert!(
+            message.contains("does not fit the manifest's i32 range"),
+            "got: {message}"
+        );
+        // The widest representable exponent still fits.
+        expand(quote! {
+            fn f(x: Length^-2147483647) -> Dimensionless { x }
+        })
+        .expect("the symmetric bound is representable");
     }
 
     #[test]

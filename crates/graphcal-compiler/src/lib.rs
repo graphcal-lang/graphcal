@@ -39,7 +39,10 @@ pub mod plot_props;
 pub mod plot_shape;
 pub mod plot_visibility;
 pub mod plugin_identity;
-pub mod ratio;
+pub mod ratio {
+    //! Reduced rational numbers, from the dependency-free `graphcal-ratio` crate.
+    pub use graphcal_ratio::*;
+}
 pub mod resolve;
 pub mod resolved_name;
 pub mod semantic;

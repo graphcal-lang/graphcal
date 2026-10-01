@@ -17,6 +17,7 @@ test-identities = []
 
 [dependencies]
 graphcal-ast-derive.workspace = true
+graphcal-ratio.workspace = true
 hifitime.workspace = true
 indexmap.workspace = true
 jiff = { workspace = true, features = ["tzdb-bundle-always"] }

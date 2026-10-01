@@ -1912,6 +1912,7 @@ name = "graphcal-compiler"
 version = "0.0.1-alpha.31"
 dependencies = [
  "graphcal-ast-derive",
+ "graphcal-ratio",
  "hifitime",
  "indexmap",
  "insta",
@@ -2047,6 +2048,7 @@ name = "graphcal-plugin-macros"
 version = "0.0.1-alpha.31"
 dependencies = [
  "graphcal-plugin-abi",
+ "graphcal-ratio",
  "proc-macro2",
  "quote",
  "syn 3.0.6",
@@ -2072,6 +2074,14 @@ dependencies = [
  "serde_json",
  "sha2",
  "tempfile",
+ "thiserror",
+]
+
+[[package]]
+name = "graphcal-ratio"
+version = "0.0.1-alpha.31"
+dependencies = [
+ "proptest",
  "thiserror",
 ]
 

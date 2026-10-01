@@ -242,27 +242,7 @@ role = "contracts"
 
 [[module]]
 package = "compiler"
-path = ["ratio", "sealed"]
-role = "contracts"
-
-[[module]]
-package = "compiler"
-path = ["ratio", "tests"]
-role = "contracts"
-
-[[module]]
-package = "compiler"
-path = ["ratio", "tests", "prop"]
-role = "contracts"
-
-[[module]]
-package = "compiler"
 path = ["exact_rational"]
-role = "contracts"
-
-[[module]]
-package = "compiler"
-path = ["exact_rational", "tests"]
 role = "contracts"
 
 [[module]]

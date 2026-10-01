@@ -35,6 +35,7 @@ graphcal-plugin-abi = { path = "crates/graphcal-plugin-abi", version = "0.0.1-al
 graphcal-plugin-host = { path = "crates/graphcal-plugin-host", version = "0.0.1-alpha.31" }
 graphcal-plugin-macros = { path = "crates/graphcal-plugin-macros", version = "0.0.1-alpha.31" }
 graphcal-project = { path = "crates/graphcal-project", version = "0.0.1-alpha.31" }
+graphcal-ratio = { path = "crates/graphcal-ratio", version = "0.0.1-alpha.31" }
 graphcal-report = { path = "crates/graphcal-report", version = "0.0.1-alpha.31" }
 graphcal-tenax = { path = "crates/graphcal-tenax", version = "0.0.1-alpha.31" }
 graphcal-test-support = { path = "crates/graphcal-test-support" }

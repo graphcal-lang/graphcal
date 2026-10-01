@@ -182,7 +182,10 @@ jobs:
         shard:
           - name: exact
             package: graphcal-compiler
-            files: -f crates/graphcal-compiler/src/exact_rational.rs -f crates/graphcal-compiler/src/dimension.rs -f crates/graphcal-compiler/src/nat.rs
+            files: -f crates/graphcal-compiler/src/dimension.rs -f crates/graphcal-compiler/src/nat.rs
+          - name: exact-power
+            package: graphcal-ratio
+            files: -f crates/graphcal-ratio/src/real_power.rs
           - name: package
             package: graphcal-package
             files: -f crates/graphcal-package/src/lib.rs
