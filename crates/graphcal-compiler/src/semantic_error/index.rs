@@ -8,7 +8,43 @@ use thiserror::Error;
 
 use crate::diagnostic::{DiagnosticKind, SecondaryLabel};
 use crate::semantic::checked_type::IndexDisplayName;
+use crate::syntax::ast::NatExpr;
 use crate::syntax::index_name::{IndexEntryKey, IndexName, IndexVariantName};
+use crate::syntax::names::NameAtom;
+
+/// A Nat written where an explicit Index is required.
+#[derive(Debug, Clone)]
+pub enum FoundNat {
+    /// A Nat expression, such as `3` or `N + 1`.
+    Expression(NatExpr),
+    /// A generic Nat parameter named where an Index parameter is required.
+    Parameter(NameAtom),
+}
+
+/// Two found Nats are equal when they are the same expression up to source
+/// layout, or name the same parameter.
+impl PartialEq for FoundNat {
+    fn eq(&self, other: &Self) -> bool {
+        use crate::syntax::format_equivalent::FormatEquivalent as _;
+        match (self, other) {
+            (Self::Expression(lhs), Self::Expression(rhs)) => lhs.format_equivalent(rhs),
+            (Self::Parameter(lhs), Self::Parameter(rhs)) => lhs == rhs,
+            (Self::Expression(_), Self::Parameter(_))
+            | (Self::Parameter(_), Self::Expression(_)) => false,
+        }
+    }
+}
+
+impl Eq for FoundNat {}
+
+impl std::fmt::Display for FoundNat {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Expression(expression) => expression.fmt(f),
+            Self::Parameter(name) => name.fmt(f),
+        }
+    }
+}
 
 /// Index diagnostics: unknown, missing, and mismatched index variants and bindings.
 #[derive(Debug, Clone, Error)]
@@ -50,7 +86,7 @@ pub enum IndexError {
         help: String,
     },
     #[error("expected Index, found Nat `{expression}`")]
-    ExpectedIndexFoundNat { expression: String },
+    ExpectedIndexFoundNat { expression: FoundNat },
     #[error(
         "index dimension mismatch: `{dep_index}` requires dimension {expected_dim} but `{bound_index}` has dimension {found_dim}"
     )]

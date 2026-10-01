@@ -5,7 +5,7 @@ use graphcal_eval::eval::runtime::{RootFailure, RootOutcome};
 use super::{
     Arc, CheckedType, CompileError, ConcreteIndexKind, DeclName, Error, HashSet, IndexVariantName,
     ModelSchemaGraph, ModelValueSchema, ParameterBindingRow, ParameterPosition, PreparedProject,
-    ResolvedDeclName, SemanticError, Span, TimeScale, Value, remap_include_debug_name,
+    ResolvedDeclName, Span, TimeScale, Value, remap_include_debug_name,
 };
 use graphcal_eval::runtime_value::IndexAxis;
 
@@ -313,8 +313,12 @@ impl PreparedProject {
                 &self.host_fns,
                 cancellation,
             )
-        })?;
-        if let Some(failure) = outcome.first_failure(self.plan(), self.source)? {
+        })
+        .map_err(|error| self.render(error))?;
+        if let Some(failure) = outcome
+            .first_failure(self.plan(), self.source)
+            .map_err(|error| self.render(error))?
+        {
             return Ok(ModelRowOutcome::Failure(self.row_failure(failure)));
         }
         self.project_model_outputs(model, outcome.values())
@@ -354,10 +358,9 @@ impl PreparedProject {
             .iter()
             .map(|output| {
                 let runtime = values.get(&output.runtime_key).ok_or_else(|| {
-                    ModelExecutionError::Internal(format!(
-                        "selected output `{}` has no runtime value",
-                        output.name
-                    ))
+                    ModelExecutionError::MissingOutputValue {
+                        name: output.name.clone(),
+                    }
                 })?;
                 graphcal_eval::eval::public_projection::project(
                     graphcal_eval::runtime_presentation::PresentedRef::plain(runtime),
@@ -365,7 +368,9 @@ impl PreparedProject {
                 )
                 .map(|(value, _)| value)
                 .map_err(|invariant| {
-                    ModelExecutionError::from(invariant.into_internal_error(self.source))
+                    ModelExecutionError::Compile(
+                        self.render(invariant.into_internal_error(self.source)),
+                    )
                 })
             })
             .collect()
@@ -384,10 +389,9 @@ impl PreparedProject {
                 .zip(&model.outputs)
                 .map(|(value, output)| match value {
                     Value::Bool(value) => Ok(value),
-                    _ => Err(ModelExecutionError::Internal(format!(
-                        "selected Tenax v2 output `{}` did not produce Bool",
-                        output.name
-                    ))),
+                    _ => Err(ModelExecutionError::NonBooleanOutput {
+                        name: output.name.clone(),
+                    }),
                 })
                 .collect::<Result<Vec<_>, _>>()
                 .map(TenaxV2RowOutcome::Success),
@@ -625,12 +629,18 @@ impl ModelRowFailure {
 pub enum ModelExecutionError {
     #[error(transparent)]
     Compile(#[from] CompileError),
-    #[error(transparent)]
-    Graphcal(#[from] SemanticError),
     #[error("model projection belongs to another prepared project")]
     PlanMismatch,
-    #[error("internal model projection invariant failed: {0}")]
-    Internal(String),
+    /// A selected output was planned but evaluation left no value for it.
+    #[error(
+        "internal model projection invariant failed: selected output `{name}` has no runtime value"
+    )]
+    MissingOutputValue { name: DeclName },
+    /// A checked Boolean output produced a non-Boolean value.
+    #[error(
+        "internal model projection invariant failed: selected Tenax v2 output `{name}` did not produce Bool"
+    )]
+    NonBooleanOutput { name: DeclName },
 }
 
 /// Why a Graphcal model cannot be projected into Tenax schema v2.
