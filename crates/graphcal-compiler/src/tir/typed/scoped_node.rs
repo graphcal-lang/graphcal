@@ -28,9 +28,9 @@ use crate::syntax::span::{Span, Spanned};
 use crate::syntax::type_name::FieldName;
 use crate::tir::texpr::operators::{BExpr, CExpr, DExpr, IExpr, LinearAlgebraCall, QExpr};
 use crate::tir::texpr::{
-    CallSlot, ConstructorApplication, DatetimeLiteral, StaticPosition, TConstRef, TConstruct,
-    TConstructorArm, TExpr, TExprKind, TExternArg, TFieldInit, TForBinding, TIndexArg, TKeyForm,
-    TLabelArm, TMapEntry, TMatchArms, TNodeRef, TParamBinding, visit_tnodes,
+    CallSlot, ConstructorApplication, DatetimeLiteral, MapLayout, StaticPosition, TConstRef,
+    TConstruct, TConstructorArm, TExpr, TExprKind, TExternArg, TFieldInit, TForBinding, TIndexArg,
+    TKeyForm, TLabelArm, TMapEntry, TMatchArms, TNodeRef, TParamBinding, visit_tnodes,
 };
 
 use super::body_scope::Scoped;
@@ -94,7 +94,7 @@ pub enum NodeKind<'t> {
     Construct(Scoped<'t, TConstruct>),
     Map {
         entries: Scoped<'t, [TMapEntry]>,
-        axes: &'t [IndexAxis],
+        layout: &'t MapLayout,
     },
     For {
         bindings: &'t NonEmpty<TForBinding>,
@@ -333,9 +333,9 @@ impl<'t> Scoped<'t, TExpr> {
                 field,
             },
             TExprKind::Construct(construct) => NodeKind::Construct(Scoped::new(scope, construct)),
-            TExprKind::Map { entries, axes } => NodeKind::Map {
+            TExprKind::Map { entries, layout } => NodeKind::Map {
                 entries: Scoped::new(scope, entries.as_slice()),
-                axes,
+                layout,
             },
             TExprKind::For { bindings, body } => NodeKind::For {
                 bindings,

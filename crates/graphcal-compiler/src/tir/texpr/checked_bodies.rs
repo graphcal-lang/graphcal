@@ -15,12 +15,13 @@ use indexmap::IndexMap;
 use thiserror::Error;
 
 use crate::expression_id::ExprId;
-use crate::hir::expr::Expr;
+use crate::hir::expr::{Expr, MapEntryKey};
 use crate::semantic::checked_type::{CheckedType, Concrete, IndexTypeRef, Symbolic};
 use crate::semantic::index_axis::IndexAxis;
 use crate::semantic::index_def::IndexCardinality;
 use crate::semantic::key_value::KeyValue;
 use crate::syntax::index_name::IndexEntryKey;
+use crate::syntax::non_empty::NonEmpty;
 use crate::syntax::span::Span;
 use crate::tir::static_index::{
     AxisDefinition, Readiness, StaticIndexError, UnavailableIndex, check_static_position,
@@ -29,6 +30,7 @@ use crate::tir::static_index::{
 use super::assembly::PendingNodes;
 use super::call_targets::{CallSlot, CallTargets};
 use super::map::{KeyEntry, TypeMap};
+use super::map_layout::MapLayout;
 use super::model::{StaticPosition, TArg, TBody, TContextual, TExpr, TNodeRef};
 use super::nominal::NominalObservation;
 use super::nominal::{ConstructorApplication, ConstructorMatch};
@@ -56,6 +58,11 @@ pub enum DischargeError {
     #[error("a constant key at {span:?} names no entry of its axis `{axis}`")]
     KeyOutsideAxis {
         axis: Box<IndexTypeRef<Concrete>>,
+        span: Span,
+    },
+    #[error("the map literal at {span:?} cannot be placed on its axes: {error}")]
+    MapLayout {
+        error: super::map_layout::MapLayoutError,
         span: Span,
     },
 }
@@ -231,6 +238,21 @@ impl TypeMap<Symbolic, Concrete> for ToConcrete<'_, '_> {
         span: Span,
     ) -> Result<IndexAxis, NotConcrete> {
         self.concrete_axis(index, span)
+    }
+
+    fn map_layout(
+        &mut self,
+        (): &(),
+        indexes: &[Option<&IndexTypeRef<Concrete>>],
+        entries: &[&NonEmpty<MapEntryKey>],
+        span: Span,
+    ) -> Result<MapLayout, NotConcrete> {
+        let axes = indexes
+            .iter()
+            .map(|index| self.concrete_axis(*index, span))
+            .collect::<Result<Vec<_>, _>>()?;
+        MapLayout::try_new(axes, entries)
+            .map_err(|error| NotConcrete::Discharge(DischargeError::MapLayout { error, span }))
     }
 
     fn key(

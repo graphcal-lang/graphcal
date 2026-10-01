@@ -312,9 +312,7 @@ impl PendingNodes {
                 .map_err(|_| AssemblyError::ConstructorFields(id()))?,
             ),
             ExprKind::MapLiteral { entries } => TExprKind::Map {
-                axes: entries
-                    .first()
-                    .map_or_else(Vec::new, |entry| vec![(); entry.keys.len()]),
+                layout: (),
                 entries: entries
                     .iter()
                     .map(|entry| {

@@ -10,11 +10,14 @@
 use std::borrow::Cow;
 
 use super::call_targets::{CallSlot, CallTargets};
+use super::map_layout::MapLayout;
 use super::nominal::{ConstructorApplication, ConstructorMatch};
+use crate::hir::expr::MapEntryKey;
 use crate::semantic::checked_type::{CheckedType, Concrete, Concreteness, IndexTypeRef, Symbolic};
 use crate::semantic::index_axis::IndexAxis;
 use crate::semantic::key_value::KeyValue;
 use crate::syntax::index_name::IndexVariantName;
+use crate::syntax::non_empty::NonEmpty;
 use crate::syntax::span::{Span, Spanned};
 
 use super::model::{
@@ -68,6 +71,17 @@ pub trait TypeMap<V: Concreteness, W: Concreteness> {
         index: Option<&IndexTypeRef<W>>,
         span: Span,
     ) -> Result<W::Discharged<IndexAxis>, Self::Error>;
+
+    /// The placement of a map literal's entries, whose keys are `entries`, on
+    /// the axes `indexes` its mapped type names, outermost first (`None` where
+    /// that type has no axis), given the placement it carried.
+    fn map_layout(
+        &mut self,
+        carried: &V::Discharged<MapLayout>,
+        indexes: &[Option<&IndexTypeRef<W>>],
+        entries: &[&NonEmpty<MapEntryKey>],
+        span: Span,
+    ) -> Result<W::Discharged<MapLayout>, Self::Error>;
 
     /// The constant key naming `entry` of the axis `index` a node carries,
     /// given the key it carried.
@@ -128,6 +142,16 @@ impl<V: Concreteness> TypeMap<V, V> for Rehome<'_> {
         _index: Option<&IndexTypeRef<V>>,
         _span: Span,
     ) -> Result<V::Discharged<IndexAxis>, Self::Error> {
+        Ok(carried.clone())
+    }
+
+    fn map_layout(
+        &mut self,
+        carried: &V::Discharged<MapLayout>,
+        _indexes: &[Option<&IndexTypeRef<V>>],
+        _entries: &[&NonEmpty<MapEntryKey>],
+        _span: Span,
+    ) -> Result<V::Discharged<MapLayout>, Self::Error> {
         Ok(carried.clone())
     }
 
@@ -400,12 +424,13 @@ impl<V: Concreteness> TExpr<V> {
             TExprKind::Construct(construct) => {
                 TExprKind::Construct(construct.map_types(ty, span, map)?)
             }
-            TExprKind::Map { entries, axes } => {
-                let axes = axes
-                    .iter()
-                    .enumerate()
-                    .map(|(depth, axis)| map.axis(axis, nested_index(ty, depth), span))
-                    .collect::<Result<_, M::Error>>()?;
+            TExprKind::Map { entries, layout } => {
+                let keys = entries.iter().map(|entry| &entry.keys).collect::<Vec<_>>();
+                let arity = keys.first().map_or(0, |keys| keys.len());
+                let indexes = (0..arity)
+                    .map(|depth| nested_index(ty, depth))
+                    .collect::<Vec<_>>();
+                let layout = map.map_layout(layout, &indexes, &keys, span)?;
                 TExprKind::Map {
                     entries: entries
                         .iter()
@@ -416,7 +441,7 @@ impl<V: Concreteness> TExpr<V> {
                             })
                         })
                         .collect::<Result<_, M::Error>>()?,
-                    axes,
+                    layout,
                 }
             }
             TExprKind::For { bindings, body } => {

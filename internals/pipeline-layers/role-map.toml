@@ -1583,6 +1583,16 @@ role = "contracts"
 
 [[module]]
 package = "compiler"
+path = ["tir", "texpr", "map_layout"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["tir", "texpr", "map_layout", "tests"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
 path = ["tir", "dim_check", "builtins"]
 role = "checking"
 

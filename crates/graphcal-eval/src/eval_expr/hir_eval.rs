@@ -15,7 +15,6 @@ use graphcal_compiler::tir::typed::evaluation_unit::{BodyKind, ScopedTree};
 use graphcal_compiler::tir::typed::scoped_node::{
     ConstRef, NodeKind, ScopedCall, ScopedIndexArg, ScopedMatchArms, ScopedNode, ScopedScan,
 };
-use indexmap::IndexMap;
 
 use crate::invariant::{Failure, Invariant};
 use crate::presentation_evidence::{PendingLeaf, PendingQuantityDisplay};
@@ -26,6 +25,7 @@ use super::context::EvalSession;
 use super::operations::read_shape;
 use super::unit_scale::{checked_unit_scaled_value, resolve_unit_scale};
 use crate::constant_pools::RuntimeValueMap;
+use graphcal_compiler::tir::texpr::MapLayout;
 
 pub type HirLocalValueMap<'a> = graphcal_compiler::hir::expr::LocalEnv<'a, EvaluatedRuntimeValue>;
 
@@ -317,24 +317,15 @@ fn eval_texpr_inner(
         NodeKind::Construct(construct) => {
             eval_constructor_call(construct, values, presentation_values, local_values, ctx)
         }
-        NodeKind::Map { entries, axes } => {
-            let entries = entries
-                .iter()
-                .map(|entry| {
-                    let (first, rest) = entry.get().keys.split_first();
-                    (first, rest, entry.map(|entry| &entry.value))
-                })
-                .collect::<Vec<_>>();
-            eval_map_literal(
-                axes,
-                span,
-                &entries,
-                values,
-                presentation_values,
-                local_values,
-                ctx,
-            )
-        }
+        NodeKind::Map { entries, layout } => eval_map_literal(
+            entries,
+            layout,
+            span,
+            values,
+            presentation_values,
+            local_values,
+            ctx,
+        ),
         NodeKind::For { bindings, body } => {
             let (first, remaining) = bindings.split_first();
             eval_for_comp_bindings(
@@ -739,127 +730,58 @@ fn eval_constructor_call(
         .map(EvaluatedRuntimeValue::from_struct)
 }
 
-fn ensure_index_ref_matches_resolved(
-    actual: &IndexTypeRef,
-    expected: &graphcal_compiler::resolved_name::ResolvedIndexName,
-    span: Span,
-    ctx: &EvalSession<'_>,
-) -> Result<(), SemanticError> {
-    if index_ref_matches_resolved(actual, expected) {
-        return Ok(());
-    }
-    Err(ctx.eval_error(
-        format!(
-            "index argument belongs to `{}`, but value is indexed by `{}`",
-            expected.as_str(),
-            actual
-        ),
-        span,
-    ))
-}
-
-fn map_entry_variant_for_axis(
-    key: &graphcal_compiler::hir::expr::MapEntryKey,
-    axis: &IndexTypeRef,
-    ctx: &EvalSession<'_>,
-) -> Result<IndexEntryKey, SemanticError> {
-    match key {
-        graphcal_compiler::hir::expr::MapEntryKey::IndexVariant(variant) => {
-            ensure_index_ref_matches_resolved(
-                axis,
-                variant.variant.index(),
-                variant.variant_span,
-                ctx,
-            )?;
-            Ok(IndexEntryKey::named(variant.variant.variant().clone()))
-        }
-        graphcal_compiler::hir::expr::MapEntryKey::FinitePosition { position, .. } => {
-            Ok(IndexEntryKey::position(position.value))
-        }
-    }
-}
-
-/// One map-literal entry still to place: its key on the current axis, its
-/// keys on the remaining axes, and its value.
-type MapLiteralEntry<'a> = (
-    &'a graphcal_compiler::hir::expr::MapEntryKey,
-    &'a [graphcal_compiler::hir::expr::MapEntryKey],
-    ScopedNode<'a>,
-);
-
+/// Evaluate a map literal: each entry in its layout's evaluation order,
+/// placed at its cell.
 fn eval_map_literal(
-    axes: &[IndexAxis],
-    map_span: Span,
-    entries: &[MapLiteralEntry<'_>],
+    entries: Scoped<'_, [graphcal_compiler::tir::texpr::TMapEntry]>,
+    layout: &MapLayout,
+    span: Span,
     values: &RuntimeValueMap,
     presentation_values: Option<&PendingPresentedMap>,
     local_values: &HirLocalValueMap<'_>,
     ctx: &EvalSession<'_>,
 ) -> Result<EvaluatedRuntimeValue, Outcome<SemanticError>> {
-    let Some((outer, inner)) = axes.split_first() else {
-        return Err(ctx
-            .internal_error("map literal selects on no axis", map_span)
-            .into());
-    };
-    let idx_name = outer.index();
-    if inner.is_empty() {
-        let mut evaluated = IndexMap::new();
-        for (key, _, value) in entries {
-            let variant = map_entry_variant_for_axis(key, idx_name, ctx)?;
-            let value =
-                eval_texpr_evaluated(*value, values, presentation_values, local_values, ctx)?;
-            evaluated.insert(variant, value);
-        }
-        let result = IndexedValue::try_from_axis(outer.clone(), |key| {
-            let variant = key.entry_key();
-            let evaluated = evaluated.swap_remove(variant).ok_or_else(|| {
-                ctx.internal_error(
-                    format!(
-                        "map literal for index `{idx_name}` is missing entry for variant `{variant}`"
-                    ),
-                    map_span,
-                )
-            })?;
-            Ok::<_, SemanticError>(evaluated)
-        })?;
-        return Ok(EvaluatedRuntimeValue::from_indexed(result));
-    }
-
-    let nested =
-        IndexedValue::try_from_axis(outer.clone(), |key| -> Result<_, Outcome<SemanticError>> {
-            let variant = key.entry_key();
-            let mut sub_entries = Vec::new();
-            for (first_entry_key, rest, value) in entries {
-                if map_entry_variant_for_axis(first_entry_key, idx_name, ctx)? != *variant {
-                    continue;
-                }
-                let Some((next_key, rest)) = rest.split_first() else {
-                    return Err(ctx
-                        .internal_error("multi-axis map literal entry lost all keys", value.span())
-                        .into());
-                };
-                sub_entries.push((next_key, rest, *value));
-            }
-            if sub_entries.is_empty() {
-                return Err(ctx.internal_error(
-                format!(
-                    "map literal for index `{idx_name}` is missing entries for variant `{variant}`"
-                ),
-                map_span,
-            )
-            .into());
-            }
-            eval_map_literal(
-                inner,
-                map_span,
-                &sub_entries,
+    let mut cells = std::iter::repeat_with(|| None)
+        .take(layout.cells())
+        .collect::<Vec<_>>();
+    for placement in layout.placements() {
+        let entry = entries
+            .nth(placement.entry)
+            .map(|entry| entry.map(|entry| &entry.value));
+        if let Some(entry) = entry {
+            cells[placement.cell] = Some(eval_texpr_evaluated(
+                entry,
                 values,
                 presentation_values,
                 local_values,
                 ctx,
-            )
-        })?;
-    Ok(EvaluatedRuntimeValue::from_indexed(nested))
+            )?);
+        }
+    }
+    // The layout fills every cell, row-major, exactly once.
+    let mut cells = cells.into_iter();
+    let (outer, inner) = layout.axes().split_first();
+    nest_cells(outer, inner, &mut cells)
+        .ok_or_else(|| type_invariant("a map literal left a cell unfilled", span, ctx))
+        .map_err(Outcome::Failed)
+}
+
+/// The nested indexed value over `axis` and `inner` whose leaves are the next
+/// row-major `cells`; `None` when a cell is unfilled.
+fn nest_cells(
+    axis: &IndexAxis,
+    inner: &[IndexAxis],
+    cells: &mut impl Iterator<Item = Option<EvaluatedRuntimeValue>>,
+) -> Option<EvaluatedRuntimeValue> {
+    IndexedValue::try_from_axis(axis.clone(), |_| {
+        match inner.split_first() {
+            None => cells.next().flatten(),
+            Some((next, rest)) => nest_cells(next, rest, cells),
+        }
+        .ok_or(())
+    })
+    .ok()
+    .map(EvaluatedRuntimeValue::from_indexed)
 }
 
 /// Evaluate a comprehension over `binding`'s axis and, inside each of its

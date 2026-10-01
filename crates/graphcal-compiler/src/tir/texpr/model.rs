@@ -265,11 +265,11 @@ pub enum TExprKind<V: Concreteness = Concrete> {
     },
     /// A constructor call with its checked nominal application.
     Construct(TConstruct<V>),
-    /// A map literal; `axes` are the axes its entry keys select on, outermost
-    /// first.
+    /// A map literal, with the placement of its entries on the axes their
+    /// keys select on.
     Map {
         entries: Vec<TMapEntry<V>>,
-        axes: Vec<V::Discharged<IndexAxis>>,
+        layout: V::Discharged<super::map_layout::MapLayout>,
     },
     For {
         bindings: NonEmpty<TForBinding<V>>,

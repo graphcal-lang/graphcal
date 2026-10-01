@@ -177,6 +177,16 @@ impl<V: SymbolicView> TypeMap<V, Symbolic> for Specializer<'_> {
         Ok(())
     }
 
+    fn map_layout(
+        &mut self,
+        _carried: &V::Discharged<crate::tir::texpr::MapLayout>,
+        _indexes: &[Option<&IndexTypeRef<Symbolic>>],
+        _entries: &[&crate::syntax::non_empty::NonEmpty<crate::hir::expr::MapEntryKey>],
+        _span: Span,
+    ) -> Result<(), SemanticError> {
+        Ok(())
+    }
+
     fn key(
         &mut self,
         _carried: &V::Discharged<KeyValue>,
@@ -364,9 +374,8 @@ pub(super) fn specialize_bound_body(
             error @ (crate::tir::texpr::DischargeError::UnavailableIndex(_)
             | crate::tir::texpr::DischargeError::AxisShape(_)
             | crate::tir::texpr::DischargeError::NonFiniteAxis(_)
-            | crate::tir::texpr::DischargeError::KeyOutsideAxis { .. }) => {
-                diagnostic(error.to_string())
-            }
+            | crate::tir::texpr::DischargeError::KeyOutsideAxis { .. }
+            | crate::tir::texpr::DischargeError::MapLayout { .. }) => diagnostic(error.to_string()),
         },
     )?;
     match checked {
