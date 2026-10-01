@@ -88,3 +88,19 @@ fn diagnostic_codes_are_unique_and_reassignments_are_pinned() {
         assert_eq!(catalog.get(variant).map(String::as_str), Some(expected));
     }
 }
+
+#[test]
+fn found_nats_render_their_spelling_and_compare_by_expression() {
+    use super::index::FoundNat;
+    use crate::syntax::ast::NatExpr;
+    use crate::syntax::names::NameAtom;
+    use crate::syntax::span::Span;
+
+    let three = FoundNat::Expression(NatExpr::Literal(3, Span::new(0, 1)));
+    let moved_three = FoundNat::Expression(NatExpr::Literal(3, Span::new(7, 1)));
+    let parameter = FoundNat::Parameter(NameAtom::parse("N").unwrap());
+    assert_eq!(three.to_string(), "3");
+    assert_eq!(parameter.to_string(), "N");
+    assert_eq!(three, moved_three);
+    assert_ne!(three, parameter);
+}
