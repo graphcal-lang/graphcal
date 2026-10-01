@@ -312,8 +312,13 @@ impl<V: Concreteness> TExpr<V> {
             TExprKind::LinearAlgebra(call) => {
                 TExprKind::LinearAlgebra(call.try_map(|operand| operand.boxed(map))?)
             }
-            TExprKind::Extern { function, args } => TExprKind::Extern {
+            TExprKind::Extern {
+                function,
+                args,
+                result,
+            } => TExprKind::Extern {
                 function: function.clone(),
+                result: result.clone(),
                 args: args
                     .iter()
                     .map(|arg| {

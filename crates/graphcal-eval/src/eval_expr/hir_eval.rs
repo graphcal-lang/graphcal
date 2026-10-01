@@ -263,9 +263,11 @@ fn eval_texpr_inner(
                 .map_err(|outcome| ctx.outcome_error(outcome, span))
                 .map(plain)
         }
-        NodeKind::Extern { function, args } => {
-            eval_extern_fn(span, function, args, values, local_values, ctx).map(plain)
-        }
+        NodeKind::Extern {
+            function,
+            args,
+            result,
+        } => eval_extern_fn(span, function, args, result, values, local_values, ctx).map(plain),
         NodeKind::If {
             condition,
             then_branch,
@@ -677,6 +679,9 @@ fn eval_extern_fn(
     span: Span,
     ext: &graphcal_compiler::hir::expr::ExternFnRef,
     args: Scoped<'_, [TExternArg]>,
+    result: &graphcal_compiler::function_signature::ResultKind<
+        graphcal_compiler::extern_struct_result::ExternStructResult,
+    >,
     values: &RuntimeValueMap,
     local_values: &HirLocalValueMap<'_>,
     ctx: &EvalSession<'_>,
@@ -700,19 +705,13 @@ fn eval_extern_fn(
             span,
         ));
     };
-    let Some(function) = ctx.tir.extern_functions().get(&key) else {
-        return Err(ctx.internal_error(
-            format!("extern function `{ext}` has no resolved signature after dimension checking"),
-            span,
-        ));
-    };
     let invariant =
         |invariant, span| ctx.internal_error(format!("extern function `{ext}`: {invariant}"), span);
 
     let evaluate = |node| eval_value(node, values, local_values, ctx);
     let operands = super::operations::Operands::new(&evaluate, ctx);
     let arguments = HostArguments::encode(
-        &function.signature,
+        result,
         args.iter().map(|arg| (&arg.get().kind, argument_node(arg))),
         &operands,
     )

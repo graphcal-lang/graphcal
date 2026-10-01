@@ -65,6 +65,9 @@ pub enum NodeKind<'t> {
     Extern {
         function: &'t ExternFnRef,
         args: Scoped<'t, [TExternArg]>,
+        result: &'t crate::function_signature::ResultKind<
+            crate::extern_struct_result::ExternStructResult,
+        >,
     },
     If {
         condition: ScopedNode<'t>,
@@ -267,8 +270,13 @@ impl<'t> Scoped<'t, TExpr> {
                 let Ok(call) = call.try_map(operand);
                 NodeKind::LinearAlgebra(call)
             }
-            TExprKind::Extern { function, args } => NodeKind::Extern {
+            TExprKind::Extern {
                 function,
+                args,
+                result,
+            } => NodeKind::Extern {
+                function,
+                result,
                 args: Scoped::new(scope, args.as_slice()),
             },
             TExprKind::If {

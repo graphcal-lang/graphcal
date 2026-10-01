@@ -25,6 +25,7 @@ use crate::syntax::span::Spanned;
 use crate::tir::static_index::StaticIndexRequirement;
 
 use super::call_targets::CallTargets;
+use super::model::ExternSignature;
 use super::model::{
     ContextualLiteral, CoordinateSearch, DatetimeLiteral, ExternArgKind, StaticPosition, TArg,
     TConstRef, TConstructorArm, TContextual, TExpr, TExprKind, TExternArg, TFieldInit, TIndexArg,
@@ -36,7 +37,6 @@ use super::operators::{
     OrderedOperands, OrderingOp, QExpr, ScaleOp, ShiftOp,
 };
 use crate::builtin::{BuiltinFn, ComplexFn, ConversionFn, DatetimeConstructorFn, DatetimeFn};
-use crate::function_signature::FunctionParam;
 use crate::hir::expr::FunctionRef;
 
 /// Why a checked node could not be assembled into a typed tree.
@@ -65,8 +65,8 @@ pub enum AssemblyError {
 /// The node-specific facts checking established for one value expression.
 pub struct NodeFacts<'a> {
     pub constructor: Option<&'a ConstructorApplication<Symbolic>>,
-    /// The declared parameters of the plugin function a call node calls.
-    pub extern_params: Option<&'a [FunctionParam]>,
+    /// The declared signature of the plugin function a call node calls.
+    pub extern_signature: Option<&'a ExternSignature>,
     pub constructor_matches: &'a HashMap<ResolvedConstructorName, ConstructorMatch>,
     pub static_indexes: &'a [StaticIndexRequirement],
 }
@@ -256,7 +256,7 @@ impl PendingNodes {
                 args.iter()
                     .map(|arg| self.take_arg(expr, arg))
                     .collect::<Result<_, _>>()?,
-                facts.extern_params,
+                facts.extern_signature,
             )
             .ok_or_else(|| AssemblyError::UncheckedOperands(id()))?,
             ExprKind::If {
@@ -621,11 +621,12 @@ fn unary(op: UnaryOp, operand: Box<TExpr<Symbolic>>) -> Option<TExprKind<Symboli
 fn call(
     callee: &FunctionRef,
     args: Vec<TArg<Symbolic>>,
-    extern_params: Option<&[FunctionParam]>,
+    extern_signature: Option<&ExternSignature>,
 ) -> Option<TExprKind<Symbolic>> {
     let function = match callee {
         FunctionRef::External(function) => {
-            let params = extern_params?;
+            let signature = extern_signature?;
+            let params = signature.params();
             let args = values(args)?;
             if args.len() != params.len() {
                 return None;
@@ -640,6 +641,7 @@ fn call(
                         value: *arg,
                     })
                     .collect(),
+                result: signature.result().clone(),
             });
         }
         FunctionRef::Epoch { scale } => {
@@ -1282,9 +1284,7 @@ mod tests {
 
     #[test]
     fn extern_calls_pair_each_argument_with_its_declared_parameter() {
-        use crate::function_signature::{
-            DimMonomial, FunctionParam, FunctionSignature, ParamKind, ScalarValueKind,
-        };
+        use crate::function_signature::{DimMonomial, FunctionParam, ParamKind, ScalarValueKind};
         use crate::syntax::function_name::{FnName, FnParamName};
         use crate::syntax::index_name::IndexVarName;
         use crate::syntax::non_empty::NonEmpty;
@@ -1294,7 +1294,7 @@ mod tests {
             name: FnParamName::expect_valid(name),
             kind,
         };
-        let signature = FunctionSignature::try_new(
+        let signature = ExternSignature::try_from_parts(
             Vec::new(),
             vec![index.clone()],
             vec![
@@ -1330,11 +1330,15 @@ mod tests {
                 .collect::<Vec<_>>()
         };
 
-        let Some(TExprKind::Extern { args: built, .. }) =
-            call(&callee, args(4), Some(signature.params()))
+        let Some(TExprKind::Extern {
+            args: built,
+            result,
+            ..
+        }) = call(&callee, args(4), Some(&signature))
         else {
             panic!("a checked extern call builds its node");
         };
+        assert_eq!(&result, signature.result());
         let kinds = built.iter().map(|arg| &arg.kind).collect::<Vec<_>>();
         assert!(matches!(
             kinds.as_slice(),
@@ -1360,10 +1364,10 @@ mod tests {
         // Without its declared parameters, with another argument count, or
         // with a contextual argument, the call is not a checked extern call.
         assert!(call(&callee, args(4), None).is_none());
-        assert!(call(&callee, args(3), Some(signature.params())).is_none());
+        assert!(call(&callee, args(3), Some(&signature)).is_none());
         let mut contextual_args = args(3);
         contextual_args.push(contextual(ContextualLiteral::String("x".to_owned())));
-        assert!(call(&callee, contextual_args, Some(signature.params())).is_none());
+        assert!(call(&callee, contextual_args, Some(&signature)).is_none());
     }
 
     #[test]
