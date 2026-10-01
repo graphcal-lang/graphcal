@@ -167,10 +167,9 @@ fn root_domain_constraints(plan: &ExecPlan<'_>) -> HashMap<ScopedName, ResolvedD
     plan.root()
         .scope()
         .dag()
-        .decls()
-        .iter()
+        .declarations()
         .filter_map(|entry| {
-            plan.domain_constraint(&entry.identity())
+            plan.domain_constraint(entry.identity())
                 .map(|constraint| (ScopedName::local(entry.name().clone()), constraint.clone()))
         })
         .collect()

@@ -685,6 +685,7 @@ pub struct DiagnosticDeclProbe {
 }
 
 impl DiagnosticDeclProbe {
+    #[cfg(any(test, feature = "test-identities"))]
     pub(super) const fn new(dag_id: crate::dag_id::DagId, name: ScopedName) -> Self {
         Self { dag_id, name }
     }

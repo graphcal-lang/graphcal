@@ -2543,7 +2543,7 @@ pub fn enrich_from_tir(table: &mut SymbolTable, tir: &CheckedTir, dag_id: &DagId
         // Enrich param/node/const declarations with resolved types + constraints.
         for (identity, annotation) in dag.value_decl_types() {
             let resolved_type = annotation.checked().resolved();
-            let type_desc = dag.semantic().domain_bounds.get(&identity);
+            let type_desc = dag.domain_bounds(&identity);
             let key = SymbolKey::Declaration(identity);
             if let Some(def) = table.definitions.get_mut(&key) {
                 let type_desc = type_desc.map_or_else(

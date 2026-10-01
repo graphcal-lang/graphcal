@@ -35,6 +35,7 @@ pub mod checked_dag;
 pub use checked_dag::*;
 pub mod dag_position;
 pub mod dag_store;
+pub mod declaration_view;
 pub use dag_store::*;
 pub mod freeze;
 pub use freeze::*;
@@ -71,10 +72,12 @@ impl DagTIR {
         );
     }
 
-    /// Look up the canonical identity recorded for a source-facing name.
+    /// Look up the canonical identity recorded for a source-facing name, for
+    /// tests that name a declaration by its spelling.
     ///
     /// Unknown names remain [`DiagnosticDeclProbe`] values rather than being
     /// assigned an authoritative-looking identity from this DAG's owner.
+    #[cfg(any(test, feature = "test-identities"))]
     #[must_use]
     pub fn lookup_decl_identity(&self, name: &ScopedName) -> DeclarationIdentityLookup {
         self.semantic.decl_bindings.get(name).map_or_else(
@@ -92,24 +95,6 @@ impl DagTIR {
     #[must_use]
     pub fn bound_decl_identity(&self, name: &ScopedName) -> Option<&ResolvedDeclName> {
         self.semantic.decl_bindings.get(name)
-    }
-
-    /// Require an authoritative declaration identity for an invariant-backed
-    /// compiler or evaluator operation.
-    ///
-    /// # Errors
-    ///
-    /// Returns an internal error instead of converting an unknown diagnostic
-    /// probe into a semantic identity.
-    pub fn require_bound_decl_identity(
-        &self,
-        name: &ScopedName,
-        src: &NamedSource<Arc<String>>,
-        anchor: DiagnosticAnchor,
-    ) -> Result<ResolvedDeclName, GraphcalError> {
-        self.lookup_decl_identity(name)
-            .into_bound()
-            .map_err(|probe| GraphcalError::internal_error(probe.to_string(), src, anchor))
     }
 }
 

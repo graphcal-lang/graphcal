@@ -217,8 +217,7 @@ impl PreparedProject {
                 let actual_kind = self
                     .tir()
                     .root()
-                    .decls()
-                    .iter()
+                    .declarations()
                     .find_map(|entry| (entry.name() == name).then_some(entry.category()));
                 return Err(actual_kind.map_or_else(
                     || ModelDefinitionError::UnknownOutput { name: name.clone() },

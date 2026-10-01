@@ -1,5 +1,6 @@
 //! Domain-bound resolution and compile-time constraint validation.
 
+use graphcal_compiler::declaration_category::ValueDeclCategory;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
@@ -45,35 +46,29 @@ pub(super) fn resolve_domain_constraints_for_dag(
     let ctx = EvalSession::provisional_constants(tir, src, cancellation.clone())
         .with_roots(&visible_const_values, None);
     let mut constraints = HashMap::new();
-    let decl_iter = dag
-        .consts()
-        .map(|entry| {
-            (
-                entry.name(),
-                entry.identity(),
-                &entry.type_ann,
-                entry.span,
-                true,
-            )
+    // Constants first, then parameters, then nodes, each in source order.
+    let decl_iter = [
+        ValueDeclCategory::Const,
+        ValueDeclCategory::Param,
+        ValueDeclCategory::Node,
+    ]
+    .into_iter()
+    .flat_map(|category| {
+        dag.declarations().filter_map(move |entry| {
+            entry
+                .value()
+                .filter(|value| value.category == category)
+                .map(|value| {
+                    (
+                        entry.name(),
+                        entry.identity().clone(),
+                        value.annotation,
+                        value.span,
+                        category == ValueDeclCategory::Const,
+                    )
+                })
         })
-        .chain(dag.params().map(|entry| {
-            (
-                entry.name(),
-                entry.identity(),
-                &entry.type_ann,
-                entry.span,
-                false,
-            )
-        }))
-        .chain(dag.nodes().map(|entry| {
-            (
-                entry.name(),
-                entry.identity(),
-                &entry.type_ann,
-                entry.span,
-                false,
-            )
-        }));
+    });
 
     for (name, resolved_key, annotation, decl_span, is_const) in decl_iter {
         cancellation.checkpoint()?;
@@ -549,7 +544,7 @@ fn collect_field_constraint_applications(
                 generic_args,
             });
         }
-        for (identity, type_def) in &dag.semantic().type_defs.struct_types {
+        for (identity, type_def) in dag.struct_type_defs() {
             if type_def.generic_params().is_empty() {
                 applications.insert(ConcreteNominalApplication {
                     identity: StructTypeRef::from_resolved(identity.clone()),
@@ -627,20 +622,26 @@ pub(super) fn check_dag_const_struct_field_constraints_at_compile_time(
     field_constraints: &HashMap<StructFieldConstraintKey, ResolvedDomainConstraint>,
     src: &NamedSource<Arc<String>>,
 ) -> Result<(), GraphcalError> {
-    for entry in dag.consts() {
-        let key = entry.identity();
+    for (entry, declared) in dag.declarations().filter_map(|entry| {
+        entry
+            .value()
+            .filter(|value| value.category == ValueDeclCategory::Const)
+            .map(|declared| (entry, declared))
+    }) {
+        let key = entry.identity().clone();
         let value = const_values.get(&key).ok_or_else(|| {
             GraphcalError::internal_error(
                 format!("checked constant `{key}` has no evaluated value"),
                 src,
-                DiagnosticAnchor::Source(entry.span),
+                DiagnosticAnchor::Source(declared.span),
             )
         })?;
-        let owning_type = struct_type_ref_from_resolved_type(entry.type_ann.checked().resolved());
+        let owning_type =
+            struct_type_ref_from_resolved_type(declared.annotation.checked().resolved());
         check_const_struct_field_constraints(
             value,
             entry.name().as_str(),
-            entry.span,
+            declared.span,
             owning_type.as_ref(),
             field_constraints,
             src,

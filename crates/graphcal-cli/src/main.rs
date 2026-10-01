@@ -889,9 +889,18 @@ fn run_check(paths: &[PathBuf], project_root: Option<&Path>, deny_todo: bool) {
                     .dag_registry()
                     .values()
                     .filter(|dag| !dag.is_semantic_instance())
-                    .flat_map(graphcal_compiler::tir::typed::CheckedDag::nodes)
-                    .filter(|node| node.definition.todo().is_some())
-                    .count();
+                    .map(|dag| {
+                        dag.declarations()
+                            .filter(|declaration| {
+                                declaration.category()
+                                    == graphcal_compiler::declaration_category::DeclCategory::Value(
+                                        graphcal_compiler::declaration_category::ValueDeclCategory::Node,
+                                    )
+                                    && dag.todo(declaration.identity()).is_some()
+                            })
+                            .count()
+                    })
+                    .sum::<usize>();
                 if todos == 0 {
                     println!("ok: {}", file.display());
                 } else if deny_todo {

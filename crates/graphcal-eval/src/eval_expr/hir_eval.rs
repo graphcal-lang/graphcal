@@ -36,21 +36,6 @@ fn index_ref_matches_resolved(
     actual.declared_resolved() == Some(expected)
 }
 
-fn imported_binding_value<'a>(
-    target: &graphcal_compiler::resolved_name::ResolvedDeclName,
-    caller_dag: &graphcal_compiler::dag_id::DagId,
-    caller_values: &'a RuntimeValueMap,
-    ctx: &'a EvalSession<'_>,
-) -> Option<&'a RuntimeValue> {
-    if target.owner() == caller_dag {
-        caller_values.get(target)
-    } else if target.owner() == ctx.tir.root_dag_id() {
-        ctx.root_values.and_then(|values| values.get(target))
-    } else {
-        None
-    }
-}
-
 /// The value of declaration `key`, `value`, borrowed with its presentation:
 /// the frame keeps a presented value only for a value with a presentation.
 fn presented_ref<'a>(
@@ -278,9 +263,11 @@ fn eval_texpr_inner(
                 .map_err(|outcome| ctx.outcome_error(outcome, span))
                 .map(plain)
         }
-        NodeKind::Extern { function, args } => {
-            eval_extern_fn(span, function, args, values, local_values, ctx).map(plain)
-        }
+        NodeKind::Extern {
+            function,
+            args,
+            result,
+        } => eval_extern_fn(span, function, args, result, values, local_values, ctx).map(plain),
         NodeKind::If {
             condition,
             then_branch,
@@ -692,6 +679,9 @@ fn eval_extern_fn(
     span: Span,
     ext: &graphcal_compiler::hir::expr::ExternFnRef,
     args: Scoped<'_, [TExternArg]>,
+    result: &graphcal_compiler::function_signature::ResultKind<
+        graphcal_compiler::extern_struct_result::ExternStructResult,
+    >,
     values: &RuntimeValueMap,
     local_values: &HirLocalValueMap<'_>,
     ctx: &EvalSession<'_>,
@@ -715,19 +705,13 @@ fn eval_extern_fn(
             span,
         ));
     };
-    let Some(function) = ctx.tir.extern_functions().get(&key) else {
-        return Err(ctx.internal_error(
-            format!("extern function `{ext}` has no resolved signature after dimension checking"),
-            span,
-        ));
-    };
     let invariant =
         |invariant, span| ctx.internal_error(format!("extern function `{ext}`: {invariant}"), span);
 
     let evaluate = |node| eval_value(node, values, local_values, ctx);
     let operands = super::operations::Operands::new(&evaluate, ctx);
     let arguments = HostArguments::encode(
-        &function.signature,
+        result,
         args.iter().map(|arg| (&arg.get().kind, argument_node(arg))),
         &operands,
     )
@@ -1317,14 +1301,14 @@ fn eval_dag_call(
     caller_locals: &HirLocalValueMap,
     ctx: &EvalSession<'_>,
 ) -> Result<EvaluatedRuntimeValue, GraphcalError> {
-    let caller_dag = args.dag_id();
     let target = call.target();
     let plan = ctx.execution_plan()?;
-    let callable = plan.callee(call);
+    let planned = plan.call(call);
+    let callable = planned.callable();
 
-    let mut frame = crate::execution_frame::ExecutionFrame::new(
+    let mut frame = crate::execution_frame::ExecutionFrame::called(
         plan,
-        callable,
+        planned,
         crate::execution_frame::FailurePolicy::Propagate,
     );
     for scoped_binding in args.iter() {
@@ -1338,9 +1322,13 @@ fn eval_dag_call(
         )?;
         frame.bind_argument(&binding.target, evaluated, ctx.src, binding.value.span())?;
     }
-    frame.seed_runtime_imports(|key| {
-        imported_runtime_value(key, caller_dag, caller_values, caller_presentations, ctx)
-    });
+    frame.seed_runtime_imports(
+        crate::execution_frame::FrameValues {
+            values: caller_values,
+            presentations: caller_presentations,
+        },
+        ctx.root,
+    );
 
     let evaluated = frame.run(&ctx.cancellation, |entry, frame| {
         let session = ctx.for_declaration(&entry).with_unavailable(frame.errors());
@@ -1422,28 +1410,6 @@ fn record_call_retention(values: &RuntimeValueMap, presentation: &EvaluatedRunti
     );
 }
 
-/// The value a prepared runtime import `key` of a called DAG reads from the
-/// caller's or the root frame, with its presentation.
-///
-/// Only explicit prepared runtime imports may consult the caller or root frame.
-fn imported_runtime_value(
-    key: &ResolvedDeclName,
-    caller_dag: &graphcal_compiler::dag_id::DagId,
-    caller_values: &RuntimeValueMap,
-    caller_presentations: Option<&PendingPresentedMap>,
-    ctx: &EvalSession<'_>,
-) -> Option<EvaluatedRuntimeValue> {
-    let value = imported_binding_value(key, caller_dag, caller_values, ctx)?;
-    let presented = if key.owner() == caller_dag {
-        caller_presentations
-    } else if key.owner() == ctx.tir.root_dag_id() {
-        ctx.root_presentation_instances
-    } else {
-        None
-    };
-    Some(presented_ref(presented, key, value).to_owned_with(RuntimeValue::clone))
-}
-
 fn check_inline_plan_asserts(
     callable: &crate::execution_plan::CallablePlan<'_>,
     values: &RuntimeValueMap,
@@ -1479,12 +1445,12 @@ fn check_inline_dag_asserts(
     call_span: Span,
     ctx: &EvalSession<'_>,
 ) -> Result<(), GraphcalError> {
-    for entry in dag_tir.decls().iter() {
+    for entry in dag_tir.declarations() {
         if !matches!(entry.category(), DeclCategory::Assert) {
             continue;
         }
-        let name = &entry.name();
-        let key = entry.identity();
+        let name = entry.name();
+        let key = entry.identity().clone();
         let unit = ctx.tir.declaration_body(&key);
         let Some(body) = unit.and_then(DeclarationBody::assertion) else {
             return Err(ctx.internal_error(

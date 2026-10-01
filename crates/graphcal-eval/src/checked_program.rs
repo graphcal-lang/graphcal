@@ -20,6 +20,7 @@ use graphcal_compiler::semantic::checked_type::CheckedType;
 use graphcal_compiler::syntax::module_name::ScopedName;
 use graphcal_compiler::tir::typed::checked::CheckedTir;
 use graphcal_compiler::tir::typed::checked_dag::CheckedDag;
+use graphcal_compiler::tir::typed::dag_position::DagPosition;
 use graphcal_compiler::tir::typed::model::StructFieldConstraintKey;
 
 use crate::runtime_value::RuntimeValue;
@@ -141,6 +142,8 @@ pub struct ScheduledChecks {
 pub struct CheckedProgram {
     tir: CheckedTir,
     facts: ExecutionFacts,
+    /// The constants and facts of each DAG of the TIR, by registry position.
+    by_position: Vec<(Arc<RuntimeValueMap>, Arc<DagExecutionFacts>)>,
 }
 
 impl std::fmt::Debug for CheckedProgram {
@@ -262,13 +265,15 @@ impl EvaluatedTir {
             struct_field_constraints,
         } = checks;
         let mut by_dag = HashMap::new();
-        for (dag_id, dag) in tir.dag_registry().iter() {
+        let mut by_position = Vec::with_capacity(tir.dag_registry().len());
+        for (_, dag) in tir.dag_registry().positioned() {
+            let dag_id = dag.dag_id();
+            let const_values = consts
+                .for_dag(dag_id)
+                .ok_or_else(|| SealError::UncoveredDag(dag_id.clone()))?;
             let facts = if let Some(facts) = inherited.by_dag.get(dag_id) {
                 Arc::clone(facts)
             } else {
-                let const_values = consts
-                    .for_dag(dag_id)
-                    .ok_or_else(|| SealError::UncoveredDag(dag_id.clone()))?;
                 Arc::new(DagExecutionFacts {
                     source: source.clone(),
                     const_presentations: const_values
@@ -287,6 +292,7 @@ impl EvaluatedTir {
                     imported_constants: resolve_imported_constants(&tir, &consts, dag)?,
                 })
             };
+            by_position.push((Arc::clone(const_values), Arc::clone(&facts)));
             by_dag.insert(dag_id.clone(), facts);
         }
         let mut all_field_constraints = inherited.struct_field_constraints.as_ref().clone();
@@ -298,6 +304,7 @@ impl EvaluatedTir {
                 by_dag: Arc::new(by_dag),
                 struct_field_constraints: Arc::new(all_field_constraints),
             },
+            by_position,
         })
     }
 }
@@ -318,11 +325,30 @@ impl CheckedProgram {
     /// Select one DAG with its execution facts.
     #[must_use]
     pub fn dag(&self, dag_id: &DagId) -> Option<SealedDag<'_>> {
-        Some(SealedDag {
-            dag: self.tir.dag_registry().get(dag_id)?,
-            const_values: self.facts.consts.for_dag(dag_id)?,
-            facts: self.facts.by_dag.get(dag_id)?,
-        })
+        self.tir
+            .dag_registry()
+            .get_positioned(dag_id)
+            .map(|(position, dag)| self.sealed(position, dag))
+    }
+
+    /// Every DAG of the program with its execution facts, in registry
+    /// position order.
+    pub fn positioned(&self) -> impl Iterator<Item = (DagPosition, SealedDag<'_>)> {
+        self.tir
+            .dag_registry()
+            .positioned()
+            .map(|(position, dag)| (position, self.sealed(position, dag)))
+    }
+
+    /// The DAG at `position` of this program's registry, with the facts
+    /// sealing recorded for that position.
+    fn sealed<'a>(&'a self, position: DagPosition, dag: &'a CheckedDag) -> SealedDag<'a> {
+        let (const_values, facts) = &self.by_position[position.index()];
+        SealedDag {
+            dag,
+            const_values,
+            facts,
+        }
     }
 
     /// Split a checked module's program for publication: its TIR's bodies

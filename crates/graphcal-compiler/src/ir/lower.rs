@@ -278,27 +278,48 @@ fn collect_static_ports(
         .collect()
 }
 
-fn collect_source_declarations(ast: &File) -> Vec<crate::hir::source_interface::SourceDeclaration> {
+/// The runtime-interface declarations `owner` authors directly, in source
+/// order, with the identities the resolver declared for them.
+fn collect_source_declarations(
+    ast: &File,
+    owner: &crate::dag_id::DagId,
+    resolver: &crate::resolve::ModuleResolver,
+) -> Result<
+    Vec<crate::hir::source_interface::SourceDeclaration>,
+    crate::resolve::error::ModuleResolveError,
+> {
+    use crate::hir::source_interface::SourceDeclaration;
     ast.declarations
         .iter()
-        .filter_map(|declaration| match &declaration.kind {
-            DeclKind::Param(param) => {
-                Some(crate::hir::source_interface::SourceDeclaration::Parameter {
-                    name: param.name.value.clone(),
-                    span: declaration.span,
-                })
-            }
-            DeclKind::Node(node) => Some(crate::hir::source_interface::SourceDeclaration::Node {
-                name: node.name.value.clone(),
-                span: declaration.span,
-            }),
-            DeclKind::Index(index) => {
-                Some(crate::hir::source_interface::SourceDeclaration::Index {
-                    name: index.name.value.clone(),
-                    span: declaration.span,
-                })
-            }
-            _ => None,
+        .filter_map(|declaration| {
+            let span = declaration.span;
+            Some(match &declaration.kind {
+                DeclKind::Param(param) => {
+                    resolver
+                        .declaration(owner, &param.name.value)
+                        .map(|symbol| SourceDeclaration::Parameter {
+                            identity: symbol.into_resolved(),
+                            span,
+                        })
+                }
+                DeclKind::Node(node) => {
+                    resolver.declaration(owner, &node.name.value).map(|symbol| {
+                        SourceDeclaration::Node {
+                            identity: symbol.into_resolved(),
+                            span,
+                        }
+                    })
+                }
+                DeclKind::Index(index) => {
+                    resolver
+                        .declaration(owner, &index.name.value)
+                        .map(|symbol| SourceDeclaration::Index {
+                            identity: symbol.into_resolved(),
+                            span,
+                        })
+                }
+                _ => return None,
+            })
         })
         .collect()
 }
@@ -498,13 +519,19 @@ fn build_ir_from_resolved(
     // The resolver was built from these same declarations, so it declared
     // every identity the entries and Static ports need.
     let module_resolver = definitions.resolver();
-    let (decls, static_ports) = super::resolve::declaration_entries(
+    let (decls, static_ports, source_declarations) = super::resolve::declaration_entries(
         ast,
         &resolved.plot_visibilities,
         module_resolver,
         dag_id,
     )
-    .and_then(|decls| Ok((decls, collect_static_ports(ast, dag_id, module_resolver)?)))
+    .and_then(|decls| {
+        Ok((
+            decls,
+            collect_static_ports(ast, dag_id, module_resolver)?,
+            collect_source_declarations(ast, dag_id, module_resolver)?,
+        ))
+    })
     .map_err(|error| {
         GraphcalError::internal_error(error.to_string(), src, DiagnosticAnchor::WholeFile)
     })?;
@@ -512,7 +539,7 @@ fn build_ir_from_resolved(
     let unfrozen = UnfrozenIR {
         decls,
         included_plots: Vec::new(),
-        source_declarations: collect_source_declarations(ast),
+        source_declarations,
         static_ports,
         assumes_map: resolved
             .assumes_map
@@ -626,14 +653,15 @@ mod tests {
         assert!(matches!(
             hir.source_declarations(),
             [
-                crate::hir::source_interface::SourceDeclaration::Index { name, .. },
-                crate::hir::source_interface::SourceDeclaration::Parameter { name: input, .. },
-                crate::hir::source_interface::SourceDeclaration::Node { name: private, .. },
-                crate::hir::source_interface::SourceDeclaration::Node { name: output, .. },
-            ] if name.as_str() == "Phase"
+                crate::hir::source_interface::SourceDeclaration::Index { identity: index, .. },
+                crate::hir::source_interface::SourceDeclaration::Parameter { identity: input, .. },
+                crate::hir::source_interface::SourceDeclaration::Node { identity: private, .. },
+                crate::hir::source_interface::SourceDeclaration::Node { identity: output, .. },
+            ] if index.as_str() == "Phase"
                 && input.as_str() == "input"
                 && private.as_str() == "private"
                 && output.as_str() == "output"
+                && [input, private, output].iter().all(|identity| identity.owner() == hir.dag_id())
         ));
     }
 

@@ -845,6 +845,18 @@ fn is_bindable_nominal(
 /// executable.
 pub fn check_external_value_expr_type<'t>(
     tir: &'t crate::tir::typed::CheckedTir,
+    expr: &crate::hir::closed_expr::ClosedExpr,
+    expected: &CheckedType,
+    src: &NamedSource<Arc<String>>,
+) -> Result<crate::tir::typed::ScopedTree<'t, crate::tir::texpr::TExpr>, GraphcalError> {
+    check_callless_value_expr_type(tir, expr, expected, src)
+}
+
+/// [`check_external_value_expr_type`] for an expression that calls no DAG,
+/// as a closed expression cannot: its tree runs in the root's scope, whose
+/// call targets do not number it.
+fn check_callless_value_expr_type<'t>(
+    tir: &'t crate::tir::typed::CheckedTir,
     expr: &crate::hir::expr::Expr,
     expected: &CheckedType,
     src: &NamedSource<Arc<String>>,
@@ -878,11 +890,6 @@ pub fn check_external_value_expr_type<'t>(
             })
             .map_err(|error| error.to_string())
             .and_then(|bodies| {
-                // The tree runs in the root's scope, whose call targets do
-                // not number it; a closed external value calls no DAG.
-                if !bodies.calls().is_empty() {
-                    return Err("an external value calls a DAG".to_owned());
-                }
                 bodies
                     .executable_value(expr.id())
                     .cloned()

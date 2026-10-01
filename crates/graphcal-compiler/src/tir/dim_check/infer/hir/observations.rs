@@ -7,9 +7,9 @@
 //! template-closure validation, override-dependency summaries) read these
 //! observations instead of inferring the body again.
 
-use crate::function_signature::FunctionParam;
 use crate::hir::expr::{ConstRef, Expr, ExprKind, FunctionRef, MatchPattern};
 use crate::resolved_name::{ResolvedConstructorName, ResolvedStructTypeName};
+use crate::tir::texpr::ExternSignature;
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -210,13 +210,13 @@ impl BodyObservations {
                 checked_type,
                 constructor,
                 constructor_matches,
-                extern_params,
+                extern_signature,
             } => self.typed.borrow_mut().record_value(
                 expr,
                 checked_type,
                 &NodeFacts {
                     constructor: constructor.as_deref(),
-                    extern_params: extern_params.as_deref(),
+                    extern_signature: extern_signature.as_deref(),
                     constructor_matches: &constructor_matches,
                     static_indexes: &static_indexes,
                 },
@@ -337,10 +337,11 @@ impl BodyObservations {
                 .collect::<Result<_, GraphcalError>>()?,
             _ => HashMap::new(),
         };
-        // The declared parameters a plugin call's arguments were checked
-        // against, so its typed node carries each argument's ABI kind. A call
-        // without a resolved signature was not checked, and assembly rejects it.
-        let extern_params = match expr.kind() {
+        // The declared signature a plugin call was checked against, so its
+        // typed node carries each argument's ABI kind and the result kind. A
+        // call without a resolved signature was not checked, and assembly
+        // rejects it.
+        let extern_signature = match expr.kind() {
             ExprKind::FnCall {
                 callee:
                     crate::syntax::span::Spanned {
@@ -351,7 +352,7 @@ impl BodyObservations {
             } => tir
                 .extern_functions()
                 .get(&function.key())
-                .map(|entry| entry.signature.params().to_vec()),
+                .map(|entry| Box::new(entry.signature.clone())),
             _ => None,
         };
         self.insert(
@@ -360,7 +361,7 @@ impl BodyObservations {
                 checked_type,
                 constructor: constructor.map(Box::new),
                 constructor_matches,
-                extern_params,
+                extern_signature,
             },
             src,
         )
@@ -374,6 +375,6 @@ enum CheckedNode {
         checked_type: CheckedType<Symbolic>,
         constructor: Option<Box<ConstructorApplication<Symbolic>>>,
         constructor_matches: HashMap<ResolvedConstructorName, ConstructorMatch>,
-        extern_params: Option<Vec<FunctionParam>>,
+        extern_signature: Option<Box<ExternSignature>>,
     },
 }

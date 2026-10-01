@@ -1,7 +1,7 @@
 //! The project TIR before it is checked: the DAG registry and the draft,
 //! unchecked, and instantiated states of the TIR typestate.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
 use miette::NamedSource;
@@ -60,26 +60,31 @@ pub enum DagStoreInsertError {
 /// DAG body with a different map key. Imported bodies are already-checked
 /// handles owned by the store that published them; they have no mutable
 /// accessor.
+///
+/// Both maps are ordered by identity, so the positions the checked registry
+/// assigns in their iteration order are the same in every run, whatever order
+/// the bodies were added in.
 #[derive(Debug, Clone)]
 pub(crate) struct DagRegistry {
     root: DagTIR,
-    other_dags: HashMap<crate::dag_id::DagId, DagTIR>,
-    shared_dags: HashMap<crate::dag_id::DagId, Arc<super::checked_dag::CheckedDag>>,
+    other_dags: BTreeMap<crate::dag_id::DagId, DagTIR>,
+    shared_dags: BTreeMap<crate::dag_id::DagId, Arc<super::checked_dag::CheckedDag>>,
 }
 
-/// The owned local bodies and the imported checked handles of a registry.
+/// The owned local bodies and the imported checked handles of a registry,
+/// each in identity order.
 pub(crate) type DagRegistryParts = (
     DagTIR,
-    HashMap<crate::dag_id::DagId, DagTIR>,
-    HashMap<crate::dag_id::DagId, Arc<super::checked_dag::CheckedDag>>,
+    BTreeMap<crate::dag_id::DagId, DagTIR>,
+    BTreeMap<crate::dag_id::DagId, Arc<super::checked_dag::CheckedDag>>,
 );
 
 impl DagRegistry {
-    fn new(root: DagTIR) -> Self {
+    const fn new(root: DagTIR) -> Self {
         Self {
             root,
-            other_dags: HashMap::new(),
-            shared_dags: HashMap::new(),
+            other_dags: BTreeMap::new(),
+            shared_dags: BTreeMap::new(),
         }
     }
 

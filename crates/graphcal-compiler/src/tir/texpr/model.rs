@@ -3,7 +3,10 @@
 use crate::builtin::AggregationFn;
 use crate::datetime_literal::{CivilDateTimeLiteral, OffsetDateTimeLiteral, ZonedDateTimeLiteral};
 use crate::expression_id::ExprId;
-use crate::function_signature::{FunctionParam, IndexBinder, ParamKind, ScalarValueKind};
+use crate::extern_struct_result::ExternStructResult;
+use crate::function_signature::{
+    FunctionParam, IndexBinder, ParamKind, ResultKind, ScalarValueKind,
+};
 use crate::hir::expr::{
     ExternFnRef, ForBinding, ForBindingIndex, IndexVariantRef, LocalDef, LocalId, MapEntryKey,
     PatternBinding, ResolvedUnitExpr, UnfoldRecurrence,
@@ -228,10 +231,12 @@ pub enum TExprKind<V: Concreteness = Concrete> {
     /// A shape-aware operation on indexed quantities.
     LinearAlgebra(LinearAlgebraCall<Box<TExpr<V>>>),
     /// A plugin function call, each argument paired with the declared
-    /// parameter checking matched it against.
+    /// parameter checking matched it against, and the declared result kind
+    /// the host's result is validated against.
     Extern {
         function: ExternFnRef,
         args: Vec<TExternArg<V>>,
+        result: ResultKind<ExternStructResult>,
     },
     If {
         condition: Box<TExpr<V>>,
@@ -417,6 +422,9 @@ pub enum ContextualLiteral {
     ZonedDateTime(ZonedDateTimeLiteral),
     TimeZone(IanaTimeZoneId),
 }
+
+/// The resolved signature of a plugin function.
+pub type ExternSignature = crate::function_signature::FunctionSignature<ExternStructResult>;
 
 /// The declared parameter of one plugin-call argument, by the ABI kind the
 /// argument crosses as.

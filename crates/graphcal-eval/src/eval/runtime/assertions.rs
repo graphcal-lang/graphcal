@@ -63,9 +63,15 @@ pub(super) fn evaluate_assertions(
     let tir = plan.tir();
     let mut assertions: Vec<(ScopedName, AssertResult, Span)> = tir
         .root()
-        .asserts()
-        .map(|entry| {
-            let owner = entry.identity();
+        .declarations()
+        .filter_map(|entry| match entry.kind() {
+            graphcal_compiler::tir::typed::declaration_view::DeclarationKind::Assert { span } => {
+                Some((entry, span))
+            }
+            _ => None,
+        })
+        .map(|(entry, span)| {
+            let owner = entry.identity().clone();
             let (unit, body) = assertion_body(tir, &owner, src)?;
             let body = body.map(|entry| &*entry.body);
             let entry_ctx = ctx.for_decl(&owner);
@@ -75,11 +81,7 @@ pub(super) fn evaluate_assertions(
                         eval_root(&entry_ctx.executable(expr)?, values, &entry_ctx)
                     })
                 });
-            Ok((
-                ScopedName::local(entry.name().clone()),
-                assert_result,
-                entry.span,
-            ))
+            Ok((ScopedName::local(entry.name().clone()), assert_result, span))
         })
         .collect::<Result<_, GraphcalError>>()?;
     for (parent, instances) in plan.root().closure_instances() {

@@ -1,9 +1,9 @@
 //! Direct source-declaration provenance retained at the HIR boundary.
 
-use crate::resolved_name::{ResolvedDimName, ResolvedIndexName, ResolvedStructTypeName};
+use crate::resolved_name::{
+    ResolvedDeclName, ResolvedDimName, ResolvedIndexName, ResolvedStructTypeName,
+};
 use crate::static_interface::{StaticInputKind, StaticRole};
-use crate::syntax::decl_name::DeclName;
-use crate::syntax::index_name::IndexName;
 use crate::syntax::span::Span;
 
 /// One runtime-interface-relevant declaration authored directly in a DAG.
@@ -11,11 +11,23 @@ use crate::syntax::span::Span;
 /// Include elaboration can merge additional declarations into a [`HirDag`](crate::ir::model::HirDag).
 /// This record deliberately excludes those merged declarations, preserving the
 /// distinction between an entry DAG's own ports and its internal instances.
+///
+/// Each record carries the canonical identity the resolver declared for it,
+/// so the checked interface is attached by identity, not by spelling.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SourceDeclaration {
-    Parameter { name: DeclName, span: Span },
-    Node { name: DeclName, span: Span },
-    Index { name: IndexName, span: Span },
+    Parameter {
+        identity: ResolvedDeclName,
+        span: Span,
+    },
+    Node {
+        identity: ResolvedDeclName,
+        span: Span,
+    },
+    Index {
+        identity: ResolvedIndexName,
+        span: Span,
+    },
 }
 
 /// Canonical identity of one Static input declaration authored by a template.

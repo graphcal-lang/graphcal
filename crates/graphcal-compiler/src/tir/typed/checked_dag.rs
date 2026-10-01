@@ -12,6 +12,7 @@ use crate::tir::presentation::DagPresentationFacts;
 use crate::tir::schedule::RuntimeSchedule;
 use crate::tir::texpr::CheckedBodies;
 
+use super::declaration_view::DeclarationView;
 use super::model::DagTIR;
 
 /// A DAG body together with everything its check published: the checked tree
@@ -173,51 +174,59 @@ impl CheckedDag {
         self.body.projectable_outputs()
     }
 
-    /// Every declaration of this DAG, keyed by canonical identity.
+    /// Every declaration of this DAG, in source order.
+    pub fn declarations(&self) -> impl Iterator<Item = DeclarationView<'_>> {
+        self.body.decls().iter().map(DeclarationView::of)
+    }
+
+    /// The declaration `identity` of this DAG.
     #[must_use]
-    pub const fn decls(&self) -> &crate::ir::decl_table::DeclTable<super::model::Typed> {
+    pub fn declaration(&self, identity: &ResolvedDeclName) -> Option<DeclarationView<'_>> {
+        self.body.decls().get(identity).map(DeclarationView::of)
+    }
+
+    /// Every declaration entry of this DAG, keyed by canonical identity.
+    #[must_use]
+    pub(crate) const fn decls(&self) -> &crate::ir::decl_table::DeclTable<super::model::Typed> {
         self.body.decls()
-    }
-
-    /// Const declarations, in source order.
-    pub fn consts(&self) -> impl Iterator<Item = &super::model::TypedConstEntry> {
-        self.body.consts()
-    }
-
-    /// Param declarations, in source order.
-    pub fn params(&self) -> impl Iterator<Item = &super::model::TypedParamEntry> {
-        self.body.params()
-    }
-
-    /// Node declarations, in source order.
-    pub fn nodes(&self) -> impl Iterator<Item = &super::model::TypedNodeEntry> {
-        self.body.nodes()
-    }
-
-    /// Assertions, in source order.
-    pub fn asserts(&self) -> impl Iterator<Item = &super::model::TypedAssertEntry> {
-        self.body.asserts()
-    }
-
-    /// Plots, in source order.
-    pub fn plots(&self) -> impl Iterator<Item = &super::model::TypedPlotEntry> {
-        self.body.plots()
-    }
-
-    /// Figures, in source order.
-    pub fn figures(&self) -> impl Iterator<Item = &super::model::TypedFigureEntry> {
-        self.body.figures()
-    }
-
-    /// Layers, in source order.
-    pub fn layers(&self) -> impl Iterator<Item = &super::model::TypedLayerEntry> {
-        self.body.layers()
     }
 
     /// Semantic facts of this DAG's body.
     #[must_use]
-    pub const fn semantic(&self) -> &super::model::DagSemanticBody {
+    pub(crate) const fn semantic(&self) -> &super::model::DagSemanticBody {
         self.body.semantic()
+    }
+
+    /// Param declarations, in source order.
+    pub(crate) fn params(&self) -> impl Iterator<Item = &super::model::TypedParamEntry> {
+        self.body.params()
+    }
+
+    /// The domain bounds a value declaration of this DAG declares, if any.
+    #[must_use]
+    pub fn domain_bounds(
+        &self,
+        identity: &ResolvedDeclName,
+    ) -> Option<&[super::model::ResolvedDomainBound]> {
+        self.body
+            .semantic()
+            .domain_bounds
+            .get(identity)
+            .map(Vec::as_slice)
+    }
+
+    /// The constant and runtime dependencies of this DAG's declarations.
+    #[must_use]
+    pub const fn dependencies(&self) -> &super::model::ResolvedDagDependencies {
+        &self.body.semantic().dependencies
+    }
+
+    /// The nominal type definitions this DAG's body uses, by identity.
+    #[must_use]
+    pub const fn struct_type_defs(
+        &self,
+    ) -> &HashMap<ResolvedStructTypeName, Arc<crate::hir::nominal::NominalTypeDef>> {
+        &self.body.semantic().type_defs.struct_types
     }
 
     /// The checked declared type of a value declaration of this DAG.

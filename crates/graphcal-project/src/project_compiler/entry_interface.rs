@@ -2,6 +2,7 @@
 
 use std::sync::Arc;
 
+use graphcal_compiler::declaration_category::ValueDeclCategory;
 use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
 use graphcal_compiler::graphcal_error::GraphcalError;
 use graphcal_compiler::hir::source_interface::SourceDeclaration;
@@ -12,6 +13,7 @@ use graphcal_compiler::syntax::decl_name::DeclName;
 use graphcal_compiler::syntax::index_name::IndexName;
 use graphcal_compiler::syntax::span::Span;
 use graphcal_compiler::tir::typed::CheckedTir;
+use graphcal_compiler::tir::typed::declaration_view::{DeclarationView, ValueDeclaration};
 use miette::NamedSource;
 
 use crate::compile_error::CompileError;
@@ -140,63 +142,70 @@ pub(super) fn build_checked_entry_interface(
 
     for declaration in source_declarations {
         match declaration {
-            SourceDeclaration::Parameter { name, span } => {
-                let entry = tir
+            SourceDeclaration::Parameter { identity, span } => {
+                let Some(ValueDeclaration {
+                    category: ValueDeclCategory::Param,
+                    annotation,
+                    has_default,
+                    ..
+                }) = tir
                     .root()
-                    .params()
-                    .find(|entry| entry.name() == name)
-                    .ok_or_else(|| {
-                        missing_interface_fact(
-                            format!("HIR entry parameter `{name}` is absent from checked TIR"),
-                            source,
-                            *span,
-                        )
-                    })?;
+                    .declaration(identity)
+                    .and_then(DeclarationView::value)
+                else {
+                    return Err(missing_interface_fact(
+                        format!("HIR entry parameter `{identity}` is absent from checked TIR"),
+                        source,
+                        *span,
+                    ));
+                };
                 parameters.push(CheckedEntryParameter {
-                    name: name.clone(),
-                    declared_type: entry.type_ann.checked().declared().clone(),
-                    has_default: entry.default.is_some(),
-                    runtime_key: entry.identity(),
+                    name: identity.leaf().clone(),
+                    declared_type: annotation.checked().declared().clone(),
+                    has_default,
+                    runtime_key: identity.clone(),
                     span: *span,
                 });
             }
-            SourceDeclaration::Node { name, span } => {
-                let entry = tir
+            SourceDeclaration::Node { identity, span } => {
+                let Some(ValueDeclaration {
+                    category: ValueDeclCategory::Node,
+                    annotation,
+                    ..
+                }) = tir
                     .root()
-                    .nodes()
-                    .find(|entry| entry.name() == name)
-                    .ok_or_else(|| {
-                        missing_interface_fact(
-                            format!("HIR entry node `{name}` is absent from checked TIR"),
-                            source,
-                            *span,
-                        )
-                    })?;
+                    .declaration(identity)
+                    .and_then(DeclarationView::value)
+                else {
+                    return Err(missing_interface_fact(
+                        format!("HIR entry node `{identity}` is absent from checked TIR"),
+                        source,
+                        *span,
+                    ));
+                };
+                let name = identity.leaf();
                 outputs.push(CheckedEntryOutput {
                     name: name.clone(),
-                    declared_type: entry.type_ann.checked().declared().clone(),
+                    declared_type: annotation.checked().declared().clone(),
                     visibility: if external_surface.is_explicit_export(name) {
                         Visibility::Public
                     } else {
                         Visibility::Private
                     },
-                    runtime_key: entry.identity(),
+                    runtime_key: identity.clone(),
                 });
             }
-            SourceDeclaration::Index { name, span } => {
-                let definition = tir
-                    .root_declared_indexes()
-                    .find(|definition| definition.name.declared_name() == Some(name))
-                    .ok_or_else(|| {
-                        missing_interface_fact(
-                            format!("HIR entry index `{name}` is absent from checked TIR"),
-                            source,
-                            *span,
-                        )
-                    })?;
+            SourceDeclaration::Index { identity, span } => {
+                let definition = tir.declared_index_def(identity).ok_or_else(|| {
+                    missing_interface_fact(
+                        format!("HIR entry index `{identity}` is absent from checked TIR"),
+                        source,
+                        *span,
+                    )
+                })?;
                 if required_index.is_none() && definition.is_required() {
                     required_index = Some(RequiredEntryIndex {
-                        name: name.clone(),
+                        name: identity.leaf().clone(),
                         anchor: DiagnosticAnchor::Source(*span),
                     });
                 }

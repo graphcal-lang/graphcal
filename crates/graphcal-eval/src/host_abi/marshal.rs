@@ -17,9 +17,7 @@ use std::fmt;
 
 use graphcal_compiler::extern_struct_result::ExternStructResult;
 use graphcal_compiler::finite_value::FiniteQuantity;
-use graphcal_compiler::function_signature::{
-    FunctionSignature, IndexBinder, ResultKind, ScalarValueKind,
-};
+use graphcal_compiler::function_signature::{IndexBinder, ResultKind, ScalarValueKind};
 use graphcal_compiler::syntax::function_name::FnParamName;
 use graphcal_compiler::syntax::non_empty::NonEmpty;
 use graphcal_compiler::tir::texpr::ExternArgKind;
@@ -34,14 +32,14 @@ use crate::invariant::{Failure, Invariant};
 use crate::runtime_value::dense_array::{DenseArray, DenseArrayError};
 use crate::runtime_value::{IndexAxis, IndexedValue, RuntimeValue, StructFieldsError, StructValue};
 
-/// The resolved signature of an extern function.
-pub type ExternSignature = FunctionSignature<ExternStructResult>;
+/// The declared result kind of an extern function.
+type ExternResultKind = ResultKind<ExternStructResult>;
 
 /// Encoded arguments of one extern call, with the typed axes their indexed
 /// arguments bound.
 #[derive(Debug)]
 pub struct HostArguments<'s> {
-    signature: &'s ExternSignature,
+    result: &'s ExternResultKind,
     values: Vec<HostArgument>,
     bound: HashMap<IndexBinder, IndexAxis>,
 }
@@ -144,8 +142,9 @@ impl ResultError {
 }
 
 impl<'s> HostArguments<'s> {
-    /// Encode the arguments of a checked call of the function `signature`
-    /// declares: `arguments` yields each argument's ABI kind with the node
+    /// Encode the arguments of a checked call of a function whose declared
+    /// result kind is `result`: `arguments` yields each argument's ABI kind
+    /// with the node
     /// `reader` evaluates, in call order. Values are read lazily, so an
     /// earlier argument's failure is reported before a later one is evaluated.
     ///
@@ -154,16 +153,17 @@ impl<'s> HostArguments<'s> {
     /// Returns [`EncodeError`] for a failed argument value or an argument
     /// that cannot cross the ABI.
     pub fn encode<'k, N, R: ArgumentReader<N>>(
-        signature: &'s ExternSignature,
+        result: &'s ExternResultKind,
         arguments: impl IntoIterator<Item = (&'k ExternArgKind, N)>,
         reader: &R,
     ) -> Result<Self, EncodeError<R::Error>> {
+        let arguments = arguments.into_iter();
         let mut encoded = Self {
-            signature,
-            values: Vec::with_capacity(signature.arity()),
+            result,
+            values: Vec::with_capacity(arguments.size_hint().0),
             bound: HashMap::new(),
         };
-        for (position, (kind, node)) in arguments.into_iter().enumerate() {
+        for (position, (kind, node)) in arguments.enumerate() {
             let argument = |failure| EncodeError::Argument { position, failure };
             let value = match kind {
                 ExternArgKind::Quantity { .. } => HostArgument::Scalar(HostScalar::Quantity(
@@ -241,7 +241,7 @@ impl<'s> HostArguments<'s> {
     /// returned, or an [`Invariant`] when the signature and arguments
     /// disagree after dimension checking.
     pub fn decode(&self, raw: &HostFnValue) -> Result<RuntimeValue, Failure<ResultError>> {
-        let result = self.signature.result();
+        let result = self.result;
         let decoded = decode_result(result, raw)
             .map_err(|error| Failure::Error(ResultError::Decode(error)))?;
         match decoded {
@@ -392,6 +392,7 @@ mod tests {
     use graphcal_compiler::function_signature::{DimMonomial, FunctionParam, NamedResultKind};
     use graphcal_compiler::syntax::dimension::DimVarName;
     use graphcal_compiler::syntax::index_name::IndexVarName;
+    use graphcal_compiler::tir::texpr::ExternSignature;
 
     use super::*;
     use crate::host_fns::HostArray;
@@ -503,7 +504,7 @@ mod tests {
             .iter()
             .map(ExternArgKind::for_param)
             .collect::<Vec<_>>();
-        HostArguments::encode(signature, kinds.iter().zip(values), &ValueReader)
+        HostArguments::encode(signature.result(), kinds.iter().zip(values), &ValueReader)
     }
 
     fn argument_failure<E: fmt::Debug>(error: EncodeError<E>) -> (usize, Failure<ArgumentError>) {

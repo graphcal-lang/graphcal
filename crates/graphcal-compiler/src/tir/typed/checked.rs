@@ -37,7 +37,8 @@ use super::program::{TirRead, UncheckedTir};
 /// insertion, removal, or mutation.
 ///
 /// Every DAG has a [`DagPosition`]: the root first, then the local DAGs,
-/// then the imported ones, in insertion order.
+/// then the imported ones, each in [`DagId`] order, so a program numbers its
+/// DAGs the same way in every run.
 ///
 /// The registry is closed under calls: every DAG a body calls is in the
 /// registry, and the callee of each call slot of each body is resolved to
@@ -68,7 +69,7 @@ impl CheckedDagRegistry {
     ///
     /// Returns [`UnresolvedCallee`] when a body calls a DAG outside the
     /// registry.
-    fn close(
+    pub(super) fn close(
         root: CheckedDag,
         other_dags: IndexMap<DagId, CheckedDag>,
         shared_dags: IndexMap<DagId, Arc<CheckedDag>>,
@@ -103,12 +104,16 @@ impl CheckedDagRegistry {
     /// The scope of one DAG, to select its bodies in.
     pub(super) fn scope(&self, dag_id: &DagId) -> Option<BodyScope<'_>> {
         self.get_positioned(dag_id)
-            .map(|(position, dag)| BodyScope::of(dag, &self.callees[position.index()]))
+            .map(|(position, dag)| BodyScope::of(dag, position, &self.callees[position.index()]))
     }
 
     /// The scope of the root DAG.
     pub(super) fn root_scope(&self) -> BodyScope<'_> {
-        BodyScope::of(&self.root, &self.callees[DagPosition::ROOT.index()])
+        BodyScope::of(
+            &self.root,
+            DagPosition::ROOT,
+            &self.callees[DagPosition::ROOT.index()],
+        )
     }
 
     /// The positions of the callees of the body at `caller`, by call slot.

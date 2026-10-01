@@ -36,25 +36,9 @@ trait MintedIndex: PlanIndex {
     fn new(position: usize) -> Self;
 }
 
-/// The position of a callable in its [`ExecPlan`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-struct CallableIdx(usize);
-
 /// The position of a step in its [`CallablePlan`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct StepIdx(usize);
-
-impl PlanIndex for CallableIdx {
-    fn position(self) -> usize {
-        self.0
-    }
-}
-
-impl MintedIndex for CallableIdx {
-    fn new(position: usize) -> Self {
-        Self(position)
-    }
-}
 
 impl PlanIndex for StepIdx {
     fn position(self) -> usize {
@@ -92,17 +76,6 @@ impl<I: PlanIndex, T> IndexVec<I, T> {
 
     fn iter(&self) -> std::slice::Iter<'_, T> {
         self.items.iter()
-    }
-
-    fn indices(&self) -> impl Iterator<Item = I> + use<I, T>
-    where
-        I: MintedIndex,
-    {
-        (0..self.items.len()).map(I::new)
-    }
-
-    const fn len(&self) -> usize {
-        self.items.len()
     }
 }
 
@@ -451,62 +424,151 @@ impl std::fmt::Debug for CallablePlan<'_> {
     }
 }
 
+/// The frame a called DAG's runtime import reads its value from, as its
+/// call site determines it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ImportSource {
+    /// The calling frame, when the calling DAG owns the imported
+    /// declaration.
+    Caller,
+    /// The root frame, when the root DAG owns it and the caller does not.
+    Root,
+}
+
+/// One runtime import of a called DAG, with the frame its call reads it
+/// from.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CallImport {
+    key: ResolvedDeclName,
+    source: ImportSource,
+}
+
+impl CallImport {
+    /// Classify the runtime import `key` of a DAG called from `caller` in a
+    /// program whose root DAG is `root`: the caller's own declarations come
+    /// from the calling frame, the root's from the root frame, and any
+    /// other import is not supplied by the call.
+    #[must_use]
+    pub fn classify(key: &ResolvedDeclName, caller: &DagId, root: &DagId) -> Option<Self> {
+        let source = if key.owner() == caller {
+            ImportSource::Caller
+        } else if key.owner() == root {
+            ImportSource::Root
+        } else {
+            return None;
+        };
+        Some(Self {
+            key: key.clone(),
+            source,
+        })
+    }
+
+    /// The imported declaration.
+    #[must_use]
+    pub const fn key(&self) -> &ResolvedDeclName {
+        &self.key
+    }
+
+    /// The frame the call reads it from.
+    #[must_use]
+    pub const fn source(&self) -> ImportSource {
+        self.source
+    }
+}
+
+/// What one call slot of one DAG runs: the callee's callable, and where the
+/// callee's runtime imports come from at that call site.
+#[derive(Debug)]
+struct PlannedCallSlot {
+    callee: DagPosition,
+    imports: Box<[CallImport]>,
+}
+
+/// The callable an inline call runs, with the runtime imports that call
+/// supplies it, classified for the call site when the plan was prepared.
+#[derive(Debug, Clone, Copy)]
+pub struct PlannedCall<'a, 'p> {
+    callable: &'a CallablePlan<'p>,
+    imports: &'a [CallImport],
+}
+
+impl<'a, 'p> PlannedCall<'a, 'p> {
+    /// A call of `callable` supplying `imports`, for tests of the frame.
+    #[cfg(any(test, feature = "test-internals"))]
+    #[must_use]
+    pub const fn for_test(callable: &'a CallablePlan<'p>, imports: &'a [CallImport]) -> Self {
+        Self { callable, imports }
+    }
+
+    /// The callee's callable.
+    #[must_use]
+    pub const fn callable(self) -> &'a CallablePlan<'p> {
+        self.callable
+    }
+
+    /// The callee's runtime imports this call supplies, with their frames.
+    #[must_use]
+    pub const fn imports(self) -> &'a [CallImport] {
+        self.imports
+    }
+}
+
 /// A compiled execution plan ready for runtime evaluation.
 pub struct ExecPlan<'p> {
     program: &'p CheckedProgram,
     has_unfinished_definitions: bool,
     declarations: HashMap<&'p ResolvedDeclName, PlannedDeclaration<'p>>,
-    root: CallableIdx,
-    callables: IndexVec<CallableIdx, CallablePlan<'p>>,
     /// The callable of each DAG of the program, by registry position.
-    at_position: IndexVec<DagPosition, CallableIdx>,
-}
-
-/// Why prepared callables do not form a plan.
-#[derive(Debug, Error)]
-pub enum ExecPlanError {
-    #[error("DAG `{0}` has more than one prepared callable plan")]
-    DuplicateCallable(DagId),
-    #[error("DAG `{0}` of the program has no prepared callable plan")]
-    MissingCallable(DagId),
+    callables: IndexVec<DagPosition, CallablePlan<'p>>,
+    /// The planned call slots of each DAG of the program, by registry
+    /// position, then by slot.
+    calls: IndexVec<DagPosition, Box<[PlannedCallSlot]>>,
 }
 
 impl<'p> ExecPlan<'p> {
-    /// Assemble a plan from the root callable and every other callable of
-    /// `program`: exactly one callable for each DAG of the program's
-    /// registry, so the callee of every inline call, which the registry
-    /// resolved to a position, has a callable.
+    /// Assemble the plan of `program` from `prepare`, which prepares the
+    /// callable of the sealed DAG it is given: it is called once for each
+    /// DAG of the program's registry, in position order, so every DAG, and
+    /// with it the callee of every inline call, has exactly one callable, at
+    /// the DAG's position.
     ///
     /// # Errors
     ///
-    /// Returns [`ExecPlanError`] when two callables share a body, or when a
-    /// DAG of the program has no callable.
-    pub(crate) fn new(
+    /// Returns the first error of `prepare`.
+    pub(crate) fn new<E>(
         program: &'p CheckedProgram,
         declarations: HashMap<&'p ResolvedDeclName, PlannedDeclaration<'p>>,
-        root: CallablePlan<'p>,
-        others: Vec<CallablePlan<'p>>,
-    ) -> Result<Self, ExecPlanError> {
-        let callables = IndexVec::from_items(std::iter::once(root).chain(others).collect());
-        let mut by_dag = HashMap::with_capacity(callables.len());
-        for index in callables.indices() {
-            let owner = callables[index].scope.dag().dag_id();
-            if by_dag.insert(owner, index).is_some() {
-                return Err(ExecPlanError::DuplicateCallable(owner.clone()));
-            }
-        }
-        let at_position = program
-            .tir()
-            .dag_registry()
+        prepare: impl FnMut(SealedDag<'p>) -> Result<CallablePlan<'p>, E>,
+    ) -> Result<Self, E> {
+        let callables = program
             .positioned()
-            .map(|(_, dag)| {
-                by_dag
-                    .get(dag.dag_id())
-                    .copied()
-                    .ok_or_else(|| ExecPlanError::MissingCallable(dag.dag_id().clone()))
-            })
+            .map(|(_, scope)| scope)
+            .map(prepare)
             .collect::<Result<Vec<_>, _>>()
             .map(IndexVec::from_items)?;
+        let registry = program.tir().dag_registry();
+        let calls = IndexVec::from_items(
+            registry
+                .positioned()
+                .map(|(caller, dag)| {
+                    registry
+                        .callee_positions(caller)
+                        .iter()
+                        .map(|&callee| {
+                            let imports = callables[callee]
+                                .imports
+                                .runtime
+                                .iter()
+                                .filter_map(|key| {
+                                    CallImport::classify(key, dag.dag_id(), registry.root_id())
+                                })
+                                .collect();
+                            PlannedCallSlot { callee, imports }
+                        })
+                        .collect()
+                })
+                .collect(),
+        );
         let has_unfinished_definitions = declarations
             .values()
             .any(|declaration| matches!(declaration.body, PlannedBody::Todo));
@@ -514,9 +576,8 @@ impl<'p> ExecPlan<'p> {
             program,
             has_unfinished_definitions,
             declarations,
-            root: CallableIdx::new(0),
             callables,
-            at_position,
+            calls,
         })
     }
 
@@ -540,7 +601,7 @@ impl<'p> ExecPlan<'p> {
     /// The root DAG's callable.
     #[must_use]
     pub fn root(&self) -> &CallablePlan<'p> {
-        &self.callables[self.root]
+        &self.callables[DagPosition::ROOT]
     }
 
     /// Every callable, the root first.
@@ -556,22 +617,26 @@ impl<'p> ExecPlan<'p> {
     pub fn callees_of(&self, owner: &DagId) -> Option<Vec<&CallablePlan<'p>>> {
         let registry = self.tir().dag_registry();
         registry.get_positioned(owner).map(|(caller, _)| {
-            registry
-                .callee_positions(caller)
+            self.calls[caller]
                 .iter()
-                .map(|callee| &self.callables[self.at_position[*callee]])
+                .map(|slot| &self.callables[slot.callee])
                 .collect()
         })
     }
 
-    /// The callable an inline call runs: the callable of the DAG the
-    /// program's registry resolved for the call's slot.
+    /// What an inline call runs: the callable of the DAG the program's
+    /// registry resolved for the call's slot, with the runtime imports the
+    /// call supplies it.
     ///
     /// The call comes from a tree of this plan's program, whose every DAG
     /// has a callable.
     #[must_use]
-    pub fn callee(&self, call: ScopedCall<'_>) -> &CallablePlan<'p> {
-        &self.callables[self.at_position[call.callee()]]
+    pub fn call(&self, call: ScopedCall<'_>) -> PlannedCall<'_, 'p> {
+        let slot = &self.calls[call.caller()][call.get().index()];
+        PlannedCall {
+            callable: &self.callables[slot.callee],
+            imports: &slot.imports,
+        }
     }
 
     /// Any value declaration of the program.

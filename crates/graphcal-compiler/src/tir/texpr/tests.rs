@@ -30,7 +30,7 @@ fn no_facts(
 ) -> NodeFacts<'_> {
     NodeFacts {
         constructor: None,
-        extern_params: None,
+        extern_signature: None,
         constructor_matches: matches,
         static_indexes: &[],
     }
@@ -182,7 +182,7 @@ fn a_static_position_must_belong_to_a_selector_of_its_node() {
             dimensionless(),
             &NodeFacts {
                 constructor: None,
-                extern_params: None,
+                extern_signature: None,
                 constructor_matches: &matches,
                 static_indexes: std::slice::from_ref(&requirement),
             },

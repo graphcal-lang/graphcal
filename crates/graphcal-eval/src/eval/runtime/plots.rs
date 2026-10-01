@@ -63,11 +63,21 @@ struct RootPlot<'p> {
 /// The plots of the root DAG, in output order: its own plots in source
 /// order, then the plots each semantic instance's include site requests.
 fn root_plots<'p>(plan: &'p crate::execution_plan::ExecPlan<'p>) -> Vec<RootPlot<'p>> {
-    let own = plan.root().scope().dag().plots().map(|entry| RootPlot {
-        identity: entry.identity(),
-        name: entry.name(),
-        visibility: entry.visibility,
-    });
+    let own = plan
+        .root()
+        .scope()
+        .dag()
+        .declarations()
+        .filter_map(|entry| match entry.kind() {
+            graphcal_compiler::tir::typed::declaration_view::DeclarationKind::Plot {
+                visibility,
+            } => Some(RootPlot {
+                identity: entry.identity().clone(),
+                name: entry.name(),
+                visibility,
+            }),
+            _ => None,
+        });
     let requested = plan.root().semantic_instances().iter().flat_map(|planned| {
         planned
             .instance()
@@ -134,14 +144,20 @@ pub(super) fn evaluate_root_plots(
     };
     let figures = tir
         .root()
-        .figures()
-        .map(|entry| {
-            let owner = entry.identity();
+        .declarations()
+        .filter_map(|entry| match entry.kind() {
+            graphcal_compiler::tir::typed::declaration_view::DeclarationKind::Figure {
+                plot_names,
+            } => Some((entry, plot_names)),
+            _ => None,
+        })
+        .map(|(entry, plot_names)| {
+            let owner = entry.identity().clone();
             let fields = declaration_body(tir, &owner, ctx.src)?
                 .figure()
                 .map(|figure| figure.map(|figure| figure.fields.as_slice()));
             Ok(compositions
-                .compose(&owner, entry.name(), fields, &entry.plot_names)?
+                .compose(&owner, entry.name(), fields, plot_names)?
                 .map(|composed| FigureSpec {
                     name: ScopedName::local(entry.name().clone()),
                     plot_names: composed.plot_names,
@@ -154,14 +170,20 @@ pub(super) fn evaluate_root_plots(
         .collect();
     let layers = tir
         .root()
-        .layers()
-        .map(|entry| {
-            let owner = entry.identity();
+        .declarations()
+        .filter_map(|entry| match entry.kind() {
+            graphcal_compiler::tir::typed::declaration_view::DeclarationKind::Layer {
+                plot_names,
+            } => Some((entry, plot_names)),
+            _ => None,
+        })
+        .map(|(entry, plot_names)| {
+            let owner = entry.identity().clone();
             let fields = declaration_body(tir, &owner, ctx.src)?
                 .layer()
                 .map(|layer| layer.map(|layer| layer.fields.as_slice()));
             Ok(compositions
-                .compose(&owner, entry.name(), fields, &entry.plot_names)?
+                .compose(&owner, entry.name(), fields, plot_names)?
                 .map(|composed| LayerSpec {
                     name: ScopedName::local(entry.name().clone()),
                     plot_names: composed.plot_names,

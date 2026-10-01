@@ -60,7 +60,9 @@ pub struct EvalEnvironment<'a> {
     pub src: &'a NamedSource<Arc<String>>,
     pub tir: &'a CheckedTir,
     pub current_decl: Option<ResolvedDeclName>,
-    pub root_values: Option<&'a RuntimeValueMap>,
+    /// The root frame's values, which calls read root-owned runtime imports
+    /// from.
+    pub(crate) root: Option<crate::execution_frame::FrameValues<'a>>,
     pub unavailable: Option<
         &'a HashMap<
             graphcal_compiler::resolved_name::ResolvedDeclName,
@@ -68,7 +70,6 @@ pub struct EvalEnvironment<'a> {
         >,
     >,
     pub unfinished_calls: Option<&'a std::cell::RefCell<BTreeSet<ResolvedDeclName>>>,
-    pub root_presentation_instances: Option<&'a PendingPresentedMap>,
 }
 
 /// An immutable environment whose capabilities can only be selected by phase.
@@ -102,10 +103,9 @@ impl<'a> EvalSession<'a> {
             src,
             tir,
             current_decl: None,
-            root_values: None,
+            root: None,
             unavailable: None,
             unfinished_calls: None,
-            root_presentation_instances: None,
         }
     }
 
@@ -267,8 +267,10 @@ impl<'a> EvalSession<'a> {
         values: &'a RuntimeValueMap,
         instances: Option<&'a PendingPresentedMap>,
     ) -> Self {
-        self.environment.root_values = Some(values);
-        self.environment.root_presentation_instances = instances;
+        self.environment.root = Some(crate::execution_frame::FrameValues {
+            values,
+            presentations: instances,
+        });
         self
     }
 

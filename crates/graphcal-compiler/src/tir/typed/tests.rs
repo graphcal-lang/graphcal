@@ -609,6 +609,29 @@ fn imported_store_diamonds_share_bodies_and_units_without_republishing_imports()
 }
 
 #[test]
+fn registry_positions_follow_identity_order_whatever_the_install_order() {
+    let stores = ["b.gcl", "c.gcl", "a.gcl"]
+        .map(|path| importer_tir(path, &[]).freeze_local_dag_store().unwrap());
+    let positions = |order: [usize; 3]| {
+        let tir = importer_tir("root.gcl", &order.map(|store| &stores[store]));
+        tir.dag_registry()
+            .positioned()
+            .map(|(position, dag)| (position.index(), dag.dag_id().clone()))
+            .collect::<Vec<_>>()
+    };
+    let forward = positions([0, 1, 2]);
+    assert_eq!(forward, positions([2, 1, 0]));
+    assert_eq!(forward, positions([1, 2, 0]));
+    let imported = forward[1..]
+        .iter()
+        .map(|(_, dag)| dag.clone())
+        .collect::<Vec<_>>();
+    let mut sorted = imported.clone();
+    sorted.sort();
+    assert_eq!(imported, sorted);
+}
+
+#[test]
 fn installed_stores_bring_every_dag_their_bodies_call() {
     let leaf = importer_tir("leaf.gcl", &[])
         .freeze_local_dag_store()
@@ -928,6 +951,130 @@ fn finalized_tir_keeps_inline_dags_in_the_checked_registry() {
             .iter()
             .all(|(dag_id, dag)| dag_id == dag.dag_id())
     );
+}
+
+#[test]
+fn closing_a_registry_resolves_every_call_slot_or_names_the_missing_callee() {
+    let tir = parse_and_type_resolve(
+        "dag child { pub node output: Dimensionless = 1.0; }\n\
+         node result: Dimensionless = @child()::output;",
+    )
+    .unwrap();
+    let child_id = tir
+        .root_dag_id()
+        .inline_dag_child(crate::syntax::decl_name::DeclName::expect_valid("child"));
+    let registry = &tir.dags;
+    let (child, _) = registry.get_positioned(&child_id).unwrap();
+    assert_eq!(
+        registry.callee_positions(crate::tir::typed::dag_position::DagPosition::ROOT),
+        [child]
+    );
+
+    let closed = CheckedDagRegistry::close(
+        registry.root.clone(),
+        registry.other_dags.clone(),
+        indexmap::IndexMap::new(),
+    )
+    .unwrap();
+    assert_eq!(
+        closed.callee_positions(crate::tir::typed::dag_position::DagPosition::ROOT),
+        [child]
+    );
+
+    let error = CheckedDagRegistry::close(
+        registry.root.clone(),
+        indexmap::IndexMap::new(),
+        indexmap::IndexMap::new(),
+    )
+    .unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        format!(
+            "DAG `{}` calls DAG `{child_id}`, which is not in its program",
+            tir.root_dag_id()
+        )
+    );
+}
+
+#[test]
+fn declaration_views_expose_each_kind_without_bodies() {
+    use super::declaration_view::{DeclarationKind, ValueDeclaration};
+    use crate::declaration_category::{DeclCategory, ValueDeclCategory};
+    use crate::plot_visibility::PlotVisibility;
+
+    let tir = parse_and_type_resolve(
+        "const node BASE: Dimensionless = 1.0;\n\
+         param required: Dimensionless;\n\
+         param defaulted: Dimensionless = 2.0;\n\
+         node total: Dimensionless = @BASE + @required + @defaulted;\n\
+         assert positive = @total > 0.0;\n\
+         plot trend = { mark: line, encode: { x: @total, y: @total } };\n\
+         figure summary = { plots: [trend] };",
+    )
+    .unwrap();
+    let dag = tir.root();
+    let views = dag.declarations().collect::<Vec<_>>();
+    assert_eq!(
+        views
+            .iter()
+            .map(|view| view.name().as_str())
+            .collect::<Vec<_>>(),
+        [
+            "BASE",
+            "required",
+            "defaulted",
+            "total",
+            "positive",
+            "trend",
+            "summary"
+        ]
+    );
+    let value = |index: usize| views[index].value().unwrap();
+    let categories = (0..4)
+        .map(|index| {
+            let ValueDeclaration {
+                category,
+                has_default,
+                ..
+            } = value(index);
+            (category, has_default)
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        categories,
+        [
+            (ValueDeclCategory::Const, false),
+            (ValueDeclCategory::Param, false),
+            (ValueDeclCategory::Param, true),
+            (ValueDeclCategory::Node, false),
+        ]
+    );
+    assert_eq!(
+        views[3].category(),
+        DeclCategory::Value(ValueDeclCategory::Node)
+    );
+    assert!(matches!(views[4].kind(), DeclarationKind::Assert { .. }));
+    assert_eq!(views[4].category(), DeclCategory::Assert);
+    assert!(views[4].value().is_none());
+    assert!(matches!(
+        views[5].kind(),
+        DeclarationKind::Plot {
+            visibility: PlotVisibility::Standalone
+        }
+    ));
+    assert_eq!(views[5].category(), DeclCategory::Plot);
+    let DeclarationKind::Figure { plot_names } = views[6].kind() else {
+        panic!("a figure view lists its plots");
+    };
+    assert_eq!(plot_names.len(), 1);
+    assert_eq!(views[6].category(), DeclCategory::Figure);
+
+    for view in &views {
+        let found = dag.declaration(view.identity()).unwrap();
+        assert_eq!(found.identity(), view.identity());
+        assert_eq!(found.category(), view.category());
+        assert_eq!(view.identity().owner(), tir.root_dag_id());
+    }
 }
 
 #[test]
