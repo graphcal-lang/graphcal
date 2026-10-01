@@ -23,7 +23,7 @@ use crate::runtime_value::{IndexAxis, RuntimeValue};
 use graphcal_compiler::outcome::Outcome;
 
 use super::EvalSession;
-use super::linear_algebra_lu::LuFailure;
+use super::linear_algebra_lu::{LuFailure, SquareMatrix};
 use super::numeric::{self, QuantityValidationError};
 use super::work_budget::{KernelCheckpoint, WorkAmount, WorkAmountError, WorkBudgetError};
 use crate::invariant::{Failure, Invariant};
@@ -74,6 +74,26 @@ impl Matrix {
     fn row_slices(&self) -> Vec<&[f64]> {
         self.values.chunks_exact(self.columns.len()).collect()
     }
+
+    /// This matrix as a square matrix: its rows and columns must enumerate
+    /// the same axis.
+    fn into_square(self, function: LinearAlgebraFn) -> Result<Square, Invariant> {
+        require_matching_axes(function, &self.rows, &self.columns)?;
+        let matrix = SquareMatrix::try_new(self.rows.len(), self.values)?;
+        Ok(Square {
+            rows: self.rows,
+            columns: self.columns,
+            matrix,
+        })
+    }
+}
+
+/// A rank-two operand whose rows and columns enumerate the same axis.
+#[derive(Debug)]
+struct Square {
+    rows: IndexAxis,
+    columns: IndexAxis,
+    matrix: SquareMatrix,
 }
 
 /// Flatten an indexed quantity operand into a rectangular array.
@@ -426,19 +446,14 @@ fn evaluate_solve(
     ctx: &EvalSession<'_>,
 ) -> Result<RuntimeValue, LinearAlgebraFailure> {
     let function = LinearAlgebraFn::Solve;
-    let matrix = Matrix::from_value(matrix, "solve")?;
+    let square = Matrix::from_value(matrix, "solve")?.into_square(function)?;
     let rhs = Vector::from_value(rhs, "solve")?;
-    require_matching_axes(function, &matrix.rows, &matrix.columns)?;
-    require_matching_axes(function, &matrix.rows, &rhs.axis)?;
-    let mut control = kernel_control(function, &[matrix.rows.len(); 3], 2, ctx)?;
-    let solution = super::linear_algebra_lu::solve_with_control(
-        &matrix.values,
-        matrix.rows.len(),
-        &rhs.values,
-        &mut control,
-    )
-    .map_err(algorithm_failure)?;
-    vector_value(matrix.rows, solution)
+    require_matching_axes(function, &square.rows, &rhs.axis)?;
+    let mut control = kernel_control(function, &[square.rows.len(); 3], 2, ctx)?;
+    let solution =
+        super::linear_algebra_lu::solve_with_control(&square.matrix, &rhs.values, &mut control)
+            .map_err(algorithm_failure)?;
+    vector_value(square.rows, solution)
 }
 
 fn evaluate_inverse(
@@ -446,16 +461,11 @@ fn evaluate_inverse(
     ctx: &EvalSession<'_>,
 ) -> Result<RuntimeValue, LinearAlgebraFailure> {
     let function = LinearAlgebraFn::Inverse;
-    let matrix = Matrix::from_value(matrix, "inverse")?;
-    require_matching_axes(function, &matrix.rows, &matrix.columns)?;
-    let mut control = kernel_control(function, &[matrix.rows.len(); 3], 3, ctx)?;
-    let inverse = super::linear_algebra_lu::inverse_with_control(
-        &matrix.values,
-        matrix.rows.len(),
-        &mut control,
-    )
-    .map_err(algorithm_failure)?;
-    matrix_value(matrix.rows, matrix.columns, inverse)
+    let square = Matrix::from_value(matrix, "inverse")?.into_square(function)?;
+    let mut control = kernel_control(function, &[square.rows.len(); 3], 3, ctx)?;
+    let inverse = super::linear_algebra_lu::inverse_with_control(&square.matrix, &mut control)
+        .map_err(algorithm_failure)?;
+    matrix_value(square.rows, square.columns, inverse.into_values())
 }
 
 fn evaluate_determinant(
@@ -463,16 +473,11 @@ fn evaluate_determinant(
     ctx: &EvalSession<'_>,
 ) -> Result<RuntimeValue, LinearAlgebraFailure> {
     let function = LinearAlgebraFn::Determinant;
-    let matrix = Matrix::from_value(matrix, "det")?;
-    require_matching_axes(function, &matrix.rows, &matrix.columns)?;
-    let mut control = kernel_control(function, &[matrix.rows.len(); 3], 1, ctx)?;
-    super::linear_algebra_lu::determinant_with_control(
-        &matrix.values,
-        matrix.rows.len(),
-        &mut control,
-    )
-    .map_err(algorithm_failure)
-    .and_then(|value| finite_runtime_quantity(value, "det()"))
+    let square = Matrix::from_value(matrix, "det")?.into_square(function)?;
+    let mut control = kernel_control(function, &[square.rows.len(); 3], 1, ctx)?;
+    super::linear_algebra_lu::determinant_with_control(&square.matrix, &mut control)
+        .map_err(algorithm_failure)
+        .and_then(|value| finite_runtime_quantity(value, "det()"))
 }
 
 /// Evaluate a checked built-in linear-algebra call on its evaluated

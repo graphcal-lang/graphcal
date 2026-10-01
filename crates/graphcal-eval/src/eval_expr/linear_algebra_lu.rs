@@ -11,6 +11,8 @@ use thiserror::Error;
 
 use graphcal_compiler::outcome::Outcome;
 
+use graphcal_compiler::cancellation::Cancelled;
+
 use super::work_budget::KernelCheckpoint;
 use crate::invariant::{Failure, Invariant};
 
@@ -55,6 +57,78 @@ fn shape_invariant(description: impl std::fmt::Display) -> Invariant {
     ))
 }
 
+/// A nonempty square matrix of `order` rows and columns, row-major.
+///
+/// Construction checks that the buffer holds exactly `order * order` values,
+/// so every position `(row, column)` with `row, column < order` is in the
+/// buffer.
+#[derive(Debug, Clone)]
+pub(super) struct SquareMatrix {
+    order: usize,
+    values: Vec<f64>,
+}
+
+impl SquareMatrix {
+    /// The order-`order` matrix with row-major `values`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`Invariant`] when `order` is zero or `values` does not
+    /// hold exactly `order * order` values.
+    pub(super) fn try_new(order: usize, values: Vec<f64>) -> Result<Self, Invariant> {
+        if order == 0 || order.checked_mul(order) != Some(values.len()) {
+            return Err(shape_invariant(format_args!(
+                "{} values do not form a nonempty order-{order} square matrix",
+                values.len()
+            )));
+        }
+        Ok(Self { order, values })
+    }
+
+    /// The number of rows (and columns).
+    pub(super) const fn order(&self) -> usize {
+        self.order
+    }
+
+    /// The buffer position of `(row, column)`; both are below the order.
+    #[expect(
+        clippy::arithmetic_side_effects,
+        reason = "row, column < order, and order * order fits usize by construction"
+    )]
+    const fn position(&self, row: usize, column: usize) -> usize {
+        row * self.order + column
+    }
+
+    /// The value at `(row, column)`; both are below the order.
+    fn at(&self, row: usize, column: usize) -> f64 {
+        self.values[self.position(row, column)]
+    }
+
+    fn set(&mut self, row: usize, column: usize, value: f64) {
+        let position = self.position(row, column);
+        self.values[position] = value;
+    }
+
+    fn swap_rows(
+        &mut self,
+        lhs: usize,
+        rhs: usize,
+        control: &mut KernelCheckpoint<'_>,
+    ) -> Result<(), Cancelled> {
+        for column in 0..self.order {
+            control.step()?;
+            let (lhs, rhs) = (self.position(lhs, column), self.position(rhs, column));
+            self.values.swap(lhs, rhs);
+        }
+        Ok(())
+    }
+
+    /// The row-major values.
+    pub(super) fn into_values(self) -> Vec<f64> {
+        self.values
+    }
+}
+
 #[derive(Debug)]
 enum Factorization {
     Singular,
@@ -63,51 +137,10 @@ enum Factorization {
 
 #[derive(Debug)]
 struct LuDecomposition {
-    order: usize,
-    factors: Vec<f64>,
+    factors: SquareMatrix,
     permutation: Vec<usize>,
     parity: f64,
     minimum_scaled_pivot: f64,
-}
-
-fn matrix_len(order: usize) -> Result<usize, Invariant> {
-    order
-        .checked_mul(order)
-        .ok_or_else(|| shape_invariant("square matrix cardinality overflowed usize"))
-}
-
-fn dense_position(order: usize, row: usize, column: usize) -> Result<usize, Invariant> {
-    if row >= order || column >= order {
-        return Err(shape_invariant(format!(
-            "matrix position ({row}, {column}) is outside order {order}"
-        )));
-    }
-    row.checked_mul(order)
-        .and_then(|offset| offset.checked_add(column))
-        .ok_or_else(|| shape_invariant("matrix position overflowed usize"))
-}
-
-fn dense_value(values: &[f64], order: usize, row: usize, column: usize) -> Result<f64, Invariant> {
-    let position = dense_position(order, row, column)?;
-    values
-        .get(position)
-        .copied()
-        .ok_or_else(|| shape_invariant("matrix position is outside its dense buffer"))
-}
-
-fn set_dense_value(
-    values: &mut [f64],
-    order: usize,
-    row: usize,
-    column: usize,
-    value: f64,
-) -> Result<(), Invariant> {
-    let position = dense_position(order, row, column)?;
-    let target = values
-        .get_mut(position)
-        .ok_or_else(|| shape_invariant("matrix position is outside its dense buffer"))?;
-    *target = value;
-    Ok(())
 }
 
 const fn finite(value: f64, operation: &'static str) -> Result<f64, LuError> {
@@ -128,36 +161,25 @@ fn numerical_threshold(order: usize) -> f64 {
 
 impl LuDecomposition {
     fn factor(
-        matrix: &[f64],
-        order: usize,
+        matrix: &SquareMatrix,
         control: &mut KernelCheckpoint<'_>,
     ) -> Result<Factorization, LuFailure> {
         control.boundary()?;
-        if order == 0 {
-            return Err(shape_invariant("LU requires a nonempty square matrix").into());
-        }
-        let expected = matrix_len(order)?;
-        if matrix.len() != expected {
-            return Err(shape_invariant(format!(
-                "LU received {} values for an order-{order} matrix",
-                matrix.len()
-            ))
-            .into());
-        }
-        if matrix.iter().any(|value| !value.is_finite()) {
+        let order = matrix.order();
+        if matrix.values.iter().any(|value| !value.is_finite()) {
             return Err(LuError::NonFinite {
                 operation: "LU factorization",
             }
             .into());
         }
 
-        let mut factors = matrix.to_vec();
+        let mut factors = matrix.clone();
         let mut scales = Vec::with_capacity(order);
         for row in 0..order {
             let mut scale = 0.0_f64;
             for column in 0..order {
                 control.step()?;
-                scale = scale.max(dense_value(&factors, order, row, column)?.abs());
+                scale = scale.max(factors.at(row, column).abs());
             }
             scales.push(scale);
         }
@@ -170,55 +192,57 @@ impl LuDecomposition {
         let mut minimum_scaled_pivot = f64::INFINITY;
 
         for pivot_column in 0..order {
-            let mut best: Option<(usize, f64)> = None;
-            for (row, scale) in scales.iter().copied().enumerate().skip(pivot_column) {
+            // The pivot column's own row is the first candidate; a later row
+            // replaces the incumbent unless its scaled ratio is no larger.
+            control.step()?;
+            let mut pivot_row = pivot_column;
+            let mut best_ratio =
+                factors.at(pivot_column, pivot_column).abs() / scales[pivot_column];
+            for (row, scale) in scales
+                .iter()
+                .copied()
+                .enumerate()
+                .skip(pivot_column.saturating_add(1))
+            {
                 control.step()?;
-                let ratio = dense_value(&factors, order, row, pivot_column)?.abs() / scale;
-                match best {
-                    Some((_, best_ratio)) if ratio <= best_ratio => {}
-                    Some(_) | None => best = Some((row, ratio)),
+                let ratio = factors.at(row, pivot_column).abs() / scale;
+                if !matches!(
+                    ratio.partial_cmp(&best_ratio),
+                    Some(std::cmp::Ordering::Less | std::cmp::Ordering::Equal)
+                ) {
+                    pivot_row = row;
+                    best_ratio = ratio;
                 }
             }
-            let (pivot_row, _) =
-                best.ok_or_else(|| shape_invariant("LU could not select a pivot row"))?;
-            if dense_value(&factors, order, pivot_row, pivot_column)? == 0.0 {
+            if factors.at(pivot_row, pivot_column) == 0.0 {
                 return Ok(Factorization::Singular);
             }
 
             if pivot_row != pivot_column {
-                for column in 0..order {
-                    control.step()?;
-                    let lhs = dense_position(order, pivot_row, column)?;
-                    let rhs = dense_position(order, pivot_column, column)?;
-                    factors.swap(lhs, rhs);
-                }
+                factors.swap_rows(pivot_row, pivot_column, control)?;
                 scales.swap(pivot_row, pivot_column);
                 permutation.swap(pivot_row, pivot_column);
                 parity = -parity;
             }
 
-            let pivot = dense_value(&factors, order, pivot_column, pivot_column)?;
+            let pivot = factors.at(pivot_column, pivot_column);
             minimum_scaled_pivot = minimum_scaled_pivot.min(pivot.abs() / scales[pivot_column]);
             for row in pivot_column.saturating_add(1)..order {
                 control.step()?;
-                let multiplier = finite(
-                    dense_value(&factors, order, row, pivot_column)? / pivot,
-                    "LU factorization",
-                )?;
-                set_dense_value(&mut factors, order, row, pivot_column, multiplier)?;
+                let multiplier = finite(factors.at(row, pivot_column) / pivot, "LU factorization")?;
+                factors.set(row, pivot_column, multiplier);
                 for column in pivot_column.saturating_add(1)..order {
                     control.step()?;
-                    let current = dense_value(&factors, order, row, column)?;
-                    let upper = dense_value(&factors, order, pivot_column, column)?;
+                    let current = factors.at(row, column);
+                    let upper = factors.at(pivot_column, column);
                     let updated =
                         finite((-multiplier).mul_add(upper, current), "LU factorization")?;
-                    set_dense_value(&mut factors, order, row, column, updated)?;
+                    factors.set(row, column, updated);
                 }
             }
         }
 
         Ok(Factorization::Nonsingular(Self {
-            order,
             factors,
             permutation,
             parity,
@@ -226,8 +250,12 @@ impl LuDecomposition {
         }))
     }
 
+    const fn order(&self) -> usize {
+        self.factors.order()
+    }
+
     fn ensure_conditioned(&self, operation: &'static str) -> Result<(), LuError> {
-        if self.minimum_scaled_pivot <= numerical_threshold(self.order) {
+        if self.minimum_scaled_pivot <= numerical_threshold(self.order()) {
             Err(LuError::IllConditioned {
                 operation,
                 scaled_pivot: self.minimum_scaled_pivot,
@@ -237,6 +265,7 @@ impl LuDecomposition {
         }
     }
 
+    /// Solve for a right-hand side of exactly `order` values.
     fn solve_raw(
         &self,
         rhs: &[f64],
@@ -244,40 +273,29 @@ impl LuDecomposition {
         control: &mut KernelCheckpoint<'_>,
     ) -> Result<Vec<f64>, LuFailure> {
         self.ensure_conditioned(operation)?;
-        if rhs.len() != self.order {
-            return Err(shape_invariant(format!(
-                "{operation} received a right-hand side of length {} for order {}",
-                rhs.len(),
-                self.order
-            ))
-            .into());
-        }
         if rhs.iter().any(|value| !value.is_finite()) {
             return Err(LuError::NonFinite { operation }.into());
         }
 
+        // The permutation permutes `0..order`.
         let mut solution = self
             .permutation
             .iter()
-            .map(|position| {
-                rhs.get(*position).copied().ok_or_else(|| {
-                    shape_invariant("LU permutation points outside the right-hand side")
-                })
-            })
-            .collect::<Result<Vec<_>, _>>()?;
+            .map(|position| rhs[*position])
+            .collect::<Vec<_>>();
 
-        for row in 0..self.order {
+        for row in 0..self.order() {
             let mut value = solution[row];
             for (column, solved) in solution.iter().copied().enumerate().take(row) {
                 control.step()?;
                 value = finite(
-                    (-dense_value(&self.factors, self.order, row, column)?).mul_add(solved, value),
+                    (-self.factors.at(row, column)).mul_add(solved, value),
                     operation,
                 )?;
             }
             solution[row] = value;
         }
-        for row in (0..self.order).rev() {
+        for row in (0..self.order()).rev() {
             let mut value = solution[row];
             for (column, solved) in solution
                 .iter()
@@ -287,11 +305,11 @@ impl LuDecomposition {
             {
                 control.step()?;
                 value = finite(
-                    (-dense_value(&self.factors, self.order, row, column)?).mul_add(solved, value),
+                    (-self.factors.at(row, column)).mul_add(solved, value),
                     operation,
                 )?;
             }
-            let diagonal = dense_value(&self.factors, self.order, row, row)?;
+            let diagonal = self.factors.at(row, row);
             solution[row] = finite(value / diagonal, operation)?;
         }
         Ok(solution)
@@ -306,9 +324,9 @@ impl LuDecomposition {
         // intermediate product cannot erase or overflow a representable result.
         let initial = BigRational::from_float(self.parity)
             .ok_or(LuError::NonFinite { operation: "det()" })?;
-        let product = (0..self.order).try_fold(initial, |product, diagonal| {
+        let product = (0..self.order()).try_fold(initial, |product, diagonal| {
             control.step()?;
-            let pivot = dense_value(&self.factors, self.order, diagonal, diagonal)?;
+            let pivot = self.factors.at(diagonal, diagonal);
             let pivot =
                 BigRational::from_float(pivot).ok_or(LuError::NonFinite { operation: "det()" })?;
             Ok::<_, LuFailure>(product * pivot)
@@ -326,34 +344,28 @@ impl LuDecomposition {
     }
 }
 
+/// Check the residual of `solution` for `rhs`, both of exactly `order`
+/// values.
 fn checked_residual(
-    matrix: &[f64],
-    order: usize,
+    matrix: &SquareMatrix,
     rhs: &[f64],
     solution: &[f64],
     operation: &'static str,
     control: &mut KernelCheckpoint<'_>,
 ) -> Result<(), LuFailure> {
+    let order = matrix.order();
     let mut matrix_norm = 0.0_f64;
     let mut residual_norm = 0.0_f64;
-    for row in 0..order {
+    for (row, expected) in rhs.iter().enumerate() {
         let mut row_norm = 0.0_f64;
         let mut product = 0.0_f64;
-        for column in 0..order {
+        for (column, value) in solution.iter().enumerate() {
             control.step()?;
-            let coefficient = dense_value(matrix, order, row, column)?;
+            let coefficient = matrix.at(row, column);
             row_norm = finite(row_norm + coefficient.abs(), operation)?;
-            let value = solution
-                .get(column)
-                .copied()
-                .ok_or_else(|| shape_invariant("solution is shorter than the matrix order"))?;
-            product = finite(coefficient.mul_add(value, product), operation)?;
+            product = finite(coefficient.mul_add(*value, product), operation)?;
         }
         matrix_norm = matrix_norm.max(row_norm);
-        let expected = rhs
-            .get(row)
-            .copied()
-            .ok_or_else(|| shape_invariant("right-hand side is shorter than the matrix order"))?;
         residual_norm = residual_norm.max((product - expected).abs());
     }
     let solution_norm = solution
@@ -377,61 +389,68 @@ fn checked_residual(
 }
 
 fn require_nonsingular(
-    matrix: &[f64],
-    order: usize,
+    matrix: &SquareMatrix,
     operation: &'static str,
     control: &mut KernelCheckpoint<'_>,
 ) -> Result<LuDecomposition, LuFailure> {
-    match LuDecomposition::factor(matrix, order, control)? {
+    match LuDecomposition::factor(matrix, control)? {
         Factorization::Singular => Err(LuError::Singular { operation }.into()),
         Factorization::Nonsingular(decomposition) => Ok(decomposition),
     }
 }
 
 pub(super) fn solve_with_control(
-    matrix: &[f64],
-    order: usize,
+    matrix: &SquareMatrix,
     rhs: &[f64],
     control: &mut KernelCheckpoint<'_>,
 ) -> Result<Vec<f64>, LuFailure> {
     let operation = "solved";
-    let decomposition = require_nonsingular(matrix, order, operation, control)?;
+    if rhs.len() != matrix.order() {
+        return Err(shape_invariant(format_args!(
+            "{operation} received a right-hand side of length {} for order {}",
+            rhs.len(),
+            matrix.order()
+        ))
+        .into());
+    }
+    let decomposition = require_nonsingular(matrix, operation, control)?;
     let solution = decomposition.solve_raw(rhs, operation, control)?;
-    checked_residual(matrix, order, rhs, &solution, operation, control)?;
+    checked_residual(matrix, rhs, &solution, operation, control)?;
     Ok(solution)
 }
 
 pub(super) fn inverse_with_control(
-    matrix: &[f64],
-    order: usize,
+    matrix: &SquareMatrix,
     control: &mut KernelCheckpoint<'_>,
-) -> Result<Vec<f64>, LuFailure> {
+) -> Result<SquareMatrix, LuFailure> {
     let operation = "inverted";
-    let decomposition = require_nonsingular(matrix, order, operation, control)?;
+    let order = matrix.order();
+    let decomposition = require_nonsingular(matrix, operation, control)?;
     decomposition.ensure_conditioned(operation)?;
-    let length = matrix_len(order)?;
-    let mut inverse = vec![0.0; length];
+    let mut inverse = SquareMatrix {
+        order,
+        values: vec![0.0; matrix.values.len()],
+    };
     for column in 0..order {
         control.boundary()?;
         let rhs = (0..order)
             .map(|row| if row == column { 1.0 } else { 0.0 })
             .collect::<Vec<_>>();
         let solution = decomposition.solve_raw(&rhs, operation, control)?;
-        checked_residual(matrix, order, &rhs, &solution, operation, control)?;
+        checked_residual(matrix, &rhs, &solution, operation, control)?;
         for (row, value) in solution.into_iter().enumerate() {
             control.step()?;
-            set_dense_value(&mut inverse, order, row, column, value)?;
+            inverse.set(row, column, value);
         }
     }
     Ok(inverse)
 }
 
 pub(super) fn determinant_with_control(
-    matrix: &[f64],
-    order: usize,
+    matrix: &SquareMatrix,
     control: &mut KernelCheckpoint<'_>,
 ) -> Result<f64, LuFailure> {
-    match LuDecomposition::factor(matrix, order, control)? {
+    match LuDecomposition::factor(matrix, control)? {
         Factorization::Singular => Ok(0.0),
         Factorization::Nonsingular(decomposition) => decomposition.determinant(control),
     }
@@ -441,11 +460,14 @@ pub(super) fn determinant_with_control(
 mod tests {
     use super::*;
 
+    fn square(matrix: &[f64], order: usize) -> SquareMatrix {
+        SquareMatrix::try_new(order, matrix.to_vec()).unwrap()
+    }
+
     fn solve(matrix: &[f64], order: usize, rhs: &[f64]) -> Result<Vec<f64>, LuFailure> {
         let cancellation = graphcal_compiler::cancellation::CancellationToken::unbounded();
         solve_with_control(
-            matrix,
-            order,
+            &square(matrix, order),
             rhs,
             &mut KernelCheckpoint::new(&cancellation),
         )
@@ -453,12 +475,19 @@ mod tests {
 
     fn inverse(matrix: &[f64], order: usize) -> Result<Vec<f64>, LuFailure> {
         let cancellation = graphcal_compiler::cancellation::CancellationToken::unbounded();
-        inverse_with_control(matrix, order, &mut KernelCheckpoint::new(&cancellation))
+        inverse_with_control(
+            &square(matrix, order),
+            &mut KernelCheckpoint::new(&cancellation),
+        )
+        .map(SquareMatrix::into_values)
     }
 
     fn determinant(matrix: &[f64], order: usize) -> Result<f64, LuFailure> {
         let cancellation = graphcal_compiler::cancellation::CancellationToken::unbounded();
-        determinant_with_control(matrix, order, &mut KernelCheckpoint::new(&cancellation))
+        determinant_with_control(
+            &square(matrix, order),
+            &mut KernelCheckpoint::new(&cancellation),
+        )
     }
 
     const MATRIX: &[f64] = &[3.0, 1.0, 1.0, 2.0];
@@ -558,10 +587,10 @@ mod tests {
 
     #[test]
     fn malformed_dense_shapes_are_errors() {
-        assert!(matches!(
-            solve(&[1.0], 2, &[1.0, 2.0]).unwrap_err(),
-            Outcome::Failed(Failure::Invariant(_))
-        ));
+        assert!(SquareMatrix::try_new(2, vec![1.0]).is_err());
+        assert!(SquareMatrix::try_new(0, Vec::new()).is_err());
+        assert!(SquareMatrix::try_new(usize::MAX, vec![1.0]).is_err());
+        assert_eq!(SquareMatrix::try_new(1, vec![1.0]).unwrap().order(), 1);
         assert!(matches!(
             solve(MATRIX, 2, &[1.0]).unwrap_err(),
             Outcome::Failed(Failure::Invariant(_))
@@ -574,7 +603,7 @@ mod tests {
         cancellation.cancel();
         let token = cancellation.token();
         assert!(matches!(
-            determinant_with_control(MATRIX, 2, &mut KernelCheckpoint::new(&token)),
+            determinant_with_control(&square(MATRIX, 2), &mut KernelCheckpoint::new(&token)),
             Err(Outcome::Cancelled)
         ));
     }
