@@ -9,6 +9,26 @@ use thiserror::Error;
 use crate::builtin::{AggregationFn, LinearAlgebraFn};
 use crate::datetime_literal::CivilDateTimeLiteral;
 use crate::diagnostic::{DiagnosticKind, SecondaryLabel};
+use crate::hir::const_expr::ConstExprError;
+use crate::semantic::unit_scale::PositiveFiniteScaleError;
+
+/// The unit scale whose value failed validation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UnitScaleSite {
+    /// A unit definition's own scale.
+    Definition,
+    /// A compound unit's product of scales.
+    Compound,
+}
+
+impl std::fmt::Display for UnitScaleSite {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Definition => "unit scale",
+            Self::Compound => "compound unit scale",
+        })
+    }
+}
 use crate::semantic::time_zone::IanaTimeZoneId;
 use crate::syntax::dimension::{DimName, UnitName, UnitRef};
 use crate::syntax::module_name::ScopedName;
@@ -156,6 +176,25 @@ pub enum DimensionError {
         after: jiff::tz::Offset,
         time_zone_span: Span,
     },
+    /// A unit-scale or coordinate constant expression that is not static.
+    #[error("{error}")]
+    InvalidConstantExpression { error: ConstExprError },
+    #[error("{site} {error}")]
+    InvalidUnitScale {
+        site: UnitScaleSite,
+        error: PositiveFiniteScaleError,
+    },
+    #[error("unit `{name}` has a dynamic scale and cannot be used here")]
+    DynamicUnitScaleNotAllowed { name: UnitRef },
+    #[error("expected a time scale name (e.g., UTC, TAI, TT, TDB, GPST)")]
+    ExpectedTimeScale,
+    #[error("unknown time scale `{name}`; expected one of: {expected}")]
+    UnknownTimeScale {
+        name: NameAtom,
+        expected: &'static str,
+    },
+    #[error("type `Datetime` expects 0 or 1 type argument(s), got {got}")]
+    WrongDatetimeArgCount { got: usize },
 }
 
 impl DiagnosticKind for DimensionError {
@@ -197,6 +236,12 @@ impl DiagnosticKind for DimensionError {
             Self::UnsupportedEpochTimeScale { .. } => "graphcal::D030",
             Self::NonexistentCivilDateTime { .. } => "graphcal::D024",
             Self::RepeatedCivilDateTime { .. } => "graphcal::D025",
+            Self::InvalidConstantExpression { .. } => "graphcal::D037",
+            Self::InvalidUnitScale { .. } => "graphcal::D038",
+            Self::DynamicUnitScaleNotAllowed { .. } => "graphcal::D039",
+            Self::ExpectedTimeScale => "graphcal::D040",
+            Self::UnknownTimeScale { .. } => "graphcal::D041",
+            Self::WrongDatetimeArgCount { .. } => "graphcal::D042",
         }
     }
 
@@ -273,12 +318,24 @@ impl DiagnosticKind for DimensionError {
             Self::UnsupportedEpochTimeScale { .. } => Some("not a supported time scale".to_owned()),
             Self::NonexistentCivilDateTime { .. } => Some("this local time is skipped".to_owned()),
             Self::RepeatedCivilDateTime { .. } => Some("this local time is repeated".to_owned()),
+            Self::InvalidConstantExpression { .. }
+            | Self::InvalidUnitScale { .. }
+            | Self::DynamicUnitScaleNotAllowed { .. }
+            | Self::ExpectedTimeScale
+            | Self::UnknownTimeScale { .. }
+            | Self::WrongDatetimeArgCount { .. } => Some("error here".to_owned()),
         }
     }
 
     fn help(&self) -> Option<String> {
         match self {
-            Self::PlotPropertyTypeMismatch { .. } => None,
+            Self::PlotPropertyTypeMismatch { .. }
+            | Self::InvalidConstantExpression { .. }
+            | Self::InvalidUnitScale { .. }
+            | Self::DynamicUnitScaleNotAllowed { .. }
+            | Self::ExpectedTimeScale
+            | Self::UnknownTimeScale { .. }
+            | Self::WrongDatetimeArgCount { .. } => None,
             Self::PlotPropertyDimensioned { .. } => Some("plot properties are raw rendering quantities (pixels, ratios); write a plain number instead of a dimensioned value".to_owned()),
             Self::PlotEncodingTypeMismatch { .. } => Some("plot quantities, Int, Bool, Datetime, index keys, or a contextual string literal; project algebraic or Complex values to a plottable field first".to_owned()),
             Self::PlotEncodingAxisMismatch { channels, .. } => Some(format!("{channels}; every channel must range over a subset of one channel's axes")),
@@ -352,7 +409,13 @@ impl DiagnosticKind for DimensionError {
             | Self::InvalidDatetimeLiteral { .. }
             | Self::EpochTimeScaleArgumentCount { .. }
             | Self::InvalidEpochTimeScaleArgument { .. }
-            | Self::UnsupportedEpochTimeScale { .. } => Vec::new(),
+            | Self::UnsupportedEpochTimeScale { .. }
+            | Self::InvalidConstantExpression { .. }
+            | Self::InvalidUnitScale { .. }
+            | Self::DynamicUnitScaleNotAllowed { .. }
+            | Self::ExpectedTimeScale
+            | Self::UnknownTimeScale { .. }
+            | Self::WrongDatetimeArgCount { .. } => Vec::new(),
             Self::NonexistentCivilDateTime { time_zone_span, .. } => vec![SecondaryLabel {
                 span: *time_zone_span,
                 text: "gap occurs in this timezone".to_owned(),

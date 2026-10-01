@@ -235,3 +235,21 @@ fn module_resolution_keeps_ambiguous_paths_apart_and_cycles_name_their_templates
         "recursive DAG instantiation: main -> inner -> main"
     );
 }
+
+#[test]
+fn time_scale_and_unit_scale_diagnostics_keep_their_lowering_text() {
+    use super::dimension::{DimensionError, UnitScaleSite};
+    use crate::diagnostic::DiagnosticKind as _;
+
+    assert_eq!(UnitScaleSite::Definition.to_string(), "unit scale");
+    assert_eq!(UnitScaleSite::Compound.to_string(), "compound unit scale");
+    assert_eq!(
+        DimensionError::WrongDatetimeArgCount { got: 2 }.to_string(),
+        "type `Datetime` expects 0 or 1 type argument(s), got 2"
+    );
+    assert_eq!(
+        DimensionError::ExpectedTimeScale.to_string(),
+        "expected a time scale name (e.g., UTC, TAI, TT, TDB, GPST)"
+    );
+    assert_eq!(DimensionError::ExpectedTimeScale.code(), "graphcal::D040");
+}

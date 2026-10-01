@@ -9,6 +9,7 @@
 //! regardless of lowering order. There is no source-name keyed registry and no
 //! merge of one module's tables into another's.
 
+use crate::semantic_error::dimension::UnitScaleSite;
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use crate::dag_id::DagId;
@@ -36,7 +37,6 @@ use crate::semantic::unit_scale::{
 };
 use crate::semantic_error::SemanticError;
 use crate::semantic_error::dimension::DimensionError;
-use crate::semantic_error::evaluation::EvaluationError;
 use crate::semantic_error::index::IndexError;
 use crate::semantic_error::name::NameError;
 use crate::source_id::SourceId;
@@ -1044,7 +1044,7 @@ impl<'a> StaticDefinitionEvaluator<'a> {
                     .map_err(|error| const_expr_error(error, src))?;
                 let scale = scale_expr
                     .checked_mul(base_scale)
-                    .map_err(|err| scale_error("unit scale", err, src, def.span))?;
+                    .map_err(|err| scale_error(UnitScaleSite::Definition, err, src, def.span))?;
                 match unit.constness {
                     UnitConstness::Const => UnitScale::Const(scale),
                     UnitConstness::Dynamic => UnitScale::Runtime(scale),
@@ -1273,23 +1273,13 @@ fn dim_expr_error(failure: DimExprFailure, src: SourceId, span: Span) -> Semanti
     }
 }
 
-fn eval_error(message: impl Into<String>, src: SourceId, span: Span) -> SemanticError {
-    SemanticError::located(
-        src,
-        span,
-        EvaluationError::Failed {
-            message: message.into(),
-        },
-    )
-}
-
 fn scale_error(
-    context: &str,
-    err: PositiveFiniteScaleError,
+    site: UnitScaleSite,
+    error: PositiveFiniteScaleError,
     src: SourceId,
     span: Span,
 ) -> SemanticError {
-    eval_error(format!("{context} {err}"), src, span)
+    SemanticError::located(src, span, DimensionError::InvalidUnitScale { site, error })
 }
 
 /// Convert a typed unit-resolution failure into a spanned diagnostic.
@@ -1301,11 +1291,9 @@ fn unit_resolve_error(err: UnitResolveError, src: SourceId, span: Span) -> Seman
         UnitResolveError::DynamicScale(name) => SemanticError::located(
             src,
             span,
-            EvaluationError::Failed {
-                message: format!("unit `{name}` has a dynamic scale and cannot be used here"),
-            },
+            DimensionError::DynamicUnitScaleNotAllowed { name },
         ),
-        UnitResolveError::InvalidScale(err) => scale_error("compound unit scale", err, src, span),
+        UnitResolveError::InvalidScale(err) => scale_error(UnitScaleSite::Compound, err, src, span),
         UnitResolveError::Overflow(_) => {
             SemanticError::located(src, span, DimensionError::DimensionOverflow)
         }
@@ -1319,7 +1307,11 @@ fn const_expr_error(error: ConstExprError, src: SourceId) -> SemanticError {
         ConstExprError::DimensionOverflow { span } => {
             SemanticError::located(src, span, DimensionError::DimensionOverflow)
         }
-        error => eval_error(error.to_string(), src, error.span()),
+        error => SemanticError::located(
+            src,
+            error.span(),
+            DimensionError::InvalidConstantExpression { error },
+        ),
     }
 }
 

@@ -9,7 +9,6 @@ use crate::semantic_error::SemanticError;
 use crate::semantic_error::attribute::AttributeError;
 use crate::semantic_error::dimension::DimensionError;
 use crate::semantic_error::domain::DomainError;
-use crate::semantic_error::evaluation::EvaluationError;
 use crate::semantic_error::index::IndexError;
 use crate::semantic_error::module::ModuleError;
 use crate::semantic_error::name::NameError;
@@ -438,150 +437,124 @@ pub fn expr_lower_error_to_semantic(err: &ExprLowerError, src: SourceId) -> Sema
 )]
 pub fn hir_lower_error_to_graphcal(err: &HirLowerError, src: SourceId) -> SemanticError {
     match err {
-        HirLowerError::ExpectedIndexFoundNat { expression, span } => {
-            return SemanticError::located(
-                src,
-                *span,
-                IndexError::ExpectedIndexFoundNat {
-                    expression: expression.clone(),
-                },
-            );
-        }
+        HirLowerError::ExpectedIndexFoundNat { expression, span } => SemanticError::located(
+            src,
+            *span,
+            IndexError::ExpectedIndexFoundNat {
+                expression: expression.clone(),
+            },
+        ),
         HirLowerError::NestedIndexedType { span } => {
-            return SemanticError::located(src, *span, IndexError::NestedIndexedType);
+            SemanticError::located(src, *span, IndexError::NestedIndexedType)
         }
         HirLowerError::NatOverflow { source, span } => {
-            return SemanticError::located(src, *span, IndexError::NatOverflow { error: *source });
+            SemanticError::located(src, *span, IndexError::NatOverflow { error: *source })
         }
-        HirLowerError::UnknownTypePath { path, span, .. } => {
-            return SemanticError::located(
-                src,
-                *span,
-                NameError::UnknownTypeName { path: path.clone() },
-            );
-        }
-        HirLowerError::IndexLabelAsType { index, label, span } => {
-            return SemanticError::located(
-                src,
-                *span,
-                NameError::IndexLabelAsType {
-                    index: index.clone(),
-                    label: label.clone(),
-                },
-            );
-        }
-        HirLowerError::IndexAsType { index } => {
-            return SemanticError::located(
-                src,
-                index.span(),
-                NameError::IndexAsType {
-                    index: index.clone(),
-                },
-            );
-        }
+        HirLowerError::UnknownTypePath { path, span, .. } => SemanticError::located(
+            src,
+            *span,
+            NameError::UnknownTypeName { path: path.clone() },
+        ),
+        HirLowerError::IndexLabelAsType { index, label, span } => SemanticError::located(
+            src,
+            *span,
+            NameError::IndexLabelAsType {
+                index: index.clone(),
+                label: label.clone(),
+            },
+        ),
+        HirLowerError::IndexAsType { index } => SemanticError::located(
+            src,
+            index.span(),
+            NameError::IndexAsType {
+                index: index.clone(),
+            },
+        ),
         HirLowerError::GenericConstraintMismatch {
             name,
             actual,
             expected,
             span,
-        } => {
-            return SemanticError::located(
-                src,
-                *span,
-                NameError::GenericConstraintMismatch {
-                    name: name.clone(),
-                    actual: *actual,
-                    expected,
-                },
-            );
-        }
-        HirLowerError::UnknownGenericParam { name, span } => {
-            return SemanticError::located(
-                src,
-                *span,
-                NameError::UnknownGenericParam { name: name.clone() },
-            );
-        }
+        } => SemanticError::located(
+            src,
+            *span,
+            NameError::GenericConstraintMismatch {
+                name: name.clone(),
+                actual: *actual,
+                expected,
+            },
+        ),
+        HirLowerError::UnknownGenericParam { name, span } => SemanticError::located(
+            src,
+            *span,
+            NameError::UnknownGenericParam { name: name.clone() },
+        ),
         HirLowerError::WrongGenericArgCount {
             target,
             expected,
             got,
             span,
-        } => {
-            return SemanticError::located(
-                src,
-                *span,
-                NameError::WrongGenericArgCount {
-                    target: target.clone(),
-                    expected: *expected,
-                    got: *got,
-                },
-            );
-        }
+        } => SemanticError::located(
+            src,
+            *span,
+            NameError::WrongGenericArgCount {
+                target: target.clone(),
+                expected: *expected,
+                got: *got,
+            },
+        ),
         HirLowerError::GenericArgumentSortMismatch {
             parameter,
             expected,
             actual,
             span,
-        } => {
-            return SemanticError::located(
-                src,
-                *span,
-                NameError::GenericArgumentSortMismatch {
-                    parameter: parameter.clone(),
-                    expected: *expected,
-                    actual,
-                },
-            );
-        }
+        } => SemanticError::located(
+            src,
+            *span,
+            NameError::GenericArgumentSortMismatch {
+                parameter: parameter.clone(),
+                expected: *expected,
+                actual,
+            },
+        ),
         HirLowerError::DuplicateGenericParam {
             name, duplicate, ..
-        } => {
-            return SemanticError::located(
-                src,
-                *duplicate,
-                NameError::DuplicateGenericParam { name: name.clone() },
-            );
-        }
+        } => SemanticError::located(
+            src,
+            *duplicate,
+            NameError::DuplicateGenericParam { name: name.clone() },
+        ),
         HirLowerError::GenericParamShadowsStatic {
             name, duplicate, ..
-        } => {
-            return SemanticError::located(
-                src,
-                *duplicate,
-                NameError::GenericParamShadowsStatic { name: name.clone() },
-            );
-        }
+        } => SemanticError::located(
+            src,
+            *duplicate,
+            NameError::GenericParamShadowsStatic { name: name.clone() },
+        ),
         HirLowerError::ModuleResolve { source, span } => {
-            return SemanticError::located(src, *span, ModuleError::resolution(source.clone()));
+            SemanticError::located(src, *span, ModuleError::resolution(source.clone()))
         }
-        _ => {}
+        HirLowerError::ExpectedTimeScale { span } => {
+            SemanticError::located(src, *span, DimensionError::ExpectedTimeScale)
+        }
+        HirLowerError::UnknownTimeScale {
+            name,
+            expected,
+            span,
+        } => SemanticError::located(
+            src,
+            *span,
+            DimensionError::UnknownTimeScale {
+                name: name.clone(),
+                expected,
+            },
+        ),
+        HirLowerError::WrongDatetimeArgCount { got, span } => SemanticError::located(
+            src,
+            *span,
+            DimensionError::WrongDatetimeArgCount { got: *got },
+        ),
     }
-    let span = match &err {
-        HirLowerError::ModuleResolve { span, .. }
-        | HirLowerError::UnknownTypePath { span, .. }
-        | HirLowerError::IndexLabelAsType { span, .. }
-        | HirLowerError::NestedIndexedType { span }
-        | HirLowerError::GenericConstraintMismatch { span, .. }
-        | HirLowerError::ExpectedIndexFoundNat { span, .. }
-        | HirLowerError::UnknownGenericParam { span, .. }
-        | HirLowerError::NatOverflow { span, .. }
-        | HirLowerError::WrongGenericArgCount { span, .. }
-        | HirLowerError::GenericArgumentSortMismatch { span, .. }
-        | HirLowerError::ExpectedTimeScale { span }
-        | HirLowerError::UnknownTimeScale { span, .. }
-        | HirLowerError::WrongDatetimeArgCount { span, .. } => *span,
-        HirLowerError::IndexAsType { index } => index.span(),
-        HirLowerError::DuplicateGenericParam { duplicate, .. }
-        | HirLowerError::GenericParamShadowsStatic { duplicate, .. } => *duplicate,
-    };
-    SemanticError::located(
-        src,
-        span,
-        EvaluationError::Failed {
-            message: err.to_string(),
-        },
-    )
 }
 
 #[cfg(test)]

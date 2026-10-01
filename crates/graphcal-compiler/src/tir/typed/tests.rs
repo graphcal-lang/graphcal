@@ -7,7 +7,6 @@ use crate::resolved_name::{ResolvedIndexName, ResolvedStructTypeName, ResolvedUn
 use crate::semantic::time_scale::TimeScale;
 use crate::semantic_error::SemanticErrorKind;
 use crate::semantic_error::dimension::DimensionError;
-use crate::semantic_error::evaluation::EvaluationError;
 use crate::semantic_error::index::IndexError;
 use crate::semantic_error::name::NameError;
 use crate::semantic_error::structure::StructError;
@@ -1515,7 +1514,7 @@ fn resolve_datetime_unknown_scale_error() {
     assert!(matches!(
         err,
         SemanticError::Located(crate::diagnostic::Diagnostic {
-            kind: SemanticErrorKind::Evaluation(EvaluationError::Failed { .. }),
+            kind: SemanticErrorKind::Dimension(DimensionError::UnknownTimeScale { .. }),
             ..
         })
     ));
