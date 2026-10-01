@@ -5,6 +5,7 @@
     clippy::allow_attributes,
     reason = "project compiler pass uses the shared internal model"
 )]
+use graphcal_compiler::semantic_error::attribute::AttributeError;
 use graphcal_compiler::syntax::span::Spanned;
 use std::collections::{HashMap, HashSet};
 
@@ -15,7 +16,6 @@ use graphcal_compiler::outcome::Outcome;
 use graphcal_compiler::resolved_name::ResolvedDeclName;
 use graphcal_compiler::semantic::index_def::IndexBindingTarget;
 use graphcal_compiler::semantic_error::SemanticError;
-use graphcal_compiler::semantic_error::evaluation::EvaluationError;
 use graphcal_compiler::semantic_error::graph::GraphError;
 use graphcal_compiler::semantic_error::index::IndexError;
 use graphcal_compiler::semantic_error::module::ModuleError;
@@ -206,11 +206,8 @@ pub(super) fn process_file_body_declarations<'a>(
             return Err(PipelineError::Semantic(SemanticError::located(
                 file_src,
                 include.path.span(),
-                EvaluationError::Failed {
-                    message: format!(
-                        "inline DAG target not found in project: {}",
-                        target.target()
-                    ),
+                GraphError::InlineDagTargetNotFound {
+                    target: target.target().clone(),
                 },
             ))
             .into());
@@ -428,9 +425,7 @@ fn validate_include_item_attributes(
                     return Err(PipelineError::Semantic(SemanticError::located(
                         file_src,
                         attr.span,
-                        EvaluationError::Failed {
-                            message: "`#[hidden]` takes no arguments".to_string(),
-                        },
+                        AttributeError::HiddenTakesNoArguments,
                     )));
                 }
                 visibility = PlotVisibility::CompositionOnly;

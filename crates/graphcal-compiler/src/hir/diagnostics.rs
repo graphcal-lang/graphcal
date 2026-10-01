@@ -107,23 +107,19 @@ pub fn type_lower_error_to_graphcal(err: &HirLowerError, src: SourceId) -> Seman
 #[must_use]
 pub fn expr_lower_error_to_semantic(err: &ExprLowerError, src: SourceId) -> SemanticError {
     match err {
-        ExprLowerError::UnknownFunction { path, span } => {
-            return SemanticError::located(
-                src,
-                *span,
-                NameError::UnknownFunction { name: path.clone() },
-            );
-        }
-        ExprLowerError::UnknownExternFunction { alias, name, span } => {
-            return SemanticError::located(
-                src,
-                *span,
-                PluginError::UnknownExternFunction {
-                    alias: alias.clone(),
-                    name: name.clone(),
-                },
-            );
-        }
+        ExprLowerError::UnknownFunction { path, span } => SemanticError::located(
+            src,
+            *span,
+            NameError::UnknownFunction { name: path.clone() },
+        ),
+        ExprLowerError::UnknownExternFunction { alias, name, span } => SemanticError::located(
+            src,
+            *span,
+            PluginError::UnknownExternFunction {
+                alias: alias.clone(),
+                name: name.clone(),
+            },
+        ),
         ExprLowerError::NamedArgumentsOnFunction {
             function,
             argument_names,
@@ -135,108 +131,90 @@ pub fn expr_lower_error_to_semantic(err: &ExprLowerError, src: SourceId) -> Sema
                 .map(|argument| format!("{argument}_value"))
                 .collect::<Vec<_>>()
                 .join(", ");
-            return SemanticError::located(
+            SemanticError::located(
                 src,
                 *span,
                 NameError::NamedArgumentsOnFunction {
                     positional_call: format!("{name}({positional_args})"),
                     name,
                 },
-            );
+            )
         }
         ExprLowerError::WrongArity {
             name,
             expected,
             got,
             span,
-        } => {
-            return SemanticError::located(
-                src,
-                *span,
-                NameError::WrongArity {
-                    name: crate::semantic_error::name::CalledFunction::Builtin(*name),
-                    expected: *expected,
-                    got: *got,
-                },
-            );
-        }
-        ExprLowerError::InvalidStaticBindingValue { name, span } => {
-            return SemanticError::located(
-                src,
-                *span,
-                ModuleError::InvalidTypeLevelBindingValue {
-                    name: name.to_string(),
-                },
-            );
-        }
-        ExprLowerError::UnknownLocalRef { name, span } => {
-            return SemanticError::located(
-                src,
-                *span,
-                StructError::UnknownLocalRef {
-                    name: name.to_string(),
-                },
-            );
-        }
-        ExprLowerError::UnknownGraphRef { name, span } => {
-            return SemanticError::located(
-                src,
-                *span,
-                NameError::UnknownGraphRef { name: name.clone() },
-            );
-        }
-        ExprLowerError::BareGraphDeclarationRef { name, kind, span } => {
-            return SemanticError::located(
-                src,
-                *span,
-                NameError::BareGraphDeclarationRef {
-                    name: name.clone(),
-                    kind: *kind,
-                },
-            );
-        }
-        ExprLowerError::TimeScaleInValuePosition { scale, span } => {
-            return SemanticError::located(
-                src,
-                *span,
-                NameError::TimeScaleInValuePosition { scale: *scale },
-            );
-        }
-        ExprLowerError::UnknownUnit { name, span } => {
-            return SemanticError::located(
-                src,
-                *span,
-                DimensionError::UnknownUnit { name: name.clone() },
-            );
-        }
+        } => SemanticError::located(
+            src,
+            *span,
+            NameError::WrongArity {
+                name: crate::semantic_error::name::CalledFunction::Builtin(*name),
+                expected: *expected,
+                got: *got,
+            },
+        ),
+        ExprLowerError::InvalidStaticBindingValue { name, span } => SemanticError::located(
+            src,
+            *span,
+            ModuleError::InvalidTypeLevelBindingValue {
+                name: name.to_string(),
+            },
+        ),
+        ExprLowerError::UnknownLocalRef { name, span } => SemanticError::located(
+            src,
+            *span,
+            StructError::UnknownLocalRef {
+                name: name.to_string(),
+            },
+        ),
+        ExprLowerError::UnknownGraphRef { name, span } => SemanticError::located(
+            src,
+            *span,
+            NameError::UnknownGraphRef { name: name.clone() },
+        ),
+        ExprLowerError::BareGraphDeclarationRef { name, kind, span } => SemanticError::located(
+            src,
+            *span,
+            NameError::BareGraphDeclarationRef {
+                name: name.clone(),
+                kind: *kind,
+            },
+        ),
+        ExprLowerError::TimeScaleInValuePosition { scale, span } => SemanticError::located(
+            src,
+            *span,
+            NameError::TimeScaleInValuePosition { scale: *scale },
+        ),
+        ExprLowerError::UnknownUnit { name, span } => SemanticError::located(
+            src,
+            *span,
+            DimensionError::UnknownUnit { name: name.clone() },
+        ),
         ExprLowerError::InvalidTimezone {
             timezone,
             tzdb_version,
             span,
-        } => {
-            return SemanticError::located(
-                src,
-                *span,
-                DimensionError::InvalidTimezone {
-                    timezone: timezone.clone(),
-                    tzdb_version,
-                },
-            );
-        }
+        } => SemanticError::located(
+            src,
+            *span,
+            DimensionError::InvalidTimezone {
+                timezone: timezone.clone(),
+                tzdb_version,
+            },
+        ),
         ExprLowerError::InvalidDatetimeLiteral {
             expectation,
             reason,
             span,
-        } => {
-            return SemanticError::located(
-                src,
-                *span,
-                DimensionError::InvalidDatetimeLiteral {
-                    expectation: *expectation,
-                    reason: reason.clone(),
-                },
-            );
-        }
+        } => SemanticError::located(
+            src,
+            *span,
+            DimensionError::InvalidDatetimeLiteral {
+                expectation: *expectation,
+                reason: reason.clone(),
+            },
+        ),
         ExprLowerError::NonexistentCivilDateTime {
             datetime,
             time_zone,
@@ -244,19 +222,17 @@ pub fn expr_lower_error_to_semantic(err: &ExprLowerError, src: SourceId) -> Sema
             after,
             datetime_span,
             time_zone_span,
-        } => {
-            return SemanticError::located(
-                src,
-                *datetime_span,
-                DimensionError::NonexistentCivilDateTime {
-                    datetime: *datetime,
-                    time_zone: time_zone.clone(),
-                    before: *before,
-                    after: *after,
-                    time_zone_span: *time_zone_span,
-                },
-            );
-        }
+        } => SemanticError::located(
+            src,
+            *datetime_span,
+            DimensionError::NonexistentCivilDateTime {
+                datetime: *datetime,
+                time_zone: time_zone.clone(),
+                before: *before,
+                after: *after,
+                time_zone_span: *time_zone_span,
+            },
+        ),
         ExprLowerError::RepeatedCivilDateTime {
             datetime,
             time_zone,
@@ -264,84 +240,70 @@ pub fn expr_lower_error_to_semantic(err: &ExprLowerError, src: SourceId) -> Sema
             after,
             datetime_span,
             time_zone_span,
-        } => {
-            return SemanticError::located(
-                src,
-                *datetime_span,
-                DimensionError::RepeatedCivilDateTime {
-                    datetime: *datetime,
-                    time_zone: time_zone.clone(),
-                    before: *before,
-                    after: *after,
-                    time_zone_span: *time_zone_span,
-                },
-            );
-        }
+        } => SemanticError::located(
+            src,
+            *datetime_span,
+            DimensionError::RepeatedCivilDateTime {
+                datetime: *datetime,
+                time_zone: time_zone.clone(),
+                before: *before,
+                after: *after,
+                time_zone_span: *time_zone_span,
+            },
+        ),
         ExprLowerError::TimeZoneRegistryInvariant {
             time_zone,
             reason,
             span,
-        } => {
-            return SemanticError::internal_error(
-                format!("validated timezone `{time_zone}` could not be loaded: {reason}"),
-                src,
-                crate::diagnostic_anchor::DiagnosticAnchor::Source(*span),
-            );
-        }
-        ExprLowerError::EpochTimeScaleArgumentCount { got, span } => {
-            return SemanticError::located(
-                src,
-                *span,
-                DimensionError::EpochTimeScaleArgumentCount { got: *got },
-            );
-        }
-        ExprLowerError::InvalidEpochTimeScaleArgument { span } => {
-            return SemanticError::located(
-                src,
-                *span,
-                DimensionError::InvalidEpochTimeScaleArgument {
-                    expected: crate::semantic::time_scale::TimeScale::expected_names(),
-                },
-            );
-        }
-        ExprLowerError::UnsupportedEpochTimeScale { name, span } => {
-            return SemanticError::located(
-                src,
-                *span,
-                DimensionError::UnsupportedEpochTimeScale {
-                    name: name.clone(),
-                    expected: crate::semantic::time_scale::TimeScale::expected_names(),
-                },
-            );
-        }
+        } => SemanticError::internal_error(
+            format!("validated timezone `{time_zone}` could not be loaded: {reason}"),
+            src,
+            crate::diagnostic_anchor::DiagnosticAnchor::Source(*span),
+        ),
+        ExprLowerError::EpochTimeScaleArgumentCount { got, span } => SemanticError::located(
+            src,
+            *span,
+            DimensionError::EpochTimeScaleArgumentCount { got: *got },
+        ),
+        ExprLowerError::InvalidEpochTimeScaleArgument { span } => SemanticError::located(
+            src,
+            *span,
+            DimensionError::InvalidEpochTimeScaleArgument {
+                expected: crate::semantic::time_scale::TimeScale::expected_names(),
+            },
+        ),
+        ExprLowerError::UnsupportedEpochTimeScale { name, span } => SemanticError::located(
+            src,
+            *span,
+            DimensionError::UnsupportedEpochTimeScale {
+                name: name.clone(),
+                expected: crate::semantic::time_scale::TimeScale::expected_names(),
+            },
+        ),
         ExprLowerError::ExtraMapVariant {
             index_name,
             variant_name,
             span,
-        } => {
-            return SemanticError::located(
-                src,
-                *span,
-                IndexError::ExtraVariants {
-                    index_name: index_name.clone().into(),
-                    extra: vec![crate::syntax::index_name::IndexEntryKey::named(
-                        variant_name.clone(),
-                    )],
-                },
-            );
-        }
+        } => SemanticError::located(
+            src,
+            *span,
+            IndexError::ExtraVariants {
+                index_name: index_name.clone().into(),
+                extra: vec![crate::syntax::index_name::IndexEntryKey::named(
+                    variant_name.clone(),
+                )],
+            },
+        ),
         ExprLowerError::ModuleResolve {
             source: ModuleResolveError::UnknownModuleAlias { alias, .. },
             span,
-        } => {
-            return SemanticError::located(
-                src,
-                *span,
-                ModuleError::UnknownModule {
-                    name: alias.to_string(),
-                },
-            );
-        }
+        } => SemanticError::located(
+            src,
+            *span,
+            ModuleError::UnknownModule {
+                name: alias.to_string(),
+            },
+        ),
         ExprLowerError::ModuleResolve {
             source:
                 ModuleResolveError::UnexpectedDeclKind {
@@ -350,41 +312,35 @@ pub fn expr_lower_error_to_semantic(err: &ExprLowerError, src: SourceId) -> Sema
                     ..
                 },
             span,
-        } => {
-            return SemanticError::located(
-                src,
-                *span,
-                AttributeError::GraphRefToAssert {
-                    name: name.to_unowned_def_name(),
-                },
-            );
-        }
+        } => SemanticError::located(
+            src,
+            *span,
+            AttributeError::GraphRefToAssert {
+                name: name.to_unowned_def_name(),
+            },
+        ),
         ExprLowerError::ModuleResolve {
             source: ModuleResolveError::PrivateName { owner, name, .. },
             span,
-        } => {
-            return SemanticError::located(
-                src,
-                *span,
-                VisibilityError::ImportPrivateItem {
-                    name: name.to_string(),
-                    file_path: owner.to_string(),
-                },
-            );
-        }
+        } => SemanticError::located(
+            src,
+            *span,
+            VisibilityError::ImportPrivateItem {
+                name: name.to_string(),
+                file_path: owner.to_string(),
+            },
+        ),
         ExprLowerError::ModuleResolve {
             source: ModuleResolveError::UnknownIndexVariant { index, variant },
             span,
-        } => {
-            return SemanticError::located(
-                src,
-                *span,
-                IndexError::UnknownVariant {
-                    index_name: index.to_unowned_def_name().into(),
-                    variant_name: variant.clone(),
-                },
-            );
-        }
+        } => SemanticError::located(
+            src,
+            *span,
+            IndexError::UnknownVariant {
+                index_name: index.to_unowned_def_name().into(),
+                variant_name: variant.clone(),
+            },
+        ),
         ExprLowerError::ModuleResolve {
             source:
                 ModuleResolveError::UnknownName {
@@ -393,15 +349,13 @@ pub fn expr_lower_error_to_semantic(err: &ExprLowerError, src: SourceId) -> Sema
                     ..
                 },
             span,
-        } => {
-            return SemanticError::located(
-                src,
-                *span,
-                IndexError::UnknownIndex {
-                    name: IndexName::classify(name.clone()).into(),
-                },
-            );
-        }
+        } => SemanticError::located(
+            src,
+            *span,
+            IndexError::UnknownIndex {
+                name: IndexName::classify(name.clone()).into(),
+            },
+        ),
         ExprLowerError::ModuleResolve {
             source:
                 ModuleResolveError::UnknownName {
@@ -410,121 +364,71 @@ pub fn expr_lower_error_to_semantic(err: &ExprLowerError, src: SourceId) -> Sema
                     ..
                 },
             span,
-        } => {
-            return SemanticError::located(
-                src,
-                *span,
-                StructError::UnknownLocalRef {
-                    name: name.to_string(),
-                },
-            );
-        }
+        } => SemanticError::located(
+            src,
+            *span,
+            StructError::UnknownLocalRef {
+                name: name.to_string(),
+            },
+        ),
         ExprLowerError::TooManyLocals { span } => {
-            return SemanticError::located(src, *span, NameError::TooManyLocals);
+            SemanticError::located(src, *span, NameError::TooManyLocals)
         }
-        ExprLowerError::ExpressionIdentity { source, span } => {
-            return SemanticError::located(
-                src,
-                *span,
-                NameError::ExpressionIdentity {
-                    source: source.clone(),
-                },
-            );
-        }
+        ExprLowerError::ExpressionIdentity { source, span } => SemanticError::located(
+            src,
+            *span,
+            NameError::ExpressionIdentity {
+                source: source.clone(),
+            },
+        ),
         ExprLowerError::EmptyMapEntry { span } => {
-            return SemanticError::located(src, *span, IndexError::EmptyMapEntry);
+            SemanticError::located(src, *span, IndexError::EmptyMapEntry)
         }
         ExprLowerError::UnknownPattern { path, span } => {
-            return SemanticError::located(
-                src,
-                *span,
-                NameError::UnknownPattern { path: path.clone() },
-            );
+            SemanticError::located(src, *span, NameError::UnknownPattern { path: path.clone() })
         }
         ExprLowerError::PositionalArgumentsOnConstructor { constructor, span } => {
-            return SemanticError::located(
+            SemanticError::located(
                 src,
                 *span,
                 NameError::PositionalArgumentsOnConstructor {
                     constructor: constructor.clone(),
                 },
-            );
+            )
         }
-        ExprLowerError::UnsupportedFunctionGenericArgs { path, span } => {
-            return SemanticError::located(
-                src,
-                *span,
-                NameError::UnsupportedFunctionGenericArgs { path: path.clone() },
-            );
-        }
+        ExprLowerError::UnsupportedFunctionGenericArgs { path, span } => SemanticError::located(
+            src,
+            *span,
+            NameError::UnsupportedFunctionGenericArgs { path: path.clone() },
+        ),
         ExprLowerError::DuplicateLocalBinding {
             name, duplicate, ..
-        } => {
-            return SemanticError::located(
-                src,
-                *duplicate,
-                NameError::DuplicateLocalBinding { name: name.clone() },
-            );
-        }
+        } => SemanticError::located(
+            src,
+            *duplicate,
+            NameError::DuplicateLocalBinding { name: name.clone() },
+        ),
         ExprLowerError::LocalBindingShadowsTerm {
             name, duplicate, ..
-        } => {
-            return SemanticError::located(
-                src,
-                *duplicate,
-                NameError::LocalBindingShadowsTerm { name: name.clone() },
-            );
-        }
+        } => SemanticError::located(
+            src,
+            *duplicate,
+            NameError::LocalBindingShadowsTerm { name: name.clone() },
+        ),
         ExprLowerError::EmptyParenthesizedConstructor { constructor, span } => {
-            return SemanticError::located(
+            SemanticError::located(
                 src,
                 *span,
                 StructError::EmptyParenthesizedConstructor {
                     constructor: constructor.to_unowned_def_name(),
                 },
-            );
+            )
         }
-        _ => {}
+        ExprLowerError::ModuleResolve { source, span } => {
+            SemanticError::located(src, *span, ModuleError::resolution(source.clone()))
+        }
+        ExprLowerError::Type(err) => hir_lower_error_to_graphcal(err, src),
     }
-    let span = match err {
-        ExprLowerError::Type(err) => return hir_lower_error_to_graphcal(err, src),
-        ExprLowerError::ModuleResolve { span, .. }
-        | ExprLowerError::InvalidStaticBindingValue { span, .. }
-        | ExprLowerError::UnknownLocalRef { span, .. }
-        | ExprLowerError::UnknownGraphRef { span, .. }
-        | ExprLowerError::BareGraphDeclarationRef { span, .. }
-        | ExprLowerError::TimeScaleInValuePosition { span, .. }
-        | ExprLowerError::UnknownUnit { span, .. }
-        | ExprLowerError::TooManyLocals { span }
-        | ExprLowerError::ExpressionIdentity { span, .. }
-        | ExprLowerError::EmptyMapEntry { span }
-        | ExprLowerError::ExtraMapVariant { span, .. }
-        | ExprLowerError::UnknownPattern { span, .. }
-        | ExprLowerError::UnknownFunction { span, .. }
-        | ExprLowerError::UnknownExternFunction { span, .. }
-        | ExprLowerError::NamedArgumentsOnFunction { span, .. }
-        | ExprLowerError::PositionalArgumentsOnConstructor { span, .. }
-        | ExprLowerError::EmptyParenthesizedConstructor { span, .. }
-        | ExprLowerError::UnsupportedFunctionGenericArgs { span, .. }
-        | ExprLowerError::WrongArity { span, .. }
-        | ExprLowerError::InvalidTimezone { span, .. }
-        | ExprLowerError::EpochTimeScaleArgumentCount { span, .. }
-        | ExprLowerError::InvalidEpochTimeScaleArgument { span }
-        | ExprLowerError::UnsupportedEpochTimeScale { span, .. }
-        | ExprLowerError::InvalidDatetimeLiteral { span, .. }
-        | ExprLowerError::TimeZoneRegistryInvariant { span, .. } => *span,
-        ExprLowerError::NonexistentCivilDateTime { datetime_span, .. }
-        | ExprLowerError::RepeatedCivilDateTime { datetime_span, .. } => *datetime_span,
-        ExprLowerError::DuplicateLocalBinding { duplicate, .. }
-        | ExprLowerError::LocalBindingShadowsTerm { duplicate, .. } => *duplicate,
-    };
-    SemanticError::located(
-        src,
-        span,
-        EvaluationError::Failed {
-            message: err.to_string(),
-        },
-    )
 }
 
 /// Convert a HIR type-lowering failure into a spanned diagnostic.
@@ -647,6 +551,9 @@ pub fn hir_lower_error_to_graphcal(err: &HirLowerError, src: SourceId) -> Semant
                 *duplicate,
                 NameError::GenericParamShadowsStatic { name: name.clone() },
             );
+        }
+        HirLowerError::ModuleResolve { source, span } => {
+            return SemanticError::located(src, *span, ModuleError::resolution(source.clone()));
         }
         _ => {}
     }

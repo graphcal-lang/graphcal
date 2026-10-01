@@ -11,7 +11,6 @@ use std::collections::{HashMap, HashSet};
 
 use super::required_bindability::{self, InterfaceDecl, Violation as RequiredBindabilityViolation};
 use crate::semantic_error::attribute::AttributeError;
-use crate::semantic_error::evaluation::EvaluationError;
 use crate::semantic_error::name::NameError;
 use crate::semantic_error::visibility::VisibilityError;
 use crate::source_id::SourceId;
@@ -638,9 +637,7 @@ fn validate_declaration_attributes(
                     return Err(SemanticError::located(
                         src,
                         attr.span,
-                        EvaluationError::Failed {
-                            message: "`#[hidden]` takes no arguments".to_string(),
-                        },
+                        AttributeError::HiddenTakesNoArguments,
                     ));
                 }
                 visibility = PlotVisibility::CompositionOnly;

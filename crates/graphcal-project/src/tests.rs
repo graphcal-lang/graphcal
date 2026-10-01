@@ -18,7 +18,6 @@ use graphcal_compiler::semantic_error::SemanticErrorKind;
 use graphcal_compiler::semantic_error::attribute::AttributeError;
 use graphcal_compiler::semantic_error::dimension::DimensionError;
 use graphcal_compiler::semantic_error::domain::DomainError;
-use graphcal_compiler::semantic_error::evaluation::EvaluationError;
 use graphcal_compiler::semantic_error::graph::GraphError;
 use graphcal_compiler::semantic_error::index::IndexError;
 use graphcal_compiler::semantic_error::module::ModuleError;
@@ -4412,8 +4411,8 @@ fn aliased_include_does_not_bind_the_source_module_name() {
     assert!(
         matches!(
             &error,
-            CompileError::Eval(RenderedSemanticError { error: SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic { kind: SemanticErrorKind::Evaluation(EvaluationError::Failed { message, .. }), .. }), .. })
-                if message == "unknown module `src.app.defaults`"
+            CompileError::Eval(RenderedSemanticError { error: SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic { kind: SemanticErrorKind::Module(kind @ ModuleError::ModuleResolution { .. }), .. }), .. })
+                if kind.to_string() == "unknown module `src.app.defaults`"
         ),
         "unexpected alias-leak diagnostic: {error:?}"
     );
@@ -4867,11 +4866,12 @@ fn project_module_includes_still_reject_duplicate_default_aliases() {
         Err(CompileError::Eval(RenderedSemanticError {
             error:
                 SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
-                    kind: SemanticErrorKind::Evaluation(EvaluationError::Failed { message, .. }),
+                    kind: SemanticErrorKind::Module(kind @ ModuleError::ModuleResolution { .. }),
                     ..
                 }),
             ..
         })) => {
+            let message = kind.to_string();
             assert!(
                 message.contains("duplicate module") && message.contains("shared"),
                 "unexpected duplicate-alias diagnostic: {message}",
@@ -7836,7 +7836,7 @@ include recursive(x: 1.0)::{result};
 ";
     let result = compile_and_eval(source);
     assert!(result.is_err(), "recursive DAG should fail");
-    let err_msg = format!("{:?}", result.unwrap_err());
+    let err_msg = result.unwrap_err().to_string();
     assert!(
         err_msg.contains("recursive DAG instantiation"),
         "error should mention recursive DAG: {err_msg}"
@@ -7867,18 +7867,19 @@ fn include_closure_cycles_are_rejected_at_the_including_declaration() {
     }
 }
 
-/// Message and label start of the E001 a recursive inline-DAG source reports.
+/// Message and label start of the G009 a recursive inline-DAG source reports.
 fn recursive_dag_error(source: &str) -> (String, usize) {
     match compile_and_eval(source) {
         Err(CompileError::Eval(RenderedSemanticError {
             error:
                 SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
-                    kind: SemanticErrorKind::Evaluation(EvaluationError::Failed { message, .. }),
+                    kind:
+                        SemanticErrorKind::Graph(kind @ GraphError::RecursiveDagInstantiation { .. }),
                     primary: span,
                     ..
                 }),
             ..
-        })) => (message, span.offset()),
+        })) => (kind.to_string(), span.offset()),
         other => panic!("expected a recursive DAG instantiation error, got {other:?}"),
     }
 }

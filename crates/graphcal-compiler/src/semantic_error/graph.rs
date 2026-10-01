@@ -6,6 +6,7 @@
 
 use thiserror::Error;
 
+use crate::dag_id::DagId;
 use crate::diagnostic::{DiagnosticKind, SecondaryLabel};
 
 /// Diagnostics of the declaration graph and of DAG calls.
@@ -32,6 +33,12 @@ pub enum GraphError {
         expected: String,
         found: String,
     },
+    #[error("inline DAG target not found in project: {target}")]
+    InlineDagTargetNotFound { target: DagId },
+    /// Templates that include each other in a circle, from the template the
+    /// include expansion re-entered back to it.
+    #[error("recursive DAG instantiation: {}", format_template_cycle(templates))]
+    RecursiveDagInstantiation { templates: Vec<DagId> },
 }
 
 impl DiagnosticKind for GraphError {
@@ -44,6 +51,8 @@ impl DiagnosticKind for GraphError {
             Self::MissingDagBindings { .. } => "graphcal::G004",
             Self::UnknownDagOutput { .. } => "graphcal::G005",
             Self::DagArgTypeMismatch { .. } => "graphcal::G006",
+            Self::InlineDagTargetNotFound { .. } => "graphcal::G008",
+            Self::RecursiveDagInstantiation { .. } => "graphcal::G009",
         }
     }
 
@@ -60,6 +69,9 @@ impl DiagnosticKind for GraphError {
                 Some(format!("not a projectable value in `{dag_name}`"))
             }
             Self::DagArgTypeMismatch { .. } => Some("type mismatch".to_owned()),
+            Self::InlineDagTargetNotFound { .. } | Self::RecursiveDagInstantiation { .. } => {
+                Some("error here".to_owned())
+            }
         }
     }
 
@@ -72,6 +84,8 @@ impl DiagnosticKind for GraphError {
             Self::MissingDagBindings { .. } => Some("every required `param` declared in the DAG must be bound at each `include` or call site".to_owned()),
             Self::UnknownDagOutput { .. } => Some("the projection after `).` must name a param input port or an explicitly exported node in the called DAG".to_owned()),
             Self::DagArgTypeMismatch { .. } => Some("the binding expression must have the same type as the DAG's param declaration".to_owned()),
+            Self::InlineDagTargetNotFound { .. }
+            | Self::RecursiveDagInstantiation { .. }=> None,
         }
     }
 
@@ -83,7 +97,32 @@ impl DiagnosticKind for GraphError {
             | Self::UnknownDagParam { .. }
             | Self::MissingDagBindings { .. }
             | Self::UnknownDagOutput { .. }
-            | Self::DagArgTypeMismatch { .. } => Vec::new(),
+            | Self::DagArgTypeMismatch { .. }
+            | Self::InlineDagTargetNotFound { .. }
+            | Self::RecursiveDagInstantiation { .. } => Vec::new(),
         }
     }
+}
+
+/// Each template is named by its path inside its file (`outer.inner`), or by
+/// its module identity when it is a file root.
+fn format_template_cycle(templates: &[DagId]) -> String {
+    templates
+        .iter()
+        .map(|template| {
+            let file_depth = template.file_root().segments().len();
+            let inline_path = template
+                .segments()
+                .iter()
+                .skip(file_depth)
+                .map(ToString::to_string)
+                .collect::<Vec<_>>();
+            if inline_path.is_empty() {
+                template.to_string()
+            } else {
+                inline_path.join(".")
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" -> ")
 }

@@ -8,7 +8,7 @@ use std::collections::HashMap;
 
 use graphcal_compiler::semantic_error::SemanticError;
 use graphcal_compiler::semantic_error::SemanticErrorKind;
-use graphcal_compiler::semantic_error::evaluation::EvaluationError;
+use graphcal_compiler::semantic_error::graph::GraphError;
 use graphcal_compiler::semantic_error::module::ModuleError;
 
 use graphcal_compiler::semantic_error::rendered::RenderedSemanticError;
@@ -112,17 +112,17 @@ dag inner {
     let CompileError::Eval(RenderedSemanticError {
         error:
             SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
-                kind: SemanticErrorKind::Evaluation(EvaluationError::Failed { message, .. }),
+                kind: SemanticErrorKind::Graph(kind @ GraphError::RecursiveDagInstantiation { .. }),
                 primary: span,
                 ..
             }),
         ..
     }) = &error
     else {
-        panic!("expected an E001 recursion diagnostic, got {error:?}");
+        panic!("expected a G009 recursion diagnostic, got {error:?}");
     };
     assert_eq!(
-        message,
+        kind.to_string(),
         "recursive DAG instantiation: src.mission.main -> inner -> src.mission.main"
     );
     assert_eq!((span.offset(), span.len()), (0, source.len()));

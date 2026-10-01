@@ -6,9 +6,9 @@ use crate::semantic_error::SemanticErrorKind;
 use crate::semantic_error::attribute::AttributeError;
 use crate::semantic_error::dimension::DimensionError;
 use crate::semantic_error::domain::DomainError;
-use crate::semantic_error::evaluation::EvaluationError;
 use crate::semantic_error::graph::GraphError;
 use crate::semantic_error::index::IndexError;
+use crate::semantic_error::module::ModuleError;
 use crate::semantic_error::name::NameError;
 use crate::semantic_error::structure::StructError;
 use crate::semantic_error::visibility::VisibilityError;
@@ -2234,7 +2234,7 @@ pub index P = { A };
 node x: Dimensionless = A;";
     let err = check(source).unwrap_err();
     assert!(
-        matches!(&err, SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Evaluation(EvaluationError::Failed { message, .. }), .. }) if message.contains("unknown Term `A`")),
+        matches!(&err, SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Module(kind @ ModuleError::ModuleResolution { .. }), .. }) if kind.to_string().contains("unknown Term `A`")),
         "got: {err:?}"
     );
 }
@@ -2244,7 +2244,7 @@ fn value_position_does_not_probe_static_prelude_dimension() {
     let source = "node x: Dimensionless = Length;";
     let err = check(source).unwrap_err();
     assert!(
-        matches!(&err, SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Evaluation(EvaluationError::Failed { message, .. }), .. }) if message.contains("unknown Term `Length`")),
+        matches!(&err, SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Module(kind @ ModuleError::ModuleResolution { .. }), .. }) if kind.to_string().contains("unknown Term `Length`")),
         "got: {err:?}"
     );
 }
@@ -2293,7 +2293,7 @@ pub index M = { A };
 param x: M<Length> = 1.0;";
     let err = check(source).unwrap_err();
     assert!(
-        matches!(&err, SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Evaluation(EvaluationError::Failed { message, .. }), .. }) if message.contains("`M` is an index, not a type")),
+        matches!(&err, SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Module(kind @ ModuleError::ModuleResolution { .. }), .. }) if kind.to_string().contains("`M` is an index, not a type")),
         "got: {err:?}"
     );
 }
@@ -3671,7 +3671,7 @@ node y: Length = @nope(v: @src)::result;
 ";
     let err = check(source).unwrap_err();
     assert!(
-        matches!(&err, SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Evaluation(EvaluationError::Failed { message, .. }), .. }) if message.contains("unknown module")),
+        matches!(&err, SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Module(kind @ ModuleError::ModuleResolution { .. }), .. }) if kind.to_string().contains("unknown module")),
         "got: {err:?}"
     );
 }
@@ -4395,7 +4395,7 @@ param vals: Dimensionless[Step] = { Step#A: 1.0, Step#B: 2.0 };
 plot p = { mark: line, encode: { x: for s: Step { @vals[s] } } };";
     let err = check(source).unwrap_err();
     assert!(
-        matches!(&err, SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Evaluation(EvaluationError::Failed { message, .. }), .. }) if message.contains("no arguments")),
+        matches!(&err, SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Attribute(kind @ AttributeError::HiddenTakesNoArguments), .. }) if kind.to_string().contains("no arguments")),
         "got: {err:?}"
     );
 }

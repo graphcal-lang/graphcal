@@ -6,8 +6,8 @@ use crate::resolve::error::ModuleResolveError;
 use crate::resolved_name::{ResolvedDimName, ResolvedIndexName, ResolvedStructTypeName};
 use crate::semantic_error::SemanticError;
 use crate::semantic_error::dimension::DimensionError;
-use crate::semantic_error::evaluation::EvaluationError;
 use crate::semantic_error::index::IndexError;
+use crate::semantic_error::module::ModuleError;
 use crate::semantic_error::structure::StructError;
 use crate::source_id::SourceId;
 use crate::syntax::ast::GenericConstraint;
@@ -30,13 +30,7 @@ pub(super) fn module_resolve_error(
     src: SourceId,
     span: Span,
 ) -> SemanticError {
-    SemanticError::located(
-        src,
-        span,
-        EvaluationError::Failed {
-            message: err.to_string(),
-        },
-    )
+    SemanticError::located(src, span, ModuleError::resolution(err.clone()))
 }
 
 pub(super) fn internal_error(message: String, src: SourceId, span: Span) -> SemanticError {

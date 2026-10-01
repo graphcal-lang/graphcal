@@ -17,4 +17,4 @@ snippet line 7:     node result: Dimensionless = @x;
 snippet line 8: }
     label ending at line 8, column 1: error here
 snippet line 9: include recurse(x: 1.0)::{ result };
-diagnostic code: graphcal::E001
+diagnostic code: graphcal::G009

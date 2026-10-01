@@ -196,3 +196,42 @@ fn unbound_generics_and_symbolic_arguments_render_their_source_form() {
         "generic argument `Bool` for `N` is not concrete"
     );
 }
+
+#[test]
+fn module_resolution_keeps_ambiguous_paths_apart_and_cycles_name_their_templates() {
+    use super::graph::GraphError;
+    use super::module::ModuleError;
+    use crate::dag_id::DagId;
+    use crate::diagnostic::DiagnosticKind as _;
+    use crate::resolve::error::ModuleResolveError;
+    use crate::syntax::decl_name::DeclName;
+
+    let first = DagId::root_in_package("test", "lib");
+    let second = DagId::root_in_package("test", "main");
+    let ambiguous = ModuleError::resolution(ModuleResolveError::AmbiguousModulePath {
+        first,
+        second: second.clone(),
+    });
+    assert!(matches!(ambiguous, ModuleError::AmbiguousModulePath { .. }));
+    assert_eq!(ambiguous.code(), "graphcal::M034");
+    let unknown = ModuleError::resolution(ModuleResolveError::UnknownModule {
+        owner: second.clone(),
+    });
+    assert_eq!(unknown.code(), "graphcal::M033");
+    assert_eq!(
+        unknown.to_string(),
+        ModuleResolveError::UnknownModule {
+            owner: second.clone()
+        }
+        .to_string()
+    );
+
+    let inner = second.inline_dag_child(DeclName::expect_valid("inner"));
+    let cycle = GraphError::RecursiveDagInstantiation {
+        templates: vec![second.clone(), inner, second],
+    };
+    assert_eq!(
+        cycle.to_string(),
+        "recursive DAG instantiation: main -> inner -> main"
+    );
+}

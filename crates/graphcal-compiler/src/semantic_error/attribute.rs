@@ -59,6 +59,8 @@ pub enum AttributeError {
     ExpectedFailFinitePositionOutOfBounds { position: u64, size: u64 },
     #[error("negative tolerance in tolerance assertion")]
     NegativeTolerance { found: String },
+    #[error("`#[hidden]` takes no arguments")]
+    HiddenTakesNoArguments,
 }
 
 impl DiagnosticKind for AttributeError {
@@ -85,6 +87,7 @@ impl DiagnosticKind for AttributeError {
             Self::ExpectedFailKeyIndexMismatch { .. } => "graphcal::A014",
             Self::ExpectedFailFinitePositionOutOfBounds { .. } => "graphcal::A016",
             Self::NegativeTolerance { .. } => "graphcal::A015",
+            Self::HiddenTakesNoArguments => "graphcal::A024",
         }
     }
 
@@ -123,6 +126,7 @@ impl DiagnosticKind for AttributeError {
                 Some(format!("position #{position} on an axis of size {size}"))
             }
             Self::NegativeTolerance { found, .. } => Some(format!("tolerance is {found}")),
+            Self::HiddenTakesNoArguments => Some("error here".to_owned()),
         }
     }
 
@@ -141,7 +145,8 @@ impl DiagnosticKind for AttributeError {
             Self::InvalidHiddenTarget { .. } => Some("`#[hidden]` suppresses a plot's standalone output; it is only valid on `plot` declarations".to_owned()),
             Self::UnknownAttribute { .. } => Some("recognized attributes are `#[assumes(...)]`, `#[expected_fail]`, `#[hidden]`, and `#[lazy]`".to_owned()),
             Self::InvalidExpectedFailTarget { .. } => Some("`#[expected_fail]` is only valid on `assert` declarations".to_owned()),
-            Self::ExpectedFailInvalidArg => None,
+            Self::ExpectedFailInvalidArg
+            | Self::HiddenTakesNoArguments => None,
             Self::ExpectedFailNotIndexed => Some("use `#[expected_fail]` without arguments for non-indexed assertions".to_owned()),
             Self::ExpectedFailAllOnIndexed => Some("use `#[expected_fail(Index#Variant, ...)]` (qualified `module::Index#Variant` also works) to specify which variants are expected to fail; for finite structural axes use `#[expected_fail(#N, ...)]`".to_owned()),
             Self::ExpectedFailDuplicateKey => Some("each expected-fail key must be unique".to_owned()),
@@ -172,7 +177,8 @@ impl DiagnosticKind for AttributeError {
             | Self::ExpectedFailKeyShapeMismatch { .. }
             | Self::ExpectedFailKeyIndexMismatch { .. }
             | Self::ExpectedFailFinitePositionOutOfBounds { .. }
-            | Self::NegativeTolerance { .. } => Vec::new(),
+            | Self::NegativeTolerance { .. }
+            | Self::HiddenTakesNoArguments => Vec::new(),
             Self::RepeatedSingletonAttribute { first, name, .. } => vec![SecondaryLabel {
                 span: *first,
                 text: format!("first `#[{name}]` attribute"),

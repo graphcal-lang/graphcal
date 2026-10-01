@@ -1,6 +1,7 @@
 //! The freeze boundary: lowering every assembled body of an [`UnfrozenIR`]
 //! to HIR in the scope that authored it, producing a frozen [`HirDag`].
 
+use crate::semantic_error::module::ModuleError;
 use std::collections::HashMap;
 
 use crate::declaration_category::DeclCategory;
@@ -9,7 +10,6 @@ use crate::diagnostic_anchor::DiagnosticAnchor;
 use crate::ir::instance::identity::instance_declaration;
 use crate::outcome::Outcome;
 use crate::semantic_error::SemanticError;
-use crate::semantic_error::evaluation::EvaluationError;
 use crate::source_id::SourceId;
 use crate::syntax::module_name::ScopedName;
 use crate::syntax::span::Span;
@@ -600,13 +600,7 @@ impl ParsedExpectedFailMetadata {
                         .resolve_index_variant_parts(&resolution_owner, &index, &variant)
                         .map(|resolved| ExpectedFailKeyPart::resolved(resolved, span))
                         .map_err(|err| {
-                            SemanticError::located(
-                                src,
-                                span,
-                                EvaluationError::Failed {
-                                    message: err.to_string(),
-                                },
-                            )
+                            SemanticError::located(src, span, ModuleError::resolution(err))
                         }),
                     ExpectedFailKeyPart::FinitePosition { position, span } => {
                         Ok(ExpectedFailKeyPart::FinitePosition { position, span })

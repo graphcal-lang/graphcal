@@ -6,8 +6,10 @@
 
 use thiserror::Error;
 
+use crate::dag_id::DagId;
 use crate::declaration_kind::DeclarationKind;
 use crate::diagnostic::{DiagnosticKind, SecondaryLabel};
+use crate::resolve::error::ModuleResolveError;
 use crate::syntax::import_category::{ImportItemCategoryMismatch, ImportItemNamespace};
 use crate::syntax::names::NameAtom;
 use crate::syntax::span::Span;
@@ -91,6 +93,16 @@ pub enum ModuleError {
     },
     #[error("cannot import runtime item `{name}`; use `include` for runtime nodes and params")]
     ImportRuntimeItem { name: String },
+    /// A module-aware lookup failed in a way no more specific diagnostic covers.
+    #[error("{error}")]
+    ModuleResolution { error: Box<ModuleResolveError> },
+    /// Two source modules share one module-path spelling.
+    #[error(
+        "module path `{first}` is ambiguous: it names a module in file `{}` and a module in file `{}`",
+        first.file_root(),
+        second.file_root()
+    )]
+    AmbiguousModulePath { first: DagId, second: DagId },
 }
 
 impl DiagnosticKind for ModuleError {
@@ -116,6 +128,8 @@ impl DiagnosticKind for ModuleError {
             Self::IndexBindingNotAnIndex { .. } => "graphcal::M019",
             Self::IndexKindMismatch { .. } => "graphcal::M018",
             Self::ImportRuntimeItem { .. } => "graphcal::M020",
+            Self::ModuleResolution { .. } => "graphcal::M033",
+            Self::AmbiguousModulePath { .. } => "graphcal::M034",
         }
     }
 
@@ -163,6 +177,9 @@ impl DiagnosticKind for ModuleError {
             Self::IndexBindingNotAnIndex { .. } => Some("not a known index".to_owned()),
             Self::IndexKindMismatch { .. } => Some("kind mismatch".to_owned()),
             Self::ImportRuntimeItem { .. } => Some("runtime item cannot be imported".to_owned()),
+            Self::ModuleResolution { .. } | Self::AmbiguousModulePath { .. } => {
+                Some("error here".to_owned())
+            }
         }
     }
 
@@ -179,7 +196,9 @@ impl DiagnosticKind for ModuleError {
             Self::DuplicateIncludeSelection { .. } => Some("select each producer at most once in an include list".to_owned()),
             Self::ImportNameNotFound { .. } => Some("check that the name is declared in the imported file".to_owned()),
             Self::ImportCategoryMismatch { .. }
-            | Self::DuplicateModuleName { .. } => None,
+            | Self::DuplicateModuleName { .. }
+            | Self::ModuleResolution { .. }
+            | Self::AmbiguousModulePath { .. } => None,
             Self::UnknownModule { .. } => Some("module-qualified references start with a local name introduced by `import`; call an aliased module through that alias, for example `import pkg.module as m; @m(...)::out`".to_owned()),
             Self::UnknownParamBinding { .. } => Some("param bindings must reference `param` declarations in the imported file".to_owned()),
             Self::BindingNotAParam { .. } => Some("only `param` declarations can be overridden in import bindings".to_owned()),
@@ -210,7 +229,9 @@ impl DiagnosticKind for ModuleError {
             | Self::InvalidTypeLevelBindingValue { .. }
             | Self::IndexBindingNotAnIndex { .. }
             | Self::IndexKindMismatch { .. }
-            | Self::ImportRuntimeItem { .. } => Vec::new(),
+            | Self::ImportRuntimeItem { .. }
+            | Self::ModuleResolution { .. }
+            | Self::AmbiguousModulePath { .. } => Vec::new(),
             Self::DuplicateIncludeSelection { first, .. } => vec![SecondaryLabel {
                 span: *first,
                 text: "first selected here".to_owned(),
@@ -219,6 +240,22 @@ impl DiagnosticKind for ModuleError {
                 span: *first,
                 text: "first imported here".to_owned(),
             }],
+        }
+    }
+}
+
+impl ModuleError {
+    /// The diagnostic of a module-resolution failure that no more specific
+    /// family variant describes; an ambiguous module path keeps its own code.
+    #[must_use]
+    pub fn resolution(error: ModuleResolveError) -> Self {
+        match error {
+            ModuleResolveError::AmbiguousModulePath { first, second } => {
+                Self::AmbiguousModulePath { first, second }
+            }
+            error => Self::ModuleResolution {
+                error: Box::new(error),
+            },
         }
     }
 }
