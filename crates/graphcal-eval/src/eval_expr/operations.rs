@@ -231,11 +231,21 @@ impl<'t> ArgumentReader<ScopedNode<'t>> for Operands<'_, 't> {
         Operands::int(self, node)
     }
 
-    fn indexed(
+    fn array(
         &self,
         node: ScopedNode<'t>,
-    ) -> Result<IndexedValue<RuntimeValue>, Outcome<SemanticError>> {
-        Operands::indexed(self, node)
+        element: &graphcal_compiler::function_signature::ScalarValueKind,
+        indexes: &graphcal_compiler::syntax::non_empty::NonEmpty<
+            graphcal_compiler::function_signature::IndexBinder,
+        >,
+    ) -> Result<crate::host_abi::marshal::ArrayArgument, Outcome<SemanticError>> {
+        self.read(
+            node,
+            "an array of its parameter's element kind and rank",
+            |value| {
+                crate::host_abi::marshal::ArrayArgument::try_from_value(value, element, indexes)
+            },
+        )
     }
 }
 

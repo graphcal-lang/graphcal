@@ -23,10 +23,8 @@ pub mod argument;
 pub(crate) mod marshal;
 mod scalar;
 
-pub use scalar::{
-    HostInt, HostScalar, HostScalarError, InvalidIntReason, decode_bool, decode_int, encode_bool,
-    encode_int, validate_quantity,
-};
+pub use scalar::{HostInt, HostScalar, HostScalarError, InvalidIntReason, validate_quantity};
+use scalar::{decode_bool, decode_int};
 
 /// A typed location for an invalid slot in a composite ABI result.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -332,6 +330,7 @@ const fn invalid_slot(
 
 #[cfg(test)]
 mod tests {
+    use super::scalar::encode_int;
     use graphcal_compiler::dimension::Dimension;
     use graphcal_compiler::function_signature::{
         FunctionParam, FunctionSignature, StructShape, StructShapeField,

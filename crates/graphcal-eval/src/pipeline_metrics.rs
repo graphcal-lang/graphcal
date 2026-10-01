@@ -34,7 +34,9 @@ pub fn record(event: Event) {
 }
 
 #[cfg(any(test, feature = "test-internals"))]
-pub use observer::{measure, record_many};
+pub use observer::measure;
+#[cfg(any(test, feature = "test-internals"))]
+pub(crate) use observer::record_many;
 
 /// Observe the actual canonical/importer addresses, not an inactive clone hook.
 #[cfg(any(test, feature = "test-internals"))]
