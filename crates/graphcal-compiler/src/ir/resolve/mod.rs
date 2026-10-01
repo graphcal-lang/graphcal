@@ -326,8 +326,8 @@ fn validate_required_bindability(file: &File, src: SourceId) -> Result<(), Seman
                         src,
                         introduced.span(),
                         VisibilityError::RequiredItemMustBeBindable {
-                            kind: kind.to_string(),
-                            name: introduced.atom().to_string(),
+                            kind,
+                            name: introduced.atom().clone(),
                         },
                     )
                 }

@@ -9,7 +9,7 @@ use graphcal_compiler::semantic_error::dimension::DimensionError;
 use graphcal_compiler::semantic_error::graph::GraphError;
 use graphcal_compiler::semantic_error::name::NameError;
 use graphcal_compiler::semantic_error::structure::StructError;
-use graphcal_compiler::semantic_error::visibility::VisibilityError;
+use graphcal_compiler::semantic_error::visibility::{OverriddenKind, VisibilityError};
 
 use graphcal_compiler::semantic_error::rendered::RenderedSemanticError;
 use graphcal_io::RealFileSystem;
@@ -408,8 +408,8 @@ fn assert_reconciliation_error(
             };
             let src = rendered.named_source();
             assert_eq!(overridden, expected_override);
-            assert_eq!(overridden_kind, expected_kind);
-            assert_eq!(orphan_decl, expected_orphan);
+            assert_eq!(overridden_kind.to_string(), expected_kind);
+            assert_eq!(orphan_decl.as_str(), expected_orphan);
             assert!(src.name().ends_with("main.gcl"));
             assert!(span.offset() + span.len() <= src.inner().len());
             assert!(src.inner()[span.offset()..span.offset() + span.len()].contains("include"));
@@ -647,8 +647,8 @@ include reusable(type Record: Other, record: Other(x: 2.0)) as instance;
     assert!(matches!(
         error,
         SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic { kind: SemanticErrorKind::Visibility(VisibilityError::IncludeMustReconcileOverride { overridden, overridden_kind, orphan_decl, .. }), .. }) if overridden == "Record"
-            && overridden_kind == "type"
-            && orphan_decl == "extracted"
+            && overridden_kind == OverriddenKind::Type
+            && orphan_decl.as_str() == "extracted"
     ));
 }
 

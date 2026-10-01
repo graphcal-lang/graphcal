@@ -8,8 +8,28 @@ use thiserror::Error;
 
 use crate::declaration_kind::DeclarationKind;
 use crate::diagnostic::{DiagnosticKind, SecondaryLabel};
+use crate::static_interface::StaticInputKind;
+use crate::syntax::decl_name::DeclName;
+use crate::syntax::index_name::{IndexName, IndexVariantName};
 use crate::syntax::names::NameAtom;
 use crate::syntax::span::Span;
+
+/// The kind of bindable symbol an include overrides without reconciling
+/// every declaration that mentions it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OverriddenKind {
+    Index,
+    Type,
+}
+
+impl std::fmt::Display for OverriddenKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Index => "index",
+            Self::Type => "type",
+        })
+    }
+}
 
 /// Diagnostics of item visibility and bindable interfaces.
 #[derive(Debug, Clone, Error)]
@@ -23,7 +43,10 @@ pub enum VisibilityError {
     /// `param` is excluded: the declaration kind itself creates a required or
     /// defaulted input port and never carries a visibility annotation.
     #[error("required {kind} `{name}` must be declared `pub(bind)`")]
-    RequiredItemMustBeBindable { kind: String, name: String },
+    RequiredItemMustBeBindable {
+        kind: StaticInputKind,
+        name: NameAtom,
+    },
     /// A visible declaration references a private type-system item in
     /// its written signature (A9 case 1).
     ///
@@ -50,7 +73,10 @@ pub enum VisibilityError {
     #[error(
         "variant literal `{index}#{variant}` of `pub(bind) index` cannot be used in the defining file"
     )]
-    PubIndexVariantLiteral { index: String, variant: String },
+    PubIndexVariantLiteral {
+        index: IndexName,
+        variant: IndexVariantName,
+    },
     /// An include overrides a bindable symbol `s`, but some kept
     /// declaration's body or default mentions a name nominally tied to
     /// `s` and was not itself re-bound by the same include statement
@@ -66,8 +92,8 @@ pub enum VisibilityError {
     )]
     IncludeMustReconcileOverride {
         overridden: String,
-        overridden_kind: String,
-        orphan_decl: String,
+        overridden_kind: OverriddenKind,
+        orphan_decl: DeclName,
         detail: String,
     },
     /// A selectively re-exported import/include item (`{ pub item }`)

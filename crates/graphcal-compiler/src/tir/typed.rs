@@ -1594,8 +1594,8 @@ impl HirPolicyChecker<'_> {
                 self.src,
                 variant.path_span(),
                 VisibilityError::PubIndexVariantLiteral {
-                    index: index.as_str().to_string(),
-                    variant: variant.variant.variant().as_str().to_string(),
+                    index: index.to_unowned_def_name(),
+                    variant: variant.variant.variant().clone(),
                 },
             ));
         }

@@ -1,5 +1,6 @@
 //! Include assembly and typed substitution for unfrozen per-DAG IR.
 
+use crate::semantic_error::visibility::OverriddenKind;
 use std::collections::{HashMap, HashSet};
 
 use crate::declaration_category::DeclCategory;
@@ -333,8 +334,8 @@ impl NominalOverridePreflight<'_> {
             self.include_span,
             VisibilityError::IncludeMustReconcileOverride {
                 overridden: index.to_string(),
-                overridden_kind: "index".to_string(),
-                orphan_decl: self.orphan_decl.to_string(),
+                overridden_kind: OverriddenKind::Index,
+                orphan_decl: self.orphan_decl.clone(),
                 detail,
             },
         ))
@@ -361,8 +362,8 @@ impl NominalOverridePreflight<'_> {
             self.include_span,
             VisibilityError::IncludeMustReconcileOverride {
                 overridden: owning_type.to_string(),
-                overridden_kind: "type".to_string(),
-                orphan_decl: self.orphan_decl.to_string(),
+                overridden_kind: OverriddenKind::Type,
+                orphan_decl: self.orphan_decl.clone(),
                 detail,
             },
         ))

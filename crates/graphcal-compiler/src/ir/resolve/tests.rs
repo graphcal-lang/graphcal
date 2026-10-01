@@ -754,7 +754,7 @@ fn resolve_required_index_must_be_bindable() {
     ";
     let err = parse_and_resolve(source).unwrap_err();
     assert!(
-        matches!(err, SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Visibility(VisibilityError::RequiredItemMustBeBindable { kind, .. }), .. }) if kind == "index")
+        matches!(err, SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Visibility(VisibilityError::RequiredItemMustBeBindable { kind, .. }), .. }) if kind.to_string() == "index")
     );
 }
 
@@ -767,7 +767,7 @@ fn resolve_required_pub_index_still_needs_bind() {
     ";
     let err = parse_and_resolve(source).unwrap_err();
     assert!(
-        matches!(err, SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Visibility(VisibilityError::RequiredItemMustBeBindable { kind, .. }), .. }) if kind == "index")
+        matches!(err, SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Visibility(VisibilityError::RequiredItemMustBeBindable { kind, .. }), .. }) if kind.to_string() == "index")
     );
 }
 
@@ -786,7 +786,7 @@ fn resolve_required_type_must_be_bindable() {
     ";
     let err = parse_and_resolve(source).unwrap_err();
     assert!(
-        matches!(err, SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Visibility(VisibilityError::RequiredItemMustBeBindable { kind, .. }), .. }) if kind == "type")
+        matches!(err, SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Visibility(VisibilityError::RequiredItemMustBeBindable { kind, .. }), .. }) if kind.to_string() == "type")
     );
 }
 
@@ -805,7 +805,7 @@ fn resolve_required_dim_must_be_bindable() {
     ";
     let err = parse_and_resolve(source).unwrap_err();
     assert!(
-        matches!(err, SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Visibility(VisibilityError::RequiredItemMustBeBindable { kind, .. }), .. }) if kind == "dim")
+        matches!(err, SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Visibility(VisibilityError::RequiredItemMustBeBindable { kind, .. }), .. }) if kind.to_string() == "dim")
     );
 }
 

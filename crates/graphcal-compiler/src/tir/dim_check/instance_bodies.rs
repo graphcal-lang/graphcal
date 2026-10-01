@@ -6,6 +6,7 @@ use crate::diagnostic_anchor::DiagnosticAnchor;
 use crate::outcome::Outcome;
 use crate::semantic_error::SemanticError;
 use crate::semantic_error::dimension::DimensionError;
+use crate::semantic_error::visibility::OverriddenKind;
 use crate::semantic_error::visibility::VisibilityError;
 use crate::source_id::SourceId;
 use crate::tir::texpr::{CheckedBodies, CheckedBody, NominalObservation, TBody};
@@ -63,7 +64,7 @@ fn check_retained_reconciliations(
                             | NominalObservation::IndexArgument(_) => continue,
                         };
                         (identity == source || identity == replacement)
-                            .then(|| (overridden.to_string(), "type", detail))
+                            .then(|| (overridden.to_string(), OverriddenKind::Type, detail))
                     }
                     (
                         OverrideTarget::Index {
@@ -86,7 +87,7 @@ fn check_retained_reconciliations(
                         };
                         (identity.declared_resolved() == Some(source)
                             || replacement.to_symbolic().matches_ref(identity))
-                        .then(|| (overridden.to_string(), "index", detail))
+                        .then(|| (overridden.to_string(), OverriddenKind::Index, detail))
                     }
                 };
                 if let Some((overridden, kind, detail)) = matched {
@@ -95,8 +96,8 @@ fn check_retained_reconciliations(
                         reconciliation.include_span,
                         VisibilityError::IncludeMustReconcileOverride {
                             overridden,
-                            overridden_kind: kind.to_string(),
-                            orphan_decl: reconciliation.orphan_decl().to_string(),
+                            overridden_kind: kind,
+                            orphan_decl: reconciliation.orphan_decl(),
                             detail,
                         },
                     ));

@@ -6930,8 +6930,8 @@ fn project_include_overrides_index_no_param_binding_v005() {
             ..
         })) => {
             assert_eq!(overridden, "Phase");
-            assert_eq!(overridden_kind, "index");
-            assert_eq!(orphan_decl, "cost");
+            assert_eq!(overridden_kind.to_string(), "index");
+            assert_eq!(orphan_decl.as_str(), "cost");
         }
         other => panic!("expected IncludeMustReconcileOverride, got {other:?}"),
     }

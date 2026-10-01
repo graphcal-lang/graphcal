@@ -173,7 +173,7 @@ fn compare_case(case: &OracleCase) -> Result<(), String> {
                     }),
                 ..
             })),
-        ) if kind == expected_kind.diagnostic_name() => Ok(()),
+        ) if kind.to_string() == expected_kind.diagnostic_name() => Ok(()),
         (OracleDecision::Accepted, Err(error)) => Err(format!(
             "Lean accepted `{source}`, but Rust rejected it with {error:?}"
         )),

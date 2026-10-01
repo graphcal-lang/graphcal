@@ -2,6 +2,7 @@
 
 use crate::hir::types::{GenericArg, IndexRef, ValueType, ValueTypeKind};
 use crate::resolved_name::{ResolvedConstructorName, ResolvedStructTypeName};
+use crate::semantic_error::visibility::OverriddenKind;
 use crate::semantic_error::visibility::VisibilityError;
 
 use crate::semantic::checked_type::{IndexTypeRef, Symbolic};
@@ -92,8 +93,8 @@ impl Infer<'_> {
                     reconciliation.include_span,
                     VisibilityError::IncludeMustReconcileOverride {
                         overridden: overridden.to_string(),
-                        overridden_kind: "type".to_string(),
-                        orphan_decl: reconciliation.orphan_decl().to_string(),
+                        overridden_kind: OverriddenKind::Type,
+                        orphan_decl: reconciliation.orphan_decl(),
                         detail,
                     },
                 ));
@@ -158,8 +159,8 @@ impl Infer<'_> {
                     reconciliation.include_span,
                     VisibilityError::IncludeMustReconcileOverride {
                         overridden: overridden.to_string(),
-                        overridden_kind: "index".to_string(),
-                        orphan_decl: reconciliation.orphan_decl().to_string(),
+                        overridden_kind: OverriddenKind::Index,
+                        orphan_decl: reconciliation.orphan_decl(),
                         detail,
                     },
                 ));
