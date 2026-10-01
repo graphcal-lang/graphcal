@@ -10,13 +10,21 @@ use std::collections::HashMap;
 use std::marker::PhantomData;
 
 use graphcal_compiler::dag_id::DagId;
+use graphcal_compiler::declaration_category::ValueDeclCategory;
 use graphcal_compiler::hir::expr::Expr;
+use graphcal_compiler::ir::instance::{
+    ExposedValueBody, InstanceAssertionProjection, InstancePlotProjection, InstanceValueProjection,
+};
 use graphcal_compiler::resolved_name::ResolvedDeclName;
 use graphcal_compiler::tir::texpr::{ExecutableBodyError, TExpr};
 use graphcal_compiler::tir::typed::body_scope::Scoped;
-use graphcal_compiler::tir::typed::checked_instance::CheckedInstance;
+use graphcal_compiler::tir::typed::checked::CheckedTir;
+use graphcal_compiler::tir::typed::checked_instance::{CheckedInstance, ResolvedProjection};
 use graphcal_compiler::tir::typed::dag_position::DagPosition;
+use graphcal_compiler::tir::typed::declaration_view::DeclarationView;
 use graphcal_compiler::tir::typed::evaluation_unit::ScopedTree;
+use graphcal_compiler::tir::typed::evaluation_unit::{BodyKind, DeclarationBody};
+use graphcal_compiler::tir::typed::model::{TypedAssertEntry, TypedPlotEntry};
 use graphcal_compiler::tir::typed::scoped_node::ScopedCall;
 use thiserror::Error;
 
@@ -258,52 +266,174 @@ pub enum StepIndexError {
 }
 
 /// One semantic instance a callable's body includes, with the sealed DAG
-/// that runs it.
-#[derive(Debug, Clone, Copy)]
+/// that runs it and the checked declarations its include site exposes.
+#[derive(Debug, Clone)]
 pub struct PlannedInstance<'p> {
     instance: CheckedInstance<'p>,
     scope: SealedDag<'p>,
+    outputs: Vec<PlannedOutput<'p>>,
+    assertions: Vec<PlannedAssertion<'p>>,
+    plots: Vec<PlannedPlot<'p>>,
 }
 
-/// Why a sealed DAG cannot run a semantic instance.
+/// One value an include site exposes from the instance's own body, with
+/// the category of the declaration that produces it.
+#[derive(Debug, Clone)]
+pub struct PlannedOutput<'p> {
+    /// The declaration the projection exposes, as the instance runs it.
+    pub target: ResolvedDeclName,
+    /// The include-site projection, for its exposed name.
+    pub projection: &'p InstanceValueProjection,
+    /// The category of the exposed declaration.
+    pub category: ValueDeclCategory,
+}
+
+/// One assertion an include site exposes, with its checked body.
+#[derive(Debug, Clone, Copy)]
+pub struct PlannedAssertion<'p> {
+    /// The include-site projection, for its exposed name and options.
+    pub projection: &'p InstanceAssertionProjection,
+    /// The assertion's checked body, in the scope of the DAG that owns it.
+    pub body: DeclarationBody<'p>,
+    /// The assertion's declaration.
+    pub entry: Scoped<'p, TypedAssertEntry>,
+}
+
+/// One plot an include site requests, with its checked body.
+#[derive(Debug, Clone, Copy)]
+pub struct PlannedPlot<'p> {
+    /// The include-site projection, for its alias and visibility.
+    pub projection: &'p InstancePlotProjection,
+    /// The plot's checked body, in the scope of the DAG that owns it, which
+    /// may be an instance nested in this one when a template forwards its
+    /// own plot.
+    pub body: DeclarationBody<'p>,
+    /// The plot's declaration.
+    pub entry: Scoped<'p, TypedPlotEntry>,
+}
+
+/// Why a semantic instance cannot be planned.
 #[derive(Debug, Error)]
-#[error("semantic instance `{instance}` is run by DAG `{actual}`")]
-pub struct PlannedInstanceError {
-    instance: DagId,
-    actual: DagId,
+pub enum PlannedInstanceError {
+    /// The sealed DAG is not the instance's own DAG.
+    #[error("semantic instance `{instance}` is run by DAG `{actual}`")]
+    ForeignScope { instance: DagId, actual: DagId },
+    /// An exposed value is not a runtime value of the instance.
+    #[error("projected declaration `{0}` is not a runtime value")]
+    NotAValue(ResolvedDeclName),
+    /// An exposed assertion has no checked assertion body.
+    #[error("assertion `{0}` has no checked body")]
+    NotAnAssertion(ResolvedDeclName),
+    /// A requested plot has no checked plot body.
+    #[error("plot `{0}` has no checked body")]
+    NotAPlot(ResolvedDeclName),
 }
 
 impl<'p> PlannedInstance<'p> {
-    /// Pair `instance` with `scope`, the sealed DAG that runs it.
+    /// Pair `instance` with `scope`, the sealed DAG that runs it, and find
+    /// the checked declarations its include site exposes in `tir`.
     ///
     /// # Errors
     ///
     /// Returns [`PlannedInstanceError`] when `scope` is not the instance's
-    /// own DAG.
+    /// own DAG or an exposed declaration has no checked body of its kind.
     pub fn try_new(
+        tir: &'p CheckedTir,
         instance: CheckedInstance<'p>,
         scope: SealedDag<'p>,
     ) -> Result<Self, PlannedInstanceError> {
-        if std::ptr::eq(instance.dag(), scope.dag()) {
-            Ok(Self { instance, scope })
-        } else {
-            Err(PlannedInstanceError {
+        if !std::ptr::eq(instance.dag(), scope.dag()) {
+            return Err(PlannedInstanceError::ForeignScope {
                 instance: instance.dag().dag_id().clone(),
                 actual: scope.dag().dag_id().clone(),
-            })
+            });
         }
+        // A value the including DAG declares itself (a projection alias) is
+        // reported by the including DAG, so only the instance's own values
+        // are planned here.
+        let outputs = instance
+            .output_projections()
+            .filter(|resolved| resolved.projection.body() == ExposedValueBody::Instance)
+            .map(|ResolvedProjection { target, projection }| {
+                let category = instance
+                    .dag()
+                    .declaration(&target)
+                    .and_then(DeclarationView::value)
+                    .map(|value| value.category)
+                    .ok_or_else(|| PlannedInstanceError::NotAValue(target.clone()))?;
+                Ok(PlannedOutput {
+                    target,
+                    projection,
+                    category,
+                })
+            })
+            .collect::<Result<_, _>>()?;
+        let assertions = instance
+            .assertion_projections()
+            .map(|ResolvedProjection { target, projection }| {
+                let body = tir.declaration_body(&target);
+                match body.map(|body| (body, body.kind())) {
+                    Some((body, BodyKind::Assert(entry))) => Ok(PlannedAssertion {
+                        projection,
+                        body,
+                        entry,
+                    }),
+                    _ => Err(PlannedInstanceError::NotAnAssertion(target)),
+                }
+            })
+            .collect::<Result<_, _>>()?;
+        let plots = instance
+            .plot_projections()
+            .map(|ResolvedProjection { target, projection }| {
+                let body = tir.declaration_body(&target);
+                match body.map(|body| (body, body.kind())) {
+                    Some((body, BodyKind::Plot(entry))) => Ok(PlannedPlot {
+                        projection,
+                        body,
+                        entry,
+                    }),
+                    _ => Err(PlannedInstanceError::NotAPlot(target)),
+                }
+            })
+            .collect::<Result<_, _>>()?;
+        Ok(Self {
+            instance,
+            scope,
+            outputs,
+            assertions,
+            plots,
+        })
     }
 
     /// The include edge and the checked DAG that runs its instance.
     #[must_use]
-    pub const fn instance(self) -> CheckedInstance<'p> {
+    pub const fn instance(&self) -> CheckedInstance<'p> {
         self.instance
     }
 
     /// The instance's sealed DAG, with the source its diagnostics point into.
     #[must_use]
-    pub const fn scope(self) -> SealedDag<'p> {
+    pub const fn scope(&self) -> SealedDag<'p> {
         self.scope
+    }
+
+    /// The values the include site exposes from the instance's own body, in
+    /// record order.
+    #[must_use]
+    pub fn outputs(&self) -> &[PlannedOutput<'p>] {
+        &self.outputs
+    }
+
+    /// The assertions the include site exposes, in record order.
+    #[must_use]
+    pub fn assertions(&self) -> &[PlannedAssertion<'p>] {
+        &self.assertions
+    }
+
+    /// The plots the include site requests, in record order.
+    #[must_use]
+    pub fn plots(&self) -> &[PlannedPlot<'p>] {
+        &self.plots
     }
 }
 

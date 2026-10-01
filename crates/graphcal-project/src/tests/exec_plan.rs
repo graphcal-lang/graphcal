@@ -118,6 +118,9 @@ fn callable_plans_use_the_checked_closure_schedule() {
         planned.scope().dag().dag_id(),
         instance.record().instance.id().owner()
     );
-    assert!(PlannedInstance::try_new(instance, planned.scope()).is_ok());
-    assert!(PlannedInstance::try_new(instance, plan.root().scope()).is_err());
+    assert!(PlannedInstance::try_new(tir, instance, planned.scope()).is_ok());
+    assert!(matches!(
+        PlannedInstance::try_new(tir, instance, plan.root().scope()),
+        Err(graphcal_eval::execution_plan::PlannedInstanceError::ForeignScope { .. })
+    ));
 }

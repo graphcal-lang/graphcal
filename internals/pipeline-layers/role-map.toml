@@ -2779,11 +2779,6 @@ role = "checking"
 
 [[module]]
 package = "eval"
-path = ["eval", "runtime", "declaration_body"]
-role = "facade"
-
-[[module]]
-package = "eval"
 path = ["eval", "runtime", "dependency_failures"]
 role = "facade"
 

@@ -1,5 +1,7 @@
 use std::sync::Arc;
 
+use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
+
 use super::*;
 
 /// The unit of the declaration `owner` of `tir`'s root.

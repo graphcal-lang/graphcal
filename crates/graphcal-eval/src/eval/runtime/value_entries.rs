@@ -11,11 +11,9 @@ use std::collections::{HashMap, HashSet};
 use graphcal_compiler::dag_id::DagId;
 use graphcal_compiler::declaration_category::ValueDeclCategory;
 use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
-use graphcal_compiler::ir::instance::ExposedValueBody;
 use graphcal_compiler::resolved_name::ResolvedDeclName;
 use graphcal_compiler::semantic_error::SemanticError;
 use graphcal_compiler::syntax::module_name::ScopedName;
-use graphcal_compiler::tir::typed::{CheckedDag, ResolvedProjection};
 
 use crate::eval::output_decl_name::OutputUnavailable;
 use crate::eval::public_projection;
@@ -111,8 +109,8 @@ pub(super) fn assemble_value_entries(
     let root_id = plan.tir().root_dag_id();
     let mut projected = Vec::new();
     for planned in plan.root().semantic_instances() {
-        projected.extend(projection_entries(*planned, evaluated, ctx)?);
-        projected.extend(debug_entries(*planned, root_id, evaluated, ctx)?);
+        projected.extend(projection_entries(planned, evaluated, ctx)?);
+        projected.extend(debug_entries(planned, root_id, evaluated, ctx)?);
     }
     ValueEntries::collect(root.into_iter().chain(projected), ctx)
 }
@@ -157,23 +155,22 @@ fn root_entries(
 /// A value the including DAG declares itself (a projection alias) is
 /// reported by the including DAG's own entry.
 fn projection_entries(
-    planned: PlannedInstance<'_>,
+    planned: &PlannedInstance<'_>,
     evaluated: EvaluatedRoot<'_>,
     ctx: &EvalSession<'_>,
 ) -> Result<Vec<ValueEntry>, SemanticError> {
-    let instance = planned.instance();
+    let record = planned.instance().record();
     let instance_ctx = ctx.with_src(planned.scope().source());
-    instance
-        .output_projections()
-        .filter(|resolved| resolved.projection.body() == ExposedValueBody::Instance)
-        .map(|ResolvedProjection { target, projection }| {
-            let category = declared_value_category(instance.dag(), &target, ctx)?;
-            let (result, diagnostics) = evaluated_value(&target, evaluated, &instance_ctx)?;
+    planned
+        .outputs()
+        .iter()
+        .map(|output| {
+            let (result, diagnostics) = evaluated_value(&output.target, evaluated, &instance_ctx)?;
             Ok(ValueEntry {
-                name: instance.record().instance.exposed_name(projection),
-                key: target,
+                name: record.instance.exposed_name(output.projection),
+                key: output.target.clone(),
                 result,
-                category,
+                category: output.category,
                 exposure: OutputExposure::Surface,
                 diagnostics,
             })
@@ -181,27 +178,10 @@ fn projection_entries(
         .collect()
 }
 
-/// The category of `declaration`, a runtime value of `dag`.
-fn declared_value_category(
-    dag: &CheckedDag,
-    declaration: &ResolvedDeclName,
-    ctx: &EvalSession<'_>,
-) -> Result<ValueDeclCategory, SemanticError> {
-    dag.declaration(declaration)
-        .and_then(graphcal_compiler::tir::typed::declaration_view::DeclarationView::value)
-        .map(|value| value.category)
-        .ok_or_else(|| {
-            ctx.internal_error(
-                format!("projected declaration `{declaration}` is not a runtime value"),
-                DiagnosticAnchor::WholeFile,
-            )
-        })
-}
-
 /// Every value of one root semantic instance, for the debug view, under its
 /// instance member name (the instance's scope in the root, then its leaf).
 fn debug_entries(
-    planned: PlannedInstance<'_>,
+    planned: &PlannedInstance<'_>,
     root: &DagId,
     evaluated: EvaluatedRoot<'_>,
     ctx: &EvalSession<'_>,

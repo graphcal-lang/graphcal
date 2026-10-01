@@ -11,44 +11,15 @@ use graphcal_compiler::semantic_error::SemanticError;
 use graphcal_compiler::source_id::SourceId;
 use graphcal_compiler::syntax::module_name::ScopedName;
 use graphcal_compiler::syntax::span::Span;
-use graphcal_compiler::tir::typed::{
-    AssertionOperands, BodyKind, DeclarationBody, ResolvedProjection, Scoped,
-};
+use graphcal_compiler::tir::typed::{AssertionOperands, BodyKind, Scoped};
 
 use crate::assertion_eval::evaluate_assert_with_expected_fail;
 use crate::eval::types::{AssertResult, NodeUnavailable};
 use crate::eval_expr::{EvalSession, RuntimeValueMap, eval_root};
 
-use super::declaration_body::declaration_body;
 use super::dependency_failures::dependency_failure_message;
 use super::root_names::{RootNames, qualified_below, root_source_names};
-
-/// The checked body of the assertion `owner`, in the scope of its owner.
-fn assertion_body<'tir>(
-    tir: &'tir graphcal_compiler::tir::typed::CheckedTir,
-    owner: &ResolvedDeclName,
-    src: SourceId,
-) -> Result<
-    (
-        DeclarationBody<'tir>,
-        Scoped<'tir, graphcal_compiler::tir::typed::TypedAssertEntry>,
-    ),
-    SemanticError,
-> {
-    let unit = declaration_body(tir, owner, src)?;
-    let entry = match unit.kind() {
-        BodyKind::Assert(entry) => Some(entry),
-        _ => None,
-    }
-    .ok_or_else(|| {
-        SemanticError::internal_error(
-            format!("assertion `{owner}` has no checked body"),
-            src,
-            DiagnosticAnchor::WholeFile,
-        )
-    })?;
-    Ok((unit, entry))
-}
+use crate::execution_plan::PlannedAssertion;
 
 /// Evaluate every assertion reported for the root DAG: root assertions in
 /// source order, then assertions projected from the semantic instances the
@@ -95,15 +66,15 @@ pub(super) fn evaluate_assertions(
     for (parent, instances) in plan.root().closure_instances() {
         let parent_dag = parent.dag();
         for planned in instances {
-            let instance = planned.instance();
-            let record = instance.record();
-            for ResolvedProjection {
-                target: owner,
+            let record = planned.instance().record();
+            for &PlannedAssertion {
                 projection,
-            } in instance.assertion_projections()
+                body: unit,
+                entry,
+            } in planned.assertions()
             {
-                let (unit, entry) = assertion_body(tir, &owner, src)?;
-                let assertion_ctx = ctx.with_src(src).for_decl(&owner);
+                let owner = unit.identity();
+                let assertion_ctx = ctx.with_src(src).for_decl(owner);
                 let expected = projection
                     .expected_fail
                     .as_ref()
