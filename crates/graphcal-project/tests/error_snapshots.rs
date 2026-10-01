@@ -1296,6 +1296,13 @@ fn error_extern_dim_var_mismatch() {
 }
 
 #[test]
+fn error_extern_array_dim_var_mismatch() {
+    let source = include_str!("../../../tests/fixtures/invalid/extern_array_dim_var_mismatch.gcl");
+    let rendered = render_error(source, "extern_array_dim_var_mismatch.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
 fn error_extern_unqualified_call() {
     let source = include_str!("../../../tests/fixtures/invalid/extern_unqualified_call.gcl");
     let rendered = render_error(source, "extern_unqualified_call.gcl");
