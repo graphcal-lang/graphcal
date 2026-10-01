@@ -48,6 +48,7 @@ pub mod declaration_view;
 pub use dag_store::*;
 pub mod freeze;
 pub use freeze::*;
+pub(crate) mod local_dag_facts;
 pub mod program;
 pub use program::*;
 pub(crate) mod frame_mint;

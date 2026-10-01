@@ -26,6 +26,8 @@ use crate::source_id::SourceId;
 use crate::syntax::dimension::UnitName;
 use crate::tir::presentation::DagPresentationFacts;
 
+use super::local_dag_facts::LocalDagFacts;
+
 fn dimension_substitution<'a>(
     substitution: &'a StaticSubstitution,
     source: &ResolvedDimName,
@@ -647,162 +649,155 @@ fn clone_checked_instance(
 pub type PlotChannels =
     HashMap<ResolvedDeclName, HashMap<crate::syntax::ast::EncodingChannel, PlotChannelShape>>;
 
-/// The checked presentation facts of `dag_id`: a local body's from
-/// `presentation`, an imported body's from its checked handle.
-fn checked_presentation<'a>(
-    tir: &'a UncheckedTir,
-    presentation: &'a HashMap<crate::dag_id::DagId, DagPresentationFacts>,
-    dag_id: &crate::dag_id::DagId,
-) -> Option<&'a DagPresentationFacts> {
-    presentation
-        .get(dag_id)
-        .or_else(|| tir.dags.shared(dag_id).map(super::CheckedDag::presentation))
+/// The presentation facts of one semantic instance: its template's plot
+/// channel shapes (or, when it rebinds a defaulted dimension port, the
+/// template's shapes in the view where that port is rigid), specialized with
+/// its substitution and rebased into its frame.
+pub fn instance_presentation_facts(
+    tir: &UncheckedTir,
+    owner: &crate::dag_id::DagId,
+    frame: &InstanceFrame,
+    specialization: &StaticSpecializationId,
+    template_channels: Option<&PlotChannels>,
+    src: SourceId,
+) -> Result<DagPresentationFacts, SemanticError> {
+    let template_channels = template_channels.ok_or_else(|| {
+        SemanticError::internal_error(
+            format!(
+                "semantic instance `{owner}` has no presentation template `{}`",
+                specialization.template
+            ),
+            src,
+            DiagnosticAnchor::WholeFile,
+        )
+    })?;
+    let plot_channels = template_channels
+        .iter()
+        .map(|(plot, channels)| {
+            channels
+                .iter()
+                .map(|(encoding, channel)| {
+                    specialize_plot_channel(channel, &specialization.substitution, tir, src)
+                        .map(|channel| (*encoding, channel))
+                })
+                .collect::<Result<_, _>>()
+                .map(|channels| (frame.rebase(plot), channels))
+        })
+        .collect::<Result<_, SemanticError>>()?;
+    Ok(DagPresentationFacts { plot_channels })
 }
 
-fn specialize_instance_presentation_facts(
-    tir: &UncheckedTir,
-    presentation: &HashMap<crate::dag_id::DagId, DagPresentationFacts>,
-    port_generic_plot_channels: &HashMap<crate::dag_id::DagId, PlotChannels>,
-    src: SourceId,
-) -> Result<Vec<(crate::dag_id::DagId, DagPresentationFacts)>, SemanticError> {
-    tir.dags
-        .local_iter()
-        .filter_map(|(owner, dag)| {
-            dag.frame()
-                .specialization()
-                .map(|specialization| (owner, specialization, dag.frame()))
-        })
-        .map(|(owner, specialization, frame)| {
-            let template = checked_presentation(tir, presentation, &specialization.template)
+/// The plots each local body projects from its instances, by body, with the
+/// projections of each local instance computed first.
+#[derive(Default)]
+struct PlotProjections {
+    projected: HashMap<crate::dag_id::DagId, PlotChannels>,
+    visiting: HashSet<crate::dag_id::DagId>,
+    complete: HashSet<crate::dag_id::DagId>,
+}
+
+impl PlotProjections {
+    /// Collect the plots `parent` requests from its instances, instances
+    /// first.
+    fn collect(
+        &mut self,
+        tir: &UncheckedTir,
+        presentation: &LocalDagFacts<DagPresentationFacts>,
+        parent: &crate::dag_id::DagId,
+        src: SourceId,
+    ) -> Result<(), SemanticError> {
+        if self.complete.contains(parent) {
+            return Ok(());
+        }
+        if !self.visiting.insert(parent.clone()) {
+            return Err(SemanticError::internal_error(
+                format!("semantic plot projection cycle reached `{parent}`"),
+                src,
+                DiagnosticAnchor::WholeFile,
+            ));
+        }
+        let projections = tir
+            .dags
+            .get(parent)
+            .ok_or_else(|| {
+                SemanticError::internal_error(
+                    format!("semantic plot projection parent `{parent}` is unavailable"),
+                    src,
+                    DiagnosticAnchor::WholeFile,
+                )
+            })?
+            .semantic_instances()
+            .iter()
+            .flat_map(|edge| {
+                edge.plot_projections.iter().map(|projection| {
+                    let instance_owner = edge.instance.id().owner().clone();
+                    let target =
+                        instance_declaration(edge.instance.id(), projection.target.leaf().clone());
+                    let exposed = projection_alias(parent, projection.alias.clone());
+                    (instance_owner, target, exposed)
+                })
+            })
+            .collect::<Vec<_>>();
+        for (instance_owner, target, exposed) in projections {
+            // Imported instances already carry their complete checked
+            // projections.
+            let local = presentation.get(&instance_owner);
+            if local.is_some() {
+                self.collect(tir, presentation, &instance_owner, src)?;
+            }
+            let channels = self
+                .projected
+                .get(&instance_owner)
+                .and_then(|projected| projected.get(&target))
+                .or_else(|| {
+                    local
+                        .or_else(|| {
+                            tir.dags
+                                .shared(&instance_owner)
+                                .map(super::CheckedDag::presentation)
+                        })
+                        .and_then(|instance| instance.plot_channels.get(&target))
+                })
+                .cloned()
                 .ok_or_else(|| {
                     SemanticError::internal_error(
                         format!(
-                            "semantic instance `{owner}` has no presentation template `{}`",
-                            specialization.template
+                            "semantic plot projection `{target}` has no checked presentation facts"
                         ),
                         src,
                         DiagnosticAnchor::WholeFile,
                     )
                 })?;
-            let plot_channels = port_generic_plot_channels
-                .get(owner)
-                .unwrap_or(&template.plot_channels)
-                .iter()
-                .map(|(plot, channels)| {
-                    channels
-                        .iter()
-                        .map(|(encoding, channel)| {
-                            specialize_plot_channel(channel, &specialization.substitution, tir, src)
-                                .map(|channel| (*encoding, channel))
-                        })
-                        .collect::<Result<_, _>>()
-                        .map(|channels| (frame.rebase(plot), channels))
-                })
-                .collect::<Result<_, SemanticError>>()?;
-            Ok((owner.clone(), DagPresentationFacts { plot_channels }))
-        })
-        .collect()
-}
-
-/// Copy the plots `parent` requests from its instances into its presentation,
-/// instances first.
-fn add_plot_projections_for_dag(
-    tir: &UncheckedTir,
-    presentation: &mut HashMap<crate::dag_id::DagId, DagPresentationFacts>,
-    parent: &crate::dag_id::DagId,
-    visiting: &mut HashSet<crate::dag_id::DagId>,
-    complete: &mut HashSet<crate::dag_id::DagId>,
-    src: SourceId,
-) -> Result<(), SemanticError> {
-    if complete.contains(parent) {
-        return Ok(());
-    }
-    if !visiting.insert(parent.clone()) {
-        return Err(SemanticError::internal_error(
-            format!("semantic plot projection cycle reached `{parent}`"),
-            src,
-            DiagnosticAnchor::WholeFile,
-        ));
-    }
-    let projections = tir
-        .dags
-        .get(parent)
-        .ok_or_else(|| {
-            SemanticError::internal_error(
-                format!("semantic plot projection parent `{parent}` is unavailable"),
-                src,
-                DiagnosticAnchor::WholeFile,
-            )
-        })?
-        .semantic_instances()
-        .iter()
-        .flat_map(|edge| {
-            edge.plot_projections.iter().map(|projection| {
-                let instance_owner = edge.instance.id().owner().clone();
-                let target =
-                    instance_declaration(edge.instance.id(), projection.target.leaf().clone());
-                let exposed = projection_alias(parent, projection.alias.clone());
-                (instance_owner, target, exposed)
-            })
-        })
-        .collect::<Vec<_>>();
-    for (instance_owner, target, exposed) in projections {
-        // Imported instances already carry their complete checked projections.
-        if presentation.contains_key(&instance_owner) {
-            add_plot_projections_for_dag(
-                tir,
-                presentation,
-                &instance_owner,
-                visiting,
-                complete,
-                src,
-            )?;
+            let plot_channels = self.projected.entry(parent.clone()).or_default();
+            plot_channels.insert(target, channels.clone());
+            plot_channels.insert(exposed, channels);
         }
-        let channels = checked_presentation(tir, presentation, &instance_owner)
-            .and_then(|instance| instance.plot_channels.get(&target))
-            .cloned()
-            .ok_or_else(|| {
-                SemanticError::internal_error(
-                    format!(
-                        "semantic plot projection `{target}` has no checked presentation facts"
-                    ),
-                    src,
-                    DiagnosticAnchor::WholeFile,
-                )
-            })?;
-        let plot_channels = &mut presentation
-            .entry(parent.clone())
-            .or_default()
-            .plot_channels;
-        plot_channels.insert(target, channels.clone());
-        plot_channels.insert(exposed, channels);
+        self.visiting.remove(parent);
+        self.complete.insert(parent.clone());
+        Ok(())
     }
-    visiting.remove(parent);
-    complete.insert(parent.clone());
-    Ok(())
 }
 
-/// Add semantic instances' specialized presentation facts, and the plots each
-/// body projects from its instances, to the canonical local `presentation`.
+/// Add the plots each local body projects from its instances to its
+/// presentation facts.
 ///
-/// An instance specializes its template's plot shapes, or, when it rebinds a
-/// defaulted dimension port, the template's shapes in the view where that
-/// port is rigid (`port_generic_plot_channels`, keyed by instance). Requested
-/// instance plots are then copied into their semantic parents from leaves
-/// upward.
-pub fn add_semantic_presentation_facts(
+/// Requested instance plots are copied into their semantic parents from
+/// leaves upward, so a body also projects the plots its instances project.
+pub fn add_plot_projections(
     tir: &UncheckedTir,
-    presentation: &mut HashMap<crate::dag_id::DagId, DagPresentationFacts>,
-    port_generic_plot_channels: &HashMap<crate::dag_id::DagId, PlotChannels>,
+    presentation: LocalDagFacts<DagPresentationFacts>,
     src: SourceId,
-) -> Result<(), SemanticError> {
-    let instances =
-        specialize_instance_presentation_facts(tir, presentation, port_generic_plot_channels, src)?;
-    presentation.extend(instances);
-    let mut visiting = HashSet::new();
-    let mut complete = HashSet::new();
-    tir.dags.local_iter().try_for_each(|(parent, _)| {
-        add_plot_projections_for_dag(tir, presentation, parent, &mut visiting, &mut complete, src)
+) -> Result<LocalDagFacts<DagPresentationFacts>, SemanticError> {
+    let mut projections = PlotProjections::default();
+    for (parent, _) in presentation.iter() {
+        projections.collect(tir, &presentation, parent, src)?;
+    }
+    let mut projected = projections.projected;
+    presentation.try_map(|owner, mut facts| {
+        if let Some(plots) = projected.remove(owner) {
+            facts.plot_channels.extend(plots);
+        }
+        Ok(facts)
     })
 }
 

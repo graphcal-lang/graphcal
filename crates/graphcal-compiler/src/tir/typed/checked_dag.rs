@@ -2,10 +2,7 @@
 
 use std::collections::HashMap;
 
-use crate::diagnostic_anchor::DiagnosticAnchor;
 use crate::resolved_name::{ResolvedDeclName, ResolvedStructTypeName};
-use crate::semantic_error::SemanticError;
-use crate::source_id::SourceId;
 use crate::tir::presentation::DagPresentationFacts;
 use crate::tir::schedule::RuntimeSchedule;
 use crate::tir::texpr::CheckedBodies;
@@ -33,37 +30,25 @@ pub struct CheckedDag {
 }
 
 /// The facts one check published for one local body.
-pub(super) struct PublishedDag {
-    pub(super) bodies: CheckedBodies,
-    pub(super) presentation: DagPresentationFacts,
-    pub(super) runtime_schedule: RuntimeSchedule,
+///
+/// The checked trees cover exactly the body's expression roots: inference
+/// publishes a tree for each root it claims, and an instance specializes one
+/// for each of its own roots.
+pub(crate) struct PublishedDag {
+    pub(crate) bodies: CheckedBodies,
+    pub(crate) presentation: DagPresentationFacts,
+    pub(crate) runtime_schedule: RuntimeSchedule,
 }
 
 impl CheckedDag {
     /// Pair a checked body with the facts published for it.
-    pub(super) fn new(
-        body: DagTIR,
-        published: PublishedDag,
-        src: SourceId,
-    ) -> Result<Self, SemanticError> {
-        let internal = |message: String| {
-            SemanticError::internal_error(
-                format!("DAG `{}`: {message}", body.dag_id()),
-                src,
-                DiagnosticAnchor::WholeFile,
-            )
-        };
-        if !published.bodies.cover(body.owned_expression_roots()) {
-            return Err(internal(
-                "typed bodies do not cover exactly its expression roots".to_owned(),
-            ));
-        }
-        Ok(Self {
+    pub(super) fn new(body: DagTIR, published: PublishedDag) -> Self {
+        Self {
             body,
             bodies: published.bodies,
             presentation: published.presentation,
             runtime_schedule: published.runtime_schedule,
-        })
+        }
     }
 
     /// The checked tree of every expression root this body owns.

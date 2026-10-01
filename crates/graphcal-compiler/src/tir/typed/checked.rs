@@ -1,7 +1,6 @@
 //! The checked project TIR: the final state of the TIR typestate, whose DAGs
 //! carry their checked facts, and the immutable stores it publishes.
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use indexmap::IndexMap;
@@ -19,13 +18,13 @@ use crate::semantic::index_def::IndexDef;
 use crate::semantic::unit_scale::UnitInfo;
 use crate::semantic_error::SemanticError;
 use crate::source_id::SourceId;
-use crate::tir::presentation::DagPresentationFacts;
-use crate::tir::schedule::{ConstSchedule, RuntimeSchedule};
+use crate::tir::schedule::ConstSchedule;
 use crate::tir::texpr::CheckedBodies;
 
 use super::body_scope::BodyScope;
 use super::checked_dag::{CheckedDag, PublishedDag};
 use super::dag_position::DagPosition;
+use super::local_dag_facts::LocalDagFacts;
 use super::model::{CheckedDeclType, DagTIR, ProjectTypeStore, TirCore};
 
 use super::program::{TirRead, UncheckedTir};
@@ -224,78 +223,41 @@ impl std::ops::Index<&DagId> for CheckedDagRegistry {
 }
 
 impl UncheckedTir {
-    /// Pair every local body with the facts its check published: the only
-    /// construction of a [`CheckedTir`].
+    /// Pair every local body with the facts its check published for it: the
+    /// only construction of a [`CheckedTir`].
     ///
+    /// `published` was mapped from this TIR's own registry, so each body
+    /// takes its facts without a lookup.
     pub(crate) fn into_checked(
         self,
-        parts: CheckedParts,
+        constants: ConstSchedule,
+        published: LocalDagFacts<PublishedDag>,
         src: SourceId,
     ) -> Result<CheckedTir, SemanticError> {
-        let CheckedParts {
-            mut bodies,
-            mut presentation,
-            schedules,
-        } = parts;
-        let CheckedSchedules {
-            constants,
-            mut callables,
-        } = schedules;
         let (core, dags) = self.into_parts();
-        let (root, other_dags, shared_dags) = dags.into_parts();
-        let internal = |message: String| {
-            SemanticError::internal_error(message, src, DiagnosticAnchor::WholeFile)
-        };
-        let mut check = |body: DagTIR| {
-            let missing =
-                |what: &str| internal(format!("DAG `{}` has no checked {what}", body.dag_id()));
-            let published = PublishedDag {
-                bodies: bodies
-                    .remove(body.dag_id())
-                    .ok_or_else(|| missing("typed bodies"))?,
-                presentation: presentation
-                    .remove(body.dag_id())
-                    .ok_or_else(|| missing("presentation facts"))?,
-                runtime_schedule: callables
-                    .remove(body.dag_id())
-                    .ok_or_else(|| missing("runtime schedule"))?,
-            };
-            CheckedDag::new(body, published, src)
-        };
-        let root = check(root)?;
-        let other_dags = other_dags
+        let paired = dags.into_local_facts(published);
+        let (root, root_facts) = paired.root;
+        let shared_dags = paired.shared;
+        let root = CheckedDag::new(root, root_facts);
+        let other_dags = paired
+            .others
             .into_iter()
-            .map(|(id, body)| check(body).map(|dag| (id, dag)))
-            .collect::<Result<_, SemanticError>>()?;
+            .map(|(body, facts)| (body.dag_id().clone(), CheckedDag::new(body, facts)))
+            .collect();
         // Every call target is in the registry: checking resolved each local
         // body's calls against it, an instance calls its template's targets
         // and its checked defaults', and installing an imported store
         // required the stores it calls into. Failing here is a compiler bug.
         let dags = CheckedDagRegistry::close(root, other_dags, shared_dags.into_iter().collect())
-            .map_err(|error| internal(error.to_string()))?;
+            .map_err(|error| {
+            SemanticError::internal_error(error.to_string(), src, DiagnosticAnchor::WholeFile)
+        })?;
         Ok(CheckedTir {
             core,
             dags,
             const_schedule: constants,
         })
     }
-}
-
-/// The schedules one check computed: the local DAGs' constants, and each
-/// local DAG as a callable.
-pub(crate) struct CheckedSchedules {
-    pub(crate) constants: ConstSchedule,
-    pub(crate) callables: HashMap<DagId, RuntimeSchedule>,
-}
-
-/// Everything one check published for the local bodies of a TIR, keyed by
-/// body; paired with the bodies only by
-/// [`UncheckedTir::into_checked`].
-pub(crate) struct CheckedParts {
-    /// The checked trees of every local body.
-    pub(crate) bodies: HashMap<DagId, CheckedBodies>,
-    pub(crate) presentation: HashMap<DagId, DagPresentationFacts>,
-    pub(crate) schedules: CheckedSchedules,
 }
 
 /// The checked project TIR: the final state of the TIR typestate and the only

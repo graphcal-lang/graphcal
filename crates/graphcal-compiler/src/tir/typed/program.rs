@@ -164,6 +164,11 @@ impl DagRegistry {
         }
     }
 
+    /// The root body and the other local bodies, in identity order.
+    pub(super) const fn local_parts(&self) -> (&DagTIR, &BTreeMap<crate::dag_id::DagId, DagTIR>) {
+        (&self.root, &self.other_dags)
+    }
+
     /// Iterate over local assembly identities and bodies.
     pub(crate) fn local_iter(&self) -> impl Iterator<Item = (&crate::dag_id::DagId, &DagTIR)> {
         std::iter::once((self.root.dag_id(), &self.root)).chain(self.other_dags.iter())
@@ -553,6 +558,14 @@ impl dyn TirRead + '_ {
         self.dag(declaration.owner())?.value_decl_type(declaration)
     }
 
+    /// One DAG body with the checked trees already published for it.
+    pub(crate) fn checked_dag(
+        &self,
+        dag_id: &crate::dag_id::DagId,
+    ) -> Option<(&DagTIR, &crate::tir::texpr::CheckedBodies)> {
+        self.dag(dag_id).zip(self.checked_bodies(dag_id))
+    }
+
     /// Find the DAG carrying resolved field metadata for a nominal type.
     pub(crate) fn dag_with_type_metadata(&self, name: &ResolvedStructTypeName) -> Option<&DagTIR> {
         self.dag_bodies()
@@ -585,41 +598,6 @@ impl TirRead for UncheckedTir {
         self.dags
             .shared(dag_id)
             .map(super::checked_dag::CheckedDag::bodies)
-    }
-}
-
-/// A project TIR in the middle of its check: unchecked local bodies with the
-/// checked trees published for them so far.
-#[derive(Clone, Copy)]
-pub(crate) struct CheckingTir<'a> {
-    pub(crate) tir: &'a UncheckedTir,
-    pub(crate) bodies: &'a HashMap<crate::dag_id::DagId, crate::tir::texpr::CheckedBodies>,
-}
-
-impl TirRead for CheckingTir<'_> {
-    fn core(&self) -> &TirCore {
-        &self.tir.core
-    }
-
-    fn root(&self) -> &DagTIR {
-        self.tir.root()
-    }
-
-    fn dag(&self, dag_id: &crate::dag_id::DagId) -> Option<&DagTIR> {
-        self.tir.dag(dag_id)
-    }
-
-    fn dag_bodies(&self) -> Box<dyn Iterator<Item = &DagTIR> + '_> {
-        self.tir.dag_bodies()
-    }
-
-    fn checked_bodies(
-        &self,
-        dag_id: &crate::dag_id::DagId,
-    ) -> Option<&crate::tir::texpr::CheckedBodies> {
-        self.bodies
-            .get(dag_id)
-            .or_else(|| self.tir.checked_bodies(dag_id))
     }
 }
 

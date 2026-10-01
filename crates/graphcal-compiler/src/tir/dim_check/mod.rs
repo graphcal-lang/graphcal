@@ -681,53 +681,69 @@ impl crate::tir::typed::InstantiatedTir {
     ) -> Result<crate::tir::typed::CheckedTir, Outcome<SemanticError>> {
         let tir = self.tir;
         cancellation.checkpoint()?;
-        let schedules = schedules::ScheduleBuilder::build(&tir, src)?;
+        let schedules = schedules::Schedules::build(&tir, src)?;
         detect_cross_dag_cycles(&tir, src)?;
 
         // Canonical bodies are checked once. Instance trees are specialized
         // below from the canonical trees; only independently lowered bindings
         // infer.
-        let checked_dag_facts = tir
-            .local_dags()
-            .filter(|(_, dag)| !dag.is_semantic_instance())
-            .map(|(dag_id, dag)| {
-                cancellation.checkpoint()?;
-                let observations = infer::hir::BodyObservations::default();
-                let plot_shapes =
-                    check_dimensions_dag(dag, &tir, src, cancellation, &observations)?;
-                Ok((dag_id, dag, observations, plot_shapes))
+        let inferred = tir.dags.map_local(|dag| {
+            if let Some(specialization) = dag.frame().specialization() {
+                return Ok(Inferred::Instance(instance_bodies::InstanceOf {
+                    dag,
+                    specialization,
+                }));
+            }
+            cancellation.checkpoint()?;
+            let observations = infer::hir::BodyObservations::default();
+            let plot_shapes = check_dimensions_dag(dag, &tir, src, cancellation, &observations)?;
+            Ok::<_, Outcome<SemanticError>>(Inferred::Canonical {
+                dag,
+                observations: Box::new(observations),
+                plot_shapes,
             })
-            .collect::<Result<Vec<_>, Outcome<SemanticError>>>()?;
-        let sinks: HashMap<_, _> = checked_dag_facts
+        })?;
+        let sinks: HashMap<_, _> = inferred
             .iter()
-            .map(|(owner, _, observations, _)| (*owner, observations))
+            .filter_map(|(owner, inferred)| match inferred {
+                Inferred::Canonical { observations, .. } => Some((owner, &**observations)),
+                Inferred::Instance(_) => None,
+            })
             .collect();
         check_field_domain_constraint_targets(&tir)?;
         check_field_domain_constraint_dimensions(&tir, cancellation, &sinks)?;
         drop(sinks);
-        let mut bodies = HashMap::new();
-        let mut checked_plot_shapes = HashMap::new();
-        for (dag_id, dag, observations, plot_shapes) in checked_dag_facts {
-            let checked_bodies = observations
-                .finish()
-                .publish(
-                    &dag.owned_expression_roots().collect::<Vec<_>>(),
-                    &|index| expression_axes::checked_index_cardinality(&tir, index),
-                )
-                .map_err(|error| {
-                    SemanticError::internal_error(
-                        format!("DAG `{dag_id}`: {error}"),
-                        src,
-                        DiagnosticAnchor::WholeFile,
+        let canonical = inferred.try_map(|dag_id, inferred| match inferred {
+            Inferred::Canonical {
+                dag,
+                observations,
+                plot_shapes,
+            } => {
+                let bodies = observations
+                    .finish()
+                    .publish(
+                        &dag.owned_expression_roots().collect::<Vec<_>>(),
+                        &|index| expression_axes::checked_index_cardinality(&tir, index),
                     )
-                })?;
-            bodies.insert(dag_id.clone(), checked_bodies);
-            checked_plot_shapes.insert(dag_id.clone(), plot_shapes);
-        }
+                    .map_err(|error| {
+                        SemanticError::internal_error(
+                            format!("DAG `{dag_id}`: {error}"),
+                            src,
+                            DiagnosticAnchor::WholeFile,
+                        )
+                    })?;
+                Ok::<_, SemanticError>(instance_bodies::CanonicalStage::Canonical {
+                    bodies,
+                    plot_shapes,
+                })
+            }
+            Inferred::Instance(instance) => Ok(instance_bodies::CanonicalStage::Instance(instance)),
+        })?;
 
-        let instances = instance_bodies::instance_bodies(&tir, &bodies, src, cancellation)?;
-        bodies.extend(instances.bodies);
-        let checking = crate::tir::typed::CheckingTir {
+        let (bodies, plots) =
+            instance_bodies::local_bodies(&tir, &canonical, src, cancellation)?.unzip();
+        drop(canonical);
+        let checking = crate::tir::typed::local_dag_facts::CheckingTir {
             tir: &tir,
             bodies: &bodies,
         };
@@ -737,28 +753,31 @@ impl crate::tir::typed::InstantiatedTir {
         // specializing instance trees does not change their nominal
         // definitions.
         cancellation.checkpoint()?;
-        let mut presentation = presentation::collect_presentation_facts(
-            &tir,
-            &checked_plot_shapes,
-            src,
-            cancellation,
-        )?;
-        crate::tir::typed::specialization::add_semantic_presentation_facts(
-            &tir,
-            &mut presentation,
-            &instances.port_generic_plot_channels,
-            src,
-        )?;
-        tir.into_checked(
-            crate::tir::typed::CheckedParts {
+        let presentation =
+            presentation::collect_presentation_facts(&tir, &plots, src, cancellation)?;
+        drop(plots);
+        let published = bodies.zip(presentation).zip(schedules.callables).map(
+            |((bodies, presentation), runtime_schedule)| crate::tir::typed::PublishedDag {
                 bodies,
                 presentation,
-                schedules: schedules.into_parts(),
+                runtime_schedule,
             },
-            src,
-        )
-        .map_err(Outcome::Failed)
+        );
+        tir.into_checked(schedules.constants, published, src)
+            .map_err(Outcome::Failed)
     }
+}
+
+/// What inference left to publish for one local body: a canonical body's
+/// observations and plot shapes, or a semantic instance, whose trees are
+/// specialized from its template's.
+enum Inferred<'t> {
+    Canonical {
+        dag: &'t crate::tir::typed::DagTIR,
+        observations: Box<infer::hir::BodyObservations>,
+        plot_shapes: plot::CheckedPlotChannelShapes,
+    },
+    Instance(instance_bodies::InstanceOf<'t>),
 }
 
 /// Collect canonical nominal dependencies for every checked parameter default
@@ -771,26 +790,12 @@ impl crate::tir::typed::InstantiatedTir {
 ///
 /// # Errors
 ///
-/// Returns a compiler diagnostic if retained checking results are unavailable.
+/// Returns [`Cancelled`](crate::cancellation::Cancelled) when `cancellation`
+/// is cancelled.
 pub fn collect_override_dependency_summary(
     tir: &crate::tir::typed::CheckedTir,
-    src: SourceId,
-) -> Result<OverrideDependencySummary, SemanticError> {
-    crate::outcome::without_cancellation(|cancellation| {
-        collect_override_dependency_summary_with_cancellation(tir, src, cancellation)
-    })
-}
-
-/// Collect override dependencies while observing cooperative cancellation.
-///
-/// # Errors
-///
-/// Returns a compiler diagnostic for inconsistent TIR or cancellation.
-pub fn collect_override_dependency_summary_with_cancellation(
-    tir: &crate::tir::typed::CheckedTir,
-    src: SourceId,
     cancellation: &crate::cancellation::CancellationToken,
-) -> Result<OverrideDependencySummary, Outcome<SemanticError>> {
+) -> Result<OverrideDependencySummary, crate::cancellation::Cancelled> {
     let mut summary = OverrideDependencySummary::new();
 
     for (_, dag) in tir.local_dags() {
@@ -802,14 +807,8 @@ pub fn collect_override_dependency_summary_with_cancellation(
             };
             cancellation.checkpoint()?;
             let owner = param.identity();
-            if bodies.get(default.id()).is_none() {
-                return Err(SemanticError::internal_error(
-                    format!("missing checked expression: {:?}", default.id()),
-                    src,
-                    DiagnosticAnchor::Source(default.span),
-                )
-                .into());
-            }
+            // A checked body has a tree for each of its expression roots,
+            // its parameter defaults included.
             let mut dependencies: HashSet<_> = bodies
                 .nominal_uses(default.id())
                 .iter()

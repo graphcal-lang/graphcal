@@ -1,8 +1,6 @@
 //! Check each semantic instance's own bodies and specialize the rest of its
 //! checked trees from its template's, without re-inferring the template.
 
-use std::collections::HashMap;
-
 use crate::cancellation::CancellationToken;
 use crate::diagnostic_anchor::DiagnosticAnchor;
 use crate::outcome::Outcome;
@@ -11,10 +9,12 @@ use crate::semantic_error::dimension::DimensionError;
 use crate::semantic_error::visibility::VisibilityError;
 use crate::source_id::SourceId;
 use crate::tir::texpr::{CheckedBodies, CheckedBody, NominalObservation, TBody};
+use crate::tir::typed::local_dag_facts::{LocalDagFacts, PublishedBodies};
 use crate::tir::typed::program::{TirRead, UncheckedTir};
 use crate::tir::typed::specialization::specialize_expression_type;
 
 use super::body_specialization::DerivedTrees;
+use super::plot::CheckedPlotChannelShapes;
 use super::{DimCheckContext, check_decl_expr_type, infer};
 
 fn check_retained_reconciliations(
@@ -200,111 +200,155 @@ fn check_instance_defaults(
     Ok(())
 }
 
-/// The checked trees of every semantic instance, and the template plot
-/// channel shapes to specialize for each instance that rebinds a defaulted
-/// dimension port (taken in the view where that port is rigid, like the
-/// instance's trees).
-pub(super) struct InstanceBodies {
-    pub(super) bodies: Vec<(crate::dag_id::DagId, CheckedBodies)>,
-    pub(super) port_generic_plot_channels:
-        HashMap<crate::dag_id::DagId, super::plot::CheckedPlotChannelShapes>,
+/// One local body once the canonical trees are published: a canonical body
+/// with its trees and checked plot shapes, or a semantic instance still to
+/// specialize from its template.
+pub(super) enum CanonicalStage<'t> {
+    Canonical {
+        bodies: CheckedBodies,
+        plot_shapes: CheckedPlotChannelShapes,
+    },
+    Instance(InstanceOf<'t>),
 }
 
-/// Check every semantic instance's own defaults and specialize the rest of its
-/// checked trees from its template's `canonical` trees.
-pub(super) fn instance_bodies(
+/// A semantic instance body and the specialization it was materialized with.
+#[derive(Clone, Copy)]
+pub(super) struct InstanceOf<'t> {
+    pub(super) dag: &'t crate::tir::typed::model::DagTIR,
+    pub(super) specialization: &'t crate::ir::static_substitution::StaticSpecializationId,
+}
+
+impl PublishedBodies for CanonicalStage<'_> {
+    fn published(&self) -> Option<&CheckedBodies> {
+        match self {
+            Self::Canonical { bodies, .. } => Some(bodies),
+            Self::Instance(_) => None,
+        }
+    }
+}
+
+/// Where the plot shapes of one local body come from: a canonical body's
+/// own check, or an instance's template, specialized.
+pub(super) enum PlotsStage<'t> {
+    Canonical(CheckedPlotChannelShapes),
+    Instance {
+        instance: InstanceOf<'t>,
+        /// When the instance rebinds a defaulted dimension port, the
+        /// template's shapes in the view where that port is rigid, like the
+        /// instance's trees.
+        port_generic: Option<CheckedPlotChannelShapes>,
+    },
+}
+
+/// The checked trees of every local body, and where its plot shapes come
+/// from: a canonical body keeps its published trees; a semantic instance
+/// checks its own defaults and specializes the rest of its trees from its
+/// template's `canonical` trees.
+pub(super) fn local_bodies<'t>(
     tir: &UncheckedTir,
-    canonical: &HashMap<crate::dag_id::DagId, CheckedBodies>,
+    canonical: &LocalDagFacts<CanonicalStage<'t>>,
     src: SourceId,
     cancellation: &CancellationToken,
-) -> Result<InstanceBodies, Outcome<SemanticError>> {
-    let checking = crate::tir::typed::CheckingTir {
+) -> Result<LocalDagFacts<(CheckedBodies, PlotsStage<'t>)>, Outcome<SemanticError>> {
+    let checking = crate::tir::typed::local_dag_facts::CheckingTir {
         tir,
         bodies: canonical,
     };
+    canonical.try_map_ref(|_, stage| match stage {
+        CanonicalStage::Canonical {
+            bodies,
+            plot_shapes,
+        } => Ok((bodies.clone(), PlotsStage::Canonical(plot_shapes.clone()))),
+        CanonicalStage::Instance(instance) => {
+            instance_bodies(&checking, *instance, src, cancellation).map(
+                |(bodies, port_generic)| {
+                    (
+                        bodies,
+                        PlotsStage::Instance {
+                            instance: *instance,
+                            port_generic,
+                        },
+                    )
+                },
+            )
+        }
+    })
+}
+
+/// Check one semantic instance's own defaults and specialize the rest of its
+/// checked trees from its template's, with the template plot channel shapes
+/// to specialize when it rebinds a defaulted dimension port.
+fn instance_bodies(
+    checking: &crate::tir::typed::local_dag_facts::CheckingTir<'_, CanonicalStage<'_>>,
+    InstanceOf {
+        dag,
+        specialization,
+    }: InstanceOf<'_>,
+    src: SourceId,
+    cancellation: &CancellationToken,
+) -> Result<(CheckedBodies, Option<CheckedPlotChannelShapes>), Outcome<SemanticError>> {
+    let tir = checking.tir;
     let internal =
         |message: String| SemanticError::internal_error(message, src, DiagnosticAnchor::WholeFile);
-    let mut port_generic_plot_channels = HashMap::new();
-    let mut published = Vec::new();
-    let instances = tir.local_dags().filter_map(|(owner, dag)| {
-        dag.frame()
-            .specialization()
-            .map(|specialization| (owner, dag, specialization))
-    });
-    for (owner, dag, specialization) in instances {
-        cancellation.checkpoint()?;
-        let template = tir
-            .dags
-            .get(&specialization.template)
-            .ok_or_else(|| internal("instance has no canonical template".to_owned()))?;
-        let template_bodies = checking
-            .checked_bodies(&specialization.template)
+    cancellation.checkpoint()?;
+    let reader: &dyn TirRead = checking;
+    let (template, template_bodies) =
+        reader
+            .checked_dag(&specialization.template)
             .ok_or_else(|| {
                 internal(format!(
-                    "canonical template `{}` has no published typed bodies",
+                    "instance has no checked canonical template `{}`",
                     specialization.template
                 ))
             })?;
-        // A rebound defaulted dimension port: the template's trees saw its
-        // default, so the instance's trees come from the view where it is rigid.
-        let ports = tir
-            .project_type_store()
-            .bound_defaulted_dimension_ports(&specialization.substitution);
-        let port_generic = if ports.is_empty() {
-            DerivedTrees::default()
-        } else {
-            let generic = super::template_closure::port_generic_trees(
-                tir,
-                template,
-                &ports,
-                src,
-                cancellation,
-            )?;
-            port_generic_plot_channels.insert(owner.clone(), generic.plot_channels);
-            generic.trees
-        };
-        let observations = infer::hir::BodyObservations::default();
-        let ctx = DimCheckContext {
-            env: infer::hir::InferEnv {
-                dag,
-                tir: &checking,
-                registry: tir.registry(),
-                src,
-            },
-            assembly: tir,
-            cancellation,
-            observations: &observations,
-        };
-        check_instance_defaults(
-            &ctx,
-            template,
-            template_bodies,
-            &specialization.substitution,
-        )?;
-        // Instance bodies are specialized from the template; only the trees
-        // of independently checked defaults are the instance's own.
-        let finished = observations.finish();
-        let claimed =
-            crate::tir::texpr::claim_roots(&rebound_defaults(template, dag), finished.typed)
-                .map_err(|error| internal(error.to_string()))?;
-        let independent = DerivedTrees {
-            bodies: claimed.roots.into_iter().collect(),
-            nominal_uses: finished.nominal_uses,
-            calls: claimed.calls,
-        };
-        let bodies = super::body_specialization::specialize_instance_bodies(
+    // A rebound defaulted dimension port: the template's trees saw its
+    // default, so the instance's trees come from the view where it is rigid.
+    let ports = tir
+        .project_type_store()
+        .bound_defaulted_dimension_ports(&specialization.substitution);
+    let (port_generic, port_generic_plot_channels) = if ports.is_empty() {
+        (DerivedTrees::default(), None)
+    } else {
+        let generic =
+            super::template_closure::port_generic_trees(tir, template, &ports, src, cancellation)?;
+        (generic.trees, Some(generic.plot_channels))
+    };
+    let observations = infer::hir::BodyObservations::default();
+    let ctx = DimCheckContext {
+        env: infer::hir::InferEnv {
             dag,
-            &checking,
-            independent,
-            template_bodies,
-            &port_generic,
-            &specialization.substitution,
+            tir: checking,
+            registry: tir.registry(),
             src,
-        )?;
-        published.push((owner.clone(), bodies));
-    }
-    Ok(InstanceBodies {
-        bodies: published,
-        port_generic_plot_channels,
-    })
+        },
+        assembly: tir,
+        cancellation,
+        observations: &observations,
+    };
+    check_instance_defaults(
+        &ctx,
+        template,
+        template_bodies,
+        &specialization.substitution,
+    )?;
+    // Instance bodies are specialized from the template; only the trees
+    // of independently checked defaults are the instance's own.
+    let finished = observations.finish();
+    let claimed = crate::tir::texpr::claim_roots(&rebound_defaults(template, dag), finished.typed)
+        .map_err(|error| internal(error.to_string()))?;
+    let independent = DerivedTrees {
+        bodies: claimed.roots.into_iter().collect(),
+        nominal_uses: finished.nominal_uses,
+        calls: claimed.calls,
+    };
+    let bodies = super::body_specialization::specialize_instance_bodies(
+        dag,
+        checking,
+        independent,
+        template_bodies,
+        &port_generic,
+        &specialization.substitution,
+        src,
+    )?;
+    Ok((bodies, port_generic_plot_channels))
 }
