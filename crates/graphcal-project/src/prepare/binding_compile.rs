@@ -768,8 +768,7 @@ impl PreparedProject {
                 &self.sources,
                 &self.host_fns,
                 cancellation.clone(),
-            )
-            .with_roots(&values, None);
+            );
             graphcal_eval::eval_expr::eval_root_with_presentation(
                 tree,
                 &values,

@@ -46,8 +46,7 @@ pub(super) fn resolve_domain_constraints_for_dag(
     cancellation.checkpoint()?;
     let visible_const_values = visible_values_with_imports(const_values, all_const_values);
 
-    let ctx = EvalSession::provisional_constants(tir, src, sources, cancellation.clone())
-        .with_roots(&visible_const_values, None);
+    let ctx = EvalSession::provisional_constants(tir, src, sources, cancellation.clone());
     let mut constraints = HashMap::new();
     // Constants first, then parameters, then nodes, each in source order.
     let decl_iter = [
@@ -497,8 +496,7 @@ fn resolve_application_field_constraints(
         owner_src,
         ctx.sources,
         ctx.cancellation.clone(),
-    )
-    .with_roots(&visible_const_values, None);
+    );
     let mut constraints = Vec::new();
     for (key, scoped_field) in nominal.constrained_fields() {
         let field_semantics = scoped_field.get();

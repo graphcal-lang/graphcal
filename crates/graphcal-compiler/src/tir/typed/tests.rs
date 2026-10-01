@@ -918,7 +918,7 @@ fn parse_and_type_resolve_builder_named(
         )?;
         TirDraft::resolve_root(
             signed,
-            HashMap::new(),
+            &|_| None,
             src,
             &resolver,
             Arc::new(project_types.clone()),

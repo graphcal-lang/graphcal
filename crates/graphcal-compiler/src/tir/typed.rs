@@ -26,6 +26,7 @@ pub use crate::nat::NatPolyForm;
 use crate::syntax::decl_name::DeclName;
 use crate::syntax::span::{Span, Spanned};
 
+use crate::ir::imported_binding::{ImportedBinding, ImportedConstantTypes};
 use crate::ir::model::HirDag;
 use crate::ir::resolve::collected::ExternalDeclSurface;
 use crate::resolve::ModuleResolver;
@@ -173,7 +174,7 @@ pub(crate) fn type_resolve_draft(
         )?;
         TirDraft::resolve_root(
             signed,
-            HashMap::new(),
+            &|_| None,
             src,
             module_resolver,
             project_types,
@@ -189,20 +190,16 @@ impl TirDraft {
     ///
     /// Returns a [`SemanticError`] when an imported interface is inconsistent
     /// or body semantic resolution fails.
-    pub fn resolve_root<S>(
+    pub fn resolve_root(
         signed: SignatureResolvedHirDag,
-        imported_bindings: HashMap<ScopedName, crate::ir::imported_binding::ImportedBinding, S>,
+        imported_types: &ImportedConstantTypes<'_>,
         src: SourceId,
         module_resolver: &ModuleResolver,
         project_types: Arc<ProjectTypeStore>,
         cancellation: &crate::cancellation::CancellationToken,
-    ) -> Result<Self, Outcome<SemanticError>>
-    where
-        S: std::hash::BuildHasher,
-    {
+    ) -> Result<Self, Outcome<SemanticError>> {
         cancellation.checkpoint()?;
-        validate_checked_imported_bindings(signed.hir(), &imported_bindings, src)?;
-        let imported_bindings = imported_bindings.into_iter().collect();
+        let imported_bindings = checked_imported_bindings(signed.hir(), imported_types, src)?;
         let dag_id = signed.dag_id().clone();
         let context_types = Arc::clone(&project_types);
         let ctx = ModuleTypeContext::new(&dag_id, module_resolver, &context_types);
@@ -225,17 +222,14 @@ impl TirDraft {
     /// Returns a [`SemanticError`] when a declared extern signature conflicts,
     /// an imported interface is inconsistent, or body semantic resolution
     /// fails.
-    pub fn add_inline_dag<S>(
+    pub fn add_inline_dag(
         &mut self,
         signed: SignatureResolvedHirDag,
-        imported_bindings: HashMap<ScopedName, crate::ir::imported_binding::ImportedBinding, S>,
+        imported_types: &ImportedConstantTypes<'_>,
         src: SourceId,
         module_resolver: &ModuleResolver,
         cancellation: &crate::cancellation::CancellationToken,
-    ) -> Result<(), Outcome<SemanticError>>
-    where
-        S: std::hash::BuildHasher,
-    {
+    ) -> Result<(), Outcome<SemanticError>> {
         cancellation.checkpoint()?;
         // A nested DAG's `import plugin` signatures join the file's extern
         // map, exactly like the root body's, so calls inside it resolve.
@@ -243,7 +237,7 @@ impl TirDraft {
         let project_types = self.project_types();
         let dag = type_resolve_signed_single_with_imported_bindings_and_cancellation(
             signed,
-            imported_bindings,
+            imported_types,
             src,
             module_resolver,
             &project_types,
@@ -278,46 +272,32 @@ impl TirDraft {
     }
 }
 
-fn validate_checked_imported_bindings<S>(
+/// Attach the checked declared type of every constant `ir` imports, keyed and
+/// targeted exactly as HIR recorded them, so the bindings cover HIR's imports
+/// by construction.
+fn checked_imported_bindings(
     ir: &HirDag,
-    checked: &HashMap<ScopedName, crate::ir::imported_binding::ImportedBinding, S>,
+    imported_types: &ImportedConstantTypes<'_>,
     src: SourceId,
-) -> Result<(), SemanticError>
-where
-    S: std::hash::BuildHasher,
-{
-    if ir.imported_bindings().len() != checked.len() {
-        return Err(SemanticError::internal_error(
-            format!(
-                "HIR declares {} imported bindings but checking supplied {}",
-                ir.imported_bindings().len(),
-                checked.len()
-            ),
-            src,
-            DiagnosticAnchor::WholeFile,
-        ));
-    }
-    for (lexical, hir_target) in ir.imported_bindings() {
-        let Some(checked_binding) = checked.get(lexical) else {
-            return Err(SemanticError::internal_error(
-                format!("checked interface for imported binding `{lexical}` is missing"),
-                src,
-                DiagnosticAnchor::WholeFile,
-            ));
-        };
-        if checked_binding.target() != hir_target {
-            return Err(SemanticError::internal_error(
-                format!(
-                    "checked interface for `{lexical}` targets `{}` instead of HIR target `{}`",
-                    checked_binding.target(),
-                    hir_target
-                ),
-                src,
-                DiagnosticAnchor::WholeFile,
-            ));
-        }
-    }
-    Ok(())
+) -> Result<HashMap<ScopedName, ImportedBinding>, SemanticError> {
+    ir.imported_bindings()
+        .iter()
+        .map(|(lexical, target)| {
+            let declared_type = imported_types(target).ok_or_else(|| {
+                SemanticError::internal_error(
+                    format!(
+                        "checked interface for HIR import `{lexical}` targeting `{target}` is unavailable"
+                    ),
+                    src,
+                    DiagnosticAnchor::WholeFile,
+                )
+            })?;
+            Ok((
+                lexical.clone(),
+                ImportedBinding::new(target.clone(), declared_type),
+            ))
+        })
+        .collect()
 }
 
 fn finalize_hir_dag(
@@ -338,7 +318,7 @@ fn finalize_hir_dag(
 
 fn type_resolve_impl(
     signed: SignatureResolvedHirDag,
-    imported_bindings: HashMap<ScopedName, crate::ir::imported_binding::ImportedBinding>,
+    imported_bindings: HashMap<ScopedName, ImportedBinding>,
     src: SourceId,
     module_ctx: ModuleTypeContext<'_>,
     project_types: Arc<ProjectTypeStore>,
@@ -410,7 +390,7 @@ pub(crate) fn type_resolve_single_with_modules(
         )?;
         type_resolve_signed_single_with_imported_bindings_and_cancellation(
             signed,
-            HashMap::<_, _, std::hash::RandomState>::new(),
+            &|_| None,
             src,
             module_resolver,
             project_types,
@@ -420,20 +400,16 @@ pub(crate) fn type_resolve_single_with_modules(
 }
 
 /// Resolve a signature-complete non-root HIR module's bodies.
-fn type_resolve_signed_single_with_imported_bindings_and_cancellation<S>(
+fn type_resolve_signed_single_with_imported_bindings_and_cancellation(
     signed: SignatureResolvedHirDag,
-    imported_bindings: HashMap<ScopedName, crate::ir::imported_binding::ImportedBinding, S>,
+    imported_types: &ImportedConstantTypes<'_>,
     src: SourceId,
     module_resolver: &ModuleResolver,
     project_types: &ProjectTypeStore,
     cancellation: &crate::cancellation::CancellationToken,
-) -> Result<DagTIR, Outcome<SemanticError>>
-where
-    S: std::hash::BuildHasher,
-{
+) -> Result<DagTIR, Outcome<SemanticError>> {
     cancellation.checkpoint()?;
-    validate_checked_imported_bindings(signed.hir(), &imported_bindings, src)?;
-    let imported_bindings = imported_bindings.into_iter().collect();
+    let imported_bindings = checked_imported_bindings(signed.hir(), imported_types, src)?;
     let dag_id = signed.dag_id().clone();
     let ctx = ModuleTypeContext::new(&dag_id, module_resolver, project_types);
     type_resolve_single_impl(signed, imported_bindings, src, ctx, cancellation)
@@ -441,7 +417,7 @@ where
 
 fn type_resolve_single_impl(
     signed: SignatureResolvedHirDag,
-    imported_bindings: HashMap<ScopedName, crate::ir::imported_binding::ImportedBinding>,
+    imported_bindings: HashMap<ScopedName, ImportedBinding>,
     src: SourceId,
     module_ctx: ModuleTypeContext<'_>,
     cancellation: &crate::cancellation::CancellationToken,
@@ -1670,7 +1646,7 @@ impl DagTIRSeed {
     fn with_body(
         self,
         body: HirBody,
-        imported_bindings: HashMap<ScopedName, crate::ir::imported_binding::ImportedBinding>,
+        imported_bindings: HashMap<ScopedName, ImportedBinding>,
         module_ctx: ModuleTypeContext<'_>,
         src: SourceId,
     ) -> Result<DagTIR, SemanticError> {

@@ -173,7 +173,7 @@ pub fn preprocess_dag_body_self_imports(
                                     // The parent's exported binding is the
                                     // canonical constant the local name denotes.
                                     let target = exported
-                                        .and_then(|binding| binding.target.declaration())
+                                        .and_then(|binding| binding.target.constant())
                                         .ok_or_else(not_found)?;
                                     let scoped = ScopedName::local(local_name);
                                     names.const_names.push((scoped.clone(), span));

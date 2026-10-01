@@ -213,12 +213,6 @@ pub struct PreparedConstantImport {
     pub value: ConstantReference,
 }
 
-#[derive(Debug, Default)]
-pub struct PreparedImports {
-    pub constants: Vec<PreparedConstantImport>,
-    pub runtime: Vec<ResolvedDeclName>,
-}
-
 /// Why a callable's steps could not be indexed.
 #[derive(Debug, Error)]
 pub enum StepIndexError {
@@ -289,7 +283,7 @@ pub struct CallablePlan<'p> {
     execution_dags: Vec<SealedDag<'p>>,
     instances: Vec<PlannedInstance<'p>>,
     closure_instances: Vec<(SealedDag<'p>, Vec<PlannedInstance<'p>>)>,
-    imports: PreparedImports,
+    imports: Vec<PreparedConstantImport>,
     steps: IndexVec<StepIdx, Step<'p>>,
 }
 
@@ -308,7 +302,7 @@ impl<'p> CallablePlan<'p> {
         execution_dags: Vec<SealedDag<'p>>,
         instances: Vec<PlannedInstance<'p>>,
         closure_instances: Vec<(SealedDag<'p>, Vec<PlannedInstance<'p>>)>,
-        imports: PreparedImports,
+        imports: Vec<PreparedConstantImport>,
         scheduled: Vec<PlannedDeclaration<'p>>,
     ) -> Result<Self, StepIndexError> {
         let mut positions = HashMap::with_capacity(scheduled.len());
@@ -387,9 +381,9 @@ impl<'p> CallablePlan<'p> {
             .any(|scope| scope.dag().dag_id() == dag)
     }
 
-    /// Retained constant references and explicit runtime imports.
+    /// The constants the callable's execution DAGs import.
     #[must_use]
-    pub const fn imports(&self) -> &PreparedImports {
+    pub fn constant_imports(&self) -> &[PreparedConstantImport] {
         &self.imports
     }
 
@@ -424,95 +418,6 @@ impl std::fmt::Debug for CallablePlan<'_> {
     }
 }
 
-/// The frame a called DAG's runtime import reads its value from, as its
-/// call site determines it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ImportSource {
-    /// The calling frame, when the calling DAG owns the imported
-    /// declaration.
-    Caller,
-    /// The root frame, when the root DAG owns it and the caller does not.
-    Root,
-}
-
-/// One runtime import of a called DAG, with the frame its call reads it
-/// from.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CallImport {
-    key: ResolvedDeclName,
-    source: ImportSource,
-}
-
-impl CallImport {
-    /// Classify the runtime import `key` of a DAG called from `caller` in a
-    /// program whose root DAG is `root`: the caller's own declarations come
-    /// from the calling frame, the root's from the root frame, and any
-    /// other import is not supplied by the call.
-    #[must_use]
-    pub fn classify(key: &ResolvedDeclName, caller: &DagId, root: &DagId) -> Option<Self> {
-        let source = if key.owner() == caller {
-            ImportSource::Caller
-        } else if key.owner() == root {
-            ImportSource::Root
-        } else {
-            return None;
-        };
-        Some(Self {
-            key: key.clone(),
-            source,
-        })
-    }
-
-    /// The imported declaration.
-    #[must_use]
-    pub const fn key(&self) -> &ResolvedDeclName {
-        &self.key
-    }
-
-    /// The frame the call reads it from.
-    #[must_use]
-    pub const fn source(&self) -> ImportSource {
-        self.source
-    }
-}
-
-/// What one call slot of one DAG runs: the callee's callable, and where the
-/// callee's runtime imports come from at that call site.
-#[derive(Debug)]
-struct PlannedCallSlot {
-    callee: DagPosition,
-    imports: Box<[CallImport]>,
-}
-
-/// The callable an inline call runs, with the runtime imports that call
-/// supplies it, classified for the call site when the plan was prepared.
-#[derive(Debug, Clone, Copy)]
-pub struct PlannedCall<'a, 'p> {
-    callable: &'a CallablePlan<'p>,
-    imports: &'a [CallImport],
-}
-
-impl<'a, 'p> PlannedCall<'a, 'p> {
-    /// A call of `callable` supplying `imports`, for tests of the frame.
-    #[cfg(any(test, feature = "test-internals"))]
-    #[must_use]
-    pub const fn for_test(callable: &'a CallablePlan<'p>, imports: &'a [CallImport]) -> Self {
-        Self { callable, imports }
-    }
-
-    /// The callee's callable.
-    #[must_use]
-    pub const fn callable(self) -> &'a CallablePlan<'p> {
-        self.callable
-    }
-
-    /// The callee's runtime imports this call supplies, with their frames.
-    #[must_use]
-    pub const fn imports(self) -> &'a [CallImport] {
-        self.imports
-    }
-}
-
 /// A compiled execution plan ready for runtime evaluation.
 pub struct ExecPlan<'p> {
     program: &'p CheckedProgram,
@@ -520,9 +425,9 @@ pub struct ExecPlan<'p> {
     declarations: HashMap<&'p ResolvedDeclName, PlannedDeclaration<'p>>,
     /// The callable of each DAG of the program, by registry position.
     callables: IndexVec<DagPosition, CallablePlan<'p>>,
-    /// The planned call slots of each DAG of the program, by registry
+    /// The callee of each call slot of each DAG of the program, by registry
     /// position, then by slot.
-    calls: IndexVec<DagPosition, Box<[PlannedCallSlot]>>,
+    calls: IndexVec<DagPosition, Box<[DagPosition]>>,
 }
 
 impl<'p> ExecPlan<'p> {
@@ -550,23 +455,7 @@ impl<'p> ExecPlan<'p> {
         let calls = IndexVec::from_items(
             registry
                 .positioned()
-                .map(|(caller, dag)| {
-                    registry
-                        .callee_positions(caller)
-                        .iter()
-                        .map(|&callee| {
-                            let imports = callables[callee]
-                                .imports
-                                .runtime
-                                .iter()
-                                .filter_map(|key| {
-                                    CallImport::classify(key, dag.dag_id(), registry.root_id())
-                                })
-                                .collect();
-                            PlannedCallSlot { callee, imports }
-                        })
-                        .collect()
-                })
+                .map(|(caller, _)| registry.callee_positions(caller).into())
                 .collect(),
         );
         let has_unfinished_definitions = declarations
@@ -619,24 +508,19 @@ impl<'p> ExecPlan<'p> {
         registry.get_positioned(owner).map(|(caller, _)| {
             self.calls[caller]
                 .iter()
-                .map(|slot| &self.callables[slot.callee])
+                .map(|&callee| &self.callables[callee])
                 .collect()
         })
     }
 
     /// What an inline call runs: the callable of the DAG the program's
-    /// registry resolved for the call's slot, with the runtime imports the
-    /// call supplies it.
+    /// registry resolved for the call's slot.
     ///
     /// The call comes from a tree of this plan's program, whose every DAG
     /// has a callable.
     #[must_use]
-    pub fn call(&self, call: ScopedCall<'_>) -> PlannedCall<'_, 'p> {
-        let slot = &self.calls[call.caller()][call.get().index()];
-        PlannedCall {
-            callable: &self.callables[slot.callee],
-            imports: &slot.imports,
-        }
+    pub fn call(&self, call: ScopedCall<'_>) -> &CallablePlan<'p> {
+        &self.callables[self.calls[call.caller()][call.get().index()]]
     }
 
     /// Any value declaration of the program.

@@ -27,13 +27,11 @@ use graphcal_compiler::tir::typed::evaluation_unit::ScopedTree;
 use graphcal_compiler::tir::typed::model::StructFieldConstraintKey;
 use graphcal_compiler::tir::typed::scoped_node::ScopedNode;
 
-use crate::constant_pools::RuntimeValueMap;
 use crate::domain_constraint::ResolvedDomainConstraint;
 use crate::execution_frame::ScheduledDeclaration;
 use crate::execution_plan::ExecPlan;
 use crate::host_fns::HostFunctionRegistry;
 use crate::invariant::Failure;
-use crate::runtime_presentation::PendingPresentedMap;
 use crate::static_incompleteness::ExpressionDependencies;
 
 use super::work_budget::WorkBudget;
@@ -64,9 +62,6 @@ pub struct EvalEnvironment<'a> {
     pub sources: &'a SourceRegistry,
     pub tir: &'a CheckedTir,
     pub current_decl: Option<ResolvedDeclName>,
-    /// The root frame's values, which calls read root-owned runtime imports
-    /// from.
-    pub(crate) root: Option<crate::execution_frame::FrameValues<'a>>,
     pub unavailable: Option<
         &'a HashMap<
             graphcal_compiler::resolved_name::ResolvedDeclName,
@@ -120,7 +115,6 @@ impl<'a> EvalSession<'a> {
             sources,
             tir,
             current_decl: None,
-            root: None,
             unavailable: None,
             unfinished_calls: None,
         }
@@ -280,19 +274,6 @@ impl<'a> EvalSession<'a> {
                 dependencies.iter().map(|(name, reason)| (name, reason)),
             ),
         )
-    }
-
-    #[must_use]
-    pub const fn with_roots(
-        mut self,
-        values: &'a RuntimeValueMap,
-        instances: Option<&'a PendingPresentedMap>,
-    ) -> Self {
-        self.environment.root = Some(crate::execution_frame::FrameValues {
-            values,
-            presentations: instances,
-        });
-        self
     }
 
     #[must_use]

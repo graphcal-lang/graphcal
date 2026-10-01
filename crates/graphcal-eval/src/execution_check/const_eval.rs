@@ -32,7 +32,6 @@ pub(super) fn eval_const_pool(
         cancellation.checkpoint()?;
         let session =
             EvalSession::provisional_constants(step.tir, src, sources, cancellation.clone())
-                .with_roots(step.visible, None)
                 .for_decl(step.key);
         reject_constant_call(step.expression.get(), src)?;
         let presented = eval_root_with_presentation(

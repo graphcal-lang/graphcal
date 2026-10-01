@@ -1583,7 +1583,7 @@ pub(super) fn process_pure_import<'a>(
                     PureImportTermDisposition::BindConstant => {
                         validate_reserved_alias(Namespace::Term, import_item, file_src)?;
                         let canonical = resolved_export
-                            .and_then(|binding| binding.target.declaration())
+                            .and_then(|binding| binding.target.constant())
                             .cloned()
                             .ok_or_else(|| {
                                 PipelineError::Semantic(SemanticError::internal_error(format!(

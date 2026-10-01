@@ -103,7 +103,6 @@ impl RootOutcome {
         cancellation: &graphcal_compiler::cancellation::CancellationToken,
     ) -> EvalSession<'a> {
         EvalSession::checked(plan, src, sources, host_fns, cancellation.clone())
-            .with_roots(&self.values, Some(&self.presentations))
             .with_unavailable(&self.errors)
             .with_unfinished_calls(&self.unfinished_calls)
     }

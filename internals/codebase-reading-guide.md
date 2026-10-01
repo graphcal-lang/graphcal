@@ -1244,7 +1244,7 @@ PlannedDeclaration<'p>
 CallablePlan<'p>
   scope: SealedDag
   execution_dags: Vec<SealedDag>  // prepared semantic closure
-  imports: PreparedImports  // retained constants + explicit runtime keys
+  imports: Vec<PreparedConstantImport>  // retained imported constants
   steps: IndexVec<StepIdx, Step { declaration, deps: Vec<StepIdx> }>
 ```
 
@@ -1260,9 +1260,8 @@ carries. Assertion expectations and `#[assumes]` tables are read from each
 body's own records.
 
 Preparation retains canonical constant pools for both singleton and multi-body
-closures, resolves imported constants to validated pool references, and selects
-runtime-import keys and lexical shadows once. Runtime imports cannot override
-supplied values or checked constants. Frame initialization still copies selected
+closures and resolves imported constants (the only values a module can import)
+to validated pool references once. Frame initialization still copies selected
 values into a mutable invocation map; this is not a zero-allocation evaluator.
 
 `execution_frame.rs` owns one shared binding/default/dependency/domain/insertion

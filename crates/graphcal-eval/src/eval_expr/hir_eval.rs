@@ -1340,12 +1340,11 @@ fn eval_dag_call(
 ) -> Result<EvaluatedRuntimeValue, Outcome<SemanticError>> {
     let target = call.target();
     let plan = ctx.execution_plan()?;
-    let planned = plan.call(call);
-    let callable = planned.callable();
+    let callable = plan.call(call);
 
-    let mut frame = crate::execution_frame::ExecutionFrame::called(
+    let mut frame = crate::execution_frame::ExecutionFrame::new(
         plan,
-        planned,
+        callable,
         crate::execution_frame::FailurePolicy::Propagate,
     );
     for scoped_binding in args.iter() {
@@ -1359,13 +1358,6 @@ fn eval_dag_call(
         )?;
         frame.bind_argument(&binding.target, evaluated, ctx.src, binding.value.span())?;
     }
-    frame.seed_runtime_imports(
-        crate::execution_frame::FrameValues {
-            values: caller_values,
-            presentations: caller_presentations,
-        },
-        ctx.root,
-    );
 
     let evaluated = frame.run(&ctx.cancellation, |entry, frame| {
         let session = ctx.for_declaration(&entry).with_unavailable(frame.errors());

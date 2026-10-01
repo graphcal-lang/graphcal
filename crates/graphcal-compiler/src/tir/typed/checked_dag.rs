@@ -248,12 +248,6 @@ impl CheckedDag {
         self.body.value_declaration_identities()
     }
 
-    /// Whether `key` is a const declaration of this DAG.
-    #[must_use]
-    pub fn is_constant(&self, key: &ResolvedDeclName) -> bool {
-        self.body.const_expr(key).is_some()
-    }
-
     /// The unfinished-definition marker of a declaration, if it is a TODO.
     #[must_use]
     pub fn todo(

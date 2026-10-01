@@ -396,7 +396,7 @@ mod tests {
             .unwrap();
         graphcal_compiler::tir::typed::TirDraft::resolve_root(
             signed,
-            std::collections::HashMap::<_, _, std::hash::RandomState>::new(),
+            &|_| None,
             src,
             &resolver,
             Arc::new(project_types),
