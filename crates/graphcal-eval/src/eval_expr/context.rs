@@ -19,8 +19,11 @@ use graphcal_compiler::outcome::Outcome;
 use graphcal_compiler::resolved_name::ResolvedDeclName;
 use graphcal_compiler::syntax::span::Span;
 use graphcal_compiler::tir::texpr::TExpr;
+use graphcal_compiler::tir::typed::body_scope::Scoped;
+use graphcal_compiler::tir::typed::checked::CheckedTir;
+use graphcal_compiler::tir::typed::evaluation_unit::ScopedTree;
+use graphcal_compiler::tir::typed::model::StructFieldConstraintKey;
 use graphcal_compiler::tir::typed::scoped_node::ScopedNode;
-use graphcal_compiler::tir::typed::{CheckedTir, Scoped, ScopedTree, StructFieldConstraintKey};
 use miette::NamedSource;
 
 use crate::constant_pools::RuntimeValueMap;

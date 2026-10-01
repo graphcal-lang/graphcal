@@ -70,7 +70,7 @@ def measure []: nothing -> record {
         too_many_arguments_expects: (count-matches $consumers 'clippy::too_many_arguments')
         build_declared_types_calls: (count-matches $core '\.build_declared_types\(')
         module_resolve_str_key_lookups: (count-matches $resolver '\.(?:get|get_mut|contains_key|remove)\(\s*[^()]*(?:\.as_str\(\)|\.as_ref\(\)|&\*)')
-        pipeline_layers_exceptions: (open internals/pipeline-layers/baseline.toml | get exception | length)
+        pipeline_layers_exceptions: (open internals/pipeline-layers/baseline.toml | default [] exception | get exception | length)
         reading_order_sccs: (reading-order-sccs)
         graphcal_error_variants: (graphcal-error-variants)
     }

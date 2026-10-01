@@ -4,8 +4,8 @@ use tower_lsp::lsp_types::{
     ParameterInformation, ParameterLabel, SignatureHelp, SignatureInformation,
 };
 
+use crate::analysis::AnalysisResult;
 use crate::cursor_context::find_fn_call_context;
-use crate::server::AnalysisResult;
 
 /// Resolve signature help for a cursor position.
 ///

@@ -602,13 +602,14 @@ role = "checking"
 
 [[module]]
 package = "compiler"
+# Pure export/import summary folded from desugared declarations; consumed as loader data.
 path = ["ir", "module_interface"]
-role = "checking"
+role = "contracts"
 
 [[module]]
 package = "compiler"
 path = ["ir", "module_interface", "tests"]
-role = "checking"
+role = "contracts"
 
 [[module]]
 package = "compiler"
@@ -1727,9 +1728,14 @@ role = "checking"
 
 [[module]]
 package = "compiler"
-# Selected data boundary; its colocated builder dependencies are explicit debt.
+# Selected data boundary for the project type store and checked TIR records.
 path = ["tir", "typed", "model"]
 role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["tir", "typed", "module_type_context"]
+role = "checking"
 
 [[module]]
 package = "compiler"
@@ -2174,8 +2180,9 @@ role = "contracts"
 
 [[module]]
 package = "project"
+# Visualization export adapter (checked TIR -> graph model -> DOT) for the CLI `graph` command.
 path = ["graph_ir"]
-role = "contracts"
+role = "facade"
 
 [[module]]
 package = "project"
@@ -2190,7 +2197,7 @@ role = "facade"
 [[module]]
 package = "project"
 path = ["graph_ir", "tests"]
-role = "contracts"
+role = "facade"
 
 [[module]]
 package = "eval"
@@ -2421,6 +2428,11 @@ role = "checking"
 
 [[module]]
 package = "project"
+path = ["project_compiler", "including_module"]
+role = "checking"
+
+[[module]]
+package = "project"
 path = ["project_compiler", "imports", "tests"]
 role = "checking"
 
@@ -2583,6 +2595,16 @@ role = "loading"
 [[module]]
 package = "project"
 path = ["loader", "loaded_file"]
+role = "contracts"
+
+[[module]]
+package = "project"
+path = ["loader", "loaded_project"]
+role = "contracts"
+
+[[module]]
+package = "project"
+path = ["loader", "budget_violation"]
 role = "contracts"
 
 [[module]]

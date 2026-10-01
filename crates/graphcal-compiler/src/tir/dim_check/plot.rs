@@ -10,7 +10,7 @@ use crate::semantic::checked_type::Symbolic;
 use std::collections::HashMap;
 
 use crate::graphcal_error::GraphcalError;
-use crate::hir::ExprKind;
+use crate::hir::expr::ExprKind;
 use crate::ir::model::{LoweredPlotField, LoweredPlotProperty};
 use crate::plot_props::{CompositionProperty, MarkProperty, PlotProperty, PlotPropertyType};
 use crate::plot_shape::{PlotChannelShape, PlotLeafKind, align_plot_channel_axes};
@@ -380,7 +380,7 @@ pub(super) fn check_property_value(
 fn infer_expression_type(
     ctx: &DimCheckContext<'_>,
     owner: &crate::resolved_name::ResolvedDeclName,
-    expr: &crate::hir::Expr,
+    expr: &crate::hir::expr::Expr,
 ) -> Result<CheckedType<Symbolic>, GraphcalError> {
     ctx.infer_hir(expr, Some(owner))
 }

@@ -7,7 +7,7 @@ use thiserror::Error;
 
 use crate::diagnostic_anchor::DiagnosticAnchor;
 use crate::graphcal_error::GraphcalError;
-use crate::hir::{NominalConstructor, NominalTypeDef, NominalTypeKind};
+use crate::hir::nominal::{NominalConstructor, NominalTypeDef, NominalTypeKind};
 use crate::semantic::checked_type::{CheckedGenericArg, CheckedType, IndexTypeRef, StructTypeRef};
 use crate::syntax::ast::GenericConstraint;
 use crate::syntax::type_name::{ConstructorName, FieldName, GenericParamName};

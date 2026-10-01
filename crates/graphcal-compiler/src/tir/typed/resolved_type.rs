@@ -1,7 +1,7 @@
 //! Canonical resolved type annotations.
 //!
-//! TIR's semantic counterpart of HIR's [`DeclType`](crate::hir::DeclType) /
-//! [`ValueType`](crate::hir::ValueType) split: every named dimension has been
+//! TIR's semantic counterpart of HIR's [`DeclType`](crate::hir::types::DeclType) /
+//! [`ValueType`](crate::hir::types::ValueType) split: every named dimension has been
 //! folded to a [`Dimension`], while generic parameters stay symbolic. Each
 //! type has exactly one spelling — `Dimensionless` is the concrete
 //! dimensionless quantity, a non-generic struct is a struct application with

@@ -1,7 +1,7 @@
 //! LSP server backend: state management and `LanguageServer` trait implementation.
 
 use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, LazyLock, Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use tokio::sync::{RwLock, Semaphore};
@@ -23,151 +23,19 @@ use tower_lsp::lsp_types::{
 };
 use tower_lsp::{Client, ClientSocket, LanguageServer, LspService, Server};
 
+use crate::analysis::AnalysisResult;
+use crate::analysis_pipeline::{AnalysisRun, OpenBuffer, run_analysis_with_cancellation};
 use crate::analysis_schedule_state::AnalysisScheduleState;
 use crate::client_capabilities::{ClientFeatureSupport, DocumentSymbolShape, WorkspaceEditShape};
 use crate::convert::position_to_byte_offset;
-use crate::diagnostics::{compile_error_to_diagnostics_grouped, eval_result_to_diagnostics};
-use crate::filesystem_events::TrackingFileSystem;
+use crate::file_identity::{document_identity, file_identity};
 use crate::formatting_scheduler::{FormattingScheduler, FormattingTaskError};
-use crate::project_symbols::{ProjectDocumentSymbols, ProjectSymbolIndex, ProjectSymbols};
-use crate::symbol_identity::{
-    SourceSymbolPath, UnresolvedSymbol, VisibleBinding, resolve_visible_target,
-};
-use crate::symbol_table::{self, DefinitionInfo, SymbolCategory, SymbolKey, SymbolTable};
+use crate::project_symbols::ProjectSymbolIndex;
 use crate::workspace_revision::{
-    AnalysisFreshness, AnalysisInputSnapshot, AnalysisInputs, DependencyGraph, DocumentIdentity,
-    DocumentRevision, RevisionClock, RevisionExhausted, current_revisions,
+    AnalysisFreshness, AnalysisInputSnapshot, DependencyGraph, DocumentIdentity, DocumentRevision,
+    RevisionClock, RevisionExhausted, current_revisions,
 };
-use graphcal_compiler::builtin::{BuiltinEntry, BuiltinFn};
 use graphcal_compiler::cancellation::{CancellationSource, CancellationToken, Cancelled};
-use graphcal_compiler::dimension::Dimension;
-use graphcal_compiler::function_signature::FunctionSignature;
-use graphcal_compiler::graphcal_error::GraphcalError;
-use graphcal_compiler::semantic::scalar_function::scalar_function;
-use graphcal_compiler::syntax::module_name::ScopedName;
-use graphcal_compiler::syntax::names::NameAtom;
-use graphcal_eval::eval::{EvalResult, Value};
-use graphcal_project::compile_error::CompileError;
-use graphcal_project::loader::LoadedProject;
-use graphcal_project::project_compiler::{CheckedProject, ProjectCompiler};
-
-/// A definition from an imported file, for cross-file go-to-definition and hover.
-pub(crate) struct ImportedDefinition {
-    /// URI of the file containing the definition.
-    pub(crate) uri: Url,
-    /// Source text of the imported file (needed for span-to-range conversion).
-    /// Shared via `Arc` to avoid cloning the full source per imported symbol.
-    pub(crate) source: Arc<String>,
-    /// The definition info (name, category, spans, type description).
-    pub(crate) definition: DefinitionInfo,
-}
-
-/// A loader-resolved import link for Document Links.
-///
-/// Pairs the source-text span of the import path with the loader-resolved
-/// target URI, so `document_links` doesn't need to re-resolve paths.
-pub(crate) struct ResolvedImportLink {
-    /// Span of the import path in the source text.
-    pub(crate) path_span: graphcal_compiler::syntax::span::Span,
-    /// Loader-resolved target URI.
-    pub(crate) target_uri: Url,
-}
-
-/// Structured function signature for Signature Help.
-pub(crate) struct FnSignatureInfo {
-    /// Full signature label, e.g. `"fn sqrt<D: Dim>(x: D) -> D^(1/2)"`.
-    pub(crate) label: String,
-    /// Individual parameter labels, e.g. `["x: D"]`.
-    pub(crate) parameters: Vec<String>,
-}
-
-/// One deliberate editor-feature degradation produced by synchronous analysis.
-///
-/// The functional analysis core records the typed reason; the async LSP shell
-/// renders it through `window/logMessage`.
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum AnalysisDegradation {
-    EmptySymbolTable { reason: String },
-    FileLocalModuleResolver { reason: String },
-}
-
-impl AnalysisDegradation {
-    fn message(&self, uri: &Url) -> String {
-        match self {
-            Self::EmptySymbolTable { reason } => format!(
-                "analysis for {uri} could not build a fallback symbol table: {reason}; retaining previous symbol information when available"
-            ),
-            Self::FileLocalModuleResolver { reason } => format!(
-                "analysis for {uri} is using a file-local module resolver after project resolver construction failed: {reason}; cross-module editor features may be unavailable"
-            ),
-        }
-    }
-}
-
-/// Transient output of one analysis pass.
-struct AnalysisRun {
-    analysis: AnalysisResult,
-    degradations: Vec<AnalysisDegradation>,
-}
-
-impl AnalysisRun {
-    const fn complete(analysis: AnalysisResult) -> Self {
-        Self {
-            analysis,
-            degradations: Vec::new(),
-        }
-    }
-}
-
-/// Cached analysis result for a document.
-pub(crate) struct AnalysisResult {
-    /// Exact document revisions and dependencies consumed by this result.
-    pub(crate) inputs: AnalysisInputs,
-    /// The raw source text. Shared via `Arc` so hover, inlay-hint, and
-    /// formatting handlers can borrow without cloning the full buffer.
-    pub(crate) source: Arc<String>,
-    /// The symbol table (built from AST, enriched from TIR if available).
-    pub(crate) symbol_table: SymbolTable,
-    /// Definitions from imported files, keyed by symbol key.
-    pub(crate) imported_definitions: HashMap<SymbolKey, ImportedDefinition>,
-    /// Complete immutable occurrence index for the loaded project snapshot.
-    pub(crate) project_symbols: ProjectSymbols,
-    /// Source-visible aliases/qualifiers for imported canonical definitions.
-    /// Several bindings may target one identity; no alias is chosen as the
-    /// semantic key.
-    pub(crate) imported_bindings: Vec<VisibleBinding>,
-    /// Public symbols of each loader-resolved import path, categorized by the
-    /// exact marker required in a selective import item.
-    pub(crate) import_surfaces: HashMap<
-        graphcal_compiler::syntax::non_empty::NonEmpty<String>,
-        Vec<graphcal_compiler::resolve::exports::ExportedImportItem>,
-    >,
-    /// Diagnostics to publish, grouped by the URI they belong to. The active
-    /// document's URI is always present (with an empty Vec when clean) so a
-    /// previously-published diagnostic can be cleared. Shared via `Arc` so
-    /// `store_and_publish` can hand a snapshot to the publish loop without
-    /// deep-cloning the map on every analysis cycle.
-    pub(crate) diagnostics: Arc<HashMap<Url, Vec<Diagnostic>>>,
-    /// Computed values from evaluation, keyed by declaration name.
-    /// Each value is a formatted display string (e.g., `"9.81 [m/s^2]"`).
-    pub(crate) eval_values: HashMap<ScopedName, String>,
-    /// Structured function signatures, keyed by function name.
-    /// Points to a lazily-initialized static map (builtins never change).
-    pub(crate) fn_signatures: &'static HashMap<String, FnSignatureInfo>,
-    /// Extern (plugin) function signatures from this file's `import plugin`
-    /// blocks, keyed by the qualified `alias.name` call spelling. Per-file,
-    /// unlike the static builtin map.
-    pub(crate) extern_fn_signatures: HashMap<String, FnSignatureInfo>,
-    /// Loader-resolved import links (for Document Links).
-    pub(crate) import_links: Vec<ResolvedImportLink>,
-    /// `false` when this result is a parse-failure fallback: the buffer did
-    /// not parse, so the symbol-dependent fields are empty placeholders and
-    /// only `diagnostics` is meaningful. [`store_analysis`] keeps the
-    /// previous good symbol state in that case (#834) — mid-edit buffers are
-    /// unparsable more often than not, and completion/hover/goto should keep
-    /// answering from the last successfully analyzed state.
-    pub(crate) buffer_parsed: bool,
-}
 
 /// Debounce delay for `did_change` notifications (milliseconds).
 const DEBOUNCE_DELAY_MS: u64 = 300;
@@ -377,64 +245,6 @@ pub struct Backend {
     analysis_scheduler: Arc<AnalysisScheduler>,
 }
 
-impl AnalysisResult {
-    pub(crate) fn resolve_imported_target(
-        &self,
-        unresolved: &UnresolvedSymbol,
-    ) -> Option<SymbolKey> {
-        resolve_visible_target(&self.imported_bindings, unresolved)
-    }
-}
-
-#[cfg(test)]
-impl AnalysisResult {
-    /// True when no diagnostics are present across any URI.
-    pub(crate) fn has_no_diagnostics(&self) -> bool {
-        self.diagnostics.values().all(Vec::is_empty)
-    }
-}
-
-// `AnalysisResult`'s custom `Debug` shape (counts, not contents) is useful only
-// inside test assertion messages; gating it behind `cfg(test)` keeps the
-// release binary from carrying an impl no production code path can call.
-/// One plugin host shared by every analysis test, mirroring the Backend's
-/// process-wide host (and keeping the module cache warm).
-#[cfg(test)]
-fn test_plugin_host() -> &'static graphcal_plugin_host::PluginHost {
-    static HOST: std::sync::OnceLock<graphcal_plugin_host::PluginHost> = std::sync::OnceLock::new();
-    HOST.get_or_init(graphcal_plugin_host::PluginHost::new)
-}
-
-#[cfg(test)]
-impl std::fmt::Debug for AnalysisResult {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("AnalysisResult")
-            .field("inputs", &self.inputs)
-            .field("source_len", &self.source.len())
-            .field("symbol_table_defs", &self.symbol_table.definitions.len())
-            .field(
-                "project_symbols_complete",
-                &self.project_symbols.complete().is_some(),
-            )
-            .field("imported_defs", &self.imported_definitions.len())
-            .field("imported_bindings", &self.imported_bindings.len())
-            .field("import_surfaces", &self.import_surfaces.len())
-            .field(
-                "diagnostics_count",
-                &self.diagnostics.values().map(Vec::len).sum::<usize>(),
-            )
-            .field("eval_values_count", &self.eval_values.len())
-            .field("fn_signatures_count", &self.fn_signatures.len())
-            .field(
-                "extern_fn_signatures_count",
-                &self.extern_fn_signatures.len(),
-            )
-            .field("import_links_count", &self.import_links.len())
-            .field("buffer_parsed", &self.buffer_parsed)
-            .finish()
-    }
-}
-
 #[derive(Clone, Copy)]
 struct CurrentAnalysis<'a>(&'a AnalysisResult);
 
@@ -477,28 +287,22 @@ fn open_revisions(
         .map(|snapshot| (snapshot.identity.clone(), snapshot.revision))
 }
 
-fn file_identity(path: &std::path::Path) -> DocumentIdentity {
-    let canonical = path.canonicalize().or_else(|_| {
-        let parent = path
-            .parent()
-            .ok_or_else(|| std::io::Error::from(std::io::ErrorKind::NotFound))?;
-        let canonical_parent = parent.canonicalize()?;
-        path.file_name().map_or_else(
-            || Err(std::io::Error::from(std::io::ErrorKind::NotFound)),
-            |name| Ok(canonical_parent.join(name)),
-        )
-    });
-    DocumentIdentity::file(canonical.unwrap_or_else(|_| path.to_path_buf()))
-}
-
-fn document_identity(uri: &Url) -> DocumentIdentity {
-    uri.to_file_path().map_or_else(
-        |()| DocumentIdentity::virtual_uri(uri.clone()),
-        |path| file_identity(&path),
-    )
-}
-
 impl Backend {
+    /// Shared handles an analysis worker needs, cloned for one pass.
+    fn analysis_worker(&self) -> AnalysisWorker {
+        AnalysisWorker {
+            client: self.client.clone(),
+            documents: Arc::clone(&self.documents),
+            generations: Arc::clone(&self.change_generations),
+            latest_text: Arc::clone(&self.latest_text),
+            filesystem_revisions: Arc::clone(&self.filesystem_revisions),
+            dependency_graph: Arc::clone(&self.dependency_graph),
+            client_features: self.client_features(),
+            plugin_host: Arc::clone(&self.plugin_host),
+            scheduler: Arc::clone(&self.analysis_scheduler),
+        }
+    }
+
     fn client_features(&self) -> ClientFeatureSupport {
         self.client_features.get().copied().unwrap_or_default()
     }
@@ -727,15 +531,7 @@ impl Backend {
         let generation = self.bump_generation(&uri).await;
 
         analyze_store_publish(
-            &self.client,
-            &self.documents,
-            &self.change_generations,
-            &self.latest_text,
-            &self.filesystem_revisions,
-            &self.dependency_graph,
-            self.client_features(),
-            Arc::clone(&self.plugin_host),
-            Arc::clone(&self.analysis_scheduler),
+            &self.analysis_worker(),
             uri,
             text,
             recorded.revision,
@@ -756,40 +552,17 @@ impl Backend {
         root_revision: DocumentRevision,
         generation: u64,
     ) {
-        let client = self.client.clone();
-        let documents = self.documents.clone();
-        let generations = self.change_generations.clone();
-        let latest_text = self.latest_text.clone();
-        let filesystem_revisions = Arc::clone(&self.filesystem_revisions);
-        let dependency_graph = Arc::clone(&self.dependency_graph);
-        let plugin_host = Arc::clone(&self.plugin_host);
-        let analysis_scheduler = Arc::clone(&self.analysis_scheduler);
-        let client_features = self.client_features();
+        let worker = self.analysis_worker();
 
         tokio::spawn(async move {
             tokio::time::sleep(Duration::from_millis(DEBOUNCE_DELAY_MS)).await;
 
             // Check if a newer change has superseded this one.
-            if !is_generation_current(&generations, &uri, generation).await {
+            if !is_generation_current(&worker.generations, &uri, generation).await {
                 return;
             }
 
-            analyze_store_publish(
-                &client,
-                &documents,
-                &generations,
-                &latest_text,
-                &filesystem_revisions,
-                &dependency_graph,
-                client_features,
-                plugin_host,
-                analysis_scheduler,
-                uri,
-                text,
-                root_revision,
-                generation,
-            )
-            .await;
+            analyze_store_publish(&worker, uri, text, root_revision, generation).await;
         });
     }
 
@@ -807,52 +580,42 @@ enum AnalysisCompletion {
     Retry(OpenDocumentSnapshot),
 }
 
-/// Run analysis until it either stores a revision-coherent result or reaches
-/// a terminal cancellation/error. A dependency edit racing the worker returns
-/// the current root snapshot for another bounded pass.
-#[expect(
-    clippy::too_many_arguments,
-    reason = "the arguments are the Backend's shared state"
-)]
-async fn analyze_store_publish(
-    client: &Client,
-    documents: &Arc<RwLock<HashMap<Url, AnalysisResult>>>,
-    generations: &Arc<RwLock<HashMap<Url, u64>>>,
-    latest_text: &Arc<RwLock<HashMap<Url, OpenDocumentSnapshot>>>,
-    filesystem_revisions: &Arc<RwLock<HashMap<DocumentIdentity, DocumentRevision>>>,
-    dependency_graph: &Arc<RwLock<DependencyGraph>>,
+/// The Backend state one analysis worker reads and publishes into.
+///
+/// Every field is a shared handle, so a debounced task owns a cheap clone
+/// while the Backend keeps serving requests.
+#[derive(Clone)]
+struct AnalysisWorker {
+    client: Client,
+    documents: Arc<RwLock<HashMap<Url, AnalysisResult>>>,
+    generations: Arc<RwLock<HashMap<Url, u64>>>,
+    latest_text: Arc<RwLock<HashMap<Url, OpenDocumentSnapshot>>>,
+    filesystem_revisions: Arc<RwLock<HashMap<DocumentIdentity, DocumentRevision>>>,
+    dependency_graph: Arc<RwLock<DependencyGraph>>,
     client_features: ClientFeatureSupport,
     plugin_host: Arc<graphcal_plugin_host::PluginHost>,
     scheduler: Arc<AnalysisScheduler>,
+}
+
+/// Run analysis until it either stores a revision-coherent result or reaches
+/// a terminal cancellation/error. A dependency edit racing the worker returns
+/// the current root snapshot for another bounded pass.
+async fn analyze_store_publish(
+    worker: &AnalysisWorker,
     uri: Url,
     mut text: String,
     mut root_revision: DocumentRevision,
     mut generation: u64,
 ) {
     loop {
-        match analyze_store_publish_once(
-            client,
-            documents,
-            generations,
-            latest_text,
-            filesystem_revisions,
-            dependency_graph,
-            client_features,
-            Arc::clone(&plugin_host),
-            Arc::clone(&scheduler),
-            uri.clone(),
-            text,
-            root_revision,
-            generation,
-        )
-        .await
+        match analyze_store_publish_once(worker, uri.clone(), text, root_revision, generation).await
         {
             AnalysisCompletion::Done => return,
             AnalysisCompletion::Retry(snapshot) => {
                 text = snapshot.text.as_ref().clone();
                 root_revision = snapshot.revision;
-                generation = bump_generation_value(generations, &uri).await;
-                scheduler.cancel_document(&uri);
+                generation = bump_generation_value(&worker.generations, &uri).await;
+                worker.scheduler.cancel_document(&uri);
             }
         }
     }
@@ -861,25 +624,28 @@ async fn analyze_store_publish(
 /// Run one blocking, timeout-guarded analysis pass and store/publish it only
 /// when every consumed open-document revision is still current.
 #[expect(
-    clippy::too_many_arguments,
     clippy::too_many_lines,
-    reason = "one call site per trigger; the arguments are the Backend's shared state"
+    reason = "one call site per trigger; the pass is one gated sequence"
 )]
 async fn analyze_store_publish_once(
-    client: &Client,
-    documents: &Arc<RwLock<HashMap<Url, AnalysisResult>>>,
-    generations: &Arc<RwLock<HashMap<Url, u64>>>,
-    latest_text: &Arc<RwLock<HashMap<Url, OpenDocumentSnapshot>>>,
-    filesystem_revisions: &Arc<RwLock<HashMap<DocumentIdentity, DocumentRevision>>>,
-    dependency_graph: &Arc<RwLock<DependencyGraph>>,
-    client_features: ClientFeatureSupport,
-    plugin_host: Arc<graphcal_plugin_host::PluginHost>,
-    scheduler: Arc<AnalysisScheduler>,
+    worker: &AnalysisWorker,
     uri: Url,
     text: String,
     root_revision: DocumentRevision,
     generation: u64,
 ) -> AnalysisCompletion {
+    let AnalysisWorker {
+        client,
+        documents,
+        generations,
+        latest_text,
+        filesystem_revisions,
+        dependency_graph,
+        client_features,
+        plugin_host,
+        scheduler,
+    } = worker;
+    let client_features = *client_features;
     let registration = scheduler.register(&uri, generation);
     let cancellation = registration.source.token();
     if !is_generation_current(generations, &uri, generation).await {
@@ -965,7 +731,7 @@ async fn analyze_store_publish_once(
 
     let uri_for_analysis = uri.clone();
     let source = registration.source;
-    let worker_plugin_host = Arc::clone(&plugin_host);
+    let worker_plugin_host = Arc::clone(plugin_host);
     let mut task = tokio::task::spawn_blocking(move || {
         // Keep both permits until the synchronous worker truly exits. Dropping
         // the async waiter on timeout must not admit replacement work while a
@@ -999,7 +765,7 @@ async fn analyze_store_publish_once(
         Err(_elapsed) => {
             source.cancel();
             task.abort();
-            let cleanup_scheduler = Arc::clone(&scheduler);
+            let cleanup_scheduler = Arc::clone(scheduler);
             let cleanup_uri = uri.clone();
             tokio::spawn(async move {
                 let _ = task.await;
@@ -1260,1303 +1026,6 @@ async fn is_generation_current(
     generation: u64,
 ) -> bool {
     *generations.read().await.get(uri).unwrap_or(&0) == generation
-}
-
-/// Snapshot of another open editor buffer, overlaid onto the filesystem
-/// during analysis so cross-file diagnostics, goto-definition targets, and
-/// hover reflect what the user actually sees instead of stale disk content.
-struct OpenBuffer {
-    path: std::path::PathBuf,
-    text: Arc<String>,
-}
-
-/// Build a `LoadedProject` from a URI and in-memory text.
-///
-/// For file-backed URIs, loads the project from disk with the in-memory text
-/// overlaid on the root file — and every other open document's latest text
-/// overlaid on its path — via [`graphcal_io::OverlayFileSystem`]. The base
-/// reader is sandboxed to the discovered project root (when a `graphcal.toml`
-/// is reachable from the buffer's directory) — keeping the LSP's filesystem
-/// access in lockstep with the CLI's. For untitled/non-file URIs, builds a
-/// single-file project from the in-memory text alone.
-struct ProjectBuild {
-    project: std::result::Result<LoadedProject, Box<CompileError>>,
-    filesystem_inputs: HashSet<DocumentIdentity>,
-}
-
-impl ProjectBuild {
-    fn failed(error: CompileError) -> Self {
-        Self {
-            project: Err(Box::new(error)),
-            filesystem_inputs: HashSet::new(),
-        }
-    }
-}
-
-fn build_project(
-    uri: &Url,
-    text: &str,
-    open_buffers: &[OpenBuffer],
-    cancellation: &CancellationToken,
-) -> ProjectBuild {
-    let name = uri.as_str();
-    let Ok(path) = uri.to_file_path() else {
-        return ProjectBuild {
-            project: LoadedProject::from_source_with_cancellation(text, name, cancellation)
-                .map_err(Box::new),
-            filesystem_inputs: HashSet::new(),
-        };
-    };
-
-    // OverlayFileSystem validates existing identities and proves unsaved
-    // buffers are below a base-authorized canonical parent. The analyzed
-    // snapshot comes first so it wins over any newer latest-text entry for the
-    // same file.
-    let base = match graphcal_project::loader::build_rooted_filesystem(&path, None) {
-        Ok(base) => base,
-        Err(error) => return ProjectBuild::failed(error),
-    };
-    let overlays = std::iter::once((path.clone(), text.to_string()))
-        .chain(
-            open_buffers
-                .iter()
-                .filter(|buffer| {
-                    graphcal_io::OverlayFileSystem::new(
-                        base.clone(),
-                        buffer.path.clone(),
-                        String::new(),
-                    )
-                    .is_ok()
-                })
-                .map(|buffer| (buffer.path.clone(), buffer.text.as_ref().clone())),
-        )
-        .collect::<Vec<_>>();
-    let fs = match graphcal_io::OverlayFileSystem::with_overlays(base, overlays) {
-        Ok(fs) => fs,
-        Err(error) => {
-            return ProjectBuild::failed(CompileError::Eval(GraphcalError::InvalidSourcePath {
-                path: error.path().display().to_string(),
-                reason: error.to_string(),
-            }));
-        }
-    };
-    let tracking_fs = TrackingFileSystem::new(fs);
-    let project = graphcal_project::loader::load_project_with_cancellation(
-        &path,
-        None,
-        &tracking_fs,
-        cancellation,
-    )
-    .map_err(Box::new);
-    let root_identity = file_identity(&path);
-    let filesystem_inputs = tracking_fs
-        .accessed_paths()
-        .into_iter()
-        .map(|input| file_identity(&input))
-        .filter(|identity| *identity != root_identity)
-        .collect();
-    ProjectBuild {
-        project,
-        filesystem_inputs,
-    }
-}
-
-fn project_dependency_identities(project: &LoadedProject) -> HashSet<DocumentIdentity> {
-    project
-        .files()
-        .ordered()
-        .deps()
-        .iter()
-        .map(|file| DocumentIdentity::file(file.path().to_path_buf()))
-        .chain(
-            project
-                .package_closure()
-                .into_iter()
-                .flat_map(dependency_artifact_identities),
-        )
-        .collect()
-}
-
-fn dependency_artifact_identities(
-    closure: &graphcal_project::loader::LoadedPackageClosure,
-) -> impl Iterator<Item = DocumentIdentity> + '_ {
-    closure.dependencies.values().flat_map(|dependency| {
-        dependency
-            .snapshot
-            .files()
-            .map(|(relative, _)| DocumentIdentity::file(dependency.root.join(relative)))
-    })
-}
-
-/// Wrap a single-URI diagnostic vec into the per-URI map shape so the active
-/// document's URI is always present (even when empty) and so eval diagnostics
-/// — which always belong to the active file — sit alongside any cross-file
-/// parse/TIR diagnostics.
-fn diagnostics_for_active_uri(uri: &Url, diags: Vec<Diagnostic>) -> HashMap<Url, Vec<Diagnostic>> {
-    let mut out = HashMap::new();
-    out.insert(uri.clone(), diags);
-    out
-}
-
-/// Run the analysis pipeline, producing an `AnalysisResult`.
-///
-/// The pipeline has two stages:
-/// 1. Build a `LoadedProject` from the in-memory text (+ disk imports).
-/// 2. Compile TIR from the project.
-///
-/// Both stages use the same source text, eliminating data provenance mismatches.
-#[cfg(test)]
-pub(crate) fn run_analysis_for_test(uri: &Url, text: &str) -> AnalysisResult {
-    run_analysis(uri, text, &[], test_plugin_host())
-}
-
-#[cfg(test)]
-fn run_analysis_run(
-    uri: &Url,
-    text: &str,
-    open_buffers: &[OpenBuffer],
-    plugin_host: &graphcal_plugin_host::PluginHost,
-) -> AnalysisRun {
-    let revision = RevisionClock::default().next().unwrap();
-    let input_snapshot =
-        AnalysisInputSnapshot::new(document_identity(uri), revision, HashMap::new());
-    run_analysis_with_cancellation(
-        uri,
-        text,
-        open_buffers,
-        plugin_host,
-        &input_snapshot,
-        &CancellationToken::unbounded(),
-    )
-    .expect("an unbounded analysis cannot be cancelled")
-}
-
-#[cfg(test)]
-fn run_analysis(
-    uri: &Url,
-    text: &str,
-    open_buffers: &[OpenBuffer],
-    plugin_host: &graphcal_plugin_host::PluginHost,
-) -> AnalysisResult {
-    run_analysis_run(uri, text, open_buffers, plugin_host).analysis
-}
-
-#[expect(
-    clippy::too_many_lines,
-    reason = "analysis coordinates fallback diagnostics and successful semantic metadata"
-)]
-fn run_analysis_with_cancellation(
-    uri: &Url,
-    text: &str,
-    open_buffers: &[OpenBuffer],
-    plugin_host: &graphcal_plugin_host::PluginHost,
-    input_snapshot: &AnalysisInputSnapshot,
-    cancellation: &CancellationToken,
-) -> std::result::Result<AnalysisRun, Cancelled> {
-    cancellation.checkpoint()?;
-    // Stage 1: Build project (parse + load imports).
-    // If this fails, no AST is available for the multi-file pipeline. Fall
-    // back to parsing just the active buffer so hover/goto-def on the active
-    // file's own symbols still answer — the imported-file error remains
-    // visible, but local LSP features degrade gracefully.
-    let project_build = build_project(uri, text, open_buffers, cancellation);
-    let mut filesystem_inputs = project_build.filesystem_inputs;
-    let project = match project_build.project {
-        Ok(project) => project,
-        Err(error) if error.is_cancelled() => return Err(Cancelled),
-        Err(error) => {
-            let mut diagnostics = compile_error_to_diagnostics_grouped(&error, uri);
-            diagnostics.entry(uri.clone()).or_default();
-            // `Some` when the failure was in an *import* (the buffer itself
-            // parses): the buffer's own symbols are still fully usable.
-            // `None` when the buffer doesn't parse — the result is then a
-            // diagnostics-only fallback and `store_analysis` retains the
-            // previous symbol state (#834).
-            let (symbol_table, buffer_parsed, degradations) =
-                match LoadedProject::from_source_with_cancellation(text, uri.as_str(), cancellation)
-                {
-                    Ok(single) => (
-                        symbol_table::build_for_buffer(single.root_file().ast(), text),
-                        true,
-                        Vec::new(),
-                    ),
-                    Err(error) if error.is_cancelled() => return Err(Cancelled),
-                    Err(error) => (
-                        SymbolTable::default(),
-                        false,
-                        vec![AnalysisDegradation::EmptySymbolTable {
-                            reason: error.to_string(),
-                        }],
-                    ),
-                };
-            cancellation.checkpoint()?;
-            return Ok(AnalysisRun {
-                analysis: AnalysisResult {
-                    inputs: input_snapshot.finish_partially_loaded_project(filesystem_inputs),
-                    source: Arc::new(text.to_string()),
-                    symbol_table,
-                    project_symbols: ProjectSymbols::Incomplete,
-                    imported_definitions: HashMap::new(),
-                    imported_bindings: Vec::new(),
-                    import_surfaces: HashMap::new(),
-                    diagnostics: Arc::new(diagnostics),
-                    eval_values: HashMap::new(),
-                    fn_signatures: build_fn_signatures(),
-                    extern_fn_signatures: HashMap::new(),
-                    import_links: Vec::new(),
-                    buffer_parsed,
-                },
-                degradations,
-            });
-        }
-    };
-
-    cancellation.checkpoint()?;
-    filesystem_inputs.extend(project_dependency_identities(&project));
-    let analysis_inputs = input_snapshot.finish_loaded_project(filesystem_inputs);
-    let root_ast = project.root_file().ast();
-    let import_links = collect_import_links(&project, cancellation)?;
-    cancellation.checkpoint()?;
-    // Extern (plugin) registry for this pass: the built-in demo plugin plus
-    // the project's vendored wasm plugins. The plugin host outlives passes,
-    // so unchanged modules come from its content-hash cache.
-    cancellation.checkpoint()?;
-    let mut host_fns = graphcal_eval::host_fns::demo_registry();
-    graphcal_plugin_host::register_project_plugins(plugin_host, &project, &mut host_fns);
-    cancellation.checkpoint()?;
-
-    // Stage 2: Compile TIR from the project.
-    match ProjectCompiler::new(&project)
-        .host_fns(&host_fns)
-        .cancellation(cancellation)
-        .check()
-    {
-        Ok(checked) => {
-            cancellation.checkpoint()?;
-            let tir = checked.tir();
-            let module_resolver = checked.module_resolver();
-            // Full success: symbol table from AST + TIR enrichment.
-            let mut symbol_table =
-                symbol_table::build_from_ast(root_ast, text, project.root_id(), module_resolver);
-            cancellation.checkpoint()?;
-            symbol_table::enrich_from_tir(&mut symbol_table, tir, project.root_id());
-
-            cancellation.checkpoint()?;
-            let imported_symbols = collect_imported_definitions(
-                uri,
-                &project,
-                Some(tir),
-                module_resolver,
-                cancellation,
-            )?;
-            cancellation.checkpoint()?;
-            let fn_signatures = build_fn_signatures();
-            let extern_fn_signatures = build_extern_fn_signatures(tir, cancellation)?;
-            let import_surfaces = collect_import_surfaces(&project, module_resolver, cancellation)?;
-            // Library files (required param/index not yet bound) cannot be evaluated
-            // standalone. Skip the eval pipeline so editors don't surface false-positive
-            // `RequiredStaticInputNotBound` / `RequiredParamNotProvided` diagnostics when the
-            // user opens such a file for editing.
-            let todos =
-                crate::diagnostics::unfinished_node_diagnostics(&root_ast.declarations, text);
-            let (mut diagnostics, eval_values) = if checked.is_library() {
-                (HashMap::new(), HashMap::new())
-            } else {
-                run_eval_from_checked(checked, uri, text, &symbol_table, &host_fns, cancellation)?
-            };
-            cancellation.checkpoint()?;
-            diagnostics.entry(uri.clone()).or_default().extend(todos);
-
-            Ok(AnalysisRun::complete(AnalysisResult {
-                inputs: analysis_inputs,
-                source: Arc::new(text.to_string()),
-                symbol_table,
-                project_symbols: ProjectSymbols::Complete(imported_symbols.project_index),
-                imported_definitions: imported_symbols.definitions,
-                imported_bindings: imported_symbols.bindings,
-                import_surfaces,
-                diagnostics: Arc::new(diagnostics),
-                eval_values,
-                fn_signatures,
-                extern_fn_signatures,
-                import_links,
-                buffer_parsed: true,
-            }))
-        }
-        Err(error) if error.is_cancelled() => Err(Cancelled),
-        Err(error) => {
-            cancellation.checkpoint()?;
-            // A failed session has no checked resolver continuation. Rebuild a
-            // best-effort resolver only for partial editor information.
-            let (module_resolver, degradations) = match project.build_module_resolver() {
-                Ok(module_resolver) => (module_resolver, Vec::new()),
-                Err(resolver_error) => (
-                    symbol_table::file_local_resolver(root_ast, project.root_id()),
-                    vec![AnalysisDegradation::FileLocalModuleResolver {
-                        reason: resolver_error.to_string(),
-                    }],
-                ),
-            };
-            let symbol_table =
-                symbol_table::build_from_ast(root_ast, text, project.root_id(), &module_resolver);
-            cancellation.checkpoint()?;
-            let imported_symbols =
-                collect_imported_definitions(uri, &project, None, &module_resolver, cancellation)?;
-            let mut diagnostics = compile_error_to_diagnostics_grouped(&error, uri);
-            diagnostics.entry(uri.clone()).or_default();
-
-            Ok(AnalysisRun {
-                analysis: AnalysisResult {
-                    inputs: analysis_inputs,
-                    source: Arc::new(text.to_string()),
-                    symbol_table,
-                    project_symbols: ProjectSymbols::Complete(imported_symbols.project_index),
-                    imported_definitions: imported_symbols.definitions,
-                    imported_bindings: imported_symbols.bindings,
-                    import_surfaces: collect_import_surfaces(
-                        &project,
-                        &module_resolver,
-                        cancellation,
-                    )?,
-                    diagnostics: Arc::new(diagnostics),
-                    eval_values: HashMap::new(),
-                    fn_signatures: build_fn_signatures(),
-                    extern_fn_signatures: HashMap::new(),
-                    import_links,
-                    buffer_parsed: true,
-                },
-                degradations,
-            })
-        }
-    }
-}
-
-type EvalAnalysisOutput = (HashMap<Url, Vec<Diagnostic>>, HashMap<ScopedName, String>);
-
-/// Run evaluation from a loaded project and extract diagnostics and formatted values.
-fn run_eval_from_checked(
-    checked: CheckedProject,
-    uri: &Url,
-    text: &str,
-    symbol_table: &SymbolTable,
-    host_fns: &graphcal_eval::host_fns::HostFunctionRegistry,
-    cancellation: &CancellationToken,
-) -> std::result::Result<EvalAnalysisOutput, Cancelled> {
-    let result = match checked.prepare_with_host_fns_and_cancellation(host_fns, cancellation) {
-        Ok(prepared) => match prepared.binding_builder().finish() {
-            Ok(row) => prepared.evaluate_with_cancellation(&row, cancellation),
-            Err(error) => Err(error),
-        },
-        Err(error) => Err(error),
-    };
-    match result {
-        Ok(result) => {
-            cancellation.checkpoint()?;
-            let diagnostics = eval_result_to_diagnostics(&result, text, symbol_table);
-            let values = format_eval_values(&result, cancellation)?;
-            Ok((diagnostics_for_active_uri(uri, diagnostics), values))
-        }
-        Err(error) if error.is_cancelled() => Err(Cancelled),
-        Err(error) => {
-            let mut diagnostics = compile_error_to_diagnostics_grouped(&error, uri);
-            diagnostics.entry(uri.clone()).or_default();
-            Ok((diagnostics, HashMap::new()))
-        }
-    }
-}
-
-/// Collect loader-resolved import links from the project for Document Links.
-///
-/// Uses `imports_with_paths()` and `includes_with_paths()` from the loader,
-/// so document links agree with actual compilation behavior.
-fn collect_import_links(
-    project: &LoadedProject,
-    cancellation: &CancellationToken,
-) -> std::result::Result<Vec<ResolvedImportLink>, Cancelled> {
-    cancellation.checkpoint()?;
-    let root_file = project.root_file();
-
-    let import_links = root_file
-        .imports_with_targets()
-        .map(|(_, import_decl, target)| (import_decl.path().span(), target));
-    let include_links = root_file
-        .includes_with_targets()
-        .map(|(_, include_decl, target)| (include_decl.path.span(), target));
-
-    import_links
-        .chain(include_links)
-        .map(|(span, target)| {
-            cancellation.checkpoint()?;
-            Ok(project.file(target.source_file()).and_then(|loaded| {
-                Url::from_file_path(loaded.path())
-                    .ok()
-                    .map(|target_uri| ResolvedImportLink {
-                        path_span: span,
-                        target_uri,
-                    })
-            }))
-        })
-        .collect::<std::result::Result<Vec<_>, Cancelled>>()
-        .map(|links| links.into_iter().flatten().collect())
-}
-
-/// Build extern (plugin) function signatures for Signature Help, keyed by
-/// the qualified `alias.name` call spelling.
-///
-/// Unlike builtins, extern signatures are per-file (they depend on the
-/// file's `import plugin` blocks and its registry's dimension names).
-fn build_extern_fn_signatures(
-    tir: &graphcal_compiler::tir::typed::CheckedTir,
-    cancellation: &CancellationToken,
-) -> std::result::Result<HashMap<String, FnSignatureInfo>, Cancelled> {
-    let mut format_dim = |dim: &Dimension| tir.registry().dimensions.format_dimension(dim);
-    let mut sigs = HashMap::new();
-    for function in tir.extern_functions().values() {
-        cancellation.checkpoint()?;
-        let parameters: Vec<String> = function
-            .signature
-            .params()
-            .iter()
-            .map(|param| param.format_with(&mut format_dim))
-            .collect();
-        let rendered = function
-            .signature
-            .format_with_result(&mut format_dim, &mut |result_struct, _| {
-                result_struct.record_type().as_str().to_string()
-            });
-        let qualified = format!("{}::{}", function.alias, function.name);
-        let label = format!("fn {qualified}{rendered}");
-        sigs.insert(qualified, FnSignatureInfo { label, parameters });
-    }
-    Ok(sigs)
-}
-
-/// Get builtin function signatures for Signature Help.
-///
-/// Computed once and cached in a static. Builtins never change at runtime.
-pub(crate) fn build_fn_signatures() -> &'static HashMap<String, FnSignatureInfo> {
-    static FN_SIGS: LazyLock<HashMap<String, FnSignatureInfo>> = LazyLock::new(|| {
-        let mut sigs = HashMap::new();
-        for function in BuiltinFn::all() {
-            let info = match function.entry() {
-                BuiltinEntry::Kernel(scalar) => {
-                    builtin_kernel_signature_info(function, scalar_function(scalar).signature())
-                }
-                BuiltinEntry::Signature(signature) => FnSignatureInfo {
-                    label: signature.label(function.as_str()),
-                    parameters: signature.parameter_labels().collect(),
-                },
-                BuiltinEntry::Bespoke(_) => continue,
-            };
-            sigs.insert(function.as_str().to_string(), info);
-        }
-        sigs
-    });
-    &FN_SIGS
-}
-
-/// Render a builtin kernel signature through the shared signature renderer.
-///
-/// Builtin signatures reference only prelude dimensions, so the canonical
-/// [`Dimension`] display needs no per-file registry.
-fn builtin_kernel_signature_info(
-    function: BuiltinFn,
-    signature: &FunctionSignature,
-) -> FnSignatureInfo {
-    let mut format_dim = |dim: &Dimension| dim.to_string();
-    FnSignatureInfo {
-        label: format!("fn {function}{}", signature.format_with(&mut format_dim)),
-        parameters: signature
-            .params()
-            .iter()
-            .map(|param| param.format_with(&mut format_dim))
-            .collect(),
-    }
-}
-
-/// Format values and explicit incompleteness outcomes for hover and inlay hints.
-fn format_eval_values(
-    result: &EvalResult,
-    cancellation: &CancellationToken,
-) -> std::result::Result<HashMap<ScopedName, String>, Cancelled> {
-    let mut map = HashMap::new();
-    for (name, value_result, _decl_type) in &result.entries {
-        cancellation.checkpoint()?;
-        let formatted = match value_result {
-            Ok(value) => format_value_inline(value, &result.render),
-            Err(reason) if reason.is_incomplete() => reason.to_string(),
-            Err(_) => continue,
-        };
-        map.insert(name.clone(), formatted);
-    }
-    Ok(map)
-}
-
-/// Maximum character length for inlay hint display strings.
-/// When the formatted value exceeds this, entries are truncated with `...`.
-const INLAY_HINT_MAX_LEN: usize = 80;
-
-/// Format a single `Value` as a compact inline string for inlay hints.
-///
-/// - Quantity: `"9.81 [m/s^2]"` or `"3.14159"` (dimensionless)
-/// - Bool: `"true"` / `"false"`
-/// - Int: `"42"`
-/// - Constructor value: `"LowThrust(thrust: 0.5 [N], duration: 3600 [s])"`
-/// - Unit constructor value: `"Nominal"`
-/// - Indexed: `"{ Departure: 4.92 [km/s], Correction: 0.24 [km/s], ... }"`
-fn format_value_inline(value: &Value, render: &graphcal_eval::eval::RenderContext) -> String {
-    format_value_inline_with_budget(value, render, INLAY_HINT_MAX_LEN)
-}
-
-/// Format a `Value` with a character budget. When the formatted entries would
-/// exceed `max_len`, remaining entries are replaced with `...`.
-fn format_value_inline_with_budget(
-    value: &Value,
-    render: &graphcal_eval::eval::RenderContext,
-    max_len: usize,
-) -> String {
-    match value {
-        // Leaf types: delegate to the shared `format_display` on `Value`.
-        Value::Quantity { .. }
-        | Value::Complex { .. }
-        | Value::Bool(_)
-        | Value::Int(_)
-        | Value::Key(_)
-        | Value::Datetime { .. } => value
-            .format_display(render, graphcal_eval::eval::UnitLabel::Inline)
-            .unwrap_or_else(|error| format!("ERROR: {error}")),
-        Value::Struct {
-            constructor,
-            fields,
-            ..
-        } => {
-            if fields.is_empty() {
-                return constructor.as_str().to_string();
-            }
-            let entries: Vec<(&str, &Value)> =
-                fields.iter().map(|(k, v)| (k.as_str(), v)).collect();
-            format_parenthesized_entries(constructor.as_str(), &entries, render, max_len)
-        }
-        Value::Indexed { entries, .. } => {
-            if entries.is_empty() {
-                return "{}".to_string();
-            }
-            // For multi-indexed maps (nested Indexed values), flatten into
-            // tuple-keyed form: `{ (A, X): 1, (A, Y): 2, (B, X): 3 }` instead
-            // of nested braces: `{ A: { X: 1, Y: 2 }, B: { X: 3 } }`.
-            let mut flat: Vec<(Vec<String>, &Value)> = Vec::new();
-            flatten_indexed_entries(value, &mut Vec::new(), &mut flat);
-            let is_multi = flat.first().is_some_and(|(keys, _)| keys.len() > 1);
-            if is_multi {
-                format_tuple_keyed_entries("", &flat, render, max_len)
-            } else {
-                let single: Vec<(String, &Value)> = entries
-                    .iter()
-                    .map(|(k, v)| (value.indexed_entry_display_name(k), v))
-                    .collect();
-                format_entries("", &single, Clone::clone, render, max_len)
-            }
-        }
-    }
-}
-
-/// Format a list of key-value pairs as `{prefix}{ k1: v1, k2: v2, ... }`,
-/// truncating with `...` when the result would exceed `max_len`.
-///
-/// `render_key` shapes each entry's key — e.g., `|k| k.to_string()` for
-/// single-axis variants or `|keys| format!("({})", keys.join(", "))` for
-/// tuple-keyed multi-axis entries.
-fn format_entries<K>(
-    prefix: &str,
-    entries: &[(K, &Value)],
-    render_key: impl Fn(&K) -> String,
-    render: &graphcal_eval::eval::RenderContext,
-    max_len: usize,
-) -> String {
-    format_delimited_entries(
-        EntryListLayout {
-            prefix,
-            open: "{ ",
-            close: " }",
-            ellipsis: "... }",
-        },
-        entries,
-        render_key,
-        render,
-        max_len,
-    )
-}
-
-#[derive(Clone, Copy)]
-struct EntryListLayout<'a> {
-    prefix: &'a str,
-    open: &'a str,
-    close: &'a str,
-    ellipsis: &'a str,
-}
-
-fn format_delimited_entries<K>(
-    layout: EntryListLayout<'_>,
-    entries: &[(K, &Value)],
-    render_key: impl Fn(&K) -> String,
-    render: &graphcal_eval::eval::RenderContext,
-    max_len: usize,
-) -> String {
-    let mut result = format!("{}{}", layout.prefix, layout.open);
-    let total = entries.len();
-
-    for (i, (key, val)) in entries.iter().enumerate() {
-        let remaining_budget = max_len.saturating_sub(result.len() + layout.close.len());
-        let entry_str = format!(
-            "{}: {}",
-            render_key(key),
-            format_value_inline_with_budget(val, render, remaining_budget)
-        );
-
-        let separator = if i + 1 < total { ", " } else { "" };
-        let needed = entry_str.len() + separator.len();
-
-        if i > 0 && result.len() + needed + layout.close.len() > max_len {
-            result.push_str(layout.ellipsis);
-            return result;
-        }
-
-        result.push_str(&entry_str);
-        if i + 1 < total {
-            result.push_str(", ");
-        }
-    }
-
-    result.push_str(layout.close);
-    result
-}
-
-fn format_parenthesized_entries(
-    prefix: &str,
-    entries: &[(&str, &Value)],
-    render: &graphcal_eval::eval::RenderContext,
-    max_len: usize,
-) -> String {
-    format_delimited_entries(
-        EntryListLayout {
-            prefix,
-            open: "(",
-            close: ")",
-            ellipsis: "...)",
-        },
-        entries,
-        |k| (*k).to_string(),
-        render,
-        max_len,
-    )
-}
-
-/// Recursively flatten nested `Indexed` values into a list of `(key_path, leaf_value)` pairs.
-///
-/// For a single-level `Indexed { A: 1, B: 2 }`, produces `[([A], 1), ([B], 2)]`.
-/// For a nested `Indexed { A: Indexed { X: 1, Y: 2 }, B: Indexed { X: 3 } }`,
-/// produces `[([A, X], 1), ([A, Y], 2), ([B, X], 3)]`.
-fn flatten_indexed_entries<'a>(
-    value: &'a Value,
-    prefix: &mut Vec<String>,
-    out: &mut Vec<(Vec<String>, &'a Value)>,
-) {
-    let Value::Indexed { entries, .. } = value else {
-        return;
-    };
-    for (key, val) in entries {
-        prefix.push(value.indexed_entry_display_name(key));
-        if matches!(val, Value::Indexed { .. }) {
-            flatten_indexed_entries(val, prefix, out);
-        } else {
-            out.push((prefix.clone(), val));
-        }
-        prefix.pop();
-    }
-}
-
-fn format_tuple_keyed_entries(
-    prefix: &str,
-    entries: &[(Vec<String>, &Value)],
-    render: &graphcal_eval::eval::RenderContext,
-    max_len: usize,
-) -> String {
-    format_entries(
-        prefix,
-        entries,
-        |keys| format!("({})", keys.join(", ")),
-        render,
-        max_len,
-    )
-}
-
-/// Collect canonical export surfaces for every import path in the root file.
-fn collect_import_surfaces(
-    project: &graphcal_project::loader::LoadedProject,
-    module_resolver: &graphcal_compiler::resolve::ModuleResolver,
-    cancellation: &CancellationToken,
-) -> std::result::Result<
-    HashMap<
-        graphcal_compiler::syntax::non_empty::NonEmpty<String>,
-        Vec<graphcal_compiler::resolve::exports::ExportedImportItem>,
-    >,
-    Cancelled,
-> {
-    cancellation.checkpoint()?;
-    let mut surfaces = HashMap::new();
-    let root_file = project.root_file();
-
-    for (_, import, target) in root_file.imports_with_targets() {
-        cancellation.checkpoint()?;
-        let Ok(items) = module_resolver.exported_import_items(target.target()) else {
-            continue;
-        };
-        let path = import
-            .path()
-            .segments
-            .clone()
-            .map(|segment| segment.name.to_string());
-        surfaces.insert(path, items);
-    }
-    Ok(surfaces)
-}
-
-/// Collect canonical definitions, visible bindings, and occurrences for every
-/// source in one loader-resolved project closure.
-///
-/// Definitions remain keyed by canonical semantic identity. Authored module
-/// qualifiers and selective aliases are separate bindings, including
-/// transitive re-exports resolved through the compiler's module scope.
-struct ImportedSymbols {
-    definitions: HashMap<SymbolKey, ImportedDefinition>,
-    bindings: Vec<VisibleBinding>,
-    project_index: ProjectSymbolIndex,
-}
-
-struct BuiltProjectDocument {
-    uri: Url,
-    source: Arc<String>,
-    table: SymbolTable,
-}
-
-fn build_project_symbol_documents(
-    root_uri: &Url,
-    project: &graphcal_project::loader::LoadedProject,
-    tir: Option<&graphcal_compiler::tir::typed::CheckedTir>,
-    module_resolver: &graphcal_compiler::resolve::ModuleResolver,
-    cancellation: &CancellationToken,
-) -> std::result::Result<HashMap<graphcal_compiler::dag_id::DagId, BuiltProjectDocument>, Cancelled>
-{
-    project
-        .files()
-        .iter()
-        .map(|loaded_file| {
-            let file_id = loaded_file.dag_id();
-            cancellation.checkpoint()?;
-            let mut table = symbol_table::build_from_ast(
-                loaded_file.ast(),
-                loaded_file.source(),
-                file_id,
-                module_resolver,
-            );
-            if let Some(tir) = tir {
-                symbol_table::enrich_from_tir(&mut table, tir, file_id);
-            }
-            let uri = if file_id == project.root_id() {
-                root_uri.clone()
-            } else {
-                loaded_file_uri(loaded_file, root_uri)
-            };
-            Ok((
-                file_id.clone(),
-                BuiltProjectDocument {
-                    uri,
-                    source: Arc::clone(loaded_file.source()),
-                    table,
-                },
-            ))
-        })
-        .collect()
-}
-
-/// The names one `import` / `include` introduces into its owner.
-#[derive(Clone, Copy)]
-enum ImportedNames<'a> {
-    Selective(&'a [graphcal_compiler::desugar::desugared_ast::ImportItem]),
-    Module(
-        Option<
-            &'a graphcal_compiler::syntax::span::Spanned<
-                graphcal_compiler::syntax::module_name::ModuleAliasName,
-            >,
-        >,
-    ),
-}
-
-impl<'a> ImportedNames<'a> {
-    fn of_import(import: &'a graphcal_compiler::desugar::desugared_ast::ImportDecl) -> Self {
-        match import {
-            graphcal_compiler::desugar::desugared_ast::ImportDecl::Selective { items, .. } => {
-                Self::Selective(items)
-            }
-            graphcal_compiler::desugar::desugared_ast::ImportDecl::Module { alias, .. } => {
-                Self::Module(alias.as_ref())
-            }
-        }
-    }
-
-    fn of_include(kind: &'a graphcal_compiler::desugar::desugared_ast::ImportKind) -> Self {
-        match kind {
-            graphcal_compiler::desugar::desugared_ast::ImportKind::Selective(items) => {
-                Self::Selective(items)
-            }
-            graphcal_compiler::desugar::desugared_ast::ImportKind::Module { alias } => {
-                Self::Module(alias.as_ref())
-            }
-        }
-    }
-}
-
-fn collect_file_imported_symbols(
-    file_id: &graphcal_compiler::dag_id::DagId,
-    loaded_file: &graphcal_project::loader::LoadedFile,
-    documents: &HashMap<graphcal_compiler::dag_id::DagId, BuiltProjectDocument>,
-    module_resolver: &graphcal_compiler::resolve::ModuleResolver,
-    cancellation: &CancellationToken,
-) -> std::result::Result<ImportedSymbols, Cancelled> {
-    let mut imported = ImportedSymbols {
-        definitions: HashMap::new(),
-        bindings: Vec::new(),
-        project_index: ProjectSymbolIndex::default(),
-    };
-    let imports = loaded_file
-        .imports_with_targets()
-        .map(|(_, decl, target)| (decl.path(), ImportedNames::of_import(decl), target, true));
-    let includes = loaded_file
-        .includes_with_targets()
-        .map(|(_, decl, target)| {
-            (
-                &decl.path,
-                ImportedNames::of_include(&decl.kind),
-                target,
-                false,
-            )
-        });
-    for (path, names, resolved_module, is_import) in imports.chain(includes) {
-        cancellation.checkpoint()?;
-        let Some(target) = documents.get(resolved_module.source_file()) else {
-            continue;
-        };
-        match names {
-            ImportedNames::Selective(items) => {
-                if is_import {
-                    imported.bindings.extend(items.iter().filter_map(|item| {
-                        resolve_selective_binding(file_id, item, module_resolver)
-                    }));
-                }
-                collect_selective_import_definitions(
-                    &mut imported,
-                    &target.table,
-                    items,
-                    resolved_module.target(),
-                    &target.uri,
-                    &target.source,
-                    cancellation,
-                )?;
-            }
-            ImportedNames::Module(alias) => {
-                let module_name = alias.map_or_else(
-                    || path.leaf().name.atom().clone(),
-                    |alias_ident| alias_ident.value.atom().clone(),
-                );
-                collect_module_import_definitions(
-                    &mut imported,
-                    &target.table,
-                    &module_name,
-                    resolved_module.target(),
-                    &target.uri,
-                    &target.source,
-                    cancellation,
-                )?;
-            }
-        }
-    }
-    Ok(imported)
-}
-
-fn collect_imported_definitions(
-    root_uri: &Url,
-    project: &graphcal_project::loader::LoadedProject,
-    tir: Option<&graphcal_compiler::tir::typed::CheckedTir>,
-    module_resolver: &graphcal_compiler::resolve::ModuleResolver,
-    cancellation: &CancellationToken,
-) -> std::result::Result<ImportedSymbols, Cancelled> {
-    cancellation.checkpoint()?;
-    let documents =
-        build_project_symbol_documents(root_uri, project, tir, module_resolver, cancellation)?;
-    let mut imported_by_file = project
-        .files()
-        .iter()
-        .map(|loaded_file| {
-            let file_id = loaded_file.dag_id();
-            collect_file_imported_symbols(
-                file_id,
-                loaded_file,
-                &documents,
-                module_resolver,
-                cancellation,
-            )
-            .map(|imported| (file_id.clone(), imported))
-        })
-        .collect::<std::result::Result<HashMap<_, _>, _>>()?;
-
-    let project_documents = documents.into_iter().map(|(file_id, document)| {
-        let bindings = imported_by_file
-            .get(&file_id)
-            .map_or_else(Vec::new, |imported| imported.bindings.clone());
-        ProjectDocumentSymbols::new(document.uri, document.source, document.table, bindings)
-    });
-    let project_index = if root_uri.to_file_path().is_ok() {
-        ProjectSymbolIndex::loaded_dependency_closure(root_uri.clone(), project_documents)
-    } else {
-        ProjectSymbolIndex::standalone(root_uri.clone(), project_documents)
-    };
-    let mut root_imported = imported_by_file
-        .remove(project.root_id())
-        .unwrap_or_else(|| ImportedSymbols {
-            definitions: HashMap::new(),
-            bindings: Vec::new(),
-            project_index: ProjectSymbolIndex::default(),
-        });
-    for binding in &root_imported.bindings {
-        if root_imported.definitions.contains_key(binding.target()) {
-            continue;
-        }
-        let Some(definition) = project_index.definition(binding.target()) else {
-            continue;
-        };
-        let Some(document) = project_index.document(&definition.occurrence.uri) else {
-            continue;
-        };
-        root_imported.definitions.insert(
-            binding.target().clone(),
-            ImportedDefinition {
-                uri: definition.occurrence.uri,
-                source: Arc::clone(&document.source),
-                definition: definition.definition.clone(),
-            },
-        );
-    }
-    root_imported.project_index = project_index;
-    Ok(root_imported)
-}
-
-fn resolve_selective_binding(
-    owner: &graphcal_compiler::dag_id::DagId,
-    item: &graphcal_compiler::syntax::ast::ImportItem,
-    resolver: &graphcal_compiler::resolve::ModuleResolver,
-) -> Option<VisibleBinding> {
-    use graphcal_compiler::syntax::ast::ImportItemNamespace;
-    use graphcal_compiler::syntax::names::NamePath;
-
-    let local = item.local_name_atom().clone();
-    let path = NamePath::local(local.clone());
-    let target = match item.namespace {
-        ImportItemNamespace::Term => match resolver
-            .resolve_decl_path(owner, &path)
-            .map(graphcal_compiler::resolve::symbols::SymbolRef::into_resolved)
-        {
-            Ok(declaration) => SymbolKey::Declaration(declaration),
-            Err(_) => SymbolKey::Constructor(
-                resolver
-                    .resolve_constructor_path(owner, &path)
-                    .map(graphcal_compiler::resolve::symbols::SymbolRef::into_resolved)
-                    .ok()?,
-            ),
-        },
-        ImportItemNamespace::Type => resolver
-            .resolve_struct_type_path(owner, &path)
-            .map(graphcal_compiler::resolve::symbols::SymbolRef::into_resolved)
-            .map(SymbolKey::StructType)
-            .ok()?,
-        ImportItemNamespace::Dimension => resolver
-            .resolve_dimension_path(owner, &path)
-            .map(graphcal_compiler::resolve::symbols::SymbolRef::into_resolved)
-            .map(SymbolKey::Dimension)
-            .ok()?,
-        ImportItemNamespace::Unit => resolver
-            .resolve_unit_path(owner, &path)
-            .map(graphcal_compiler::resolve::symbols::SymbolRef::into_resolved)
-            .map(SymbolKey::Unit)
-            .ok()?,
-        ImportItemNamespace::Index => resolver
-            .resolve_index_path(owner, &path)
-            .map(graphcal_compiler::resolve::symbols::SymbolRef::into_resolved)
-            .map(SymbolKey::Index)
-            .ok()?,
-    };
-    Some(VisibleBinding::new(target, SourceSymbolPath::local(local)))
-}
-
-fn loaded_file_uri(loaded_file: &graphcal_project::loader::LoadedFile, root_uri: &Url) -> Url {
-    Url::from_file_path(loaded_file.path()).unwrap_or_else(|()| {
-        #[expect(
-            clippy::print_stderr,
-            clippy::unnecessary_debug_formatting,
-            reason = "developer-visible warning for an unreachable fallback"
-        )]
-        {
-            eprintln!(
-                "graphcal-lsp: Url::from_file_path failed for {:?}; falling back to root URI",
-                loaded_file.path(),
-            );
-        }
-        root_uri.clone()
-    })
-}
-
-fn collect_selective_import_definitions(
-    result: &mut ImportedSymbols,
-    imported_table: &SymbolTable,
-    items: &[graphcal_compiler::syntax::ast::ImportItem],
-    target_module: &graphcal_compiler::dag_id::DagId,
-    imported_uri: &Url,
-    source: &Arc<String>,
-    cancellation: &CancellationToken,
-) -> std::result::Result<(), Cancelled> {
-    for import_item in items {
-        cancellation.checkpoint()?;
-        for (key, definition) in &imported_table.definitions {
-            cancellation.checkpoint()?;
-            let Some(spelling) = selective_import_spelling(
-                key,
-                definition.category,
-                import_item.namespace,
-                target_module,
-                import_item.name.name.as_str(),
-                import_item.local_name_atom(),
-            ) else {
-                continue;
-            };
-            insert_imported_def(
-                &mut result.definitions,
-                key.clone(),
-                imported_uri,
-                source,
-                definition,
-            );
-            result
-                .bindings
-                .push(VisibleBinding::new(key.clone(), spelling));
-        }
-    }
-    Ok(())
-}
-
-fn collect_module_import_definitions(
-    result: &mut ImportedSymbols,
-    imported_table: &SymbolTable,
-    module_name: &NameAtom,
-    target_module: &graphcal_compiler::dag_id::DagId,
-    imported_uri: &Url,
-    source: &Arc<String>,
-    cancellation: &CancellationToken,
-) -> std::result::Result<(), Cancelled> {
-    for (key, definition) in &imported_table.definitions {
-        cancellation.checkpoint()?;
-        let Some(spelling) =
-            module_import_spelling(key, definition.category, module_name, target_module)
-        else {
-            continue;
-        };
-        insert_imported_def(
-            &mut result.definitions,
-            key.clone(),
-            imported_uri,
-            source,
-            definition,
-        );
-        result
-            .bindings
-            .push(VisibleBinding::new(key.clone(), spelling));
-    }
-    Ok(())
-}
-
-/// Source-visible spelling contributed by one selective import.
-///
-/// The returned spelling is deliberately separate from `key`: aliases are
-/// lexical bindings, not semantic identity. Attached members (index variants,
-/// constructor fields, generic parameters, and DAG body declarations) retain
-/// their parent as a structured qualifier.
-fn selective_import_spelling(
-    key: &SymbolKey,
-    category: SymbolCategory,
-    namespace: graphcal_compiler::desugar::desugared_ast::ImportItemNamespace,
-    target_module: &graphcal_compiler::dag_id::DagId,
-    original: &str,
-    local: &NameAtom,
-) -> Option<SourceSymbolPath> {
-    if !selective_import_allows_category(namespace, category) {
-        return None;
-    }
-
-    let primary = key.owner() == Some(target_module) && key.leaf_name() == original;
-    if primary {
-        return Some(SourceSymbolPath::local(local.clone()));
-    }
-
-    let attached = match key {
-        SymbolKey::IndexVariant(id) => {
-            id.index().owner() == target_module && id.index().as_str() == original
-        }
-        SymbolKey::Field(id) => {
-            id.owner().owner() == target_module && id.owner().as_str() == original
-        }
-        SymbolKey::GenericParam(id) => {
-            id.owner().owner() == target_module && id.owner().as_str() == original
-        }
-        SymbolKey::Declaration(name) => {
-            name.owner().parent().as_ref() == Some(target_module)
-                && name
-                    .owner()
-                    .leaf()
-                    .inline_dag()
-                    .is_some_and(|dag| dag.as_str() == original)
-        }
-        _ => false,
-    };
-    if !attached {
-        return None;
-    }
-    let leaf = NameAtom::parse(key.leaf_name()).ok()?;
-    match key {
-        SymbolKey::IndexVariant(_) => Some(SourceSymbolPath::index_label(
-            Vec::new(),
-            local.clone(),
-            leaf,
-        )),
-        SymbolKey::Field(_) | SymbolKey::GenericParam(_) => Some(SourceSymbolPath::associated(
-            Vec::new(),
-            local.clone(),
-            leaf,
-        )),
-        _ => Some(SourceSymbolPath::module_member(vec![local.clone()], leaf)),
-    }
-}
-
-const fn selective_import_allows_category(
-    namespace: graphcal_compiler::desugar::desugared_ast::ImportItemNamespace,
-    category: SymbolCategory,
-) -> bool {
-    match namespace {
-        graphcal_compiler::desugar::desugared_ast::ImportItemNamespace::Term => matches!(
-            category,
-            SymbolCategory::Param
-                | SymbolCategory::Node
-                | SymbolCategory::Const
-                | SymbolCategory::Constructor
-                | SymbolCategory::Field
-                | SymbolCategory::Assert
-                | SymbolCategory::Plot
-                | SymbolCategory::Figure
-                | SymbolCategory::Layer
-                | SymbolCategory::Dag
-                | SymbolCategory::LocalVar
-        ),
-        graphcal_compiler::desugar::desugared_ast::ImportItemNamespace::Type => matches!(
-            category,
-            SymbolCategory::StructType | SymbolCategory::Field | SymbolCategory::GenericParam
-        ),
-        graphcal_compiler::desugar::desugared_ast::ImportItemNamespace::Dimension => {
-            matches!(category, SymbolCategory::Dimension)
-        }
-        graphcal_compiler::desugar::desugared_ast::ImportItemNamespace::Unit => {
-            matches!(category, SymbolCategory::Unit)
-        }
-        graphcal_compiler::desugar::desugared_ast::ImportItemNamespace::Index => {
-            matches!(
-                category,
-                SymbolCategory::Index | SymbolCategory::IndexVariant
-            )
-        }
-    }
-}
-
-/// Source-visible spelling contributed by a module import.
-fn module_import_spelling(
-    key: &SymbolKey,
-    category: SymbolCategory,
-    module_name: &NameAtom,
-    target_module: &graphcal_compiler::dag_id::DagId,
-) -> Option<SourceSymbolPath> {
-    // Importing an inline DAG makes the DAG declaration itself callable by the
-    // local module alias (`@alias(...)`).
-    if let SymbolKey::Declaration(name) = key
-        && target_module.parent().as_ref() == Some(name.owner())
-        && target_module.leaf().inline_dag() == Some(&name.to_unowned_def_name())
-    {
-        return Some(SourceSymbolPath::local(module_name.clone()));
-    }
-
-    let owner = key.owner()?;
-    let qualifier = module_relative_qualifier(module_name, owner, target_module)?;
-    let leaf = NameAtom::parse(key.leaf_name()).ok()?;
-    match key {
-        SymbolKey::IndexVariant(id) => Some(SourceSymbolPath::index_label(
-            qualifier,
-            NameAtom::parse(id.index().as_str()).ok()?,
-            leaf,
-        )),
-        SymbolKey::Field(id) => Some(SourceSymbolPath::associated(
-            qualifier,
-            NameAtom::parse(id.owner().as_str()).ok()?,
-            leaf,
-        )),
-        SymbolKey::GenericParam(id) => Some(SourceSymbolPath::associated(
-            qualifier,
-            NameAtom::parse(id.owner().as_str()).ok()?,
-            leaf,
-        )),
-        SymbolKey::Declaration(_) if category == SymbolCategory::Dag => {
-            let mut segments = qualifier;
-            segments.push(leaf);
-            SourceSymbolPath::dag_path(segments)
-        }
-        _ => Some(SourceSymbolPath::module_member(qualifier, leaf)),
-    }
-}
-
-fn module_relative_qualifier(
-    module_name: &NameAtom,
-    owner: &graphcal_compiler::dag_id::DagId,
-    target_module: &graphcal_compiler::dag_id::DagId,
-) -> Option<Vec<NameAtom>> {
-    let relative = owner
-        .scopes_below(target_module)?
-        .into_iter()
-        .map(|scope| scope.alias().map(|alias| alias.atom().clone()))
-        .collect::<Option<Vec<_>>>()?;
-    let mut qualifier = Vec::with_capacity(relative.len() + 1);
-    qualifier.push(module_name.clone());
-    qualifier.extend(relative);
-    Some(qualifier)
-}
-
-fn insert_imported_def(
-    result: &mut HashMap<SymbolKey, ImportedDefinition>,
-    key: SymbolKey,
-    uri: &Url,
-    source: &Arc<String>,
-    def: &DefinitionInfo,
-) {
-    result.insert(
-        key,
-        ImportedDefinition {
-            uri: uri.clone(),
-            source: Arc::clone(source),
-            definition: def.clone(),
-        },
-    );
 }
 
 #[tower_lsp::async_trait]
@@ -3020,8 +1489,11 @@ pub(crate) async fn run() {
 mod tests {
     use std::collections::BTreeMap;
 
+    use graphcal_compiler::builtin::BuiltinFn;
     use graphcal_compiler::dimension::Dimension;
-    use graphcal_compiler::function_signature::{FunctionParam, ParamKind, ScalarValueKind};
+    use graphcal_compiler::function_signature::{
+        FunctionParam, FunctionSignature, ParamKind, ScalarValueKind,
+    };
     use graphcal_compiler::syntax::function_name::FnParamName;
     use graphcal_compiler::syntax::index_name::{IndexName, IndexVarName, IndexVariantName};
     use graphcal_compiler::syntax::non_empty::NonEmpty;
@@ -3032,6 +1504,16 @@ mod tests {
 
     use super::*;
 
+    use crate::analysis_pipeline::{
+        AnalysisDegradation, dependency_artifact_identities, run_analysis, run_analysis_for_test,
+        run_analysis_run, test_plugin_host,
+    };
+    use crate::fn_signatures::build_fn_signatures;
+    use crate::project_symbols::{ProjectDocumentSymbols, ProjectSymbols};
+    use crate::symbol_identity::VisibleBinding;
+    use crate::symbol_table::{SymbolKey, SymbolTable};
+    use crate::value_format::*;
+    use crate::workspace_revision::AnalysisInputs;
     use crate::{completion, goto_definition, inlay_hints};
 
     fn imported_target_for_spelling<'a>(

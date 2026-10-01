@@ -11,7 +11,7 @@ use std::collections::HashMap;
 
 use crate::compile_error::CompileError;
 use crate::prepare::*;
-use crate::project_compiler::{ProjectCompiler, compile_to_tir, compile_to_tir_project};
+use crate::project_compiler::{ProjectCompiler, compile_to_tir, compile_to_tir_from_project};
 use graphcal_compiler::graphcal_error::GraphcalError;
 use graphcal_compiler::syntax::attribute::AttributeName;
 use graphcal_compiler::syntax::decl_name::DeclName;
@@ -21,6 +21,23 @@ use graphcal_eval::eval::{
     AssertResult, EvalResult, NodeUnavailable, PlotFieldValue, UnitLabel, Value,
 };
 use graphcal_io::RealFileSystem;
+
+/// Test-only convenience projection for a loaded multi-file project.
+pub fn compile_to_tir_project<F: graphcal_io::FileSystemReader>(
+    root_path: &std::path::Path,
+    project_root: Option<&std::path::Path>,
+    fs: &F,
+) -> Result<
+    (
+        graphcal_compiler::tir::typed::CheckedTir,
+        crate::loader::LoadedProject,
+    ),
+    CompileError,
+> {
+    let project = crate::loader::load_project(root_path, project_root, fs)?;
+    let tir = compile_to_tir_from_project(&project)?;
+    Ok((tir, project))
+}
 
 fn fs() -> RealFileSystem {
     RealFileSystem::default()
@@ -686,7 +703,7 @@ fn frozen_stores_record_the_imported_dags_their_bodies_call() {
         ],
         "mid.gcl",
     );
-    let (tir, _) = crate::project_compiler::compile_to_tir_project(&root, None, &fs()).unwrap();
+    let (tir, _) = compile_to_tir_project(&root, None, &fs()).unwrap();
     let mid = tir.root_dag_id().clone();
     let leaf = tir
         .dag_registry()
@@ -3939,7 +3956,7 @@ node meeting: Datetime = datetime("2024-11-05T10:00", "asia/tokyo");
 node displayed: Datetime = @meeting -> "america/new_york";
 "#;
     let tir = compile_to_tir(source, "test.gcl").unwrap();
-    let graphcal_compiler::hir::ExprKind::FnCall { args, .. } = tir
+    let graphcal_compiler::hir::expr::ExprKind::FnCall { args, .. } = tir
         .root()
         .nodes()
         .next()
@@ -3951,13 +3968,15 @@ node displayed: Datetime = @meeting -> "america/new_york";
     else {
         panic!("expected datetime function call");
     };
-    let graphcal_compiler::hir::ExprKind::ZonedDateTimeLiteral(datetime) = args[0].kind() else {
+    let graphcal_compiler::hir::expr::ExprKind::ZonedDateTimeLiteral(datetime) = args[0].kind()
+    else {
         panic!(
             "expected a resolved zoned datetime literal, got {:?}",
             args[0]
         );
     };
-    let graphcal_compiler::hir::ExprKind::IanaTimeZoneLiteral(time_zone_id) = args[1].kind() else {
+    let graphcal_compiler::hir::expr::ExprKind::IanaTimeZoneLiteral(time_zone_id) = args[1].kind()
+    else {
         panic!("expected a typed IANA timezone literal, got {:?}", args[1]);
     };
     assert_eq!(time_zone_id.as_str(), "Asia/Tokyo");

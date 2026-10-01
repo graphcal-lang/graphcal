@@ -1176,7 +1176,7 @@ fn type_position_wrong_universe(source: ModuleResolveError) -> ModuleResolveErro
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::hir::GenericParamOwner;
+    use crate::hir::types::GenericParamOwner;
     use crate::resolved_name::ResolvedStructTypeName;
     use crate::syntax::parser::Parser;
     use crate::syntax::type_name::StructTypeName;

@@ -17,6 +17,9 @@ struct RawModule {
 }
 #[derive(Debug, Deserialize)]
 struct RawBaseline {
+    /// Absent once every boundary is removed: `prune` then writes a baseline
+    /// with no `[[exception]]` tables.
+    #[serde(default)]
     exception: Vec<RawException>,
 }
 #[derive(Debug, Deserialize)]
@@ -169,6 +172,17 @@ mod tests {
         );
         assert!(Baseline::load(&baseline).is_err());
         let _ = fs::remove_file(role);
+        let _ = fs::remove_file(baseline);
+    }
+
+    #[test]
+    fn baseline_without_exceptions_is_empty() {
+        let baseline = temporary_file(
+            "empty-baseline",
+            "# Exact, edge-specific exceptions. Delete entries as boundaries are removed.\n",
+        );
+        let loaded = Baseline::load(&baseline).expect("empty baseline parses");
+        assert!(loaded.exceptions.is_empty());
         let _ = fs::remove_file(baseline);
     }
 

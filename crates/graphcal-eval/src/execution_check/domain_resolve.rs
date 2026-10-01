@@ -230,7 +230,7 @@ fn evaluate_domain_bounds<T: PartialOrd>(
         &RuntimeValue,
         &graphcal_compiler::tir::typed::ResolvedDomainBound,
     ) -> Result<T, GraphcalError>,
-    format_display: impl Fn(&graphcal_compiler::hir::Expr, &T) -> String,
+    format_display: impl Fn(&graphcal_compiler::hir::expr::Expr, &T) -> String,
 ) -> Result<EvaluatedDomainBounds<T>, GraphcalError> {
     let bounds = scoped_bounds.get();
     let Some(first) = bounds.first() else {
@@ -354,7 +354,7 @@ fn collect_concrete_nominal_applications(
 }
 
 fn generic_nat_bindings(
-    type_def: &graphcal_compiler::hir::NominalTypeDef,
+    type_def: &graphcal_compiler::hir::nominal::NominalTypeDef,
     generic_args: &[CheckedGenericArg],
     src: &NamedSource<Arc<String>>,
     span: Span,
@@ -824,8 +824,11 @@ fn exact_domain_int_bound(
     })
 }
 
-fn format_quantity_bound_display(expr: &graphcal_compiler::hir::Expr, si_value: f64) -> String {
-    use graphcal_compiler::hir::ExprKind;
+fn format_quantity_bound_display(
+    expr: &graphcal_compiler::hir::expr::Expr,
+    si_value: f64,
+) -> String {
+    use graphcal_compiler::hir::expr::ExprKind;
     match expr.kind() {
         ExprKind::Number(n) => graphcal_compiler::display::number::format_number(*n),
         ExprKind::Integer(n) => format!("{n}"),

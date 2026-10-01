@@ -3,7 +3,9 @@ use std::cell::Cell;
 use std::fs;
 use std::io;
 
+use graphcal_compiler::syntax::function_name::FnName;
 use graphcal_compiler::syntax::non_empty::NonEmpty;
+use graphcal_compiler::syntax::plugin::PluginPath;
 use graphcal_io::{
     ByteLimit, CancellationSignal, EntryLimit, NeverCancel, RealFileSystem, SourceTreeHashLimits,
 };

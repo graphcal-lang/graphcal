@@ -9,9 +9,7 @@ use crate::dimension::Dimension;
 use crate::display::formatting_registry::FormattingRegistry;
 use crate::generic_param::GenericParamId;
 use crate::graphcal_error::GraphcalError;
-use crate::hir;
-use crate::hir::NominalTypeDef;
-use crate::resolve::ModuleResolver;
+use crate::hir::nominal::NominalTypeDef;
 use crate::resolved_name::{
     ResolvedConstructorName, ResolvedDeclName, ResolvedDimName, ResolvedIndexName,
     ResolvedStructTypeName, ResolvedUnitName,
@@ -49,7 +47,8 @@ pub fn nat_overflow_error(
 /// [`ModuleDefinitions`](crate::ir::module_definitions::ModuleDefinitions)
 /// fill this store directly. Checked TIR retains a [`FormattingRegistry`] for
 /// diagnostics and input boundaries; every canonical type-system lookup reads
-/// this store. Source spellings are resolved through [`ModuleResolver`], and
+/// this store. Source spellings are resolved through
+/// [`ModuleResolver`](crate::resolve::ModuleResolver), and
 /// imported aliases are never installed as additional canonical definitions.
 #[derive(Debug, Default, Clone)]
 pub struct ProjectTypeStore {
@@ -214,7 +213,7 @@ impl ProjectTypeStore {
 
     fn insert_nominal_types(
         &mut self,
-        nominal_types: &crate::hir::NominalTypeRegistry,
+        nominal_types: &crate::hir::nominal::NominalTypeRegistry,
     ) -> Result<(), ProjectTypeStoreInsertError> {
         for definition in nominal_types.values() {
             if let Some(existing) = self.struct_types.get(definition.identity())
@@ -369,34 +368,6 @@ impl ProjectTypeStore {
         constructor: &ResolvedConstructorName,
     ) -> Option<&crate::hir::nominal::ResolvedConstructor> {
         self.constructors.get(constructor)
-    }
-}
-
-/// Module-aware type-resolution context for one DAG body.
-#[derive(Debug, Clone, Copy)]
-pub struct ModuleTypeContext<'a> {
-    pub(in crate::tir::typed) owner: &'a crate::dag_id::DagId,
-    pub(in crate::tir::typed) resolver: &'a ModuleResolver,
-    pub(in crate::tir::typed) types: &'a ProjectTypeStore,
-}
-
-impl<'a> ModuleTypeContext<'a> {
-    #[must_use]
-    pub(crate) const fn new(
-        owner: &'a crate::dag_id::DagId,
-        resolver: &'a ModuleResolver,
-        types: &'a ProjectTypeStore,
-    ) -> Self {
-        Self {
-            owner,
-            resolver,
-            types,
-        }
-    }
-
-    #[must_use]
-    pub const fn owner(self) -> &'a crate::dag_id::DagId {
-        self.owner
     }
 }
 
@@ -592,7 +563,7 @@ pub struct ResolvedDomainBound {
     /// Whether this is a `min:` or `max:` bound.
     pub kind: crate::syntax::ast::DomainBoundKind,
     /// The bound expression, strictly lowered.
-    pub value: hir::CheckedExpr,
+    pub value: crate::hir::expr::CheckedExpr,
     /// Span of the whole bound.
     pub span: Span,
     /// Source file whose bytes are indexed by `span` and the expression spans.
@@ -646,7 +617,7 @@ impl CheckedDeclType {
 pub struct CheckedTypeAnnotation {
     /// The canonical HIR annotation, retained so a rigid template view can
     /// resolve it again against an opaque dimension.
-    pub decl_type: hir::DeclType,
+    pub decl_type: crate::hir::types::DeclType,
     /// Span of the whole annotation.
     pub span: Span,
     pub(crate) checked: CheckedDeclType,
@@ -666,10 +637,10 @@ impl CheckedTypeAnnotation {
 pub enum Typed {}
 
 impl crate::ir::entry::BodyPhase for Typed {
-    type Expr = hir::CheckedExpr;
+    type Expr = crate::hir::expr::CheckedExpr;
     type TypeAnnotation = CheckedTypeAnnotation;
-    type NodeDefinition = hir::node_definition::NodeDefinition;
-    type AssertBody = hir::CheckedAssertBody;
+    type NodeDefinition = crate::hir::node_definition::NodeDefinition;
+    type AssertBody = crate::hir::expr::CheckedAssertBody;
     type PlotBody = crate::ir::model::LoweredPlotBody;
     type CompositionFields = Vec<crate::ir::model::LoweredPlotField>;
     type UnitIdentity = ResolvedUnitName;
@@ -942,7 +913,7 @@ pub struct DagTIR {
     pub(crate) decls: crate::ir::decl_table::DeclTable<Typed>,
     pub(crate) included_plots: Vec<crate::ir::model::IncludedPlotEntry>,
     pub(crate) semantic: DagSemanticBody,
-    pub(crate) static_ports: Vec<crate::hir::StaticPort>,
+    pub(crate) static_ports: Vec<crate::hir::source_interface::StaticPort>,
     pub(crate) assumes_map: HashMap<ResolvedDeclName, Vec<ResolvedDeclName>>,
     pub(crate) expected_fail: HashMap<ResolvedDeclName, ResolvedExpectedFailMetadata>,
     pub(crate) imported_bindings: HashMap<ScopedName, crate::ir::imported_binding::ImportedBinding>,
@@ -1032,7 +1003,7 @@ impl DagTIR {
 
     /// Typed Static interface authored directly in this reusable DAG.
     #[must_use]
-    pub fn static_ports(&self) -> &[crate::hir::StaticPort] {
+    pub fn static_ports(&self) -> &[crate::hir::source_interface::StaticPort] {
         &self.static_ports
     }
 
@@ -1114,7 +1085,7 @@ impl DagTIR {
 
     /// Look up the single authoritative HIR expression owned by a const.
     #[must_use]
-    pub fn const_expr(&self, key: &ResolvedDeclName) -> Option<&hir::Expr> {
+    pub fn const_expr(&self, key: &ResolvedDeclName) -> Option<&crate::hir::expr::Expr> {
         match self.decls.get(key)? {
             crate::ir::entry::Decl::Const(entry) => Some(&*entry.expr),
             _ => None,
@@ -1123,7 +1094,7 @@ impl DagTIR {
 
     /// Look up the single authoritative HIR expression owned by a param or node.
     #[must_use]
-    pub fn runtime_expr(&self, key: &ResolvedDeclName) -> Option<&hir::Expr> {
+    pub fn runtime_expr(&self, key: &ResolvedDeclName) -> Option<&crate::hir::expr::Expr> {
         match self.decls.get(key)? {
             crate::ir::entry::Decl::Param(entry) => entry.default.as_deref(),
             crate::ir::entry::Decl::Node(entry) => entry.definition.formula().map(|expr| &**expr),
@@ -1146,13 +1117,13 @@ impl DagTIR {
 
     /// Look up any value declaration's authoritative HIR expression.
     #[must_use]
-    pub fn value_expr(&self, key: &ResolvedDeclName) -> Option<&hir::Expr> {
+    pub fn value_expr(&self, key: &ResolvedDeclName) -> Option<&crate::hir::expr::Expr> {
         self.const_expr(key).or_else(|| self.runtime_expr(key))
     }
 
     /// Look up the single authoritative HIR body owned by an assertion.
     #[must_use]
-    pub fn assert_body(&self, key: &ResolvedDeclName) -> Option<&hir::AssertBody> {
+    pub fn assert_body(&self, key: &ResolvedDeclName) -> Option<&crate::hir::expr::AssertBody> {
         match self.decls.get(key)? {
             crate::ir::entry::Decl::Assert(entry) => Some(&*entry.body),
             _ => None,
@@ -1160,13 +1131,16 @@ impl DagTIR {
     }
 
     /// Visit every source unit reference used by this DAG.
-    pub fn visit_unit_references(&self, visitor: &mut impl FnMut(&hir::LocalUnit, Span)) {
+    pub fn visit_unit_references(
+        &self,
+        visitor: &mut impl FnMut(&crate::hir::expr::LocalUnit, Span),
+    ) {
         self.visit_expressions(&mut |expr| match expr.kind() {
-            hir::ExprKind::QuantityLiteral { unit, .. } => unit
+            crate::hir::expr::ExprKind::QuantityLiteral { unit, .. } => unit
                 .terms
                 .iter()
                 .for_each(|term| visitor(&term.name.value, term.name.span)),
-            hir::ExprKind::Convert { target, .. } => target
+            crate::hir::expr::ExprKind::Convert { target, .. } => target
                 .terms
                 .iter()
                 .for_each(|term| visitor(&term.name.value, term.name.span)),
@@ -1175,15 +1149,18 @@ impl DagTIR {
     }
 
     /// Visit semantic expressions, including referenced nominal bounds for dependency analysis.
-    pub(crate) fn visit_expressions<'a>(&'a self, visitor: &mut dyn FnMut(&'a hir::Expr)) {
+    pub(crate) fn visit_expressions<'a>(
+        &'a self,
+        visitor: &mut dyn FnMut(&'a crate::hir::expr::Expr),
+    ) {
         self.owned_expression_roots()
             .chain(self.field_bound_roots(ExpressionRootScope::ReferencedBody))
-            .for_each(|root| hir::visit_expr(root, visitor));
+            .for_each(|root| crate::hir::expr::visit_expr(root, visitor));
     }
 
     /// Expression roots checked in this body's environment, not foreign nominal definitions.
     #[must_use]
-    pub fn owned_expression_roots(&self) -> std::vec::IntoIter<&hir::Expr> {
+    pub fn owned_expression_roots(&self) -> std::vec::IntoIter<&crate::hir::expr::Expr> {
         // Materialize the root inventory here, rather than specializing this large
         // heterogeneous iterator pipeline in every checking/publication consumer.
         self.declaration_expression_roots()
@@ -1192,7 +1169,10 @@ impl DagTIR {
             .into_iter()
     }
 
-    fn field_bound_roots(&self, scope: ExpressionRootScope) -> impl Iterator<Item = &hir::Expr> {
+    fn field_bound_roots(
+        &self,
+        scope: ExpressionRootScope,
+    ) -> impl Iterator<Item = &crate::hir::expr::Expr> {
         self.semantic
             .type_defs
             .constrained_fields()
@@ -1209,7 +1189,7 @@ impl DagTIR {
         }
     }
 
-    fn declaration_expression_roots(&self) -> impl Iterator<Item = &hir::Expr> {
+    fn declaration_expression_roots(&self) -> impl Iterator<Item = &crate::hir::expr::Expr> {
         self.decls
             .consts()
             .map(|entry| &*entry.expr)

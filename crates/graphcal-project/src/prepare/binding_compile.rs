@@ -508,7 +508,8 @@ impl PreparedProject {
         expr: &Expr,
         expected: &ModelValueSchema,
         owner: &graphcal_compiler::dag_id::DagId,
-    ) -> Result<graphcal_compiler::hir::Expr<graphcal_compiler::hir::Draft>, CompileError> {
+    ) -> Result<graphcal_compiler::hir::expr::Expr<graphcal_compiler::hir::expr::Draft>, CompileError>
+    {
         match (&expr.kind, expected) {
             (AstExprKind::ConstructorCall { callee, .. }, ModelValueSchema::Algebraic(_))
                 if callee.as_bare().is_some() =>
@@ -553,7 +554,8 @@ impl PreparedProject {
         expr: &Expr,
         expected: &ModelValueSchema,
         owner: &graphcal_compiler::dag_id::DagId,
-    ) -> Result<graphcal_compiler::hir::Expr<graphcal_compiler::hir::Draft>, CompileError> {
+    ) -> Result<graphcal_compiler::hir::expr::Expr<graphcal_compiler::hir::expr::Draft>, CompileError>
+    {
         let AstExprKind::ConstructorCall {
             callee,
             generic_args,
@@ -628,7 +630,7 @@ impl PreparedProject {
                 })
             })
             .collect::<Result<Vec<_>, CompileError>>()?;
-        Ok(graphcal_compiler::hir::Expr::new(
+        Ok(graphcal_compiler::hir::expr::Expr::new(
             HirExprKind::ConstructorCall {
                 callee,
                 generic_args,
@@ -643,7 +645,8 @@ impl PreparedProject {
         expr: &Expr,
         expected: &ModelValueSchema,
         owner: &graphcal_compiler::dag_id::DagId,
-    ) -> Result<graphcal_compiler::hir::Expr<graphcal_compiler::hir::Draft>, CompileError> {
+    ) -> Result<graphcal_compiler::hir::expr::Expr<graphcal_compiler::hir::expr::Draft>, CompileError>
+    {
         let AstExprKind::MapLiteral { entries } = &expr.kind else {
             return Err(self.binding_internal_error(
                 "external map binding has a non-map syntax node",
@@ -694,7 +697,7 @@ impl PreparedProject {
                 })
             })
             .collect::<Result<Vec<_>, CompileError>>()?;
-        Ok(graphcal_compiler::hir::Expr::new(
+        Ok(graphcal_compiler::hir::expr::Expr::new(
             HirExprKind::MapLiteral { entries },
             expr.span,
         ))
@@ -704,7 +707,8 @@ impl PreparedProject {
         &self,
         expr: &Expr,
         owner: &graphcal_compiler::dag_id::DagId,
-    ) -> Result<graphcal_compiler::hir::Expr<graphcal_compiler::hir::Draft>, CompileError> {
+    ) -> Result<graphcal_compiler::hir::expr::Expr<graphcal_compiler::hir::expr::Draft>, CompileError>
+    {
         let scope = GenericScope::new();
         let context = ExprLoweringContext::new(
             ModuleScope::new(owner, &self.module_resolver, &scope),

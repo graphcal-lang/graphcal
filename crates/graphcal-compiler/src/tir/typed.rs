@@ -13,7 +13,6 @@ use std::sync::Arc;
 
 use crate::diagnostic_anchor::DiagnosticAnchor;
 use crate::generic_param::GenericParamId;
-use crate::hir;
 pub use crate::ir::model::{LoweredPlotBody, LoweredPlotField};
 pub use crate::nat::NatPolyForm;
 use crate::syntax::decl_name::DeclName;
@@ -47,6 +46,8 @@ pub mod evaluation_unit;
 pub use evaluation_unit::*;
 pub mod model;
 pub use model::*;
+pub mod module_type_context;
+pub use module_type_context::ModuleTypeContext;
 pub mod override_dependencies;
 pub use override_dependencies::CheckedOverrideDependencies;
 pub mod resolved_type;
@@ -526,7 +527,7 @@ fn resolve_declared_type_exprs(
 /// is that annotation specialized through the instance's Static substitution,
 /// exactly as the instance output itself is specialized.
 fn resolve_declared_types<'d>(
-    declarations: impl Iterator<Item = (ResolvedDeclName, &'d hir::DeclType)>,
+    declarations: impl Iterator<Item = (ResolvedDeclName, &'d crate::hir::types::DeclType)>,
     semantic_instances: &[crate::ir::instance::HirInstanceRecord],
     types: &ProjectTypeStore,
     src: &NamedSource<Arc<String>>,
@@ -589,7 +590,7 @@ fn instance_type_view<'s>(
 /// Resolve a template annotation in `view` (from [`instance_type_view`]) and
 /// specialize it through the include's `substitution`.
 fn resolve_instance_decl_type(
-    decl_type: &hir::DeclType,
+    decl_type: &crate::hir::types::DeclType,
     substitution: &crate::ir::static_substitution::StaticSubstitution,
     view: &ProjectTypeStore,
     types: &ProjectTypeStore,
@@ -613,7 +614,8 @@ fn attach_checked_types(
         AssertEntry, ConstEntry, Decl, FigureEntry, LayerEntry, NodeEntry, ParamEntry, PlotEntry,
     };
     let mut domain_bounds = HashMap::new();
-    let mut check = |identity: ResolvedDeclName, annotation: hir::TypeAnnotation| {
+    let mut check = |identity: ResolvedDeclName,
+                     annotation: crate::hir::type_annotation::TypeAnnotation| {
         let checked = decl_types.remove(&identity).ok_or_else(|| {
             GraphcalError::internal_error(
                 format!("value declaration `{identity}` has no resolved signature"),
@@ -850,86 +852,89 @@ impl PublicSignatureDependency {
 }
 
 fn collect_public_signature_generic_arg_dependencies(
-    arg: &hir::GenericArg,
+    arg: &crate::hir::types::GenericArg,
     defs: &ResolvedTypeDefs,
     visited_defaults: &mut std::collections::HashSet<GenericParamId>,
     dependencies: &mut Vec<PublicSignatureDependency>,
 ) {
     match arg {
-        hir::GenericArg::Dim(arg) => {
+        crate::hir::types::GenericArg::Dim(arg) => {
             collect_public_signature_dim_arg_dependencies(arg, dependencies);
         }
-        hir::GenericArg::Index(index) => {
+        crate::hir::types::GenericArg::Index(index) => {
             collect_public_signature_index_dependencies(index, dependencies);
         }
-        hir::GenericArg::Nat(_) => {}
-        hir::GenericArg::Type(type_expr) => collect_public_signature_type_dependencies(
-            type_expr,
-            defs,
-            visited_defaults,
-            dependencies,
-        ),
+        crate::hir::types::GenericArg::Nat(_) => {}
+        crate::hir::types::GenericArg::Type(type_expr) => {
+            collect_public_signature_type_dependencies(
+                type_expr,
+                defs,
+                visited_defaults,
+                dependencies,
+            );
+        }
     }
 }
 
 fn collect_public_signature_dim_arg_dependencies(
-    arg: &hir::DimArg,
+    arg: &crate::hir::types::DimArg,
     dependencies: &mut Vec<PublicSignatureDependency>,
 ) {
-    let hir::DimArg::Expr(expr) = arg else {
+    let crate::hir::types::DimArg::Expr(expr) = arg else {
         return;
     };
     dependencies.extend(
         expr.terms
             .iter()
             .filter_map(|item| match &item.term.target {
-                hir::DimTermTarget::Dimension(name) => {
+                crate::hir::types::DimTermTarget::Dimension(name) => {
                     Some(PublicSignatureDependency::Dimension(name.clone()))
                 }
-                hir::DimTermTarget::GenericParam(_) => None,
+                crate::hir::types::DimTermTarget::GenericParam(_) => None,
             }),
     );
 }
 
 fn collect_public_signature_index_dependencies(
-    index: &hir::IndexRef,
+    index: &crate::hir::types::IndexRef,
     dependencies: &mut Vec<PublicSignatureDependency>,
 ) {
-    if let hir::IndexRef::Concrete(name) = index {
+    if let crate::hir::types::IndexRef::Concrete(name) = index {
         dependencies.push(PublicSignatureDependency::Index(name.clone()));
     }
 }
 
 fn collect_public_signature_type_dependencies(
-    value_type: &hir::ValueType,
+    value_type: &crate::hir::types::ValueType,
     defs: &ResolvedTypeDefs,
     visited_defaults: &mut std::collections::HashSet<GenericParamId>,
     dependencies: &mut Vec<PublicSignatureDependency>,
 ) {
     match &value_type.kind {
-        hir::ValueTypeKind::Builtin(_) | hir::ValueTypeKind::GenericTypeParam(_) => {}
-        hir::ValueTypeKind::DimExpr(expr) => {
+        crate::hir::types::ValueTypeKind::Builtin(_)
+        | crate::hir::types::ValueTypeKind::GenericTypeParam(_) => {}
+        crate::hir::types::ValueTypeKind::DimExpr(expr) => {
             dependencies.extend(
                 expr.terms
                     .iter()
                     .filter_map(|item| match &item.term.target {
-                        hir::DimTermTarget::Dimension(name) => {
+                        crate::hir::types::DimTermTarget::Dimension(name) => {
                             Some(PublicSignatureDependency::Dimension(name.clone()))
                         }
-                        hir::DimTermTarget::GenericParam(_) => None,
+                        crate::hir::types::DimTermTarget::GenericParam(_) => None,
                     }),
             );
         }
-        hir::ValueTypeKind::Key(index) => {
+        crate::hir::types::ValueTypeKind::Key(index) => {
             collect_public_signature_index_dependencies(index, dependencies);
         }
-        hir::ValueTypeKind::Struct(name) => {
+        crate::hir::types::ValueTypeKind::Struct(name) => {
             dependencies.push(PublicSignatureDependency::Type(name.clone()));
         }
-        hir::ValueTypeKind::Complex(arg) => {
+        crate::hir::types::ValueTypeKind::Complex(arg) => {
             collect_public_signature_dim_arg_dependencies(arg, dependencies);
         }
-        hir::ValueTypeKind::TypeApplication { name, generic_args } => {
+        crate::hir::types::ValueTypeKind::TypeApplication { name, generic_args } => {
             dependencies.push(PublicSignatureDependency::Type(name.clone()));
             for arg in generic_args {
                 collect_public_signature_generic_arg_dependencies(
@@ -1247,7 +1252,7 @@ fn check_domain_bound_policies(
                 check_pub_bind_literals,
             )?;
             // Domain bounds are evaluated without a host function registry.
-            if let Some((external, span)) = hir::find_extern_call(&bound.value) {
+            if let Some((external, span)) = crate::hir::expr::find_extern_call(&bound.value) {
                 return Err(GraphcalError::ExternCallNotAllowed {
                     name: external.to_string(),
                     context: "domain bound".to_string(),
@@ -1282,7 +1287,7 @@ fn check_dynamic_unit_policies(
             frame,
         }
         .check_expr(&entry.expr, BodyPhase::Runtime, false)?;
-        if let Some((external, span)) = hir::find_extern_call(&entry.expr) {
+        if let Some((external, span)) = crate::hir::expr::find_extern_call(&entry.expr) {
             return Err(GraphcalError::ExternCallNotAllowed {
                 name: external.to_string(),
                 context: "unit scale expression".to_string(),
@@ -1310,10 +1315,10 @@ fn check_sink_body_policies(
             frame: dag.frame(),
         };
         match &*entry.body {
-            hir::AssertBody::Expr(expr) => {
+            crate::hir::expr::AssertBody::Expr(expr) => {
                 checker.check_expr(expr, BodyPhase::Runtime, check_literals)?;
             }
-            hir::AssertBody::Tolerance {
+            crate::hir::expr::AssertBody::Tolerance {
                 actual,
                 expected,
                 tolerance,
@@ -1380,7 +1385,7 @@ struct HirPolicyChecker<'a> {
 impl HirPolicyChecker<'_> {
     fn check_expr(
         &self,
-        expr: &hir::Expr,
+        expr: &crate::hir::expr::Expr,
         phase: BodyPhase,
         check_pub_bind_literals: bool,
     ) -> Result<(), GraphcalError> {
@@ -1393,52 +1398,55 @@ impl HirPolicyChecker<'_> {
     #[expect(clippy::too_many_lines, reason = "exhaustive ExprKind policy walk")]
     fn check_expr_inner(
         &self,
-        expr: &hir::Expr,
+        expr: &crate::hir::expr::Expr,
         phase: BodyPhase,
         check_pub_bind_literals: bool,
     ) -> Result<(), GraphcalError> {
-        let recurse = |inner: &hir::Expr| self.check_expr(inner, phase, check_pub_bind_literals);
+        let recurse =
+            |inner: &crate::hir::expr::Expr| self.check_expr(inner, phase, check_pub_bind_literals);
         match expr.kind() {
-            hir::ExprKind::Error(no_error) => no_error.absurd(),
-            hir::ExprKind::Number(_)
-            | hir::ExprKind::Integer(_)
-            | hir::ExprKind::Bool(_)
-            | hir::ExprKind::StringLiteral(_)
-            | hir::ExprKind::OffsetDateTimeLiteral(_)
-            | hir::ExprKind::CivilDateTimeLiteral(_)
-            | hir::ExprKind::ZonedDateTimeLiteral(_)
-            | hir::ExprKind::IanaTimeZoneLiteral(_)
-            | hir::ExprKind::TypeSystemRef(_)
-            | hir::ExprKind::ConstRef(_)
-            | hir::ExprKind::LocalRef(_) => Ok(()),
-            hir::ExprKind::QuantityLiteral { unit, .. } => self.check_unit_expr(unit, phase),
-            hir::ExprKind::GraphRef(target) => {
+            crate::hir::expr::ExprKind::Error(no_error) => no_error.absurd(),
+            crate::hir::expr::ExprKind::Number(_)
+            | crate::hir::expr::ExprKind::Integer(_)
+            | crate::hir::expr::ExprKind::Bool(_)
+            | crate::hir::expr::ExprKind::StringLiteral(_)
+            | crate::hir::expr::ExprKind::OffsetDateTimeLiteral(_)
+            | crate::hir::expr::ExprKind::CivilDateTimeLiteral(_)
+            | crate::hir::expr::ExprKind::ZonedDateTimeLiteral(_)
+            | crate::hir::expr::ExprKind::IanaTimeZoneLiteral(_)
+            | crate::hir::expr::ExprKind::TypeSystemRef(_)
+            | crate::hir::expr::ExprKind::ConstRef(_)
+            | crate::hir::expr::ExprKind::LocalRef(_) => Ok(()),
+            crate::hir::expr::ExprKind::QuantityLiteral { unit, .. } => {
+                self.check_unit_expr(unit, phase)
+            }
+            crate::hir::expr::ExprKind::GraphRef(target) => {
                 // Use the whole `@name` span (the reference Spanned covers
                 // only the name) so the label includes the sigil.
                 self.check_graph_ref(target, expr.span, phase)
             }
-            hir::ExprKind::VariantLiteral(variant) => {
+            crate::hir::expr::ExprKind::VariantLiteral(variant) => {
                 self.check_variant_literal(variant, check_pub_bind_literals)
             }
-            hir::ExprKind::BinOp { lhs, rhs, .. } => {
+            crate::hir::expr::ExprKind::BinOp { lhs, rhs, .. } => {
                 recurse(lhs)?;
                 recurse(rhs)
             }
-            hir::ExprKind::UnaryOp { operand, .. }
-            | hir::ExprKind::DisplayTimezone { expr: operand, .. }
-            | hir::ExprKind::FieldAccess { expr: operand, .. } => recurse(operand),
-            hir::ExprKind::Convert {
+            crate::hir::expr::ExprKind::UnaryOp { operand, .. }
+            | crate::hir::expr::ExprKind::DisplayTimezone { expr: operand, .. }
+            | crate::hir::expr::ExprKind::FieldAccess { expr: operand, .. } => recurse(operand),
+            crate::hir::expr::ExprKind::Convert {
                 expr: operand,
                 target,
             } => {
                 self.check_unit_expr(target, phase)?;
                 recurse(operand)
             }
-            hir::ExprKind::FnCall { callee, args, .. } => {
+            crate::hir::expr::ExprKind::FnCall { callee, args, .. } => {
                 // Extern functions are runtime-provided; const expressions
                 // evaluate at compile time without a host function registry.
                 if phase.is_compile_time()
-                    && let hir::FunctionRef::External(ext) = &callee.value
+                    && let crate::hir::expr::FunctionRef::External(ext) = &callee.value
                 {
                     return Err(GraphcalError::ExternCallNotAllowed {
                         name: ext.to_string(),
@@ -1449,7 +1457,7 @@ impl HirPolicyChecker<'_> {
                 }
                 args.iter().try_for_each(recurse)
             }
-            hir::ExprKind::If {
+            crate::hir::expr::ExprKind::If {
                 condition,
                 then_branch,
                 else_branch,
@@ -1458,13 +1466,13 @@ impl HirPolicyChecker<'_> {
                 recurse(then_branch)?;
                 recurse(else_branch)
             }
-            hir::ExprKind::ConstructorCall { fields, .. } => {
+            crate::hir::expr::ExprKind::ConstructorCall { fields, .. } => {
                 fields.iter().try_for_each(|field| recurse(&field.value))
             }
-            hir::ExprKind::MapLiteral { entries } => {
+            crate::hir::expr::ExprKind::MapLiteral { entries } => {
                 for entry in entries {
                     for key in &entry.keys {
-                        if let hir::expr::MapEntryKey::IndexVariant(variant) = key {
+                        if let crate::hir::expr::MapEntryKey::IndexVariant(variant) = key {
                             self.check_variant_literal(variant, check_pub_bind_literals)?;
                         }
                     }
@@ -1472,43 +1480,44 @@ impl HirPolicyChecker<'_> {
                 }
                 Ok(())
             }
-            hir::ExprKind::ForComp { body, .. } => recurse(body),
-            hir::ExprKind::IndexAccess { expr: inner, args } => {
+            crate::hir::expr::ExprKind::ForComp { body, .. } => recurse(body),
+            crate::hir::expr::ExprKind::IndexAccess { expr: inner, args } => {
                 recurse(inner)?;
                 for arg in args {
                     match arg {
-                        hir::expr::IndexArg::Variant(variant) => {
+                        crate::hir::expr::IndexArg::Variant(variant) => {
                             self.check_variant_literal(variant, check_pub_bind_literals)?;
                         }
-                        hir::expr::IndexArg::Expr(arg_expr) => recurse(arg_expr)?,
-                        hir::expr::IndexArg::Var(_) => {}
+                        crate::hir::expr::IndexArg::Expr(arg_expr) => recurse(arg_expr)?,
+                        crate::hir::expr::IndexArg::Var(_) => {}
                     }
                 }
                 Ok(())
             }
-            hir::ExprKind::Scan {
+            crate::hir::expr::ExprKind::Scan {
                 source, init, body, ..
             } => {
                 recurse(source)?;
                 recurse(init)?;
                 recurse(body)
             }
-            hir::ExprKind::Unfold { init, body, .. } => {
+            crate::hir::expr::ExprKind::Unfold { init, body, .. } => {
                 recurse(init)?;
                 recurse(body)
             }
-            hir::ExprKind::KeyForm { arg, .. } => recurse(arg),
-            hir::ExprKind::Match { scrutinee, arms } => {
+            crate::hir::expr::ExprKind::KeyForm { arg, .. } => recurse(arg),
+            crate::hir::expr::ExprKind::Match { scrutinee, arms } => {
                 recurse(scrutinee)?;
                 for arm in arms {
-                    if let hir::expr::MatchPattern::IndexLabel { variant, .. } = &arm.pattern {
+                    if let crate::hir::expr::MatchPattern::IndexLabel { variant, .. } = &arm.pattern
+                    {
                         self.check_variant_literal(variant, check_pub_bind_literals)?;
                     }
                     recurse(&arm.body)?;
                 }
                 Ok(())
             }
-            hir::ExprKind::DagCall { target, args, .. } => {
+            crate::hir::expr::ExprKind::DagCall { target, args, .. } => {
                 if phase.is_compile_time() {
                     return Err(GraphcalError::DagCallInCompileTime {
                         name: target.value.to_string(),
@@ -1523,7 +1532,7 @@ impl HirPolicyChecker<'_> {
 
     fn check_unit_expr(
         &self,
-        unit: &hir::ResolvedUnitExpr,
+        unit: &crate::hir::expr::ResolvedUnitExpr,
         phase: BodyPhase,
     ) -> Result<(), GraphcalError> {
         if !phase.is_compile_time() {
@@ -1548,7 +1557,7 @@ impl HirPolicyChecker<'_> {
 
     fn check_graph_ref(
         &self,
-        reference: &Spanned<hir::LocalDecl>,
+        reference: &Spanned<crate::hir::expr::LocalDecl>,
         ref_span: Span,
         phase: BodyPhase,
     ) -> Result<(), GraphcalError> {
@@ -1582,7 +1591,7 @@ impl HirPolicyChecker<'_> {
 
     fn check_variant_literal(
         &self,
-        variant: &hir::expr::IndexVariantRef,
+        variant: &crate::hir::expr::IndexVariantRef,
         check_pub_bind_literals: bool,
     ) -> Result<(), GraphcalError> {
         if !check_pub_bind_literals {
@@ -1626,7 +1635,7 @@ use collect::{
 /// The HIR DAG fields beyond the resolved value declarations.
 struct HirBody {
     included_plots: Vec<crate::ir::model::IncludedPlotEntry>,
-    static_ports: Vec<crate::hir::StaticPort>,
+    static_ports: Vec<crate::hir::source_interface::StaticPort>,
     assumes_map: HashMap<ResolvedDeclName, Vec<ResolvedDeclName>>,
     expected_fail: HashMap<ResolvedDeclName, crate::ir::model::ResolvedExpectedFailMetadata>,
     dynamic_unit_scales: Vec<crate::ir::model::DynamicUnitScaleEntry>,

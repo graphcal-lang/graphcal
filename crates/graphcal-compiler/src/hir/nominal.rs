@@ -16,7 +16,8 @@ use crate::syntax::ast::GenericConstraint;
 use crate::syntax::span::Span;
 use crate::syntax::type_name::{ConstructorName, FieldName, GenericParamName, StructTypeName};
 
-use super::{GenericArg, GenericParamId, TypeAnnotation};
+use super::type_annotation::TypeAnnotation;
+use super::types::{GenericArg, GenericParamId};
 
 /// One constructor field whose complete signature has crossed into HIR.
 #[derive(Debug, Clone)]

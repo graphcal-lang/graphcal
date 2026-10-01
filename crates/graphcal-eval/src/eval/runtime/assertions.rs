@@ -177,7 +177,7 @@ fn merge_assumes_maps<'a>(
 /// list only the dependency's name (its own failure is reported on that
 /// declaration).
 fn assert_dependency_failure(
-    body: Scoped<'_, graphcal_compiler::hir::AssertBody>,
+    body: Scoped<'_, graphcal_compiler::hir::expr::AssertBody>,
     errors: &HashMap<ResolvedDeclName, NodeUnavailable>,
     ctx: &EvalSession<'_>,
 ) -> Option<AssertResult> {

@@ -2,8 +2,8 @@
 
 use tower_lsp::lsp_types::DocumentLink;
 
+use crate::analysis::AnalysisResult;
 use crate::convert::LineIndex;
-use crate::server::AnalysisResult;
 
 /// Build document links from the loader-resolved import targets.
 pub fn document_links(analysis: &AnalysisResult) -> Option<Vec<DocumentLink>> {

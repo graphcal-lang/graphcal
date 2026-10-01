@@ -3,8 +3,9 @@
 use graphcal_compiler::syntax::span::Span;
 use tower_lsp::lsp_types::{Location, Url};
 
+use crate::analysis::AnalysisResult;
 use crate::convert::LineIndex;
-use crate::server::{AnalysisResult, ImportedDefinition};
+use crate::imported_definitions::ImportedDefinition;
 use crate::symbol_identity::ReferenceTarget;
 use crate::symbol_table::{DefinitionInfo, SymbolKey};
 

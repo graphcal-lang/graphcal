@@ -117,7 +117,7 @@ struct HirRefCollector<'a> {
     nominal_types: &'a NominalTypeIndex,
     time_zones: TimeZoneRegistry,
     /// Lexical local definitions of the current body, keyed by HIR identity.
-    locals: HashMap<hir::LocalId, SymbolKey>,
+    locals: HashMap<hir::expr::LocalId, SymbolKey>,
     /// Span of the expression currently being lowered. Together with the DAG
     /// owner it scopes HIR-local IDs, which are only body-local identities.
     body_span: Span,
@@ -162,7 +162,7 @@ impl<'a> HirRefCollector<'a> {
     }
 
     fn collect_resolved_unit_expr_refs(
-        unit: &hir::ResolvedUnitExpr<hir::ResolvedUnitRef>,
+        unit: &hir::expr::ResolvedUnitExpr<hir::expr::ResolvedUnitRef>,
         table: &mut SymbolTable,
     ) {
         for item in &unit.terms {
@@ -183,9 +183,9 @@ impl<'a> HirRefCollector<'a> {
         expr: &graphcal_compiler::desugar::desugared_ast::Expr,
         table: &mut SymbolTable,
     ) {
-        let generic_scope = hir::GenericScope::new();
+        let generic_scope = hir::lower::GenericScope::new();
         let ctx = hir::ExprLoweringContext::new(
-            hir::ModuleScope::new(self.dag_id, self.resolver, &generic_scope),
+            hir::lower::ModuleScope::new(self.dag_id, self.resolver, &generic_scope),
             &self.time_zones,
         );
         let lowered = hir::lower_expr_tolerant(expr, ctx);
@@ -249,7 +249,7 @@ impl<'a> HirRefCollector<'a> {
 
     fn define_local(
         &mut self,
-        local: &hir::LocalDef,
+        local: &hir::expr::LocalDef,
         scope: Span,
         detail: String,
         table: &mut SymbolTable,
@@ -299,7 +299,7 @@ impl<'a> HirRefCollector<'a> {
         }
     }
 
-    fn walk(&mut self, expr: &hir::Expr<hir::Tolerant>, table: &mut SymbolTable) {
+    fn walk(&mut self, expr: &hir::expr::Expr<hir::Tolerant>, table: &mut SymbolTable) {
         graphcal_compiler::stack::with_stack_growth(|| self.walk_inner(expr, table));
     }
 
@@ -307,42 +307,42 @@ impl<'a> HirRefCollector<'a> {
         clippy::too_many_lines,
         reason = "reference extraction handles every HIR ExprKind variant"
     )]
-    fn walk_inner(&mut self, expr: &hir::Expr<hir::Tolerant>, table: &mut SymbolTable) {
+    fn walk_inner(&mut self, expr: &hir::expr::Expr<hir::Tolerant>, table: &mut SymbolTable) {
         match expr.kind() {
-            hir::ExprKind::Error(failure) => {
+            hir::expr::ExprKind::Error(failure) => {
                 for child in failure.children() {
                     self.walk(child, table);
                 }
             }
-            hir::ExprKind::Number(_)
-            | hir::ExprKind::Integer(_)
-            | hir::ExprKind::Bool(_)
-            | hir::ExprKind::StringLiteral(_)
-            | hir::ExprKind::OffsetDateTimeLiteral(_)
-            | hir::ExprKind::CivilDateTimeLiteral(_)
-            | hir::ExprKind::ZonedDateTimeLiteral(_)
-            | hir::ExprKind::IanaTimeZoneLiteral(_) => {}
-            hir::ExprKind::GraphRef(target) => {
+            hir::expr::ExprKind::Number(_)
+            | hir::expr::ExprKind::Integer(_)
+            | hir::expr::ExprKind::Bool(_)
+            | hir::expr::ExprKind::StringLiteral(_)
+            | hir::expr::ExprKind::OffsetDateTimeLiteral(_)
+            | hir::expr::ExprKind::CivilDateTimeLiteral(_)
+            | hir::expr::ExprKind::ZonedDateTimeLiteral(_)
+            | hir::expr::ExprKind::IanaTimeZoneLiteral(_) => {}
+            hir::expr::ExprKind::GraphRef(target) => {
                 Self::reference(
                     table,
                     target.span,
                     SymbolKey::Declaration(target.value.clone()),
                 );
             }
-            hir::ExprKind::ConstRef(const_ref) => {
+            hir::expr::ExprKind::ConstRef(const_ref) => {
                 let target = match &const_ref.value {
-                    hir::ConstRef::Decl(name) => SymbolKey::Declaration(name.clone()),
-                    hir::ConstRef::Constructor(name) => SymbolKey::Constructor(name.clone()),
-                    hir::ConstRef::Builtin(builtin) => SymbolKey::BuiltinConstant(*builtin),
+                    hir::expr::ConstRef::Decl(name) => SymbolKey::Declaration(name.clone()),
+                    hir::expr::ConstRef::Constructor(name) => SymbolKey::Constructor(name.clone()),
+                    hir::expr::ConstRef::Builtin(builtin) => SymbolKey::BuiltinConstant(*builtin),
                 };
                 Self::reference(table, const_ref.span, target);
             }
-            hir::ExprKind::LocalRef(local) => {
+            hir::expr::ExprKind::LocalRef(local) => {
                 if let Some(key) = self.locals.get(&local.value) {
                     Self::reference(table, local.span, key.clone());
                 }
             }
-            hir::ExprKind::TypeSystemRef(type_ref) => {
+            hir::expr::ExprKind::TypeSystemRef(type_ref) => {
                 let target = match &type_ref.value {
                     hir::expr::TypeSystemRef::Type(name) => SymbolKey::StructType(name.clone()),
                     hir::expr::TypeSystemRef::Dimension(name) => SymbolKey::Dimension(name.clone()),
@@ -351,18 +351,18 @@ impl<'a> HirRefCollector<'a> {
                 };
                 Self::reference(table, type_ref.span, target);
             }
-            hir::ExprKind::VariantLiteral(variant) => {
+            hir::expr::ExprKind::VariantLiteral(variant) => {
                 Self::variant_reference(variant, table);
             }
-            hir::ExprKind::BinOp { lhs, rhs, .. } => {
+            hir::expr::ExprKind::BinOp { lhs, rhs, .. } => {
                 self.walk(lhs, table);
                 self.walk(rhs, table);
             }
-            hir::ExprKind::UnaryOp { operand, .. }
-            | hir::ExprKind::DisplayTimezone { expr: operand, .. } => {
+            hir::expr::ExprKind::UnaryOp { operand, .. }
+            | hir::expr::ExprKind::DisplayTimezone { expr: operand, .. } => {
                 self.walk(operand, table);
             }
-            hir::ExprKind::FieldAccess { expr, field } => {
+            hir::expr::ExprKind::FieldAccess { expr, field } => {
                 self.walk(expr, table);
                 let target = self.nominal_types.expression_constructor(expr).map_or_else(
                     || ReferenceTarget::Unresolved(UnresolvedSymbol::Field(field.value.clone())),
@@ -375,16 +375,16 @@ impl<'a> HirRefCollector<'a> {
                     target,
                 });
             }
-            hir::ExprKind::FnCall { callee, args } => {
+            hir::expr::ExprKind::FnCall { callee, args } => {
                 match &callee.value {
-                    hir::FunctionRef::Builtin(builtin) => {
+                    hir::expr::FunctionRef::Builtin(builtin) => {
                         Self::reference(
                             table,
                             callee.span,
                             SymbolKey::BuiltinFunction(builtin.function()),
                         );
                     }
-                    hir::FunctionRef::Epoch { scale } => {
+                    hir::expr::FunctionRef::Epoch { scale } => {
                         Self::reference(
                             table,
                             callee.span,
@@ -392,7 +392,7 @@ impl<'a> HirRefCollector<'a> {
                         );
                         Self::reference(table, scale.span, SymbolKey::TimeScale(scale.value));
                     }
-                    hir::FunctionRef::External(ext) => Self::reference(
+                    hir::expr::FunctionRef::External(ext) => Self::reference(
                         table,
                         callee.span,
                         SymbolKey::ExternFunction(ExternFunctionId::new(
@@ -406,7 +406,7 @@ impl<'a> HirRefCollector<'a> {
                     self.walk(arg, table);
                 }
             }
-            hir::ExprKind::If {
+            hir::expr::ExprKind::If {
                 condition,
                 then_branch,
                 else_branch,
@@ -415,17 +415,17 @@ impl<'a> HirRefCollector<'a> {
                 self.walk(then_branch, table);
                 self.walk(else_branch, table);
             }
-            hir::ExprKind::QuantityLiteral { unit, .. } => {
+            hir::expr::ExprKind::QuantityLiteral { unit, .. } => {
                 Self::collect_resolved_unit_expr_refs(unit, table);
             }
-            hir::ExprKind::Convert {
+            hir::expr::ExprKind::Convert {
                 expr: inner,
                 target,
             } => {
                 self.walk(inner, table);
                 Self::collect_resolved_unit_expr_refs(target, table);
             }
-            hir::ExprKind::ConstructorCall {
+            hir::expr::ExprKind::ConstructorCall {
                 callee,
                 generic_args,
                 fields,
@@ -451,7 +451,7 @@ impl<'a> HirRefCollector<'a> {
                     self.walk(&field.value, table);
                 }
             }
-            hir::ExprKind::MapLiteral { entries } => {
+            hir::expr::ExprKind::MapLiteral { entries } => {
                 for entry in entries {
                     for key in &entry.keys {
                         if let hir::expr::MapEntryKey::IndexVariant(variant) = key {
@@ -461,7 +461,7 @@ impl<'a> HirRefCollector<'a> {
                     self.walk(&entry.value, table);
                 }
             }
-            hir::ExprKind::ForComp { bindings, body } => {
+            hir::expr::ExprKind::ForComp { bindings, body } => {
                 for binding in bindings {
                     let detail = match &binding.index {
                         hir::expr::ForBindingIndex::Named(index) => {
@@ -480,7 +480,7 @@ impl<'a> HirRefCollector<'a> {
                 }
                 self.walk(body, table);
             }
-            hir::ExprKind::IndexAccess { expr: inner, args } => {
+            hir::expr::ExprKind::IndexAccess { expr: inner, args } => {
                 self.walk(inner, table);
                 for arg in args {
                     match arg {
@@ -496,7 +496,7 @@ impl<'a> HirRefCollector<'a> {
                     }
                 }
             }
-            hir::ExprKind::Scan {
+            hir::expr::ExprKind::Scan {
                 source,
                 init,
                 acc,
@@ -509,7 +509,7 @@ impl<'a> HirRefCollector<'a> {
                 self.define_local(val, body.span, "scan value".into(), table);
                 self.walk(body, table);
             }
-            hir::ExprKind::Unfold {
+            hir::expr::ExprKind::Unfold {
                 recurrence,
                 init,
                 body,
@@ -537,13 +537,13 @@ impl<'a> HirRefCollector<'a> {
                 );
                 self.walk(body, table);
             }
-            hir::ExprKind::KeyForm { axis, arg, .. } => {
+            hir::expr::ExprKind::KeyForm { axis, arg, .. } => {
                 if let hir::expr::ForBindingIndex::Named(axis) = axis {
                     Self::reference(table, axis.span, SymbolKey::Index(axis.value.clone()));
                 }
                 self.walk(arg, table);
             }
-            hir::ExprKind::Match { scrutinee, arms } => {
+            hir::expr::ExprKind::Match { scrutinee, arms } => {
                 self.walk(scrutinee, table);
                 for arm in arms {
                     match &arm.pattern {
@@ -596,7 +596,7 @@ impl<'a> HirRefCollector<'a> {
                     self.walk(&arm.body, table);
                 }
             }
-            hir::ExprKind::DagCall {
+            hir::expr::ExprKind::DagCall {
                 target,
                 args,
                 output,
@@ -622,13 +622,14 @@ impl<'a> HirRefCollector<'a> {
         }
     }
 
-    fn walk_type(&self, value_type: &hir::ValueType, table: &mut SymbolTable) {
+    fn walk_type(&self, value_type: &hir::types::ValueType, table: &mut SymbolTable) {
         match &value_type.kind {
-            hir::ValueTypeKind::Builtin(_) | hir::ValueTypeKind::GenericTypeParam(_) => {}
-            hir::ValueTypeKind::Complex(dimension) => {
-                if let hir::DimArg::Expr(dim_expr) = dimension {
+            hir::types::ValueTypeKind::Builtin(_)
+            | hir::types::ValueTypeKind::GenericTypeParam(_) => {}
+            hir::types::ValueTypeKind::Complex(dimension) => {
+                if let hir::types::DimArg::Expr(dim_expr) = dimension {
                     for item in &dim_expr.terms {
-                        if let hir::DimTermTarget::Dimension(name) = &item.term.target {
+                        if let hir::types::DimTermTarget::Dimension(name) = &item.term.target {
                             Self::reference(
                                 table,
                                 name.span,
@@ -638,22 +639,22 @@ impl<'a> HirRefCollector<'a> {
                     }
                 }
             }
-            hir::ValueTypeKind::DimExpr(dim_expr) => {
+            hir::types::ValueTypeKind::DimExpr(dim_expr) => {
                 for item in &dim_expr.terms {
-                    if let hir::DimTermTarget::Dimension(name) = &item.term.target {
+                    if let hir::types::DimTermTarget::Dimension(name) = &item.term.target {
                         Self::reference(table, name.span, SymbolKey::Dimension(name.value.clone()));
                     }
                 }
             }
-            hir::ValueTypeKind::Key(index) => {
-                if let hir::IndexRef::Concrete(name) = index {
+            hir::types::ValueTypeKind::Key(index) => {
+                if let hir::types::IndexRef::Concrete(name) = index {
                     Self::reference(table, name.span, SymbolKey::Index(name.value.clone()));
                 }
             }
-            hir::ValueTypeKind::Struct(name) => {
+            hir::types::ValueTypeKind::Struct(name) => {
                 Self::reference(table, name.span, SymbolKey::StructType(name.value.clone()));
             }
-            hir::ValueTypeKind::TypeApplication { name, generic_args } => {
+            hir::types::ValueTypeKind::TypeApplication { name, generic_args } => {
                 Self::reference(table, name.span, SymbolKey::StructType(name.value.clone()));
                 for arg in generic_args {
                     self.walk_generic_arg(arg, table);
@@ -662,22 +663,24 @@ impl<'a> HirRefCollector<'a> {
         }
     }
 
-    fn walk_generic_arg(&self, arg: &hir::GenericArg, table: &mut SymbolTable) {
+    fn walk_generic_arg(&self, arg: &hir::types::GenericArg, table: &mut SymbolTable) {
         match arg {
-            hir::GenericArg::Dim(hir::DimArg::Dimensionless(_))
-            | hir::GenericArg::Index(hir::IndexRef::GenericParam(_) | hir::IndexRef::Finite(_))
-            | hir::GenericArg::Nat(_) => {}
-            hir::GenericArg::Dim(hir::DimArg::Expr(dim_expr)) => {
+            hir::types::GenericArg::Dim(hir::types::DimArg::Dimensionless(_))
+            | hir::types::GenericArg::Index(
+                hir::types::IndexRef::GenericParam(_) | hir::types::IndexRef::Finite(_),
+            )
+            | hir::types::GenericArg::Nat(_) => {}
+            hir::types::GenericArg::Dim(hir::types::DimArg::Expr(dim_expr)) => {
                 for item in &dim_expr.terms {
-                    if let hir::DimTermTarget::Dimension(name) = &item.term.target {
+                    if let hir::types::DimTermTarget::Dimension(name) = &item.term.target {
                         Self::reference(table, name.span, SymbolKey::Dimension(name.value.clone()));
                     }
                 }
             }
-            hir::GenericArg::Index(hir::IndexRef::Concrete(name)) => {
+            hir::types::GenericArg::Index(hir::types::IndexRef::Concrete(name)) => {
                 Self::reference(table, name.span, SymbolKey::Index(name.value.clone()));
             }
-            hir::GenericArg::Type(value_type) => self.walk_type(value_type, table),
+            hir::types::GenericArg::Type(value_type) => self.walk_type(value_type, table),
         }
     }
 }
@@ -2461,11 +2464,11 @@ fn collect_unit_expr_refs(unit_expr: &UnitExpr, table: &mut SymbolTable) {
 /// Format a domain bound expression as a human-readable string.
 ///
 /// Handles the common cases: number literals, quantity literals, and negated forms.
-fn format_bound_expr(expr: &hir::Expr) -> String {
+fn format_bound_expr(expr: &hir::expr::Expr) -> String {
     match expr.kind() {
-        hir::ExprKind::Number(value) => format_number(*value),
-        hir::ExprKind::Integer(value) => value.to_string(),
-        hir::ExprKind::QuantityLiteral { value, unit } => {
+        hir::expr::ExprKind::Number(value) => format_number(*value),
+        hir::expr::ExprKind::Integer(value) => value.to_string(),
+        hir::expr::ExprKind::QuantityLiteral { value, unit } => {
             let number = format_number(*value);
             let unit = format_unit_terms_with_config(
                 unit.terms
@@ -2475,7 +2478,7 @@ fn format_bound_expr(expr: &hir::Expr) -> String {
             );
             format!("{number} {unit}")
         }
-        hir::ExprKind::UnaryOp {
+        hir::expr::ExprKind::UnaryOp {
             op: graphcal_compiler::syntax::ast::UnaryOp::Neg,
             operand,
         } => format!("-{}", format_bound_expr(operand)),

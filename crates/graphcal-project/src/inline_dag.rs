@@ -64,8 +64,8 @@ pub fn preprocess_dag_body_self_imports(
     parent_dag_id: &DagId,
     parent_interface: &ModuleInterface,
     body_resolved_imports: &HashMap<
-        crate::loader::ModulePathKey,
-        crate::loader::InlineBodyImportResolution,
+        crate::loader::module_path::ModulePathKey,
+        crate::loader::module_path::InlineBodyImportResolution,
     >,
     module_resolver: &ModuleResolver,
     src: &NamedSource<Arc<String>>,
@@ -93,11 +93,13 @@ pub fn preprocess_dag_body_self_imports(
         };
 
         let is_self_import = body_resolved_imports
-            .get(&crate::loader::ModulePathKey::from_path(import_decl.path()))
+            .get(&crate::loader::module_path::ModulePathKey::from_path(
+                import_decl.path(),
+            ))
             .is_some_and(|resolution| {
                 matches!(
                     resolution,
-                    crate::loader::InlineBodyImportResolution::Resolved(target)
+                    crate::loader::module_path::InlineBodyImportResolution::Resolved(target)
                         if target.target() == parent_dag_id
                 )
             });

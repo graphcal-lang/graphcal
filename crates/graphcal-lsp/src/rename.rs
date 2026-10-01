@@ -4,9 +4,9 @@ use std::collections::HashMap;
 
 use tower_lsp::lsp_types::{PrepareRenameResponse, TextEdit, Url, WorkspaceEdit};
 
+use crate::analysis::AnalysisResult;
 use crate::convert::LineIndex;
 use crate::resolve::{ResolvedSymbol, SymbolLocation, reference_lookup_keys, resolve_symbol_at};
-use crate::server::AnalysisResult;
 use crate::symbol_identity::{ExternFunctionId, FieldId, GenericParamId, IndexVariantId};
 use crate::symbol_table::SymbolKey;
 use graphcal_compiler::syntax::decl_name::DeclName;
@@ -354,7 +354,7 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
-    use crate::server::build_fn_signatures;
+    use crate::fn_signatures::build_fn_signatures;
     use crate::symbol_table;
 
     /// Build a minimal `AnalysisResult` from source text.
@@ -563,7 +563,7 @@ figure f = { plots: [p] };
             .changes
             .unwrap();
         let updated = apply_edits(source, &changes[&uri]);
-        let checked = crate::server::run_analysis_for_test(&uri, &updated);
+        let checked = crate::analysis_pipeline::run_analysis_for_test(&uri, &updated);
         assert!(
             checked.has_no_diagnostics(),
             "{updated}: {:?}",
@@ -600,7 +600,7 @@ figure f = { plots: [p] };
             .changes
             .unwrap();
         let updated = apply_edits(source, &changes[&uri]);
-        let checked = crate::server::run_analysis_for_test(&uri, &updated);
+        let checked = crate::analysis_pipeline::run_analysis_for_test(&uri, &updated);
         assert!(checked.has_no_diagnostics(), "{:?}", checked.diagnostics);
     }
 
@@ -621,7 +621,9 @@ figure f = { plots: [p] };
         assert_eq!(file_edits.len(), 2);
         assert!(file_edits.iter().all(|e| e.new_text == "velocity"));
         let updated = apply_edits(source, file_edits);
-        assert!(crate::server::run_analysis_for_test(&uri, &updated).has_no_diagnostics());
+        assert!(
+            crate::analysis_pipeline::run_analysis_for_test(&uri, &updated).has_no_diagnostics()
+        );
     }
 
     #[test]
@@ -707,14 +709,14 @@ figure f = { plots: [p] };
         std::fs::write(dir.path().join("src/helper/sibling.gcl"), main_text).unwrap();
         let main_uri = Url::from_file_path(&main_path).unwrap();
         let lib_uri = Url::from_file_path(lib_path.canonicalize().unwrap()).unwrap();
-        let analysis = crate::server::run_analysis_for_test(&main_uri, main_text);
+        let analysis = crate::analysis_pipeline::run_analysis_for_test(&main_uri, main_text);
         assert!(
             analysis.has_no_diagnostics(),
             "expected the import to load cleanly, got: {:?}",
             analysis.diagnostics,
         );
 
-        let defining_analysis = crate::server::run_analysis_for_test(&lib_uri, lib_text);
+        let defining_analysis = crate::analysis_pipeline::run_analysis_for_test(&lib_uri, lib_text);
         let definition_cursor = lib_text.find(" y:").unwrap() + 1;
         assert_eq!(
             rename(
@@ -775,7 +777,7 @@ figure f = { plots: [p] };
         let main_path = source_dir.join("main.gcl");
         let main_uri = Url::from_file_path(&main_path).unwrap();
         let main_text = std::fs::read_to_string(&main_path).unwrap();
-        let analysis = crate::server::run_analysis_for_test(&main_uri, &main_text);
+        let analysis = crate::analysis_pipeline::run_analysis_for_test(&main_uri, &main_text);
         assert!(
             analysis.has_no_diagnostics(),
             "expected clean include project: {:?}",
@@ -823,7 +825,7 @@ figure f = { plots: [p] };
         let main_path = source_dir.join("main.gcl");
         let main_uri = Url::from_file_path(&main_path).unwrap();
         let main_text = std::fs::read_to_string(&main_path).unwrap();
-        let analysis = crate::server::run_analysis_for_test(&main_uri, &main_text);
+        let analysis = crate::analysis_pipeline::run_analysis_for_test(&main_uri, &main_text);
         assert!(
             analysis.has_no_diagnostics(),
             "expected clean project: {:?}",

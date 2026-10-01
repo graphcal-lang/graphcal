@@ -25,7 +25,7 @@ use sha2::Digest as _;
 use thiserror::Error;
 
 use crate::convert::{ManifestConvertError, convert_manifest};
-use crate::host::PluginLimits;
+use crate::limits::PluginLimits;
 
 /// Host-side state carried by each plugin store.
 struct CallState {

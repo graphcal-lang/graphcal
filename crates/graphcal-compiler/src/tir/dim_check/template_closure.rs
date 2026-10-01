@@ -4,7 +4,6 @@ use super::{DimCheckContext, check_decl_expr_type, check_hir_assert_body, infer}
 use crate::declaration_kind::DeclarationKind;
 use crate::diagnostic_anchor::DiagnosticAnchor;
 use crate::graphcal_error::GraphcalError;
-use crate::hir;
 use crate::resolved_name::{ResolvedDeclName, ResolvedStructTypeName};
 use crate::semantic::checked_type::{CheckedType, Symbolic};
 use crate::static_interface::StaticRole;
@@ -23,12 +22,12 @@ struct TemplateBodyIdentity {
 fn optional_type_port<'a>(
     dag: &'a crate::tir::typed::DagTIR,
     identity: &ResolvedStructTypeName,
-) -> Option<&'a crate::hir::StaticPort> {
+) -> Option<&'a crate::hir::source_interface::StaticPort> {
     dag.static_ports().iter().find(|port| {
         port.role == StaticRole::OptionalInput
             && matches!(
                 &port.identity,
-                crate::hir::StaticPortIdentity::Type(port_identity)
+                crate::hir::source_interface::StaticPortIdentity::Type(port_identity)
                     if port_identity == identity
             )
     })
@@ -37,7 +36,7 @@ fn optional_type_port<'a>(
 fn infer_operand(
     ctx: &DimCheckContext<'_>,
     owner: Option<&ResolvedDeclName>,
-    expr: &hir::Expr,
+    expr: &crate::hir::expr::Expr,
 ) -> Result<CheckedType<Symbolic>, GraphcalError> {
     ctx.infer_hir(expr, owner)
 }
@@ -45,7 +44,7 @@ fn infer_operand(
 fn emit_violation(
     ctx: &DimCheckContext<'_>,
     body: &TemplateBodyIdentity,
-    port: &crate::hir::StaticPort,
+    port: &crate::hir::source_interface::StaticPort,
     span: Span,
 ) -> Result<(), GraphcalError> {
     let check = TemplateClosureCheck {
@@ -78,7 +77,7 @@ fn emit_violation(
 fn check_expr(
     ctx: &DimCheckContext<'_>,
     body: &TemplateBodyIdentity,
-    expr: &hir::Expr,
+    expr: &crate::hir::expr::Expr,
 ) -> Result<(), GraphcalError> {
     let dependencies = ctx.observations.type_definition_dependencies(expr.id());
     dependencies.into_iter().try_for_each(|dependency| {
@@ -100,7 +99,7 @@ fn local_owner(
 #[derive(Clone, Copy)]
 enum RigidFailure<'a> {
     /// The body depends on this optional port's default (V007).
-    Violation(&'a crate::hir::StaticPort),
+    Violation(&'a crate::hir::source_interface::StaticPort),
     /// The closure check already accepted every body; report the error as is.
     Propagate,
 }
@@ -239,7 +238,10 @@ fn check_rigid_plot_bodies(
             name: entry.name().atom().clone(),
         };
         for (_, expression) in &entry.body.encodings {
-            if matches!(expression.kind(), hir::ExprKind::StringLiteral(_)) {
+            if matches!(
+                expression.kind(),
+                crate::hir::expr::ExprKind::StringLiteral(_)
+            ) {
                 // A contextual string channel has no type to depend on a port.
                 continue;
             }
@@ -368,7 +370,7 @@ fn check_in_rigid_view<R>(
 
 fn check_rigid_dimension_port(
     ctx: &DimCheckContext<'_>,
-    port: &crate::hir::StaticPort,
+    port: &crate::hir::source_interface::StaticPort,
     dimension: &crate::resolved_name::ResolvedDimName,
 ) -> Result<(), GraphcalError> {
     let failure = RigidFailure::Violation(port);
@@ -441,10 +443,11 @@ fn check_rigid_dimensions(ctx: &DimCheckContext<'_>) -> Result<(), GraphcalError
         .iter()
         .filter(|port| port.role == StaticRole::OptionalInput)
         .filter_map(|port| match &port.identity {
-            crate::hir::StaticPortIdentity::Dimension(identity) => Some((port, identity)),
-            crate::hir::StaticPortIdentity::Type(_) | crate::hir::StaticPortIdentity::Index(_) => {
-                None
+            crate::hir::source_interface::StaticPortIdentity::Dimension(identity) => {
+                Some((port, identity))
             }
+            crate::hir::source_interface::StaticPortIdentity::Type(_)
+            | crate::hir::source_interface::StaticPortIdentity::Index(_) => None,
         })
         .try_for_each(|(port, identity)| check_rigid_dimension_port(ctx, port, identity))
 }
@@ -497,8 +500,8 @@ fn check_template_assertion_bodies(ctx: &DimCheckContext<'_>) -> Result<(), Grap
             name: entry.name().atom().clone(),
         };
         match &*entry.body {
-            hir::AssertBody::Expr(expr) => check_expr(ctx, &identity, expr)?,
-            hir::AssertBody::Tolerance {
+            crate::hir::expr::AssertBody::Expr(expr) => check_expr(ctx, &identity, expr)?,
+            crate::hir::expr::AssertBody::Tolerance {
                 actual,
                 expected,
                 tolerance,

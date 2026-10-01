@@ -41,10 +41,11 @@ use graphcal_compiler::syntax::phase::Desugared;
 use graphcal_compiler::syntax::visitor::ExprVisitor;
 
 use super::generic_leakage::check_generics_leakage;
+use super::including_module::IncludingModule;
 
 /// Project-wide semantic services shared by every module lowering pass.
 pub(super) struct ProjectSemanticContext<'project, 'session> {
-    pub(super) project: &'project crate::loader::LoadedProject,
+    pub(super) project: &'project crate::loader::loaded_project::LoadedProject,
     pub(super) module_resolver: &'project graphcal_compiler::resolve::ModuleResolver,
     pub(super) module_templates: &'session mut ModuleTemplateStore,
     /// Canonical dimensions, units, and indexes of every module, evaluated on demand.
@@ -55,7 +56,7 @@ pub(super) struct ProjectSemanticContext<'project, 'session> {
 }
 
 struct DirectDagCallValidator<'a> {
-    project: &'a crate::loader::LoadedProject,
+    project: &'a crate::loader::loaded_project::LoadedProject,
     owner: &'a graphcal_compiler::dag_id::DagId,
     importer: &'a ModuleInterface,
     resolver: &'a graphcal_compiler::resolve::ModuleResolver,
@@ -95,8 +96,8 @@ impl ExprVisitor<Desugared> for DirectDagCallValidator<'_> {
 /// full loaded body and its self-import-stripped lowering body are equivalent
 /// here.
 fn validate_direct_dag_calls(
-    module: crate::loader::LoadedModule<'_>,
-    project: &crate::loader::LoadedProject,
+    module: crate::loader::loaded_file::LoadedModule<'_>,
+    project: &crate::loader::loaded_project::LoadedProject,
     owner: &graphcal_compiler::dag_id::DagId,
     resolver: &graphcal_compiler::resolve::ModuleResolver,
     src: &NamedSource<Arc<String>>,
@@ -182,7 +183,7 @@ fn is_imported_dynamic_unit_during_lowering(
     >,
     name: &graphcal_compiler::syntax::dimension::UnitName,
     module_map: &HashMap<ModuleAliasName, ProjectModuleBinding>,
-    project: &crate::loader::LoadedProject,
+    project: &crate::loader::loaded_project::LoadedProject,
 ) -> bool {
     imported_module_target(alias, module_map).is_some_and(|target| {
         project
@@ -194,7 +195,7 @@ fn is_imported_dynamic_unit_during_lowering(
 fn remap_imported_dynamic_unit_error(
     error: GraphcalError,
     module_map: &HashMap<ModuleAliasName, ProjectModuleBinding>,
-    project: &crate::loader::LoadedProject,
+    project: &crate::loader::loaded_project::LoadedProject,
 ) -> GraphcalError {
     match error {
         GraphcalError::UnknownUnit { name, src, span }
@@ -276,7 +277,7 @@ fn include_debug_name_map(ctx: &ImportContext<'_>) -> IncludeDebugNameMap {
 /// host signatures, or construct TIR.
 pub(super) fn lower_file_to_hir(
     semantic: &mut ProjectSemanticContext<'_, '_>,
-    loaded_file: &crate::loader::LoadedFile,
+    loaded_file: &crate::loader::loaded_file::LoadedFile,
     ctx: ImportContext<'_>,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<HirFile, CompileError> {
@@ -354,7 +355,7 @@ pub(super) fn lower_file_to_hir(
 
 fn lower_inline_dag_modules(
     semantic: &mut ProjectSemanticContext<'_, '_>,
-    loaded_file: &crate::loader::LoadedFile,
+    loaded_file: &crate::loader::loaded_file::LoadedFile,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<Vec<graphcal_compiler::ir::model::HirDag>, CompileError> {
     let file_src = loaded_file.named_source();
@@ -378,8 +379,8 @@ fn lower_inline_dag_modules(
 
 fn compile_loaded_dag_module_ir(
     semantic: &mut ProjectSemanticContext<'_, '_>,
-    parent_loaded: &crate::loader::LoadedFile,
-    loaded_dag: &crate::loader::LoadedDag,
+    parent_loaded: &crate::loader::loaded_file::LoadedFile,
+    loaded_dag: &crate::loader::loaded_file::LoadedDag,
     dag_body: &[Declaration],
     file_src: &NamedSource<Arc<String>>,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
@@ -564,8 +565,8 @@ fn extend_imported_bindings(
 }
 
 fn process_dag_body_import_declarations<'a>(
-    project: &'a crate::loader::LoadedProject,
-    loaded_dag: &crate::loader::LoadedDag,
+    project: &'a crate::loader::loaded_project::LoadedProject,
+    loaded_dag: &crate::loader::loaded_file::LoadedDag,
     dag_body: &[Declaration],
     file_src: &NamedSource<Arc<String>>,
     module_resolver: &graphcal_compiler::resolve::ModuleResolver,
@@ -575,9 +576,10 @@ fn process_dag_body_import_declarations<'a>(
         let DeclKind::Import(import_decl) = &decl.kind else {
             continue;
         };
-        let Some(crate::loader::InlineBodyImportResolution::Resolved(target)) = loaded_dag
-            .resolved_imports()
-            .get(&crate::loader::ModulePathKey::from_path(import_decl.path()))
+        let Some(crate::loader::module_path::InlineBodyImportResolution::Resolved(target)) =
+            loaded_dag.resolved_imports().get(
+                &crate::loader::module_path::ModulePathKey::from_path(import_decl.path()),
+            )
         else {
             continue;
         };
@@ -601,8 +603,8 @@ fn process_dag_body_import_declarations<'a>(
 }
 
 fn process_dag_body_include_declarations<'a>(
-    project: &'a crate::loader::LoadedProject,
-    loaded_dag: &crate::loader::LoadedDag,
+    project: &'a crate::loader::loaded_project::LoadedProject,
+    loaded_dag: &crate::loader::loaded_file::LoadedDag,
     dag_body: &[Declaration],
     file_src: &NamedSource<Arc<String>>,
     module_resolver: &graphcal_compiler::resolve::ModuleResolver,
@@ -612,9 +614,10 @@ fn process_dag_body_include_declarations<'a>(
         let DeclKind::Include(include_decl) = &decl.kind else {
             continue;
         };
-        let Some(crate::loader::InlineBodyImportResolution::Resolved(target)) = loaded_dag
-            .resolved_imports()
-            .get(&crate::loader::ModulePathKey::from_path(&include_decl.path))
+        let Some(crate::loader::module_path::InlineBodyImportResolution::Resolved(target)) =
+            loaded_dag.resolved_imports().get(
+                &crate::loader::module_path::ModulePathKey::from_path(&include_decl.path),
+            )
         else {
             continue;
         };
@@ -624,9 +627,11 @@ fn process_dag_body_include_declarations<'a>(
                 target,
                 include_decl,
                 decl,
-                loaded_dag.interface(),
-                file_src,
-                StaticScope::new(loaded_dag.dag_id(), module_resolver),
+                &IncludingModule {
+                    interface: loaded_dag.interface(),
+                    source: file_src,
+                    scope: StaticScope::new(loaded_dag.dag_id(), module_resolver),
+                },
                 ctx,
             )?;
             continue;
@@ -642,9 +647,11 @@ fn process_dag_body_include_declarations<'a>(
             },
             include_decl,
             decl,
-            loaded_dag.interface(),
-            file_src,
-            StaticScope::new(loaded_dag.dag_id(), module_resolver),
+            &IncludingModule {
+                interface: loaded_dag.interface(),
+                source: file_src,
+                scope: StaticScope::new(loaded_dag.dag_id(), module_resolver),
+            },
             ctx,
         )?;
     }
@@ -965,7 +972,7 @@ fn elaborate_include_instances(
     importer_dag_id: &graphcal_compiler::dag_id::DagId,
     include_instances: &[IncludeInstanceRequest],
     importer_src: &NamedSource<Arc<String>>,
-    importer: crate::loader::LoadedModule<'_>,
+    importer: crate::loader::loaded_file::LoadedModule<'_>,
     unfrozen: &mut graphcal_compiler::ir::model::UnfrozenIR,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<(), CompileError> {
@@ -984,7 +991,7 @@ fn elaborate_include_instances(
                 template_id.clone(),
                 template_module.declarations(),
             ),
-            (None, crate::loader::LoadedModule::FileRoot(dep_loaded)) => {
+            (None, crate::loader::loaded_file::LoadedModule::FileRoot(dep_loaded)) => {
                 let dep_dag_id = dep_loaded.dag_id();
                 let dep_src = dep_loaded.named_source();
                 let mut body_ctx = ImportContext {
@@ -1044,7 +1051,7 @@ fn elaborate_include_instances(
             }
             (
                 None,
-                crate::loader::LoadedModule::InlineDag {
+                crate::loader::loaded_file::LoadedModule::InlineDag {
                     file: parent_loaded,
                     dag: loaded_inline,
                 },
@@ -1161,9 +1168,11 @@ fn elaborate_include_instances(
             StaticScope::new(&dep_resolution_owner, module_resolver),
             &instance.pub_reexport_items,
             &instance.static_bindings.substitution,
-            importer_dag_id,
-            importer.interface(),
-            importer_src,
+            &IncludingModule {
+                interface: importer.interface(),
+                source: importer_src,
+                scope: StaticScope::new(importer_dag_id, module_resolver),
+            },
             instance.include_span,
         )?;
 

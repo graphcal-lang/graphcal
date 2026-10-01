@@ -9,11 +9,11 @@ use graphcal_compiler::syntax::names::NameAtom;
 use graphcal_compiler::syntax::token::{ContextualKeyword, Token};
 use tower_lsp::lsp_types::{CompletionItem, CompletionItemKind};
 
+use crate::analysis::AnalysisResult;
 use crate::cursor_context::{
     CompletionContext, CoordinateIndexCompletionContext, ImportItemCompletionContext,
     determine_completion_context, determine_coordinate_index_completion_context,
 };
-use crate::server::AnalysisResult;
 use crate::symbol_table::{DefinitionInfo, SymbolCategory};
 
 /// Built-ins available while editing a type annotation: the prelude's
@@ -388,7 +388,7 @@ mod tests {
     fn complex_type_and_functions_are_completed() {
         let source = "node z: Complex<Length> = complex(1.0 m, 2.0 m);";
         let uri = tower_lsp::lsp_types::Url::parse("file:///tmp/completion-complex.gcl").unwrap();
-        let analysis = crate::server::run_analysis_for_test(&uri, source);
+        let analysis = crate::analysis_pipeline::run_analysis_for_test(&uri, source);
 
         let type_items =
             completion(&analysis, source, source.find("Complex").unwrap()).unwrap_or_default();
@@ -420,7 +420,7 @@ mod tests {
                             node result: Dimensionless = @local;\n\
                         }\n";
         let uri = tower_lsp::lsp_types::Url::parse("file:///tmp/completion-stale.gcl").unwrap();
-        let analysis = crate::server::run_analysis_for_test(&uri, analyzed);
+        let analysis = crate::analysis_pipeline::run_analysis_for_test(&uri, analyzed);
         let current = format!("node incomplete:\r\n// UTF-16 shift 🚀\r\n{analyzed}");
         let offset = current.find("@local").unwrap() + 1;
 
@@ -438,7 +438,7 @@ mod tests {
     fn index_positions_offer_fin_constructor() {
         let source = "param values: Dimensionless[Fin(3)] = table[Fin(3)] { 1.0; 2.0; 3.0; };\n";
         let uri = tower_lsp::lsp_types::Url::parse("file:///tmp/completion-fin.gcl").unwrap();
-        let analysis = crate::server::run_analysis_for_test(&uri, source);
+        let analysis = crate::analysis_pipeline::run_analysis_for_test(&uri, source);
         for offset in [source.find("Fin").unwrap(), source.rfind("Fin").unwrap()] {
             let items = completion(&analysis, source, offset).unwrap_or_default();
             assert!(
@@ -453,7 +453,7 @@ mod tests {
         let source = "index ByStep = range(0.0, 1.0, step: 0.5);\nindex ByCount = linspace(0.0, 1.0, points: 3);\n";
         let uri =
             tower_lsp::lsp_types::Url::parse("file:///tmp/completion-coordinate.gcl").unwrap();
-        let analysis = crate::server::run_analysis_for_test(&uri, source);
+        let analysis = crate::analysis_pipeline::run_analysis_for_test(&uri, source);
 
         let constructors =
             completion(&analysis, source, source.find("range").unwrap()).unwrap_or_default();
@@ -501,7 +501,7 @@ mod tests {
         let analyzed_source = "import app.lib::{ JPY };\n";
         std::fs::write(&main_path, analyzed_source).unwrap();
         let uri = tower_lsp::lsp_types::Url::from_file_path(&main_path).unwrap();
-        let analysis = crate::server::run_analysis_for_test(&uri, analyzed_source);
+        let analysis = crate::analysis_pipeline::run_analysis_for_test(&uri, analyzed_source);
 
         let unmarked = "import app.lib::{ ";
         let labels = completion(&analysis, unmarked, unmarked.len())
@@ -550,7 +550,7 @@ mod tests {
                          node b: Length = @a -> km;\n";
         std::fs::write(&main_path, main_text).unwrap();
         let main_uri = tower_lsp::lsp_types::Url::from_file_path(&main_path).unwrap();
-        let analysis = crate::server::run_analysis_for_test(&main_uri, main_text);
+        let analysis = crate::analysis_pipeline::run_analysis_for_test(&main_uri, main_text);
 
         // Cursor right after `-> `, at the start of `km`.
         let offset = main_text.find("-> km").unwrap() + 3;
@@ -576,7 +576,7 @@ mod tests {
     fn canonical_extremum_functions_complete() {
         let source = "node result: Dimensionless = greatest(1.0, 2.0);";
         let uri = tower_lsp::lsp_types::Url::parse("untitled:builtins.gcl").unwrap();
-        let analysis = crate::server::run_analysis_for_test(&uri, source);
+        let analysis = crate::analysis_pipeline::run_analysis_for_test(&uri, source);
         let offset = source.find("greatest").unwrap();
         let items = completion(&analysis, source, offset).unwrap_or_default();
         let labels: Vec<&str> = items.iter().map(|item| item.label.as_str()).collect();
@@ -615,7 +615,7 @@ mod tests {
                          node b: Length = @a -> u::mile;\n";
         std::fs::write(&main_path, main_text).unwrap();
         let main_uri = tower_lsp::lsp_types::Url::from_file_path(&main_path).unwrap();
-        let analysis = crate::server::run_analysis_for_test(&main_uri, main_text);
+        let analysis = crate::analysis_pipeline::run_analysis_for_test(&main_uri, main_text);
 
         let offset = main_text.find("-> u::mile").unwrap() + 3;
         let items = completion(&analysis, main_text, offset).unwrap_or_default();
@@ -644,7 +644,7 @@ mod tests {
         let main_text = "import app.lib as m;\nparam v: m::Speed = 3.0 m/s;\n";
         std::fs::write(&main_path, main_text).unwrap();
         let main_uri = tower_lsp::lsp_types::Url::from_file_path(&main_path).unwrap();
-        let analysis = crate::server::run_analysis_for_test(&main_uri, main_text);
+        let analysis = crate::analysis_pipeline::run_analysis_for_test(&main_uri, main_text);
 
         // Cursor right after `: `, at the start of the type annotation.
         let offset = main_text.find(": m::Speed").unwrap() + 2;
@@ -682,7 +682,7 @@ mod tests {
         let main_text = "import app.lib as m;\nnode z: Dimensionless = 1.0 + 2.0;\n";
         std::fs::write(&main_path, main_text).unwrap();
         let main_uri = tower_lsp::lsp_types::Url::from_file_path(&main_path).unwrap();
-        let analysis = crate::server::run_analysis_for_test(&main_uri, main_text);
+        let analysis = crate::analysis_pipeline::run_analysis_for_test(&main_uri, main_text);
 
         // Cursor in expression position, right after `1.0 + `.
         let offset = main_text.find("+ 2.0").unwrap() + 2;
@@ -713,7 +713,7 @@ dag d {
 include d(inner: @outer)::{ doubled as result };
 ";
         let uri = tower_lsp::lsp_types::Url::parse("untitled:test.gcl").unwrap();
-        let analysis = crate::server::run_analysis_for_test(&uri, source);
+        let analysis = crate::analysis_pipeline::run_analysis_for_test(&uri, source);
 
         // Inside the dag body, right after the `@` of `@inner`.
         let inside_offset = source.find("@inner").unwrap() + 1;
@@ -768,7 +768,7 @@ include d(inner: @outer)::{ doubled as result };
             "import helper.lib::{y as renamed};\nnode z: Dimensionless = @renamed + 1.0;\n";
         std::fs::write(&main_path, main_text).unwrap();
         let main_uri = tower_lsp::lsp_types::Url::from_file_path(&main_path).unwrap();
-        let analysis = crate::server::run_analysis_for_test(&main_uri, main_text);
+        let analysis = crate::analysis_pipeline::run_analysis_for_test(&main_uri, main_text);
 
         // Cursor right after the `@` in `@renamed`.
         let offset = main_text.find("@renamed").unwrap() + 1;

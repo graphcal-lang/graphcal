@@ -23,7 +23,7 @@ pub struct HirProject<'project> {
     /// ASTs and the rest of `LoadedProject` do not cross the HIR boundary.
     pub(super) plugins: &'project HashMap<
         graphcal_compiler::plugin_identity::PluginIdentity,
-        crate::loader::PluginFileEntry,
+        crate::loader::loaded_project::PluginFileEntry,
     >,
     /// Minimal semantic fact needed to reject runtime units at a pure import
     /// boundary. Full frontend registries are discarded after HIR lowering.

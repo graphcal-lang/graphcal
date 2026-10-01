@@ -426,7 +426,7 @@ mod tests {
             source.to_string(),
         )
         .unwrap();
-        let (tir, _project) = crate::project_compiler::compile_to_tir_project(
+        let (tir, _project) = crate::tests::compile_to_tir_project(
             std::path::Path::new("/proj/test.gcl"),
             Some(std::path::Path::new("/proj")),
             &fs,

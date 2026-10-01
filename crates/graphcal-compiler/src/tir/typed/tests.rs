@@ -22,7 +22,7 @@ fn make_src() -> NamedSource<Arc<String>> {
 /// Resolve a source type through the production AST → HIR → TIR path.
 ///
 /// Generic parameters are declared on a synthetic nominal type so HIR builds
-/// the same typed [`hir::GenericScope`] used for real generic field signatures.
+/// the same typed [`hir::lower::GenericScope`] used for real generic field signatures.
 fn resolve_source_type(
     source_type: &str,
     dim_params: &[GenericParamName],

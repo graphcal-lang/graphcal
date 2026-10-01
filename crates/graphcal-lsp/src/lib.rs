@@ -4,6 +4,8 @@
     reason = "the LSP is an imperative shell where missing editor metadata deliberately degrades to an empty response"
 )]
 
+mod analysis;
+mod analysis_pipeline;
 mod analysis_schedule_state;
 mod client_capabilities;
 mod code_actions;
@@ -13,11 +15,14 @@ mod cursor_context;
 mod diagnostics;
 mod document_links;
 mod document_symbols;
+mod file_identity;
 mod filesystem_events;
+mod fn_signatures;
 mod formatting;
 mod formatting_scheduler;
 mod goto_definition;
 mod hover;
+mod imported_definitions;
 mod inlay_hints;
 mod nominal_type_index;
 mod project_symbols;
@@ -30,6 +35,7 @@ pub mod server;
 mod signature_help;
 mod symbol_identity;
 mod symbol_table;
+mod value_format;
 mod workspace_revision;
 
 /// Start the LSP server, reading from stdin and writing to stdout.

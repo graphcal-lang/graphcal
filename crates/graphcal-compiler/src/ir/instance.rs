@@ -233,7 +233,7 @@ pub struct HirInstanceRecord {
     /// Concrete instance identity and typed Static substitution.
     pub instance: InstanceRecord,
     /// Explicit value-port bindings lowered in the importer's lexical context.
-    pub value_bindings: HashMap<ResolvedDeclName, crate::hir::CheckedExpr>,
+    pub value_bindings: HashMap<ResolvedDeclName, crate::hir::expr::CheckedExpr>,
     /// Runtime-unit definitions materialized under this instance owner.
     pub runtime_unit_names: HashSet<UnitName>,
     /// Runtime values intentionally exposed by this include site.

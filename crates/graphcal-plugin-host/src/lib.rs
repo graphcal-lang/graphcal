@@ -35,11 +35,13 @@
 mod cache;
 pub mod convert;
 pub mod host;
+pub mod limits;
 pub mod module;
 pub mod registry;
 
 pub use cache::PluginCacheLimits;
 pub use convert::{ConvertErrorKind, ManifestConvertError, convert_manifest};
-pub use host::{PluginHost, PluginLimits};
+pub use host::PluginHost;
+pub use limits::PluginLimits;
 pub use module::{PluginCallError, PluginLoadError, PluginModule, PluginModuleLimitError};
 pub use registry::register_project_plugins;

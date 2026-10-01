@@ -4,12 +4,12 @@ use std::sync::Arc;
 use miette::NamedSource;
 
 use crate::graphcal_error::GraphcalError;
-use crate::hir;
 use crate::ir::instance::frame::InstanceFrame;
 use crate::resolved_name::{ResolvedConstructorName, ResolvedDeclName, ResolvedStructTypeName};
 use crate::syntax::span::Span;
 
-use super::model::{DagTIR, ModuleTypeContext, ResolvedDagDependencies};
+use super::model::{DagTIR, ResolvedDagDependencies};
+use super::module_type_context::ModuleTypeContext;
 use super::type_expr::{internal_error, module_resolve_error};
 
 pub(super) fn augment_runtime_deps_for_dynamic_units(dag: &mut DagTIR) {
@@ -23,7 +23,7 @@ pub(super) fn augment_runtime_deps_for_dynamic_units(dag: &mut DagTIR) {
             .map(|(name, entry)| {
                 (
                     name.clone(),
-                    hir::collect_expr_dependencies(&entry.expr)
+                    crate::hir::expr::collect_expr_dependencies(&entry.expr)
                         .graph_refs
                         .iter()
                         .map(|reference| dag.frame.resolve(reference))
@@ -74,7 +74,7 @@ pub(super) fn augment_runtime_deps_for_dynamic_units(dag: &mut DagTIR) {
 /// the DAG running it in `frame` names them.
 fn collect_unit_names(
     frame: &InstanceFrame,
-    expr: &hir::Expr,
+    expr: &crate::hir::expr::Expr,
 ) -> std::collections::HashSet<crate::resolved_name::ResolvedUnitName> {
     let mut names = std::collections::HashSet::new();
     collect_unit_names_from_hir(frame, expr, &mut names);
@@ -86,12 +86,12 @@ fn collect_unit_names(
 /// self/forward references; an unselected display target schedules no work.
 fn collect_unit_names_from_hir(
     frame: &InstanceFrame,
-    expr: &hir::Expr,
+    expr: &crate::hir::expr::Expr,
     names: &mut std::collections::HashSet<crate::resolved_name::ResolvedUnitName>,
 ) {
-    hir::visit_expr(expr, &mut |node| {
+    crate::hir::expr::visit_expr(expr, &mut |node| {
         let unit = match node.kind() {
-            hir::ExprKind::QuantityLiteral { unit, .. } => Some(unit),
+            crate::hir::expr::ExprKind::QuantityLiteral { unit, .. } => Some(unit),
             _ => None,
         };
         if let Some(unit) = unit {
@@ -107,7 +107,7 @@ fn collect_unit_names_from_hir(
 /// The declarations `references` name in `frame`.
 fn resolve_all<'a>(
     frame: &InstanceFrame,
-    references: impl IntoIterator<Item = &'a hir::LocalDecl>,
+    references: impl IntoIterator<Item = &'a crate::hir::expr::LocalDecl>,
 ) -> BTreeSet<ResolvedDeclName> {
     references
         .into_iter()
@@ -125,7 +125,7 @@ pub(super) fn collect_resolved_dag_dependencies(
 
     for entry in decls.consts() {
         let key = entry.identity();
-        let deps = hir::collect_expr_dependencies(&entry.expr);
+        let deps = crate::hir::expr::collect_expr_dependencies(&entry.expr);
         let mut const_refs = resolve_all(frame, &deps.const_refs);
         for graph_ref in &resolve_all(frame, &deps.graph_refs) {
             // `@const_name` in a const body is a const dependency. Non-const
@@ -160,8 +160,8 @@ pub(super) fn collect_resolved_dag_dependencies(
         let deps = entry
             .default
             .as_ref()
-            .map_or_else(hir::ExprDependencies::default, |default| {
-                hir::collect_expr_dependencies(default)
+            .map_or_else(crate::hir::expr::ExprDependencies::default, |default| {
+                crate::hir::expr::collect_expr_dependencies(default)
             });
         resolved
             .runtime_deps
@@ -173,7 +173,7 @@ pub(super) fn collect_resolved_dag_dependencies(
         let dependencies = match &entry.definition {
             crate::node_definition::NodeDefinition::Formula(expression) => resolve_all(
                 frame,
-                &hir::collect_expr_dependencies(expression).graph_refs,
+                &crate::hir::expr::collect_expr_dependencies(expression).graph_refs,
             ),
             crate::node_definition::NodeDefinition::Todo(dependencies) => dependencies
                 .value
@@ -207,19 +207,19 @@ fn record_constructed_type(
 
 /// Collect the owning types of every constructor a body calls, names, or matches.
 pub(super) fn collect_constructed_types_from_expr(
-    expr: &hir::Expr,
+    expr: &crate::hir::expr::Expr,
     ctx: ModuleTypeContext<'_>,
     src: &NamedSource<Arc<String>>,
     constructed_types: &mut HashSet<ResolvedStructTypeName>,
 ) -> Result<(), GraphcalError> {
     let mut result = Ok(());
-    hir::visit_expr(expr, &mut |node| {
+    crate::hir::expr::visit_expr(expr, &mut |node| {
         if result.is_err() {
             return;
         }
         result = (|| {
             match node.kind() {
-                hir::ExprKind::ConstructorCall { callee, .. } => {
+                crate::hir::expr::ExprKind::ConstructorCall { callee, .. } => {
                     record_constructed_type(
                         &callee.value,
                         ctx,
@@ -228,8 +228,8 @@ pub(super) fn collect_constructed_types_from_expr(
                         constructed_types,
                     )?;
                 }
-                hir::ExprKind::ConstRef(target) => {
-                    if let hir::ConstRef::Constructor(constructor) = &target.value {
+                crate::hir::expr::ExprKind::ConstRef(target) => {
+                    if let crate::hir::expr::ConstRef::Constructor(constructor) = &target.value {
                         record_constructed_type(
                             constructor,
                             ctx,
@@ -239,9 +239,9 @@ pub(super) fn collect_constructed_types_from_expr(
                         )?;
                     }
                 }
-                hir::ExprKind::Match { arms, .. } => {
+                crate::hir::expr::ExprKind::Match { arms, .. } => {
                     for arm in arms {
-                        if let hir::expr::MatchPattern::Constructor { constructor, .. } =
+                        if let crate::hir::expr::MatchPattern::Constructor { constructor, .. } =
                             &arm.pattern
                         {
                             record_constructed_type(
