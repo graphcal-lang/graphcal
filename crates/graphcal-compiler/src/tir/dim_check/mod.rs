@@ -63,6 +63,8 @@ pub use crate::tir::typed::override_dependencies::{
 #[derive(Clone, Copy)]
 struct DimCheckContext<'a> {
     env: infer::hir::InferEnv<'a>,
+    /// The position of the DAG being checked in `assembly`.
+    position: crate::tir::typed::dag_position::DagPosition,
     /// The unchecked project being checked, from which derived checking views
     /// (such as a template with rigid dimension ports) are built.
     assembly: &'a crate::tir::typed::UncheckedTir,
@@ -659,33 +661,36 @@ impl crate::tir::typed::InstantiatedTir {
         // Canonical bodies are checked once. Instance trees are specialized
         // below from the canonical trees; only independently lowered bindings
         // infer.
-        let inferred = tir.dags.map_local(|dag| {
+        let inferred = tir.dags.map_local(|position, dag| {
             if let Some(specialization) = dag.frame().specialization() {
                 return Ok(Inferred::Instance(instance_bodies::InstanceOf {
+                    position,
                     dag,
                     specialization,
                 }));
             }
             cancellation.checkpoint()?;
             let observations = infer::hir::BodyObservations::default();
-            let plot_shapes = check_dimensions_dag(dag, &tir, src, cancellation, &observations)?;
+            let plot_shapes =
+                check_dimensions_dag(position, dag, &tir, src, cancellation, &observations)?;
             Ok::<_, Outcome<SemanticError>>(Inferred::Canonical {
                 dag,
                 observations: Box::new(observations),
                 plot_shapes,
             })
         })?;
-        let sinks: HashMap<_, _> = inferred
-            .iter()
-            .filter_map(|(owner, inferred)| match inferred {
-                Inferred::Canonical { observations, .. } => Some((owner, &**observations)),
+        let sinks: HashMap<_, _> = tir
+            .dags
+            .with_local_facts(&inferred)
+            .filter_map(|(dag, inferred)| match inferred {
+                Inferred::Canonical { observations, .. } => Some((dag.dag_id(), &**observations)),
                 Inferred::Instance(_) => None,
             })
             .collect();
         check_field_domain_constraint_targets(&tir)?;
         check_field_domain_constraint_dimensions(&tir, cancellation, &sinks)?;
         drop(sinks);
-        let canonical = inferred.try_map(|dag_id, inferred| match inferred {
+        let canonical = inferred.try_map(|inferred| match inferred {
             Inferred::Canonical {
                 dag,
                 observations,
@@ -699,7 +704,7 @@ impl crate::tir::typed::InstantiatedTir {
                     )
                     .map_err(|error| {
                         SemanticError::internal_error(
-                            format!("DAG `{dag_id}`: {error}"),
+                            format!("DAG `{}`: {error}", dag.dag_id()),
                             src,
                             DiagnosticAnchor::WholeFile,
                         )
@@ -715,7 +720,7 @@ impl crate::tir::typed::InstantiatedTir {
         let (bodies, plots) =
             instance_bodies::local_bodies(&tir, &canonical, src, cancellation)?.unzip();
         drop(canonical);
-        let checking = crate::tir::typed::local_dag_facts::CheckingTir {
+        let checking = crate::tir::typed::checking_tir::CheckingTir {
             tir: &tir,
             bodies: &bodies,
         };
@@ -925,6 +930,7 @@ fn check_param_defaults(ctx: &DimCheckContext<'_>) -> Result<(), Outcome<Semanti
 /// Dim-check a single [`DagTIR`] against the file's shared registry and
 /// the full flat dag map.
 fn check_dimensions_dag(
+    position: crate::tir::typed::dag_position::DagPosition,
     dag: &crate::tir::typed::DagTIR,
     tir: &crate::tir::typed::UncheckedTir,
     src: SourceId,
@@ -933,6 +939,7 @@ fn check_dimensions_dag(
 ) -> Result<plot::CheckedPlotChannelShapes, Outcome<SemanticError>> {
     cancellation.checkpoint()?;
     let ctx = DimCheckContext {
+        position,
         env: infer::hir::InferEnv {
             dag,
             tir,

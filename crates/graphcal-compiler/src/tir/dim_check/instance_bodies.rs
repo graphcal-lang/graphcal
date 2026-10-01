@@ -9,8 +9,9 @@ use crate::semantic_error::dimension::DimensionError;
 use crate::semantic_error::visibility::VisibilityError;
 use crate::source_id::SourceId;
 use crate::tir::texpr::{CheckedBodies, CheckedBody, NominalObservation, TBody};
-use crate::tir::typed::local_dag_facts::{LocalDagFacts, PublishedBodies};
-use crate::tir::typed::program::{TirRead, UncheckedTir};
+use crate::tir::typed::checking_tir::PublishedBodies;
+use crate::tir::typed::dag_slots::LocalDagFacts;
+use crate::tir::typed::program::UncheckedTir;
 use crate::tir::typed::specialization::specialize_expression_type;
 
 use super::body_specialization::DerivedTrees;
@@ -220,6 +221,7 @@ pub(super) enum CanonicalStage<'t> {
 /// A semantic instance body and the specialization it was materialized with.
 #[derive(Clone, Copy)]
 pub(super) struct InstanceOf<'t> {
+    pub(super) position: crate::tir::typed::dag_position::DagPosition,
     pub(super) dag: &'t crate::tir::typed::model::DagTIR,
     pub(super) specialization: &'t crate::ir::static_substitution::StaticSpecializationId,
 }
@@ -256,11 +258,11 @@ pub(super) fn local_bodies<'t>(
     src: SourceId,
     cancellation: &CancellationToken,
 ) -> Result<LocalDagFacts<(CheckedBodies, PlotsStage<'t>)>, Outcome<SemanticError>> {
-    let checking = crate::tir::typed::local_dag_facts::CheckingTir {
+    let checking = crate::tir::typed::checking_tir::CheckingTir {
         tir,
         bodies: canonical,
     };
-    canonical.try_map_ref(|_, stage| match stage {
+    canonical.try_map_ref(|stage| match stage {
         CanonicalStage::Canonical {
             bodies,
             plot_shapes,
@@ -285,8 +287,9 @@ pub(super) fn local_bodies<'t>(
 /// checked trees from its template's, with the template plot channel shapes
 /// to specialize when it rebinds a defaulted dimension port.
 fn instance_bodies(
-    checking: &crate::tir::typed::local_dag_facts::CheckingTir<'_, CanonicalStage<'_>>,
+    checking: &crate::tir::typed::checking_tir::CheckingTir<'_, CanonicalStage<'_>>,
     InstanceOf {
+        position,
         dag,
         specialization,
     }: InstanceOf<'_>,
@@ -297,16 +300,20 @@ fn instance_bodies(
     let internal =
         |message: String| SemanticError::internal_error(message, src, DiagnosticAnchor::WholeFile);
     cancellation.checkpoint()?;
-    let reader: &dyn TirRead = checking;
-    let (template, template_bodies) =
-        reader
-            .checked_dag(&specialization.template)
-            .ok_or_else(|| {
-                internal(format!(
-                    "instance has no checked canonical template `{}`",
-                    specialization.template
-                ))
-            })?;
+    let (template_position, template, template_bodies) = tir
+        .dags
+        .position(&specialization.template)
+        .and_then(|template| {
+            checking
+                .checked_at(template)
+                .map(|(dag, bodies)| (template, dag, bodies))
+        })
+        .ok_or_else(|| {
+            internal(format!(
+                "instance has no checked canonical template `{}`",
+                specialization.template
+            ))
+        })?;
     // A rebound defaulted dimension port: the template's trees saw its
     // default, so the instance's trees come from the view where it is rigid.
     let ports = tir
@@ -315,12 +322,19 @@ fn instance_bodies(
     let (port_generic, port_generic_plot_channels) = if ports.is_empty() {
         (DerivedTrees::default(), None)
     } else {
-        let generic =
-            super::template_closure::port_generic_trees(tir, template, &ports, src, cancellation)?;
+        let generic = super::template_closure::port_generic_trees(
+            tir,
+            template_position,
+            template,
+            &ports,
+            src,
+            cancellation,
+        )?;
         (generic.trees, Some(generic.plot_channels))
     };
     let observations = infer::hir::BodyObservations::default();
     let ctx = DimCheckContext {
+        position,
         env: infer::hir::InferEnv {
             dag,
             tir: checking,

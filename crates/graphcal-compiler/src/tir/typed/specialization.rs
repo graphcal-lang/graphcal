@@ -26,7 +26,7 @@ use crate::source_id::SourceId;
 use crate::syntax::dimension::UnitName;
 use crate::tir::presentation::DagPresentationFacts;
 
-use super::local_dag_facts::LocalDagFacts;
+use super::dag_slots::LocalDagFacts;
 
 fn dimension_substitution<'a>(
     substitution: &'a StaticSubstitution,
@@ -602,6 +602,7 @@ fn specialize_instance_semantics(
 }
 
 fn clone_checked_instance(
+    template_position: super::dag_position::DagPosition,
     template: &DagTIR,
     edge: &HirInstanceRecord,
     parent: &InstanceFrame,
@@ -619,17 +620,8 @@ fn clone_checked_instance(
     let template = if ports.is_empty() {
         template
     } else {
-        rigid_tir = super::rigid_dimension_view(tir, template.dag_id(), &ports, src)?;
-        rigid_tir.dags.get(template.dag_id()).ok_or_else(|| {
-            SemanticError::internal_error(
-                format!(
-                    "rigid template `{}` is unavailable for semantic instance",
-                    template.dag_id()
-                ),
-                src,
-                DiagnosticAnchor::WholeFile,
-            )
-        })?
+        rigid_tir = super::rigid_dimension_view(tir, template_position, &ports, src)?;
+        rigid_tir.dags.at(template_position)
     };
     let mut instance = template.clone();
     initialize_instance_identity(&mut instance, template, edge, parent, runtime_units);
@@ -697,15 +689,16 @@ struct PlotProjections {
 }
 
 impl PlotProjections {
-    /// Collect the plots `parent` requests from its instances, instances
-    /// first.
+    /// Collect the plots the local body `parent` requests from its
+    /// instances, instances first.
     fn collect(
         &mut self,
         tir: &UncheckedTir,
         presentation: &LocalDagFacts<DagPresentationFacts>,
-        parent: &crate::dag_id::DagId,
+        parent_dag: &DagTIR,
         src: SourceId,
     ) -> Result<(), SemanticError> {
+        let parent = parent_dag.dag_id();
         if self.complete.contains(parent) {
             return Ok(());
         }
@@ -716,16 +709,7 @@ impl PlotProjections {
                 DiagnosticAnchor::WholeFile,
             ));
         }
-        let projections = tir
-            .dags
-            .get(parent)
-            .ok_or_else(|| {
-                SemanticError::internal_error(
-                    format!("semantic plot projection parent `{parent}` is unavailable"),
-                    src,
-                    DiagnosticAnchor::WholeFile,
-                )
-            })?
+        let projections = parent_dag
             .semantic_instances()
             .iter()
             .flat_map(|edge| {
@@ -741,10 +725,11 @@ impl PlotProjections {
         for (instance_owner, target, exposed) in projections {
             // Imported instances already carry their complete checked
             // projections.
-            let local = presentation.get(&instance_owner);
-            if local.is_some() {
-                self.collect(tir, presentation, &instance_owner, src)?;
+            let local = tir.dags.local_with_fact(presentation, &instance_owner);
+            if let Some((instance, _)) = local {
+                self.collect(tir, presentation, instance, src)?;
             }
+            let local = local.map(|(_, facts)| facts);
             let channels = self
                 .projected
                 .get(&instance_owner)
@@ -789,21 +774,21 @@ pub fn add_plot_projections(
     src: SourceId,
 ) -> Result<LocalDagFacts<DagPresentationFacts>, SemanticError> {
     let mut projections = PlotProjections::default();
-    for (parent, _) in presentation.iter() {
+    for (_, parent) in tir.dags.local_iter() {
         projections.collect(tir, &presentation, parent, src)?;
     }
     let mut projected = projections.projected;
-    presentation.try_map(|owner, mut facts| {
-        if let Some(plots) = projected.remove(owner) {
+    Ok(tir.dags.map_local_facts(presentation, |dag, mut facts| {
+        if let Some(plots) = projected.remove(dag.dag_id()) {
             facts.plot_channels.extend(plots);
         }
-        Ok(facts)
-    })
+        facts
+    }))
 }
 
 /// Bind the names each body exposes from its instances' projections.
 fn install_semantic_projection_bindings(tir: &mut UncheckedTir) {
-    for dag in tir.dags.values_mut() {
+    for dag in tir.dags.locals_mut() {
         for edge in dag.semantic_instances.clone() {
             for projection in &edge.output_projections {
                 match projection.body() {
@@ -838,9 +823,9 @@ fn instantiate_semantic_edge(
 ) -> Result<(), SemanticError> {
     let owner = edge.instance.id().owner();
     let parent = edge.instance.id().parent();
-    let template = tir
+    let template_position = tir
         .dags
-        .get(edge.instance.id().template())
+        .position(edge.instance.id().template())
         .ok_or_else(|| {
             SemanticError::internal_error(
                 format!(
@@ -850,8 +835,8 @@ fn instantiate_semantic_edge(
                 src,
                 DiagnosticAnchor::WholeFile,
             )
-        })?
-        .clone();
+        })?;
+    let template = tir.dags.at(template_position).clone();
     let runtime_unit_names = edge
         .runtime_unit_names
         .iter()
@@ -898,8 +883,15 @@ fn instantiate_semantic_edge(
             )
         })?
         .frame();
-    let instance =
-        clone_checked_instance(&template, edge, parent_frame, runtime_unit_names, tir, src)?;
+    let instance = clone_checked_instance(
+        template_position,
+        &template,
+        edge,
+        parent_frame,
+        runtime_unit_names,
+        tir,
+        src,
+    )?;
     for (unit, info) in runtime_unit_infos {
         tir.insert_runtime_unit(unit, info).map_err(|error| {
             SemanticError::internal_error(error.to_string(), src, DiagnosticAnchor::WholeFile)

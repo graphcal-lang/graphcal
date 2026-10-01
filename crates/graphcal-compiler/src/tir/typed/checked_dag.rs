@@ -105,12 +105,6 @@ impl CheckedDag {
     {
         self.presentation.plot_channels.get(plot)
     }
-
-    /// Release the body, dropping its facts, to re-resolve it in a derived
-    /// checking view.
-    pub(crate) fn into_body(self) -> DagTIR {
-        self.body
-    }
 }
 
 /// The unchecked body, for the compiler's own passes.

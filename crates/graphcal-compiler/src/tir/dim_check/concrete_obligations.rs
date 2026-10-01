@@ -55,7 +55,7 @@ pub(super) fn validate_concrete_type_obligations(
 }
 
 pub(super) fn validate_project(
-    checking: &crate::tir::typed::local_dag_facts::CheckingTir<'_>,
+    checking: &crate::tir::typed::checking_tir::CheckingTir<'_>,
     src: SourceId,
     cancellation: &CancellationToken,
 ) -> Result<(), Outcome<SemanticError>> {

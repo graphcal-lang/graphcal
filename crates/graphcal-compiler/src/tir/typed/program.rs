@@ -1,7 +1,7 @@
 //! The project TIR before it is checked: the DAG registry and the draft,
 //! unchecked, and instantiated states of the TIR typestate.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use thiserror::Error;
@@ -18,7 +18,6 @@ use crate::semantic::unit_scale::UnitInfo;
 use crate::semantic_error::SemanticError;
 use crate::source_id::SourceId;
 
-use super::dag_store::DagStore;
 use super::model::{
     CheckedDeclType, CompetingExternFunctionDefinition, DagTIR, ProjectTypeStore,
     ProjectTypeStoreInsertError, TirCore,
@@ -28,13 +27,7 @@ use super::model::{
 // DAG registry
 // ---------------------------------------------------------------------------
 
-/// Failure to add a DAG to a TIR registry.
-#[derive(Debug, Clone, PartialEq, Eq, Error)]
-pub enum DagRegistryError {
-    /// A canonical DAG identity can occur only once in one compiled registry.
-    #[error("DAG `{dag_id}` is already present in the TIR registry")]
-    DuplicateDag { dag_id: crate::dag_id::DagId },
-}
+pub use super::dag_slots::DagRegistryError;
 
 /// Failure to attach one immutable module store to an assembly registry.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
@@ -53,163 +46,10 @@ pub enum DagStoreInsertError {
     },
 }
 
-/// Registry of the DAG bodies of a TIR before it is checked.
-///
-/// The root DAG is stored directly, so its presence is structural. Every other
-/// entry is keyed internally from [`DagTIR::dag_id`], so a caller cannot pair a
-/// DAG body with a different map key. Imported bodies are already-checked
-/// handles owned by the store that published them; they have no mutable
-/// accessor.
-///
-/// Both maps are ordered by identity, so the positions the checked registry
-/// assigns in their iteration order are the same in every run, whatever order
-/// the bodies were added in.
-#[derive(Debug, Clone)]
-pub(crate) struct DagRegistry {
-    root: DagTIR,
-    other_dags: BTreeMap<crate::dag_id::DagId, DagTIR>,
-    shared_dags: BTreeMap<crate::dag_id::DagId, Arc<super::checked_dag::CheckedDag>>,
-}
-
-/// The owned local bodies and the imported checked handles of a registry,
-/// each in identity order.
-pub(crate) type DagRegistryParts = (
-    DagTIR,
-    BTreeMap<crate::dag_id::DagId, DagTIR>,
-    BTreeMap<crate::dag_id::DagId, Arc<super::checked_dag::CheckedDag>>,
-);
-
-impl DagRegistry {
-    const fn new(root: DagTIR) -> Self {
-        Self {
-            root,
-            other_dags: BTreeMap::new(),
-            shared_dags: BTreeMap::new(),
-        }
-    }
-
-    pub(crate) fn into_parts(self) -> DagRegistryParts {
-        (self.root, self.other_dags, self.shared_dags)
-    }
-
-    /// Canonical identity of this registry's root DAG.
-    pub(crate) const fn root_id(&self) -> &crate::dag_id::DagId {
-        self.root.dag_id()
-    }
-
-    /// Borrow the root DAG.
-    pub(crate) const fn root(&self) -> &DagTIR {
-        &self.root
-    }
-
-    #[cfg(test)]
-    const fn root_mut(&mut self) -> &mut DagTIR {
-        &mut self.root
-    }
-
-    pub(crate) fn contains(&self, dag_id: &crate::dag_id::DagId) -> bool {
-        dag_id == self.root_id()
-            || self.other_dags.contains_key(dag_id)
-            || self.shared_dags.contains_key(dag_id)
-    }
-
-    fn insert(&mut self, dag: DagTIR) -> Result<(), DagRegistryError> {
-        let dag_id = dag.dag_id.clone();
-        if self.contains(&dag_id) {
-            return Err(DagRegistryError::DuplicateDag { dag_id });
-        }
-        self.other_dags.insert(dag_id, dag);
-        Ok(())
-    }
-
-    pub(super) fn insert_shared(
-        &mut self,
-        dag_id: crate::dag_id::DagId,
-        dag: Arc<super::checked_dag::CheckedDag>,
-    ) {
-        self.shared_dags.insert(dag_id, dag);
-    }
-
-    /// Look up one DAG body by canonical identity.
-    pub(crate) fn get(&self, dag_id: &crate::dag_id::DagId) -> Option<&DagTIR> {
-        if dag_id == self.root_id() {
-            Some(&self.root)
-        } else {
-            self.other_dags
-                .get(dag_id)
-                .or_else(|| self.shared_dags.get(dag_id).map(|dag| dag.body()))
-        }
-    }
-
-    /// The checked handle of an imported body.
-    pub(crate) fn shared(
-        &self,
-        dag_id: &crate::dag_id::DagId,
-    ) -> Option<&super::checked_dag::CheckedDag> {
-        self.shared_dags.get(dag_id).map(AsRef::as_ref)
-    }
-
-    /// Mutably borrow one DAG, first copying a shared (imported) body into
-    /// this registry's local bodies. Used only by temporary views that
-    /// re-resolve an imported template's signatures.
-    pub(crate) fn localized_mut(&mut self, dag_id: &crate::dag_id::DagId) -> Option<&mut DagTIR> {
-        if let Some(shared) = self.shared_dags.remove(dag_id) {
-            self.other_dags
-                .insert(dag_id.clone(), Arc::unwrap_or_clone(shared).into_body());
-        }
-        if dag_id == self.root.dag_id() {
-            Some(&mut self.root)
-        } else {
-            self.other_dags.get_mut(dag_id)
-        }
-    }
-
-    /// The root body and the other local bodies, in identity order.
-    pub(super) const fn local_parts(&self) -> (&DagTIR, &BTreeMap<crate::dag_id::DagId, DagTIR>) {
-        (&self.root, &self.other_dags)
-    }
-
-    /// Iterate over local assembly identities and bodies.
-    pub(crate) fn local_iter(&self) -> impl Iterator<Item = (&crate::dag_id::DagId, &DagTIR)> {
-        std::iter::once((self.root.dag_id(), &self.root)).chain(self.other_dags.iter())
-    }
-
-    /// Iterate over canonical identities and DAG bodies.
-    pub(crate) fn iter(&self) -> impl Iterator<Item = (&crate::dag_id::DagId, &DagTIR)> {
-        self.local_iter()
-            .chain(self.shared_dags.iter().map(|(id, dag)| (id, dag.body())))
-    }
-
-    /// Iterate mutably over local DAG bodies while preserving their registry keys.
-    pub(crate) fn values_mut(&mut self) -> impl Iterator<Item = &mut DagTIR> {
-        std::iter::once(&mut self.root).chain(self.other_dags.values_mut())
-    }
-
-    /// Number of DAG modules in this registry, including its root and imports.
-    #[cfg(test)]
-    pub(crate) fn len(&self) -> usize {
-        self.other_dags.len() + self.shared_dags.len() + 1
-    }
-}
-
-impl DagRegistry {
-    /// Add handles to an immutable module store during assembly.
-    pub(crate) fn insert_shared_store(
-        &mut self,
-        store: &DagStore,
-    ) -> Result<(), super::program::DagRegistryError> {
-        if let Some(dag_id) = store.dags.keys().find(|dag_id| self.contains(dag_id)) {
-            return Err(super::program::DagRegistryError::DuplicateDag {
-                dag_id: dag_id.clone(),
-            });
-        }
-        store
-            .dags
-            .iter()
-            .for_each(|(dag_id, dag)| self.insert_shared(dag_id.clone(), Arc::clone(dag)));
-        Ok(())
-    }
-}
+/// Registry of the DAG bodies of a TIR before it is checked: owned local
+/// bodies without facts, and imported checked handles, each at the position
+/// it was given when it joined the draft.
+pub(crate) type DagRegistry = super::dag_slots::DagSlots<DagTIR>;
 
 /// A project TIR under assembly: the first state of the TIR typestate.
 ///
@@ -248,14 +88,15 @@ impl TirDraft {
 
     /// Borrow the file-root DAG during assembly.
     #[must_use]
-    pub const fn root(&self) -> &DagTIR {
+    pub fn root(&self) -> &DagTIR {
         self.dags.root()
     }
 
     /// Mutably borrow the file-root DAG during assembly.
     #[cfg(test)]
-    pub(crate) const fn root_mut(&mut self) -> &mut DagTIR {
-        self.dags.root_mut()
+    pub(crate) fn root_mut(&mut self) -> &mut DagTIR {
+        self.dags
+            .localized_mut(super::dag_position::DagPosition::ROOT)
     }
 
     /// Borrow the root file's post-resolution formatting services.
@@ -282,7 +123,7 @@ impl TirDraft {
     /// Returns [`DagRegistryError::DuplicateDag`] rather than replacing an
     /// existing root, child, or dependency DAG.
     pub(crate) fn insert_dag(&mut self, dag: DagTIR) -> Result<(), DagRegistryError> {
-        self.dags.insert(dag)
+        self.dags.push_local(dag).map(|_| ())
     }
 
     /// Add immutable checked bodies from previously frozen module stores.
@@ -318,13 +159,36 @@ impl TirDraft {
                 target: target.clone(),
             });
         }
-        stores
-            .into_iter()
-            .try_for_each(|store| self.insert_shared_dag_store(store))
+        let mut handles = Vec::new();
+        for store in stores {
+            self.merge_runtime_units(store)?;
+            if let Some(dag_id) = store.dags.keys().find(|dag_id| {
+                self.dags.contains(dag_id)
+                    || handles
+                        .iter()
+                        .any(|(installed, _): &(&crate::dag_id::DagId, _)| installed == dag_id)
+            }) {
+                return Err(DagStoreInsertError::Registry(
+                    DagRegistryError::DuplicateDag {
+                        dag_id: dag_id.clone(),
+                    },
+                ));
+            }
+            handles.extend(store.dags.iter());
+        }
+        // Handles join in identity order, so their positions do not depend
+        // on the order of the stores or of the bodies in a store.
+        handles.sort_by_key(|(dag_id, _)| *dag_id);
+        handles.into_iter().try_for_each(|(_, dag)| {
+            self.dags
+                .push_shared(Arc::clone(dag))
+                .map(|_| ())
+                .map_err(DagStoreInsertError::Registry)
+        })
     }
 
-    /// Add the handles of one store whose callees are installed.
-    fn insert_shared_dag_store(
+    /// Merge the runtime units one store publishes.
+    fn merge_runtime_units(
         &mut self,
         store: &super::dag_store::DagStore,
     ) -> Result<(), DagStoreInsertError> {
@@ -338,9 +202,6 @@ impl TirDraft {
                 identity: name.clone(),
             });
         }
-        self.dags
-            .insert_shared_store(store)
-            .map_err(DagStoreInsertError::Registry)?;
         self.core.runtime_units.extend(
             store
                 .runtime_units
@@ -424,7 +285,7 @@ pub(crate) struct UncheckedTir {
 
 impl UncheckedTir {
     pub(super) fn insert_materialized_dag(&mut self, dag: DagTIR) -> Result<(), DagRegistryError> {
-        self.dags.insert(dag)
+        self.dags.push_local(dag).map(|_| ())
     }
 
     pub(crate) fn into_parts(self) -> (TirCore, DagRegistry) {
@@ -432,12 +293,12 @@ impl UncheckedTir {
     }
 
     /// Borrow the root DAG. Root presence is guaranteed by [`DagRegistry`].
-    pub(crate) const fn root(&self) -> &DagTIR {
+    pub(crate) fn root(&self) -> &DagTIR {
         self.dags.root()
     }
 
     /// Canonical identity of the root DAG.
-    pub(crate) const fn root_dag_id(&self) -> &crate::dag_id::DagId {
+    pub(crate) fn root_dag_id(&self) -> &crate::dag_id::DagId {
         self.dags.root_id()
     }
 
@@ -556,14 +417,6 @@ impl dyn TirRead + '_ {
     /// The checked type of any value declaration in the project.
     pub(crate) fn decl_type(&self, declaration: &ResolvedDeclName) -> Option<&CheckedDeclType> {
         self.dag(declaration.owner())?.value_decl_type(declaration)
-    }
-
-    /// One DAG body with the checked trees already published for it.
-    pub(crate) fn checked_dag(
-        &self,
-        dag_id: &crate::dag_id::DagId,
-    ) -> Option<(&DagTIR, &crate::tir::texpr::CheckedBodies)> {
-        self.dag(dag_id).zip(self.checked_bodies(dag_id))
     }
 
     /// Find the DAG carrying resolved field metadata for a nominal type.
