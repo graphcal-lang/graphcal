@@ -4,6 +4,8 @@ use std::collections::HashMap;
 use std::fmt::Write as _;
 
 use graphcal_compiler::graphcal_error::GraphcalError;
+use graphcal_compiler::semantic_error::SemanticErrorKind;
+use graphcal_compiler::semantic_error::domain::DomainError;
 
 use graphcal_compiler::graphcal_error::RenderedGraphcalError;
 use graphcal_eval::eval::EvalResult;
@@ -92,7 +94,10 @@ node called: Dimensionless = @bounded()::result;
     assert!(matches!(
         error,
         CompileError::Eval(RenderedGraphcalError {
-            error: GraphcalError::DomainViolation { .. },
+            error: GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+                kind: SemanticErrorKind::Domain(DomainError::DomainViolation { .. }),
+                ..
+            }),
             ..
         })
     ));

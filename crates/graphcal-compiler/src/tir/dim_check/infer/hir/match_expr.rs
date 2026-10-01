@@ -4,6 +4,7 @@ use crate::hir::expr::{Expr, MatchArm, MatchPattern, PatternBinding};
 use crate::hir::nominal::{NominalConstructor, NominalTypeDef};
 use crate::outcome::Outcome;
 use crate::resolved_name::ResolvedStructTypeName;
+use crate::semantic_error::structure::StructError;
 use crate::source_id::SourceId;
 
 use crate::display::formatting_registry::FormattingRegistry;
@@ -33,12 +34,16 @@ impl InferEnv<'_> {
             .iter()
             .any(|field_def| field_def.name() == &field.value)
         {
-            return Err(GraphcalError::UnknownField {
-                type_name: type_def.name(),
-                member: crate::graphcal_error::NominalMember::Field(field.value.clone()),
-                src: self.src,
-                span: field.span.into(),
-            });
+            return Err(GraphcalError::located(
+                self.src,
+                field.span,
+                StructError::UnknownField {
+                    type_name: type_def.name(),
+                    member: crate::semantic_error::structure::NominalMember::Field(
+                        field.value.clone(),
+                    ),
+                },
+            ));
         }
         resolved_field_type(
             &resolved_type_field_key(owning_type, variant, &field.value),
@@ -159,10 +164,14 @@ impl Infer<'_> {
             CheckedType::Struct(type_name, scrutinee_type_args) => {
                 let type_def =
                     struct_type_def_for_inferred(type_name, Some(self.env.dag), self.env.registry)
-                        .ok_or_else(|| GraphcalError::UnknownStructType {
-                            name: type_name.to_string(),
-                            src: self.env.src,
-                            span: scrutinee.span.into(),
+                        .ok_or_else(|| {
+                            GraphcalError::located(
+                                self.env.src,
+                                scrutinee.span,
+                                StructError::UnknownStructType {
+                                    name: type_name.to_string(),
+                                },
+                            )
                         })?;
                 let mut covered = std::collections::HashSet::new();
                 let mut arm_types = Vec::new();
@@ -191,22 +200,27 @@ impl Infer<'_> {
                         },
                     )?;
                     if bindings.is_explicit_empty() && target.variant().fields().is_empty() {
-                        return Err(GraphcalError::EmptyParenthesizedConstructor {
-                            constructor: target.variant().name(),
-                            src: self.env.src,
-                            span: (*span).into(),
-                        }
+                        return Err(GraphcalError::located(
+                            self.env.src,
+                            *span,
+                            StructError::EmptyParenthesizedConstructor {
+                                constructor: target.variant().name(),
+                            },
+                        )
                         .into());
                     }
                     if type_name.resolved() != target.owning_type() {
-                        return Err(GraphcalError::UnknownField {
-                            type_name: type_name.name().clone(),
-                            member: crate::graphcal_error::NominalMember::Constructor(
-                                target.name(),
-                            ),
-                            src: self.env.src,
-                            span: constructor.span.into(),
-                        }
+                        return Err(GraphcalError::located(
+                            self.env.src,
+                            constructor.span,
+                            StructError::UnknownField {
+                                type_name: type_name.name().clone(),
+                                member:
+                                    crate::semantic_error::structure::NominalMember::Constructor(
+                                        target.name(),
+                                    ),
+                            },
+                        )
                         .into());
                     }
                     if !covered.insert(target.variant().name().clone()) {
@@ -261,12 +275,14 @@ impl Infer<'_> {
                         .map(|field| field.name().clone())
                         .collect::<Vec<_>>();
                     if !missing.is_empty() {
-                        return Err(GraphcalError::MissingPatternFields {
-                            constructor: target.variant().name(),
-                            missing,
-                            src: self.env.src,
-                            span: (*span).into(),
-                        }
+                        return Err(GraphcalError::located(
+                            self.env.src,
+                            *span,
+                            StructError::MissingPatternFields {
+                                constructor: target.variant().name(),
+                                missing,
+                            },
+                        )
                         .into());
                     }
                     arm_types.push(self.with_locals(&arm_locals).infer_hir_type(&arm.body)?);

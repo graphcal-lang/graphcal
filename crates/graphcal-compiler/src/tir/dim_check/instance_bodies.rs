@@ -7,6 +7,7 @@ use crate::cancellation::CancellationToken;
 use crate::diagnostic_anchor::DiagnosticAnchor;
 use crate::graphcal_error::GraphcalError;
 use crate::outcome::Outcome;
+use crate::semantic_error::visibility::VisibilityError;
 use crate::source_id::SourceId;
 use crate::tir::texpr::{CheckedBodies, CheckedBody, NominalObservation, TBody};
 use crate::tir::typed::program::{TirRead, UncheckedTir};
@@ -87,14 +88,16 @@ fn check_retained_reconciliations(
                     }
                 };
                 if let Some((overridden, kind, detail)) = matched {
-                    return Err(GraphcalError::IncludeMustReconcileOverride {
-                        overridden,
-                        overridden_kind: kind.to_string(),
-                        orphan_decl: reconciliation.orphan_decl().to_string(),
-                        detail,
-                        src: reconciliation.src,
-                        span: reconciliation.include_span.into(),
-                    });
+                    return Err(GraphcalError::located(
+                        reconciliation.src,
+                        reconciliation.include_span,
+                        VisibilityError::IncludeMustReconcileOverride {
+                            overridden,
+                            overridden_kind: kind.to_string(),
+                            orphan_decl: reconciliation.orphan_decl().to_string(),
+                            detail,
+                        },
+                    ));
                 }
             }
         }

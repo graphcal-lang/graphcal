@@ -1,5 +1,6 @@
 //! Constant evaluation in the checker's constant schedule.
 
+use graphcal_compiler::semantic_error::graph::GraphError;
 use graphcal_compiler::source_registry::SourceRegistry;
 
 use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
@@ -61,11 +62,13 @@ fn reject_constant_call(
     src: SourceId,
 ) -> Result<(), GraphcalError> {
     match graphcal_compiler::hir::expr::find_dag_call(expr) {
-        Some((target, span)) => Err(GraphcalError::DagCallInCompileTime {
-            name: target.to_string(),
+        Some((target, span)) => Err(GraphcalError::located(
             src,
-            span: span.into(),
-        }),
+            span,
+            GraphError::DagCallInCompileTime {
+                name: target.to_string(),
+            },
+        )),
         None => Ok(()),
     }
 }

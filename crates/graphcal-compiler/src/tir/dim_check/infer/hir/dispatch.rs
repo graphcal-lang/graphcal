@@ -5,6 +5,7 @@ use crate::graphcal_error::GraphcalError;
 use crate::hir::expr::{Expr, ExprKind};
 use crate::outcome::Outcome;
 use crate::semantic::checked_type::{IndexTypeRef, Symbolic};
+use crate::semantic_error::structure::StructError;
 
 use crate::semantic::checked_type::CheckedType;
 
@@ -73,11 +74,13 @@ impl Infer<'_> {
             ExprKind::ConstRef(target) => self.infer_hir_const_ref(target)?,
             ExprKind::LocalRef(local) => {
                 self.locals.get(local.value).cloned().ok_or_else(|| {
-                    GraphcalError::UnknownLocalRef {
-                        name: format!("#{}", local.value.index()),
-                        src: self.env.src,
-                        span: local.span.into(),
-                    }
+                    GraphcalError::located(
+                        self.env.src,
+                        local.span,
+                        StructError::UnknownLocalRef {
+                            name: format!("#{}", local.value.index()),
+                        },
+                    )
                 })?
             }
             ExprKind::FnCall { callee, args, .. } => {

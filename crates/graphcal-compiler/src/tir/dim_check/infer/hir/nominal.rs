@@ -5,6 +5,7 @@ use crate::hir::nominal::{NominalConstructor, NominalField, NominalTypeDef};
 use crate::hir::types::GenericArg;
 use crate::outcome::Outcome;
 use crate::resolved_name::ResolvedConstructorName;
+use crate::semantic_error::structure::StructError;
 
 use crate::graphcal_error::GraphcalError;
 use crate::semantic::checked_type::{StructTypeRef, Symbolic};
@@ -35,11 +36,13 @@ impl Infer<'_> {
     ) -> Result<CheckedType<Symbolic>, Outcome<GraphcalError>> {
         let inner_type = self.infer_hir_type(inner)?;
         let CheckedType::Struct(type_name, type_args) = &inner_type else {
-            return Err(GraphcalError::NotAStruct {
-                name: format_checked_type(&inner_type, self.env.registry),
-                src: self.env.src,
-                span: inner.span.into(),
-            }
+            return Err(GraphcalError::located(
+                self.env.src,
+                inner.span,
+                StructError::NotAStruct {
+                    name: format_checked_type(&inner_type, self.env.registry),
+                },
+            )
             .into());
         };
         self.check_type_override_dependency(
@@ -51,10 +54,14 @@ impl Infer<'_> {
         )?;
         let type_def =
             struct_type_def_for_inferred(type_name, Some(self.env.dag), self.env.registry)
-                .ok_or_else(|| GraphcalError::UnknownStructType {
-                    name: type_name.to_string(),
-                    src: self.env.src,
-                    span: inner.span.into(),
+                .ok_or_else(|| {
+                    GraphcalError::located(
+                        self.env.src,
+                        inner.span,
+                        StructError::UnknownStructType {
+                            name: type_name.to_string(),
+                        },
+                    )
                 })?;
         let member = record_member(type_def).ok_or_else(|| {
             let detail = if type_def.is_required() {
@@ -65,23 +72,27 @@ impl Infer<'_> {
                     type_name.name()
                 )
             };
-            GraphcalError::NotAStruct {
-                name: detail,
-                src: self.env.src,
-                span: inner.span.into(),
-            }
+            GraphcalError::located(
+                self.env.src,
+                inner.span,
+                StructError::NotAStruct { name: detail },
+            )
         })?;
         if !member
             .fields()
             .iter()
             .any(|field_def| field_def.name() == &field.value)
         {
-            return Err(GraphcalError::UnknownField {
-                type_name: type_name.name().clone(),
-                member: crate::graphcal_error::NominalMember::Field(field.value.clone()),
-                src: self.env.src,
-                span: field.span.into(),
-            }
+            return Err(GraphcalError::located(
+                self.env.src,
+                field.span,
+                StructError::UnknownField {
+                    type_name: type_name.name().clone(),
+                    member: crate::semantic_error::structure::NominalMember::Field(
+                        field.value.clone(),
+                    ),
+                },
+            )
             .into());
         }
         resolved_field_type(
@@ -150,12 +161,14 @@ impl Infer<'_> {
             .map(|name| (*name).clone())
             .collect();
         if !extra.is_empty() {
-            return Err(GraphcalError::ExtraFields {
-                type_name: owning_type_name,
-                extra,
-                src: self.env.src,
-                span: expr.span.into(),
-            }
+            return Err(GraphcalError::located(
+                self.env.src,
+                expr.span,
+                StructError::ExtraFields {
+                    type_name: owning_type_name,
+                    extra,
+                },
+            )
             .into());
         }
 
@@ -168,12 +181,14 @@ impl Infer<'_> {
             .map(|field| field.name().clone())
             .collect();
         if !missing.is_empty() {
-            return Err(GraphcalError::MissingFields {
-                type_name: owning_type_name,
-                missing,
-                src: self.env.src,
-                span: expr.span.into(),
-            }
+            return Err(GraphcalError::located(
+                self.env.src,
+                expr.span,
+                StructError::MissingFields {
+                    type_name: owning_type_name,
+                    missing,
+                },
+            )
             .into());
         }
 
@@ -204,14 +219,16 @@ impl Infer<'_> {
             if value_type != expected {
                 let (expected, found) =
                     format_distinct_types(&expected, &value_type, self.env.registry);
-                return Err(GraphcalError::FieldDimensionMismatch {
-                    type_name: owning_type_name,
-                    field_name: field_init.name.value.clone(),
-                    expected,
-                    found,
-                    src: self.env.src,
-                    span: field_init.name.span.into(),
-                }
+                return Err(GraphcalError::located(
+                    self.env.src,
+                    field_init.name.span,
+                    StructError::FieldDimensionMismatch {
+                        type_name: owning_type_name,
+                        field_name: field_init.name.value.clone(),
+                        expected,
+                        found,
+                    },
+                )
                 .into());
             }
         }

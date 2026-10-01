@@ -3,6 +3,12 @@ use crate::dimension::{BaseDimId, Dimension};
 use crate::outcome::Outcome;
 use crate::resolved_name::{ResolvedDeclName, ResolvedIndexName, ResolvedStructTypeName};
 use crate::semantic::checked_type::{CheckedGenericArg, IndexTypeRef, StructTypeRef};
+use crate::semantic_error::SemanticErrorKind;
+use crate::semantic_error::attribute::AttributeError;
+use crate::semantic_error::domain::DomainError;
+use crate::semantic_error::graph::GraphError;
+use crate::semantic_error::structure::StructError;
+use crate::semantic_error::visibility::VisibilityError;
 use crate::syntax::decl_name::DeclName;
 use crate::syntax::module_name::ScopedName;
 use crate::syntax::parser::Parser;
@@ -280,9 +286,15 @@ fn template_closure_reports_the_first_observed_type_definition_use() {
                   pub node read: Dimensionless = @r.x + @r.x;";
     let (tir, src) = module_aware_tir(source);
     let error = check_draft(tir, src).unwrap_err();
-    let GraphcalError::TemplateBodyDependsOnStaticDefault {
-        body_name, span, ..
-    } = error
+    let GraphcalError::Located(crate::diagnostic::Diagnostic {
+        kind:
+            SemanticErrorKind::Visibility(VisibilityError::TemplateBodyDependsOnStaticDefault {
+                body_name,
+                ..
+            }),
+        primary: span,
+        ..
+    }) = error
     else {
         panic!("expected V007, got {error:?}");
     };
@@ -633,7 +645,13 @@ assert order = for m: Mode { @lhs[m] > @rhs[m] };
 ";
     let err = check(source).unwrap_err();
     assert!(
-        matches!(err, GraphcalError::ExpectedFailDuplicateKey { .. }),
+        matches!(
+            err,
+            GraphcalError::Located(crate::diagnostic::Diagnostic {
+                kind: SemanticErrorKind::Attribute(AttributeError::ExpectedFailDuplicateKey),
+                ..
+            })
+        ),
         "got: {err:?}"
     );
 }
@@ -650,7 +668,15 @@ assert order = for m: Mode { @lhs[m] > @rhs[m] };
 ";
     let err = check(source).unwrap_err();
     assert!(
-        matches!(err, GraphcalError::ExpectedFailKeyIndexMismatch { .. }),
+        matches!(
+            err,
+            GraphcalError::Located(crate::diagnostic::Diagnostic {
+                kind: SemanticErrorKind::Attribute(
+                    AttributeError::ExpectedFailKeyIndexMismatch { .. }
+                ),
+                ..
+            })
+        ),
         "got: {err:?}"
     );
 }
@@ -667,7 +693,15 @@ assert order = for m: Mode, p: Phase { @lhs[m, p] > @rhs[m, p] };
 ";
     let err = check(source).unwrap_err();
     assert!(
-        matches!(err, GraphcalError::ExpectedFailKeyShapeMismatch { .. }),
+        matches!(
+            err,
+            GraphcalError::Located(crate::diagnostic::Diagnostic {
+                kind: SemanticErrorKind::Attribute(
+                    AttributeError::ExpectedFailKeyShapeMismatch { .. }
+                ),
+                ..
+            })
+        ),
         "got: {err:?}"
     );
 }
@@ -683,7 +717,13 @@ assert order = @lhs > @rhs;
 ";
     let err = check(source).unwrap_err();
     assert!(
-        matches!(err, GraphcalError::ExpectedFailNotIndexed { .. }),
+        matches!(
+            err,
+            GraphcalError::Located(crate::diagnostic::Diagnostic {
+                kind: SemanticErrorKind::Attribute(AttributeError::ExpectedFailNotIndexed),
+                ..
+            })
+        ),
         "got: {err:?}"
     );
 }
@@ -698,7 +738,13 @@ assert order = @flags;
 ";
     let err = check(source).unwrap_err();
     assert!(
-        matches!(err, GraphcalError::ExpectedFailAllOnIndexed { .. }),
+        matches!(
+            err,
+            GraphcalError::Located(crate::diagnostic::Diagnostic {
+                kind: SemanticErrorKind::Attribute(AttributeError::ExpectedFailAllOnIndexed),
+                ..
+            })
+        ),
         "got: {err:?}"
     );
 }
@@ -1629,7 +1675,13 @@ param x: Length = 1.0 m;
 node bad: Length = @x.foo;";
     let err = check(source).unwrap_err();
     assert!(
-        matches!(err, GraphcalError::NotAStruct { .. }),
+        matches!(
+            err,
+            GraphcalError::Located(crate::diagnostic::Diagnostic {
+                kind: SemanticErrorKind::Struct(StructError::NotAStruct { .. }),
+                ..
+            })
+        ),
         "got: {err:?}"
     );
 }
@@ -1648,7 +1700,13 @@ param box: Box = Make(value: 1.0);
 node value: Dimensionless = @box.value;";
     let err = check(non_record).unwrap_err();
     assert!(
-        matches!(err, GraphcalError::NotAStruct { .. }),
+        matches!(
+            err,
+            GraphcalError::Located(crate::diagnostic::Diagnostic {
+                kind: SemanticErrorKind::Struct(StructError::NotAStruct { .. }),
+                ..
+            })
+        ),
         "got: {err:?}"
     );
 }
@@ -1662,7 +1720,13 @@ type Orbit { Orbit(altitude: Length, speed: Velocity) }
 node o: Orbit = Orbit(altitude: 400.0 km, speed: 7.6 km / s, bonus: 1.0);";
     let err = check(source).unwrap_err();
     assert!(
-        matches!(err, GraphcalError::ExtraFields { .. }),
+        matches!(
+            err,
+            GraphcalError::Located(crate::diagnostic::Diagnostic {
+                kind: SemanticErrorKind::Struct(StructError::ExtraFields { .. }),
+                ..
+            })
+        ),
         "got: {err:?}"
     );
 }
@@ -1687,7 +1751,13 @@ param x: Maybe = Some(value: 1.0 m);
 node y: Length = match @x { Some(nope: _) => 1.0 m, None => 0.0 m };";
     let err = check(source).unwrap_err();
     assert!(
-        matches!(err, GraphcalError::UnknownField { .. }),
+        matches!(
+            err,
+            GraphcalError::Located(crate::diagnostic::Diagnostic {
+                kind: SemanticErrorKind::Struct(StructError::UnknownField { .. }),
+                ..
+            })
+        ),
         "got: {err:?}"
     );
 }
@@ -2378,7 +2448,13 @@ index Step = range(0.0 s, 2.0 s, step: 1.0 s);
 node y: Dimensionless[Step] = unfold(Step, sum(@y), |prev_y, p, t| prev_y + 1.0);";
     let err = check(source).unwrap_err();
     assert!(
-        matches!(err, GraphcalError::CyclicDependency { .. }),
+        matches!(
+            err,
+            GraphcalError::Located(crate::diagnostic::Diagnostic {
+                kind: SemanticErrorKind::Graph(GraphError::CyclicDependency { .. }),
+                ..
+            })
+        ),
         "expected CyclicDependency, got: {err:?}"
     );
 }
@@ -2396,7 +2472,13 @@ fn unfold_body_self_references_are_cycles_for_every_coordinate() {
         );
         let err = check(&source).unwrap_err();
         assert!(
-            matches!(err, GraphcalError::CyclicDependency { .. }),
+            matches!(
+                err,
+                GraphcalError::Located(crate::diagnostic::Diagnostic {
+                    kind: SemanticErrorKind::Graph(GraphError::CyclicDependency { .. }),
+                    ..
+                })
+            ),
             "expected CyclicDependency for `{self_read}`, got: {err:?}"
         );
     }
@@ -2491,7 +2573,13 @@ fn domain_bound_bare_number_on_dimensioned_rejected() {
     let source = "param m: Mass(min: 1.0, max: 100.0 kg) = 50.0 kg;";
     let err = check(source).unwrap_err();
     assert!(
-        matches!(err, GraphcalError::DomainDimensionMismatch { .. }),
+        matches!(
+            err,
+            GraphcalError::Located(crate::diagnostic::Diagnostic {
+                kind: SemanticErrorKind::Domain(DomainError::DomainDimensionMismatch { .. }),
+                ..
+            })
+        ),
         "got: {err:?}"
     );
 }
@@ -2502,7 +2590,13 @@ fn domain_bound_bare_int_on_dimensioned_rejected() {
     let source = "param m: Mass(min: 1, max: 100.0 kg) = 50.0 kg;";
     let err = check(source).unwrap_err();
     assert!(
-        matches!(err, GraphcalError::DomainDimensionMismatch { .. }),
+        matches!(
+            err,
+            GraphcalError::Located(crate::diagnostic::Diagnostic {
+                kind: SemanticErrorKind::Domain(DomainError::DomainDimensionMismatch { .. }),
+                ..
+            })
+        ),
         "got: {err:?}"
     );
 }
@@ -2513,7 +2607,13 @@ fn domain_bound_division_creates_wrong_dimension() {
     let source = "param d: Length(min: 1.0 m / 1.0 s) = 5.0 m;";
     let err = check(source).unwrap_err();
     assert!(
-        matches!(err, GraphcalError::DomainDimensionMismatch { .. }),
+        matches!(
+            err,
+            GraphcalError::Located(crate::diagnostic::Diagnostic {
+                kind: SemanticErrorKind::Domain(DomainError::DomainDimensionMismatch { .. }),
+                ..
+            })
+        ),
         "got: {err:?}"
     );
 }
@@ -2524,7 +2624,13 @@ fn domain_bound_division_inverse_dimension() {
     let source = "param x: Mass(min: 1.0 / 1.0 kg) = 5.0 kg;";
     let err = check(source).unwrap_err();
     assert!(
-        matches!(err, GraphcalError::DomainDimensionMismatch { .. }),
+        matches!(
+            err,
+            GraphcalError::Located(crate::diagnostic::Diagnostic {
+                kind: SemanticErrorKind::Domain(DomainError::DomainDimensionMismatch { .. }),
+                ..
+            })
+        ),
         "got: {err:?}"
     );
 }
@@ -2565,7 +2671,13 @@ Maneuver#Correction: 0.5 m / s,
 };";
     let err = check(source).unwrap_err();
     assert!(
-        matches!(err, GraphcalError::DomainDimensionMismatch { .. }),
+        matches!(
+            err,
+            GraphcalError::Located(crate::diagnostic::Diagnostic {
+                kind: SemanticErrorKind::Domain(DomainError::DomainDimensionMismatch { .. }),
+                ..
+            })
+        ),
         "got: {err:?}"
     );
 }
@@ -2585,7 +2697,13 @@ fn int_domain_bound_dimensionless_quantity_rejected() {
     let source = "param n: Int(min: 0.0, max: 100.0) = 5;";
     let err = check(source).unwrap_err();
     assert!(
-        matches!(err, GraphcalError::IntDomainBoundTypeMismatch { .. }),
+        matches!(
+            err,
+            GraphcalError::Located(crate::diagnostic::Diagnostic {
+                kind: SemanticErrorKind::Domain(DomainError::IntDomainBoundTypeMismatch { .. }),
+                ..
+            })
+        ),
         "got: {err:?}"
     );
 }
@@ -2595,7 +2713,13 @@ fn int_domain_bound_with_unit_rejected() {
     let source = "param n: Int(min: 1.0 kg, max: 10.0 kg) = 5;";
     let err = check(source).unwrap_err();
     assert!(
-        matches!(err, GraphcalError::IntDomainBoundTypeMismatch { .. }),
+        matches!(
+            err,
+            GraphcalError::Located(crate::diagnostic::Diagnostic {
+                kind: SemanticErrorKind::Domain(DomainError::IntDomainBoundTypeMismatch { .. }),
+                ..
+            })
+        ),
         "got: {err:?}"
     );
 }
@@ -2606,7 +2730,13 @@ fn int_domain_bound_arithmetic_with_unit_rejected() {
     let source = "param n: Int(min: 1.0 m / 1.0 s) = 5;";
     let err = check(source).unwrap_err();
     assert!(
-        matches!(err, GraphcalError::IntDomainBoundTypeMismatch { .. }),
+        matches!(
+            err,
+            GraphcalError::Located(crate::diagnostic::Diagnostic {
+                kind: SemanticErrorKind::Domain(DomainError::IntDomainBoundTypeMismatch { .. }),
+                ..
+            })
+        ),
         "got: {err:?}"
     );
 }
@@ -2639,7 +2769,10 @@ param event: Datetime<TT>(min: datetime("2024-01-01T00:00:00Z")) =
     let error = check(source).unwrap_err();
     assert!(matches!(
         error,
-        GraphcalError::DatetimeDomainBoundTypeMismatch { .. }
+        GraphcalError::Located(crate::diagnostic::Diagnostic {
+            kind: SemanticErrorKind::Domain(DomainError::DatetimeDomainBoundTypeMismatch { .. }),
+            ..
+        })
     ));
 }
 
@@ -2658,7 +2791,10 @@ fn datetime_domain_bound_rejects_a_non_datetime_value() {
     let error = check(source).unwrap_err();
     assert!(matches!(
         error,
-        GraphcalError::DatetimeDomainBoundTypeMismatch { .. }
+        GraphcalError::Located(crate::diagnostic::Diagnostic {
+            kind: SemanticErrorKind::Domain(DomainError::DatetimeDomainBoundTypeMismatch { .. }),
+            ..
+        })
     ));
 }
 
@@ -2672,7 +2808,13 @@ fn const_domain_bound_dimension_checked() {
     let source = "const node MAX_M: Mass(min: 1.0 m) = 50.0 kg;";
     let err = check(source).unwrap_err();
     assert!(
-        matches!(err, GraphcalError::DomainDimensionMismatch { .. }),
+        matches!(
+            err,
+            GraphcalError::Located(crate::diagnostic::Diagnostic {
+                kind: SemanticErrorKind::Domain(DomainError::DomainDimensionMismatch { .. }),
+                ..
+            })
+        ),
         "got: {err:?}"
     );
 }
@@ -2682,7 +2824,13 @@ fn const_domain_bound_int_with_unit_rejected() {
     let source = "const node MAX_N: Int(min: 1.0 kg) = 5;";
     let err = check(source).unwrap_err();
     assert!(
-        matches!(err, GraphcalError::IntDomainBoundTypeMismatch { .. }),
+        matches!(
+            err,
+            GraphcalError::Located(crate::diagnostic::Diagnostic {
+                kind: SemanticErrorKind::Domain(DomainError::IntDomainBoundTypeMismatch { .. }),
+                ..
+            })
+        ),
         "got: {err:?}"
     );
 }
@@ -2707,7 +2855,13 @@ node bad: Box<Time> = Box<Time>(x: 1.0 s);
 ";
     let error = check(source).unwrap_err();
     assert!(
-        matches!(error, GraphcalError::DomainDimensionMismatch { .. }),
+        matches!(
+            error,
+            GraphcalError::Located(crate::diagnostic::Diagnostic {
+                kind: SemanticErrorKind::Domain(DomainError::DomainDimensionMismatch { .. }),
+                ..
+            })
+        ),
         "got: {error:?}"
     );
 }
@@ -2720,7 +2874,13 @@ node bad: Time = Box<Time>(x: 1.0 s).x;
 ";
     let error = check(source).unwrap_err();
     assert!(
-        matches!(error, GraphcalError::DomainDimensionMismatch { .. }),
+        matches!(
+            error,
+            GraphcalError::Located(crate::diagnostic::Diagnostic {
+                kind: SemanticErrorKind::Domain(DomainError::DomainDimensionMismatch { .. }),
+                ..
+            })
+        ),
         "got: {error:?}"
     );
 }
@@ -2742,7 +2902,13 @@ node bad: Squared<Time> = Squared<Time>(x: 1.0 s^2);
 ";
     let error = check(source).unwrap_err();
     assert!(
-        matches!(error, GraphcalError::DomainDimensionMismatch { .. }),
+        matches!(
+            error,
+            GraphcalError::Located(crate::diagnostic::Diagnostic {
+                kind: SemanticErrorKind::Domain(DomainError::DomainDimensionMismatch { .. }),
+                ..
+            })
+        ),
         "got: {error:?}"
     );
 }
@@ -2756,7 +2922,13 @@ node bad: Outer<Time> = Outer<Time>(inner: Inner<Time>(x: 1.0 s));
 ";
     let error = check(source).unwrap_err();
     assert!(
-        matches!(error, GraphcalError::DomainDimensionMismatch { .. }),
+        matches!(
+            error,
+            GraphcalError::Located(crate::diagnostic::Diagnostic {
+                kind: SemanticErrorKind::Domain(DomainError::DomainDimensionMismatch { .. }),
+                ..
+            })
+        ),
         "got: {error:?}"
     );
 }
@@ -2769,7 +2941,13 @@ node bad: Box = Box(x: 1.0 s);
 ";
     let error = check(source).unwrap_err();
     assert!(
-        matches!(error, GraphcalError::DomainDimensionMismatch { .. }),
+        matches!(
+            error,
+            GraphcalError::Located(crate::diagnostic::Diagnostic {
+                kind: SemanticErrorKind::Domain(DomainError::DomainDimensionMismatch { .. }),
+                ..
+            })
+        ),
         "got: {error:?}"
     );
 }
@@ -2789,7 +2967,12 @@ param port: Box<Time>;
     assert!(
         matches!(
             error,
-            ConcreteModelTypeError::Compiler(GraphcalError::DomainDimensionMismatch { .. })
+            ConcreteModelTypeError::Compiler(GraphcalError::Located(
+                crate::diagnostic::Diagnostic {
+                    kind: SemanticErrorKind::Domain(DomainError::DomainDimensionMismatch { .. }),
+                    ..
+                }
+            ))
         ),
         "got: {error:?}"
     );
@@ -3001,7 +3184,10 @@ node bad: Bad = Bad(value: Wrapper<Length>(value: -1.0 m));
     let error = check(source).unwrap_err();
     assert!(matches!(
         error,
-        GraphcalError::GenericTypeArgDomainConstraint { .. }
+        GraphcalError::Located(crate::diagnostic::Diagnostic {
+            kind: SemanticErrorKind::Domain(DomainError::GenericTypeArgDomainConstraint),
+            ..
+        })
     ));
 }
 
@@ -3016,7 +3202,13 @@ dag nested {
 ";
     let error = check(source).unwrap_err();
     assert!(
-        matches!(error, GraphcalError::GenericTypeArgDomainConstraint { .. }),
+        matches!(
+            error,
+            GraphcalError::Located(crate::diagnostic::Diagnostic {
+                kind: SemanticErrorKind::Domain(DomainError::GenericTypeArgDomainConstraint),
+                ..
+            })
+        ),
         "got: {error:?}"
     );
 }
@@ -3107,7 +3299,13 @@ node y: Length = @id_len(bogus: @src)::result;
 ";
     let err = check(source).unwrap_err();
     assert!(
-        matches!(err, GraphcalError::UnknownLocalRef { .. }),
+        matches!(
+            err,
+            GraphcalError::Located(crate::diagnostic::Diagnostic {
+                kind: SemanticErrorKind::Struct(StructError::UnknownLocalRef { .. }),
+                ..
+            })
+        ),
         "got: {err:?}"
     );
 }
@@ -3126,7 +3324,7 @@ node y: Length = @scale(v: @src)::result;
 ";
     let err = check(source).unwrap_err();
     assert!(
-        matches!(&err, GraphcalError::MissingDagBindings { missing, .. } if missing == &vec!["factor".to_string()]),
+        matches!(&err, GraphcalError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Graph(GraphError::MissingDagBindings { missing, .. }), .. }) if missing == &vec!["factor".to_string()]),
         "got: {err:?}"
     );
 }
@@ -3144,7 +3342,13 @@ node y: Length = @id_len(v: @src)::nope;
 ";
     let err = check(source).unwrap_err();
     assert!(
-        matches!(err, GraphcalError::UnknownLocalRef { .. }),
+        matches!(
+            err,
+            GraphcalError::Located(crate::diagnostic::Diagnostic {
+                kind: SemanticErrorKind::Struct(StructError::UnknownLocalRef { .. }),
+                ..
+            })
+        ),
         "got: {err:?}"
     );
 }
@@ -3162,7 +3366,13 @@ node y: Length = @id_len(v: @src)::result;
 ";
     let err = check(source).unwrap_err();
     assert!(
-        matches!(err, GraphcalError::DagArgTypeMismatch { .. }),
+        matches!(
+            err,
+            GraphcalError::Located(crate::diagnostic::Diagnostic {
+                kind: SemanticErrorKind::Graph(GraphError::DagArgTypeMismatch { .. }),
+                ..
+            })
+        ),
         "got: {err:?}"
     );
 }
@@ -3258,7 +3468,13 @@ node y: Length = @private_result(v: @src)::hidden;
 ";
     let err = check(source).unwrap_err();
     assert!(
-        matches!(err, GraphcalError::ImportPrivateItem { .. }),
+        matches!(
+            err,
+            GraphcalError::Located(crate::diagnostic::Diagnostic {
+                kind: SemanticErrorKind::Visibility(VisibilityError::ImportPrivateItem { .. }),
+                ..
+            })
+        ),
         "expected ImportPrivateItem for non-pub projection, got: {err:?}"
     );
 }
@@ -3289,7 +3505,13 @@ node y: Length = @loop_self(v: @src)::result;
 ";
     let err = check(source).unwrap_err();
     assert!(
-        matches!(err, GraphcalError::CyclicDependency { .. }),
+        matches!(
+            err,
+            GraphcalError::Located(crate::diagnostic::Diagnostic {
+                kind: SemanticErrorKind::Graph(GraphError::CyclicDependency { .. }),
+                ..
+            })
+        ),
         "expected CyclicDependency, got: {err:?}"
     );
 }
@@ -3312,7 +3534,12 @@ node y: Length = @a(v: @src)::out;
 ";
     let err = check(source).unwrap_err();
     // The search visits `a` first and re-enters it from the call inside `b`.
-    let GraphcalError::CyclicDependency { name, span, .. } = &err else {
+    let GraphcalError::Located(crate::diagnostic::Diagnostic {
+        kind: SemanticErrorKind::Graph(GraphError::CyclicDependency { name, .. }),
+        primary: span,
+        ..
+    }) = &err
+    else {
         panic!("expected CyclicDependency, got: {err:?}");
     };
     assert!(name.ends_with('a'), "{name}");
@@ -3699,7 +3926,7 @@ fn check_hidden_on_node_is_rejected() {
 node x: Dimensionless = 1.0;";
     let err = check(source).unwrap_err();
     assert!(
-        matches!(err, GraphcalError::InvalidHiddenTarget { ref kind, .. }
+        matches!(&err, GraphcalError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Attribute(AttributeError::InvalidHiddenTarget { kind, .. }), .. })
         if kind == &crate::declaration_kind::AttributeTarget::declaration(
             crate::declaration_kind::DeclarationKind::Node,
         )),
@@ -3717,7 +3944,7 @@ plot p = { mark: line, encode: { x: for s: Step { @vals[s] } } };
 figure f = { plots: [p] };";
     let err = check(source).unwrap_err();
     assert!(
-        matches!(err, GraphcalError::InvalidHiddenTarget { ref kind, .. }
+        matches!(&err, GraphcalError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Attribute(AttributeError::InvalidHiddenTarget { kind, .. }), .. })
         if kind == &crate::declaration_kind::AttributeTarget::declaration(
             crate::declaration_kind::DeclarationKind::Figure,
         )),
@@ -3784,7 +4011,7 @@ fn resolved_constructor_carries_owning_definition_and_field_constraints() {
 
 #[test]
 fn check_match_foreign_constructor_names_the_constructor_member() {
-    use crate::graphcal_error::NominalMember;
+    use crate::semantic_error::structure::NominalMember;
     use crate::syntax::type_name::ConstructorName;
     let source = "\
 pub type Maybe { Some(value: Length), None }
@@ -3792,7 +4019,11 @@ pub type Other { Elsewhere }
 param x: Maybe = Some(value: 1.0 m);
 node y: Length = match @x { Elsewhere => 1.0 m, Some(value: v) => v, None => 0.0 m };";
     let err = check(source).unwrap_err();
-    let GraphcalError::UnknownField { member, .. } = &err else {
+    let GraphcalError::Located(crate::diagnostic::Diagnostic {
+        kind: SemanticErrorKind::Struct(StructError::UnknownField { member, .. }),
+        ..
+    }) = &err
+    else {
         panic!("got: {err:?}");
     };
     assert_eq!(
@@ -3890,7 +4121,7 @@ fn declaration_cycles_are_reported_deterministically_at_the_closing_declaration(
             let (tir, src) = module_aware_tir(source);
             let error = check_draft(tir, src).unwrap_err();
             assert!(
-                matches!(&error, GraphcalError::CyclicDependency { name, .. } if name == expected),
+                matches!(&error, GraphcalError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Graph(GraphError::CyclicDependency { name, .. }), .. }) if name == expected),
                 "{source}: {error:?}"
             );
         }

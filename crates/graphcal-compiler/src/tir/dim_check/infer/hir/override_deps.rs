@@ -2,6 +2,7 @@
 
 use crate::hir::types::{GenericArg, IndexRef, ValueType, ValueTypeKind};
 use crate::resolved_name::{ResolvedConstructorName, ResolvedStructTypeName};
+use crate::semantic_error::visibility::VisibilityError;
 
 use crate::graphcal_error::GraphcalError;
 use crate::semantic::checked_type::{IndexTypeRef, Symbolic};
@@ -86,14 +87,16 @@ impl Infer<'_> {
                     ),
                     TypeNominalUse::TypeArgument => format!("type `{overridden}`"),
                 };
-                return Err(GraphcalError::IncludeMustReconcileOverride {
-                    overridden: overridden.to_string(),
-                    overridden_kind: "type".to_string(),
-                    orphan_decl: reconciliation.orphan_decl().to_string(),
-                    detail,
-                    src: reconciliation.src,
-                    span: reconciliation.include_span.into(),
-                });
+                return Err(GraphcalError::located(
+                    reconciliation.src,
+                    reconciliation.include_span,
+                    VisibilityError::IncludeMustReconcileOverride {
+                        overridden: overridden.to_string(),
+                        overridden_kind: "type".to_string(),
+                        orphan_decl: reconciliation.orphan_decl().to_string(),
+                        detail,
+                    },
+                ));
             }
         }
         Ok(())
@@ -150,14 +153,16 @@ impl Infer<'_> {
                     }
                     IndexNominalUse::TypeArgument => format!("index `{overridden}`"),
                 };
-                return Err(GraphcalError::IncludeMustReconcileOverride {
-                    overridden: overridden.to_string(),
-                    overridden_kind: "index".to_string(),
-                    orphan_decl: reconciliation.orphan_decl().to_string(),
-                    detail,
-                    src: reconciliation.src,
-                    span: reconciliation.include_span.into(),
-                });
+                return Err(GraphcalError::located(
+                    reconciliation.src,
+                    reconciliation.include_span,
+                    VisibilityError::IncludeMustReconcileOverride {
+                        overridden: overridden.to_string(),
+                        overridden_kind: "index".to_string(),
+                        orphan_decl: reconciliation.orphan_decl().to_string(),
+                        detail,
+                    },
+                ));
             }
         }
         Ok(())

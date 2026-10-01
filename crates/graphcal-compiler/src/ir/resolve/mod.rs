@@ -10,6 +10,8 @@ mod tests;
 use std::collections::{HashMap, HashSet};
 
 use super::required_bindability::{self, InterfaceDecl, Violation as RequiredBindabilityViolation};
+use crate::semantic_error::attribute::AttributeError;
+use crate::semantic_error::visibility::VisibilityError;
 use crate::source_id::SourceId;
 use crate::static_interface::{Requirement, StaticInputKind as NominalKind};
 
@@ -18,8 +20,8 @@ use crate::dag_id::DagId;
 use crate::declaration_category::{DeclCategory, ValueDeclCategory};
 use crate::declaration_kind::{AttributeTarget, DeclarationKind};
 use crate::desugar::desugared_ast::{
-    AssertBody, DeclKind, Declaration, DimExpr, ExprKind, File, IndexExpr, TypeDeclBody, TypeExpr,
-    TypeExprKind,
+    AssertBody, DeclKind, Declaration, DimExpr, ExprKind, File, IndexDeclKind, IndexExpr,
+    TypeDeclBody, TypeExpr, TypeExprKind,
 };
 use crate::graphcal_error::GraphcalError;
 use crate::ir::entry::{
@@ -309,12 +311,14 @@ fn validate_required_bindability(file: &File, src: SourceId) -> Result<(), Graph
         .try_for_each(|(interface, introduced)| {
             required_bindability::validate(interface).map_err(|violation| match violation {
                 RequiredBindabilityViolation::RequiredMustBeBindable { kind } => {
-                    GraphcalError::RequiredItemMustBeBindable {
-                        kind: kind.to_string(),
-                        name: introduced.atom().to_string(),
+                    GraphcalError::located(
                         src,
-                        span: introduced.span().into(),
-                    }
+                        introduced.span(),
+                        VisibilityError::RequiredItemMustBeBindable {
+                            kind: kind.to_string(),
+                            name: introduced.atom().to_string(),
+                        },
+                    )
                 }
             })
         })
@@ -575,11 +579,13 @@ fn validate_declaration_attributes(
                 // of unique, plain assertion names.
                 for argument in validated.assumes_arguments() {
                     if !assert_names.contains(&argument.value) {
-                        return Err(GraphcalError::UnknownAssertInAssumes {
-                            name: argument.value.to_string(),
+                        return Err(GraphcalError::located(
                             src,
-                            span: argument.span.into(),
-                        });
+                            argument.span,
+                            AttributeError::UnknownAssertInAssumes {
+                                name: argument.value.to_string(),
+                            },
+                        ));
                     }
                     if let Some(ref dname) = decl_name {
                         assumes_map
@@ -606,10 +612,11 @@ fn validate_declaration_attributes(
                         AssertBody::Expr(expr) if matches!(expr.kind, ExprKind::ForComp { .. })
                     );
                     if is_indexed {
-                        return Err(GraphcalError::ExpectedFailAllOnIndexed {
+                        return Err(GraphcalError::located(
                             src,
-                            span: attr.span.into(),
-                        });
+                            attr.span,
+                            AttributeError::ExpectedFailAllOnIndexed,
+                        ));
                     }
                 }
                 if let Some(ref dname) = decl_name {
@@ -633,10 +640,11 @@ fn validate_declaration_attributes(
                 visibility = PlotVisibility::CompositionOnly;
             }
             AttributeName::Lazy => {
-                return Err(GraphcalError::LazyNotSupported {
+                return Err(GraphcalError::located(
                     src,
-                    span: attr.span.into(),
-                });
+                    attr.span,
+                    AttributeError::LazyNotSupported,
+                ));
             }
         }
     }
@@ -658,8 +666,6 @@ fn validate_private_in_public(
     src: SourceId,
     external_surface: &ExternalDeclSurface,
 ) -> Result<(), GraphcalError> {
-    use crate::desugar::desugared_ast::IndexDeclKind;
-
     // Preserve the semantic category beside each local type-system name so
     // the visibility diagnostic never has to rescan declarations.
     let local_type_names: HashMap<&NameAtom, DeclarationKind> = file
@@ -687,23 +693,24 @@ fn validate_private_in_public(
                 refs: &[(crate::syntax::names::NamePath, Span)]|
      -> Result<(), GraphcalError> {
         for (ref_path, ref_span) in refs {
-            // Only a bare (single-segment) path can name a local type-system
-            // declaration; qualified refs belong to another module.
+            // Only a bare path can name a local declaration; qualified refs are foreign.
             let Some(ref_name) = ref_path.as_bare() else {
                 continue;
             };
             if let Some(ref_kind) = local_type_names.get(ref_name)
                 && !external_surface.is_static_explicit_export(ref_name)
             {
-                return Err(GraphcalError::PrivateInPublic {
-                    pub_kind,
-                    pub_name,
-                    ref_kind: *ref_kind,
-                    ref_name: ref_name.clone(),
+                return Err(GraphcalError::located(
                     src,
-                    ref_span: (*ref_span).into(),
-                    pub_span: pub_span.into(),
-                });
+                    *ref_span,
+                    VisibilityError::PrivateInPublic {
+                        pub_kind,
+                        pub_name,
+                        ref_kind: *ref_kind,
+                        ref_name: ref_name.clone(),
+                        pub_span,
+                    },
+                ));
             }
         }
         Ok(())

@@ -2,6 +2,8 @@ use super::*;
 use crate::builtin::{BuiltinConst, BuiltinFn};
 use crate::resolved_name::ResolvedDeclName;
 use crate::semantic::time_scale::TimeScale;
+use crate::semantic_error::SemanticErrorKind;
+use crate::semantic_error::visibility::VisibilityError;
 use crate::syntax::parser::Parser;
 
 fn make_src(source: &str) -> crate::source_id::SourceId {
@@ -670,7 +672,7 @@ fn resolve_required_index_must_be_bindable() {
     ";
     let err = parse_and_resolve(source).unwrap_err();
     assert!(
-        matches!(err, GraphcalError::RequiredItemMustBeBindable { kind, .. } if kind == "index")
+        matches!(err, GraphcalError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Visibility(VisibilityError::RequiredItemMustBeBindable { kind, .. }), .. }) if kind == "index")
     );
 }
 
@@ -683,7 +685,7 @@ fn resolve_required_pub_index_still_needs_bind() {
     ";
     let err = parse_and_resolve(source).unwrap_err();
     assert!(
-        matches!(err, GraphcalError::RequiredItemMustBeBindable { kind, .. } if kind == "index")
+        matches!(err, GraphcalError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Visibility(VisibilityError::RequiredItemMustBeBindable { kind, .. }), .. }) if kind == "index")
     );
 }
 
@@ -702,7 +704,7 @@ fn resolve_required_type_must_be_bindable() {
     ";
     let err = parse_and_resolve(source).unwrap_err();
     assert!(
-        matches!(err, GraphcalError::RequiredItemMustBeBindable { kind, .. } if kind == "type")
+        matches!(err, GraphcalError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Visibility(VisibilityError::RequiredItemMustBeBindable { kind, .. }), .. }) if kind == "type")
     );
 }
 
@@ -720,7 +722,9 @@ fn resolve_required_dim_must_be_bindable() {
         dim D;
     ";
     let err = parse_and_resolve(source).unwrap_err();
-    assert!(matches!(err, GraphcalError::RequiredItemMustBeBindable { kind, .. } if kind == "dim"));
+    assert!(
+        matches!(err, GraphcalError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Visibility(VisibilityError::RequiredItemMustBeBindable { kind, .. }), .. }) if kind == "dim")
+    );
 }
 
 #[test]
@@ -741,7 +745,7 @@ fn resolve_private_in_public_dim() {
     ";
     let err = parse_and_resolve(source).unwrap_err();
     assert!(
-        matches!(err, GraphcalError::PrivateInPublic { ref_name, .. } if ref_name.as_str() == "Speed")
+        matches!(&err, GraphcalError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Visibility(VisibilityError::PrivateInPublic { ref_name, .. }), .. }) if ref_name.as_str() == "Speed")
     );
 }
 
@@ -775,8 +779,16 @@ fn resolve_private_in_public_index_in_type() {
     let err = parse_and_resolve(source).unwrap_err();
     // May get PubIndexVariantLiteral before PrivateInPublic.
     assert!(
-        matches!(err, GraphcalError::PrivateInPublic { ref ref_name, .. } if ref_name.as_str() == "Step")
-            || matches!(err, GraphcalError::PubIndexVariantLiteral { .. }),
+        matches!(&err, GraphcalError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Visibility(VisibilityError::PrivateInPublic { ref_name, .. }), .. }) if ref_name.as_str() == "Step")
+            || matches!(
+                err,
+                GraphcalError::Located(crate::diagnostic::Diagnostic {
+                    kind: SemanticErrorKind::Visibility(
+                        VisibilityError::PubIndexVariantLiteral { .. }
+                    ),
+                    ..
+                })
+            ),
         "expected PrivateInPublic or PubIndexVariantLiteral error, got: {err:?}"
     );
 }
@@ -846,7 +858,13 @@ fn resolve_node_with_pub_bind_variant_literal_fires_v004() {
         node design_cost: Dimensionless = @cost[Phase#Design];
     ";
     let err = compile_to_tir(source).unwrap_err();
-    assert!(matches!(err, GraphcalError::PubIndexVariantLiteral { .. }));
+    assert!(matches!(
+        err,
+        GraphcalError::Located(crate::diagnostic::Diagnostic {
+            kind: SemanticErrorKind::Visibility(VisibilityError::PubIndexVariantLiteral { .. }),
+            ..
+        })
+    ));
 }
 
 #[test]
@@ -859,7 +877,13 @@ fn resolve_const_with_pub_bind_variant_literal_fires_v004() {
         };
     ";
     let err = compile_to_tir(source).unwrap_err();
-    assert!(matches!(err, GraphcalError::PubIndexVariantLiteral { .. }));
+    assert!(matches!(
+        err,
+        GraphcalError::Located(crate::diagnostic::Diagnostic {
+            kind: SemanticErrorKind::Visibility(VisibilityError::PubIndexVariantLiteral { .. }),
+            ..
+        })
+    ));
 }
 
 #[test]
@@ -891,7 +915,13 @@ fn resolve_public_assert_with_pub_bind_variant_literal_fires_v004() {
         pub assert design_cheap = @cost[Phase#Design] < 10.0;
     ";
     let err = compile_to_tir(source).unwrap_err();
-    assert!(matches!(err, GraphcalError::PubIndexVariantLiteral { .. }));
+    assert!(matches!(
+        err,
+        GraphcalError::Located(crate::diagnostic::Diagnostic {
+            kind: SemanticErrorKind::Visibility(VisibilityError::PubIndexVariantLiteral { .. }),
+            ..
+        })
+    ));
 }
 
 #[test]
@@ -918,7 +948,7 @@ fn resolve_param_with_private_dim_fires_v003() {
     ";
     let err = parse_and_resolve(source).unwrap_err();
     assert!(
-        matches!(err, GraphcalError::PrivateInPublic { ref_name, .. } if ref_name.as_str() == "Speed")
+        matches!(&err, GraphcalError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Visibility(VisibilityError::PrivateInPublic { ref_name, .. }), .. }) if ref_name.as_str() == "Speed")
     );
 }
 
@@ -940,7 +970,7 @@ fn resolve_pub_dim_with_private_dim_fires_v003() {
     ";
     let err = parse_and_resolve(source).unwrap_err();
     assert!(
-        matches!(err, GraphcalError::PrivateInPublic { pub_kind, ref_name, .. }
+        matches!(err, GraphcalError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Visibility(VisibilityError::PrivateInPublic { pub_kind, ref_name, .. }), .. })
             if pub_kind == DeclarationKind::Dimension && ref_name.as_str() == "Inner")
     );
 }
@@ -953,7 +983,7 @@ fn resolve_pub_type_with_private_field_type_fires_v003() {
     ";
     let err = parse_and_resolve(source).unwrap_err();
     assert!(
-        matches!(err, GraphcalError::PrivateInPublic { pub_kind, ref_name, .. }
+        matches!(err, GraphcalError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Visibility(VisibilityError::PrivateInPublic { pub_kind, ref_name, .. }), .. })
             if pub_kind == DeclarationKind::Type && ref_name.as_str() == "Inner")
     );
 }
@@ -973,7 +1003,7 @@ fn resolve_pub_union_type_with_private_payload_type_fires_v003() {
     ";
     let err = parse_and_resolve(source).unwrap_err();
     assert!(
-        matches!(err, GraphcalError::PrivateInPublic { pub_kind, ref_name, .. }
+        matches!(err, GraphcalError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Visibility(VisibilityError::PrivateInPublic { pub_kind, ref_name, .. }), .. })
             if pub_kind == DeclarationKind::Type && ref_name.as_str() == "Inner")
     );
 }
@@ -986,7 +1016,7 @@ fn resolve_pub_type_with_private_type_default_fires_v003() {
     ";
     let err = compile_to_tir(source).unwrap_err();
     assert!(
-        matches!(err, GraphcalError::PrivateInPublic { pub_kind, ref_kind, ref_name, .. }
+        matches!(err, GraphcalError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Visibility(VisibilityError::PrivateInPublic { pub_kind, ref_kind, ref_name, .. }), .. })
             if pub_kind == DeclarationKind::Type
                 && ref_kind == DeclarationKind::Type
                 && ref_name.as_str() == "Secret")
@@ -1001,7 +1031,7 @@ fn resolve_pub_type_with_private_dimension_default_fires_v003() {
     ";
     let err = compile_to_tir(source).unwrap_err();
     assert!(
-        matches!(err, GraphcalError::PrivateInPublic { ref_kind, ref_name, .. }
+        matches!(err, GraphcalError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Visibility(VisibilityError::PrivateInPublic { ref_kind, ref_name, .. }), .. })
             if ref_kind == DeclarationKind::Dimension && ref_name.as_str() == "SecretDim")
     );
 }
@@ -1014,7 +1044,7 @@ fn resolve_pub_type_with_private_index_default_fires_v003() {
     ";
     let err = compile_to_tir(source).unwrap_err();
     assert!(
-        matches!(err, GraphcalError::PrivateInPublic { ref_kind, ref_name, .. }
+        matches!(err, GraphcalError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Visibility(VisibilityError::PrivateInPublic { ref_kind, ref_name, .. }), .. })
             if ref_kind == DeclarationKind::Index && ref_name.as_str() == "SecretIndex")
     );
 }
@@ -1028,7 +1058,7 @@ fn resolve_pub_type_checks_nested_generic_default_dependencies() {
     ";
     let err = compile_to_tir(source).unwrap_err();
     assert!(
-        matches!(err, GraphcalError::PrivateInPublic { ref_name, .. }
+        matches!(&err, GraphcalError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Visibility(VisibilityError::PrivateInPublic { ref_name, .. }), .. })
             if ref_name.as_str() == "Secret")
     );
 }
@@ -1071,7 +1101,7 @@ fn resolve_pub_bind_index_with_private_dim_fires_v003() {
     ";
     let err = parse_and_resolve(source).unwrap_err();
     assert!(
-        matches!(err, GraphcalError::PrivateInPublic { pub_kind, ref_name, .. }
+        matches!(err, GraphcalError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Visibility(VisibilityError::PrivateInPublic { pub_kind, ref_name, .. }), .. })
             if pub_kind == DeclarationKind::Index && ref_name.as_str() == "Rate")
     );
 }
@@ -1084,7 +1114,7 @@ fn resolve_pub_unit_with_private_dim_fires_v003() {
     ";
     let err = parse_and_resolve(source).unwrap_err();
     assert!(
-        matches!(err, GraphcalError::PrivateInPublic { pub_kind, ref_name, .. }
+        matches!(err, GraphcalError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Visibility(VisibilityError::PrivateInPublic { pub_kind, ref_name, .. }), .. })
             if pub_kind == DeclarationKind::Unit && ref_name.as_str() == "Currency")
     );
 }

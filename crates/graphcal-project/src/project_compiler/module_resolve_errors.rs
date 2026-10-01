@@ -1,6 +1,7 @@
 //! Project diagnostics for module-resolution failures.
 
 use graphcal_compiler::graphcal_error::GraphcalError;
+use graphcal_compiler::semantic_error::visibility::VisibilityError;
 use graphcal_compiler::source_id::SourceId;
 use graphcal_compiler::syntax::span::Span;
 
@@ -23,12 +24,14 @@ pub(super) fn module_resolve_compile_error(
     match err {
         graphcal_compiler::resolve::error::ModuleResolveError::PrivateName {
             owner, name, ..
-        } => PipelineError::Semantic(GraphcalError::ImportPrivateItem {
-            name: name.to_string(),
-            file_path: owner.to_string(),
+        } => PipelineError::Semantic(GraphcalError::located(
             src,
-            span: src.whole_span().into(),
-        }),
+            src.whole_span(),
+            VisibilityError::ImportPrivateItem {
+                name: name.to_string(),
+                file_path: owner.to_string(),
+            },
+        )),
         graphcal_compiler::resolve::error::ModuleResolveError::WrongImportCategory {
             owner,
             mismatch,

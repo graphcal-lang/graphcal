@@ -8,6 +8,8 @@ use std::process::Command;
 use std::sync::Arc;
 
 use super::{CollectedWithEntries, GraphcalError, resolve};
+use crate::semantic_error::SemanticErrorKind;
+use crate::semantic_error::visibility::VisibilityError;
 use crate::syntax::parser::Parser;
 
 const ORACLE_ENV: &str = "GRAPHCAL_REQUIRED_BINDABILITY_ORACLE";
@@ -163,7 +165,14 @@ fn compare_case(case: &OracleCase) -> Result<(), String> {
                 rule: OracleRule::RequiredMustBeBindable,
                 kind: expected_kind,
             },
-            Err(GraphcalError::RequiredItemMustBeBindable { kind, .. }),
+            Err(GraphcalError::Located(crate::diagnostic::Diagnostic {
+                kind:
+                    SemanticErrorKind::Visibility(VisibilityError::RequiredItemMustBeBindable {
+                        kind,
+                        ..
+                    }),
+                ..
+            })),
         ) if kind == expected_kind.diagnostic_name() => Ok(()),
         (OracleDecision::Accepted, Err(error)) => Err(format!(
             "Lean accepted `{source}`, but Rust rejected it with {error:?}"

@@ -9,6 +9,9 @@ use crate::outcome::Outcome;
 use crate::resolved_name::{
     ResolvedDeclName, ResolvedDimName, ResolvedIndexName, ResolvedStructTypeName,
 };
+use crate::semantic_error::attribute::AttributeError;
+use crate::semantic_error::graph::GraphError;
+use crate::semantic_error::visibility::VisibilityError;
 use crate::source_id::SourceId;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -1005,15 +1008,17 @@ fn validate_public_generic_defaults(
                 match dependency.is_public(ctx.resolver) {
                     Some(true) => {}
                     Some(false) => {
-                        return Err(GraphcalError::PrivateInPublic {
-                            pub_kind: crate::declaration_kind::DeclarationKind::Type,
-                            pub_name: type_name.atom().clone(),
-                            ref_kind: dependency.kind(),
-                            ref_name: dependency.name(),
+                        return Err(GraphcalError::located(
                             src,
-                            ref_span: dependency.span().into(),
-                            pub_span: pub_span.into(),
-                        });
+                            dependency.span(),
+                            VisibilityError::PrivateInPublic {
+                                pub_kind: crate::declaration_kind::DeclarationKind::Type,
+                                pub_name: type_name.atom().clone(),
+                                ref_kind: dependency.kind(),
+                                ref_name: dependency.name(),
+                                pub_span,
+                            },
+                        ));
                     }
                     None => {
                         return Err(GraphcalError::InternalError {
@@ -1173,10 +1178,10 @@ fn record_resolved_struct_type_def(
 ///   declarations (E020-style [`GraphcalError::GraphRefInConst`]) or use runtime
 ///   units in literals / conversion targets;
 /// - no body may `@`-reference an assert declaration
-///   ([`GraphcalError::GraphRefToAssert`]);
+///   ([`AttributeError::GraphRefToAssert`](crate::semantic_error::attribute::AttributeError::GraphRefToAssert));
 /// - A10(c) / V004: bodies of non-bindable kinds owned by this module must
 ///   not mention variant literals of the module's own `pub(bind)` indexes
-///   ([`GraphcalError::PubIndexVariantLiteral`]). Params are exempt (A10(a));
+///   ([`VisibilityError::PubIndexVariantLiteral`](crate::semantic_error::visibility::VisibilityError::PubIndexVariantLiteral)). Params are exempt (A10(a));
 ///   sink kinds (assert/plot/figure/layer) are checked only when `pub`.
 fn check_hir_body_policies(
     dag: &DagTIR,
@@ -1512,11 +1517,13 @@ impl HirPolicyChecker<'_> {
             }
             crate::hir::expr::ExprKind::DagCall { target, args, .. } => {
                 if phase.is_compile_time() {
-                    return Err(GraphcalError::DagCallInCompileTime {
-                        name: target.value.to_string(),
-                        src: self.src,
-                        span: expr.span.into(),
-                    });
+                    return Err(GraphcalError::located(
+                        self.src,
+                        expr.span,
+                        GraphError::DagCallInCompileTime {
+                            name: target.value.to_string(),
+                        },
+                    ));
                 }
                 args.iter().try_for_each(|arg| recurse(&arg.value))
             }
@@ -1566,11 +1573,13 @@ impl HirPolicyChecker<'_> {
             return Ok(());
         };
         if matches!(kind, crate::resolve::category::DeclSymbolKind::Assert) {
-            return Err(GraphcalError::GraphRefToAssert {
-                name: target.to_unowned_def_name(),
-                src: self.src,
-                span: ref_span.into(),
-            });
+            return Err(GraphcalError::located(
+                self.src,
+                ref_span,
+                AttributeError::GraphRefToAssert {
+                    name: target.to_unowned_def_name(),
+                },
+            ));
         }
         if phase.is_compile_time() && !kind.is_const() {
             return Err(GraphcalError::GraphRefInConst {
@@ -1604,12 +1613,14 @@ impl HirPolicyChecker<'_> {
                 symbol.visibility().is_bindable() && !symbol.data().is_empty()
             });
         if is_pub_bind {
-            return Err(GraphcalError::PubIndexVariantLiteral {
-                index: index.as_str().to_string(),
-                variant: variant.variant.variant().as_str().to_string(),
-                src: self.src,
-                span: variant.path_span().into(),
-            });
+            return Err(GraphcalError::located(
+                self.src,
+                variant.path_span(),
+                VisibilityError::PubIndexVariantLiteral {
+                    index: index.as_str().to_string(),
+                    variant: variant.variant.variant().as_str().to_string(),
+                },
+            ));
         }
         Ok(())
     }

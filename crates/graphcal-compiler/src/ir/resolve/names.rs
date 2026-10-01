@@ -2,6 +2,7 @@ use crate::assertion_expectation::{ExpectedFail, ExpectedFailKeyPart};
 use crate::desugar::desugared_ast::AttributeArg;
 use crate::graphcal_error::GraphcalError;
 use crate::ir::resolve::collected::{ParsedExpectedFail, ParsedExpectedFailKey};
+use crate::semantic_error::attribute::AttributeError;
 use crate::source_id::SourceId;
 use crate::syntax::non_empty::NonEmpty;
 
@@ -25,10 +26,11 @@ pub fn parse_expected_fail_args(
                     span: *span,
                 }])
             }
-            AttributeArg::Path { path } => Err(GraphcalError::ExpectedFailInvalidArg {
+            AttributeArg::Path { path } => Err(GraphcalError::located(
                 src,
-                span: path.span.into(),
-            }),
+                path.span,
+                AttributeError::ExpectedFailInvalidArg,
+            )),
             AttributeArg::FinitePosition { position, span } => {
                 Ok(vec![ExpectedFailKeyPart::FinitePosition {
                     position: *position,
@@ -46,30 +48,31 @@ pub fn parse_expected_fail_args(
                                 span: *span,
                             })
                         }
-                        AttributeArg::Path { path } => Err(GraphcalError::ExpectedFailInvalidArg {
+                        AttributeArg::Path { path } => Err(GraphcalError::located(
                             src,
-                            span: path.span.into(),
-                        }),
+                            path.span,
+                            AttributeError::ExpectedFailInvalidArg,
+                        )),
                         AttributeArg::FinitePosition { position, span } => {
                             Ok(ExpectedFailKeyPart::FinitePosition {
                                 position: *position,
                                 span: *span,
                             })
                         }
-                        AttributeArg::Group { span: g_span, .. } => {
-                            Err(GraphcalError::ExpectedFailInvalidArg {
-                                src,
-                                span: (*g_span).into(),
-                            })
-                        }
+                        AttributeArg::Group { span: g_span, .. } => Err(GraphcalError::located(
+                            src,
+                            *g_span,
+                            AttributeError::ExpectedFailInvalidArg,
+                        )),
                     })
                     .collect();
                 let key = key?;
                 if key.is_empty() {
-                    Err(GraphcalError::ExpectedFailInvalidArg {
+                    Err(GraphcalError::located(
                         src,
-                        span: (*span).into(),
-                    })
+                        *span,
+                        AttributeError::ExpectedFailInvalidArg,
+                    ))
                 } else {
                     Ok(key)
                 }

@@ -3,7 +3,7 @@
 //! A dependency cycle is a topological property of source, knowable without
 //! evaluating any value. The checker orders every local DAG's constants and
 //! every local callable's params and nodes exactly once; a cycle becomes a
-//! [`GraphcalError::CyclicDependency`] under `graphcal check`, and the orders
+//! [`GraphError::CyclicDependency`](crate::semantic_error::graph::GraphError::CyclicDependency) under `graphcal check`, and the orders
 //! are retained for evaluation.
 
 use crate::dag_id::DagId;
@@ -12,6 +12,7 @@ use crate::diagnostic_anchor::DiagnosticAnchor;
 use crate::graphcal_error::GraphcalError;
 use crate::ir::entry::Decl;
 use crate::resolved_name::ResolvedDeclName;
+use crate::semantic_error::graph::GraphError;
 use crate::source_id::SourceId;
 use crate::tir::schedule::{ConstSchedule, RuntimeSchedule, RuntimeScheduleError};
 use crate::tir::typed::UncheckedTir;
@@ -29,7 +30,7 @@ impl ScheduleBuilder {
     ///
     /// # Errors
     ///
-    /// Returns [`GraphcalError::CyclicDependency`] for the first cycle found,
+    /// Returns [`GraphError::CyclicDependency`](crate::semantic_error::graph::GraphError::CyclicDependency) for the first cycle found,
     /// at the declaration that closes it.
     pub(super) fn build(tir: &UncheckedTir, src: SourceId) -> Result<Self, GraphcalError> {
         let constants = ConstSchedule::build(tir.dags.local_iter().map(|(_, dag)| dag))
@@ -108,11 +109,13 @@ fn cyclic_dependency(
             Decl::Assert(_) | Decl::Plot(_) | Decl::Figure(_) | Decl::Layer(_) => None,
         });
     match site {
-        Some((name, span)) => GraphcalError::CyclicDependency {
-            name: name.to_string(),
+        Some((name, span)) => GraphcalError::located(
             src,
-            span: span.into(),
-        },
+            span,
+            GraphError::CyclicDependency {
+                name: name.to_string(),
+            },
+        ),
         None => GraphcalError::internal_error(
             format!("cycle node `{closing}` is missing declaration metadata"),
             src,

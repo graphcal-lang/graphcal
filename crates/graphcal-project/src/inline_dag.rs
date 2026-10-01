@@ -14,6 +14,7 @@ use graphcal_compiler::ir::lower::DagBodySelfImports;
 use graphcal_compiler::ir::module_interface::{ModuleInterface, PureImportTermDisposition};
 use graphcal_compiler::ir::resolve::{ImportedValueNames, ScopedName};
 use graphcal_compiler::resolve::ModuleResolver;
+use graphcal_compiler::semantic_error::visibility::VisibilityError;
 use graphcal_compiler::source_id::SourceId;
 use graphcal_compiler::syntax::ast::{DeclExposure, ImportItemNamespace};
 use graphcal_compiler::syntax::decl_name::DeclName;
@@ -125,12 +126,14 @@ pub fn preprocess_dag_body_self_imports(
                             ));
                         }
                         Some(DeclExposure::Private) => {
-                            return Err(GraphcalError::ImportPrivateItem {
-                                name: orig_name.to_string(),
-                                file_path: import_decl.path().display_path(),
+                            return Err(GraphcalError::located(
                                 src,
-                                span: span.into(),
-                            });
+                                span,
+                                VisibilityError::ImportPrivateItem {
+                                    name: orig_name.to_string(),
+                                    file_path: import_decl.path().display_path(),
+                                },
+                            ));
                         }
                         Some(DeclExposure::ExplicitExport | DeclExposure::InputPort) => {}
                     }

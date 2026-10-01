@@ -7,6 +7,7 @@ use crate::graphcal_error::GraphcalError;
 use crate::outcome::Outcome;
 use crate::resolved_name::{ResolvedDeclName, ResolvedStructTypeName};
 use crate::semantic::checked_type::{CheckedType, Symbolic};
+use crate::semantic_error::visibility::VisibilityError;
 use crate::source_id::SourceId;
 use crate::static_interface::StaticRole;
 use crate::syntax::names::NameAtom;
@@ -55,17 +56,18 @@ fn emit_violation(
         context: StaticUseContext::TemplateBody,
         dependency: StaticDependency::DefaultDefinition,
     };
-    let violation =
-        validate(check).map_err(
-            |violation| GraphcalError::TemplateBodyDependsOnStaticDefault {
+    let violation = validate(check).map_err(|violation| {
+        GraphcalError::located(
+            ctx.env.src,
+            span,
+            VisibilityError::TemplateBodyDependsOnStaticDefault {
                 body_kind: body.kind,
                 body_name: body.name.clone(),
                 port_kind: violation.kind,
                 port_name: port.identity.name().clone(),
-                src: ctx.env.src,
-                span: span.into(),
             },
-        );
+        )
+    });
     match violation {
         Ok(()) => Ok(()),
         Err(error) => Err(error),

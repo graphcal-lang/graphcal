@@ -1,5 +1,8 @@
 //! Diagnostic production from compile errors and evaluation results.
 
+use graphcal_compiler::semantic_error::SemanticErrorKind;
+use graphcal_compiler::semantic_error::structure::StructError;
+use graphcal_compiler::semantic_error::visibility::VisibilityError;
 use std::collections::HashMap;
 
 use tower_lsp::lsp_types::{
@@ -248,13 +251,16 @@ fn structured_data(error: &CompileError) -> Option<serde_json::Value> {
     };
     match e.error() {
         // V003: the private item that needs `pub`.
-        GraphcalError::PrivateInPublic { ref_name, .. } => {
-            Some(serde_json::json!({ "referencedName": ref_name.as_str() }))
-        }
+        GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+            kind: SemanticErrorKind::Visibility(VisibilityError::PrivateInPublic { ref_name, .. }),
+            ..
+        }) => Some(serde_json::json!({ "referencedName": ref_name.as_str() })),
         // V006: the leaked private item that needs `pub`.
-        GraphcalError::GenericsLeakage { leaked_name, .. } => {
-            Some(serde_json::json!({ "referencedName": leaked_name }))
-        }
+        GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+            kind:
+                SemanticErrorKind::Visibility(VisibilityError::GenericsLeakage { leaked_name, .. }),
+            ..
+        }) => Some(serde_json::json!({ "referencedName": leaked_name })),
         // D020: an exact replacement exists only when the decimal spelling
         // maps exactly into the dimension rational model.
         GraphcalError::FloatPowerExponent {
@@ -271,12 +277,14 @@ fn structured_data(error: &CompileError) -> Option<serde_json::Value> {
         GraphcalError::UnknownIndex { name, .. } => name
             .declared_name()
             .and_then(|name| auto_import_data(name.as_str(), AutoImportCategory::Index)),
-        GraphcalError::UnknownStructType { name, .. } => {
-            auto_import_data(name, AutoImportCategory::Type)
-        }
-        GraphcalError::UnknownLocalRef { name, .. } => {
-            auto_import_data(name, AutoImportCategory::Term)
-        }
+        GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+            kind: SemanticErrorKind::Struct(StructError::UnknownStructType { name, .. }),
+            ..
+        }) => auto_import_data(name, AutoImportCategory::Type),
+        GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+            kind: SemanticErrorKind::Struct(StructError::UnknownLocalRef { name, .. }),
+            ..
+        }) => auto_import_data(name, AutoImportCategory::Term),
         GraphcalError::UnknownGraphRef { name, .. } if name.qualifier().is_empty() => {
             auto_import_data(name.leaf().as_str(), AutoImportCategory::Term)
         }

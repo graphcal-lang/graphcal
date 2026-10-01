@@ -1,5 +1,8 @@
 use crate::outcome::Outcome;
 use crate::resolved_name::ResolvedDeclName;
+use crate::semantic_error::attribute::AttributeError;
+use crate::semantic_error::domain::DomainError;
+use crate::semantic_error::graph::GraphError;
 use crate::source_id::SourceId;
 use std::collections::{HashMap, HashSet};
 
@@ -386,11 +389,13 @@ fn check_hir_assert_body(
         crate::hir::expr::AssertBody::Expr(body_expr) => {
             let inferred = ctx.infer_hir(body_expr, Some(owner))?;
             if !is_bool_type(&inferred) {
-                return Err(GraphcalError::AssertBodyNotBool {
-                    found: format_checked_type(&inferred, registry),
+                return Err(GraphcalError::located(
                     src,
-                    span: span.into(),
-                }
+                    span,
+                    AttributeError::AssertBodyNotBool {
+                        found: format_checked_type(&inferred, registry),
+                    },
+                )
                 .into());
             }
             Ok(AssertionIndexShape::from_bool_type(&inferred))
@@ -463,11 +468,11 @@ fn check_hir_assert_body(
                     value if value == 0.0 && value.is_sign_negative() => "-0".to_string(),
                     value => crate::display::number::format_number(value),
                 };
-                return Err(GraphcalError::NegativeTolerance {
-                    found,
+                return Err(GraphcalError::located(
                     src,
-                    span: tolerance.span.into(),
-                }
+                    tolerance.span,
+                    AttributeError::NegativeTolerance { found },
+                )
                 .into());
             }
             Ok(AssertionIndexShape { axes: actual_axes })
@@ -561,46 +566,54 @@ fn validate_expected_fail_key(
     src: SourceId,
 ) -> Result<(), GraphcalError> {
     if key.len() != shape.rank() {
-        return Err(GraphcalError::ExpectedFailKeyShapeMismatch {
-            expected: shape.rank(),
-            found: key.len(),
+        return Err(GraphcalError::located(
             src,
-            span: expected_fail_key_span(key, src)?.into(),
-        });
+            expected_fail_key_span(key, src)?,
+            AttributeError::ExpectedFailKeyShapeMismatch {
+                expected: shape.rank(),
+                found: key.len(),
+            },
+        ));
     }
 
     for (part, expected_axis) in key.iter().zip(&shape.axes) {
         match part {
             ExpectedFailKeyPart::Named { index, .. } => {
                 if !index.to_symbolic().matches_ref(expected_axis) {
-                    return Err(GraphcalError::ExpectedFailKeyIndexMismatch {
-                        expected: expected_axis.display_name().to_string(),
-                        found: part.display(),
+                    return Err(GraphcalError::located(
                         src,
-                        span: part.span().into(),
-                    });
+                        part.span(),
+                        AttributeError::ExpectedFailKeyIndexMismatch {
+                            expected: expected_axis.display_name().to_string(),
+                            found: part.display(),
+                        },
+                    ));
                 }
             }
             ExpectedFailKeyPart::FinitePosition { position, span } => {
                 let Some(finite) = expected_axis.finite_index_ref() else {
-                    return Err(GraphcalError::ExpectedFailKeyIndexMismatch {
-                        expected: expected_axis.display_name().to_string(),
-                        found: part.display(),
+                    return Err(GraphcalError::located(
                         src,
-                        span: (*span).into(),
-                    });
+                        *span,
+                        AttributeError::ExpectedFailKeyIndexMismatch {
+                            expected: expected_axis.display_name().to_string(),
+                            found: part.display(),
+                        },
+                    ));
                 };
                 // Bound-check `#N` against a statically known Fin cardinality.
                 // Symbolic cardinalities are checked after substitution.
                 if let Some(concrete) = finite.concrete_index()
                     && *position >= concrete.size_u64()
                 {
-                    return Err(GraphcalError::ExpectedFailFinitePositionOutOfBounds {
-                        position: *position,
-                        size: concrete.size_u64(),
+                    return Err(GraphcalError::located(
                         src,
-                        span: (*span).into(),
-                    });
+                        *span,
+                        AttributeError::ExpectedFailFinitePositionOutOfBounds {
+                            position: *position,
+                            size: concrete.size_u64(),
+                        },
+                    ));
                 }
             }
         }
@@ -616,27 +629,30 @@ fn validate_expected_fail(
     attribute_span: crate::syntax::span::Span,
 ) -> Result<(), GraphcalError> {
     match expected_fail {
-        ExpectedFail::All if shape.is_indexed() => Err(GraphcalError::ExpectedFailAllOnIndexed {
+        ExpectedFail::All if shape.is_indexed() => Err(GraphcalError::located(
             src,
-            span: attribute_span.into(),
-        }),
+            attribute_span,
+            AttributeError::ExpectedFailAllOnIndexed,
+        )),
         ExpectedFail::All => Ok(()),
         ExpectedFail::Variants(keys) if !shape.is_indexed() => {
             let span = expected_fail_key_span(keys.first(), src)?;
-            Err(GraphcalError::ExpectedFailNotIndexed {
+            Err(GraphcalError::located(
                 src,
-                span: span.into(),
-            })
+                span,
+                AttributeError::ExpectedFailNotIndexed,
+            ))
         }
         ExpectedFail::Variants(keys) => {
             let mut seen = HashSet::new();
             for key in keys {
                 validate_expected_fail_key(key, shape, src)?;
                 if !seen.insert(expected_fail_key_signature(key)) {
-                    return Err(GraphcalError::ExpectedFailDuplicateKey {
+                    return Err(GraphcalError::located(
                         src,
-                        span: expected_fail_key_span(key, src)?.into(),
-                    });
+                        expected_fail_key_span(key, src)?,
+                        AttributeError::ExpectedFailDuplicateKey,
+                    ));
                 }
             }
             Ok(())
@@ -1091,11 +1107,11 @@ fn check_domain_constraint_targets_dag(
             continue;
         }
         if let Some(type_kind) = invalid_domain_target_kind(annotation.checked().resolved()) {
-            return Err(GraphcalError::InvalidDomainTarget {
-                type_kind,
+            return Err(GraphcalError::located(
                 src,
-                span: decl_span.into(),
-            });
+                decl_span,
+                DomainError::InvalidDomainTarget { type_kind },
+            ));
         }
     }
     Ok(())
@@ -1158,11 +1174,11 @@ fn check_field_domain_constraint_targets(
             let first_bound = first_constrained_field_bound(key, field_semantics, src)?;
             let span = field_type_annotation(dag, key)
                 .map_or(first_bound.span, |field| field.type_annotation().span);
-            return Err(GraphcalError::InvalidDomainTarget {
-                type_kind,
-                src: first_bound.src,
-                span: span.into(),
-            });
+            return Err(GraphcalError::located(
+                first_bound.src,
+                span,
+                DomainError::InvalidDomainTarget { type_kind },
+            ));
         }
     }
     Ok(())
@@ -1331,14 +1347,16 @@ fn check_deferred_generic_quantity_bound(
     if inferred.quantity_dimension().is_some() || matches!(inferred, CheckedType::Int) {
         return Ok(());
     }
-    Err(GraphcalError::DomainDimensionMismatch {
-        name: display_name.to_string(),
-        type_dim: resolved_target.format(registry),
-        bound_name: bound.kind.to_string(),
-        bound_dim: format_checked_type(inferred, registry),
-        src: bound.src,
-        span: bound.span.into(),
-    })
+    Err(GraphcalError::located(
+        bound.src,
+        bound.span,
+        DomainError::DomainDimensionMismatch {
+            name: display_name.to_string(),
+            type_dim: resolved_target.format(registry),
+            bound_name: bound.kind.to_string(),
+            bound_dim: format_checked_type(inferred, registry),
+        },
+    ))
 }
 
 /// Collect DAG-call targets and the first source span for each call edge.
@@ -1358,7 +1376,7 @@ fn collect_dag_call_targets_from_dag(
 /// A dag `A` that transitively inline-calls itself — directly or through a
 /// chain `A → B → … → A` — would recurse unboundedly at evaluation time. We
 /// reject such programs at compile time with
-/// [`GraphcalError::CyclicDependency`] naming the dag at which the
+/// [`GraphError::CyclicDependency`](crate::semantic_error::graph::GraphError::CyclicDependency) naming the dag at which the
 /// dependency-graph search (dags and call targets in `DagId` order)
 /// re-entered the cycle, spanning the call that re-entered it.
 ///
@@ -1407,9 +1425,11 @@ fn detect_cross_dag_cycles(
                 DiagnosticAnchor::WholeFile,
             )
         })?;
-    Err(GraphcalError::CyclicDependency {
-        name: entry.to_string(),
+    Err(GraphcalError::located(
         src,
-        span: (*span).into(),
-    })
+        *span,
+        GraphError::CyclicDependency {
+            name: entry.to_string(),
+        },
+    ))
 }

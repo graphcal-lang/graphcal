@@ -5,6 +5,7 @@ use crate::dimension::Dimension;
 use crate::display::formatting_registry::FormattingRegistry;
 use crate::graphcal_error::GraphcalError;
 use crate::semantic::checked_type::{CheckedType, Concrete, Concreteness};
+use crate::semantic_error::domain::DomainError;
 use crate::source_id::SourceId;
 
 use super::helpers::format_checked_type;
@@ -73,43 +74,49 @@ pub(super) fn check_one_bound_with_display_name<V: Concreteness>(
                 || format_checked_type(inferred, registry),
                 |d| registry.dimensions.format_dimension(d),
             );
-            Err(GraphcalError::DomainDimensionMismatch {
-                name: display_name.to_string(),
-                type_dim: registry.dimensions.format_dimension(target_dim),
-                bound_name: bound.kind.to_string(),
-                bound_dim: bound_dim_str,
+            Err(GraphcalError::located(
                 src,
-                span: bound.span.into(),
-            })
+                bound.span,
+                DomainError::DomainDimensionMismatch {
+                    name: display_name.to_string(),
+                    type_dim: registry.dimensions.format_dimension(target_dim),
+                    bound_name: bound.kind.to_string(),
+                    bound_dim: bound_dim_str,
+                },
+            ))
         }
         ExpectedBound::Int => {
             if matches!(inferred, CheckedType::Int) {
                 return Ok(());
             }
-            Err(GraphcalError::IntDomainBoundTypeMismatch {
-                name: display_name.to_string(),
-                bound_name: bound.kind.to_string(),
-                bound_type: format_checked_type(inferred, registry),
+            Err(GraphcalError::located(
                 src,
-                span: bound.span.into(),
-            })
+                bound.span,
+                DomainError::IntDomainBoundTypeMismatch {
+                    name: display_name.to_string(),
+                    bound_name: bound.kind.to_string(),
+                    bound_type: format_checked_type(inferred, registry),
+                },
+            ))
         }
         ExpectedBound::Datetime(target_scale) => {
             if matches!(inferred, CheckedType::Datetime(bound_scale) if bound_scale == target_scale)
             {
                 return Ok(());
             }
-            Err(GraphcalError::DatetimeDomainBoundTypeMismatch {
-                name: display_name.to_string(),
-                target_type: format_checked_type(
-                    &CheckedType::<Concrete>::Datetime(*target_scale),
-                    registry,
-                ),
-                bound_name: bound.kind.to_string(),
-                bound_type: format_checked_type(inferred, registry),
+            Err(GraphcalError::located(
                 src,
-                span: bound.span.into(),
-            })
+                bound.span,
+                DomainError::DatetimeDomainBoundTypeMismatch {
+                    name: display_name.to_string(),
+                    target_type: format_checked_type(
+                        &CheckedType::<Concrete>::Datetime(*target_scale),
+                        registry,
+                    ),
+                    bound_name: bound.kind.to_string(),
+                    bound_type: format_checked_type(inferred, registry),
+                },
+            ))
         }
     }
 }

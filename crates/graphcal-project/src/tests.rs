@@ -17,6 +17,12 @@ use crate::project_compiler::{ProjectCompiler, compile_to_tir, compile_to_tir_fr
 use graphcal_compiler::graphcal_error::GraphcalError;
 use graphcal_compiler::graphcal_error::RenderedGraphcalError;
 use graphcal_compiler::outcome::Outcome;
+use graphcal_compiler::semantic_error::SemanticErrorKind;
+use graphcal_compiler::semantic_error::attribute::AttributeError;
+use graphcal_compiler::semantic_error::domain::DomainError;
+use graphcal_compiler::semantic_error::graph::GraphError;
+use graphcal_compiler::semantic_error::structure::StructError;
+use graphcal_compiler::semantic_error::visibility::VisibilityError;
 use graphcal_compiler::syntax::attribute::AttributeName;
 use graphcal_compiler::syntax::decl_name::DeclName;
 use graphcal_compiler::syntax::index_name::IndexVariantName;
@@ -1868,10 +1874,7 @@ fn constructor_empty_parentheses_are_rejected() {
         assert!(
             matches!(
                 &error,
-                CompileError::Eval(RenderedGraphcalError { error: GraphcalError::EmptyParenthesizedConstructor {
-                    constructor,
-                    ..
-                }, .. }) if constructor.as_str() == expected_constructor
+                CompileError::Eval(RenderedGraphcalError { error: GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic { kind: SemanticErrorKind::Struct(StructError::EmptyParenthesizedConstructor { constructor, .. }), .. }), .. }) if constructor.as_str() == expected_constructor
             ),
             "unexpected error: {error:?}"
         );
@@ -1890,7 +1893,7 @@ fn payload_constructor_empty_pattern_keeps_missing_field_diagnostic() {
     assert!(
         matches!(
             &error,
-            CompileError::Eval(RenderedGraphcalError { error: GraphcalError::MissingPatternFields { constructor, .. }, .. })
+            CompileError::Eval(RenderedGraphcalError { error: GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic { kind: SemanticErrorKind::Struct(StructError::MissingPatternFields { constructor, .. }), .. }), .. })
                 if constructor.as_str() == "Present"
         ),
         "unexpected error: {error:?}"
@@ -2097,10 +2100,13 @@ fn safety_attributes_reject_repetition_and_invalid_assumptions() {
     assert!(matches!(
         error,
         CompileError::Eval(RenderedGraphcalError {
-            error: GraphcalError::RepeatedSingletonAttribute {
-                name: AttributeName::ExpectedFail,
+            error: GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+                kind: SemanticErrorKind::Attribute(AttributeError::RepeatedSingletonAttribute {
+                    name: AttributeName::ExpectedFail,
+                    ..
+                }),
                 ..
-            },
+            }),
             ..
         })
     ));
@@ -2137,10 +2143,13 @@ fn repeated_expected_fail_is_rejected_on_file_and_inline_include_items() {
     assert!(matches!(
         file_error,
         CompileError::Eval(RenderedGraphcalError {
-            error: GraphcalError::RepeatedSingletonAttribute {
-                name: AttributeName::ExpectedFail,
+            error: GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+                kind: SemanticErrorKind::Attribute(AttributeError::RepeatedSingletonAttribute {
+                    name: AttributeName::ExpectedFail,
+                    ..
+                }),
                 ..
-            },
+            }),
             ..
         })
     ));
@@ -2155,10 +2164,13 @@ fn repeated_expected_fail_is_rejected_on_file_and_inline_include_items() {
     assert!(matches!(
         inline_error,
         CompileError::Eval(RenderedGraphcalError {
-            error: GraphcalError::RepeatedSingletonAttribute {
-                name: AttributeName::ExpectedFail,
+            error: GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+                kind: SemanticErrorKind::Attribute(AttributeError::RepeatedSingletonAttribute {
+                    name: AttributeName::ExpectedFail,
+                    ..
+                }),
                 ..
-            },
+            }),
             ..
         })
     ));
@@ -2174,10 +2186,13 @@ fn repeated_hidden_is_rejected_on_plots_and_include_items() {
     assert!(matches!(
         declaration_error,
         CompileError::Eval(RenderedGraphcalError {
-            error: GraphcalError::RepeatedSingletonAttribute {
-                name: AttributeName::Hidden,
+            error: GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+                kind: SemanticErrorKind::Attribute(AttributeError::RepeatedSingletonAttribute {
+                    name: AttributeName::Hidden,
+                    ..
+                }),
                 ..
-            },
+            }),
             ..
         })
     ));
@@ -2198,10 +2213,13 @@ fn repeated_hidden_is_rejected_on_plots_and_include_items() {
     assert!(matches!(
         include_error,
         CompileError::Eval(RenderedGraphcalError {
-            error: GraphcalError::RepeatedSingletonAttribute {
-                name: AttributeName::Hidden,
+            error: GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+                kind: SemanticErrorKind::Attribute(AttributeError::RepeatedSingletonAttribute {
+                    name: AttributeName::Hidden,
+                    ..
+                }),
                 ..
-            },
+            }),
             ..
         })
     ));
@@ -2445,7 +2463,10 @@ fn lazy_attribute_is_rejected_on_declarations_and_include_items() {
         assert!(matches!(
             error,
             CompileError::Eval(RenderedGraphcalError {
-                error: GraphcalError::LazyNotSupported { .. },
+                error: GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+                    kind: SemanticErrorKind::Attribute(AttributeError::LazyNotSupported),
+                    ..
+                }),
                 ..
             })
         ));
@@ -2462,7 +2483,10 @@ fn lazy_attribute_is_rejected_on_declarations_and_include_items() {
     assert!(matches!(
         file_error,
         CompileError::Eval(RenderedGraphcalError {
-            error: GraphcalError::LazyNotSupported { .. },
+            error: GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+                kind: SemanticErrorKind::Attribute(AttributeError::LazyNotSupported),
+                ..
+            }),
             ..
         })
     ));
@@ -2476,7 +2500,10 @@ fn lazy_attribute_is_rejected_on_declarations_and_include_items() {
     assert!(matches!(
         inline_error,
         CompileError::Eval(RenderedGraphcalError {
-            error: GraphcalError::LazyNotSupported { .. },
+            error: GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+                kind: SemanticErrorKind::Attribute(AttributeError::LazyNotSupported),
+                ..
+            }),
             ..
         })
     ));
@@ -2490,9 +2517,15 @@ fn assert_missing_dag_bindings(
     match error {
         CompileError::Eval(RenderedGraphcalError {
             error:
-                GraphcalError::MissingDagBindings {
-                    missing, dag_name, ..
-                },
+                GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+                    kind:
+                        SemanticErrorKind::Graph(GraphError::MissingDagBindings {
+                            missing,
+                            dag_name,
+                            ..
+                        }),
+                    ..
+                }),
             ..
         }) => {
             assert_eq!(dag_name, expected_dag_name);
@@ -3786,7 +3819,7 @@ fn assert_literal_negative_zero_tolerance_is_rejected() {
     .unwrap_err();
     assert!(matches!(
         error,
-        CompileError::Eval(RenderedGraphcalError { error: GraphcalError::NegativeTolerance { ref found, .. }, .. }) if found == "-0"
+        CompileError::Eval(RenderedGraphcalError { error: GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic { kind: SemanticErrorKind::Attribute(AttributeError::NegativeTolerance { found, .. }), .. }), .. }) if found == "-0"
     ));
 }
 
@@ -6384,7 +6417,12 @@ fn project_selective_import_item_rejects_unknown_attribute() {
 
     match compile_and_eval_project(&root, &HashMap::new(), None, &fs()) {
         Err(CompileError::Eval(RenderedGraphcalError {
-            error: GraphcalError::UnknownAttribute { name, .. },
+            error:
+                GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+                    kind:
+                        SemanticErrorKind::Attribute(AttributeError::UnknownAttribute { name, .. }),
+                    ..
+                }),
             ..
         })) => {
             assert_eq!(name, "bogus");
@@ -7795,7 +7833,14 @@ fn project_expected_fail_keys_reject_same_leaf_wrong_owner() {
 
     match compile_and_eval_project(&root, &HashMap::new(), None, &fs()) {
         Err(CompileError::Eval(RenderedGraphcalError {
-            error: GraphcalError::ExpectedFailKeyIndexMismatch { .. },
+            error:
+                GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+                    kind:
+                        SemanticErrorKind::Attribute(AttributeError::ExpectedFailKeyIndexMismatch {
+                            ..
+                        }),
+                    ..
+                }),
             ..
         })) => {}
         other => {
@@ -8276,12 +8321,16 @@ fn project_include_overrides_index_no_param_binding_v005() {
     match result {
         Err(CompileError::Eval(RenderedGraphcalError {
             error:
-                GraphcalError::IncludeMustReconcileOverride {
-                    overridden,
-                    overridden_kind,
-                    orphan_decl,
+                GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+                    kind:
+                        SemanticErrorKind::Visibility(VisibilityError::IncludeMustReconcileOverride {
+                            overridden,
+                            overridden_kind,
+                            orphan_decl,
+                            ..
+                        }),
                     ..
-                },
+                }),
             ..
         })) => {
             assert_eq!(overridden, "Phase");
@@ -8318,12 +8367,16 @@ fn template_closure_error_renders_against_dependency_source() {
     let result = compile_and_eval_project(&root, &HashMap::new(), None, &fs());
     match result {
         Err(CompileError::Eval(rendered)) => {
-            let GraphcalError::TemplateBodyDependsOnStaticDefault {
-                body_name,
-                port_name,
-                span,
+            let GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+                kind:
+                    SemanticErrorKind::Visibility(VisibilityError::TemplateBodyDependsOnStaticDefault {
+                        body_name,
+                        port_name,
+                        ..
+                    }),
+                primary: span,
                 ..
-            } = &rendered.error
+            }) = &rendered.error
             else {
                 panic!("expected V007, got {:?}", rendered.error);
             };
@@ -8360,12 +8413,16 @@ fn project_selective_include_leaks_private_type_v006() {
     match result {
         Err(CompileError::Eval(RenderedGraphcalError {
             error:
-                GraphcalError::GenericsLeakage {
-                    reexport_name,
-                    leaked_name,
-                    leaked_kind,
+                GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+                    kind:
+                        SemanticErrorKind::Visibility(VisibilityError::GenericsLeakage {
+                            reexport_name,
+                            leaked_name,
+                            leaked_kind,
+                            ..
+                        }),
                     ..
-                },
+                }),
             ..
         })) => {
             assert_eq!(reexport_name, "origin");
@@ -8385,12 +8442,16 @@ fn project_selective_include_rejects_private_generic_default_binding() {
     match result {
         Err(CompileError::Eval(RenderedGraphcalError {
             error:
-                GraphcalError::GenericsLeakage {
-                    reexport_name,
-                    leaked_name,
-                    leaked_kind,
+                GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+                    kind:
+                        SemanticErrorKind::Visibility(VisibilityError::GenericsLeakage {
+                            reexport_name,
+                            leaked_name,
+                            leaked_kind,
+                            ..
+                        }),
                     ..
-                },
+                }),
             ..
         })) => {
             assert_eq!(reexport_name, "Wrapper");
@@ -8476,7 +8537,10 @@ fn imported_generic_field_obligation_is_checked_in_the_consumer() {
     assert!(matches!(
         error,
         CompileError::Eval(RenderedGraphcalError {
-            error: GraphcalError::DomainDimensionMismatch { .. },
+            error: GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+                kind: SemanticErrorKind::Domain(DomainError::DomainDimensionMismatch { .. }),
+                ..
+            }),
             ..
         })
     ));
@@ -8495,7 +8559,10 @@ node bad: Bad = Bad(value: Wrapper<Length>(value: -1.0 m));
     assert!(matches!(
         error,
         CompileError::Eval(RenderedGraphcalError {
-            error: GraphcalError::GenericTypeArgDomainConstraint { .. },
+            error: GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+                kind: SemanticErrorKind::Domain(DomainError::GenericTypeArgDomainConstraint),
+                ..
+            }),
             ..
         })
     ));
@@ -8516,7 +8583,10 @@ dag nested {
     assert!(matches!(
         error,
         CompileError::Eval(RenderedGraphcalError {
-            error: GraphcalError::GenericTypeArgDomainConstraint { .. },
+            error: GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+                kind: SemanticErrorKind::Domain(DomainError::GenericTypeArgDomainConstraint),
+                ..
+            }),
             ..
         })
     ));
@@ -8947,7 +9017,7 @@ node used: Force = @internal_scratch;
     let error = compile_and_eval(source).unwrap_err();
     assert!(matches!(
         error,
-        CompileError::Eval(RenderedGraphcalError { error: GraphcalError::ImportPrivateItem { name, .. }, .. })
+        CompileError::Eval(RenderedGraphcalError { error: GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic { kind: SemanticErrorKind::Visibility(VisibilityError::ImportPrivateItem { name, .. }), .. }), .. })
             if name == "internal_scratch"
     ));
 }
@@ -8968,7 +9038,7 @@ node used: Force = @inst::internal_scratch;
     let error = compile_and_eval(source).unwrap_err();
     assert!(matches!(
         error,
-        CompileError::Eval(RenderedGraphcalError { error: GraphcalError::ImportPrivateItem { name, .. }, .. })
+        CompileError::Eval(RenderedGraphcalError { error: GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic { kind: SemanticErrorKind::Visibility(VisibilityError::ImportPrivateItem { name, .. }), .. }), .. })
             if name == "internal_scratch"
     ));
 }
@@ -9161,7 +9231,12 @@ fn include_closure_cycles_are_rejected_at_the_including_declaration() {
                   node a: Dimensionless = @inst::out;";
     match compile_and_eval(source) {
         Err(CompileError::Eval(RenderedGraphcalError {
-            error: GraphcalError::CyclicDependency { name, span, .. },
+            error:
+                GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+                    kind: SemanticErrorKind::Graph(GraphError::CyclicDependency { name, .. }),
+                    primary: span,
+                    ..
+                }),
             ..
         })) => {
             assert_eq!(name, "a");
@@ -10169,7 +10244,12 @@ node event: EventSpec = EventSpec(at: epoch<TT>("2024-06-01T00:00:00"));
     assert!(matches!(
         error,
         CompileError::Eval(RenderedGraphcalError {
-            error: GraphcalError::DatetimeDomainBoundTypeMismatch { .. },
+            error: GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+                kind: SemanticErrorKind::Domain(
+                    DomainError::DatetimeDomainBoundTypeMismatch { .. }
+                ),
+                ..
+            }),
             ..
         })
     ));
@@ -10264,9 +10344,14 @@ const node SAT: Spec = Spec(mass: 5000.0 kg);
 ";
     let err = compile_and_eval(source).unwrap_err();
     let CompileError::Eval(RenderedGraphcalError {
-        error: GraphcalError::DomainViolation {
-            name, violation, ..
-        },
+        error:
+            GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+                kind:
+                    SemanticErrorKind::Domain(DomainError::DomainViolation {
+                        name, violation, ..
+                    }),
+                ..
+            }),
         ..
     }) = err
     else {
@@ -10339,7 +10424,10 @@ node bad: Box<Time> = Box<Time>(x: 1.0 s);
     assert!(matches!(
         error,
         CompileError::Eval(RenderedGraphcalError {
-            error: GraphcalError::DomainDimensionMismatch { .. },
+            error: GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+                kind: SemanticErrorKind::Domain(DomainError::DomainDimensionMismatch { .. }),
+                ..
+            }),
             ..
         })
     ));
@@ -10472,7 +10560,11 @@ fn struct_field_min_exceeds_max_at_compile_time() {
     let source = "type Foo { Foo(x: Mass(min: 100.0 kg, max: 50.0 kg)) }";
     let err = compile_and_eval(source).unwrap_err();
     let CompileError::Eval(RenderedGraphcalError {
-        error: GraphcalError::DomainMinExceedsMax { name, .. },
+        error:
+            GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+                kind: SemanticErrorKind::Domain(DomainError::DomainMinExceedsMax { name, .. }),
+                ..
+            }),
         ..
     }) = err
     else {
@@ -10489,7 +10581,10 @@ fn struct_field_invalid_target_at_compile_time() {
         matches!(
             err,
             CompileError::Eval(RenderedGraphcalError {
-                error: GraphcalError::InvalidDomainTarget { .. },
+                error: GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+                    kind: SemanticErrorKind::Domain(DomainError::InvalidDomainTarget { .. }),
+                    ..
+                }),
                 ..
             })
         ),
@@ -10502,7 +10597,11 @@ fn struct_field_dim_mismatch_at_compile_time() {
     let source = "type Foo { Foo(x: Length(min: 1.0 s)) }";
     let err = compile_and_eval(source).unwrap_err();
     let CompileError::Eval(RenderedGraphcalError {
-        error: GraphcalError::DomainDimensionMismatch { name, .. },
+        error:
+            GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+                kind: SemanticErrorKind::Domain(DomainError::DomainDimensionMismatch { name, .. }),
+                ..
+            }),
         ..
     }) = err
     else {
@@ -10525,7 +10624,10 @@ param p: Vec3<Length(min: 0.0 m), Eci> = Vec3<Length, Eci>(x: 1.0 m, y: 2.0 m, z
         matches!(
             err,
             CompileError::Eval(RenderedGraphcalError {
-                error: GraphcalError::GenericTypeArgDomainConstraint { .. },
+                error: GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+                    kind: SemanticErrorKind::Domain(DomainError::GenericTypeArgDomainConstraint),
+                    ..
+                }),
                 ..
             })
         ),
@@ -10568,7 +10670,10 @@ include bumper(v: 5.0 m/s)::{ out };
         matches!(
             err,
             CompileError::Eval(RenderedGraphcalError {
-                error: GraphcalError::DomainDimensionMismatch { .. },
+                error: GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+                    kind: SemanticErrorKind::Domain(DomainError::DomainDimensionMismatch { .. }),
+                    ..
+                }),
                 ..
             })
         ),

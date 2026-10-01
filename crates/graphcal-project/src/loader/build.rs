@@ -72,7 +72,7 @@ pub(super) fn build_loaded_files<K: SourceKey>(
     };
     match builder.build_parsed(&root, root_parsed) {
         Ok(_) | Err(Stop::ReEntered) => {}
-        Err(Stop::Failed(error)) => return Err(error),
+        Err(Stop::Failed(error)) => return Err(*error),
     }
     let Builder {
         loading,
@@ -121,7 +121,7 @@ struct Builder<'s, K> {
 /// Why the walk stopped before building every reachable file.
 enum Stop {
     /// A failure to report as is.
-    Failed(CompileError),
+    Failed(Box<CompileError>),
     /// A file imported a file that is still being built: the dependency graph
     /// now has a cycle.
     ReEntered,
@@ -129,7 +129,7 @@ enum Stop {
 
 impl From<CompileError> for Stop {
     fn from(error: CompileError) -> Self {
-        Self::Failed(error)
+        Self::Failed(Box::new(error))
     }
 }
 

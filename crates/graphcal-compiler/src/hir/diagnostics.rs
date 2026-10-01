@@ -6,6 +6,10 @@ use crate::hir::expr_lower::error::ExprLowerError;
 use crate::hir::lower::{HirLowerError, TypePathSlot};
 use crate::resolve::category::SymbolTable;
 use crate::resolve::error::{ModuleResolveError, NameCategory};
+use crate::semantic_error::attribute::AttributeError;
+use crate::semantic_error::domain::DomainError;
+use crate::semantic_error::structure::StructError;
+use crate::semantic_error::visibility::VisibilityError;
 use crate::source_id::SourceId;
 use crate::syntax::index_name::IndexName;
 use crate::syntax::names::NamePath;
@@ -23,10 +27,11 @@ pub fn validate_type_annotation(type_expr: &TypeExpr, src: SourceId) -> Result<(
         }
         TypeExprKind::DatetimeApplication { type_args } => type_args.iter().try_for_each(|arg| {
             if let Some(bound) = arg.constraints.first() {
-                return Err(GraphcalError::GenericTypeArgDomainConstraint {
+                return Err(GraphcalError::located(
                     src,
-                    span: bound.span.into(),
-                });
+                    bound.span,
+                    DomainError::GenericTypeArgDomainConstraint,
+                ));
             }
             validate_type_annotation(arg, src)
         }),
@@ -46,10 +51,11 @@ fn validate_generic_args<'a>(
     generic_args.into_iter().try_for_each(|arg| match arg {
         crate::desugar::desugared_ast::GenericArg::Type(type_expr) => {
             if let Some(bound) = type_expr.constraints.first() {
-                return Err(GraphcalError::GenericTypeArgDomainConstraint {
+                return Err(GraphcalError::located(
                     src,
-                    span: bound.span.into(),
-                });
+                    bound.span,
+                    DomainError::GenericTypeArgDomainConstraint,
+                ));
             }
             validate_type_annotation(type_expr, src)
         }
@@ -146,11 +152,13 @@ pub fn expr_lower_error_to_graphcal(err: &ExprLowerError, src: SourceId) -> Grap
             };
         }
         ExprLowerError::UnknownLocalRef { name, span } => {
-            return GraphcalError::UnknownLocalRef {
-                name: name.to_string(),
+            return GraphcalError::located(
                 src,
-                span: (*span).into(),
-            };
+                *span,
+                StructError::UnknownLocalRef {
+                    name: name.to_string(),
+                },
+            );
         }
         ExprLowerError::UnknownGraphRef { name, span } => {
             return GraphcalError::UnknownGraphRef {
@@ -307,22 +315,26 @@ pub fn expr_lower_error_to_graphcal(err: &ExprLowerError, src: SourceId) -> Grap
                 },
             span,
         } => {
-            return GraphcalError::GraphRefToAssert {
-                name: name.to_unowned_def_name(),
+            return GraphcalError::located(
                 src,
-                span: (*span).into(),
-            };
+                *span,
+                AttributeError::GraphRefToAssert {
+                    name: name.to_unowned_def_name(),
+                },
+            );
         }
         ExprLowerError::ModuleResolve {
             source: ModuleResolveError::PrivateName { owner, name, .. },
             span,
         } => {
-            return GraphcalError::ImportPrivateItem {
-                name: name.to_string(),
-                file_path: owner.to_string(),
+            return GraphcalError::located(
                 src,
-                span: (*span).into(),
-            };
+                *span,
+                VisibilityError::ImportPrivateItem {
+                    name: name.to_string(),
+                    file_path: owner.to_string(),
+                },
+            );
         }
         ExprLowerError::ModuleResolve {
             source: ModuleResolveError::UnknownIndexVariant { index, variant },
@@ -359,18 +371,22 @@ pub fn expr_lower_error_to_graphcal(err: &ExprLowerError, src: SourceId) -> Grap
                 },
             span,
         } => {
-            return GraphcalError::UnknownLocalRef {
-                name: name.to_string(),
+            return GraphcalError::located(
                 src,
-                span: (*span).into(),
-            };
+                *span,
+                StructError::UnknownLocalRef {
+                    name: name.to_string(),
+                },
+            );
         }
         ExprLowerError::EmptyParenthesizedConstructor { constructor, span } => {
-            return GraphcalError::EmptyParenthesizedConstructor {
-                constructor: constructor.to_unowned_def_name(),
+            return GraphcalError::located(
                 src,
-                span: (*span).into(),
-            };
+                *span,
+                StructError::EmptyParenthesizedConstructor {
+                    constructor: constructor.to_unowned_def_name(),
+                },
+            );
         }
         _ => {}
     }

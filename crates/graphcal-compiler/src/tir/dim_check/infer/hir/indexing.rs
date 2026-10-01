@@ -2,6 +2,7 @@
 
 use crate::hir::expr::{Expr, ForBinding, ForBindingIndex, IndexArg};
 use crate::outcome::Outcome;
+use crate::semantic_error::structure::StructError;
 use crate::source_id::SourceId;
 
 use crate::diagnostic_anchor::DiagnosticAnchor;
@@ -307,11 +308,13 @@ impl Infer<'_> {
                 }
                 IndexArg::Var(local) => {
                     let Some(var_type) = self.locals.get(local.value) else {
-                        return Err(GraphcalError::UnknownLocalRef {
-                            name: format!("#{}", local.value.index()),
-                            src: self.env.src,
-                            span: local.span.into(),
-                        }
+                        return Err(GraphcalError::located(
+                            self.env.src,
+                            local.span,
+                            StructError::UnknownLocalRef {
+                                name: format!("#{}", local.value.index()),
+                            },
+                        )
                         .into());
                     };
                     match var_type {

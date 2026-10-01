@@ -11,6 +11,7 @@ use thiserror::Error;
 use crate::declaration_kind::AttributeTarget;
 use crate::desugar::desugared_ast::{Attribute, AttributeArg};
 use crate::graphcal_error::GraphcalError;
+use crate::semantic_error::attribute::AttributeError;
 use crate::source_id::SourceId;
 use crate::syntax::attribute::AttributeName;
 use crate::syntax::decl_name::DeclName;
@@ -219,76 +220,64 @@ pub fn attribute_validation_error_to_graphcal(
 ) -> GraphcalError {
     match error {
         AttributeValidationError::UnknownAttribute { name, span } => {
-            GraphcalError::UnknownAttribute {
-                name,
-                src,
-                span: span.into(),
-            }
+            GraphcalError::located(src, span, AttributeError::UnknownAttribute { name })
         }
         AttributeValidationError::InvalidTarget { name, target, span } => match name {
-            AttributeName::Assumes => GraphcalError::InvalidAssumesTarget {
-                kind: target,
+            AttributeName::Assumes => GraphcalError::located(
                 src,
-                span: span.into(),
-            },
-            AttributeName::ExpectedFail => GraphcalError::InvalidExpectedFailTarget {
-                kind: target,
+                span,
+                AttributeError::InvalidAssumesTarget { kind: target },
+            ),
+            AttributeName::ExpectedFail => GraphcalError::located(
                 src,
-                span: span.into(),
-            },
+                span,
+                AttributeError::InvalidExpectedFailTarget { kind: target },
+            ),
             AttributeName::Hidden => match target {
-                AttributeTarget::IncludeItem { name, .. } => {
-                    GraphcalError::HiddenIncludeItemNotAPlot {
-                        name: name.to_string(),
-                        src,
-                        span: span.into(),
-                    }
-                }
-                target @ AttributeTarget::Declaration(_) => GraphcalError::InvalidHiddenTarget {
-                    kind: target,
+                AttributeTarget::IncludeItem { name, .. } => GraphcalError::located(
                     src,
-                    span: span.into(),
-                },
+                    span,
+                    AttributeError::HiddenIncludeItemNotAPlot {
+                        name: name.to_string(),
+                    },
+                ),
+                target @ AttributeTarget::Declaration(_) => GraphcalError::located(
+                    src,
+                    span,
+                    AttributeError::InvalidHiddenTarget { kind: target },
+                ),
             },
-            AttributeName::Lazy => GraphcalError::LazyNotSupported {
-                src,
-                span: span.into(),
-            },
+            AttributeName::Lazy => {
+                GraphcalError::located(src, span, AttributeError::LazyNotSupported)
+            }
         },
         AttributeValidationError::RepeatedSingleton {
             name,
             first,
             duplicate,
-        } => GraphcalError::RepeatedSingletonAttribute {
-            name,
+        } => GraphcalError::located(
             src,
-            first: first.into(),
-            duplicate: duplicate.into(),
-        },
-        AttributeValidationError::EmptyAssumes { span } => GraphcalError::EmptyAssumes {
-            src,
-            span: span.into(),
-        },
+            duplicate,
+            AttributeError::RepeatedSingletonAttribute { name, first },
+        ),
+        AttributeValidationError::EmptyAssumes { span } => {
+            GraphcalError::located(src, span, AttributeError::EmptyAssumes)
+        }
         AttributeValidationError::InvalidAssumesArgument { span } => {
-            GraphcalError::InvalidAssumesArgument {
-                src,
-                span: span.into(),
-            }
+            GraphcalError::located(src, span, AttributeError::InvalidAssumesArgument)
         }
         AttributeValidationError::DuplicateAssumesArgument {
             name,
             first,
             duplicate,
-        } => GraphcalError::DuplicateAssumesArgument {
-            name,
+        } => GraphcalError::located(
             src,
-            first: first.into(),
-            duplicate: duplicate.into(),
-        },
-        AttributeValidationError::UnsupportedLazy { span } => GraphcalError::LazyNotSupported {
-            src,
-            span: span.into(),
-        },
+            duplicate,
+            AttributeError::DuplicateAssumesArgument { name, first },
+        ),
+        AttributeValidationError::UnsupportedLazy { span } => {
+            GraphcalError::located(src, span, AttributeError::LazyNotSupported)
+        }
     }
 }
 

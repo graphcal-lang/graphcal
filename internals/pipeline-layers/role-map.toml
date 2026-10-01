@@ -813,6 +813,41 @@ role = "contracts"
 
 [[module]]
 package = "compiler"
+path = ["semantic_error"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["semantic_error", "attribute"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["semantic_error", "domain"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["semantic_error", "graph"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["semantic_error", "structure"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["semantic_error", "visibility"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["semantic_error", "tests"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
 path = ["graphcal_error"]
 role = "contracts"
 

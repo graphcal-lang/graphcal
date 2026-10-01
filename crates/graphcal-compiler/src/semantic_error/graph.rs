@@ -1,0 +1,89 @@
+//! Diagnostics of the declaration graph and of DAG calls.
+//!
+//! Each variant is a typed payload located by a
+//! [`Diagnostic`](crate::diagnostic::Diagnostic); its stable code, labels,
+//! and help are described by its [`DiagnosticKind`] implementation.
+
+use thiserror::Error;
+
+use crate::diagnostic::{DiagnosticKind, SecondaryLabel};
+
+/// Diagnostics of the declaration graph and of DAG calls.
+#[derive(Debug, Clone, Error)]
+pub enum GraphError {
+    #[error("DAG call `{name}` is not allowed in a compile-time expression")]
+    DagCallInCompileTime { name: String },
+    #[error("cyclic dependency involving `{name}`")]
+    CyclicDependency { name: String },
+    #[error("unknown dag `{name}`")]
+    UnknownDag { name: String },
+    #[error("unknown param `{name}` in DAG call to `{dag_name}`")]
+    UnknownDagParam { name: String, dag_name: String },
+    #[error("missing required binding(s) {missing:?} when instantiating DAG `{dag_name}`")]
+    MissingDagBindings {
+        missing: Vec<String>,
+        dag_name: String,
+    },
+    #[error("unknown output `{name}` in DAG call to `{dag_name}`")]
+    UnknownDagOutput { name: String, dag_name: String },
+    #[error("DAG call binding `{param_name}`: expected {expected}, found {found}")]
+    DagArgTypeMismatch {
+        param_name: String,
+        expected: String,
+        found: String,
+    },
+}
+
+impl DiagnosticKind for GraphError {
+    fn code(&self) -> &'static str {
+        match self {
+            Self::DagCallInCompileTime { .. } => "graphcal::G007",
+            Self::CyclicDependency { .. } => "graphcal::G001",
+            Self::UnknownDag { .. } => "graphcal::G002",
+            Self::UnknownDagParam { .. } => "graphcal::G003",
+            Self::MissingDagBindings { .. } => "graphcal::G004",
+            Self::UnknownDagOutput { .. } => "graphcal::G005",
+            Self::DagArgTypeMismatch { .. } => "graphcal::G006",
+        }
+    }
+
+    fn primary_label(&self) -> Option<String> {
+        match self {
+            Self::DagCallInCompileTime { .. } => {
+                Some("runtime DAG instantiation is not allowed here".to_owned())
+            }
+            Self::CyclicDependency { .. } => Some("involved in cycle".to_owned()),
+            Self::UnknownDag { .. } => Some("unknown dag".to_owned()),
+            Self::UnknownDagParam { dag_name, .. } => Some(format!("not a param in `{dag_name}`")),
+            Self::MissingDagBindings { .. } => Some("missing binding(s)".to_owned()),
+            Self::UnknownDagOutput { dag_name, .. } => {
+                Some(format!("not a projectable value in `{dag_name}`"))
+            }
+            Self::DagArgTypeMismatch { .. } => Some("type mismatch".to_owned()),
+        }
+    }
+
+    fn help(&self) -> Option<String> {
+        match self {
+            Self::DagCallInCompileTime { .. } => Some("a DAG call is an anonymous runtime include; call it from a `node`, `param` default, assertion, or visualization expression instead".to_owned()),
+            Self::CyclicDependency { .. } => Some("declarations cannot form dependency cycles".to_owned()),
+            Self::UnknownDag { .. } => Some("the inline call references a dag that is not declared in this file".to_owned()),
+            Self::UnknownDagParam { .. } => Some("the binding name must match a `param` declared in the called DAG".to_owned()),
+            Self::MissingDagBindings { .. } => Some("every required `param` declared in the DAG must be bound at each `include` or call site".to_owned()),
+            Self::UnknownDagOutput { .. } => Some("the projection after `).` must name a param input port or an explicitly exported node in the called DAG".to_owned()),
+            Self::DagArgTypeMismatch { .. } => Some("the binding expression must have the same type as the DAG's param declaration".to_owned()),
+        }
+    }
+
+    fn secondary_labels(&self) -> Vec<SecondaryLabel> {
+        match self {
+            Self::DagCallInCompileTime { .. }
+            | Self::CyclicDependency { .. }
+            | Self::UnknownDag { .. }
+            | Self::UnknownDagParam { .. }
+            | Self::MissingDagBindings { .. }
+            | Self::UnknownDagOutput { .. }
+            | Self::DagArgTypeMismatch { .. } => Vec::new(),
+        }
+    }
+}

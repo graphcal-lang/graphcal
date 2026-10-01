@@ -11,6 +11,8 @@ use std::collections::HashMap;
 use std::panic;
 
 use graphcal_compiler::graphcal_error::GraphcalError;
+use graphcal_compiler::semantic_error::SemanticErrorKind;
+use graphcal_compiler::semantic_error::attribute::AttributeError;
 
 use graphcal_compiler::graphcal_error::RenderedGraphcalError;
 use graphcal_eval::eval::{EvalResult, Value};
@@ -374,7 +376,13 @@ fn unused_dynamic_unit_scale_rejects_assertion_reference() {
     let err = compile_graphcal_error(
         "base dim Money;\nbase unit USD: Money;\nassert factor = true;\nunit EUR: Money = (@factor) USD;\n",
     );
-    assert!(matches!(err, GraphcalError::GraphRefToAssert { .. }));
+    assert!(matches!(
+        err,
+        GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+            kind: SemanticErrorKind::Attribute(AttributeError::GraphRefToAssert { .. }),
+            ..
+        })
+    ));
 }
 
 #[test]

@@ -2,21 +2,22 @@ use std::sync::Arc;
 
 use miette::{Diagnostic, NamedSource, SourceSpan};
 
+use crate::diagnostic::{Diagnostic as LocatedDiagnostic, DiagnosticKind as _};
+use crate::semantic_error::SemanticErrorKind;
 use crate::source_id::SourceId;
 use crate::source_registry::SourceRegistry;
+use crate::syntax::span::Span;
 use thiserror::Error;
 
 use crate::builtin::{AggregationFn, LinearAlgebraFn};
 use crate::datetime_literal::CivilDateTimeLiteral;
-use crate::declaration_kind::{AttributeTarget, DeclarationKind};
+use crate::declaration_kind::DeclarationKind;
 use crate::diagnostic_anchor::DiagnosticAnchor;
 use crate::outcome::Outcome;
 use crate::resolve::category::DeclSymbolKind;
 use crate::semantic::checked_type::IndexDisplayName;
 use crate::semantic::time_scale::TimeScale;
 use crate::semantic::time_zone::IanaTimeZoneId;
-use crate::syntax::attribute::AttributeName;
-use crate::syntax::decl_name::DeclName;
 use crate::syntax::dimension::{DimName, UnitName, UnitRef};
 use crate::syntax::function_name::{FnName, FnParamName};
 use crate::syntax::import_category::{ImportItemCategoryMismatch, ImportItemNamespace};
@@ -49,26 +50,13 @@ impl std::fmt::Display for CalledFunction {
     }
 }
 
-/// A member a nominal-type diagnostic names: a payload field, or a
-/// constructor that does not belong to the scrutinized type.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum NominalMember {
-    Field(FieldName),
-    Constructor(ConstructorName),
-}
-
-impl std::fmt::Display for NominalMember {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Field(name) => name.fmt(f),
-            Self::Constructor(name) => name.fmt(f),
-        }
-    }
-}
-
 /// Rich diagnostic error types for graphcal evaluation.
 #[derive(Debug, Clone, Error, Diagnostic)]
 pub enum GraphcalError {
+    /// A diagnostic of a typed family, located by source id and span.
+    #[error("{}", .0.kind)]
+    Located(LocatedDiagnostic<SemanticErrorKind>),
+
     /// Runtime propagation of an unavailable projected value. This is not a
     /// static checking error; evaluator boundaries retain the typed reason.
     #[error("{reason}")]
@@ -322,18 +310,6 @@ pub enum GraphcalError {
         duplicate: SourceSpan,
         #[label("first selected here")]
         first: SourceSpan,
-    },
-
-    #[error("attribute `hidden` does not apply to include item `{name}`")]
-    #[diagnostic(
-        code(graphcal::A018),
-        help("`#[hidden]` on an include item is only valid when the item names a plot")
-    )]
-    HiddenIncludeItemNotAPlot {
-        name: String,
-        src: SourceId,
-        #[label("not a plot item")]
-        span: SourceSpan,
     },
 
     #[error("{owner_kind} `{owner}` references unknown plot `{name}`")]
@@ -605,20 +581,6 @@ pub enum GraphcalError {
         span: SourceSpan,
     },
 
-    #[error("DAG call `{name}` is not allowed in a compile-time expression")]
-    #[diagnostic(
-        code(graphcal::G007),
-        help(
-            "a DAG call is an anonymous runtime include; call it from a `node`, `param` default, assertion, or visualization expression instead"
-        )
-    )]
-    DagCallInCompileTime {
-        name: String,
-        src: SourceId,
-        #[label("runtime DAG instantiation is not allowed here")]
-        span: SourceSpan,
-    },
-
     #[error("graph reference `@{name}` not allowed in const unit scale")]
     #[diagnostic(
         code(graphcal::D017),
@@ -655,18 +617,6 @@ pub enum GraphcalError {
         got: usize,
         src: SourceId,
         #[label("wrong number of arguments")]
-        span: SourceSpan,
-    },
-
-    #[error("cyclic dependency involving `{name}`")]
-    #[diagnostic(
-        code(graphcal::G001),
-        help("declarations cannot form dependency cycles")
-    )]
-    CyclicDependency {
-        name: String,
-        src: SourceId,
-        #[label("involved in cycle")]
         span: SourceSpan,
     },
 
@@ -996,121 +946,6 @@ pub enum GraphcalError {
         span: SourceSpan,
     },
 
-    #[error("unknown struct type `{name}`")]
-    #[diagnostic(
-        code(graphcal::S002),
-        help("struct types must be declared with `type` before use")
-    )]
-    UnknownStructType {
-        name: String,
-        src: SourceId,
-        #[label("not found")]
-        span: SourceSpan,
-    },
-
-    #[error("unknown field `{member}` on struct `{type_name}`")]
-    #[diagnostic(code(graphcal::S003))]
-    UnknownField {
-        type_name: StructTypeName,
-        member: NominalMember,
-        src: SourceId,
-        #[label("no such field")]
-        span: SourceSpan,
-    },
-
-    #[error("missing field(s) {missing:?} in construction of `{type_name}`")]
-    #[diagnostic(
-        code(graphcal::S004),
-        help("all fields are required when constructing a struct")
-    )]
-    MissingFields {
-        type_name: StructTypeName,
-        missing: Vec<FieldName>,
-        src: SourceId,
-        #[label("incomplete construction")]
-        span: SourceSpan,
-    },
-
-    #[error("missing field(s) {missing:?} in match pattern for `{constructor}`")]
-    #[diagnostic(
-        code(graphcal::S009),
-        help(
-            "all constructor fields must be bound as `field: variable` or discarded with `field: _`"
-        )
-    )]
-    MissingPatternFields {
-        constructor: ConstructorName,
-        missing: Vec<FieldName>,
-        src: SourceId,
-        #[label("incomplete pattern")]
-        span: SourceSpan,
-    },
-
-    #[error("constructor `{constructor}` cannot use empty parentheses")]
-    #[diagnostic(
-        code(graphcal::S010),
-        help(
-            "write a unit constructor as `{constructor}`; payload constructors require named field arguments"
-        )
-    )]
-    EmptyParenthesizedConstructor {
-        constructor: ConstructorName,
-        src: SourceId,
-        #[label("empty parentheses are invalid here")]
-        span: SourceSpan,
-    },
-
-    #[error("extra field(s) {extra:?} in construction of `{type_name}`")]
-    #[diagnostic(
-        code(graphcal::S005),
-        help("only fields declared in the struct type are allowed")
-    )]
-    ExtraFields {
-        type_name: StructTypeName,
-        extra: Vec<FieldName>,
-        src: SourceId,
-        #[label("unexpected fields")]
-        span: SourceSpan,
-    },
-
-    #[error("field `{field_name}` of `{type_name}`: expected dimension {expected}, found {found}")]
-    #[diagnostic(code(graphcal::S006))]
-    FieldDimensionMismatch {
-        type_name: StructTypeName,
-        field_name: FieldName,
-        expected: String,
-        found: String,
-        src: SourceId,
-        #[label("has dimension {found}")]
-        span: SourceSpan,
-    },
-
-    #[error("cannot access field of non-struct value `{name}`")]
-    #[diagnostic(
-        code(graphcal::S007),
-        help("field access `.field` is only valid on struct values")
-    )]
-    NotAStruct {
-        name: String,
-        src: SourceId,
-        #[label("not a struct")]
-        span: SourceSpan,
-    },
-
-    #[error("unknown local variable `{name}`")]
-    #[diagnostic(
-        code(graphcal::S008),
-        help(
-            "local variables are introduced by `for`, `scan`, `unfold`, `match`, or function parameters"
-        )
-    )]
-    UnknownLocalRef {
-        name: String,
-        src: SourceId,
-        #[label("not found")]
-        span: SourceSpan,
-    },
-
     #[error("unknown index `{name}`")]
     #[diagnostic(
         code(graphcal::I001),
@@ -1258,254 +1093,6 @@ pub enum GraphcalError {
         expression: String,
         src: SourceId,
         #[label("Nat is not implicitly converted to Index")]
-        span: SourceSpan,
-    },
-
-    #[error("cannot reference assert `{name}` with `@`")]
-    #[diagnostic(
-        code(graphcal::A003),
-        help("assert declarations are post-evaluation checks and cannot be referenced with `@`")
-    )]
-    GraphRefToAssert {
-        name: DeclName,
-        src: SourceId,
-        #[label("`@{name}` is an assert, not a param or node")]
-        span: SourceSpan,
-    },
-
-    #[error("assert body must evaluate to Bool, got {found}")]
-    #[diagnostic(
-        code(graphcal::A004),
-        help("assert declarations must have a body that evaluates to Bool")
-    )]
-    AssertBodyNotBool {
-        found: String,
-        src: SourceId,
-        #[label("expected Bool, found {found}")]
-        span: SourceSpan,
-    },
-
-    #[error("unknown assert `{name}` in #[assumes(...)]")]
-    #[diagnostic(
-        code(graphcal::A005),
-        help("`#[assumes(...)]` arguments must reference `assert` declarations")
-    )]
-    UnknownAssertInAssumes {
-        name: String,
-        src: SourceId,
-        #[label("not an assert declaration")]
-        span: SourceSpan,
-    },
-
-    #[error("`#[assumes(...)]` is not valid on `{kind}` declarations")]
-    #[diagnostic(
-        code(graphcal::A006),
-        help("`#[assumes(...)]` is only valid on `node` and `param` declarations")
-    )]
-    InvalidAssumesTarget {
-        kind: AttributeTarget,
-        src: SourceId,
-        #[label("not a node or param")]
-        span: SourceSpan,
-    },
-
-    #[error("attribute `#[{name}]` appears more than once")]
-    #[diagnostic(
-        code(graphcal::A019),
-        help("`#[{name}]` is singleton metadata; combine its contents into one attribute")
-    )]
-    RepeatedSingletonAttribute {
-        name: AttributeName,
-        src: SourceId,
-        #[label("duplicate `#[{name}]` attribute")]
-        duplicate: SourceSpan,
-        #[label("first `#[{name}]` attribute")]
-        first: SourceSpan,
-    },
-
-    #[error("`#[assumes(...)]` requires at least one assertion name")]
-    #[diagnostic(
-        code(graphcal::A020),
-        help("name one or more distinct assertions, or remove the inert attribute")
-    )]
-    EmptyAssumes {
-        src: SourceId,
-        #[label("no assertions named")]
-        span: SourceSpan,
-    },
-
-    #[error("assertion `{name}` appears more than once in `#[assumes(...)]`")]
-    #[diagnostic(
-        code(graphcal::A021),
-        help("each assertion may be named at most once by one declaration")
-    )]
-    DuplicateAssumesArgument {
-        name: DeclName,
-        src: SourceId,
-        #[label("duplicate assertion name")]
-        duplicate: SourceSpan,
-        #[label("first named here")]
-        first: SourceSpan,
-    },
-
-    #[error("`#[assumes(...)]` arguments must be plain identifiers")]
-    #[diagnostic(
-        code(graphcal::A022),
-        help("name assertions directly, for example `#[assumes(first_check, second_check)]`")
-    )]
-    InvalidAssumesArgument {
-        src: SourceId,
-        #[label("not a plain assertion name")]
-        span: SourceSpan,
-    },
-
-    #[error("`#[lazy]` is reserved but not supported")]
-    #[diagnostic(
-        code(graphcal::A023),
-        help("remove `#[lazy]`; Graphcal currently evaluates nodes eagerly")
-    )]
-    LazyNotSupported {
-        src: SourceId,
-        #[label("lazy evaluation is not implemented")]
-        span: SourceSpan,
-    },
-
-    #[error("attribute `hidden` does not apply to `{kind}` declarations")]
-    #[diagnostic(
-        code(graphcal::A017),
-        help(
-            "`#[hidden]` suppresses a plot's standalone output; it is only valid on `plot` declarations"
-        )
-    )]
-    InvalidHiddenTarget {
-        kind: AttributeTarget,
-        src: SourceId,
-        #[label("not a plot")]
-        span: SourceSpan,
-    },
-
-    #[error("unknown attribute `{name}`")]
-    #[diagnostic(
-        code(graphcal::A007),
-        help(
-            "recognized attributes are `#[assumes(...)]`, `#[expected_fail]`, `#[hidden]`, and `#[lazy]`"
-        )
-    )]
-    UnknownAttribute {
-        name: String,
-        src: SourceId,
-        #[label("unknown attribute")]
-        span: SourceSpan,
-    },
-
-    #[error("`#[expected_fail]` is not valid on `{kind}` declarations")]
-    #[diagnostic(
-        code(graphcal::A008),
-        help("`#[expected_fail]` is only valid on `assert` declarations")
-    )]
-    InvalidExpectedFailTarget {
-        kind: AttributeTarget,
-        src: SourceId,
-        #[label("not an assert")]
-        span: SourceSpan,
-    },
-
-    #[error(
-        "invalid argument in `#[expected_fail(...)]`: expected `Index#Variant`, `module::Index#Variant`, `#N` (Fin axes), or grouped variants"
-    )]
-    #[diagnostic(code(graphcal::A009))]
-    ExpectedFailInvalidArg {
-        src: SourceId,
-        #[label("invalid argument")]
-        span: SourceSpan,
-    },
-
-    #[error("`#[expected_fail(...)]` on non-indexed assertion")]
-    #[diagnostic(
-        code(graphcal::A010),
-        help("use `#[expected_fail]` without arguments for non-indexed assertions")
-    )]
-    ExpectedFailNotIndexed {
-        src: SourceId,
-        #[label("this assertion is not indexed")]
-        span: SourceSpan,
-    },
-
-    #[error("`#[expected_fail]` without arguments on indexed assertion")]
-    #[diagnostic(
-        code(graphcal::A011),
-        help(
-            "use `#[expected_fail(Index#Variant, ...)]` (qualified `module::Index#Variant` also works) to specify which variants are expected to fail; for finite structural axes use `#[expected_fail(#N, ...)]`"
-        )
-    )]
-    ExpectedFailAllOnIndexed {
-        src: SourceId,
-        #[label("this assertion is indexed")]
-        span: SourceSpan,
-    },
-
-    #[error("duplicate key in `#[expected_fail(...)]`")]
-    #[diagnostic(code(graphcal::A012), help("each expected-fail key must be unique"))]
-    ExpectedFailDuplicateKey {
-        src: SourceId,
-        #[label("duplicate expected-fail key")]
-        span: SourceSpan,
-    },
-
-    #[error("`#[expected_fail(...)]` key has the wrong index shape")]
-    #[diagnostic(
-        code(graphcal::A013),
-        help(
-            "single-index assertions require `Index#Variant` keys; multi-index assertions require full tuple keys in assertion axis order"
-        )
-    )]
-    ExpectedFailKeyShapeMismatch {
-        expected: usize,
-        found: usize,
-        src: SourceId,
-        #[label("expected {expected} index axis/axes, found {found}")]
-        span: SourceSpan,
-    },
-
-    #[error("`#[expected_fail(...)]` key does not belong to the assertion index")]
-    #[diagnostic(
-        code(graphcal::A014),
-        help("expected-fail keys must use the assertion's indexes in axis order")
-    )]
-    ExpectedFailKeyIndexMismatch {
-        expected: String,
-        found: String,
-        src: SourceId,
-        #[label("expected index `{expected}`, found `{found}`")]
-        span: SourceSpan,
-    },
-
-    #[error("`#[expected_fail(...)]` finite-index position `#{position}` is out of bounds")]
-    #[diagnostic(
-        code(graphcal::A016),
-        help(
-            "finite-index positions in expected-fail keys must satisfy `0 <= N < size` for a `Fin(size)` axis"
-        )
-    )]
-    ExpectedFailFinitePositionOutOfBounds {
-        position: u64,
-        size: u64,
-        src: SourceId,
-        #[label("position #{position} on an axis of size {size}")]
-        span: SourceSpan,
-    },
-
-    #[error("negative tolerance in tolerance assertion")]
-    #[diagnostic(
-        code(graphcal::A015),
-        help(
-            "a literal tolerance must not have a negative sign; use `0` for exact-match semantics"
-        )
-    )]
-    NegativeTolerance {
-        found: String,
-        src: SourceId,
-        #[label("tolerance is {found}")]
         span: SourceSpan,
     },
 
@@ -1739,345 +1326,6 @@ pub enum GraphcalError {
         #[label("fold occurs in this timezone")]
         time_zone_span: SourceSpan,
     },
-
-    #[error("domain violation: `{name}` value {value} is {violation}")]
-    #[diagnostic(
-        code(graphcal::C001),
-        help("the value must satisfy the domain constraints declared on the type")
-    )]
-    DomainViolation {
-        name: String,
-        value: String,
-        violation: String,
-        src: SourceId,
-        #[label("value out of declared domain")]
-        span: SourceSpan,
-    },
-
-    #[error(
-        "domain bound dimension mismatch on `{name}`: type has dimension {type_dim}, but {bound_name} bound has dimension {bound_dim}"
-    )]
-    #[diagnostic(
-        code(graphcal::C002),
-        help("domain bounds must have the same dimension as the constrained type")
-    )]
-    DomainDimensionMismatch {
-        name: String,
-        type_dim: String,
-        bound_name: String,
-        bound_dim: String,
-        src: SourceId,
-        #[label("dimension mismatch in domain bound")]
-        span: SourceSpan,
-    },
-
-    #[error("domain constraint on `{name}`: min ({min}) exceeds max ({max})")]
-    #[diagnostic(
-        code(graphcal::C003),
-        help("the min bound must be less than or equal to the max bound")
-    )]
-    DomainMinExceedsMax {
-        name: String,
-        min: String,
-        max: String,
-        src: SourceId,
-        #[label("min > max")]
-        span: SourceSpan,
-    },
-
-    #[error("domain constraints are not valid on `{type_kind}` types")]
-    #[diagnostic(
-        code(graphcal::C004),
-        help("domain constraints (min/max) are only valid on quantity, Int, and Datetime types")
-    )]
-    InvalidDomainTarget {
-        type_kind: String,
-        src: SourceId,
-        #[label("constraints not valid here")]
-        span: SourceSpan,
-    },
-
-    #[error("domain bound type mismatch on Int `{name}`: {bound_name} bound has type {bound_type}")]
-    #[diagnostic(
-        code(graphcal::C005),
-        help("Int domain bounds must be Int so their full range is preserved exactly")
-    )]
-    IntDomainBoundTypeMismatch {
-        name: String,
-        bound_name: String,
-        bound_type: String,
-        src: SourceId,
-        #[label("Int bound must have type Int")]
-        span: SourceSpan,
-    },
-
-    #[error("domain constraints are not supported on generic type arguments")]
-    #[diagnostic(
-        code(graphcal::C006),
-        help(
-            "put the constraint on the field in the struct definition, not on the generic type argument"
-        )
-    )]
-    GenericTypeArgDomainConstraint {
-        src: SourceId,
-        #[label("constraint not allowed here")]
-        span: SourceSpan,
-    },
-
-    #[error(
-        "datetime domain bound type mismatch on `{name}`: target is {target_type}, but {bound_name} bound is {bound_type}"
-    )]
-    #[diagnostic(
-        code(graphcal::C007),
-        help(
-            "datetime bounds must have exactly the constrained Datetime<S> type; use an explicit time-scale conversion"
-        )
-    )]
-    DatetimeDomainBoundTypeMismatch {
-        name: String,
-        target_type: String,
-        bound_name: String,
-        bound_type: String,
-        src: SourceId,
-        #[label("datetime bound has the wrong time scale or value type")]
-        span: SourceSpan,
-    },
-
-    // --- Visibility errors ---
-    /// Attempting to import a private (non-`pub`) item from another file.
-    #[error("cannot import private item `{name}` from `{file_path}`")]
-    #[diagnostic(
-        code(graphcal::V001),
-        help("add `pub` to the declaration in the source file to make it importable")
-    )]
-    ImportPrivateItem {
-        name: String,
-        file_path: String,
-        src: SourceId,
-        #[label("not visible — item is private")]
-        span: SourceSpan,
-    },
-
-    /// A required `index`, `type`, or `dim` is not marked `pub(bind)`.
-    ///
-    /// `param` is excluded: the declaration kind itself creates a required or
-    /// defaulted input port and never carries a visibility annotation.
-    #[error("required {kind} `{name}` must be declared `pub(bind)`")]
-    #[diagnostic(
-        code(graphcal::V002),
-        help(
-            "required indexes, types, and dimensions form the bindable interface — add `pub(bind)` before the declaration"
-        )
-    )]
-    RequiredItemMustBeBindable {
-        kind: String,
-        name: String,
-        src: SourceId,
-        #[label("required item must be `pub(bind)`")]
-        span: SourceSpan,
-    },
-
-    /// A visible declaration references a private type-system item in
-    /// its written signature (A9 case 1).
-    ///
-    /// `pub_kind` is the externally visible declaration category. A `param`
-    /// contributes an input-port signature rather than an explicitly exported
-    /// signature.
-    #[error(
-        "`{pub_kind}` `{pub_name}` references private {ref_kind} `{ref_name}` in its signature"
-    )]
-    #[diagnostic(
-        code(graphcal::V003),
-        help(
-            "add `pub` to `{ref_name}` so it is visible across the include boundary, or stop exposing `{pub_name}`"
-        )
-    )]
-    PrivateInPublic {
-        pub_kind: DeclarationKind,
-        pub_name: NameAtom,
-        ref_kind: DeclarationKind,
-        ref_name: NameAtom,
-        src: SourceId,
-        #[label("references private `{ref_name}`")]
-        ref_span: SourceSpan,
-        #[label("visible declaration is here")]
-        pub_span: SourceSpan,
-    },
-
-    /// A `pub(bind)` index with concrete variants has its variants used
-    /// in a non-bindable body (`node` / `const`) or a public sink
-    /// declaration in the defining file.
-    ///
-    /// Per axiom A10(c) / A10(b), a bindable index's variant literals
-    /// must not appear in bodies that cannot themselves be re-bound by
-    /// importers (the defining library must abstract over the index).
-    #[error(
-        "variant literal `{index}#{variant}` of `pub(bind) index` cannot be used in the defining file"
-    )]
-    #[diagnostic(
-        code(graphcal::V004),
-        help(
-            "pub(bind) indexes may be overridden by importers; use `param` declarations for variant-specific values, or abstract over the index via `for p : I {{ … }}`"
-        )
-    )]
-    PubIndexVariantLiteral {
-        index: String,
-        variant: String,
-        src: SourceId,
-        #[label("variant literal of pub(bind) index")]
-        span: SourceSpan,
-    },
-
-    /// An include overrides a bindable symbol `s`, but some kept
-    /// declaration's body or default mentions a name nominally tied to
-    /// `s` and was not itself re-bound by the same include statement
-    /// (A8).
-    ///
-    /// Nominally-tied mentions today are: variant literals `s.v` for
-    /// an overridden `index`, and constructors / field accesses of `s`
-    /// for an overridden `type`. `dim` and `param` overrides are
-    /// vacuous for A8 — their substitution is total — so they never
-    /// trigger this error.
-    #[error(
-        "include overrides {overridden_kind} `{overridden}` but does not re-bind `{orphan_decl}`, whose default mentions `{detail}`"
-    )]
-    #[diagnostic(
-        code(graphcal::V005),
-        help(
-            "add a binding for `{orphan_decl}` to this include, or keep `{overridden}` bound to its default"
-        )
-    )]
-    IncludeMustReconcileOverride {
-        overridden: String,
-        overridden_kind: String,
-        orphan_decl: String,
-        detail: String,
-        src: SourceId,
-        #[label("include is missing a binding for `{orphan_decl}`")]
-        span: SourceSpan,
-    },
-
-    /// A selectively re-exported import/include item (`{ pub item }`)
-    /// has an effective (post-substitution) signature that mentions a symbol
-    /// that is `V = private` at the importing site — A9 case 2 / visibility
-    /// composition.
-    ///
-    /// Concretely: an include binding renames a bindable symbol `s`
-    /// in the dep to a name that is private at the importer, and the
-    /// re-exported surface of the include carries that name into the
-    /// importer's public API. Downstream consumers of the importer
-    /// would see a signature referring to a symbol they cannot name.
-    #[error(
-        "re-exported {reexport_kind} `{reexport_name}`'s signature references private {leaked_kind} `{leaked_name}`"
-    )]
-    #[diagnostic(
-        code(graphcal::V006),
-        help(
-            "make `{leaked_name}` `pub` at the importing file, or drop the per-item `pub` marker on this include / import"
-        )
-    )]
-    GenericsLeakage {
-        reexport_kind: String,
-        reexport_name: String,
-        leaked_kind: String,
-        leaked_name: String,
-        src: SourceId,
-        #[label("leaks private `{leaked_name}` across the include boundary")]
-        span: SourceSpan,
-    },
-
-    /// A template body observes the concrete default of an optional Static port.
-    ///
-    /// Templates are checked once with every `pub(bind)` Static port rigid.
-    /// Parameter defaults are exempt because V005 reconciles them at include
-    /// sites; executable bodies and sinks must remain valid for every binding.
-    #[error(
-        "{body_kind} `{body_name}` depends on the default of `pub(bind) {port_kind} {port_name}`"
-    )]
-    #[diagnostic(
-        code(graphcal::V007),
-        help(
-            "pass the required value through a `param`, or make `{port_name}` non-bindable when its concrete definition is part of the template contract"
-        )
-    )]
-    TemplateBodyDependsOnStaticDefault {
-        body_kind: DeclarationKind,
-        body_name: NameAtom,
-        port_kind: crate::static_interface::StaticInputKind,
-        port_name: NameAtom,
-        src: SourceId,
-        #[label("uses the bindable port's default definition")]
-        span: SourceSpan,
-    },
-
-    #[error("unknown dag `{name}`")]
-    #[diagnostic(
-        code(graphcal::G002),
-        help("the inline call references a dag that is not declared in this file")
-    )]
-    UnknownDag {
-        name: String,
-        src: SourceId,
-        #[label("unknown dag")]
-        span: SourceSpan,
-    },
-
-    #[error("unknown param `{name}` in DAG call to `{dag_name}`")]
-    #[diagnostic(
-        code(graphcal::G003),
-        help("the binding name must match a `param` declared in the called DAG")
-    )]
-    UnknownDagParam {
-        name: String,
-        dag_name: String,
-        src: SourceId,
-        #[label("not a param in `{dag_name}`")]
-        span: SourceSpan,
-    },
-
-    #[error("missing required binding(s) {missing:?} when instantiating DAG `{dag_name}`")]
-    #[diagnostic(
-        code(graphcal::G004),
-        help(
-            "every required `param` declared in the DAG must be bound at each `include` or call site"
-        )
-    )]
-    MissingDagBindings {
-        missing: Vec<String>,
-        dag_name: String,
-        src: SourceId,
-        #[label("missing binding(s)")]
-        span: SourceSpan,
-    },
-
-    #[error("unknown output `{name}` in DAG call to `{dag_name}`")]
-    #[diagnostic(
-        code(graphcal::G005),
-        help(
-            "the projection after `).` must name a param input port or an explicitly exported node in the called DAG"
-        )
-    )]
-    UnknownDagOutput {
-        name: String,
-        dag_name: String,
-        src: SourceId,
-        #[label("not a projectable value in `{dag_name}`")]
-        span: SourceSpan,
-    },
-
-    #[error("DAG call binding `{param_name}`: expected {expected}, found {found}")]
-    #[diagnostic(
-        code(graphcal::G006),
-        help("the binding expression must have the same type as the DAG's param declaration")
-    )]
-    DagArgTypeMismatch {
-        param_name: String,
-        expected: String,
-        found: String,
-        src: SourceId,
-        #[label("type mismatch")]
-        span: SourceSpan,
-    },
 }
 
 /// A cancellable operation that fails with a [`GraphcalError`] reports it as
@@ -2090,6 +1338,12 @@ impl From<GraphcalError> for Outcome<GraphcalError> {
 }
 
 impl GraphcalError {
+    /// Locate a typed family diagnostic at `primary` in `src`.
+    #[must_use]
+    pub fn located(src: SourceId, primary: Span, kind: impl Into<SemanticErrorKind>) -> Self {
+        Self::Located(LocatedDiagnostic::new(src, primary, kind.into()))
+    }
+
     /// Construct an internal diagnostic with an explicit source-anchor policy.
     #[must_use]
     #[cold]
@@ -2107,12 +1361,9 @@ impl GraphcalError {
 
     /// The source this error's spans index into.
     #[must_use]
-    #[expect(
-        clippy::too_many_lines,
-        reason = "exhaustive variant list; one arm per error variant"
-    )]
     pub const fn source(&self) -> SourceId {
         match self {
+            Self::Located(diagnostic) => diagnostic.src,
             Self::DuplicateName { src, .. }
             | Self::DuplicateConstructorField { src, .. }
             | Self::BuiltinNameShadowed { src, .. }
@@ -2133,7 +1384,6 @@ impl GraphcalError {
             | Self::IncludeItemNotProjectable { src, .. }
             | Self::IncludeConstructorOwnerRebound { src, .. }
             | Self::DuplicateIncludeSelection { src, .. }
-            | Self::HiddenIncludeItemNotAPlot { src, .. }
             | Self::UnknownGraphRef { src, .. }
             | Self::BareGraphDeclarationRef { src, .. }
             | Self::TimeScaleInValuePosition { src, .. }
@@ -2150,11 +1400,9 @@ impl GraphcalError {
             | Self::MissingHostFunction { src, .. }
             | Self::ExternCallNotAllowed { src, .. }
             | Self::GraphRefInConst { src, .. }
-            | Self::DagCallInCompileTime { src, .. }
             | Self::GraphRefInConstUnit { src, .. }
             | Self::NonConstUnitInConst { src, .. }
             | Self::WrongArity { src, .. }
-            | Self::CyclicDependency { src, .. }
             | Self::EvalError { src, .. }
             | Self::EvaluationUnavailable { src, .. }
             | Self::InternalError { src, .. }
@@ -2181,15 +1429,6 @@ impl GraphcalError {
             | Self::IneffectiveConversion { src, .. }
             | Self::InvalidBaseUnitDeclaration { src, .. }
             | Self::AffineProneUnitDefinition { src, .. }
-            | Self::UnknownStructType { src, .. }
-            | Self::UnknownField { src, .. }
-            | Self::MissingFields { src, .. }
-            | Self::MissingPatternFields { src, .. }
-            | Self::EmptyParenthesizedConstructor { src, .. }
-            | Self::ExtraFields { src, .. }
-            | Self::FieldDimensionMismatch { src, .. }
-            | Self::NotAStruct { src, .. }
-            | Self::UnknownLocalRef { src, .. }
             | Self::UnknownIndex { src, .. }
             | Self::UnknownVariant { src, .. }
             | Self::MissingVariants { src, .. }
@@ -2202,26 +1441,6 @@ impl GraphcalError {
             | Self::CoordinateIndexDimensionMismatch { src, .. }
             | Self::CoordinateIndexInvalid { src, .. }
             | Self::ExpectedIndexFoundNat { src, .. }
-            | Self::GraphRefToAssert { src, .. }
-            | Self::AssertBodyNotBool { src, .. }
-            | Self::UnknownAssertInAssumes { src, .. }
-            | Self::InvalidAssumesTarget { src, .. }
-            | Self::RepeatedSingletonAttribute { src, .. }
-            | Self::EmptyAssumes { src, .. }
-            | Self::DuplicateAssumesArgument { src, .. }
-            | Self::InvalidAssumesArgument { src, .. }
-            | Self::LazyNotSupported { src, .. }
-            | Self::InvalidHiddenTarget { src, .. }
-            | Self::UnknownAttribute { src, .. }
-            | Self::InvalidExpectedFailTarget { src, .. }
-            | Self::ExpectedFailInvalidArg { src, .. }
-            | Self::ExpectedFailNotIndexed { src, .. }
-            | Self::ExpectedFailAllOnIndexed { src, .. }
-            | Self::ExpectedFailDuplicateKey { src, .. }
-            | Self::ExpectedFailKeyShapeMismatch { src, .. }
-            | Self::ExpectedFailKeyIndexMismatch { src, .. }
-            | Self::ExpectedFailFinitePositionOutOfBounds { src, .. }
-            | Self::NegativeTolerance { src, .. }
             | Self::UnknownParamBinding { src, .. }
             | Self::BindingNotAParam { src, .. }
             | Self::DagInputCategoryMismatch { src, .. }
@@ -2237,26 +1456,7 @@ impl GraphcalError {
             | Self::InvalidEpochTimeScaleArgument { src, .. }
             | Self::UnsupportedEpochTimeScale { src, .. }
             | Self::NonexistentCivilDateTime { src, .. }
-            | Self::RepeatedCivilDateTime { src, .. }
-            | Self::DomainViolation { src, .. }
-            | Self::DomainDimensionMismatch { src, .. }
-            | Self::DomainMinExceedsMax { src, .. }
-            | Self::InvalidDomainTarget { src, .. }
-            | Self::IntDomainBoundTypeMismatch { src, .. }
-            | Self::GenericTypeArgDomainConstraint { src, .. }
-            | Self::DatetimeDomainBoundTypeMismatch { src, .. }
-            | Self::ImportPrivateItem { src, .. }
-            | Self::RequiredItemMustBeBindable { src, .. }
-            | Self::PrivateInPublic { src, .. }
-            | Self::PubIndexVariantLiteral { src, .. }
-            | Self::IncludeMustReconcileOverride { src, .. }
-            | Self::GenericsLeakage { src, .. }
-            | Self::TemplateBodyDependsOnStaticDefault { src, .. }
-            | Self::UnknownDag { src, .. }
-            | Self::UnknownDagParam { src, .. }
-            | Self::MissingDagBindings { src, .. }
-            | Self::UnknownDagOutput { src, .. }
-            | Self::DagArgTypeMismatch { src, .. } => *src,
+            | Self::RepeatedCivilDateTime { src, .. } => *src,
         }
     }
 }
@@ -2308,11 +1508,20 @@ impl std::error::Error for RenderedGraphcalError {}
 
 impl Diagnostic for RenderedGraphcalError {
     fn code<'a>(&'a self) -> Option<Box<dyn std::fmt::Display + 'a>> {
-        self.error.code()
+        match &self.error {
+            GraphcalError::Located(diagnostic) => Some(Box::new(diagnostic.kind.code())),
+            error => error.code(),
+        }
     }
 
     fn help<'a>(&'a self) -> Option<Box<dyn std::fmt::Display + 'a>> {
-        self.error.help()
+        match &self.error {
+            GraphcalError::Located(diagnostic) => diagnostic
+                .kind
+                .help()
+                .map(|help| Box::new(help) as Box<dyn std::fmt::Display + 'a>),
+            error => error.help(),
+        }
     }
 
     fn source_code(&self) -> Option<&dyn miette::SourceCode> {
@@ -2321,6 +1530,17 @@ impl Diagnostic for RenderedGraphcalError {
 
     fn labels(&self) -> Option<Box<dyn Iterator<Item = miette::LabeledSpan> + '_>> {
         match &self.error {
+            GraphcalError::Located(diagnostic) => {
+                let primary = miette::LabeledSpan::new_with_span(
+                    diagnostic.kind.primary_label(),
+                    diagnostic.primary,
+                );
+                let secondary =
+                    diagnostic.kind.secondary_labels().into_iter().map(|label| {
+                        miette::LabeledSpan::new_with_span(Some(label.text), label.span)
+                    });
+                Some(Box::new(std::iter::once(primary).chain(secondary)))
+            }
             GraphcalError::InternalError { anchor, .. } => Some(Box::new(
                 anchor
                     .resolve(self.source.inner().len())
@@ -2441,7 +1661,13 @@ mod tests {
 
     #[test]
     fn diagnostic_codes_are_unique_and_reassignments_are_pinned() {
-        let catalog = diagnostic_code_catalog();
+        let mut catalog = diagnostic_code_catalog();
+        for (variant, code) in crate::semantic_error::tests::family_code_catalog() {
+            assert!(
+                catalog.insert(variant.clone(), code).is_none(),
+                "variant `{variant}` is defined twice"
+            );
+        }
         assert!(catalog.len() > 100, "incomplete catalog: {catalog:?}");
 
         let mut variants_by_code = BTreeMap::new();
@@ -2467,8 +1693,9 @@ mod tests {
 
     #[test]
     fn typed_member_and_function_payloads_render_their_source_spelling() {
-        use super::{CalledFunction, NominalMember};
+        use super::CalledFunction;
         use crate::builtin::{BuiltinFn, ScalarFn};
+        use crate::semantic_error::structure::NominalMember;
         use crate::syntax::function_name::FnName;
         use crate::syntax::type_name::{ConstructorName, FieldName};
 

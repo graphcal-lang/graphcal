@@ -1,6 +1,7 @@
 //! Domain-bound resolution and compile-time constraint validation.
 
 use graphcal_compiler::declaration_category::ValueDeclCategory;
+use graphcal_compiler::semantic_error::domain::DomainError;
 use graphcal_compiler::source_registry::SourceRegistry;
 use std::collections::{HashMap, HashSet};
 
@@ -102,13 +103,15 @@ pub(super) fn resolve_domain_constraints_for_dag(
             && let Err(violation) =
                 crate::domain_check::check_domain_constraint(value, &resolved_constraint)
         {
-            return Err(GraphcalError::DomainViolation {
-                name: name.to_string(),
-                value: format_runtime_value(value),
-                violation: violation.message,
+            return Err(GraphcalError::located(
                 src,
-                span: decl_span.into(),
-            }
+                decl_span,
+                DomainError::DomainViolation {
+                    name: name.to_string(),
+                    value: format_runtime_value(value),
+                    violation: violation.message,
+                },
+            )
             .into());
         }
         constraints.insert(resolved_key, resolved_constraint);
@@ -263,13 +266,15 @@ fn evaluate_domain_bounds<T: PartialOrd>(
     if let (Some(min), Some(max)) = (&min, &max)
         && min.value() > max.value()
     {
-        return Err(GraphcalError::DomainMinExceedsMax {
-            name: display_name.to_string(),
-            min: min.display().to_string(),
-            max: max.display().to_string(),
+        return Err(GraphcalError::located(
             src,
-            span: constraint_span.into(),
-        }
+            constraint_span,
+            DomainError::DomainMinExceedsMax {
+                name: display_name.to_string(),
+                min: min.display().to_string(),
+                max: max.display().to_string(),
+            },
+        )
         .into());
     }
     Ok(EvaluatedDomainBounds::new(min, max))
@@ -718,13 +723,15 @@ fn check_const_struct_field_constraints(
                 ) && let Err(violation) =
                     crate::domain_check::check_domain_constraint(field_value, constraint)
                 {
-                    return Err(GraphcalError::DomainViolation {
-                        name: format!("{decl_name}.{field_name}"),
-                        value: format_runtime_value(field_value),
-                        violation: violation.message,
+                    return Err(GraphcalError::located(
                         src,
-                        span: decl_span.into(),
-                    });
+                        decl_span,
+                        DomainError::DomainViolation {
+                            name: format!("{decl_name}.{field_name}"),
+                            value: format_runtime_value(field_value),
+                            violation: violation.message,
+                        },
+                    ));
                 }
                 // Recurse for nested struct fields. The nested runtime value
                 // carries its canonical owner when module-aware constructor
@@ -794,33 +801,43 @@ fn resolve_constraint_target(
         ResolvedValueType::Quantity(_) => Ok(ConstraintTarget::Quantity),
         ResolvedValueType::Int => Ok(ConstraintTarget::Int),
         ResolvedValueType::Datetime(scale) => Ok(ConstraintTarget::Datetime(*scale)),
-        ResolvedValueType::Bool => Err(GraphcalError::InvalidDomainTarget {
-            type_kind: "Bool".to_string(),
+        ResolvedValueType::Bool => Err(GraphcalError::located(
             src,
-            span: decl_span.into(),
-        }),
-        ResolvedValueType::Complex { .. } => Err(GraphcalError::InvalidDomainTarget {
-            type_kind: "Complex".to_string(),
+            decl_span,
+            DomainError::InvalidDomainTarget {
+                type_kind: "Bool".to_string(),
+            },
+        )),
+        ResolvedValueType::Complex { .. } => Err(GraphcalError::located(
             src,
-            span: decl_span.into(),
-        }),
-        ResolvedValueType::Key { .. } => Err(GraphcalError::InvalidDomainTarget {
-            type_kind: "Key".to_string(),
+            decl_span,
+            DomainError::InvalidDomainTarget {
+                type_kind: "Complex".to_string(),
+            },
+        )),
+        ResolvedValueType::Key { .. } => Err(GraphcalError::located(
             src,
-            span: decl_span.into(),
-        }),
+            decl_span,
+            DomainError::InvalidDomainTarget {
+                type_kind: "Key".to_string(),
+            },
+        )),
         ResolvedValueType::Struct {
             name: struct_name, ..
-        } => Err(GraphcalError::InvalidDomainTarget {
-            type_kind: format!("struct `{}`", struct_name.as_str()),
+        } => Err(GraphcalError::located(
             src,
-            span: decl_span.into(),
-        }),
-        ResolvedValueType::GenericTypeParam(param, _) => Err(GraphcalError::InvalidDomainTarget {
-            type_kind: format!("generic Type parameter `{param}`"),
+            decl_span,
+            DomainError::InvalidDomainTarget {
+                type_kind: format!("struct `{}`", struct_name.as_str()),
+            },
+        )),
+        ResolvedValueType::GenericTypeParam(param, _) => Err(GraphcalError::located(
             src,
-            span: decl_span.into(),
-        }),
+            decl_span,
+            DomainError::InvalidDomainTarget {
+                type_kind: format!("generic Type parameter `{param}`"),
+            },
+        )),
     }
 }
 

@@ -10,6 +10,8 @@ use crate::outcome::Outcome;
 use crate::semantic::checked_type::{
     CheckedGenericArg, CheckedType, IndexTypeRef, StructTypeRef, Symbolic,
 };
+use crate::semantic_error::domain::DomainError;
+use crate::semantic_error::structure::StructError;
 use crate::source_id::SourceId;
 use crate::syntax::span::Span;
 use crate::tir::texpr::{CheckedBody, TBody, TNodeRef, visit_tnodes};
@@ -130,10 +132,14 @@ fn validate(
             let definition = ctx
                 .tir
                 .struct_type_def(identity.resolved())
-                .ok_or_else(|| GraphcalError::UnknownStructType {
-                    name: identity.to_string(),
-                    src: ctx.src,
-                    span: ctx.span.into(),
+                .ok_or_else(|| {
+                    GraphcalError::located(
+                        ctx.src,
+                        ctx.span,
+                        StructError::UnknownStructType {
+                            name: identity.to_string(),
+                        },
+                    )
                 })?;
             let application = Application {
                 identity: identity.clone(),
@@ -226,11 +232,13 @@ fn check_bound(
 ) -> Result<(), GraphcalError> {
     let expected =
         super::domain_bound_type::expected_bound_from_inferred(target).ok_or_else(|| {
-            GraphcalError::InvalidDomainTarget {
-                type_kind: super::format_checked_type(target, ctx.tir.registry()),
-                src: bound.src,
-                span: bound.span.into(),
-            }
+            GraphcalError::located(
+                bound.src,
+                bound.span,
+                DomainError::InvalidDomainTarget {
+                    type_kind: super::format_checked_type(target, ctx.tir.registry()),
+                },
+            )
         })?;
     let display = if member.name().as_str() == definition.name().as_str() {
         format!("{}.{}", definition.name(), key.field)

@@ -11,6 +11,7 @@ use crate::ir::instance::{
     InstanceAssertionProjection, InstancePlotProjection, InstanceRecord, InstanceValueProjection,
 };
 use crate::resolved_name::ResolvedDeclName;
+use crate::semantic_error::visibility::VisibilityError;
 use crate::source_id::SourceId;
 use crate::syntax::decl_name::DeclName;
 use crate::syntax::dimension::{UnitName, UnitRef};
@@ -327,14 +328,16 @@ impl NominalOverridePreflight<'_> {
         if !self.substitution.indexes.contains_key(symbol.resolved()) {
             return Ok(());
         }
-        Err(GraphcalError::IncludeMustReconcileOverride {
-            overridden: index.to_string(),
-            overridden_kind: "index".to_string(),
-            orphan_decl: self.orphan_decl.to_string(),
-            detail,
-            src: self.importer_src,
-            span: self.include_span.into(),
-        })
+        Err(GraphcalError::located(
+            self.importer_src,
+            self.include_span,
+            VisibilityError::IncludeMustReconcileOverride {
+                overridden: index.to_string(),
+                overridden_kind: "index".to_string(),
+                orphan_decl: self.orphan_decl.to_string(),
+                detail,
+            },
+        ))
     }
 
     fn check_constructor(
@@ -353,14 +356,16 @@ impl NominalOverridePreflight<'_> {
         if !self.substitution.types.contains_key(&owning_identity) {
             return Ok(());
         }
-        Err(GraphcalError::IncludeMustReconcileOverride {
-            overridden: owning_type.to_string(),
-            overridden_kind: "type".to_string(),
-            orphan_decl: self.orphan_decl.to_string(),
-            detail,
-            src: self.importer_src,
-            span: self.include_span.into(),
-        })
+        Err(GraphcalError::located(
+            self.importer_src,
+            self.include_span,
+            VisibilityError::IncludeMustReconcileOverride {
+                overridden: owning_type.to_string(),
+                overridden_kind: "type".to_string(),
+                orphan_decl: self.orphan_decl.to_string(),
+                detail,
+            },
+        ))
     }
 }
 

@@ -4,6 +4,10 @@
 use std::collections::HashMap;
 
 use graphcal_compiler::graphcal_error::GraphcalError;
+use graphcal_compiler::semantic_error::SemanticErrorKind;
+use graphcal_compiler::semantic_error::graph::GraphError;
+use graphcal_compiler::semantic_error::structure::StructError;
+use graphcal_compiler::semantic_error::visibility::VisibilityError;
 
 use graphcal_compiler::graphcal_error::RenderedGraphcalError;
 use graphcal_io::RealFileSystem;
@@ -238,9 +242,15 @@ node bad: a::Box<a::Foo> = a::Box<a::Foo>(x: 1.0 b::foo);
     match error {
         CompileError::Eval(RenderedGraphcalError {
             error:
-                GraphcalError::FieldDimensionMismatch {
-                    expected, found, ..
-                },
+                GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+                    kind:
+                        SemanticErrorKind::Struct(StructError::FieldDimensionMismatch {
+                            expected,
+                            found,
+                            ..
+                        }),
+                    ..
+                }),
             ..
         }) => {
             assert_ne!(expected, found);
@@ -283,7 +293,10 @@ type Box { Box(value: Dimensionless(min: @helper()::min_value)) }
         assert!(
             matches!(
                 compile_graphcal_error(source),
-                GraphcalError::DagCallInCompileTime { .. }
+                GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+                    kind: SemanticErrorKind::Graph(GraphError::DagCallInCompileTime { .. }),
+                    ..
+                })
             ),
             "compile-time DAG call was accepted:\n{source}"
         );
@@ -317,7 +330,10 @@ fn file_root_dag_call_is_also_runtime_only() {
     assert!(matches!(
         error,
         CompileError::Eval(RenderedGraphcalError {
-            error: GraphcalError::DagCallInCompileTime { .. },
+            error: GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+                kind: SemanticErrorKind::Graph(GraphError::DagCallInCompileTime { .. }),
+                ..
+            }),
             ..
         })
     ));
@@ -368,13 +384,17 @@ fn assert_reconciliation_error(
 ) {
     match error {
         CompileError::Eval(ref rendered) => {
-            let GraphcalError::IncludeMustReconcileOverride {
-                overridden,
-                overridden_kind,
-                orphan_decl,
-                span,
+            let GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+                kind:
+                    SemanticErrorKind::Visibility(VisibilityError::IncludeMustReconcileOverride {
+                        overridden,
+                        overridden_kind,
+                        orphan_decl,
+                        ..
+                    }),
+                primary: span,
                 ..
-            } = &rendered.error
+            }) = &rendered.error
             else {
                 panic!(
                     "expected typed V005 reconciliation error, got {:?}",
@@ -621,12 +641,7 @@ include reusable(type Record: Other, record: Other(x: 2.0)) as instance;
 
     assert!(matches!(
         error,
-        GraphcalError::IncludeMustReconcileOverride {
-            overridden,
-            overridden_kind,
-            orphan_decl,
-            ..
-        } if overridden == "Record"
+        GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic { kind: SemanticErrorKind::Visibility(VisibilityError::IncludeMustReconcileOverride { overridden, overridden_kind, orphan_decl, .. }), .. }) if overridden == "Record"
             && overridden_kind == "type"
             && orphan_decl == "extracted"
     ));
@@ -668,10 +683,15 @@ pub node values: Dimensionless[Item] = for item: Item {
     assert!(
         matches!(
             error,
-            GraphcalError::TemplateBodyDependsOnStaticDefault {
-                port_kind: graphcal_compiler::static_interface::StaticInputKind::Type,
+            GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+                kind: SemanticErrorKind::Visibility(
+                    VisibilityError::TemplateBodyDependsOnStaticDefault {
+                        port_kind: graphcal_compiler::static_interface::StaticInputKind::Type,
+                        ..
+                    }
+                ),
                 ..
-            }
+            })
         ),
         "unexpected closure diagnostic: {error:?}"
     );
@@ -692,10 +712,15 @@ pub const node origin: Element = Element;
     ] {
         assert!(matches!(
             compile_graphcal_error(source),
-            GraphcalError::TemplateBodyDependsOnStaticDefault {
-                port_kind: graphcal_compiler::static_interface::StaticInputKind::Type,
+            GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+                kind: SemanticErrorKind::Visibility(
+                    VisibilityError::TemplateBodyDependsOnStaticDefault {
+                        port_kind: graphcal_compiler::static_interface::StaticInputKind::Type,
+                        ..
+                    }
+                ),
                 ..
-            }
+            })
         ));
     }
 }
@@ -710,10 +735,15 @@ param a: Length = 1.0 m;
 pub node out: D = @a;
 ",
         ),
-        GraphcalError::TemplateBodyDependsOnStaticDefault {
-            port_kind: graphcal_compiler::static_interface::StaticInputKind::Dimension,
+        GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+            kind: SemanticErrorKind::Visibility(
+                VisibilityError::TemplateBodyDependsOnStaticDefault {
+                    port_kind: graphcal_compiler::static_interface::StaticInputKind::Dimension,
+                    ..
+                }
+            ),
             ..
-        }
+        })
     ));
 
     let result = compile_and_eval(
@@ -768,11 +798,7 @@ unit scaled: Length = (@factor) m;
         assert!(
             matches!(
                 error,
-                GraphcalError::TemplateBodyDependsOnStaticDefault {
-                    ref body_name,
-                    port_kind: graphcal_compiler::static_interface::StaticInputKind::Dimension,
-                    ..
-                } if body_name.as_str() == expected_body
+                GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic { kind: SemanticErrorKind::Visibility(VisibilityError::TemplateBodyDependsOnStaticDefault { ref body_name, port_kind: graphcal_compiler::static_interface::StaticInputKind::Dimension, .. }), .. }) if body_name.as_str() == expected_body
             ),
             "unexpected error for `{expected_body}`: {error:?}"
         );

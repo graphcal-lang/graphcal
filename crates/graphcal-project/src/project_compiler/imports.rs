@@ -14,6 +14,9 @@ use graphcal_compiler::ir::resolve::{ImportedValueNames, ScopedName};
 use graphcal_compiler::outcome::Outcome;
 use graphcal_compiler::resolved_name::ResolvedDeclName;
 use graphcal_compiler::semantic::index_def::IndexBindingTarget;
+use graphcal_compiler::semantic_error::attribute::AttributeError;
+use graphcal_compiler::semantic_error::graph::GraphError;
+use graphcal_compiler::semantic_error::visibility::VisibilityError;
 use graphcal_compiler::source_id::SourceId;
 use graphcal_compiler::syntax::decl_name::DeclName;
 use graphcal_compiler::syntax::dimension::DimName;
@@ -207,12 +210,14 @@ pub(super) fn process_file_body_declarations<'a>(
         if !target_dag.declaration(target_loaded).visibility.is_public()
             && target.source_file() != file_dag_id
         {
-            return Err(PipelineError::Semantic(GraphcalError::ImportPrivateItem {
-                name: target.target().leaf().to_string(),
-                file_path: include.path.display_path(),
-                src: file_src,
-                span: include.path.leaf().span.into(),
-            })
+            return Err(PipelineError::Semantic(GraphcalError::located(
+                file_src,
+                include.path.leaf().span,
+                VisibilityError::ImportPrivateItem {
+                    name: target.target().leaf().to_string(),
+                    file_path: include.path.display_path(),
+                },
+            ))
             .into());
         }
         process_inline_dag_include(
@@ -239,14 +244,14 @@ fn ensure_include_item_selectable(
 ) -> Result<(), PipelineError> {
     match interface.exposure(name, namespace) {
         Some(DeclExposure::ExplicitExport | DeclExposure::InputPort) => Ok(()),
-        Some(DeclExposure::Private) => {
-            Err(PipelineError::Semantic(GraphcalError::ImportPrivateItem {
+        Some(DeclExposure::Private) => Err(PipelineError::Semantic(GraphcalError::located(
+            file_src,
+            span,
+            VisibilityError::ImportPrivateItem {
                 name: name.to_string(),
                 file_path: file_path.to_string(),
-                src: file_src,
-                span: span.into(),
-            }))
-        }
+            },
+        ))),
         None => Err(PipelineError::Semantic(GraphcalError::ImportNameNotFound {
             name: name.to_string(),
             file_path: file_path.to_string(),
@@ -421,10 +426,11 @@ fn validate_include_item_attributes(
                 )));
             }
             AttributeName::Lazy => {
-                return Err(PipelineError::Semantic(GraphcalError::LazyNotSupported {
-                    src: file_src,
-                    span: attr.span.into(),
-                }));
+                return Err(PipelineError::Semantic(GraphcalError::located(
+                    file_src,
+                    attr.span,
+                    AttributeError::LazyNotSupported,
+                )));
             }
         }
     }
@@ -893,12 +899,14 @@ fn validate_required_param_bindings(
     }
 
     missing.sort();
-    Err(PipelineError::Semantic(GraphcalError::MissingDagBindings {
-        missing,
-        dag_name: dag_name.to_string(),
-        src: file_src,
-        span: include_span.into(),
-    }))
+    Err(PipelineError::Semantic(GraphcalError::located(
+        file_src,
+        include_span,
+        GraphError::MissingDagBindings {
+            missing,
+            dag_name: dag_name.to_string(),
+        },
+    )))
 }
 
 /// Process every file-root DAG include, deferring its concrete instance for
@@ -1464,12 +1472,14 @@ pub(super) fn process_pure_import<'a>(
                     && !dep_interface.exposes_item(orig_name.atom(), import_item.namespace)
                 {
                     if dep_interface.has_item(orig_name.atom(), import_item.namespace) {
-                        return Err(PipelineError::Semantic(GraphcalError::ImportPrivateItem {
-                            name: orig_name.to_string(),
-                            file_path: import_path.display_path(),
-                            src: file_src,
-                            span: import_item.name.span.into(),
-                        }));
+                        return Err(PipelineError::Semantic(GraphcalError::located(
+                            file_src,
+                            import_item.name.span,
+                            VisibilityError::ImportPrivateItem {
+                                name: orig_name.to_string(),
+                                file_path: import_path.display_path(),
+                            },
+                        )));
                     }
                     return Err(PipelineError::Semantic(import_item_not_found_error(
                         dep_interface,

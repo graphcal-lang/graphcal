@@ -336,6 +336,9 @@ mod tests {
     use crate::runtime_value::RuntimeValue;
     use crate::test_tir::checked_tir_from_source;
     use graphcal_compiler::resolved_name::ResolvedDeclName;
+    use graphcal_compiler::semantic_error::SemanticErrorKind;
+    use graphcal_compiler::semantic_error::domain::DomainError;
+    use graphcal_compiler::semantic_error::graph::GraphError;
     use graphcal_compiler::syntax::decl_name::DeclName;
     use std::collections::HashSet;
 
@@ -581,7 +584,13 @@ mod tests {
             "const node a: Dimensionless = @b + 1.0;\nconst node b: Dimensionless = @a + 1.0;",
         )
         .unwrap_err();
-        assert!(matches!(err, GraphcalError::CyclicDependency { .. }));
+        assert!(matches!(
+            err,
+            GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+                kind: SemanticErrorKind::Graph(GraphError::CyclicDependency { .. }),
+                ..
+            })
+        ));
     }
 
     #[test]
@@ -589,7 +598,13 @@ mod tests {
         let err =
             compile_source("node a: Dimensionless = @b + 1.0;\nnode b: Dimensionless = @a + 1.0;")
                 .unwrap_err();
-        assert!(matches!(err, GraphcalError::CyclicDependency { .. }));
+        assert!(matches!(
+            err,
+            GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+                kind: SemanticErrorKind::Graph(GraphError::CyclicDependency { .. }),
+                ..
+            })
+        ));
     }
 
     #[test]
@@ -653,7 +668,13 @@ mod tests {
     fn const_domain_value_below_min_rejected() {
         let err = compile_source("const node X: Mass(min: 100.0 kg) = 50.0 kg;").unwrap_err();
         assert!(
-            matches!(err, GraphcalError::DomainViolation { .. }),
+            matches!(
+                err,
+                GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+                    kind: SemanticErrorKind::Domain(DomainError::DomainViolation { .. }),
+                    ..
+                })
+            ),
             "got: {err:?}"
         );
     }
@@ -662,7 +683,13 @@ mod tests {
     fn const_domain_value_above_max_rejected() {
         let err = compile_source("const node X: Mass(max: 10.0 kg) = 50.0 kg;").unwrap_err();
         assert!(
-            matches!(err, GraphcalError::DomainViolation { .. }),
+            matches!(
+                err,
+                GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+                    kind: SemanticErrorKind::Domain(DomainError::DomainViolation { .. }),
+                    ..
+                })
+            ),
             "got: {err:?}"
         );
     }
@@ -672,7 +699,13 @@ mod tests {
         let err = compile_source("const node X: Mass(min: 100.0 kg, max: 50.0 kg) = 75.0 kg;")
             .unwrap_err();
         assert!(
-            matches!(err, GraphcalError::DomainMinExceedsMax { .. }),
+            matches!(
+                err,
+                GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+                    kind: SemanticErrorKind::Domain(DomainError::DomainMinExceedsMax { .. }),
+                    ..
+                })
+            ),
             "got: {err:?}"
         );
     }
@@ -682,7 +715,13 @@ mod tests {
         // `Bool` is not a valid constraint target; this should now fire on consts too.
         let err = compile_source("const node FLAG: Bool(min: 0.0) = true;").unwrap_err();
         assert!(
-            matches!(err, GraphcalError::InvalidDomainTarget { .. }),
+            matches!(
+                err,
+                GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+                    kind: SemanticErrorKind::Domain(DomainError::InvalidDomainTarget { .. }),
+                    ..
+                })
+            ),
             "got: {err:?}"
         );
     }
@@ -696,7 +735,13 @@ mod tests {
     fn const_domain_int_value_out_of_bounds_rejected() {
         let err = compile_source("const node N: Int(min: 1, max: 10) = 100;").unwrap_err();
         assert!(
-            matches!(err, GraphcalError::DomainViolation { .. }),
+            matches!(
+                err,
+                GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+                    kind: SemanticErrorKind::Domain(DomainError::DomainViolation { .. }),
+                    ..
+                })
+            ),
             "got: {err:?}"
         );
     }
@@ -736,7 +781,13 @@ const node EVENT: Datetime(
 "#,
         )
         .unwrap_err();
-        assert!(matches!(error, GraphcalError::DomainViolation { .. }));
+        assert!(matches!(
+            error,
+            GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+                kind: SemanticErrorKind::Domain(DomainError::DomainViolation { .. }),
+                ..
+            })
+        ));
     }
 
     #[test]
@@ -750,6 +801,12 @@ const node EVENT: Datetime<TT>(
 "#,
         )
         .unwrap_err();
-        assert!(matches!(error, GraphcalError::DomainMinExceedsMax { .. }));
+        assert!(matches!(
+            error,
+            GraphcalError::Located(graphcal_compiler::diagnostic::Diagnostic {
+                kind: SemanticErrorKind::Domain(DomainError::DomainMinExceedsMax { .. }),
+                ..
+            })
+        ));
     }
 }

@@ -4,6 +4,7 @@ use crate::graphcal_error::GraphcalError;
 use crate::hir::nominal::{NominalGenericParam, NominalTypeDef};
 use crate::resolve::error::ModuleResolveError;
 use crate::resolved_name::{ResolvedDimName, ResolvedIndexName, ResolvedStructTypeName};
+use crate::semantic_error::structure::StructError;
 use crate::source_id::SourceId;
 use crate::syntax::ast::GenericConstraint;
 use crate::syntax::index_name::IndexName;
@@ -162,13 +163,15 @@ fn hir_struct_type_def<'a>(
     span: Span,
     ctx: HirTypeResolutionContext<'a>,
 ) -> Result<&'a NominalTypeDef, GraphcalError> {
-    ctx.project_types
-        .get_struct_type(name)
-        .ok_or_else(|| GraphcalError::UnknownStructType {
-            name: name.to_string(),
-            src: ctx.src,
-            span: span.into(),
-        })
+    ctx.project_types.get_struct_type(name).ok_or_else(|| {
+        GraphcalError::located(
+            ctx.src,
+            span,
+            StructError::UnknownStructType {
+                name: name.to_string(),
+            },
+        )
+    })
 }
 
 fn resolve_hir_dim_expr(

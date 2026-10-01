@@ -8,6 +8,7 @@
 use std::collections::{HashMap, HashSet};
 
 use graphcal_compiler::graphcal_error::GraphcalError;
+use graphcal_compiler::semantic_error::visibility::VisibilityError;
 use graphcal_compiler::syntax::span::Span;
 
 use crate::compile_error::PipelineError;
@@ -211,14 +212,16 @@ pub(super) fn check_generics_leakage(
                     .external_surface()
                     .is_static_explicit_export(substituted.atom())
             {
-                return Err(PipelineError::Semantic(GraphcalError::GenericsLeakage {
-                    reexport_kind: decl_kind_str.to_string(),
-                    reexport_name: decl_name.to_string(),
-                    leaked_kind: namespace_diagnostic_name(namespace).to_string(),
-                    leaked_name: substituted.atom().to_string(),
-                    src: importer_src,
-                    span: include_span.into(),
-                }));
+                return Err(PipelineError::Semantic(GraphcalError::located(
+                    importer_src,
+                    include_span,
+                    VisibilityError::GenericsLeakage {
+                        reexport_kind: decl_kind_str.to_string(),
+                        reexport_name: decl_name.to_string(),
+                        leaked_kind: namespace_diagnostic_name(namespace).to_string(),
+                        leaked_name: substituted.atom().to_string(),
+                    },
+                )));
             }
         }
     }

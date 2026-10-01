@@ -43,6 +43,7 @@ pub mod ratio;
 pub mod resolve;
 pub mod resolved_name;
 pub mod semantic;
+pub mod semantic_error;
 pub mod source_id;
 pub(crate) mod source_line;
 pub mod source_registry;
