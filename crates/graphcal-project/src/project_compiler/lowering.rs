@@ -45,7 +45,8 @@ use super::including_module::IncludingModule;
 /// Project-wide semantic services shared by every module lowering pass.
 pub(super) struct ProjectSemanticContext<'project, 'session> {
     pub(super) project: &'project crate::loader::loaded_project::LoadedProject,
-    pub(super) module_resolver: &'project graphcal_compiler::resolve::ModuleResolver,
+    /// The module resolver, with the handle of every loaded module.
+    pub(super) modules: &'project crate::loader::loaded_module_resolver::LoadedModuleResolver,
     pub(super) module_templates: &'session mut ModuleTemplateStore,
     /// Canonical dimensions, units, and indexes of every module, evaluated on demand.
     pub(super) definitions:
@@ -293,7 +294,7 @@ pub(super) fn lower_file_to_hir(
         importer,
         project,
         file_dag_id,
-        semantic.module_resolver,
+        semantic.modules.resolver(),
         file_src,
     )?;
     let include_debug_names = include_debug_name_map(&ctx);
@@ -404,13 +405,14 @@ fn compile_loaded_dag_module_ir(
         );
     }
     let project = semantic.project;
-    let module_resolver = semantic.module_resolver;
+    let modules = semantic.modules;
+    let module_resolver = modules.resolver();
     let self_imports = crate::inline_dag::preprocess_dag_body_self_imports(
         dag_body,
         loaded_dag.parent_dag_id(),
         parent_loaded.interface(),
         loaded_dag.resolved_imports(),
-        module_resolver,
+        modules,
         file_src,
     )
     .map_err(PipelineError::from)?;
@@ -424,20 +426,10 @@ fn compile_loaded_dag_module_ir(
     };
 
     process_dag_body_import_declarations(
-        project,
-        loaded_dag,
-        dag_body,
-        file_src,
-        module_resolver,
-        &mut ctx,
+        project, loaded_dag, dag_body, file_src, modules, &mut ctx,
     )?;
     process_dag_body_include_declarations(
-        project,
-        loaded_dag,
-        dag_body,
-        file_src,
-        module_resolver,
-        &mut ctx,
+        project, loaded_dag, dag_body, file_src, modules, &mut ctx,
     )?;
 
     extend_imported_value_names(&mut ctx.imported_names, self_imports.names);
@@ -555,9 +547,10 @@ fn process_dag_body_import_declarations<'a>(
     loaded_dag: &crate::loader::loaded_file::LoadedDag,
     dag_body: &[Declaration],
     file_src: SourceId,
-    module_resolver: &graphcal_compiler::resolve::ModuleResolver,
+    modules: &'a crate::loader::loaded_module_resolver::LoadedModuleResolver,
     ctx: &mut ImportContext<'a>,
 ) -> Result<(), PipelineError> {
+    let module_resolver = modules.resolver();
     for decl in dag_body {
         let DeclKind::Import(import_decl) = &decl.kind else {
             continue;
@@ -577,7 +570,7 @@ fn process_dag_body_import_declarations<'a>(
                 StaticScope::new(loaded_dag.dag_id(), module_resolver),
             ),
             file_src,
-            module_resolver,
+            modules,
             ctx,
         )?;
     }
@@ -589,9 +582,10 @@ fn process_dag_body_include_declarations<'a>(
     loaded_dag: &crate::loader::loaded_file::LoadedDag,
     dag_body: &[Declaration],
     file_src: SourceId,
-    module_resolver: &graphcal_compiler::resolve::ModuleResolver,
+    modules: &'a crate::loader::loaded_module_resolver::LoadedModuleResolver,
     ctx: &mut ImportContext<'a>,
 ) -> Result<(), PipelineError> {
+    let module_resolver = modules.resolver();
     for decl in dag_body {
         let DeclKind::Include(include_decl) = &decl.kind else {
             continue;
@@ -599,9 +593,14 @@ fn process_dag_body_include_declarations<'a>(
         let Some(target) = loaded_dag.resolved_imports().get(&include_decl.path.key()) else {
             continue;
         };
-        if target.target() == target.source_file() {
+        let crate::loader::loaded_file::LoadedModule::InlineDag {
+            file: target_file,
+            dag: target_dag,
+        } = project.target_module(target)
+        else {
             imports::process_file_include(
                 project,
+                modules,
                 target,
                 include_decl,
                 decl,
@@ -613,14 +612,11 @@ fn process_dag_body_include_declarations<'a>(
                 ctx,
             )?;
             continue;
-        }
-
-        let Some((target_file, target_dag)) = project.inline_dag(target.target()) else {
-            continue;
         };
         imports::process_inline_dag_include(
             &imports::InlineDagIncludeTarget {
                 module: target_dag.module(target_file),
+                resolved: modules.target(target),
                 dag_name: &target_dag.declaration(target_file).name.value,
             },
             include_decl,
@@ -989,7 +985,8 @@ fn elaborate_include_instances(
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<(), Outcome<PipelineError>> {
     let project = semantic.project;
-    let module_resolver = semantic.module_resolver;
+    let modules = semantic.modules;
+    let module_resolver = modules.resolver();
     for instance in include_instances {
         cancellation.checkpoint()?;
         // ---- 1. Resolve and assemble source body -----------------------------
@@ -1016,7 +1013,7 @@ fn elaborate_include_instances(
                 imports::process_file_body_declarations(
                     project,
                     dep_loaded,
-                    module_resolver,
+                    modules,
                     &mut body_ctx,
                     cancellation,
                 )?;
@@ -1076,7 +1073,7 @@ fn elaborate_include_instances(
                     parent_dag_id,
                     parent_loaded.interface(),
                     loaded_inline.resolved_imports(),
-                    module_resolver,
+                    modules,
                     importer_src,
                 )
                 .map_err(PipelineError::from)?;
@@ -1093,7 +1090,7 @@ fn elaborate_include_instances(
                     loaded_inline,
                     inline_body,
                     importer_src,
-                    module_resolver,
+                    modules,
                     &mut body_ctx,
                 )?;
                 process_dag_body_include_declarations(
@@ -1101,7 +1098,7 @@ fn elaborate_include_instances(
                     loaded_inline,
                     inline_body,
                     importer_src,
-                    module_resolver,
+                    modules,
                     &mut body_ctx,
                 )?;
                 extend_imported_value_names(&mut body_ctx.imported_names, self_imports.names);

@@ -2809,6 +2809,11 @@ role = "contracts"
 
 [[module]]
 package = "project"
+path = ["loader", "loaded_module_resolver"]
+role = "checking"
+
+[[module]]
+package = "project"
 path = ["loader", "budget_violation"]
 role = "contracts"
 

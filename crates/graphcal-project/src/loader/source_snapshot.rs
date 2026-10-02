@@ -19,7 +19,7 @@ use miette::NamedSource;
 
 use graphcal_compiler::syntax::module_path_key::ModulePathKey;
 
-use super::module_path::ResolvedModuleTarget;
+use super::module_path::ModuleTarget;
 use crate::compile_error::CompileError;
 use graphcal_compiler::cancellation::CancellationToken;
 use graphcal_compiler::dag_id::{DagId, DagPackageId};
@@ -289,14 +289,14 @@ pub(super) struct ResolvedFile<K> {
 
 impl<K> ResolvedFile<K> {
     /// Exact module target once the owning file has its [`DagId`].
-    pub(super) fn target_from(&self, source_file: &DagId) -> ResolvedModuleTarget {
+    pub(super) fn target_from(&self, source_file: &DagId) -> ModuleTarget {
         let target = self
             .inline_path
             .iter()
             .fold(source_file.clone(), |owner, name| {
                 owner.inline_dag_child(name.clone())
             });
-        ResolvedModuleTarget::in_file(source_file.clone(), target)
+        ModuleTarget::in_file(source_file.clone(), target)
     }
 }
 

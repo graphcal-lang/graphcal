@@ -29,23 +29,16 @@ struct ResolvedModuleQualifier {
     access: Access,
 }
 
-impl ModuleResolver {
+impl super::ModuleRef<'_> {
     /// List the module's public surface as source spelling plus typed canonical target.
     ///
     /// Native declarations and selective re-exports are indistinguishable here.
     /// Imports expose only items explicitly marked `pub` in their selective list;
     /// namespaced imports never widen this surface.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`ModuleResolveError`] if `owner` or a re-exported declaration's
-    /// canonical owner is missing.
-    pub fn exported_bindings(
-        &self,
-        owner: &DagId,
-    ) -> Result<Vec<ExportedBinding>, ModuleResolveError> {
-        let symbols = self.module_symbols(owner)?;
-        let scope = self.module_scope(owner)?;
+    #[must_use]
+    pub fn exported_bindings(self) -> Vec<ExportedBinding> {
+        let symbols = &self.entry.symbols;
+        let scope = &self.entry.scope;
         let mut bindings = Vec::new();
         let mut export = |name: &NameAtom, target| {
             bindings.push(ExportedBinding {
@@ -101,15 +94,35 @@ impl ModuleResolver {
                 .cmp(&right.target.kind().sort_rank())
                 .then_with(|| left.name.cmp(&right.name))
         });
-        Ok(bindings)
+        bindings
+    }
+}
+
+impl ModuleResolver {
+    /// The public surface of the module `owner` (see
+    /// [`ModuleRef::exported_bindings`](super::ModuleRef::exported_bindings)).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ModuleResolveError::UnknownModule`] when the resolver does
+    /// not know `owner`.
+    pub fn exported_bindings(
+        &self,
+        owner: &DagId,
+    ) -> Result<Vec<ExportedBinding>, ModuleResolveError> {
+        self.module_handle(owner)
+            .map(|module| self.module(module).exported_bindings())
+            .ok_or_else(|| ModuleResolveError::UnknownModule {
+                owner: owner.clone(),
+            })
     }
 
     /// Render the typed exported bindings in selective-import categories.
     ///
     /// # Errors
     ///
-    /// Returns [`ModuleResolveError`] when [`Self::exported_bindings`] cannot
-    /// resolve a canonical target.
+    /// Returns [`ModuleResolveError::UnknownModule`] when the resolver does
+    /// not know `owner`.
     pub fn exported_import_items(
         &self,
         owner: &DagId,

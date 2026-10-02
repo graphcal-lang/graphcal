@@ -23,6 +23,7 @@ pub(crate) mod budget_violation;
 mod build;
 mod inline_dags;
 pub(crate) mod loaded_file;
+pub(crate) mod loaded_module_resolver;
 pub(crate) mod loaded_project;
 pub(crate) mod module_path;
 mod source_authority;
@@ -44,7 +45,7 @@ pub use loaded_project::{
     PluginCallPolicy, PluginFileEntry, PluginFileError,
 };
 use module_path::PackageSelector;
-pub use module_path::{ResolvedModuleTarget, ResolvedModuleTargetError};
+pub use module_path::ResolvedModuleTarget;
 use source_authority::{
     ModuleSourceAuthority, ProjectSources, SelectedPackage, SourceTree, fetch_source_snapshot,
 };
@@ -77,7 +78,7 @@ fn wasm_plugin_paths(
 }
 
 fn validate_plugin_call_policy(
-    files: &DependencyOrdered<LoadedFile>,
+    files: &DependencyOrdered<LoadedFile<module_path::ModuleTarget>>,
     policy: &PluginCallPolicy,
 ) -> Result<(), CompileError> {
     let declared_functions = files
@@ -353,12 +354,13 @@ impl LoadedProject {
             HashMap::new(),
             inline_dags,
         );
-        Ok(Self::from_parts(
+        Self::from_parts(
             DependencyOrdered::root_only(loaded_file),
             sources,
             plugins,
             PluginCallPolicy::default(),
-        ))
+        )
+        .map_err(Into::into)
     }
 
     /// Build the module resolver for every loaded file and inline DAG.
@@ -379,14 +381,8 @@ impl LoadedProject {
         graphcal_compiler::resolve::ModuleResolver,
         graphcal_compiler::resolve::error::ModuleResolveError,
     > {
-        let mut tables = graphcal_compiler::resolve::builder::SymbolTables::default();
-        for loaded in &self.files {
-            tables.add_module(loaded.dag_id.clone(), &loaded.ast.declarations)?;
-            for inline in &loaded.inline_dags {
-                tables.add_module(inline.dag_id.clone(), inline.body(loaded))?;
-            }
-        }
-        tables.scopes(self)?.freeze()
+        loaded_module_resolver::LoadedModuleResolver::build(self)
+            .map(loaded_module_resolver::LoadedModuleResolver::into_resolver)
     }
 
     /// The top-level `dag` of the file root `owner` that a single-segment
@@ -423,7 +419,7 @@ fn resolved_module_target_from(
         || {
             project
                 .inline_dag(source)
-                .and_then(|(_, inline)| inline.resolved_imports.get(&key).cloned())
+                .and_then(|(_, _, inline)| inline.resolved_imports.get(&key).cloned())
         },
         |file| file.resolved_imports.get(&key).cloned(),
     )?;
@@ -635,7 +631,7 @@ fn load_project_with_budget_state<F: FileSystemReader>(
         sources,
         plugins,
         plugin_call_policy,
-    ))
+    )?)
 }
 
 /// Read the root package's plugin pins from `graphcal.lock`, when present.
@@ -751,7 +747,7 @@ fn load_locked_package_project<F: FileSystemReader>(
     }
     validate_plugin_call_policy(&files, &plugin_call_policy)?;
     cancellation.checkpoint()?;
-    let mut project = LoadedProject::from_parts(files, sources, plugins, plugin_call_policy);
+    let mut project = LoadedProject::from_parts(files, sources, plugins, plugin_call_policy)?;
     project.package_closure = Some(context.closure);
     Ok(project)
 }

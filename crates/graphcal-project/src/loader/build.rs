@@ -21,7 +21,7 @@ use miette::NamedSource;
 use super::budget::io_not_found;
 use super::inline_dags::lift_inline_dags;
 use super::loaded_file::LoadedFile;
-use super::module_path::ResolvedModuleTarget;
+use super::module_path::ModuleTarget;
 use super::source_snapshot::{
     DependencySite, FetchedFile, FileRootDependencyKind, ModuleResolution, ParsedSource,
     ResolveFailure, ResolvedFile, SourceKey, SourceSnapshot, collect_inline_dag_names,
@@ -53,7 +53,7 @@ use graphcal_compiler::syntax::module_path_key::ModulePathKey;
 /// a file-root self import, an import cycle, or an invalid module path.
 pub(super) fn build_loaded_files<K: SourceKey>(
     snapshot: SourceSnapshot<K>,
-) -> Result<(DependencyOrdered<LoadedFile>, SourceRegistry), CompileError> {
+) -> Result<(DependencyOrdered<LoadedFile<ModuleTarget>>, SourceRegistry), CompileError> {
     let SourceSnapshot {
         root,
         mut files,
@@ -117,7 +117,7 @@ struct Builder<'s, K> {
     /// order.
     graph: DependencyGraph<K>,
     /// Completed files.
-    built: HashMap<K, LoadedFile>,
+    built: HashMap<K, LoadedFile<ModuleTarget>>,
 }
 
 /// Why the walk stopped before building every reachable file.
@@ -295,7 +295,7 @@ impl<K: SourceKey> Builder<'_, K> {
         dag_id: &DagId,
         parsed: &ParsedSource<K>,
         path: &ModulePath,
-    ) -> Result<ResolvedModuleTarget, CompileError> {
+    ) -> Result<ModuleTarget, CompileError> {
         let src = parsed.named_source();
         let resolved = match parsed.resolution(path) {
             Some(ModuleResolution::Resolved(resolved)) => resolved,

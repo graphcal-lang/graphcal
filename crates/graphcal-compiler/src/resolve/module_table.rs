@@ -88,6 +88,29 @@ impl<E> ModuleTable<E> {
     pub(super) fn entry(&self, handle: ModuleHandle) -> &E {
         &self.entries[handle.0].1
     }
+
+    /// Every identity, in handle order.
+    pub(super) fn owners(&self) -> impl Iterator<Item = &DagId> {
+        self.entries.iter().map(|(owner, _)| owner)
+    }
+
+    /// Every identity with its entry, in handle order.
+    pub(super) fn iter(&self) -> impl Iterator<Item = (&DagId, &E)> {
+        self.entries.iter().map(|(owner, entry)| (owner, entry))
+    }
+
+    /// The table of `f` applied to every entry, where every module keeps its
+    /// handle.
+    pub(super) fn map<F>(self, mut f: impl FnMut(E) -> F) -> ModuleTable<F> {
+        ModuleTable {
+            entries: self
+                .entries
+                .into_iter()
+                .map(|(owner, entry)| (owner, f(entry)))
+                .collect(),
+            positions: self.positions,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -122,6 +145,25 @@ mod tests {
             *entry = 4;
         }
         assert_eq!(table.entry(main), &4);
+    }
+
+    #[test]
+    fn mapping_keeps_every_handle_and_order() {
+        let mut table = ModuleTable::default();
+        let main = table.insert(dag("main"), 1);
+        let lib = table.insert(dag("lib"), 2);
+        assert_eq!(
+            table.owners().cloned().collect::<Vec<_>>(),
+            [dag("main"), dag("lib")]
+        );
+        assert_eq!(
+            table.iter().map(|(_, entry)| *entry).collect::<Vec<_>>(),
+            [1, 2]
+        );
+        let mapped = table.map(|entry| entry * 10);
+        assert_eq!(mapped.entry(main), &10);
+        assert_eq!(mapped.entry(lib), &20);
+        assert_eq!(mapped.handle(&dag("lib")), Some(lib));
     }
 
     #[test]

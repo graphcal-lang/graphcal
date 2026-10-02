@@ -630,24 +630,10 @@ pub(super) fn prepare_checked_project(
         module_resolver,
     } = checked.into_runtime_parts();
     if let Some(index) = compiled.entry_interface.required_index() {
-        let Some(span) = index.anchor().resolve(source.whole_span().len()) else {
-            return Err(CompileError::semantic(
-                SemanticError::internal_error(
-                    format!(
-                        "required index `{}` has no diagnostic source anchor",
-                        index.name()
-                    ),
-                    source,
-                    DiagnosticAnchor::Builtin,
-                ),
-                &sources,
-            )
-            .into());
-        };
         return Err(CompileError::semantic(
             SemanticError::located(
                 source,
-                span,
+                index.span(),
                 IndexError::RequiredStaticInputNotBound {
                     kind: StaticInputKind::Index,
                     name: index.name().atom().clone(),
