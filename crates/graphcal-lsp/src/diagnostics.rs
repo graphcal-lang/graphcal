@@ -680,7 +680,7 @@ mod tests {
         let cases = [
             (
                 CompileError::Load(LoadError::InvalidSourcePath {
-                    path: "bad.txt".to_string(),
+                    path: std::path::PathBuf::from("bad.txt"),
                     reason: "wrong extension".to_string(),
                 }),
                 "graphcal::M023",

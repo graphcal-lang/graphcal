@@ -245,14 +245,10 @@ impl<K: SourceKey> Builder<'_, K> {
                     return Err(CompileError::Load(outside_root(path, src.clone())).into());
                 }
                 Some(ModuleResolution::Failed(failure)) => {
-                    return Err(failure
-                        .to_error(path, src, parsed.source_id(), self.sources)
-                        .into());
+                    return Err(failure.to_error(path, src).into());
                 }
                 None => {
-                    return Err(ResolveFailure::FileNotFound
-                        .to_error(path, src, parsed.source_id(), self.sources)
-                        .into());
+                    return Err(ResolveFailure::FileNotFound.to_error(path, src).into());
                 }
             };
             let owner = if resolved.file == *file {
@@ -303,7 +299,7 @@ pub(super) fn file_root_self_import_error(
     src: &NamedSource<Arc<String>>,
 ) -> CompileError {
     CompileError::Load(LoadError::FileRootSelfImport {
-        path: path.display_path(),
+        path: path.key(),
         src: src.clone(),
         span: path.span().into(),
     })

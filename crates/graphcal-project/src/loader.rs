@@ -54,8 +54,9 @@ use source_authority::{
 use source_snapshot::{PackageFileKey, ParsedFile, ResolveFailure, file_stem};
 
 use graphcal_package::{
-    GitSourceId, LockedPackage, PackageInstanceId, PackageManifest, PackageSource, STDLIB_VERSION,
-    ValidatedPackageGraph, parse_lockfile_str_with_limits, parse_manifest_str,
+    GitSourceId, LockedPackage, PackageInstanceId, PackageManifest, PackageResolveError,
+    PackageSource, STDLIB_VERSION, ValidatedPackageGraph, parse_lockfile_str_with_limits,
+    parse_manifest_str,
 };
 
 #[cfg(test)]
@@ -907,15 +908,22 @@ impl ModuleSourceAuthority for PackageLoadContext<'_> {
         let resolved = self
             .graph
             .resolve_package_selector(&from.package, selector.name().as_str())
-            .map_err(|error| ResolveFailure::NotLocked {
-                message: error.to_string(),
+            .map_err(|error| match error {
+                // The importing file's package instance came from this graph.
+                PackageResolveError::UnknownCurrentPackage { package } => {
+                    ResolveFailure::PackageAuthority(PackageAuthorityError::MissingPackage(package))
+                }
+                PackageResolveError::UnknownDependency { package_name, .. } => {
+                    ResolveFailure::UnknownDependency {
+                        package: package_name,
+                    }
+                }
             })?;
-        let package =
-            self.graph
-                .package(&resolved.package)
-                .ok_or_else(|| ResolveFailure::Manifest {
-                    message: format!("lockfile package `{}` is missing", resolved.package),
-                })?;
+        let package = self.graph.package(&resolved.package).ok_or_else(|| {
+            ResolveFailure::PackageAuthority(PackageAuthorityError::MissingPackage(
+                resolved.package.clone(),
+            ))
+        })?;
         Ok(SelectedPackage {
             namespace_dir: package.source_dir.to_path_buf().join(package.name.as_str()),
             package: resolved.package,
@@ -1285,13 +1293,13 @@ fn virtual_package_id_for_path(path: &Path) -> Result<DagPackageId, CompileError
         .and_then(|name| name.to_str())
         .ok_or_else(|| {
             CompileError::Load(LoadError::InvalidSourcePath {
-                path: path.display().to_string(),
+                path: path.to_path_buf(),
                 reason: "source path has no UTF-8 file name".to_string(),
             })
         })?;
     let stem = file_name.strip_suffix(".gcl").ok_or_else(|| {
         CompileError::Load(LoadError::InvalidSourcePath {
-            path: path.display().to_string(),
+            path: path.to_path_buf(),
             reason: "source path must end with `.gcl`".to_string(),
         })
     })?;

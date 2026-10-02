@@ -212,9 +212,7 @@ pub(super) fn resolve_module<A: ModuleSourceAuthority>(
     let tree = match authority.tree(&selected.package) {
         Ok(tree) => tree,
         Err(error) => {
-            return ModuleResolution::Failed(ResolveFailure::Manifest {
-                message: error.to_string(),
-            });
+            return ModuleResolution::Failed(ResolveFailure::PackageAuthority(error));
         }
     };
     let namespace_dir = tree.root.join(&selected.namespace_dir);
@@ -282,7 +280,7 @@ impl ModuleSourceAuthority for ProjectSources<'_> {
         // Real package: the first segment must match the package name.
         if !selector.names(&manifest.name) {
             return Err(ResolveFailure::PackageNameMismatch {
-                package_name: manifest.name.to_string(),
+                package_name: manifest.name.clone(),
             });
         }
         Ok(SelectedPackage {

@@ -2247,11 +2247,13 @@ impl PackageGraph {
     /// its direct dependency aliases. The remaining module-path segments are
     /// not this graph's concern: they walk the selected package's source tree.
     ///
+    /// Lock validation rejects a dependency alias equal to its package's own
+    /// name, so a selector equal to that name is always a self-reference.
+    ///
     /// # Errors
     ///
-    /// Returns [`PackageResolveError`] if the current package id is missing,
-    /// the selector names neither the package nor a direct dependency, or the
-    /// selector is ambiguous between the two.
+    /// Returns [`PackageResolveError`] if the current package id is missing or
+    /// the selector names neither the package nor a direct dependency.
     pub fn resolve_package_selector(
         &self,
         current: &PackageInstanceId,
@@ -2262,25 +2264,20 @@ impl PackageGraph {
                 package: current.clone(),
             }
         })?;
-        let dependency = current_package
-            .dependencies
-            .get_key_value(&DependencyName(selector.to_owned()));
         if selector == current_package.name.as_str() {
-            if dependency.is_some() {
-                return Err(PackageResolveError::SelfReferenceAmbiguity {
-                    package: current.clone(),
-                    name: selector.to_owned(),
-                });
-            }
             return Ok(SelectedPackageInstance {
                 package: current.clone(),
                 relation: PackageResolutionRelation::SelfReference,
             });
         }
-        let (name, target) = dependency.ok_or_else(|| PackageResolveError::UnknownDependency {
-            package: current.clone(),
-            name: selector.to_owned(),
-        })?;
+        let (name, target) = current_package
+            .dependencies
+            .get_key_value(&DependencyName(selector.to_owned()))
+            .ok_or_else(|| PackageResolveError::UnknownDependency {
+                package: current.clone(),
+                package_name: current_package.name.clone(),
+                name: selector.to_owned(),
+            })?;
         Ok(SelectedPackageInstance {
             package: target.clone(),
             relation: PackageResolutionRelation::Dependency { name: name.clone() },
@@ -2324,15 +2321,12 @@ pub enum PackageResolveError {
     #[error("unknown current package instance `{package}`")]
     UnknownCurrentPackage { package: PackageInstanceId },
     /// The first segment is neither self-reference nor direct dependency alias.
-    #[error("unknown dependency `{name}` in package `{package}`")]
+    #[error("unknown dependency `{name}` in package `{package_name}`")]
     UnknownDependency {
         package: PackageInstanceId,
-        name: String,
-    },
-    /// A dependency alias conflicts with the current package self-reference.
-    #[error("package `{package}` has ambiguous self-reference/dependency name `{name}`")]
-    SelfReferenceAmbiguity {
-        package: PackageInstanceId,
+        /// Real name of `package`.
+        package_name: PackageName,
+        /// Source spelling of the module path's first segment.
         name: String,
     },
 }

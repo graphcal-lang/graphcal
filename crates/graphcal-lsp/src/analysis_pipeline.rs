@@ -136,7 +136,7 @@ pub fn build_project(
         Ok(fs) => fs,
         Err(error) => {
             return ProjectBuild::failed(CompileError::Load(LoadError::InvalidSourcePath {
-                path: error.path().display().to_string(),
+                path: error.path().to_path_buf(),
                 reason: error.to_string(),
             }));
         }

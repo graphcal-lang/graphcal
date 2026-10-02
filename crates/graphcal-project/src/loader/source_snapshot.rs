@@ -26,8 +26,9 @@ use graphcal_compiler::dag_id::{DagId, DagPackageId};
 use graphcal_compiler::desugar::desugared_ast::{Declaration, File};
 use graphcal_compiler::import_cycle::ImportChainFile;
 use graphcal_compiler::outcome::Outcome;
-use graphcal_compiler::semantic_error::SemanticError;
-use graphcal_compiler::semantic_error::evaluation::EvaluationError;
+use graphcal_package::PackageName;
+
+use super::budget::PackageAuthorityError;
 use graphcal_compiler::source_id::SourceId;
 use graphcal_compiler::source_registry::SourceRegistry;
 use graphcal_compiler::syntax::ast::{DeclKind, ModulePath};
@@ -305,15 +306,16 @@ pub(super) enum ResolveFailure {
     /// The path names the reserved (unimplemented) standard library.
     StdlibNotImplemented,
     /// The first segment does not name the importing package.
-    PackageNameMismatch { package_name: String },
+    PackageNameMismatch { package_name: PackageName },
     /// No source file matches any prefix of the path.
     FileNotFound,
     /// A file without a package manifest cannot import other files.
     CrossFileImportInVirtualPackage,
-    /// The locked package graph cannot resolve the path.
-    NotLocked { message: String },
+    /// The first segment names neither the importing package nor one of its
+    /// locked direct dependencies.
+    UnknownDependency { package: PackageName },
     /// The lockfile or package authority is inconsistent.
-    Manifest { message: String },
+    PackageAuthority(PackageAuthorityError),
 }
 
 impl ResolveFailure {
@@ -322,51 +324,44 @@ impl ResolveFailure {
         &self,
         path: &ModulePath,
         src: &NamedSource<Arc<String>>,
-        source_id: SourceId,
-        sources: &SourceRegistry,
     ) -> CompileError {
         let src = src.clone();
         let span = path.span().into();
         match self {
             Self::StdlibNotImplemented => LoadError::StdlibNotImplemented {
-                path: path.display_path(),
+                path: path.key(),
                 src,
                 span,
             }
             .into(),
             Self::PackageNameMismatch { package_name } => LoadError::PackageNameMismatch {
-                path_first: path.segments.first().name.to_string(),
+                path_first: path.segments.first().name.atom().clone(),
                 package_name: package_name.clone(),
                 src,
                 span,
             }
             .into(),
             Self::FileNotFound => LoadError::ImportFileNotFound {
-                path: path.display_path(),
+                path: path.key(),
                 src,
                 span,
             }
             .into(),
             Self::CrossFileImportInVirtualPackage => LoadError::CrossFileImportInVirtualPackage {
-                path: path.display_path(),
+                path: path.key(),
                 src,
                 span,
             }
             .into(),
-            Self::NotLocked { message } => CompileError::semantic(
-                SemanticError::located(
-                    source_id,
-                    path.span(),
-                    EvaluationError::Failed {
-                        message: format!(
-                            "{message}; run `graphcal deps lock` after changing dependencies"
-                        ),
-                    },
-                ),
-                sources,
-            ),
-            Self::Manifest { message } => LoadError::ManifestError {
-                message: message.clone(),
+            Self::UnknownDependency { package } => LoadError::UnknownDependency {
+                name: path.segments.first().name.atom().clone(),
+                package: package.clone(),
+                src,
+                span,
+            }
+            .into(),
+            Self::PackageAuthority(error) => LoadError::ManifestError {
+                message: error.to_string(),
             }
             .into(),
         }
@@ -376,7 +371,7 @@ impl ResolveFailure {
 /// Error for a path that resolved outside the permitted source root.
 pub(super) fn outside_root(path: &ModulePath, src: NamedSource<Arc<String>>) -> LoadError {
     LoadError::ImportOutsideRoot {
-        path: path.display_path(),
+        path: path.key(),
         src,
         span: path.span().into(),
     }
