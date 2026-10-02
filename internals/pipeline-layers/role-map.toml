@@ -733,16 +733,6 @@ role = "contracts"
 
 [[module]]
 package = "compiler"
-path = ["semantic", "aliased_table"]
-role = "contracts"
-
-[[module]]
-package = "compiler"
-path = ["semantic", "aliased_table", "tests"]
-role = "contracts"
-
-[[module]]
-package = "compiler"
 path = ["semantic", "applied_constructor"]
 role = "contracts"
 

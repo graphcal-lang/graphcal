@@ -4,7 +4,6 @@
 //! values built from them, unit scales, base-dimension metadata, time scales
 //! and zones, the scalar built-in catalog, and the Graphcal prelude catalog.
 
-pub mod aliased_table;
 pub mod applied_constructor;
 pub mod checked_type;
 pub mod dimension_table;
