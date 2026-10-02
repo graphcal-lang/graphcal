@@ -9,6 +9,8 @@
 //! regardless of lowering order. There is no source-name keyed registry and no
 //! merge of one module's tables into another's.
 
+use crate::semantic::dimension_table::DimensionSpelling;
+use crate::semantic_error::dimension::BaseUnitRejection;
 use crate::semantic_error::dimension::UnitScaleSite;
 use std::collections::{BTreeMap, HashMap, HashSet};
 
@@ -573,6 +575,17 @@ impl<'a> StaticDefinitionEvaluator<'a> {
     /// already evaluated.
     #[must_use]
     pub fn format_dimension(&self, owner: &DagId, dimension: &Dimension) -> String {
+        self.display_registry(owner).format_dimension(dimension)
+    }
+
+    /// Spell a dimension for a diagnostic in `owner`, using only dimensions
+    /// already evaluated.
+    #[must_use]
+    pub fn dimension_spelling(&self, owner: &DagId, dimension: &Dimension) -> DimensionSpelling {
+        self.display_registry(owner).dimension_spelling(dimension)
+    }
+
+    fn display_registry(&self, owner: &DagId) -> DimensionFormattingRegistry {
         DimensionFormattingRegistry::new(
             self.base_dimensions.clone(),
             self.display_spellings(owner)
@@ -583,7 +596,6 @@ impl<'a> StaticDefinitionEvaluator<'a> {
                         .map(|dimension| (spelling, dimension.clone()))
                 }),
         )
-        .format_dimension(dimension)
     }
 
     fn annotate_base(&mut self, owner: &DagId, id: BaseDimId) {
@@ -923,32 +935,19 @@ impl<'a> StaticDefinitionEvaluator<'a> {
             });
             let reason = match registered {
                 Some(Ok(())) => None,
-                Some(Err(error)) => Some((
-                    format!(
-                        "`{}` already has canonical base unit `{}`",
-                        self.format_dimension(owner, &dim),
-                        error.existing
-                    ),
-                    "a dimension can have only one canonical base unit; if another multiplicative unit is valid for this dimension, define its scale explicitly with `const unit` or `unit`"
-                        .to_string(),
-                )),
-                None => Some((
-                    format!("`{}` is not a base dimension", self.format_dimension(owner, &dim)),
-                    format!(
-                        "`base unit` can only define the canonical unit of a bare base dimension; define `{}` with an explicit `const unit` or `unit` scale instead",
-                        unit.name.value
-                    ),
-                )),
+                Some(Err(error)) => Some(BaseUnitRejection::CanonicalUnitTaken {
+                    existing: error.existing,
+                }),
+                None => Some(BaseUnitRejection::NotBaseDimension),
             };
-            if let Some((reason, help)) = reason {
+            if let Some(rejection) = reason {
                 return Err(SemanticError::located(
                     src,
                     unit.name.span,
                     DimensionError::InvalidBaseUnitDeclaration {
                         name: unit.name.value.clone(),
-                        dim: self.format_dimension(owner, &dim),
-                        reason,
-                        help,
+                        dim: self.dimension_spelling(owner, &dim),
+                        rejection,
                     },
                 ));
             }
@@ -970,7 +969,7 @@ impl<'a> StaticDefinitionEvaluator<'a> {
                 src,
                 unit.name.span,
                 DimensionError::AffineProneUnitDefinition {
-                    dim: self.format_dimension(owner, &dim),
+                    dim: self.dimension_spelling(owner, &dim),
                 },
             ));
         }
@@ -1010,8 +1009,8 @@ impl<'a> StaticDefinitionEvaluator<'a> {
                 def.unit_expr.span,
                 DimensionError::UnitDefinitionDimensionMismatch {
                     name: unit.name.value.clone(),
-                    declared: self.format_dimension(owner, &dim),
-                    definition: self.format_dimension(owner, &base_unit_dimension),
+                    declared: self.dimension_spelling(owner, &dim),
+                    definition: self.dimension_spelling(owner, &base_unit_dimension),
                 },
             ));
         }
@@ -1849,7 +1848,7 @@ mod tests {
             .module_definitions(&Project::id("main"))
             .unwrap_err();
         assert!(
-            matches!(&error, SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Dimension(DimensionError::InvalidBaseUnitDeclaration { reason, .. }), .. }) if reason.contains("already has canonical base unit `USD`")),
+            matches!(&error, SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Dimension(DimensionError::InvalidBaseUnitDeclaration { rejection: BaseUnitRejection::CanonicalUnitTaken { existing }, .. }), .. }) if existing.as_str() == "USD"),
             "{error:?}"
         );
     }

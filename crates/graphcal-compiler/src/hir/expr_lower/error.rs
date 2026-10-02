@@ -146,7 +146,7 @@ pub enum ExprLowerError {
     #[error("invalid datetime literal: {reason}")]
     InvalidDatetimeLiteral {
         expectation: DatetimeLiteralExpectation,
-        reason: String,
+        reason: crate::semantic_error::dimension::DatetimeLiteralError,
         span: Span,
     },
     /// A timezone transition skips the requested local civil datetime.

@@ -3,6 +3,7 @@
 use crate::hir::expr::{Expr, FunctionRef};
 use crate::outcome::Outcome;
 use crate::semantic_error::dimension::DimensionError;
+use crate::semantic_error::dimension::LinearAlgebraAxisMismatch;
 use crate::semantic_error::dimension_mismatch::{
     MismatchOperand, MismatchRule, OperandExpectation,
 };
@@ -73,34 +74,70 @@ impl Infer<'_> {
             .collect::<Result<Vec<_>, _>>()?;
 
         infer_linear_algebra_type(function, &argument_types, |index| {
-        crate::tir::dim_check::infer::concrete_cardinality_for_inferred(index, self.env.tir)
-    })
-    .map_err(|error| match error {
-        LinearAlgebraTypeError::ExpectedIndexedQuantity { argument, rank } => {
-            SemanticError::located(self.env.src, args[argument].span, DimensionError::DimensionMismatch { expected: Box::new(MismatchOperand::Expected(OperandExpectation::RankIndexedQuantity { rank })), found: Box::new(MismatchOperand::Type(argument_types[argument].spelling(&self.env.registry.dimensions))), help: Box::new(MismatchRule::LinearAlgebraArgument { function, argument: argument.saturating_add(1), rank })})
-        }
-        LinearAlgebraTypeError::AxisMismatch {
-            argument,
-            expected,
-            found,
-        } => SemanticError::located(self.env.src, args[argument].span, DimensionError::LinearAlgebraShapeMismatch { function, expected: expected.to_string(), found: found.to_string(), help: "linear-algebra contractions match axes by typed identity; use the same declared index (or the same Fin(N) structural index) at both contracted positions"
-                .to_string() }),
-        LinearAlgebraTypeError::CardinalityMismatch {
-            argument,
-            expected,
-            found,
-        } => SemanticError::located(self.env.src, args[argument].span, DimensionError::LinearAlgebraShapeMismatch { function, expected: format!("an axis with exactly {expected} entries"), found: found.map_or_else(
-                || "an axis whose cardinality is not concrete".to_string(),
-                |cardinality| format!("an axis with {cardinality} entries"),
-            ), help: format!("{}() is defined only for three-component vectors", function.as_str()) }),
-        LinearAlgebraTypeError::ConcreteCardinalityRequired { argument } => {
-            SemanticError::located(self.env.src, args[argument].span, DimensionError::LinearAlgebraShapeMismatch { function, expected: "an axis with a concrete cardinality".to_string(), found: "an axis whose cardinality is still generic".to_string(), help: format!(
-                    "{}() needs a concrete matrix size because its result dimension depends on that size",
-                    function.as_str()
-                ) })
-        }
-        LinearAlgebraTypeError::DimensionOverflow => SemanticError::located(self.env.src, callee_span, DimensionError::DimensionOverflow),
-    }).map_err(Outcome::Failed)
+            crate::tir::dim_check::infer::concrete_cardinality_for_inferred(index, self.env.tir)
+        })
+        .map_err(|error| match error {
+            LinearAlgebraTypeError::ExpectedIndexedQuantity { argument, rank } => {
+                SemanticError::located(
+                    self.env.src,
+                    args[argument].span,
+                    DimensionError::DimensionMismatch {
+                        expected: Box::new(MismatchOperand::Expected(
+                            OperandExpectation::RankIndexedQuantity { rank },
+                        )),
+                        found: Box::new(MismatchOperand::Type(
+                            argument_types[argument].spelling(&self.env.registry.dimensions),
+                        )),
+                        help: Box::new(MismatchRule::LinearAlgebraArgument {
+                            function,
+                            argument: argument.saturating_add(1),
+                            rank,
+                        }),
+                    },
+                )
+            }
+            LinearAlgebraTypeError::AxisMismatch {
+                argument,
+                expected,
+                found,
+            } => SemanticError::located(
+                self.env.src,
+                args[argument].span,
+                DimensionError::LinearAlgebraShapeMismatch {
+                    function,
+                    mismatch: LinearAlgebraAxisMismatch::Identity {
+                        expected: Box::new(expected),
+                        found: Box::new(found),
+                    },
+                },
+            ),
+            LinearAlgebraTypeError::CardinalityMismatch {
+                argument,
+                expected,
+                found,
+            } => SemanticError::located(
+                self.env.src,
+                args[argument].span,
+                DimensionError::LinearAlgebraShapeMismatch {
+                    function,
+                    mismatch: LinearAlgebraAxisMismatch::Cardinality { expected, found },
+                },
+            ),
+            LinearAlgebraTypeError::ConcreteCardinalityRequired { argument } => {
+                SemanticError::located(
+                    self.env.src,
+                    args[argument].span,
+                    DimensionError::LinearAlgebraShapeMismatch {
+                        function,
+                        mismatch: LinearAlgebraAxisMismatch::ConcreteCardinalityRequired,
+                    },
+                )
+            }
+            LinearAlgebraTypeError::DimensionOverflow => {
+                SemanticError::located(self.env.src, callee_span, DimensionError::DimensionOverflow)
+            }
+        })
+        .map_err(Outcome::Failed)
     }
 
     pub(super) fn infer_hir_fn_call(

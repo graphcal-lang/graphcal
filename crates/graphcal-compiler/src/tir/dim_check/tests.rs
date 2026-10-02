@@ -1529,7 +1529,7 @@ Case#B: 2.0 m,
                 matches!(
                     &err,
                     SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Dimension(DimensionError::IndexedComparisonOperand { found, .. }), .. })
-                        if found == "Length[Case]"
+                        if found.to_string() == "Length[Case]"
                 ),
                 "operator `{op}` in `{expr}` produced: {err:?}"
             );
@@ -2779,8 +2779,8 @@ node state: Dimensionless[Element, Step] = unfold(
     assert!(
         matches!(
             &err,
-            SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Dimension(DimensionError::DimensionMismatchInAnnotation { declared, inferred, .. }), .. }) if declared == "Dimensionless[Element, Step]"
-                && inferred == "Dimensionless[Step, Element]"
+            SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Dimension(DimensionError::DimensionMismatchInAnnotation { declared, inferred, .. }), .. }) if declared.to_string() == "Dimensionless[Element, Step]"
+                && inferred.to_string() == "Dimensionless[Step, Element]"
         ),
         "got: {err:?}"
     );
@@ -4061,7 +4061,7 @@ fn check_rejects_non_plottable_encoding_leaves() {
         assert!(
             matches!(
                 check(source),
-                Err(SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Dimension(DimensionError::PlotEncodingTypeMismatch { channel: crate::syntax::ast::EncodingChannel::X, found, .. }), .. })) if found == expected
+                Err(SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Dimension(DimensionError::PlotEncodingTypeMismatch { channel: crate::syntax::ast::EncodingChannel::X, found, .. }), .. })) if found.to_string() == expected
             ),
             "non-plottable leaf `{expected}` was accepted"
         );
@@ -4085,7 +4085,8 @@ plot p = {
     assert!(matches!(
         error,
         SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Dimension(DimensionError::PlotEncodingAxisMismatch { channels, .. }), .. })
-            if channels.contains("test.Step") && channels.contains("test.Pair")
+            if channels.iter().any(|channel| channel.to_string().contains("test.Step"))
+                && channels.iter().any(|channel| channel.to_string().contains("test.Pair"))
     ));
 }
 

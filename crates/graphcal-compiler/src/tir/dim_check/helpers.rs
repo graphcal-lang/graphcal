@@ -30,15 +30,6 @@ pub(super) fn nominal_for_inferred<'a>(
     dag.semantic.type_defs.nominal(ty.resolved())
 }
 
-/// Format a checked type for display in diagnostics.
-#[must_use]
-pub fn format_checked_type<V: Concreteness>(
-    ty: &CheckedType<V>,
-    registry: &FormattingRegistry,
-) -> String {
-    ty.format(&registry.dimensions)
-}
-
 pub fn expect_quantity<V: Concreteness>(
     inferred: &CheckedType<V>,
     registry: &FormattingRegistry,

@@ -181,8 +181,8 @@ impl Infer<'_> {
                 self.env.src,
                 target.span,
                 DimensionError::ConversionDimensionMismatch {
-                    target: self.env.registry.dimensions.format_dimension(&target_dim),
-                    expr_dim: self.env.registry.dimensions.format_dimension(&expr_dim),
+                    target: self.env.registry.dimensions.dimension_spelling(&target_dim),
+                    expr_dim: self.env.registry.dimensions.dimension_spelling(&expr_dim),
                 },
             )
             .into());

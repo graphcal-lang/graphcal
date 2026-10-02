@@ -207,8 +207,8 @@ fn check_instance_defaults(
                 ctx.env.src,
                 default.span,
                 DimensionError::DimensionMismatchInAnnotation {
-                    declared: expected.format(&ctx.env.registry.dimensions),
-                    inferred: specialized.format(&ctx.env.registry.dimensions),
+                    declared: expected.spelling(&ctx.env.registry.dimensions),
+                    inferred: specialized.spelling(&ctx.env.registry.dimensions),
                 },
             )
             .into());

@@ -264,20 +264,13 @@ pub fn expr_lower_error_to_semantic(err: &ExprLowerError, src: SourceId) -> Sema
             *span,
             DimensionError::EpochTimeScaleArgumentCount { got: *got },
         ),
-        ExprLowerError::InvalidEpochTimeScaleArgument { span } => SemanticError::located(
-            src,
-            *span,
-            DimensionError::InvalidEpochTimeScaleArgument {
-                expected: crate::semantic::time_scale::TimeScale::expected_names(),
-            },
-        ),
+        ExprLowerError::InvalidEpochTimeScaleArgument { span } => {
+            SemanticError::located(src, *span, DimensionError::InvalidEpochTimeScaleArgument)
+        }
         ExprLowerError::UnsupportedEpochTimeScale { name, span } => SemanticError::located(
             src,
             *span,
-            DimensionError::UnsupportedEpochTimeScale {
-                name: name.clone(),
-                expected: crate::semantic::time_scale::TimeScale::expected_names(),
-            },
+            DimensionError::UnsupportedEpochTimeScale { name: name.clone() },
         ),
         ExprLowerError::ExtraMapVariant {
             index_name,

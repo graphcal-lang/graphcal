@@ -846,8 +846,8 @@ mod tests {
         assert!(matches!(
             err,
             SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Dimension(DimensionError::UnitDefinitionDimensionMismatch { name, declared, definition, .. }), .. }) if name.as_str() == "wrong"
-                && declared == "Length"
-                && definition == "Time"
+                && declared.to_string() == "Length"
+                && definition.to_string() == "Time"
         ));
     }
 

@@ -224,8 +224,8 @@ plot p = {
     assert!(matches!(
         error,
         CompileError::Eval(RenderedSemanticError { error: SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic { kind: SemanticErrorKind::Dimension(DimensionError::PlotEncodingAxisMismatch { channels, .. }), .. }), .. })
-            if channels.contains("owner_dims.a.Axis")
-                && channels.contains("owner_dims.b.Axis")
+            if channels.iter().any(|channel| channel.to_string().contains("owner_dims.a.Axis"))
+                && channels.iter().any(|channel| channel.to_string().contains("owner_dims.b.Axis"))
     ));
 }
 

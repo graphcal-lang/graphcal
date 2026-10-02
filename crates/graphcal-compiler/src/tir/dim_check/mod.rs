@@ -2,6 +2,7 @@ use crate::outcome::Outcome;
 use crate::resolved_name::ResolvedDeclName;
 use crate::semantic_error::attribute::AttributeError;
 use crate::semantic_error::dimension::DimensionError;
+use crate::semantic_error::dimension::ShapeContext;
 use crate::semantic_error::dimension_mismatch::{MismatchOperand, MismatchRule};
 use crate::semantic_error::domain::DomainError;
 use crate::semantic_error::domain::{DomainSubject, DomainTypeSpelling, UnconstrainableType};
@@ -20,7 +21,7 @@ use crate::syntax::span::Span;
 use crate::display::formatting_registry::FormattingRegistry;
 use crate::semantic_error::SemanticError;
 
-pub(crate) use helpers::{expect_quantity, format_checked_type};
+pub(crate) use helpers::expect_quantity;
 
 use domain_bound_type::{
     ExpectedBound, check_one_bound_with_display_name, expected_bound_from_resolved,
@@ -147,8 +148,8 @@ fn check_decl_expr_type(
             ctx.env.src,
             *type_ann_span,
             DimensionError::DimensionMismatchInAnnotation {
-                declared: format_checked_type(declared, ctx.env.registry),
-                inferred: format_checked_type(&inferred, ctx.env.registry),
+                declared: declared.spelling(&ctx.env.registry.dimensions),
+                inferred: inferred.spelling(&ctx.env.registry.dimensions),
             },
         )
         .into());
@@ -182,7 +183,7 @@ fn check_dynamic_unit_scale_type(
             entry.expr.span,
             DimensionError::DynamicUnitScaleTypeMismatch {
                 name: entry.spelling.clone(),
-                found: format_checked_type(&inferred, ctx.env.registry),
+                found: inferred.spelling(&ctx.env.registry.dimensions),
             },
         )
         .into());
@@ -485,9 +486,9 @@ fn broadcast_operand_element<'a>(
             src,
             operand_span,
             DimensionError::IndexedShapeMismatch {
-                context: "tolerance assertion".to_string(),
-                lhs: format_checked_type(actual_type, registry),
-                rhs: format_checked_type(operand_type, registry),
+                context: ShapeContext::ToleranceAssertion,
+                lhs: actual_type.spelling(&registry.dimensions),
+                rhs: operand_type.spelling(&registry.dimensions),
             },
         ));
     }
@@ -897,8 +898,8 @@ fn check_callless_value_expr_type<'t>(
             src,
             expr.span,
             DimensionError::DimensionMismatchInAnnotation {
-                declared: format_checked_type(expected, tir.registry()),
-                inferred: format_checked_type(&inferred, tir.registry()),
+                declared: expected.spelling(&tir.registry().dimensions),
+                inferred: inferred.spelling(&tir.registry().dimensions),
             },
         ))
     }

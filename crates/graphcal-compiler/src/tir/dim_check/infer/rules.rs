@@ -22,7 +22,7 @@ use crate::source_id::SourceId;
 use crate::syntax::ast::PowerExponent;
 use crate::syntax::span::Span;
 
-use super::super::helpers::{expect_quantity, format_checked_type};
+use super::super::helpers::expect_quantity;
 use crate::semantic::checked_type::{CheckedType, Symbolic};
 
 /// A typed operand with the span diagnostics should point at.
@@ -45,7 +45,7 @@ fn comparison_operand_type<'a>(
             src,
             operand.span,
             DimensionError::IndexedComparisonOperand {
-                found: format_checked_type(&operand.ty, registry),
+                found: operand.ty.spelling(&registry.dimensions),
             },
         )),
         ty => Ok(ty),
@@ -594,17 +594,10 @@ pub(super) fn binop_rule(
                         return Ok(CheckedType::Quantity(Dimension::dimensionless()));
                     }
                     let replacement = exact_float_replacement(exact);
-                    let help = replacement.as_ref().map_or_else(
-                        || {
-                            "write the exponent as an exact integer or parenthesized rational"
-                                .to_string()
-                        },
-                        |replacement| format!("replace the float exponent with `{replacement}`"),
-                    );
                     Err(SemanticError::located(
                         src,
                         rhs.span,
-                        DimensionError::FloatPowerExponent { replacement, help },
+                        DimensionError::FloatPowerExponent { replacement },
                     ))
                 }
                 PowerExponent::Runtime => {

@@ -15,7 +15,6 @@ use crate::syntax::span::Span;
 use crate::tir::typed::NatPolyForm;
 
 use crate::semantic::checked_type::CheckedType;
-use crate::tir::dim_check::helpers::format_checked_type;
 
 use super::context::Infer;
 use super::nat_forms::finite_index_error;
@@ -383,8 +382,8 @@ impl Infer<'_> {
                     self.env.src,
                     entry.value.span,
                     DimensionError::DimensionMismatchInAnnotation {
-                        declared: format_checked_type(&first_type, self.env.registry),
-                        inferred: format_checked_type(&entry_type, self.env.registry),
+                        declared: first_type.spelling(&self.env.registry.dimensions),
+                        inferred: entry_type.spelling(&self.env.registry.dimensions),
                     },
                 )
                 .into());

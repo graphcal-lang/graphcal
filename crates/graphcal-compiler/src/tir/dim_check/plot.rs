@@ -9,6 +9,7 @@
 use crate::outcome::Outcome;
 use crate::semantic::checked_type::Symbolic;
 use crate::semantic_error::dimension::DimensionError;
+use crate::semantic_error::dimension::{PlotChannelAxes, PlotPropertyValue};
 use crate::semantic_error::name::NameError;
 use std::collections::HashMap;
 
@@ -18,9 +19,7 @@ use crate::plot_props::{CompositionProperty, MarkProperty, PlotProperty, PlotPro
 use crate::plot_shape::{PlotChannelShape, PlotLeafKind, align_plot_channel_axes};
 use crate::semantic_error::SemanticError;
 
-use super::{
-    CheckedType, DimCheckContext, check_ineffective_conversions, helpers::format_checked_type,
-};
+use super::{CheckedType, DimCheckContext, check_ineffective_conversions};
 
 pub(super) type CheckedPlotChannelShapes = HashMap<
     crate::resolved_name::ResolvedDeclName,
@@ -244,7 +243,7 @@ fn check_plot_encodings(
                     expr.span,
                     DimensionError::PlotEncodingTypeMismatch {
                         channel: *channel,
-                        found: format_checked_type(&inferred, ctx.env.registry),
+                        found: inferred.spelling(&ctx.env.registry.dimensions),
                     },
                 )
                 .into()
@@ -261,7 +260,15 @@ fn check_plot_encodings(
             ctx.env.src,
             expr.span,
             DimensionError::PlotEncodingAxisMismatch {
-                channels: describe_channel_axes(body, &shapes),
+                channels: body
+                    .encodings
+                    .iter()
+                    .zip(&shapes)
+                    .map(|((channel, _), shape)| PlotChannelAxes {
+                        channel: *channel,
+                        axes: shape.axes().to_vec(),
+                    })
+                    .collect(),
             },
         )
         .into());
@@ -298,34 +305,6 @@ fn plot_leaf_kind(
     }
 }
 
-fn describe_channel_axes(
-    body: &crate::ir::model::LoweredPlotBody,
-    shapes: &[PlotChannelShape],
-) -> String {
-    body.encodings
-        .iter()
-        .zip(shapes)
-        .map(|((channel, _), shape)| {
-            let axes = if shape.axes().is_empty() {
-                "no index".to_string()
-            } else {
-                shape
-                    .axes()
-                    .iter()
-                    .map(|index| {
-                        index
-                            .declared_resolved()
-                            .map_or_else(|| index.display_name().to_string(), ToString::to_string)
-                    })
-                    .collect::<Vec<_>>()
-                    .join(" × ")
-            };
-            format!("`{channel}` ranges over {axes}")
-        })
-        .collect::<Vec<_>>()
-        .join(", ")
-}
-
 fn valid_names<'a>(names: impl Iterator<Item = &'a str>) -> String {
     format!(
         "valid properties are: {}",
@@ -359,7 +338,7 @@ pub(super) fn check_property_value(
     field: &LoweredPlotField,
 ) -> Result<(), Outcome<SemanticError>> {
     let is_string_literal = matches!(field.value.kind(), ExprKind::StringLiteral(_));
-    let mismatch = |found: String| {
+    let mismatch = |found: PlotPropertyValue| {
         SemanticError::located(
             ctx.env.src,
             field.value.span,
@@ -380,12 +359,12 @@ pub(super) fn check_property_value(
             } else {
                 // No expression other than a literal can produce a string —
                 // graphcal has no runtime string values.
-                Err(mismatch("not a string literal".to_string()).into())
+                Err(mismatch(PlotPropertyValue::NotStringLiteral).into())
             }
         }
         PlotPropertyType::Number | PlotPropertyType::PositiveNumber => {
             if is_string_literal {
-                return Err(mismatch("a string literal".to_string()).into());
+                return Err(mismatch(PlotPropertyValue::StringLiteral).into());
             }
             match infer_expression_type(ctx, owner, &field.value)? {
                 CheckedType::Int => Ok(()),
@@ -395,20 +374,26 @@ pub(super) fn check_property_value(
                     field.value.span,
                     DimensionError::PlotPropertyDimensioned {
                         property,
-                        dimension: ctx.env.registry.dimensions.format_dimension(&d),
+                        dimension: ctx.env.registry.dimensions.dimension_spelling(&d),
                     },
                 )
                 .into()),
-                other => Err(mismatch(format_checked_type(&other, ctx.env.registry)).into()),
+                other => Err(mismatch(PlotPropertyValue::Type(
+                    other.spelling(&ctx.env.registry.dimensions),
+                ))
+                .into()),
             }
         }
         PlotPropertyType::Bool => {
             if is_string_literal {
-                return Err(mismatch("a string literal".to_string()).into());
+                return Err(mismatch(PlotPropertyValue::StringLiteral).into());
             }
             match infer_expression_type(ctx, owner, &field.value)? {
                 CheckedType::Bool => Ok(()),
-                other => Err(mismatch(format_checked_type(&other, ctx.env.registry)).into()),
+                other => Err(mismatch(PlotPropertyValue::Type(
+                    other.spelling(&ctx.env.registry.dimensions),
+                ))
+                .into()),
             }
         }
     }

@@ -716,7 +716,9 @@ mod tests {
                         span(),
                         DimensionError::InvalidDatetimeLiteral {
                             expectation: DatetimeLiteralExpectation::OffsetDateTime,
-                            reason: "invalid".to_string(),
+                            reason: graphcal_compiler::semantic_error::dimension::DatetimeLiteralError::Offset(
+                                graphcal_compiler::datetime_literal::ParseOffsetDateTimeLiteralError::MissingOffset,
+                            ),
                         },
                     ),
                     &sources,
@@ -728,9 +730,7 @@ mod tests {
                     SemanticError::located(
                         src(),
                         span(),
-                        DimensionError::InvalidEpochTimeScaleArgument {
-                            expected: "UTC".to_string(),
-                        },
+                        DimensionError::InvalidEpochTimeScaleArgument,
                     ),
                     &sources,
                 ),
@@ -743,7 +743,6 @@ mod tests {
                         span(),
                         DimensionError::UnsupportedEpochTimeScale {
                             name: NameAtom::parse("BAD").unwrap(),
-                            expected: "UTC".to_string(),
                         },
                     ),
                     &sources,

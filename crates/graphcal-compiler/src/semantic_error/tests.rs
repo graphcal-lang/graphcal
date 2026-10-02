@@ -612,3 +612,86 @@ fn dimension_mismatch_payloads_render_distinct_texts() {
         "contextual string literal"
     );
 }
+
+#[test]
+fn dimension_payloads_render_their_text_as_before() {
+    use super::dimension::{
+        BaseUnitRejection, DimensionError, LinearAlgebraAxisMismatch, PlotPropertyValue,
+        ShapeContext,
+    };
+    use crate::builtin::LinearAlgebraFn;
+    use crate::diagnostic::DiagnosticKind;
+    use crate::syntax::dimension::UnitName;
+
+    assert_eq!(
+        PlotPropertyValue::NotStringLiteral.to_string(),
+        "not a string literal"
+    );
+    assert_eq!(
+        PlotPropertyValue::StringLiteral.to_string(),
+        "a string literal"
+    );
+    assert_eq!(
+        ShapeContext::ToleranceAssertion.to_string(),
+        "tolerance assertion"
+    );
+
+    let cross = LinearAlgebraFn::Cross;
+    let cardinality = DimensionError::LinearAlgebraShapeMismatch {
+        function: cross,
+        mismatch: LinearAlgebraAxisMismatch::Cardinality {
+            expected: 3,
+            found: Some(2),
+        },
+    };
+    assert_eq!(
+        cardinality.to_string(),
+        "incompatible indexed shape for `cross()`: expected an axis with exactly 3 entries, found an axis with 2 entries"
+    );
+    assert_eq!(
+        cardinality.help().as_deref(),
+        Some("cross() is defined only for three-component vectors")
+    );
+    let unknown = DimensionError::LinearAlgebraShapeMismatch {
+        function: cross,
+        mismatch: LinearAlgebraAxisMismatch::Cardinality {
+            expected: 3,
+            found: None,
+        },
+    };
+    assert_eq!(
+        unknown.primary_label().as_deref(),
+        Some("found an axis whose cardinality is not concrete")
+    );
+    let generic = DimensionError::LinearAlgebraShapeMismatch {
+        function: cross,
+        mismatch: LinearAlgebraAxisMismatch::ConcreteCardinalityRequired,
+    };
+    assert_eq!(
+        generic.to_string(),
+        "incompatible indexed shape for `cross()`: expected an axis with a concrete cardinality, found an axis whose cardinality is still generic"
+    );
+    assert!(
+        generic
+            .help()
+            .is_some_and(|help| help.starts_with("cross() needs a concrete matrix size"))
+    );
+
+    let taken = BaseUnitRejection::CanonicalUnitTaken {
+        existing: UnitName::expect_valid("USD"),
+    };
+    assert_ne!(taken, BaseUnitRejection::NotBaseDimension);
+    assert!(
+        DimensionError::FloatPowerExponent { replacement: None }
+            .help()
+            .is_some_and(|help| help.contains("exact integer"))
+    );
+    assert_eq!(
+        DimensionError::FloatPowerExponent {
+            replacement: Some("(1/2)".to_owned())
+        }
+        .help()
+        .as_deref(),
+        Some("replace the float exponent with `(1/2)`")
+    );
+}
