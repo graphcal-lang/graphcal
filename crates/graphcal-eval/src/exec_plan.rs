@@ -90,7 +90,7 @@ pub fn compile_checked_with_cancellation(
     PreparedPlan::try_new(program, |program| prepare(program, src, cancellation))
 }
 
-fn invalid(message: impl Into<String>, src: SourceId) -> SemanticError {
+fn plan_internal_error(message: impl Into<String>, src: SourceId) -> SemanticError {
     SemanticError::internal_error(message, src, DiagnosticAnchor::WholeFile)
 }
 
@@ -105,8 +105,7 @@ fn prepare<'p>(
         .positioned()
         .map(|(_, scope)| (scope.dag().dag_id(), scope))
         .collect::<HashMap<_, _>>();
-    let declarations =
-        prepare_declarations(tir, program.positioned().map(|(_, scope)| scope), src)?;
+    let declarations = prepare_declarations(tir, program.positioned(), src)?;
     ExecPlan::new(program, declarations.clone(), |scope| {
         prepare_callable_plan(tir, &scopes, scope, &declarations, cancellation)
     })
@@ -116,19 +115,19 @@ fn prepare<'p>(
 /// its owner), the declarations it reads and its domain constraint.
 fn prepare_declarations<'p>(
     tir: &'p graphcal_compiler::tir::typed::CheckedTir,
-    scopes: impl IntoIterator<Item = SealedDag<'p>>,
+    scopes: impl IntoIterator<
+        Item = (
+            graphcal_compiler::tir::typed::dag_position::DagPosition,
+            SealedDag<'p>,
+        ),
+    >,
     src: SourceId,
 ) -> Result<HashMap<&'p ResolvedDeclName, PlannedDeclaration<'p>>, SemanticError> {
     let mut declarations = HashMap::<&ResolvedDeclName, PlannedDeclaration<'p>>::new();
-    for scope in scopes {
+    for (position, scope) in scopes {
         let dag = scope.dag();
-        for key in dag.value_declaration_identities() {
-            let unit = tir.declaration_body(key).ok_or_else(|| {
-                invalid(
-                    format!("checked declaration `{key}` has no body in its owner"),
-                    scope.source(),
-                )
-            })?;
+        for unit in tir.declaration_bodies(position) {
+            let key = unit.identity();
             let body = match unit.kind() {
                 BodyKind::Node(NodeBody::Todo) => PlannedBody::Computed(ComputedBody::Todo),
                 BodyKind::Node(NodeBody::Formula(root))
@@ -139,18 +138,20 @@ fn prepare_declarations<'p>(
                     tree: root.executable(),
                 }),
                 // Required ports have no default; constants are pooled.
-                BodyKind::Param { default: None }
-                | BodyKind::Const(_)
-                | BodyKind::Assert(_)
+                BodyKind::Param { default: None } | BodyKind::Const(_) => PlannedBody::Supplied,
+                // Only value declarations are planned.
+                BodyKind::Assert(_)
                 | BodyKind::Plot(_)
                 | BodyKind::Figure(_)
-                | BodyKind::Layer(_) => PlannedBody::Supplied,
+                | BodyKind::Layer(_) => {
+                    continue;
+                }
             };
             let reads = match (&body, dag.runtime_schedule().dependencies_of(key)) {
                 (_, Some(reads)) => reads,
                 (PlannedBody::Supplied, None) => &[],
                 (PlannedBody::Computed(_), None) => {
-                    return Err(invalid(
+                    return Err(plan_internal_error(
                         format!("checked declaration `{key}` has no dependencies"),
                         scope.source(),
                     ));
@@ -164,7 +165,7 @@ fn prepare_declarations<'p>(
                 scope.domain_constraints().get(key),
             );
             if let Some(first) = declarations.insert(key, planned) {
-                return Err(invalid(
+                return Err(plan_internal_error(
                     format!(
                         "declaration `{key}` has duplicate physical locations in `{}` and `{}`",
                         first.scope().dag().dag_id(),
@@ -215,7 +216,7 @@ fn prepare_callable_plan<'p>(
         .iter()
         .map(|owner| {
             scopes.get(owner).copied().ok_or_else(|| {
-                invalid(
+                plan_internal_error(
                     format!("semantic runtime instance `{owner}` has no compiled DAG"),
                     src,
                 )
@@ -229,7 +230,7 @@ fn prepare_callable_plan<'p>(
             let planned = located(declarations, declaration, src)?;
             let physical = planned.scope().dag().dag_id();
             if !schedule.execution_dags().contains(physical) {
-                return Err(invalid(
+                return Err(plan_internal_error(
                     format!(
                         "scheduled declaration `{declaration}` is physically in `{physical}`, outside its callable closure"
                     ),
@@ -253,14 +254,14 @@ fn prepare_callable_plan<'p>(
                 instance
                     .zip(scopes.get(owner).copied())
                     .ok_or_else(|| {
-                        invalid(
+                        plan_internal_error(
                             format!("semantic instance `{owner}` has no compiled DAG"),
                             src,
                         )
                     })
                     .and_then(|(instance, scope)| {
                         PlannedInstance::try_new(tir, instance, scope)
-                            .map_err(|error| invalid(error.to_string(), src))
+                            .map_err(|error| plan_internal_error(error.to_string(), src))
                     })
             })
             .collect::<Result<Vec<_>, _>>()
@@ -287,7 +288,7 @@ fn prepare_callable_plan<'p>(
         imports,
         scheduled,
     )
-    .map_err(|error| invalid(error.to_string(), src))
+    .map_err(|error| plan_internal_error(error.to_string(), src))
     .map_err(Outcome::Failed)
 }
 
@@ -298,7 +299,7 @@ fn located<'a, 'p>(
     src: SourceId,
 ) -> Result<&'a PlannedDeclaration<'p>, SemanticError> {
     declarations.get(key).ok_or_else(|| {
-        invalid(
+        plan_internal_error(
             format!("declaration `{key}` has no prepared physical location"),
             src,
         )

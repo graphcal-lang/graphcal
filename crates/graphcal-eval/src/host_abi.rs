@@ -172,9 +172,9 @@ impl ValidatedHostField {
     }
 }
 
-/// A host-function result proven to match its declared ABI kind.
+/// A host-function result proven to match its declared ABI kind `'d`.
 #[derive(Debug, Clone, PartialEq)]
-pub enum ValidatedHostResult {
+pub enum ValidatedHostResult<'d, S = graphcal_compiler::function_signature::StructShape> {
     /// Boolean result.
     Bool(bool),
     /// Integer result.
@@ -188,8 +188,12 @@ pub enum ValidatedHostResult {
     },
     /// Dense typed scalar array.
     Array(ValidatedHostArray),
-    /// Fixed-layout record whose fields are decoded by declared kind.
-    Struct(Vec<ValidatedHostField>),
+    /// Fixed-layout record whose fields are decoded by declared kind, with
+    /// the declared struct result it was decoded as.
+    Struct {
+        record: &'d S,
+        fields: Vec<ValidatedHostField>,
+    },
 }
 
 /// Validate and decode a raw host-function result according to one declared
@@ -199,10 +203,10 @@ pub enum ValidatedHostResult {
 ///
 /// Returns [`HostResultDecodeError`] for a wrong wire shape, rank/arity
 /// mismatch, non-finite quantity, invalid `Int`, or invalid `Bool` encoding.
-pub fn decode_result<S: StructResult>(
-    declared: &ResultKind<S>,
+pub fn decode_result<'d, S: StructResult>(
+    declared: &'d ResultKind<S>,
     raw: &HostFnValue,
-) -> Result<ValidatedHostResult, HostResultDecodeError> {
+) -> Result<ValidatedHostResult<'d, S>, HostResultDecodeError> {
     match declared {
         ResultKind::Value(ParamKind::Scalar(ScalarValueKind::Bool)) => {
             scalar_slot(raw).and_then(|value| {
@@ -293,7 +297,10 @@ pub fn decode_result<S: StructResult>(
                     })
                 })
                 .collect::<Result<Vec<_>, HostResultDecodeError>>()?;
-            Ok(ValidatedHostResult::Struct(fields))
+            Ok(ValidatedHostResult::Struct {
+                record: payload,
+                fields,
+            })
         }
     }
 }

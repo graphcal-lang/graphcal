@@ -5,7 +5,7 @@
 //! boundary events, not arbitrary allocations or every Rust `Clone` call.
 
 #[derive(Debug, Clone, Copy)]
-pub enum Event {
+pub(crate) enum Event {
     #[cfg(any(test, feature = "test-internals"))]
     ImportedBodyReference,
     #[cfg(any(test, feature = "test-internals"))]
@@ -26,10 +26,10 @@ pub enum Event {
 
 #[cfg(not(any(test, feature = "test-internals")))]
 #[inline]
-pub const fn record(_event: Event) {}
+pub(crate) const fn record(_event: Event) {}
 
 #[cfg(any(test, feature = "test-internals"))]
-pub fn record(event: Event) {
+pub(crate) fn record(event: Event) {
     record_many(event, 1);
 }
 

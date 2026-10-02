@@ -1,5 +1,11 @@
+//! Aggregations over the entries of a rank-one indexed value.
+//!
+//! Every operand arrives read as its checked type (see [`super::operations`]):
+//! the quantity aggregations and the extremum keys receive quantities, and
+//! `count()` receives entries that are not indexed further.
+
 use crate::invariant::{Failure, Invariant};
-use crate::runtime_value::{IndexedValue, KeyValue, RuntimeValue, RuntimeValueError};
+use crate::runtime_value::{IndexedValue, KeyValue, RuntimeValue};
 use graphcal_compiler::builtin::{KeyAggregation, ValueAggregation};
 use graphcal_compiler::finite_value::FiniteQuantity;
 use thiserror::Error;
@@ -9,20 +15,16 @@ use super::numeric;
 /// Error produced by pure aggregation evaluation.
 #[derive(Debug, Error)]
 pub(super) enum AggregationError {
-    /// An indexed entry was not quantity-like.
-    #[error(transparent)]
-    ElementType(#[from] RuntimeValueError),
     /// An input quantity or computed aggregate was non-finite.
     #[error(transparent)]
     Quantity(#[from] numeric::QuantityValidationError),
 }
 
-/// Evaluate an aggregation function over indexed entries.
-pub(super) fn aggregate_indexed_values(
+/// Evaluate an aggregation function over the quantities of an indexed value.
+pub(super) fn aggregate_quantities(
     kind: ValueAggregation,
-    indexed: &IndexedValue<RuntimeValue>,
+    entries: &[FiniteQuantity],
 ) -> Result<RuntimeValue, Failure<AggregationError>> {
-    let entries = indexed.values().as_slice();
     let value = match kind {
         ValueAggregation::Sum => aggregate_sum(entries).map(RuntimeValue::Quantity),
         ValueAggregation::Product => aggregate_product(entries).map(RuntimeValue::Quantity),
@@ -32,63 +34,54 @@ pub(super) fn aggregate_indexed_values(
         ValueAggregation::RootSumSquare => {
             aggregate_root_sum_square(entries).map(RuntimeValue::Quantity)
         }
-        ValueAggregation::Count => return Ok(RuntimeValue::Int(aggregate_count(entries)?)),
+        ValueAggregation::Count => {
+            return count(entries.len())
+                .map(RuntimeValue::Int)
+                .map_err(Failure::Invariant);
+        }
     };
     value.map_err(Failure::Error)
+}
+
+/// `count()` of a rank-one indexed value: its number of entries, whatever
+/// they are.
+pub(super) fn count_entries<V>(indexed: &IndexedValue<V>) -> Result<RuntimeValue, Invariant> {
+    count(indexed.values().len()).map(RuntimeValue::Int)
 }
 
 /// Key of the extremum element, resolving ties to the first entry in index
 /// order (entries iterate in canonical index order).
 pub(super) fn extremum_key(
     kind: KeyAggregation,
-    indexed: &IndexedValue<RuntimeValue>,
-) -> Result<KeyValue, AggregationError> {
-    let context = match kind {
-        KeyAggregation::Argmin => "argmin element",
-        KeyAggregation::Argmax => "argmax element",
-    };
+    indexed: &IndexedValue<FiniteQuantity>,
+) -> KeyValue {
     let keys = KeyValue::all(indexed.axis());
     let (first_key, rest_keys) = keys.split_first();
     let (first_value, rest_values) = indexed.values().split_first();
-    let first = (first_key, quantity_entry(first_value, context)?);
-    let (key, _) = rest_keys.iter().zip(rest_values).try_fold(
-        first,
-        |incumbent, (key, value)| -> Result<_, AggregationError> {
-            let quantity = quantity_entry(value, context)?;
+    let (key, _) = rest_keys.iter().zip(rest_values).fold(
+        (first_key, *first_value),
+        |incumbent, (key, quantity)| {
             let better = match kind {
-                KeyAggregation::Argmax => quantity > incumbent.1,
-                KeyAggregation::Argmin => quantity < incumbent.1,
+                KeyAggregation::Argmax => *quantity > incumbent.1,
+                KeyAggregation::Argmin => *quantity < incumbent.1,
             };
-            Ok(if better { (key, quantity) } else { incumbent })
+            if better { (key, *quantity) } else { incumbent }
         },
-    )?;
-    Ok(key.clone())
+    );
+    key.clone()
 }
 
-fn quantity_entry(
-    value: &RuntimeValue,
-    context: &'static str,
-) -> Result<FiniteQuantity, AggregationError> {
-    Ok(value.expect_quantity(context)?)
-}
-
-fn aggregate_sum(entries: &[RuntimeValue]) -> Result<FiniteQuantity, AggregationError> {
+fn aggregate_sum(entries: &[FiniteQuantity]) -> Result<FiniteQuantity, AggregationError> {
     // The raw total may overflow midway and still be reported once at the end.
-    let total =
-        entries
-            .iter()
-            .try_fold(0.0_f64, |acc, value| -> Result<f64, AggregationError> {
-                Ok(acc + quantity_entry(value, "sum element")?.get())
-            })?;
+    let total = entries.iter().fold(0.0_f64, |acc, value| acc + value.get());
     numeric::computed_finite_quantity(total, "sum()").map_err(AggregationError::from)
 }
 
-fn aggregate_product(entries: &[RuntimeValue]) -> Result<FiniteQuantity, AggregationError> {
+fn aggregate_product(entries: &[FiniteQuantity]) -> Result<FiniteQuantity, AggregationError> {
     entries
         .iter()
         .try_fold(FiniteQuantity::ONE, |product, value| {
-            let value = quantity_entry(value, "product element")?;
-            product.checked_mul(value).map_err(|error| {
+            product.checked_mul(*value).map_err(|error| {
                 AggregationError::from(numeric::QuantityValidationError::from_arithmetic(
                     error,
                     "product()",
@@ -97,57 +90,34 @@ fn aggregate_product(entries: &[RuntimeValue]) -> Result<FiniteQuantity, Aggrega
         })
 }
 
-fn aggregate_root_sum_square(entries: &[RuntimeValue]) -> Result<FiniteQuantity, AggregationError> {
-    let values = entries
-        .iter()
-        .map(|value| quantity_entry(value, "rss element").map(FiniteQuantity::get))
-        .collect::<Result<Vec<_>, _>>()?;
+fn aggregate_root_sum_square(
+    entries: &[FiniteQuantity],
+) -> Result<FiniteQuantity, AggregationError> {
+    let values = entries.iter().map(|value| value.get()).collect::<Vec<_>>();
     numeric::root_sum_square(values, "rss()").map_err(AggregationError::from)
 }
 
-fn aggregate_minimum(entries: &[RuntimeValue]) -> Result<FiniteQuantity, AggregationError> {
-    let minimum = entries.iter().try_fold(
-        f64::INFINITY,
-        |acc, value| -> Result<f64, AggregationError> {
-            Ok(acc.min(quantity_entry(value, "minimum element")?.get()))
-        },
-    )?;
+fn aggregate_minimum(entries: &[FiniteQuantity]) -> Result<FiniteQuantity, AggregationError> {
+    let minimum = entries
+        .iter()
+        .fold(f64::INFINITY, |acc, value| acc.min(value.get()));
     numeric::computed_finite_quantity(minimum, "minimum()").map_err(AggregationError::from)
 }
 
-fn aggregate_maximum(entries: &[RuntimeValue]) -> Result<FiniteQuantity, AggregationError> {
-    let maximum = entries.iter().try_fold(
-        f64::NEG_INFINITY,
-        |acc, value| -> Result<f64, AggregationError> {
-            Ok(acc.max(quantity_entry(value, "maximum element")?.get()))
-        },
-    )?;
+fn aggregate_maximum(entries: &[FiniteQuantity]) -> Result<FiniteQuantity, AggregationError> {
+    let maximum = entries
+        .iter()
+        .fold(f64::NEG_INFINITY, |acc, value| acc.max(value.get()));
     numeric::computed_finite_quantity(maximum, "maximum()").map_err(AggregationError::from)
 }
 
-fn aggregate_mean(entries: &[RuntimeValue]) -> Result<FiniteQuantity, AggregationError> {
-    let values = entries
-        .iter()
-        .map(|value| quantity_entry(value, "mean element").map(FiniteQuantity::get))
-        .collect::<Result<Vec<_>, _>>()?;
+fn aggregate_mean(entries: &[FiniteQuantity]) -> Result<FiniteQuantity, AggregationError> {
+    let values = entries.iter().map(|value| value.get()).collect::<Vec<_>>();
     numeric::exact_mean(&values, "mean()").map_err(AggregationError::from)
 }
 
-/// Rank checking prevents `count()` from seeing nested indexed entries, and
-/// no in-memory axis has more entries than `Int` can count.
-fn aggregate_count(entries: &[RuntimeValue]) -> Result<i64, Invariant> {
-    if entries
-        .iter()
-        .any(|value| matches!(value, RuntimeValue::Indexed(_)))
-    {
-        return Err(Invariant::violated(
-            "count() received a multi-axis Indexed value after rank-one type checking",
-        ));
-    }
-    checked_count(entries.len())
-}
-
-fn checked_count(count: usize) -> Result<i64, Invariant> {
+/// No in-memory axis has more entries than `Int` can count.
+fn count(count: usize) -> Result<i64, Invariant> {
     i64::try_from(count).map_err(|_| {
         Invariant::violated(format_args!(
             "count() cardinality {count} cannot be represented as Int"
@@ -159,84 +129,79 @@ fn checked_count(count: usize) -> Result<i64, Invariant> {
 mod tests {
     use super::*;
 
+    fn quantities(values: &[f64]) -> IndexedValue<FiniteQuantity> {
+        IndexedValue::finite_for_test(
+            values
+                .iter()
+                .map(|value| FiniteQuantity::try_new(*value).unwrap())
+                .collect(),
+        )
+    }
+
+    fn aggregate(
+        kind: ValueAggregation,
+        values: &[f64],
+    ) -> Result<RuntimeValue, Failure<AggregationError>> {
+        aggregate_quantities(kind, quantities(values).values().as_slice())
+    }
+
     #[test]
     fn extremum_keys_prefer_the_first_of_tied_entries() {
-        let entries = IndexedValue::finite_for_test(vec![
-            RuntimeValue::quantity(2.0).unwrap(),
-            RuntimeValue::quantity(1.0).unwrap(),
-            RuntimeValue::quantity(3.0).unwrap(),
-            RuntimeValue::quantity(1.0).unwrap(),
-            RuntimeValue::quantity(3.0).unwrap(),
-        ]);
-        assert_eq!(
-            extremum_key(KeyAggregation::Argmin, &entries)
-                .unwrap()
-                .position(),
-            1
-        );
-        assert_eq!(
-            extremum_key(KeyAggregation::Argmax, &entries)
-                .unwrap()
-                .position(),
-            2
-        );
-        let single = IndexedValue::finite_for_test(vec![RuntimeValue::quantity(5.0).unwrap()]);
-        assert_eq!(
-            extremum_key(KeyAggregation::Argmax, &single)
-                .unwrap()
-                .position(),
-            0
-        );
-        let non_quantity = IndexedValue::finite_for_test(vec![RuntimeValue::Bool(true)]);
+        let entries = quantities(&[2.0, 1.0, 3.0, 1.0, 3.0]);
+        assert_eq!(extremum_key(KeyAggregation::Argmin, &entries).position(), 1);
+        assert_eq!(extremum_key(KeyAggregation::Argmax, &entries).position(), 2);
+        let single = quantities(&[5.0]);
+        assert_eq!(extremum_key(KeyAggregation::Argmax, &single).position(), 0);
+    }
+
+    #[test]
+    fn sums_and_extrema_aggregate_every_entry() {
         assert!(matches!(
-            extremum_key(KeyAggregation::Argmin, &non_quantity),
-            Err(AggregationError::ElementType(_))
+            aggregate(ValueAggregation::Sum, &[1.0, 2.0, 3.5]),
+            Ok(RuntimeValue::Quantity(value)) if value.get().to_bits() == 6.5_f64.to_bits()
+        ));
+        assert!(matches!(
+            aggregate(ValueAggregation::Minimum, &[2.0, -1.0, 3.0]),
+            Ok(RuntimeValue::Quantity(value)) if value.get().to_bits() == (-1.0_f64).to_bits()
+        ));
+        assert!(matches!(
+            aggregate(ValueAggregation::Maximum, &[2.0, -1.0, 3.0]),
+            Ok(RuntimeValue::Quantity(value)) if value.get().to_bits() == 3.0_f64.to_bits()
+        ));
+        assert!(matches!(
+            aggregate(ValueAggregation::Sum, &[f64::MAX, f64::MAX]),
+            Err(Failure::Error(AggregationError::Quantity(_)))
+        ));
+        assert!(matches!(
+            aggregate(ValueAggregation::Count, &[1.0, 2.0]),
+            Ok(RuntimeValue::Int(2))
         ));
     }
 
     #[test]
     fn product_and_rss_evaluate_with_numerical_checks() {
-        let entries = IndexedValue::finite_for_test(vec![
-            RuntimeValue::quantity(3.0).unwrap(),
-            RuntimeValue::quantity(4.0).unwrap(),
-        ]);
         assert!(matches!(
-            aggregate_indexed_values(ValueAggregation::Product, &entries),
+            aggregate(ValueAggregation::Product, &[3.0, 4.0]),
             Ok(RuntimeValue::Quantity(value)) if value.get().to_bits() == 12.0_f64.to_bits()
         ));
         assert!(matches!(
-            aggregate_indexed_values(ValueAggregation::RootSumSquare, &entries),
+            aggregate(ValueAggregation::RootSumSquare, &[3.0, 4.0]),
             Ok(RuntimeValue::Quantity(value)) if value.get().to_bits() == 5.0_f64.to_bits()
         ));
-
-        let large = IndexedValue::finite_for_test(vec![
-            RuntimeValue::quantity(1.0e308).unwrap(),
-            RuntimeValue::quantity(1.0e308).unwrap(),
-        ]);
         let RuntimeValue::Quantity(rss) =
-            aggregate_indexed_values(ValueAggregation::RootSumSquare, &large).unwrap()
+            aggregate(ValueAggregation::RootSumSquare, &[1.0e308, 1.0e308]).unwrap()
         else {
             panic!("rss must return a quantity");
         };
         assert!(rss.get().is_finite());
-
-        let small = IndexedValue::finite_for_test(vec![
-            RuntimeValue::quantity(1.0e-300).unwrap(),
-            RuntimeValue::quantity(1.0e-300).unwrap(),
-        ]);
         let RuntimeValue::Quantity(small_rss) =
-            aggregate_indexed_values(ValueAggregation::RootSumSquare, &small).unwrap()
+            aggregate(ValueAggregation::RootSumSquare, &[1.0e-300, 1.0e-300]).unwrap()
         else {
             panic!("rss must return a quantity");
         };
         assert!(small_rss.get() > 0.0);
-
-        let overflowing_product = IndexedValue::finite_for_test(vec![
-            RuntimeValue::quantity(f64::MAX).unwrap(),
-            RuntimeValue::quantity(2.0).unwrap(),
-        ]);
         assert!(matches!(
-            aggregate_indexed_values(ValueAggregation::Product, &overflowing_product),
+            aggregate(ValueAggregation::Product, &[f64::MAX, 2.0]),
             Err(Failure::Error(AggregationError::Quantity(
                 numeric::QuantityValidationError::InfiniteResult { .. }
             )))
@@ -245,12 +210,8 @@ mod tests {
 
     #[test]
     fn mean_avoids_overflow_in_a_representable_result() {
-        let entries = IndexedValue::finite_for_test(vec![
-            RuntimeValue::quantity(1.0e308).unwrap(),
-            RuntimeValue::quantity(1.0e308).unwrap(),
-        ]);
         let RuntimeValue::Quantity(mean) =
-            aggregate_indexed_values(ValueAggregation::Mean, &entries).unwrap()
+            aggregate(ValueAggregation::Mean, &[1.0e308, 1.0e308]).unwrap()
         else {
             panic!("mean must return a quantity");
         };
@@ -263,24 +224,7 @@ mod tests {
             RuntimeValue::Bool(false),
             RuntimeValue::Bool(true),
         ]);
-        assert!(matches!(
-            aggregate_indexed_values(ValueAggregation::Count, &entries),
-            Ok(RuntimeValue::Int(2))
-        ));
-    }
-
-    #[test]
-    fn count_defensively_rejects_nested_indexed_entries() {
-        let inner = RuntimeValue::Indexed(IndexedValue::finite_for_test(vec![
-            RuntimeValue::quantity(1.0).unwrap(),
-        ]));
-        let entries = IndexedValue::finite_for_test(vec![inner]);
-        let error = aggregate_indexed_values(ValueAggregation::Count, &entries).unwrap_err();
-        assert!(matches!(
-            &error,
-            Failure::Invariant(invariant) if invariant.to_string()
-                == "count() received a multi-axis Indexed value after rank-one type checking"
-        ));
+        assert!(matches!(count_entries(&entries), Ok(RuntimeValue::Int(2))));
     }
 
     #[cfg(target_pointer_width = "64")]
@@ -288,7 +232,7 @@ mod tests {
     fn count_checks_conversion_to_int() {
         let too_large = usize::try_from(i64::MAX).unwrap() + 1;
         assert_eq!(
-            checked_count(too_large).unwrap_err().to_string(),
+            count(too_large).unwrap_err().to_string(),
             format!("count() cardinality {too_large} cannot be represented as Int")
         );
     }

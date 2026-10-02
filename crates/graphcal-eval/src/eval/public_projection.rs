@@ -42,6 +42,23 @@ use crate::runtime_value::{IndexedValue, RuntimeValue, StructValue};
 ///
 /// Returns an [`Invariant`] when a runtime variant differs from its checked
 /// type.
+/// The value of a declaration checked as `Bool`.
+///
+/// # Errors
+///
+/// Returns an [`Invariant`] when the value is not a `Bool`.
+pub fn project_bool(runtime: &RuntimeValue) -> Result<bool, Invariant> {
+    match runtime {
+        RuntimeValue::Bool(value) => Ok(*value),
+        other => Err(mismatch(other.describe(), &CheckedType::Bool)),
+    }
+}
+
+/// Project `value`, checked as `declared_type`, to its public value.
+///
+/// # Errors
+///
+/// Returns an [`Invariant`] when the value contradicts its checked type.
 pub fn project(
     value: PresentedRef<'_, ResolvedLeaf>,
     declared_type: &CheckedType,
@@ -204,22 +221,25 @@ fn project_struct<V>(
     path: &Path<'_>,
     mut project_field: impl FnMut(&V, &CheckedType, &Path<'_>) -> Result<Value, Invariant>,
 ) -> Result<Value, Invariant> {
-    let CheckedType::Struct(declared, declared_args) = declared_type else {
-        return Err(mismatch(
-            format_args!("struct `{}`", fields.constructor()),
-            declared_type,
-        ));
+    // The value's nominal application must be the checked one.
+    let (declared, declared_args) = match declared_type {
+        CheckedType::Struct(declared, declared_args)
+            if declared.resolved() == fields.type_name()
+                && declared_args.as_slice() == fields.generic_args() =>
+        {
+            (declared, declared_args)
+        }
+        _ => {
+            return Err(mismatch(
+                format_args!(
+                    "struct `{}` of `{:?}`",
+                    fields.constructor(),
+                    fields.type_name()
+                ),
+                declared_type,
+            ));
+        }
     };
-    if declared.resolved() != fields.type_name()
-        || declared_args.as_slice() != fields.generic_args()
-    {
-        return Err(Invariant::violated(format_args!(
-            "a value of constructor `{}` of `{:?}` was checked as a value of `{:?}`",
-            fields.constructor(),
-            fields.type_name(),
-            declared.resolved()
-        )));
-    }
     let projected = fields
         .typed_fields()
         .map(|(field, value)| {
@@ -338,6 +358,7 @@ fn format_coordinate_exact(data: &CoordinateIndexData, position: usize) -> Strin
 
 #[cfg(test)]
 mod tests {
+    use super::project_bool;
     use graphcal_compiler::dag_id::DagId;
     use graphcal_compiler::dimension::{BaseDimId, Dimension, PreludeBaseDimension};
     use graphcal_compiler::resolved_name::ResolvedStructTypeName;
@@ -424,6 +445,13 @@ mod tests {
     }
 
     #[test]
+    fn bool_outputs_project_only_bools() {
+        assert_eq!(project_bool(&RuntimeValue::Bool(true)), Ok(true));
+        let error = project_bool(&quantity(1.0)).unwrap_err().to_string();
+        assert!(error.contains("was checked as a Bool"), "{error}");
+    }
+
+    #[test]
     fn a_runtime_variant_must_match_its_checked_type() {
         let error = plain(&quantity(1.0), &CheckedType::Bool).unwrap_err();
         assert!(error.contains("was checked as a Bool"), "{error}");
@@ -443,7 +471,7 @@ mod tests {
             Vec::new(),
         );
         let error = plain(&fields, &other).unwrap_err();
-        assert!(error.contains("was checked as a value of"), "{error}");
+        assert!(error.contains("was checked as a struct value"), "{error}");
     }
 
     #[test]

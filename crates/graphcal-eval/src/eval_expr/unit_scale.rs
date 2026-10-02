@@ -71,19 +71,20 @@ fn resolve_dynamic_unit_scale(
     })?;
     let scale_session = session.with_src(scale.source());
     let expression = scale.expression();
-    let scale_val = evaluate(
-        &scale_session.executable(expression)?,
-        values,
+    let scale_f64 = super::operations::read_shape(
+        evaluate(
+            &scale_session.executable(expression)?,
+            values,
+            &scale_session,
+        )?,
+        "a dynamic unit scale quantity",
+        expression.get().span,
         &scale_session,
+        |value| match value {
+            RuntimeValue::Quantity(scale) => Ok(scale),
+            other => Err(other),
+        },
     )?;
-    let RuntimeValue::Quantity(scale_f64) = scale_val else {
-        return Err(scale_session
-            .internal_error(
-                "dynamic unit scale expression must evaluate to a quantity",
-                expression.get().span,
-            )
-            .into());
-    };
     let dynamic_scale = PositiveFiniteScale::new(scale_f64.get()).map_err(|error| {
         unit_scale_error(
             UnitScaleContext::DynamicUnit,

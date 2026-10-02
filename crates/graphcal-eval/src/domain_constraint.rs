@@ -1,16 +1,18 @@
 //! Evaluated domain-bound data, independent of runtime-value interpretation.
 
+use graphcal_compiler::finite_value::FiniteQuantity;
 use graphcal_compiler::semantic::time_scale::TimeScale;
+use graphcal_compiler::semantic_error::domain::DomainBoundSpelling;
 
-/// One evaluated inclusive domain bound plus its user-facing diagnostic text.
+/// One evaluated inclusive domain bound plus how diagnostics spell it.
 #[derive(Debug, Clone)]
 pub struct ResolvedDomainBound<T> {
     value: T,
-    display: String,
+    display: DomainBoundSpelling,
 }
 
 impl<T> ResolvedDomainBound<T> {
-    pub const fn new(value: T, display: String) -> Self {
+    pub const fn new(value: T, display: DomainBoundSpelling) -> Self {
         Self { value, display }
     }
 
@@ -18,15 +20,8 @@ impl<T> ResolvedDomainBound<T> {
         &self.value
     }
 
-    pub fn display(&self) -> &str {
+    pub const fn display(&self) -> &DomainBoundSpelling {
         &self.display
-    }
-
-    fn map<U>(self, map: impl FnOnce(T) -> U) -> ResolvedDomainBound<U> {
-        ResolvedDomainBound {
-            value: map(self.value),
-            display: self.display,
-        }
     }
 }
 
@@ -51,15 +46,6 @@ impl<T> ResolvedDomainBounds<T> {
 
     pub const fn max(&self) -> Option<&ResolvedDomainBound<T>> {
         self.max.as_ref()
-    }
-
-    /// Transform both bound values, keeping their diagnostic text.
-    #[must_use]
-    pub fn map<U>(self, map: impl Fn(T) -> U) -> ResolvedDomainBounds<U> {
-        ResolvedDomainBounds {
-            min: self.min.map(|bound| bound.map(&map)),
-            max: self.max.map(|bound| bound.map(&map)),
-        }
     }
 }
 
@@ -92,7 +78,7 @@ impl DomainInstant {
 
 /// Failure to canonicalize a datetime value for a same-scale domain constraint.
 #[derive(Debug, Clone, thiserror::Error)]
-pub enum DomainInstantError {
+pub(crate) enum DomainInstantError {
     #[error("expected time scale {expected}, got {actual:?}")]
     ScaleMismatch {
         expected: TimeScale,
@@ -102,7 +88,7 @@ pub enum DomainInstantError {
 
 #[derive(Debug, Clone)]
 enum ResolvedDomainConstraintKind {
-    Quantity(ResolvedDomainBounds<f64>),
+    Quantity(ResolvedDomainBounds<FiniteQuantity>),
     Int(ResolvedDomainBounds<i64>),
     Datetime {
         scale: TimeScale,
@@ -123,7 +109,7 @@ pub struct ResolvedDomainConstraint {
 /// Read-only family-preserving view for validation and interface projection.
 #[derive(Clone, Copy)]
 pub enum ResolvedDomainConstraintRef<'constraint> {
-    Quantity(&'constraint ResolvedDomainBounds<f64>),
+    Quantity(&'constraint ResolvedDomainBounds<FiniteQuantity>),
     Int(&'constraint ResolvedDomainBounds<i64>),
     Datetime {
         scale: TimeScale,
@@ -133,7 +119,7 @@ pub enum ResolvedDomainConstraintRef<'constraint> {
 
 impl ResolvedDomainConstraint {
     #[must_use]
-    pub const fn quantity(bounds: ResolvedDomainBounds<f64>) -> Self {
+    pub const fn quantity(bounds: ResolvedDomainBounds<FiniteQuantity>) -> Self {
         Self {
             kind: ResolvedDomainConstraintKind::Quantity(bounds),
         }
@@ -188,24 +174,12 @@ mod tests {
     }
 
     #[test]
-    fn mapped_bounds_keep_their_diagnostic_text() {
-        let bounds = ResolvedDomainBounds::new(
-            Some(ResolvedDomainBound::new(1_i64, "one".to_owned())),
-            Some(ResolvedDomainBound::new(2_i64, "two".to_owned())),
-        )
-        .map(|value| value * 10);
-        let (min, max) = (bounds.min().unwrap(), bounds.max().unwrap());
-        assert_eq!((*min.value(), min.display()), (10, "one"));
-        assert_eq!((*max.value(), max.display()), (20, "two"));
-    }
-
-    #[test]
     fn integer_view_preserves_exact_bounds_and_diagnostic_spelling() {
         let constraint = ResolvedDomainConstraint::int(ResolvedDomainBounds::new(
             None,
             Some(ResolvedDomainBound::new(
                 i64::MAX,
-                "maximum integer".to_owned(),
+                DomainBoundSpelling::Integer(i64::MAX),
             )),
         ));
         match constraint.as_ref() {
@@ -213,7 +187,7 @@ mod tests {
                 assert!(bounds.min().is_none());
                 let max = bounds.max().unwrap();
                 assert_eq!(*max.value(), i64::MAX);
-                assert_eq!(max.display(), "maximum integer");
+                assert_eq!(max.display(), &DomainBoundSpelling::Integer(i64::MAX));
             }
             _ => panic!("integer bounds changed family"),
         }

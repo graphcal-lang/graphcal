@@ -26,7 +26,7 @@ pub(super) enum ComplexTypeError {
 /// Infer one complex built-in call from already-inferred arguments.
 ///
 /// The caller has already checked `arguments` against the function's static
-/// entry (`check_builtin_arity`), so it holds exactly `function.arity()`
+/// entry (`ArityChecked::check`), so it holds exactly `function.arity()`
 /// types; this rule does not re-check the count.
 pub(super) fn infer(
     function: ComplexFn,

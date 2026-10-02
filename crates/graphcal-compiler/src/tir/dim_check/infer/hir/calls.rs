@@ -7,59 +7,20 @@ use crate::semantic_error::dimension::LinearAlgebraAxisMismatch;
 use crate::semantic_error::dimension_mismatch::{
     MismatchOperand, MismatchRule, OperandExpectation,
 };
-use crate::semantic_error::name::NameError;
-use crate::source_id::SourceId;
 
-use crate::builtin::{
-    AggregationFn, BuiltinArity, BuiltinFn, DatetimeFn, ScalarFn, ValueAggregation,
-};
+use crate::builtin::{AggregationFn, BuiltinFn, DatetimeFn, ScalarFn, ValueAggregation};
 use crate::dimension::{Dimension, Rational};
 use crate::semantic_error::SemanticError;
 use crate::syntax::span::Span;
 
 use crate::semantic::checked_type::{CheckedType, Symbolic};
-use crate::tir::dim_check::builtins::infer_fn_dim;
+use crate::tir::dim_check::builtins::{ArityChecked, infer_fn_dim};
 use crate::tir::dim_check::helpers::expect_quantity;
 use crate::tir::dim_check::infer::linear_algebra::{
     LinearAlgebraTypeError, infer_linear_algebra_type,
 };
 
 use super::context::Infer;
-
-/// Check a built-in call's argument count against its static entry.
-///
-/// This is the only arity check for built-in calls: `infer_hir_fn_call` runs
-/// it once, before inferring any argument, and the family rules rely on it.
-fn check_builtin_arity(
-    function: BuiltinFn,
-    got: usize,
-    span: Span,
-    src: SourceId,
-) -> Result<(), SemanticError> {
-    match function.entry().arity() {
-        BuiltinArity::Exact(expected) if got != expected => Err(SemanticError::located(
-            src,
-            span,
-            NameError::WrongArity {
-                name: crate::semantic_error::name::CalledFunction::Builtin(function),
-                expected,
-                got,
-            },
-        )),
-        arity @ BuiltinArity::OptionalTrailing { .. } if !arity.accepts(got) => {
-            Err(SemanticError::located(
-                src,
-                span,
-                NameError::WrongOptionalArity {
-                    function,
-                    arity,
-                    got,
-                },
-            ))
-        }
-        BuiltinArity::Exact(_) | BuiltinArity::OptionalTrailing { .. } => Ok(()),
-    }
-}
 
 impl Infer<'_> {
     fn infer_hir_linear_algebra_call(
@@ -155,7 +116,8 @@ impl Infer<'_> {
         // The single arity check for every built-in family, driven by its static
         // entry and run before any argument is inferred. Family rules below may
         // rely on the accepted argument count.
-        check_builtin_arity(builtin, args.len(), callee.span, self.env.src)?;
+        let checked =
+            ArityChecked::check(builtin, args.iter().collect(), callee.span, self.env.src)?;
         match builtin {
             BuiltinFn::Complex(function) => self.infer_hir_complex_call(function, args),
             BuiltinFn::Aggregation(kind) => {
@@ -305,7 +267,9 @@ impl Infer<'_> {
                 args,
                 CheckedType::Quantity(Dimension::dimensionless()),
             ),
-            BuiltinFn::Scalar(function) => self.infer_hir_builtin_fn(function, callee.span, args),
+            BuiltinFn::Scalar(function) => {
+                self.infer_hir_builtin_fn(function, callee.span, checked)
+            }
         }
     }
 
@@ -409,20 +373,15 @@ impl Infer<'_> {
         &self,
         name: ScalarFn,
         callee_span: Span,
-        args: &[Expr],
+        args: ArityChecked<&Expr>,
     ) -> Result<CheckedType<Symbolic>, Outcome<SemanticError>> {
         let func = crate::semantic::scalar_function::scalar_function(name);
-        let dimension_args = args
-            .iter()
-            .map(|arg| {
-                let inferred = self.infer_arg(arg)?;
-                let dimension =
-                    expect_quantity(&inferred, self.env.registry, self.env.src, arg.span)?;
-                Ok(crate::syntax::span::Spanned::new(dimension, arg.span))
-            })
-            .collect::<Result<Vec<_>, Outcome<SemanticError>>>()?;
+        let dimension_args = args.try_map(|arg| {
+            let inferred = self.infer_arg(arg)?;
+            let dimension = expect_quantity(&inferred, self.env.registry, self.env.src, arg.span)?;
+            Ok::<_, Outcome<SemanticError>>(crate::syntax::span::Spanned::new(dimension, arg.span))
+        })?;
         infer_fn_dim(
-            name.into(),
             func.quantity_signature(),
             &dimension_args,
             callee_span,

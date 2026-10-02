@@ -51,8 +51,9 @@ pub enum DisplayProjectionError {
 }
 
 /// Error returned by a display accessor or projection.
+#[cfg(test)]
 #[derive(Debug, Error)]
-pub enum DisplayValueError {
+pub(crate) enum DisplayValueError {
     /// The accessor was called on the wrong public value variant.
     #[error(transparent)]
     Value(#[from] ValueError),
@@ -247,8 +248,8 @@ impl Value {
     /// # Errors
     ///
     /// Returns [`ValueError`] if this is not a `Quantity`.
-    #[cfg(any(test, feature = "test-internals"))]
-    pub fn display_value(&self) -> Result<f64, DisplayValueError> {
+    #[cfg(test)]
+    pub(crate) fn display_value(&self) -> Result<f64, DisplayValueError> {
         match self {
             Self::Quantity {
                 si_value,

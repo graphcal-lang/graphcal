@@ -248,7 +248,7 @@ fn evaluate_request_batch(
                         column.push(None);
                     }
                     statuses.push(STATUS_MODEL_ERROR);
-                    messages.push(Some(failure.message().to_string()));
+                    messages.push(Some(failure.to_string()));
                 }
             },
         }

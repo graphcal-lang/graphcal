@@ -46,7 +46,7 @@ trait MintedIndex: PlanIndex {
 
 /// The position of a step in its [`CallablePlan`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct StepIdx(usize);
+pub(crate) struct StepIdx(usize);
 
 impl PlanIndex for StepIdx {
     fn position(self) -> usize {
@@ -234,13 +234,13 @@ impl<'p> Step<'p> {
 
     /// What computing the declaration does.
     #[must_use]
-    pub const fn body(&self) -> &ComputedBody<'p> {
+    pub(crate) const fn body(&self) -> &ComputedBody<'p> {
         &self.body
     }
 
     /// The earlier steps of the same callable whose declarations it reads.
     #[must_use]
-    pub fn deps(&self) -> &[StepIdx] {
+    pub(crate) fn deps(&self) -> &[StepIdx] {
         &self.deps
     }
 }
@@ -253,7 +253,7 @@ pub struct PreparedConstantImport {
 
 /// Why a callable's steps could not be indexed.
 #[derive(Debug, Error)]
-pub enum StepIndexError {
+pub(crate) enum StepIndexError {
     #[error("declaration `{0}` is scheduled twice")]
     Duplicate(ResolvedDeclName),
     #[error(
@@ -279,7 +279,7 @@ pub struct PlannedInstance<'p> {
 /// One value an include site exposes from the instance's own body, with
 /// the category of the declaration that produces it.
 #[derive(Debug, Clone)]
-pub struct PlannedOutput<'p> {
+pub(crate) struct PlannedOutput<'p> {
     /// The declaration the projection exposes, as the instance runs it.
     pub target: ResolvedDeclName,
     /// The include-site projection, for its exposed name.
@@ -290,7 +290,7 @@ pub struct PlannedOutput<'p> {
 
 /// One assertion an include site exposes, with its checked body.
 #[derive(Debug, Clone, Copy)]
-pub struct PlannedAssertion<'p> {
+pub(crate) struct PlannedAssertion<'p> {
     /// The include-site projection, for its exposed name and options.
     pub projection: &'p InstanceAssertionProjection,
     /// The assertion's checked body, in the scope of the DAG that owns it.
@@ -301,7 +301,7 @@ pub struct PlannedAssertion<'p> {
 
 /// One plot an include site requests, with its checked body.
 #[derive(Debug, Clone, Copy)]
-pub struct PlannedPlot<'p> {
+pub(crate) struct PlannedPlot<'p> {
     /// The include-site projection, for its alias and visibility.
     pub projection: &'p InstancePlotProjection,
     /// The plot's checked body, in the scope of the DAG that owns it, which
@@ -420,19 +420,19 @@ impl<'p> PlannedInstance<'p> {
     /// The values the include site exposes from the instance's own body, in
     /// record order.
     #[must_use]
-    pub fn outputs(&self) -> &[PlannedOutput<'p>] {
+    pub(crate) fn outputs(&self) -> &[PlannedOutput<'p>] {
         &self.outputs
     }
 
     /// The assertions the include site exposes, in record order.
     #[must_use]
-    pub fn assertions(&self) -> &[PlannedAssertion<'p>] {
+    pub(crate) fn assertions(&self) -> &[PlannedAssertion<'p>] {
         &self.assertions
     }
 
     /// The plots the include site requests, in record order.
     #[must_use]
-    pub fn plots(&self) -> &[PlannedPlot<'p>] {
+    pub(crate) fn plots(&self) -> &[PlannedPlot<'p>] {
         &self.plots
     }
 }
@@ -458,7 +458,7 @@ impl<'p> CallablePlan<'p> {
     ///
     /// Returns a [`StepIndexError`] when a declaration is scheduled twice or
     /// before a scheduled declaration it reads.
-    pub fn new(
+    pub(crate) fn new(
         scope: SealedDag<'p>,
         execution_dags: Vec<SealedDag<'p>>,
         instances: Vec<PlannedInstance<'p>>,
@@ -569,7 +569,7 @@ impl<'p> CallablePlan<'p> {
 
     /// One step of this callable.
     #[must_use]
-    pub fn step(&self, index: StepIdx) -> &Step<'p> {
+    pub(crate) fn step(&self, index: StepIdx) -> &Step<'p> {
         &self.steps[index]
     }
 }

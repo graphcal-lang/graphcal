@@ -5,6 +5,7 @@ use crate::domain_check::check_domain_constraint;
 use crate::domain_constraint::ResolvedDomainConstraint;
 use crate::eval::types::NodeUnavailable;
 use crate::execution_plan::{CallablePlan, ComputedBody, ExecPlan};
+use crate::invariant::Failure;
 use crate::runtime_presentation::EvaluatedRuntimeValue;
 use crate::runtime_presentation::PendingPresentedMap;
 use graphcal_compiler::cancellation::CancellationToken;
@@ -100,12 +101,6 @@ pub fn eval_failed_node_error(error: &SemanticError) -> NodeUnavailable {
             kind: SemanticErrorKind::Evaluation(EvaluationError::Unavailable { reason, .. }),
             ..
         }) => reason.clone(),
-        SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
-            kind: SemanticErrorKind::Evaluation(EvaluationError::Failed { message, .. }),
-            ..
-        }) => NodeUnavailable::EvalFailed {
-            message: message.clone(),
-        },
         other => NodeUnavailable::EvalFailed {
             message: other.to_string(),
         },
@@ -211,13 +206,12 @@ impl<'a> ExecutionFrame<'a> {
         span: Span,
     ) -> Result<(), SemanticError> {
         if let Some(constraint) = domain
-            && let Err(violation) = check_domain_constraint(&value.value(), constraint)
+            && let Err(failure) = check_domain_constraint(&value.value(), constraint)
         {
             self.values.remove(key);
             self.presented.remove(key);
-            return self.failure(
-                key,
-                SemanticError::located(
+            let error = match failure {
+                Failure::Error(violation) => SemanticError::located(
                     source,
                     span,
                     EvaluationError::Runtime(
@@ -226,7 +220,9 @@ impl<'a> ExecutionFrame<'a> {
                         ),
                     ),
                 ),
-            );
+                Failure::Invariant(invariant) => invariant.into_internal_error(source),
+            };
+            return self.failure(key, error);
         }
         self.store(key, value);
         Ok(())

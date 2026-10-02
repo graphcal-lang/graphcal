@@ -1,10 +1,10 @@
 //! Domain-bound resolution and compile-time constraint validation.
 
 use graphcal_compiler::declaration_category::ValueDeclCategory;
+use graphcal_compiler::finite_value::FiniteQuantity;
 use graphcal_compiler::semantic_error::domain::{
-    DomainError, DomainSubject, ValuePath, ValuePathStep,
+    DomainBoundSpelling, DomainError, DomainSubject, ValuePath, ValuePathStep,
 };
-use graphcal_compiler::semantic_error::evaluation::EvaluationError;
 use graphcal_compiler::source_registry::SourceRegistry;
 use graphcal_compiler::syntax::non_empty::NonEmpty;
 use graphcal_compiler::tir::typed::DomainFamily;
@@ -28,6 +28,7 @@ use crate::domain_constraint::{
     ResolvedDomainBounds as EvaluatedDomainBounds, ResolvedDomainConstraint,
 };
 use crate::eval_expr::{EvalSession, RuntimeValue, eval_root};
+use crate::invariant::Failure;
 use graphcal_compiler::resolved_name::ResolvedDeclName;
 
 /// Resolve domain constraints from type annotations on consts, params, and nodes.
@@ -103,17 +104,15 @@ pub(super) fn resolve_domain_constraints_for_dag(
         )?;
         if is_const
             && let Some(value) = const_values.get(&resolved_key)
-            && let Err(violation) =
+            && let Err(failure) =
                 crate::domain_check::check_domain_constraint(value, &resolved_constraint)
         {
-            return Err(SemanticError::located(
+            return Err(domain_check_error(
+                failure,
+                DomainSubject::Declaration(name.clone()),
+                value,
                 src,
                 decl_span,
-                DomainError::DomainViolation {
-                    name: DomainSubject::Declaration(name.clone()),
-                    value: format_runtime_value(value),
-                    violation: violation.message,
-                },
             )
             .into());
         }
@@ -146,19 +145,26 @@ fn resolve_constraint_from_bounds(
             values,
             ctx,
             src,
-            |value, bound| match value {
-                RuntimeValue::Quantity(value) => Ok(value.get()),
-                RuntimeValue::Int(value) => {
-                    exact_domain_int_bound(*value, src, bound.value.span).map_err(Outcome::Failed)
-                }
-                other => {
-                    Err(
-                        domain_bound_value_error(display_name, bound, "a quantity", other, src)
-                            .into(),
-                    )
-                }
+            &"a quantity",
+            |value, bound| {
+                let quantity = match value {
+                    RuntimeValue::Quantity(value) => *value,
+                    RuntimeValue::Int(value) => {
+                        match FiniteQuantity::try_new(
+                            exact_domain_int_bound(*value, src, bound.value.span)
+                                .map_err(Outcome::Failed)?,
+                        ) {
+                            Ok(quantity) => quantity,
+                            Err(_) => return Ok(None),
+                        }
+                    }
+                    _ => return Ok(None),
+                };
+                Ok(Some((
+                    quantity,
+                    quantity_bound_spelling(&bound.value, quantity.get()),
+                )))
             },
-            |expr, value| format_quantity_bound_display(expr, *value),
         )
         .map(ResolvedDomainConstraint::quantity),
         DomainFamily::Int => evaluate_domain_bounds(
@@ -167,67 +173,50 @@ fn resolve_constraint_from_bounds(
             values,
             ctx,
             src,
-            |value, bound| match value {
-                RuntimeValue::Int(value) => Ok(*value),
-                other => {
-                    Err(domain_bound_value_error(display_name, bound, "Int", other, src).into())
+            &"Int",
+            |value, _| match value {
+                RuntimeValue::Int(value) => {
+                    Ok(Some((*value, DomainBoundSpelling::Integer(*value))))
                 }
+                _ => Ok(None),
             },
-            |_expr, value| value.to_string(),
         )
         .map(ResolvedDomainConstraint::int),
-        DomainFamily::Datetime(scale) => {
-            let evaluated = evaluate_domain_bounds(
-                bounds,
-                display_name,
-                values,
-                ctx,
-                src,
-                // Each bound is admitted as an instant only from an epoch in
-                // the constrained scale; its display keeps the epoch.
-                |value, bound| match value {
-                    RuntimeValue::Datetime(epoch) => DomainInstant::from_epoch(*epoch, scale)
-                        .map(|instant| (instant, *epoch))
-                        .map_err(|_| {
-                            domain_bound_value_error(
-                                display_name,
-                                bound,
-                                &format!("Datetime<{scale}>"),
-                                value,
-                                src,
-                            )
-                            .into()
-                        }),
-                    other => Err(domain_bound_value_error(
-                        display_name,
-                        bound,
-                        &format!("Datetime<{scale}>"),
-                        other,
-                        src,
-                    )
-                    .into()),
-                },
-                |_expr, (_, epoch)| epoch.to_string(),
-            )?;
-            Ok(ResolvedDomainConstraint::datetime(
-                scale,
-                evaluated.map(|(instant, _)| instant),
-            ))
-        }
+        DomainFamily::Datetime(scale) => evaluate_domain_bounds(
+            bounds,
+            display_name,
+            values,
+            ctx,
+            src,
+            &format_args!("Datetime<{scale}>"),
+            // Each bound is admitted as an instant only from an epoch in the
+            // constrained scale; its spelling keeps the epoch.
+            |value, _| match value {
+                RuntimeValue::Datetime(epoch) => Ok(DomainInstant::from_epoch(*epoch, scale)
+                    .ok()
+                    .map(|instant| (instant, DomainBoundSpelling::Datetime(*epoch)))),
+                _ => Ok(None),
+            },
+        )
+        .map(|bounds| ResolvedDomainConstraint::datetime(scale, bounds)),
     }
 }
 
+/// Evaluate each bound and read it with `read`, which returns the bound's
+/// value and its spelling, or `None` for a value that is not `expected`:
+/// checking proved every bound of the constrained family, so such a value is
+/// a violated invariant.
 fn evaluate_domain_bounds<T: PartialOrd>(
     scoped_bounds: Scoped<'_, NonEmpty<graphcal_compiler::tir::typed::ResolvedDomainBound>>,
     display_name: &DomainSubject,
     values: &RuntimeValueMap,
     ctx: BoundCheckingContext<'_, '_>,
     src: SourceId,
-    convert: impl Fn(
+    expected: &dyn std::fmt::Display,
+    read: impl Fn(
         &RuntimeValue,
         &graphcal_compiler::tir::typed::ResolvedDomainBound,
-    ) -> Result<T, Outcome<SemanticError>>,
-    format_display: impl Fn(&graphcal_compiler::hir::expr::Expr, &T) -> String,
+    ) -> Result<Option<(T, DomainBoundSpelling)>, Outcome<SemanticError>>,
 ) -> Result<EvaluatedDomainBounds<T>, Outcome<SemanticError>> {
     let (first, rest) = scoped_bounds.get().split_first();
     let evaluated = scoped_bounds
@@ -239,8 +228,17 @@ fn evaluate_domain_bounds<T: PartialOrd>(
                 ctx.evaluation.tir, scoped_bound, ctx.bindings,
             )?;
             let runtime_value = eval_root(&tree, values, ctx.evaluation)?;
-            let value = convert(&runtime_value, bound)?;
-            let display = format_display(&bound.value, &value);
+            let (value, display) = read(&runtime_value, bound)?.ok_or_else(|| {
+                SemanticError::internal_error(
+                    format!(
+                        "{} domain bound on `{display_name}` checked as {expected} evaluated to {}",
+                        bound.kind,
+                        runtime_value.describe()
+                    ),
+                    src,
+                    DiagnosticAnchor::Source(bound.value.span),
+                )
+            })?;
             Ok((bound.kind, EvaluatedDomainBound::new(value, display)))
         })
         .collect::<Result<Vec<_>, Outcome<SemanticError>>>()?;
@@ -262,33 +260,13 @@ fn evaluate_domain_bounds<T: PartialOrd>(
             constraint_span,
             DomainError::DomainMinExceedsMax {
                 name: display_name.clone(),
-                min: min.display().to_string(),
-                max: max.display().to_string(),
+                min: Box::new(min.display().clone()),
+                max: Box::new(max.display().clone()),
             },
         )
         .into());
     }
     Ok(EvaluatedDomainBounds::new(min, max))
-}
-
-fn domain_bound_value_error(
-    display_name: &DomainSubject,
-    bound: &graphcal_compiler::tir::typed::ResolvedDomainBound,
-    expected: &str,
-    actual: &RuntimeValue,
-    src: SourceId,
-) -> SemanticError {
-    SemanticError::located(
-        src,
-        bound.value.span,
-        EvaluationError::Failed {
-            message: format!(
-                "{} domain bound on `{display_name}` must evaluate to {expected}, got {}",
-                bound.kind,
-                actual.describe()
-            ),
-        },
-    )
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -725,19 +703,17 @@ fn check_const_struct_field_constraints(
                     value.generic_args(),
                     value.constructor(),
                     field_name,
-                ) && let Err(violation) =
+                ) && let Err(failure) =
                     crate::domain_check::check_domain_constraint(field_value, constraint)
                 {
-                    return Err(SemanticError::located(
+                    return Err(domain_check_error(
+                        failure,
+                        DomainSubject::Value(Box::new(
+                            path.child(ValuePathStep::Field(field_name.clone())),
+                        )),
+                        field_value,
                         src,
                         decl_span,
-                        DomainError::DomainViolation {
-                            name: DomainSubject::Value(Box::new(
-                                path.child(ValuePathStep::Field(field_name.clone())),
-                            )),
-                            value: format_runtime_value(field_value),
-                            violation: violation.message,
-                        },
                     ));
                 }
                 // Recurse for nested struct fields. The nested runtime value
@@ -769,6 +745,30 @@ fn check_const_struct_field_constraints(
             Ok(())
         }
         _ => Ok(()),
+    }
+}
+
+/// The diagnostic for a constant `value` of `subject` that failed its domain
+/// check at `span`: a violation is a domain error, a value of another family
+/// than its constraint's a violated invariant.
+fn domain_check_error(
+    failure: Failure<crate::domain_check::DomainViolation>,
+    subject: DomainSubject,
+    value: &RuntimeValue,
+    src: SourceId,
+    span: Span,
+) -> SemanticError {
+    match failure {
+        Failure::Error(violation) => SemanticError::located(
+            src,
+            span,
+            DomainError::DomainViolation {
+                name: subject,
+                value: format_runtime_value(value),
+                violation: Box::new(violation),
+            },
+        ),
+        Failure::Invariant(invariant) => invariant.into_internal_error(src),
     }
 }
 
@@ -820,32 +820,26 @@ fn exact_domain_int_bound(
     })
 }
 
-fn format_quantity_bound_display(
+/// How a quantity bound is spelled: as written when it is a literal, by its
+/// SI value otherwise.
+fn quantity_bound_spelling(
     expr: &graphcal_compiler::hir::expr::Expr,
     si_value: f64,
-) -> String {
+) -> DomainBoundSpelling {
     use graphcal_compiler::hir::expr::ExprKind;
     match expr.kind() {
-        ExprKind::Number(n) => graphcal_compiler::display::number::format_number(*n),
-        ExprKind::Integer(n) => format!("{n}"),
-        ExprKind::QuantityLiteral { value, unit } => {
-            let unit_str = graphcal_compiler::display::unit_label::format_unit_terms_with_config(
-                unit.terms
-                    .iter()
-                    .map(|item| (item.op, item.name.value.to_string(), item.power)),
-                true,
-            );
-            let val_str = graphcal_compiler::display::number::format_number(*value);
-            format!("{val_str} {unit_str}")
-        }
+        ExprKind::Number(n) => DomainBoundSpelling::Number(*n),
+        ExprKind::Integer(n) => DomainBoundSpelling::Integer(*n),
+        ExprKind::QuantityLiteral { value, unit } => DomainBoundSpelling::Quantity {
+            value: *value,
+            unit: unit.clone(),
+        },
         ExprKind::UnaryOp {
             op: graphcal_compiler::desugar::desugared_ast::UnaryOp::Neg,
             operand,
-        } => {
-            format!("-{}", format_quantity_bound_display(operand, -si_value))
-        }
+        } => DomainBoundSpelling::Negated(Box::new(quantity_bound_spelling(operand, -si_value))),
         // Fallback: display the already-evaluated SI value.
-        _ => graphcal_compiler::display::number::format_number(si_value),
+        _ => DomainBoundSpelling::Number(si_value),
     }
 }
 

@@ -3939,7 +3939,16 @@ fn rejected_expression_bindings_report_typed_binding_errors() {
 
     let error = bind("d", "-1.0 m");
     assert!(
-        matches!(&error, CompileError::Binding(BindingError::DomainViolation { name, .. }) if name.as_str() == "d"),
+        matches!(
+            &error,
+            CompileError::Binding(BindingError::DomainViolation { name, violation, .. })
+                if name.as_str() == "d"
+                    && violation.entries().is_empty()
+                    && matches!(
+                        violation.bound(),
+                        graphcal_compiler::semantic_error::domain::DomainBoundViolation::BelowMinimum(_)
+                    )
+        ),
         "{error:?}"
     );
     assert_eq!(error.to_string(), "below minimum (0 m)");
@@ -4221,7 +4230,7 @@ fn model_row_fails_when_an_included_assertion_fails() {
     );
     match evaluate_included_model_row(leaf, "-1.0") {
         ModelRowOutcome::Failure(failure) => assert!(
-            failure.message().contains("positive"),
+            failure.to_string().contains("positive"),
             "unexpected failure: {failure}"
         ),
         ModelRowOutcome::Success(values) => panic!("expected assertion failure, got {values:?}"),
@@ -4239,7 +4248,7 @@ fn model_row_reports_runtime_errors_inside_included_dags_as_row_failures() {
     );
     match evaluate_included_model_row(leaf, "0.0") {
         ModelRowOutcome::Failure(failure) => assert!(
-            failure.message().contains("division by zero"),
+            failure.to_string().contains("division by zero"),
             "unexpected failure: {failure}"
         ),
         ModelRowOutcome::Success(values) => panic!("expected runtime failure, got {values:?}"),
@@ -4295,7 +4304,7 @@ fn private_include_failures_are_labelled_by_the_include_scope() {
         match prepared.evaluate_model_row(&row, &model).unwrap() {
             ModelRowOutcome::Failure(failure) => assert!(
                 failure
-                    .message()
+                    .to_string()
                     .starts_with(&format!("{label}: division by zero")),
                 "unexpected failure for `{include}`: {failure}"
             ),
@@ -5862,7 +5871,9 @@ fn eval_constructor_match_rejects_runtime_owner_mismatch_with_same_leaf_construc
     match err {
         Outcome::Failed(SemanticError::Internal(internal)) => {
             assert!(
-                internal.message().contains("no match arm for variant"),
+                internal
+                    .message()
+                    .contains("a union value one arm takes apart"),
                 "{}",
                 internal.message()
             );
@@ -6792,7 +6803,9 @@ fn eval_index_access_rejects_runtime_owner_mismatch_with_same_leaf_variant() {
     match err {
         Outcome::Failed(SemanticError::Internal(internal)) => {
             assert!(
-                internal.message().contains("checked index entry"),
+                internal
+                    .message()
+                    .contains("an indexed value with the entry"),
                 "{}",
                 internal.message()
             );
@@ -6884,7 +6897,7 @@ fn eval_label_match_rejects_runtime_owner_mismatch_with_same_leaf_variant() {
     match err {
         Outcome::Failed(SemanticError::Internal(internal)) => {
             assert!(
-                internal.message().contains("no match arm for label"),
+                internal.message().contains("operand checked as a key of"),
                 "{}",
                 internal.message()
             );
@@ -9004,7 +9017,7 @@ const node SAT: Spec = Spec(mass: 5000.0 kg);
     };
     assert_eq!(name.to_string(), "SAT.mass");
     assert!(
-        violation.contains("above maximum"),
+        violation.to_string().contains("above maximum"),
         "violation = {violation}"
     );
 }

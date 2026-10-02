@@ -25,6 +25,25 @@ pub struct MapLayout {
     placements: Vec<Placement>,
 }
 
+/// The values of one axis level of a filled map literal: exactly one per key
+/// of `axis`, in axis order.
+///
+/// Built only by [`MapLayout::fill`], whose layout covers every cell exactly
+/// once.
+#[derive(Debug, Clone)]
+pub struct AxisCells<T> {
+    axis: IndexAxis,
+    cells: NonEmpty<T>,
+}
+
+impl<T> AxisCells<T> {
+    /// The axis and its values, one per key in axis order.
+    #[must_use]
+    pub fn into_parts(self) -> (IndexAxis, NonEmpty<T>) {
+        (self.axis, self.cells)
+    }
+}
+
 /// Where one map-literal entry goes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Placement {
@@ -125,6 +144,47 @@ impl MapLayout {
     pub const fn cells(&self) -> usize {
         self.placements.len()
     }
+
+    /// The nested value of the map literal: each entry's value, computed by
+    /// `entry` from its written position in evaluation order, placed in its
+    /// cell, and nested axis by axis (innermost first) by `nest`.
+    ///
+    /// # Errors
+    ///
+    /// Returns the first error `entry` returns; later entries are not
+    /// computed.
+    pub fn fill<T, E>(
+        &self,
+        mut entry: impl FnMut(usize) -> Result<T, E>,
+        mut nest: impl FnMut(AxisCells<T>) -> T,
+    ) -> Result<T, E> {
+        let mut placed = Vec::with_capacity(self.placements.len());
+        for placement in &self.placements {
+            placed.push((placement.cell, entry(placement.entry)?));
+        }
+        // The placements fill every cell exactly once, so sorting by cell
+        // leaves one value per cell in row-major order.
+        placed.sort_by_key(|(cell, _)| *cell);
+        let mut level = placed
+            .into_iter()
+            .map(|(_, value)| value)
+            .collect::<Vec<_>>();
+        for axis in self.axes.iter().rev() {
+            // Each level holds a whole number of runs of this axis's length.
+            let mut values = level.into_iter();
+            let mut nested = Vec::new();
+            while let Some(first) = values.next() {
+                let rest = values.by_ref().take(axis.len() - 1).collect();
+                nested.push(nest(AxisCells {
+                    axis: axis.clone(),
+                    cells: NonEmpty::new(first, rest),
+                }));
+            }
+            level = nested;
+        }
+        // The outermost axis nests every cell into one value.
+        Ok(level.swap_remove(0))
+    }
 }
 
 /// The position on `axis` of the entry `key` names.
@@ -153,7 +213,7 @@ mod tests {
     use crate::syntax::non_empty::NonEmpty;
     use crate::syntax::span::{Span, Spanned};
 
-    use super::{MapLayout, MapLayoutError, Placement};
+    use super::{AxisCells, MapLayout, MapLayoutError, Placement};
 
     fn fin(size: u64) -> IndexAxis {
         IndexAxis::finite(FiniteIndex::try_from_u64(size).unwrap()).unwrap()
@@ -209,6 +269,64 @@ mod tests {
                 Placement { entry: 2, cell: 1 },
             ]
         );
+    }
+
+    /// A filled cell or axis level, rendered for comparison.
+    fn rendered(level: AxisCells<String>) -> String {
+        let (axis, cells) = level.into_parts();
+        format!("{}[{}]", axis.len(), cells.as_slice().join(","))
+    }
+
+    #[test]
+    fn filling_nests_cells_row_major_and_evaluates_by_group() {
+        let entries = [
+            keys(&[(2, 1), (3, 0)]),
+            keys(&[(2, 0), (3, 2)]),
+            keys(&[(2, 1), (3, 2)]),
+            keys(&[(2, 0), (3, 0)]),
+            keys(&[(2, 1), (3, 1)]),
+            keys(&[(2, 0), (3, 1)]),
+        ];
+        let layout =
+            MapLayout::try_new(vec![fin(2), fin(3)], &entries.iter().collect::<Vec<_>>()).unwrap();
+        let mut order = Vec::new();
+        let filled = layout
+            .fill(
+                |entry| {
+                    order.push(entry);
+                    Ok::<_, ()>(format!("e{entry}"))
+                },
+                rendered,
+            )
+            .unwrap();
+        assert_eq!(filled, "2[3[e3,e5,e1],3[e0,e4,e2]]");
+        assert_eq!(order, [1, 3, 5, 0, 2, 4]);
+        let single = [keys(&[(1, 0)])];
+        let layout = MapLayout::try_new(vec![fin(1)], &single.iter().collect::<Vec<_>>()).unwrap();
+        assert_eq!(
+            layout.fill(|entry| Ok::<_, ()>(format!("e{entry}")), rendered),
+            Ok("1[e0]".to_owned())
+        );
+    }
+
+    #[test]
+    fn filling_stops_at_the_first_failed_entry() {
+        let entries = [keys(&[(2, 1)]), keys(&[(2, 0)])];
+        let layout = MapLayout::try_new(vec![fin(2)], &entries.iter().collect::<Vec<_>>()).unwrap();
+        let mut computed = Vec::new();
+        let result = layout.fill(
+            |entry| {
+                computed.push(entry);
+                if entry == 0 {
+                    Err(entry)
+                } else {
+                    Ok(String::new())
+                }
+            },
+            rendered,
+        );
+        assert_eq!(result, Err(0));
+        assert_eq!(computed, [0]);
     }
 
     #[test]

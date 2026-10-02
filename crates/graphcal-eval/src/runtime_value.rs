@@ -11,29 +11,6 @@ pub use graphcal_compiler::semantic::key_value::{KeyElement, KeyValue};
 pub use graphcal_compiler::semantic::struct_value::{StructFieldsError, StructValue};
 pub use indexed::IndexedValue;
 
-/// Error returned when a [`RuntimeValue`] accessor is called on an incompatible variant.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct RuntimeValueError {
-    /// What kind of value was expected (e.g. "quantity", "Bool").
-    expected: &'static str,
-    /// A description of what the value was being used for.
-    context: String,
-    /// Description of the value actually encountered.
-    actual: String,
-}
-
-impl std::fmt::Display for RuntimeValueError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "expected {} for {}, got {}",
-            self.expected, self.context, self.actual
-        )
-    }
-}
-
-impl std::error::Error for RuntimeValueError {}
-
 /// The compiler/evaluator boundary representation of a runtime value.
 ///
 /// Equality is structural and is the language's `==`: quantities and complex
@@ -73,31 +50,15 @@ impl RuntimeValue {
 
     /// Describe this value's variant (not its contents) for diagnostics.
     #[must_use]
-    pub const fn describe(&self) -> RuntimeValueDescription<'_> {
+    pub(crate) const fn describe(&self) -> RuntimeValueDescription<'_> {
         RuntimeValueDescription(self)
-    }
-
-    /// Extract quantity value, returning a structured error if this is not a quantity.
-    /// (Type mismatches should be caught by `dim_check`; this is defense-in-depth.)
-    pub(crate) fn expect_quantity(
-        &self,
-        context: &str,
-    ) -> Result<FiniteQuantity, RuntimeValueError> {
-        match self {
-            Self::Quantity(v) => Ok(*v),
-            other => Err(RuntimeValueError {
-                expected: "quantity",
-                context: context.to_string(),
-                actual: other.describe().to_string(),
-            }),
-        }
     }
 }
 
 /// Diagnostic rendering of a [`RuntimeValue`]'s variant, from
 /// [`RuntimeValue::describe`].
 #[derive(Debug, Clone, Copy)]
-pub struct RuntimeValueDescription<'a>(&'a RuntimeValue);
+pub(crate) struct RuntimeValueDescription<'a>(&'a RuntimeValue);
 
 impl std::fmt::Display for RuntimeValueDescription<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

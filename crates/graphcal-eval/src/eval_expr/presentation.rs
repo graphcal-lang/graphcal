@@ -115,10 +115,7 @@ fn resolve_request(
         Err(Outcome::Failed(error)) => Ok(QuantityDisplay::Failed(PresentationFailure::Scale {
             source_name: match &error {
                 SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
-                    kind:
-                        SemanticErrorKind::Evaluation(
-                            EvaluationError::Failed { .. } | EvaluationError::Runtime(_),
-                        ),
+                    kind: SemanticErrorKind::Evaluation(EvaluationError::Runtime(_)),
                     src,
                     ..
                 }) => context.source_name(*src).to_owned(),

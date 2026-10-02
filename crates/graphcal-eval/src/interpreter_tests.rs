@@ -1881,9 +1881,14 @@ mod execution_frames {
     use graphcal_compiler::node_unavailable::NodeUnavailable;
     use graphcal_compiler::outcome::Outcome;
     use graphcal_compiler::semantic_error::SemanticError;
-    use graphcal_compiler::semantic_error::evaluation::EvaluationError;
+    use graphcal_compiler::semantic_error::evaluation::{EvaluationError, EvaluatorFailure};
 
     use crate::execution_frame::{ExecutionFrame, FailurePolicy};
+
+    /// An ordinary (non-fatal) evaluation failure of a test declaration.
+    #[derive(Debug, thiserror::Error)]
+    #[error("ordinary sentinel")]
+    struct OrdinarySentinel;
 
     #[test]
     fn shared_frames_cancel_before_interpretation() {
@@ -1981,9 +1986,7 @@ mod execution_frames {
                             SemanticError::located(
                                 src,
                                 entry.body().root().span(),
-                                EvaluationError::Failed {
-                                    message: "ordinary sentinel".into(),
-                                },
+                                EvaluationError::Runtime(EvaluatorFailure::new(OrdinarySentinel)),
                             )
                         }
                         .into());

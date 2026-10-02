@@ -28,18 +28,30 @@ use graphcal_compiler::outcome::Outcome;
 
 use super::EvalSession;
 use super::linear_algebra_error::LinearAlgebraError;
-use super::linear_algebra_lu::{LuFailure, SquareMatrix};
+use super::linear_algebra_lu::{LinearSystem, LuFailure, SquareMatrix};
 use super::numeric::{self, QuantityValidationError};
 use super::work_budget::{KernelCheckpoint, WorkAmount, WorkAmountError};
 use crate::invariant::{Failure, Invariant};
 
+/// A rank-two operand whose rows and columns enumerate the same axis.
+#[derive(Debug)]
+struct Square {
+    rows: IndexAxis,
+    columns: IndexAxis,
+    matrix: SquareMatrix,
+}
+
 /// Reads the operands of a linear-algebra call as the vectors and matrices
 /// their checked types are.
 pub(super) trait LinearOperands<N> {
-    /// The vector `node`, a rank-one array of quantities, evaluates to.
-    fn vector(&self, node: N) -> Result<Vector, Outcome<SemanticError>>;
-    /// The matrix `node`, a rank-two array of quantities, evaluates to.
-    fn matrix(&self, node: N) -> Result<Matrix, Outcome<SemanticError>>;
+    /// The value of `node`, checked as `expected`, read by `read`, which
+    /// returns the value back when its shape contradicts the checked type.
+    fn read_operand<T>(
+        &self,
+        node: N,
+        expected: &str,
+        read: impl FnOnce(RuntimeValue) -> Result<T, RuntimeValue>,
+    ) -> Result<T, Outcome<SemanticError>>;
 }
 
 /// A rank-one operand: one value per key of `axis`.
@@ -47,6 +59,13 @@ pub(super) trait LinearOperands<N> {
 pub(super) struct Vector {
     axis: IndexAxis,
     values: Vec<f64>,
+}
+
+/// A rank-one operand of exactly three values.
+#[derive(Debug)]
+struct Vector3 {
+    axis: IndexAxis,
+    values: [f64; 3],
 }
 
 /// A rank-two operand: `rows.len() * columns.len()` values, row-major.
@@ -64,17 +83,45 @@ impl Vector {
     ///
     /// Returns `value` back unless it is a rank-one array of quantities.
     pub(super) fn try_from_value(value: RuntimeValue) -> Result<Self, RuntimeValue> {
+        Self::read(value, None)
+    }
+
+    /// `value` as a vector over `axis`, the axis of another operand the
+    /// checker proved it shares.
+    fn try_on_axis(value: RuntimeValue, axis: &IndexAxis) -> Result<Self, RuntimeValue> {
+        Self::read(value, Some(axis))
+    }
+
+    fn read(value: RuntimeValue, shared: Option<&IndexAxis>) -> Result<Self, RuntimeValue> {
         let Some((axes, values)) = dense_quantities(&value) else {
             return Err(value);
         };
-        let (first, inner) = axes.split_first();
-        if !inner.is_empty() {
-            return Err(value);
+        match axes.as_slice() {
+            [only] if shared.is_none_or(|shared| shared.matches(only)) => Ok(Self {
+                axis: only.clone(),
+                values,
+            }),
+            _ => Err(value),
         }
-        Ok(Self {
-            axis: first.clone(),
-            values,
-        })
+    }
+}
+
+impl Vector3 {
+    /// `value` as a three-dimensional vector, over `axis` when given.
+    fn try_from_value(
+        value: RuntimeValue,
+        shared: Option<&IndexAxis>,
+    ) -> Result<Self, RuntimeValue> {
+        let Some((axes, values)) = dense_quantities(&value) else {
+            return Err(value);
+        };
+        match (axes.as_slice(), <[f64; 3]>::try_from(values.as_slice())) {
+            ([only], Ok(values)) if shared.is_none_or(|shared| shared.matches(only)) => Ok(Self {
+                axis: only.clone(),
+                values,
+            }),
+            _ => Err(value),
+        }
     }
 }
 
@@ -86,43 +133,73 @@ impl Matrix {
     /// Returns `value` back unless it is a rank-two rectangular array of
     /// quantities.
     pub(super) fn try_from_value(value: RuntimeValue) -> Result<Self, RuntimeValue> {
+        Self::read(value, None)
+    }
+
+    /// `value` as a matrix whose rows enumerate `rows`, the axis of another
+    /// operand the checker proved it shares.
+    fn try_with_rows(value: RuntimeValue, rows: &IndexAxis) -> Result<Self, RuntimeValue> {
+        Self::read(value, Some(rows))
+    }
+
+    fn read(value: RuntimeValue, row_axis: Option<&IndexAxis>) -> Result<Self, RuntimeValue> {
         let Some((axes, values)) = dense_quantities(&value) else {
             return Err(value);
         };
-        let [rows, columns] = axes.as_slice() else {
-            return Err(value);
-        };
-        Ok(Self {
-            rows: rows.clone(),
-            columns: columns.clone(),
-            values,
-        })
+        match axes.as_slice() {
+            [rows, columns] if row_axis.is_none_or(|axis| axis.matches(rows)) => Ok(Self {
+                rows: rows.clone(),
+                columns: columns.clone(),
+                values,
+            }),
+            _ => Err(value),
+        }
     }
 
     /// The rows as slices of `columns.len()` values each.
     fn row_slices(&self) -> Vec<&[f64]> {
         self.values.chunks_exact(self.columns.len()).collect()
     }
-
-    /// This matrix as a square matrix: its rows and columns must enumerate
-    /// the same axis.
-    fn into_square(self, function: LinearAlgebraFn) -> Result<Square, Invariant> {
-        require_matching_axes(function, &self.rows, &self.columns)?;
-        let matrix = SquareMatrix::try_new(self.rows.len(), self.values)?;
-        Ok(Square {
-            rows: self.rows,
-            columns: self.columns,
-            matrix,
-        })
-    }
 }
 
-/// A rank-two operand whose rows and columns enumerate the same axis.
-#[derive(Debug)]
-struct Square {
-    rows: IndexAxis,
-    columns: IndexAxis,
-    matrix: SquareMatrix,
+impl Square {
+    /// `value` as a square matrix: a rank-two array of quantities whose rows
+    /// and columns enumerate the same axis.
+    fn try_from_value(value: RuntimeValue) -> Result<Self, RuntimeValue> {
+        let Some((axes, values)) = dense_quantities(&value) else {
+            return Err(value);
+        };
+        let [rows, columns] = axes.as_slice() else {
+            return Err(value);
+        };
+        if !rows.matches(columns) {
+            return Err(value);
+        }
+        let (rows, columns) = (rows.clone(), columns.clone());
+        SquareMatrix::try_new(rows.len(), values).map_or(Err(value), |matrix| {
+            Ok(Self {
+                rows,
+                columns,
+                matrix,
+            })
+        })
+    }
+
+    /// This matrix with the right-hand side `value`, a vector over its rows.
+    fn system(self, value: RuntimeValue) -> Result<(IndexAxis, LinearSystem), RuntimeValue> {
+        let Some((axes, values)) = dense_quantities(&value) else {
+            return Err(value);
+        };
+        match axes.as_slice() {
+            [only] if only.matches(&self.rows) => {
+                match LinearSystem::try_new(self.matrix, values) {
+                    Ok(system) => Ok((self.rows, system)),
+                    Err(_) => Err(value),
+                }
+            }
+            _ => Err(value),
+        }
+    }
 }
 
 /// The axes and row-major quantities of a rectangular indexed array of
@@ -137,13 +214,6 @@ fn dense_quantities(value: &RuntimeValue) -> Option<(NonEmpty<IndexAxis>, Vec<f6
     })
     .ok()
     .map(DenseArray::into_parts)
-}
-
-/// An operand shape the type checker rules out.
-fn operand_invariant(message: impl std::fmt::Display) -> Invariant {
-    Invariant::violated(format_args!(
-        "linear-algebra operand invariant failed: {message}"
-    ))
 }
 
 /// Why a linear-algebra operation did not produce a value.
@@ -267,20 +337,6 @@ fn norm(
     accumulator.finish("norm()").map_err(Into::into)
 }
 
-fn require_matching_axes(
-    function: LinearAlgebraFn,
-    lhs: &IndexAxis,
-    rhs: &IndexAxis,
-) -> Result<(), Invariant> {
-    if lhs.matches(rhs) {
-        Ok(())
-    } else {
-        Err(operand_invariant(format_args!(
-            "{function}() received operands over incompatible axes"
-        )))
-    }
-}
-
 fn finite_runtime_quantity(
     value: f64,
     context: &'static str,
@@ -301,7 +357,6 @@ fn evaluate_dot(
     ctx: &EvalSession<'_>,
 ) -> Result<RuntimeValue, LinearAlgebraFailure> {
     let function = LinearAlgebraFn::Dot;
-    require_matching_axes(function, &lhs.axis, &rhs.axis)?;
     let mut control = kernel_control(function, &[lhs.axis.len()], 1, ctx)?;
     sum_products(lhs.values, rhs.values, "dot()", &mut control).map(RuntimeValue::Quantity)
 }
@@ -312,7 +367,6 @@ fn evaluate_matmul(
     ctx: &EvalSession<'_>,
 ) -> Result<RuntimeValue, LinearAlgebraFailure> {
     let function = LinearAlgebraFn::Matmul;
-    require_matching_axes(function, &lhs.columns, &rhs.rows)?;
     let (rows, inner, columns) = (lhs.rows.len(), lhs.columns.len(), rhs.columns.len());
     let mut control = kernel_control(function, &[rows, inner, columns], 1, ctx)?;
     let rhs_rows = rhs.row_slices();
@@ -349,20 +403,20 @@ fn evaluate_transpose(
 }
 
 fn evaluate_trace(
-    matrix: &Matrix,
+    square: &Square,
     ctx: &EvalSession<'_>,
 ) -> Result<RuntimeValue, LinearAlgebraFailure> {
     let function = LinearAlgebraFn::Trace;
-    require_matching_axes(function, &matrix.rows, &matrix.columns)?;
-    let mut control = kernel_control(function, &[matrix.rows.len()], 1, ctx)?;
-    matrix
-        .row_slices()
-        .into_iter()
-        .enumerate()
-        .try_fold(FiniteQuantity::ZERO, |sum, (diagonal, row)| {
+    let order = square.matrix.order();
+    let mut control = kernel_control(function, &[order], 1, ctx)?;
+    (0..order)
+        .try_fold(FiniteQuantity::ZERO, |sum, diagonal| {
             control.step()?;
-            numeric::computed_finite_quantity(sum.get() + row[diagonal], "trace()")
-                .map_err(LinearAlgebraFailure::from)
+            numeric::computed_finite_quantity(
+                sum.get() + square.matrix.at(diagonal, diagonal),
+                "trace()",
+            )
+            .map_err(LinearAlgebraFailure::from)
         })
         .map(RuntimeValue::Quantity)
 }
@@ -377,21 +431,12 @@ fn evaluate_norm(
 }
 
 fn evaluate_cross(
-    lhs: Vector,
-    rhs: &Vector,
+    lhs: Vector3,
+    rhs: &Vector3,
     ctx: &EvalSession<'_>,
 ) -> Result<RuntimeValue, LinearAlgebraFailure> {
     let function = LinearAlgebraFn::Cross;
-    require_matching_axes(function, &lhs.axis, &rhs.axis)?;
-    let (Ok(a), Ok(b)) = (
-        <[f64; 3]>::try_from(lhs.values.as_slice()),
-        <[f64; 3]>::try_from(rhs.values.as_slice()),
-    ) else {
-        return Err(operand_invariant(format_args!(
-            "{function}() received vectors that are not three-dimensional"
-        ))
-        .into());
-    };
+    let (a, b) = (lhs.values, rhs.values);
     let control = kernel_control(function, &[6], 1, ctx)?;
     control.boundary()?;
     let component = |a_1: f64, b_1: f64, a_2: f64, b_2: f64| {
@@ -429,26 +474,22 @@ fn evaluate_outer(
 }
 
 fn evaluate_solve(
-    matrix: Matrix,
-    rhs: &Vector,
+    rows: IndexAxis,
+    system: &LinearSystem,
     ctx: &EvalSession<'_>,
 ) -> Result<RuntimeValue, LinearAlgebraFailure> {
     let function = LinearAlgebraFn::Solve;
-    let square = matrix.into_square(function)?;
-    require_matching_axes(function, &square.rows, &rhs.axis)?;
-    let mut control = kernel_control(function, &[square.rows.len(); 3], 2, ctx)?;
-    let solution =
-        super::linear_algebra_lu::solve_with_control(&square.matrix, &rhs.values, &mut control)
-            .map_err(algorithm_failure)?;
-    vector_value(square.rows, solution)
+    let mut control = kernel_control(function, &[rows.len(); 3], 2, ctx)?;
+    let solution = super::linear_algebra_lu::solve_with_control(system, &mut control)
+        .map_err(algorithm_failure)?;
+    vector_value(rows, solution)
 }
 
 fn evaluate_inverse(
-    matrix: Matrix,
+    square: Square,
     ctx: &EvalSession<'_>,
 ) -> Result<RuntimeValue, LinearAlgebraFailure> {
     let function = LinearAlgebraFn::Inverse;
-    let square = matrix.into_square(function)?;
     let mut control = kernel_control(function, &[square.rows.len(); 3], 3, ctx)?;
     let inverse = super::linear_algebra_lu::inverse_with_control(&square.matrix, &mut control)
         .map_err(algorithm_failure)?;
@@ -456,16 +497,23 @@ fn evaluate_inverse(
 }
 
 fn evaluate_determinant(
-    matrix: Matrix,
+    square: &Square,
     ctx: &EvalSession<'_>,
 ) -> Result<RuntimeValue, LinearAlgebraFailure> {
     let function = LinearAlgebraFn::Determinant;
-    let square = matrix.into_square(function)?;
     let mut control = kernel_control(function, &[square.rows.len(); 3], 1, ctx)?;
     super::linear_algebra_lu::determinant_with_control(&square.matrix, &mut control)
         .map_err(algorithm_failure)
         .and_then(|value| finite_runtime_quantity(value, "det()"))
 }
+
+/// What each kind of linear-algebra operand is checked as.
+const VECTOR: &str = "a rank-1 quantity array";
+const MATRIX: &str = "a rank-2 quantity array";
+const SQUARE: &str = "a rank-2 quantity array over one axis twice";
+const VECTOR3: &str = "a rank-1 quantity array of three entries";
+const SHARED_VECTOR: &str = "a rank-1 quantity array over the axis of the other operand";
+const CHAINED_MATRIX: &str = "a rank-2 quantity array whose rows are the other operand's columns";
 
 /// Evaluate a checked built-in linear-algebra call, reading each operand,
 /// in argument order, as the vector or matrix its checked type is.
@@ -475,29 +523,46 @@ pub(super) fn evaluate<'t>(
     operands: &impl LinearOperands<ScopedNode<'t>>,
     ctx: &EvalSession<'_>,
 ) -> Result<RuntimeValue, Outcome<SemanticError>> {
+    // Operands the checker proved to share an axis are read against the
+    // axis of the operand read before them.
+    let vector = |node| operands.read_operand(node, VECTOR, Vector::try_from_value);
+    let matrix = |node| operands.read_operand(node, MATRIX, Matrix::try_from_value);
+    let square = |node| operands.read_operand(node, SQUARE, Square::try_from_value);
     match *call {
         LinearAlgebraCall::Dot { lhs, rhs } => {
-            evaluate_dot(operands.vector(lhs)?, operands.vector(rhs)?, ctx)
+            let lhs = vector(lhs)?;
+            let rhs = operands.read_operand(rhs, SHARED_VECTOR, |value| {
+                Vector::try_on_axis(value, &lhs.axis)
+            })?;
+            evaluate_dot(lhs, rhs, ctx)
         }
         LinearAlgebraCall::Matmul { lhs, rhs } => {
-            evaluate_matmul(operands.matrix(lhs)?, operands.matrix(rhs)?, ctx)
+            let lhs = matrix(lhs)?;
+            let rhs = operands.read_operand(rhs, CHAINED_MATRIX, |value| {
+                Matrix::try_with_rows(value, &lhs.columns)
+            })?;
+            evaluate_matmul(lhs, rhs, ctx)
         }
-        LinearAlgebraCall::Transpose(matrix) => evaluate_transpose(operands.matrix(matrix)?, ctx),
-        LinearAlgebraCall::Trace(matrix) => evaluate_trace(&operands.matrix(matrix)?, ctx),
-        LinearAlgebraCall::Norm(vector) => evaluate_norm(&operands.vector(vector)?, ctx),
+        LinearAlgebraCall::Transpose(node) => evaluate_transpose(matrix(node)?, ctx),
+        LinearAlgebraCall::Trace(node) => evaluate_trace(&square(node)?, ctx),
+        LinearAlgebraCall::Norm(node) => evaluate_norm(&vector(node)?, ctx),
         LinearAlgebraCall::Cross { lhs, rhs } => {
-            evaluate_cross(operands.vector(lhs)?, &operands.vector(rhs)?, ctx)
+            let lhs = operands
+                .read_operand(lhs, VECTOR3, |value| Vector3::try_from_value(value, None))?;
+            let rhs = operands.read_operand(rhs, VECTOR3, |value| {
+                Vector3::try_from_value(value, Some(&lhs.axis))
+            })?;
+            evaluate_cross(lhs, &rhs, ctx)
         }
-        LinearAlgebraCall::Outer { lhs, rhs } => {
-            evaluate_outer(operands.vector(lhs)?, operands.vector(rhs)?, ctx)
-        }
+        LinearAlgebraCall::Outer { lhs, rhs } => evaluate_outer(vector(lhs)?, vector(rhs)?, ctx),
         LinearAlgebraCall::Solve { matrix, rhs } => {
-            evaluate_solve(operands.matrix(matrix)?, &operands.vector(rhs)?, ctx)
+            let square = square(matrix)?;
+            let (rows, system) =
+                operands.read_operand(rhs, SHARED_VECTOR, |value| square.system(value))?;
+            evaluate_solve(rows, &system, ctx)
         }
-        LinearAlgebraCall::Inverse(matrix) => evaluate_inverse(operands.matrix(matrix)?, ctx),
-        LinearAlgebraCall::Determinant(matrix) => {
-            evaluate_determinant(operands.matrix(matrix)?, ctx)
-        }
+        LinearAlgebraCall::Inverse(node) => evaluate_inverse(square(node)?, ctx),
+        LinearAlgebraCall::Determinant(node) => evaluate_determinant(&square(node)?, ctx),
     }
     .map_err(|outcome| ctx.outcome_error(outcome, span))
 }
@@ -583,12 +648,35 @@ mod tests {
                 LinearAlgebraError::Numeric(_)
             )))
         ));
-        assert!(
-            require_matching_axes(LinearAlgebraFn::Dot, &fin(2), &fin(3))
-                .unwrap_err()
-                .to_string()
-                .contains("incompatible axes")
+    }
+
+    #[test]
+    fn operands_sharing_an_axis_are_read_against_it() {
+        let pair = vector(&[1.0, 2.0]);
+        assert!(Vector::try_on_axis(pair.clone(), &fin(2)).is_ok());
+        assert_eq!(
+            Vector::try_on_axis(pair.clone(), &fin(3)).unwrap_err(),
+            pair
         );
-        assert!(require_matching_axes(LinearAlgebraFn::Dot, &fin(2), &fin(2)).is_ok());
+        let triple = vector(&[1.0, 2.0, 3.0]);
+        assert!(Vector3::try_from_value(triple.clone(), Some(&fin(3))).is_ok());
+        assert!(Vector3::try_from_value(triple, Some(&fin(2))).is_err());
+        assert!(Vector3::try_from_value(pair.clone(), None).is_err());
+        let rectangle = RuntimeValue::Indexed(IndexedValue::for_test(
+            fin(3),
+            vec![pair.clone(), vector(&[3.0, 4.0]), vector(&[5.0, 6.0])],
+        ));
+        assert!(Matrix::try_with_rows(rectangle.clone(), &fin(3)).is_ok());
+        assert!(Matrix::try_with_rows(rectangle.clone(), &fin(2)).is_err());
+        assert!(Square::try_from_value(rectangle).is_err());
+        let square = RuntimeValue::Indexed(IndexedValue::for_test(
+            fin(2),
+            vec![pair.clone(), vector(&[3.0, 4.0])],
+        ));
+        let read = || Square::try_from_value(square.clone()).unwrap();
+        assert_eq!(read().matrix.at(1, 0).to_bits(), 3.0_f64.to_bits());
+        assert!(read().system(pair).is_ok());
+        let wrong = vector(&[1.0, 2.0, 3.0]);
+        assert_eq!(read().system(wrong.clone()).unwrap_err(), wrong);
     }
 }

@@ -423,7 +423,10 @@ impl PendingNodes {
                     }
                 }
                 let arms = match (scrutinee.ty(), labels.is_empty(), constructors.is_empty()) {
-                    (CheckedType::Key(_), _, true) => TMatchArms::Labels(labels),
+                    (CheckedType::Key(_), _, true) => TMatchArms::Labels {
+                        arms: labels,
+                        dispatch: (),
+                    },
                     (CheckedType::Struct(..), true, _) => TMatchArms::Constructors(constructors),
                     _ => return Err(AssemblyError::UncheckedOperands(id())),
                 };
@@ -580,7 +583,7 @@ fn binary(
         BinaryOperation::KeyShift => TExprKind::KeyShift {
             key: lhs,
             addend: rhs,
-            axis: (),
+            shift: (),
         },
         BinaryOperation::Int(op) => TExprKind::Int(IExpr::Arith { op, lhs, rhs }),
         BinaryOperation::IntExactPower(exponent) => TExprKind::Int(IExpr::ExactPower {
