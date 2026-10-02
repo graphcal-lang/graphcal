@@ -87,22 +87,29 @@ pub fn type_lower_error_to_graphcal(err: &HirLowerError, src: SourceId) -> Seman
     if let HirLowerError::UnknownTypePath { path, slot, span } = err
         && let Some(atom) = path.as_bare()
     {
-        return match slot {
-            TypePathSlot::IndexAxis => SemanticError::located(
-                src,
-                *span,
-                IndexError::UnknownIndex {
-                    name: IndexName::classify(atom.clone()).into(),
-                },
-            ),
-            TypePathSlot::DimensionTerm => SemanticError::located(
-                src,
-                *span,
-                DimensionError::UnknownDimension {
-                    name: NamePath::local(atom.clone()),
-                },
-            ),
-        };
+        match slot {
+            TypePathSlot::IndexAxis => {
+                return SemanticError::located(
+                    src,
+                    *span,
+                    IndexError::UnknownIndex {
+                        name: IndexName::classify(atom.clone()).into(),
+                    },
+                );
+            }
+            TypePathSlot::DimensionTerm => {
+                return SemanticError::located(
+                    src,
+                    *span,
+                    DimensionError::UnknownDimension {
+                        name: NamePath::local(atom.clone()),
+                    },
+                );
+            }
+            // An unknown applied type is reported as the unknown type-level
+            // name it is.
+            TypePathSlot::TypeApplication => {}
+        }
     }
     hir_lower_error_to_graphcal(err, src)
 }

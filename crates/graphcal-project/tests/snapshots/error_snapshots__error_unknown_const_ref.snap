@@ -2,7 +2,7 @@
 source: crates/graphcal-project/tests/error_snapshots.rs
 expression: rendered
 ---
-unknown Term `UNKNOWN` in module `unknown_const_ref`
+unknown term name `UNKNOWN` in module `unknown_const_ref`
     Diagnostic severity: error
 Begin snippet for unknown_const_ref.gcl starting at line 1, column 1
 

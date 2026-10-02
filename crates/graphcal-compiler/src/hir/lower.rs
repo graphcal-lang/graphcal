@@ -144,6 +144,8 @@ pub enum TypePathSlot {
     IndexAxis,
     /// A term of a dimension expression in a type position: `L` in `L / T`.
     DimensionTerm,
+    /// The applied type of a generic type application: `Vec` in `Vec<L>`.
+    TypeApplication,
 }
 
 /// A generic parameter binding in a lexical generic scope.
@@ -353,9 +355,16 @@ fn lower_type_slot(
             let struct_type = ctx
                 .resolver
                 .resolve_struct_type_path(ctx.owner, &name.value)
-                .map_err(|source| HirLowerError::ModuleResolve {
-                    source,
-                    span: name.span,
+                .map_err(|source| match source {
+                    ModuleResolveError::UnknownName { .. } => HirLowerError::UnknownTypePath {
+                        path: name.value.clone(),
+                        slot: TypePathSlot::TypeApplication,
+                        span: name.span,
+                    },
+                    source => HirLowerError::ModuleResolve {
+                        source,
+                        span: name.span,
+                    },
                 })?;
             let resolved_name = struct_type.into_resolved();
             let generic_args = lower_generic_args(
@@ -1537,6 +1546,7 @@ mod tests {
             // An ambiguous product argument is a dimension product.
             ("Vec<Length * Missing>", TypePathSlot::DimensionTerm),
             ("Box<Length / Missing>", TypePathSlot::DimensionTerm),
+            ("Missing<Length>", TypePathSlot::TypeApplication),
         ] {
             assert_eq!(
                 unknown_type_path(param_type),

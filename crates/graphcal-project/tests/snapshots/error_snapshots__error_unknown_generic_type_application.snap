@@ -1,0 +1,11 @@
+---
+source: crates/graphcal-project/tests/error_snapshots.rs
+expression: rendered
+---
+unknown type-level name `Bux`
+    Diagnostic severity: error
+Begin snippet for unknown_generic_type_application.gcl starting at line 1, column 1
+
+snippet line 1: node q: Bux<Length> = 1.0 m;
+    label at line 1, columns 9 to 11: error here
+diagnostic code: graphcal::N019

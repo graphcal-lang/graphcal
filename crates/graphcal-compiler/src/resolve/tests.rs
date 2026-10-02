@@ -1390,21 +1390,15 @@ fn lookup_categories_render_the_established_labels() {
         name: NameAtom::parse("x").unwrap(),
     };
     let cases = [
-        (NameCategory::Table(SymbolTable::Decl), "DeclName"),
-        (
-            NameCategory::Table(SymbolTable::Constructor),
-            "ConstructorName",
-        ),
-        (NameCategory::Table(SymbolTable::Dimension), "DimName"),
-        (
-            NameCategory::Table(SymbolTable::StructType),
-            "StructTypeName",
-        ),
-        (NameCategory::Table(SymbolTable::Index), "IndexName"),
-        (NameCategory::Table(SymbolTable::Unit), "UnitName"),
-        (NameCategory::Namespace(Namespace::Static), "Static"),
-        (NameCategory::Namespace(Namespace::Term), "Term"),
-        (NameCategory::Namespace(Namespace::Unit), "Unit"),
+        (NameCategory::Table(SymbolTable::Decl), "declaration"),
+        (NameCategory::Table(SymbolTable::Constructor), "constructor"),
+        (NameCategory::Table(SymbolTable::Dimension), "dimension"),
+        (NameCategory::Table(SymbolTable::StructType), "type"),
+        (NameCategory::Table(SymbolTable::Index), "index"),
+        (NameCategory::Table(SymbolTable::Unit), "unit"),
+        (NameCategory::Namespace(Namespace::Static), "static name"),
+        (NameCategory::Namespace(Namespace::Term), "term name"),
+        (NameCategory::Namespace(Namespace::Unit), "unit name"),
         (NameCategory::TermImport, "term import namespace"),
         (NameCategory::DagAlias, "dag alias"),
         (NameCategory::Dag, "dag"),
@@ -1444,7 +1438,7 @@ fn duplicate_and_decl_kind_errors_render_the_established_messages() {
                 first: span,
                 duplicate: span,
             },
-            "duplicate Unit `m` in module `main`",
+            "duplicate unit name `m` in module `main`",
         ),
         (
             ModuleResolveError::DuplicateImportName {
@@ -1454,7 +1448,7 @@ fn duplicate_and_decl_kind_errors_render_the_established_messages() {
                 first: span,
                 duplicate: span,
             },
-            "duplicate imported Static `M` in module `main`",
+            "duplicate imported static name `M` in module `main`",
         ),
         (
             ModuleResolveError::DuplicateIndexVariant {
@@ -1464,7 +1458,7 @@ fn duplicate_and_decl_kind_errors_render_the_established_messages() {
                 first: span,
                 duplicate: span,
             },
-            "duplicate IndexVariantName `Phase#Burn` in module `main`",
+            "duplicate index variant `Phase#Burn` in module `main`",
         ),
         (
             ModuleResolveError::DuplicatePluginFunction {
@@ -1473,7 +1467,7 @@ fn duplicate_and_decl_kind_errors_render_the_established_messages() {
                 first: span,
                 duplicate: span,
             },
-            "duplicate FnName `f` in module `main`",
+            "duplicate plugin function `f` in module `main`",
         ),
         (
             unexpected(ExpectedDeclKind::Const),
