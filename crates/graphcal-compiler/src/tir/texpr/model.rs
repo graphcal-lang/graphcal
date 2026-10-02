@@ -8,11 +8,14 @@ use crate::function_signature::{
     FunctionParam, IndexBinder, ParamKind, ResultKind, ScalarValueKind,
 };
 use crate::hir::expr::{
-    ExternFnRef, ForBinding, ForBindingIndex, IndexVariantRef, LocalDef, LocalId, MapEntryKey,
-    PatternBinding, ResolvedUnitExpr, UnfoldRecurrence,
+    ExternFnRef, ForBinding, IndexVariantRef, LocalDef, LocalId, MapEntryKey, PatternBinding,
+    ResolvedUnitExpr, UnfoldRecurrence,
 };
 use crate::resolved_name::ResolvedDeclName;
 use crate::semantic::checked_type::{CheckedType, Concrete, Concreteness, IndexTypeRef};
+use crate::semantic::index_axis::IndexAxis;
+use crate::semantic::key_value::KeyValue;
+use crate::semantic::struct_value::{StructFieldsError, StructValue};
 use crate::semantic::time_zone::IanaTimeZoneId;
 use crate::syntax::function_name::FnParamName;
 use crate::syntax::non_empty::NonEmpty;
@@ -91,11 +94,11 @@ impl<V: Concreteness> TExpr<V> {
     #[must_use]
     pub const fn application(&self) -> Option<&ConstructorApplication<V>> {
         match &self.kind {
-            TExprKind::Construct { application, .. }
+            TExprKind::Construct(construct)
             | TExprKind::Const(Spanned {
-                value: TConstRef::Constructor(application),
+                value: TConstRef::Constructor(construct),
                 ..
-            }) => Some(application),
+            }) => Some(construct.application()),
             _ => None,
         }
     }
@@ -113,13 +116,13 @@ impl<V: Concreteness> TExpr<V> {
             | TExprKind::GraphRef(_)
             | TExprKind::Const(_)
             | TExprKind::Local(_)
-            | TExprKind::Variant(_) => Vec::new(),
+            | TExprKind::Variant { .. } => Vec::new(),
             TExprKind::Quantity(operation) => unbox(operation.operands()),
             TExprKind::Int(operation) => unbox(operation.operands()),
             TExprKind::Bool(operation) => unbox(operation.operands()),
             TExprKind::Complex(operation) => unbox(operation.operands()),
             TExprKind::Datetime(operation) => unbox(operation.operands()),
-            TExprKind::KeyShift { key, addend } => vec![&**key, &**addend],
+            TExprKind::KeyShift { key, addend, .. } => vec![&**key, &**addend],
             TExprKind::Convert { expr: operand, .. }
             | TExprKind::DisplayTimezone { expr: operand, .. }
             | TExprKind::Field { expr: operand, .. }
@@ -134,10 +137,10 @@ impl<V: Concreteness> TExpr<V> {
                 then_branch,
                 else_branch,
             } => vec![&**condition, &**then_branch, &**else_branch],
-            TExprKind::Construct { fields, .. } => {
-                fields.iter().map(|field| &field.value).collect()
+            TExprKind::Construct(construct) => {
+                construct.fields().map(|field| &field.value).collect()
             }
-            TExprKind::Map { entries } => entries.iter().map(|entry| &entry.value).collect(),
+            TExprKind::Map { entries, .. } => entries.iter().map(|entry| &entry.value).collect(),
             TExprKind::Index { expr, args } => std::iter::once(&**expr)
                 .chain(args.iter().filter_map(|arg| match arg {
                     TIndexArg::Key(operand) | TIndexArg::Position { operand, .. } => {
@@ -199,6 +202,11 @@ pub fn visit_tnodes<'a, V: Concreteness>(
 /// Operators are recorded as the operation their operand types select
 /// ([`QExpr`], [`IExpr`], [`BExpr`], [`CExpr`], [`DExpr`], and the Fin-key
 /// shift), grouped by the checked result type.
+///
+/// A node that introduces keys or entries of an axis carries, once the tree
+/// is concrete, that axis's [`IndexAxis`] (and a constant key its
+/// [`KeyValue`]), established when the tree was discharged; a symbolic tree
+/// carries nothing in their place (see [`Concreteness::Discharged`]).
 #[derive(Debug, Clone)]
 pub enum TExprKind<V: Concreteness = Concrete> {
     /// A quantity literal with its unit.
@@ -216,6 +224,7 @@ pub enum TExprKind<V: Concreteness = Concrete> {
     KeyShift {
         key: Box<TExpr<V>>,
         addend: Box<TExpr<V>>,
+        axis: V::Discharged<IndexAxis>,
     },
     GraphRef(Spanned<crate::hir::expr::LocalDecl>),
     Const(Spanned<TConstRef<V>>),
@@ -255,15 +264,15 @@ pub enum TExprKind<V: Concreteness = Concrete> {
         field: Spanned<FieldName>,
     },
     /// A constructor call with its checked nominal application.
-    Construct {
-        application: ConstructorApplication<V>,
-        fields: Vec<TFieldInit<V>>,
-    },
+    Construct(TConstruct<V>),
+    /// A map literal, with the placement of its entries on the axes their
+    /// keys select on.
     Map {
         entries: Vec<TMapEntry<V>>,
+        layout: V::Discharged<super::map_layout::MapLayout>,
     },
     For {
-        bindings: Vec<ForBinding>,
+        bindings: NonEmpty<TForBinding<V>>,
         body: Box<TExpr<V>>,
     },
     Index {
@@ -281,18 +290,23 @@ pub enum TExprKind<V: Concreteness = Concrete> {
         recurrence: Box<UnfoldRecurrence>,
         init: Box<TExpr<V>>,
         body: Box<TExpr<V>>,
+        axis: V::Discharged<IndexAxis>,
     },
     /// A key introduction of the axis `axis` from `arg`.
     Key {
         form: TKeyForm<V>,
-        axis: ForBindingIndex,
         arg: Box<TExpr<V>>,
+        axis: V::Discharged<IndexAxis>,
     },
     Match {
         scrutinee: Box<TExpr<V>>,
         arms: TMatchArms<V>,
     },
-    Variant(IndexVariantRef),
+    /// A qualified label (`Maneuver#Departure`), with the key it denotes.
+    Variant {
+        variant: IndexVariantRef,
+        key: V::Discharged<KeyValue>,
+    },
     /// An inline call of the DAG `slot` names in the call targets of the
     /// body that holds this node.
     DagCall {
@@ -314,11 +328,22 @@ pub enum DatetimeLiteral {
     Epoch(EpochLiteral),
 }
 
+/// One binding of a comprehension, with the axis it ranges over.
+#[derive(Debug, Clone)]
+pub struct TForBinding<V: Concreteness = Concrete> {
+    pub binding: ForBinding,
+    pub axis: V::Discharged<IndexAxis>,
+}
+
 /// How a key introduction selects its key.
 #[derive(Debug, Clone)]
 pub enum TKeyForm<V: Concreteness = Concrete> {
-    /// `key(Axis, position)`: the position, proved in range of the axis.
-    Static(StaticPosition<V>),
+    /// `key(Axis, position)`: the position, proved in range of the axis, and
+    /// the key at it.
+    Static {
+        position: StaticPosition<V>,
+        key: V::Discharged<KeyValue>,
+    },
     /// `fin_key(Fin(N), position)`: a runtime position, range-checked.
     Fin,
     /// A search of a coordinate axis for a quantity.
@@ -352,8 +377,8 @@ impl CoordinateSearch {
 #[derive(Debug, Clone)]
 pub enum TConstRef<V: Concreteness = Concrete> {
     Decl(crate::hir::expr::LocalDecl),
-    /// A field-less constructor used as a value, with its checked application.
-    Constructor(ConstructorApplication<V>),
+    /// A field-less constructor used as a value: a call with no fields.
+    Constructor(TConstruct<V>),
 }
 
 /// A function argument: a value, or a contextual literal the callee accepts.
@@ -482,6 +507,107 @@ pub struct TExternArg<V: Concreteness = Concrete> {
 pub struct TFieldInit<V: Concreteness = Concrete> {
     pub name: FieldName,
     pub value: TExpr<V>,
+}
+
+/// A constructor call: its checked application and its field initializers
+/// in written order, each placed at the declared field it initializes.
+///
+/// Built only by `TConstruct::try_new`, which admits exactly the
+/// application's declared fields; a type map rewrites the application's
+/// field types but never its field names, so applying a call to its
+/// evaluated fields always yields a [`StructValue`].
+#[derive(Debug, Clone)]
+pub struct TConstruct<V: Concreteness = Concrete> {
+    pub(super) application: ConstructorApplication<V>,
+    /// Each initializer, in written order, with the declaration position of
+    /// the field it initializes.
+    pub(super) fields: Vec<(usize, TFieldInit<V>)>,
+}
+
+impl<V: Concreteness> TConstruct<V> {
+    /// A call of `application` with `fields`, in written order.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`StructFieldsError`] when `fields` is not exactly the
+    /// application's declared field set.
+    pub(crate) fn try_new(
+        application: ConstructorApplication<V>,
+        fields: Vec<TFieldInit<V>>,
+    ) -> Result<Self, StructFieldsError> {
+        let declared = application.applied.fields();
+        let constructor = || application.applied.constructor().clone();
+        let mut placed = vec![false; declared.len()];
+        let fields = fields
+            .into_iter()
+            .map(|init| {
+                let slot = declared
+                    .iter()
+                    .position(|field| *field.name() == init.name)
+                    .ok_or_else(|| StructFieldsError::Unexpected {
+                        constructor: constructor(),
+                        field: init.name.clone(),
+                    })?;
+                if std::mem::replace(&mut placed[slot], true) {
+                    return Err(StructFieldsError::Duplicate {
+                        constructor: constructor(),
+                        field: init.name,
+                    });
+                }
+                Ok((slot, init))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        if let Some(missing) = declared
+            .iter()
+            .zip(&placed)
+            .find_map(|(field, placed)| (!placed).then_some(field))
+        {
+            return Err(StructFieldsError::Missing {
+                constructor: constructor(),
+                field: missing.name().clone(),
+            });
+        }
+        Ok(Self {
+            application,
+            fields,
+        })
+    }
+
+    /// The checked application.
+    #[must_use]
+    pub const fn application(&self) -> &ConstructorApplication<V> {
+        &self.application
+    }
+
+    /// The field initializers, in written order.
+    #[must_use]
+    pub fn fields(&self) -> impl ExactSizeIterator<Item = &TFieldInit<V>> {
+        self.fields.iter().map(|(_, init)| init)
+    }
+}
+
+impl TConstruct {
+    /// The value of this call: each field's value as `value` produces it,
+    /// evaluated in written order, at the field's declared place.
+    ///
+    /// # Errors
+    ///
+    /// Returns the first error `value` returns, in written order.
+    pub fn apply<'s, T, E>(
+        &'s self,
+        mut value: impl FnMut(&'s TFieldInit) -> Result<T, E>,
+    ) -> Result<StructValue<T>, E> {
+        let mut values = self
+            .fields
+            .iter()
+            .map(|(slot, init)| Ok((*slot, value(init)?)))
+            .collect::<Result<Vec<_>, E>>()?;
+        values.sort_by_key(|(slot, _)| *slot);
+        Ok(StructValue::from_declared(
+            std::sync::Arc::clone(&self.application.applied),
+            values.into_iter().map(|(_, value)| value).collect(),
+        ))
+    }
 }
 
 /// A checked map-literal entry.

@@ -3,12 +3,11 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use graphcal_compiler::finite_value::FiniteQuantity;
-use graphcal_compiler::semantic::checked_type::IndexTypeRef;
-use graphcal_compiler::semantic::index_def::{ConcreteIndexKind, CoordinateIndexData};
-use graphcal_compiler::syntax::index_name::IndexEntryKey;
-use graphcal_compiler::syntax::non_empty::NonEmpty;
-use graphcal_compiler::tir::typed::checked::CheckedTir;
+use crate::finite_value::FiniteQuantity;
+use crate::semantic::checked_type::IndexTypeRef;
+use crate::semantic::index_def::{ConcreteIndexKind, CoordinateIndexData};
+use crate::syntax::index_name::IndexEntryKey;
+use crate::syntax::non_empty::NonEmpty;
 
 /// A concrete index together with its ordered entry keys.
 ///
@@ -46,22 +45,10 @@ impl PartialEq for IndexAxis {
 }
 
 impl IndexAxis {
-    /// Resolve `index` to its concrete definition in `tir`.
-    ///
-    /// Returns `None` when the index is unknown, still required (not bound
-    /// to a concrete definition), or a coordinate index with a non-finite
-    /// coordinate.
-    #[must_use]
-    pub fn resolve(tir: &CheckedTir, index: &IndexTypeRef) -> Option<Self> {
-        let definition = tir.index_def(index)?;
-        let kind = definition.concrete()?.clone();
-        Self::from_concrete(index.clone(), kind)
-    }
-
     /// The axis of a structural `Fin(N)` index, which needs no registry.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-identities"))]
     #[must_use]
-    pub fn finite(index: graphcal_compiler::semantic::index_def::FiniteIndex) -> Option<Self> {
+    pub fn finite(index: crate::semantic::index_def::FiniteIndex) -> Option<Self> {
         Self::from_concrete(
             IndexTypeRef::from_finite_index(index),
             ConcreteIndexKind::Finite { index },
@@ -69,15 +56,15 @@ impl IndexAxis {
     }
 
     /// The axis of a named index whose identity is given directly, for tests.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-identities"))]
     #[must_use]
-    pub(crate) fn named_for_test(
-        owner: graphcal_compiler::dag_id::DagId,
-        index: &str,
-        variants: &[&str],
-    ) -> Self {
-        use graphcal_compiler::syntax::index_name::{IndexName, IndexVariantName};
-        use graphcal_compiler::syntax::non_empty::NonEmptyUnique;
+    #[expect(
+        clippy::unwrap_used,
+        reason = "a test fixture panics on an invalid axis"
+    )]
+    pub fn named_for_test(owner: crate::dag_id::DagId, index: &str, variants: &[&str]) -> Self {
+        use crate::syntax::index_name::{IndexName, IndexVariantName};
+        use crate::syntax::non_empty::NonEmptyUnique;
         let variants = variants
             .iter()
             .map(|variant| IndexVariantName::expect_valid(*variant))
@@ -93,14 +80,18 @@ impl IndexAxis {
 
     /// The axis of a coordinate index whose identity is given directly, for
     /// tests.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-identities"))]
     #[must_use]
-    pub(crate) fn coordinate_for_test(
-        owner: graphcal_compiler::dag_id::DagId,
+    #[expect(
+        clippy::unwrap_used,
+        reason = "a test fixture panics on an invalid axis"
+    )]
+    pub fn coordinate_for_test(
+        owner: crate::dag_id::DagId,
         index: &str,
         data: CoordinateIndexData,
     ) -> Self {
-        use graphcal_compiler::syntax::index_name::IndexName;
+        use crate::syntax::index_name::IndexName;
         Self::from_concrete(
             IndexTypeRef::with_owner(owner, IndexName::expect_valid(index)),
             ConcreteIndexKind::Coordinate(data),
@@ -108,7 +99,7 @@ impl IndexAxis {
         .unwrap()
     }
 
-    fn from_concrete(index: IndexTypeRef, kind: ConcreteIndexKind) -> Option<Self> {
+    pub(crate) fn from_concrete(index: IndexTypeRef, kind: ConcreteIndexKind) -> Option<Self> {
         let keys = NonEmpty::try_from_vec(kind.entry_keys()).ok()?;
         let positions = keys
             .iter()
@@ -144,7 +135,7 @@ impl IndexAxis {
 
     /// Coordinate data, when this is a coordinate axis.
     #[must_use]
-    pub(crate) fn coordinate_data(&self) -> Option<&CoordinateIndexData> {
+    pub fn coordinate_data(&self) -> Option<&CoordinateIndexData> {
         match &self.0.kind {
             ConcreteIndexKind::Coordinate(data) => Some(data),
             ConcreteIndexKind::Named { .. } | ConcreteIndexKind::Finite { .. } => None,
@@ -194,7 +185,7 @@ impl IndexAxis {
     /// `Fin(M)` axis with `N <= M`. Positions of an admitted key are
     /// positions of this axis.
     #[must_use]
-    pub(crate) fn admits(&self, key_axis: &Self) -> bool {
+    pub fn admits(&self, key_axis: &Self) -> bool {
         match (&self.0.kind, &key_axis.0.kind) {
             (ConcreteIndexKind::Finite { .. }, ConcreteIndexKind::Finite { .. }) => {
                 key_axis.len() <= self.len()
@@ -206,9 +197,9 @@ impl IndexAxis {
 
 #[cfg(test)]
 mod tests {
-    use graphcal_compiler::dag_id::DagId;
-    use graphcal_compiler::semantic::index_def::FiniteIndex;
-    use graphcal_compiler::syntax::index_name::{IndexEntryKey, IndexVariantName};
+    use crate::dag_id::DagId;
+    use crate::semantic::index_def::FiniteIndex;
+    use crate::syntax::index_name::{IndexEntryKey, IndexVariantName};
 
     use super::IndexAxis;
 
@@ -240,8 +231,8 @@ mod tests {
 
     #[test]
     fn coordinate_axes_hold_one_finite_coordinate_per_key() {
-        use graphcal_compiler::dimension::Dimension;
-        use graphcal_compiler::semantic::index_def::{CoordinateDisplayUnit, CoordinateIndexData};
+        use crate::dimension::Dimension;
+        use crate::semantic::index_def::{CoordinateDisplayUnit, CoordinateIndexData};
         let data = CoordinateIndexData::try_range(
             0.0,
             2.0,

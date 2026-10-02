@@ -868,6 +868,11 @@ role = "contracts"
 
 [[module]]
 package = "compiler"
+path = ["semantic_error", "evaluation", "tests"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
 path = ["semantic_error", "rendered"]
 role = "contracts"
 
@@ -1583,6 +1588,16 @@ role = "contracts"
 
 [[module]]
 package = "compiler"
+path = ["tir", "texpr", "map_layout"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["tir", "texpr", "map_layout", "tests"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
 path = ["tir", "dim_check", "builtins"]
 role = "checking"
 
@@ -2090,6 +2105,11 @@ role = "interpreter"
 
 [[module]]
 package = "eval"
+path = ["eval_expr", "linear_algebra_error"]
+role = "interpreter"
+
+[[module]]
+package = "eval"
 path = ["eval_expr", "linear_algebra", "tests"]
 role = "interpreter"
 
@@ -2179,13 +2199,13 @@ path = ["runtime_value", "dense_array", "tests"]
 role = "contracts"
 
 [[module]]
-package = "eval"
-path = ["runtime_value", "index_axis"]
+package = "compiler"
+path = ["semantic", "index_axis"]
 role = "contracts"
 
 [[module]]
-package = "eval"
-path = ["runtime_value", "index_axis", "tests"]
+package = "compiler"
+path = ["semantic", "index_axis", "tests"]
 role = "contracts"
 
 [[module]]
@@ -2199,23 +2219,23 @@ path = ["runtime_value", "indexed", "tests"]
 role = "contracts"
 
 [[module]]
-package = "eval"
-path = ["runtime_value", "key_value"]
+package = "compiler"
+path = ["semantic", "key_value"]
 role = "contracts"
 
 [[module]]
-package = "eval"
-path = ["runtime_value", "key_value", "tests"]
+package = "compiler"
+path = ["semantic", "key_value", "tests"]
 role = "contracts"
 
 [[module]]
-package = "eval"
-path = ["runtime_value", "struct_value"]
+package = "compiler"
+path = ["semantic", "struct_value"]
 role = "contracts"
 
 [[module]]
-package = "eval"
-path = ["runtime_value", "struct_value", "tests"]
+package = "compiler"
+path = ["semantic", "struct_value", "tests"]
 role = "contracts"
 
 [[module]]
@@ -2434,6 +2454,16 @@ role = "contracts"
 [[module]]
 package = "eval"
 path = ["eval_expr", "presentation"]
+role = "interpreter"
+
+[[module]]
+package = "eval"
+path = ["eval_expr", "runtime_failure"]
+role = "interpreter"
+
+[[module]]
+package = "eval"
+path = ["eval_expr", "runtime_failure", "tests"]
 role = "interpreter"
 
 [[module]]
@@ -2660,6 +2690,11 @@ role = "checking"
 [[module]]
 package = "eval"
 path = ["interpreter_tests"]
+role = "facade"
+
+[[module]]
+package = "eval"
+path = ["interpreter_tests", "execution_frames"]
 role = "facade"
 
 [[module]]

@@ -380,3 +380,17 @@ impl TirRead for CheckedTir {
         self.dags.get(dag_id).map(CheckedDag::bodies)
     }
 }
+
+impl crate::semantic::index_axis::IndexAxis {
+    /// Resolve `index` to its concrete definition in `tir`.
+    ///
+    /// Returns `None` when the index is unknown, still required (not bound
+    /// to a concrete definition), or a coordinate index with a non-finite
+    /// coordinate.
+    #[must_use]
+    pub fn resolve(tir: &CheckedTir, index: &IndexTypeRef) -> Option<Self> {
+        let definition = tir.index_def(index)?;
+        let kind = definition.concrete()?.clone();
+        Self::from_concrete(index.clone(), kind)
+    }
+}

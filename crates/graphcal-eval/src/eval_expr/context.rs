@@ -16,7 +16,7 @@ use graphcal_compiler::hir::expr::Expr;
 use graphcal_compiler::outcome::Outcome;
 use graphcal_compiler::resolved_name::ResolvedDeclName;
 use graphcal_compiler::semantic_error::SemanticError;
-use graphcal_compiler::semantic_error::evaluation::EvaluationError;
+use graphcal_compiler::semantic_error::evaluation::{EvaluationError, EvaluatorFailure};
 use graphcal_compiler::source_id::SourceId;
 use graphcal_compiler::source_registry::SourceRegistry;
 use graphcal_compiler::syntax::span::Span;
@@ -34,6 +34,7 @@ use crate::host_fns::HostFunctionRegistry;
 use crate::invariant::Failure;
 use crate::static_incompleteness::ExpressionDependencies;
 
+use super::runtime_failure::RuntimeFailure;
 use super::work_budget::WorkBudget;
 
 #[derive(Clone, Copy)]
@@ -310,14 +311,39 @@ impl<'a> EvalSession<'a> {
         session
     }
 
-    pub fn eval_error(&self, message: impl Into<String>, span: Span) -> SemanticError {
+    /// The diagnostic for a runtime failure of the expression at `span`.
+    pub(super) fn runtime_error(
+        &self,
+        failure: impl Into<RuntimeFailure>,
+        span: Span,
+    ) -> SemanticError {
         SemanticError::located(
             self.src,
             span,
-            EvaluationError::Failed {
-                message: message.into(),
-            },
+            EvaluationError::Runtime(EvaluatorFailure::new(failure.into())),
         )
+    }
+
+    /// The diagnostic for a failed runtime operation: a user-facing failure
+    /// is an evaluation error, a violated invariant an internal error.
+    pub(super) fn failure_error(
+        &self,
+        failure: Failure<impl Into<RuntimeFailure>>,
+        span: Span,
+    ) -> SemanticError {
+        match failure {
+            Failure::Error(error) => self.runtime_error(error, span),
+            Failure::Invariant(invariant) => self.internal_error(invariant.to_string(), span),
+        }
+    }
+
+    /// Like [`Self::failure_error`], keeping cancellation as control flow.
+    pub(super) fn outcome_error(
+        &self,
+        outcome: Outcome<Failure<impl Into<RuntimeFailure>>>,
+        span: Span,
+    ) -> Outcome<SemanticError> {
+        outcome.map_failed(|failure| self.failure_error(failure, span))
     }
 
     #[cold]
@@ -327,28 +353,6 @@ impl<'a> EvalSession<'a> {
         anchor: impl Into<DiagnosticAnchor>,
     ) -> SemanticError {
         SemanticError::internal_error(message, self.src, anchor.into())
-    }
-
-    /// The diagnostic for a failed runtime operation: a user-facing failure
-    /// is an evaluation error, a violated invariant an internal error.
-    pub(crate) fn failure_error(
-        &self,
-        failure: Failure<impl std::fmt::Display>,
-        span: Span,
-    ) -> SemanticError {
-        match failure {
-            Failure::Error(error) => self.eval_error(error.to_string(), span),
-            Failure::Invariant(invariant) => self.internal_error(invariant.to_string(), span),
-        }
-    }
-
-    /// Like [`Self::failure_error`], keeping cancellation as control flow.
-    pub(crate) fn outcome_error(
-        &self,
-        outcome: Outcome<Failure<impl std::fmt::Display>>,
-        span: Span,
-    ) -> Outcome<SemanticError> {
-        outcome.map_failed(|failure| self.failure_error(failure, span))
     }
 }
 

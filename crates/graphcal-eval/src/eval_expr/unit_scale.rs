@@ -16,6 +16,7 @@ use graphcal_compiler::tir::typed::scoped_node::ScopedUnitExpr;
 
 use super::context::EvalSession;
 use super::numeric;
+use super::runtime_failure::{RuntimeFailure, UnitScaleContext};
 use crate::constant_pools::RuntimeValueMap;
 
 /// The expression kernel, evaluating one executable tree with no locals.
@@ -31,12 +32,12 @@ pub(super) type EvaluateExecutable =
     ) -> Result<RuntimeValue, Outcome<SemanticError>>;
 
 fn unit_scale_error(
-    context: &str,
+    context: UnitScaleContext,
     error: PositiveFiniteScaleError,
     span: Span,
     session: &EvalSession<'_>,
 ) -> SemanticError {
-    session.eval_error(format!("{context} {error}"), span)
+    session.runtime_error(RuntimeFailure::UnitScale { context, error }, span)
 }
 
 /// Apply a unit scale to a literal value and validate that the SI value is finite.
@@ -48,7 +49,7 @@ pub(super) fn checked_unit_scaled_value(
 ) -> Result<RuntimeValue, SemanticError> {
     numeric::finite_quantity(value * scale.get(), "quantity literal value")
         .map(RuntimeValue::Quantity)
-        .map_err(|err| ctx.eval_error(err.to_string(), span))
+        .map_err(|err| ctx.runtime_error(err, span))
 }
 
 /// Evaluate the scale expression of a dynamic unit in the scope of the DAG
@@ -85,7 +86,7 @@ fn resolve_dynamic_unit_scale(
     };
     let dynamic_scale = PositiveFiniteScale::new(scale_f64.get()).map_err(|error| {
         unit_scale_error(
-            "dynamic unit scale",
+            UnitScaleContext::DynamicUnit,
             error,
             expression.get().span,
             &scale_session,
@@ -93,7 +94,9 @@ fn resolve_dynamic_unit_scale(
     })?;
     dynamic_scale
         .checked_mul(base_unit_scale)
-        .map_err(|error| unit_scale_error("dynamic unit scale", error, scale.span(), session))
+        .map_err(|error| {
+            unit_scale_error(UnitScaleContext::DynamicUnit, error, scale.span(), session)
+        })
         .map_err(Outcome::Failed)
 }
 
@@ -135,11 +138,15 @@ fn fold_unit_scale<'u, R: 'u>(
             })
         },
         |(item, _), error| match error {
-            UnitScaleStepError::Power(error) => {
-                unit_scale_error("unit scale exponentiation", error, item.name.span, session).into()
-            }
+            UnitScaleStepError::Power(error) => unit_scale_error(
+                UnitScaleContext::Exponentiation,
+                error,
+                item.name.span,
+                session,
+            )
+            .into(),
             UnitScaleStepError::Compound(error) => {
-                unit_scale_error("compound unit scale", error, span, session).into()
+                unit_scale_error(UnitScaleContext::Compound, error, span, session).into()
             }
         },
     )

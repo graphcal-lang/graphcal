@@ -81,7 +81,7 @@ impl<'a> ScheduledDeclaration<'a> {
 }
 
 #[must_use]
-pub(crate) fn eval_failed_node_error(error: &SemanticError) -> NodeUnavailable {
+pub fn eval_failed_node_error(error: &SemanticError) -> NodeUnavailable {
     match error {
         SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
             kind:
@@ -220,9 +220,11 @@ impl<'a> ExecutionFrame<'a> {
                 SemanticError::located(
                     source,
                     span,
-                    EvaluationError::Failed {
-                        message: violation.message,
-                    },
+                    EvaluationError::Runtime(
+                        graphcal_compiler::semantic_error::evaluation::EvaluatorFailure::new(
+                            violation,
+                        ),
+                    ),
                 ),
             );
         }

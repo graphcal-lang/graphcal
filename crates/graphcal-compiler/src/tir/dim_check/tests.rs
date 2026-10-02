@@ -4579,6 +4579,81 @@ fn call_arguments_prechecked_for_override_reconciliation_are_inferred_once() {
 }
 
 #[test]
+fn constructor_calls_place_written_fields_at_their_declared_fields() {
+    use crate::semantic::struct_value::StructFieldsError;
+    use crate::tir::texpr::{TConstruct, TExprKind};
+
+    let source = "type Pair { Pair(left: Dimensionless, right: Dimensionless) }\n\
+                  node p: Pair = Pair(right: 2.0, left: 1.0);";
+    let (tir, src) = module_aware_tir(source);
+    let tir = check_draft(tir, src).unwrap();
+    let dag = tir.root();
+    let formula = dag
+        .body()
+        .nodes()
+        .find(|entry| entry.name().as_str() == "p")
+        .and_then(|entry| entry.definition.formula())
+        .unwrap();
+    let tree = dag.bodies().executable_value(formula.id()).unwrap();
+    let TExprKind::Construct(call) = tree.kind() else {
+        panic!("expected a constructor call, got {tree:?}");
+    };
+    let names = |fields: &[crate::tir::texpr::TFieldInit]| {
+        fields
+            .iter()
+            .map(|field| field.name.as_str().to_owned())
+            .collect::<Vec<_>>()
+    };
+    let written = call.fields().cloned().collect::<Vec<_>>();
+    assert_eq!(names(&written), ["right", "left"]);
+
+    // Fields are evaluated in written order and stored in declared order.
+    let mut order = Vec::new();
+    let value = call
+        .apply(|init| {
+            order.push(init.name.as_str().to_owned());
+            Ok::<_, ()>(init.name.as_str().to_owned())
+        })
+        .unwrap();
+    assert_eq!(order, ["right", "left"]);
+    let fields = value
+        .fields()
+        .map(|(name, value)| (name.as_str().to_owned(), value.clone()))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        fields,
+        [
+            ("left".to_owned(), "left".to_owned()),
+            ("right".to_owned(), "right".to_owned())
+        ]
+    );
+    // The first failing field, in written order, is the call's failure.
+    assert_eq!(
+        call.apply(|init| Err::<(), _>(init.name.as_str().to_owned()))
+            .unwrap_err(),
+        "right"
+    );
+
+    // A call admits exactly the application's declared fields.
+    let application = || call.application().clone();
+    let (right, left) = (written[0].clone(), written[1].clone());
+    assert!(matches!(
+        TConstruct::try_new(application(), vec![left.clone()]),
+        Err(StructFieldsError::Missing { field, .. }) if field.as_str() == "right"
+    ));
+    let mut extra = left.clone();
+    extra.name = crate::syntax::type_name::FieldName::expect_valid("extra");
+    assert!(matches!(
+        TConstruct::try_new(application(), vec![left.clone(), right.clone(), extra]),
+        Err(StructFieldsError::Unexpected { field, .. }) if field.as_str() == "extra"
+    ));
+    assert!(matches!(
+        TConstruct::try_new(application(), vec![left.clone(), left, right]),
+        Err(StructFieldsError::Duplicate { field, .. }) if field.as_str() == "left"
+    ));
+}
+
+#[test]
 fn inference_emits_typed_trees_carrying_node_facts() {
     use crate::tir::texpr::{DatetimeLiteral, TConstRef, TExprKind, TIndexArg, TMatchArms};
 
@@ -4609,21 +4684,17 @@ fn inference_emits_typed_trees_carrying_node_facts() {
             .unwrap_or_else(|error| panic!("`{name}` has no typed value root: {error}"))
     };
 
-    let TExprKind::Construct {
-        application,
-        fields,
-    } = root("burn").kind()
-    else {
+    let TExprKind::Construct(burn) = root("burn").kind() else {
         panic!("expected a constructor application");
     };
-    assert_eq!(application.constructor.name().as_str(), "Impulsive");
-    assert_eq!(fields.len(), 1);
+    assert_eq!(burn.application().constructor.name().as_str(), "Impulsive");
+    assert_eq!(burn.fields().len(), 1);
     let coast = match root("coast").kind() {
         TExprKind::Const(crate::syntax::span::Spanned {
-            value: TConstRef::Constructor(application),
+            value: TConstRef::Constructor(construct),
             ..
         })
-        | TExprKind::Construct { application, .. } => application,
+        | TExprKind::Construct(construct) => construct.application(),
         other => panic!("expected a constructor application, got {other:?}"),
     };
     assert_eq!(coast.constructor.name().as_str(), "Coast");

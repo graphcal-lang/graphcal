@@ -15,9 +15,6 @@ pub mod eval;
 pub mod eval_expr;
 pub mod exec_plan;
 pub mod execution_check;
-#[cfg(any(test, feature = "test-internals"))]
-pub mod execution_frame;
-#[cfg(not(any(test, feature = "test-internals")))]
 pub(crate) mod execution_frame;
 pub mod execution_plan;
 pub mod host_abi;

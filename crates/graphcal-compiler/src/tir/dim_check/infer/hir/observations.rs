@@ -104,12 +104,12 @@ impl FinishedObservations {
     pub(in crate::tir::dim_check) fn publish(
         self,
         roots: &[&Expr],
-        cardinality: &crate::tir::static_index::AxisCardinality<'_>,
+        definition: &crate::tir::static_index::AxisDefinition<'_>,
     ) -> Result<crate::tir::texpr::CheckedBodies, PublicationError> {
         Ok(crate::tir::texpr::CheckedBodies::discharge(
             crate::tir::texpr::claim_roots(roots, self.typed)?,
             self.nominal_uses,
-            cardinality,
+            definition,
         )?)
     }
 }

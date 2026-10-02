@@ -319,19 +319,16 @@ fn key_node(
         Span::new(0, 6),
         CheckedType::Key(axis.clone()),
         TExprKind::Key {
-            form: TKeyForm::Static(StaticPosition {
-                axis,
-                position,
-                usage: crate::tir::static_index::StaticIndexUse::Key,
-            }),
-            axis: crate::hir::expr::ForBindingIndex::Finite {
-                cardinality: crate::syntax::span::Spanned::new(
-                    crate::nat::NatPolyForm::from_constant(3),
-                    Span::new(0, 1),
-                ),
-                span: Span::new(0, 1),
+            form: TKeyForm::Static {
+                position: StaticPosition {
+                    axis,
+                    position,
+                    usage: crate::tir::static_index::StaticIndexUse::Key,
+                },
+                key: (),
             },
             arg: Box::new(arg),
+            axis: (),
         },
     )
 }
@@ -347,13 +344,15 @@ fn known(
 ) -> impl Fn(
     &IndexTypeRef<Symbolic>,
 ) -> Result<
-    Option<crate::semantic::index_def::IndexCardinality>,
+    Option<std::borrow::Cow<'static, crate::semantic::index_def::ConcreteIndexKind>>,
     crate::tir::static_index::UnavailableIndex,
 > {
     move |_| {
-        Ok(Some(
-            crate::semantic::index_def::IndexCardinality::try_from_u64(size).unwrap(),
-        ))
+        Ok(Some(std::borrow::Cow::Owned(
+            crate::semantic::index_def::ConcreteIndexKind::Finite {
+                index: crate::semantic::index_def::FiniteIndex::try_from_u64(size).unwrap(),
+            },
+        )))
     }
 }
 
@@ -369,6 +368,18 @@ fn discharge_publishes_only_trees_whose_every_obligation_is_met() {
         panic!("a discharged tree is executable: {ready:?}");
     };
     assert!(matches!(tree.ty(), CheckedType::Key(_)));
+    // The discharged key node carries its concrete axis and constant key.
+    let TExprKind::Key {
+        form: TKeyForm::Static { key, .. },
+        axis,
+        ..
+    } = tree.kind()
+    else {
+        panic!("a discharged key node keeps its form: {tree:?}");
+    };
+    assert_eq!(axis.len(), 3);
+    assert_eq!(key.axis(), axis);
+    assert_eq!(key.position(), 1);
 
     // An axis still awaiting its binding keeps the tree deferred.
     let waiting = CheckedBody::discharge(
@@ -455,17 +466,24 @@ fn executable_lookup_distinguishes_missing_deferred_and_contextual_roots() {
 fn type_maps_keep_structure_and_rewrite_every_carried_type() {
     let mut ids = crate::expression_id::ExprIds::default();
     let tree = key_node(&mut ids, fin(3), 1);
-    let concrete = tree.map_types(&mut map::ToConcrete).unwrap();
+    let definition = known(3);
+    let concrete = tree
+        .map_types(&mut checked_bodies::ToConcrete::new(&definition))
+        .unwrap();
     assert_eq!(concrete.ty().to_symbolic(), *tree.ty());
     assert_eq!(concrete.id(), tree.id());
     let (
         TExprKind::Key {
-            form: TKeyForm::Static(before),
+            form: TKeyForm::Static {
+                position: before, ..
+            },
             arg: before_arg,
             ..
         },
         TExprKind::Key {
-            form: TKeyForm::Static(after),
+            form: TKeyForm::Static {
+                position: after, ..
+            },
             arg: after_arg,
             ..
         },
@@ -479,4 +497,50 @@ fn type_maps_keep_structure_and_rewrite_every_carried_type() {
         (before.position, before.usage)
     );
     assert_eq!(before_arg.id(), after_arg.id());
+}
+
+#[test]
+fn discharge_rejects_axes_a_node_cannot_be_given() {
+    let mut ids = crate::expression_id::ExprIds::default();
+    // A key node whose type is not a key has no axis to carry.
+    let mut fin_key = |ty: CheckedType<Symbolic>| {
+        let arg = TExpr::new(
+            ids.allocate().unwrap(),
+            Span::new(4, 1),
+            CheckedType::Int,
+            TExprKind::Int(operators::IExpr::Literal(0)),
+        );
+        TExpr::new(
+            ids.allocate().unwrap(),
+            Span::new(0, 6),
+            ty,
+            TExprKind::Key {
+                form: TKeyForm::Fin,
+                arg: Box::new(arg),
+                axis: (),
+            },
+        )
+    };
+    let shapeless = fin_key(CheckedType::Int);
+    assert!(matches!(
+        CheckedBody::discharge(TBody::Value(Box::new(shapeless)), &known(3)),
+        Err(DischargeError::AxisShape(_))
+    ));
+    let waiting = fin_key(CheckedType::Key(fin(3)));
+
+    // An axis whose definition still awaits its binding defers the tree
+    // even when its cardinality reads as known.
+    let calls = std::cell::Cell::new(0);
+    let cardinality_then_waiting = |_: &IndexTypeRef<Symbolic>| {
+        calls.set(calls.get() + 1);
+        Ok(if calls.get() == 1 {
+            known(3)(&fin(3))?
+        } else {
+            None
+        })
+    };
+    assert!(matches!(
+        CheckedBody::discharge(TBody::Value(Box::new(waiting)), &cardinality_then_waiting),
+        Ok(CheckedBody::Deferred(_))
+    ));
 }

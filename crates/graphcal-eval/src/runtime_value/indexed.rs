@@ -4,8 +4,8 @@ use graphcal_compiler::semantic::checked_type::IndexTypeRef;
 use graphcal_compiler::syntax::index_name::IndexEntryKey;
 use graphcal_compiler::syntax::non_empty::NonEmpty;
 
-use super::index_axis::IndexAxis;
-use super::key_value::KeyValue;
+use graphcal_compiler::semantic::index_axis::IndexAxis;
+use graphcal_compiler::semantic::key_value::KeyValue;
 
 /// An indexed value: exactly one entry of type `V` for every key of its axis,
 /// in axis order.
@@ -136,6 +136,30 @@ impl<V> IndexedValue<V> {
     pub const fn values(&self) -> &NonEmpty<V> {
         &self.entries
     }
+
+    /// Pair each entry with the entry of `other` at the same key.
+    ///
+    /// # Errors
+    ///
+    /// Returns this value back when `other` is indexed by another axis.
+    pub(crate) fn zip<U>(self, other: &IndexedValue<U>) -> Result<IndexedValue<(V, &U)>, Self> {
+        if !self.axis.matches(&other.axis) {
+            return Err(self);
+        }
+        // Axes of one index have the same keys, so the entries align
+        // position by position.
+        let others = other.entries.as_slice();
+        let mut position = 0;
+        let entries = self.entries.map(|entry| {
+            let paired = (entry, &others[position]);
+            position = position.saturating_add(1);
+            paired
+        });
+        Ok(IndexedValue {
+            axis: self.axis,
+            entries,
+        })
+    }
 }
 
 #[cfg(test)]
@@ -261,5 +285,19 @@ mod tests {
         assert_eq!(wide.get_key(&KeyValue::at(fin(4), 3).unwrap()), Some(&'d'));
         let narrow = IndexedValue::finite_for_test(vec!['a', 'b']);
         assert_eq!(narrow.get_key(&KeyValue::at(fin(4), 1).unwrap()), None);
+    }
+
+    #[test]
+    fn zips_pair_entries_of_one_axis_only() {
+        let lhs = IndexedValue::for_test(axis(), vec![1, 2, 3]);
+        let rhs = IndexedValue::for_test(axis(), vec!['a', 'b', 'c']);
+        let zipped = lhs.clone().zip(&rhs).unwrap();
+        assert_eq!(
+            zipped.values().as_slice(),
+            &[(1, &'a'), (2, &'b'), (3, &'c')]
+        );
+        assert!(zipped.axis().matches(&axis()));
+        let other = IndexedValue::finite_for_test(vec!['a', 'b', 'c']);
+        assert_eq!(lhs.clone().zip(&other).unwrap_err(), lhs);
     }
 }

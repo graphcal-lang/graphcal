@@ -29,7 +29,7 @@ use super::{
 };
 use crate::host_fns::HostFnValue;
 use crate::invariant::{Failure, Invariant};
-use crate::runtime_value::dense_array::{DenseArray, DenseArrayError};
+use crate::runtime_value::dense_array::DenseArray;
 use crate::runtime_value::{IndexAxis, IndexedValue, RuntimeValue, StructFieldsError, StructValue};
 
 /// The declared result kind of an extern function.
@@ -60,8 +60,118 @@ pub trait ArgumentReader<N> {
     fn bool(&self, node: N) -> Result<bool, Self::Error>;
     /// The integer `node` evaluates to.
     fn int(&self, node: N) -> Result<i64, Self::Error>;
-    /// The indexed value `node` evaluates to.
-    fn indexed(&self, node: N) -> Result<IndexedValue<RuntimeValue>, Self::Error>;
+    /// The array of `element`s `node` evaluates to, whose axes, in order,
+    /// bind `indexes`.
+    fn array(
+        &self,
+        node: N,
+        element: &ScalarValueKind,
+        indexes: &NonEmpty<IndexBinder>,
+    ) -> Result<ArrayArgument, Self::Error>;
+}
+
+/// An array argument read at its parameter's element kind and rank: a
+/// rectangular array whose axes, in order, are paired with the index
+/// variables they bind.
+#[derive(Debug)]
+pub struct ArrayArgument {
+    bindings: NonEmpty<(IndexBinder, IndexAxis)>,
+    data: ArrayData,
+}
+
+/// The row-major elements of an array argument, by element kind.
+#[derive(Debug)]
+enum ArrayData {
+    Quantity(DenseArray<FiniteQuantity>),
+    Bool(DenseArray<bool>),
+    Int(DenseArray<i64>),
+}
+
+impl ArrayData {
+    const fn axes(&self) -> &NonEmpty<IndexAxis> {
+        match self {
+            Self::Quantity(array) => array.axes(),
+            Self::Bool(array) => array.axes(),
+            Self::Int(array) => array.axes(),
+        }
+    }
+}
+
+impl ArrayArgument {
+    /// `value` read as an array of `element`s whose axes, in order, bind
+    /// `indexes`.
+    ///
+    /// # Errors
+    ///
+    /// Returns `value` back unless it is a rectangular array of `element`s
+    /// with one axis per index variable.
+    pub fn try_from_value(
+        value: RuntimeValue,
+        element: &ScalarValueKind,
+        indexes: &NonEmpty<IndexBinder>,
+    ) -> Result<Self, RuntimeValue> {
+        let data = match &value {
+            RuntimeValue::Indexed(entries) => match element {
+                ScalarValueKind::Quantity(_) => {
+                    DenseArray::try_from_indexed(entries, |leaf| match leaf {
+                        RuntimeValue::Quantity(value) => Ok(*value),
+                        _ => Err(()),
+                    })
+                    .map(ArrayData::Quantity)
+                }
+                ScalarValueKind::Bool => DenseArray::try_from_indexed(entries, |leaf| match leaf {
+                    RuntimeValue::Bool(value) => Ok(*value),
+                    _ => Err(()),
+                })
+                .map(ArrayData::Bool),
+                ScalarValueKind::Int => DenseArray::try_from_indexed(entries, |leaf| match leaf {
+                    RuntimeValue::Int(value) => Ok(*value),
+                    _ => Err(()),
+                })
+                .map(ArrayData::Int),
+            }
+            .ok(),
+            _ => None,
+        };
+        let Some(data) = data.filter(|data| data.axes().len() == indexes.len()) else {
+            return Err(value);
+        };
+        NonEmpty::try_from_vec(
+            indexes
+                .iter()
+                .cloned()
+                .zip(data.axes().iter().cloned())
+                .collect(),
+        )
+        .map_or(Err(value), |bindings| Ok(Self { bindings, data }))
+    }
+
+    /// The host array of this argument for `parameter`.
+    fn into_host(
+        self,
+        parameter: &FnParamName,
+    ) -> Result<HostArgumentArray, Failure<ArgumentError>> {
+        Ok(match self.data {
+            ArrayData::Quantity(array) => {
+                HostArgumentArray::from_dense(array, HostArrayElements::Quantity)
+            }
+            ArrayData::Bool(array) => HostArgumentArray::from_dense(array, HostArrayElements::Bool),
+            ArrayData::Int(array) => {
+                let mut positions = 0_usize..;
+                let integers = array.try_map(|value| {
+                    let index = positions.next().unwrap_or(usize::MAX);
+                    HostInt::try_new(value).map_err(|error| {
+                        Failure::Error(ArgumentError::InexactIntElement {
+                            parameter: parameter.clone(),
+                            index,
+                            error,
+                        })
+                    })
+                })?;
+                HostArgumentArray::from_dense(integers, HostArrayElements::Int)
+            }
+        })
+    }
 }
 
 /// Why the arguments of an extern call could not be encoded.
@@ -188,12 +298,13 @@ impl<'s> HostArguments<'s> {
                     element,
                     indexes,
                 } => {
-                    let indexed = reader.indexed(node).map_err(EncodeError::Value)?;
-                    let (axes, array) = encode_array(param, element, &indexed).map_err(argument)?;
+                    let array = reader
+                        .array(node, element, indexes)
+                        .map_err(EncodeError::Value)?;
                     encoded
-                        .bind_axes(param, indexes, &axes)
+                        .bind_axes(&array.bindings)
                         .map_err(|invariant| argument(invariant.into()))?;
-                    HostArgument::Array(array)
+                    HostArgument::Array(array.into_host(param).map_err(argument)?)
                 }
             };
             encoded.values.push(value);
@@ -209,14 +320,9 @@ impl<'s> HostArguments<'s> {
     /// Record the axes an array argument binds to its index variables.
     fn bind_axes(
         &mut self,
-        parameter: &FnParamName,
-        indexes: &NonEmpty<IndexBinder>,
-        axes: &NonEmpty<IndexAxis>,
+        bindings: &NonEmpty<(IndexBinder, IndexAxis)>,
     ) -> Result<(), Invariant> {
-        if axes.len() != indexes.len() {
-            return Err(rank_invariant(parameter, axes.len(), indexes.len()));
-        }
-        for (index, axis) in indexes.iter().zip(axes) {
+        for (index, axis) in bindings {
             match self.bound.entry(index.clone()) {
                 Entry::Vacant(slot) => {
                     slot.insert(axis.clone());
@@ -296,81 +402,6 @@ impl<'s> HostArguments<'s> {
             }
         }
     }
-}
-
-/// Flatten an indexed argument into its typed axes and validated
-/// row-major elements.
-///
-/// A checked argument of this parameter is a rectangular array of `element`s,
-/// so a ragged array or another element is an invariant violation.
-fn encode_array(
-    parameter: &FnParamName,
-    element: &ScalarValueKind,
-    indexed: &IndexedValue<RuntimeValue>,
-) -> Result<(NonEmpty<IndexAxis>, HostArgumentArray), Failure<ArgumentError>> {
-    let invariant = |error: &DenseArrayError<&'static str>| -> Failure<ArgumentError> {
-        Invariant::violated(match error {
-            DenseArrayError::Ragged => format!(
-                "array argument `{parameter}` is ragged after dimension checking"
-            ),
-            DenseArrayError::Element(expected) => format!(
-                "array argument `{parameter}` has an element other than {expected} after dimension checking"
-            ),
-        })
-        .into()
-    };
-    match element {
-        ScalarValueKind::Quantity(_) => DenseArray::try_from_indexed(indexed, |leaf| match leaf {
-            RuntimeValue::Quantity(value) => Ok(*value),
-            _ => Err("a quantity"),
-        })
-        .map(|array| {
-            (
-                array.axes().clone(),
-                HostArgumentArray::from_dense(array, HostArrayElements::Quantity),
-            )
-        })
-        .map_err(|error| invariant(&error)),
-        ScalarValueKind::Bool => DenseArray::try_from_indexed(indexed, |leaf| match leaf {
-            RuntimeValue::Bool(value) => Ok(*value),
-            _ => Err("a Bool"),
-        })
-        .map(|array| {
-            (
-                array.axes().clone(),
-                HostArgumentArray::from_dense(array, HostArrayElements::Bool),
-            )
-        })
-        .map_err(|error| invariant(&error)),
-        ScalarValueKind::Int => {
-            let integers = DenseArray::try_from_indexed(indexed, |leaf| match leaf {
-                RuntimeValue::Int(value) => Ok(*value),
-                _ => Err("an Int"),
-            })
-            .map_err(|error| invariant(&error))?;
-            let mut positions = 0_usize..;
-            let integers = integers.try_map(|value| {
-                let index = positions.next().unwrap_or(usize::MAX);
-                HostInt::try_new(value).map_err(|error| {
-                    Failure::Error(ArgumentError::InexactIntElement {
-                        parameter: parameter.clone(),
-                        index,
-                        error,
-                    })
-                })
-            })?;
-            Ok((
-                integers.axes().clone(),
-                HostArgumentArray::from_dense(integers, HostArrayElements::Int),
-            ))
-        }
-    }
-}
-
-fn rank_invariant(parameter: &FnParamName, actual: usize, expected: usize) -> Invariant {
-    Invariant::violated(format_args!(
-        "parameter `{parameter}` received rank {actual}, expected rank {expected} after dimension checking"
-    ))
 }
 
 /// Rebuild a validated row-major result over `axes`.
@@ -486,11 +517,14 @@ mod tests {
             }
         }
 
-        fn indexed(&self, node: RuntimeValue) -> Result<IndexedValue<RuntimeValue>, &'static str> {
-            match node {
-                RuntimeValue::Indexed(value) => Ok(value),
-                _ => Err("not indexed"),
-            }
+        fn array(
+            &self,
+            node: RuntimeValue,
+            element: &ScalarValueKind,
+            indexes: &NonEmpty<IndexBinder>,
+        ) -> Result<ArrayArgument, &'static str> {
+            ArrayArgument::try_from_value(node, element, indexes)
+                .map_err(|_| "not an array of the parameter's kind and rank")
         }
     }
 
@@ -715,18 +749,23 @@ mod tests {
             };
             (position, invariant.to_string())
         };
+        // An argument of another rank, element kind, or a ragged one is no
+        // array of its parameter: the reader reports it.
+        let unread = |values| match encode(&signature, values).unwrap_err() {
+            EncodeError::Value(error) => error,
+            EncodeError::Argument { position, .. } => {
+                panic!("expected a reader failure, got an argument failure at {position}")
+            }
+        };
+        let not_an_array = "not an array of the parameter's kind and rank";
 
         assert_eq!(
-            invariant(vec![
+            unread(vec![
                 vector(rows(), vec![row_values(), row_values()]),
                 row_values(),
                 row_ints(),
             ]),
-            (
-                0,
-                "parameter `p0` received rank 2, expected rank 1 after dimension checking"
-                    .to_string()
-            )
+            not_an_array
         );
         assert_eq!(
             invariant(vec![
@@ -741,16 +780,12 @@ mod tests {
             )
         );
         assert_eq!(
-            invariant(vec![
+            unread(vec![
                 row_values(),
                 row_values(),
                 vector(rows(), vec![RuntimeValue::Int(1), RuntimeValue::Bool(true)]),
             ]),
-            (
-                2,
-                "array argument `p2` has an element other than an Int after dimension checking"
-                    .to_string()
-            )
+            not_an_array
         );
         let ragged = vector(
             rows(),
@@ -760,11 +795,8 @@ mod tests {
             ],
         );
         assert_eq!(
-            invariant(vec![row_values(), row_values(), ragged]),
-            (
-                2,
-                "array argument `p2` is ragged after dimension checking".to_string()
-            )
+            unread(vec![row_values(), row_values(), ragged]),
+            not_an_array
         );
 
         let arguments = encode(&signature, vec![row_values(), row_values(), row_ints()]).unwrap();

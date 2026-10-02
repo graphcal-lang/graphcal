@@ -6,10 +6,12 @@ mod conversions;
 mod datetime;
 mod hir_eval;
 mod linear_algebra;
+mod linear_algebra_error;
 mod linear_algebra_lu;
 pub mod numeric;
 mod operations;
 mod presentation;
+mod runtime_failure;
 mod unit_scale;
 mod work_budget;
 

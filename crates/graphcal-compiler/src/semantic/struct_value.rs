@@ -4,12 +4,11 @@ use std::sync::Arc;
 
 use indexmap::IndexMap;
 
-use graphcal_compiler::extern_struct_result::ExternStructResult;
-use graphcal_compiler::resolved_name::ResolvedStructTypeName;
-use graphcal_compiler::semantic::applied_constructor::{AppliedConstructor, AppliedField};
-use graphcal_compiler::semantic::checked_type::CheckedGenericArg;
-use graphcal_compiler::syntax::type_name::{ConstructorName, FieldName};
-use graphcal_compiler::tir::texpr::ConstructorApplication;
+use crate::extern_struct_result::ExternStructResult;
+use crate::resolved_name::ResolvedStructTypeName;
+use crate::semantic::applied_constructor::{AppliedConstructor, AppliedField};
+use crate::semantic::checked_type::CheckedGenericArg;
+use crate::syntax::type_name::{ConstructorName, FieldName};
 
 /// A constructor applied to exactly its declared fields.
 ///
@@ -48,17 +47,18 @@ pub enum StructFieldsError {
 }
 
 impl<V> StructValue<V> {
-    /// Apply a checked constructor application to evaluated field values.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`StructFieldsError`] when `fields` is not exactly the
-    /// constructor's declared field set.
-    pub(crate) fn try_from_application(
-        application: &ConstructorApplication,
-        fields: impl IntoIterator<Item = (FieldName, V)>,
-    ) -> Result<Self, StructFieldsError> {
-        Self::try_new(Arc::clone(&application.applied), fields)
+    /// Apply `application` to one value per declared field, in declaration
+    /// order. Only a checked constructor call, which places each of its
+    /// initializers at its declared field once, applies a constructor this
+    /// way.
+    pub(crate) const fn from_declared(
+        application: Arc<AppliedConstructor>,
+        values: Vec<V>,
+    ) -> Self {
+        Self {
+            application,
+            values,
+        }
     }
 
     /// Build the record an extern function returned, whose declaration bound
@@ -68,7 +68,7 @@ impl<V> StructValue<V> {
     ///
     /// Returns [`StructFieldsError`] when `fields` is not exactly the shape's
     /// field set.
-    pub(crate) fn try_from_record(
+    pub fn try_from_record(
         record: &ExternStructResult,
         fields: impl IntoIterator<Item = (FieldName, V)>,
     ) -> Result<Self, StructFieldsError> {
@@ -115,16 +115,12 @@ impl<V> StructValue<V> {
     /// A struct value of `constructor` of `type_name` whose declared fields
     /// are exactly `fields`, each at its type, for tests (including of the
     /// evaluator's defenses against values of a foreign type).
-    #[cfg(any(test, feature = "test-internals"))]
+    #[cfg(any(test, feature = "test-identities"))]
     #[must_use]
     pub fn for_test(
         type_name: ResolvedStructTypeName,
         constructor: ConstructorName,
-        fields: Vec<(
-            FieldName,
-            graphcal_compiler::semantic::checked_type::CheckedType,
-            V,
-        )>,
+        fields: Vec<(FieldName, crate::semantic::checked_type::CheckedType, V)>,
     ) -> Self {
         let (declared, values): (Vec<_>, Vec<_>) = fields
             .into_iter()
@@ -182,7 +178,7 @@ impl<V> StructValue<V> {
     /// Every declared field, at its instantiated type, with its value, in
     /// declaration order.
     #[must_use]
-    pub(crate) fn typed_fields(&self) -> impl ExactSizeIterator<Item = (&AppliedField, &V)> {
+    pub fn typed_fields(&self) -> impl ExactSizeIterator<Item = (&AppliedField, &V)> {
         self.application.fields().iter().zip(&self.values)
     }
 
@@ -213,11 +209,38 @@ impl<V> StructValue<V> {
         })
     }
 
-    /// The owned value of `field`, when the constructor declares it.
-    #[must_use]
-    pub(crate) fn into_field(self, field: &FieldName) -> Option<V> {
-        let index = self.position(field)?;
-        self.values.into_iter().nth(index)
+    /// Pair each field value with the value of the same field of `other`.
+    ///
+    /// # Errors
+    ///
+    /// Returns this value back when `other` applies another constructor
+    /// application.
+    pub fn zip<U>(self, other: &StructValue<U>) -> Result<StructValue<(V, &U)>, Self> {
+        if self.application != other.application {
+            return Err(self);
+        }
+        // One application has one field list, so the values align field by
+        // field.
+        Ok(StructValue {
+            application: self.application,
+            values: self.values.into_iter().zip(&other.values).collect(),
+        })
+    }
+
+    /// The owned value of `field`.
+    ///
+    /// # Errors
+    ///
+    /// Returns this value back when its constructor does not declare `field`.
+    pub fn into_field(self, field: &FieldName) -> Result<V, Self> {
+        match self.position(field) {
+            // One value per declared field, so a declared position has one.
+            Some(index) => {
+                let mut values = self.values;
+                Ok(values.swap_remove(index))
+            }
+            None => Err(self),
+        }
     }
 }
 
@@ -225,15 +248,15 @@ impl<V> StructValue<V> {
 mod tests {
     use std::sync::Arc;
 
-    use graphcal_compiler::dag_id::DagId;
-    use graphcal_compiler::extern_struct_result::ExternStructResult;
-    use graphcal_compiler::function_signature::{StructFieldKind, StructShape, StructShapeField};
-    use graphcal_compiler::resolved_name::ResolvedStructTypeName;
-    use graphcal_compiler::semantic::applied_constructor::AppliedConstructor;
-    use graphcal_compiler::semantic::checked_type::CheckedType;
-    use graphcal_compiler::syntax::type_name::{ConstructorName, FieldName, StructTypeName};
+    use crate::dag_id::DagId;
+    use crate::extern_struct_result::ExternStructResult;
+    use crate::function_signature::{StructFieldKind, StructShape, StructShapeField};
+    use crate::resolved_name::ResolvedStructTypeName;
+    use crate::semantic::applied_constructor::AppliedConstructor;
+    use crate::semantic::checked_type::CheckedType;
+    use crate::syntax::type_name::{ConstructorName, FieldName, StructTypeName};
 
-    use crate::runtime_value::struct_value::{StructFieldsError, StructValue};
+    use super::{StructFieldsError, StructValue};
 
     fn field(name: &str) -> FieldName {
         FieldName::expect_valid(name)
@@ -364,8 +387,11 @@ mod tests {
             value.clone().map(|value| value * 3).field(&field("right")),
             Some(&6)
         );
-        assert_eq!(value.clone().into_field(&field("right")), Some(2));
-        assert_eq!(value.clone().into_field(&field("other")), None);
+        assert_eq!(value.clone().into_field(&field("right")), Ok(2));
+        assert_eq!(
+            value.clone().into_field(&field("other")),
+            Err(value.clone())
+        );
         let failed = value.try_map(|name, value| {
             if *name == field("right") {
                 Err(value)
@@ -374,6 +400,21 @@ mod tests {
             }
         });
         assert_eq!(failed.unwrap_err(), 2);
+    }
+
+    #[test]
+    fn zips_pair_fields_of_one_application_only() {
+        let value = build(vec![("left", 1), ("right", 2)]).unwrap();
+        let labels = build(vec![("right", 20), ("left", 10)]).unwrap();
+        let zipped = value.clone().zip(&labels).unwrap();
+        assert_eq!(zipped.field(&field("left")), Some(&(1, &10)));
+        assert_eq!(zipped.field(&field("right")), Some(&(2, &20)));
+        let other = StructValue::try_new(
+            Arc::new(pair("other", constructor())),
+            [(field("left"), 1), (field("right"), 2)],
+        )
+        .unwrap();
+        assert_eq!(value.clone().zip(&other).unwrap_err(), value);
     }
 
     #[test]

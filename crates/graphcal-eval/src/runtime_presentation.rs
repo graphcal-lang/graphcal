@@ -215,9 +215,12 @@ impl<L> Presented<L> {
         }
     }
 
-    /// The presented fields of a struct value; `None` for any other value.
-    #[must_use]
-    pub(crate) fn into_fields(self) -> Option<StructValue<Self>>
+    /// The presented fields of a struct value.
+    ///
+    /// # Errors
+    ///
+    /// Returns any other value back.
+    pub(crate) fn into_fields(self) -> Result<StructValue<Self>, Self>
     where
         L: Clone,
     {
@@ -225,20 +228,23 @@ impl<L> Presented<L> {
             Node::Whole {
                 value: RuntimeValue::Struct(fields),
                 leaf,
-            } => Some(fields.map(|value| {
+            } => Ok(fields.map(|value| {
                 Self(Node::Whole {
                     value,
                     leaf: leaf.clone(),
                 })
             })),
-            Node::Struct(fields) => Some(fields),
-            Node::Whole { .. } | Node::Indexed(_) => None,
+            Node::Struct(fields) => Ok(fields),
+            node @ (Node::Whole { .. } | Node::Indexed(_)) => Err(Self(node)),
         }
     }
 
-    /// The presented entries of an indexed value; `None` for any other value.
-    #[must_use]
-    pub(crate) fn into_entries(self) -> Option<IndexedValue<Self>>
+    /// The presented entries of an indexed value.
+    ///
+    /// # Errors
+    ///
+    /// Returns any other value back.
+    pub(crate) fn into_entries(self) -> Result<IndexedValue<Self>, Self>
     where
         L: Clone,
     {
@@ -246,14 +252,14 @@ impl<L> Presented<L> {
             Node::Whole {
                 value: RuntimeValue::Indexed(entries),
                 leaf,
-            } => Some(entries.map(|value| {
+            } => Ok(entries.map(|value| {
                 Self(Node::Whole {
                     value,
                     leaf: leaf.clone(),
                 })
             })),
-            Node::Indexed(entries) => Some(entries),
-            Node::Whole { .. } | Node::Struct(_) => None,
+            Node::Indexed(entries) => Ok(entries),
+            node @ (Node::Whole { .. } | Node::Struct(_)) => Err(Self(node)),
         }
     }
 
@@ -270,14 +276,14 @@ impl<L> Presented<L> {
     where
         L: PresentationLeaf,
     {
-        match (&self.0, value) {
-            (Node::Whole { leaf: None, .. }, value) => Ok(Self::plain(value)),
+        let other = match (&self.0, value) {
+            (Node::Whole { leaf: None, .. }, value) => return Ok(Self::plain(value)),
             (
                 Node::Whole {
                     leaf: Some(leaf), ..
                 },
                 value,
-            ) => Self::with_leaf(value, leaf.clone()),
+            ) => return Self::with_leaf(value, leaf.clone()),
             (Node::Struct(template), RuntimeValue::Struct(fields))
                 if template.type_name() == fields.type_name()
                     && template.generic_args() == fields.generic_args() =>
@@ -285,43 +291,31 @@ impl<L> Presented<L> {
                 if template.constructor() != fields.constructor() {
                     return Ok(Self::plain(RuntimeValue::Struct(fields)));
                 }
-                fields
-                    .try_map(|name, field| {
-                        template
-                            .field(name)
-                            .ok_or_else(|| {
-                                Invariant::violated(format_args!(
-                                    "constructor `{}` lost its field `{name}`",
-                                    template.constructor()
-                                ))
-                            })?
-                            .present_alike(field)
-                    })
-                    .map(Self::from_struct)
+                match fields.zip(template) {
+                    Ok(fields) => {
+                        return fields
+                            .try_map(|_, (field, template)| template.present_alike(field))
+                            .map(Self::from_struct);
+                    }
+                    Err(fields) => RuntimeValue::Struct(fields),
+                }
             }
-            (Node::Indexed(template), RuntimeValue::Indexed(entries))
-                if template.axis().matches(entries.axis()) =>
-            {
-                // Both walk the same axis, so each key finds its entry.
-                entries
-                    .try_map(|key, entry| {
-                        template
-                            .get(key)
-                            .ok_or_else(|| {
-                                Invariant::violated(format_args!(
-                                    "axis `{}` lost its key `{key}`",
-                                    template.index()
-                                ))
-                            })?
-                            .present_alike(entry)
-                    })
-                    .map(Self::from_indexed)
+            (Node::Indexed(template), RuntimeValue::Indexed(entries)) => {
+                match entries.zip(template) {
+                    Ok(entries) => {
+                        return entries
+                            .try_map(|_, (entry, template)| template.present_alike(entry))
+                            .map(Self::from_indexed);
+                    }
+                    Err(entries) => RuntimeValue::Indexed(entries),
+                }
             }
-            (_, value) => Err(Invariant::violated(format_args!(
-                "a presentation of another type was applied to {}",
-                value.describe()
-            ))),
-        }
+            (_, value) => value,
+        };
+        Err(Invariant::violated(format_args!(
+            "a presentation of another type was applied to {}",
+            other.describe()
+        )))
     }
 
     /// This value, or, when it has no presentation, the value presented as
@@ -710,7 +704,7 @@ mod tests {
             Some("km".to_owned())
         );
         assert!(entries.get(&IndexEntryKey::position(1)).unwrap().is_plain());
-        assert!(presented.clone().into_fields().is_none());
+        assert!(presented.clone().into_fields().is_err());
         let RuntimeValue::Indexed(value) = presented.into_value() else {
             panic!("indexed value");
         };
@@ -722,7 +716,7 @@ mod tests {
             Presented::plain(quantity(2.0)),
         ));
         assert!(matches!(fields.view(), PresentedView::Struct(_)));
-        assert!(fields.clone().into_entries().is_none());
+        assert!(fields.clone().into_entries().is_err());
         let fields = fields.into_fields().unwrap();
         assert_eq!(
             whole_label(fields.field(&field("left")).unwrap()),

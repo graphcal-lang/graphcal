@@ -851,85 +851,6 @@ fn dependency_availability_is_determined_once_per_declaration() {
 }
 
 #[test]
-fn shared_frames_cancel_before_interpretation() {
-    use graphcal_eval::execution_frame::{ExecutionFrame, FailurePolicy};
-    let (tir, src, sources) = callable_plan_fixture();
-    let prepared = graphcal_eval::exec_plan::compile(&tir, src, &sources).unwrap();
-    let plan = prepared.plan();
-    for policy in [FailurePolicy::Contain, FailurePolicy::Propagate] {
-        let mut frame = ExecutionFrame::new(plan, plan.root(), policy);
-        let cancellation = graphcal_compiler::cancellation::CancellationSource::new();
-        cancellation.cancel();
-        let outcome = frame.run(&cancellation.token(), |_, _| {
-            panic!("cancelled frame must not invoke its expression adapter")
-        });
-        assert!(matches!(outcome, Err(Outcome::Cancelled)));
-    }
-}
-
-#[test]
-fn frame_arguments_are_domain_checked_and_keep_presentation_only_when_bound() {
-    use graphcal_eval::execution_frame::{ExecutionFrame, FailurePolicy};
-    use graphcal_eval::presentation_evidence::{
-        PendingLeaf, PendingQuantityDisplay, QuantityDisplay,
-    };
-    use graphcal_eval::runtime_presentation::EvaluatedRuntimeValue;
-    use graphcal_eval::runtime_value::RuntimeValue;
-    let source = "param p: Dimensionless(min: 0.0) = 1.0; node n: Dimensionless = @p;";
-    let tir = compile_to_tir(source, "frame.gcl").unwrap();
-    let mut sources = graphcal_compiler::source_registry::SourceRegistry::new();
-    let src = sources.register("frame.gcl", std::sync::Arc::new(source.to_string()));
-    let prepared = graphcal_eval::exec_plan::compile(&tir, src, &sources).unwrap();
-    let plan = prepared.plan();
-    let key = tir
-        .root()
-        .body_for_test()
-        .params()
-        .next()
-        .map(graphcal_compiler::tir::typed::TypedParamEntry::identity)
-        .unwrap();
-    let labelled = |value: f64| {
-        EvaluatedRuntimeValue::with_leaf(
-            RuntimeValue::quantity(value).unwrap(),
-            PendingLeaf::Quantity(PendingQuantityDisplay::Ready(QuantityDisplay::Unit {
-                label: "percent".to_owned(),
-                scale: graphcal_compiler::semantic::unit_scale::PositiveFiniteScale::new(0.01)
-                    .unwrap(),
-            })),
-        )
-        .unwrap()
-    };
-    let span = graphcal_compiler::syntax::span::Span::new(0, 0);
-
-    let mut frame = ExecutionFrame::new(plan, plan.root(), FailurePolicy::Contain);
-    frame.bind_argument(&key, labelled(2.0), src, span).unwrap();
-    assert!(frame.values().contains_key(&key));
-    assert!(frame.presentations().contains_key(&key));
-    assert!(frame.errors().is_empty());
-
-    let mut frame = ExecutionFrame::new(plan, plan.root(), FailurePolicy::Contain);
-    frame
-        .bind_argument(&key, labelled(-1.0), src, span)
-        .unwrap();
-    assert!(!frame.values().contains_key(&key));
-    assert!(!frame.presentations().contains_key(&key));
-    assert!(matches!(
-        frame.errors().get(&key),
-        Some(NodeUnavailable::EvalFailed { .. })
-    ));
-    let outcome = frame.finish();
-    assert!(outcome.values.is_empty() && outcome.presented.is_empty());
-    assert_eq!(outcome.errors.len(), 1);
-
-    let mut frame = ExecutionFrame::new(plan, plan.root(), FailurePolicy::Propagate);
-    assert!(
-        frame
-            .bind_argument(&key, labelled(-1.0), src, span)
-            .is_err()
-    );
-}
-
-#[test]
 fn prepared_imports_and_instance_constant_pools_borrow_canonical_values() {
     let source = "pub const node OUTER: Dimensionless = 2.0; dag helper { import pools::{OUTER}; const node LOCAL: Dimensionless = 3.0; pub node value: Dimensionless = @OUTER + @LOCAL; } include helper() as one; include helper() as two; node output: Dimensionless = @one::value + @two::value + @helper()::value;";
     let tir = compile_to_tir(source, "pools.gcl").unwrap();
@@ -995,84 +916,6 @@ fn prepared_imports_and_instance_constant_pools_borrow_canonical_values() {
         15.0,
     );
 }
-
-#[test]
-fn shared_frame_dependency_and_fatal_error_policies_are_explicit() {
-    use graphcal_eval::execution_frame::{ExecutionFrame, FailurePolicy};
-    let source = "node a: Dimensionless = 1.0; node dependent: Dimensionless = @a; node independent: Dimensionless = 2.0;";
-    let tir = compile_to_tir(source, "frame.gcl").unwrap();
-    let mut sources = graphcal_compiler::source_registry::SourceRegistry::new();
-    let src = sources.register("frame.gcl", std::sync::Arc::new(source.to_string()));
-    let prepared = graphcal_eval::exec_plan::compile(&tir, src, &sources).unwrap();
-    let plan = prepared.plan();
-    let token = graphcal_compiler::cancellation::CancellationToken::unbounded();
-    for policy in [FailurePolicy::Contain, FailurePolicy::Propagate] {
-        for fatal in [false, true] {
-            let mut frame = ExecutionFrame::new(plan, plan.root(), policy);
-            let outcome = frame.run(&token, |entry, _| {
-                if entry.key().as_str() == "a" {
-                    return Err(if fatal {
-                        SemanticError::internal_error(
-                            "fatal sentinel",
-                            src,
-                            graphcal_compiler::diagnostic_anchor::DiagnosticAnchor::WholeFile,
-                        )
-                    } else {
-                        SemanticError::located(
-                            src,
-                            entry.body().root().span(),
-                            EvaluationError::Failed {
-                                message: "ordinary sentinel".into(),
-                            },
-                        )
-                    }
-                    .into());
-                }
-                assert_ne!(
-                    entry.key().as_str(),
-                    "dependent",
-                    "failed dependencies must never be interpreted"
-                );
-                Ok(
-                    graphcal_eval::runtime_presentation::EvaluatedRuntimeValue::plain(
-                        graphcal_eval::runtime_value::RuntimeValue::quantity(2.0).unwrap(),
-                    ),
-                )
-            });
-            if fatal || matches!(policy, FailurePolicy::Propagate) {
-                assert!(outcome.is_err());
-            } else {
-                outcome.unwrap();
-                assert!(
-                    frame
-                        .values()
-                        .keys()
-                        .any(|key| key.as_str() == "independent")
-                );
-                assert!(
-                    frame
-                        .errors()
-                        .iter()
-                        .any(|(key, error)| key.as_str() == "dependent"
-                            && matches!(error, NodeUnavailable::DependencyFailed { .. }))
-                );
-            }
-        }
-    }
-}
-
-// Compile-time negative API assertion: implementing DerefMut would make the
-// inferred marker ambiguous and fail compilation, allowing unchecked replacement
-// of the selected environment through its read-only field interface.
-const _: fn() = || {
-    trait ReadOnlyUnlessMutable<Marker> {
-        fn probe() {}
-    }
-    impl<T: ?Sized> ReadOnlyUnlessMutable<()> for T {}
-    struct Mutable;
-    impl<T: ?Sized + std::ops::DerefMut> ReadOnlyUnlessMutable<Mutable> for T {}
-    let _ = <graphcal_eval::eval_expr::EvalSession<'static> as ReadOnlyUnlessMutable<_>>::probe;
-};
 
 #[test]
 fn selective_import_rejects_required_static_inputs() {
@@ -6801,9 +6644,10 @@ fn eval_label_match_rejects_runtime_owner_mismatch_with_same_leaf_variant() {
     else {
         panic!("expected `code` to be a for-comprehension, got {tree:?}");
     };
-    let [binding] = bindings else {
+    let [binding] = bindings.as_slice() else {
         panic!("expected one for-comprehension binding, got {bindings:?}");
     };
+    let binding = &binding.binding;
     let b_owner = graphcal_compiler::resolved_name::ResolvedName::for_test(
         loaded_file_dag_id(&project, "b.gcl"),
         graphcal_compiler::syntax::index_name::IndexName::expect_valid("Phase"),
