@@ -17,7 +17,6 @@ use graphcal_compiler::resolved_name::ResolvedDeclName;
 use graphcal_compiler::semantic::index_def::IndexBindingTarget;
 use graphcal_compiler::semantic_error::SemanticError;
 use graphcal_compiler::semantic_error::graph::{DagReference, GraphError};
-use graphcal_compiler::semantic_error::index::IndexError;
 use graphcal_compiler::semantic_error::module::ModuleError;
 use graphcal_compiler::semantic_error::name::{DuplicateDeclaration, NameError};
 use graphcal_compiler::semantic_error::visibility::VisibilityError;
@@ -31,14 +30,16 @@ use graphcal_compiler::syntax::type_name::StructTypeName;
 
 use super::binding_values::{extract_index_binding_target, extract_type_name_from_binding_expr};
 use super::including_module::IncludingModule;
-use super::module_resolve_errors::module_resolve_compile_error;
 use crate::compile_error::PipelineError;
 use crate::loader::loaded_file::LoadedModule;
 
-use super::model::{
-    BoundIndexPort, ImportAlias, ImportContext, IncludeInstanceRequest, IncludeStaticBindings,
-    ProjectModuleBinding, UnitProjectionAlias,
+use super::include_static_bindings::{
+    CoveredStaticBindings, StaticBindingResolution, validate_required_static_bindings,
 };
+use super::model::{
+    ImportAlias, ImportContext, IncludeInstanceRequest, ProjectModuleBinding, UnitProjectionAlias,
+};
+use super::module_resolve_errors::module_resolve_compile_error;
 use crate::import_surface::{
     import_item_not_found_error, validate_constructor_alias, validate_reserved_alias,
 };
@@ -501,7 +502,7 @@ fn file_exports_plot(
 /// four binding maps based on what the dependency declares the binding name
 /// as, keyed by the dependency-side name. Index values retain a typed
 /// declared-or-structural target. The Static maps serve interface-level
-/// validation only; [`resolve_include_static_bindings`] turns them into the
+/// validation only; [`CoveredStaticBindings::resolve`] turns them into the
 /// canonical bindings an include instance carries.
 struct ClassifiedBindings {
     params: HashMap<DeclName, graphcal_compiler::desugar::desugared_ast::Expr>,
@@ -511,58 +512,63 @@ struct ClassifiedBindings {
     dims: HashMap<DimName, DimName>,
 }
 
-/// One include's authored Static bindings, keyed by dependency-side name.
-struct AuthoredStaticBindings {
-    indexes: HashMap<IndexName, IndexBindingTarget>,
-    index_spans: HashMap<IndexName, Span>,
-    types: HashMap<StructTypeName, StructTypeName>,
-    dims: HashMap<DimName, DimName>,
+/// The Static binding resolution of one include site: each port in the
+/// template's scope, each target in the importer's.
+struct IncludeSite<'a> {
+    template: &'a graphcal_compiler::dag_id::DagId,
+    importer: StaticScope<'a>,
+    src: SourceId,
 }
 
-/// Resolve one include's authored Static bindings canonically: each port in
-/// the template's scope, each target in the importer's (`scope`).
-///
-/// A dimension target may also name a prelude dimension.
-fn resolve_include_static_bindings(
-    authored: AuthoredStaticBindings,
-    template: &graphcal_compiler::dag_id::DagId,
-    scope: StaticScope<'_>,
-    src: SourceId,
-    include_span: Span,
-) -> Result<IncludeStaticBindings, PipelineError> {
-    use graphcal_compiler::ir::static_substitution::InstanceIndexBindingTarget;
-    use graphcal_compiler::resolve::symbols::SymbolRef;
-    use graphcal_compiler::syntax::names::NamePath;
+impl IncludeSite<'_> {
+    /// The canonical identity of the Static port `port` the template
+    /// declares.
+    fn port<Ns: graphcal_compiler::resolve::tables::NamespaceTables>(
+        &self,
+        port: &graphcal_compiler::syntax::names::NameDef<Ns>,
+    ) -> Result<graphcal_compiler::resolved_name::ResolvedName<Ns>, PipelineError> {
+        self.importer
+            .resolver()
+            .declaration(self.template, port)
+            .map(graphcal_compiler::resolve::symbols::SymbolRef::into_resolved)
+            .map_err(|error| {
+                PipelineError::Semantic(SemanticError::internal_error(
+                    format!("template port `{port}` has no canonical identity: {error}"),
+                    self.src,
+                    graphcal_compiler::diagnostic_anchor::DiagnosticAnchor::WholeFile,
+                ))
+            })
+    }
+}
 
-    let AuthoredStaticBindings {
-        indexes,
-        index_spans,
-        types,
-        dims,
-    } = authored;
-    let resolver = scope.resolver();
-    let missing_port_internal_error = |kind: &str, port: &dyn std::fmt::Display| {
-        PipelineError::Semantic(SemanticError::internal_error(
-            format!("template {kind} port `{port}` has no canonical identity"),
-            src,
-            graphcal_compiler::diagnostic_anchor::DiagnosticAnchor::WholeFile,
-        ))
-    };
-    let mut bindings = IncludeStaticBindings::default();
-    for (port, authored) in indexes {
-        let span = index_spans.get(&port).copied().unwrap_or(include_span);
-        let identity = resolver
-            .resolve_index_path(template, &NamePath::local(port.atom().clone()))
-            .map(SymbolRef::into_resolved)
-            .map_err(|_| missing_port_internal_error("index", &port))?;
-        let target = match &authored {
+impl StaticBindingResolution for IncludeSite<'_> {
+    fn index(
+        &self,
+        port: &IndexName,
+        authored: &IndexBindingTarget,
+        span: Span,
+    ) -> Result<
+        (
+            graphcal_compiler::resolved_name::ResolvedIndexName,
+            graphcal_compiler::ir::static_substitution::InstanceIndexBindingTarget,
+        ),
+        PipelineError,
+    > {
+        use graphcal_compiler::ir::static_substitution::InstanceIndexBindingTarget;
+
+        let identity = self.port(port)?;
+        let target = match authored {
             IndexBindingTarget::Declared(target) => InstanceIndexBindingTarget::Declared(
-                resolver
-                    .resolve_index_path(scope.owner(), &NamePath::local(target.atom().clone()))
-                    .map(SymbolRef::into_resolved)
+                self.importer
+                    .resolver()
+                    .resolve_index_path(
+                        self.importer.owner(),
+                        &graphcal_compiler::syntax::names::NamePath::local(target.atom().clone()),
+                    )
+                    .map(graphcal_compiler::resolve::symbols::SymbolRef::into_resolved)
                     .map_err(|_| {
                         PipelineError::Semantic(SemanticError::located(
-                            src,
+                            self.src,
                             span,
                             ModuleError::IndexBindingNotAnIndex {
                                 dep_index: port.clone(),
@@ -573,45 +579,60 @@ fn resolve_include_static_bindings(
             ),
             IndexBindingTarget::Finite(finite) => InstanceIndexBindingTarget::Finite(*finite),
         };
-        bindings.indexes.insert(
-            identity,
-            BoundIndexPort {
-                target,
-                authored,
-                span,
-            },
-        );
+        Ok((identity, target))
     }
-    for (port, target) in types {
-        let identity = resolver
-            .resolve_struct_type_path(template, &NamePath::local(port.atom().clone()))
-            .map(SymbolRef::into_resolved)
-            .map_err(|_| missing_port_internal_error("type", &port))?;
-        let target = resolver
-            .resolve_struct_type_path(scope.owner(), &NamePath::local(target.atom().clone()))
-            .map(SymbolRef::into_resolved)
-            .map_err(|error| module_resolve_compile_error(error, src))?;
-        bindings.types.insert(identity, target);
+
+    fn struct_type(
+        &self,
+        port: &StructTypeName,
+        target: &StructTypeName,
+    ) -> Result<
+        (
+            graphcal_compiler::resolved_name::ResolvedStructTypeName,
+            graphcal_compiler::resolved_name::ResolvedStructTypeName,
+        ),
+        PipelineError,
+    > {
+        let identity = self.port(port)?;
+        let target = self
+            .importer
+            .resolver()
+            .resolve_struct_type_path(
+                self.importer.owner(),
+                &graphcal_compiler::syntax::names::NamePath::local(target.atom().clone()),
+            )
+            .map(graphcal_compiler::resolve::symbols::SymbolRef::into_resolved)
+            .map_err(|error| module_resolve_compile_error(error, self.src))?;
+        Ok((identity, target))
     }
-    let prelude = graphcal_compiler::resolve::prelude::prelude_type_scope();
-    for (port, target) in dims {
-        let identity = resolver
-            .resolve_dimension_path(template, &NamePath::local(port.atom().clone()))
-            .map(SymbolRef::into_resolved)
-            .map_err(|_| missing_port_internal_error("dimension", &port))?;
-        let path = NamePath::local(target.atom().clone());
-        let target = match resolver
-            .resolve_dimension_path(scope.owner(), &path)
-            .map(SymbolRef::into_resolved)
+
+    /// A dimension target may also name a prelude dimension.
+    fn dimension(
+        &self,
+        port: &DimName,
+        target: &DimName,
+    ) -> Result<
+        (
+            graphcal_compiler::resolved_name::ResolvedDimName,
+            graphcal_compiler::resolved_name::ResolvedDimName,
+        ),
+        PipelineError,
+    > {
+        let identity = self.port(port)?;
+        let path = graphcal_compiler::syntax::names::NamePath::local(target.atom().clone());
+        let target = match self
+            .importer
+            .resolver()
+            .resolve_dimension_path(self.importer.owner(), &path)
+            .map(graphcal_compiler::resolve::symbols::SymbolRef::into_resolved)
         {
             Ok(identity) => identity,
-            Err(error) => prelude
+            Err(error) => graphcal_compiler::resolve::prelude::prelude_type_scope()
                 .resolve_dimension_path(&path)
-                .ok_or_else(|| module_resolve_compile_error(error, src))?,
+                .ok_or_else(|| module_resolve_compile_error(error, self.src))?,
         };
-        bindings.dimensions.insert(identity, target);
+        Ok((identity, target))
     }
-    Ok(bindings)
 }
 
 /// Route each binding through the namespace/category selected by its authored
@@ -795,48 +816,6 @@ fn record_unit_projection(
             alias: UnitName::classify(import_item.local_name_atom().clone()),
         });
     }
-}
-
-fn validate_required_static_bindings(
-    dep: &ModuleInterface,
-    type_bindings: &HashMap<StructTypeName, StructTypeName>,
-    dim_bindings: &HashMap<DimName, DimName>,
-    index_bindings: &HashMap<IndexName, IndexBindingTarget>,
-    file_src: SourceId,
-    include_span: Span,
-) -> Result<(), PipelineError> {
-    let mut missing = dep
-        .static_declarations()
-        .filter(|(kind, name, role)| {
-            role.is_required()
-                && !match kind {
-                    StaticInputKind::Type => {
-                        type_bindings.contains_key(&StructTypeName::classify((*name).clone()))
-                    }
-                    StaticInputKind::Dimension => {
-                        dim_bindings.contains_key(&DimName::classify((*name).clone()))
-                    }
-                    StaticInputKind::Index => {
-                        index_bindings.contains_key(&IndexName::classify((*name).clone()))
-                    }
-                }
-        })
-        .map(|(kind, name, _)| (kind, name.clone()))
-        .collect::<Vec<_>>();
-    missing.sort_by(|(first_kind, first_name), (second_kind, second_name)| {
-        first_kind
-            .marker()
-            .cmp(second_kind.marker())
-            .then_with(|| first_name.cmp(second_name))
-    });
-    let Some((kind, name)) = missing.into_iter().next() else {
-        return Ok(());
-    };
-    Err(PipelineError::Semantic(SemanticError::located(
-        file_src,
-        include_span,
-        IndexError::RequiredStaticInputNotBound { kind, name },
-    )))
 }
 
 pub(super) fn validate_direct_dag_call_bindings(
@@ -1089,25 +1068,22 @@ pub(super) fn process_file_include<'a>(
     };
     let surface_outputs = include_surface_outputs(dep, &instance_scope, selective_names.as_deref());
 
-    validate_required_static_bindings(
+    let covered_static_bindings = CoveredStaticBindings::check(
         dep,
-        &type_bindings,
-        &dim_bindings,
-        &index_bindings,
+        index_bindings,
+        index_binding_spans,
+        type_bindings,
+        dim_bindings,
         file_src,
         include_decl.path.span(),
     )?;
     validate_required_param_bindings(dep, &bindings, &dep_path_display, file_src, decl.span)?;
-    let static_bindings = resolve_include_static_bindings(
-        AuthoredStaticBindings {
-            indexes: index_bindings,
-            index_spans: index_binding_spans,
-            types: type_bindings,
-            dims: dim_bindings,
+    let static_bindings = covered_static_bindings.resolve(
+        &IncludeSite {
+            template: import_dag_id,
+            importer: importer_scope,
+            src: file_src,
         },
-        import_dag_id,
-        importer_scope,
-        file_src,
         decl.span,
     )?;
 
@@ -1323,25 +1299,22 @@ pub(super) fn process_inline_dag_include<'a>(
     };
     let surface_outputs = include_surface_outputs(dep, &instance_scope, selective_names.as_deref());
 
-    validate_required_static_bindings(
+    let covered_static_bindings = CoveredStaticBindings::check(
         dep,
-        &type_bindings,
-        &dim_bindings,
-        &index_bindings,
+        index_bindings,
+        index_binding_spans,
+        type_bindings,
+        dim_bindings,
         file_src,
         include_decl.path.span(),
     )?;
     validate_required_param_bindings(dep, &bindings, &dag_reference, file_src, decl.span)?;
-    let static_bindings = resolve_include_static_bindings(
-        AuthoredStaticBindings {
-            indexes: index_bindings,
-            index_spans: index_binding_spans,
-            types: type_bindings,
-            dims: dim_bindings,
+    let static_bindings = covered_static_bindings.resolve(
+        &IncludeSite {
+            template: dag_id,
+            importer: importer_scope,
+            src: file_src,
         },
-        dag_id,
-        importer_scope,
-        file_src,
         decl.span,
     )?;
 

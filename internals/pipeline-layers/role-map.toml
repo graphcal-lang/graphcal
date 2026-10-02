@@ -2588,6 +2588,11 @@ role = "checking"
 
 [[module]]
 package = "project"
+path = ["project_compiler", "include_static_bindings"]
+role = "contracts"
+
+[[module]]
+package = "project"
 path = ["project_compiler", "including_module"]
 role = "checking"
 

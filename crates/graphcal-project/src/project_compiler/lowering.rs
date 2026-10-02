@@ -30,9 +30,10 @@ use super::imports;
 use super::module_resolve_errors::module_resolve_compile_error;
 use crate::compile_error::PipelineError;
 
+use super::include_static_bindings::IncludeStaticBindings;
 use super::model::{
-    HirFile, ImportAlias, ImportContext, IncludeInstanceRequest, IncludeStaticBindings,
-    ModuleArtifactStore, ProjectModuleBinding,
+    HirFile, ImportAlias, ImportContext, IncludeInstanceRequest, ModuleArtifactStore,
+    ProjectModuleBinding,
 };
 use super::template::{ElaboratedModuleTemplate, ModuleTemplateStore};
 use graphcal_compiler::desugar::desugared_ast::{DeclKind, Declaration, Expr, ExprKind, GraphRef};
@@ -1178,7 +1179,7 @@ fn elaborate_include_instances(
             body_decls_for_aliases,
             StaticScope::new(&dep_resolution_owner, module_resolver),
             &instance.pub_reexport_items,
-            &static_substitution,
+            &instance.static_bindings,
             &IncludingModule {
                 interface: importer.interface(),
                 source: importer_src,
@@ -1242,7 +1243,7 @@ fn validate_index_binding_contracts(
     use graphcal_compiler::ir::static_substitution::InstanceIndexBindingTarget;
     use graphcal_compiler::semantic::index_def::IndexBindingContractError;
 
-    for (port, site) in &bindings.indexes {
+    for (port, site) in bindings.indexes() {
         let candidate = match &site.target {
             InstanceIndexBindingTarget::Declared(identity) => definitions.index(identity)?,
             InstanceIndexBindingTarget::Finite(finite) => {
@@ -1253,7 +1254,7 @@ fn validate_index_binding_contracts(
             definitions,
             sites,
             port,
-            &bindings.dimensions,
+            bindings.dimensions(),
             site.span,
         )?;
         let dep_index = port.to_unowned_def_name();

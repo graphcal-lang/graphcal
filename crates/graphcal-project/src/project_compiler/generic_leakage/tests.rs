@@ -1,7 +1,9 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use graphcal_compiler::ir::module_interface::ModuleInterface;
 
+use super::super::include_static_bindings::{CoveredStaticBindings, StaticBindingResolution};
 use super::*;
 use crate::compile_error::PipelineError;
 
@@ -37,6 +39,67 @@ fn resolver(
         .unwrap()
 }
 
+/// The resolution of an include that binds nothing.
+struct NothingBound;
+
+impl StaticBindingResolution for NothingBound {
+    fn index(
+        &self,
+        port: &graphcal_compiler::syntax::index_name::IndexName,
+        _: &graphcal_compiler::semantic::index_def::IndexBindingTarget,
+        _: Span,
+    ) -> Result<
+        (
+            graphcal_compiler::resolved_name::ResolvedIndexName,
+            InstanceIndexBindingTarget,
+        ),
+        PipelineError,
+    > {
+        panic!("unexpected index binding {port}")
+    }
+
+    fn struct_type(
+        &self,
+        port: &graphcal_compiler::syntax::type_name::StructTypeName,
+        _: &graphcal_compiler::syntax::type_name::StructTypeName,
+    ) -> Result<
+        (
+            graphcal_compiler::resolved_name::ResolvedStructTypeName,
+            graphcal_compiler::resolved_name::ResolvedStructTypeName,
+        ),
+        PipelineError,
+    > {
+        panic!("unexpected type binding {port}")
+    }
+
+    fn dimension(
+        &self,
+        port: &graphcal_compiler::syntax::dimension::DimName,
+        _: &graphcal_compiler::syntax::dimension::DimName,
+    ) -> Result<
+        (
+            graphcal_compiler::resolved_name::ResolvedDimName,
+            graphcal_compiler::resolved_name::ResolvedDimName,
+        ),
+        PipelineError,
+    > {
+        panic!("unexpected dimension binding {port}")
+    }
+}
+
+/// The Static bindings of an include that binds nothing.
+fn unbound(dependency: &ModuleInterface) -> Result<CoveredStaticBindings, PipelineError> {
+    CoveredStaticBindings::check(
+        dependency,
+        HashMap::new(),
+        HashMap::new(),
+        HashMap::new(),
+        HashMap::new(),
+        source(),
+        Span::new(0, 0),
+    )
+}
+
 #[test]
 fn unsubstituted_dependency_name_is_not_probed_in_the_importer() {
     let declarations = parse_declarations(
@@ -49,11 +112,15 @@ fn unsubstituted_dependency_name_is_not_probed_in_the_importer() {
     let resolver = resolver(&declarations);
     let owner = dependency();
     let importer_owner = importer();
+    let bindings = unbound(&ModuleInterface::new(&declarations))
+        .unwrap()
+        .resolve(&NothingBound, Span::new(0, 0))
+        .unwrap();
     check_generics_leakage(
         &declarations,
         StaticScope::new(&owner, &resolver),
         &reexports,
-        &StaticSubstitution::default(),
+        &bindings,
         &IncludingModule {
             interface: &importer_interface,
             source: source(),
@@ -65,36 +132,24 @@ fn unsubstituted_dependency_name_is_not_probed_in_the_importer() {
 }
 
 #[test]
-fn missing_required_substitution_is_an_internal_error() {
+fn bindings_leaving_a_required_port_unbound_are_rejected_before_leakage_analysis() {
     let declarations =
         parse_declarations("pub(bind) type Element; node output: Element = Missing;");
-    let reexports = HashSet::from([NameAtom::parse("output").unwrap()]);
-
-    let resolver = resolver(&declarations);
-    let owner = dependency();
-    let importer_owner = importer();
-    let error = check_generics_leakage(
-        &declarations,
-        StaticScope::new(&owner, &resolver),
-        &reexports,
-        &StaticSubstitution::default(),
-        &IncludingModule {
-            interface: &ModuleInterface::default(),
-            source: source(),
-            scope: StaticScope::new(&importer_owner, &resolver),
-        },
-        Span::new(0, 0),
-    )
-    .unwrap_err();
+    let error = unbound(&ModuleInterface::new(&declarations)).unwrap_err();
 
     match error {
-        PipelineError::Semantic(SemanticError::Internal(internal)) => assert!(
-            internal.message().contains(
-                "required type binding `Element` is absent during generic-leakage analysis"
+        PipelineError::Semantic(SemanticError::Located(diagnostic)) => assert!(
+            matches!(
+                diagnostic.kind,
+                graphcal_compiler::semantic_error::SemanticErrorKind::Index(
+                    graphcal_compiler::semantic_error::index::IndexError::RequiredStaticInputNotBound {
+                        kind: graphcal_compiler::static_interface::StaticInputKind::Type,
+                        ..
+                    }
+                )
             ),
-            "{}",
-            internal.message()
+            "{diagnostic:?}"
         ),
-        other => panic!("expected internal error, got {other:?}"),
+        other => panic!("expected I010, got {other:?}"),
     }
 }
