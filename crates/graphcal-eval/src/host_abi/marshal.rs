@@ -382,12 +382,7 @@ impl<'s> HostArguments<'s> {
                 }?;
                 Ok(RuntimeValue::Indexed(indexed))
             }
-            ValidatedHostResult::Struct(fields) => {
-                let ResultKind::Struct(record) = result else {
-                    return Err(
-                        Invariant::violated("decoded a struct for a non-struct result").into(),
-                    );
-                };
+            ValidatedHostResult::Struct { record, fields } => {
                 let fields = fields.iter().map(|field| {
                     let value = match field.value() {
                         ValidatedHostFieldValue::Bool(value) => RuntimeValue::Bool(*value),

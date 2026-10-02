@@ -8,6 +8,7 @@
 use crate::semantic_error::dimension_mismatch::{MismatchOperand, MismatchRule};
 use std::collections::HashMap;
 
+use crate::builtin::{BuiltinArity, BuiltinFn};
 use crate::diagnostic_anchor::DiagnosticAnchor;
 use crate::dimension::Dimension;
 use crate::display::formatting_registry::FormattingRegistry;
@@ -18,40 +19,94 @@ use crate::semantic_error::name::NameError;
 use crate::source_id::SourceId;
 use crate::syntax::span::{Span, Spanned};
 
-/// Check quantity argument dimensions against `sig` and compute the result
-/// dimension.
+/// The arguments of a built-in call, whose count [`ArityChecked::check`]
+/// matched against the function's static entry.
+///
+/// This is the only arity check of a built-in call: it runs once, before any
+/// argument is inferred, and every later reading of the arguments relies on
+/// the count it accepted.
+#[derive(Debug)]
+pub(super) struct ArityChecked<T> {
+    function: BuiltinFn,
+    args: Vec<T>,
+}
+
+impl<T> ArityChecked<T> {
+    /// The arguments `args` of a call of `function`, whose callee spans
+    /// `span`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a wrong-arity diagnostic when `function`'s entry does not
+    /// accept as many arguments.
+    pub(super) fn check(
+        function: BuiltinFn,
+        args: Vec<T>,
+        span: Span,
+        src: SourceId,
+    ) -> Result<Self, SemanticError> {
+        let got = args.len();
+        match function.entry().arity() {
+            BuiltinArity::Exact(expected) if got != expected => Err(SemanticError::located(
+                src,
+                span,
+                NameError::WrongArity {
+                    name: crate::semantic_error::name::CalledFunction::Builtin(function),
+                    expected,
+                    got,
+                },
+            )),
+            arity @ BuiltinArity::OptionalTrailing { .. } if !arity.accepts(got) => {
+                Err(SemanticError::located(
+                    src,
+                    span,
+                    NameError::WrongOptionalArity {
+                        function,
+                        arity,
+                        got,
+                    },
+                ))
+            }
+            BuiltinArity::Exact(_) | BuiltinArity::OptionalTrailing { .. } => {
+                Ok(Self { function, args })
+            }
+        }
+    }
+
+    /// The called function.
+    pub(super) const fn function(&self) -> BuiltinFn {
+        self.function
+    }
+
+    /// The arguments, each read by `read`; the count is kept.
+    pub(super) fn try_map<U, E>(
+        self,
+        read: impl FnMut(T) -> Result<U, E>,
+    ) -> Result<ArityChecked<U>, E> {
+        Ok(ArityChecked {
+            function: self.function,
+            args: self.args.into_iter().map(read).collect::<Result<_, _>>()?,
+        })
+    }
+}
+
+/// Check quantity argument dimensions against `sig`, the quantity signature
+/// of the called scalar function, and compute the result dimension.
 ///
 /// Arguments are quantity dimensions; callers verify non-quantity scalar kinds
-/// before reaching this walk. Scalar built-in signatures are all-quantity by
-/// type, so built-in inference calls this directly.
+/// before reaching this walk. A scalar function's signature has the arity of
+/// its static entry, which [`ArityChecked`] matched.
 pub(super) fn infer_fn_dim(
-    function: crate::builtin::BuiltinFn,
     sig: &QuantitySignature,
-    args: &[Spanned<Dimension>],
+    args: &ArityChecked<Spanned<Dimension>>,
     call_span: Span,
     registry: &FormattingRegistry,
     src: SourceId,
 ) -> Result<Dimension, SemanticError> {
-    if args.len() != sig.arity() {
-        let error_span = args
-            .get(sig.arity())
-            .or_else(|| args.last())
-            .map_or(call_span, |arg| arg.span);
-        return Err(SemanticError::located(
-            src,
-            error_span,
-            NameError::WrongArity {
-                name: crate::semantic_error::name::CalledFunction::Builtin(function),
-                expected: sig.arity(),
-                got: args.len(),
-            },
-        ));
-    }
-
-    let fn_name = function.as_str();
+    let fn_name = args.function().as_str();
     let mut walk = SignatureDimWalk::new(fn_name, registry, src);
 
-    for (param, arg) in sig.params().iter().zip(args) {
+    for (param, arg) in sig.params().iter().zip(&args.args) {
         walk.check_quantity_param(param.name(), param.monomial(), &arg.value, arg.span)?;
     }
     walk.result(sig.result(), call_span)
@@ -240,32 +295,19 @@ mod tests {
     }
 
     #[test]
-    fn zero_argument_arity_error_uses_the_explicit_call_span() {
-        let signature = QuantitySignature::try_new(FunctionSignature::fixed_to_fixed(
-            FnParamName::expect_valid("value"),
-            Dimension::dimensionless(),
-            Dimension::dimensionless(),
-        ))
-        .unwrap();
-        let registry = crate::display::formatting_registry::FormattingRegistry::new(
-            std::collections::BTreeMap::new(),
-            Vec::new(),
-        );
+    fn calls_are_checked_against_their_entry_arity_once() {
         let source = crate::source_registry::SourceRegistry::new()
             .register("test.gcl", std::sync::Arc::new("f()".to_string()));
+        let sqrt = BuiltinFn::Scalar(crate::builtin::ScalarFn::Sqrt);
         let call_span = Span::new(0, 3);
-
-        let error = infer_fn_dim(
-            crate::builtin::BuiltinFn::Scalar(crate::builtin::ScalarFn::Sqrt),
-            &signature,
-            &[],
-            call_span,
-            &registry,
-            source,
-        )
-        .unwrap_err();
+        let error = ArityChecked::<()>::check(sqrt, Vec::new(), call_span, source).unwrap_err();
         let SemanticError::Located(crate::diagnostic::Diagnostic {
-            kind: SemanticErrorKind::Name(NameError::WrongArity { .. }),
+            kind:
+                SemanticErrorKind::Name(NameError::WrongArity {
+                    expected: 1,
+                    got: 0,
+                    ..
+                }),
             primary: span,
             ..
         }) = error
@@ -273,6 +315,9 @@ mod tests {
             panic!("expected wrong-arity diagnostic");
         };
         assert_eq!(span.offset(), call_span.offset());
-        assert_eq!(span.len(), call_span.len());
+        let checked = ArityChecked::check(sqrt, vec![2], call_span, source).unwrap();
+        let mapped = checked.try_map(|arg| Ok::<_, ()>(arg * 2)).unwrap();
+        assert_eq!(mapped.function(), sqrt);
+        assert_eq!(mapped.args, [4]);
     }
 }

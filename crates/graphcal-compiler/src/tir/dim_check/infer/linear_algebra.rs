@@ -124,7 +124,7 @@ fn reciprocal_dimension(dimension: &Dimension) -> Result<Dimension, LinearAlgebr
 /// registry. It is consulted only by fixed-size operations such as `cross`.
 ///
 /// The caller has already checked `arguments` against the function's static
-/// entry (`check_builtin_arity`), so it holds exactly `function.arity()`
+/// entry (`ArityChecked::check`), so it holds exactly `function.arity()`
 /// types; this rule does not re-check the count.
 pub(super) fn infer_linear_algebra_type(
     function: LinearAlgebraFn,

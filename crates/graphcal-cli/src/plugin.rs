@@ -904,7 +904,7 @@ pub fn render_result(signature: &FunctionSignature, value: &HostFnValue) -> Resu
                 render_dense_array(array.shape(), values, ToString::to_string)
             }
         },
-        ValidatedHostResult::Struct(fields) => {
+        ValidatedHostResult::Struct { fields, .. } => {
             let fields = fields
                 .iter()
                 .map(|field| {
