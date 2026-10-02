@@ -18,9 +18,6 @@ pub enum EvaluationError {
     /// static checking error; evaluator boundaries retain the typed reason.
     #[error("{reason}")]
     Unavailable { reason: NodeUnavailable },
-    /// An evaluation failure described only by its message.
-    #[error("{message}")]
-    Failed { message: String },
     /// A failure the evaluator reported at runtime, kept as its typed error.
     #[error("{0}")]
     Runtime(EvaluatorFailure),
@@ -64,14 +61,14 @@ impl DiagnosticKind for EvaluationError {
     fn code(&self) -> &'static str {
         match self {
             Self::Unavailable { .. } => "graphcal::E050",
-            Self::Failed { .. } | Self::Runtime(_) => "graphcal::E001",
+            Self::Runtime(_) => "graphcal::E001",
         }
     }
 
     fn primary_label(&self) -> Option<String> {
         match self {
             Self::Unavailable { .. } => Some("value unavailable here".to_owned()),
-            Self::Failed { .. } | Self::Runtime(_) => Some("error here".to_owned()),
+            Self::Runtime(_) => Some("error here".to_owned()),
         }
     }
 }

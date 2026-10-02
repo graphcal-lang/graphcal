@@ -101,12 +101,6 @@ pub fn eval_failed_node_error(error: &SemanticError) -> NodeUnavailable {
             kind: SemanticErrorKind::Evaluation(EvaluationError::Unavailable { reason, .. }),
             ..
         }) => reason.clone(),
-        SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
-            kind: SemanticErrorKind::Evaluation(EvaluationError::Failed { message, .. }),
-            ..
-        }) => NodeUnavailable::EvalFailed {
-            message: message.clone(),
-        },
         other => NodeUnavailable::EvalFailed {
             message: other.to_string(),
         },

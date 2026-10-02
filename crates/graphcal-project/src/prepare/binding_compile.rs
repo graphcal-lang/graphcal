@@ -646,7 +646,7 @@ impl ParameterBindingBuilder<'_> {
                     self.project
                         .port_error(port, |name, src, span| BindingError::DomainViolation {
                             name,
-                            violation: violation.to_string(),
+                            violation,
                             src,
                             span,
                         })

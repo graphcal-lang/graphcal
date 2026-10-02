@@ -9,6 +9,7 @@ use thiserror::Error;
 use graphcal_compiler::declaration_category::DeclCategory;
 use graphcal_compiler::hir::closed_expr::ClosedExpressionError;
 use graphcal_compiler::semantic::checked_type::{IndexTypeRef, TypeSpelling};
+use graphcal_compiler::semantic_error::domain::DomainViolationDetail;
 use graphcal_compiler::syntax::decl_name::DeclName;
 use graphcal_compiler::syntax::index_name::IndexVariantName;
 
@@ -141,8 +142,8 @@ pub enum BindingError {
     #[diagnostic(code(graphcal::O010))]
     DomainViolation {
         name: DeclName,
-        /// The domain checker's description of the violated bound.
-        violation: String,
+        /// The violated bound, at the indexed entry it is found in.
+        violation: DomainViolationDetail,
         #[source_code]
         src: NamedSource<Arc<String>>,
         #[label("value for `{name}` is out of its declared domain")]

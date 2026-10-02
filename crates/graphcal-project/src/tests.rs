@@ -3939,7 +3939,16 @@ fn rejected_expression_bindings_report_typed_binding_errors() {
 
     let error = bind("d", "-1.0 m");
     assert!(
-        matches!(&error, CompileError::Binding(BindingError::DomainViolation { name, .. }) if name.as_str() == "d"),
+        matches!(
+            &error,
+            CompileError::Binding(BindingError::DomainViolation { name, violation, .. })
+                if name.as_str() == "d"
+                    && violation.entries().is_empty()
+                    && matches!(
+                        violation.bound(),
+                        graphcal_compiler::semantic_error::domain::DomainBoundViolation::BelowMinimum(_)
+                    )
+        ),
         "{error:?}"
     );
     assert_eq!(error.to_string(), "below minimum (0 m)");
