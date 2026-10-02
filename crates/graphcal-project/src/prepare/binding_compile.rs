@@ -1,8 +1,9 @@
 //! Prepared-parameter binding compilation and row construction.
 
-use crate::binding_error::BindingError;
+use crate::binding_error::{BindingError, BindingLiteralError, BindingValueKind};
 
-use graphcal_compiler::semantic_error::evaluation::EvaluationError;
+use std::sync::Arc;
+
 use graphcal_compiler::syntax::ast::{
     FieldInit, GenericArg, Ident, IdentPath, MapEntry, MapEntryKey,
 };
@@ -11,6 +12,9 @@ use graphcal_compiler::syntax::non_empty::NonEmpty;
 use graphcal_compiler::syntax::phase::Desugared;
 use graphcal_compiler::syntax::span::Spanned;
 use graphcal_compiler::syntax::token::SourceIdentifier;
+use graphcal_compiler::syntax::token::SourceIdentifierError;
+use graphcal_compiler::syntax::type_name::ConstructorName;
+use miette::{NamedSource, SourceSpan};
 
 use super::{
     AstExprKind, CheckedEntryInterface, CompileError, DeclName, DiagnosticAnchor, EvalSession,
@@ -44,11 +48,12 @@ pub enum StructuredBindingPathSegment {
     Entry(usize),
 }
 
+/// A structured editor value rejected at a typed address.
 #[derive(Debug, thiserror::Error)]
-#[error("{message}")]
+#[error("{kind}")]
 pub struct StructuredBindingError {
     path: Vec<StructuredBindingPathSegment>,
-    message: String,
+    kind: StructuredBindingErrorKind,
 }
 
 impl StructuredBindingError {
@@ -56,16 +61,73 @@ impl StructuredBindingError {
     pub fn path(&self) -> &[StructuredBindingPathSegment] {
         &self.path
     }
+
+    #[must_use]
+    pub const fn kind(&self) -> &StructuredBindingErrorKind {
+        &self.kind
+    }
+}
+
+/// Why a structured editor value was rejected.
+#[derive(Debug, thiserror::Error)]
+pub enum StructuredBindingErrorKind {
+    #[error("expected an algebraic constructor value")]
+    ExpectedAlgebraic,
+    #[error("expected a complete indexed value")]
+    ExpectedIndexed,
+    #[error("unexpected algebraic value")]
+    UnexpectedAlgebraic,
+    #[error("unexpected indexed value")]
+    UnexpectedIndexed,
+    #[error("missing expected algebraic schema")]
+    MissingAlgebraicSchema,
+    #[error("constructor belongs to a different algebraic type")]
+    ForeignConstructor,
+    #[error("unknown constructor")]
+    UnknownConstructor,
+    #[error("constructor `{constructor}` expects {expected} fields, received {received}")]
+    FieldCount {
+        constructor: ConstructorName,
+        expected: usize,
+        received: usize,
+    },
+    #[error("constructor `{constructor}` {reason}")]
+    ConstructorSpelling {
+        constructor: ConstructorName,
+        reason: SourceIdentifierError,
+    },
+    #[error("indexed value expects {expected} entries, received {received}")]
+    EntryCount { expected: usize, received: usize },
+    #[error("finite index cardinality is too large")]
+    CardinalityTooLarge,
+    #[error("indexed entry position is too large")]
+    EntryPositionTooLarge,
+    #[error("indexed axis is not visible at the boundary")]
+    AxisNotVisible,
+    /// A coordinate axis has neither variant names nor a `Fin(N)`
+    /// cardinality, so no source map key can address its entries.
+    #[error("coordinate-indexed values cannot be bound entry by entry")]
+    CoordinateEntries,
+    /// A literal leaf or the assembled value failed compilation.
+    #[error(transparent)]
+    Compile(Box<CompileError>),
 }
 
 fn structured_error(
     path: &[StructuredBindingPathSegment],
-    message: impl Into<String>,
+    kind: StructuredBindingErrorKind,
 ) -> StructuredBindingError {
     StructuredBindingError {
         path: path.to_vec(),
-        message: message.into(),
+        kind,
     }
+}
+
+fn structured_compile_error(
+    path: &[StructuredBindingPathSegment],
+    error: CompileError,
+) -> StructuredBindingError {
+    structured_error(path, StructuredBindingErrorKind::Compile(Box::new(error)))
 }
 
 impl PreparedProject {
@@ -87,17 +149,13 @@ impl PreparedProject {
         let port = self.port_at(position)?;
         let normalized =
             normalize_binding_literal(expr.clone(), &port.value_schema, &self.schema_graph)
-                .map_err(|message| {
-                    CompileError::semantic(
-                        SemanticError::located(
-                            self.source,
-                            expr.span,
-                            EvaluationError::Failed {
-                                message: format!("invalid binding for `{}`: {message}", port.name),
-                            },
-                        ),
-                        &self.sources,
-                    )
+                .map_err(|reason| {
+                    self.value_error(expr.span, |src, span| BindingError::InvalidLiteral {
+                        name: port.name.clone(),
+                        reason,
+                        src,
+                        span,
+                    })
                 })?;
         let tree = self.check_closed_binding(port, &normalized)?;
         Ok(ParameterValue {
@@ -126,19 +184,21 @@ impl PreparedProject {
     ) -> Result<ParameterValue, StructuredBindingError> {
         let port = self
             .port_at(position)
-            .map_err(|error| structured_error(&[], error.to_string()))?;
+            .map_err(|error| structured_compile_error(&[], error))?;
         let expr = self.structured_binding_expr(
+            &port.name,
             value,
             &port.value_schema,
             self.tir().root_dag_id(),
             &mut Vec::new(),
         )?;
         self.compile_parameter_value(position, &expr)
-            .map_err(|error| structured_error(&[], error.to_string()))
+            .map_err(|error| structured_compile_error(&[], error))
     }
 
     fn structured_binding_expr(
         &self,
+        name: &DeclName,
         value: &StructuredValueExpr,
         expected: &ModelValueSchema,
         owner: &graphcal_compiler::dag_id::DagId,
@@ -146,13 +206,13 @@ impl PreparedProject {
     ) -> Result<Expr, StructuredBindingError> {
         match (value, expected) {
             (StructuredValueExpr::Literal(_), ModelValueSchema::Algebraic(_)) => Err(
-                structured_error(path, "expected an algebraic constructor value"),
+                structured_error(path, StructuredBindingErrorKind::ExpectedAlgebraic),
             ),
-            (StructuredValueExpr::Literal(_), ModelValueSchema::Indexed { .. }) => {
-                Err(structured_error(path, "expected a complete indexed value"))
-            }
+            (StructuredValueExpr::Literal(_), ModelValueSchema::Indexed { .. }) => Err(
+                structured_error(path, StructuredBindingErrorKind::ExpectedIndexed),
+            ),
             (StructuredValueExpr::Literal(expr), _) => {
-                self.structured_literal_expr(expr, expected, owner, path)
+                self.structured_literal_expr(name, expr, expected, owner, path)
             }
             (
                 StructuredValueExpr::Algebraic {
@@ -161,86 +221,112 @@ impl PreparedProject {
                     fields,
                 },
                 ModelValueSchema::Algebraic(expected_id),
-            ) => {
-                self.structured_algebraic_expr(*definition, *constructor, fields, expected_id, path)
-            }
+            ) => self.structured_algebraic_expr(
+                name,
+                *definition,
+                *constructor,
+                fields,
+                expected_id,
+                path,
+            ),
             (
                 StructuredValueExpr::Indexed { entries },
                 ModelValueSchema::Indexed { element, axis },
-            ) => self.structured_indexed_expr(entries, element, axis, owner, path),
-            (StructuredValueExpr::Algebraic { .. }, _) => {
-                Err(structured_error(path, "unexpected algebraic value"))
-            }
-            (StructuredValueExpr::Indexed { .. }, _) => {
-                Err(structured_error(path, "unexpected indexed value"))
-            }
+            ) => self.structured_indexed_expr(name, entries, element, axis, owner, path),
+            (StructuredValueExpr::Algebraic { .. }, _) => Err(structured_error(
+                path,
+                StructuredBindingErrorKind::UnexpectedAlgebraic,
+            )),
+            (StructuredValueExpr::Indexed { .. }, _) => Err(structured_error(
+                path,
+                StructuredBindingErrorKind::UnexpectedIndexed,
+            )),
         }
     }
 
     fn structured_literal_expr(
         &self,
+        name: &DeclName,
         expr: &Expr,
         expected: &ModelValueSchema,
         owner: &graphcal_compiler::dag_id::DagId,
         path: &[StructuredBindingPathSegment],
     ) -> Result<Expr, StructuredBindingError> {
         let normalized = normalize_binding_literal(expr.clone(), expected, &self.schema_graph)
-            .map_err(|message| structured_error(path, message))?;
+            .map_err(|reason| {
+                structured_compile_error(
+                    path,
+                    self.value_error(expr.span, |src, span| BindingError::InvalidLiteral {
+                        name: name.clone(),
+                        reason,
+                        src,
+                        span,
+                    }),
+                )
+            })?;
         let hir = self
-            .lower_closed_binding_expr(&normalized, expected, owner)
-            .map_err(|error| structured_error(path, error.to_string()))?;
-        let hir = graphcal_compiler::hir::closed_expr::ClosedExpr::try_new(hir)
-            .map_err(|message| structured_error(path, message.to_string()))?;
+            .lower_closed_binding_expr(name, &normalized, expected, owner)
+            .map_err(|error| structured_compile_error(path, error))?;
+        let hir = self
+            .closed_binding(name, hir)
+            .map_err(|error| structured_compile_error(path, error))?;
         graphcal_compiler::tir::dim_check::check_external_value_expr_type(
             self.tir(),
             &hir,
             &expected.declared_type(),
             self.source,
         )
-        .map_err(|error| structured_error(path, error.to_string()))?;
+        .map_err(|error| structured_compile_error(path, self.render(error)))?;
         Ok(normalized)
     }
 
     fn structured_algebraic_expr(
         &self,
+        name: &DeclName,
         definition_index: usize,
         constructor_index: usize,
         fields: &[StructuredValueExpr],
         expected_id: &ModelTypeId,
         path: &mut Vec<StructuredBindingPathSegment>,
     ) -> Result<Expr, StructuredBindingError> {
-        let expected_definition = self
-            .schema_graph
-            .definition_index(expected_id)
-            .ok_or_else(|| structured_error(path, "missing expected algebraic schema"))?;
+        let expected_definition =
+            self.schema_graph
+                .definition_index(expected_id)
+                .ok_or_else(|| {
+                    structured_error(path, StructuredBindingErrorKind::MissingAlgebraicSchema)
+                })?;
         if definition_index != expected_definition {
             return Err(structured_error(
                 path,
-                "constructor belongs to a different algebraic type",
+                StructuredBindingErrorKind::ForeignConstructor,
             ));
         }
         let constructor = self
             .schema_graph
             .definition_at(definition_index)
             .and_then(|definition| definition.constructors().get(constructor_index))
-            .ok_or_else(|| structured_error(path, "unknown constructor"))?;
+            .ok_or_else(|| {
+                structured_error(path, StructuredBindingErrorKind::UnknownConstructor)
+            })?;
         if fields.len() != constructor.fields().len() {
             return Err(structured_error(
                 path,
-                format!(
-                    "constructor `{}` expects {} fields, received {}",
-                    constructor.name(),
-                    constructor.fields().len(),
-                    fields.len()
-                ),
+                StructuredBindingErrorKind::FieldCount {
+                    constructor: constructor.name().clone(),
+                    expected: constructor.fields().len(),
+                    received: fields.len(),
+                },
             ));
         }
         // Canonical constructor names are declared in source, so they always
         // occupy a source identifier position.
-        let callee = SourceIdentifier::parse(constructor.name().as_str()).map_err(|error| {
+        let callee = SourceIdentifier::parse(constructor.name().as_str()).map_err(|reason| {
             structured_error(
                 path,
-                format!("constructor `{}` {error}", constructor.name()),
+                StructuredBindingErrorKind::ConstructorSpelling {
+                    constructor: constructor.name().clone(),
+                    reason,
+                },
             )
         })?;
         let span = Span::new(0, 0);
@@ -251,7 +337,7 @@ impl PreparedProject {
             .enumerate()
             .map(|(index, (value, schema))| {
                 path.push(StructuredBindingPathSegment::Field(index));
-                let value = self.structured_binding_expr(value, schema.value(), owner, path);
+                let value = self.structured_binding_expr(name, value, schema.value(), owner, path);
                 path.pop();
                 value.map(|value| FieldInit {
                     name: Spanned::new(schema.name().clone(), span),
@@ -271,6 +357,7 @@ impl PreparedProject {
 
     fn structured_indexed_expr(
         &self,
+        name: &DeclName,
         entries: &[StructuredValueExpr],
         element: &ModelValueSchema,
         axis: &ModelIndexSchema,
@@ -285,10 +372,10 @@ impl PreparedProject {
         if entries.len() != expected_count {
             return Err(structured_error(
                 path,
-                format!(
-                    "indexed value expects {expected_count} entries, received {}",
-                    entries.len()
-                ),
+                StructuredBindingErrorKind::EntryCount {
+                    expected: expected_count,
+                    received: entries.len(),
+                },
             ));
         }
         let span = Span::new(0, 0);
@@ -297,7 +384,7 @@ impl PreparedProject {
             .enumerate()
             .map(|(index, entry)| {
                 path.push(StructuredBindingPathSegment::Entry(index));
-                let value = self.structured_binding_expr(entry, element, owner, path);
+                let value = self.structured_binding_expr(name, entry, element, owner, path);
                 path.pop();
                 Ok(MapEntry {
                     keys: NonEmpty::singleton(self.structured_map_key(axis, index, span, path)?),
@@ -318,12 +405,15 @@ impl PreparedProject {
     ) -> Result<MapEntryKey, StructuredBindingError> {
         match axis.kind() {
             ModelIndexKind::Finite { index } => {
-                let cardinality = u64::try_from(index.cardinality().get())
-                    .map_err(|_| structured_error(path, "finite index cardinality is too large"))?;
+                let cardinality = u64::try_from(index.cardinality().get()).map_err(|_| {
+                    structured_error(path, StructuredBindingErrorKind::CardinalityTooLarge)
+                })?;
                 let position = u64::try_from(position)
                     .ok()
                     .and_then(|position| FinPosition::try_new(cardinality, position).ok())
-                    .ok_or_else(|| structured_error(path, "indexed entry position is too large"))?;
+                    .ok_or_else(|| {
+                        structured_error(path, StructuredBindingErrorKind::EntryPositionTooLarge)
+                    })?;
                 Ok(MapEntryKey::Finite {
                     axis_span: span,
                     position: Spanned::new(position, span),
@@ -335,7 +425,7 @@ impl PreparedProject {
                     .declared_resolved()
                     .and_then(|resolved| self.source_index_path(resolved))
                     .ok_or_else(|| {
-                        structured_error(path, "indexed axis is not visible at the boundary")
+                        structured_error(path, StructuredBindingErrorKind::AxisNotVisible)
                     })?;
                 Ok(MapEntryKey::named(
                     Spanned::new(index, span),
@@ -346,7 +436,7 @@ impl PreparedProject {
             // cardinality, so no source map key can address its entries.
             ModelIndexKind::Coordinate { .. } => Err(structured_error(
                 path,
-                "coordinate-indexed values cannot be bound entry by entry",
+                StructuredBindingErrorKind::CoordinateEntries,
             )),
         }
     }
@@ -362,13 +452,13 @@ impl ParameterBindingBuilder<'_> {
         let index = self
             .project
             .parameter_index(name)
-            .map_err(|error| structured_error(&[], error.to_string()))?;
+            .map_err(|error| structured_compile_error(&[], error))?;
         let parameter = self.project.compile_structured_parameter_value(
             self.project.parameter_ports[index].position,
             value,
         )?;
         self.bind_value(parameter)
-            .map_err(|error| structured_error(&[], error.to_string()))
+            .map_err(|error| structured_compile_error(&[], error))
     }
 
     /// Validate required slots and finish this row.
@@ -412,14 +502,20 @@ impl ParameterBindingBuilder<'_> {
             && let Err(violation) =
                 graphcal_eval::domain_check::check_domain_constraint(&binding.value(), constraint)
         {
-            return Err(self.project.binding_value_error(port, &violation.message));
+            return Err(self.project.port_error(port, |name, src, span| {
+                BindingError::DomainViolation {
+                    name,
+                    violation: violation.message,
+                    src,
+                    span,
+                }
+            }));
         }
         let slot = &mut self.slots[position.index];
         if slot.is_some() {
-            return Err(self.project.binding_value_error(
-                port,
-                &format!("parameter `{}` is bound more than once", port.name),
-            ));
+            return Err(self.project.port_error(port, |name, src, span| {
+                BindingError::BoundMoreThanOnce { name, src, span }
+            }));
         }
         *slot = Some(binding);
         Ok(())
@@ -498,25 +594,13 @@ impl PreparedProject {
         graphcal_compiler::tir::typed::ScopedTree<'_, graphcal_compiler::tir::texpr::TExpr>,
         CompileError,
     > {
-        let hir =
-            self.lower_closed_binding_expr(expr, &port.value_schema, self.tir().root_dag_id())?;
-        let span = hir.span;
-        let hir =
-            graphcal_compiler::hir::closed_expr::ClosedExpr::try_new(hir).map_err(|message| {
-                CompileError::semantic(
-                    SemanticError::located(
-                        self.source,
-                        span,
-                        EvaluationError::Failed {
-                            message: format!(
-                                "binding for `{}` is not a closed value: {message}",
-                                port.name
-                            ),
-                        },
-                    ),
-                    &self.sources,
-                )
-            })?;
+        let hir = self.lower_closed_binding_expr(
+            &port.name,
+            expr,
+            &port.value_schema,
+            self.tir().root_dag_id(),
+        )?;
+        let hir = self.closed_binding(&port.name, hir)?;
         graphcal_compiler::tir::dim_check::check_external_value_expr_type(
             self.tir(),
             &hir,
@@ -536,6 +620,7 @@ impl PreparedProject {
     /// switch owners again at each canonical constructor boundary.
     fn lower_closed_binding_expr(
         &self,
+        name: &DeclName,
         expr: &Expr,
         expected: &ModelValueSchema,
         owner: &graphcal_compiler::dag_id::DagId,
@@ -550,6 +635,7 @@ impl PreparedProject {
                 },
                 ModelValueSchema::Algebraic(type_id),
             ) if callee.as_bare().is_some() => self.lower_canonical_constructor_binding(
+                name,
                 CanonicalConstructorCall {
                     expr,
                     callee,
@@ -583,10 +669,25 @@ impl PreparedProject {
                     },
                     expr.span,
                 );
-                self.lower_closed_binding_expr(&constructor_expr, expected, owner)
+                self.lower_closed_binding_expr(name, &constructor_expr, expected, owner)
             }
             (AstExprKind::MapLiteral { entries }, ModelValueSchema::Indexed { .. }) => {
-                self.lower_closed_map_binding(entries, expr.span, expected, owner)
+                self.lower_closed_map_binding(name, entries, expr.span, expected, owner)
+            }
+            // The value's kind is checked before its shape: a map literal for
+            // a non-indexed value is a kind mismatch, not a map to lower.
+            (AstExprKind::MapLiteral { .. }, _) => {
+                Err(
+                    self.value_error(expr.span, |src, span| BindingError::KindMismatch {
+                        name: name.clone(),
+                        actual: BindingValueKind::MapLiteral,
+                        expected: expected
+                            .declared_type()
+                            .spelling(&self.tir().registry().dimensions),
+                        src,
+                        span,
+                    }),
+                )
             }
             _ => self.lower_binding_expr_in_owner(expr, owner),
         }
@@ -594,6 +695,7 @@ impl PreparedProject {
 
     fn lower_canonical_constructor_binding(
         &self,
+        name: &DeclName,
         call: CanonicalConstructorCall<'_>,
         type_id: &ModelTypeId,
         owner: &graphcal_compiler::dag_id::DagId,
@@ -633,6 +735,7 @@ impl PreparedProject {
                         || self.lower_binding_expr_in_owner(&field.value, constructor_owner),
                         |schema| {
                             self.lower_closed_binding_expr(
+                                name,
                                 &field.value,
                                 schema.value(),
                                 constructor_owner,
@@ -657,6 +760,7 @@ impl PreparedProject {
 
     fn lower_closed_map_binding(
         &self,
+        name: &DeclName,
         entries: &[MapEntry<Desugared>],
         span: Span,
         expected: &ModelValueSchema,
@@ -672,19 +776,18 @@ impl PreparedProject {
                     graphcal_compiler::hir::lower_map_entry_keys(entry, span, context)
                 })?;
                 let entry_schema =
-                    map_entry_value_schema(expected, entry.keys.len()).map_err(|message| {
-                        CompileError::semantic(
-                            SemanticError::located(
-                                self.source,
-                                entry.value.span,
-                                EvaluationError::Failed {
-                                    message: format!("invalid external map binding: {message}"),
-                                },
-                            ),
-                            &self.sources,
-                        )
+                    map_entry_value_schema(expected, entry.keys.len()).map_err(|reason| {
+                        self.value_error(entry.value.span, |src, span| {
+                            BindingError::InvalidLiteral {
+                                name: name.clone(),
+                                reason,
+                                src,
+                                span,
+                            }
+                        })
                     })?;
-                let value = self.lower_closed_binding_expr(&entry.value, entry_schema, owner)?;
+                let value =
+                    self.lower_closed_binding_expr(name, &entry.value, entry_schema, owner)?;
                 Ok(graphcal_compiler::hir::expr::MapEntry { keys, value })
             })
             .collect::<Result<Vec<_>, CompileError>>()?;
@@ -758,28 +861,59 @@ impl PreparedProject {
         .map_err(|error| self.render(error))
     }
 
-    pub(super) fn binding_kind_error(&self, port: &ParameterPort, actual: &str) -> CompileError {
-        self.binding_value_error(
-            port,
-            &format!(
-                "cannot bind {actual} to `{}` of type `{}`",
-                port.name,
-                port.declared_type.format(&self.tir().registry().dimensions)
-            ),
-        )
+    pub(super) fn binding_kind_error(
+        &self,
+        port: &ParameterPort,
+        actual: BindingValueKind,
+    ) -> CompileError {
+        self.port_error(port, |name, src, span| BindingError::KindMismatch {
+            name,
+            actual,
+            expected: port
+                .declared_type
+                .spelling(&self.tir().registry().dimensions),
+            src,
+            span,
+        })
     }
 
-    pub(super) fn binding_value_error(&self, port: &ParameterPort, message: &str) -> CompileError {
-        CompileError::semantic(
-            SemanticError::located(
-                self.source,
-                port.span,
-                EvaluationError::Failed {
-                    message: message.to_string(),
-                },
-            ),
-            &self.sources,
-        )
+    /// A binding error located at the declaration of `port`.
+    pub(super) fn port_error(
+        &self,
+        port: &ParameterPort,
+        error: impl FnOnce(DeclName, NamedSource<Arc<String>>, SourceSpan) -> BindingError,
+    ) -> CompileError {
+        CompileError::Binding(error(
+            port.name.clone(),
+            self.sources.renderable(self.source),
+            port.span.into(),
+        ))
+    }
+
+    /// A binding error located in the bound value expression.
+    fn value_error(
+        &self,
+        span: Span,
+        error: impl FnOnce(NamedSource<Arc<String>>, SourceSpan) -> BindingError,
+    ) -> CompileError {
+        CompileError::Binding(error(self.sources.renderable(self.source), span.into()))
+    }
+
+    /// Validate that a lowered binding value is a closed literal tree.
+    fn closed_binding(
+        &self,
+        name: &DeclName,
+        hir: graphcal_compiler::hir::expr::Expr<graphcal_compiler::hir::expr::Draft>,
+    ) -> Result<graphcal_compiler::hir::closed_expr::ClosedExpr, CompileError> {
+        let span = hir.span;
+        graphcal_compiler::hir::closed_expr::ClosedExpr::try_new(hir).map_err(|reason| {
+            self.value_error(span, |src, span| BindingError::NotClosed {
+                name: name.clone(),
+                reason,
+                src,
+                span,
+            })
+        })
     }
 }
 
@@ -832,7 +966,7 @@ fn normalize_binding_literal(
     mut expr: Expr,
     expected: &ModelValueSchema,
     schemas: &ModelSchemaGraph,
-) -> Result<Expr, &'static str> {
+) -> Result<Expr, BindingLiteralError> {
     normalize_binding_literal_in_place(&mut expr, expected, schemas)?;
     Ok(expr)
 }
@@ -840,10 +974,10 @@ fn normalize_binding_literal(
 fn map_entry_value_schema(
     expected: &ModelValueSchema,
     key_count: usize,
-) -> Result<&ModelValueSchema, &'static str> {
+) -> Result<&ModelValueSchema, BindingLiteralError> {
     (0..key_count).try_fold(expected, |schema, _| match schema {
         ModelValueSchema::Indexed { element, .. } => Ok(element.as_ref()),
-        _ => Err("map entry has more keys than the declared value has indexed axes"),
+        _ => Err(BindingLiteralError::OverNestedMapEntry),
     })
 }
 
@@ -857,14 +991,14 @@ fn normalize_binding_literal_in_place(
     expr: &mut Expr,
     expected: &ModelValueSchema,
     schemas: &ModelSchemaGraph,
-) -> Result<(), &'static str> {
+) -> Result<(), BindingLiteralError> {
     match (&mut expr.kind, expected) {
         (AstExprKind::Integer(value), ModelValueSchema::Quantity(quantity))
             if quantity.dimension().is_dimensionless() =>
         {
             const MAX_EXACT_INTEGER: u64 = 1_u64 << f64::MANTISSA_DIGITS;
             if value.unsigned_abs() > MAX_EXACT_INTEGER {
-                return Err("integer is not exactly representable as a real quantity");
+                return Err(BindingLiteralError::InexactRealInteger);
             }
             expr.kind = AstExprKind::Number(*value as f64);
         }
@@ -875,11 +1009,11 @@ fn normalize_binding_literal_in_place(
                 || *value < -I64_EXCLUSIVE_UPPER
                 || *value >= I64_EXCLUSIVE_UPPER
             {
-                return Err("number is not exactly representable as Int");
+                return Err(BindingLiteralError::InexactInt);
             }
             let integer = *value as i64;
             if integer as f64 != *value {
-                return Err("number is not exactly representable as Int");
+                return Err(BindingLiteralError::InexactInt);
             }
             expr.kind = AstExprKind::Integer(integer);
         }
