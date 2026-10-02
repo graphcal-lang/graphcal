@@ -4508,7 +4508,7 @@ fn resolved_nominal_aligns_field_semantics_with_its_definition() {
     assert!(burn.field(&FieldName::expect_valid("missing")).is_none());
     let dv = burn.field(&FieldName::expect_valid("dv")).unwrap();
     assert_eq!(dv.member().constructor().name(), burn.constructor().name());
-    assert_eq!(dv.display_name(), "Maneuver.Burn.dv");
+    assert_eq!(dv.domain_subject().to_string(), "Maneuver.Burn.dv");
 
     // Only a one-constructor type named like its constructor is a record.
     assert!(maneuver.record_member().is_none());
@@ -4518,13 +4518,19 @@ fn resolved_nominal_aligns_field_semantics_with_its_definition() {
         record
             .field(&FieldName::expect_valid("y"))
             .unwrap()
-            .display_name(),
+            .domain_subject()
+            .to_string(),
         "Point.y"
     );
 
     let mut constrained = defs
         .constrained_fields()
-        .map(|field| (field.field().display_name(), field.bounds().len()))
+        .map(|field| {
+            (
+                field.field().domain_subject().to_string(),
+                field.bounds().len(),
+            )
+        })
         .collect::<Vec<_>>();
     constrained.sort();
     assert_eq!(

@@ -8811,7 +8811,7 @@ const node SAT: Spec = Spec(mass: 5000.0 kg);
     else {
         panic!("expected DomainViolation, got {err:?}");
     };
-    assert_eq!(name, "SAT.mass");
+    assert_eq!(name.to_string(), "SAT.mass");
     assert!(
         violation.contains("above maximum"),
         "violation = {violation}"
@@ -8875,7 +8875,7 @@ fn struct_field_min_exceeds_max_at_compile_time() {
     else {
         panic!("expected DomainMinExceedsMax, got {err:?}");
     };
-    assert_eq!(name, "Foo.x");
+    assert_eq!(name.to_string(), "Foo.x");
 }
 
 #[test]
@@ -8912,7 +8912,7 @@ fn struct_field_dim_mismatch_at_compile_time() {
     else {
         panic!("expected DomainDimensionMismatch, got {err:?}");
     };
-    assert_eq!(name, "Foo.x");
+    assert_eq!(name.to_string(), "Foo.x");
 }
 
 // ---- Position 4: domain constraint on a generic type argument ----

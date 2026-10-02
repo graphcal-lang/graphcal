@@ -1,6 +1,7 @@
 //! One nominal type definition together with the resolved semantics of each
 //! of its fields, aligned with the definition.
 
+use crate::semantic_error::domain::{DomainSubject, NominalFieldPath};
 use std::sync::Arc;
 
 use crate::hir::nominal::{NominalConstructor, NominalField, NominalTypeDef, ResolvedConstructor};
@@ -241,15 +242,15 @@ impl<'a> NominalFieldSemantics<'a> {
     /// How diagnostics name the field: `Type.field` for a record-shaped
     /// constructor named like its type, `Type.Constructor.field` otherwise.
     #[must_use]
-    pub fn display_name(self) -> String {
+    pub fn domain_subject(self) -> DomainSubject {
         let definition = self.member.nominal.definition();
         let constructor = self.member.constructor.name();
-        let field = self.field.name();
-        if constructor.as_str() == definition.name().as_str() {
-            format!("{}.{field}", definition.name())
-        } else {
-            format!("{}.{constructor}.{field}", definition.name())
-        }
+        let record_shaped = constructor.as_str() == definition.name().as_str();
+        DomainSubject::NominalField(Box::new(NominalFieldPath {
+            type_name: definition.name(),
+            constructor: (!record_shaped).then(|| constructor.clone()),
+            field: self.field.name().clone(),
+        }))
     }
 }
 

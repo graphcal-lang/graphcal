@@ -10,6 +10,7 @@ use crate::semantic::checked_type::{
 };
 use crate::semantic_error::SemanticError;
 use crate::semantic_error::domain::DomainError;
+use crate::semantic_error::domain::UnconstrainableType;
 use crate::semantic_error::index::IndexError;
 use crate::semantic_error::structure::StructError;
 use crate::semantic_error::structure::UnknownStructTypeName;
@@ -217,11 +218,13 @@ fn check_bound(
                 bound.src,
                 bound.span,
                 DomainError::InvalidDomainTarget {
-                    type_kind: super::format_checked_type(target, ctx.tir.registry()),
+                    type_kind: UnconstrainableType::Checked(
+                        target.spelling(&ctx.tir.registry().dimensions),
+                    ),
                 },
             )
         })?;
-    let display = field.display_name();
+    let display = field.domain_subject();
     let owning_dag = field.member().nominal().identity().owner();
     let (Some(owner), Some(bodies)) = (ctx.tir.dag(owning_dag), ctx.tir.checked_bodies(owning_dag))
     else {

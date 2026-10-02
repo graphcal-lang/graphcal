@@ -3,6 +3,7 @@ use crate::resolved_name::ResolvedDeclName;
 use crate::semantic_error::attribute::AttributeError;
 use crate::semantic_error::dimension::DimensionError;
 use crate::semantic_error::domain::DomainError;
+use crate::semantic_error::domain::{DomainSubject, DomainTypeSpelling, UnconstrainableType};
 use crate::semantic_error::graph::CycleMember;
 use crate::semantic_error::graph::GraphError;
 use crate::source_id::SourceId;
@@ -1058,7 +1059,14 @@ fn check_one_bound(
     registry: &FormattingRegistry,
     src: SourceId,
 ) -> Result<(), SemanticError> {
-    check_one_bound_with_display_name(&name.to_string(), bound, inferred, expected, registry, src)
+    check_one_bound_with_display_name(
+        &DomainSubject::Declaration(name.clone()),
+        bound,
+        inferred,
+        expected,
+        registry,
+        src,
+    )
 }
 
 /// Reject domain constraints on base types that don't accept them.
@@ -1098,23 +1106,10 @@ fn check_domain_constraint_targets_dag(
     Ok(())
 }
 
-fn invalid_domain_target_kind(resolved: &crate::tir::typed::ResolvedDeclType) -> Option<String> {
-    use crate::tir::typed::ResolvedValueType;
-
-    match resolved.element() {
-        ResolvedValueType::Bool => Some("Bool".to_string()),
-        ResolvedValueType::Complex { .. } => Some("Complex".to_string()),
-        ResolvedValueType::Key { .. } => Some("Key".to_string()),
-        ResolvedValueType::Struct {
-            name: struct_name, ..
-        } => Some(format!("struct `{}`", struct_name.as_str())),
-        ResolvedValueType::GenericTypeParam(param, _) => {
-            Some(format!("generic Type parameter `{param}`"))
-        }
-        ResolvedValueType::Quantity(_)
-        | ResolvedValueType::Int
-        | ResolvedValueType::Datetime(_) => None,
-    }
+fn invalid_domain_target_kind(
+    resolved: &crate::tir::typed::ResolvedDeclType,
+) -> Option<UnconstrainableType> {
+    resolved.element().domain_family().err()
 }
 
 /// Reject constraints on struct/union fields outside the explicitly
@@ -1209,7 +1204,7 @@ fn check_field_domain_constraint_dimensions(
             )
             .into());
         }
-        let display_name = field.display_name();
+        let display_name = field.domain_subject();
         let definition_dag = field_constraint_definition_dag(
             tir,
             field.member().nominal().identity(),
@@ -1251,7 +1246,7 @@ fn check_field_domain_constraint_dimensions(
 }
 
 fn check_deferred_generic_quantity_bound(
-    display_name: &str,
+    display_name: &DomainSubject,
     resolved_target: &crate::tir::typed::ResolvedValueType,
     bound: &crate::tir::typed::ResolvedDomainBound,
     inferred: &CheckedType<Symbolic>,
@@ -1264,10 +1259,10 @@ fn check_deferred_generic_quantity_bound(
         bound.src,
         bound.span,
         DomainError::DomainDimensionMismatch {
-            name: display_name.to_string(),
-            type_dim: resolved_target.format(registry),
-            bound_name: bound.kind.to_string(),
-            bound_dim: format_checked_type(inferred, registry),
+            name: display_name.clone(),
+            type_dim: DomainTypeSpelling::Declared(resolved_target.spelling(registry)),
+            bound_name: bound.kind,
+            bound_dim: DomainTypeSpelling::Checked(inferred.spelling(&registry.dimensions)),
         },
     ))
 }

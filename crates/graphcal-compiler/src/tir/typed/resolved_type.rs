@@ -21,6 +21,7 @@ use crate::semantic::checked_type::{
 use crate::semantic::index_def::FiniteIndex;
 use crate::semantic::time_scale::TimeScale;
 use crate::semantic_error::SemanticError;
+use crate::semantic_error::domain::UnconstrainableType;
 use crate::semantic_error::index::IndexError;
 use crate::semantic_error::structure::StructError;
 use crate::semantic_error::structure::UnboundGeneric;
@@ -211,7 +212,44 @@ pub enum ResolvedValueType {
     GenericTypeParam(GenericParamId, Span),
 }
 
+/// The value family a `min`/`max` domain constraint is checked in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DomainFamily {
+    Quantity,
+    Int,
+    Datetime(TimeScale),
+}
+
 impl ResolvedValueType {
+    /// Spell this declared value type for a diagnostic payload.
+    #[must_use]
+    pub fn spelling(&self, registry: &FormattingRegistry) -> DeclaredTypeSpelling {
+        DeclaredTypeSpelling::new(self.format(registry))
+    }
+
+    /// The `min`/`max` domain family of this value type.
+    ///
+    /// # Errors
+    ///
+    /// Returns why the type cannot carry a domain constraint when it is not
+    /// a quantity, `Int`, or `Datetime`.
+    pub fn domain_family(&self) -> Result<DomainFamily, UnconstrainableType> {
+        match self {
+            Self::Quantity(_) => Ok(DomainFamily::Quantity),
+            Self::Int => Ok(DomainFamily::Int),
+            Self::Datetime(scale) => Ok(DomainFamily::Datetime(*scale)),
+            Self::Bool => Err(UnconstrainableType::Bool),
+            Self::Complex { .. } => Err(UnconstrainableType::Complex),
+            Self::Key { .. } => Err(UnconstrainableType::Key),
+            Self::Struct { name, .. } => {
+                Err(UnconstrainableType::Struct(name.to_unowned_def_name()))
+            }
+            Self::GenericTypeParam(param, _) => {
+                Err(UnconstrainableType::GenericTypeParam(param.clone()))
+            }
+        }
+    }
+
     /// Format as a human-readable string, e.g. `"Length / Time^2"`, `"Bool"`, `"Vec3<Length, ECI>"`.
     #[must_use]
     pub fn format(&self, registry: &FormattingRegistry) -> String {

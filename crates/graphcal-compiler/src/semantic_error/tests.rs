@@ -409,3 +409,73 @@ fn visibility_payloads_render_their_mentions_as_before() {
     assert_eq!(ImportItemNamespace::Term.noun(), "term");
     assert_eq!(ImportItemNamespace::Dimension.noun(), "dim");
 }
+
+#[test]
+fn domain_payloads_render_their_subjects_as_before() {
+    use super::domain::{
+        DomainSubject, NominalFieldPath, UnconstrainableType, ValuePath, ValuePathStep,
+    };
+    use crate::syntax::decl_name::DeclName;
+    use crate::syntax::index_name::{IndexEntryKey, IndexVariantName};
+    use crate::syntax::type_name::{ConstructorName, FieldName, StructTypeName};
+
+    let field = FieldName::expect_valid("mass");
+    let root = ValuePath::new(DeclName::expect_valid("sat"));
+    let nested = root
+        .child(ValuePathStep::Field(field.clone()))
+        .child(ValuePathStep::Entry(IndexEntryKey::Named(
+            IndexVariantName::expect_valid("Launch"),
+        )));
+    let cases = [
+        (
+            DomainSubject::Declaration(DeclName::expect_valid("sat")),
+            "sat",
+        ),
+        (
+            DomainSubject::NominalField(Box::new(NominalFieldPath {
+                type_name: StructTypeName::expect_valid("Sat"),
+                constructor: None,
+                field: field.clone(),
+            })),
+            "Sat.mass",
+        ),
+        (
+            DomainSubject::NominalField(Box::new(NominalFieldPath {
+                type_name: StructTypeName::expect_valid("Craft"),
+                constructor: Some(ConstructorName::expect_valid("Sat")),
+                field: field.clone(),
+            })),
+            "Craft.Sat.mass",
+        ),
+        (
+            DomainSubject::ConstructorField(Box::new((
+                ConstructorName::expect_valid("Sat"),
+                field,
+            ))),
+            "Sat.mass",
+        ),
+        (DomainSubject::Value(Box::new(root)), "sat"),
+    ];
+    for (subject, expected) in cases {
+        assert_eq!(subject.to_string(), expected);
+    }
+    assert_eq!(
+        DomainSubject::Value(Box::new(nested)).to_string(),
+        format!(
+            "sat.mass.{}",
+            IndexEntryKey::Named(IndexVariantName::expect_valid("Launch"))
+        )
+    );
+    let targets = [
+        (UnconstrainableType::Bool, "Bool"),
+        (UnconstrainableType::Complex, "Complex"),
+        (UnconstrainableType::Key, "Key"),
+        (
+            UnconstrainableType::Struct(StructTypeName::expect_valid("Sat")),
+            "struct `Sat`",
+        ),
+    ];
+    for (target, expected) in targets {
+        assert_eq!(target.to_string(), expected);
+    }
+}
