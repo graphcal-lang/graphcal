@@ -17,6 +17,7 @@ use graphcal_compiler::syntax::span::Spanned;
 use graphcal_compiler::syntax::token::SourceIdentifier;
 use graphcal_compiler::syntax::token::SourceIdentifierError;
 use graphcal_compiler::syntax::type_name::ConstructorName;
+use graphcal_eval::invariant::Failure;
 use miette::{NamedSource, SourceSpan};
 
 use super::{
@@ -637,17 +638,23 @@ impl ParameterBindingBuilder<'_> {
     ) -> Result<(), CompileError> {
         let port = self.project.port_at(position)?;
         if let Some(constraint) = self.project.plan().domain_constraint(&port.runtime_key)
-            && let Err(violation) =
+            && let Err(failure) =
                 graphcal_eval::domain_check::check_domain_constraint(&binding.value(), constraint)
         {
-            return Err(self.project.port_error(port, |name, src, span| {
-                BindingError::DomainViolation {
-                    name,
-                    violation: violation.message,
-                    src,
-                    span,
+            return Err(match failure {
+                Failure::Error(violation) => {
+                    self.project
+                        .port_error(port, |name, src, span| BindingError::DomainViolation {
+                            name,
+                            violation: violation.to_string(),
+                            src,
+                            span,
+                        })
                 }
-            }));
+                Failure::Invariant(invariant) => self
+                    .project
+                    .render(invariant.into_internal_error(self.project.source)),
+            });
         }
         let slot = &mut self.slots[position.index];
         if slot.is_some() {

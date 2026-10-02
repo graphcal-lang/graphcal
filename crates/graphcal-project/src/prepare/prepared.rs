@@ -605,7 +605,7 @@ fn parameter_domain(
     }
     Ok(match constraint.as_ref() {
         ResolvedDomainConstraintRef::Quantity(bounds) => {
-            ParameterDomain::Quantity(inclusive(bounds, |value| *value)?)
+            ParameterDomain::Quantity(inclusive(bounds, |value| value.get())?)
         }
         ResolvedDomainConstraintRef::Int(bounds) => {
             ParameterDomain::Integer(inclusive(bounds, |value| *value)?)

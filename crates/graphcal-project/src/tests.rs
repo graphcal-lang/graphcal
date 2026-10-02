@@ -9008,7 +9008,7 @@ const node SAT: Spec = Spec(mass: 5000.0 kg);
     };
     assert_eq!(name.to_string(), "SAT.mass");
     assert!(
-        violation.contains("above maximum"),
+        violation.to_string().contains("above maximum"),
         "violation = {violation}"
     );
 }

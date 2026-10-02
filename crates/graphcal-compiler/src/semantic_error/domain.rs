@@ -8,6 +8,7 @@ use thiserror::Error;
 
 use crate::diagnostic::{DiagnosticKind, SecondaryLabel};
 use crate::generic_param::GenericParamId;
+use crate::hir::expr::{LocalUnit, ResolvedUnitExpr};
 use crate::semantic::checked_type::TypeSpelling;
 use crate::semantic::dimension_table::DimensionSpelling;
 use crate::syntax::ast::DomainBoundKind;
@@ -152,6 +153,117 @@ impl std::fmt::Display for UnconstrainableType {
     }
 }
 
+/// How a domain diagnostic spells an evaluated `min`/`max` bound: as the
+/// bound was written when it is a literal, its evaluated value otherwise.
+#[derive(Debug, Clone, PartialEq)]
+pub enum DomainBoundSpelling {
+    /// A number: a written number, or the SI value of a computed quantity
+    /// bound.
+    Number(f64),
+    /// An integer bound.
+    Integer(i64),
+    /// A written quantity literal: its number and unit.
+    Quantity {
+        value: f64,
+        unit: ResolvedUnitExpr<LocalUnit>,
+    },
+    /// A written negation of a bound.
+    Negated(Box<Self>),
+    /// A datetime bound: its epoch.
+    Datetime(hifitime::Epoch),
+}
+
+impl std::fmt::Display for DomainBoundSpelling {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Number(value) => f.write_str(&crate::display::number::format_number(*value)),
+            Self::Integer(value) => value.fmt(f),
+            Self::Quantity { value, unit } => {
+                let unit = crate::display::unit_label::format_unit_terms_with_config(
+                    unit.terms
+                        .iter()
+                        .map(|item| (item.op, item.name.value.to_string(), item.power)),
+                    true,
+                );
+                write!(
+                    f,
+                    "{} {unit}",
+                    crate::display::number::format_number(*value)
+                )
+            }
+            Self::Negated(bound) => write!(f, "-{bound}"),
+            Self::Datetime(epoch) => epoch.fmt(f),
+        }
+    }
+}
+
+/// Which declared bound a value is outside of.
+#[derive(Debug, Clone, PartialEq)]
+pub enum DomainBoundViolation {
+    /// The value is below the `min` bound.
+    BelowMinimum(DomainBoundSpelling),
+    /// The value is above the `max` bound.
+    AboveMaximum(DomainBoundSpelling),
+}
+
+impl std::fmt::Display for DomainBoundViolation {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::BelowMinimum(bound) => write!(f, "below minimum ({bound})"),
+            Self::AboveMaximum(bound) => write!(f, "above maximum ({bound})"),
+        }
+    }
+}
+
+/// A value outside its declared domain: the bound it violates, at the entry
+/// of an indexed value it is found in (outermost axis first).
+#[derive(Debug, Clone, PartialEq)]
+pub struct DomainViolationDetail {
+    entries: Vec<IndexEntryKey>,
+    bound: DomainBoundViolation,
+}
+
+impl DomainViolationDetail {
+    /// A value that violates `bound` itself.
+    #[must_use]
+    pub const fn new(bound: DomainBoundViolation) -> Self {
+        Self {
+            entries: Vec::new(),
+            bound,
+        }
+    }
+
+    /// This violation, found at `entry` of an indexed value.
+    #[must_use]
+    pub fn at_entry(mut self, entry: IndexEntryKey) -> Self {
+        self.entries.insert(0, entry);
+        self
+    }
+
+    /// The bound the value violates.
+    #[must_use]
+    pub const fn bound(&self) -> &DomainBoundViolation {
+        &self.bound
+    }
+
+    /// The entries, outermost first, the violating value is found at.
+    #[must_use]
+    pub fn entries(&self) -> &[IndexEntryKey] {
+        &self.entries
+    }
+}
+
+impl std::fmt::Display for DomainViolationDetail {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        for entry in &self.entries {
+            write!(f, "at {entry}: ")?;
+        }
+        self.bound.fmt(f)
+    }
+}
+
+impl std::error::Error for DomainViolationDetail {}
+
 /// Diagnostics of declared value domains (min and max constraints).
 #[derive(Debug, Clone, Error)]
 pub enum DomainError {
@@ -159,7 +271,7 @@ pub enum DomainError {
     DomainViolation {
         name: DomainSubject,
         value: String,
-        violation: String,
+        violation: Box<DomainViolationDetail>,
     },
     #[error(
         "domain bound dimension mismatch on `{name}`: type has dimension {type_dim}, but {bound_name} bound has dimension {bound_dim}"
@@ -173,8 +285,8 @@ pub enum DomainError {
     #[error("domain constraint on `{name}`: min ({min}) exceeds max ({max})")]
     DomainMinExceedsMax {
         name: DomainSubject,
-        min: String,
-        max: String,
+        min: Box<DomainBoundSpelling>,
+        max: Box<DomainBoundSpelling>,
     },
     #[error("domain constraints are not valid on `{type_kind}` types")]
     InvalidDomainTarget { type_kind: UnconstrainableType },

@@ -739,16 +739,16 @@ fn eval_constructor_call(
                         field_init.value.span(),
                     )
                 })?;
-                if let Err(violation) =
+                if let Err(failure) =
                     crate::domain_check::check_domain_constraint(&evaluated.value(), constraint)
                 {
                     return Err(ctx
-                        .runtime_error(
-                            RuntimeFailure::FieldConstraint {
+                        .failure_error(
+                            failure.map_error(|violation| RuntimeFailure::FieldConstraint {
                                 constructor: constructor_name.clone(),
                                 field: field_init.name.clone(),
                                 violation,
-                            },
+                            }),
                             field_init.value.span(),
                         )
                         .into());
