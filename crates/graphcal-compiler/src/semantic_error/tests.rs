@@ -807,3 +807,46 @@ fn attribute_payloads_render_their_text_as_before() {
         "unknown attribute `bogus`"
     );
 }
+
+#[test]
+fn plugin_payloads_render_their_text_as_before() {
+    use super::plugin::{ExternCallContext, ExternSignatureError};
+    use crate::syntax::names::NameAtom;
+    use crate::syntax::type_name::{FieldName, StructTypeName};
+    use std::collections::HashSet;
+
+    let errors = [
+        ExternSignatureError::DuplicateGenericBinder(NameAtom::parse("D").unwrap()),
+        ExternSignatureError::DomainConstraint,
+        ExternSignatureError::UnsupportedParameterType,
+        ExternSignatureError::GenericStructReturn,
+        ExternSignatureError::UndeclaredRecordType(StructTypeName::expect_valid("Pair")),
+        ExternSignatureError::GenericRecordType(StructTypeName::expect_valid("Pair")),
+        ExternSignatureError::NotARecordType(StructTypeName::expect_valid("Pair")),
+        ExternSignatureError::UnsupportedStructField(FieldName::expect_valid("x")),
+        ExternSignatureError::ArrayAxesMustBeBinders,
+        ExternSignatureError::ArrayWithoutAxes,
+        ExternSignatureError::ArrayElementKind,
+    ];
+    let texts: HashSet<String> = errors.iter().map(ToString::to_string).collect();
+    assert_eq!(texts.len(), errors.len());
+    assert_eq!(
+        ExternSignatureError::DuplicateGenericBinder(NameAtom::parse("D").unwrap()).to_string(),
+        "generic binder `D` is declared more than once"
+    );
+    assert_eq!(
+        ExternSignatureError::NotARecordType(StructTypeName::expect_valid("Pair")).to_string(),
+        "`Pair` is not a record type; extern struct returns need a single constructor named after the type"
+    );
+    let contexts = [
+        (ExternCallContext::DomainBound, "domain bound"),
+        (
+            ExternCallContext::UnitScaleExpression,
+            "unit scale expression",
+        ),
+        (ExternCallContext::ConstExpression, "const expression"),
+    ];
+    for (context, expected) in contexts {
+        assert_eq!(context.to_string(), expected);
+    }
+}

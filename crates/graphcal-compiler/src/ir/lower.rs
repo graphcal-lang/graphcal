@@ -586,7 +586,7 @@ mod tests {
     use crate::semantic_error::SemanticErrorKind;
     use crate::semantic_error::dimension::DimensionError;
     use crate::semantic_error::name::NameError;
-    use crate::semantic_error::plugin::PluginError;
+    use crate::semantic_error::plugin::{ExternSignatureError, PluginError};
     use crate::syntax::decl_name::DeclName;
     use crate::syntax::names::{NameAtom, NamePath};
     use crate::syntax::parser::Parser;
@@ -796,8 +796,12 @@ mod tests {
         assert!(
             matches!(
                 &err,
-                SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Plugin(PluginError::InvalidExternSignature { message, .. }), .. })
-                    if message.contains("different result type")
+                SemanticError::Located(crate::diagnostic::Diagnostic {
+                    kind: SemanticErrorKind::Plugin(PluginError::InvalidExternSignature {
+                        error: ExternSignatureError::ConflictingResultType { .. }
+                    }),
+                    ..
+                })
             ),
             "{err:?}"
         );

@@ -13,6 +13,7 @@ use crate::semantic_error::attribute::AttributeError;
 use crate::semantic_error::dimension::DimensionError;
 use crate::semantic_error::graph::GraphError;
 use crate::semantic_error::name::NameError;
+use crate::semantic_error::plugin::ExternCallContext;
 use crate::semantic_error::plugin::PluginError;
 use crate::semantic_error::visibility::VisibilityError;
 use crate::source_id::SourceId;
@@ -1222,8 +1223,8 @@ fn check_domain_bound_policies(
                     bound.src,
                     span,
                     PluginError::ExternCallNotAllowed {
-                        name: external.to_string(),
-                        context: "domain bound".to_string(),
+                        name: external.clone(),
+                        context: ExternCallContext::DomainBound,
                     },
                 ));
             }
@@ -1259,8 +1260,8 @@ fn check_dynamic_unit_policies(
                 entry.src,
                 span,
                 PluginError::ExternCallNotAllowed {
-                    name: external.to_string(),
-                    context: "unit scale expression".to_string(),
+                    name: external.clone(),
+                    context: ExternCallContext::UnitScaleExpression,
                 },
             ));
         }
@@ -1422,8 +1423,8 @@ impl HirPolicyChecker<'_> {
                         self.src,
                         callee.span,
                         PluginError::ExternCallNotAllowed {
-                            name: ext.to_string(),
-                            context: "const expression".to_string(),
+                            name: ext.clone(),
+                            context: ExternCallContext::ConstExpression,
                         },
                     ));
                 }
