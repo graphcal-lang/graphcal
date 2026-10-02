@@ -948,6 +948,9 @@ impl<'a> StaticDefinitionEvaluator<'a> {
                 None,
             )
             .map_err(|failure| dim_expr_error(failure, src, unit.dim_type.span))?;
+        if !unit.constness.is_const() {
+            self.reject_default_dependent_runtime_unit(owner, unit, src)?;
+        }
         let Some(def) = &unit.definition else {
             let base = dim.base_dimension_id().cloned();
             let registered = base.as_ref().map(|base| {
@@ -1076,6 +1079,58 @@ impl<'a> StaticDefinitionEvaluator<'a> {
         Ok(UnitInfo {
             dimension: dim,
             scale,
+        })
+    }
+
+    /// Reject a runtime unit whose declared dimension is defined over one of
+    /// its module's defaulted bindable dimension ports.
+    ///
+    /// A runtime unit is copied into every instance of its module, which may
+    /// rebind the port; its definition is a unit expression, and no unit
+    /// expression measures an opaque port. So, like a node body checked with
+    /// the port rigid, such a unit only type-checks against the port's
+    /// default (V007). Every accepted runtime unit therefore measures the same
+    /// dimension in every instance.
+    fn reject_default_dependent_runtime_unit(
+        &mut self,
+        owner: &DagId,
+        unit: &'a UnitDecl,
+        src: SourceId,
+    ) -> Result<(), SemanticError> {
+        let generic = self
+            .evaluate_dim_expr(
+                owner,
+                &unit.dim_type,
+                &HashMap::new(),
+                &PortView::Generic(owner.clone()),
+                None,
+            )
+            .map_err(|failure| dim_expr_error(failure, src, unit.dim_type.span))?;
+        let Some(port) = generic.iter().find_map(|(base, _)| match base {
+            BaseDimId::UserDefined(port) if self.is_defaulted_dimension_port(port) => Some(port),
+            BaseDimId::UserDefined(_) | BaseDimId::Prelude(_) => None,
+        }) else {
+            return Ok(());
+        };
+        let check = crate::tir::template_closure::TemplateClosureCheck {
+            kind: crate::static_interface::StaticInputKind::Dimension,
+            role: crate::static_interface::StaticRole::OptionalInput,
+            context: crate::tir::template_closure::StaticUseContext::TemplateBody,
+            dependency: crate::tir::template_closure::StaticDependency::DefaultDefinition,
+        };
+        crate::tir::template_closure::validate(check).map_err(|violation| {
+            SemanticError::located(
+                src,
+                unit.definition
+                    .as_ref()
+                    .map_or(unit.dim_type.span, |definition| definition.unit_expr.span),
+                crate::semantic_error::visibility::VisibilityError::TemplateBodyDependsOnStaticDefault {
+                    body_kind: crate::declaration_kind::DeclarationKind::Unit,
+                    body_name: unit.name.value.atom().clone(),
+                    port_kind: violation.kind,
+                    port_name: port.atom().clone(),
+                },
+            )
         })
     }
 
@@ -1383,40 +1438,21 @@ fn validate_structural_finite_indexes(
     Ok(())
 }
 
+/// The value of a variable-free `Fin(...)` cardinality, or `None` when it
+/// names a generic parameter; a closed part that overflows is rejected.
 fn concrete_nat_value(expr: &ast::NatExpr, src: SourceId) -> Result<Option<u64>, SemanticError> {
-    match expr {
-        ast::NatExpr::Literal(value, _) => Ok(Some(*value)),
-        ast::NatExpr::Var(_) => Ok(None),
-        ast::NatExpr::Add(operands, span) => {
-            operands.iter().try_fold(Some(0_u64), |sum, operand| {
-                match (sum, concrete_nat_value(operand, src)?) {
-                    (Some(sum), Some(value)) => sum.checked_add(value).map(Some).ok_or_else(|| {
-                        SemanticError::located(
-                            src,
-                            *span,
-                            IndexError::FinCardinalityAdditionOverflow,
-                        )
-                    }),
-                    _ => Ok(None),
-                }
-            })
-        }
-        ast::NatExpr::Mul(operands, span) => {
-            operands.iter().try_fold(Some(1_u64), |product, operand| {
-                match (product, concrete_nat_value(operand, src)?) {
-                    (Some(product), Some(value)) => {
-                        product.checked_mul(value).map(Some).ok_or_else(|| {
-                            SemanticError::located(
-                                src,
-                                *span,
-                                IndexError::FinCardinalityMultiplicationOverflow,
-                            )
-                        })
-                    }
-                    _ => Ok(None),
-                }
-            })
-        }
+    use crate::syntax::nat_eval::{ClosedNat, NatArithmetic};
+    match expr.closed_value() {
+        Ok(ClosedNat::Value(value)) => Ok(Some(value)),
+        Ok(ClosedNat::Open { .. }) => Ok(None),
+        Err(overflow) => Err(SemanticError::located(
+            src,
+            overflow.span,
+            match overflow.op {
+                NatArithmetic::Addition => IndexError::FinCardinalityAdditionOverflow,
+                NatArithmetic::Multiplication => IndexError::FinCardinalityMultiplicationOverflow,
+            },
+        )),
     }
 }
 

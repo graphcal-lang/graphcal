@@ -12,6 +12,7 @@ use crate::semantic_error::visibility::VisibilityError;
 use crate::source_id::SourceId;
 use crate::tir::texpr::{CheckedBodies, CheckedBody, NominalObservation, TBody};
 use crate::tir::typed::checking_tir::PublishedBodies;
+use crate::tir::typed::complete_substitution::CompleteSubstitution;
 use crate::tir::typed::dag_slots::LocalDagFacts;
 use crate::tir::typed::program::UncheckedTir;
 use crate::tir::typed::specialization::specialize_expression_type;
@@ -153,7 +154,7 @@ fn check_instance_defaults(
     ctx: &DimCheckContext<'_>,
     template: &crate::tir::typed::model::DagTIR,
     template_bodies: &CheckedBodies,
-    substitution: &crate::ir::static_substitution::StaticSubstitution,
+    substitution: &CompleteSubstitution<'_>,
 ) -> Result<(), Outcome<SemanticError>> {
     let template_defaults = inherited_defaults(template);
     for entry in ctx.env.dag.params() {
@@ -199,8 +200,7 @@ fn check_instance_defaults(
                 );
             }
         };
-        let specialized =
-            specialize_expression_type(&checked_type, substitution, ctx.env.tir, ctx.env.src)?;
+        let specialized = specialize_expression_type(&checked_type, substitution, ctx.env.src)?;
         let expected = entry.type_ann.checked().declared();
         if specialized != expected.to_symbolic() {
             return Err(SemanticError::located(
@@ -229,11 +229,13 @@ pub(super) enum CanonicalStage<'t> {
 }
 
 /// A semantic instance body and the specialization it was materialized with.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub(super) struct InstanceOf<'t> {
     pub(super) position: crate::tir::typed::dag_position::DagPosition,
     pub(super) dag: &'t crate::tir::typed::model::DagTIR,
     pub(super) specialization: &'t crate::ir::static_substitution::StaticSpecializationId,
+    /// The complete view of `specialization`'s substitution.
+    pub(super) substitution: CompleteSubstitution<'t>,
 }
 
 impl PublishedBodies for CanonicalStage<'_> {
@@ -278,17 +280,15 @@ pub(super) fn local_bodies<'t>(
             plot_shapes,
         } => Ok((bodies.clone(), PlotsStage::Canonical(plot_shapes.clone()))),
         CanonicalStage::Instance(instance) => {
-            instance_bodies(&checking, *instance, src, cancellation).map(
-                |(bodies, port_generic)| {
-                    (
-                        bodies,
-                        PlotsStage::Instance {
-                            instance: *instance,
-                            port_generic,
-                        },
-                    )
-                },
-            )
+            instance_bodies(&checking, instance, src, cancellation).map(|(bodies, port_generic)| {
+                (
+                    bodies,
+                    PlotsStage::Instance {
+                        instance: instance.clone(),
+                        port_generic,
+                    },
+                )
+            })
         }
     })
 }
@@ -302,7 +302,8 @@ fn instance_bodies(
         position,
         dag,
         specialization,
-    }: InstanceOf<'_>,
+        substitution,
+    }: &InstanceOf<'_>,
     src: SourceId,
     cancellation: &CancellationToken,
 ) -> Result<(CheckedBodies, Option<CheckedPlotChannelShapes>), Outcome<SemanticError>> {
@@ -344,7 +345,7 @@ fn instance_bodies(
     };
     let observations = infer::hir::BodyObservations::default();
     let ctx = DimCheckContext {
-        position,
+        position: *position,
         env: infer::hir::InferEnv {
             dag,
             tir: checking,
@@ -355,12 +356,7 @@ fn instance_bodies(
         cancellation,
         observations: &observations,
     };
-    check_instance_defaults(
-        &ctx,
-        template,
-        template_bodies,
-        &specialization.substitution,
-    )?;
+    check_instance_defaults(&ctx, template, template_bodies, substitution)?;
     // Instance bodies are specialized from the template; only the trees
     // of independently checked defaults are the instance's own.
     let finished = observations.finish();
@@ -377,7 +373,7 @@ fn instance_bodies(
         independent,
         template_bodies,
         &port_generic,
-        &specialization.substitution,
+        substitution,
         src,
     )?;
     Ok((bodies, port_generic_plot_channels))

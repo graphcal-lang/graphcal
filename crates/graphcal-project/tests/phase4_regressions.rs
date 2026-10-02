@@ -169,3 +169,40 @@ fn local_dag_include_selection_collides_with_an_import() {
         "unexpected error: {error}"
     );
 }
+
+/// A runtime unit used through an instance projection (`1.0 inst::qu`)
+/// reads the instance's params: the reader is scheduled after them, so the
+/// scale, evaluated in the instance's scope, finds their values.
+#[test]
+fn instance_runtime_unit_used_by_the_including_dag_reads_instance_values() {
+    let library = r"
+param k: Dimensionless = 2.0;
+pub unit qu: Length = (@k) m;
+pub node out: Length = 3.0 qu;
+";
+    let inline = format!(
+        "dag lib {{{library}}}\n\
+         include lib(k: 5.0) as inst;\n\
+         node o: Length = @inst::out;\n\
+         node o4: Length = 1.0 inst::qu;\n"
+    );
+    let (_dir, root) = write_project("unitinline", &[("main.gcl", &inline)], "main.gcl");
+    let result = eval(&root);
+    assert!((si_value(&result, "o4") - 5.0).abs() < 1e-12);
+    assert!((si_value(&result, "o") - 15.0).abs() < 1e-12);
+
+    let (_dir, root) = write_project(
+        "unitfile",
+        &[
+            ("lib.gcl", library),
+            (
+                "main.gcl",
+                "include unitfile.lib(k: 5.0) as inst;\n\
+                 node o4: Length = 1.0 inst::qu;\n",
+            ),
+        ],
+        "main.gcl",
+    );
+    let result = eval(&root);
+    assert!((si_value(&result, "o4") - 5.0).abs() < 1e-12);
+}

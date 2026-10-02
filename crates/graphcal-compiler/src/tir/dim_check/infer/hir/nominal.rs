@@ -1,7 +1,6 @@
 //! Inference of field access and constructor calls on nominal types.
 
 use crate::hir::expr::{Expr, FieldInit};
-use crate::hir::nominal::NominalField;
 use crate::hir::types::GenericArg;
 use crate::outcome::Outcome;
 use crate::resolved_name::ResolvedConstructorName;
@@ -106,14 +105,13 @@ impl Infer<'_> {
         let owning_type_identity = StructTypeRef::from_resolved(target.owning_type().clone());
         let owning_type_name = type_def.name();
 
+        let member = recorded_member(self.env.dag, target, self.env.src, callee.span)?;
         let resolved_type_args = self.env.resolve_applied_generic_args(
-            type_def,
+            member.nominal(),
             constructor_generic_args,
             callee.span,
         )?;
 
-        let def_field_names: std::collections::HashSet<&FieldName> =
-            variant.fields().iter().map(NominalField::name).collect();
         let provided_names: Vec<&FieldName> =
             fields.iter().map(|field| &field.name.value).collect();
         let mut seen_fields = std::collections::HashSet::new();
@@ -130,11 +128,16 @@ impl Infer<'_> {
                 .into());
             }
         }
-        let extra: Vec<FieldName> = provided_names
-            .iter()
-            .filter(|name| !def_field_names.contains(**name))
-            .map(|name| (*name).clone())
-            .collect();
+        // Each initializer is paired with the field it names; one naming no
+        // field is extra.
+        let mut initialized = Vec::with_capacity(fields.len());
+        let mut extra: Vec<FieldName> = Vec::new();
+        for field_init in fields {
+            match member.field(&field_init.name.value) {
+                Some(field_def) => initialized.push((field_def, field_init)),
+                None => extra.push(field_init.name.value.clone()),
+            }
+        }
         if !extra.is_empty() {
             return Err(SemanticError::located(
                 self.env.src,
@@ -167,24 +170,7 @@ impl Infer<'_> {
             .into());
         }
 
-        // A constructor without fields needs no field semantics.
-        let member = fields
-            .first()
-            .map(|_| recorded_member(self.env.dag, target, self.env.src, callee.span))
-            .transpose()?;
-        for field_init in fields {
-            let field_def = member
-                .and_then(|member| member.field(&field_init.name.value))
-                .ok_or_else(|| {
-                    SemanticError::located(
-                        self.env.src,
-                        field_init.name.span,
-                        StructError::UnresolvedConstructionField {
-                            field: field_init.name.value.clone(),
-                            constructor: variant.name(),
-                        },
-                    )
-                })?;
+        for (field_def, field_init) in initialized {
             let value_type = self.infer_hir_type(&field_init.value)?;
             let expected = applied_field_type(
                 field_def,

@@ -813,6 +813,93 @@ unit scaled: Length = (@factor) m;
     }
 }
 
+/// A runtime unit measuring a defaulted dimension port, and a domain bound
+/// on a value of that port's dimension, only type-check against the port's
+/// default, which an instance may rebind (P6-4 (a)(b)).
+#[test]
+fn template_closure_rejects_default_dependent_runtime_units_and_domain_bounds() {
+    let cases = [
+        (
+            r"
+dag lib {
+    pub(bind) dim Q = Length;
+    param k: Dimensionless = 2.0;
+    pub unit qu: Q = (@k) m;
+    param q: Q;
+    pub node out: Q = @q;
+}
+include lib(dim Q: Mass, q: 4.0 kg) as inst;
+node o4: Length = 1.0 inst::qu;
+",
+            "qu",
+        ),
+        (
+            r"
+dag lib {
+    pub(bind) dim Q = Length;
+    param k: Dimensionless = 2.0;
+    unit qu: Q = (@k) m;
+    param q: Q;
+    pub node out_qu: Q = 3.0 qu;
+}
+",
+            "qu",
+        ),
+        (
+            r"
+pub(bind) dim Q = Length;
+dim QR = Q / Time;
+unit rate: QR = 2.0 m / s;
+",
+            "rate",
+        ),
+        (
+            r"
+dag lib {
+    pub(bind) dim Q = Length;
+    param q: Q (min: 10.0 m);
+    pub node out: Q = @q;
+}
+include lib(dim Q: Mass, q: 40.0 kg) as inst;
+node o: Mass = @inst::out;
+",
+            "q",
+        ),
+    ];
+    for (source, expected_body) in cases {
+        let error = compile_semantic_error(source);
+        assert!(
+            matches!(
+                error,
+                SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic { kind: SemanticErrorKind::Visibility(VisibilityError::TemplateBodyDependsOnStaticDefault { ref body_name, port_kind: graphcal_compiler::static_interface::StaticInputKind::Dimension, .. }), .. }) if body_name.as_str() == expected_body
+            ),
+            "unexpected error for `{expected_body}`: {error:?}"
+        );
+    }
+
+    // A `const unit` is not copied into instances, and a dimension in which
+    // the port cancels does not depend on its default.
+    let result = compile_and_eval(
+        r"
+dag lib {
+    pub(bind) dim Q = Length;
+    const unit cq: Q = 2.0 m;
+    pub dim Ratio = Q / Q;
+    param k: Dimensionless = 2.0;
+    pub unit ru: Ratio = (@k) m / m;
+    param q: Q;
+    pub node out: Q = @q;
+}
+include lib(dim Q: Mass, q: 4.0 kg) as inst;
+node o: Mass = @inst::out;
+",
+    );
+    assert!(
+        result.is_ok(),
+        "a port-independent unit was rejected: {result:?}"
+    );
+}
+
 #[test]
 fn nested_semantic_value_bindings_compose_outer_index_substitution() {
     let directory = tempfile::tempdir().unwrap();

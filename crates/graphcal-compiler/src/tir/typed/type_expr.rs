@@ -15,7 +15,6 @@ use crate::syntax::ast::GenericConstraint;
 use crate::syntax::index_name::IndexName;
 use crate::syntax::names::NamePath;
 use crate::syntax::span::Span;
-use crate::syntax::type_name::StructTypeName;
 
 use super::{
     ModuleTypeContext, ProjectTypeStore, ResolvedDeclType, ResolvedDim, ResolvedDimTerm,
@@ -264,36 +263,6 @@ fn resolve_hir_index_ref(
     }
 }
 
-/// Validate the generic-argument count for a type application: enough to
-/// reach the last non-defaulted parameter, and at most the total count.
-/// Shared by the HIR and syntax type-application resolvers.
-fn check_type_application_arity(
-    type_name: StructTypeName,
-    type_def: &NominalTypeDef,
-    arg_count: usize,
-    span: Span,
-    src: SourceId,
-) -> Result<(), SemanticError> {
-    let arity = GenericArgArity::of_defaults(
-        type_def
-            .generic_params()
-            .iter()
-            .map(|param| param.default().is_some()),
-    );
-    if !arity.accepts(arg_count) {
-        return Err(SemanticError::located(
-            src,
-            span,
-            StructError::GenericArgCount {
-                type_name,
-                expected: arity,
-                got: arg_count,
-            },
-        ));
-    }
-    Ok(())
-}
-
 fn resolve_hir_type_application(
     type_ann: &crate::hir::types::ValueType,
     name: &crate::syntax::span::Spanned<ResolvedStructTypeName>,
@@ -301,29 +270,33 @@ fn resolve_hir_type_application(
     ctx: HirTypeResolutionContext<'_>,
 ) -> Result<ResolvedValueType, SemanticError> {
     let type_def = hir_struct_type_def(&name.value, name.span, ctx)?;
-    check_type_application_arity(
-        name.value.to_unowned_def_name(),
-        type_def,
+    // The parameters left to their defaults: enough arguments to reach the
+    // last parameter without a default, and at most one per parameter.
+    let defaulted = GenericArgArity::defaulted_tail(
+        type_def
+            .generic_params()
+            .iter()
+            .map(|param| (param, param.default())),
         generic_args.len(),
-        type_ann.span,
-        ctx.src,
-    )?;
+    )
+    .map_err(|expected| {
+        SemanticError::located(
+            ctx.src,
+            type_ann.span,
+            StructError::GenericArgCount {
+                type_name: name.value.to_unowned_def_name(),
+                expected,
+                got: generic_args.len(),
+            },
+        )
+    })?;
 
     let mut resolved_args = Vec::with_capacity(type_def.generic_params().len());
     for (param, arg) in type_def.generic_params().iter().zip(generic_args) {
         resolved_args.push(resolve_hir_generic_arg_for_param(param, arg, ctx)?);
     }
 
-    for param in type_def.generic_params().iter().skip(generic_args.len()) {
-        let default = param.default().ok_or_else(|| {
-            SemanticError::located(
-                ctx.src,
-                type_ann.span,
-                StructError::MissingGenericDefault {
-                    param: param.name().clone(),
-                },
-            )
-        })?;
+    for (param, default) in defaulted {
         // A default may name earlier parameters; instantiate it with the
         // arguments resolved so far.
         let resolved = resolve_hir_generic_arg_for_param(param, default, ctx)?;

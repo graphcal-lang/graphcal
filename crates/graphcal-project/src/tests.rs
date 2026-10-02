@@ -1238,8 +1238,7 @@ fn derived_dimension_over_bindable_dimension_is_accepted() {
     let with_default = "dag blib {\n\
                             pub(bind) dim Q = Length;\n\
                             pub dim QR = Q / Time;\n\
-                            pub unit per_two_seconds: QR = 0.5 m / s;\n\
-                            param q: QR = 3.0 per_two_seconds;\n\
+                            param q: QR = 1.5 m / s;\n\
                             pub node rate: QR = @q;\n\
                         }\n\
                         include blib()::{rate, dim QR};\n\
@@ -1627,6 +1626,18 @@ fn structural_index_binding_cardinality_must_be_closed() {
         compile_and_eval(&program("4294967296 * 4294967296")).unwrap_err(),
         CompileError::Eval(RenderedSemanticError { error: SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic { kind: SemanticErrorKind::Index(kind @ IndexError::NatOverflow { .. }), .. }), .. })
             if kind.to_string().contains("type-level Nat arithmetic overflow")
+    ));
+    // A closed part that overflows is reported even after a name, like a
+    // `Fin(...)` written in a declaration.
+    assert!(matches!(
+        compile_and_eval(&program("N + 4294967296 * 4294967296")).unwrap_err(),
+        CompileError::Eval(RenderedSemanticError {
+            error: SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
+                kind: SemanticErrorKind::Index(IndexError::NatOverflow { .. }),
+                ..
+            }),
+            ..
+        })
     ));
 }
 

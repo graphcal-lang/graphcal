@@ -1106,7 +1106,8 @@ pub node result: Output = @value; // OK for every Output binding
 ```
 
 この規則は `node`、`const node`、`assert`、`plot`、`figure`、`layer`、および
-ランタイム `unit` の本体を対象とします。パラメーターのデフォルトは、意図的に V007 の
+ランタイム `unit` の本体と、ランタイム `unit` が測る次元、`(min: 10.0 m)` のような
+定義域の境界を対象とします。パラメーターのデフォルトは、意図的に V007 の
 対象外です。それらは入力のデフォルトとして検査され、名目的な `type`/`index` の
 デフォルトは、include がその依存関係を置き換えた場合、引き続き V005 の整合の
 対象となります。

@@ -349,6 +349,77 @@ fn check_in_rigid_view<R>(
     Ok((result, observations.finish()))
 }
 
+/// Check the domain bounds of every local declaration in a rigid view.
+///
+/// A bound is checked against its target's type, which a rebinding instance
+/// specializes, so a bound that only matches the port's default (`param q: Q
+/// (min: 10.0 m)`) would compare values of different dimensions there.
+fn check_rigid_domain_bounds(
+    ctx: &DimCheckContext<'_>,
+    failure: RigidFailure<'_>,
+) -> Result<(), Outcome<SemanticError>> {
+    let dag = ctx.env.dag;
+    for (kind, name, declaration, annotation) in dag
+        .consts()
+        .map(|entry| {
+            (
+                DeclarationKind::ConstNode,
+                entry.name(),
+                entry.identity(),
+                &entry.type_ann,
+            )
+        })
+        .chain(dag.params().map(|entry| {
+            (
+                DeclarationKind::Param,
+                entry.name(),
+                entry.identity(),
+                &entry.type_ann,
+            )
+        }))
+        .chain(dag.nodes().map(|entry| {
+            (
+                DeclarationKind::Node,
+                entry.name(),
+                entry.identity(),
+                &entry.type_ann,
+            )
+        }))
+    {
+        let Some(declaration) = local_owner(ctx, declaration) else {
+            continue;
+        };
+        let Some(bounds) = dag.semantic.domain_bounds.get(&declaration) else {
+            continue;
+        };
+        let Some(expected) =
+            super::expected_bound_from_resolved(annotation.checked().resolved().element())
+        else {
+            continue;
+        };
+        let body = TemplateBodyIdentity {
+            kind,
+            name: name.atom().clone(),
+        };
+        for bound in bounds {
+            let checked =
+                infer_operand(ctx, Some(&declaration), &bound.value).and_then(|inferred| {
+                    super::check_one_bound(
+                        name,
+                        bound,
+                        &inferred,
+                        &expected,
+                        ctx.env.registry,
+                        ctx.env.src,
+                    )
+                    .map_err(Outcome::Failed)
+                });
+            rigid_dimension_error(ctx, &body, failure, bound.span, checked)?;
+        }
+    }
+    Ok(())
+}
+
 fn check_rigid_dimension_port(
     ctx: &DimCheckContext<'_>,
     port: &crate::hir::source_interface::StaticPort,
@@ -362,7 +433,10 @@ fn check_rigid_dimension_port(
         failure,
         ctx.env.src,
         ctx.cancellation,
-        |rigid| check_rigid_plot_bodies(rigid, failure),
+        |rigid| {
+            check_rigid_plot_bodies(rigid, failure)?;
+            check_rigid_domain_bounds(rigid, failure)
+        },
     )
     .map(drop)
 }

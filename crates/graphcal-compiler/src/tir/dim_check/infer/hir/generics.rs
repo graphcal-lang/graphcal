@@ -1,7 +1,5 @@
 //! Generic-argument inference and substitution for nominal types.
 
-use crate::generic_param::GenericArgArity;
-use crate::hir::nominal::NominalTypeDef;
 use crate::hir::types::{
     BuiltinType, DimArg, DimExpr, DimTermTarget, GenericArg, IndexRef, ValueType, ValueTypeKind,
 };
@@ -66,12 +64,11 @@ impl InferEnv<'_> {
                 },
             )),
             ValueTypeKind::TypeApplication { name, generic_args } => {
-                let type_def = self
+                let nominal = self
                     .dag
                     .semantic
                     .type_defs
                     .nominal(&name.value)
-                    .map(|nominal| nominal.definition().as_ref())
                     .ok_or_else(|| {
                         SemanticError::internal_error(
                             format!(
@@ -84,7 +81,7 @@ impl InferEnv<'_> {
                     })?;
                 Ok(CheckedType::Struct(
                     StructTypeRef::from_resolved(name.value.clone()),
-                    self.resolve_applied_generic_args(type_def, generic_args, name.span)?,
+                    self.resolve_applied_generic_args(nominal, generic_args, name.span)?,
                 ))
             }
         }
@@ -189,31 +186,28 @@ fn infer_hir_dim_expr_arg(
 impl InferEnv<'_> {
     pub(super) fn resolve_applied_generic_args(
         &self,
-        type_def: &NominalTypeDef,
+        nominal: &crate::tir::typed::ResolvedNominal,
         applied_generic_args: &[GenericArg],
         span: Span,
     ) -> Result<Vec<CheckedGenericArg<Symbolic>>, SemanticError> {
+        let type_def = nominal.definition();
         if applied_generic_args.is_empty() && type_def.generic_params().is_empty() {
             return Ok(Vec::new());
         }
         let total_params = type_def.generic_params().len();
-        let arity = GenericArgArity::of_defaults(
-            type_def
-                .generic_params()
-                .iter()
-                .map(|param| param.default().is_some()),
-        );
-        if !arity.accepts(applied_generic_args.len()) {
-            return Err(SemanticError::located(
-                self.src,
-                span,
-                StructError::GenericArgCount {
-                    type_name: type_def.name(),
-                    expected: arity,
-                    got: applied_generic_args.len(),
-                },
-            ));
-        }
+        let defaulted = nominal
+            .defaulted_generic_tail(applied_generic_args.len())
+            .map_err(|expected| {
+                SemanticError::located(
+                    self.src,
+                    span,
+                    StructError::GenericArgCount {
+                        type_name: type_def.name(),
+                        expected,
+                        got: applied_generic_args.len(),
+                    },
+                )
+            })?;
         let mut args = Vec::with_capacity(total_params);
         for (param, arg) in type_def.generic_params().iter().zip(applied_generic_args) {
             let inferred = self.infer_hir_sorted_generic_arg(arg)?;
@@ -222,27 +216,7 @@ impl InferEnv<'_> {
             }
             args.push(inferred);
         }
-        for param in type_def
-            .generic_params()
-            .iter()
-            .skip(applied_generic_args.len())
-        {
-            let resolved_default = &self
-                .dag
-                .semantic
-                .type_defs
-                .generic_defaults
-                .get(param.id())
-                .ok_or_else(|| {
-                    SemanticError::located(
-                        self.src,
-                        span,
-                        StructError::MissingGenericDefault {
-                            param: param.name().clone(),
-                        },
-                    )
-                })?
-                .resolved;
+        for (_, resolved_default) in defaulted {
             let subs = generic_substitution_prefix(type_def, &args, self.src, span)?;
             args.push(
                 instantiate_concrete_generic_arg(resolved_default, &subs, self.src)?.to_symbolic(),

@@ -61,34 +61,23 @@ fn closed_binding_cardinality(
     expr: &graphcal_compiler::desugar::desugared_ast::NatExpr,
     file_src: SourceId,
 ) -> Result<u64, SemanticError> {
-    use graphcal_compiler::desugar::desugared_ast::NatExpr;
-    let overflow = |span: graphcal_compiler::syntax::span::Span| {
-        SemanticError::located(
+    use graphcal_compiler::syntax::nat_eval::ClosedNat;
+    match expr.closed_value() {
+        Ok(ClosedNat::Value(value)) => Ok(value),
+        Ok(ClosedNat::Open { first_var }) => Err(SemanticError::located(
             file_src,
-            span,
+            first_var.span,
+            IndexError::UnknownIndex {
+                name: IndexName::classify(first_var.name.atom().clone()).into(),
+            },
+        )),
+        Err(overflow) => Err(SemanticError::located(
+            file_src,
+            overflow.span,
             IndexError::NatOverflow {
                 error: graphcal_compiler::nat::NatOverflowError,
             },
-        )
-    };
-    match expr {
-        NatExpr::Literal(value, _) => Ok(*value),
-        NatExpr::Var(ident) => Err(SemanticError::located(
-            file_src,
-            ident.span,
-            IndexError::UnknownIndex {
-                name: IndexName::classify(ident.name.atom().clone()).into(),
-            },
         )),
-        NatExpr::Add(operands, span) => operands.iter().try_fold(0_u64, |sum, operand| {
-            sum.checked_add(closed_binding_cardinality(operand, file_src)?)
-                .ok_or_else(|| overflow(*span))
-        }),
-        NatExpr::Mul(operands, span) => operands.iter().try_fold(1_u64, |product, operand| {
-            product
-                .checked_mul(closed_binding_cardinality(operand, file_src)?)
-                .ok_or_else(|| overflow(*span))
-        }),
     }
 }
 

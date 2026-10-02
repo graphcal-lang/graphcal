@@ -1293,6 +1293,16 @@ role = "contracts"
 
 [[module]]
 package = "compiler"
+path = ["syntax", "nat_eval"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["syntax", "nat_eval", "tests"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
 path = ["syntax", "names", "tests"]
 role = "contracts"
 
@@ -1886,6 +1896,16 @@ role = "contracts"
 [[module]]
 package = "compiler"
 path = ["tir", "typed", "specialization"]
+role = "checking"
+
+[[module]]
+package = "compiler"
+path = ["tir", "typed", "complete_substitution"]
+role = "checking"
+
+[[module]]
+package = "compiler"
+path = ["tir", "typed", "complete_substitution", "tests"]
 role = "checking"
 
 [[module]]

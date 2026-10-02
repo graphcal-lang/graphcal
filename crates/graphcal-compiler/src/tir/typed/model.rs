@@ -8,7 +8,6 @@ use thiserror::Error;
 use crate::assertion_expectation::ExpectedFail;
 use crate::dimension::Dimension;
 use crate::display::formatting_registry::FormattingRegistry;
-use crate::generic_param::GenericParamId;
 use crate::hir::nominal::NominalTypeDef;
 use crate::resolved_name::{
     ResolvedConstructorName, ResolvedDeclName, ResolvedDimName, ResolvedIndexName,
@@ -28,7 +27,7 @@ use crate::syntax::type_name::{ConstructorName, FieldName};
 use super::resolved_nominal::{
     ConstrainedField, NominalMember, ResolvedDomainBound, ResolvedNominal,
 };
-use super::resolved_type::{ResolvedDeclType, ResolvedGenericArg};
+use super::resolved_type::ResolvedDeclType;
 
 /// Convert a [`NatOverflowError`](crate::nat::NatOverflowError)
 /// into a spanned [`SemanticError`].
@@ -427,23 +426,12 @@ pub struct ResolvedDagDependencies {
     pub const_deps: HashMap<ResolvedDeclName, BTreeSet<ResolvedDeclName>>,
 }
 
-/// Semantic resolution of one HIR generic-parameter default.
-///
-/// The canonical HIR form remains authoritative on [`NominalGenericParam`];
-/// this sidecar stores only the later semantic fact used for substitution.
-#[derive(Debug, Clone)]
-pub(crate) struct ResolvedGenericDefault {
-    pub(crate) resolved: ResolvedGenericArg,
-}
-
 /// Canonical type definitions referenced by module-aware TIR.
 #[derive(Debug, Clone, Default)]
 pub struct ResolvedTypeDefs {
     /// Each nominal type with its fields' semantics, keyed by its own
     /// identity.
     nominals: HashMap<ResolvedStructTypeName, ResolvedNominal>,
-    /// Generic parameter defaults resolved in the owning type's generic scope.
-    pub(crate) generic_defaults: HashMap<GenericParamId, ResolvedGenericDefault>,
 }
 
 impl ResolvedTypeDefs {
@@ -453,12 +441,6 @@ impl ResolvedTypeDefs {
                 .nominals
                 .iter()
                 .map(|(name, nominal)| (name.clone(), nominal.clone())),
-        );
-        self.generic_defaults.extend(
-            other
-                .generic_defaults
-                .iter()
-                .map(|(key, default)| (key.clone(), default.clone())),
         );
     }
 

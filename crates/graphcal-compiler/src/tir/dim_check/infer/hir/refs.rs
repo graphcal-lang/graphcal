@@ -77,11 +77,15 @@ impl Infer<'_> {
                         },
                     ));
                 }
-                let type_args = self.env.resolve_applied_generic_args(
-                    target_def.definition(),
-                    &[],
+                let member = crate::tir::dim_check::generic_substitution::recorded_member(
+                    self.env.dag,
+                    target_def,
+                    self.env.src,
                     target.span,
                 )?;
+                let type_args =
+                    self.env
+                        .resolve_applied_generic_args(member.nominal(), &[], target.span)?;
                 Ok(CheckedType::Struct(
                     StructTypeRef::from_resolved(target_def.owning_type().clone()),
                     type_args,

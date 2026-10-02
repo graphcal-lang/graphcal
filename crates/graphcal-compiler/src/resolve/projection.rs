@@ -354,17 +354,11 @@ fn finite_index_binding(value: &ast::Expr) -> Option<FiniteIndex> {
     }
 }
 
-/// Evaluate a variable-free natural-number expression, or `None` when it has
-/// a variable or overflows.
+/// The value of a variable-free natural-number expression, or `None` when it
+/// has a variable or overflows: either way it names no concrete index here.
 fn concrete_nat_value(expr: &ast::NatExpr) -> Option<u64> {
-    match expr {
-        ast::NatExpr::Literal(value, _) => Some(*value),
-        ast::NatExpr::Var(_) => None,
-        ast::NatExpr::Add(operands, _) => operands.iter().try_fold(0_u64, |sum, operand| {
-            sum.checked_add(concrete_nat_value(operand)?)
-        }),
-        ast::NatExpr::Mul(operands, _) => operands.iter().try_fold(1_u64, |product, operand| {
-            product.checked_mul(concrete_nat_value(operand)?)
-        }),
+    match expr.closed_value() {
+        Ok(crate::syntax::nat_eval::ClosedNat::Value(value)) => Some(value),
+        Ok(crate::syntax::nat_eval::ClosedNat::Open { .. }) | Err(_) => None,
     }
 }

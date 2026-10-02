@@ -42,6 +42,7 @@ pub mod checked_instance;
 pub use checked_instance::*;
 pub mod checked;
 pub mod checked_dag;
+pub(crate) mod complete_substitution;
 pub use checked_dag::*;
 pub mod dag_position;
 pub mod dag_store;
@@ -276,6 +277,7 @@ impl TirDraft {
     ) -> Result<InstantiatedTir, SemanticError> {
         let mut tir = self.finish();
         specialization::instantiate_semantic_edges(&mut tir, src)?;
+        augment_runtime_deps_for_dynamic_units(&mut tir);
         overrides.reconcile(&mut tir);
         Ok(InstantiatedTir { tir })
     }
@@ -317,7 +319,6 @@ fn finalize_hir_dag(
     cancellation: &crate::cancellation::CancellationToken,
 ) -> Result<(), Outcome<SemanticError>> {
     cancellation.checkpoint()?;
-    augment_runtime_deps_for_dynamic_units(dag);
     dag.populate_projectable_outputs(surface);
     cancellation.checkpoint()?;
     validate_public_generic_defaults(dag, surface, module_ctx, src)?;
@@ -527,16 +528,21 @@ fn resolve_declared_types<'d>(
         .collect::<HashMap<_, _>>();
     let mut views = HashMap::new();
     for substitution in projection_substitutions.values() {
-        views.insert(*substitution, instance_type_view(types, substitution, src)?);
+        let complete = complete_substitution::CompleteSubstitution::try_new(substitution, types)
+            .map_err(|error| error.into_graphcal(src))?;
+        views.insert(
+            *substitution,
+            (instance_type_view(types, substitution, src)?, complete),
+        );
     }
     let mut resolved = Vec::new();
     for (identity, decl_type) in declarations {
         cancellation.checkpoint()?;
-        let ty = match projection_substitutions.get(&identity.to_unowned_def_name()) {
-            Some(substitution) => {
-                let view = views.get(substitution).map_or(types, AsRef::as_ref);
-                resolve_instance_decl_type(decl_type, substitution, view, types, src)?
-            }
+        let instance = projection_substitutions
+            .get(&identity.to_unowned_def_name())
+            .and_then(|substitution| views.get(substitution));
+        let ty = match instance {
+            Some((view, complete)) => resolve_instance_decl_type(decl_type, complete, view, src)?,
             None => type_expr::resolve_hir_decl_type_with_project_types(decl_type, src, types)?,
         };
         resolved.push((identity, ty));
@@ -573,13 +579,12 @@ fn instance_type_view<'s>(
 /// specialize it through the include's `substitution`.
 fn resolve_instance_decl_type(
     decl_type: &crate::hir::types::DeclType,
-    substitution: &crate::ir::static_substitution::StaticSubstitution,
+    substitution: &complete_substitution::CompleteSubstitution<'_>,
     view: &ProjectTypeStore,
-    types: &ProjectTypeStore,
     src: SourceId,
 ) -> Result<ResolvedDeclType, SemanticError> {
     let template_type = type_expr::resolve_hir_decl_type_with_project_types(decl_type, src, view)?;
-    specialization::specialize_type(&template_type, substitution, types, src)
+    specialization::specialize_type(&template_type, substitution, src)
 }
 
 /// Declaration domain bounds keyed by the canonical declaration they bound.
@@ -1088,33 +1093,33 @@ impl<'d, 'c> TypeDefCollector<'d, 'c> {
         };
         let definition_src = type_def.source();
 
-        for param in type_def.generic_params() {
-            if let Some(default) = param.default() {
-                let resolved = resolve_hir_generic_arg(param, default, definition_src, ctx)?;
-                if let ResolvedGenericArg::Type(type_expr) = &resolved {
-                    self.resolved_type(type_expr)?;
-                }
-                self.defs
-                    .generic_defaults
-                    .insert(param.id().clone(), ResolvedGenericDefault { resolved });
+        let defaults =
+            ResolvedGenericDefaults::try_resolve(Arc::clone(&type_def), |param, default| {
+                resolve_hir_generic_arg(param, default, definition_src, ctx)
+            })?;
+        for resolved in defaults.resolved() {
+            if let ResolvedGenericArg::Type(type_expr) = resolved {
+                self.resolved_type(type_expr)?;
             }
         }
 
         let instance_view = type_def
             .instance_substitution()
             .map(|substitution| {
+                let complete =
+                    complete_substitution::CompleteSubstitution::try_new(substitution, ctx.types)
+                        .map_err(|error| error.into_graphcal(definition_src))?;
                 instance_type_view(ctx.types, substitution, definition_src)
-                    .map(|view| (substitution, view))
+                    .map(|view| (complete, view))
             })
             .transpose()?;
-        let nominal = ResolvedNominal::try_resolve(Arc::clone(&type_def), |_, field| {
+        let nominal = ResolvedNominal::try_resolve(defaults, |_, field| {
             let annotation = field.type_annotation();
             let resolved = match &instance_view {
                 Some((substitution, view)) => resolve_instance_decl_type(
                     &annotation.decl_type,
                     substitution,
                     view,
-                    ctx.types,
                     definition_src,
                 )?,
                 None => resolve_hir_decl_type(&annotation.decl_type, definition_src, ctx)?,

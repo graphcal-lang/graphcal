@@ -282,11 +282,6 @@ pub enum StructError {
         field: FieldName,
         constructor: ConstructorName,
     },
-    #[error("internal: unknown field `{field}` in constructor `{constructor}`")]
-    UnresolvedConstructionField {
-        field: FieldName,
-        constructor: ConstructorName,
-    },
     #[error("constructor `{constructor}` requires field arguments")]
     ConstructorRequiresFields { constructor: ConstructorName },
     #[error("type `{type_name}` expects {expected} generic argument(s), got {got}")]
@@ -295,8 +290,6 @@ pub enum StructError {
         expected: GenericArgArity,
         got: usize,
     },
-    #[error("internal: generic parameter `{param}` has no default")]
-    MissingGenericDefault { param: GenericParamName },
     #[error("type `{type_name}` expects at most {maximum} generic arguments, got {got}")]
     TooManyGenericArgs {
         type_name: StructTypeName,
@@ -360,10 +353,8 @@ impl DiagnosticKind for StructError {
             Self::UnmatchableType { .. } => "graphcal::S020",
             Self::EmptyMatch => "graphcal::S021",
             Self::DuplicateConstructionField { .. } => "graphcal::S022",
-            Self::UnresolvedConstructionField { .. } => "graphcal::S023",
             Self::ConstructorRequiresFields { .. } => "graphcal::S024",
             Self::GenericArgCount { .. } => "graphcal::S025",
-            Self::MissingGenericDefault { .. } => "graphcal::S026",
             Self::TooManyGenericArgs { .. } => "graphcal::S027",
             Self::ConcreteGenericArgCount { .. } => "graphcal::S028",
             Self::NonConcreteGenericArgument { .. } => "graphcal::S029",
@@ -400,10 +391,8 @@ impl DiagnosticKind for StructError {
             | Self::UnmatchableType { .. }
             | Self::EmptyMatch
             | Self::DuplicateConstructionField { .. }
-            | Self::UnresolvedConstructionField { .. }
             | Self::ConstructorRequiresFields { .. }
             | Self::GenericArgCount { .. }
-            | Self::MissingGenericDefault { .. }
             | Self::TooManyGenericArgs { .. }
             | Self::ConcreteGenericArgCount { .. }
             | Self::NonConcreteGenericArgument { .. }
@@ -431,10 +420,8 @@ impl DiagnosticKind for StructError {
             | Self::UnmatchableType { .. }
             | Self::EmptyMatch
             | Self::DuplicateConstructionField { .. }
-            | Self::UnresolvedConstructionField { .. }
             | Self::ConstructorRequiresFields { .. }
             | Self::GenericArgCount { .. }
-            | Self::MissingGenericDefault { .. }
             | Self::TooManyGenericArgs { .. }
             | Self::ConcreteGenericArgCount { .. }
             | Self::NonConcreteGenericArgument { .. }
@@ -474,10 +461,8 @@ impl DiagnosticKind for StructError {
             | Self::UnmatchableType { .. }
             | Self::EmptyMatch
             | Self::DuplicateConstructionField { .. }
-            | Self::UnresolvedConstructionField { .. }
             | Self::ConstructorRequiresFields { .. }
             | Self::GenericArgCount { .. }
-            | Self::MissingGenericDefault { .. }
             | Self::TooManyGenericArgs { .. }
             | Self::ConcreteGenericArgCount { .. }
             | Self::NonConcreteGenericArgument { .. }
