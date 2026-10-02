@@ -1,6 +1,7 @@
 //! Include assembly and typed substitution for unfrozen per-DAG IR.
 
 use crate::semantic_error::visibility::OverriddenKind;
+use crate::semantic_error::visibility::OverrideMention;
 use std::collections::{HashMap, HashSet};
 
 use crate::declaration_category::DeclCategory;
@@ -319,7 +320,7 @@ struct NominalOverridePreflight<'a> {
 }
 
 impl NominalOverridePreflight<'_> {
-    fn check_label(&self, index: &IndexName, detail: String) -> Result<(), SemanticError> {
+    fn check_label(&self, index: &IndexName, detail: OverrideMention) -> Result<(), SemanticError> {
         let Ok(symbol) = self.resolver.resolve_index_path(
             self.dependency_owner,
             &crate::syntax::names::NamePath::local(index.atom().clone()),
@@ -333,7 +334,7 @@ impl NominalOverridePreflight<'_> {
             self.importer_src,
             self.include_span,
             VisibilityError::IncludeMustReconcileOverride {
-                overridden: index.to_string(),
+                overridden: index.atom().clone(),
                 overridden_kind: OverriddenKind::Index,
                 orphan_decl: self.orphan_decl.clone(),
                 detail,
@@ -344,7 +345,7 @@ impl NominalOverridePreflight<'_> {
     fn check_constructor(
         &self,
         constructor: &ConstructorName,
-        detail: String,
+        detail: OverrideMention,
     ) -> Result<(), SemanticError> {
         let Ok(symbol) = self.resolver.resolve_constructor_path(
             self.dependency_owner,
@@ -361,7 +362,7 @@ impl NominalOverridePreflight<'_> {
             self.importer_src,
             self.include_span,
             VisibilityError::IncludeMustReconcileOverride {
-                overridden: owning_type.to_string(),
+                overridden: owning_type.atom().clone(),
                 overridden_kind: OverriddenKind::Type,
                 orphan_decl: self.orphan_decl.clone(),
                 detail,
@@ -380,12 +381,21 @@ impl ExprVisitor<crate::syntax::phase::Desugared> for NominalOverridePreflight<'
         match reference {
             crate::syntax::ast::UnresolvedRef::IndexLabel { index, label, .. } => {
                 let name = IndexName::classify(index.leaf().name.atom().clone());
-                self.check_label(&name, format!("`{index}#{}`", label.value))
+                self.check_label(
+                    &name,
+                    OverrideMention::WrittenLabel {
+                        index: index.to_name_path(),
+                        variant: label.value.clone(),
+                    },
+                )
             }
             crate::syntax::ast::UnresolvedRef::Path(path) => {
                 if let Some(name) = path.as_bare() {
                     let constructor = ConstructorName::classify(name.name.atom().clone());
-                    self.check_constructor(&constructor, format!("constructor `{constructor}`"))?;
+                    self.check_constructor(
+                        &constructor,
+                        OverrideMention::WrittenConstructor(constructor.clone()),
+                    )?;
                 }
                 Ok(())
             }
@@ -397,7 +407,13 @@ impl ExprVisitor<crate::syntax::phase::Desugared> for NominalOverridePreflight<'
             for arg in args {
                 if let crate::desugar::desugared_ast::IndexArg::Variant { index, variant } = arg {
                     let name = IndexName::classify(index.value.leaf().clone());
-                    self.check_label(&name, format!("`{}#{}`", index.value, variant.value))?;
+                    self.check_label(
+                        &name,
+                        OverrideMention::WrittenLabel {
+                            index: index.value.clone(),
+                            variant: variant.value.clone(),
+                        },
+                    )?;
                 }
             }
         }
@@ -411,9 +427,15 @@ impl ExprVisitor<crate::syntax::phase::Desugared> for NominalOverridePreflight<'
     ) -> Result<(), Self::Error> {
         for entry in entries {
             for key in &entry.keys {
-                if let crate::syntax::ast::MapEntryKey::Named { index, .. } = key {
+                if let crate::syntax::ast::MapEntryKey::Named { index, variant, .. } = key {
                     let index_name = IndexName::classify(index.value.leaf().clone());
-                    self.check_label(&index_name, format!("`{key}`"))?;
+                    self.check_label(
+                        &index_name,
+                        OverrideMention::WrittenLabel {
+                            index: index.value.clone(),
+                            variant: variant.value.clone(),
+                        },
+                    )?;
                 }
             }
             self.visit_expr(&entry.value)?;
@@ -434,21 +456,27 @@ impl ExprVisitor<crate::syntax::phase::Desugared> for NominalOverridePreflight<'
                     index, variant, ..
                 } => {
                     let name = IndexName::classify(index.value.leaf().clone());
-                    self.check_label(&name, format!("`{}#{}`", index.value, variant.value))?;
+                    self.check_label(
+                        &name,
+                        OverrideMention::WrittenLabel {
+                            index: index.value.clone(),
+                            variant: variant.value.clone(),
+                        },
+                    )?;
                 }
                 crate::desugar::desugared_ast::MatchPattern::Path { path, .. } => {
                     if let Some(name) = path.as_bare() {
                         let constructor = ConstructorName::classify(name.name.atom().clone());
                         self.check_constructor(
                             &constructor,
-                            format!("match constructor `{constructor}`"),
+                            OverrideMention::MatchConstructor(constructor.clone()),
                         )?;
                     }
                 }
                 crate::desugar::desugared_ast::MatchPattern::Constructor { name, .. } => {
                     self.check_constructor(
                         &name.value,
-                        format!("match constructor `{}`", name.value),
+                        OverrideMention::MatchConstructor(name.value.clone()),
                     )?;
                 }
             }
@@ -466,7 +494,10 @@ impl ExprVisitor<crate::syntax::phase::Desugared> for NominalOverridePreflight<'
             && let Some(name) = callee.as_bare()
         {
             let constructor = ConstructorName::classify(name.name.atom().clone());
-            self.check_constructor(&constructor, format!("constructor `{constructor}(...)`"))?;
+            self.check_constructor(
+                &constructor,
+                OverrideMention::WrittenConstructorCall(constructor.clone()),
+            )?;
         }
         fields
             .iter()

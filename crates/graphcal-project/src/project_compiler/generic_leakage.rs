@@ -1,5 +1,6 @@
 //! Generic type-system leakage analysis at include boundaries.
 
+use graphcal_compiler::semantic_error::visibility::ReexportedDeclarationKind;
 #[allow(
     clippy::wildcard_imports,
     clippy::allow_attributes,
@@ -100,28 +101,20 @@ const fn static_namespace(name: &ResolvedStaticName) -> ImportItemNamespace {
     }
 }
 
-const fn namespace_diagnostic_name(namespace: ImportItemNamespace) -> &'static str {
-    match namespace {
-        ImportItemNamespace::Term => "term",
-        ImportItemNamespace::Type => "type",
-        ImportItemNamespace::Dimension => "dim",
-        ImportItemNamespace::Unit => "unit",
-        ImportItemNamespace::Index => "index",
-    }
-}
-
 /// Diagnostic noun for a declaration an include brace item (`{ pub name }`)
 /// can re-export with a checked signature, or `None` for declarations whose
 /// signature is outside the V006 check.
-const fn reexported_declaration_kind(kind: IntroducedKind) -> Option<&'static str> {
+const fn reexported_declaration_kind(kind: IntroducedKind) -> Option<ReexportedDeclarationKind> {
     match kind {
-        IntroducedKind::Param => Some("param"),
-        IntroducedKind::Node => Some("node"),
-        IntroducedKind::ConstNode => Some("const node"),
-        IntroducedKind::BaseDimension | IntroducedKind::Dimension => Some("dim"),
-        IntroducedKind::Unit => Some("unit"),
-        IntroducedKind::Index => Some("index"),
-        IntroducedKind::Type => Some("type"),
+        IntroducedKind::Param => Some(ReexportedDeclarationKind::Param),
+        IntroducedKind::Node => Some(ReexportedDeclarationKind::Node),
+        IntroducedKind::ConstNode => Some(ReexportedDeclarationKind::ConstNode),
+        IntroducedKind::BaseDimension | IntroducedKind::Dimension => {
+            Some(ReexportedDeclarationKind::Dimension)
+        }
+        IntroducedKind::Unit => Some(ReexportedDeclarationKind::Unit),
+        IntroducedKind::Index => Some(ReexportedDeclarationKind::Index),
+        IntroducedKind::Type => Some(ReexportedDeclarationKind::Type),
         IntroducedKind::Assert
         | IntroducedKind::Plot
         | IntroducedKind::Figure
@@ -163,7 +156,7 @@ pub(super) fn check_generics_leakage(
         let Some(introduced) = decl.kind.declared_name() else {
             continue;
         };
-        let Some(decl_kind_str) = reexported_declaration_kind(introduced.kind()) else {
+        let Some(decl_kind) = reexported_declaration_kind(introduced.kind()) else {
             continue;
         };
         let decl_name = introduced.atom();
@@ -191,7 +184,7 @@ pub(super) fn check_generics_leakage(
                         return Err(PipelineError::Semantic(SemanticError::internal_error(
                             format!(
                                 "required {} binding `{reference_name}` is absent during generic-leakage analysis",
-                                namespace_diagnostic_name(*namespace),
+                                namespace.noun(),
                             ),
                             importer_src,
                             DiagnosticAnchor::Source(include_span),
@@ -216,10 +209,10 @@ pub(super) fn check_generics_leakage(
                     importer_src,
                     include_span,
                     VisibilityError::GenericsLeakage {
-                        reexport_kind: decl_kind_str.to_string(),
-                        reexport_name: decl_name.to_string(),
-                        leaked_kind: namespace_diagnostic_name(namespace).to_string(),
-                        leaked_name: substituted.atom().to_string(),
+                        reexport_kind: decl_kind,
+                        reexport_name: decl_name.clone(),
+                        leaked_kind: namespace,
+                        leaked_name: substituted.atom().clone(),
                     },
                 )));
             }

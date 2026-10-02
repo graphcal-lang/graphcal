@@ -3,6 +3,7 @@
 use crate::hir::types::{GenericArg, IndexRef, ValueType, ValueTypeKind};
 use crate::resolved_name::{ResolvedConstructorName, ResolvedStructTypeName};
 use crate::semantic_error::visibility::OverriddenKind;
+use crate::semantic_error::visibility::OverrideMention;
 use crate::semantic_error::visibility::VisibilityError;
 
 use crate::semantic::checked_type::{IndexTypeRef, Symbolic};
@@ -79,20 +80,25 @@ impl Infer<'_> {
                     continue;
                 }
                 let detail = match nominal_use {
-                    TypeNominalUse::Field { field, .. } => {
-                        format!("field `{field}` of type `{overridden}`")
+                    TypeNominalUse::Field { field, .. } => OverrideMention::Field {
+                        field: (*field).clone(),
+                        owner: overridden.clone(),
+                    },
+                    TypeNominalUse::Constructor { constructor, .. } => {
+                        OverrideMention::Constructor {
+                            constructor: constructor.to_unowned_def_name(),
+                            owner: overridden.clone(),
+                        }
                     }
-                    TypeNominalUse::Constructor { constructor, .. } => format!(
-                        "constructor `{}` of type `{overridden}`",
-                        constructor.as_str()
-                    ),
-                    TypeNominalUse::TypeArgument => format!("type `{overridden}`"),
+                    TypeNominalUse::TypeArgument => {
+                        OverrideMention::TypeArgument(overridden.clone())
+                    }
                 };
                 return Err(SemanticError::located(
                     reconciliation.src,
                     reconciliation.include_span,
                     VisibilityError::IncludeMustReconcileOverride {
-                        overridden: overridden.to_string(),
+                        overridden: overridden.atom().clone(),
                         overridden_kind: OverriddenKind::Type,
                         orphan_decl: reconciliation.orphan_decl(),
                         detail,
@@ -149,16 +155,19 @@ impl Infer<'_> {
                     continue;
                 }
                 let detail = match nominal_use {
-                    IndexNominalUse::Label(variant) => {
-                        format!("index label `{overridden}#{variant}`")
+                    IndexNominalUse::Label(variant) => OverrideMention::IndexLabel {
+                        index: overridden.clone(),
+                        variant: (*variant).clone(),
+                    },
+                    IndexNominalUse::TypeArgument => {
+                        OverrideMention::IndexArgument(overridden.clone())
                     }
-                    IndexNominalUse::TypeArgument => format!("index `{overridden}`"),
                 };
                 return Err(SemanticError::located(
                     reconciliation.src,
                     reconciliation.include_span,
                     VisibilityError::IncludeMustReconcileOverride {
-                        overridden: overridden.to_string(),
+                        overridden: overridden.atom().clone(),
                         overridden_kind: OverriddenKind::Index,
                         orphan_decl: reconciliation.orphan_decl(),
                         detail,

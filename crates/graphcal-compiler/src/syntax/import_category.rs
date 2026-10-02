@@ -22,6 +22,15 @@ pub enum ImportItemNamespace {
 }
 
 impl ImportItemNamespace {
+    /// Diagnostic noun for this category: its source marker, or `term`.
+    #[must_use]
+    pub const fn noun(self) -> &'static str {
+        match self.marker() {
+            Some(marker) => marker,
+            None => "term",
+        }
+    }
+
     /// Source marker for this category, or `None` for a bare term item.
     #[must_use]
     pub const fn marker(self) -> Option<&'static str> {

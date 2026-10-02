@@ -334,3 +334,78 @@ fn structure_payloads_render_their_names_as_before() {
         "x"
     );
 }
+
+#[test]
+fn visibility_payloads_render_their_mentions_as_before() {
+    use super::visibility::{OverrideMention, ReexportedDeclarationKind};
+    use crate::syntax::ast::ImportItemNamespace;
+    use crate::syntax::index_name::{IndexName, IndexVariantName};
+    use crate::syntax::names::{NameAtom, NamePath};
+    use crate::syntax::type_name::{ConstructorName, FieldName, StructTypeName};
+
+    let owner = StructTypeName::expect_valid("Record");
+    let index = IndexName::expect_valid("Phase");
+    let variant = IndexVariantName::expect_valid("Launch");
+    let constructor = ConstructorName::expect_valid("Pick");
+    let cases = [
+        (
+            OverrideMention::Field {
+                field: FieldName::expect_valid("mass"),
+                owner: owner.clone(),
+            },
+            "field `mass` of type `Record`",
+        ),
+        (
+            OverrideMention::Constructor {
+                constructor: constructor.clone(),
+                owner: owner.clone(),
+            },
+            "constructor `Pick` of type `Record`",
+        ),
+        (OverrideMention::TypeArgument(owner), "type `Record`"),
+        (
+            OverrideMention::IndexLabel {
+                index: index.clone(),
+                variant: variant.clone(),
+            },
+            "index label `Phase#Launch`",
+        ),
+        (OverrideMention::IndexArgument(index), "index `Phase`"),
+        (
+            OverrideMention::WrittenLabel {
+                index: NamePath::local(NameAtom::parse("Phase").unwrap()),
+                variant,
+            },
+            "`Phase#Launch`",
+        ),
+        (
+            OverrideMention::WrittenConstructor(constructor.clone()),
+            "constructor `Pick`",
+        ),
+        (
+            OverrideMention::WrittenConstructorCall(constructor.clone()),
+            "constructor `Pick(...)`",
+        ),
+        (
+            OverrideMention::MatchConstructor(constructor),
+            "match constructor `Pick`",
+        ),
+    ];
+    for (mention, expected) in cases {
+        assert_eq!(mention.to_string(), expected);
+    }
+    let kinds = [
+        (ReexportedDeclarationKind::Param, "param"),
+        (ReexportedDeclarationKind::Node, "node"),
+        (ReexportedDeclarationKind::ConstNode, "const node"),
+        (ReexportedDeclarationKind::Dimension, "dim"),
+        (ReexportedDeclarationKind::Unit, "unit"),
+        (ReexportedDeclarationKind::Index, "index"),
+        (ReexportedDeclarationKind::Type, "type"),
+    ];
+    for (kind, expected) in kinds {
+        assert_eq!(kind.to_string(), expected);
+    }
+    assert_eq!(ImportItemNamespace::Term.noun(), "term");
+    assert_eq!(ImportItemNamespace::Dimension.noun(), "dim");
+}

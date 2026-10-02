@@ -219,7 +219,7 @@ pub(super) fn process_file_body_declarations<'a>(
                 file_src,
                 include.path.leaf().span,
                 VisibilityError::ImportPrivateItem {
-                    name: target.target().leaf().to_string(),
+                    name: include.path.leaf().name.atom().clone(),
                     file_path: DagReference::Path(include.path.clone()),
                 },
             ))
@@ -253,7 +253,7 @@ fn ensure_include_item_selectable(
             file_src,
             span,
             VisibilityError::ImportPrivateItem {
-                name: name.to_string(),
+                name: name.clone(),
                 file_path: file_path.clone(),
             },
         ))),
@@ -1467,7 +1467,7 @@ pub(super) fn process_pure_import<'a>(
                             file_src,
                             import_item.name.span,
                             VisibilityError::ImportPrivateItem {
-                                name: orig_name.to_string(),
+                                name: orig_name.atom().clone(),
                                 file_path: DagReference::Path(import_path.clone()),
                             },
                         )));

@@ -264,7 +264,7 @@ fn structured_data(error: &CompileError) -> Option<serde_json::Value> {
             kind:
                 SemanticErrorKind::Visibility(VisibilityError::GenericsLeakage { leaked_name, .. }),
             ..
-        }) => Some(serde_json::json!({ "referencedName": leaked_name })),
+        }) => Some(serde_json::json!({ "referencedName": leaked_name.as_str() })),
         // D020: an exact replacement exists only when the decimal spelling
         // maps exactly into the dimension rational model.
         SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {

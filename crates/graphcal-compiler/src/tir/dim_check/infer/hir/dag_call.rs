@@ -130,7 +130,6 @@ impl Infer<'_> {
                     },
                 )
             })?;
-        let output_name = output_key.as_str();
         if !dag_tir
             .projectable_outputs
             .contains(&output_key.to_unowned_def_name())
@@ -139,7 +138,7 @@ impl Infer<'_> {
                 self.env.src,
                 output.span,
                 VisibilityError::ImportPrivateItem {
-                    name: output_name.to_string(),
+                    name: output_key.atom().clone(),
                     file_path: DagReference::Dag(target.value.clone()),
                 },
             )

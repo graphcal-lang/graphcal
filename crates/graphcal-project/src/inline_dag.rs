@@ -134,7 +134,7 @@ pub fn preprocess_dag_body_self_imports(
                                 src,
                                 span,
                                 VisibilityError::ImportPrivateItem {
-                                    name: orig_name.to_string(),
+                                    name: orig_name.atom().clone(),
                                     file_path: DagReference::Path(import_decl.path().clone()),
                                 },
                             ));

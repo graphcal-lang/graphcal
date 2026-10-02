@@ -30,7 +30,7 @@ pub(super) fn module_resolve_compile_error(
             src,
             src.whole_span(),
             VisibilityError::ImportPrivateItem {
-                name: name.to_string(),
+                name,
                 file_path: DagReference::Dag(owner),
             },
         )),

@@ -6929,7 +6929,7 @@ fn project_include_overrides_index_no_param_binding_v005() {
                 }),
             ..
         })) => {
-            assert_eq!(overridden, "Phase");
+            assert_eq!(overridden.as_str(), "Phase");
             assert_eq!(overridden_kind.to_string(), "index");
             assert_eq!(orphan_decl.as_str(), "cost");
         }
@@ -7021,9 +7021,9 @@ fn project_selective_include_leaks_private_type_v006() {
                 }),
             ..
         })) => {
-            assert_eq!(reexport_name, "origin");
-            assert_eq!(leaked_name, "PrivateInner");
-            assert_eq!(leaked_kind, "type");
+            assert_eq!(reexport_name.as_str(), "origin");
+            assert_eq!(leaked_name.as_str(), "PrivateInner");
+            assert_eq!(leaked_kind.noun(), "type");
         }
         other => panic!("expected GenericsLeakage, got {other:?}"),
     }
@@ -7050,9 +7050,9 @@ fn project_selective_include_rejects_private_generic_default_binding() {
                 }),
             ..
         })) => {
-            assert_eq!(reexport_name, "Wrapper");
-            assert_eq!(leaked_name, "PrivateElement");
-            assert_eq!(leaked_kind, "type");
+            assert_eq!(reexport_name.as_str(), "Wrapper");
+            assert_eq!(leaked_name.as_str(), "PrivateElement");
+            assert_eq!(leaked_kind.noun(), "type");
         }
         other => panic!("expected generic-default GenericsLeakage, got {other:?}"),
     }
@@ -7639,7 +7639,7 @@ node used: Force = @internal_scratch;
     assert!(matches!(
         error,
         CompileError::Eval(RenderedSemanticError { error: SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic { kind: SemanticErrorKind::Visibility(VisibilityError::ImportPrivateItem { name, .. }), .. }), .. })
-            if name == "internal_scratch"
+            if name.as_str() == "internal_scratch"
     ));
 }
 
@@ -7660,7 +7660,7 @@ node used: Force = @inst::internal_scratch;
     assert!(matches!(
         error,
         CompileError::Eval(RenderedSemanticError { error: SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic { kind: SemanticErrorKind::Visibility(VisibilityError::ImportPrivateItem { name, .. }), .. }), .. })
-            if name == "internal_scratch"
+            if name.as_str() == "internal_scratch"
     ));
 }
 

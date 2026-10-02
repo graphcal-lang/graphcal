@@ -10,10 +10,13 @@ use crate::declaration_kind::DeclarationKind;
 use crate::diagnostic::{DiagnosticKind, SecondaryLabel};
 use crate::semantic_error::graph::DagReference;
 use crate::static_interface::StaticInputKind;
+use crate::syntax::ast::ImportItemNamespace;
 use crate::syntax::decl_name::DeclName;
 use crate::syntax::index_name::{IndexName, IndexVariantName};
 use crate::syntax::names::NameAtom;
+use crate::syntax::names::NamePath;
 use crate::syntax::span::Span;
+use crate::syntax::type_name::{ConstructorName, FieldName, StructTypeName};
 
 /// The kind of bindable symbol an include overrides without reconciling
 /// every declaration that mentions it.
@@ -32,6 +35,89 @@ impl std::fmt::Display for OverriddenKind {
     }
 }
 
+/// What a declaration that an include did not re-bind mentions of an
+/// overridden symbol.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum OverrideMention {
+    /// A field access on the overridden type, observed by the checker.
+    Field {
+        field: FieldName,
+        owner: StructTypeName,
+    },
+    /// A constructor of the overridden type, observed by the checker.
+    Constructor {
+        constructor: ConstructorName,
+        owner: StructTypeName,
+    },
+    /// The overridden type as a type argument.
+    TypeArgument(StructTypeName),
+    /// A label of the overridden index, observed by the checker.
+    IndexLabel {
+        index: IndexName,
+        variant: IndexVariantName,
+    },
+    /// The overridden index as a type argument.
+    IndexArgument(IndexName),
+    /// A label as written in the producer's source (`I#v`).
+    WrittenLabel {
+        index: NamePath,
+        variant: IndexVariantName,
+    },
+    /// A constructor reference as written in the producer's source.
+    WrittenConstructor(ConstructorName),
+    /// A constructor call as written in the producer's source.
+    WrittenConstructorCall(ConstructorName),
+    /// A constructor pattern of a `match` arm in the producer's source.
+    MatchConstructor(ConstructorName),
+}
+
+impl std::fmt::Display for OverrideMention {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Field { field, owner } => write!(f, "field `{field}` of type `{owner}`"),
+            Self::Constructor { constructor, owner } => {
+                write!(f, "constructor `{constructor}` of type `{owner}`")
+            }
+            Self::TypeArgument(owner) => write!(f, "type `{owner}`"),
+            Self::IndexLabel { index, variant } => write!(f, "index label `{index}#{variant}`"),
+            Self::IndexArgument(index) => write!(f, "index `{index}`"),
+            Self::WrittenLabel { index, variant } => write!(f, "`{index}#{variant}`"),
+            Self::WrittenConstructor(constructor) => write!(f, "constructor `{constructor}`"),
+            Self::WrittenConstructorCall(constructor) => {
+                write!(f, "constructor `{constructor}(...)`")
+            }
+            Self::MatchConstructor(constructor) => write!(f, "match constructor `{constructor}`"),
+        }
+    }
+}
+
+/// The kind of declaration an include brace item (`{ pub name }`) re-exports
+/// with a checked signature.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReexportedDeclarationKind {
+    Param,
+    Node,
+    ConstNode,
+    Dimension,
+    Unit,
+    Index,
+    Type,
+}
+
+impl std::fmt::Display for ReexportedDeclarationKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Param => "param",
+            Self::Node => "node",
+            Self::ConstNode => "const node",
+            Self::Dimension => "dim",
+            Self::Unit => "unit",
+            Self::Index => "index",
+            Self::Type => "type",
+        })
+    }
+}
+
 /// Diagnostics of item visibility and bindable interfaces.
 #[derive(Debug, Clone, Error)]
 pub enum VisibilityError {
@@ -39,7 +125,7 @@ pub enum VisibilityError {
     /// Attempting to import a private (non-`pub`) item from another file.
     #[error("cannot import private item `{name}` from `{file_path}`")]
     ImportPrivateItem {
-        name: String,
+        name: NameAtom,
         file_path: DagReference,
     },
     /// A required `index`, `type`, or `dim` is not marked `pub(bind)`.
@@ -95,10 +181,10 @@ pub enum VisibilityError {
         "include overrides {overridden_kind} `{overridden}` but does not re-bind `{orphan_decl}`, whose default mentions `{detail}`"
     )]
     IncludeMustReconcileOverride {
-        overridden: String,
+        overridden: NameAtom,
         overridden_kind: OverriddenKind,
         orphan_decl: DeclName,
-        detail: String,
+        detail: OverrideMention,
     },
     /// A selectively re-exported import/include item (`{ pub item }`)
     /// has an effective (post-substitution) signature that mentions a symbol
@@ -111,13 +197,14 @@ pub enum VisibilityError {
     /// importer's public API. Downstream consumers of the importer
     /// would see a signature referring to a symbol they cannot name.
     #[error(
-        "re-exported {reexport_kind} `{reexport_name}`'s signature references private {leaked_kind} `{leaked_name}`"
+        "re-exported {reexport_kind} `{reexport_name}`'s signature references private {} `{leaked_name}`",
+        leaked_kind.noun()
     )]
     GenericsLeakage {
-        reexport_kind: String,
-        reexport_name: String,
-        leaked_kind: String,
-        leaked_name: String,
+        reexport_kind: ReexportedDeclarationKind,
+        reexport_name: NameAtom,
+        leaked_kind: ImportItemNamespace,
+        leaked_name: NameAtom,
     },
     /// A template body observes the concrete default of an optional Static port.
     ///

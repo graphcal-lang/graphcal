@@ -410,7 +410,7 @@ fn assert_reconciliation_error(
                 );
             };
             let src = rendered.named_source();
-            assert_eq!(overridden, expected_override);
+            assert_eq!(overridden.as_str(), expected_override);
             assert_eq!(overridden_kind.to_string(), expected_kind);
             assert_eq!(orphan_decl.as_str(), expected_orphan);
             assert!(src.name().ends_with("main.gcl"));
@@ -649,7 +649,7 @@ include reusable(type Record: Other, record: Other(x: 2.0)) as instance;
 
     assert!(matches!(
         error,
-        SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic { kind: SemanticErrorKind::Visibility(VisibilityError::IncludeMustReconcileOverride { overridden, overridden_kind, orphan_decl, .. }), .. }) if overridden == "Record"
+        SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic { kind: SemanticErrorKind::Visibility(VisibilityError::IncludeMustReconcileOverride { overridden, overridden_kind, orphan_decl, .. }), .. }) if overridden.as_str() == "Record"
             && overridden_kind == OverriddenKind::Type
             && orphan_decl.as_str() == "extracted"
     ));

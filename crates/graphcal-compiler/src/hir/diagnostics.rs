@@ -325,7 +325,7 @@ pub fn expr_lower_error_to_semantic(err: &ExprLowerError, src: SourceId) -> Sema
             src,
             *span,
             VisibilityError::ImportPrivateItem {
-                name: name.to_string(),
+                name: name.clone(),
                 file_path: DagReference::Dag(owner.clone()),
             },
         ),
