@@ -816,15 +816,7 @@ fn exact_domain_int_bound(
     span: graphcal_compiler::syntax::span::Span,
 ) -> Result<f64, SemanticError> {
     crate::eval_expr::numeric::exact_i64_to_f64(value).map_err(|_| {
-        SemanticError::located(
-            src,
-            span,
-            EvaluationError::Failed {
-                message: format!(
-                    "domain bound integer {value} is too large for exact quantity comparison"
-                ),
-            },
-        )
+        SemanticError::located(src, span, DomainError::InexactIntDomainBound { value })
     })
 }
 

@@ -850,3 +850,21 @@ fn plugin_payloads_render_their_text_as_before() {
         assert_eq!(context.to_string(), expected);
     }
 }
+
+#[test]
+fn inexact_int_domain_bound_has_its_own_domain_code() {
+    use super::domain::DomainError;
+    use crate::diagnostic::DiagnosticKind;
+
+    let error = DomainError::InexactIntDomainBound { value: i64::MAX };
+    assert_eq!(error.code(), "graphcal::C008");
+    assert_eq!(
+        error.to_string(),
+        format!(
+            "domain bound integer {} is too large for exact quantity comparison",
+            i64::MAX
+        )
+    );
+    assert_eq!(error.primary_label().as_deref(), Some("error here"));
+    assert_eq!(error.help(), None);
+}

@@ -195,6 +195,9 @@ pub enum DomainError {
         bound_name: DomainBoundKind,
         bound_type: TypeSpelling,
     },
+    /// An Int bound on a quantity domain that `f64` cannot represent exactly.
+    #[error("domain bound integer {value} is too large for exact quantity comparison")]
+    InexactIntDomainBound { value: i64 },
 }
 
 impl DiagnosticKind for DomainError {
@@ -207,6 +210,7 @@ impl DiagnosticKind for DomainError {
             Self::IntDomainBoundTypeMismatch { .. } => "graphcal::C005",
             Self::GenericTypeArgDomainConstraint => "graphcal::C006",
             Self::DatetimeDomainBoundTypeMismatch { .. } => "graphcal::C007",
+            Self::InexactIntDomainBound { .. } => "graphcal::C008",
         }
     }
 
@@ -225,6 +229,7 @@ impl DiagnosticKind for DomainError {
             Self::DatetimeDomainBoundTypeMismatch { .. } => {
                 Some("datetime bound has the wrong time scale or value type".to_owned())
             }
+            Self::InexactIntDomainBound { .. } => Some("error here".to_owned()),
         }
     }
 
@@ -237,6 +242,7 @@ impl DiagnosticKind for DomainError {
             Self::IntDomainBoundTypeMismatch { .. } => Some("Int domain bounds must be Int so their full range is preserved exactly".to_owned()),
             Self::GenericTypeArgDomainConstraint => Some("put the constraint on the field in the struct definition, not on the generic type argument".to_owned()),
             Self::DatetimeDomainBoundTypeMismatch { .. } => Some("datetime bounds must have exactly the constrained Datetime<S> type; use an explicit time-scale conversion".to_owned()),
+            Self::InexactIntDomainBound { .. } => None,
         }
     }
 
@@ -248,7 +254,8 @@ impl DiagnosticKind for DomainError {
             | Self::InvalidDomainTarget { .. }
             | Self::IntDomainBoundTypeMismatch { .. }
             | Self::GenericTypeArgDomainConstraint
-            | Self::DatetimeDomainBoundTypeMismatch { .. } => Vec::new(),
+            | Self::DatetimeDomainBoundTypeMismatch { .. }
+            | Self::InexactIntDomainBound { .. } => Vec::new(),
         }
     }
 }
