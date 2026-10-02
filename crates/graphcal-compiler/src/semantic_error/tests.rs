@@ -868,3 +868,15 @@ fn inexact_int_domain_bound_has_its_own_domain_code() {
     assert_eq!(error.primary_label().as_deref(), Some("error here"));
     assert_eq!(error.help(), None);
 }
+
+#[test]
+fn plugin_load_failures_render_their_cause() {
+    let module = crate::semantic_error::plugin::PluginLoadFailure::Module {
+        reason: "invalid magic number".to_owned(),
+    };
+    assert_eq!(module.to_string(), "invalid magic number");
+    let artifact = crate::semantic_error::plugin::PluginLoadFailure::Artifact(std::sync::Arc::new(
+        std::io::Error::other("cannot read `x.wasm`"),
+    ));
+    assert_eq!(artifact.to_string(), "cannot read `x.wasm`");
+}

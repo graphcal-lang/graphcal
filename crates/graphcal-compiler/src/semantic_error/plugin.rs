@@ -4,9 +4,13 @@
 //! [`Diagnostic`](crate::diagnostic::Diagnostic); its stable code, labels,
 //! and help are described by its [`DiagnosticKind`] implementation.
 
+use std::sync::Arc;
+
 use thiserror::Error;
 
 use crate::diagnostic::{DiagnosticKind, SecondaryLabel};
+use crate::function_signature::SignatureSpelling;
+use crate::plugin_identity::PluginDigest;
 use crate::syntax::function_name::FnParamName;
 use crate::syntax::names::NameAtom;
 use crate::syntax::span::Span;
@@ -134,13 +138,13 @@ pub enum PluginError {
     ExternSignatureMismatch {
         plugin: crate::plugin_identity::PluginIdentity,
         name: crate::syntax::function_name::FnName,
-        declared: String,
-        provided: String,
+        declared: SignatureSpelling,
+        provided: SignatureSpelling,
     },
     #[error("failed to load plugin \"{plugin}\": {reason}")]
     PluginLoadFailed {
         plugin: crate::plugin_identity::PluginIdentity,
-        reason: String,
+        reason: PluginLoadFailure,
     },
     #[error("plugin \"{plugin}\" imports `{import_module}::{import_name}`, which is not allowed")]
     PluginForbiddenImport {
@@ -157,9 +161,22 @@ pub enum PluginError {
     )]
     PluginHashMismatch {
         plugin: crate::plugin_identity::PluginIdentity,
-        expected: String,
-        actual: String,
+        expected: PluginDigest,
+        actual: PluginDigest,
     },
+}
+
+/// Why a plugin could not be loaded.
+#[derive(Debug, Clone, Error)]
+pub enum PluginLoadFailure {
+    /// The project loader could not provide the plugin artifact; the loader's
+    /// typed failure is kept as reported.
+    #[error("{0}")]
+    Artifact(Arc<dyn std::error::Error + Send + Sync>),
+    /// The plugin host rejected the module; `reason` is the host engine's
+    /// own description.
+    #[error("{reason}")]
+    Module { reason: String },
 }
 
 impl DiagnosticKind for PluginError {

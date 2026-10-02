@@ -1,6 +1,5 @@
 use crate::load_error::LoadError;
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::fmt::Write as _;
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
@@ -53,8 +52,8 @@ use source_snapshot::{PackageFileKey, ParsedFile, ResolveFailure, file_stem};
 
 use graphcal_package::{
     GitSourceId, LockedPackage, PackageInstanceId, PackageManifest, PackageResolveError,
-    PackageSource, STDLIB_VERSION, ValidatedPackageGraph, parse_lockfile_str_with_limits,
-    parse_manifest_str,
+    PackageSource, STDLIB_VERSION, Sha256Digest, ValidatedPackageGraph,
+    parse_lockfile_str_with_limits, parse_manifest_str,
 };
 
 #[cfg(test)]
@@ -213,7 +212,7 @@ fn read_plugin_file(
     Ok(
         match budget.read_bytes(fs, &artifact.0, LoaderArtifact::Plugin, cancellation) {
             Ok(bytes) => Ok(LoadedPlugin {
-                sha256_hex: hex_string(&Sha256::digest(&bytes)),
+                sha256: Sha256Digest::from_bytes(Sha256::digest(&bytes).into()),
                 bytes: bytes.into(),
             }),
             Err(Outcome::Cancelled) => return Err(graphcal_compiler::cancellation::Cancelled),
@@ -238,7 +237,7 @@ fn read_plugin_file(
 /// entry with a hard error surfaced at the declaring import.
 fn apply_plugin_pins(
     plugins: &mut HashMap<PluginIdentity, PluginFileEntry>,
-    pins: &BTreeMap<String, String>,
+    pins: &BTreeMap<String, Sha256Digest>,
 ) {
     for (path, entry) in plugins.iter_mut() {
         let Ok(loaded) = entry.as_ref() else {
@@ -246,10 +245,10 @@ fn apply_plugin_pins(
         };
         match pins.get(path.path().as_str()) {
             None => *entry = Err(PluginFileError::NotPinned),
-            Some(expected) if *expected != loaded.sha256_hex => {
+            Some(expected) if *expected != loaded.sha256 => {
                 *entry = Err(PluginFileError::HashMismatch {
-                    expected: expected.clone(),
-                    actual: loaded.sha256_hex.clone(),
+                    expected: *expected,
+                    actual: loaded.sha256,
                 });
             }
             Some(_) => {}
@@ -649,7 +648,7 @@ fn load_plugin_pins(
     fs: &dyn FileSystemReader,
     budget: &mut LoaderBudgetState,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
-) -> Result<BTreeMap<String, String>, Outcome<CompileError>> {
+) -> Result<BTreeMap<String, Sha256Digest>, Outcome<CompileError>> {
     let lockfile_path = project_root.join("graphcal.lock");
     let lockfile_text =
         match budget.read_text(fs, &lockfile_path, LoaderArtifact::Lockfile, cancellation) {
@@ -683,7 +682,7 @@ fn load_plugin_pins(
         })?;
     Ok(validated
         .plugins()
-        .map(|plugin| (plugin.path().to_string(), plugin.sha256().to_string()))
+        .map(|plugin| (plugin.path().to_string(), *plugin.sha256()))
         .collect())
 }
 
@@ -770,7 +769,7 @@ struct PackageLoadContext<'a> {
         BTreeMap<PackageInstanceId, graphcal_package::PluginExecutionPolicy>,
     closure: LoadedPackageClosure,
     /// Root-package plugin pins from `graphcal.lock`: path → SHA-256.
-    plugin_pins: BTreeMap<String, String>,
+    plugin_pins: BTreeMap<String, Sha256Digest>,
 }
 
 impl<'a> PackageLoadContext<'a> {
@@ -847,7 +846,7 @@ impl<'a> PackageLoadContext<'a> {
             .map_err(|error| loader_manifest_error(error.to_string()))?;
         let plugin_pins = validated
             .plugins()
-            .map(|plugin| (plugin.path().to_string(), plugin.sha256().to_string()))
+            .map(|plugin| (plugin.path().to_string(), *plugin.sha256()))
             .collect();
         Ok(Self {
             graph,
@@ -1120,14 +1119,6 @@ fn package_cache_root() -> Result<crate::package_cache::PackageCacheRoot, String
             .map_err(|error| error.to_string());
     }
     crate::package_cache::PackageCacheRoot::from_environment().map_err(|error| error.to_string())
-}
-
-fn hex_string(bytes: &[u8]) -> String {
-    let mut out = String::with_capacity(bytes.len().saturating_mul(2));
-    for byte in bytes {
-        let _ = write!(out, "{byte:02x}");
-    }
-    out
 }
 
 /// Walk up from `start_dir` looking for a `graphcal.toml` manifest. Returns

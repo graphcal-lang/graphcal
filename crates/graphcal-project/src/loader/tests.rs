@@ -23,12 +23,12 @@ fn fs() -> RealFileSystem {
 fn loaded_plugin_debug_never_exposes_module_bytes() {
     let plugin = LoadedPlugin {
         bytes: Arc::from(b"private-wasm-payload".as_slice()),
-        sha256_hex: "digest".to_string(),
+        sha256: graphcal_package::Sha256Digest::from_bytes([7; 32]),
     };
 
     let rendered = format!("{plugin:#?}");
     assert!(rendered.contains("byte_len: 20"));
-    assert!(rendered.contains("sha256_hex: \"digest\""));
+    assert!(rendered.contains("sha256: Sha256Digest("));
     assert!(!rendered.contains("private-wasm-payload"));
     assert!(!rendered.contains("112, 114, 105, 118, 97, 116, 101"));
 }
