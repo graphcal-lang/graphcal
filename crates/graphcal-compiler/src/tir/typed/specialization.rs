@@ -4,8 +4,8 @@ use crate::semantic_error::dimension::DimensionError;
 use std::collections::{BTreeSet, HashMap, HashSet};
 
 use super::{
-    DagTIR, ProjectTypeStore, ResolvedDeclType, ResolvedDim, ResolvedDimTerm, ResolvedGenericArg,
-    ResolvedIndex, ResolvedValueType, UncheckedTir,
+    DagTIR, ResolvedDeclType, ResolvedDim, ResolvedDimTerm, ResolvedGenericArg, ResolvedIndex,
+    ResolvedValueType, UncheckedTir,
 };
 use crate::diagnostic_anchor::DiagnosticAnchor;
 use crate::dimension::{BaseDimId, Dimension};
@@ -18,7 +18,7 @@ use crate::ir::static_substitution::{
 use crate::nat::NatPolyForm;
 use crate::plot_shape::PlotChannelShape;
 use crate::resolved_name::{
-    ResolvedDeclName, ResolvedDimName, ResolvedIndexName, ResolvedStructTypeName, ResolvedUnitName,
+    ResolvedDeclName, ResolvedDimName, ResolvedStructTypeName, ResolvedUnitName,
 };
 use crate::semantic::checked_type::{Concreteness, IndexTypeRef, StructTypeRef};
 use crate::semantic_error::SemanticError;
@@ -26,68 +26,40 @@ use crate::source_id::SourceId;
 use crate::syntax::dimension::UnitName;
 use crate::tir::presentation::DagPresentationFacts;
 
+use super::complete_substitution::CompleteSubstitution;
 use super::dag_slots::LocalDagFacts;
-
-fn dimension_substitution<'a>(
-    substitution: &'a StaticSubstitution,
-    source: &ResolvedDimName,
-) -> Option<&'a ResolvedDimName> {
-    substitution.dimensions.get(source)
-}
-
-fn index_substitution<'a>(
-    substitution: &'a StaticSubstitution,
-    source: &ResolvedIndexName,
-) -> Option<&'a InstanceIndexBindingTarget> {
-    substitution.indexes.get(source)
-}
-
-fn type_substitution<'a>(
-    substitution: &'a StaticSubstitution,
-    source: &ResolvedStructTypeName,
-) -> Option<&'a ResolvedStructTypeName> {
-    substitution.types.get(source)
-}
 
 fn specialize_dimension(
     dimension: &Dimension,
-    substitution: &StaticSubstitution,
-    types: &ProjectTypeStore,
+    substitution: &CompleteSubstitution<'_>,
     src: SourceId,
 ) -> Result<Dimension, SemanticError> {
-    dimension.iter().try_fold(
-        Dimension::dimensionless(),
-        |acc, (base, exponent)| {
+    dimension
+        .iter()
+        .try_fold(Dimension::dimensionless(), |acc, (base, exponent)| {
             let factor = match base {
-                BaseDimId::UserDefined(name) => dimension_substitution(substitution, name).map_or_else(
-                    || Ok(Dimension::base(base.clone())),
-                    |target| {
-                        types.get_dimension(target).cloned().ok_or_else(|| {
-                            SemanticError::internal_error(
-                                format!(
-                                    "semantic specialization dimension target `{target}` is unavailable"
-                                ),
-                                src,
-                                DiagnosticAnchor::WholeFile,
-                            )
-                        })
-                    },
-                )?,
+                BaseDimId::UserDefined(name) => substitution
+                    .dimension(name)
+                    .cloned()
+                    .unwrap_or_else(|| Dimension::base(base.clone())),
                 BaseDimId::Prelude(_) => Dimension::base(base.clone()),
             };
             // A bound dimension raised to the template's exponents can
             // leave the exponent range, like any other dimension arithmetic.
-            let overflow =
-                |_| SemanticError::located(src, src.whole_span(), DimensionError::DimensionOverflow);
+            let overflow = |_| {
+                SemanticError::located(src, src.whole_span(), DimensionError::DimensionOverflow)
+            };
             let factor = factor.pow(*exponent).map_err(overflow)?;
             acc.checked_mul(&factor).map_err(overflow)
-        },
-    )
+        })
 }
 
-fn specialize_index(index: &ResolvedIndex, substitution: &StaticSubstitution) -> ResolvedIndex {
+fn specialize_index(
+    index: &ResolvedIndex,
+    substitution: &CompleteSubstitution<'_>,
+) -> ResolvedIndex {
     match index {
-        ResolvedIndex::Concrete(name, span) => index_substitution(substitution, name).map_or_else(
+        ResolvedIndex::Concrete(name, span) => substitution.index(name).map_or_else(
             || index.clone(),
             |target| match target {
                 InstanceIndexBindingTarget::Declared(target) => {
@@ -104,19 +76,18 @@ fn specialize_index(index: &ResolvedIndex, substitution: &StaticSubstitution) ->
 
 fn specialize_dim_arg(
     dimension: &ResolvedDim,
-    substitution: &StaticSubstitution,
-    types: &ProjectTypeStore,
+    substitution: &CompleteSubstitution<'_>,
     src: SourceId,
 ) -> Result<ResolvedDim, SemanticError> {
     match dimension {
         ResolvedDim::Concrete(dimension) => {
-            specialize_dimension(dimension, substitution, types, src).map(ResolvedDim::Concrete)
+            specialize_dimension(dimension, substitution, src).map(ResolvedDim::Concrete)
         }
         ResolvedDim::Symbolic { terms, span } => terms
             .iter()
             .map(|term| match term {
                 ResolvedDimTerm::Concrete { dim, power, op } => {
-                    specialize_dimension(dim, substitution, types, src).map(|dim| {
+                    specialize_dimension(dim, substitution, src).map(|dim| {
                         ResolvedDimTerm::Concrete {
                             dim,
                             power: *power,
@@ -133,16 +104,15 @@ fn specialize_dim_arg(
 
 fn specialize_value_type(
     resolved: &ResolvedValueType,
-    substitution: &StaticSubstitution,
-    types: &ProjectTypeStore,
+    substitution: &CompleteSubstitution<'_>,
     src: SourceId,
 ) -> Result<ResolvedValueType, SemanticError> {
     match resolved {
         ResolvedValueType::Quantity(dimension) => {
-            specialize_dim_arg(dimension, substitution, types, src).map(ResolvedValueType::Quantity)
+            specialize_dim_arg(dimension, substitution, src).map(ResolvedValueType::Quantity)
         }
         ResolvedValueType::Complex { dimension, span } => {
-            specialize_dim_arg(dimension, substitution, types, src).map(|dimension| {
+            specialize_dim_arg(dimension, substitution, src).map(|dimension| {
                 ResolvedValueType::Complex {
                     dimension,
                     span: *span,
@@ -162,7 +132,7 @@ fn specialize_value_type(
                 .iter()
                 .map(|argument| match argument {
                     ResolvedGenericArg::Dim(dimension) => {
-                        specialize_dim_arg(dimension, substitution, types, src)
+                        specialize_dim_arg(dimension, substitution, src)
                             .map(ResolvedGenericArg::Dim)
                     }
                     ResolvedGenericArg::Index(index) => Ok(ResolvedGenericArg::Index(
@@ -170,15 +140,13 @@ fn specialize_value_type(
                     )),
                     ResolvedGenericArg::Nat(_, _) => Ok(argument.clone()),
                     ResolvedGenericArg::Type(resolved) => {
-                        specialize_value_type(resolved, substitution, types, src)
+                        specialize_value_type(resolved, substitution, src)
                             .map(ResolvedGenericArg::Type)
                     }
                 })
                 .collect::<Result<Vec<_>, _>>()?;
             Ok(ResolvedValueType::Struct {
-                name: type_substitution(substitution, name)
-                    .unwrap_or(name)
-                    .clone(),
+                name: substitution.nominal(name).unwrap_or(name).clone(),
                 generic_args,
                 span: *span,
             })
@@ -192,16 +160,15 @@ fn specialize_value_type(
 
 pub fn specialize_type(
     resolved: &ResolvedDeclType,
-    substitution: &StaticSubstitution,
-    types: &ProjectTypeStore,
+    substitution: &CompleteSubstitution<'_>,
     src: SourceId,
 ) -> Result<ResolvedDeclType, SemanticError> {
     match resolved {
         ResolvedDeclType::Value(value_type) => {
-            specialize_value_type(value_type, substitution, types, src).map(ResolvedDeclType::Value)
+            specialize_value_type(value_type, substitution, src).map(ResolvedDeclType::Value)
         }
         ResolvedDeclType::Indexed { element, indexes } => Ok(ResolvedDeclType::Indexed {
-            element: specialize_value_type(element, substitution, types, src)?,
+            element: specialize_value_type(element, substitution, src)?,
             indexes: indexes.map_ref(|index| specialize_index(index, substitution)),
         }),
     }
@@ -209,12 +176,12 @@ pub fn specialize_type(
 
 pub fn specialize_index_ref<V: Concreteness>(
     index: &IndexTypeRef<V>,
-    substitution: &StaticSubstitution,
+    substitution: &CompleteSubstitution<'_>,
 ) -> IndexTypeRef<V> {
     let (Some(source), Some(leaf)) = (index.declared_resolved(), index.declared_name()) else {
         return index.clone();
     };
-    match index_substitution(substitution, source) {
+    match substitution.index(source) {
         Some(InstanceIndexBindingTarget::Declared(target)) => {
             IndexTypeRef::with_display_leaf(leaf.clone(), target.clone())
         }
@@ -227,9 +194,9 @@ pub fn specialize_index_ref<V: Concreteness>(
 
 fn specialize_struct_ref(
     struct_type: &StructTypeRef,
-    substitution: &StaticSubstitution,
+    substitution: &CompleteSubstitution<'_>,
 ) -> StructTypeRef {
-    type_substitution(substitution, struct_type.resolved()).map_or_else(
+    substitution.nominal(struct_type.resolved()).map_or_else(
         || struct_type.clone(),
         |target| StructTypeRef::with_display_leaf(struct_type.name().clone(), target.clone()),
     )
@@ -237,25 +204,18 @@ fn specialize_struct_ref(
 
 pub fn specialize_expression_type<V: Concreteness>(
     ty: &crate::semantic::checked_type::CheckedType<V>,
-    substitution: &StaticSubstitution,
-    tir: &dyn super::TirRead,
+    substitution: &CompleteSubstitution<'_>,
     src: SourceId,
 ) -> Result<crate::semantic::checked_type::CheckedType<V>, SemanticError> {
     use crate::semantic::checked_type::{CheckedGenericArg, CheckedType};
-    let recurse = |ty: &CheckedType<V>| specialize_expression_type(ty, substitution, tir, src);
+    let recurse = |ty: &CheckedType<V>| specialize_expression_type(ty, substitution, src);
     Ok(match ty {
-        CheckedType::Quantity(dimension) => CheckedType::Quantity(specialize_dimension(
-            dimension,
-            substitution,
-            tir.project_type_store(),
-            src,
-        )?),
-        CheckedType::Complex(dimension) => CheckedType::Complex(specialize_dimension(
-            dimension,
-            substitution,
-            tir.project_type_store(),
-            src,
-        )?),
+        CheckedType::Quantity(dimension) => {
+            CheckedType::Quantity(specialize_dimension(dimension, substitution, src)?)
+        }
+        CheckedType::Complex(dimension) => {
+            CheckedType::Complex(specialize_dimension(dimension, substitution, src)?)
+        }
         CheckedType::Key(index) => CheckedType::Key(specialize_index_ref(index, substitution)),
         CheckedType::Indexed { element, index } => CheckedType::Indexed {
             element: Box::new(recurse(element)?),
@@ -266,14 +226,9 @@ pub fn specialize_expression_type<V: Concreteness>(
             args.iter()
                 .map(|arg| {
                     Ok(match arg {
-                        CheckedGenericArg::Dim(dimension) => {
-                            CheckedGenericArg::Dim(specialize_dimension(
-                                dimension,
-                                substitution,
-                                tir.project_type_store(),
-                                src,
-                            )?)
-                        }
+                        CheckedGenericArg::Dim(dimension) => CheckedGenericArg::Dim(
+                            specialize_dimension(dimension, substitution, src)?,
+                        ),
                         CheckedGenericArg::Index(index) => {
                             CheckedGenericArg::Index(specialize_index_ref(index, substitution))
                         }
@@ -289,8 +244,7 @@ pub fn specialize_expression_type<V: Concreteness>(
 
 fn specialize_plot_channel(
     channel: &PlotChannelShape,
-    substitution: &StaticSubstitution,
-    tir: &UncheckedTir,
+    substitution: &CompleteSubstitution<'_>,
     src: SourceId,
 ) -> Result<PlotChannelShape, SemanticError> {
     let leaf = match channel.leaf() {
@@ -298,7 +252,6 @@ fn specialize_plot_channel(
             crate::plot_shape::PlotLeafKind::Quantity(specialize_dimension(
                 dimension,
                 substitution,
-                tir.project_type_store(),
                 src,
             )?)
         }
@@ -361,7 +314,7 @@ fn specialize_expected_fail(
         for part in keys.iter_mut().flatten() {
             if let crate::assertion_expectation::ExpectedFailKeyPart::Named { index, .. } = part
                 && let Some(source) = index.declared_resolved()
-                && let Some(replacement) = index_substitution(substitution, source)
+                && let Some(replacement) = substitution.indexes.get(source)
             {
                 *index = match replacement {
                     InstanceIndexBindingTarget::Declared(target) => {
@@ -382,7 +335,7 @@ fn compose_index_targets<'a>(
 ) {
     for target in targets {
         if let InstanceIndexBindingTarget::Declared(source) = target
-            && let Some(replacement) = index_substitution(substitution, source)
+            && let Some(replacement) = substitution.indexes.get(source)
         {
             *target = replacement.clone();
         }
@@ -394,7 +347,7 @@ fn compose_type_targets<'a>(
     substitution: &StaticSubstitution,
 ) {
     for target in targets {
-        if let Some(replacement) = type_substitution(substitution, target) {
+        if let Some(replacement) = substitution.types.get(target) {
             *target = replacement.clone();
         }
     }
@@ -405,7 +358,7 @@ fn compose_dimension_targets<'a>(
     substitution: &StaticSubstitution,
 ) {
     for target in targets {
-        if let Some(replacement) = dimension_substitution(substitution, target) {
+        if let Some(replacement) = substitution.dimensions.get(target) {
             *target = replacement.clone();
         }
     }
@@ -534,21 +487,15 @@ fn rebase_dynamic_unit_scales(instance: &mut DagTIR) {
 fn specialize_instance_semantics(
     instance: &mut DagTIR,
     edge: &HirInstanceRecord,
-    tir: &UncheckedTir,
+    substitution: &CompleteSubstitution<'_>,
     src: SourceId,
 ) -> Result<(), SemanticError> {
-    let specialization = edge.instance.specialization();
     let specialized = instance
         .value_decl_types()
         .map(|(identity, annotation)| {
-            specialize_type(
-                annotation.checked().resolved(),
-                &specialization.substitution,
-                tir.project_type_store(),
-                src,
-            )
-            .and_then(|resolved| super::CheckedDeclType::new(resolved, src))
-            .map(|checked| (identity, checked))
+            specialize_type(annotation.checked().resolved(), substitution, src)
+                .and_then(|resolved| super::CheckedDeclType::new(resolved, src))
+                .map(|checked| (identity, checked))
         })
         .collect::<Result<_, _>>()?;
     instance.replace_value_decl_types(specialized);
@@ -616,7 +563,6 @@ fn clone_checked_instance(
     }
     specialize_instance_declarations(&mut instance, edge, src)?;
     rebase_dynamic_unit_scales(&mut instance);
-    specialize_instance_semantics(&mut instance, edge, tir, src)?;
     Ok(instance)
 }
 
@@ -629,10 +575,10 @@ pub type PlotChannels =
 /// template's shapes in the view where that port is rigid), specialized with
 /// its substitution and rebased into its frame.
 pub fn instance_presentation_facts(
-    tir: &UncheckedTir,
     owner: &crate::dag_id::DagId,
     frame: &InstanceFrame,
     specialization: &StaticSpecializationId,
+    substitution: &CompleteSubstitution<'_>,
     template_channels: Option<&PlotChannels>,
     src: SourceId,
 ) -> Result<DagPresentationFacts, SemanticError> {
@@ -652,7 +598,7 @@ pub fn instance_presentation_facts(
             channels
                 .iter()
                 .map(|(encoding, channel)| {
-                    specialize_plot_channel(channel, &specialization.substitution, tir, src)
+                    specialize_plot_channel(channel, substitution, src)
                         .map(|channel| (*encoding, channel))
                 })
                 .collect::<Result<_, _>>()
@@ -820,6 +766,9 @@ fn instantiate_semantic_edge(
             )
         })?;
     let template = tir.dags.at(template_position).clone();
+    let substitution =
+        CompleteSubstitution::try_new(edge.instance.substitution(), tir.project_type_store())
+            .map_err(|error| error.into_graphcal(src))?;
     let runtime_unit_names = edge
         .runtime_unit_names
         .iter()
@@ -844,12 +793,7 @@ fn instantiate_semantic_edge(
                     DiagnosticAnchor::WholeFile,
                 )
             })?;
-            info.dimension = specialize_dimension(
-                &info.dimension,
-                edge.instance.substitution(),
-                tir.project_type_store(),
-                src,
-            )?;
+            info.dimension = specialize_dimension(&info.dimension, &substitution, src)?;
             Ok((instance_declaration(edge.instance.id(), name), info))
         })
         .collect::<Result<Vec<_>, SemanticError>>()?;
@@ -866,7 +810,7 @@ fn instantiate_semantic_edge(
             )
         })?
         .frame();
-    let instance = clone_checked_instance(
+    let mut instance = clone_checked_instance(
         template_position,
         &template,
         edge,
@@ -875,6 +819,7 @@ fn instantiate_semantic_edge(
         tir,
         src,
     )?;
+    specialize_instance_semantics(&mut instance, edge, &substitution, src)?;
     for (unit, info) in runtime_unit_infos {
         tir.insert_runtime_unit(unit, info).map_err(|error| {
             SemanticError::internal_error(error.to_string(), src, DiagnosticAnchor::WholeFile)

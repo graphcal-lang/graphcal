@@ -655,10 +655,17 @@ impl crate::tir::typed::InstantiatedTir {
         // infer.
         let inferred = tir.dags.map_local(|position, dag| {
             if let Some(specialization) = dag.frame().specialization() {
+                let substitution =
+                    crate::tir::typed::complete_substitution::CompleteSubstitution::try_new(
+                        &specialization.substitution,
+                        tir.project_type_store(),
+                    )
+                    .map_err(|error| error.into_graphcal(src))?;
                 return Ok(Inferred::Instance(instance_bodies::InstanceOf {
                     position,
                     dag,
                     specialization,
+                    substitution,
                 }));
             }
             cancellation.checkpoint()?;

@@ -31,6 +31,7 @@ pub(super) fn collect_presentation_facts(
                 InstanceOf {
                     dag,
                     specialization,
+                    substitution,
                     ..
                 },
             port_generic,
@@ -44,10 +45,10 @@ pub(super) fn collect_presentation_facts(
                     .map(|template| &template.presentation().plot_channels),
             };
             crate::tir::typed::specialization::instance_presentation_facts(
-                tir,
                 dag.dag_id(),
                 dag.frame(),
                 specialization,
+                substitution,
                 port_generic.as_ref().or(template),
                 src,
             )

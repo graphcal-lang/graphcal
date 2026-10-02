@@ -23,6 +23,7 @@ use crate::tir::texpr::{
     CallSlot, CallTargets, CheckedBodies, CheckedBody, ClaimedRoots, ConstructorApplication,
     ConstructorMatch, NominalObservation, StaticPosition, TBody,
 };
+use crate::tir::typed::complete_substitution::CompleteSubstitution;
 use crate::tir::typed::model::DagTIR;
 use crate::tir::typed::program::TirRead;
 use crate::tir::typed::specialization::{specialize_expression_type, specialize_index_ref};
@@ -32,7 +33,7 @@ use super::expression_axes::{check_materializable, concrete_index_kind};
 /// The bindings a specialization applies.
 enum BodySubstitution<'a> {
     /// A semantic instance's Static substitution.
-    Static(&'a crate::ir::static_substitution::StaticSubstitution),
+    Static(&'a CompleteSubstitution<'a>),
     /// One generic application's `Nat` arguments.
     Generic(&'a crate::tir::typed::Substitution),
 }
@@ -41,12 +42,11 @@ impl BodySubstitution<'_> {
     fn value_type(
         &self,
         ty: &CheckedType<Symbolic>,
-        tir: &dyn TirRead,
         src: SourceId,
         span: Span,
     ) -> Result<CheckedType<Symbolic>, SemanticError> {
         match self {
-            Self::Static(substitution) => specialize_expression_type(ty, substitution, tir, src),
+            Self::Static(substitution) => specialize_expression_type(ty, substitution, src),
             Self::Generic(substitution) => substitution
                 .instantiate(ty, span)
                 .map(|ty| ty.to_symbolic())
@@ -113,7 +113,7 @@ impl<V: SymbolicView> TypeMap<V, Symbolic> for Specializer<'_> {
         let span = self.span(span);
         let ty = self
             .substitution
-            .value_type(&V::symbolic_type(ty), self.tir, self.src, span)?;
+            .value_type(&V::symbolic_type(ty), self.src, span)?;
         check_materializable(&ty, self.tir, self.src, span)?;
         Ok(ty)
     }
@@ -136,12 +136,8 @@ impl<V: SymbolicView> TypeMap<V, Symbolic> for Specializer<'_> {
             self.dag.frame().struct_type(application.definition()),
             args.clone(),
             |field_type| {
-                self.substitution.value_type(
-                    &V::symbolic_type(field_type),
-                    self.tir,
-                    self.src,
-                    report,
-                )
+                self.substitution
+                    .value_type(&V::symbolic_type(field_type), self.src, report)
             },
         )?;
         Ok(ConstructorApplication {
@@ -247,7 +243,7 @@ pub(super) fn specialize_instance_bodies(
     mut independent: DerivedTrees,
     template: &CheckedBodies,
     port_generic: &DerivedTrees,
-    substitution: &crate::ir::static_substitution::StaticSubstitution,
+    substitution: &CompleteSubstitution<'_>,
     src: SourceId,
 ) -> Result<CheckedBodies, SemanticError> {
     let mut specializer = Specializer {

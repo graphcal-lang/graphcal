@@ -1890,6 +1890,16 @@ role = "checking"
 
 [[module]]
 package = "compiler"
+path = ["tir", "typed", "complete_substitution"]
+role = "checking"
+
+[[module]]
+package = "compiler"
+path = ["tir", "typed", "complete_substitution", "tests"]
+role = "checking"
+
+[[module]]
+package = "compiler"
 path = ["tir", "typed", "tests"]
 role = "checking"
 

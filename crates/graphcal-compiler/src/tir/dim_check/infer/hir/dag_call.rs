@@ -10,6 +10,7 @@ use crate::semantic_error::visibility::VisibilityError;
 use std::collections::HashMap;
 
 use crate::semantic_error::SemanticError;
+use crate::tir::typed::complete_substitution::CompleteSubstitution;
 use crate::tir::typed::specialization::specialize_type;
 
 use crate::semantic::checked_type::{CheckedType, Symbolic};
@@ -35,6 +36,9 @@ impl Infer<'_> {
             )
         })?;
 
+        let substitution =
+            CompleteSubstitution::try_new(static_bindings, self.env.tir.project_type_store())
+                .map_err(|error| error.into_graphcal(self.env.src))?;
         let mut required_param_keys = std::collections::HashSet::new();
         let param_decl_types_by_key: HashMap<
             ResolvedDeclName,
@@ -73,12 +77,7 @@ impl Infer<'_> {
                 )
             })?;
             let found = self.infer_hir_type(&binding.value)?;
-            let expected = specialize_type(
-                expected,
-                static_bindings,
-                self.env.tir.project_type_store(),
-                self.env.src,
-            )?;
+            let expected = specialize_type(expected, &substitution, self.env.src)?;
             // A parameter type that still mentions a generic parameter has no
             // checked type and therefore matches no argument.
             if !expected
@@ -144,12 +143,7 @@ impl Infer<'_> {
             )
             .into());
         }
-        let output_decl = specialize_type(
-            output_decl,
-            static_bindings,
-            self.env.tir.project_type_store(),
-            self.env.src,
-        )?;
+        let output_decl = specialize_type(output_decl, &substitution, self.env.src)?;
         output_decl
             .to_checked_type(self.env.src)
             .map(|ty| ty.to_symbolic())
