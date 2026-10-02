@@ -9,7 +9,29 @@ use thiserror::Error;
 use crate::dag_id::DagId;
 use crate::diagnostic::{DiagnosticKind, SecondaryLabel};
 use crate::semantic::checked_type::TypeSpelling;
+use crate::syntax::ast::ModulePath;
 use crate::syntax::decl_name::DeclName;
+use crate::tir::typed::declared_type_spelling::DeclaredTypeSpelling;
+
+/// How a diagnostic names the DAG an import, include, or DAG call refers
+/// to: the module path as the source wrote it, a resolved DAG identity, or
+/// an inline `dag` declaration by its declared name.
+#[derive(Debug, Clone)]
+pub enum DagReference {
+    Path(ModulePath),
+    Dag(DagId),
+    InlineDag(DeclName),
+}
+
+impl std::fmt::Display for DagReference {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Path(path) => f.write_str(&path.display_path()),
+            Self::Dag(dag) => dag.fmt(f),
+            Self::InlineDag(name) => name.fmt(f),
+        }
+    }
+}
 
 /// The member a dependency cycle is reported at: a DAG that inline-calls
 /// itself, or a declaration that depends on itself.
@@ -46,17 +68,14 @@ pub enum GraphError {
     MissingDagBindings {
         /// Sorted by spelling.
         missing: Vec<DeclName>,
-        // TODO(S15 leftover): include sites name the DAG by its written
-        // path or inline declaration; type them once the include validators
-        // carry those identities instead of `&str`.
-        dag_name: String,
+        dag_name: DagReference,
     },
     #[error("unknown output `{name}` in DAG call to `{dag_name}`")]
     UnknownDagOutput { name: DeclName, dag_name: DagId },
     #[error("DAG call binding `{param_name}`: expected {expected}, found {found}")]
     DagArgTypeMismatch {
         param_name: DeclName,
-        expected: String,
+        expected: DeclaredTypeSpelling,
         found: TypeSpelling,
     },
     #[error("inline DAG target not found in project: {target}")]

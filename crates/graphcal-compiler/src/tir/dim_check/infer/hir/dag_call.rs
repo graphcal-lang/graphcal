@@ -5,7 +5,7 @@ use crate::hir::expr::{Expr, ParamBinding};
 use crate::ir::static_substitution::StaticSubstitution;
 use crate::outcome::Outcome;
 use crate::resolved_name::ResolvedDeclName;
-use crate::semantic_error::graph::GraphError;
+use crate::semantic_error::graph::{DagReference, GraphError};
 use crate::semantic_error::visibility::VisibilityError;
 use std::collections::HashMap;
 
@@ -25,7 +25,6 @@ impl Infer<'_> {
         static_bindings: &StaticSubstitution,
         output: &crate::syntax::span::Spanned<ResolvedDeclName>,
     ) -> Result<CheckedType<Symbolic>, Outcome<SemanticError>> {
-        let display_path = target.value.to_string();
         let dag_tir = self.env.tir.dag(&target.value).ok_or_else(|| {
             SemanticError::located(
                 self.env.src,
@@ -91,7 +90,7 @@ impl Infer<'_> {
                     binding.value.span,
                     GraphError::DagArgTypeMismatch {
                         param_name: target_key.to_unowned_def_name(),
-                        expected: expected.format(self.env.registry),
+                        expected: expected.spelling(self.env.registry),
                         found: found.spelling(&self.env.registry.dimensions),
                     },
                 )
@@ -111,7 +110,7 @@ impl Infer<'_> {
                 expr.span,
                 GraphError::MissingDagBindings {
                     missing,
-                    dag_name: display_path,
+                    dag_name: DagReference::Dag(target.value.clone()),
                 },
             )
             .into());
@@ -141,7 +140,7 @@ impl Infer<'_> {
                 output.span,
                 VisibilityError::ImportPrivateItem {
                     name: output_name.to_string(),
-                    file_path: display_path,
+                    file_path: DagReference::Dag(target.value.clone()),
                 },
             )
             .into());

@@ -27,6 +27,7 @@ use crate::semantic_error::structure::UnboundGeneric;
 use crate::source_id::SourceId;
 use crate::syntax::non_empty::NonEmpty;
 use crate::syntax::span::Span;
+use crate::tir::typed::declared_type_spelling::DeclaredTypeSpelling;
 
 /// A resolved dimension: fully concrete, or symbolic in at least one generic
 /// dimension parameter.
@@ -330,6 +331,12 @@ impl ResolvedDeclType {
             Self::Value(_) => &[],
             Self::Indexed { indexes, .. } => indexes.as_slice(),
         }
+    }
+
+    /// Spell this declared type for a diagnostic payload.
+    #[must_use]
+    pub fn spelling(&self, registry: &FormattingRegistry) -> DeclaredTypeSpelling {
+        DeclaredTypeSpelling::new(self.format(registry))
     }
 
     /// Format as a human-readable string, e.g. `"Velocity[Maneuver]"`.

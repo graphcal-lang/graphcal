@@ -9,6 +9,7 @@ use crate::semantic_error::SemanticError;
 use crate::semantic_error::attribute::AttributeError;
 use crate::semantic_error::dimension::DimensionError;
 use crate::semantic_error::domain::DomainError;
+use crate::semantic_error::graph::DagReference;
 use crate::semantic_error::index::IndexError;
 use crate::semantic_error::module::ModuleError;
 use crate::semantic_error::name::NameError;
@@ -326,7 +327,7 @@ pub fn expr_lower_error_to_semantic(err: &ExprLowerError, src: SourceId) -> Sema
             *span,
             VisibilityError::ImportPrivateItem {
                 name: name.to_string(),
-                file_path: owner.to_string(),
+                file_path: DagReference::Dag(owner.clone()),
             },
         ),
         ExprLowerError::ModuleResolve {

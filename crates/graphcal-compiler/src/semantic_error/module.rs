@@ -10,6 +10,7 @@ use crate::dag_id::DagId;
 use crate::declaration_kind::DeclarationKind;
 use crate::diagnostic::{DiagnosticKind, SecondaryLabel};
 use crate::resolve::error::ModuleResolveError;
+use crate::semantic_error::graph::DagReference;
 use crate::resolved_name::ResolvedStructTypeName;
 use crate::syntax::dimension::UnitRef;
 use crate::syntax::import_category::{ImportItemCategoryMismatch, ImportItemNamespace};
@@ -62,10 +63,10 @@ pub enum ModuleError {
         first: Span,
     },
     #[error("name `{name}` not found in imported file `{file_path}`")]
-    ImportNameNotFound { name: String, file_path: String },
+    ImportNameNotFound { name: String, file_path: DagReference },
     #[error("in imported file `{file_path}`, {mismatch}")]
     ImportCategoryMismatch {
-        file_path: String,
+        file_path: DagReference,
         mismatch: ImportItemCategoryMismatch,
     },
     #[error("duplicate module name `{name}`")]
@@ -73,7 +74,7 @@ pub enum ModuleError {
     #[error("unknown module `{name}`")]
     UnknownModule { name: ModuleAliasName },
     #[error("unknown param `{name}` in import binding for `{file_path}`")]
-    UnknownParamBinding { name: String, file_path: String },
+    UnknownParamBinding { name: String, file_path: DagReference },
     #[error("binding target `{name}` is a {actual_kind}, not a param")]
     BindingNotAParam {
         name: String,

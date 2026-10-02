@@ -16,7 +16,7 @@ use graphcal_compiler::outcome::Outcome;
 use graphcal_compiler::resolved_name::ResolvedDeclName;
 use graphcal_compiler::semantic::index_def::IndexBindingTarget;
 use graphcal_compiler::semantic_error::SemanticError;
-use graphcal_compiler::semantic_error::graph::GraphError;
+use graphcal_compiler::semantic_error::graph::{DagReference, GraphError};
 use graphcal_compiler::semantic_error::index::IndexError;
 use graphcal_compiler::semantic_error::module::ModuleError;
 use graphcal_compiler::semantic_error::name::NameError;
@@ -124,7 +124,7 @@ fn static_input_is_bindable(
 
 pub(super) struct InlineDagIncludeTarget<'a> {
     pub(super) module: crate::loader::loaded_file::LoadedModule<'a>,
-    pub(super) dag_name: &'a str,
+    pub(super) dag_name: &'a DeclName,
 }
 
 /// Populate one file body's pure imports and concrete include requests.
@@ -188,7 +188,7 @@ pub(super) fn process_file_body_declarations<'a>(
         process_inline_dag_include(
             &InlineDagIncludeTarget {
                 module: loaded_dag.module(dag_file),
-                dag_name: loaded_dag.declaration(dag_file).name.value.as_str(),
+                dag_name: &loaded_dag.declaration(dag_file).name.value,
             },
             include,
             declaration,
@@ -220,7 +220,7 @@ pub(super) fn process_file_body_declarations<'a>(
                 include.path.leaf().span,
                 VisibilityError::ImportPrivateItem {
                     name: target.target().leaf().to_string(),
-                    file_path: include.path.display_path(),
+                    file_path: DagReference::Path(include.path.clone()),
                 },
             ))
             .into());
@@ -228,7 +228,7 @@ pub(super) fn process_file_body_declarations<'a>(
         process_inline_dag_include(
             &InlineDagIncludeTarget {
                 module: target_dag.module(target_loaded),
-                dag_name: target_dag.declaration(target_loaded).name.value.as_str(),
+                dag_name: &target_dag.declaration(target_loaded).name.value,
             },
             include,
             declaration,
@@ -243,7 +243,7 @@ fn ensure_include_item_selectable(
     interface: &ModuleInterface,
     name: &NameAtom,
     namespace: ImportItemNamespace,
-    file_path: &str,
+    file_path: &DagReference,
     file_src: SourceId,
     span: Span,
 ) -> Result<(), PipelineError> {
@@ -254,7 +254,7 @@ fn ensure_include_item_selectable(
             span,
             VisibilityError::ImportPrivateItem {
                 name: name.to_string(),
-                file_path: file_path.to_string(),
+                file_path: file_path.clone(),
             },
         ))),
         None => Err(PipelineError::Semantic(SemanticError::located(
@@ -262,7 +262,7 @@ fn ensure_include_item_selectable(
             span,
             ModuleError::ImportNameNotFound {
                 name: name.to_string(),
-                file_path: file_path.to_string(),
+                file_path: file_path.clone(),
             },
         ))),
     }
@@ -631,7 +631,7 @@ fn classify_param_bindings(
     param_bindings: &[graphcal_compiler::desugar::desugared_ast::ParamBinding],
     dep: &ModuleInterface,
     file_src: SourceId,
-    dep_path_for_error: &str,
+    dep_path_for_error: &DagReference,
 ) -> Result<ClassifiedBindings, PipelineError> {
     let mut out = ClassifiedBindings {
         params: HashMap::new(),
@@ -705,7 +705,7 @@ fn classify_param_bindings(
                     binding.name.span,
                     ModuleError::UnknownParamBinding {
                         name: binding_name.to_string(),
-                        file_path: dep_path_for_error.to_string(),
+                        file_path: dep_path_for_error.clone(),
                     },
                 )));
             }
@@ -853,7 +853,7 @@ pub(super) fn validate_direct_dag_call_bindings(
     args: &[graphcal_compiler::desugar::desugared_ast::ParamBinding],
     dependency: &ModuleInterface,
     importer: &ModuleInterface,
-    dag_name: &str,
+    dag_name: &DagReference,
     file_src: SourceId,
     span: Span,
 ) -> Result<(), PipelineError> {
@@ -881,7 +881,7 @@ pub(super) fn validate_direct_dag_call_bindings(
 fn validate_required_param_bindings(
     dep: &ModuleInterface,
     bindings: &HashMap<DeclName, graphcal_compiler::desugar::desugared_ast::Expr>,
-    dag_name: &str,
+    dag_name: &DagReference,
     file_src: SourceId,
     include_span: Span,
 ) -> Result<(), PipelineError> {
@@ -901,7 +901,7 @@ fn validate_required_param_bindings(
         include_span,
         GraphError::MissingDagBindings {
             missing,
-            dag_name: dag_name.to_string(),
+            dag_name: dag_name.clone(),
         },
     )))
 }
@@ -974,7 +974,7 @@ pub(super) fn process_file_include<'a>(
     // binding lands in one of params/types/dims/indexes, or is rejected as
     // an unknown / non-bindable name. Caller-specific cross-checks (importer
     // scope for index bindings) layer on top of the shared classification.
-    let dep_path_display = include_decl.path.display_path();
+    let dep_path_display = DagReference::Path(include_decl.path.clone());
     let ClassifiedBindings {
         params: bindings,
         indexes: index_bindings,
@@ -1024,7 +1024,7 @@ pub(super) fn process_file_include<'a>(
                     dep,
                     orig_name.atom(),
                     import_item.namespace,
-                    &include_decl.path.display_path(),
+                    &dep_path_display,
                     file_src,
                     import_item.name.span,
                 )?;
@@ -1194,6 +1194,7 @@ pub(super) fn process_inline_dag_include<'a>(
 
     let dep = target.module.interface();
     let dag_name = target.dag_name;
+    let dag_reference = DagReference::InlineDag(dag_name.clone());
     let dag_id = target.module.dag_id();
 
     // As for file-root includes, only the module form introduces an alias.
@@ -1231,7 +1232,7 @@ pub(super) fn process_inline_dag_include<'a>(
         index_spans: index_binding_spans,
         types: type_bindings,
         dims: dim_bindings,
-    } = classify_param_bindings(&include_decl.param_bindings, dep, file_src, dag_name)?;
+    } = classify_param_bindings(&include_decl.param_bindings, dep, file_src, &dag_reference)?;
     validate_concrete_static_binding_targets(
         importer,
         dep,
@@ -1264,7 +1265,7 @@ pub(super) fn process_inline_dag_include<'a>(
                     dep,
                     orig_name.atom(),
                     import_item.namespace,
-                    dag_name,
+                    &dag_reference,
                     file_src,
                     import_item.name.span,
                 )?;
@@ -1356,7 +1357,7 @@ pub(super) fn process_inline_dag_include<'a>(
         file_src,
         include_decl.path.span(),
     )?;
-    validate_required_param_bindings(dep, &bindings, dag_name, file_src, decl.span)?;
+    validate_required_param_bindings(dep, &bindings, &dag_reference, file_src, decl.span)?;
     let static_bindings = resolve_include_static_bindings(
         AuthoredStaticBindings {
             indexes: index_bindings,
@@ -1382,7 +1383,7 @@ pub(super) fn process_inline_dag_include<'a>(
     ctx.include_instances.push(IncludeInstanceRequest {
         template: target.module,
         instance_scope,
-        debug_scope: ModuleAliasName::expect_valid(dag_name),
+        debug_scope: ModuleAliasName::expect_valid(dag_name.as_str()),
         bindings,
         static_bindings,
         selective_names,
@@ -1470,7 +1471,7 @@ pub(super) fn process_pure_import<'a>(
                             import_item.name.span,
                             VisibilityError::ImportPrivateItem {
                                 name: orig_name.to_string(),
-                                file_path: import_path.display_path(),
+                                file_path: DagReference::Path(import_path.clone()),
                             },
                         )));
                     }
@@ -1478,7 +1479,7 @@ pub(super) fn process_pure_import<'a>(
                         dep_interface,
                         orig_name.atom(),
                         import_item.namespace,
-                        &import_path.display_path(),
+                        &DagReference::Path(import_path.clone()),
                         file_src,
                         import_item.name.span,
                     )));
@@ -1544,7 +1545,7 @@ pub(super) fn process_pure_import<'a>(
                             import_item.name.span,
                             ModuleError::ImportNameNotFound {
                                 name: orig_name.to_string(),
-                                file_path: import_path.display_path(),
+                                file_path: DagReference::Path(import_path.clone()),
                             },
                         ))
                     })?;

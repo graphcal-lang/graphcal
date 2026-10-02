@@ -15,6 +15,7 @@ use graphcal_compiler::ir::module_interface::{ModuleInterface, PureImportTermDis
 use graphcal_compiler::ir::resolve::{ImportedValueNames, ScopedName};
 use graphcal_compiler::resolve::ModuleResolver;
 use graphcal_compiler::semantic_error::SemanticError;
+use graphcal_compiler::semantic_error::graph::DagReference;
 use graphcal_compiler::semantic_error::visibility::VisibilityError;
 use graphcal_compiler::source_id::SourceId;
 use graphcal_compiler::syntax::ast::{DeclExposure, ImportItemNamespace};
@@ -123,7 +124,7 @@ pub fn preprocess_dag_body_self_imports(
                                 parent_interface,
                                 orig_name.atom(),
                                 item.namespace,
-                                &import_decl.path().display_path(),
+                                &DagReference::Path(import_decl.path().clone()),
                                 src,
                                 span,
                             ));
@@ -134,7 +135,7 @@ pub fn preprocess_dag_body_self_imports(
                                 span,
                                 VisibilityError::ImportPrivateItem {
                                     name: orig_name.to_string(),
-                                    file_path: import_decl.path().display_path(),
+                                    file_path: DagReference::Path(import_decl.path().clone()),
                                 },
                             ));
                         }
@@ -152,7 +153,7 @@ pub fn preprocess_dag_body_self_imports(
                             parent_interface,
                             orig_name.atom(),
                             item.namespace,
-                            &import_decl.path().display_path(),
+                            &DagReference::Path(import_decl.path().clone()),
                             src,
                             span,
                         )

@@ -256,7 +256,7 @@ fn time_scale_and_unit_scale_diagnostics_keep_their_lowering_text() {
 
 #[test]
 fn graph_payloads_render_their_names_as_before() {
-    use super::graph::{CycleMember, GraphError};
+    use super::graph::{CycleMember, DagReference, GraphError};
     use crate::dag_id::DagId;
     use crate::syntax::decl_name::DeclName;
 
@@ -269,10 +269,23 @@ fn graph_payloads_render_their_names_as_before() {
     assert_eq!(
         GraphError::MissingDagBindings {
             missing: vec![DeclName::expect_valid("x"), DeclName::expect_valid("y")],
-            dag_name: "lib".to_owned(),
+            dag_name: DagReference::InlineDag(DeclName::expect_valid("lib")),
         }
         .to_string(),
         "missing required binding(s) [\"x\", \"y\"] when instantiating DAG `lib`"
+    );
+    assert_eq!(DagReference::Dag(dag.clone()).to_string(), dag.to_string());
+    let ident = |name: &str| crate::syntax::ast::Ident {
+        name: crate::syntax::token::SourceIdentifier::parse(name).unwrap(),
+        span: crate::syntax::span::Span::new(0, 0),
+    };
+    assert_eq!(
+        DagReference::Path(crate::syntax::ast::ModulePath {
+            segments: crate::syntax::non_empty::NonEmpty::new(ident("pkg"), vec![ident("lib")]),
+            span: crate::syntax::span::Span::new(0, 0),
+        })
+        .to_string(),
+        "pkg.lib"
     );
     assert_eq!(
         GraphError::UnknownDagParam {

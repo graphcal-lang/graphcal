@@ -8,6 +8,7 @@ use thiserror::Error;
 
 use crate::declaration_kind::DeclarationKind;
 use crate::diagnostic::{DiagnosticKind, SecondaryLabel};
+use crate::semantic_error::graph::DagReference;
 use crate::static_interface::StaticInputKind;
 use crate::syntax::decl_name::DeclName;
 use crate::syntax::index_name::{IndexName, IndexVariantName};
@@ -37,7 +38,7 @@ pub enum VisibilityError {
     // --- Visibility errors ---
     /// Attempting to import a private (non-`pub`) item from another file.
     #[error("cannot import private item `{name}` from `{file_path}`")]
-    ImportPrivateItem { name: String, file_path: String },
+    ImportPrivateItem { name: String, file_path: DagReference },
     /// A required `index`, `type`, or `dim` is not marked `pub(bind)`.
     ///
     /// `param` is excluded: the declaration kind itself creates a required or

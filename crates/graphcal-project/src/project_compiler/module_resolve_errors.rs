@@ -1,6 +1,7 @@
 //! Project diagnostics for module-resolution failures.
 
 use graphcal_compiler::semantic_error::SemanticError;
+use graphcal_compiler::semantic_error::graph::DagReference;
 use graphcal_compiler::semantic_error::module::ModuleError;
 use graphcal_compiler::semantic_error::name::NameError;
 use graphcal_compiler::semantic_error::visibility::VisibilityError;
@@ -30,7 +31,7 @@ pub(super) fn module_resolve_compile_error(
             src.whole_span(),
             VisibilityError::ImportPrivateItem {
                 name: name.to_string(),
-                file_path: owner.to_string(),
+                file_path: DagReference::Dag(owner),
             },
         )),
         graphcal_compiler::resolve::error::ModuleResolveError::WrongImportCategory {
@@ -41,7 +42,7 @@ pub(super) fn module_resolve_compile_error(
             src,
             span,
             ModuleError::ImportCategoryMismatch {
-                file_path: owner.to_string(),
+                file_path: DagReference::Dag(owner),
                 mismatch,
             },
         )),

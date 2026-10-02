@@ -1860,6 +1860,11 @@ role = "contracts"
 
 [[module]]
 package = "compiler"
+path = ["tir", "typed", "declared_type_spelling"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
 path = ["tir", "typed", "resolved_type", "tests"]
 role = "contracts"
 

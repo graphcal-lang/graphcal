@@ -80,7 +80,7 @@ impl ExprVisitor<Desugared> for DirectDagCallValidator<'_> {
                 args,
                 dependency.interface(),
                 self.importer,
-                &target.to_string(),
+                &graphcal_compiler::semantic_error::graph::DagReference::Dag(target.clone()),
                 self.src,
                 expr.span,
             )?;
@@ -629,7 +629,7 @@ fn process_dag_body_include_declarations<'a>(
         imports::process_inline_dag_include(
             &imports::InlineDagIncludeTarget {
                 module: target_dag.module(target_file),
-                dag_name: target_dag.declaration(target_file).name.value.as_str(),
+                dag_name: &target_dag.declaration(target_file).name.value,
             },
             include_decl,
             decl,

@@ -2199,7 +2199,7 @@ fn assert_missing_dag_bindings(
                 }),
             ..
         }) => {
-            assert_eq!(dag_name, expected_dag_name);
+            assert_eq!(dag_name.to_string(), expected_dag_name);
             assert_eq!(
                 missing.iter().map(ToString::to_string).collect::<Vec<_>>(),
                 expected_missing

@@ -6,4 +6,4 @@ build_declared_types_calls = 0
 module_resolve_str_key_lookups = 0
 pipeline_layers_exceptions = 0
 reading_order_sccs = 0
-semantic_error_string_payloads = 114
+semantic_error_string_payloads = 108
