@@ -3,6 +3,9 @@
 use crate::hir::expr::{Expr, ForBinding, ForBindingIndex, IndexArg};
 use crate::outcome::Outcome;
 use crate::semantic_error::dimension::DimensionError;
+use crate::semantic_error::dimension_mismatch::{
+    MismatchOperand, MismatchRule, OperandExpectation,
+};
 use crate::semantic_error::index::IndexError;
 use crate::semantic_error::structure::StructError;
 use crate::semantic_error::structure::UnknownLocal;
@@ -15,7 +18,7 @@ use crate::syntax::span::Span;
 use crate::tir::typed::NatPolyForm;
 
 use crate::semantic::checked_type::CheckedType;
-use crate::tir::dim_check::helpers::{expect_quantity, format_checked_type};
+use crate::tir::dim_check::helpers::expect_quantity;
 
 use super::context::Infer;
 use super::nat_forms::finite_index_error;
@@ -80,9 +83,13 @@ impl Infer<'_> {
                         self.env.src,
                         arg.span,
                         DimensionError::DimensionMismatch {
-                            expected: "a static Nat position".to_string(),
-                            found: format_checked_type(&arg_type, self.env.registry),
-                            help: "key(Fin(N), position) takes an integer position".to_string(),
+                            expected: Box::new(MismatchOperand::Expected(
+                                OperandExpectation::StaticNatPosition,
+                            )),
+                            found: Box::new(MismatchOperand::Type(
+                                arg_type.spelling(&self.env.registry.dimensions),
+                            )),
+                            help: Box::new(MismatchRule::KeyStaticPosition),
                         },
                     )
                     .into());
@@ -142,11 +149,11 @@ impl Infer<'_> {
                         self.env.src,
                         arg.span,
                         DimensionError::DimensionMismatch {
-                            expected: "Int".to_string(),
-                            found: format_checked_type(&arg_type, self.env.registry),
-                            help: "fin_key(Fin(N), position) takes an Int position, checked at \
-                           runtime"
-                                .to_string(),
+                            expected: Box::new(MismatchOperand::Expected(OperandExpectation::Int)),
+                            found: Box::new(MismatchOperand::Type(
+                                arg_type.spelling(&self.env.registry.dimensions),
+                            )),
+                            help: Box::new(MismatchRule::FinKeyIntPosition),
                         },
                     )
                     .into());
@@ -182,12 +189,13 @@ impl Infer<'_> {
                         self.env.src,
                         arg.span,
                         DimensionError::DimensionMismatch {
-                            expected: self.env.registry.dimensions.format_dimension(&dimension),
-                            found: self.env.registry.dimensions.format_dimension(&arg_dim),
-                            help: format!(
-                                "{}() takes a quantity in the axis dimension",
-                                kind.as_str()
-                            ),
+                            expected: Box::new(MismatchOperand::Dimension(
+                                self.env.registry.dimensions.dimension_spelling(&dimension),
+                            )),
+                            found: Box::new(MismatchOperand::Dimension(
+                                self.env.registry.dimensions.dimension_spelling(&arg_dim),
+                            )),
+                            help: Box::new(MismatchRule::CoordinateSearchAxisDimension(kind)),
                         },
                     )
                     .into());

@@ -18,6 +18,7 @@ use crate::syntax::span::Span;
 
 pub mod attribute;
 pub mod dimension;
+pub mod dimension_mismatch;
 pub mod domain;
 pub mod evaluation;
 pub mod graph;

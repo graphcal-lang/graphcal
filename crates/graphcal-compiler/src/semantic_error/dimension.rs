@@ -29,6 +29,7 @@ impl std::fmt::Display for UnitScaleSite {
         })
     }
 }
+use super::dimension_mismatch::{MismatchOperand, MismatchRule};
 use crate::semantic::time_zone::IanaTimeZoneId;
 use crate::syntax::dimension::{DimName, UnitName, UnitRef};
 use crate::syntax::module_name::ScopedName;
@@ -69,9 +70,9 @@ pub enum DimensionError {
     DimensionOverflow,
     #[error("dimension mismatch: expected {expected}, found {found}")]
     DimensionMismatch {
-        expected: String,
-        found: String,
-        help: String,
+        expected: Box<MismatchOperand>,
+        found: Box<MismatchOperand>,
+        help: Box<MismatchRule>,
     },
     #[error("mismatched index axes in {context}: {lhs} vs {rhs}")]
     IndexedShapeMismatch {
@@ -342,8 +343,8 @@ impl DiagnosticKind for DimensionError {
             Self::GraphRefInConstUnit { .. } => Some("`const unit` scales are compile-time constants; use plain `unit` for runtime-dependent units".to_owned()),
             Self::NonConstUnitInConst { .. } => Some("`const node` bodies and `const unit` definitions can only use prelude units, `base unit`, or `const unit` declarations; use `node` or plain `unit` for runtime-unit calculations".to_owned()),
             Self::DimensionOverflow => Some("dimension exponents are stored as `i32`; reduce the magnitude of the exponent".to_owned()),
-            Self::DimensionMismatch { help, .. }
-            | Self::LinearAlgebraShapeMismatch { help, .. }
+            Self::DimensionMismatch { help, .. } => Some(help.to_string()),
+            Self::LinearAlgebraShapeMismatch { help, .. }
             | Self::FloatPowerExponent { help, .. }
             | Self::InvalidBaseUnitDeclaration { help, .. } => Some(help.clone()),
             Self::IndexedShapeMismatch { .. } => Some("element-wise operands must be indexed by the same axes in the same order; an unindexed operand broadcasts to every key".to_owned()),

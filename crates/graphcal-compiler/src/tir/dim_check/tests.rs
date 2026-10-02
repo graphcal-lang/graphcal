@@ -2802,8 +2802,8 @@ node state: Dimensionless[Step, Element] = unfold(
     assert!(
         matches!(
             &err,
-            SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Dimension(DimensionError::DimensionMismatch { expected, found, .. }), .. }) if expected == "Dimensionless[Element]"
-                && found == "Dimensionless[Other]"
+            SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Dimension(DimensionError::DimensionMismatch { expected, found, .. }), .. }) if expected.to_string() == "Dimensionless[Element]"
+                && found.to_string() == "Dimensionless[Other]"
         ),
         "got: {err:?}"
     );
@@ -2875,7 +2875,7 @@ param v: Dimensionless[Fin(3)] = for i: Fin(3) { 1.0 };
 node w: Dimensionless[Fin(3)] = for i: Fin(3) { @v[-i] };";
     let err = check(source).unwrap_err();
     assert!(
-        matches!(&err, SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Dimension(DimensionError::DimensionMismatch { found, .. }), .. }) if found.contains("Fin")),
+        matches!(&err, SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Dimension(DimensionError::DimensionMismatch { found, .. }), .. }) if found.to_string().contains("Fin")),
         "got: {err:?}"
     );
 }
@@ -2885,7 +2885,7 @@ fn negation_rejects_datetime() {
     let source = "node t: Datetime<UTC> = -datetime(\"2026-01-01T00:00:00Z\");";
     let err = check(source).unwrap_err();
     assert!(
-        matches!(&err, SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Dimension(DimensionError::DimensionMismatch { found, .. }), .. }) if found.contains("Datetime")),
+        matches!(&err, SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Dimension(DimensionError::DimensionMismatch { found, .. }), .. }) if found.to_string().contains("Datetime")),
         "got: {err:?}"
     );
 }
@@ -2898,7 +2898,7 @@ param flags: Bool[Phase] = for p: Phase { true };
 node total: Dimensionless = sum(@flags);";
     let err = check(source).unwrap_err();
     assert!(
-        matches!(&err, SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Dimension(DimensionError::DimensionMismatch { expected, .. }), .. }) if expected == "indexed quantity collection"),
+        matches!(&err, SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Dimension(DimensionError::DimensionMismatch { expected, .. }), .. }) if expected.to_string() == "indexed quantity collection"),
         "got: {err:?}"
     );
 }
@@ -2910,7 +2910,7 @@ param counts: Int[Fin(3)] = for i: Fin(3) { i };
 node total: Int = sum(@counts);";
     let err = check(source).unwrap_err();
     assert!(
-        matches!(&err, SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Dimension(DimensionError::DimensionMismatch { expected, .. }), .. }) if expected == "indexed quantity collection"),
+        matches!(&err, SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Dimension(DimensionError::DimensionMismatch { expected, .. }), .. }) if expected.to_string() == "indexed quantity collection"),
         "got: {err:?}"
     );
 }

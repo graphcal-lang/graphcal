@@ -3,13 +3,16 @@
 use crate::hir::expr::{Expr, ExprKind, ResolvedUnitExpr};
 use crate::outcome::Outcome;
 use crate::semantic_error::dimension::DimensionError;
+use crate::semantic_error::dimension_mismatch::{
+    MismatchOperand, MismatchRule, OperandExpectation,
+};
 use crate::source_id::SourceId;
 
 use crate::semantic_error::SemanticError;
 use crate::syntax::ast::UnaryOp;
 
 use crate::semantic::checked_type::{CheckedType, Symbolic};
-use crate::tir::dim_check::helpers::{expect_quantity, format_checked_type};
+use crate::tir::dim_check::helpers::expect_quantity;
 use crate::tir::dim_check::infer::rules::{self, Operand};
 
 use super::context::Infer;
@@ -200,11 +203,11 @@ impl Infer<'_> {
                 self.env.src,
                 inner.span,
                 DimensionError::DimensionMismatch {
-                    expected: "Datetime".to_string(),
-                    found: format_checked_type(&inner_type, self.env.registry),
-                    help: format!(
-                        "timezone display `-> \"{timezone}\"` requires a Datetime expression"
-                    ),
+                    expected: Box::new(MismatchOperand::Expected(OperandExpectation::Datetime)),
+                    found: Box::new(MismatchOperand::Type(
+                        inner_type.spelling(&self.env.registry.dimensions),
+                    )),
+                    help: Box::new(MismatchRule::TimezoneDisplayDatetime(timezone.clone())),
                 },
             )
             .into());

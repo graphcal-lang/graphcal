@@ -848,6 +848,11 @@ role = "contracts"
 
 [[module]]
 package = "compiler"
+path = ["semantic_error", "dimension_mismatch"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
 path = ["semantic_error", "module"]
 role = "contracts"
 

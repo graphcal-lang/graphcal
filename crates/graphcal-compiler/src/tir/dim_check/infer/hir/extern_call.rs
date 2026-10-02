@@ -3,6 +3,9 @@
 use crate::hir::expr::{Expr, ExternFnRef};
 use crate::outcome::Outcome;
 use crate::semantic_error::dimension::DimensionError;
+use crate::semantic_error::dimension_mismatch::{
+    ExternScalar, MismatchOperand, MismatchRule, OperandExpectation,
+};
 use crate::semantic_error::name::NameError;
 use crate::semantic_error::plugin::PluginError;
 use std::collections::HashMap;
@@ -12,7 +15,7 @@ use crate::semantic_error::SemanticError;
 use crate::syntax::span::Span;
 
 use crate::semantic::checked_type::CheckedType;
-use crate::tir::dim_check::helpers::{expect_quantity, format_checked_type};
+use crate::tir::dim_check::helpers::expect_quantity;
 
 use super::context::Infer;
 
@@ -71,9 +74,16 @@ impl Infer<'_> {
                             self.env.src,
                             arg.span,
                             DimensionError::DimensionMismatch {
-                                expected: "Bool".to_string(),
-                                found: format_checked_type(&arg_type, self.env.registry),
-                                help: format!("parameter `{}` requires Bool", param.name),
+                                expected: Box::new(MismatchOperand::Expected(
+                                    OperandExpectation::Bool,
+                                )),
+                                found: Box::new(MismatchOperand::Type(
+                                    arg_type.spelling(&self.env.registry.dimensions),
+                                )),
+                                help: Box::new(MismatchRule::ExternScalarParameter {
+                                    parameter: param.name.clone(),
+                                    scalar: ExternScalar::Bool,
+                                }),
                             },
                         )
                         .into());
@@ -85,9 +95,16 @@ impl Infer<'_> {
                             self.env.src,
                             arg.span,
                             DimensionError::DimensionMismatch {
-                                expected: "Int".to_string(),
-                                found: format_checked_type(&arg_type, self.env.registry),
-                                help: format!("parameter `{}` requires Int", param.name),
+                                expected: Box::new(MismatchOperand::Expected(
+                                    OperandExpectation::Int,
+                                )),
+                                found: Box::new(MismatchOperand::Type(
+                                    arg_type.spelling(&self.env.registry.dimensions),
+                                )),
+                                help: Box::new(MismatchRule::ExternScalarParameter {
+                                    parameter: param.name.clone(),
+                                    scalar: ExternScalar::Int,
+                                }),
                             },
                         )
                         .into());
@@ -107,10 +124,25 @@ impl Infer<'_> {
                             index: arg_index,
                         } = current
                         else {
-                            return Err(SemanticError::located(self.env.src, arg.span, DimensionError::DimensionMismatch { expected: format!("a rank-{} indexed collection", indexes.len()), found: format_checked_type(&arg_type, self.env.registry), help: format!(
-                                    "parameter `{}` of `{display_name}` takes one axis for each declared index variable",
-                                    param.name
-                                ) }).into());
+                            return Err(SemanticError::located(
+                                self.env.src,
+                                arg.span,
+                                DimensionError::DimensionMismatch {
+                                    expected: Box::new(MismatchOperand::Expected(
+                                        OperandExpectation::ExternIndexedCollection {
+                                            rank: indexes.len(),
+                                        },
+                                    )),
+                                    found: Box::new(MismatchOperand::Type(
+                                        arg_type.spelling(&self.env.registry.dimensions),
+                                    )),
+                                    help: Box::new(MismatchRule::ExternAxisPerIndexVariable {
+                                        parameter: param.name.clone(),
+                                        function: ext.clone(),
+                                    }),
+                                },
+                            )
+                            .into());
                         };
                         arg_indexes.push(arg_index);
                         current = element;
@@ -118,13 +150,25 @@ impl Infer<'_> {
                     match element {
                         ScalarValueKind::Quantity(monomial) => {
                             let Some(arg_dim) = current.quantity_dimension().cloned() else {
-                                return Err(SemanticError::located(self.env.src, arg.span, DimensionError::DimensionMismatch { expected: format!(
-                                        "a rank-{} indexed quantity collection",
-                                        indexes.len()
-                                    ), found: format_checked_type(&arg_type, self.env.registry), help: format!(
-                                        "parameter `{}` of `{display_name}` requires quantity elements",
-                                        param.name
-                                    ) }).into());
+                                return Err(SemanticError::located(
+                                    self.env.src,
+                                    arg.span,
+                                    DimensionError::DimensionMismatch {
+                                        expected: Box::new(MismatchOperand::Expected(
+                                            OperandExpectation::ExternIndexedQuantityCollection {
+                                                rank: indexes.len(),
+                                            },
+                                        )),
+                                        found: Box::new(MismatchOperand::Type(
+                                            arg_type.spelling(&self.env.registry.dimensions),
+                                        )),
+                                        help: Box::new(MismatchRule::ExternQuantityElements {
+                                            parameter: param.name.clone(),
+                                            function: ext.clone(),
+                                        }),
+                                    },
+                                )
+                                .into());
                             };
                             dim_walk.check_quantity_param(
                                 &param.name,
@@ -135,9 +179,9 @@ impl Infer<'_> {
                         }
                         scalar @ (ScalarValueKind::Bool | ScalarValueKind::Int) => {
                             let name = if matches!(scalar, ScalarValueKind::Bool) {
-                                "Bool"
+                                ExternScalar::Bool
                             } else {
-                                "Int"
+                                ExternScalar::Int
                             };
                             let matches = matches!(
                                 (scalar, current),
@@ -145,13 +189,27 @@ impl Infer<'_> {
                                     | (ScalarValueKind::Int, CheckedType::Int)
                             );
                             if !matches {
-                                return Err(SemanticError::located(self.env.src, arg.span, DimensionError::DimensionMismatch { expected: format!(
-                                        "{name} with exactly {} indexed axes",
-                                        indexes.len()
-                                    ), found: format_checked_type(&arg_type, self.env.registry), help: format!(
-                                        "parameter `{}` of `{display_name}` requires {name} elements",
-                                        param.name
-                                    ) }).into());
+                                return Err(SemanticError::located(
+                                    self.env.src,
+                                    arg.span,
+                                    DimensionError::DimensionMismatch {
+                                        expected: Box::new(MismatchOperand::Expected(
+                                            OperandExpectation::ExternScalarAxes {
+                                                scalar: name,
+                                                rank: indexes.len(),
+                                            },
+                                        )),
+                                        found: Box::new(MismatchOperand::Type(
+                                            arg_type.spelling(&self.env.registry.dimensions),
+                                        )),
+                                        help: Box::new(MismatchRule::ExternScalarElements {
+                                            parameter: param.name.clone(),
+                                            function: ext.clone(),
+                                            scalar: name,
+                                        }),
+                                    },
+                                )
+                                .into());
                             }
                         }
                     }
@@ -162,12 +220,28 @@ impl Infer<'_> {
                             }
                             std::collections::hash_map::Entry::Occupied(bound) => {
                                 if bound.get() != arg_index {
-                                    return Err(SemanticError::located(self.env.src, arg.span, DimensionError::DimensionMismatch { expected: format!(
-                                            "an axis over `{}` (index variable `{index}` was bound by an earlier argument)",
-                                            bound.get()
-                                        ), found: format_checked_type(&arg_type, self.env.registry), help: format!(
-                                            "axes sharing index variable `{index}` of `{display_name}` must use the same typed index"
-                                        ) }).into());
+                                    return Err(SemanticError::located(
+                                        self.env.src,
+                                        arg.span,
+                                        DimensionError::DimensionMismatch {
+                                            expected: Box::new(MismatchOperand::Expected(
+                                                OperandExpectation::ExternSharedAxis {
+                                                    bound: bound.get().clone(),
+                                                    variable: index.clone(),
+                                                },
+                                            )),
+                                            found: Box::new(MismatchOperand::Type(
+                                                arg_type.spelling(&self.env.registry.dimensions),
+                                            )),
+                                            help: Box::new(
+                                                MismatchRule::ExternSharedIndexVariable {
+                                                    variable: index.clone(),
+                                                    function: ext.clone(),
+                                                },
+                                            ),
+                                        },
+                                    )
+                                    .into());
                                 }
                             }
                         }

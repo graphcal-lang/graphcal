@@ -6,6 +6,9 @@ use crate::outcome::Outcome;
 use crate::semantic::checked_type::{IndexTypeRef, Symbolic};
 use crate::semantic_error::SemanticError;
 use crate::semantic_error::dimension::DimensionError;
+use crate::semantic_error::dimension_mismatch::{
+    MismatchOperand, MismatchRule, OperandExpectation,
+};
 use crate::semantic_error::name::NameError;
 use crate::semantic_error::structure::StructError;
 use crate::semantic_error::structure::UnknownLocal;
@@ -46,11 +49,11 @@ impl Infer<'_> {
                     self.env.src,
                     expr.span,
                     DimensionError::DimensionMismatch {
-                        expected: "a numeric or boolean expression".to_string(),
-                        found: "contextual string literal".to_string(),
-                        help:
-                            "string literals can only be used in their declared datetime contexts"
-                                .to_string(),
+                        expected: Box::new(MismatchOperand::Expected(
+                            OperandExpectation::NumericOrBooleanExpression,
+                        )),
+                        found: Box::new(MismatchOperand::ContextualStringLiteral),
+                        help: Box::new(MismatchRule::StringLiteralContext),
                     },
                 )
                 .into());

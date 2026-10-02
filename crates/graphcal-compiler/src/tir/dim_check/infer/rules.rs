@@ -13,6 +13,9 @@ use crate::display::formatting_registry::FormattingRegistry;
 use crate::exact_rational::ExactRational;
 use crate::semantic_error::SemanticError;
 use crate::semantic_error::dimension::DimensionError;
+use crate::semantic_error::dimension_mismatch::{
+    FinKeyArithmeticRule, MismatchOperand, MismatchRule, OperandExpectation,
+};
 use crate::semantic_error::index::IndexError;
 use crate::semantic_error::structure::StructError;
 use crate::source_id::SourceId;
@@ -64,40 +67,33 @@ fn fin_key_additive_rule(
     registry: &FormattingRegistry,
     src: SourceId,
 ) -> Result<CheckedType<Symbolic>, SemanticError> {
-    let reject = |help: &str| {
+    let reject = |help: FinKeyArithmeticRule| {
         Err(SemanticError::located(
             src,
             rhs.span,
             DimensionError::DimensionMismatch {
-                expected: "a static Nat constant".to_string(),
-                found: format_checked_type(&rhs.ty, registry),
-                help: help.to_string(),
+                expected: Box::new(MismatchOperand::Expected(
+                    OperandExpectation::StaticNatConstant,
+                )),
+                found: Box::new(MismatchOperand::Type(rhs.ty.spelling(&registry.dimensions))),
+                help: Box::new(MismatchRule::FinKeyArithmetic(help)),
             },
         ))
     };
     let Some(bound) = key_index.finite_index_form() else {
-        return reject(
-            "named and coordinate keys have no arithmetic; only Fin-axis keys \
-             carry the additive fragment `k + c`",
-        );
+        return reject(FinKeyArithmeticRule::NamedOrCoordinateKey);
     };
     if op != BinOp::Add {
-        return reject(
-            "key subtraction is fallible at 0 and excluded; restructure additively \
-             or use to_int() and fin_key()",
-        );
+        return reject(FinKeyArithmeticRule::Subtraction);
     }
     if rhs.ty != CheckedType::Int {
-        return reject("`k + c` takes an integer constant addend");
+        return reject(FinKeyArithmeticRule::IntegerAddend);
     }
     let Some(addend) = rhs_const_int else {
-        return reject(
-            "a runtime offset escapes any static bound; use `to_int(k) + e` and \
-             re-enter with fin_key()",
-        );
+        return reject(FinKeyArithmeticRule::RuntimeOffset);
     };
     let Ok(addend) = u64::try_from(addend) else {
-        return reject("`k + c` takes a non-negative static constant");
+        return reject(FinKeyArithmeticRule::NegativeAddend);
     };
     let shifted = bound
         .add(&crate::nat::NatPolyForm::from_constant(addend))
@@ -144,9 +140,11 @@ pub(super) fn binop_rule(
                     src,
                     lhs.span,
                     DimensionError::DimensionMismatch {
-                        expected: "Bool".to_string(),
-                        found: format_checked_type(lhs_type, registry),
-                        help: "boolean operators require Bool operands".to_string(),
+                        expected: Box::new(MismatchOperand::Expected(OperandExpectation::Bool)),
+                        found: Box::new(MismatchOperand::Type(
+                            lhs_type.spelling(&registry.dimensions),
+                        )),
+                        help: Box::new(MismatchRule::BooleanOperands),
                     },
                 ));
             }
@@ -155,9 +153,11 @@ pub(super) fn binop_rule(
                     src,
                     rhs.span,
                     DimensionError::DimensionMismatch {
-                        expected: "Bool".to_string(),
-                        found: format_checked_type(rhs_type, registry),
-                        help: "boolean operators require Bool operands".to_string(),
+                        expected: Box::new(MismatchOperand::Expected(OperandExpectation::Bool)),
+                        found: Box::new(MismatchOperand::Type(
+                            rhs_type.spelling(&registry.dimensions),
+                        )),
+                        help: Box::new(MismatchRule::BooleanOperands),
                     },
                 ));
             }
@@ -180,9 +180,13 @@ pub(super) fn binop_rule(
                 src,
                 rhs.span,
                 DimensionError::DimensionMismatch {
-                    expected: format_checked_type(lhs_type, registry),
-                    found: format_checked_type(rhs_type, registry),
-                    help: "equality operands must have the same type".to_string(),
+                    expected: Box::new(MismatchOperand::Type(
+                        lhs_type.spelling(&registry.dimensions),
+                    )),
+                    found: Box::new(MismatchOperand::Type(
+                        rhs_type.spelling(&registry.dimensions),
+                    )),
+                    help: Box::new(MismatchRule::EqualitySameType),
                 },
             ))
         }
@@ -194,17 +198,28 @@ pub(super) fn binop_rule(
             if matches!(lhs_type, CheckedType::Complex(_))
                 || matches!(rhs_type, CheckedType::Complex(_))
             {
-                return Err(SemanticError::located(src, if matches!(lhs_type, CheckedType::Complex(_)) {
+                return Err(SemanticError::located(
+                    src,
+                    if matches!(lhs_type, CheckedType::Complex(_)) {
                         lhs.span
                     } else {
                         rhs.span
-                    }
-                    , DimensionError::DimensionMismatch { expected: "an ordered real quantity, integer, or datetime".to_string(), found: if matches!(lhs_type, CheckedType::Complex(_)) {
-                        format_checked_type(lhs_type, registry)
-                    } else {
-                        format_checked_type(rhs_type, registry)
-                    }, help: "complex quantities are unordered; compare re(), im(), abs(), or phase() explicitly"
-                        .to_string() }));
+                    },
+                    DimensionError::DimensionMismatch {
+                        expected: Box::new(MismatchOperand::Expected(
+                            OperandExpectation::OrderedQuantity,
+                        )),
+                        found: Box::new(MismatchOperand::Type(
+                            if matches!(lhs_type, CheckedType::Complex(_)) {
+                                lhs_type
+                            } else {
+                                rhs_type
+                            }
+                            .spelling(&registry.dimensions),
+                        )),
+                        help: Box::new(MismatchRule::ComplexUnordered),
+                    },
+                ));
             }
             if matches!(lhs_type, CheckedType::Int) || matches!(rhs_type, CheckedType::Int) {
                 if !matches!(lhs_type, CheckedType::Int) || !matches!(rhs_type, CheckedType::Int) {
@@ -212,9 +227,13 @@ pub(super) fn binop_rule(
                         src,
                         rhs.span,
                         DimensionError::DimensionMismatch {
-                            expected: format_checked_type(lhs_type, registry),
-                            found: format_checked_type(rhs_type, registry),
-                            help: "comparison operands must have the same type".to_string(),
+                            expected: Box::new(MismatchOperand::Type(
+                                lhs_type.spelling(&registry.dimensions),
+                            )),
+                            found: Box::new(MismatchOperand::Type(
+                                rhs_type.spelling(&registry.dimensions),
+                            )),
+                            help: Box::new(MismatchRule::ComparisonSameType),
                         },
                     ));
                 }
@@ -229,9 +248,13 @@ pub(super) fn binop_rule(
                         src,
                         rhs.span,
                         DimensionError::DimensionMismatch {
-                            expected: format_checked_type(lhs_type, registry),
-                            found: format_checked_type(rhs_type, registry),
-                            help: "cannot compare datetimes with different time scales".to_string(),
+                            expected: Box::new(MismatchOperand::Type(
+                                lhs_type.spelling(&registry.dimensions),
+                            )),
+                            found: Box::new(MismatchOperand::Type(
+                                rhs_type.spelling(&registry.dimensions),
+                            )),
+                            help: Box::new(MismatchRule::DatetimeComparisonScales),
                         },
                     ));
                 }
@@ -244,9 +267,13 @@ pub(super) fn binop_rule(
                     src,
                     rhs.span,
                     DimensionError::DimensionMismatch {
-                        expected: registry.dimensions.format_dimension(&lhs_dim),
-                        found: registry.dimensions.format_dimension(&rhs_dim),
-                        help: "comparison operands must have the same dimension".to_string(),
+                        expected: Box::new(MismatchOperand::Dimension(
+                            registry.dimensions.dimension_spelling(&lhs_dim),
+                        )),
+                        found: Box::new(MismatchOperand::Dimension(
+                            registry.dimensions.dimension_spelling(&rhs_dim),
+                        )),
+                        help: Box::new(MismatchRule::ComparisonSameDimension),
                     },
                 ));
             }
@@ -267,11 +294,13 @@ pub(super) fn binop_rule(
                     src,
                     rhs.span,
                     DimensionError::DimensionMismatch {
-                        expected: format_checked_type(lhs_type, registry),
-                        found: format_checked_type(rhs_type, registry),
-                        help: "Fin-key arithmetic is written key-first: `k + c` with a \
-                           static Nat constant"
-                            .to_string(),
+                        expected: Box::new(MismatchOperand::Type(
+                            lhs_type.spelling(&registry.dimensions),
+                        )),
+                        found: Box::new(MismatchOperand::Type(
+                            rhs_type.spelling(&registry.dimensions),
+                        )),
+                        help: Box::new(MismatchRule::FinKeyArithmeticKeyFirst),
                     },
                 ));
             }
@@ -281,14 +310,36 @@ pub(super) fn binop_rule(
             match (lhs_type, rhs_type) {
                 (CheckedType::Complex(lhs_dim), CheckedType::Complex(rhs_dim)) => {
                     if lhs_dim != rhs_dim {
-                        return Err(SemanticError::located(src, rhs.span, DimensionError::DimensionMismatch { expected: format_checked_type(lhs_type, registry), found: format_checked_type(rhs_type, registry), help: "complex operands of addition and subtraction must have the same dimension"
-                                .to_string() }));
+                        return Err(SemanticError::located(
+                            src,
+                            rhs.span,
+                            DimensionError::DimensionMismatch {
+                                expected: Box::new(MismatchOperand::Type(
+                                    lhs_type.spelling(&registry.dimensions),
+                                )),
+                                found: Box::new(MismatchOperand::Type(
+                                    rhs_type.spelling(&registry.dimensions),
+                                )),
+                                help: Box::new(MismatchRule::ComplexAdditionSameDimension),
+                            },
+                        ));
                     }
                     return Ok(CheckedType::Complex(lhs_dim.clone()));
                 }
                 (CheckedType::Complex(_), _) | (_, CheckedType::Complex(_)) => {
-                    return Err(SemanticError::located(src, rhs.span, DimensionError::DimensionMismatch { expected: format_checked_type(lhs_type, registry), found: format_checked_type(rhs_type, registry), help: "addition and subtraction do not implicitly promote real quantities; use to_complex()"
-                            .to_string() }));
+                    return Err(SemanticError::located(
+                        src,
+                        rhs.span,
+                        DimensionError::DimensionMismatch {
+                            expected: Box::new(MismatchOperand::Type(
+                                lhs_type.spelling(&registry.dimensions),
+                            )),
+                            found: Box::new(MismatchOperand::Type(
+                                rhs_type.spelling(&registry.dimensions),
+                            )),
+                            help: Box::new(MismatchRule::NoImplicitComplexPromotion),
+                        },
+                    ));
                 }
                 _ => {}
             }
@@ -303,10 +354,13 @@ pub(super) fn binop_rule(
                                 src,
                                 rhs.span,
                                 DimensionError::DimensionMismatch {
-                                    expected: format_checked_type(lhs_type, registry),
-                                    found: format_checked_type(rhs_type, registry),
-                                    help: "cannot subtract datetimes with different time scales"
-                                        .to_string(),
+                                    expected: Box::new(MismatchOperand::Type(
+                                        lhs_type.spelling(&registry.dimensions),
+                                    )),
+                                    found: Box::new(MismatchOperand::Type(
+                                        rhs_type.spelling(&registry.dimensions),
+                                    )),
+                                    help: Box::new(MismatchRule::DatetimeSubtractionScales),
                                 },
                             ));
                         }
@@ -317,9 +371,13 @@ pub(super) fn binop_rule(
                         src,
                         rhs.span,
                         DimensionError::DimensionMismatch {
-                            expected: "Quantity(Time)".to_string(),
-                            found: format_checked_type(rhs_type, registry),
-                            help: "cannot add two datetimes; did you mean to subtract?".to_string(),
+                            expected: Box::new(MismatchOperand::Expected(
+                                OperandExpectation::TimeQuantity,
+                            )),
+                            found: Box::new(MismatchOperand::Type(
+                                rhs_type.spelling(&registry.dimensions),
+                            )),
+                            help: Box::new(MismatchRule::DatetimeAddition),
                         },
                     ));
                 }
@@ -330,10 +388,11 @@ pub(super) fn binop_rule(
                         src,
                         rhs.span,
                         DimensionError::DimensionMismatch {
-                            expected: "Time".to_string(),
-                            found: registry.dimensions.format_dimension(&rhs_dim),
-                            help: "can only add/subtract a Time duration to/from a Datetime"
-                                .to_string(),
+                            expected: Box::new(MismatchOperand::Expected(OperandExpectation::Time)),
+                            found: Box::new(MismatchOperand::Dimension(
+                                registry.dimensions.dimension_spelling(&rhs_dim),
+                            )),
+                            help: Box::new(MismatchRule::DurationAddSubtract),
                         },
                     ));
                 }
@@ -349,9 +408,13 @@ pub(super) fn binop_rule(
                             src,
                             lhs.span,
                             DimensionError::DimensionMismatch {
-                                expected: "Time".to_string(),
-                                found: registry.dimensions.format_dimension(&lhs_dim),
-                                help: "can only add a Time duration to a Datetime".to_string(),
+                                expected: Box::new(MismatchOperand::Expected(
+                                    OperandExpectation::Time,
+                                )),
+                                found: Box::new(MismatchOperand::Dimension(
+                                    registry.dimensions.dimension_spelling(&lhs_dim),
+                                )),
+                                help: Box::new(MismatchRule::DurationAdd),
                             },
                         ));
                     }
@@ -362,9 +425,13 @@ pub(super) fn binop_rule(
                     src,
                     rhs.span,
                     DimensionError::DimensionMismatch {
-                        expected: format_checked_type(lhs_type, registry),
-                        found: format_checked_type(rhs_type, registry),
-                        help: "cannot subtract a Datetime from a quantity".to_string(),
+                        expected: Box::new(MismatchOperand::Type(
+                            lhs_type.spelling(&registry.dimensions),
+                        )),
+                        found: Box::new(MismatchOperand::Type(
+                            rhs_type.spelling(&registry.dimensions),
+                        )),
+                        help: Box::new(MismatchRule::DatetimeFromQuantity),
                     },
                 ));
             }
@@ -375,10 +442,13 @@ pub(super) fn binop_rule(
                     src,
                     rhs.span,
                     DimensionError::DimensionMismatch {
-                        expected: registry.dimensions.format_dimension(&lhs_dim),
-                        found: registry.dimensions.format_dimension(&rhs_dim),
-                        help: "operands of addition and subtraction must have the same dimension"
-                            .to_string(),
+                        expected: Box::new(MismatchOperand::Dimension(
+                            registry.dimensions.dimension_spelling(&lhs_dim),
+                        )),
+                        found: Box::new(MismatchOperand::Dimension(
+                            registry.dimensions.dimension_spelling(&rhs_dim),
+                        )),
+                        help: Box::new(MismatchRule::AdditionSameDimension),
                     },
                 ));
             }
@@ -434,13 +504,12 @@ pub(super) fn binop_rule(
                 src,
                 expr_span,
                 DimensionError::DimensionMismatch {
-                    expected: "Int".to_string(),
-                    found: format!(
-                        "{} % {}",
-                        format_checked_type(lhs_type, registry),
-                        format_checked_type(rhs_type, registry)
-                    ),
-                    help: "modulo operator requires Int operands".to_string(),
+                    expected: Box::new(MismatchOperand::Expected(OperandExpectation::Int)),
+                    found: Box::new(MismatchOperand::ModuloOperands {
+                        lhs: lhs_type.spelling(&registry.dimensions),
+                        rhs: rhs_type.spelling(&registry.dimensions),
+                    }),
+                    help: Box::new(MismatchRule::ModuloInt),
                 },
             ))
         }
@@ -462,10 +531,11 @@ pub(super) fn binop_rule(
                         src,
                         rhs.span,
                         DimensionError::DimensionMismatch {
-                            expected: "non-negative Int exponent".to_string(),
-                            found: value.to_string(),
-                            help: "integer power requires a non-negative exact integer exponent"
-                                .to_string(),
+                            expected: Box::new(MismatchOperand::Expected(
+                                OperandExpectation::NonNegativeIntExponent,
+                            )),
+                            found: Box::new(MismatchOperand::IntExponent(value)),
+                            help: Box::new(MismatchRule::NonNegativeExponent),
                         },
                     ));
                 }
@@ -473,10 +543,13 @@ pub(super) fn binop_rule(
                     src,
                     rhs.span,
                     DimensionError::DimensionMismatch {
-                        expected: "non-negative exact Int exponent".to_string(),
-                        found: format_checked_type(rhs_type, registry),
-                        help: "integer power requires an exact integer exponent such as `2`"
-                            .to_string(),
+                        expected: Box::new(MismatchOperand::Expected(
+                            OperandExpectation::NonNegativeExactIntExponent,
+                        )),
+                        found: Box::new(MismatchOperand::Type(
+                            rhs_type.spelling(&registry.dimensions),
+                        )),
+                        help: Box::new(MismatchRule::ExactIntegerExponent),
                     },
                 ));
             }
@@ -491,9 +564,13 @@ pub(super) fn binop_rule(
                         src,
                         rhs.span,
                         DimensionError::DimensionMismatch {
-                            expected: "Dimensionless exponent".to_string(),
-                            found: registry.dimensions.format_dimension(&rhs_dim),
-                            help: "the exponent of a power must be dimensionless".to_string(),
+                            expected: Box::new(MismatchOperand::Expected(
+                                OperandExpectation::DimensionlessExponent,
+                            )),
+                            found: Box::new(MismatchOperand::Dimension(
+                                registry.dimensions.dimension_spelling(&rhs_dim),
+                            )),
+                            help: Box::new(MismatchRule::DimensionlessExponent),
                         },
                     ));
                 }
@@ -560,9 +637,11 @@ pub(super) fn unary_rule(
                     src,
                     operand.span,
                     DimensionError::DimensionMismatch {
-                        expected: "Bool".to_string(),
-                        found: format_checked_type(&operand.ty, registry),
-                        help: "logical NOT requires a Bool operand".to_string(),
+                        expected: Box::new(MismatchOperand::Expected(OperandExpectation::Bool)),
+                        found: Box::new(MismatchOperand::Type(
+                            operand.ty.spelling(&registry.dimensions),
+                        )),
+                        help: Box::new(MismatchRule::LogicalNot),
                     },
                 ));
             }
@@ -576,9 +655,11 @@ pub(super) fn unary_rule(
                 src,
                 operand.span,
                 DimensionError::DimensionMismatch {
-                    expected: "Int or Quantity".to_string(),
-                    found: format_checked_type(other, registry),
-                    help: "negation requires a numeric quantity or Int operand".to_string(),
+                    expected: Box::new(MismatchOperand::Expected(
+                        OperandExpectation::IntOrQuantity,
+                    )),
+                    found: Box::new(MismatchOperand::Type(other.spelling(&registry.dimensions))),
+                    help: Box::new(MismatchRule::Negation),
                 },
             )),
         },
@@ -598,9 +679,11 @@ pub(super) fn if_rule(
             src,
             cond.span,
             DimensionError::DimensionMismatch {
-                expected: "Bool".to_string(),
-                found: format_checked_type(&cond.ty, registry),
-                help: "if/else condition must be Bool".to_string(),
+                expected: Box::new(MismatchOperand::Expected(OperandExpectation::Bool)),
+                found: Box::new(MismatchOperand::Type(
+                    cond.ty.spelling(&registry.dimensions),
+                )),
+                help: Box::new(MismatchRule::IfConditionBool),
             },
         ));
     }
@@ -609,9 +692,13 @@ pub(super) fn if_rule(
             src,
             else_branch.span,
             DimensionError::DimensionMismatch {
-                expected: format_checked_type(&then_branch.ty, registry),
-                found: format_checked_type(&else_branch.ty, registry),
-                help: "both branches of if/else must have the same dimension".to_string(),
+                expected: Box::new(MismatchOperand::Type(
+                    then_branch.ty.spelling(&registry.dimensions),
+                )),
+                found: Box::new(MismatchOperand::Type(
+                    else_branch.ty.spelling(&registry.dimensions),
+                )),
+                help: Box::new(MismatchRule::IfBranchesSameDimension),
             },
         ));
     }
@@ -675,9 +762,11 @@ pub(in crate::tir::dim_check) fn match_arms_rule(
                 src,
                 arm_body_span(i),
                 DimensionError::DimensionMismatch {
-                    expected: format_checked_type(first, registry),
-                    found: format_checked_type(arm_type, registry),
-                    help: "all match arms must return the same type".to_string(),
+                    expected: Box::new(MismatchOperand::Type(first.spelling(&registry.dimensions))),
+                    found: Box::new(MismatchOperand::Type(
+                        arm_type.spelling(&registry.dimensions),
+                    )),
+                    help: Box::new(MismatchRule::MatchArmsSameType),
                 },
             ));
         }

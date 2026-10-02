@@ -479,3 +479,136 @@ fn domain_payloads_render_their_subjects_as_before() {
         assert_eq!(target.to_string(), expected);
     }
 }
+
+#[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "lists every fixed dimension-mismatch rule and expectation"
+)]
+fn dimension_mismatch_payloads_render_distinct_texts() {
+    use super::dimension_mismatch::{
+        ExternScalar, FinKeyArithmeticRule, MismatchOperand, MismatchRule, NonQuantityValue,
+        OperandExpectation,
+    };
+    use std::collections::HashSet;
+
+    let rules = [
+        MismatchRule::ExpectedQuantity(NonQuantityValue::Complex),
+        MismatchRule::ExpectedQuantity(NonQuantityValue::Bool),
+        MismatchRule::ExpectedQuantity(NonQuantityValue::Int),
+        MismatchRule::ExpectedQuantity(NonQuantityValue::Datetime),
+        MismatchRule::ExpectedQuantity(NonQuantityValue::Key),
+        MismatchRule::ExpectedQuantity(NonQuantityValue::Struct),
+        MismatchRule::ExpectedQuantity(NonQuantityValue::Indexed),
+        MismatchRule::ComplexComponentsSameDimension,
+        MismatchRule::PolarPhaseAngle,
+        MismatchRule::ExpDimensionless,
+        MismatchRule::ToFloatInt,
+        MismatchRule::ToIntFiniteKeys,
+        MismatchRule::ToIntDimensionless,
+        MismatchRule::CoordExtractsCoordinate,
+        MismatchRule::CoordCoordinateKeysOnly,
+        MismatchRule::DatetimeStringLiteral,
+        MismatchRule::DatetimeTimezoneLiteral,
+        MismatchRule::EpochCivilLiteral,
+        MismatchRule::StringLiteralContext,
+        MismatchRule::KeyStaticPosition,
+        MismatchRule::FinKeyIntPosition,
+        MismatchRule::ScanBody,
+        MismatchRule::UnfoldBody,
+        MismatchRule::FinKeyArithmetic(FinKeyArithmeticRule::NamedOrCoordinateKey),
+        MismatchRule::FinKeyArithmetic(FinKeyArithmeticRule::Subtraction),
+        MismatchRule::FinKeyArithmetic(FinKeyArithmeticRule::IntegerAddend),
+        MismatchRule::FinKeyArithmetic(FinKeyArithmeticRule::RuntimeOffset),
+        MismatchRule::FinKeyArithmetic(FinKeyArithmeticRule::NegativeAddend),
+        MismatchRule::BooleanOperands,
+        MismatchRule::EqualitySameType,
+        MismatchRule::ComplexUnordered,
+        MismatchRule::ComparisonSameType,
+        MismatchRule::DatetimeComparisonScales,
+        MismatchRule::ComparisonSameDimension,
+        MismatchRule::FinKeyArithmeticKeyFirst,
+        MismatchRule::ComplexAdditionSameDimension,
+        MismatchRule::NoImplicitComplexPromotion,
+        MismatchRule::DatetimeSubtractionScales,
+        MismatchRule::DatetimeAddition,
+        MismatchRule::DurationAddSubtract,
+        MismatchRule::DurationAdd,
+        MismatchRule::DatetimeFromQuantity,
+        MismatchRule::AdditionSameDimension,
+        MismatchRule::ModuloInt,
+        MismatchRule::NonNegativeExponent,
+        MismatchRule::ExactIntegerExponent,
+        MismatchRule::DimensionlessExponent,
+        MismatchRule::LogicalNot,
+        MismatchRule::Negation,
+        MismatchRule::IfConditionBool,
+        MismatchRule::IfBranchesSameDimension,
+        MismatchRule::MatchArmsSameType,
+        MismatchRule::ToleranceSameDimension,
+        MismatchRule::AbsoluteToleranceDimension,
+    ];
+    let texts: HashSet<String> = rules.iter().map(ToString::to_string).collect();
+    assert_eq!(texts.len(), rules.len());
+    assert!(texts.iter().all(|text| !text.is_empty()));
+    assert_eq!(
+        MismatchRule::ExpectedQuantity(NonQuantityValue::Key).to_string(),
+        "expected a quantity value, not an index-key value"
+    );
+
+    let expectations = [
+        OperandExpectation::QuantityType,
+        OperandExpectation::RankIndexedQuantity { rank: 2 },
+        OperandExpectation::IndexedCollection,
+        OperandExpectation::IndexedQuantityCollection,
+        OperandExpectation::DimensionlessOrInt,
+        OperandExpectation::ComplexQuantity,
+        OperandExpectation::RealOrComplexQuantity,
+        OperandExpectation::Angle,
+        OperandExpectation::DimensionlessOrComplexDimensionless,
+        OperandExpectation::Int,
+        OperandExpectation::FiniteKey,
+        OperandExpectation::Dimensionless,
+        OperandExpectation::CoordinateKey,
+        OperandExpectation::Datetime,
+        OperandExpectation::DatetimeLiteral,
+        OperandExpectation::TimezoneLiteral,
+        OperandExpectation::ScaleFreeDatetimeLiteral,
+        OperandExpectation::NumericOrBooleanExpression,
+        OperandExpectation::Bool,
+        OperandExpectation::ExternIndexedCollection { rank: 2 },
+        OperandExpectation::ExternIndexedQuantityCollection { rank: 2 },
+        OperandExpectation::ExternScalarAxes {
+            scalar: ExternScalar::Bool,
+            rank: 2,
+        },
+        OperandExpectation::ExternScalarAxes {
+            scalar: ExternScalar::Int,
+            rank: 2,
+        },
+        OperandExpectation::StaticNatPosition,
+        OperandExpectation::StaticNatConstant,
+        OperandExpectation::OrderedQuantity,
+        OperandExpectation::TimeQuantity,
+        OperandExpectation::Time,
+        OperandExpectation::NonNegativeIntExponent,
+        OperandExpectation::NonNegativeExactIntExponent,
+        OperandExpectation::DimensionlessExponent,
+        OperandExpectation::IntOrQuantity,
+    ];
+    let texts: HashSet<String> = expectations.iter().map(ToString::to_string).collect();
+    assert_eq!(texts.len(), expectations.len());
+    assert_eq!(
+        OperandExpectation::ExternScalarAxes {
+            scalar: ExternScalar::Int,
+            rank: 2,
+        }
+        .to_string(),
+        "Int with exactly 2 indexed axes"
+    );
+    assert_eq!(MismatchOperand::IntExponent(-2).to_string(), "-2");
+    assert_eq!(
+        MismatchOperand::ContextualStringLiteral.to_string(),
+        "contextual string literal"
+    );
+}

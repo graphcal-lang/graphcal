@@ -2,6 +2,7 @@ use crate::outcome::Outcome;
 use crate::resolved_name::ResolvedDeclName;
 use crate::semantic_error::attribute::AttributeError;
 use crate::semantic_error::dimension::DimensionError;
+use crate::semantic_error::dimension_mismatch::{MismatchOperand, MismatchRule};
 use crate::semantic_error::domain::DomainError;
 use crate::semantic_error::domain::{DomainSubject, DomainTypeSpelling, UnconstrainableType};
 use crate::semantic_error::graph::CycleMember;
@@ -396,8 +397,19 @@ fn check_hir_assert_body(
             let actual_dim = expect_quantity(actual_elem, registry, src, actual.span)?;
             let expected_dim = expect_quantity(expected_elem, registry, src, expected.span)?;
             if actual_dim != expected_dim {
-                return Err(SemanticError::located(src, expected.span, DimensionError::DimensionMismatch { expected: registry.dimensions.format_dimension(&actual_dim), found: registry.dimensions.format_dimension(&expected_dim), help: "actual and expected in tolerance assertion must have the same dimension"
-                        .to_string() })
+                return Err(SemanticError::located(
+                    src,
+                    expected.span,
+                    DimensionError::DimensionMismatch {
+                        expected: Box::new(MismatchOperand::Dimension(
+                            registry.dimensions.dimension_spelling(&actual_dim),
+                        )),
+                        found: Box::new(MismatchOperand::Dimension(
+                            registry.dimensions.dimension_spelling(&expected_dim),
+                        )),
+                        help: Box::new(MismatchRule::ToleranceSameDimension),
+                    },
+                )
                 .into());
             }
 
@@ -407,10 +419,13 @@ fn check_hir_assert_body(
                     src,
                     tolerance.span,
                     DimensionError::DimensionMismatch {
-                        expected: registry.dimensions.format_dimension(&actual_dim),
-                        found: format_checked_type(&tolerance_type, registry),
-                        help: "absolute tolerance must have the same dimension as actual/expected"
-                            .to_string(),
+                        expected: Box::new(MismatchOperand::Dimension(
+                            registry.dimensions.dimension_spelling(&actual_dim),
+                        )),
+                        found: Box::new(MismatchOperand::Type(
+                            tolerance_type.spelling(&registry.dimensions),
+                        )),
+                        help: Box::new(MismatchRule::AbsoluteToleranceDimension),
                     },
                 )
                 .into());
