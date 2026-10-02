@@ -439,14 +439,10 @@ fn check_hir_assert_body(
             if let Some(value) = statically_known_tolerance(tolerance)
                 && value.is_sign_negative()
             {
-                let found = match value {
-                    value if value == 0.0 && value.is_sign_negative() => "-0".to_string(),
-                    value => crate::display::number::format_number(value),
-                };
                 return Err(SemanticError::located(
                     src,
                     tolerance.span,
-                    AttributeError::NegativeTolerance { found },
+                    AttributeError::NegativeTolerance { value },
                 )
                 .into());
             }
@@ -557,7 +553,7 @@ fn validate_expected_fail_key(
                         part.span(),
                         AttributeError::ExpectedFailKeyIndexMismatch {
                             expected: expected_axis.display_name(),
-                            found: part.display(),
+                            found: Box::new(part.clone()),
                         },
                     ));
                 }
@@ -569,7 +565,7 @@ fn validate_expected_fail_key(
                         *span,
                         AttributeError::ExpectedFailKeyIndexMismatch {
                             expected: expected_axis.display_name(),
-                            found: part.display(),
+                            found: Box::new(part.clone()),
                         },
                     ));
                 };

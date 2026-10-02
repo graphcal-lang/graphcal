@@ -40,7 +40,9 @@ pub enum AttributeError {
     #[error("attribute `hidden` does not apply to `{kind}` declarations")]
     InvalidHiddenTarget { kind: AttributeTarget },
     #[error("unknown attribute `{name}`")]
-    UnknownAttribute { name: String },
+    UnknownAttribute {
+        name: crate::syntax::token::SourceIdentifier,
+    },
     #[error("`#[expected_fail]` is not valid on `{kind}` declarations")]
     InvalidExpectedFailTarget { kind: AttributeTarget },
     #[error(
@@ -58,12 +60,12 @@ pub enum AttributeError {
     #[error("`#[expected_fail(...)]` key does not belong to the assertion index")]
     ExpectedFailKeyIndexMismatch {
         expected: IndexDisplayName,
-        found: String,
+        found: Box<crate::assertion_expectation::ExpectedFailKeyPart>,
     },
     #[error("`#[expected_fail(...)]` finite-index position `#{position}` is out of bounds")]
     ExpectedFailFinitePositionOutOfBounds { position: u64, size: u64 },
     #[error("negative tolerance in tolerance assertion")]
-    NegativeTolerance { found: String },
+    NegativeTolerance { value: f64 },
     #[error("`#[hidden]` takes no arguments")]
     HiddenTakesNoArguments,
 }
@@ -126,11 +128,21 @@ impl DiagnosticKind for AttributeError {
             )),
             Self::ExpectedFailKeyIndexMismatch {
                 expected, found, ..
-            } => Some(format!("expected index `{expected}`, found `{found}`")),
+            } => Some(format!(
+                "expected index `{expected}`, found `{}`",
+                found.display()
+            )),
             Self::ExpectedFailFinitePositionOutOfBounds { position, size, .. } => {
                 Some(format!("position #{position} on an axis of size {size}"))
             }
-            Self::NegativeTolerance { found, .. } => Some(format!("tolerance is {found}")),
+            Self::NegativeTolerance { value } => Some(format!(
+                "tolerance is {}",
+                if *value == 0.0 {
+                    "-0".to_owned()
+                } else {
+                    crate::display::number::format_number(*value)
+                }
+            )),
             Self::HiddenTakesNoArguments => Some("error here".to_owned()),
         }
     }

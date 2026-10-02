@@ -3305,7 +3305,7 @@ fn assert_literal_negative_zero_tolerance_is_rejected() {
     .unwrap_err();
     assert!(matches!(
         error,
-        CompileError::Eval(RenderedSemanticError { error: SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic { kind: SemanticErrorKind::Attribute(AttributeError::NegativeTolerance { found, .. }), .. }), .. }) if found == "-0"
+        CompileError::Eval(RenderedSemanticError { error: SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic { kind: SemanticErrorKind::Attribute(AttributeError::NegativeTolerance { value }), .. }), .. }) if value == 0.0 && value.is_sign_negative()
     ));
 }
 
@@ -4972,7 +4972,7 @@ fn project_selective_import_item_rejects_unknown_attribute() {
                 }),
             ..
         })) => {
-            assert_eq!(name, "bogus");
+            assert_eq!(name.as_str(), "bogus");
         }
         other => panic!("expected UnknownAttribute, got {other:?}"),
     }

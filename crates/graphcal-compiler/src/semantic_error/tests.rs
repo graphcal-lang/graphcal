@@ -781,3 +781,29 @@ fn name_payloads_render_their_text_as_before() {
         .is_some_and(|help| help.ends_with("so sizes belong on the constituent plots or layers"))
     );
 }
+
+#[test]
+fn attribute_payloads_render_their_text_as_before() {
+    use super::attribute::AttributeError;
+    use crate::diagnostic::DiagnosticKind;
+
+    assert_eq!(
+        AttributeError::NegativeTolerance { value: -0.0 }
+            .primary_label()
+            .as_deref(),
+        Some("tolerance is -0")
+    );
+    assert_eq!(
+        AttributeError::NegativeTolerance { value: -1.5 }
+            .primary_label()
+            .as_deref(),
+        Some("tolerance is -1.5")
+    );
+    assert_eq!(
+        AttributeError::UnknownAttribute {
+            name: crate::syntax::token::SourceIdentifier::parse("bogus").unwrap(),
+        }
+        .to_string(),
+        "unknown attribute `bogus`"
+    );
+}
