@@ -272,9 +272,9 @@ pub(super) enum ModuleResolution<K> {
     /// The path names this file (possibly the file itself) and, for any
     /// remaining segments, a nested inline DAG inside it.
     Resolved(ResolvedFile<K>),
-    /// The path resolved to a file outside its package's source root. Unlike
-    /// [`ResolveFailure`]s, this is rejected in inline-DAG bodies too: a
-    /// sandbox escape is never left for the module resolver to report.
+    /// The path resolved to a file outside its package's source root. It is
+    /// rejected before the file it names is loaded, even from an inline-DAG
+    /// body.
     OutsideRoot,
     /// The path could not be resolved.
     Failed(ResolveFailure),

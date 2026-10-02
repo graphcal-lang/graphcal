@@ -475,7 +475,9 @@ fn from_source_keeps_absolute_diagnostic_label_out_of_semantic_identity() {
 }
 
 #[test]
-fn inline_dag_unresolved_body_import_is_recorded_explicitly() {
+fn single_buffer_load_leaves_cross_file_body_imports_without_a_target() {
+    // Like its file-root imports, a single buffer loaded without a project
+    // has no cross-file targets; editor analysis of the buffer stays usable.
     let source = r"
 dag calc {
   import missing::{x};
@@ -496,12 +498,7 @@ dag calc {
         })
         .expect("inline DAG should be lifted");
 
-    assert!(
-        loaded_dag
-            .resolved_imports
-            .values()
-            .any(|resolution| { matches!(resolution, InlineBodyImportResolution::Unresolved) })
-    );
+    assert!(loaded_dag.resolved_imports.is_empty());
 }
 
 #[test]

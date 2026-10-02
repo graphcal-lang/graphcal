@@ -107,18 +107,6 @@ impl<'p> PackageSelector<'p> {
     }
 }
 
-/// Loader-side resolution status for an import inside an inline DAG body.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum InlineBodyImportResolution {
-    /// The module path resolved to an exact module and its owning source file.
-    Resolved(ResolvedModuleTarget),
-    /// The loader could not resolve the path in its current project context.
-    ///
-    /// The import declaration remains in the DAG body so the downstream
-    /// resolver can emit the user-facing diagnostic with the original span.
-    Unresolved,
-}
-
 #[cfg(test)]
 mod tests {
     use graphcal_compiler::syntax::ast::DeclKind;

@@ -45,9 +45,7 @@ pub use loaded_project::{
     PluginCallPolicy, PluginFileEntry, PluginFileError,
 };
 use module_path::PackageSelector;
-pub use module_path::{
-    InlineBodyImportResolution, ResolvedModuleTarget, ResolvedModuleTargetError,
-};
+pub use module_path::{ResolvedModuleTarget, ResolvedModuleTargetError};
 use source_authority::{
     ModuleSourceAuthority, ProjectSources, SelectedPackage, SourceTree, fetch_source_snapshot,
 };
@@ -327,9 +325,13 @@ impl LoadedProject {
                 &sources,
             )
         })?;
-        // No project root or manifest in single-file mode — only the
-        // file-stem self-reference (Concept 7) can be detected here.
-        let inline_dags = lift_inline_dags(&parsed.ast, &dag_id, stem, |_| None);
+        // No project root or manifest in single-file mode — only same-file
+        // DAGs and the file-stem self-reference (Concept 7) resolve here. Like
+        // the file-root imports of this mode, a cross-file body path has no
+        // target: an editor buffer analyzed without its project stays usable.
+        let Ok(inline_dags) = lift_inline_dags(&parsed.ast, &dag_id, stem, |_| {
+            Ok::<_, std::convert::Infallible>(None)
+        });
         cancellation.checkpoint()?;
         // No filesystem to read wasm plugin files from; the entries carry
         // the reason so evaluation can report it at the import site.
@@ -420,12 +422,9 @@ fn resolved_module_target_from(
     let key = path.key();
     let resolved = project.file(source).map_or_else(
         || {
-            project.inline_dag(source).and_then(|(_, inline)| {
-                match inline.resolved_imports.get(&key) {
-                    Some(InlineBodyImportResolution::Resolved(target)) => Some(target.clone()),
-                    Some(InlineBodyImportResolution::Unresolved) | None => None,
-                }
-            })
+            project
+                .inline_dag(source)
+                .and_then(|(_, inline)| inline.resolved_imports.get(&key).cloned())
         },
         |file| file.resolved_imports.get(&key).cloned(),
     )?;

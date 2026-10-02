@@ -13,7 +13,7 @@ use graphcal_compiler::syntax::ast::DeclKind;
 
 use graphcal_compiler::syntax::module_path_key::ModulePathKey;
 
-use super::module_path::{InlineBodyImportResolution, ResolvedModuleTarget};
+use super::module_path::ResolvedModuleTarget;
 
 /// Validated path from a file AST root to one nested inline-DAG body.
 ///
@@ -89,12 +89,12 @@ pub struct LoadedDag {
     pub(super) parent_dag_id: DagId,
     /// Stable locator into the owning file AST, which remains the single body owner.
     pub(super) body_locator: DagBodyLocator,
-    /// Loader-resolved DAG identities for each `import` declaration in the
-    /// body, keyed by its typed span-free module path. Self-imports map to
-    /// `parent_dag_id`; cross-file imports map to the dependency file's id.
-    /// Imports whose path fails to resolve at load time are absent here; the
-    /// downstream resolver surfaces a structured error for them.
-    pub(super) resolved_imports: HashMap<ModulePathKey, InlineBodyImportResolution>,
+    /// Loader-resolved DAG identities for each `import`/`include` declaration
+    /// in the body, keyed by its typed span-free module path. Self-imports map
+    /// to `parent_dag_id`; cross-file imports map to the dependency file's id.
+    /// A project load rejects a body path it cannot resolve; only a
+    /// single-buffer load (no loader) leaves cross-file paths absent.
+    pub(super) resolved_imports: HashMap<ModulePathKey, ResolvedModuleTarget>,
     /// Declared interface of the body, computed once at load.
     pub(super) interface: ModuleInterface,
 }
@@ -124,9 +124,7 @@ impl LoadedDag {
     }
 
     #[must_use]
-    pub(crate) const fn resolved_imports(
-        &self,
-    ) -> &HashMap<ModulePathKey, InlineBodyImportResolution> {
+    pub(crate) const fn resolved_imports(&self) -> &HashMap<ModulePathKey, ResolvedModuleTarget> {
         &self.resolved_imports
     }
 
