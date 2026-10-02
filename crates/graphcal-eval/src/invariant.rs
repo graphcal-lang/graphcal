@@ -21,7 +21,7 @@ pub struct Invariant(String);
 
 impl Invariant {
     /// Record a violated invariant, described for the internal error.
-    pub fn violated(description: impl std::fmt::Display) -> Self {
+    pub(crate) fn violated(description: impl std::fmt::Display) -> Self {
         Self(description.to_string())
     }
 

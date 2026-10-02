@@ -138,13 +138,13 @@ fn plot_datum_from_leaf(
 
 /// Flatten a (possibly nested) runtime value into axes plus row-major leaf
 /// values.
-pub(super) fn channel_data_from_runtime(rv: &RuntimeValue) -> Result<ChannelData, String> {
+fn channel_data_from_runtime(rv: &RuntimeValue) -> Result<ChannelData, String> {
     channel_data_from_runtime_with_display_unit(rv, None)
 }
 
 /// Flatten a runtime value while converting quantity leaves to a requested
 /// rendering unit. Canonical runtime values remain unchanged.
-pub(super) fn channel_data_from_runtime_with_display_unit(
+fn channel_data_from_runtime_with_display_unit(
     rv: &RuntimeValue,
     display_unit: Option<&DisplayUnit>,
 ) -> Result<ChannelData, String> {

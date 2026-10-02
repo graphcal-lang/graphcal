@@ -41,7 +41,7 @@ impl RuntimeValue {
 
     /// Construct a finite complex runtime value from Cartesian components.
     #[cfg(test)]
-    pub fn complex(
+    pub(crate) fn complex(
         re: f64,
         im: f64,
     ) -> Result<Self, graphcal_compiler::complex_value::ComplexValueError> {

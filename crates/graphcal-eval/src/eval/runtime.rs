@@ -37,10 +37,10 @@ pub use root_outcome::{RootFailure, RootOutcome};
 /// one artifact makes the evaluator's direct output available to debugging
 /// consumers without running the evaluator a second time.
 pub struct RuntimeEvaluation {
-    pub(super) result: EvalResult,
-    pub(super) presentations: ResolvedPresentedMap,
-    pub(super) values: RuntimeValueMap,
-    pub(super) errors: HashMap<ResolvedDeclName, RuntimeUnavailable>,
+    result: EvalResult,
+    presentations: ResolvedPresentedMap,
+    values: RuntimeValueMap,
+    errors: HashMap<ResolvedDeclName, RuntimeUnavailable>,
 }
 
 impl std::fmt::Debug for RuntimeEvaluation {

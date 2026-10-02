@@ -250,7 +250,7 @@ impl<'p> Step<'p> {
 
 #[derive(Debug)]
 pub struct PreparedConstantImport {
-    pub destination: ResolvedDeclName,
+    pub(crate) destination: ResolvedDeclName,
     pub value: ConstantReference,
 }
 
@@ -300,13 +300,13 @@ impl<'p> ClosureDag<'p> {
     /// `name`, written in this DAG, as the callable's body names it:
     /// qualified by the scopes of this DAG below the body.
     #[must_use]
-    pub fn qualify(&self, name: &ScopedName) -> ScopedName {
+    pub(crate) fn qualify(&self, name: &ScopedName) -> ScopedName {
         qualified(&self.scopes, name)
     }
 
     /// The declaration `leaf` of this DAG, as the callable's body names it.
     #[must_use]
-    pub fn member(&self, leaf: &DeclName) -> ScopedName {
+    pub(crate) fn member(&self, leaf: &DeclName) -> ScopedName {
         self.qualify(&ScopedName::local(leaf.clone()))
     }
 }
@@ -756,7 +756,7 @@ impl<'p> ExecPlan<'p> {
     /// The call comes from a tree of this plan's program, whose every DAG
     /// has a callable.
     #[must_use]
-    pub fn call(&self, call: ScopedCall<'_>) -> &CallablePlan<'p> {
+    pub(crate) fn call(&self, call: ScopedCall<'_>) -> &CallablePlan<'p> {
         &self.callables[self.calls[call.caller()][call.get().index()]]
     }
 

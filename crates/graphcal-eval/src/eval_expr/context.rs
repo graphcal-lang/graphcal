@@ -351,7 +351,7 @@ impl<'a> EvalSession<'a> {
     }
 
     #[cold]
-    pub fn internal_error(
+    pub(crate) fn internal_error(
         &self,
         message: impl Into<String>,
         anchor: impl Into<DiagnosticAnchor>,

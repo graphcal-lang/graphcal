@@ -105,7 +105,7 @@ impl RootOutcome {
 
     /// A session over this outcome, for further root-level evaluation; calls
     /// that reach unfinished formulas are recorded in this outcome.
-    pub fn session<'a>(
+    pub(crate) fn session<'a>(
         &'a self,
         plan: &'a ExecPlan<'a>,
         src: SourceId,
@@ -124,17 +124,17 @@ impl RootOutcome {
     }
 
     /// The declarations that failed or are unavailable.
-    pub const fn errors(&self) -> &HashMap<ResolvedDeclName, RuntimeUnavailable> {
+    pub(crate) const fn errors(&self) -> &HashMap<ResolvedDeclName, RuntimeUnavailable> {
         &self.errors
     }
 
     /// The presentations of the evaluated declarations, still pending: the
     /// result assembly resolves them against the complete root frame.
-    pub const fn presentations(&self) -> &PendingPresentedMap {
+    pub(crate) const fn presentations(&self) -> &PendingPresentedMap {
         &self.presentations
     }
 
-    pub fn into_parts(self) -> RootOutcomeParts {
+    pub(crate) fn into_parts(self) -> RootOutcomeParts {
         RootOutcomeParts {
             unfinished_calls: self.unfinished_calls.into_inner(),
             values: self.values,

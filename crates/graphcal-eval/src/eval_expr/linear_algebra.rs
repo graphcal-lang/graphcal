@@ -82,7 +82,7 @@ impl Vector {
     /// # Errors
     ///
     /// Returns `value` back unless it is a rank-one array of quantities.
-    pub(super) fn try_from_value(value: RuntimeValue) -> Result<Self, RuntimeValue> {
+    fn try_from_value(value: RuntimeValue) -> Result<Self, RuntimeValue> {
         Self::read(value, None)
     }
 
@@ -132,7 +132,7 @@ impl Matrix {
     ///
     /// Returns `value` back unless it is a rank-two rectangular array of
     /// quantities.
-    pub(super) fn try_from_value(value: RuntimeValue) -> Result<Self, RuntimeValue> {
+    fn try_from_value(value: RuntimeValue) -> Result<Self, RuntimeValue> {
         Self::read(value, None)
     }
 

@@ -115,7 +115,7 @@ impl<N> ComposedPlotsUnavailable<N> {
 
     /// Whether a composed plot failed.
     #[must_use]
-    pub const fn has_failure(&self) -> bool {
+    const fn has_failure(&self) -> bool {
         match self {
             Self::Blocked { failed_plots, .. } => !failed_plots.is_empty(),
             Self::Failed { .. } => true,

@@ -35,7 +35,7 @@ use crate::host_abi::argument::{
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HostFnError {
     /// Human-readable failure description.
-    pub(crate) message: String,
+    message: String,
 }
 
 impl HostFnError {
@@ -104,13 +104,13 @@ impl HostArray {
 
     /// Ordered row-major shape.
     #[must_use]
-    pub fn shape(&self) -> &[usize] {
+    pub(crate) fn shape(&self) -> &[usize] {
         &self.shape
     }
 
     /// Flattened row-major values.
     #[must_use]
-    pub fn values(&self) -> &[f64] {
+    pub(crate) fn values(&self) -> &[f64] {
         &self.values
     }
 
@@ -248,7 +248,7 @@ impl HostFunctionRegistry {
     ///
     /// Re-registering the same `(plugin, name)` replaces the previous
     /// closure — the embedder owns the registry contents.
-    pub(crate) fn register(
+    fn register(
         &mut self,
         plugin: PluginPath,
         name: FnName,

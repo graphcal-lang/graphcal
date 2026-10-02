@@ -8,7 +8,7 @@ use std::sync::{
 use thiserror::Error;
 
 /// Maximum arithmetic work charged to one declaration evaluation.
-pub(super) const DEFAULT_WORK_LIMIT: u64 = 10_000_000;
+const DEFAULT_WORK_LIMIT: u64 = 10_000_000;
 
 /// Checked estimate of primitive kernel operations.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -53,7 +53,7 @@ impl Default for WorkBudget {
 }
 
 impl WorkBudget {
-    pub(super) fn new(limit: u64) -> Self {
+    fn new(limit: u64) -> Self {
         Self {
             remaining: Arc::new(AtomicU64::new(limit)),
             limit,

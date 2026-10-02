@@ -17,9 +17,9 @@ use crate::runtime_presentation::PendingPresentedMap;
 
 /// Result of running the core eval loop: successfully evaluated values and per-node errors.
 pub struct EvalLoopResult {
-    pub unfinished_calls: std::cell::RefCell<BTreeSet<ResolvedDeclName>>,
+    pub(crate) unfinished_calls: std::cell::RefCell<BTreeSet<ResolvedDeclName>>,
     pub values: RuntimeValueMap,
-    pub presentations: PendingPresentedMap,
+    pub(crate) presentations: PendingPresentedMap,
     pub errors: HashMap<ResolvedDeclName, RuntimeUnavailable>,
 }
 

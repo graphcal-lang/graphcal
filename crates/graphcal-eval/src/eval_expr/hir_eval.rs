@@ -502,14 +502,22 @@ fn runtime_value_tree_node_count(value: &RuntimeValue) -> usize {
 /// Test-only: reset the count of runtime value nodes cloned by graph
 /// references and index accesses.
 #[cfg(test)]
-pub fn reset_cloned_runtime_node_count() {
+#[expect(
+    clippy::redundant_pub_crate,
+    reason = "test-only helper of a private module; `pub` would widen the test surface"
+)]
+pub(crate) fn reset_cloned_runtime_node_count() {
     CLONED_RUNTIME_NODES.with(|count| count.set(0));
 }
 
 /// Test-only: take the count of cloned runtime value nodes.
 #[cfg(test)]
 #[must_use]
-pub fn take_cloned_runtime_node_count() -> usize {
+#[expect(
+    clippy::redundant_pub_crate,
+    reason = "test-only helper of a private module; `pub` would widen the test surface"
+)]
+pub(crate) fn take_cloned_runtime_node_count() -> usize {
     CLONED_RUNTIME_NODES.with(|count| count.replace(0))
 }
 

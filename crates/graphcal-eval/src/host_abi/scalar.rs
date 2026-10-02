@@ -178,14 +178,15 @@ impl HostInt {
     }
 
     /// The integer.
+    #[cfg(test)]
     #[must_use]
-    pub const fn get(self) -> i64 {
+    const fn get(self) -> i64 {
         self.value
     }
 
     /// Its exact binary64 ABI slot.
     #[must_use]
-    pub const fn abi_slot(self) -> f64 {
+    pub(crate) const fn abi_slot(self) -> f64 {
         self.slot
     }
 }

@@ -125,7 +125,7 @@ pub struct ValidatedHostArray<I = IndexBinder> {
 impl<I> ValidatedHostArray<I> {
     /// Declared axes in row-major order.
     #[must_use]
-    pub const fn indexes(&self) -> &NonEmpty<I> {
+    const fn indexes(&self) -> &NonEmpty<I> {
         &self.indexes
     }
 

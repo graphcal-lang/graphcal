@@ -984,7 +984,7 @@ pub struct PlotSpec {
     /// Used by the CLI to auto-generate axis titles like "Velocity (km/s)".
     pub encoding_meta: Vec<(EncodingChannel, AxisMeta)>,
     /// Display failures associated with this plot's channels; data falls back to SI.
-    pub presentation_diagnostics: Vec<crate::presentation_evidence::PresentationDiagnostic>,
+    pub(crate) presentation_diagnostics: Vec<crate::presentation_evidence::PresentationDiagnostic>,
     /// Evaluated mark properties (`stroke_width`, `opacity`, etc.).
     pub mark_properties: Vec<(MarkProperty, PlotFieldValue)>,
     /// Evaluated plot-level properties (title, width, height, etc.).

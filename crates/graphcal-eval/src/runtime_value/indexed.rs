@@ -77,7 +77,7 @@ impl<V> IndexedValue<V> {
 
     /// Derive a value over the same axis from each owned entry.
     #[must_use]
-    pub fn map<U>(self, entry: impl FnMut(V) -> U) -> IndexedValue<U> {
+    pub(crate) fn map<U>(self, entry: impl FnMut(V) -> U) -> IndexedValue<U> {
         IndexedValue {
             axis: self.axis,
             entries: self.entries.map(entry),
@@ -85,7 +85,7 @@ impl<V> IndexedValue<V> {
     }
 
     /// Derive a value over the same axis from each owned entry and its key.
-    pub fn try_map<U, E>(
+    pub(crate) fn try_map<U, E>(
         self,
         mut entry: impl FnMut(&IndexEntryKey, V) -> Result<U, E>,
     ) -> Result<IndexedValue<U>, E> {
@@ -102,19 +102,19 @@ impl<V> IndexedValue<V> {
 
     /// The axis this value is indexed by.
     #[must_use]
-    pub const fn axis(&self) -> &IndexAxis {
+    pub(crate) const fn axis(&self) -> &IndexAxis {
         &self.axis
     }
 
     /// The index this value is indexed by.
     #[must_use]
-    pub fn index(&self) -> &IndexTypeRef {
+    pub(crate) fn index(&self) -> &IndexTypeRef {
         self.axis.index()
     }
 
     /// The entry for `key`, when `key` belongs to the axis.
     #[must_use]
-    pub fn get(&self, key: &IndexEntryKey) -> Option<&V> {
+    pub(crate) fn get(&self, key: &IndexEntryKey) -> Option<&V> {
         self.axis
             .position(key)
             .and_then(|position| self.entries.as_slice().get(position))
@@ -133,13 +133,13 @@ impl<V> IndexedValue<V> {
 
     /// Entries with their keys, in axis order.
     #[must_use]
-    pub fn iter(&self) -> impl ExactSizeIterator<Item = (&IndexEntryKey, &V)> {
+    pub(crate) fn iter(&self) -> impl ExactSizeIterator<Item = (&IndexEntryKey, &V)> {
         self.axis.keys().iter().zip(self.entries.iter())
     }
 
     /// Entries in axis order (at least one).
     #[must_use]
-    pub const fn values(&self) -> &NonEmpty<V> {
+    pub(crate) const fn values(&self) -> &NonEmpty<V> {
         &self.entries
     }
 

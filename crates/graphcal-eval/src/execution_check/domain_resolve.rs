@@ -592,7 +592,7 @@ pub(super) fn resolve_struct_field_constraints_for_dags(
 }
 
 #[cfg(any(test, feature = "test-internals"))]
-pub(super) fn resolve_struct_field_constraints_with_cancellation(
+fn resolve_struct_field_constraints_with_cancellation(
     tir: &CheckedTir,
     const_values: &RuntimeValueMap,
     src: SourceId,

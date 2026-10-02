@@ -12,7 +12,7 @@ pub struct ResolvedDomainBound<T> {
 }
 
 impl<T> ResolvedDomainBound<T> {
-    pub const fn new(value: T, display: DomainBoundSpelling) -> Self {
+    pub(crate) const fn new(value: T, display: DomainBoundSpelling) -> Self {
         Self { value, display }
     }
 
@@ -20,7 +20,7 @@ impl<T> ResolvedDomainBound<T> {
         &self.value
     }
 
-    pub const fn display(&self) -> &DomainBoundSpelling {
+    pub(crate) const fn display(&self) -> &DomainBoundSpelling {
         &self.display
     }
 }
@@ -33,7 +33,7 @@ pub struct ResolvedDomainBounds<T> {
 }
 
 impl<T> ResolvedDomainBounds<T> {
-    pub const fn new(
+    pub(crate) const fn new(
         min: Option<ResolvedDomainBound<T>>,
         max: Option<ResolvedDomainBound<T>>,
     ) -> Self {
@@ -119,14 +119,14 @@ pub enum ResolvedDomainConstraintRef<'constraint> {
 
 impl ResolvedDomainConstraint {
     #[must_use]
-    pub const fn quantity(bounds: ResolvedDomainBounds<FiniteQuantity>) -> Self {
+    pub(crate) const fn quantity(bounds: ResolvedDomainBounds<FiniteQuantity>) -> Self {
         Self {
             kind: ResolvedDomainConstraintKind::Quantity(bounds),
         }
     }
 
     #[must_use]
-    pub const fn int(bounds: ResolvedDomainBounds<i64>) -> Self {
+    pub(crate) const fn int(bounds: ResolvedDomainBounds<i64>) -> Self {
         Self {
             kind: ResolvedDomainConstraintKind::Int(bounds),
         }
@@ -151,7 +151,10 @@ impl ResolvedDomainConstraint {
     /// Datetime bounds of a `Datetime<scale>` value, each instant admitted
     /// from an epoch in `scale`.
     #[must_use]
-    pub const fn datetime(scale: TimeScale, bounds: ResolvedDomainBounds<DomainInstant>) -> Self {
+    pub(crate) const fn datetime(
+        scale: TimeScale,
+        bounds: ResolvedDomainBounds<DomainInstant>,
+    ) -> Self {
         Self {
             kind: ResolvedDomainConstraintKind::Datetime { scale, bounds },
         }
