@@ -29,7 +29,6 @@ use crate::syntax::type_name::GenericParamName;
 
 use super::nominal::{
     NominalConstructor, NominalField, NominalGenericParam, NominalTypeDef, NominalTypeError,
-    NominalTypeKind,
 };
 use super::type_annotation::TypeAnnotation;
 use super::types::{
@@ -462,17 +461,18 @@ fn invariant_error(message: String, src: SourceId, span: Span) -> SemanticError 
 ///
 /// # Errors
 ///
-/// Returns a [`NominalTypeError`] only if the template definition was invalid.
+/// Returns a [`NatOverflowError`] if re-owning a template Nat expression
+/// overflows.
 pub fn specialize_nominal_type(
     template: &NominalTypeDef,
-    identity: ResolvedStructTypeName,
+    identity: &ResolvedStructTypeName,
     substitution: &StaticSubstitution,
     source: SourceId,
     span: Span,
-) -> Result<NominalTypeDef, NominalTypeError> {
+) -> Result<NominalTypeDef, NatOverflowError> {
     let specializer = Specializer {
         template: template.identity(),
-        identity: &identity,
+        identity,
         substitution,
     };
     let generic_params = template
@@ -490,30 +490,19 @@ pub fn specialize_nominal_type(
             ))
         })
         .collect::<Result<_, NatOverflowError>>()?;
-    match template.kind() {
-        NominalTypeKind::Required => {
-            Ok(
-                NominalTypeDef::required(identity, generic_params, source, span)
-                    .with_instance_substitution(substitution.clone()),
-            )
-        }
-        NominalTypeKind::Union { members } => {
-            let members = members
-                .iter()
-                .map(|member| {
-                    member.try_map_annotations(identity.constructor(member.name()), |annotation| {
-                        Ok::<_, NatOverflowError>(TypeAnnotation {
-                            decl_type: specializer.decl_type(&annotation.decl_type)?,
-                            domain_bounds: annotation.domain_bounds.clone(),
-                            span: annotation.span,
-                        })
-                    })
-                })
-                .collect::<Result<Vec<_>, _>>()?;
-            NominalTypeDef::try_union(identity, generic_params, members, source, span)
-                .map(|definition| definition.with_instance_substitution(substitution.clone()))
-        }
-    }
+    template.try_project(
+        identity.clone(),
+        generic_params,
+        substitution.clone(),
+        (source, span),
+        |annotation| {
+            Ok(TypeAnnotation {
+                decl_type: specializer.decl_type(&annotation.decl_type)?,
+                domain_bounds: annotation.domain_bounds.clone(),
+                span: annotation.span,
+            })
+        },
+    )
 }
 
 /// One specialization of a template's nominal signatures.
@@ -855,14 +844,9 @@ mod tests {
                 InstanceIndexBindingTarget::Finite(FiniteIndex::try_from_u64(3).unwrap()),
             )]),
         };
-        let specialized = specialize_nominal_type(
-            &template,
-            identity.clone(),
-            &substitution,
-            src,
-            Span::new(0, 1),
-        )
-        .unwrap();
+        let specialized =
+            specialize_nominal_type(&template, &identity, &substitution, src, Span::new(0, 1))
+                .unwrap();
 
         assert_eq!(specialized.identity(), &identity);
         assert_eq!(specialized.instance_substitution(), Some(&substitution));

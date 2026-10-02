@@ -521,7 +521,7 @@ impl UnfrozenIR {
                             })?;
                         specialize_nominal_type(
                             &template,
-                            identity,
+                            &identity,
                             &substitution,
                             src,
                             symbol.span(),

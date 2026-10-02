@@ -254,12 +254,44 @@ impl NominalTypeDef {
         })
     }
 
-    /// Mark this definition as projected from a template through an
-    /// include's canonical `substitution`.
-    #[must_use]
-    pub(crate) fn with_instance_substitution(mut self, substitution: StaticSubstitution) -> Self {
-        self.instance_substitution = Some(substitution);
-        self
+    /// This definition projected as `identity` through an include's canonical
+    /// `substitution`, with its generic parameters replaced by
+    /// `generic_params` and every field type rewritten by `annotation`.
+    ///
+    /// The template's constructors are re-owned by `identity` under their own
+    /// names, so the projection keeps the template's validated shape: its
+    /// constructor and field names stay unique.
+    pub(crate) fn try_project<E>(
+        &self,
+        identity: ResolvedStructTypeName,
+        generic_params: Vec<NominalGenericParam>,
+        substitution: StaticSubstitution,
+        site: (SourceId, Span),
+        mut annotation: impl FnMut(&TypeAnnotation) -> Result<TypeAnnotation, E>,
+    ) -> Result<Self, E> {
+        let kind = match &self.kind {
+            NominalTypeKind::Required => NominalTypeKind::Required,
+            NominalTypeKind::Union { members } => NominalTypeKind::Union {
+                members: members
+                    .iter()
+                    .map(|member| {
+                        member.try_map_annotations(
+                            identity.constructor(member.name()),
+                            &mut annotation,
+                        )
+                    })
+                    .collect::<Result<_, E>>()?,
+            },
+        };
+        let (source, span) = site;
+        Ok(Self {
+            identity,
+            generic_params,
+            kind,
+            source,
+            span,
+            instance_substitution: Some(substitution),
+        })
     }
 
     /// The include substitution this definition was projected through, if any.
