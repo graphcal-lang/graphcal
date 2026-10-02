@@ -33,56 +33,29 @@ pub struct LoweredPlotBody {
         crate::hir::expr::CheckedExpr,
     )>,
     /// Mark property expressions (`stroke_width: ...`).
-    pub mark_properties: Vec<LoweredPlotField>,
+    pub mark_properties: Vec<LoweredPlotField<crate::plot_props::MarkProperty>>,
     /// Plot-level property expressions (`title: ...`).
-    pub properties: Vec<LoweredPlotField>,
+    pub properties: Vec<LoweredPlotField<crate::plot_props::PlotProperty>>,
 }
 
-/// Typed classification of a plot, mark, or composition property name.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum LoweredPlotProperty {
-    Mark(crate::plot_props::MarkProperty),
-    Plot(crate::plot_props::PlotProperty),
-    Composition(crate::plot_props::CompositionProperty),
-    Unknown(crate::syntax::ast::PlotPropertyName),
-}
-
-impl LoweredPlotProperty {
-    pub(super) fn mark(name: crate::syntax::ast::PlotPropertyName) -> Self {
-        crate::plot_props::MarkProperty::from_name(name.as_str())
-            .map(Self::Mark)
-            .unwrap_or(Self::Unknown(name))
-    }
-
-    pub(super) fn plot(name: crate::syntax::ast::PlotPropertyName) -> Self {
-        crate::plot_props::PlotProperty::from_name(name.as_str())
-            .map(Self::Plot)
-            .unwrap_or(Self::Unknown(name))
-    }
-
-    pub(super) fn composition(name: crate::syntax::ast::PlotPropertyName) -> Self {
-        crate::plot_props::CompositionProperty::from_name(name.as_str())
-            .map(Self::Composition)
-            .unwrap_or(Self::Unknown(name))
-    }
-
-    #[must_use]
-    pub fn name(&self) -> &str {
-        match self {
-            Self::Mark(property) => property.name(),
-            Self::Plot(property) => property.name(),
-            Self::Composition(property) => property.name(),
-            Self::Unknown(name) => name.as_str(),
-        }
+impl LoweredPlotBody {
+    /// Every property value expression, mark properties first.
+    pub fn property_values(&self) -> impl Iterator<Item = &crate::hir::expr::CheckedExpr> {
+        self.mark_properties
+            .iter()
+            .map(|field| &field.value)
+            .chain(self.properties.iter().map(|field| &field.value))
     }
 }
 
-/// A typed plot/figure/layer field expression lowered to HIR.
+/// A plot, mark, figure, or layer field expression lowered to HIR.
+///
+/// Its property is classified for the block that holds it when the
+/// declaration is lowered, so a name that is not a property of that block is
+/// rejected there and never reaches checking or evaluation.
 #[derive(Debug, Clone)]
-pub struct LoweredPlotField {
-    pub property: LoweredPlotProperty,
-    /// Span of the property name in the source, for validation diagnostics.
-    pub(crate) name_span: crate::syntax::span::Span,
+pub struct LoweredPlotField<P> {
+    pub property: P,
     pub value: crate::hir::expr::CheckedExpr,
 }
 
@@ -115,7 +88,7 @@ impl BodyPhase for Lowered {
     type NodeDefinition = crate::hir::node_definition::NodeDefinition;
     type AssertBody = crate::hir::expr::CheckedAssertBody;
     type PlotBody = LoweredPlotBody;
-    type CompositionFields = Vec<LoweredPlotField>;
+    type CompositionFields = Vec<LoweredPlotField<crate::plot_props::CompositionProperty>>;
 }
 
 /// A lowered value, assertion, or visualization declaration.

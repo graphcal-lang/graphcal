@@ -2,21 +2,21 @@
 //!
 //! Every encoding expression is inferred, reduced to a plottable leaf plus
 //! canonical index axes, and checked against the same subset/broadcast shape
-//! contract retained by runtime alignment. Property names are checked against
-//! the typed registry in [`crate::plot_props`], and property values are
-//! type-checked (string literal vs. dimensionless number vs. boolean).
+//! contract retained by runtime alignment. Property names were classified
+//! against the typed registry in [`crate::plot_props`] when the declaration
+//! was lowered; property values are type-checked here (string literal vs.
+//! dimensionless number vs. boolean).
 
 use crate::outcome::Outcome;
 use crate::semantic::checked_type::Symbolic;
 use crate::semantic_error::dimension::DimensionError;
 use crate::semantic_error::dimension::{PlotChannelAxes, PlotPropertyValue};
 use crate::semantic_error::name::NameError;
-use crate::semantic_error::name::PlotPropertyContext;
 use std::collections::HashMap;
 
 use crate::hir::expr::ExprKind;
-use crate::ir::model::{LoweredPlotField, LoweredPlotProperty};
-use crate::plot_props::PlotPropertyType;
+use crate::ir::model::LoweredPlotField;
+use crate::plot_props::{BlockProperty, PlotPropertyType};
 use crate::plot_shape::{PlotChannelShape, PlotLeafKind, align_plot_channel_axes};
 use crate::semantic_error::SemanticError;
 
@@ -60,16 +60,10 @@ pub(super) fn check_plot_entry(
     let owner = entry.identity();
     let types = check_plot_encodings(ctx, &owner, body)?;
     for field in &body.mark_properties {
-        let LoweredPlotProperty::Mark(prop) = &field.property else {
-            return Err(invalid_property(ctx, field, PlotPropertyContext::MarkBlock).into());
-        };
-        check_property_value(ctx, &owner, prop.name(), prop.value_type(), field)?;
+        check_property_value(ctx, &owner, field)?;
     }
     for field in &body.properties {
-        let LoweredPlotProperty::Plot(prop) = &field.property else {
-            return Err(invalid_property(ctx, field, PlotPropertyContext::PlotDeclaration).into());
-        };
-        check_property_value(ctx, &owner, prop.name(), prop.value_type(), field)?;
+        check_property_value(ctx, &owner, field)?;
     }
     Ok((owner, types))
 }
@@ -80,17 +74,7 @@ pub(super) fn check_figure_entry(
 ) -> Result<(), Outcome<SemanticError>> {
     let owner = entry.identity();
     for field in &entry.fields {
-        let LoweredPlotProperty::Composition(prop) = &field.property else {
-            return Err(
-                invalid_property(ctx, field, PlotPropertyContext::FigureDeclaration).into(),
-            );
-        };
-        if !prop.applies_to_figure() {
-            return Err(
-                invalid_property(ctx, field, PlotPropertyContext::FigureDeclaration).into(),
-            );
-        }
-        check_property_value(ctx, &owner, prop.name(), prop.value_type(), field)?;
+        check_property_value(ctx, &owner, field)?;
     }
     Ok(())
 }
@@ -101,10 +85,7 @@ pub(super) fn check_layer_entry(
 ) -> Result<(), Outcome<SemanticError>> {
     let owner = entry.identity();
     for field in &entry.fields {
-        let LoweredPlotProperty::Composition(prop) = &field.property else {
-            return Err(invalid_property(ctx, field, PlotPropertyContext::LayerDeclaration).into());
-        };
-        check_property_value(ctx, &owner, prop.name(), prop.value_type(), field)?;
+        check_property_value(ctx, &owner, field)?;
     }
     Ok(())
 }
@@ -262,29 +243,14 @@ fn plot_leaf_kind(
     }
 }
 
-fn invalid_property(
-    ctx: &DimCheckContext<'_>,
-    field: &LoweredPlotField,
-    context: PlotPropertyContext,
-) -> SemanticError {
-    SemanticError::located(
-        ctx.env.src,
-        field.name_span,
-        NameError::InvalidPlotProperty {
-            property: field.property.clone(),
-            context,
-        },
-    )
-}
-
 /// Check one property value against its expected type.
-pub(super) fn check_property_value(
+pub(super) fn check_property_value<P: BlockProperty>(
     ctx: &DimCheckContext<'_>,
     owner: &crate::resolved_name::ResolvedDeclName,
-    property: &'static str,
-    expected: PlotPropertyType,
-    field: &LoweredPlotField,
+    field: &LoweredPlotField<P>,
 ) -> Result<(), Outcome<SemanticError>> {
+    let property = field.property.name();
+    let expected = field.property.value_type();
     let is_string_literal = matches!(field.value.kind(), ExprKind::StringLiteral(_));
     let mismatch = |found: PlotPropertyValue| {
         SemanticError::located(

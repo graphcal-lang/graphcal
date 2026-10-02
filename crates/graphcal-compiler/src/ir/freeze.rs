@@ -10,6 +10,7 @@ use crate::diagnostic_anchor::DiagnosticAnchor;
 use crate::ir::instance::identity::instance_declaration;
 use crate::outcome::Outcome;
 use crate::semantic_error::SemanticError;
+use crate::semantic_error::name::{NameError, PlotPropertyContext};
 use crate::source_id::SourceId;
 use crate::syntax::module_name::ScopedName;
 use crate::syntax::span::Span;
@@ -20,8 +21,8 @@ use super::{
     extern_fns::resolve_plugin_imports,
     model::{
         AssertEntry, ConstEntry, DynamicUnitScaleEntry, FigureEntry, HirDag, HirDecl, LayerEntry,
-        LoweredPlotBody, LoweredPlotField, LoweredPlotProperty, NodeEntry, ParamEntry,
-        ParsedExpectedFailMetadata, PlotEntry, ResolvedExpectedFailMetadata, UnfrozenIR,
+        LoweredPlotBody, LoweredPlotField, NodeEntry, ParamEntry, ParsedExpectedFailMetadata,
+        PlotEntry, ResolvedExpectedFailMetadata, UnfrozenIR,
     },
 };
 
@@ -198,28 +199,42 @@ impl UnfrozenIR {
             })
             .collect::<Result<Vec<_>, Outcome<SemanticError>>>()?;
 
-        let lower_fields = |fields: &[crate::desugar::desugared_ast::PlotField],
-                            resolution_owner: &crate::dag_id::DagId,
-                            classify: fn(
-            crate::syntax::ast::PlotPropertyName,
-        ) -> LoweredPlotProperty| {
-            fields
-                .iter()
-                .map(|field| {
-                    Ok(LoweredPlotField {
-                        property: classify(field.name.value.clone()),
-                        name_span: field.name.span,
-                        value: lower_in(&field.value, resolution_owner)?,
-                    })
-                })
-                .collect::<Result<Vec<_>, SemanticError>>()
-        };
+        let lower_mark_fields =
+            |fields: &[crate::desugar::desugared_ast::PlotField],
+             resolution_owner: &crate::dag_id::DagId| {
+                lower_plot_fields(
+                    fields,
+                    PlotPropertyContext::MarkBlock,
+                    crate::plot_props::MarkProperty::from_name,
+                    |value| lower_in(value, resolution_owner),
+                    src,
+                )
+            };
+        let lower_plot_level_fields =
+            |fields: &[crate::desugar::desugared_ast::PlotField],
+             resolution_owner: &crate::dag_id::DagId| {
+                lower_plot_fields(
+                    fields,
+                    PlotPropertyContext::PlotDeclaration,
+                    crate::plot_props::PlotProperty::from_name,
+                    |value| lower_in(value, resolution_owner),
+                    src,
+                )
+            };
         let lower_composition_fields =
-            |fields: &InScope<Vec<crate::desugar::desugared_ast::PlotField>>| {
-                lower_fields(
+            |fields: &InScope<Vec<crate::desugar::desugared_ast::PlotField>>,
+             context: PlotPropertyContext| {
+                lower_plot_fields(
                     &fields.syntax,
-                    &fields.resolution_owner,
-                    LoweredPlotProperty::composition,
+                    context,
+                    |name| {
+                        crate::plot_props::CompositionProperty::from_name(name).filter(|property| {
+                            context != PlotPropertyContext::FigureDeclaration
+                                || property.applies_to_figure()
+                        })
+                    },
+                    |value| lower_in(value, &fields.resolution_owner),
+                    src,
                 )
             };
         // Lower kind by kind, preserving the established diagnostic order when
@@ -309,15 +324,13 @@ impl UnfrozenIR {
                         Decl::Plot(PlotEntry {
                             body: LoweredPlotBody {
                                 encodings,
-                                mark_properties: lower_fields(
+                                mark_properties: lower_mark_fields(
                                     &body.mark_properties,
                                     resolution_owner,
-                                    LoweredPlotProperty::mark,
                                 )?,
-                                properties: lower_fields(
+                                properties: lower_plot_level_fields(
                                     &body.properties,
                                     resolution_owner,
-                                    LoweredPlotProperty::plot,
                                 )?,
                             },
                             identity: entry.identity,
@@ -326,12 +339,18 @@ impl UnfrozenIR {
                         })
                     }
                     Decl::Figure(entry) => Decl::Figure(FigureEntry {
-                        fields: lower_composition_fields(&entry.fields)?,
+                        fields: lower_composition_fields(
+                            &entry.fields,
+                            PlotPropertyContext::FigureDeclaration,
+                        )?,
                         identity: entry.identity,
                         plot_names: entry.plot_names,
                     }),
                     Decl::Layer(entry) => Decl::Layer(LayerEntry {
-                        fields: lower_composition_fields(&entry.fields)?,
+                        fields: lower_composition_fields(
+                            &entry.fields,
+                            PlotPropertyContext::LayerDeclaration,
+                        )?,
                         identity: entry.identity,
                         plot_names: entry.plot_names,
                     }),
@@ -620,4 +639,39 @@ impl ParsedExpectedFailMetadata {
             attribute_span,
         })
     }
+}
+
+/// Lower the fields of one plot-family block, classifying each property name
+/// for the block.
+///
+/// # Errors
+///
+/// Returns [`NameError::InvalidPlotProperty`] for a name `classify` rejects,
+/// before its value is lowered, or the value's lowering error.
+fn lower_plot_fields<P>(
+    fields: &[crate::desugar::desugared_ast::PlotField],
+    context: PlotPropertyContext,
+    classify: impl Fn(&str) -> Option<P>,
+    lower_value: impl Fn(&Expr) -> Result<crate::hir::expr::CheckedExpr, SemanticError>,
+    src: SourceId,
+) -> Result<Vec<LoweredPlotField<P>>, SemanticError> {
+    fields
+        .iter()
+        .map(|field| {
+            let property = classify(field.name.value.as_str()).ok_or_else(|| {
+                SemanticError::located(
+                    src,
+                    field.name.span,
+                    NameError::InvalidPlotProperty {
+                        property: field.name.value.clone(),
+                        context,
+                    },
+                )
+            })?;
+            Ok(LoweredPlotField {
+                property,
+                value: lower_value(&field.value)?,
+            })
+        })
+        .collect()
 }

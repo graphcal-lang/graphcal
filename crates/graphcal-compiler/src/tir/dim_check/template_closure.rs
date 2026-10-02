@@ -2,7 +2,6 @@
 
 use super::{DimCheckContext, check_decl_expr_type, check_hir_assert_body, infer};
 use crate::declaration_kind::DeclarationKind;
-use crate::diagnostic_anchor::DiagnosticAnchor;
 use crate::outcome::Outcome;
 use crate::resolved_name::{ResolvedDeclName, ResolvedStructTypeName};
 use crate::semantic::checked_type::{CheckedType, Symbolic};
@@ -127,38 +126,19 @@ fn rigid_dimension_error(
     }
 }
 
-fn check_rigid_plot_field(
+fn check_rigid_plot_field<P: crate::plot_props::BlockProperty>(
     ctx: &DimCheckContext<'_>,
     owner: &ResolvedDeclName,
     body: &TemplateBodyIdentity,
     failure: RigidFailure<'_>,
-    field: &crate::ir::model::LoweredPlotField,
+    field: &crate::ir::model::LoweredPlotField<P>,
 ) -> Result<(), Outcome<SemanticError>> {
-    let (property, expected) = match &field.property {
-        crate::ir::model::LoweredPlotProperty::Mark(property) => {
-            (property.name(), property.value_type())
-        }
-        crate::ir::model::LoweredPlotProperty::Plot(property) => {
-            (property.name(), property.value_type())
-        }
-        crate::ir::model::LoweredPlotProperty::Composition(property) => {
-            (property.name(), property.value_type())
-        }
-        crate::ir::model::LoweredPlotProperty::Unknown(property) => {
-            return Err(SemanticError::internal_error(
-                format!("unchecked plot property `{property}` reached rigid validation"),
-                ctx.env.src,
-                DiagnosticAnchor::Source(field.name_span),
-            )
-            .into());
-        }
-    };
     rigid_dimension_error(
         ctx,
         body,
         failure,
         field.value.span,
-        super::plot::check_property_value(ctx, owner, property, expected, field),
+        super::plot::check_property_value(ctx, owner, field),
     )
 }
 
@@ -261,12 +241,10 @@ fn check_rigid_plot_bodies(
                 infer_operand(ctx, Some(&owner), expression).map(|_| ()),
             )?;
         }
-        for field in entry
-            .body
-            .mark_properties
-            .iter()
-            .chain(&entry.body.properties)
-        {
+        for field in &entry.body.mark_properties {
+            check_rigid_plot_field(ctx, &owner, &body, failure, field)?;
+        }
+        for field in &entry.body.properties {
             check_rigid_plot_field(ctx, &owner, &body, failure, field)?;
         }
     }

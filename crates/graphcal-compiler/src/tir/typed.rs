@@ -1309,8 +1309,8 @@ fn check_sink_body_policies(
         for (_, expr) in &body.encodings {
             checker.check_expr(expr, BodyPhase::Runtime, check_literals)?;
         }
-        for field in body.mark_properties.iter().chain(&body.properties) {
-            checker.check_expr(&field.value, BodyPhase::Runtime, check_literals)?;
+        for value in body.property_values() {
+            checker.check_expr(value, BodyPhase::Runtime, check_literals)?;
         }
     }
     for (name, fields) in dag

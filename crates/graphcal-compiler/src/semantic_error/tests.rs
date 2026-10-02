@@ -755,9 +755,7 @@ fn name_payloads_render_their_text_as_before() {
     for (context, expected) in contexts {
         assert_eq!(context.to_string(), expected);
         let error = NameError::InvalidPlotProperty {
-            property: crate::ir::model::LoweredPlotProperty::Unknown(
-                crate::syntax::ast::PlotPropertyName::expect_valid("bogus"),
-            ),
+            property: crate::syntax::ast::PlotPropertyName::expect_valid("bogus"),
             context,
         };
         assert_eq!(
@@ -772,9 +770,7 @@ fn name_payloads_render_their_text_as_before() {
     }
     assert!(
         NameError::InvalidPlotProperty {
-            property: crate::ir::model::LoweredPlotProperty::Unknown(
-                crate::syntax::ast::PlotPropertyName::expect_valid("bogus"),
-            ),
+            property: crate::syntax::ast::PlotPropertyName::expect_valid("bogus"),
             context: PlotPropertyContext::FigureDeclaration,
         }
         .help()

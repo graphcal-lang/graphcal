@@ -127,9 +127,9 @@ pub enum NameError {
     },
     #[error("{kind} `{name}` shadows a built-in name")]
     BuiltinNameShadowed { kind: &'static str, name: NameAtom },
-    #[error("property `{}` is not valid in {context}", property.name())]
+    #[error("property `{property}` is not valid in {context}")]
     InvalidPlotProperty {
-        property: crate::ir::model::LoweredPlotProperty,
+        property: crate::syntax::ast::PlotPropertyName,
         context: PlotPropertyContext,
     },
     #[error("{owner_kind} `{owner}` references unknown plot `{name}`")]
