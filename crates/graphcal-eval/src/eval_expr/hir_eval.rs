@@ -1,5 +1,5 @@
 use crate::runtime_value::{IndexAxis, IndexedValue, KeyValue, RuntimeValue};
-use graphcal_compiler::builtin::{AggregationFn, KeyAggregation};
+use graphcal_compiler::builtin::{AggregationFn, ValueAggregation};
 use graphcal_compiler::outcome::Outcome;
 use graphcal_compiler::semantic::checked_type::{IndexTypeRef, StructTypeRef};
 use graphcal_compiler::semantic_error::SemanticError;
@@ -56,6 +56,46 @@ fn invariant_error(invariant: Invariant, span: Span, ctx: &EvalSession<'_>) -> S
     ctx.failure_error(
         Failure::<std::convert::Infallible>::Invariant(invariant),
         span,
+    )
+}
+
+/// `value` with every leaf presented by `leaf`: the checker admits a display
+/// unit only on quantities and a display time zone only on datetimes, so a
+/// leaf of another kind contradicts the checked type.
+fn presented(
+    value: RuntimeValue,
+    leaf: PendingLeaf,
+    span: Span,
+    ctx: &EvalSession<'_>,
+) -> Result<EvaluatedRuntimeValue, Outcome<SemanticError>> {
+    let expected = match leaf {
+        PendingLeaf::Quantity(_) => "a value whose leaves are quantities",
+        PendingLeaf::Datetime(_) => "a value whose leaves are datetimes",
+    };
+    read_shape(value, expected, span, ctx, |value| {
+        EvaluatedRuntimeValue::with_leaf(value, leaf)
+    })
+}
+
+/// `value`, a step of a recurrence seeded by `initial`, presented as
+/// `initial` when it has no presentation of its own; a value of another type
+/// than `initial`'s contradicts the checked type.
+fn with_initial_presentation(
+    value: EvaluatedRuntimeValue,
+    initial: &EvaluatedRuntimeValue,
+    span: Span,
+    ctx: &EvalSession<'_>,
+) -> Result<EvaluatedRuntimeValue, Outcome<SemanticError>> {
+    read_shape(
+        value,
+        "a value of the initial value's type",
+        span,
+        ctx,
+        |value| {
+            value
+                .with_default_presentation(initial)
+                .map_err(EvaluatedRuntimeValue::plain)
+        },
     )
 }
 
@@ -201,12 +241,12 @@ fn eval_texpr_inner(
             let scale = resolve_unit_scale(unit, values, ctx, eval_executable)?;
             let value = checked_unit_scaled_value(value, scale, span, ctx)?;
             let display = super::presentation::scaled(unit.get(), scale, ctx);
-            EvaluatedRuntimeValue::with_leaf(
+            presented(
                 value,
                 PendingLeaf::Quantity(PendingQuantityDisplay::Ready(display)),
+                span,
+                ctx,
             )
-            .map_err(|invariant| invariant_error(invariant, span, ctx))
-            .map_err(Outcome::Failed)
         }
         NodeKind::GraphRef(target) => {
             let value = resolve_graph_ref(&target, values, ctx)?;
@@ -234,18 +274,26 @@ fn eval_texpr_inner(
         NodeKind::DatetimeLiteral(literal) => Ok(plain(RuntimeValue::Datetime(
             super::operations::datetime_literal(literal),
         ))),
-        NodeKind::Aggregate { function, arg } => {
-            let indexed = operands.indexed(arg)?;
-            match function {
-                AggregationFn::Key(function) => eval_extremum_key(function, &indexed, span, ctx),
-                AggregationFn::Value(function) => {
-                    super::aggregations::aggregate_indexed_values(function, &indexed)
-                        .map_err(|failure| ctx.failure_error(failure, span))
-                }
+        NodeKind::Aggregate { function, arg } => match function {
+            AggregationFn::Key(function) => {
+                let quantities = operands.quantities(arg)?;
+                Ok(plain(RuntimeValue::Key(super::aggregations::extremum_key(
+                    function,
+                    &quantities,
+                ))))
             }
+            AggregationFn::Value(ValueAggregation::Count) => {
+                super::aggregations::count_entries(&operands.rank_one(arg)?)
+                    .map(plain)
+                    .map_err(|invariant| invariant_error(invariant, span, ctx).into())
+            }
+            AggregationFn::Value(function) => super::aggregations::aggregate_quantities(
+                function,
+                operands.quantities(arg)?.values().as_slice(),
+            )
             .map(plain)
-            .map_err(Outcome::Failed)
-        }
+            .map_err(|failure| ctx.failure_error(failure, span).into()),
+        },
         NodeKind::LinearAlgebra(call) => {
             super::linear_algebra::evaluate(&call, span, &operands, ctx).map(plain)
         }
@@ -270,21 +318,19 @@ fn eval_texpr_inner(
             target,
         } => {
             let value = eval_value(inner, values, local_values, ctx)?;
-            EvaluatedRuntimeValue::with_leaf(
+            presented(
                 value,
                 PendingLeaf::Quantity(super::presentation::pending(target, expr.dag_id(), ctx)),
+                span,
+                ctx,
             )
-            .map_err(|invariant| invariant_error(invariant, span, ctx))
-            .map_err(Outcome::Failed)
         }
         NodeKind::DisplayTimezone {
             expr: inner,
             timezone,
         } => {
             let value = eval_value(inner, values, local_values, ctx)?;
-            EvaluatedRuntimeValue::with_leaf(value, PendingLeaf::Datetime(timezone.clone()))
-                .map_err(|invariant| invariant_error(invariant, span, ctx))
-                .map_err(Outcome::Failed)
+            presented(value, PendingLeaf::Datetime(timezone.clone()), span, ctx)
         }
         NodeKind::Field { expr: inner, field } => {
             let inner_val =
@@ -556,17 +602,6 @@ fn coordinate_search(
 
 /// Evaluate `argmin`/`argmax`: the key of the extremum entry on the reduced
 /// axis.
-fn eval_extremum_key(
-    kind: KeyAggregation,
-    indexed: &IndexedValue<RuntimeValue>,
-    span: Span,
-    ctx: &EvalSession<'_>,
-) -> Result<RuntimeValue, SemanticError> {
-    super::aggregations::extremum_key(kind, indexed)
-        .map(RuntimeValue::Key)
-        .map_err(|error| ctx.runtime_error(error, span))
-}
-
 /// The expression of one plugin-call argument, in the argument's scope.
 fn argument_node(arg: Scoped<'_, TExternArg>) -> Scoped<'_, TExpr> {
     arg.map(|arg| &arg.value)
@@ -926,9 +961,12 @@ fn eval_scan(
     let result_entries = source_entries.try_map(|_, item| {
         scan_locals.bind(acc.id, accumulated.clone());
         scan_locals.bind(val.id, item);
-        accumulated = eval_texpr_evaluated(body, values, presentation_values, &scan_locals, ctx)?
-            .with_default_presentation(&initial)
-            .map_err(|invariant| invariant_error(invariant, body.span(), ctx))?;
+        accumulated = with_initial_presentation(
+            eval_texpr_evaluated(body, values, presentation_values, &scan_locals, ctx)?,
+            &initial,
+            body.span(),
+            ctx,
+        )?;
         Ok::<_, Outcome<SemanticError>>(accumulated.clone())
     })?;
     Ok(EvaluatedRuntimeValue::from_indexed(result_entries))
@@ -984,10 +1022,12 @@ fn eval_unfold(
             recurrence.current_index.id,
             EvaluatedRuntimeValue::plain(RuntimeValue::Key(key.clone())),
         );
-        previous_state =
-            eval_texpr_evaluated(body, values, presentation_values, &unfold_locals, ctx)?
-                .with_default_presentation(&evaluated_init)
-                .map_err(|invariant| invariant_error(invariant, body.span(), ctx))?;
+        previous_state = with_initial_presentation(
+            eval_texpr_evaluated(body, values, presentation_values, &unfold_locals, ctx)?,
+            &evaluated_init,
+            body.span(),
+            ctx,
+        )?;
         Ok::<_, Outcome<SemanticError>>(previous_state.clone())
     })?;
     Ok(EvaluatedRuntimeValue::from_indexed(result_entries))

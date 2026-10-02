@@ -100,7 +100,7 @@ impl SquareMatrix {
     }
 
     /// The value at `(row, column)`; both are below the order.
-    fn at(&self, row: usize, column: usize) -> f64 {
+    pub(super) fn at(&self, row: usize, column: usize) -> f64 {
         self.values[self.position(row, column)]
     }
 
@@ -399,20 +399,39 @@ fn require_nonsingular(
     }
 }
 
+/// A square matrix with a right-hand side of its order.
+///
+/// Built only by [`LinearSystem::try_new`], which checks the lengths agree.
+#[derive(Debug)]
+pub(super) struct LinearSystem {
+    matrix: SquareMatrix,
+    rhs: Vec<f64>,
+}
+
+impl LinearSystem {
+    /// `matrix` with the right-hand side `rhs`.
+    ///
+    /// # Errors
+    ///
+    /// Returns both parts back when `rhs` does not have one value per row.
+    pub(super) const fn try_new(
+        matrix: SquareMatrix,
+        rhs: Vec<f64>,
+    ) -> Result<Self, (SquareMatrix, Vec<f64>)> {
+        if rhs.len() == matrix.order() {
+            Ok(Self { matrix, rhs })
+        } else {
+            Err((matrix, rhs))
+        }
+    }
+}
+
 pub(super) fn solve_with_control(
-    matrix: &SquareMatrix,
-    rhs: &[f64],
+    system: &LinearSystem,
     control: &mut KernelCheckpoint<'_>,
 ) -> Result<Vec<f64>, LuFailure> {
+    let LinearSystem { matrix, rhs } = system;
     let operation = "solved";
-    if rhs.len() != matrix.order() {
-        return Err(shape_invariant(format_args!(
-            "{operation} received a right-hand side of length {} for order {}",
-            rhs.len(),
-            matrix.order()
-        ))
-        .into());
-    }
     let decomposition = require_nonsingular(matrix, operation, control)?;
     let solution = decomposition.solve_raw(rhs, operation, control)?;
     checked_residual(matrix, rhs, &solution, operation, control)?;
@@ -467,8 +486,7 @@ mod tests {
     fn solve(matrix: &[f64], order: usize, rhs: &[f64]) -> Result<Vec<f64>, LuFailure> {
         let cancellation = graphcal_compiler::cancellation::CancellationToken::unbounded();
         solve_with_control(
-            &square(matrix, order),
-            rhs,
+            &LinearSystem::try_new(square(matrix, order), rhs.to_vec()).unwrap(),
             &mut KernelCheckpoint::new(&cancellation),
         )
     }
@@ -591,10 +609,7 @@ mod tests {
         assert!(SquareMatrix::try_new(0, Vec::new()).is_err());
         assert!(SquareMatrix::try_new(usize::MAX, vec![1.0]).is_err());
         assert_eq!(SquareMatrix::try_new(1, vec![1.0]).unwrap().order(), 1);
-        assert!(matches!(
-            solve(MATRIX, 2, &[1.0]).unwrap_err(),
-            Outcome::Failed(Failure::Invariant(_))
-        ));
+        assert!(LinearSystem::try_new(square(MATRIX, 2), vec![1.0]).is_err());
     }
 
     #[test]

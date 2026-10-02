@@ -24,6 +24,7 @@ use graphcal_compiler::syntax::index_name::IndexEntryKey;
 use graphcal_compiler::syntax::non_empty::NonEmpty;
 use graphcal_compiler::tir::typed::body_scope::Scoped;
 use graphcal_compiler::tir::typed::evaluation_unit::AssertionOperands;
+use thiserror::Error;
 
 /// The value of a checked assertion operand of an (indexed) scalar type: a
 /// leaf of that type, or one such operand per key of an axis.
@@ -41,7 +42,34 @@ type Verdicts = Leaves<bool>;
 /// The value of a checked tolerance-assertion operand.
 type Measured = Leaves<f64>;
 
+/// Read an operand checked as `expected` with `read`, which returns the
+/// part of the value that contradicts the checked type: the one place an
+/// assertion operand of another shape is reported.
+fn read_operand<R>(
+    value: RuntimeValue,
+    expected: &dyn std::fmt::Display,
+    read: impl FnOnce(RuntimeValue) -> Result<R, RuntimeValue>,
+) -> Result<R, Invariant> {
+    read(value).map_err(|other| {
+        Invariant::violated(format_args!("{expected} evaluated to {}", other.describe()))
+    })
+}
+
 impl<T> Leaves<T> {
+    /// Read (indexed) leaves, each read by `leaf`; returns the part of
+    /// `value` of another shape.
+    fn read_tree(
+        value: RuntimeValue,
+        leaf: &impl Fn(RuntimeValue) -> Result<T, RuntimeValue>,
+    ) -> Result<Self, RuntimeValue> {
+        match value {
+            RuntimeValue::Indexed(indexed) => indexed
+                .try_map(|_, entry| Self::read_tree(entry, leaf))
+                .map(Self::Indexed),
+            value => leaf(value).map(Self::Single),
+        }
+    }
+
     /// Read an operand checked as `expected` (indexed) leaves, each read by
     /// `leaf`; any other shape contradicts the operand's checked type.
     fn read(
@@ -49,25 +77,33 @@ impl<T> Leaves<T> {
         expected: &dyn std::fmt::Display,
         leaf: &impl Fn(RuntimeValue) -> Result<T, RuntimeValue>,
     ) -> Result<Self, Invariant> {
-        match value {
-            RuntimeValue::Indexed(indexed) => indexed
-                .try_map(|_, entry| Self::read(entry, expected, leaf))
-                .map(Self::Indexed),
-            value => leaf(value).map(Self::Single).map_err(|other| {
-                Invariant::violated(format_args!("{expected} evaluated to {}", other.describe()))
-            }),
-        }
+        read_operand(value, expected, |value| Self::read_tree(value, leaf))
+    }
+}
+
+/// A condition's leaf: a `Bool` verdict.
+fn verdict(value: RuntimeValue) -> Result<bool, RuntimeValue> {
+    match value {
+        RuntimeValue::Bool(verdict) => Ok(verdict),
+        other => Err(other),
     }
 }
 
 impl Verdicts {
     /// Read a condition's value.
     fn try_from_value(value: RuntimeValue) -> Result<Self, Invariant> {
-        Self::read(
+        Self::read(value, &"assertion condition checked as Bool", &verdict)
+    }
+
+    /// Read the value of a condition checked as an indexed `Bool`.
+    fn try_indexed_from_value(value: RuntimeValue) -> Result<IndexedValue<Self>, Invariant> {
+        read_operand(
             value,
-            &"assertion condition checked as Bool",
-            &|value| match value {
-                RuntimeValue::Bool(verdict) => Ok(verdict),
+            &"assertion condition checked as an indexed Bool",
+            |value| match value {
+                RuntimeValue::Indexed(indexed) => {
+                    indexed.try_map(|_, entry| Self::read_tree(entry, &verdict))
+                }
                 other => Err(other),
             },
         )
@@ -150,9 +186,11 @@ pub fn evaluate_assert_with_expected_fail<'t>(
             // specific entries. For `Expr` bodies these are the evaluated
             // condition; for tolerance bodies the element-wise pass/fail
             // verdicts (#809).
+            // Checking admits per-variant `#[expected_fail]` only on an
+            // indexed assertion.
             let verdicts = match body {
                 AssertionOperands::Condition(body_expr) => match evaluate_expression(body_expr) {
-                    Ok(value) => match Verdicts::try_from_value(value) {
+                    Ok(value) => match Verdicts::try_indexed_from_value(value) {
                         Ok(verdicts) => verdicts,
                         Err(invariant) => return Ok(invariant_result(&invariant)),
                     },
@@ -163,29 +201,30 @@ pub fn evaluate_assert_with_expected_fail<'t>(
                     expected,
                     tolerance,
                 } => {
-                    let operands =
-                        eval_tolerance_operands(actual, expected, tolerance, evaluate_expression)?;
-                    let (actual_val, expected_val, tolerance_val) = match operands {
-                        Ok(operands) => operands,
+                    let gauges = match eval_tolerance_operands(
+                        actual,
+                        expected,
+                        tolerance,
+                        evaluate_expression,
+                        |gauges| match gauges {
+                            Gauges::Indexed(gauges) => Ok(gauges),
+                            Gauges::Single(_) => Err(Misaligned::Unindexed),
+                        },
+                    )? {
+                        Ok(gauges) => gauges,
                         Err(result) => return Ok(result),
                     };
-                    match eval_tolerance_tree(&actual_val, &expected_val, &tolerance_val) {
-                        Ok((verdicts, _)) => verdicts,
+                    match gauges.try_map_ref(|variant, entry| {
+                        let mut path = vec![(gauges.index().clone(), variant.clone())];
+                        tolerance_tree_inner(entry, &mut path, &mut Vec::new())
+                    }) {
+                        Ok(verdicts) => verdicts,
                         Err(error) => return Ok(error.result()),
                     }
                 }
             };
-            // Checking admits per-variant `#[expected_fail]` only on an
-            // indexed assertion.
-            match verdicts {
-                Verdicts::Indexed(indexed) => {
-                    let inverted = invert_indexed_variants(&indexed, keys.as_slice());
-                    check_indexed_assert_with_expected_fail(&inverted, keys.as_slice())
-                }
-                Verdicts::Single(_) => invariant_result(&Invariant::violated(
-                    "per-variant #[expected_fail(...)] reached a non-indexed assertion",
-                )),
-            }
+            let inverted = invert_indexed_variants(&verdicts, keys.as_slice());
+            check_indexed_assert_with_expected_fail(&inverted, keys.as_slice())
         }
     })
 }
@@ -435,34 +474,34 @@ fn evaluate_tolerance_assert<'t>(
         Scoped<'t, Expr>,
     ) -> Result<RuntimeValue, Outcome<SemanticError>>,
 ) -> Evaluated {
-    let (actual_val, expected_val, tolerance_val) =
-        match eval_tolerance_operands(actual, expected, tolerance, evaluate_expression)? {
-            Ok(operands) => operands,
+    let gauges =
+        match eval_tolerance_operands(actual, expected, tolerance, evaluate_expression, Ok)? {
+            Ok(gauges) => gauges,
             Err(result) => return Ok(result),
         };
-    Ok(
-        match eval_tolerance_tree(&actual_val, &expected_val, &tolerance_val) {
-            Err(error) => error.result(),
-            Ok((_, failures)) if failures.is_empty() => AssertResult::Pass,
-            Ok((_, failures)) => AssertResult::Fail {
-                message: format_tolerance_failures(&failures),
-            },
+    Ok(match eval_tolerance_tree(&gauges) {
+        Err(error) => error.result(),
+        Ok((_, failures)) if failures.is_empty() => AssertResult::Pass,
+        Ok((_, failures)) => AssertResult::Fail {
+            message: format_tolerance_failures(&failures),
         },
-    )
+    })
 }
 
 /// Evaluate the three operand expressions of a tolerance assertion.
 ///
-/// Returns the operands read as (indexed) quantities, or the
-/// `AssertResult::Error` to report; the outer error is cancellation.
-fn eval_tolerance_operands<'t>(
+/// Returns the operands read as (indexed) quantities and aligned on
+/// `actual`'s axes, or the `AssertResult::Error` to report; the outer error
+/// is cancellation.
+fn eval_tolerance_operands<'t, G>(
     actual: Scoped<'t, Expr>,
     expected: Scoped<'t, Expr>,
     tolerance: Scoped<'t, Expr>,
     evaluate_expression: &mut impl FnMut(
         Scoped<'t, Expr>,
     ) -> Result<RuntimeValue, Outcome<SemanticError>>,
-) -> Result<Result<(Measured, Measured, Measured), AssertResult>, Cancelled> {
+    shape: impl FnOnce(Gauges) -> Result<G, Misaligned>,
+) -> Result<Result<G, AssertResult>, Cancelled> {
     let mut operand =
         |expr: Scoped<'t, Expr>, role: &str| match evaluate_expression(expr) {
             Ok(value) => Ok(Measured::try_from_value(value, role)
@@ -477,7 +516,101 @@ fn eval_tolerance_operands<'t>(
         Ok(expected) => expected,
         Err(result) => return Ok(Err(result)),
     };
-    Ok(operand(tolerance, "tolerance")?.map(|tolerance| (actual, expected, tolerance)))
+    let tolerance = match operand(tolerance, "tolerance")? {
+        Ok(tolerance) => tolerance,
+        Err(result) => return Ok(Err(result)),
+    };
+    // Checking proved `expected` and `tolerance` each unindexed or indexed by
+    // a prefix of `actual`'s axes; operands that do not align contradict
+    // their checked types.
+    Ok(align(actual, &expected, &tolerance)
+        .and_then(shape)
+        .map_err(|misaligned| invariant_result(&Invariant::violated(misaligned))))
+}
+
+/// The three operands of a tolerance assertion at one key of `actual`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Gauge {
+    actual: f64,
+    expected: f64,
+    tolerance: f64,
+}
+
+/// Tolerance operands aligned on `actual`'s axes.
+type Gauges = Leaves<Gauge>;
+
+/// Why tolerance operands do not align with `actual`'s axes.
+#[derive(Debug, Error)]
+enum Misaligned {
+    #[error("per-variant #[expected_fail(...)] reached a non-indexed tolerance assertion")]
+    Unindexed,
+    #[error("tolerance {role} has more axes than actual")]
+    ExtraAxes { role: &'static str },
+    #[error("tolerance assertion operand over `{operand}` has no entry `{entry}` of `{axis}`")]
+    MissingEntry {
+        operand: IndexTypeRef,
+        axis: IndexTypeRef,
+        entry: IndexEntryKey,
+    },
+}
+
+/// Align `expected` and `tolerance` on the axes of `actual`: an unindexed
+/// operand broadcasts to every key, an indexed one is indexed per key.
+fn align(
+    actual: Measured,
+    expected: &Measured,
+    tolerance: &Measured,
+) -> Result<Gauges, Misaligned> {
+    match actual {
+        Measured::Indexed(indexed) => {
+            let axis = indexed.index().clone();
+            indexed
+                .try_map(|variant, actual_entry| {
+                    align(
+                        actual_entry,
+                        entry_or_broadcast(expected, &axis, variant)?,
+                        entry_or_broadcast(tolerance, &axis, variant)?,
+                    )
+                })
+                .map(Gauges::Indexed)
+        }
+        Measured::Single(actual) => Ok(Gauges::Single(Gauge {
+            actual,
+            expected: scalar(expected, "expected")?,
+            tolerance: scalar(tolerance, "tolerance")?,
+        })),
+    }
+}
+
+/// The value of an operand at a leaf of `actual`.
+const fn scalar(operand: &Measured, role: &'static str) -> Result<f64, Misaligned> {
+    match operand {
+        Measured::Single(value) => Ok(*value),
+        Measured::Indexed(_) => Err(Misaligned::ExtraAxes { role }),
+    }
+}
+
+/// Select the entry of a broadcastable tolerance operand for one key of
+/// `actual`'s axis: indexed operands index per key, unindexed operands
+/// broadcast unchanged.
+fn entry_or_broadcast<'a>(
+    operand: &'a Measured,
+    axis: &IndexTypeRef,
+    variant: &IndexEntryKey,
+) -> Result<&'a Measured, Misaligned> {
+    match operand {
+        Measured::Indexed(indexed) => indexed
+            .index()
+            .matches_ref(axis)
+            .then(|| indexed.get(variant))
+            .flatten()
+            .ok_or_else(|| Misaligned::MissingEntry {
+                operand: indexed.index().clone(),
+                axis: axis.clone(),
+                entry: variant.clone(),
+            }),
+        Measured::Single(_) => Ok(operand),
+    }
 }
 
 /// A failing key of a tolerance assertion, with its numeric detail.
@@ -489,82 +622,59 @@ struct ToleranceFailure {
     detail: String,
 }
 
-/// Why a tolerance assertion could not be decided.
-enum ToleranceError {
-    /// A tolerance computed at runtime is negative.
-    NegativeTolerance(String),
-    /// The operands' shapes contradict their checked types.
-    Invariant(Invariant),
-}
+/// A tolerance computed at runtime is negative: the assertion cannot be
+/// decided.
+struct NegativeTolerance(String);
 
-impl ToleranceError {
+impl NegativeTolerance {
     fn result(self) -> AssertResult {
-        match self {
-            Self::NegativeTolerance(tolerance) => AssertResult::Error {
-                message: format!("tolerance must be non-negative, got {tolerance}"),
-            },
-            Self::Invariant(invariant) => invariant_result(&invariant),
+        AssertResult::Error {
+            message: format!("tolerance must be non-negative, got {}", self.0),
         }
     }
 }
 
-/// Walk a tolerance assertion's operands element-wise, producing the per-key
-/// verdicts (mirroring `actual`'s index structure) plus the detail for every
-/// failing key.
+/// Walk aligned tolerance operands, producing the per-key verdicts
+/// (mirroring `actual`'s index structure) plus the detail for every failing
+/// key.
 fn eval_tolerance_tree(
-    actual: &Measured,
-    expected: &Measured,
-    tolerance: &Measured,
-) -> Result<(Verdicts, Vec<ToleranceFailure>), ToleranceError> {
+    gauges: &Gauges,
+) -> Result<(Verdicts, Vec<ToleranceFailure>), NegativeTolerance> {
     let mut failures = Vec::new();
     let mut path = Vec::new();
-    let tree = tolerance_tree_inner(actual, expected, tolerance, &mut path, &mut failures)?;
+    let tree = tolerance_tree_inner(gauges, &mut path, &mut failures)?;
     Ok((tree, failures))
 }
 
 fn tolerance_tree_inner(
-    actual: &Measured,
-    expected: &Measured,
-    tolerance: &Measured,
+    gauges: &Gauges,
     path: &mut Vec<(IndexTypeRef, IndexEntryKey)>,
     failures: &mut Vec<ToleranceFailure>,
-) -> Result<Verdicts, ToleranceError> {
-    let actual_val = match actual {
-        Measured::Indexed(indexed) => {
+) -> Result<Verdicts, NegativeTolerance> {
+    let Gauge {
+        actual: actual_val,
+        expected: expected_val,
+        tolerance: tolerance_val,
+    } = match gauges {
+        Gauges::Indexed(indexed) => {
             let index_name = indexed.index();
-            let checked = indexed.try_map_ref(|variant, actual_entry| {
-                let expected_entry = tolerance_entry_or_broadcast(expected, index_name, variant)?;
-                let tolerance_entry = tolerance_entry_or_broadcast(tolerance, index_name, variant)?;
+            let checked = indexed.try_map_ref(|variant, entry| {
                 path.push((index_name.clone(), variant.clone()));
-                let result = tolerance_tree_inner(
-                    actual_entry,
-                    expected_entry,
-                    tolerance_entry,
-                    path,
-                    failures,
-                );
+                let result = tolerance_tree_inner(entry, path, failures);
                 path.pop();
                 result
             })?;
             return Ok(Verdicts::Indexed(checked));
         }
-        Measured::Single(value) => *value,
+        Gauges::Single(gauge) => *gauge,
     };
-    let scalar = |operand: &Measured, role: &str| match operand {
-        Measured::Single(value) => Ok(*value),
-        Measured::Indexed(_) => Err(ToleranceError::Invariant(Invariant::violated(
-            format_args!("tolerance {role} has more axes than actual"),
-        ))),
-    };
-    let expected_val = scalar(expected, "expected")?;
-    let tolerance_val = scalar(tolerance, "tolerance")?;
     let tol_display = format!("{tolerance_val}");
 
     // A negative tolerance makes the assertion unsatisfiable (even an
     // exact match fails). Statically-known negatives are rejected at
     // check time (#815); this guards tolerances computed at runtime.
     if tolerance_val < 0.0 {
-        return Err(ToleranceError::NegativeTolerance(tol_display));
+        return Err(NegativeTolerance(tol_display));
     }
 
     let delta = (actual_val - expected_val).abs();
@@ -578,32 +688,6 @@ fn tolerance_tree_inner(
         });
     }
     Ok(Verdicts::Single(ok))
-}
-
-/// Select the entry of a broadcastable tolerance operand for one key of
-/// `actual`'s axis: indexed operands index per key (their axes were checked
-/// statically), unindexed operands broadcast unchanged.
-fn tolerance_entry_or_broadcast<'a>(
-    operand: &'a Measured,
-    axis: &IndexTypeRef,
-    variant: &IndexEntryKey,
-) -> Result<&'a Measured, ToleranceError> {
-    match operand {
-        Measured::Indexed(indexed) => {
-            let index_name = indexed.index();
-            index_name
-                .matches_ref(axis)
-                .then(|| indexed.get(variant))
-                .flatten()
-                .ok_or_else(|| {
-                    ToleranceError::Invariant(Invariant::violated(format_args!(
-                        "tolerance assertion operand over `{index_name}` has no entry `{}` of `{axis}`",
-                        format_indexed_path_part(axis, variant)
-                    )))
-                })
-        }
-        Measured::Single(_) => Ok(operand),
-    }
 }
 
 /// Render tolerance failures: an unindexed assertion reports its detail bare
@@ -663,22 +747,74 @@ mod tests {
             Ok(Measured::Single(value)) if value.to_bits() == 1.0_f64.to_bits()
         ));
         assert!(Measured::try_from_value(RuntimeValue::Bool(true), "actual").is_err());
-        let (verdicts, failures) = eval_tolerance_tree(
-            &Measured::Single(1.0),
+        let gauges = align(
+            Measured::Single(1.0),
             &Measured::Single(1.5),
             &Measured::Single(0.1),
         )
-        .ok()
         .unwrap();
+        let (verdicts, failures) = eval_tolerance_tree(&gauges).ok().unwrap();
         assert_eq!(verdicts, Verdicts::Single(false));
         assert_eq!(failures.len(), 1);
+        let negative = align(
+            Measured::Single(1.0),
+            &Measured::Single(1.0),
+            &Measured::Single(-1.0),
+        )
+        .unwrap();
+        assert!(eval_tolerance_tree(&negative).is_err());
+    }
+
+    #[test]
+    fn tolerance_operands_broadcast_onto_the_actual_axes() {
+        let measured = |values: &[f64]| {
+            Measured::Indexed(IndexedValue::finite_for_test(
+                values.iter().copied().map(Measured::Single).collect(),
+            ))
+        };
+        let gauges = align(
+            measured(&[1.0, 2.0]),
+            &measured(&[1.0, 3.0]),
+            &Measured::Single(0.5),
+        )
+        .unwrap();
+        let (verdicts, failures) = eval_tolerance_tree(&gauges).ok().unwrap();
+        let Verdicts::Indexed(verdicts) = verdicts else {
+            panic!("indexed operands give indexed verdicts");
+        };
+        assert_eq!(
+            verdicts.values().as_slice(),
+            [Verdicts::Single(true), Verdicts::Single(false)]
+        );
+        assert_eq!(failures.len(), 1);
         assert!(matches!(
-            eval_tolerance_tree(
-                &Measured::Single(1.0),
-                &Measured::Single(1.0),
-                &Measured::Single(-1.0),
+            align(
+                Measured::Single(1.0),
+                &measured(&[1.0]),
+                &Measured::Single(0.5)
             ),
-            Err(ToleranceError::NegativeTolerance(_))
+            Err(Misaligned::ExtraAxes { role: "expected" })
         ));
+        assert!(matches!(
+            align(
+                measured(&[1.0, 2.0]),
+                &Measured::Single(1.0),
+                &measured(&[0.5])
+            ),
+            Err(Misaligned::MissingEntry { .. })
+        ));
+    }
+
+    #[test]
+    fn per_variant_conditions_must_be_indexed() {
+        assert!(Verdicts::try_indexed_from_value(RuntimeValue::Bool(true)).is_err());
+        let indexed = IndexedValue::finite_for_test(vec![RuntimeValue::Bool(false)]);
+        assert_eq!(
+            Verdicts::try_indexed_from_value(RuntimeValue::Indexed(indexed))
+                .unwrap()
+                .values()
+                .as_slice(),
+            [Verdicts::Single(false)]
+        );
     }
 }

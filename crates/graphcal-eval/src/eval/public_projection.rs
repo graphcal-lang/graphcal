@@ -204,22 +204,25 @@ fn project_struct<V>(
     path: &Path<'_>,
     mut project_field: impl FnMut(&V, &CheckedType, &Path<'_>) -> Result<Value, Invariant>,
 ) -> Result<Value, Invariant> {
-    let CheckedType::Struct(declared, declared_args) = declared_type else {
-        return Err(mismatch(
-            format_args!("struct `{}`", fields.constructor()),
-            declared_type,
-        ));
+    // The value's nominal application must be the checked one.
+    let (declared, declared_args) = match declared_type {
+        CheckedType::Struct(declared, declared_args)
+            if declared.resolved() == fields.type_name()
+                && declared_args.as_slice() == fields.generic_args() =>
+        {
+            (declared, declared_args)
+        }
+        _ => {
+            return Err(mismatch(
+                format_args!(
+                    "struct `{}` of `{:?}`",
+                    fields.constructor(),
+                    fields.type_name()
+                ),
+                declared_type,
+            ));
+        }
     };
-    if declared.resolved() != fields.type_name()
-        || declared_args.as_slice() != fields.generic_args()
-    {
-        return Err(Invariant::violated(format_args!(
-            "a value of constructor `{}` of `{:?}` was checked as a value of `{:?}`",
-            fields.constructor(),
-            fields.type_name(),
-            declared.resolved()
-        )));
-    }
     let projected = fields
         .typed_fields()
         .map(|(field, value)| {
@@ -443,7 +446,7 @@ mod tests {
             Vec::new(),
         );
         let error = plain(&fields, &other).unwrap_err();
-        assert!(error.contains("was checked as a value of"), "{error}");
+        assert!(error.contains("was checked as a struct value"), "{error}");
     }
 
     #[test]

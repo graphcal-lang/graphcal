@@ -500,7 +500,10 @@ mod tests {
         type Error = &'static str;
 
         fn quantity(&self, node: RuntimeValue) -> Result<FiniteQuantity, &'static str> {
-            node.expect_quantity("test").map_err(|_| "not a quantity")
+            match node {
+                RuntimeValue::Quantity(value) => Ok(value),
+                _ => Err("not a quantity"),
+            }
         }
 
         fn bool(&self, node: RuntimeValue) -> Result<bool, &'static str> {
@@ -552,12 +555,15 @@ mod tests {
         let RuntimeValue::Indexed(indexed) = value else {
             panic!("expected an indexed result");
         };
-        DenseArray::try_from_indexed(indexed, |leaf| leaf.expect_quantity("test"))
-            .unwrap()
-            .data()
-            .iter()
-            .map(|value| value.get())
-            .collect()
+        DenseArray::try_from_indexed(indexed, |leaf| match leaf {
+            RuntimeValue::Quantity(value) => Ok(*value),
+            _ => Err(()),
+        })
+        .unwrap()
+        .data()
+        .iter()
+        .map(|value| value.get())
+        .collect()
     }
 
     #[test]

@@ -160,12 +160,39 @@ impl<'o, 't> Operands<'o, 't> {
         })
     }
 
-    pub(super) fn indexed(
+    /// The quantities of the rank-one indexed value `node` evaluates to.
+    pub(super) fn quantities(
+        &self,
+        node: ScopedNode<'t>,
+    ) -> Result<IndexedValue<FiniteQuantity>, Outcome<SemanticError>> {
+        self.read(
+            node,
+            "a rank-one indexed value of quantities",
+            |value| match value {
+                RuntimeValue::Indexed(indexed) => indexed.try_map(|_, entry| match entry {
+                    RuntimeValue::Quantity(quantity) => Ok(quantity),
+                    other => Err(other),
+                }),
+                other => Err(other),
+            },
+        )
+    }
+
+    /// The rank-one indexed value `node` evaluates to: its entries are not
+    /// indexed further.
+    pub(super) fn rank_one(
         &self,
         node: ScopedNode<'t>,
     ) -> Result<IndexedValue<RuntimeValue>, Outcome<SemanticError>> {
-        self.read(node, "an indexed value", |value| match value {
-            RuntimeValue::Indexed(value) => Ok(value),
+        self.read(node, "a rank-one indexed value", |value| match value {
+            RuntimeValue::Indexed(indexed)
+                if !indexed
+                    .values()
+                    .iter()
+                    .any(|entry| matches!(entry, RuntimeValue::Indexed(_))) =>
+            {
+                Ok(indexed)
+            }
             other => Err(other),
         })
     }
@@ -191,6 +218,17 @@ impl<'o, 't> Operands<'o, 't> {
         })
     }
 
+    /// The position of the key of a `Fin` axis `node` evaluates to.
+    fn fin_position(&self, node: ScopedNode<'t>) -> Result<usize, Outcome<SemanticError>> {
+        self.read(node, "a key of a `Fin` axis", |value| match &value {
+            RuntimeValue::Key(key) => match key.element() {
+                KeyElement::Finite(position) => Ok(position),
+                KeyElement::Named(_) | KeyElement::Coordinate { .. } => Err(value),
+            },
+            _ => Err(value),
+        })
+    }
+
     /// The coordinate of the key of a coordinate axis `node` evaluates to.
     fn coordinate(&self, node: ScopedNode<'t>) -> Result<FiniteQuantity, Outcome<SemanticError>> {
         self.read(node, "a coordinate key", |value| {
@@ -209,26 +247,13 @@ impl<'o, 't> Operands<'o, 't> {
 /// Linear-algebra operands are read as the vectors and matrices their checked
 /// types are.
 impl<'t> super::linear_algebra::LinearOperands<ScopedNode<'t>> for Operands<'_, 't> {
-    fn vector(
+    fn read_operand<T>(
         &self,
         node: ScopedNode<'t>,
-    ) -> Result<super::linear_algebra::Vector, Outcome<SemanticError>> {
-        self.read(
-            node,
-            "a rank-1 quantity array",
-            super::linear_algebra::Vector::try_from_value,
-        )
-    }
-
-    fn matrix(
-        &self,
-        node: ScopedNode<'t>,
-    ) -> Result<super::linear_algebra::Matrix, Outcome<SemanticError>> {
-        self.read(
-            node,
-            "a rank-2 quantity array",
-            super::linear_algebra::Matrix::try_from_value,
-        )
+        expected: &str,
+        read: impl FnOnce(RuntimeValue) -> Result<T, RuntimeValue>,
+    ) -> Result<T, Outcome<SemanticError>> {
+        self.read(node, expected, read)
     }
 }
 
@@ -387,12 +412,7 @@ pub(super) fn int<'t>(
                 .map_err(Outcome::Failed)
         }
         IExpr::FinPosition(arg) => {
-            let key = operands.key(arg)?;
-            let KeyElement::Finite(position) = key.element() else {
-                return Err(ctx
-                    .internal_error("to_int() received a non-Fin key", arg.span())
-                    .into());
-            };
+            let position = operands.fin_position(arg)?;
             i64::try_from(position)
                 .map_err(|_| {
                     ctx.internal_error(

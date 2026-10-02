@@ -2050,9 +2050,9 @@ order: `report_form_state.js`, `report_outline_state.js`, `report_results.js`,
 367. `crates/graphcal-eval/src/eval_expr/context.rs`
 368. `crates/graphcal-eval/src/eval_expr/arithmetic.rs`
 369. `crates/graphcal-eval/src/eval_expr/linear_algebra.rs`
-370. `crates/graphcal-eval/src/eval_expr/unit_scale.rs`
-371. `crates/graphcal-eval/src/eval_expr/presentation.rs`
-372. `crates/graphcal-eval/src/eval_expr/operations.rs`
+370. `crates/graphcal-eval/src/eval_expr/operations.rs`
+371. `crates/graphcal-eval/src/eval_expr/unit_scale.rs`
+372. `crates/graphcal-eval/src/eval_expr/presentation.rs`
 373. `crates/graphcal-eval/src/eval_expr/hir_eval.rs`
 374. `crates/graphcal-eval/src/eval_expr/mod.rs`
 375. `crates/graphcal-eval/src/eval/runtime/assertions.rs`

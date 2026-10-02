@@ -19,7 +19,6 @@ use std::collections::HashMap;
 use graphcal_compiler::resolved_name::ResolvedDeclName;
 use graphcal_compiler::syntax::type_name::FieldName;
 
-use crate::invariant::Invariant;
 use crate::presentation_evidence::{
     LeafKind, PendingLeaf, PendingQuantityDisplay, PresentationLeaf, QuantityDisplay, ResolvedLeaf,
 };
@@ -133,24 +132,20 @@ impl<L> Presented<L> {
     ///
     /// # Errors
     ///
-    /// Returns an [`Invariant`] when a leaf of `value` is not of the leaf's
-    /// kind: the checker admits a display unit only on quantities and a
-    /// display time zone only on datetimes.
-    pub fn with_leaf(value: RuntimeValue, leaf: L) -> Result<Self, Invariant>
+    /// Returns `value` back when a leaf of it is not of the leaf's kind: the
+    /// checker admits a display unit only on quantities and a display time
+    /// zone only on datetimes.
+    pub fn with_leaf(value: RuntimeValue, leaf: L) -> Result<Self, RuntimeValue>
     where
         L: PresentationLeaf,
     {
-        let kind = leaf.kind();
-        if leaves_are(&value, kind) {
+        if leaves_are(&value, leaf.kind()) {
             Ok(Self(Node::Whole {
                 value,
                 leaf: Some(leaf),
             }))
         } else {
-            Err(Invariant::violated(format_args!(
-                "a {kind:?} presentation reached {}",
-                value.describe()
-            )))
+            Err(value)
         }
     }
 
@@ -271,8 +266,8 @@ impl<L> Presented<L> {
     ///
     /// # Errors
     ///
-    /// Returns an [`Invariant`] when `value` is not of this value's type.
-    pub(crate) fn present_alike(&self, value: RuntimeValue) -> Result<Self, Invariant>
+    /// Returns the part of `value` that is not of this value's type.
+    pub(crate) fn present_alike(&self, value: RuntimeValue) -> Result<Self, RuntimeValue>
     where
         L: PresentationLeaf,
     {
@@ -312,10 +307,7 @@ impl<L> Presented<L> {
             }
             (_, value) => value,
         };
-        Err(Invariant::violated(format_args!(
-            "a presentation of another type was applied to {}",
-            other.describe()
-        )))
+        Err(other)
     }
 
     /// This value, or, when it has no presentation, the value presented as
@@ -324,8 +316,8 @@ impl<L> Presented<L> {
     ///
     /// # Errors
     ///
-    /// Returns an [`Invariant`] when `initial` is not of this value's type.
-    pub(crate) fn with_default_presentation(self, initial: &Self) -> Result<Self, Invariant>
+    /// Returns the part of this value that is not of `initial`'s type.
+    pub(crate) fn with_default_presentation(self, initial: &Self) -> Result<Self, RuntimeValue>
     where
         L: PresentationLeaf,
     {
