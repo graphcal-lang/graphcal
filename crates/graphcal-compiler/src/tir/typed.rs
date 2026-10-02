@@ -276,6 +276,7 @@ impl TirDraft {
     ) -> Result<InstantiatedTir, SemanticError> {
         let mut tir = self.finish();
         specialization::instantiate_semantic_edges(&mut tir, src)?;
+        augment_runtime_deps_for_dynamic_units(&mut tir);
         overrides.reconcile(&mut tir);
         Ok(InstantiatedTir { tir })
     }
@@ -317,7 +318,6 @@ fn finalize_hir_dag(
     cancellation: &crate::cancellation::CancellationToken,
 ) -> Result<(), Outcome<SemanticError>> {
     cancellation.checkpoint()?;
-    augment_runtime_deps_for_dynamic_units(dag);
     dag.populate_projectable_outputs(surface);
     cancellation.checkpoint()?;
     validate_public_generic_defaults(dag, surface, module_ctx, src)?;

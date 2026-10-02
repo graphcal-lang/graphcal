@@ -10,25 +10,46 @@ use super::model::{DagTIR, ResolvedDagDependencies};
 use super::module_type_context::ModuleTypeContext;
 use super::type_expr::{internal_error, module_resolve_error};
 
-pub(super) fn augment_runtime_deps_for_dynamic_units(dag: &mut DagTIR) {
-    if dag.semantic.dynamic_unit_scales.is_empty() {
-        return;
-    }
+/// Make every param default and node formula that reads a dynamic unit's
+/// scale depend on the declarations that scale reads.
+///
+/// A unit's scale is evaluated in the scope of the DAG instance defining it
+/// (its owner), so its `@`-references are resolved in that DAG's frame, which
+/// is not the frame of a reader using it through an instance projection
+/// (`1.0 inst::qu`). Runs after instantiation, when every unit owner exists.
+pub(super) fn augment_runtime_deps_for_dynamic_units(tir: &mut super::UncheckedTir) {
     let scale_deps: HashMap<crate::resolved_name::ResolvedUnitName, BTreeSet<ResolvedDeclName>> =
-        dag.semantic
-            .dynamic_unit_scales
+        tir.dags
             .iter()
-            .map(|(name, entry)| {
-                (
-                    name.clone(),
-                    crate::hir::expr::collect_expr_dependencies(&entry.expr)
-                        .graph_refs
-                        .iter()
-                        .map(|reference| dag.frame.resolve(reference))
-                        .collect(),
-                )
+            .flat_map(|(_, dag)| {
+                let frame = dag.frame();
+                dag.semantic()
+                    .dynamic_unit_scales
+                    .iter()
+                    .map(move |(name, entry)| {
+                        (
+                            name.clone(),
+                            crate::hir::expr::collect_expr_dependencies(&entry.expr)
+                                .graph_refs
+                                .iter()
+                                .map(|reference| frame.resolve(reference))
+                                .collect(),
+                        )
+                    })
             })
             .collect();
+    if scale_deps.is_empty() {
+        return;
+    }
+    for dag in tir.dags.locals_mut() {
+        add_dynamic_unit_reads(dag, &scale_deps);
+    }
+}
+
+fn add_dynamic_unit_reads(
+    dag: &mut DagTIR,
+    scale_deps: &HashMap<crate::resolved_name::ResolvedUnitName, BTreeSet<ResolvedDeclName>>,
+) {
     let runtime_units = dag
         .params()
         .filter_map(|entry| {
