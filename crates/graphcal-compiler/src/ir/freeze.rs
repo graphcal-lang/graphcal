@@ -10,6 +10,7 @@ use crate::diagnostic_anchor::DiagnosticAnchor;
 use crate::ir::instance::identity::instance_declaration;
 use crate::outcome::Outcome;
 use crate::semantic_error::SemanticError;
+use crate::semantic_error::name::{NameError, PlotPropertyContext};
 use crate::source_id::SourceId;
 use crate::syntax::module_name::ScopedName;
 use crate::syntax::span::Span;
@@ -20,8 +21,8 @@ use super::{
     extern_fns::resolve_plugin_imports,
     model::{
         AssertEntry, ConstEntry, DynamicUnitScaleEntry, FigureEntry, HirDag, HirDecl, LayerEntry,
-        LoweredPlotBody, LoweredPlotField, LoweredPlotProperty, NodeEntry, ParamEntry,
-        ParsedExpectedFailMetadata, PlotEntry, ResolvedExpectedFailMetadata, UnfrozenIR,
+        LoweredPlotBody, LoweredPlotField, NodeEntry, ParamEntry, ParsedExpectedFailMetadata,
+        PlotEntry, ResolvedExpectedFailMetadata, UnfrozenIR,
     },
 };
 
@@ -68,6 +69,15 @@ impl UnfrozenIR {
     ) -> Result<HirDag, Outcome<SemanticError>> {
         cancellation.checkpoint()?;
         let resolver = definitions.resolver();
+        // The one lookup of this DAG by identity: everything below reads its
+        // module through the handle.
+        let module = resolver.module_handle(owner).ok_or_else(|| {
+            SemanticError::internal_error(
+                format!("DAG `{owner}` is not a module of its resolver"),
+                src,
+                DiagnosticAnchor::WholeFile,
+            )
+        })?;
         let time_zones = crate::semantic::time_zone::TimeZoneRegistry::bundled();
         // Entries already visible in this IR (including prefixed include
         // instances and dag self-imports) bind their written names to
@@ -82,7 +92,7 @@ impl UnfrozenIR {
                 )
             })
             .collect::<HashMap<_, _>>();
-        let nominal_types = self.lower_nominal_types(owner, definitions, src, cancellation)?;
+        let nominal_types = self.lower_nominal_types(module, definitions, src, cancellation)?;
         let table = DeclTable::new(owner, self.decls).map_err(|error| {
             SemanticError::internal_error(error.to_string(), src, DiagnosticAnchor::WholeFile)
         })?;
@@ -174,50 +184,57 @@ impl UnfrozenIR {
             })
         };
 
-        let dynamic_unit_scales =
-            self.dynamic_unit_scales
-                .iter()
-                .map(|entry| {
-                    cancellation.checkpoint()?;
-                    let unit = resolver
-                    .resolve_unit_path(&entry.unit, &entry.spelling.to_name_path())
-                    .map(crate::resolve::symbols::SymbolRef::into_resolved)
-                    .map_err(|err| SemanticError::internal_error(format!(
-                            "registered dynamic unit `{}` did not resolve canonically: {err}",
-                            entry.spelling
-                        ), src, crate::diagnostic_anchor::DiagnosticAnchor::Source(entry.span)))?;
-                    Ok(DynamicUnitScaleEntry {
-                        unit,
-                        spelling: entry.spelling.clone(),
-                        expr: lower_scoped(&entry.expr)?,
-                        span: entry.span,
-                        src: entry.src,
-                    })
+        let dynamic_unit_scales = self
+            .dynamic_unit_scales
+            .iter()
+            .map(|entry| {
+                cancellation.checkpoint()?;
+                Ok(DynamicUnitScaleEntry {
+                    unit: entry.unit.clone(),
+                    spelling: entry.spelling.clone(),
+                    expr: lower_scoped(&entry.expr)?,
+                    span: entry.span,
+                    src: entry.src,
                 })
-                .collect::<Result<Vec<_>, Outcome<SemanticError>>>()?;
+            })
+            .collect::<Result<Vec<_>, Outcome<SemanticError>>>()?;
 
-        let lower_fields = |fields: &[crate::desugar::desugared_ast::PlotField],
-                            resolution_owner: &crate::dag_id::DagId,
-                            classify: fn(
-            crate::syntax::ast::PlotPropertyName,
-        ) -> LoweredPlotProperty| {
-            fields
-                .iter()
-                .map(|field| {
-                    Ok(LoweredPlotField {
-                        property: classify(field.name.value.clone()),
-                        name_span: field.name.span,
-                        value: lower_in(&field.value, resolution_owner)?,
-                    })
-                })
-                .collect::<Result<Vec<_>, SemanticError>>()
-        };
+        let lower_mark_fields =
+            |fields: &[crate::desugar::desugared_ast::PlotField],
+             resolution_owner: &crate::dag_id::DagId| {
+                lower_plot_fields(
+                    fields,
+                    PlotPropertyContext::MarkBlock,
+                    crate::plot_props::MarkProperty::from_name,
+                    |value| lower_in(value, resolution_owner),
+                    src,
+                )
+            };
+        let lower_plot_level_fields =
+            |fields: &[crate::desugar::desugared_ast::PlotField],
+             resolution_owner: &crate::dag_id::DagId| {
+                lower_plot_fields(
+                    fields,
+                    PlotPropertyContext::PlotDeclaration,
+                    crate::plot_props::PlotProperty::from_name,
+                    |value| lower_in(value, resolution_owner),
+                    src,
+                )
+            };
         let lower_composition_fields =
-            |fields: &InScope<Vec<crate::desugar::desugared_ast::PlotField>>| {
-                lower_fields(
+            |fields: &InScope<Vec<crate::desugar::desugared_ast::PlotField>>,
+             context: PlotPropertyContext| {
+                lower_plot_fields(
                     &fields.syntax,
-                    &fields.resolution_owner,
-                    LoweredPlotProperty::composition,
+                    context,
+                    |name| {
+                        crate::plot_props::CompositionProperty::from_name(name).filter(|property| {
+                            context != PlotPropertyContext::FigureDeclaration
+                                || property.applies_to_figure()
+                        })
+                    },
+                    |value| lower_in(value, &fields.resolution_owner),
+                    src,
                 )
             };
         // Lower kind by kind, preserving the established diagnostic order when
@@ -307,15 +324,13 @@ impl UnfrozenIR {
                         Decl::Plot(PlotEntry {
                             body: LoweredPlotBody {
                                 encodings,
-                                mark_properties: lower_fields(
+                                mark_properties: lower_mark_fields(
                                     &body.mark_properties,
                                     resolution_owner,
-                                    LoweredPlotProperty::mark,
                                 )?,
-                                properties: lower_fields(
+                                properties: lower_plot_level_fields(
                                     &body.properties,
                                     resolution_owner,
-                                    LoweredPlotProperty::plot,
                                 )?,
                             },
                             identity: entry.identity,
@@ -324,12 +339,18 @@ impl UnfrozenIR {
                         })
                     }
                     Decl::Figure(entry) => Decl::Figure(FigureEntry {
-                        fields: lower_composition_fields(&entry.fields)?,
+                        fields: lower_composition_fields(
+                            &entry.fields,
+                            PlotPropertyContext::FigureDeclaration,
+                        )?,
                         identity: entry.identity,
                         plot_names: entry.plot_names,
                     }),
                     Decl::Layer(entry) => Decl::Layer(LayerEntry {
-                        fields: lower_composition_fields(&entry.fields)?,
+                        fields: lower_composition_fields(
+                            &entry.fields,
+                            PlotPropertyContext::LayerDeclaration,
+                        )?,
                         identity: entry.identity,
                         plot_names: entry.plot_names,
                     }),
@@ -432,6 +453,7 @@ impl UnfrozenIR {
 
         Ok(HirDag {
             dag_id: owner.clone(),
+            module,
             extern_functions,
             definitions,
             display_dimensions,
@@ -456,7 +478,7 @@ impl UnfrozenIR {
     /// that include's canonical substitution.
     fn lower_nominal_types(
         &self,
-        owner: &crate::dag_id::DagId,
+        module: crate::resolve::ModuleHandle,
         definitions: &super::static_definitions::StaticDefinitionEvaluator<'_>,
         src: SourceId,
         cancellation: &crate::cancellation::CancellationToken,
@@ -466,11 +488,10 @@ impl UnfrozenIR {
         };
 
         let resolver = definitions.resolver();
-        let Some(symbols) = resolver.symbols(owner) else {
-            return Ok(crate::hir::nominal::NominalTypeRegistry::default());
-        };
-        let lowering = NominalLowering {
+        let symbols = resolver.module(module).symbols();
+        let lowering = |declaring_module| NominalLowering {
             resolver,
+            module: resolver.module(declaring_module),
             cancellation,
         };
         let invariant = |message: String, span: Span| {
@@ -491,7 +512,8 @@ impl UnfrozenIR {
                     &identity,
                     crate::resolve::symbols::StaticProjection::template,
                 );
-                let Some((declaration, declaration_src)) = definitions.type_declaration(source)
+                let Some((declaration, declaration_src, declaring_module)) =
+                    definitions.type_declaration(source)
                 else {
                     return Err(invariant(
                         format!("nominal type `{source}` has no source declaration"),
@@ -506,7 +528,7 @@ impl UnfrozenIR {
                             projection.template().clone(),
                             declaration.name.span,
                             declaration_src,
-                            lowering,
+                            lowering(declaring_module),
                         )?;
                         let substitution = self
                             .projection_substitution(symbols, projection)
@@ -518,16 +540,20 @@ impl UnfrozenIR {
                             })?;
                         specialize_nominal_type(
                             &template,
-                            identity,
+                            &identity,
                             &substitution,
                             src,
                             symbol.span(),
                         )
                         .map_err(|error| invariant(error.to_string(), symbol.span()))?
                     }
-                    None => {
-                        lower_type_declaration(declaration, identity, symbol.span(), src, lowering)?
-                    }
+                    None => lower_type_declaration(
+                        declaration,
+                        identity,
+                        symbol.span(),
+                        src,
+                        lowering(declaring_module),
+                    )?,
                 };
                 lowered.insert(definition).map_err(|error| {
                     invariant(
@@ -613,4 +639,39 @@ impl ParsedExpectedFailMetadata {
             attribute_span,
         })
     }
+}
+
+/// Lower the fields of one plot-family block, classifying each property name
+/// for the block.
+///
+/// # Errors
+///
+/// Returns [`NameError::InvalidPlotProperty`] for a name `classify` rejects,
+/// before its value is lowered, or the value's lowering error.
+fn lower_plot_fields<P>(
+    fields: &[crate::desugar::desugared_ast::PlotField],
+    context: PlotPropertyContext,
+    classify: impl Fn(&str) -> Option<P>,
+    lower_value: impl Fn(&Expr) -> Result<crate::hir::expr::CheckedExpr, SemanticError>,
+    src: SourceId,
+) -> Result<Vec<LoweredPlotField<P>>, SemanticError> {
+    fields
+        .iter()
+        .map(|field| {
+            let property = classify(field.name.value.as_str()).ok_or_else(|| {
+                SemanticError::located(
+                    src,
+                    field.name.span,
+                    NameError::InvalidPlotProperty {
+                        property: field.name.value.clone(),
+                        context,
+                    },
+                )
+            })?;
+            Ok(LoweredPlotField {
+                property,
+                value: lower_value(&field.value)?,
+            })
+        })
+        .collect()
 }

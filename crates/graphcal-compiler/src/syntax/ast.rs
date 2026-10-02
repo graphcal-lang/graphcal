@@ -40,11 +40,11 @@ mod tests {
                 attributes: vec![],
                 kind: DeclKind::Param(ParamDecl {
                     name: Spanned::new(DeclName::expect_valid("x"), Span::new(6, 1)),
-                    type_ann: TypeExpr {
+                    type_ann: TypeExpr::unindexed(ElementTypeExpr {
                         kind: TypeExprKind::Dimensionless,
                         constraints: vec![],
                         span: Span::new(9, 15),
-                    },
+                    }),
                     value: Some(Expr::new(ExprKind::Number(1.0), Span::new(27, 3))),
                 }),
                 span: Span::new(0, 31),

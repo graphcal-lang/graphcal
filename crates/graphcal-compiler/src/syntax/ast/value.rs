@@ -328,39 +328,62 @@ impl IndexExpr {
     }
 }
 
-/// E.g., `Length`, `Dimensionless`, `Length^3 / Time^2`
+/// A type expression: an element type with an optional index suffix.
 ///
-/// Optionally carries domain constraints: `Mass(min: 100 kg, max: 2000 kg)`.
+/// E.g., `Length`, `Dimensionless`, `Length^3 / Time^2`, `Velocity[Maneuver]`.
+/// The index suffix is a field, not a variant of the element, so an indexed
+/// type whose element is itself indexed is unrepresentable.
 #[derive(Debug, Clone, PhaseLift, FormatEquivalent)]
 #[phase_lift(from = Raw, to = Desugared)]
 #[fe(phase = Raw)]
 pub struct TypeExpr<P: Phase = Raw> {
-    pub kind: TypeExprKind<P>,
-    /// Optional domain constraints on the type.
-    pub constraints: Vec<DomainBound<P>>,
+    /// The element type, with its domain constraints.
+    pub element: ElementTypeExpr<P>,
+    /// The `[Index, ...]` suffix of an indexed type.
+    pub indexes: Option<NonEmpty<IndexExpr>>,
+    /// The whole type expression, including the index suffix.
     #[fe(skip)]
     pub(crate) span: Span,
 }
 
 impl<P: Phase> TypeExpr<P> {
+    /// An unindexed type expression.
+    #[must_use]
+    pub(crate) const fn unindexed(element: ElementTypeExpr<P>) -> Self {
+        let span = element.span;
+        Self {
+            element,
+            indexes: None,
+            span,
+        }
+    }
+
     /// The domain bounds attached to this type expression.
     ///
-    /// Bounds on an indexed type (`Velocity[Maneuver](min: 0.0 m/s)`) are
-    /// parsed onto the base type expression, so this looks through one
-    /// `Indexed` wrapper when the outer expression carries none.
+    /// Bounds are written on the element type, before any index suffix
+    /// (`Velocity(min: 0.0 m/s)[Maneuver]`).
     #[must_use]
     pub(crate) fn domain_bounds(&self) -> &[DomainBound<P>] {
-        if !self.constraints.is_empty() {
-            return &self.constraints;
-        }
-        match &self.kind {
-            TypeExprKind::Indexed { base, .. } => &base.constraints,
-            _ => &[],
-        }
+        &self.element.constraints
     }
 }
 
-/// The kind of a type expression.
+/// The element type of a [`TypeExpr`]: everything but the index suffix.
+///
+/// Optionally carries domain constraints: `Mass(min: 100 kg, max: 2000 kg)`.
+#[derive(Debug, Clone, PhaseLift, FormatEquivalent)]
+#[phase_lift(from = Raw, to = Desugared)]
+#[fe(phase = Raw)]
+pub struct ElementTypeExpr<P: Phase = Raw> {
+    pub kind: TypeExprKind<P>,
+    /// Optional domain constraints on the type.
+    pub constraints: Vec<DomainBound<P>>,
+    /// The element type, including its domain constraints.
+    #[fe(skip)]
+    pub(crate) span: Span,
+}
+
+/// The kind of an element type expression.
 #[derive(Debug, Clone, PhaseLift, FormatEquivalent)]
 #[phase_lift(from = Raw, to = Desugared)]
 #[fe(phase = Raw)]
@@ -402,11 +425,6 @@ pub enum TypeExprKind<P: Phase = Raw> {
     },
     /// A dimension expression like `Length`, `Length^2`, `Mass * Length / Time^2`
     DimExpr(DimExpr),
-    /// An indexed type such as `Velocity[Maneuver]`, `Dimensionless[Fin(3)]`, or `D[I]`
-    Indexed {
-        base: Box<TypeExpr<P>>,
-        indexes: NonEmpty<IndexExpr>,
-    },
     /// A user-defined generic type application like `Vec3<Length, ECI>` or
     /// `FixedVec<3>`.
     /// Built-in parameterized types have their own variants instead — see

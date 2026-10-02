@@ -38,6 +38,7 @@ pub mod exports;
 mod imports;
 mod lookup;
 pub(crate) mod mint;
+pub mod module_table;
 pub mod namespace;
 pub mod prelude;
 mod projection;
@@ -48,14 +49,14 @@ pub mod tables;
 #[cfg(test)]
 mod tests;
 
-use std::collections::HashMap;
-
 use crate::dag_id::DagId;
 use crate::resolved_name::ResolvedName;
 use crate::syntax::module_name::ModuleAliasName;
 use crate::syntax::names::NameDef;
 
 use self::error::ModuleResolveError;
+pub use self::module_table::ModuleHandle;
+use self::module_table::ModuleTable;
 use self::scope::{ModuleAliasRole, ModuleAliasTarget, ModuleScope, PluginAliasTarget};
 use self::symbols::{ModuleSymbols, SymbolRef};
 use self::tables::NamespaceTables;
@@ -81,16 +82,72 @@ impl ModuleEntry {
     }
 }
 
+/// One module of a [`ModuleResolver`], reached through its [`ModuleHandle`].
+///
+/// Every query is total: the module exists by construction of the handle.
+#[derive(Debug, Clone, Copy)]
+pub struct ModuleRef<'r> {
+    owner: &'r DagId,
+    entry: &'r ModuleEntry,
+}
+
+impl<'r> ModuleRef<'r> {
+    /// The module's canonical identity.
+    #[must_use]
+    pub const fn owner(self) -> &'r DagId {
+        self.owner
+    }
+
+    /// The module's own declarations.
+    #[must_use]
+    pub const fn symbols(self) -> &'r ModuleSymbols {
+        &self.entry.symbols
+    }
+
+    /// Definition or import span occupying `(namespace, name)` in this
+    /// module, if any binding occupies it.
+    #[must_use]
+    pub(crate) fn visible_span(
+        self,
+        namespace: crate::resolve::namespace::Namespace,
+        name: &crate::syntax::names::NameAtom,
+    ) -> Option<crate::syntax::span::Span> {
+        self.entry
+            .symbols
+            .occupant(namespace, name)
+            .or_else(|| self.entry.scope.occupant(namespace, name))
+            .map(|occupant| occupant.span)
+    }
+}
+
 /// Project-wide module resolver backed by canonical [`DagId`] identities.
 ///
 /// Built by [`builder::SymbolTables`] and [`builder::ScopeBuilder::freeze`];
 /// immutable once built.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct ModuleResolver {
-    modules: HashMap<DagId, ModuleEntry>,
+    modules: ModuleTable<ModuleEntry>,
 }
 
 impl ModuleResolver {
+    /// The handle of the module `owner`, if the resolver knows it.
+    ///
+    /// This is the one lookup by identity; every query through the handle is
+    /// total.
+    #[must_use]
+    pub fn module_handle(&self, owner: &DagId) -> Option<ModuleHandle> {
+        self.modules.handle(owner)
+    }
+
+    /// The module this resolver issued `handle` for.
+    #[must_use]
+    pub fn module(&self, handle: ModuleHandle) -> ModuleRef<'_> {
+        ModuleRef {
+            owner: self.modules.owner(handle),
+            entry: self.modules.entry(handle),
+        }
+    }
+
     /// Role of one source-visible module alias in the owner's Term scope.
     #[must_use]
     pub(crate) fn module_alias_role(

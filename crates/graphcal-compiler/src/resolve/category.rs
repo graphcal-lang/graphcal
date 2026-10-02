@@ -53,6 +53,19 @@ pub enum ExportedImportItemKind {
     Index,
 }
 
+impl std::fmt::Display for ExportedImportItemKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Decl(kind) => kind.fmt(f),
+            Self::Constructor => f.write_str("constructor"),
+            Self::Dimension => f.write_str("dimension"),
+            Self::Unit(_) => f.write_str("unit"),
+            Self::Type => f.write_str("type"),
+            Self::Index => f.write_str("index"),
+        }
+    }
+}
+
 /// Semantic target category produced by crossing an include projection boundary.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum IncludeProjection {
@@ -120,7 +133,7 @@ impl ExportedImportItemKind {
 
 /// One of the resolver's per-namespace symbol tables.
 ///
-/// Diagnostics render it with the historical table label.
+/// Diagnostics render it with the user-facing category of its declarations.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SymbolTable {
     Decl,
@@ -134,12 +147,12 @@ pub enum SymbolTable {
 impl std::fmt::Display for SymbolTable {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {
-            Self::Decl => "DeclName",
-            Self::Constructor => "ConstructorName",
-            Self::Dimension => "DimName",
-            Self::StructType => "StructTypeName",
-            Self::Index => "IndexName",
-            Self::Unit => "UnitName",
+            Self::Decl => "declaration",
+            Self::Constructor => "constructor",
+            Self::Dimension => "dimension",
+            Self::StructType => "type",
+            Self::Index => "index",
+            Self::Unit => "unit",
         })
     }
 }

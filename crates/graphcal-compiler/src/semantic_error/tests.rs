@@ -755,9 +755,7 @@ fn name_payloads_render_their_text_as_before() {
     for (context, expected) in contexts {
         assert_eq!(context.to_string(), expected);
         let error = NameError::InvalidPlotProperty {
-            property: crate::ir::model::LoweredPlotProperty::Unknown(
-                crate::syntax::ast::PlotPropertyName::expect_valid("bogus"),
-            ),
+            property: crate::syntax::ast::PlotPropertyName::expect_valid("bogus"),
             context,
         };
         assert_eq!(
@@ -772,9 +770,7 @@ fn name_payloads_render_their_text_as_before() {
     }
     assert!(
         NameError::InvalidPlotProperty {
-            property: crate::ir::model::LoweredPlotProperty::Unknown(
-                crate::syntax::ast::PlotPropertyName::expect_valid("bogus"),
-            ),
+            property: crate::syntax::ast::PlotPropertyName::expect_valid("bogus"),
             context: PlotPropertyContext::FigureDeclaration,
         }
         .help()
@@ -825,7 +821,6 @@ fn plugin_payloads_render_their_text_as_before() {
         ExternSignatureError::NotARecordType(StructTypeName::expect_valid("Pair")),
         ExternSignatureError::UnsupportedStructField(FieldName::expect_valid("x")),
         ExternSignatureError::ArrayAxesMustBeBinders,
-        ExternSignatureError::ArrayWithoutAxes,
         ExternSignatureError::ArrayElementKind,
     ];
     let texts: HashSet<String> = errors.iter().map(ToString::to_string).collect();

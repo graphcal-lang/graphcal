@@ -1,12 +1,9 @@
-//! Visitor traits for recursive traversal of [`ExprKind`] trees.
+//! Visitor trait for read-only recursive traversal of [`ExprKind`] trees.
 //!
-//! These traits eliminate the need for hand-written recursive match expressions
-//! across the codebase. Two traits are provided:
+//! `ExprVisitor` eliminates the need for hand-written recursive match
+//! expressions in read-only traversals (reference collection, validation).
 //!
-//! - `ExprVisitor` for read-only traversals (reference collection, validation)
-//! - [`ExprVisitorMut`] for in-place rewriting (name prefixing, qualification rewriting)
-//!
-//! Both traits are generic over the AST [`Phase`]: a single visitor can walk
+//! The trait is generic over the AST [`Phase`]: a single visitor can walk
 //! either `Expr<Raw>` (parser output, surface-aware tooling) or
 //! `Expr<Desugared>` (post-desugar consumers). The dispatch logic is
 //! phase-invariant — variants and field shapes are identical across phases —
@@ -164,10 +161,10 @@ pub trait ExprVisitor<P: Phase> {
     }
 
     fn visit_type_expr(&mut self, type_expr: &TypeExpr<P>) -> Result<(), Self::Error> {
-        for bound in &type_expr.constraints {
+        for bound in &type_expr.element.constraints {
             self.visit_expr(&bound.value)?;
         }
-        match &type_expr.kind {
+        match &type_expr.element.kind {
             TypeExprKind::DatetimeApplication { type_args } => {
                 for arg in type_args {
                     self.visit_type_expr(arg)?;
@@ -180,7 +177,6 @@ pub trait ExprVisitor<P: Phase> {
             | TypeExprKind::KeyApplication { generic_args } => {
                 self.visit_generic_args(generic_args)?;
             }
-            TypeExprKind::Indexed { base, .. } => self.visit_type_expr(base)?,
             TypeExprKind::IndexLabel { .. }
             | TypeExprKind::Dimensionless
             | TypeExprKind::Bool
@@ -282,228 +278,6 @@ pub trait ExprVisitor<P: Phase> {
         self.visit_expr(scrutinee)?;
         for arm in arms {
             self.visit_expr(&arm.body)?;
-        }
-        Ok(())
-    }
-}
-
-/// Mutable visitor for in-place rewriting of [`Expr`] trees, generic over [`Phase`].
-///
-/// Same structure as `ExprVisitor` but takes `&mut Expr<P>` references.
-pub trait ExprVisitorMut<P: Phase> {
-    type Error;
-
-    fn visit_expr_mut(&mut self, expr: &mut Expr<P>) -> Result<(), Self::Error> {
-        self.dispatch_mut(expr)
-    }
-
-    /// Dispatches to the appropriate handler based on [`ExprKind`].
-    /// Typically not overridden.
-    ///
-    /// Grows the stack on demand: visitors recurse once per expression-tree
-    /// level, and left-nested operator chains make that depth unbounded.
-    fn dispatch_mut(&mut self, expr: &mut Expr<P>) -> Result<(), Self::Error> {
-        crate::stack::with_stack_growth(|| self.dispatch_mut_inner(expr))
-    }
-
-    /// Body of [`Self::dispatch_mut`]. Not meant to be overridden or called
-    /// directly — call [`Self::dispatch_mut`] so the stack-growth guard runs.
-    fn dispatch_mut_inner(&mut self, expr: &mut Expr<P>) -> Result<(), Self::Error> {
-        match &mut expr.kind {
-            ExprKind::Number(_)
-            | ExprKind::Integer(_)
-            | ExprKind::Bool(_)
-            | ExprKind::StringLiteral(_)
-            | ExprKind::QuantityLiteral { .. } => Ok(()),
-
-            ExprKind::UnresolvedRef(_) => self.visit_unresolved_ref_mut(expr),
-            ExprKind::GraphRef(_) => self.visit_graph_ref_mut(expr),
-            ExprKind::InlineDagRef { .. } => self.visit_inline_dag_ref_mut(expr),
-
-            ExprKind::FnCall { .. } => self.visit_fn_call_mut(expr),
-
-            ExprKind::BinOp { lhs, rhs, .. } => {
-                self.visit_expr_mut(lhs)?;
-                self.visit_expr_mut(rhs)
-            }
-            ExprKind::UnaryOp { operand, .. } => self.visit_expr_mut(operand),
-            ExprKind::If {
-                condition,
-                then_branch,
-                else_branch,
-            } => {
-                self.visit_expr_mut(condition)?;
-                self.visit_expr_mut(then_branch)?;
-                self.visit_expr_mut(else_branch)
-            }
-            ExprKind::Convert { expr: inner, .. }
-            | ExprKind::DisplayTimezone { expr: inner, .. }
-            | ExprKind::FieldAccess { expr: inner, .. } => self.visit_expr_mut(inner),
-
-            ExprKind::IndexAccess { .. } => self.visit_index_access_mut(expr),
-
-            ExprKind::ConstructorCall {
-                generic_args,
-                fields,
-                ..
-            } => {
-                Self::visit_generic_args_mut(self, generic_args)?;
-                for field in fields {
-                    self.visit_expr_mut(&mut field.value)?;
-                }
-                Ok(())
-            }
-
-            ExprKind::MapLiteral { .. } => self.visit_map_literal_mut(expr),
-            ExprKind::Sugar(_) => self.visit_sugar_mut(expr),
-
-            ExprKind::ForComp { .. } => self.visit_for_comp_mut(expr),
-            ExprKind::Scan {
-                source, init, body, ..
-            } => {
-                self.visit_expr_mut(source)?;
-                self.visit_expr_mut(init)?;
-                self.visit_expr_mut(body)
-            }
-            ExprKind::Unfold { .. } => self.visit_unfold_mut(expr),
-            ExprKind::KeyForm { arg, .. } => self.visit_expr_mut(arg),
-            ExprKind::Match { .. } => self.visit_match_mut(expr),
-        }
-    }
-
-    // -- Leaf handlers for mutable visitor (default: no-op) --
-
-    fn visit_graph_ref_mut(&mut self, _expr: &mut Expr<P>) -> Result<(), Self::Error> {
-        Ok(())
-    }
-
-    /// Called for unresolved reference paths (`Foo`, `Foo#Bar`, ...). Leaf
-    /// node — classification happens in HIR lowering, so visitors that
-    /// rewrite reference shapes rewrite the syntactic path.
-    fn visit_unresolved_ref_mut(&mut self, _expr: &mut Expr<P>) -> Result<(), Self::Error> {
-        Ok(())
-    }
-
-    fn visit_unfold_mut(&mut self, expr: &mut Expr<P>) -> Result<(), Self::Error> {
-        let ExprKind::Unfold { init, body, .. } = &mut expr.kind else {
-            return Ok(());
-        };
-        self.visit_expr_mut(init)?;
-        self.visit_expr_mut(body)
-    }
-
-    fn visit_fn_call_mut(&mut self, expr: &mut Expr<P>) -> Result<(), Self::Error> {
-        if let ExprKind::FnCall {
-            generic_args, args, ..
-        } = &mut expr.kind
-        {
-            Self::visit_generic_args_mut(self, generic_args)?;
-            for arg in args {
-                self.visit_expr_mut(arg)?;
-            }
-        }
-        Ok(())
-    }
-
-    fn visit_generic_args_mut(&mut self, args: &mut [GenericArg<P>]) -> Result<(), Self::Error> {
-        for arg in args {
-            if let GenericArg::Type(type_expr) = arg {
-                self.visit_type_expr_mut(type_expr)?;
-            }
-        }
-        Ok(())
-    }
-
-    fn visit_type_expr_mut(&mut self, type_expr: &mut TypeExpr<P>) -> Result<(), Self::Error> {
-        for bound in &mut type_expr.constraints {
-            self.visit_expr_mut(&mut bound.value)?;
-        }
-        match &mut type_expr.kind {
-            TypeExprKind::DatetimeApplication { type_args } => {
-                for arg in type_args {
-                    self.visit_type_expr_mut(arg)?;
-                }
-            }
-            TypeExprKind::TypeApplication { generic_args, .. } => {
-                Self::visit_generic_args_mut(self, generic_args.as_mut_slice())?;
-            }
-            TypeExprKind::ComplexApplication { generic_args }
-            | TypeExprKind::KeyApplication { generic_args } => {
-                Self::visit_generic_args_mut(self, generic_args)?;
-            }
-            TypeExprKind::Indexed { base, .. } => self.visit_type_expr_mut(base)?,
-            TypeExprKind::IndexLabel { .. }
-            | TypeExprKind::Dimensionless
-            | TypeExprKind::Bool
-            | TypeExprKind::Int
-            | TypeExprKind::Datetime
-            | TypeExprKind::DimExpr(_) => {}
-        }
-        Ok(())
-    }
-
-    /// Called for `InlineDagRef`. Default: recurse into binding value expressions.
-    fn visit_inline_dag_ref_mut(&mut self, expr: &mut Expr<P>) -> Result<(), Self::Error> {
-        if let ExprKind::InlineDagRef { args, .. } = &mut expr.kind {
-            for arg in args {
-                self.visit_expr_mut(&mut arg.value)?;
-            }
-        }
-        Ok(())
-    }
-
-    // -- Per-variant handlers for nodes that carry non-Expr fields --
-    //
-    // These allow visitors to intercept structural fields (index names,
-    // bindings, pattern labels) without overriding the entire `dispatch_mut`.
-
-    /// Called for `ForComp`. Default: recurse into `body`.
-    fn visit_for_comp_mut(&mut self, expr: &mut Expr<P>) -> Result<(), Self::Error> {
-        if let ExprKind::ForComp { body, .. } = &mut expr.kind {
-            self.visit_expr_mut(body)?;
-        }
-        Ok(())
-    }
-
-    /// Called for `IndexAccess`. Default: recurse into inner expr and expression args.
-    fn visit_index_access_mut(&mut self, expr: &mut Expr<P>) -> Result<(), Self::Error> {
-        if let ExprKind::IndexAccess {
-            expr: inner, args, ..
-        } = &mut expr.kind
-        {
-            self.visit_expr_mut(inner)?;
-            for arg in args {
-                if let IndexArg::Expr(e) = arg {
-                    self.visit_expr_mut(e)?;
-                }
-            }
-        }
-        Ok(())
-    }
-
-    /// Called for `MapLiteral`. Default: recurse into entry values.
-    fn visit_map_literal_mut(&mut self, expr: &mut Expr<P>) -> Result<(), Self::Error> {
-        if let ExprKind::MapLiteral { entries } = &mut expr.kind {
-            for entry in entries {
-                self.visit_expr_mut(&mut entry.value)?;
-            }
-        }
-        Ok(())
-    }
-
-    /// Called for `Sugar` variants (Raw-only surface forms). Default: no-op.
-    /// Override in Raw-phase visitors that need to mutate sugar payloads.
-    fn visit_sugar_mut(&mut self, _expr: &mut Expr<P>) -> Result<(), Self::Error> {
-        Ok(())
-    }
-
-    /// Called for `Match`. Default: recurse into scrutinee and arm bodies.
-    fn visit_match_mut(&mut self, expr: &mut Expr<P>) -> Result<(), Self::Error> {
-        if let ExprKind::Match { scrutinee, arms } = &mut expr.kind {
-            self.visit_expr_mut(scrutinee)?;
-            for arm in arms {
-                self.visit_expr_mut(&mut arm.body)?;
-            }
         }
         Ok(())
     }

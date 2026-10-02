@@ -3,9 +3,9 @@
 //! bounds carry value expressions).
 
 use graphcal_compiler::syntax::ast::{
-    BinOp, DomainBound, Expr, ExprKind, FieldInit, ForBinding, GenericArg, IndexArg, MapEntry,
-    MapEntryKey, MatchArm, MatchPattern, ModulePath, ParamBinding, PatternBinding, PatternBindings,
-    TableIndexSpec, TypeExpr, TypeExprKind, UnaryOp,
+    BinOp, DomainBound, ElementTypeExpr, Expr, ExprKind, FieldInit, ForBinding, GenericArg,
+    IndexArg, MapEntry, MapEntryKey, MatchArm, MatchPattern, ModulePath, ParamBinding,
+    PatternBinding, PatternBindings, TableIndexSpec, TypeExpr, TypeExprKind, UnaryOp,
 };
 use graphcal_compiler::syntax::local_name::LocalName;
 use graphcal_compiler::syntax::span::Spanned;
@@ -1186,32 +1186,41 @@ fn format_inline_dag_ref(
 
 /// Format a type expression.
 pub fn format_type_expr_inline(fmt: &mut Formatter<'_>, te: &TypeExpr) -> RcDoc<'static> {
+    let element = format_element_type_expr_inline(fmt, &te.element);
+    let Some(indexes) = &te.indexes else {
+        return element;
+    };
+    let idx_docs: Vec<RcDoc<'static>> = indexes
+        .iter()
+        .map(|i| match i {
+            graphcal_compiler::syntax::ast::IndexExpr::Name(name) => {
+                RcDoc::text(name.value.display_path())
+            }
+            graphcal_compiler::syntax::ast::IndexExpr::Finite { cardinality, .. } => {
+                RcDoc::text(format!("Fin({cardinality})"))
+            }
+            graphcal_compiler::syntax::ast::IndexExpr::BareNat(nat_expr) => {
+                RcDoc::text(nat_expr.to_string())
+            }
+        })
+        .collect();
+    element
+        .append(RcDoc::text("["))
+        .append(RcDoc::intersperse(idx_docs, RcDoc::text(", ")))
+        .append(RcDoc::text("]"))
+}
+
+/// Format an element type expression with its domain constraints.
+fn format_element_type_expr_inline(
+    fmt: &mut Formatter<'_>,
+    te: &ElementTypeExpr,
+) -> RcDoc<'static> {
     let base = match &te.kind {
         TypeExprKind::Dimensionless => RcDoc::text("Dimensionless"),
         TypeExprKind::Bool => RcDoc::text("Bool"),
         TypeExprKind::Int => RcDoc::text("Int"),
         TypeExprKind::Datetime => RcDoc::text("Datetime"),
         TypeExprKind::DimExpr(de) => format_dim_expr_inline(de),
-        TypeExprKind::Indexed { base, indexes } => {
-            let idx_docs: Vec<RcDoc<'static>> = indexes
-                .iter()
-                .map(|i| match i {
-                    graphcal_compiler::syntax::ast::IndexExpr::Name(name) => {
-                        RcDoc::text(name.value.display_path())
-                    }
-                    graphcal_compiler::syntax::ast::IndexExpr::Finite { cardinality, .. } => {
-                        RcDoc::text(format!("Fin({cardinality})"))
-                    }
-                    graphcal_compiler::syntax::ast::IndexExpr::BareNat(nat_expr) => {
-                        RcDoc::text(nat_expr.to_string())
-                    }
-                })
-                .collect();
-            format_type_expr_inline(fmt, base)
-                .append(RcDoc::text("["))
-                .append(RcDoc::intersperse(idx_docs, RcDoc::text(", ")))
-                .append(RcDoc::text("]"))
-        }
         TypeExprKind::TypeApplication { name, generic_args } => {
             let arg_docs: Vec<RcDoc<'static>> = generic_args
                 .iter()

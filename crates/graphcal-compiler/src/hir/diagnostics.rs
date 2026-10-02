@@ -23,8 +23,7 @@ use crate::syntax::names::NamePath;
 
 /// Reject source-only type syntax that has no valid HIR representation.
 pub fn validate_type_annotation(type_expr: &TypeExpr, src: SourceId) -> Result<(), SemanticError> {
-    match &type_expr.kind {
-        TypeExprKind::Indexed { base, .. } => validate_type_annotation(base, src),
+    match &type_expr.element.kind {
         TypeExprKind::TypeApplication { generic_args, .. } => {
             validate_generic_args(generic_args.iter(), src)
         }
@@ -33,7 +32,11 @@ pub fn validate_type_annotation(type_expr: &TypeExpr, src: SourceId) -> Result<(
             validate_generic_args(generic_args.iter(), src)
         }
         TypeExprKind::DatetimeApplication { type_args } => type_args.iter().try_for_each(|arg| {
-            if let Some(bound) = arg.constraints.first() {
+            // Bounds before an index suffix are left to the indexed-argument
+            // rejection of lowering.
+            if arg.indexes.is_none()
+                && let Some(bound) = arg.element.constraints.first()
+            {
                 return Err(SemanticError::located(
                     src,
                     bound.span,
@@ -57,7 +60,11 @@ fn validate_generic_args<'a>(
 ) -> Result<(), SemanticError> {
     generic_args.into_iter().try_for_each(|arg| match arg {
         crate::desugar::desugared_ast::GenericArg::Type(type_expr) => {
-            if let Some(bound) = type_expr.constraints.first() {
+            // Bounds before an index suffix are left to the indexed-argument
+            // rejection of lowering.
+            if type_expr.indexes.is_none()
+                && let Some(bound) = type_expr.element.constraints.first()
+            {
                 return Err(SemanticError::located(
                     src,
                     bound.span,
@@ -80,22 +87,29 @@ pub fn type_lower_error_to_graphcal(err: &HirLowerError, src: SourceId) -> Seman
     if let HirLowerError::UnknownTypePath { path, slot, span } = err
         && let Some(atom) = path.as_bare()
     {
-        return match slot {
-            TypePathSlot::IndexAxis => SemanticError::located(
-                src,
-                *span,
-                IndexError::UnknownIndex {
-                    name: IndexName::classify(atom.clone()).into(),
-                },
-            ),
-            TypePathSlot::DimensionTerm => SemanticError::located(
-                src,
-                *span,
-                DimensionError::UnknownDimension {
-                    name: NamePath::local(atom.clone()),
-                },
-            ),
-        };
+        match slot {
+            TypePathSlot::IndexAxis => {
+                return SemanticError::located(
+                    src,
+                    *span,
+                    IndexError::UnknownIndex {
+                        name: IndexName::classify(atom.clone()).into(),
+                    },
+                );
+            }
+            TypePathSlot::DimensionTerm => {
+                return SemanticError::located(
+                    src,
+                    *span,
+                    DimensionError::UnknownDimension {
+                        name: NamePath::local(atom.clone()),
+                    },
+                );
+            }
+            // An unknown applied type is reported as the unknown type-level
+            // name it is.
+            TypePathSlot::TypeApplication => {}
+        }
     }
     hir_lower_error_to_graphcal(err, src)
 }
@@ -429,9 +443,6 @@ pub fn hir_lower_error_to_graphcal(err: &HirLowerError, src: SourceId) -> Semant
                 expression: expression.clone(),
             },
         ),
-        HirLowerError::NestedIndexedType { span } => {
-            SemanticError::located(src, *span, IndexError::NestedIndexedType)
-        }
         HirLowerError::NatOverflow { source, span } => {
             SemanticError::located(src, *span, IndexError::NatOverflow { error: *source })
         }

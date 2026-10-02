@@ -9,6 +9,7 @@
 use std::collections::HashMap;
 
 use graphcal_compiler::outcome::Outcome;
+use graphcal_compiler::plot_props::BlockProperty;
 use graphcal_compiler::plot_shape::PlotLeafKind;
 use graphcal_compiler::plot_visibility::PlotVisibility;
 use graphcal_compiler::resolved_name::ResolvedDeclName;
@@ -18,6 +19,9 @@ use graphcal_compiler::syntax::decl_name::DeclName;
 use graphcal_compiler::syntax::module_name::ScopedName;
 use graphcal_compiler::syntax::span::{Span, Spanned};
 use graphcal_compiler::tir::typed::{BodyKind, DeclarationBody, Scoped};
+
+/// One figure or layer field, its property classified for compositions.
+type CompositionField = graphcal_compiler::tir::typed::LoweredPlotField<CompositionProperty>;
 
 use crate::eval::plot_unavailable::{ComposedPlotsUnavailable, PlotUnavailable};
 use crate::eval::public_projection;
@@ -201,7 +205,7 @@ impl Compositions<'_, '_> {
     fn compose(
         &mut self,
         name: &DeclName,
-        fields: Scoped<'_, [graphcal_compiler::tir::typed::LoweredPlotField]>,
+        fields: Scoped<'_, [CompositionField]>,
         references: &[Spanned<ScopedName>],
     ) -> Result<Option<CompositionFields>, Outcome<SemanticError>> {
         let names = self.evaluated.names;
@@ -287,15 +291,18 @@ impl From<SemanticError> for PlotEvaluationError {
 }
 
 impl PlotEvaluationError {
-    fn with_property(self, property: &graphcal_compiler::ir::model::LoweredPlotProperty) -> Self {
+    fn with_property(self, property: impl BlockProperty) -> Self {
+        self.with_property_label("property", property)
+    }
+
+    fn with_mark_property(self, property: graphcal_compiler::plot_props::MarkProperty) -> Self {
+        self.with_property_label("mark property", property)
+    }
+
+    fn with_property_label(self, label: &str, property: impl BlockProperty) -> Self {
         match self {
             Self::Unavailable(NodeUnavailable::EvalFailed { message }) => {
-                Self::from(match property {
-                    graphcal_compiler::ir::model::LoweredPlotProperty::Mark(_) => {
-                        format!("mark property `{}`: {message}", property.name())
-                    }
-                    property => format!("property `{}`: {message}", property.name()),
-                })
+                Self::from(format!("{label} `{}`: {message}", property.name()))
             }
             other => other,
         }
@@ -438,21 +445,11 @@ fn evaluate_plot(
     // Evaluate top-level properties (e.g., title, width, height)
     let mut properties = Vec::new();
     for scoped_field in plot_fields.iter() {
-        let field = scoped_field.get();
-        let graphcal_compiler::ir::model::LoweredPlotProperty::Plot(plot_prop) = &field.property
-        else {
-            return Err(PlotEvaluationError::fatal(ctx.internal_error(
-                format!(
-                    "checked plot property has incompatible classification `{}`",
-                    field.property.name()
-                ),
-                field.value.span,
-            )));
-        };
+        let plot_prop = scoped_field.get().property;
         let field_value = eval_plot_property(scoped_field.map(|field| &*field.value), values, ctx)
-            .map_err(|error| error.with_property(&field.property))?;
+            .map_err(|error| error.with_property(plot_prop))?;
         check_positive_property(plot_prop.name(), plot_prop.value_type(), &field_value)?;
-        properties.push((*plot_prop, field_value));
+        properties.push((plot_prop, field_value));
     }
 
     Ok(EvaluatedPlot {
@@ -466,7 +463,12 @@ fn evaluate_plot(
 }
 
 fn evaluate_mark_properties(
-    fields: Scoped<'_, [graphcal_compiler::ir::model::LoweredPlotField]>,
+    fields: Scoped<
+        '_,
+        [graphcal_compiler::ir::model::LoweredPlotField<
+            graphcal_compiler::plot_props::MarkProperty,
+        >],
+    >,
     values: &RuntimeValueMap,
     ctx: &EvalSession<'_>,
 ) -> Result<Vec<(graphcal_compiler::plot_props::MarkProperty, PlotFieldValue)>, PlotEvaluationError>
@@ -474,21 +476,10 @@ fn evaluate_mark_properties(
     fields
         .iter()
         .map(|scoped_field| {
-            let field = scoped_field.get();
-            let graphcal_compiler::ir::model::LoweredPlotProperty::Mark(mark_prop) =
-                &field.property
-            else {
-                return Err(PlotEvaluationError::fatal(ctx.internal_error(
-                    format!(
-                        "checked mark property has incompatible classification `{}`",
-                        field.property.name()
-                    ),
-                    field.value.span,
-                )));
-            };
+            let mark_prop = scoped_field.get().property;
             let value = eval_plot_property(scoped_field.map(|field| &*field.value), values, ctx)
-                .map_err(|error| error.with_property(&field.property))?;
-            Ok((*mark_prop, value))
+                .map_err(|error| error.with_mark_property(mark_prop))?;
+            Ok((mark_prop, value))
         })
         .collect()
 }
@@ -645,7 +636,7 @@ fn composed_plots_unavailable(
 
 /// Evaluate composition fields (properties and plot names) shared by figures and layers.
 fn eval_composition_fields(
-    fields: Scoped<'_, [graphcal_compiler::tir::typed::LoweredPlotField]>,
+    fields: Scoped<'_, [CompositionField]>,
     plot_name_spans: &[Spanned<ScopedName>],
     values: &RuntimeValueMap,
     ctx: &EvalSession<'_>,
@@ -657,22 +648,11 @@ fn eval_composition_fields(
     }
     let mut properties = Vec::new();
     for scoped_field in fields.iter() {
-        let field = scoped_field.get();
-        let graphcal_compiler::ir::model::LoweredPlotProperty::Composition(comp_prop) =
-            &field.property
-        else {
-            return Err(PlotEvaluationError::fatal(ctx.internal_error(
-                format!(
-                    "checked composition property has incompatible classification `{}`",
-                    field.property.name()
-                ),
-                field.value.span,
-            )));
-        };
+        let comp_prop = scoped_field.get().property;
         let field_value = eval_plot_property(scoped_field.map(|field| &*field.value), values, ctx)
-            .map_err(|error| error.with_property(&field.property))?;
+            .map_err(|error| error.with_property(comp_prop))?;
         check_positive_property(comp_prop.name(), comp_prop.value_type(), &field_value)?;
-        properties.push((*comp_prop, field_value));
+        properties.push((comp_prop, field_value));
     }
     let plot_names = plot_name_spans.iter().map(|p| p.value.clone()).collect();
     Ok(CompositionFields {

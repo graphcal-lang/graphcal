@@ -84,6 +84,15 @@ fn error_unknown_const_ref() {
     insta::assert_snapshot!(rendered);
 }
 
+/// An unknown applied generic type is the unknown type-level name it is, in
+/// the user's words rather than a resolver table's.
+#[test]
+fn error_unknown_generic_type_application() {
+    let source = "node q: Bux<Length> = 1.0 m;\n";
+    let rendered = render_error(source, "unknown_generic_type_application.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
 #[test]
 fn error_bare_graph_declaration_ref() {
     let source = include_str!("../../../tests/fixtures/invalid/bare_graph_declaration_ref.gcl");

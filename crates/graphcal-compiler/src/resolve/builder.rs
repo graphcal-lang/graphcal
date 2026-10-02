@@ -223,12 +223,18 @@ impl<'a> SymbolTables<'a> {
         self,
         targets: &impl ModuleTargets,
     ) -> Result<ScopeBuilder<'a>, ModuleResolveError> {
-        let Self { modules, order, .. } = self;
-        let mut entries = HashMap::with_capacity(modules.len());
+        let Self {
+            mut modules, order, ..
+        } = self;
+        // Source modules take their handles in registration order, so one
+        // set of registrations always yields the same handles.
+        let mut entries = super::module_table::ModuleTable::default();
         let mut declarations = HashMap::with_capacity(modules.len());
-        for (owner, module) in modules {
-            declarations.insert(owner.clone(), module.declarations);
-            entries.insert(owner, module.entry);
+        for owner in &order {
+            if let Some(module) = modules.remove(owner) {
+                declarations.insert(owner.clone(), module.declarations);
+                entries.insert(owner.clone(), module.entry);
+            }
         }
         let own_edges = order
             .iter()

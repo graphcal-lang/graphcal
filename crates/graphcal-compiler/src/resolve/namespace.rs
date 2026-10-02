@@ -40,6 +40,17 @@ impl std::fmt::Display for Namespace {
 }
 
 impl Namespace {
+    /// The lowercase namespace word diagnostics use (`term`, `static`,
+    /// `unit`), as the language documentation spells it.
+    #[must_use]
+    pub const fn user_facing_label(self) -> &'static str {
+        match self {
+            Self::Term => "term",
+            Self::Static => "static",
+            Self::Unit => "unit",
+        }
+    }
+
     /// The namespace a selective-import category introduces names into: the
     /// type, dimension, and index categories share Static.
     #[must_use]

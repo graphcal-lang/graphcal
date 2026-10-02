@@ -1238,7 +1238,7 @@ fn collected_value_entries_carry_their_signatures_and_scope() {
         panic!("expected one const");
     };
     assert!(matches!(
-        constant.type_ann.syntax.kind,
+        constant.type_ann.syntax.element.kind,
         crate::desugar::desugared_ast::TypeExprKind::Dimensionless
     ));
     assert_eq!(constant.type_ann.resolution_owner, owner);

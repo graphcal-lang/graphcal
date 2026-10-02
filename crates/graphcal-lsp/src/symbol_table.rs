@@ -2239,7 +2239,7 @@ fn collect_type_expr_refs_in_scope(
     table: &mut SymbolTable,
     refs: &mut HirRefCollector<'_>,
 ) {
-    match &type_expr.kind {
+    match &type_expr.element.kind {
         TypeExprKind::IndexLabel { .. }
         | TypeExprKind::Dimensionless
         | TypeExprKind::Bool
@@ -2252,30 +2252,6 @@ fn collect_type_expr_refs_in_scope(
                 UnresolvedSymbol::TypeExpression,
                 table,
             );
-        }
-        TypeExprKind::Indexed { base, indexes } => {
-            collect_type_expr_refs_in_scope(base, generic_scope, table, refs);
-            for idx in indexes {
-                match idx {
-                    graphcal_compiler::desugar::desugared_ast::IndexExpr::Name(path) => {
-                        table.references.push(ReferenceInfo {
-                            span: path.span,
-                            target: reference_target_in_generic_scope(
-                                &path.value,
-                                generic_scope,
-                                UnresolvedSymbol::Index,
-                            ),
-                        });
-                    }
-                    graphcal_compiler::desugar::desugared_ast::IndexExpr::Finite {
-                        cardinality,
-                        ..
-                    }
-                    | graphcal_compiler::desugar::desugared_ast::IndexExpr::BareNat(cardinality) => {
-                        collect_nat_generic_param_refs(cardinality, generic_scope, table);
-                    }
-                }
-            }
         }
         TypeExprKind::TypeApplication { name, generic_args } => {
             table.references.push(ReferenceInfo {
@@ -2306,8 +2282,28 @@ fn collect_type_expr_refs_in_scope(
         }
     }
     // Collect references from domain constraint bound expressions (e.g., unit names in `100 kg`).
-    for bound in &type_expr.constraints {
+    for bound in &type_expr.element.constraints {
         refs.collect_body(&bound.value, table);
+    }
+    for idx in type_expr.indexes.iter().flatten() {
+        match idx {
+            graphcal_compiler::desugar::desugared_ast::IndexExpr::Name(path) => {
+                table.references.push(ReferenceInfo {
+                    span: path.span,
+                    target: reference_target_in_generic_scope(
+                        &path.value,
+                        generic_scope,
+                        UnresolvedSymbol::Index,
+                    ),
+                });
+            }
+            graphcal_compiler::desugar::desugared_ast::IndexExpr::Finite {
+                cardinality, ..
+            }
+            | graphcal_compiler::desugar::desugared_ast::IndexExpr::BareNat(cardinality) => {
+                collect_nat_generic_param_refs(cardinality, generic_scope, table);
+            }
+        }
     }
 }
 

@@ -34,6 +34,32 @@ impl PlotPropertyType {
     }
 }
 
+/// A property of one plot-family block (mark, plot, or composition),
+/// classified for that block when its declaration is lowered.
+pub trait BlockProperty: Copy {
+    /// The source-level property name.
+    fn name(self) -> &'static str;
+
+    /// The value type this property expects.
+    fn value_type(self) -> PlotPropertyType;
+}
+
+macro_rules! impl_block_property {
+    ($($property:ty),* $(,)?) => {$(
+        impl BlockProperty for $property {
+            fn name(self) -> &'static str {
+                Self::name(self)
+            }
+
+            fn value_type(self) -> PlotPropertyType {
+                Self::value_type(self)
+            }
+        }
+    )*};
+}
+
+impl_block_property!(MarkProperty, PlotProperty, CompositionProperty);
+
 /// A mark-level property (style applied to the mark in a plot).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum MarkProperty {

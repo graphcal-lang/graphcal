@@ -257,8 +257,6 @@ pub enum IndexError {
     FinCardinalityMultiplicationOverflow,
     #[error("unresolved finite-index obligation `{index}`")]
     UnresolvedFiniteIndexObligation { index: IndexDisplayName },
-    #[error("an indexed type cannot be indexed again; list every axis in one bracket list")]
-    NestedIndexedType,
     #[error("map literal entry has no keys")]
     EmptyMapEntry,
 }
@@ -307,7 +305,6 @@ impl DiagnosticKind for IndexError {
             Self::FinCardinalityAdditionOverflow => "graphcal::I039",
             Self::FinCardinalityMultiplicationOverflow => "graphcal::I040",
             Self::UnresolvedFiniteIndexObligation { .. } => "graphcal::I041",
-            Self::NestedIndexedType => "graphcal::I042",
             Self::EmptyMapEntry => "graphcal::I043",
         }
     }
@@ -361,7 +358,6 @@ impl DiagnosticKind for IndexError {
             | Self::FinCardinalityAdditionOverflow
             | Self::FinCardinalityMultiplicationOverflow
             | Self::UnresolvedFiniteIndexObligation { .. }
-            | Self::NestedIndexedType
             | Self::EmptyMapEntry => Some("error here".to_owned()),
         }
     }
@@ -402,7 +398,6 @@ impl DiagnosticKind for IndexError {
             | Self::FinCardinalityAdditionOverflow
             | Self::FinCardinalityMultiplicationOverflow
             | Self::UnresolvedFiniteIndexObligation { .. }
-            | Self::NestedIndexedType
             | Self::EmptyMapEntry => None,
             Self::MissingVariants { .. } => Some("map literals must cover all variants of the index".to_owned()),
             Self::ExtraVariants { .. } => Some("only variants declared in the index are allowed".to_owned()),
@@ -457,7 +452,6 @@ impl DiagnosticKind for IndexError {
             | Self::FinCardinalityAdditionOverflow
             | Self::FinCardinalityMultiplicationOverflow
             | Self::UnresolvedFiniteIndexObligation { .. }
-            | Self::NestedIndexedType
             | Self::EmptyMapEntry => Vec::new(),
         }
     }

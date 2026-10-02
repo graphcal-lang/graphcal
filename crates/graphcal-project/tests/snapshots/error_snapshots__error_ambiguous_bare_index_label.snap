@@ -2,7 +2,7 @@
 source: crates/graphcal-project/tests/error_snapshots.rs
 expression: rendered
 ---
-unknown Term `A` in module `ambiguous_bare_index_label`
+unknown term name `A` in module `ambiguous_bare_index_label`
     Diagnostic severity: error
 Begin snippet for ambiguous_bare_index_label.gcl starting at line 4, column 1
 

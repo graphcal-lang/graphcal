@@ -1,8 +1,8 @@
 use crate::dimension::Rational;
 use crate::syntax::ast::{
-    AmbiguousGenericArg, DimExpr, DimExprItem, DimTerm, Expr, ExprKind, GenericArg,
-    GenericConstraint, GenericParam, Ident, IdentPath, IndexExpr, MulDivOp, NatExpr, TypeExpr,
-    TypeExprKind, UnitDef, UnitExpr, UnitExprItem,
+    AmbiguousGenericArg, DimExpr, DimExprItem, DimTerm, ElementTypeExpr, Expr, ExprKind,
+    GenericArg, GenericConstraint, GenericParam, Ident, IdentPath, IndexExpr, MulDivOp, NatExpr,
+    TypeExpr, TypeExprKind, UnitDef, UnitExpr, UnitExprItem,
 };
 use crate::syntax::builtin_type_name::BuiltinTypeName;
 use crate::syntax::index_name::IndexVariantName;
@@ -38,7 +38,7 @@ impl Parser<'_> {
             if self.lexer.peek() == Some(&Token::Hash) {
                 self.lexer.next_token();
                 let label: Spanned<IndexVariantName> = self.parse_any_ident()?.classify();
-                TypeExpr {
+                ElementTypeExpr {
                     span: path_span.merge(label.span),
                     kind: TypeExprKind::IndexLabel { index: path, label },
                     constraints: vec![],
@@ -48,17 +48,17 @@ impl Parser<'_> {
                     .as_bare()
                     .and_then(|ident| BuiltinTypeName::parse(ident.name.as_str()));
                 match builtin {
-                    Some(BuiltinTypeName::Dimensionless) => TypeExpr {
+                    Some(BuiltinTypeName::Dimensionless) => ElementTypeExpr {
                         kind: TypeExprKind::Dimensionless,
                         constraints: vec![],
                         span: path_span,
                     },
-                    Some(BuiltinTypeName::Bool) => TypeExpr {
+                    Some(BuiltinTypeName::Bool) => ElementTypeExpr {
                         kind: TypeExprKind::Bool,
                         constraints: vec![],
                         span: path_span,
                     },
-                    Some(BuiltinTypeName::Int) => TypeExpr {
+                    Some(BuiltinTypeName::Int) => ElementTypeExpr {
                         kind: TypeExprKind::Int,
                         constraints: vec![],
                         span: path_span,
@@ -69,14 +69,14 @@ impl Parser<'_> {
                             // its own variant so TIR resolution doesn't need to
                             // string-match the built-in type name.
                             let (type_args, closing_span) = self.parse_type_arg_list()?;
-                            TypeExpr {
+                            ElementTypeExpr {
                                 kind: TypeExprKind::DatetimeApplication { type_args },
                                 constraints: vec![],
                                 span: path_span.merge(closing_span),
                             }
                         } else {
                             // Bare Datetime (= Datetime<UTC>)
-                            TypeExpr {
+                            ElementTypeExpr {
                                 kind: TypeExprKind::Datetime,
                                 constraints: vec![],
                                 span: path_span,
@@ -94,7 +94,7 @@ impl Parser<'_> {
                         let name = path.into_spanned_name_path();
                         let (generic_args, closing_span) = self.parse_generic_arg_list()?;
                         let span = name.span.merge(closing_span);
-                        TypeExpr {
+                        ElementTypeExpr {
                             kind: TypeExprKind::TypeApplication { name, generic_args },
                             constraints: vec![],
                             span,
@@ -103,7 +103,7 @@ impl Parser<'_> {
                     _ => {
                         let dim_expr = self.parse_dim_expr_after_first_path(path)?;
                         let span = dim_expr.span;
-                        TypeExpr {
+                        ElementTypeExpr {
                             kind: TypeExprKind::DimExpr(dim_expr),
                             constraints: vec![],
                             span,
@@ -114,7 +114,7 @@ impl Parser<'_> {
         } else {
             let dim_expr = self.parse_dim_expr()?;
             let span = dim_expr.span;
-            TypeExpr {
+            ElementTypeExpr {
                 kind: TypeExprKind::DimExpr(dim_expr),
                 constraints: vec![],
                 span,
@@ -136,21 +136,18 @@ impl Parser<'_> {
                 self.parse_non_empty_comma_separated(Token::RBracket, Self::parse_index_expr)?;
             let (_, end_span) = self.expect(Token::RBracket)?;
             let span = base.span.merge(end_span);
-            base = TypeExpr {
-                kind: TypeExprKind::Indexed {
-                    base: Box::new(base),
-                    indexes,
-                },
-                constraints: vec![],
+            return Ok(TypeExpr {
+                element: base,
+                indexes: Some(indexes),
                 span,
-            };
+            });
         }
 
-        Ok(base)
+        Ok(TypeExpr::unindexed(base))
     }
 
     /// Parse the built-in `Complex<D>` type former into its dedicated syntax variant.
-    fn parse_complex_type(&mut self, name_span: Span) -> Result<TypeExpr, ParseError> {
+    fn parse_complex_type(&mut self, name_span: Span) -> Result<ElementTypeExpr, ParseError> {
         // Bare `Complex` is retained with zero arguments so HIR can report the
         // missing mandatory dimension with a targeted arity diagnostic.
         let (generic_args, end_span) = if self.lexer.peek() == Some(&Token::Lt) {
@@ -159,7 +156,7 @@ impl Parser<'_> {
         } else {
             (Vec::new(), name_span)
         };
-        Ok(TypeExpr {
+        Ok(ElementTypeExpr {
             kind: TypeExprKind::ComplexApplication { generic_args },
             constraints: vec![],
             span: name_span.merge(end_span),
@@ -167,7 +164,7 @@ impl Parser<'_> {
     }
 
     /// Parse the built-in `Key<I>` type former into its dedicated syntax variant.
-    fn parse_key_type(&mut self, name_span: Span) -> Result<TypeExpr, ParseError> {
+    fn parse_key_type(&mut self, name_span: Span) -> Result<ElementTypeExpr, ParseError> {
         // Bare `Key` is retained with zero arguments so HIR can report the
         // missing mandatory index axis with a targeted arity diagnostic.
         let (generic_args, end_span) = if self.lexer.peek() == Some(&Token::Lt) {
@@ -176,7 +173,7 @@ impl Parser<'_> {
         } else {
             (Vec::new(), name_span)
         };
-        Ok(TypeExpr {
+        Ok(ElementTypeExpr {
             kind: TypeExprKind::KeyApplication { generic_args },
             constraints: vec![],
             span: name_span.merge(end_span),
@@ -713,10 +710,10 @@ impl Parser<'_> {
     /// Reclassify only the source shapes that genuinely have two possible
     /// sorts: a bare name or a multiplication of bare names.
     fn ambiguous_generic_arg(type_expr: &TypeExpr) -> Option<AmbiguousGenericArg> {
-        if !type_expr.constraints.is_empty() {
+        if type_expr.indexes.is_some() || !type_expr.element.constraints.is_empty() {
             return None;
         }
-        let TypeExprKind::DimExpr(dim_expr) = &type_expr.kind else {
+        let TypeExprKind::DimExpr(dim_expr) = &type_expr.element.kind else {
             return None;
         };
         let mut terms = dim_expr.terms.iter();
@@ -907,7 +904,7 @@ mod tests {
     use crate::syntax::parser::MAX_NESTING_DEPTH;
 
     fn dim_expr_name(te: &crate::syntax::ast::TypeExpr) -> &str {
-        match &te.kind {
+        match &te.element.kind {
             TypeExprKind::DimExpr(dim) => {
                 assert_eq!(dim.terms.len(), 1, "expected single-term DimExpr");
                 dim.terms[0].term.name.value.leaf().as_str()
@@ -1083,7 +1080,7 @@ mod tests {
         let source = "param v: Vec3<Length, ECI> = 1.0;";
         let file = Parser::new(source).parse_file().unwrap();
         match &file.declarations[0].kind {
-            DeclKind::Param(p) => match &p.type_ann.kind {
+            DeclKind::Param(p) => match &p.type_ann.element.kind {
                 TypeExprKind::TypeApplication { name, generic_args } => {
                     assert_eq!(name.value.leaf().as_str(), "Vec3");
                     assert_eq!(generic_args.len(), 2);
@@ -1103,7 +1100,8 @@ mod tests {
         let DeclKind::Param(param) = &file.declarations[0].kind else {
             panic!("expected param");
         };
-        let TypeExprKind::TypeApplication { generic_args, .. } = &param.type_ann.kind else {
+        let TypeExprKind::TypeApplication { generic_args, .. } = &param.type_ann.element.kind
+        else {
             panic!("expected type application");
         };
         assert!(matches!(
@@ -1128,7 +1126,8 @@ mod tests {
         let DeclKind::Param(wrapped) = &file.declarations[0].kind else {
             panic!("expected param");
         };
-        let TypeExprKind::TypeApplication { generic_args, .. } = &wrapped.type_ann.kind else {
+        let TypeExprKind::TypeApplication { generic_args, .. } = &wrapped.type_ann.element.kind
+        else {
             panic!("expected type application");
         };
         assert!(matches!(
@@ -1142,7 +1141,7 @@ mod tests {
         let DeclKind::Param(values) = &file.declarations[1].kind else {
             panic!("expected param");
         };
-        let TypeExprKind::Indexed { indexes, .. } = &values.type_ann.kind else {
+        let Some(indexes) = &values.type_ann.indexes else {
             panic!("expected indexed type");
         };
         assert!(matches!(
@@ -1173,7 +1172,7 @@ mod tests {
         let source = "param t: Timestamp<UTC> = 0.0;";
         let file = Parser::new(source).parse_file().unwrap();
         match &file.declarations[0].kind {
-            DeclKind::Param(p) => match &p.type_ann.kind {
+            DeclKind::Param(p) => match &p.type_ann.element.kind {
                 TypeExprKind::TypeApplication { name, generic_args } => {
                     assert_eq!(name.value.leaf().as_str(), "Timestamp");
                     assert_eq!(generic_args.len(), 1);
@@ -1190,7 +1189,7 @@ mod tests {
         let source = "param v: math::Vec3<Length> = 1.0;";
         let file = Parser::new(source).parse_file().unwrap();
         match &file.declarations[0].kind {
-            DeclKind::Param(p) => match &p.type_ann.kind {
+            DeclKind::Param(p) => match &p.type_ann.element.kind {
                 TypeExprKind::TypeApplication { name, generic_args } => {
                     assert_eq!(name.value.display_path(), "math::Vec3");
                     assert_eq!(name.value.leaf().as_str(), "Vec3");
@@ -1207,7 +1206,7 @@ mod tests {
         let source = "param v: physics::Length / Time = 1.0;";
         let file = Parser::new(source).parse_file().unwrap();
         match &file.declarations[0].kind {
-            DeclKind::Param(p) => match &p.type_ann.kind {
+            DeclKind::Param(p) => match &p.type_ann.element.kind {
                 TypeExprKind::DimExpr(dim_expr) => {
                     assert_eq!(dim_expr.terms.len(), 2);
                     assert_eq!(
@@ -1227,8 +1226,8 @@ mod tests {
         let source = "param xs: Dimensionless[mesh::Row] = 0.0;";
         let file = Parser::new(source).parse_file().unwrap();
         match &file.declarations[0].kind {
-            DeclKind::Param(p) => match &p.type_ann.kind {
-                TypeExprKind::Indexed { indexes, .. } => {
+            DeclKind::Param(p) => match &p.type_ann.indexes {
+                Some(indexes) => {
                     assert_eq!(indexes.len(), 1);
                     let IndexExpr::Name(index_path) = &indexes[0] else {
                         panic!("expected Name")
@@ -1236,7 +1235,7 @@ mod tests {
                     assert_eq!(index_path.value.display_path(), "mesh::Row");
                     assert_eq!(index_path.value.leaf().as_str(), "Row");
                 }
-                other => panic!("expected Indexed type, got {other:?}"),
+                _ => panic!("expected Indexed type"),
             },
             _ => panic!("expected param"),
         }
@@ -1249,7 +1248,7 @@ mod tests {
         let DeclKind::Param(param) = &file.declarations[0].kind else {
             panic!("expected param");
         };
-        let TypeExprKind::ComplexApplication { generic_args } = &param.type_ann.kind else {
+        let TypeExprKind::ComplexApplication { generic_args } = &param.type_ann.element.kind else {
             panic!("expected ComplexApplication");
         };
         assert_eq!(generic_args.len(), 1);
@@ -1264,7 +1263,7 @@ mod tests {
             panic!("expected param");
         };
         assert!(matches!(
-            &param.type_ann.kind,
+            &param.type_ann.element.kind,
             TypeExprKind::ComplexApplication { generic_args } if generic_args.is_empty()
         ));
     }
@@ -1276,7 +1275,7 @@ mod tests {
         let DeclKind::Param(param) = &file.declarations[0].kind else {
             panic!("expected param");
         };
-        let TypeExprKind::KeyApplication { generic_args } = &param.type_ann.kind else {
+        let TypeExprKind::KeyApplication { generic_args } = &param.type_ann.element.kind else {
             panic!("expected KeyApplication");
         };
         assert_eq!(generic_args.len(), 1);
@@ -1290,7 +1289,7 @@ mod tests {
         let DeclKind::Param(param) = &file.declarations[0].kind else {
             panic!("expected param");
         };
-        let TypeExprKind::KeyApplication { generic_args } = &param.type_ann.kind else {
+        let TypeExprKind::KeyApplication { generic_args } = &param.type_ann.element.kind else {
             panic!("expected KeyApplication");
         };
         assert_eq!(generic_args.len(), 1);
@@ -1308,7 +1307,7 @@ mod tests {
             panic!("expected param");
         };
         assert!(matches!(
-            &param.type_ann.kind,
+            &param.type_ann.element.kind,
             TypeExprKind::KeyApplication { generic_args } if generic_args.is_empty()
         ));
     }
@@ -1321,7 +1320,7 @@ mod tests {
         let source = "param t: Datetime<TT> = 0.0;";
         let file = Parser::new(source).parse_file().unwrap();
         match &file.declarations[0].kind {
-            DeclKind::Param(p) => match &p.type_ann.kind {
+            DeclKind::Param(p) => match &p.type_ann.element.kind {
                 TypeExprKind::DatetimeApplication { type_args } => {
                     assert_eq!(type_args.len(), 1);
                     assert_eq!(dim_expr_name(&type_args[0]), "TT");
@@ -1342,7 +1341,7 @@ mod tests {
         let file = Parser::new(source).parse_file().unwrap();
         match &file.declarations[0].kind {
             DeclKind::Param(p) => {
-                assert!(matches!(&p.type_ann.kind, TypeExprKind::Datetime));
+                assert!(matches!(&p.type_ann.element.kind, TypeExprKind::Datetime));
             }
             _ => panic!("expected param"),
         }
@@ -1354,7 +1353,7 @@ mod tests {
         let file = Parser::new(source).parse_file().unwrap();
         match &file.declarations[0].kind {
             DeclKind::Param(p) => {
-                assert!(matches!(&p.type_ann.kind, TypeExprKind::DimExpr(_)));
+                assert!(matches!(&p.type_ann.element.kind, TypeExprKind::DimExpr(_)));
             }
             _ => panic!("expected param"),
         }
@@ -1367,8 +1366,8 @@ mod tests {
         match &file.declarations[0].kind {
             DeclKind::Param(p) => {
                 assert_eq!(p.name.value.as_str(), "dv");
-                match &p.type_ann.kind {
-                    TypeExprKind::Indexed { base, indexes } => {
+                match (&p.type_ann.element, &p.type_ann.indexes) {
+                    (base, Some(indexes)) => {
                         assert!(matches!(base.kind, TypeExprKind::DimExpr(_)));
                         assert_eq!(indexes.len(), 1);
                         let IndexExpr::Name(ident) = &indexes[0] else {
@@ -1376,7 +1375,7 @@ mod tests {
                         };
                         assert_eq!(ident.value.leaf().as_str(), "Maneuver");
                     }
-                    other => panic!("expected Indexed type, got {other:?}"),
+                    _ => panic!("expected Indexed type"),
                 }
             }
             _ => panic!("expected param"),
@@ -1388,8 +1387,8 @@ mod tests {
         let source = "param matrix: Dimensionless[Row, Col] = 0.0;";
         let file = Parser::new(source).parse_file().unwrap();
         match &file.declarations[0].kind {
-            DeclKind::Param(p) => match &p.type_ann.kind {
-                TypeExprKind::Indexed { indexes, .. } => {
+            DeclKind::Param(p) => match &p.type_ann.indexes {
+                Some(indexes) => {
                     assert_eq!(indexes.len(), 2);
                     let IndexExpr::Name(ident) = &indexes[0] else {
                         panic!("expected Name")
@@ -1400,7 +1399,7 @@ mod tests {
                     };
                     assert_eq!(ident.value.leaf().as_str(), "Col");
                 }
-                other => panic!("expected Indexed type, got {other:?}"),
+                _ => panic!("expected Indexed type"),
             },
             _ => panic!("expected param"),
         }
@@ -1412,14 +1411,14 @@ mod tests {
         let file = Parser::new(source).parse_file().unwrap();
         match &file.declarations[0].kind {
             DeclKind::Param(p) => {
-                assert!(matches!(&p.type_ann.kind, TypeExprKind::DimExpr(_)));
-                assert_eq!(p.type_ann.constraints.len(), 2);
+                assert!(matches!(&p.type_ann.element.kind, TypeExprKind::DimExpr(_)));
+                assert_eq!(p.type_ann.element.constraints.len(), 2);
                 assert_eq!(
-                    p.type_ann.constraints[0].kind,
+                    p.type_ann.element.constraints[0].kind,
                     crate::syntax::ast::DomainBoundKind::Min
                 );
                 assert_eq!(
-                    p.type_ann.constraints[1].kind,
+                    p.type_ann.element.constraints[1].kind,
                     crate::syntax::ast::DomainBoundKind::Max
                 );
             }
@@ -1454,9 +1453,9 @@ mod tests {
         let file = Parser::new(source).parse_file().unwrap();
         match &file.declarations[0].kind {
             DeclKind::Param(p) => {
-                assert_eq!(p.type_ann.constraints.len(), 1);
+                assert_eq!(p.type_ann.element.constraints.len(), 1);
                 assert_eq!(
-                    p.type_ann.constraints[0].kind,
+                    p.type_ann.element.constraints[0].kind,
                     crate::syntax::ast::DomainBoundKind::Min
                 );
             }
@@ -1470,10 +1469,13 @@ mod tests {
         let file = Parser::new(source).parse_file().unwrap();
         match &file.declarations[0].kind {
             DeclKind::Param(p) => {
-                assert!(matches!(&p.type_ann.kind, TypeExprKind::Dimensionless));
-                assert_eq!(p.type_ann.constraints.len(), 1);
+                assert!(matches!(
+                    &p.type_ann.element.kind,
+                    TypeExprKind::Dimensionless
+                ));
+                assert_eq!(p.type_ann.element.constraints.len(), 1);
                 assert_eq!(
-                    p.type_ann.constraints[0].kind,
+                    p.type_ann.element.constraints[0].kind,
                     crate::syntax::ast::DomainBoundKind::Max
                 );
             }
@@ -1486,9 +1488,9 @@ mod tests {
         let source = "param dv: Velocity(min: 0.0 m/s, max: 10000.0 m/s)[Maneuver] = 1.0 m/s;";
         let file = Parser::new(source).parse_file().unwrap();
         match &file.declarations[0].kind {
-            DeclKind::Param(p) => match &p.type_ann.kind {
-                TypeExprKind::Indexed { base, indexes } => {
-                    // Constraints are on the base type, not the outer Indexed
+            DeclKind::Param(p) => match (&p.type_ann.element, &p.type_ann.indexes) {
+                (base, Some(indexes)) => {
+                    // Constraints are on the element type, before the index suffix
                     assert_eq!(base.constraints.len(), 2);
                     assert_eq!(
                         base.constraints[0].kind,
@@ -1504,7 +1506,7 @@ mod tests {
                     };
                     assert_eq!(ident.value.leaf().as_str(), "Maneuver");
                 }
-                other => panic!("expected Indexed type, got {other:?}"),
+                _ => panic!("expected Indexed type"),
             },
             _ => panic!("expected param"),
         }
@@ -1516,14 +1518,14 @@ mod tests {
         let file = Parser::new(source).parse_file().unwrap();
         match &file.declarations[0].kind {
             DeclKind::Param(p) => {
-                assert!(matches!(&p.type_ann.kind, TypeExprKind::Int));
-                assert_eq!(p.type_ann.constraints.len(), 2);
+                assert!(matches!(&p.type_ann.element.kind, TypeExprKind::Int));
+                assert_eq!(p.type_ann.element.constraints.len(), 2);
                 assert_eq!(
-                    p.type_ann.constraints[0].kind,
+                    p.type_ann.element.constraints[0].kind,
                     crate::syntax::ast::DomainBoundKind::Min
                 );
                 assert_eq!(
-                    p.type_ann.constraints[1].kind,
+                    p.type_ann.element.constraints[1].kind,
                     crate::syntax::ast::DomainBoundKind::Max
                 );
             }
@@ -1537,7 +1539,7 @@ mod tests {
         let file = Parser::new(source).parse_file().unwrap();
         match &file.declarations[0].kind {
             DeclKind::Param(p) => {
-                assert!(p.type_ann.constraints.is_empty());
+                assert!(p.type_ann.element.constraints.is_empty());
             }
             _ => panic!("expected param"),
         }

@@ -39,7 +39,7 @@ impl std::fmt::Display for NameCategory {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Table(table) => table.fmt(f),
-            Self::Namespace(namespace) => namespace.fmt(f),
+            Self::Namespace(namespace) => write!(f, "{} name", namespace.user_facing_label()),
             Self::TermImport => f.write_str("term import namespace"),
             Self::DagAlias => f.write_str("dag alias"),
             Self::Dag => f.write_str("dag"),
@@ -113,7 +113,7 @@ pub enum ModuleResolveError {
         alias: ModuleAliasName,
     },
     /// Two local declarations occupy one slot of the module's collision unit.
-    #[error("duplicate {namespace} `{name}` in module `{owner}`")]
+    #[error("duplicate {} name `{name}` in module `{owner}`", .namespace.user_facing_label())]
     DuplicateSymbol {
         owner: DagId,
         namespace: Namespace,
@@ -122,7 +122,7 @@ pub enum ModuleResolveError {
         duplicate: Span,
     },
     /// One index declaration lists a variant twice.
-    #[error("duplicate IndexVariantName `{variant}` in module `{owner}`")]
+    #[error("duplicate index variant `{variant}` in module `{owner}`")]
     DuplicateIndexVariant {
         owner: DagId,
         variant: QualifiedIndexVariantName,
@@ -130,7 +130,7 @@ pub enum ModuleResolveError {
         duplicate: Span,
     },
     /// One plugin block declares a function twice.
-    #[error("duplicate FnName `{function}` in module `{owner}`")]
+    #[error("duplicate plugin function `{function}` in module `{owner}`")]
     DuplicatePluginFunction {
         owner: DagId,
         function: FnName,
@@ -138,7 +138,7 @@ pub enum ModuleResolveError {
         duplicate: Span,
     },
     /// An alias or import claims a slot another binding already occupies.
-    #[error("duplicate imported {namespace} `{name}` in module `{owner}`")]
+    #[error("duplicate imported {} name `{name}` in module `{owner}`", .namespace.user_facing_label())]
     DuplicateImportName {
         owner: DagId,
         namespace: Namespace,
@@ -169,7 +169,7 @@ pub enum ModuleResolveError {
         actual: SurfaceNameKind,
     },
     /// A selective include chose an importable blueprint that is not an instance member.
-    #[error("cannot project `{name}` from configured instance `{owner}` ({kind:?})")]
+    #[error("cannot project {kind} `{name}` from configured instance `{owner}`")]
     IncludeItemNotProjectable {
         owner: DagId,
         name: NameAtom,

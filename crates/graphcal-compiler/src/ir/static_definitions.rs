@@ -59,6 +59,17 @@ pub struct DefinitionSource<'a> {
     pub src: SourceId,
 }
 
+/// A [`StaticDefinitionEvaluator`] that cannot be created.
+#[derive(Debug, thiserror::Error)]
+pub enum DefinitionEvaluatorError {
+    /// The built-in prelude is inconsistent.
+    #[error("prelude failed to load: {0}")]
+    Prelude(#[from] PreludeDefinitionError),
+    /// A source module is not a module of the evaluator's resolver.
+    #[error("source module `{0}` is not a module of the resolver")]
+    UnknownSourceModule(DagId),
+}
+
 /// A dimension expression that could not be evaluated.
 #[derive(Debug)]
 pub enum DimExprFailure {
@@ -144,6 +155,8 @@ enum DimensionSource<'a> {
 /// Declarations of one module indexed by the name they introduce.
 #[derive(Debug)]
 struct ModuleSource<'a> {
+    /// The resolver's handle of the module.
+    module: crate::resolve::ModuleHandle,
     src: SourceId,
     declarations: &'a [Declaration],
     dimensions: HashMap<DimName, DimensionSource<'a>>,
@@ -153,8 +166,9 @@ struct ModuleSource<'a> {
 }
 
 impl<'a> ModuleSource<'a> {
-    fn new(source: DefinitionSource<'a>) -> Self {
+    fn new(module: crate::resolve::ModuleHandle, source: DefinitionSource<'a>) -> Self {
         let mut module = Self {
+            module,
             src: source.src,
             declarations: source.declarations,
             dimensions: HashMap::new(),
@@ -247,13 +261,23 @@ impl<'a> StaticDefinitionEvaluator<'a> {
     ///
     /// # Errors
     ///
-    /// Returns an error only if the built-in prelude is inconsistent.
+    /// Returns an error if the built-in prelude is inconsistent or a source
+    /// module is not a module of `resolver`.
     pub fn new(
         resolver: &'a ModuleResolver,
         sources: impl IntoIterator<Item = (DagId, DefinitionSource<'a>)>,
         fallback_src: SourceId,
-    ) -> Result<Self, PreludeDefinitionError> {
+    ) -> Result<Self, DefinitionEvaluatorError> {
         let prelude_definitions = crate::ir::prelude_definitions::prelude_definitions()?;
+        let modules = sources
+            .into_iter()
+            .map(|(owner, source)| {
+                let module = resolver
+                    .module_handle(&owner)
+                    .ok_or_else(|| DefinitionEvaluatorError::UnknownSourceModule(owner.clone()))?;
+                Ok((owner, ModuleSource::new(module, source)))
+            })
+            .collect::<Result<_, DefinitionEvaluatorError>>()?;
         let prelude_dimensions = prelude_definitions
             .dimensions()
             .map(|(identity, _)| {
@@ -267,10 +291,7 @@ impl<'a> StaticDefinitionEvaluator<'a> {
             resolver,
             prelude: crate::resolve::prelude::prelude_type_scope(),
             prelude_dimensions,
-            modules: sources
-                .into_iter()
-                .map(|(owner, source)| (owner, ModuleSource::new(source)))
-                .collect(),
+            modules,
             dimensions: prelude_definitions
                 .dimensions()
                 .map(|(identity, dimension)| (identity.clone(), dimension.clone()))
@@ -310,12 +331,12 @@ impl<'a> StaticDefinitionEvaluator<'a> {
     pub fn type_declaration(
         &self,
         identity: &crate::resolved_name::ResolvedStructTypeName,
-    ) -> Option<(&'a ast::TypeDecl, SourceId)> {
+    ) -> Option<(&'a ast::TypeDecl, SourceId, crate::resolve::ModuleHandle)> {
         let module = self.modules.get(identity.owner())?;
         module
             .types
             .get(&identity.to_unowned_def_name())
-            .map(|declaration| (*declaration, module.src))
+            .map(|declaration| (*declaration, module.src, module.module))
     }
 
     /// Resolve a dimension reference written in `owner`.
@@ -460,7 +481,7 @@ impl<'a> StaticDefinitionEvaluator<'a> {
         let mut definitions = StaticDefinitions::new(owner.clone());
         let fallback_src = self.fallback_src;
         let foreign = |error: crate::ir::module_definitions::ForeignDefinitionError| {
-            missing_definition_error(&error.to_string(), fallback_src)
+            missing_definition_internal_error(&error.to_string(), fallback_src)
         };
         if let Some(symbols) = self.resolver.symbols(owner) {
             for symbol in symbols.dimensions().values() {
@@ -725,7 +746,7 @@ impl<'a> StaticDefinitionEvaluator<'a> {
                 src,
             }
             .error(),
-            None => missing_definition_error(&identity.to_string(), self.fallback_src),
+            None => missing_definition_internal_error(&identity.to_string(), self.fallback_src),
         }
     }
 
@@ -740,7 +761,7 @@ impl<'a> StaticDefinitionEvaluator<'a> {
                 .get(&identity.to_unowned_def_name())
                 .map(|source| (*source, module.src))
         }) else {
-            return Err(missing_definition_error(
+            return Err(missing_definition_internal_error(
                 &identity.to_string(),
                 self.fallback_src,
             ));
@@ -882,7 +903,7 @@ impl<'a> StaticDefinitionEvaluator<'a> {
                 .get(&identity.to_unowned_def_name())
                 .map(|declaration| (*declaration, module.src))
         }) else {
-            return Err(missing_definition_error(
+            return Err(missing_definition_internal_error(
                 &identity.to_string(),
                 self.fallback_src,
             ));
@@ -1025,7 +1046,7 @@ impl<'a> StaticDefinitionEvaluator<'a> {
                     .entry(owner.clone())
                     .or_default()
                     .push(DynamicUnitScaleEntry {
-                        unit: owner.clone(),
+                        unit: identity.clone(),
                         spelling: UnitRef::local(unit.name.value.clone()),
                         expr: InScope::new(def.scale_expr.clone(), owner.clone()),
                         span: def.scale_expr.span,
@@ -1093,7 +1114,9 @@ impl<'a> StaticDefinitionEvaluator<'a> {
                     .get(&identity.to_unowned_def_name())
                     .map(|(declaration, span)| (*declaration, *span, module.src))
             })
-            .ok_or_else(|| missing_definition_error(&identity.to_string(), self.fallback_src))
+            .ok_or_else(|| {
+                missing_definition_internal_error(&identity.to_string(), self.fallback_src)
+            })
     }
 
     fn index_definition(
@@ -1245,7 +1268,7 @@ impl<'a> StaticDefinitionEvaluator<'a> {
 
 /// A resolver symbol has no valid definition source: the evaluator was not
 /// given the declaring module, or the symbol belongs to another module.
-fn missing_definition_error(detail: &str, src: SourceId) -> SemanticError {
+fn missing_definition_internal_error(detail: &str, src: SourceId) -> SemanticError {
     SemanticError::internal_error(
         format!("resolved definition has no owned source declaration: {detail}"),
         src,
@@ -1443,13 +1466,7 @@ fn validate_type_expr_finite_indexes(
     type_expr: &ast::TypeExpr,
     src: SourceId,
 ) -> Result<(), SemanticError> {
-    match &type_expr.kind {
-        ast::TypeExprKind::Indexed { base, indexes } => {
-            validate_type_expr_finite_indexes(base, src)?;
-            for index in indexes {
-                validate_index_expr_finite_indexes(index, src)?;
-            }
-        }
+    match &type_expr.element.kind {
         ast::TypeExprKind::TypeApplication { generic_args, .. } => {
             for arg in generic_args {
                 validate_generic_arg_finite_indexes(arg, src)?;
@@ -1461,6 +1478,9 @@ fn validate_type_expr_finite_indexes(
             }
         }
         _ => {}
+    }
+    for index in type_expr.indexes.iter().flatten() {
+        validate_index_expr_finite_indexes(index, src)?;
     }
     Ok(())
 }

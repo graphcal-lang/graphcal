@@ -548,7 +548,7 @@ fn resolve_include_static_bindings(
         dims,
     } = authored;
     let resolver = scope.resolver();
-    let missing_port = |kind: &str, port: &dyn std::fmt::Display| {
+    let missing_port_internal_error = |kind: &str, port: &dyn std::fmt::Display| {
         PipelineError::Semantic(SemanticError::internal_error(
             format!("template {kind} port `{port}` has no canonical identity"),
             src,
@@ -561,7 +561,7 @@ fn resolve_include_static_bindings(
         let identity = resolver
             .resolve_index_path(template, &NamePath::local(port.atom().clone()))
             .map(SymbolRef::into_resolved)
-            .map_err(|_| missing_port("index", &port))?;
+            .map_err(|_| missing_port_internal_error("index", &port))?;
         let target = match &authored {
             IndexBindingTarget::Declared(target) => InstanceIndexBindingTarget::Declared(
                 resolver
@@ -593,7 +593,7 @@ fn resolve_include_static_bindings(
         let identity = resolver
             .resolve_struct_type_path(template, &NamePath::local(port.atom().clone()))
             .map(SymbolRef::into_resolved)
-            .map_err(|_| missing_port("type", &port))?;
+            .map_err(|_| missing_port_internal_error("type", &port))?;
         let target = resolver
             .resolve_struct_type_path(scope.owner(), &NamePath::local(target.atom().clone()))
             .map(SymbolRef::into_resolved)
@@ -605,7 +605,7 @@ fn resolve_include_static_bindings(
         let identity = resolver
             .resolve_dimension_path(template, &NamePath::local(port.atom().clone()))
             .map(SymbolRef::into_resolved)
-            .map_err(|_| missing_port("dimension", &port))?;
+            .map_err(|_| missing_port_internal_error("dimension", &port))?;
         let path = NamePath::local(target.atom().clone());
         let target = match resolver
             .resolve_dimension_path(scope.owner(), &path)

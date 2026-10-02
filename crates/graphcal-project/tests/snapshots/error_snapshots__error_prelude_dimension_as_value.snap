@@ -2,7 +2,7 @@
 source: crates/graphcal-project/tests/error_snapshots.rs
 expression: rendered
 ---
-unknown Term `Length` in module `prelude_dimension_as_value`
+unknown term name `Length` in module `prelude_dimension_as_value`
     Diagnostic severity: error
 Begin snippet for prelude_dimension_as_value.gcl starting at line 1, column 1
 

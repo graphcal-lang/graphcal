@@ -44,9 +44,10 @@ impl ExternSignatureScope<'_, '_> {
         if let Some(definition) = self.nominal_types.get(identity) {
             return Ok(Some(Arc::clone(definition)));
         }
+        let resolver = self.resolver();
         self.definitions
             .type_declaration(identity)
-            .map(|(declaration, src)| {
+            .map(|(declaration, src, module)| {
                 crate::outcome::without_cancellation(|cancellation| {
                     crate::hir::nominal_lower::lower_type_declaration(
                         declaration,
@@ -54,7 +55,8 @@ impl ExternSignatureScope<'_, '_> {
                         declaration.name.span,
                         src,
                         crate::hir::nominal_lower::NominalLowering {
-                            resolver: self.resolver(),
+                            resolver,
+                            module: resolver.module(module),
                             cancellation,
                         },
                     )
@@ -225,7 +227,10 @@ fn resolve_extern_value_kind(
     use crate::desugar::desugared_ast::TypeExprKind;
     use crate::function_signature::ParamKind;
 
-    if !type_ann.constraints.is_empty() {
+    if let Some(indexes) = &type_ann.indexes {
+        return resolve_extern_array_kind(&type_ann.element, indexes, generics, scope, src);
+    }
+    if !type_ann.element.constraints.is_empty() {
         return Err(SemanticError::located(
             src,
             type_ann.span,
@@ -234,16 +239,13 @@ fn resolve_extern_value_kind(
             },
         ));
     }
-    match &type_ann.kind {
+    match &type_ann.element.kind {
         TypeExprKind::Bool => Ok(ParamKind::bool()),
         TypeExprKind::Int => Ok(ParamKind::int()),
         TypeExprKind::Dimensionless => Ok(ParamKind::dimensionless()),
         TypeExprKind::DimExpr(dim_expr) => {
             resolve_extern_dim_monomial(dim_expr, generics, scope, src)
                 .map(ParamKind::quantity_monomial)
-        }
-        TypeExprKind::Indexed { base, indexes } => {
-            resolve_extern_array_kind(base, indexes.as_slice(), generics, scope, src)
         }
         TypeExprKind::IndexLabel { .. }
         | TypeExprKind::Datetime
@@ -346,8 +348,9 @@ fn resolve_extern_result_kind(
 ) -> Result<crate::function_signature::NamedResultKind<ExternStructResult>, SemanticError> {
     use crate::desugar::desugared_ast::TypeExprKind;
 
-    if type_ann.constraints.is_empty()
-        && let TypeExprKind::DimExpr(dim_expr) = &type_ann.kind
+    if type_ann.indexes.is_none()
+        && type_ann.element.constraints.is_empty()
+        && let TypeExprKind::DimExpr(dim_expr) = &type_ann.element.kind
         && let [item] = dim_expr.terms.as_slice()
         && item.term.power.is_none()
         && scope.dimension_term(&item.term, generics)?.is_none()
@@ -360,7 +363,9 @@ fn resolve_extern_result_kind(
             src,
         );
     }
-    if let TypeExprKind::TypeApplication { .. } = &type_ann.kind {
+    if type_ann.indexes.is_none()
+        && let TypeExprKind::TypeApplication { .. } = &type_ann.element.kind
+    {
         return Err(SemanticError::located(
             src,
             type_ann.span,
@@ -500,8 +505,8 @@ fn resolve_extern_struct_field(
 /// function is generic over the axes it receives, and every result axis must
 /// come from an input.
 fn resolve_extern_array_kind(
-    base: &TypeExpr,
-    indexes: &[crate::syntax::ast::IndexExpr],
+    base: &crate::desugar::desugared_ast::ElementTypeExpr,
+    indexes: &crate::syntax::non_empty::NonEmpty<crate::syntax::ast::IndexExpr>,
     generics: &ExternGenerics,
     scope: &mut ExternSignatureScope<'_, '_>,
     src: SourceId,
@@ -509,30 +514,17 @@ fn resolve_extern_array_kind(
     use crate::desugar::desugared_ast::TypeExprKind;
     use crate::function_signature::{DimMonomial, ParamKind, ScalarValueKind};
 
-    let resolved_indexes = indexes
-        .iter()
-        .map(|index_expr| {
-            scope.index_var(index_expr, generics).ok_or_else(|| {
-                SemanticError::located(
-                    src,
-                    index_expr.span(),
-                    PluginError::InvalidExternSignature {
-                        error: ExternSignatureError::ArrayAxesMustBeBinders,
-                    },
-                )
-            })
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    let indexes =
-        crate::syntax::non_empty::NonEmpty::try_from_vec(resolved_indexes).map_err(|_| {
+    let indexes = indexes.try_map_ref(|index_expr| {
+        scope.index_var(index_expr, generics).ok_or_else(|| {
             SemanticError::located(
                 src,
-                type_ann_indexes_span(indexes, base),
+                index_expr.span(),
                 PluginError::InvalidExternSignature {
-                    error: ExternSignatureError::ArrayWithoutAxes,
+                    error: ExternSignatureError::ArrayAxesMustBeBinders,
                 },
             )
-        })?;
+        })
+    })?;
 
     if !base.constraints.is_empty() {
         return Err(SemanticError::located(
@@ -561,18 +553,6 @@ fn resolve_extern_array_kind(
         }
     };
     Ok(ParamKind::Indexed { element, indexes })
-}
-
-/// Span covering an array annotation's index list (falls back to the base
-/// type's span when the list is empty, which the parser never produces).
-fn type_ann_indexes_span(
-    indexes: &[crate::syntax::ast::IndexExpr],
-    base: &TypeExpr,
-) -> crate::syntax::span::Span {
-    match (indexes.first(), indexes.last()) {
-        (Some(first), Some(last)) => first.span().merge(last.span()),
-        _ => base.span,
-    }
 }
 
 /// Resolve a dimension expression over the signature's dimension binders and

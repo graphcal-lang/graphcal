@@ -202,12 +202,6 @@ impl<T> NonEmpty<T> {
         &self.items
     }
 
-    /// Mutably borrow as a slice.
-    #[must_use]
-    pub(crate) fn as_mut_slice(&mut self) -> &mut [T] {
-        &mut self.items
-    }
-
     /// Number of elements. Always at least 1.
     #[must_use]
     pub const fn len(&self) -> usize {

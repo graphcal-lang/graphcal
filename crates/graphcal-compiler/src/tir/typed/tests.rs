@@ -2056,19 +2056,11 @@ fn module_type_context_carries_its_owners_symbol_table() {
         crate::ir::lower::lower_file_with_inline_dags_for_test(&file, "test.gcl", src).unwrap();
     let types = ProjectTypeStore::default();
     let owner = lowered.root.dag_id().clone();
-    let ctx = ModuleTypeContext::try_new(&owner, &lowered.resolver, &types, src).unwrap();
+    let ctx = ModuleTypeContext::new(lowered.root.module(), &lowered.resolver, &types);
     assert_eq!(ctx.owner(), &owner);
     assert!(
         ctx.symbols()
             .struct_types()
             .contains_key(&StructTypeName::expect_valid("T"))
-    );
-
-    let unknown =
-        owner.inline_dag_child(crate::syntax::decl_name::DeclName::expect_valid("missing"));
-    let error = ModuleTypeContext::try_new(&unknown, &lowered.resolver, &types, src).unwrap_err();
-    assert!(
-        matches!(error, SemanticError::Internal(_)),
-        "got: {error:?}"
     );
 }

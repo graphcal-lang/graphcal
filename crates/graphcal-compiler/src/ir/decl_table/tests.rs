@@ -16,7 +16,6 @@ impl BodyPhase for Bare {
     type AssertBody = ();
     type PlotBody = ();
     type CompositionFields = ();
-    type UnitIdentity = ();
 }
 
 /// Same shape as [`Bare`], used to observe a phase change.
@@ -30,7 +29,6 @@ impl BodyPhase for Counted {
     type AssertBody = usize;
     type PlotBody = ();
     type CompositionFields = ();
-    type UnitIdentity = ();
 }
 
 fn owner() -> DagId {

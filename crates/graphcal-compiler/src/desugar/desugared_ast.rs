@@ -46,6 +46,7 @@ pub type UnitDecl = crate::syntax::ast::UnitDecl<Desugared>;
 pub type UnitDef = crate::syntax::ast::UnitDef<Desugared>;
 pub type DomainBound = crate::syntax::ast::DomainBound<Desugared>;
 pub type TypeExpr = crate::syntax::ast::TypeExpr<Desugared>;
+pub type ElementTypeExpr = crate::syntax::ast::ElementTypeExpr<Desugared>;
 pub type TypeExprKind = crate::syntax::ast::TypeExprKind<Desugared>;
 pub type DimExpr = crate::syntax::ast::DimExpr;
 pub(crate) type DimExprItem = crate::syntax::ast::DimExprItem;

@@ -6,7 +6,6 @@ use std::collections::BTreeMap;
 use thiserror::Error;
 
 use crate::dimension::{BaseDimId, Dimension};
-use crate::semantic::aliased_table::AliasedTable;
 use crate::syntax::dimension::{DimName, DimRef, UnitName};
 
 /// Format a dimension, preferring a registered named alias for compound forms.
@@ -16,7 +15,7 @@ use crate::syntax::dimension::{DimName, DimRef, UnitName};
 /// a matching named dimension (`Energy`) when one is registered; if several
 /// names match, the lexicographically smallest is chosen for determinism.
 fn format_dimension_preferring_alias(
-    named: &AliasedTable<DimRef, Dimension>,
+    named: &BTreeMap<DimRef, Dimension>,
     dim: &Dimension,
 ) -> String {
     // Base dimensions and Dimensionless render as a single bare name already;
@@ -139,7 +138,7 @@ impl std::fmt::Display for DimensionSpelling {
 #[derive(Debug, Clone)]
 pub struct DimensionFormattingRegistry {
     bases: BTreeMap<BaseDimId, BaseDimensionInfo>,
-    display_aliases: AliasedTable<DimRef, Dimension>,
+    display_aliases: BTreeMap<DimRef, Dimension>,
 }
 
 impl DimensionFormattingRegistry {
@@ -150,13 +149,9 @@ impl DimensionFormattingRegistry {
         bases: BTreeMap<BaseDimId, BaseDimensionInfo>,
         display_aliases: impl IntoIterator<Item = (DimRef, Dimension)>,
     ) -> Self {
-        let mut aliases = AliasedTable::default();
-        for (name, dimension) in display_aliases {
-            aliases.insert(name, dimension);
-        }
         Self {
             bases,
-            display_aliases: aliases,
+            display_aliases: display_aliases.into_iter().collect(),
         }
     }
 
