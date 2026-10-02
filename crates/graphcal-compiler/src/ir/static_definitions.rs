@@ -1438,40 +1438,21 @@ fn validate_structural_finite_indexes(
     Ok(())
 }
 
+/// The value of a variable-free `Fin(...)` cardinality, or `None` when it
+/// names a generic parameter; a closed part that overflows is rejected.
 fn concrete_nat_value(expr: &ast::NatExpr, src: SourceId) -> Result<Option<u64>, SemanticError> {
-    match expr {
-        ast::NatExpr::Literal(value, _) => Ok(Some(*value)),
-        ast::NatExpr::Var(_) => Ok(None),
-        ast::NatExpr::Add(operands, span) => {
-            operands.iter().try_fold(Some(0_u64), |sum, operand| {
-                match (sum, concrete_nat_value(operand, src)?) {
-                    (Some(sum), Some(value)) => sum.checked_add(value).map(Some).ok_or_else(|| {
-                        SemanticError::located(
-                            src,
-                            *span,
-                            IndexError::FinCardinalityAdditionOverflow,
-                        )
-                    }),
-                    _ => Ok(None),
-                }
-            })
-        }
-        ast::NatExpr::Mul(operands, span) => {
-            operands.iter().try_fold(Some(1_u64), |product, operand| {
-                match (product, concrete_nat_value(operand, src)?) {
-                    (Some(product), Some(value)) => {
-                        product.checked_mul(value).map(Some).ok_or_else(|| {
-                            SemanticError::located(
-                                src,
-                                *span,
-                                IndexError::FinCardinalityMultiplicationOverflow,
-                            )
-                        })
-                    }
-                    _ => Ok(None),
-                }
-            })
-        }
+    use crate::syntax::nat_eval::{ClosedNat, NatArithmetic};
+    match expr.closed_value() {
+        Ok(ClosedNat::Value(value)) => Ok(Some(value)),
+        Ok(ClosedNat::Open { .. }) => Ok(None),
+        Err(overflow) => Err(SemanticError::located(
+            src,
+            overflow.span,
+            match overflow.op {
+                NatArithmetic::Addition => IndexError::FinCardinalityAdditionOverflow,
+                NatArithmetic::Multiplication => IndexError::FinCardinalityMultiplicationOverflow,
+            },
+        )),
     }
 }
 

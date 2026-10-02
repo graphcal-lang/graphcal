@@ -17,6 +17,7 @@ pub mod local_name;
 pub mod module_name;
 pub mod module_path_key;
 pub mod names;
+pub mod nat_eval;
 pub mod non_empty;
 pub mod parser;
 pub mod phase;
