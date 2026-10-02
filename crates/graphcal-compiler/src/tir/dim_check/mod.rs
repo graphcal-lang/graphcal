@@ -1125,111 +1125,43 @@ fn check_field_domain_constraint_targets(
 ) -> Result<(), SemanticError> {
     let mut seen = std::collections::HashSet::new();
     for (_, dag) in tir.local_dags() {
-        for (key, field_semantics, bounds) in dag.semantic.type_defs.constrained_fields() {
-            if !seen.insert(key) {
+        for nominal in dag.semantic.type_defs.nominals() {
+            if !seen.insert(nominal.identity()) {
                 continue;
             }
-            let Some(type_kind) = invalid_domain_target_kind(field_semantics.resolved_type())
-            else {
-                continue;
-            };
-            let first_bound = bounds.first();
-            let span = field_type_annotation(dag, key)
-                .map_or(first_bound.span, |field| field.type_annotation().span);
-            return Err(SemanticError::located(
-                first_bound.src,
-                span,
-                DomainError::InvalidDomainTarget { type_kind },
-            ));
+            for constrained in nominal.constrained_fields() {
+                let field = constrained.field();
+                let Some(type_kind) = invalid_domain_target_kind(field.semantics().resolved_type())
+                else {
+                    continue;
+                };
+                return Err(SemanticError::located(
+                    constrained.bounds().first().src,
+                    field.field().type_annotation().span,
+                    DomainError::InvalidDomainTarget { type_kind },
+                ));
+            }
         }
     }
     Ok(())
 }
 
-fn field_type_annotation<'a>(
-    dag: &'a crate::tir::typed::DagTIR,
-    key: &crate::tir::typed::ResolvedStructFieldTypeKey,
-) -> Option<&'a crate::hir::nominal::NominalField> {
-    dag.semantic
-        .type_defs
-        .struct_types
-        .get(&key.owning_type)?
-        .union_members()?
-        .iter()
-        .find(|member| member.name() == key.constructor)?
-        .fields()
-        .iter()
-        .find(|field| field.name() == &key.field)
-}
-
 fn field_constraint_definition_dag<'a>(
     tir: &'a crate::tir::typed::UncheckedTir,
-    key: &crate::tir::typed::ResolvedStructFieldTypeKey,
+    owning_type: &crate::resolved_name::ResolvedStructTypeName,
     src: SourceId,
     span: Span,
 ) -> Result<&'a crate::tir::typed::DagTIR, SemanticError> {
-    tir.dags.get(key.owning_type.owner()).ok_or_else(|| {
+    tir.dags.get(owning_type.owner()).ok_or_else(|| {
         SemanticError::internal_error(
             format!(
                 "field-constraint owner `{}` has no checked DAG",
-                key.owning_type.owner()
+                owning_type.owner()
             ),
             src,
             crate::diagnostic_anchor::DiagnosticAnchor::Source(span),
         )
     })
-}
-
-/// The nominal type, constructor, and field a constrained-field key names.
-fn constrained_field_definition<'d>(
-    dag: &'d crate::tir::typed::DagTIR,
-    key: &crate::tir::typed::ResolvedStructFieldTypeKey,
-    src: SourceId,
-    span: Span,
-) -> Result<
-    (
-        &'d crate::hir::nominal::NominalTypeDef,
-        &'d crate::hir::nominal::NominalConstructor,
-        &'d crate::hir::nominal::NominalField,
-    ),
-    SemanticError,
-> {
-    let type_def = dag
-        .semantic
-        .type_defs
-        .struct_types
-        .get(&key.owning_type)
-        .ok_or_else(|| {
-            SemanticError::internal_error(
-                format!(
-                    "semantic type metadata missing constrained type `{}`",
-                    key.owning_type
-                ),
-                src,
-                crate::diagnostic_anchor::DiagnosticAnchor::Source(span),
-            )
-        })?;
-    let (variant, field) = type_def
-        .union_members()
-        .and_then(|members| {
-            members
-                .iter()
-                .flat_map(|member| member.fields().iter().map(move |field| (member, field)))
-                .find(|(member, field)| {
-                    member.name() == key.constructor && field.name() == &key.field
-                })
-        })
-        .ok_or_else(|| {
-            SemanticError::internal_error(
-                format!(
-                    "semantic type metadata missing constrained field `{}.{}`",
-                    key.constructor, key.field
-                ),
-                src,
-                crate::diagnostic_anchor::DiagnosticAnchor::Source(span),
-            )
-        })?;
-    Ok((type_def, variant, field))
 }
 
 /// Check that domain bound expressions on struct/union fields have the
@@ -1246,75 +1178,71 @@ fn check_field_domain_constraint_dimensions(
 ) -> Result<(), Outcome<SemanticError>> {
     let registry = tir.registry();
     let mut seen = HashSet::new();
-    for (_, dag) in tir.local_dags() {
-        for (key, field_semantics, bounds) in dag.semantic.type_defs.constrained_fields() {
-            if !seen.insert(key) {
-                continue;
+    let constrained_fields = tir
+        .local_dags()
+        .flat_map(|(_, dag)| dag.semantic.type_defs.nominals())
+        .filter(|nominal| seen.insert(nominal.identity()))
+        .flat_map(crate::tir::typed::ResolvedNominal::constrained_fields);
+    for constrained in constrained_fields {
+        let (field, bounds) = (constrained.field(), constrained.bounds());
+        let field_semantics = field.semantics();
+        let diagnostic_bound = bounds.first();
+        let diagnostic_src = &diagnostic_bound.src;
+        let diagnostic_span = diagnostic_bound.span;
+        let resolved_target = field_semantics.resolved_type().element();
+        let expected = expected_bound_from_resolved(resolved_target);
+        let deferred_generic_quantity = matches!(
+            resolved_target,
+            crate::tir::typed::ResolvedValueType::Quantity(
+                crate::tir::typed::ResolvedDim::Symbolic { .. }
+            )
+        );
+        if expected.is_none() && !deferred_generic_quantity {
+            return Err(SemanticError::internal_error(
+                format!(
+                    "constrained field target `{}` was not classified",
+                    resolved_target.format(registry)
+                ),
+                *diagnostic_src,
+                crate::diagnostic_anchor::DiagnosticAnchor::Source(diagnostic_span),
+            )
+            .into());
+        }
+        let display_name = field.display_name();
+        let definition_dag = field_constraint_definition_dag(
+            tir,
+            field.member().nominal().identity(),
+            *diagnostic_src,
+            diagnostic_span,
+        )?;
+        let Some(observations) = sinks.get(definition_dag.dag_id()) else {
+            // Imported definitions already carry their canonical proof.
+            continue;
+        };
+        for bound in bounds {
+            let inferred = infer::hir::InferEnv {
+                dag: definition_dag,
+                tir,
+                registry,
+                src: bound.src,
             }
-            let diagnostic_bound = bounds.first();
-            let diagnostic_src = &diagnostic_bound.src;
-            let diagnostic_span = diagnostic_bound.span;
-            let (type_def, variant, field) =
-                constrained_field_definition(dag, key, *diagnostic_src, diagnostic_span)?;
-            let resolved_target = field_semantics.resolved_type().element();
-            let expected = expected_bound_from_resolved(resolved_target);
-            let deferred_generic_quantity = matches!(
-                resolved_target,
-                crate::tir::typed::ResolvedValueType::Quantity(
-                    crate::tir::typed::ResolvedDim::Symbolic { .. }
-                )
-            );
-            if expected.is_none() && !deferred_generic_quantity {
-                return Err(SemanticError::internal_error(
-                    format!(
-                        "constrained field target `{}` was not classified",
-                        resolved_target.format(registry)
-                    ),
-                    *diagnostic_src,
-                    crate::diagnostic_anchor::DiagnosticAnchor::Source(diagnostic_span),
-                )
-                .into());
-            }
-            // For a single-variant collision (record-shape) the display
-            // name is `Type.field`; for a true multi-variant union it's
-            // `Type#Variant.field` so diagnostics disambiguate which
-            // constructor a violating bound belongs to.
-            let display_name = if variant.name().as_str() == type_def.name().as_str() {
-                format!("{}.{}", type_def.name(), field.name())
-            } else {
-                format!("{}.{}.{}", type_def.name(), variant.name(), field.name())
-            };
-            let definition_dag =
-                field_constraint_definition_dag(tir, key, *diagnostic_src, diagnostic_span)?;
-            let Some(observations) = sinks.get(definition_dag.dag_id()) else {
-                // Imported definitions already carry their canonical proof.
-                continue;
-            };
-            for bound in bounds {
-                let inferred = infer::hir::InferEnv {
-                    dag: definition_dag,
-                    tir,
+            .infer_root(&bound.value, None, cancellation, observations)?;
+            match &expected {
+                Some(expected) => check_one_bound_with_display_name(
+                    &display_name,
+                    bound,
+                    &inferred,
+                    expected,
                     registry,
-                    src: bound.src,
-                }
-                .infer_root(&bound.value, None, cancellation, observations)?;
-                match &expected {
-                    Some(expected) => check_one_bound_with_display_name(
-                        &display_name,
-                        bound,
-                        &inferred,
-                        expected,
-                        registry,
-                        bound.src,
-                    )?,
-                    None => check_deferred_generic_quantity_bound(
-                        &display_name,
-                        resolved_target,
-                        bound,
-                        &inferred,
-                        registry,
-                    )?,
-                }
+                    bound.src,
+                )?,
+                None => check_deferred_generic_quantity_bound(
+                    &display_name,
+                    resolved_target,
+                    bound,
+                    &inferred,
+                    registry,
+                )?,
             }
         }
     }

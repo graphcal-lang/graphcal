@@ -1,7 +1,7 @@
 //! Inference of field access and constructor calls on nominal types.
 
 use crate::hir::expr::{Expr, FieldInit};
-use crate::hir::nominal::{NominalConstructor, NominalField, NominalTypeDef};
+use crate::hir::nominal::NominalField;
 use crate::hir::types::GenericArg;
 use crate::outcome::Outcome;
 use crate::resolved_name::ResolvedConstructorName;
@@ -14,20 +14,12 @@ use crate::syntax::type_name::FieldName;
 
 use crate::semantic::checked_type::CheckedType;
 use crate::tir::dim_check::helpers::{
-    format_checked_type, format_distinct_types, struct_type_def_for_inferred,
+    format_checked_type, format_distinct_types, nominal_for_inferred,
 };
 
 use super::context::Infer;
 use super::override_deps::TypeNominalUse;
-use crate::tir::dim_check::generic_substitution::{resolved_field_type, resolved_type_field_key};
-
-fn record_member(type_def: &NominalTypeDef) -> Option<&NominalConstructor> {
-    let members = type_def.union_members()?;
-    let [only] = members else {
-        return None;
-    };
-    (only.name().as_str() == type_def.name().as_str()).then_some(only)
-}
+use crate::tir::dim_check::generic_substitution::{applied_field_type, recorded_member};
 
 impl Infer<'_> {
     pub(super) fn infer_hir_field_access(
@@ -53,19 +45,17 @@ impl Infer<'_> {
                 span: field.span,
             },
         )?;
-        let type_def =
-            struct_type_def_for_inferred(type_name, Some(self.env.dag), self.env.registry)
-                .ok_or_else(|| {
-                    SemanticError::located(
-                        self.env.src,
-                        inner.span,
-                        StructError::UnknownStructType {
-                            name: type_name.to_string(),
-                        },
-                    )
-                })?;
-        let member = record_member(type_def).ok_or_else(|| {
-            let detail = if type_def.is_required() {
+        let nominal = nominal_for_inferred(type_name, self.env.dag).ok_or_else(|| {
+            SemanticError::located(
+                self.env.src,
+                inner.span,
+                StructError::UnknownStructType {
+                    name: type_name.to_string(),
+                },
+            )
+        })?;
+        let member = nominal.record_member().ok_or_else(|| {
+            let detail = if nominal.definition().is_required() {
                 format!("required type `{}` has no fields", type_name.name())
             } else {
                 format!(
@@ -79,12 +69,8 @@ impl Infer<'_> {
                 StructError::NotAStruct { name: detail },
             )
         })?;
-        if !member
-            .fields()
-            .iter()
-            .any(|field_def| field_def.name() == &field.value)
-        {
-            return Err(SemanticError::located(
+        let field_semantics = member.field(&field.value).ok_or_else(|| {
+            SemanticError::located(
                 self.env.src,
                 field.span,
                 StructError::UnknownField {
@@ -94,18 +80,10 @@ impl Infer<'_> {
                     ),
                 },
             )
-            .into());
-        }
-        resolved_field_type(
-            &resolved_type_field_key(type_name.resolved(), member, &field.value),
-            type_def,
-            type_args,
-            self.env.dag,
-            self.env.src,
-            field.span,
-        )
-        .map(|ty| ty.to_symbolic())
-        .map_err(Outcome::Failed)
+        })?;
+        applied_field_type(field_semantics, type_args, self.env.src, field.span)
+            .map(|ty| ty.to_symbolic())
+            .map_err(Outcome::Failed)
     }
 
     pub(super) fn infer_hir_constructor_call(
@@ -195,11 +173,14 @@ impl Infer<'_> {
             .into());
         }
 
+        // A constructor without fields needs no field semantics.
+        let member = fields
+            .first()
+            .map(|_| recorded_member(self.env.dag, target, self.env.src, callee.span))
+            .transpose()?;
         for field_init in fields {
-            let field_def = variant
-                .fields()
-                .iter()
-                .find(|field| field.name() == &field_init.name.value)
+            let field_def = member
+                .and_then(|member| member.field(&field_init.name.value))
                 .ok_or_else(|| {
                     SemanticError::located(
                         self.env.src,
@@ -214,11 +195,9 @@ impl Infer<'_> {
                     )
                 })?;
             let value_type = self.infer_hir_type(&field_init.value)?;
-            let expected = resolved_field_type(
-                &resolved_type_field_key(target.owning_type(), variant, field_def.name()),
-                type_def,
+            let expected = applied_field_type(
+                field_def,
                 &resolved_type_args,
-                self.env.dag,
                 self.env.src,
                 field_init.name.span,
             )?

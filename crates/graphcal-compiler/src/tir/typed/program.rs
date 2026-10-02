@@ -422,7 +422,7 @@ impl dyn TirRead + '_ {
     /// Find the DAG carrying resolved field metadata for a nominal type.
     pub(crate) fn dag_with_type_metadata(&self, name: &ResolvedStructTypeName) -> Option<&DagTIR> {
         self.dag_bodies()
-            .find(|dag| dag.semantic.type_defs.struct_types.contains_key(name))
+            .find(|dag| dag.semantic.type_defs.contains(name))
     }
 }
 

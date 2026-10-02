@@ -12,6 +12,7 @@ use crate::dag_id::DagId;
 use crate::declaration_category::{DeclCategory, ValueDeclCategory};
 use crate::dependency_graph::{Cycle, DependencyGraph, TopoOrder};
 use crate::resolved_name::ResolvedDeclName;
+use crate::tir::typed::dag_position::DagPosition;
 use crate::tir::typed::model::DagTIR;
 
 /// Evaluation order of every constant of a checked file's local DAGs.
@@ -20,7 +21,8 @@ use crate::tir::typed::model::DagTIR;
 /// included instance's constants), so the order spans all local DAGs.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConstSchedule {
-    dags: Vec<DagId>,
+    /// The positions of the scheduled DAGs, in [`DagId`] order.
+    dags: Vec<DagPosition>,
     order: TopoOrder<ResolvedDeclName>,
 }
 
@@ -33,17 +35,17 @@ impl ConstSchedule {
     ///
     /// Returns the first [`Cycle`] among the constants.
     pub(crate) fn build<'a>(
-        dags: impl IntoIterator<Item = &'a DagTIR>,
+        dags: impl IntoIterator<Item = (DagPosition, &'a DagTIR)>,
     ) -> Result<Self, Cycle<ResolvedDeclName>> {
         let mut dags = dags.into_iter().collect::<Vec<_>>();
-        dags.sort_by(|left, right| left.dag_id().cmp(right.dag_id()));
+        dags.sort_by(|(_, left), (_, right)| left.dag_id().cmp(right.dag_id()));
         let mut graph = DependencyGraph::new();
-        for dag in &dags {
+        for (_, dag) in &dags {
             for entry in dag.consts() {
                 graph.add_node(entry.identity());
             }
         }
-        for dag in &dags {
+        for (_, dag) in &dags {
             let const_deps = &dag.semantic().dependencies.const_deps;
             for entry in dag.consts() {
                 let constant = entry.identity();
@@ -55,14 +57,14 @@ impl ConstSchedule {
             }
         }
         Ok(Self {
-            dags: dags.iter().map(|dag| dag.dag_id().clone()).collect(),
+            dags: dags.iter().map(|(position, _)| *position).collect(),
             order: graph.into_topo_order()?,
         })
     }
 
-    /// The scheduled DAGs, in [`DagId`] order.
+    /// The positions of the scheduled DAGs, in [`DagId`] order.
     #[must_use]
-    pub fn dags(&self) -> &[DagId] {
+    pub fn dags(&self) -> &[DagPosition] {
         &self.dags
     }
 

@@ -130,41 +130,58 @@ impl<'tir> ValidatedModelType<'tir> {
         _src: SourceId,
     ) -> Result<Vec<ConcreteModelConstructor>, SemanticError> {
         let tir: &dyn crate::tir::typed::TirRead = self.tir;
+        let type_def = self.definition.type_def;
+        // A type whose constructors have no fields needs no field semantics.
+        if self
+            .definition
+            .constructors
+            .iter()
+            .all(|constructor| constructor.fields().is_empty())
+        {
+            return Ok(self
+                .definition
+                .constructors
+                .iter()
+                .map(|constructor| ConcreteModelConstructor {
+                    name: constructor.name(),
+                    fields: Vec::new(),
+                })
+                .collect());
+        }
         let metadata_dag = tir
             .dag_with_type_metadata(self.identity.resolved())
             .unwrap_or_else(|| tir.root());
-        self.definition
-            .constructors
+        let nominal = super::generic_substitution::recorded_nominal(
+            metadata_dag,
+            self.identity.resolved(),
+            type_def.source(),
+            type_def.span(),
+        )?;
+        let generic_args = self
+            .generic_args
             .iter()
-            .map(|constructor| {
-                let fields = constructor
+            .map(CheckedGenericArg::to_symbolic)
+            .collect::<Vec<_>>();
+        nominal
+            .members()
+            .map(|member| {
+                let fields = member
                     .fields()
-                    .iter()
                     .map(|field| {
-                        super::generic_substitution::resolved_field_type(
-                            &super::generic_substitution::resolved_type_field_key(
-                                self.identity.resolved(),
-                                constructor,
-                                field.name(),
-                            ),
-                            self.definition.type_def,
-                            &self
-                                .generic_args
-                                .iter()
-                                .map(CheckedGenericArg::to_symbolic)
-                                .collect::<Vec<_>>(),
-                            metadata_dag,
-                            self.definition.type_def.source(),
-                            field.type_annotation().span,
+                        super::generic_substitution::applied_field_type(
+                            field,
+                            &generic_args,
+                            type_def.source(),
+                            field.field().type_annotation().span,
                         )
                         .map(|inferred| ConcreteModelField {
-                            name: field.name().clone(),
+                            name: field.field().name().clone(),
                             declared_type: inferred,
                         })
                     })
                     .collect::<Result<Vec<_>, _>>()?;
                 Ok(ConcreteModelConstructor {
-                    name: constructor.name(),
+                    name: member.constructor().name(),
                     fields,
                 })
             })

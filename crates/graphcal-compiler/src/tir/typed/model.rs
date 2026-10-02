@@ -25,6 +25,9 @@ use crate::syntax::module_name::ScopedName;
 use crate::syntax::span::Span;
 use crate::syntax::type_name::{ConstructorName, FieldName};
 
+use super::resolved_nominal::{
+    ConstrainedField, NominalMember, ResolvedDomainBound, ResolvedNominal,
+};
 use super::resolved_type::{ResolvedDeclType, ResolvedGenericArg};
 
 /// Convert a [`NatOverflowError`](crate::nat::NatOverflowError)
@@ -430,17 +433,6 @@ pub struct ResolvedDagDependencies {
     pub const_deps: HashMap<ResolvedDeclName, BTreeSet<ResolvedDeclName>>,
 }
 
-/// Canonical field type identity inside a resolved struct/tagged-union type.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct ResolvedStructFieldTypeKey {
-    /// Canonical owner/name of the type that owns the constructor.
-    pub owning_type: ResolvedStructTypeName,
-    /// Constructor/union-member leaf inside the owning type.
-    pub constructor: ConstructorName,
-    /// Field leaf inside the constructor payload.
-    pub field: FieldName,
-}
-
 /// Semantic resolution of one HIR generic-parameter default.
 ///
 /// The canonical HIR form remains authoritative on [`NominalGenericParam`];
@@ -450,66 +442,23 @@ pub(crate) struct ResolvedGenericDefault {
     pub(crate) resolved: ResolvedGenericArg,
 }
 
-/// Resolved semantic facts for one nominal field.
-///
-/// Keeping the target type and its bounds in one value prevents a constrained
-/// field from existing without the type needed to validate those bounds.
-#[derive(Debug, Clone)]
-pub struct ResolvedStructFieldSemantics {
-    resolved_type: ResolvedDeclType,
-    /// The field's domain bounds; `None` when the field is unconstrained.
-    domain_bounds: Option<NonEmpty<ResolvedDomainBound>>,
-}
-
-impl ResolvedStructFieldSemantics {
-    /// A field of `resolved_type`, constrained when `domain_bounds` is not
-    /// empty.
-    #[must_use]
-    pub fn new(resolved_type: ResolvedDeclType, domain_bounds: Vec<ResolvedDomainBound>) -> Self {
-        Self {
-            resolved_type,
-            domain_bounds: NonEmpty::try_from_vec(domain_bounds).ok(),
-        }
-    }
-
-    /// Return the field annotation resolved in its owning generic scope.
-    #[must_use]
-    pub const fn resolved_type(&self) -> &ResolvedDeclType {
-        &self.resolved_type
-    }
-
-    /// Return domain bounds lowered in the same owning generic scope, when
-    /// the field is constrained.
-    #[must_use]
-    pub const fn domain_bounds(&self) -> Option<&NonEmpty<ResolvedDomainBound>> {
-        self.domain_bounds.as_ref()
-    }
-}
-
 /// Canonical type definitions referenced by module-aware TIR.
 #[derive(Debug, Clone, Default)]
 pub struct ResolvedTypeDefs {
-    /// Shared handles to project-store nominal definitions keyed by canonical identity.
-    pub struct_types: HashMap<ResolvedStructTypeName, Arc<NominalTypeDef>>,
-    /// Atomic field semantics resolved in each owning type's generic scope.
-    fields: HashMap<ResolvedStructFieldTypeKey, ResolvedStructFieldSemantics>,
+    /// Each nominal type with its fields' semantics, keyed by its own
+    /// identity.
+    nominals: HashMap<ResolvedStructTypeName, ResolvedNominal>,
     /// Generic parameter defaults resolved in the owning type's generic scope.
     pub(crate) generic_defaults: HashMap<GenericParamId, ResolvedGenericDefault>,
 }
 
 impl ResolvedTypeDefs {
     pub(crate) fn extend_from(&mut self, other: &Self) {
-        self.struct_types.extend(
+        self.nominals.extend(
             other
-                .struct_types
+                .nominals
                 .iter()
-                .map(|(name, definition)| (name.clone(), Arc::clone(definition))),
-        );
-        self.fields.extend(
-            other
-                .fields
-                .iter()
-                .map(|(key, semantics)| (key.clone(), semantics.clone())),
+                .map(|(name, nominal)| (name.clone(), nominal.clone())),
         );
         self.generic_defaults.extend(
             other
@@ -519,69 +468,44 @@ impl ResolvedTypeDefs {
         );
     }
 
-    /// Insert one field's type and bounds as an atomic semantic fact.
-    pub(crate) fn insert_field(
-        &mut self,
-        key: ResolvedStructFieldTypeKey,
-        field: ResolvedStructFieldSemantics,
-    ) {
-        self.fields.insert(key, field);
+    /// Record one nominal type under its own identity.
+    pub(crate) fn insert(&mut self, nominal: ResolvedNominal) {
+        self.nominals.insert(nominal.identity().clone(), nominal);
     }
 
-    /// Return one field's complete resolved semantics.
+    /// Whether the nominal type `identity` is recorded.
     #[must_use]
-    pub fn field(&self, key: &ResolvedStructFieldTypeKey) -> Option<&ResolvedStructFieldSemantics> {
-        self.fields.get(key)
+    pub fn contains(&self, identity: &ResolvedStructTypeName) -> bool {
+        self.nominals.contains_key(identity)
     }
 
-    /// Visit every resolved field semantic record.
-    pub fn fields(
-        &self,
-    ) -> impl Iterator<Item = (&ResolvedStructFieldTypeKey, &ResolvedStructFieldSemantics)> {
-        self.fields.iter()
-    }
-
-    /// Visit only fields that carry domain bounds, with their bounds.
-    pub fn constrained_fields(
-        &self,
-    ) -> impl Iterator<
-        Item = (
-            &ResolvedStructFieldTypeKey,
-            &ResolvedStructFieldSemantics,
-            &NonEmpty<ResolvedDomainBound>,
-        ),
-    > {
-        self.fields.iter().filter_map(|(key, field)| {
-            field
-                .domain_bounds
-                .as_ref()
-                .map(|bounds| (key, field, bounds))
-        })
-    }
-
-    /// Return a field annotation resolved in its owning type's generic scope.
+    /// The nominal type `identity` with its fields' semantics.
     #[must_use]
-    pub fn field_type(&self, key: &ResolvedStructFieldTypeKey) -> Option<&ResolvedDeclType> {
-        self.field(key)
-            .map(ResolvedStructFieldSemantics::resolved_type)
+    pub fn nominal(&self, identity: &ResolvedStructTypeName) -> Option<&ResolvedNominal> {
+        self.nominals.get(identity)
     }
-}
 
-/// A `min:`/`max:` domain bound with its expression lowered to HIR.
-///
-/// Declaration bounds cross into HIR with their owning type annotation. TIR
-/// moves them into this checked semantic record so dimension checking and
-/// evaluation consume the same canonical expression tree.
-#[derive(Debug, Clone)]
-pub struct ResolvedDomainBound {
-    /// Whether this is a `min:` or `max:` bound.
-    pub kind: crate::syntax::ast::DomainBoundKind,
-    /// The bound expression, strictly lowered.
-    pub value: crate::hir::expr::CheckedExpr,
-    /// Span of the whole bound.
-    pub span: Span,
-    /// Source file whose bytes are indexed by `span` and the expression spans.
-    pub src: SourceId,
+    /// The recorded constructor `constructor` with its fields' semantics.
+    #[must_use]
+    pub fn member(
+        &self,
+        constructor: &crate::hir::nominal::ResolvedConstructor,
+    ) -> Option<NominalMember<'_>> {
+        self.nominal(constructor.owning_type())?
+            .member_of(constructor)
+    }
+
+    /// Every recorded nominal type.
+    pub fn nominals(&self) -> impl Iterator<Item = &ResolvedNominal> {
+        self.nominals.values()
+    }
+
+    /// Every field of a recorded type that carries domain bounds.
+    pub fn constrained_fields(&self) -> impl Iterator<Item = ConstrainedField<'_>> {
+        self.nominals
+            .values()
+            .flat_map(ResolvedNominal::constrained_fields)
+    }
 }
 
 /// The checked type of one value declaration.
@@ -1178,14 +1102,15 @@ impl DagTIR {
     ) -> impl Iterator<Item = &crate::hir::expr::Expr> {
         self.semantic
             .type_defs
-            .constrained_fields()
-            .filter(move |(key, _, _)| self.field_bound_scope(key) == scope)
-            .flat_map(|(_, _, bounds)| bounds.iter())
+            .nominals()
+            .filter(move |nominal| self.field_bound_scope(nominal.identity()) == scope)
+            .flat_map(ResolvedNominal::constrained_fields)
+            .flat_map(|field| field.bounds().iter())
             .map(|bound| &*bound.value)
     }
 
-    fn field_bound_scope(&self, key: &ResolvedStructFieldTypeKey) -> ExpressionRootScope {
-        if self.frame.owner(key.owning_type.owner()) == self.dag_id() {
+    fn field_bound_scope(&self, owning_type: &ResolvedStructTypeName) -> ExpressionRootScope {
+        if self.frame.owner(owning_type.owner()) == self.dag_id() {
             ExpressionRootScope::ThisBody
         } else {
             ExpressionRootScope::ReferencedBody

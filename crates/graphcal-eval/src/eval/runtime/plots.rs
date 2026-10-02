@@ -8,7 +8,6 @@
 
 use std::collections::HashMap;
 
-use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
 use graphcal_compiler::outcome::Outcome;
 use graphcal_compiler::plot_shape::PlotLeafKind;
 use graphcal_compiler::plot_visibility::PlotVisibility;
@@ -18,7 +17,7 @@ use graphcal_compiler::semantic_error::SemanticError;
 use graphcal_compiler::syntax::decl_name::DeclName;
 use graphcal_compiler::syntax::module_name::ScopedName;
 use graphcal_compiler::syntax::span::{Span, Spanned};
-use graphcal_compiler::tir::typed::{BodyKind, DeclarationBody, ResolvedProjection, Scoped};
+use graphcal_compiler::tir::typed::{BodyKind, DeclarationBody, Scoped};
 
 use crate::eval::plot_unavailable::{ComposedPlotsUnavailable, PlotUnavailable};
 use crate::eval::public_projection;
@@ -37,7 +36,6 @@ use crate::runtime_presentation::PendingPresentedMap;
 use crate::runtime_presentation::PresentedRef;
 use crate::runtime_value::KeyElement;
 
-use super::declaration_body::declaration_body;
 use super::dependency_failures::dependency_failure_message;
 use super::evaluated_root::EvaluatedRoot;
 
@@ -65,10 +63,7 @@ struct RootPlot<'p> {
 
 /// The plots of the root DAG, in output order: its own plots in source
 /// order, then the plots each semantic instance's include site requests.
-fn root_plots<'p>(
-    plan: &'p crate::execution_plan::ExecPlan<'p>,
-    ctx: &EvalSession<'_>,
-) -> Result<Vec<RootPlot<'p>>, SemanticError> {
+fn root_plots<'p>(plan: &'p crate::execution_plan::ExecPlan<'p>) -> Vec<RootPlot<'p>> {
     let tir = plan.tir();
     let own = tir
         .declaration_bodies(plan.root().scope().position())
@@ -82,29 +77,14 @@ fn root_plots<'p>(
             _ => None,
         });
     let requested = plan.root().semantic_instances().iter().flat_map(|planned| {
-        planned
-            .instance()
-            .plot_projections()
-            .map(|ResolvedProjection { target, projection }| {
-                // The plot runs in the DAG that owns it, which may be an
-                // instance nested in the requesting one when a template
-                // forwards its own plot.
-                let unit = declaration_body(tir, &target, ctx.src)?;
-                let BodyKind::Plot(entry) = unit.kind() else {
-                    return Err(ctx.internal_error(
-                        format!("plot `{target}` has no checked body"),
-                        DiagnosticAnchor::WholeFile,
-                    ));
-                };
-                Ok(RootPlot {
-                    unit,
-                    entry,
-                    name: &projection.alias,
-                    visibility: projection.visibility,
-                })
-            })
+        planned.plots().iter().map(|planned_plot| RootPlot {
+            unit: planned_plot.body,
+            entry: planned_plot.entry,
+            name: &planned_plot.projection.alias,
+            visibility: planned_plot.projection.visibility,
+        })
     });
-    own.map(Ok).chain(requested).collect()
+    own.chain(requested).collect()
 }
 
 /// The root plots that could not be rendered, by their name in the root's
@@ -123,7 +103,7 @@ pub(super) fn evaluate_root_plots(
     ctx: &EvalSession<'_>,
 ) -> Result<PlotOutputs, Outcome<SemanticError>> {
     let tir = plan.tir();
-    let root_plots = root_plots(plan, ctx)?;
+    let root_plots = root_plots(plan);
     let mut plots = Vec::new();
     let mut plot_errors = Vec::new();
     let mut unavailable = UnavailablePlots::new();

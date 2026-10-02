@@ -184,7 +184,8 @@ impl CheckedDag {
     pub fn domain_bounds(
         &self,
         identity: &ResolvedDeclName,
-    ) -> Option<&crate::syntax::non_empty::NonEmpty<super::model::ResolvedDomainBound>> {
+    ) -> Option<&crate::syntax::non_empty::NonEmpty<super::resolved_nominal::ResolvedDomainBound>>
+    {
         self.body.semantic().domain_bounds.get(identity)
     }
 
@@ -194,12 +195,9 @@ impl CheckedDag {
         &self.body.semantic().dependencies
     }
 
-    /// The nominal type definitions this DAG's body uses, by identity.
-    #[must_use]
-    pub const fn struct_type_defs(
-        &self,
-    ) -> &HashMap<ResolvedStructTypeName, std::sync::Arc<crate::hir::nominal::NominalTypeDef>> {
-        &self.body.semantic().type_defs.struct_types
+    /// The nominal types this DAG's body uses.
+    pub fn nominal_types(&self) -> impl Iterator<Item = &super::resolved_nominal::ResolvedNominal> {
+        self.body.semantic().type_defs.nominals()
     }
 
     /// The checked declared type of a value declaration of this DAG.

@@ -247,15 +247,9 @@ impl BodyObservations {
             expr.span,
         )?;
         let resolved_constructor = |name| {
-            tir.project_type_store()
-                .lookup_constructor(name)
-                .ok_or_else(|| {
-                    SemanticError::internal_error(
-                        format!("checked constructor `{name}` has no definition"),
-                        src,
-                        DiagnosticAnchor::Source(expr.span),
-                    )
-                })
+            crate::tir::dim_check::generic_substitution::resolved_constructor(
+                tir, name, src, expr.span,
+            )
         };
         let constructor = match expr.kind() {
             ExprKind::ConstructorCall { callee, .. } => Some(&callee.value),
@@ -277,28 +271,24 @@ impl BodyObservations {
             // The field types checking the call resolved, instantiated at
             // the application's arguments, so a value built here never looks
             // its constructor up again.
-            let fields = target
-                .variant()
+            // A constructor without fields needs no field semantics.
+            let fields = if target.variant().fields().is_empty() {
+                Vec::new()
+            } else {
+                crate::tir::dim_check::generic_substitution::recorded_member(
+                    dag, target, src, expr.span,
+                )?
                 .fields()
-                .iter()
                 .map(|field| {
-                    crate::tir::dim_check::generic_substitution::resolved_field_type(
-                        &crate::tir::dim_check::generic_substitution::resolved_type_field_key(
-                            target.owning_type(),
-                            target.variant(),
-                            field.name(),
-                        ),
-                        target.definition(),
-                        args,
-                        dag,
-                        src,
-                        expr.span,
+                    crate::tir::dim_check::generic_substitution::applied_field_type(
+                        field, args, src, expr.span,
                     )
                     .map(|field_type| {
-                        AppliedField::new(field.name().clone(), field_type.to_symbolic())
+                        AppliedField::new(field.field().name().clone(), field_type.to_symbolic())
                     })
                 })
-                .collect::<Result<Vec<_>, _>>()?;
+                .collect::<Result<Vec<_>, _>>()?
+            };
             Ok(ConstructorApplication {
                 constructor: target.clone(),
                 applied: Arc::new(AppliedConstructor::new(

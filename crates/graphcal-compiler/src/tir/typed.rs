@@ -62,6 +62,8 @@ pub mod module_type_context;
 pub use module_type_context::ModuleTypeContext;
 pub mod override_dependencies;
 pub use override_dependencies::CheckedOverrideDependencies;
+pub mod resolved_nominal;
+pub use resolved_nominal::*;
 pub mod resolved_type;
 pub use resolved_type::*;
 pub mod scoped_node;
@@ -157,7 +159,7 @@ pub fn resolve_hir_signature_with_modules_and_cancellation(
     cancellation: &crate::cancellation::CancellationToken,
 ) -> Result<SignatureResolvedHirDag, Outcome<SemanticError>> {
     cancellation.checkpoint()?;
-    let ctx = ModuleTypeContext::new(hir.dag_id(), module_resolver, project_types);
+    let ctx = ModuleTypeContext::try_new(hir.dag_id(), module_resolver, project_types, src)?;
     let decl_types = resolve_declared_type_exprs(&hir, src, ctx, cancellation)?;
     Ok(SignatureResolvedHirDag { hir, decl_types })
 }
@@ -208,7 +210,7 @@ impl TirDraft {
         let imported_bindings = checked_imported_bindings(signed.hir(), imported_types, src)?;
         let dag_id = signed.dag_id().clone();
         let context_types = Arc::clone(&project_types);
-        let ctx = ModuleTypeContext::new(&dag_id, module_resolver, &context_types);
+        let ctx = ModuleTypeContext::try_new(&dag_id, module_resolver, &context_types, src)?;
         type_resolve_impl(
             signed,
             imported_bindings,
@@ -417,7 +419,7 @@ fn type_resolve_signed_single_with_imported_bindings_and_cancellation(
     cancellation.checkpoint()?;
     let imported_bindings = checked_imported_bindings(signed.hir(), imported_types, src)?;
     let dag_id = signed.dag_id().clone();
-    let ctx = ModuleTypeContext::new(&dag_id, module_resolver, project_types);
+    let ctx = ModuleTypeContext::try_new(&dag_id, module_resolver, project_types, src)?;
     type_resolve_single_impl(signed, imported_bindings, src, ctx, cancellation)
 }
 
@@ -700,7 +702,7 @@ fn type_resolve_dag(
         imported_bindings,
         module_ctx,
     )?;
-    let bindable_nominals = collect_bindable_nominals(module_ctx, src)?;
+    let bindable_nominals = collect_bindable_nominals(module_ctx);
 
     let semantic = DagSemanticBody {
         domain_bounds,
@@ -720,18 +722,9 @@ fn type_resolve_dag(
     })
 }
 
-fn collect_bindable_nominals(
-    ctx: ModuleTypeContext<'_>,
-    src: SourceId,
-) -> Result<HashSet<BindableNominalIdentity>, SemanticError> {
-    let symbols = ctx.resolver.symbols(ctx.owner).ok_or_else(|| {
-        SemanticError::internal_error(
-            format!("module symbol table missing for DAG `{}`", ctx.owner),
-            src,
-            DiagnosticAnchor::WholeFile,
-        )
-    })?;
-    Ok(symbols
+fn collect_bindable_nominals(ctx: ModuleTypeContext<'_>) -> HashSet<BindableNominalIdentity> {
+    let symbols = ctx.symbols();
+    symbols
         .indexes()
         .values()
         .filter(|symbol| symbol.visibility().is_bindable())
@@ -743,7 +736,7 @@ fn collect_bindable_nominals(
                 .filter(|symbol| symbol.visibility().is_bindable())
                 .map(|symbol| BindableNominalIdentity::Type(symbol.resolved().clone())),
         )
-        .collect())
+        .collect()
 }
 
 fn override_reconciliations<'a>(
@@ -761,20 +754,15 @@ fn collect_resolved_type_defs<'a>(
     ctx: ModuleTypeContext<'_>,
 ) -> Result<ResolvedTypeDefs, SemanticError> {
     let mut defs = ResolvedTypeDefs::default();
-    if let Some(symbols) = ctx.resolver.symbols(ctx.owner) {
-        for symbol in symbols.struct_types().values() {
-            record_resolved_struct_type_def(symbol.resolved(), ctx, &mut defs)?;
-        }
+    let mut collector = TypeDefCollector::new(ctx, &mut defs);
+    for symbol in ctx.symbols().struct_types().values() {
+        collector.record(symbol.resolved())?;
     }
     for annotation in annotations {
-        collect_struct_type_defs_from_resolved_type(
-            annotation.checked().resolved().element(),
-            ctx,
-            &mut defs,
-        )?;
+        collector.resolved_type(annotation.checked().resolved().element())?;
     }
     for binding in imported_bindings.values() {
-        collect_struct_type_defs_from_declared_type(binding.declared_type(), ctx, &mut defs)?;
+        collector.declared_type(binding.declared_type())?;
     }
     Ok(defs)
 }
@@ -922,7 +910,7 @@ fn collect_public_signature_type_dependencies(
                     dependencies,
                 );
             }
-            if let Some(type_def) = defs.struct_types.get(&name.value) {
+            if let Some(type_def) = defs.nominal(&name.value).map(ResolvedNominal::definition) {
                 for param in type_def.generic_params().iter().skip(generic_args.len()) {
                     let key = param.id().clone();
                     if !visited_defaults.insert(key) {
@@ -955,23 +943,19 @@ fn validate_public_generic_defaults(
     ctx: ModuleTypeContext<'_>,
     src: SourceId,
 ) -> Result<(), SemanticError> {
-    for (type_name, type_def) in &dag.semantic.type_defs.struct_types {
+    for symbol in ctx.symbols().struct_types().values() {
+        let type_name = symbol.resolved();
         if type_name.owner() != ctx.owner
             || !external_surface.is_static_explicit_export(type_name.atom())
         {
             continue;
         }
-        let pub_span = ctx
-            .resolver
-            .symbol(type_name)
-            .map(SymbolRef::span)
-            .ok_or_else(|| {
-                SemanticError::internal_error(
-                    format!("module resolver lost source span for public type `{type_name}`"),
-                    src,
-                    DiagnosticAnchor::WholeFile,
-                )
-            })?;
+        // A type the project store does not define has no recorded nominal.
+        let Some(nominal) = dag.semantic.type_defs.nominal(type_name) else {
+            continue;
+        };
+        let type_def = nominal.definition();
+        let pub_span = symbol.span();
         for param in type_def.generic_params() {
             let Some(default) = param.default() else {
                 continue;
@@ -1022,135 +1006,135 @@ fn validate_public_generic_defaults(
     Ok(())
 }
 
-fn collect_struct_type_defs_from_declared_type(
-    declared: &crate::semantic::checked_type::CheckedType,
-    ctx: ModuleTypeContext<'_>,
-    defs: &mut ResolvedTypeDefs,
-) -> Result<(), SemanticError> {
-    match declared {
-        crate::semantic::checked_type::CheckedType::Struct(name, generic_args) => {
-            record_resolved_struct_type_def(name.resolved(), ctx, defs)?;
-            for arg in generic_args {
-                if let crate::semantic::checked_type::CheckedGenericArg::Type(type_expr) = arg {
-                    collect_struct_type_defs_from_declared_type(type_expr, ctx, defs)?;
-                }
-            }
-        }
-        crate::semantic::checked_type::CheckedType::Indexed { element, .. } => {
-            collect_struct_type_defs_from_declared_type(element, ctx, defs)?;
-        }
-        crate::semantic::checked_type::CheckedType::Quantity(_)
-        | crate::semantic::checked_type::CheckedType::Complex(_)
-        | crate::semantic::checked_type::CheckedType::Bool
-        | crate::semantic::checked_type::CheckedType::Int
-        | crate::semantic::checked_type::CheckedType::Datetime(_)
-        | crate::semantic::checked_type::CheckedType::Key(_) => {}
-    }
-    Ok(())
+/// Records nominal types into one DAG's type definitions, together with every
+/// type their generic defaults and fields name.
+///
+/// Model-schema expansion needs this closure, not only the types named
+/// directly by entry declarations: a prepared boundary value can contain
+/// nested records whose names never appear in the consumer module.
+struct TypeDefCollector<'d, 'c> {
+    ctx: ModuleTypeContext<'c>,
+    defs: &'d mut ResolvedTypeDefs,
+    /// Types whose recording has started, so recursive nominal types
+    /// terminate.
+    visiting: HashSet<ResolvedStructTypeName>,
 }
 
-fn collect_struct_type_defs_from_resolved_type(
-    resolved: &ResolvedValueType,
-    ctx: ModuleTypeContext<'_>,
-    defs: &mut ResolvedTypeDefs,
-) -> Result<(), SemanticError> {
-    match resolved {
-        ResolvedValueType::Struct {
-            name, generic_args, ..
-        } => {
-            record_resolved_struct_type_def(name, ctx, defs)?;
-            for arg in generic_args {
-                if let crate::tir::typed::ResolvedGenericArg::Type(type_expr) = arg {
-                    collect_struct_type_defs_from_resolved_type(type_expr, ctx, defs)?;
+impl<'d, 'c> TypeDefCollector<'d, 'c> {
+    fn new(ctx: ModuleTypeContext<'c>, defs: &'d mut ResolvedTypeDefs) -> Self {
+        Self {
+            ctx,
+            defs,
+            visiting: HashSet::new(),
+        }
+    }
+
+    fn declared_type(
+        &mut self,
+        declared: &crate::semantic::checked_type::CheckedType,
+    ) -> Result<(), SemanticError> {
+        match declared {
+            crate::semantic::checked_type::CheckedType::Struct(name, generic_args) => {
+                self.record(name.resolved())?;
+                for arg in generic_args {
+                    if let crate::semantic::checked_type::CheckedGenericArg::Type(type_expr) = arg {
+                        self.declared_type(type_expr)?;
+                    }
                 }
             }
-        }
-        ResolvedValueType::Complex { .. }
-        | ResolvedValueType::Key { .. }
-        | ResolvedValueType::Bool
-        | ResolvedValueType::Int
-        | ResolvedValueType::Datetime(_)
-        | ResolvedValueType::Quantity(_)
-        | ResolvedValueType::GenericTypeParam(_, _) => {}
-    }
-    Ok(())
-}
-
-fn record_resolved_struct_type_def(
-    name: &ResolvedStructTypeName,
-    ctx: ModuleTypeContext<'_>,
-    defs: &mut ResolvedTypeDefs,
-) -> Result<(), SemanticError> {
-    if defs.struct_types.contains_key(name) {
-        return Ok(());
-    }
-    let Some(type_def) = ctx.types.get_struct_type_handle(name).cloned() else {
-        return Ok(());
-    };
-    let definition_src = type_def.source();
-
-    // Record the owner before walking defaults and fields so recursive nominal
-    // types terminate naturally. Model-schema expansion needs this closure,
-    // not only the types named directly by entry declarations: a prepared
-    // boundary value can contain nested records whose names never appear in
-    // the consumer module.
-    defs.struct_types
-        .insert(name.clone(), Arc::clone(&type_def));
-
-    for param in type_def.generic_params() {
-        if let Some(default) = param.default() {
-            let resolved = resolve_hir_generic_arg(param, default, definition_src, ctx)?;
-            if let ResolvedGenericArg::Type(type_expr) = &resolved {
-                collect_struct_type_defs_from_resolved_type(type_expr, ctx, defs)?;
+            crate::semantic::checked_type::CheckedType::Indexed { element, .. } => {
+                self.declared_type(element)?;
             }
-            defs.generic_defaults
-                .insert(param.id().clone(), ResolvedGenericDefault { resolved });
+            crate::semantic::checked_type::CheckedType::Quantity(_)
+            | crate::semantic::checked_type::CheckedType::Complex(_)
+            | crate::semantic::checked_type::CheckedType::Bool
+            | crate::semantic::checked_type::CheckedType::Int
+            | crate::semantic::checked_type::CheckedType::Datetime(_)
+            | crate::semantic::checked_type::CheckedType::Key(_) => {}
         }
+        Ok(())
     }
 
-    let instance_view = type_def
-        .instance_substitution()
-        .map(|substitution| {
-            instance_type_view(ctx.types, substitution, definition_src)
-                .map(|view| (substitution, view))
-        })
-        .transpose()?;
-    if let Some(members) = type_def.union_members() {
-        for member in members {
-            for field in member.fields() {
-                let key = ResolvedStructFieldTypeKey {
-                    owning_type: name.clone(),
-                    constructor: member.name(),
-                    field: field.name().clone(),
-                };
-                let annotation = field.type_annotation();
-                let resolved = match &instance_view {
-                    Some((substitution, view)) => resolve_instance_decl_type(
-                        &annotation.decl_type,
-                        substitution,
-                        view,
-                        ctx.types,
-                        definition_src,
-                    )?,
-                    None => resolve_hir_decl_type(&annotation.decl_type, definition_src, ctx)?,
-                };
-                let bounds = annotation
-                    .domain_bounds
-                    .iter()
-                    .map(|bound| ResolvedDomainBound {
-                        kind: bound.kind,
-                        value: bound.value.clone(),
-                        span: bound.span,
-                        src: definition_src,
-                    })
-                    .collect();
-                collect_struct_type_defs_from_resolved_type(resolved.element(), ctx, defs)?;
-                defs.insert_field(key, ResolvedStructFieldSemantics::new(resolved, bounds));
+    fn resolved_type(&mut self, resolved: &ResolvedValueType) -> Result<(), SemanticError> {
+        match resolved {
+            ResolvedValueType::Struct {
+                name, generic_args, ..
+            } => {
+                self.record(name)?;
+                for arg in generic_args {
+                    if let crate::tir::typed::ResolvedGenericArg::Type(type_expr) = arg {
+                        self.resolved_type(type_expr)?;
+                    }
+                }
+            }
+            ResolvedValueType::Complex { .. }
+            | ResolvedValueType::Key { .. }
+            | ResolvedValueType::Bool
+            | ResolvedValueType::Int
+            | ResolvedValueType::Datetime(_)
+            | ResolvedValueType::Quantity(_)
+            | ResolvedValueType::GenericTypeParam(_, _) => {}
+        }
+        Ok(())
+    }
+
+    fn record(&mut self, name: &ResolvedStructTypeName) -> Result<(), SemanticError> {
+        if self.defs.contains(name) || !self.visiting.insert(name.clone()) {
+            return Ok(());
+        }
+        let ctx = self.ctx;
+        let Some(type_def) = ctx.types.get_struct_type_handle(name).cloned() else {
+            return Ok(());
+        };
+        let definition_src = type_def.source();
+
+        for param in type_def.generic_params() {
+            if let Some(default) = param.default() {
+                let resolved = resolve_hir_generic_arg(param, default, definition_src, ctx)?;
+                if let ResolvedGenericArg::Type(type_expr) = &resolved {
+                    self.resolved_type(type_expr)?;
+                }
+                self.defs
+                    .generic_defaults
+                    .insert(param.id().clone(), ResolvedGenericDefault { resolved });
             }
         }
-    }
 
-    Ok(())
+        let instance_view = type_def
+            .instance_substitution()
+            .map(|substitution| {
+                instance_type_view(ctx.types, substitution, definition_src)
+                    .map(|view| (substitution, view))
+            })
+            .transpose()?;
+        let nominal = ResolvedNominal::try_resolve(Arc::clone(&type_def), |_, field| {
+            let annotation = field.type_annotation();
+            let resolved = match &instance_view {
+                Some((substitution, view)) => resolve_instance_decl_type(
+                    &annotation.decl_type,
+                    substitution,
+                    view,
+                    ctx.types,
+                    definition_src,
+                )?,
+                None => resolve_hir_decl_type(&annotation.decl_type, definition_src, ctx)?,
+            };
+            let bounds = annotation
+                .domain_bounds
+                .iter()
+                .map(|bound| ResolvedDomainBound {
+                    kind: bound.kind,
+                    value: bound.value.clone(),
+                    span: bound.span,
+                    src: definition_src,
+                })
+                .collect();
+            self.resolved_type(resolved.element())?;
+            Ok(ResolvedStructFieldSemantics::new(resolved, bounds))
+        })?;
+        self.defs.insert(nominal);
+        Ok(())
+    }
 }
 
 /// HIR-level body policies that replaced the retired syntax-AST scope checks.
@@ -1248,8 +1232,8 @@ fn check_domain_bound_policies(
     for (key, bounds) in &semantic.domain_bounds {
         check_bounds(bounds.as_slice(), key.owner() == ctx.owner)?;
     }
-    for (_, _, bounds) in semantic.type_defs.constrained_fields() {
-        check_bounds(bounds.as_slice(), false)?;
+    for field in semantic.type_defs.constrained_fields() {
+        check_bounds(field.bounds().as_slice(), false)?;
     }
     Ok(())
 }
@@ -1598,9 +1582,9 @@ impl HirPolicyChecker<'_> {
         }
         let is_pub_bind = self
             .ctx
-            .resolver
-            .symbols(self.ctx.owner)
-            .and_then(|symbols| symbols.indexes().get(&index.to_unowned_def_name()))
+            .symbols()
+            .indexes()
+            .get(&index.to_unowned_def_name())
             .is_some_and(|symbol| {
                 // A bindable index with declared variants.
                 symbol.visibility().is_bindable() && !symbol.data().is_empty()
@@ -1716,8 +1700,9 @@ impl DagTIRSeed {
         for root in dag.owned_expression_roots() {
             collect_constructed_types_from_expr(root, module_ctx, src, &mut constructed_types)?;
         }
+        let mut collector = TypeDefCollector::new(module_ctx, &mut dag.semantic.type_defs);
         for owning_type in &constructed_types {
-            record_resolved_struct_type_def(owning_type, module_ctx, &mut dag.semantic.type_defs)?;
+            collector.record(owning_type)?;
         }
         Ok(dag)
     }

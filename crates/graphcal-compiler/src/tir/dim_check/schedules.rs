@@ -37,7 +37,7 @@ impl Schedules {
     /// Returns [`GraphError::CyclicDependency`](GraphError::CyclicDependency) for the first cycle found,
     /// at the declaration that closes it.
     pub(super) fn build(tir: &UncheckedTir, src: SourceId) -> Result<Self, SemanticError> {
-        let constants = ConstSchedule::build(tir.dags.local_iter().map(|(_, dag)| dag))
+        let constants = ConstSchedule::build(tir.dags.local_positioned())
             .map_err(|cycle| cyclic_dependency(tir, &cycle, None, src))?;
         let callables = tir.dags.map_local(|_, dag| {
             RuntimeSchedule::build(dag, |owner| tir.dags.get(owner)).map_err(|error| match error {

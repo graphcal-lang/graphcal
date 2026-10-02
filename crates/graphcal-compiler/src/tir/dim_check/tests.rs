@@ -4441,6 +4441,99 @@ fn resolved_constructor_carries_owning_definition_and_field_constraints() {
 }
 
 #[test]
+fn resolved_nominal_aligns_field_semantics_with_its_definition() {
+    use crate::syntax::type_name::{ConstructorName, FieldName, StructTypeName};
+    let (tir, _src) = module_aware_tir(
+        "type Maneuver {\n    Burn(dv: Dimensionless(min: 0.0), label: Dimensionless),\n    Coast,\n}\ntype Point { Point(x: Dimensionless, y: Dimensionless(max: 1.0)) }\nnode m: Maneuver = Coast;\nnode p: Point = Point(x: 1.0, y: 0.5);",
+    );
+    let constructor = |name: &str| {
+        tir.project_type_store()
+            .lookup_constructor(&crate::resolved_name::ResolvedConstructorName::for_test(
+                test_dag_id(),
+                ConstructorName::expect_valid(name),
+            ))
+            .unwrap()
+    };
+    let type_name = |name: &str| {
+        ResolvedStructTypeName::for_test(test_dag_id(), StructTypeName::expect_valid(name))
+    };
+    let defs = &tir.root().semantic.type_defs;
+    assert!(defs.contains(&type_name("Maneuver")));
+    assert!(!defs.contains(&type_name("Missing")));
+    let maneuver = defs.nominal(&type_name("Maneuver")).unwrap();
+    assert_eq!(maneuver.identity(), &type_name("Maneuver"));
+
+    // Members and fields come in definition order, each with its semantics.
+    let shape = maneuver
+        .members()
+        .map(|member| {
+            (
+                member.constructor().name().to_string(),
+                member
+                    .fields()
+                    .map(|field| {
+                        (
+                            field.field().name().to_string(),
+                            field.semantics().domain_bounds().is_some(),
+                        )
+                    })
+                    .collect::<Vec<_>>(),
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        shape,
+        vec![
+            (
+                "Burn".to_string(),
+                vec![("dv".to_string(), true), ("label".to_string(), false)]
+            ),
+            ("Coast".to_string(), vec![]),
+        ]
+    );
+
+    // A constructor resolves to its own member, never to another type's.
+    let coast = constructor("Coast");
+    assert_eq!(coast.position(), 1);
+    assert_eq!(
+        maneuver.member_of(coast).unwrap().constructor().name(),
+        ConstructorName::expect_valid("Coast")
+    );
+    assert!(maneuver.member_of(constructor("Point")).is_none());
+    let burn = defs.member(constructor("Burn")).unwrap();
+    assert_eq!(burn.nominal().identity(), &type_name("Maneuver"));
+    assert!(burn.field(&FieldName::expect_valid("missing")).is_none());
+    let dv = burn.field(&FieldName::expect_valid("dv")).unwrap();
+    assert_eq!(dv.member().constructor().name(), burn.constructor().name());
+    assert_eq!(dv.display_name(), "Maneuver.Burn.dv");
+
+    // Only a one-constructor type named like its constructor is a record.
+    assert!(maneuver.record_member().is_none());
+    let point = defs.nominal(&type_name("Point")).unwrap();
+    let record = point.record_member().unwrap();
+    assert_eq!(
+        record
+            .field(&FieldName::expect_valid("y"))
+            .unwrap()
+            .display_name(),
+        "Point.y"
+    );
+
+    let mut constrained = defs
+        .constrained_fields()
+        .map(|field| (field.field().display_name(), field.bounds().len()))
+        .collect::<Vec<_>>();
+    constrained.sort();
+    assert_eq!(
+        constrained,
+        vec![
+            ("Maneuver.Burn.dv".to_string(), 1),
+            ("Point.y".to_string(), 1)
+        ]
+    );
+}
+
+#[test]
 fn check_match_foreign_constructor_names_the_constructor_member() {
     use crate::semantic_error::structure::NominalMember;
     use crate::syntax::type_name::ConstructorName;
@@ -4484,7 +4577,10 @@ fn checker_retains_dependency_then_source_ordered_schedules() {
     let tir = check_draft(draft.clone(), src).unwrap();
 
     let constants = tir.const_schedule();
-    assert_eq!(constants.dags(), [test_dag_id()]);
+    assert_eq!(
+        constants.dags(),
+        [crate::tir::typed::dag_position::DagPosition::ROOT]
+    );
     assert_eq!(
         constants.order().as_slice(),
         [root_decl("a"), root_decl("b"), root_decl("c")]

@@ -231,6 +231,11 @@ impl<L: SlotBody> DagSlots<L> {
         )
     }
 
+    /// Every local body with its position, in no particular order.
+    pub fn local_positioned(&self) -> impl Iterator<Item = (DagPosition, &L)> {
+        self.local_positions.iter().copied().zip(&self.locals)
+    }
+
     /// Every DAG in visiting order: the local bodies, then the imported
     /// handles in identity order.
     pub fn iter(&self) -> impl Iterator<Item = (&DagId, &L)> {

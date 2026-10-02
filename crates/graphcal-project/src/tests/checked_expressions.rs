@@ -19,8 +19,11 @@ fn scalar_prototypes_require_discharge_and_invalid_membership_never_publishes() 
         );
         let nominal = tir.nominal_type_body(&identity).unwrap();
         let parameter = nominal.definition().generic_params()[0].id().clone();
-        let (key, _, bounds) = nominal.constrained_fields().next().unwrap();
-        assert_eq!(key.field, FieldName::expect_valid("x"));
+        let (constrained, bounds) = nominal.constrained_fields().next().unwrap();
+        assert_eq!(
+            constrained.field().field().name(),
+            &FieldName::expect_valid("x")
+        );
         let bound = bounds.map(NonEmpty::first);
         let context = graphcal_eval::eval_expr::EvalSession::provisional_constants(
             &tir,
@@ -95,7 +98,7 @@ fn readiness_is_checked_before_evaluating_an_earlier_sibling() {
         tir.root_dag_id().clone(),
         StructTypeName::expect_valid("T"),
     );
-    let (_, _, bounds) = tir
+    let (_, bounds) = tir
         .nominal_type_body(&identity)
         .unwrap()
         .constrained_fields()

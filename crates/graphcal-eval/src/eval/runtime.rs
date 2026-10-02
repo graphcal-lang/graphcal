@@ -19,7 +19,6 @@ use crate::runtime_presentation::ResolvedPresentedMap;
 use super::types::{EvalResult, NodeUnavailable};
 
 mod assertions;
-mod declaration_body;
 mod dependency_failures;
 mod evaluated_root;
 mod plots;

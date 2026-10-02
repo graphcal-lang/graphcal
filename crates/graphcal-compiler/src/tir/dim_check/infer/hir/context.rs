@@ -30,16 +30,12 @@ impl<'a> InferEnv<'a> {
         constructor: &crate::resolved_name::ResolvedConstructorName,
         span: crate::syntax::span::Span,
     ) -> Result<&'a crate::hir::nominal::ResolvedConstructor, SemanticError> {
-        self.tir
-            .project_type_store()
-            .lookup_constructor(constructor)
-            .ok_or_else(|| {
-                SemanticError::internal_error(
-                    format!("project type store has no constructor `{constructor}`"),
-                    self.src,
-                    crate::diagnostic_anchor::DiagnosticAnchor::Source(span),
-                )
-            })
+        crate::tir::dim_check::generic_substitution::resolved_constructor(
+            self.tir,
+            constructor,
+            self.src,
+            span,
+        )
     }
 
     /// Infer the type of the checked root `expr`, recording every

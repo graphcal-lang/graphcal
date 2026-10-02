@@ -259,7 +259,7 @@ fn prepare_callable_plan<'p>(
                         )
                     })
                     .and_then(|(instance, scope)| {
-                        PlannedInstance::try_new(instance, scope)
+                        PlannedInstance::try_new(tir, instance, scope)
                             .map_err(|error| invalid(error.to_string(), src))
                     })
             })
