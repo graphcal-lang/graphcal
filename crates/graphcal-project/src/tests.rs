@@ -1976,7 +1976,7 @@ fn reserved_name_policy_covers_import_include_and_reexport_aliases() {
         assert!(matches!(
             error,
             CompileError::Eval(RenderedSemanticError { error: SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic { kind: SemanticErrorKind::Name(NameError::BuiltinNameShadowed { name, .. }), .. }), .. })
-                if name == expected_name
+                if name.to_string() == expected_name
         ));
     }
 
@@ -1996,7 +1996,7 @@ fn reserved_name_policy_covers_import_include_and_reexport_aliases() {
         };
         assert!(matches!(
             error,
-            CompileError::Eval(RenderedSemanticError { error: SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic { kind: SemanticErrorKind::Name(NameError::BuiltinNameShadowed { name, .. }), .. }), .. }) if name == "E"
+            CompileError::Eval(RenderedSemanticError { error: SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic { kind: SemanticErrorKind::Name(NameError::BuiltinNameShadowed { name, .. }), .. }), .. }) if name.to_string() == "E"
         ));
     }
 
@@ -2011,7 +2011,7 @@ fn reserved_name_policy_covers_import_include_and_reexport_aliases() {
     let reexport_error = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap_err();
     assert!(matches!(
         reexport_error,
-        CompileError::Eval(RenderedSemanticError { error: SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic { kind: SemanticErrorKind::Name(NameError::BuiltinNameShadowed { name, .. }), .. }), .. }) if name == "E"
+        CompileError::Eval(RenderedSemanticError { error: SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic { kind: SemanticErrorKind::Name(NameError::BuiltinNameShadowed { name, .. }), .. }), .. }) if name.to_string() == "E"
     ));
 
     let (_directory, root) = write_pipeline_project(
@@ -2026,7 +2026,7 @@ fn reserved_name_policy_covers_import_include_and_reexport_aliases() {
         compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap_err();
     assert!(matches!(
         constructor_reexport_error,
-        CompileError::Eval(RenderedSemanticError { error: SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic { kind: SemanticErrorKind::Name(NameError::BuiltinNameShadowed { name, .. }), .. }), .. }) if name == "sum"
+        CompileError::Eval(RenderedSemanticError { error: SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic { kind: SemanticErrorKind::Name(NameError::BuiltinNameShadowed { name, .. }), .. }), .. }) if name.to_string() == "sum"
     ));
 
     let (_directory, root) = write_pipeline_project(
@@ -2047,7 +2047,7 @@ fn reserved_name_policy_covers_import_include_and_reexport_aliases() {
         compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap_err();
     assert!(matches!(
         self_import_error,
-        CompileError::Eval(RenderedSemanticError { error: SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic { kind: SemanticErrorKind::Name(NameError::BuiltinNameShadowed { name, .. }), .. }), .. }) if name == "E"
+        CompileError::Eval(RenderedSemanticError { error: SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic { kind: SemanticErrorKind::Name(NameError::BuiltinNameShadowed { name, .. }), .. }), .. }) if name.to_string() == "E"
     ));
 }
 
@@ -4814,7 +4814,7 @@ fn module_aliases_and_same_named_nodes_are_duplicate_names() {
                     }),
                 ..
             })) => {
-                assert_eq!(name, "parking", "{alias_decl}");
+                assert_eq!(name.to_string(), "parking", "{alias_decl}");
             }
             other => panic!("expected N001 for `{alias_decl}`, got {other:?}"),
         }

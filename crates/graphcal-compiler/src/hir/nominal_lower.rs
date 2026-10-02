@@ -8,6 +8,7 @@
 //! through the include's canonical substitution; no source spelling is
 //! rewritten.
 
+use crate::semantic_error::name::DuplicateDeclaration;
 use crate::semantic_error::structure::StructError;
 use std::collections::HashMap;
 
@@ -142,7 +143,7 @@ fn member_error(
                 src,
                 duplicate,
                 NameError::DuplicateName {
-                    name: constructor.to_string(),
+                    name: DuplicateDeclaration::Name(constructor.atom().clone()),
                     first,
                 },
             )

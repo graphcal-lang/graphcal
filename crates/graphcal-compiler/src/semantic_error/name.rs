@@ -12,7 +12,7 @@ use crate::expression_source::ExpressionSourceError;
 use crate::generic_param::{
     GenericApplicationTarget, GenericArgArity, render_accepted_constraints,
 };
-use crate::hir::expr::TypeSystemRef;
+use crate::hir::expr::{TypeSystemRef, UnappliedFunctionRef};
 use crate::hir::types::IndexRef;
 use crate::resolve::category::DeclSymbolKind;
 use crate::resolved_name::ResolvedConstructorName;
@@ -20,8 +20,10 @@ use crate::semantic::time_scale::TimeScale;
 use crate::syntax::ast::GenericConstraint;
 use crate::syntax::function_name::FnName;
 use crate::syntax::index_name::IndexVariantName;
+use crate::syntax::index_name::QualifiedIndexVariantName;
 use crate::syntax::local_name::LocalName;
 use crate::syntax::module_name::ScopedName;
+use crate::syntax::names::NameAtom;
 use crate::syntax::names::NamePath;
 use crate::syntax::span::Span;
 use crate::syntax::type_name::GenericParamName;
@@ -45,10 +47,76 @@ impl std::fmt::Display for CalledFunction {
 }
 
 /// Name-resolution diagnostics: duplicate, unknown, and misused names.
+/// A name declared twice in one scope.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DuplicateDeclaration {
+    Name(NameAtom),
+    Scoped(ScopedName),
+    IndexVariant(QualifiedIndexVariantName),
+}
+
+impl std::fmt::Display for DuplicateDeclaration {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Name(name) => name.fmt(f),
+            Self::Scoped(name) => name.fmt(f),
+            Self::IndexVariant(variant) => variant.fmt(f),
+        }
+    }
+}
+
+/// The plot-family block a property was written in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PlotPropertyContext {
+    MarkBlock,
+    PlotDeclaration,
+    FigureDeclaration,
+    LayerDeclaration,
+}
+
+impl PlotPropertyContext {
+    /// The help listing the properties valid in this block.
+    fn valid_properties(self) -> String {
+        use crate::plot_props::{CompositionProperty, MarkProperty, PlotProperty};
+        let list = |names: Vec<&str>| format!("valid properties are: {}", names.join(", "));
+        match self {
+            Self::MarkBlock => list(MarkProperty::ALL.iter().map(|p| p.name()).collect()),
+            Self::PlotDeclaration => list(PlotProperty::ALL.iter().map(|p| p.name()).collect()),
+            Self::FigureDeclaration => format!(
+                "{}; figures render as side-by-side concatenation, so sizes belong on the constituent plots or layers",
+                list(
+                    CompositionProperty::ALL
+                        .iter()
+                        .filter(|p| p.applies_to_figure())
+                        .map(|p| p.name())
+                        .collect()
+                )
+            ),
+            Self::LayerDeclaration => {
+                list(CompositionProperty::ALL.iter().map(|p| p.name()).collect())
+            }
+        }
+    }
+}
+
+impl std::fmt::Display for PlotPropertyContext {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::MarkBlock => "a mark block",
+            Self::PlotDeclaration => "a plot declaration",
+            Self::FigureDeclaration => "a figure declaration",
+            Self::LayerDeclaration => "a layer declaration",
+        })
+    }
+}
+
 #[derive(Debug, Clone, Error)]
 pub enum NameError {
     #[error("duplicate name `{name}`")]
-    DuplicateName { name: String, first: Span },
+    DuplicateName {
+        name: DuplicateDeclaration,
+        first: Span,
+    },
     /// A constructor payload repeats a field declaration.
     #[error("constructor `{constructor}` declares field `{field}` more than once")]
     DuplicateConstructorField {
@@ -58,13 +126,11 @@ pub enum NameError {
         first: Span,
     },
     #[error("{kind} `{name}` shadows a built-in name")]
-    BuiltinNameShadowed { kind: &'static str, name: String },
-    #[error("property `{property}` is not valid in {context}")]
+    BuiltinNameShadowed { kind: &'static str, name: NameAtom },
+    #[error("property `{}` is not valid in {context}", property.name())]
     InvalidPlotProperty {
-        property: String,
-        context: &'static str,
-        /// Preformatted help listing the valid property set for `context`.
-        valid: String,
+        property: crate::ir::model::LoweredPlotProperty,
+        context: PlotPropertyContext,
     },
     #[error("{owner_kind} `{owner}` references unknown plot `{name}`")]
     UnknownPlotReference {
@@ -94,11 +160,11 @@ pub enum NameError {
     #[error("time scale `{scale}` cannot be used as a value")]
     TimeScaleInValuePosition { scale: TimeScale },
     #[error("unknown function `{name}`")]
-    UnknownFunction { name: String },
-    #[error("function `{name}` uses positional arguments")]
+    UnknownFunction { name: NamePath },
+    #[error("function `{function}` uses positional arguments")]
     NamedArgumentsOnFunction {
-        name: String,
-        positional_call: String,
+        function: UnappliedFunctionRef,
+        arguments: Vec<FieldName>,
     },
     #[error("graph reference `@{name}` not allowed in const expression")]
     GraphRefInConst { name: ScopedName },
@@ -268,7 +334,7 @@ impl DiagnosticKind for NameError {
             Self::DuplicateName { .. } => Some("each name must be unique within a file".to_owned()),
             Self::DuplicateConstructorField { .. } => Some("constructor field names must be unique; remove or rename one declaration".to_owned()),
             Self::BuiltinNameShadowed { .. } => Some("choose a different name; prelude dimensions, built-in types, prelude units, and built-in numeric constants cannot be redefined in their namespaces".to_owned()),
-            Self::InvalidPlotProperty { valid, .. } => Some(valid.clone()),
+            Self::InvalidPlotProperty { context, .. } => Some(context.valid_properties()),
             Self::UnknownPlotReference { .. } => Some("`plots:` entries must name `plot` declarations visible in this file".to_owned()),
             Self::CompositionReferencesNonPlot { actual_kind, owner_kind, .. } => Some(format!("{owner_kind}s compose `plot` declarations; they cannot nest other {actual_kind}s")),
             Self::DuplicatePlotReference { .. } => Some("each plot may appear at most once in a `plots:` list".to_owned()),
@@ -276,7 +342,14 @@ impl DiagnosticKind for NameError {
             Self::BareGraphDeclarationRef { kind, name, .. } => Some(format!("write `@{name}` to reference this {kind}")),
             Self::TimeScaleInValuePosition { scale, .. } => Some(format!("time scales are Static atoms; use `{scale}` in `Datetime<{scale}>` or `epoch<{scale}>(...)`")),
             Self::UnknownFunction { .. } => Some("check function name and ensure it is defined".to_owned()),
-            Self::NamedArgumentsOnFunction { positional_call, .. } => Some(format!("write `{positional_call}`")),
+            Self::NamedArgumentsOnFunction { function, arguments } => Some(format!(
+                "write `{function}({})`",
+                arguments
+                    .iter()
+                    .map(|argument| format!("{argument}_value"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )),
             Self::GraphRefInConst { .. } => Some("const expressions are evaluated at compile time and cannot reference params or nodes".to_owned()),
             Self::WrongArity { .. }
             | Self::UnknownTypeName { .. }

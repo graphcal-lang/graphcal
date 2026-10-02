@@ -19,7 +19,7 @@ use graphcal_compiler::semantic_error::SemanticError;
 use graphcal_compiler::semantic_error::graph::{DagReference, GraphError};
 use graphcal_compiler::semantic_error::index::IndexError;
 use graphcal_compiler::semantic_error::module::ModuleError;
-use graphcal_compiler::semantic_error::name::NameError;
+use graphcal_compiler::semantic_error::name::{DuplicateDeclaration, NameError};
 use graphcal_compiler::semantic_error::visibility::VisibilityError;
 use graphcal_compiler::source_id::SourceId;
 use graphcal_compiler::syntax::decl_name::DeclName;
@@ -1658,7 +1658,7 @@ fn insert_imported_binding(
             src,
             span,
             NameError::DuplicateName {
-                name: lexical_name.to_string(),
+                name: DuplicateDeclaration::Scoped(lexical_name),
                 first: first.span,
             },
         )));

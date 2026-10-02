@@ -559,7 +559,7 @@ impl<'a> ExprLowerer<'a> {
             return BuiltinFn::parse(ident.name.as_str())
                 .map(UnappliedFunctionRef::Builtin)
                 .ok_or_else(|| ExprLowerError::UnknownFunction {
-                    path: callee.display_path(),
+                    path: callee.to_name_path(),
                     span: callee.span(),
                 });
         }
@@ -589,7 +589,7 @@ impl<'a> ExprLowerer<'a> {
             }));
         }
         Err(ExprLowerError::UnknownFunction {
-            path: callee.display_path(),
+            path: callee.to_name_path(),
             span: callee.span(),
         })
     }

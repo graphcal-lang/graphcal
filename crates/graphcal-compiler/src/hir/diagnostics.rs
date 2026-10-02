@@ -125,22 +125,14 @@ pub fn expr_lower_error_to_semantic(err: &ExprLowerError, src: SourceId) -> Sema
             function,
             argument_names,
             span,
-        } => {
-            let name = function.to_string();
-            let positional_args = argument_names
-                .iter()
-                .map(|argument| format!("{argument}_value"))
-                .collect::<Vec<_>>()
-                .join(", ");
-            SemanticError::located(
-                src,
-                *span,
-                NameError::NamedArgumentsOnFunction {
-                    positional_call: format!("{name}({positional_args})"),
-                    name,
-                },
-            )
-        }
+        } => SemanticError::located(
+            src,
+            *span,
+            NameError::NamedArgumentsOnFunction {
+                function: function.clone(),
+                arguments: argument_names.clone(),
+            },
+        ),
         ExprLowerError::WrongArity {
             name,
             expected,

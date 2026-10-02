@@ -7,6 +7,7 @@ pub(crate) mod names;
 #[cfg(test)]
 mod tests;
 
+use crate::semantic_error::name::DuplicateDeclaration;
 use std::collections::{HashMap, HashSet};
 
 use super::required_bindability::{self, InterfaceDecl, Violation as RequiredBindabilityViolation};
@@ -64,7 +65,7 @@ fn register_value_namespace_name(
             src,
             span,
             NameError::DuplicateName {
-                name: name.to_string(),
+                name: DuplicateDeclaration::Name(name.clone()),
                 first: *first_span,
             },
         ));
@@ -84,7 +85,7 @@ fn register_exclusive_universe_name(
             src,
             span,
             NameError::DuplicateName {
-                name: atom.to_string(),
+                name: DuplicateDeclaration::Name(atom.clone()),
                 first,
             },
         ))
@@ -105,7 +106,7 @@ fn check_builtin_name_shadowing(file: &File, src: SourceId) -> Result<(), Semant
                         introduced.span(),
                         NameError::BuiltinNameShadowed {
                             kind: introduced.kind().describe(),
-                            name: introduced.atom().to_string(),
+                            name: introduced.atom().clone(),
                         },
                     )
                 })
@@ -130,7 +131,7 @@ fn check_imported_graph_value_names(
                     *span,
                     NameError::BuiltinNameShadowed {
                         kind: "graph-value alias",
-                        name: atom.to_string(),
+                        name: atom.clone(),
                     },
                 )
             })

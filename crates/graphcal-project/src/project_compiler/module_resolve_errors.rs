@@ -3,7 +3,7 @@
 use graphcal_compiler::semantic_error::SemanticError;
 use graphcal_compiler::semantic_error::graph::DagReference;
 use graphcal_compiler::semantic_error::module::ModuleError;
-use graphcal_compiler::semantic_error::name::NameError;
+use graphcal_compiler::semantic_error::name::{DuplicateDeclaration, NameError};
 use graphcal_compiler::semantic_error::visibility::VisibilityError;
 use graphcal_compiler::source_id::SourceId;
 use graphcal_compiler::syntax::span::Span;
@@ -11,7 +11,12 @@ use graphcal_compiler::syntax::span::Span;
 use crate::compile_error::PipelineError;
 
 /// N001 for a resolver duplicate, rendered with its spelled name.
-fn duplicate_name(name: String, first: Span, duplicate: Span, src: SourceId) -> PipelineError {
+fn duplicate_name(
+    name: DuplicateDeclaration,
+    first: Span,
+    duplicate: Span,
+    src: SourceId,
+) -> PipelineError {
     PipelineError::Semantic(SemanticError::located(
         src,
         duplicate,
@@ -79,19 +84,29 @@ pub(super) fn module_resolve_compile_error(
             first,
             duplicate,
             ..
-        } => duplicate_name(name.to_string(), first, duplicate, src),
+        } => duplicate_name(DuplicateDeclaration::Name(name), first, duplicate, src),
         graphcal_compiler::resolve::error::ModuleResolveError::DuplicateIndexVariant {
             variant,
             first,
             duplicate,
             ..
-        } => duplicate_name(variant.to_string(), first, duplicate, src),
+        } => duplicate_name(
+            DuplicateDeclaration::IndexVariant(variant),
+            first,
+            duplicate,
+            src,
+        ),
         graphcal_compiler::resolve::error::ModuleResolveError::DuplicatePluginFunction {
             function,
             first,
             duplicate,
             ..
-        } => duplicate_name(function.to_string(), first, duplicate, src),
+        } => duplicate_name(
+            DuplicateDeclaration::Name(function.atom().clone()),
+            first,
+            duplicate,
+            src,
+        ),
         other => PipelineError::Semantic(SemanticError::located(
             src,
             src.whole_span(),

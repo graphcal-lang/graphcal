@@ -725,3 +725,59 @@ fn index_payloads_render_their_text_as_before() {
         format!("linspace start and end have dimensions {rendered} and {rendered}")
     );
 }
+
+#[test]
+fn name_payloads_render_their_text_as_before() {
+    use super::name::{DuplicateDeclaration, NameError, PlotPropertyContext};
+    use crate::diagnostic::DiagnosticKind;
+    use crate::syntax::index_name::{IndexName, IndexVariantName};
+    use crate::syntax::names::NameAtom;
+
+    assert_eq!(
+        DuplicateDeclaration::Name(NameAtom::parse("speed").unwrap()).to_string(),
+        "speed"
+    );
+    let variant =
+        IndexVariantName::expect_valid("Launch").qualified_by(&IndexName::expect_valid("Phase"));
+    assert_eq!(
+        DuplicateDeclaration::IndexVariant(variant.clone()).to_string(),
+        variant.to_string()
+    );
+    let contexts = [
+        (PlotPropertyContext::MarkBlock, "a mark block"),
+        (PlotPropertyContext::PlotDeclaration, "a plot declaration"),
+        (
+            PlotPropertyContext::FigureDeclaration,
+            "a figure declaration",
+        ),
+        (PlotPropertyContext::LayerDeclaration, "a layer declaration"),
+    ];
+    for (context, expected) in contexts {
+        assert_eq!(context.to_string(), expected);
+        let error = NameError::InvalidPlotProperty {
+            property: crate::ir::model::LoweredPlotProperty::Unknown(
+                crate::syntax::ast::PlotPropertyName::expect_valid("bogus"),
+            ),
+            context,
+        };
+        assert_eq!(
+            error.to_string(),
+            format!("property `bogus` is not valid in {expected}")
+        );
+        assert!(
+            error
+                .help()
+                .is_some_and(|help| help.starts_with("valid properties are: "))
+        );
+    }
+    assert!(
+        NameError::InvalidPlotProperty {
+            property: crate::ir::model::LoweredPlotProperty::Unknown(
+                crate::syntax::ast::PlotPropertyName::expect_valid("bogus"),
+            ),
+            context: PlotPropertyContext::FigureDeclaration,
+        }
+        .help()
+        .is_some_and(|help| help.ends_with("so sizes belong on the constituent plots or layers"))
+    );
+}

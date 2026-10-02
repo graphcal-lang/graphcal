@@ -87,7 +87,10 @@ pub enum ExprLowerError {
     },
     /// A function call could not be resolved to a built-in function.
     #[error("unknown function `{path}`")]
-    UnknownFunction { path: String, span: Span },
+    UnknownFunction {
+        path: crate::syntax::names::NamePath,
+        span: Span,
+    },
     /// A plugin alias is in scope, but does not declare the called function.
     #[error("plugin alias `{alias}` does not declare a function `{name}`")]
     UnknownExternFunction {

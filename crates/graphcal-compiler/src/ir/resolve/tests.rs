@@ -139,7 +139,7 @@ fn resolve_rejects_type_index_name_collision() {
         parse_and_resolve("type M { Mk(v: Dimensionless) }\npub index M = { A, B };").unwrap_err();
     assert!(matches!(
         err,
-        SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Name(NameError::DuplicateName { name, .. }), .. }) if name == "M"
+        SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Name(NameError::DuplicateName { name, .. }), .. }) if name.to_string() == "M"
     ));
 }
 
@@ -148,7 +148,7 @@ fn resolve_rejects_dimension_index_name_collision() {
     let err = parse_and_resolve("dim M = Length;\npub index M = { A, B };").unwrap_err();
     assert!(matches!(
         err,
-        SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Name(NameError::DuplicateName { name, .. }), .. }) if name == "M"
+        SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Name(NameError::DuplicateName { name, .. }), .. }) if name.to_string() == "M"
     ));
 }
 
@@ -157,7 +157,7 @@ fn resolve_rejects_dimension_type_name_collision() {
     let err = parse_and_resolve("dim M = Length;\ntype M { Mk(v: Dimensionless) }").unwrap_err();
     assert!(matches!(
         err,
-        SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Name(NameError::DuplicateName { name, .. }), .. }) if name == "M"
+        SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Name(NameError::DuplicateName { name, .. }), .. }) if name.to_string() == "M"
     ));
 }
 
@@ -179,7 +179,7 @@ fn static_index_and_prelude_unit_resolve_independently() {
 fn resolve_rejects_builtin_dimension_shadowing() {
     let err = parse_and_resolve("dim Velocity = Length / Time;").unwrap_err();
     assert!(
-        matches!(err, SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Name(NameError::BuiltinNameShadowed { name, .. }), .. }) if name == "Velocity")
+        matches!(err, SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Name(NameError::BuiltinNameShadowed { name, .. }), .. }) if name.to_string() == "Velocity")
     );
 }
 
@@ -187,7 +187,7 @@ fn resolve_rejects_builtin_dimension_shadowing() {
 fn resolve_rejects_builtin_unit_shadowing() {
     let err = parse_and_resolve("unit m: Length = 1.0 m;").unwrap_err();
     assert!(
-        matches!(err, SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Name(NameError::BuiltinNameShadowed { name, .. }), .. }) if name == "m")
+        matches!(err, SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Name(NameError::BuiltinNameShadowed { name, .. }), .. }) if name.to_string() == "m")
     );
 }
 
@@ -202,7 +202,7 @@ fn resolve_rejects_every_builtin_constant_spelling_for_graph_values() {
             let err = parse_and_resolve(&declaration).unwrap_err();
             assert!(matches!(
                 err,
-                SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Name(NameError::BuiltinNameShadowed { name, .. }), .. }) if name == builtin.as_str()
+                SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Name(NameError::BuiltinNameShadowed { name, .. }), .. }) if name.to_string() == builtin.as_str()
             ));
         }
     }
@@ -234,7 +234,7 @@ fn resolve_rejects_every_builtin_term_spelling_for_constructors() {
             assert!(matches!(
                 err,
                 SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Name(NameError::BuiltinNameShadowed { name: rejected, .. }), .. })
-                    if rejected == name
+                    if rejected.to_string() == name
             ));
         }
     }
@@ -365,7 +365,7 @@ fn named_arguments_on_builtin_report_positional_call_syntax() {
     let err = compile_to_tir("node angle: Angle = atan2(y: 1.0 m, x: 2.0 m);").unwrap_err();
     assert!(matches!(
         err,
-        SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Name(NameError::NamedArgumentsOnFunction { name, positional_call, .. }), .. }) if name == "atan2" && positional_call == "atan2(y_value, x_value)"
+        SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Name(NameError::NamedArgumentsOnFunction { function, arguments }), .. }) if function.to_string() == "atan2" && arguments.iter().map(ToString::to_string).collect::<Vec<_>>() == ["y", "x"]
     ));
 }
 
@@ -382,8 +382,8 @@ node x: Dimensionless = demo::lerp(a: 1.0, b: 2.0, t: 0.5);
     .unwrap_err();
     assert!(matches!(
         err,
-        SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Name(NameError::NamedArgumentsOnFunction { name, positional_call, .. }), .. }) if name == "demo::lerp"
-            && positional_call == "demo::lerp(a_value, b_value, t_value)"
+        SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Name(NameError::NamedArgumentsOnFunction { function, arguments }), .. }) if function.to_string() == "demo::lerp"
+            && arguments.iter().map(ToString::to_string).collect::<Vec<_>>() == ["a", "b", "t"]
     ));
 }
 
@@ -392,7 +392,7 @@ fn unknown_named_call_reports_one_unknown_term_callee() {
     let err = compile_to_tir("node x: Dimensionless = Missing(value: 1.0);").unwrap_err();
     assert!(matches!(
         err,
-        SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Name(NameError::UnknownFunction { name, .. }), .. }) if name == "Missing"
+        SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Name(NameError::UnknownFunction { name, .. }), .. }) if name.to_string() == "Missing"
     ));
 }
 
@@ -404,7 +404,7 @@ fn obsolete_extremum_function_names_are_rejected() {
             SemanticError::Located(crate::diagnostic::Diagnostic {
                 kind: SemanticErrorKind::Name(NameError::UnknownFunction { name, .. }),
                 ..
-            }) => assert_eq!(name, obsolete),
+            }) => assert_eq!(name.to_string(), obsolete),
             other => panic!("obsolete function call should be unknown: {other:?}"),
         }
     }
@@ -504,7 +504,7 @@ fn resolve_constructor_collision_with_node() {
     .unwrap_err();
     assert!(matches!(
         err,
-        SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Name(NameError::DuplicateName { name, .. }), .. }) if name == "Student"
+        SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Name(NameError::DuplicateName { name, .. }), .. }) if name.to_string() == "Student"
     ));
 }
 

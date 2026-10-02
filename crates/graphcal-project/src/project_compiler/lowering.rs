@@ -16,7 +16,7 @@ use graphcal_compiler::semantic_error::SemanticErrorKind;
 use graphcal_compiler::semantic_error::dimension::DimensionError;
 use graphcal_compiler::semantic_error::index::IndexError;
 use graphcal_compiler::semantic_error::module::ModuleError;
-use graphcal_compiler::semantic_error::name::NameError;
+use graphcal_compiler::semantic_error::name::{DuplicateDeclaration, NameError};
 use graphcal_compiler::source_id::SourceId;
 
 use graphcal_compiler::declaration_category::DeclCategory;
@@ -540,7 +540,7 @@ fn extend_imported_bindings(
                 src,
                 binding.span,
                 NameError::DuplicateName {
-                    name: name.to_string(),
+                    name: DuplicateDeclaration::Scoped(name),
                     first: first.span,
                 },
             )));

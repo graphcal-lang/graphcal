@@ -13,6 +13,7 @@ use crate::semantic::dimension_table::DimensionSpelling;
 use crate::semantic_error::dimension::BaseUnitRejection;
 use crate::semantic_error::dimension::UnitScaleSite;
 use crate::semantic_error::index::CoordinateArgumentDimensions;
+use crate::semantic_error::name::DuplicateDeclaration;
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use crate::dag_id::DagId;
@@ -1111,10 +1112,9 @@ impl<'a> StaticDefinitionEvaluator<'a> {
                                 src,
                                 variants[duplicate].span,
                                 NameError::DuplicateName {
-                                    name: variants[duplicate]
-                                        .value
-                                        .qualified_by(&index.name.value)
-                                        .to_string(),
+                                    name: DuplicateDeclaration::IndexVariant(
+                                        variants[duplicate].value.qualified_by(&index.name.value),
+                                    ),
                                     first: variants[first].span,
                                 },
                             )

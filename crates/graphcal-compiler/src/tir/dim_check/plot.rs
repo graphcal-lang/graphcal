@@ -11,11 +11,12 @@ use crate::semantic::checked_type::Symbolic;
 use crate::semantic_error::dimension::DimensionError;
 use crate::semantic_error::dimension::{PlotChannelAxes, PlotPropertyValue};
 use crate::semantic_error::name::NameError;
+use crate::semantic_error::name::PlotPropertyContext;
 use std::collections::HashMap;
 
 use crate::hir::expr::ExprKind;
 use crate::ir::model::{LoweredPlotField, LoweredPlotProperty};
-use crate::plot_props::{CompositionProperty, MarkProperty, PlotProperty, PlotPropertyType};
+use crate::plot_props::PlotPropertyType;
 use crate::plot_shape::{PlotChannelShape, PlotLeafKind, align_plot_channel_axes};
 use crate::semantic_error::SemanticError;
 
@@ -60,25 +61,13 @@ pub(super) fn check_plot_entry(
     let types = check_plot_encodings(ctx, &owner, body)?;
     for field in &body.mark_properties {
         let LoweredPlotProperty::Mark(prop) = &field.property else {
-            return Err(invalid_property(
-                ctx,
-                field,
-                "a mark block",
-                &valid_names(MarkProperty::ALL.iter().map(|p| p.name())),
-            )
-            .into());
+            return Err(invalid_property(ctx, field, PlotPropertyContext::MarkBlock).into());
         };
         check_property_value(ctx, &owner, prop.name(), prop.value_type(), field)?;
     }
     for field in &body.properties {
         let LoweredPlotProperty::Plot(prop) = &field.property else {
-            return Err(invalid_property(
-                ctx,
-                field,
-                "a plot declaration",
-                &valid_names(PlotProperty::ALL.iter().map(|p| p.name())),
-            )
-            .into());
+            return Err(invalid_property(ctx, field, PlotPropertyContext::PlotDeclaration).into());
         };
         check_property_value(ctx, &owner, prop.name(), prop.value_type(), field)?;
     }
@@ -92,40 +81,14 @@ pub(super) fn check_figure_entry(
     let owner = entry.identity();
     for field in &entry.fields {
         let LoweredPlotProperty::Composition(prop) = &field.property else {
-            return Err(invalid_property(
-                ctx,
-                field,
-                "a figure declaration",
-                &format!(
-                    "{}; figures render as side-by-side concatenation, so sizes belong on \
-                     the constituent plots or layers",
-                    valid_names(
-                        CompositionProperty::ALL
-                            .iter()
-                            .filter(|p| p.applies_to_figure())
-                            .map(|p| p.name()),
-                    )
-                ),
-            )
-            .into());
+            return Err(
+                invalid_property(ctx, field, PlotPropertyContext::FigureDeclaration).into(),
+            );
         };
         if !prop.applies_to_figure() {
-            return Err(invalid_property(
-                ctx,
-                field,
-                "a figure declaration",
-                &format!(
-                    "{}; figures render as side-by-side concatenation, so sizes belong on \
-                     the constituent plots or layers",
-                    valid_names(
-                        CompositionProperty::ALL
-                            .iter()
-                            .filter(|p| p.applies_to_figure())
-                            .map(|p| p.name()),
-                    )
-                ),
-            )
-            .into());
+            return Err(
+                invalid_property(ctx, field, PlotPropertyContext::FigureDeclaration).into(),
+            );
         }
         check_property_value(ctx, &owner, prop.name(), prop.value_type(), field)?;
     }
@@ -139,13 +102,7 @@ pub(super) fn check_layer_entry(
     let owner = entry.identity();
     for field in &entry.fields {
         let LoweredPlotProperty::Composition(prop) = &field.property else {
-            return Err(invalid_property(
-                ctx,
-                field,
-                "a layer declaration",
-                &valid_names(CompositionProperty::ALL.iter().map(|p| p.name())),
-            )
-            .into());
+            return Err(invalid_property(ctx, field, PlotPropertyContext::LayerDeclaration).into());
         };
         check_property_value(ctx, &owner, prop.name(), prop.value_type(), field)?;
     }
@@ -305,26 +262,17 @@ fn plot_leaf_kind(
     }
 }
 
-fn valid_names<'a>(names: impl Iterator<Item = &'a str>) -> String {
-    format!(
-        "valid properties are: {}",
-        names.collect::<Vec<_>>().join(", ")
-    )
-}
-
 fn invalid_property(
     ctx: &DimCheckContext<'_>,
     field: &LoweredPlotField,
-    context: &'static str,
-    valid: &str,
+    context: PlotPropertyContext,
 ) -> SemanticError {
     SemanticError::located(
         ctx.env.src,
         field.name_span,
         NameError::InvalidPlotProperty {
-            property: field.property.name().to_string(),
+            property: field.property.clone(),
             context,
-            valid: valid.to_string(),
         },
     )
 }

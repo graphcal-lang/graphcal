@@ -61,7 +61,7 @@ pub fn validate_reserved_alias(
             import_item.local_span(),
             NameError::BuiltinNameShadowed {
                 kind,
-                name: local_name.to_string(),
+                name: local_name.clone(),
             },
         )
     })
