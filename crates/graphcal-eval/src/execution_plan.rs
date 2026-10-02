@@ -90,6 +90,17 @@ impl<I: PlanIndex, T> std::ops::Index<I> for IndexVec<I, T> {
 /// What running one value declaration does.
 #[derive(Clone)]
 pub enum PlannedBody<'p> {
+    /// A param default, a node formula, or an unfinished node: a callable
+    /// computes it.
+    Computed(ComputedBody<'p>),
+    /// A constant or a required port: nothing is evaluated at runtime, and
+    /// no callable has a step for it.
+    Supplied,
+}
+
+/// What computing one value declaration does.
+#[derive(Clone)]
+pub enum ComputedBody<'p> {
     /// An unfinished node: running it records the TODO.
     Todo,
     /// A param default or a node formula, in the scope of the DAG that owns
@@ -100,8 +111,6 @@ pub enum PlannedBody<'p> {
         /// Its checked tree, or why the tree cannot be executed.
         tree: Result<ScopedTree<'p, &'p TExpr>, ExecutableBodyError>,
     },
-    /// A constant or a required port: nothing is evaluated at runtime.
-    Supplied,
 }
 
 /// One value declaration of the program, with everything running it needs.
@@ -175,9 +184,13 @@ impl std::fmt::Debug for PlannedDeclaration<'_> {
             .field(
                 "kind",
                 &match &self.body {
-                    PlannedBody::Todo => "todo",
-                    PlannedBody::Expression { tree: Ok(_), .. } => "executable",
-                    PlannedBody::Expression { tree: Err(_), .. } => "deferred",
+                    PlannedBody::Computed(ComputedBody::Todo) => "todo",
+                    PlannedBody::Computed(ComputedBody::Expression { tree: Ok(_), .. }) => {
+                        "executable"
+                    }
+                    PlannedBody::Computed(ComputedBody::Expression { tree: Err(_), .. }) => {
+                        "deferred"
+                    }
                     PlannedBody::Supplied => "supplied",
                 },
             )
@@ -185,12 +198,23 @@ impl std::fmt::Debug for PlannedDeclaration<'_> {
     }
 }
 
-/// One scheduled declaration of a callable: its planned body and the steps
-/// of the same callable it depends on.
-#[derive(Debug)]
+/// One scheduled declaration of a callable that the callable computes: its
+/// planned body and the steps of the same callable it depends on.
 pub struct Step<'p> {
     declaration: PlannedDeclaration<'p>,
+    body: ComputedBody<'p>,
     deps: Vec<StepIdx>,
+}
+
+impl std::fmt::Debug for Step<'_> {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // The declaration's debug output names the kind of its body.
+        formatter
+            .debug_struct("Step")
+            .field("declaration", &self.declaration)
+            .field("deps", &self.deps)
+            .finish_non_exhaustive()
+    }
 }
 
 impl<'p> Step<'p> {
@@ -198,6 +222,12 @@ impl<'p> Step<'p> {
     #[must_use]
     pub const fn declaration(&self) -> &PlannedDeclaration<'p> {
         &self.declaration
+    }
+
+    /// What computing the declaration does.
+    #[must_use]
+    pub const fn body(&self) -> &ComputedBody<'p> {
+        &self.body
     }
 
     /// The earlier steps of the same callable whose declarations it reads.
@@ -288,10 +318,11 @@ pub struct CallablePlan<'p> {
 }
 
 impl<'p> CallablePlan<'p> {
-    /// Index `scheduled` declarations, in their evaluation order, as the
-    /// steps of the callable `scope`. Each step depends on the earlier steps
-    /// among the declarations it reads; reads of declarations this callable
-    /// does not schedule (constants and imports) have no step.
+    /// Index the computed `scheduled` declarations, in their evaluation
+    /// order, as the steps of the callable `scope`. Each step depends on the
+    /// earlier steps among the declarations it reads; reads of declarations
+    /// this callable does not compute (constants, imports, and required
+    /// ports, whose values are supplied) have no step.
     ///
     /// # Errors
     ///
@@ -305,8 +336,18 @@ impl<'p> CallablePlan<'p> {
         imports: Vec<PreparedConstantImport>,
         scheduled: Vec<PlannedDeclaration<'p>>,
     ) -> Result<Self, StepIndexError> {
+        let scheduled = scheduled
+            .into_iter()
+            .filter_map(|declaration| match &declaration.body {
+                PlannedBody::Computed(body) => {
+                    let body = body.clone();
+                    Some((declaration, body))
+                }
+                PlannedBody::Supplied => None,
+            })
+            .collect::<Vec<_>>();
         let mut positions = HashMap::with_capacity(scheduled.len());
-        for (position, declaration) in scheduled.iter().enumerate() {
+        for (position, (declaration, _)) in scheduled.iter().enumerate() {
             if positions
                 .insert(declaration.key, StepIdx::new(position))
                 .is_some()
@@ -317,7 +358,7 @@ impl<'p> CallablePlan<'p> {
         let steps = scheduled
             .into_iter()
             .enumerate()
-            .map(|(position, declaration)| {
+            .map(|(position, (declaration, body))| {
                 let deps = declaration
                     .reads
                     .iter()
@@ -333,7 +374,11 @@ impl<'p> CallablePlan<'p> {
                         }
                     })
                     .collect::<Result<Vec<_>, _>>()?;
-                Ok(Step { declaration, deps })
+                Ok(Step {
+                    declaration,
+                    body,
+                    deps,
+                })
             })
             .collect::<Result<Vec<_>, _>>()?;
         Ok(Self {
@@ -458,9 +503,9 @@ impl<'p> ExecPlan<'p> {
                 .map(|(caller, _)| registry.callee_positions(caller).into())
                 .collect(),
         );
-        let has_unfinished_definitions = declarations
-            .values()
-            .any(|declaration| matches!(declaration.body, PlannedBody::Todo));
+        let has_unfinished_definitions = declarations.values().any(|declaration| {
+            matches!(declaration.body, PlannedBody::Computed(ComputedBody::Todo))
+        });
         Ok(Self {
             program,
             has_unfinished_definitions,

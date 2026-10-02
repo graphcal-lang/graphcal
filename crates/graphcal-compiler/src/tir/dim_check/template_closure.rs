@@ -166,7 +166,7 @@ fn check_rigid_value_bodies(
     ctx: &DimCheckContext<'_>,
     failure: RigidFailure<'_>,
 ) -> Result<(), Outcome<SemanticError>> {
-    for (kind, name, declaration, annotation, body_span) in ctx
+    for (kind, name, declaration, annotation, expression) in ctx
         .env
         .dag
         .consts()
@@ -176,7 +176,7 @@ fn check_rigid_value_bodies(
                 entry.name(),
                 entry.identity(),
                 &entry.type_ann,
-                entry.expr.span,
+                &*entry.expr,
             )
         })
         .chain(ctx.env.dag.nodes().filter_map(|entry| {
@@ -186,7 +186,7 @@ fn check_rigid_value_bodies(
                     entry.name(),
                     entry.identity(),
                     &entry.type_ann,
-                    expression.span,
+                    &**expression,
                 )
             })
         }))
@@ -202,8 +202,8 @@ fn check_rigid_value_bodies(
             ctx,
             &body,
             failure,
-            body_span,
-            check_decl_expr_type(ctx, name, &declaration, annotation),
+            expression.span,
+            check_decl_expr_type(ctx, name, &declaration, annotation, expression),
         )?;
     }
     Ok(())
@@ -217,7 +217,7 @@ fn check_rigid_assertion_bodies(
         let Some(owner) = local_owner(ctx, entry.identity()) else {
             continue;
         };
-        let assertion = ctx.hir_assert_body(entry.name(), &owner, entry.span)?;
+        let assertion = &*entry.body;
         let body = TemplateBodyIdentity {
             kind: DeclarationKind::Assert,
             name: entry.name().atom().clone(),
@@ -341,23 +341,18 @@ fn check_rigid_unit_bodies(
 /// recorded.
 fn check_in_rigid_view<R>(
     tir: &crate::tir::typed::UncheckedTir,
-    template: &crate::tir::typed::DagTIR,
+    template: crate::tir::typed::dag_position::DagPosition,
     ports: &[crate::resolved_name::ResolvedDimName],
     failure: RigidFailure<'_>,
     src: SourceId,
     cancellation: &crate::cancellation::CancellationToken,
     plots: impl FnOnce(&DimCheckContext<'_>) -> Result<R, Outcome<SemanticError>>,
 ) -> Result<(R, infer::hir::FinishedObservations), Outcome<SemanticError>> {
-    let rigid_tir = crate::tir::typed::rigid_dimension_view(tir, template.dag_id(), ports, src)?;
-    let rigid_dag = rigid_tir.dags.get(template.dag_id()).ok_or_else(|| {
-        SemanticError::internal_error(
-            format!("rigid template DAG `{}` is unavailable", template.dag_id()),
-            src,
-            DiagnosticAnchor::WholeFile,
-        )
-    })?;
+    let rigid_tir = crate::tir::typed::rigid_dimension_view(tir, template, ports, src)?;
+    let rigid_dag = rigid_tir.dags.at(template);
     let observations = infer::hir::BodyObservations::default();
     let rigid_ctx = DimCheckContext {
+        position: template,
         env: infer::hir::InferEnv {
             dag: rigid_dag,
             tir: &rigid_tir,
@@ -384,7 +379,7 @@ fn check_rigid_dimension_port(
     let failure = RigidFailure::Violation(port);
     check_in_rigid_view(
         ctx.assembly,
-        ctx.env.dag,
+        ctx.position,
         std::slice::from_ref(dimension),
         failure,
         ctx.env.src,
@@ -411,14 +406,16 @@ pub(super) struct PortGenericTrees {
 /// failure here is reported unchanged.
 pub(super) fn port_generic_trees(
     tir: &crate::tir::typed::UncheckedTir,
+    position: crate::tir::typed::dag_position::DagPosition,
     template: &crate::tir::typed::DagTIR,
     ports: &[crate::resolved_name::ResolvedDimName],
     src: SourceId,
     cancellation: &crate::cancellation::CancellationToken,
 ) -> Result<PortGenericTrees, Outcome<SemanticError>> {
+    debug_assert!(std::ptr::eq(tir.dags.at(position), template));
     let (plot_channels, finished) = check_in_rigid_view(
         tir,
-        template,
+        position,
         ports,
         RigidFailure::Propagate,
         src,

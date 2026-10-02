@@ -2,7 +2,6 @@ use crate::runtime_value::{
     IndexAxis, IndexedValue, KeyElement, KeyValue, RuntimeValue, StructValue,
 };
 use graphcal_compiler::builtin::{AggregationFn, KeyAggregation};
-use graphcal_compiler::declaration_category::DeclCategory;
 use graphcal_compiler::outcome::Outcome;
 use graphcal_compiler::semantic::checked_type::{CheckedType, IndexTypeRef, StructTypeRef};
 use graphcal_compiler::semantic_error::SemanticError;
@@ -14,7 +13,7 @@ use graphcal_compiler::tir::texpr::{
     TLabelArm, TParamBinding,
 };
 use graphcal_compiler::tir::typed::body_scope::Scoped;
-use graphcal_compiler::tir::typed::evaluation_unit::{DeclarationBody, ScopedTree};
+use graphcal_compiler::tir::typed::evaluation_unit::{BodyKind, ScopedTree};
 use graphcal_compiler::tir::typed::scoped_node::{
     ConstRef, NodeKind, ScopedCall, ScopedIndexArg, ScopedMatchArms, ScopedNode, ScopedScan,
 };
@@ -1462,7 +1461,7 @@ fn check_inline_plan_asserts(
 ) -> Result<(), Outcome<SemanticError>> {
     callable.execution_dags().iter().try_for_each(|scope| {
         check_inline_dag_asserts(
-            scope.dag(),
+            *scope,
             values,
             &ctx.with_src(scope.source()),
             target,
@@ -1481,29 +1480,20 @@ fn check_inline_plan_asserts(
 /// the calling expression (fault-isolated to the calling declaration).
 /// `#[expected_fail]` inversion applies as usual.
 fn check_inline_dag_asserts(
-    dag_tir: &graphcal_compiler::tir::typed::checked_dag::CheckedDag,
+    scope: crate::checked_program::SealedDag<'_>,
     dag_values: &RuntimeValueMap,
     dag_ctx: &EvalSession<'_>,
     target: &graphcal_compiler::dag_id::DagId,
     call_span: Span,
     ctx: &EvalSession<'_>,
 ) -> Result<(), Outcome<SemanticError>> {
-    for entry in dag_tir.declarations() {
-        if !matches!(entry.category(), DeclCategory::Assert) {
+    for unit in ctx.tir.declaration_bodies(scope.position()) {
+        let BodyKind::Assert(body) = unit.kind() else {
             continue;
-        }
-        let name = entry.name();
-        let key = entry.identity().clone();
-        let unit = ctx.tir.declaration_body(&key);
-        let Some(body) = unit.and_then(DeclarationBody::assertion) else {
-            return Err(ctx
-                .internal_error(
-                    format!("TIR assertion entry missing for DAG assertion `{name}`"),
-                    call_span,
-                )
-                .into());
         };
-        let ef = unit.and_then(DeclarationBody::expected_fail);
+        let key = unit.identity().clone();
+        let name = key.leaf();
+        let ef = unit.expected_fail();
         let context = dag_ctx.for_decl(&key);
         let result = crate::assertion_eval::evaluate_assert_with_expected_fail(
             body.map(|entry| &*entry.body),

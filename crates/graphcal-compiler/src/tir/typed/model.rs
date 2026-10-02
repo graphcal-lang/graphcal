@@ -1133,15 +1133,6 @@ impl DagTIR {
         self.const_expr(key).or_else(|| self.runtime_expr(key))
     }
 
-    /// Look up the single authoritative HIR body owned by an assertion.
-    #[must_use]
-    pub fn assert_body(&self, key: &ResolvedDeclName) -> Option<&crate::hir::expr::AssertBody> {
-        match self.decls.get(key)? {
-            crate::ir::entry::Decl::Assert(entry) => Some(&*entry.body),
-            _ => None,
-        }
-    }
-
     /// Visit every source unit reference used by this DAG.
     pub fn visit_unit_references(
         &self,

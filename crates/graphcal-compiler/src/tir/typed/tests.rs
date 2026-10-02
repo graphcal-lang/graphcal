@@ -1007,23 +1007,14 @@ fn closing_a_registry_resolves_every_call_slot_or_names_the_missing_callee() {
         [child]
     );
 
-    let closed = CheckedDagRegistry::close(
-        registry.root.clone(),
-        registry.other_dags.clone(),
-        indexmap::IndexMap::new(),
-    )
-    .unwrap();
+    let closed = CheckedDagRegistry::close(registry.dags.clone()).unwrap();
     assert_eq!(
         closed.callee_positions(crate::tir::typed::dag_position::DagPosition::ROOT),
         [child]
     );
 
-    let error = CheckedDagRegistry::close(
-        registry.root.clone(),
-        indexmap::IndexMap::new(),
-        indexmap::IndexMap::new(),
-    )
-    .unwrap_err();
+    let error = CheckedDagRegistry::close(super::dag_slots::DagSlots::new(registry.root().clone()))
+        .unwrap_err();
     assert_eq!(
         error.to_string(),
         format!(
@@ -1869,70 +1860,182 @@ fn rigid_views_keep_bound_defaulted_ports_opaque_and_recompute_derived_dimension
     assert_eq!(store.get_dimension(&qp), Some(&(&length * &mass).unwrap()));
 }
 
-fn instantiate_for_test(draft: TirDraft, src: crate::source_id::SourceId) -> InstantiatedTir {
-    draft
-        .instantiate(&CheckedOverrideDependencies::default(), src)
-        .unwrap()
+#[test]
+fn checked_tir_pairs_each_local_body_with_everything_its_check_published() {
+    let source = "param p: Dimensionless = 2.0; node x: Dimensionless = @p * 1.0;";
+    let src = crate::source_registry::SourceRegistry::new()
+        .register("test.gcl", Arc::new(source.to_string()));
+    let tir = check_draft(parse_and_type_resolve_builder(source).unwrap(), src).unwrap();
+    let root = tir.root();
+    assert!(root.bodies().cover(root.body().owned_expression_roots()));
+    assert_eq!(
+        root.runtime_schedule().execution_dags(),
+        std::slice::from_ref(tir.root_dag_id())
+    );
 }
 
-/// Everything `tir` published for its root, to pair with another check's body.
-fn root_parts(tir: &CheckedTir) -> CheckedParts {
-    let owner = tir.root_dag_id().clone();
-    let root = tir.root();
-    CheckedParts {
-        bodies: HashMap::from([(owner.clone(), root.bodies().clone())]),
-        presentation: HashMap::from([(owner.clone(), root.presentation().clone())]),
-        schedules: CheckedSchedules {
-            constants: tir.const_schedule().clone(),
-            callables: HashMap::from([(owner, root.runtime_schedule().clone())]),
-        },
+/// A draft whose root has two other local bodies, `b` added before `a`.
+fn draft_with_local_children() -> TirDraft {
+    let mut draft = parse_and_type_resolve_builder("node x: Dimensionless = 1.0;").unwrap();
+    let root_id = draft.root().dag_id().clone();
+    for name in ["b", "a"] {
+        let mut child = draft.root().clone();
+        child.dag_id =
+            root_id.inline_dag_child(crate::syntax::decl_name::DeclName::expect_valid(name));
+        draft.insert_dag(child).unwrap();
     }
+    draft
 }
 
 #[test]
-fn checked_tir_pairs_each_local_body_with_everything_its_check_published() {
-    let source = "node x: Dimensionless = 1.0;";
-    let src = crate::source_registry::SourceRegistry::new()
-        .register("test.gcl", Arc::new(source.to_string()));
-    let draft = parse_and_type_resolve_builder(source).unwrap();
-    let other = check_draft(draft.clone(), src).unwrap();
-    let pair = |edit: &dyn Fn(&mut CheckedParts)| {
-        let mut parts = root_parts(&other);
-        edit(&mut parts);
-        instantiate_for_test(draft.clone(), src)
-            .tir
-            .into_checked(parts, src)
+fn draft_positions_follow_insertion_while_visits_follow_identity() {
+    let tir = draft_with_local_children().finish();
+    let position = |name: &str| {
+        let dag_id = tir
+            .root_dag_id()
+            .inline_dag_child(crate::syntax::decl_name::DeclName::expect_valid(name));
+        tir.dags.position(&dag_id).unwrap().index()
     };
-    let fails_with = |result: Result<CheckedTir, SemanticError>, expected: &str| {
-        assert!(
-            matches!(&result, Err(SemanticError::Internal(internal)) if internal.message().contains(expected)),
-            "expected `{expected}`: {result:?}"
-        );
+    // `b` joined before `a`.
+    assert_eq!((position("b"), position("a")), (1, 2));
+    assert_eq!(tir.dags.positioned().count(), 3);
+    let visited = tir
+        .dags
+        .local_iter()
+        .map(|(dag_id, _)| dag_id.to_string())
+        .collect::<Vec<_>>();
+    assert_eq!(visited[0], tir.root_dag_id().to_string());
+    assert!(visited[1].ends_with('a') && visited[2].ends_with('b'));
+    assert!(tir.dags.positioned().all(|(position, dag)| {
+        tir.dags.position(dag.dag_id()) == Some(position)
+            && std::ptr::eq(tir.dags.at(position), dag)
+    }));
+}
+
+#[test]
+fn imported_slots_keep_their_position_when_localized() {
+    let leaf = importer_tir("leaf.gcl", &[])
+        .freeze_local_dag_store()
+        .unwrap();
+    let (leaf_id, _) = leaf.iter().next().unwrap();
+    let mut draft =
+        parse_and_type_resolve_builder_named("node x: Dimensionless = 1.0;", "root.gcl").unwrap();
+    draft.install_shared_dag_stores([&leaf]).unwrap();
+    let mut tir = draft.finish();
+    let imported = tir.dags.position(leaf_id).unwrap();
+    assert_eq!(imported.index(), 1);
+    assert!(std::ptr::eq(
+        tir.dags.shared_at(imported).unwrap(),
+        leaf.get(leaf_id).unwrap()
+    ));
+    assert!(
+        tir.dags
+            .shared_at(super::dag_position::DagPosition::ROOT)
+            .is_none()
+    );
+    assert_eq!(tir.dags[leaf_id].dag_id(), leaf_id);
+    let facts = tir
+        .dags
+        .map_local(|_, dag| Ok::<_, ()>(dag.dag_id().clone()))
+        .unwrap();
+    assert!(tir.dags.local_fact_at(&facts, imported).is_none());
+    assert!(tir.dags.local_with_fact(&facts, leaf_id).is_none());
+    assert_eq!(
+        tir.dags
+            .local_fact_at(&facts, super::dag_position::DagPosition::ROOT),
+        Some(tir.root_dag_id())
+    );
+
+    // Localizing the import copies its body into a local slot at the same
+    // position; it is then visited with the local bodies.
+    let localized = tir.dags.localized_mut(imported).dag_id().clone();
+    assert_eq!(&localized, leaf_id);
+    assert_eq!(tir.dags.position(leaf_id), Some(imported));
+    assert!(tir.dags.shared_at(imported).is_none());
+    assert!(tir.dags.shared(leaf_id).is_none());
+    assert_eq!(tir.dags.local_iter().count(), 2);
+    assert_eq!(tir.dags.len(), 2);
+}
+
+#[test]
+fn local_dag_facts_pair_each_local_body_with_the_fact_mapped_from_it() {
+    let tir = draft_with_local_children().finish();
+    let facts = tir
+        .dags
+        .map_local(|position, dag| {
+            assert_eq!(tir.dags.position(dag.dag_id()), Some(position));
+            Ok::<_, ()>(dag.dag_id().clone())
+        })
+        .unwrap();
+    // Visited in identity order, paired by body.
+    let visited = tir
+        .dags
+        .with_local_facts(&facts)
+        .map(|(dag, fact)| {
+            assert_eq!(dag.dag_id(), fact);
+            fact.to_string()
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(visited.len(), 3);
+    assert_eq!(visited[0], tir.root_dag_id().to_string());
+    assert!(visited[1].ends_with('a') && visited[2].ends_with('b'));
+    assert_eq!(
+        tir.dags.local_fact(&facts, tir.root_dag_id()),
+        Some(tir.root_dag_id())
+    );
+
+    // Derived tables keep the alignment, so their facts still pair by body.
+    let rendered = facts
+        .try_map_ref(|owner| Ok::<_, ()>(owner.to_string()))
+        .unwrap();
+    let (owners, rendered) = facts.zip(rendered).unzip();
+    let lengths = tir
+        .dags
+        .map_local_facts(rendered.map(|text| text.len()), |dag, length| {
+            assert_eq!(length, dag.dag_id().to_string().len());
+            length
+        });
+    let paired = tir
+        .dags
+        .zip_locals(owners.zip(lengths), |dag, (owner, length)| {
+            assert_eq!(dag.dag_id(), &owner);
+            assert_eq!(length, owner.to_string().len());
+            dag
+        });
+    assert_eq!(paired.len(), 3);
+}
+
+#[test]
+fn local_dag_facts_stop_at_the_first_failure_in_visiting_order() {
+    let tir = draft_with_local_children().finish();
+    let mut visited = Vec::new();
+    let failure = tir.dags.map_local(|_, dag| {
+        visited.push(dag.dag_id().clone());
+        if visited.len() == 2 {
+            Err(dag.dag_id().clone())
+        } else {
+            Ok(())
+        }
+    });
+    let Err(failed) = failure else {
+        panic!("expected the second body to fail");
     };
-    fails_with(
-        pair(&|parts| parts.presentation.clear()),
-        "no checked presentation facts",
-    );
-    fails_with(
-        pair(&|parts| parts.schedules.callables.clear()),
-        "no checked runtime schedule",
-    );
-    fails_with(
-        pair(&|parts| parts.bodies.clear()),
-        "no checked typed bodies",
-    );
-    // Another check of the same body publishes trees of the same roots.
-    assert!(pair(&|_| {}).is_ok());
-    // Trees of another body do not cover this one's expression roots.
-    let unrelated = check_draft(
-        parse_and_type_resolve_builder("node x: Dimensionless = 2.0;").unwrap(),
-        src,
-    )
-    .unwrap();
-    fails_with(
-        pair(&|parts| {
-            parts.bodies = root_parts(&unrelated).bodies;
-        }),
-        "do not cover exactly its expression roots",
+    assert_eq!(visited.len(), 2);
+    assert!(failed.to_string().ends_with('a'));
+    let facts = tir
+        .dags
+        .map_local(|_, dag| Ok::<_, ()>(dag.dag_id().clone()))
+        .unwrap();
+    assert_eq!(
+        facts
+            .try_map(|owner| if owner == *tir.root_dag_id() {
+                Ok(())
+            } else {
+                Err(owner)
+            })
+            .map(|_| ()),
+        Err(tir
+            .root_dag_id()
+            .inline_dag_child(crate::syntax::decl_name::DeclName::expect_valid("b")))
     );
 }

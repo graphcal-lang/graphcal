@@ -23,7 +23,9 @@ fn plot_properties_preserve_cancellation_classification() {
             .unwrap()
             .identity(),
     );
-    let plot = unit.plot().unwrap();
+    let BodyKind::Plot(plot) = unit.kind() else {
+        panic!("expected a plot");
+    };
     let ctx = EvalSession::provisional_constants(
         &tir,
         src,
@@ -87,17 +89,17 @@ fn composition_properties_preserve_cancellation_classification() {
     let layer = tir.root().body_for_test().layers().next().unwrap();
     let compositions = [
         (
-            root_unit(&tir, &figure.identity())
-                .figure()
-                .unwrap()
-                .map(|figure| figure.fields.as_slice()),
+            match root_unit(&tir, &figure.identity()).kind() {
+                BodyKind::Figure(figure) => figure.map(|figure| figure.fields.as_slice()),
+                _ => panic!("expected a figure"),
+            },
             &figure.plot_names,
         ),
         (
-            root_unit(&tir, &layer.identity())
-                .layer()
-                .unwrap()
-                .map(|layer| layer.fields.as_slice()),
+            match root_unit(&tir, &layer.identity()).kind() {
+                BodyKind::Layer(layer) => layer.map(|layer| layer.fields.as_slice()),
+                _ => panic!("expected a layer"),
+            },
             &layer.plot_names,
         ),
     ];

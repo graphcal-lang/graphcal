@@ -118,12 +118,7 @@ fn store_module_artifact(
     let (tir, execution_facts) = compiled.program.into_parts();
     let local_owners = tir.local_dags().map(|(dag_id, _)| dag_id.clone()).collect();
     let override_dependencies =
-        graphcal_compiler::tir::dim_check::collect_override_dependency_summary_with_cancellation(
-            &tir,
-            file_src,
-            cancellation,
-        )
-        .map_err(Outcome::map_into)?;
+        graphcal_compiler::tir::dim_check::collect_override_dependency_summary(&tir, cancellation)?;
     let extern_functions = tir.extern_functions().clone();
     // The checked file is no longer needed after publication. Consume its
     // mutable assembly registry so each local body becomes one immutable

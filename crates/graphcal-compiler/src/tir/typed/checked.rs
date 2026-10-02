@@ -1,11 +1,6 @@
 //! The checked project TIR: the final state of the TIR typestate, whose DAGs
 //! carry their checked facts, and the immutable stores it publishes.
 
-use std::collections::HashMap;
-use std::sync::Arc;
-
-use indexmap::IndexMap;
-
 use crate::dag_id::DagId;
 use crate::diagnostic_anchor::DiagnosticAnchor;
 use crate::dimension::Dimension;
@@ -19,36 +14,31 @@ use crate::semantic::index_def::IndexDef;
 use crate::semantic::unit_scale::UnitInfo;
 use crate::semantic_error::SemanticError;
 use crate::source_id::SourceId;
-use crate::tir::presentation::DagPresentationFacts;
-use crate::tir::schedule::{ConstSchedule, RuntimeSchedule};
+use crate::tir::schedule::ConstSchedule;
 use crate::tir::texpr::CheckedBodies;
 
 use super::body_scope::BodyScope;
 use super::checked_dag::{CheckedDag, PublishedDag};
 use super::dag_position::DagPosition;
+use super::dag_slots::{DagSlots, LocalDagFacts};
 use super::model::{CheckedDeclType, DagTIR, ProjectTypeStore, TirCore};
 
 use super::program::{TirRead, UncheckedTir};
 
 /// Registry of the checked DAGs of one file and every DAG it imports.
 ///
-/// The root DAG is stored directly, so its presence is structural. Every other
-/// entry is keyed from its own [`DagTIR::dag_id`]; the API exposes no
-/// insertion, removal, or mutation.
-///
-/// Every DAG has a [`DagPosition`]: the root first, then the local DAGs,
-/// then the imported ones, each in [`DagId`] order, so a program numbers its
-/// DAGs the same way in every run.
+/// Every DAG keeps the [`DagPosition`] it was given when it joined the draft
+/// this registry was checked from. The root is at [`DagPosition::ROOT`], so
+/// its presence is structural; the API exposes no insertion, removal, or
+/// mutation. Iteration visits the root, then the other local DAGs, then the
+/// imported ones, each in [`DagId`] order.
 ///
 /// The registry is closed under calls: every DAG a body calls is in the
 /// registry, and the callee of each call slot of each body is resolved to
 /// its position once, when the registry is built.
 #[derive(Debug, Clone)]
 pub struct CheckedDagRegistry {
-    pub(super) root: CheckedDag,
-    pub(super) other_dags: IndexMap<DagId, CheckedDag>,
-    /// Immutable bodies imported from an already-frozen module store.
-    shared_dags: IndexMap<DagId, Arc<CheckedDag>>,
+    pub(super) dags: DagSlots<CheckedDag>,
     /// The position of the callee of each call slot, by caller position.
     callees: Vec<Box<[DagPosition]>>,
 }
@@ -69,51 +59,49 @@ impl CheckedDagRegistry {
     ///
     /// Returns [`UnresolvedCallee`] when a body calls a DAG outside the
     /// registry.
-    pub(super) fn close(
-        root: CheckedDag,
-        other_dags: IndexMap<DagId, CheckedDag>,
-        shared_dags: IndexMap<DagId, Arc<CheckedDag>>,
-    ) -> Result<Self, UnresolvedCallee> {
-        let mut registry = Self {
-            root,
-            other_dags,
-            shared_dags,
-            callees: Vec::new(),
-        };
-        registry.callees = registry
-            .values()
-            .map(|caller| {
+    pub(super) fn close(dags: DagSlots<CheckedDag>) -> Result<Self, UnresolvedCallee> {
+        let callees = dags
+            .positioned()
+            .map(|(_, caller)| {
                 caller
                     .call_targets()
                     .iter()
                     .map(|(_, target)| {
-                        registry
-                            .get_positioned(target)
-                            .map(|(position, _)| position)
-                            .ok_or_else(|| UnresolvedCallee {
-                                caller: caller.dag_id().clone(),
-                                target: target.clone(),
-                            })
+                        dags.position(target).ok_or_else(|| UnresolvedCallee {
+                            caller: caller.dag_id().clone(),
+                            target: target.clone(),
+                        })
                     })
                     .collect()
             })
             .collect::<Result<_, _>>()?;
-        Ok(registry)
+        Ok(Self { dags, callees })
     }
 
     /// The scope of one DAG, to select its bodies in.
     pub(super) fn scope(&self, dag_id: &DagId) -> Option<BodyScope<'_>> {
-        self.get_positioned(dag_id)
-            .map(|(position, dag)| BodyScope::of(dag, position, &self.callees[position.index()]))
+        self.dags
+            .position(dag_id)
+            .map(|position| self.scope_at(position))
+    }
+
+    /// The scope of the DAG at `position`.
+    ///
+    /// # Panics
+    ///
+    /// Panics when `position` is a position of another registry with more
+    /// DAGs.
+    pub(super) fn scope_at(&self, position: DagPosition) -> BodyScope<'_> {
+        BodyScope::of(
+            self.dags.at(position),
+            position,
+            &self.callees[position.index()],
+        )
     }
 
     /// The scope of the root DAG.
     pub(super) fn root_scope(&self) -> BodyScope<'_> {
-        BodyScope::of(
-            &self.root,
-            DagPosition::ROOT,
-            &self.callees[DagPosition::ROOT.index()],
-        )
+        self.scope_at(DagPosition::ROOT)
     }
 
     /// The positions of the callees of the body at `caller`, by call slot.
@@ -130,60 +118,42 @@ impl CheckedDagRegistry {
     /// The position and body of one DAG.
     #[must_use]
     pub fn get_positioned(&self, dag_id: &DagId) -> Option<(DagPosition, &CheckedDag)> {
-        if dag_id == self.root_id() {
-            return Some((DagPosition::ROOT, &self.root));
-        }
-        let locals = self.other_dags.len();
-        self.other_dags
-            .get_full(dag_id)
-            .map(|(position, _, dag)| (DagPosition::new(1 + position), dag))
-            .or_else(|| {
-                self.shared_dags.get_full(dag_id).map(|(position, _, dag)| {
-                    (DagPosition::new(1 + locals + position), dag.as_ref())
-                })
-            })
+        self.dags
+            .position(dag_id)
+            .map(|position| (position, self.dags.at(position)))
     }
 
     /// Every DAG with its position, in position order.
     pub fn positioned(&self) -> impl Iterator<Item = (DagPosition, &CheckedDag)> {
-        self.values()
-            .enumerate()
-            .map(|(position, dag)| (DagPosition::new(position), dag))
+        self.dags.positioned()
     }
 
     /// Canonical identity of this registry's root DAG.
     #[must_use]
-    pub const fn root_id(&self) -> &DagId {
-        &self.root.body.dag_id
+    pub fn root_id(&self) -> &DagId {
+        self.dags.root_id()
     }
 
     /// Borrow the root DAG.
     #[must_use]
-    pub const fn root(&self) -> &CheckedDag {
-        &self.root
+    pub fn root(&self) -> &CheckedDag {
+        self.dags.root()
     }
 
     /// Look up one DAG by canonical identity.
     #[must_use]
     pub fn get(&self, dag_id: &DagId) -> Option<&CheckedDag> {
-        if dag_id == self.root_id() {
-            Some(&self.root)
-        } else {
-            self.other_dags
-                .get(dag_id)
-                .or_else(|| self.shared_dags.get(dag_id).map(AsRef::as_ref))
-        }
+        self.dags.get(dag_id)
     }
 
     /// Iterate over the identities and bodies this file owns.
     pub(crate) fn local_iter(&self) -> impl Iterator<Item = (&DagId, &CheckedDag)> {
-        std::iter::once((self.root_id(), &self.root)).chain(self.other_dags.iter())
+        self.dags.local_iter()
     }
 
     /// Iterate over canonical identities and DAG bodies.
     pub fn iter(&self) -> impl Iterator<Item = (&DagId, &CheckedDag)> {
-        self.local_iter()
-            .chain(self.shared_dags.iter().map(|(id, dag)| (id, dag.as_ref())))
+        self.dags.iter()
     }
 
     /// Iterate over canonical DAG identities.
@@ -198,8 +168,8 @@ impl CheckedDagRegistry {
 
     /// Number of DAG modules in this registry, including its root and imports.
     #[must_use]
-    pub fn len(&self) -> usize {
-        self.other_dags.len() + self.shared_dags.len() + 1
+    pub const fn len(&self) -> usize {
+        self.dags.len()
     }
 
     /// A checked registry is never empty because construction requires a root.
@@ -213,89 +183,37 @@ impl std::ops::Index<&DagId> for CheckedDagRegistry {
     type Output = CheckedDag;
 
     fn index(&self, index: &DagId) -> &Self::Output {
-        if index == self.root_id() {
-            &self.root
-        } else {
-            self.other_dags
-                .get(index)
-                .unwrap_or_else(|| self.shared_dags[index].as_ref())
-        }
+        &self.dags[index]
     }
 }
 
 impl UncheckedTir {
-    /// Pair every local body with the facts its check published: the only
-    /// construction of a [`CheckedTir`].
+    /// Pair every local body with the facts its check published for it: the
+    /// only construction of a [`CheckedTir`].
     ///
+    /// `published` was mapped from this TIR's own registry, so each body
+    /// takes its facts without a lookup, and keeps its position.
     pub(crate) fn into_checked(
         self,
-        parts: CheckedParts,
+        constants: ConstSchedule,
+        published: LocalDagFacts<PublishedDag>,
         src: SourceId,
     ) -> Result<CheckedTir, SemanticError> {
-        let CheckedParts {
-            mut bodies,
-            mut presentation,
-            schedules,
-        } = parts;
-        let CheckedSchedules {
-            constants,
-            mut callables,
-        } = schedules;
         let (core, dags) = self.into_parts();
-        let (root, other_dags, shared_dags) = dags.into_parts();
-        let internal = |message: String| {
-            SemanticError::internal_error(message, src, DiagnosticAnchor::WholeFile)
-        };
-        let mut check = |body: DagTIR| {
-            let missing =
-                |what: &str| internal(format!("DAG `{}` has no checked {what}", body.dag_id()));
-            let published = PublishedDag {
-                bodies: bodies
-                    .remove(body.dag_id())
-                    .ok_or_else(|| missing("typed bodies"))?,
-                presentation: presentation
-                    .remove(body.dag_id())
-                    .ok_or_else(|| missing("presentation facts"))?,
-                runtime_schedule: callables
-                    .remove(body.dag_id())
-                    .ok_or_else(|| missing("runtime schedule"))?,
-            };
-            CheckedDag::new(body, published, src)
-        };
-        let root = check(root)?;
-        let other_dags = other_dags
-            .into_iter()
-            .map(|(id, body)| check(body).map(|dag| (id, dag)))
-            .collect::<Result<_, SemanticError>>()?;
+        let dags = dags.zip_locals(published, CheckedDag::new);
         // Every call target is in the registry: checking resolved each local
         // body's calls against it, an instance calls its template's targets
         // and its checked defaults', and installing an imported store
         // required the stores it calls into. Failing here is a compiler bug.
-        let dags = CheckedDagRegistry::close(root, other_dags, shared_dags.into_iter().collect())
-            .map_err(|error| internal(error.to_string()))?;
+        let dags = CheckedDagRegistry::close(dags).map_err(|error| {
+            SemanticError::internal_error(error.to_string(), src, DiagnosticAnchor::WholeFile)
+        })?;
         Ok(CheckedTir {
             core,
             dags,
             const_schedule: constants,
         })
     }
-}
-
-/// The schedules one check computed: the local DAGs' constants, and each
-/// local DAG as a callable.
-pub(crate) struct CheckedSchedules {
-    pub(crate) constants: ConstSchedule,
-    pub(crate) callables: HashMap<DagId, RuntimeSchedule>,
-}
-
-/// Everything one check published for the local bodies of a TIR, keyed by
-/// body; paired with the bodies only by
-/// [`UncheckedTir::into_checked`].
-pub(crate) struct CheckedParts {
-    /// The checked trees of every local body.
-    pub(crate) bodies: HashMap<DagId, CheckedBodies>,
-    pub(crate) presentation: HashMap<DagId, DagPresentationFacts>,
-    pub(crate) schedules: CheckedSchedules,
 }
 
 /// The checked project TIR: the final state of the TIR typestate and the only
@@ -314,13 +232,13 @@ pub struct CheckedTir {
 impl CheckedTir {
     /// Borrow the root DAG. Root presence is guaranteed by [`CheckedDagRegistry`].
     #[must_use]
-    pub const fn root(&self) -> &CheckedDag {
+    pub fn root(&self) -> &CheckedDag {
         self.dags.root()
     }
 
     /// Canonical identity of the root DAG.
     #[must_use]
-    pub const fn root_dag_id(&self) -> &DagId {
+    pub fn root_dag_id(&self) -> &DagId {
         self.dags.root_id()
     }
 

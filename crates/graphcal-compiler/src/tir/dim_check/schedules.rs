@@ -16,17 +16,21 @@ use crate::semantic_error::graph::GraphError;
 use crate::source_id::SourceId;
 use crate::tir::schedule::{ConstSchedule, RuntimeSchedule, RuntimeScheduleError};
 use crate::tir::typed::UncheckedTir;
+use crate::tir::typed::dag_slots::LocalDagFacts;
 
 /// Schedules computed for one checking revision, paired with the bodies only
 /// after the whole TIR has been accepted.
-pub(super) struct ScheduleBuilder {
-    constants: ConstSchedule,
-    callables: Vec<(DagId, RuntimeSchedule)>,
+pub(super) struct Schedules {
+    /// Evaluation order of the local DAGs' constants.
+    pub(super) constants: ConstSchedule,
+    /// Each local DAG as a callable.
+    pub(super) callables: LocalDagFacts<RuntimeSchedule>,
 }
 
-impl ScheduleBuilder {
+impl Schedules {
     /// Schedule the constants of every local DAG, then each local DAG as a
-    /// callable in [`DagId`] order.
+    /// callable, in local order (the root, which every other local DAG
+    /// descends from, then the others in [`DagId`] order).
     ///
     /// # Errors
     ///
@@ -35,43 +39,22 @@ impl ScheduleBuilder {
     pub(super) fn build(tir: &UncheckedTir, src: SourceId) -> Result<Self, SemanticError> {
         let constants = ConstSchedule::build(tir.dags.local_iter().map(|(_, dag)| dag))
             .map_err(|cycle| cyclic_dependency(tir, &cycle, None, src))?;
-        let mut callables = tir
-            .dags
-            .local_iter()
-            .map(|(_, dag)| dag)
-            .collect::<Vec<_>>();
-        callables.sort_by(|left, right| left.dag_id().cmp(right.dag_id()));
-        let callables = callables
-            .into_iter()
-            .map(|dag| {
-                RuntimeSchedule::build(dag, |owner| tir.dags.get(owner))
-                    .map(|schedule| (dag.dag_id().clone(), schedule))
-                    .map_err(|error| match error {
-                        RuntimeScheduleError::Cycle(cycle) => {
-                            cyclic_dependency(tir, &cycle, Some(dag.dag_id()), src)
-                        }
-                        RuntimeScheduleError::MissingInstance(owner) => {
-                            SemanticError::internal_error(
-                                format!("semantic runtime instance `{owner}` has no compiled DAG"),
-                                src,
-                                DiagnosticAnchor::WholeFile,
-                            )
-                        }
-                    })
+        let callables = tir.dags.map_local(|_, dag| {
+            RuntimeSchedule::build(dag, |owner| tir.dags.get(owner)).map_err(|error| match error {
+                RuntimeScheduleError::Cycle(cycle) => {
+                    cyclic_dependency(tir, &cycle, Some(dag.dag_id()), src)
+                }
+                RuntimeScheduleError::MissingInstance(owner) => SemanticError::internal_error(
+                    format!("semantic runtime instance `{owner}` has no compiled DAG"),
+                    src,
+                    DiagnosticAnchor::WholeFile,
+                ),
             })
-            .collect::<Result<_, _>>()?;
+        })?;
         Ok(Self {
             constants,
             callables,
         })
-    }
-
-    /// Release the schedules for pairing with the accepted TIR.
-    pub(super) fn into_parts(self) -> crate::tir::typed::CheckedSchedules {
-        crate::tir::typed::CheckedSchedules {
-            constants: self.constants,
-            callables: self.callables.into_iter().collect(),
-        }
     }
 }
 

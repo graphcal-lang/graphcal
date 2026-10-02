@@ -48,6 +48,8 @@ pub mod declaration_view;
 pub use dag_store::*;
 pub mod freeze;
 pub use freeze::*;
+pub(crate) mod checking_tir;
+pub mod dag_slots;
 pub mod program;
 pub use program::*;
 pub(crate) mod frame_mint;
@@ -1721,7 +1723,7 @@ impl DagTIRSeed {
 }
 
 /// Build a temporary TIR view in which the optional dimension `ports` of
-/// `dag_id` are rigid.
+/// the DAG at `position` are rigid. The DAG keeps its position in the view.
 ///
 /// The ordinary checked TIR retains default-resolved signatures for parameter
 /// default reconciliation. This view re-resolves source-authored declaration
@@ -1731,7 +1733,7 @@ impl DagTIRSeed {
 /// authoritative result.
 pub(crate) fn rigid_dimension_view(
     tir: &UncheckedTir,
-    dag_id: &crate::dag_id::DagId,
+    position: dag_position::DagPosition,
     ports: &[ResolvedDimName],
     src: SourceId,
 ) -> Result<UncheckedTir, SemanticError> {
@@ -1748,13 +1750,7 @@ pub(crate) fn rigid_dimension_view(
             .dimensions
             .register_rigid_dimension(port);
     }
-    let rigid_dag = rigid.dags.localized_mut(dag_id).ok_or_else(|| {
-        SemanticError::internal_error(
-            format!("template DAG `{dag_id}` is unavailable for rigid checking"),
-            src,
-            DiagnosticAnchor::WholeFile,
-        )
-    })?;
+    let rigid_dag = rigid.dags.localized_mut(position);
     let resolved = crate::outcome::without_cancellation(|cancellation| {
         resolve_declared_types(
             rigid_dag

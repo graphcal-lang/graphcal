@@ -1,6 +1,5 @@
 use super::*;
 use crate::dimension::{BaseDimId, Dimension};
-use crate::outcome::Outcome;
 use crate::resolved_name::{ResolvedDeclName, ResolvedIndexName, ResolvedStructTypeName};
 use crate::semantic::checked_type::{CheckedGenericArg, IndexTypeRef, StructTypeRef};
 use crate::semantic_error::SemanticErrorKind;
@@ -354,7 +353,11 @@ param fixed_wrapped: Wrapper<Fixed, FixedAxis> =
     let (tir, src) = module_aware_tir(source);
     let tir = check_draft(tir, src).unwrap();
 
-    let summary = collect_override_dependency_summary(&tir, src).unwrap();
+    let summary = collect_override_dependency_summary(
+        &tir,
+        &crate::cancellation::CancellationToken::unbounded(),
+    )
+    .unwrap();
     let owner = test_dag_id();
     let record = NominalOverrideIdentity::Type(ResolvedStructTypeName::for_test(
         owner.clone(),
@@ -401,8 +404,8 @@ param record: Record = Record(x: 1.0);
     cancellation.cancel();
 
     assert!(matches!(
-        collect_override_dependency_summary_with_cancellation(&tir, src, &cancellation.token(),),
-        Err(Outcome::Cancelled)
+        collect_override_dependency_summary(&tir, &cancellation.token()),
+        Err(crate::cancellation::Cancelled)
     ));
 }
 

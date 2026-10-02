@@ -47,7 +47,7 @@ impl CheckedOverrideDependencies {
     /// the entry DAG, because each instance owns its own executable
     /// reconciliation facts.
     pub(in crate::tir::typed) fn reconcile(&self, tir: &mut super::program::UncheckedTir) {
-        for dag in tir.dags.values_mut() {
+        for dag in tir.dags.locals_mut() {
             dag.semantic
                 .override_reconciliations
                 .retain(|_, reconciliations| {

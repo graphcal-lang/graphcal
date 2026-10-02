@@ -63,6 +63,8 @@ pub use crate::tir::typed::override_dependencies::{
 #[derive(Clone, Copy)]
 struct DimCheckContext<'a> {
     env: infer::hir::InferEnv<'a>,
+    /// The position of the DAG being checked in `assembly`.
+    position: crate::tir::typed::dag_position::DagPosition,
     /// The unchecked project being checked, from which derived checking views
     /// (such as a template with rigid dimension ports) are built.
     assembly: &'a crate::tir::typed::UncheckedTir,
@@ -73,27 +75,6 @@ struct DimCheckContext<'a> {
 impl DimCheckContext<'_> {
     fn checkpoint(&self) -> Result<(), crate::cancellation::Cancelled> {
         self.cancellation.checkpoint()
-    }
-
-    /// Look up the module-aware HIR expression for a local declaration.
-    fn hir_expr_for_decl(&self, declaration: &ResolvedDeclName) -> Option<&crate::hir::expr::Expr> {
-        self.env.dag.value_expr(declaration)
-    }
-
-    /// Look up the module-aware HIR assertion body for a local assertion.
-    fn hir_assert_body(
-        &self,
-        name: &DeclName,
-        declaration: &ResolvedDeclName,
-        span: crate::syntax::span::Span,
-    ) -> Result<&crate::hir::expr::AssertBody, SemanticError> {
-        self.env.dag.assert_body(declaration).ok_or_else(|| {
-            SemanticError::internal_error(
-                format!("TIR assertion entry missing for `{name}`"),
-                self.env.src,
-                crate::diagnostic_anchor::DiagnosticAnchor::Source(span),
-            )
-        })
     }
 
     /// Infer the type of a checked root, recording its observations in this
@@ -120,27 +101,20 @@ fn validate_declared_shape(
     )
 }
 
-/// Check that a declaration's expression type matches its declared type annotation.
+/// Check that a declaration's expression type matches its declared type
+/// annotation.
+///
+/// An unfinished node (`todo`) has no expression: its explicit declaration
+/// type is the entire contract, so it is not checked here.
 fn check_decl_expr_type(
     ctx: &DimCheckContext<'_>,
     name: &DeclName,
     identity: &ResolvedDeclName,
     annotation: &crate::tir::typed::CheckedTypeAnnotation,
+    hir_expr: &crate::hir::expr::Expr,
 ) -> Result<(), Outcome<SemanticError>> {
     let type_ann_span = &annotation.span;
     let declared = annotation.checked().declared();
-    if ctx.env.dag.todo(identity).is_some() {
-        // The explicit declaration type is the entire contract; there is no
-        // formula to infer or expression fact to fabricate.
-        return Ok(());
-    }
-    let hir_expr = ctx.hir_expr_for_decl(identity).ok_or_else(|| {
-        SemanticError::internal_error(
-            format!("value declaration record missing while checking `{name}`"),
-            ctx.env.src,
-            crate::diagnostic_anchor::DiagnosticAnchor::Source(*type_ann_span),
-        )
-    })?;
     if ctx
         .env
         .dag
@@ -681,53 +655,72 @@ impl crate::tir::typed::InstantiatedTir {
     ) -> Result<crate::tir::typed::CheckedTir, Outcome<SemanticError>> {
         let tir = self.tir;
         cancellation.checkpoint()?;
-        let schedules = schedules::ScheduleBuilder::build(&tir, src)?;
+        let schedules = schedules::Schedules::build(&tir, src)?;
         detect_cross_dag_cycles(&tir, src)?;
 
         // Canonical bodies are checked once. Instance trees are specialized
         // below from the canonical trees; only independently lowered bindings
         // infer.
-        let checked_dag_facts = tir
-            .local_dags()
-            .filter(|(_, dag)| !dag.is_semantic_instance())
-            .map(|(dag_id, dag)| {
-                cancellation.checkpoint()?;
-                let observations = infer::hir::BodyObservations::default();
-                let plot_shapes =
-                    check_dimensions_dag(dag, &tir, src, cancellation, &observations)?;
-                Ok((dag_id, dag, observations, plot_shapes))
+        let inferred = tir.dags.map_local(|position, dag| {
+            if let Some(specialization) = dag.frame().specialization() {
+                return Ok(Inferred::Instance(instance_bodies::InstanceOf {
+                    position,
+                    dag,
+                    specialization,
+                }));
+            }
+            cancellation.checkpoint()?;
+            let observations = infer::hir::BodyObservations::default();
+            let plot_shapes =
+                check_dimensions_dag(position, dag, &tir, src, cancellation, &observations)?;
+            Ok::<_, Outcome<SemanticError>>(Inferred::Canonical {
+                dag,
+                observations: Box::new(observations),
+                plot_shapes,
             })
-            .collect::<Result<Vec<_>, Outcome<SemanticError>>>()?;
-        let sinks: HashMap<_, _> = checked_dag_facts
-            .iter()
-            .map(|(owner, _, observations, _)| (*owner, observations))
+        })?;
+        let sinks: HashMap<_, _> = tir
+            .dags
+            .with_local_facts(&inferred)
+            .filter_map(|(dag, inferred)| match inferred {
+                Inferred::Canonical { observations, .. } => Some((dag.dag_id(), &**observations)),
+                Inferred::Instance(_) => None,
+            })
             .collect();
         check_field_domain_constraint_targets(&tir)?;
         check_field_domain_constraint_dimensions(&tir, cancellation, &sinks)?;
         drop(sinks);
-        let mut bodies = HashMap::new();
-        let mut checked_plot_shapes = HashMap::new();
-        for (dag_id, dag, observations, plot_shapes) in checked_dag_facts {
-            let checked_bodies = observations
-                .finish()
-                .publish(
-                    &dag.owned_expression_roots().collect::<Vec<_>>(),
-                    &|index| expression_axes::checked_index_cardinality(&tir, index),
-                )
-                .map_err(|error| {
-                    SemanticError::internal_error(
-                        format!("DAG `{dag_id}`: {error}"),
-                        src,
-                        DiagnosticAnchor::WholeFile,
+        let canonical = inferred.try_map(|inferred| match inferred {
+            Inferred::Canonical {
+                dag,
+                observations,
+                plot_shapes,
+            } => {
+                let bodies = observations
+                    .finish()
+                    .publish(
+                        &dag.owned_expression_roots().collect::<Vec<_>>(),
+                        &|index| expression_axes::checked_index_cardinality(&tir, index),
                     )
-                })?;
-            bodies.insert(dag_id.clone(), checked_bodies);
-            checked_plot_shapes.insert(dag_id.clone(), plot_shapes);
-        }
+                    .map_err(|error| {
+                        SemanticError::internal_error(
+                            format!("DAG `{}`: {error}", dag.dag_id()),
+                            src,
+                            DiagnosticAnchor::WholeFile,
+                        )
+                    })?;
+                Ok::<_, SemanticError>(instance_bodies::CanonicalStage::Canonical {
+                    bodies,
+                    plot_shapes,
+                })
+            }
+            Inferred::Instance(instance) => Ok(instance_bodies::CanonicalStage::Instance(instance)),
+        })?;
 
-        let instances = instance_bodies::instance_bodies(&tir, &bodies, src, cancellation)?;
-        bodies.extend(instances.bodies);
-        let checking = crate::tir::typed::CheckingTir {
+        let (bodies, plots) =
+            instance_bodies::local_bodies(&tir, &canonical, src, cancellation)?.unzip();
+        drop(canonical);
+        let checking = crate::tir::typed::checking_tir::CheckingTir {
             tir: &tir,
             bodies: &bodies,
         };
@@ -737,28 +730,31 @@ impl crate::tir::typed::InstantiatedTir {
         // specializing instance trees does not change their nominal
         // definitions.
         cancellation.checkpoint()?;
-        let mut presentation = presentation::collect_presentation_facts(
-            &tir,
-            &checked_plot_shapes,
-            src,
-            cancellation,
-        )?;
-        crate::tir::typed::specialization::add_semantic_presentation_facts(
-            &tir,
-            &mut presentation,
-            &instances.port_generic_plot_channels,
-            src,
-        )?;
-        tir.into_checked(
-            crate::tir::typed::CheckedParts {
+        let presentation =
+            presentation::collect_presentation_facts(&tir, &plots, src, cancellation)?;
+        drop(plots);
+        let published = bodies.zip(presentation).zip(schedules.callables).map(
+            |((bodies, presentation), runtime_schedule)| crate::tir::typed::PublishedDag {
                 bodies,
                 presentation,
-                schedules: schedules.into_parts(),
+                runtime_schedule,
             },
-            src,
-        )
-        .map_err(Outcome::Failed)
+        );
+        tir.into_checked(schedules.constants, published, src)
+            .map_err(Outcome::Failed)
     }
+}
+
+/// What inference left to publish for one local body: a canonical body's
+/// observations and plot shapes, or a semantic instance, whose trees are
+/// specialized from its template's.
+enum Inferred<'t> {
+    Canonical {
+        dag: &'t crate::tir::typed::DagTIR,
+        observations: Box<infer::hir::BodyObservations>,
+        plot_shapes: plot::CheckedPlotChannelShapes,
+    },
+    Instance(instance_bodies::InstanceOf<'t>),
 }
 
 /// Collect canonical nominal dependencies for every checked parameter default
@@ -771,26 +767,12 @@ impl crate::tir::typed::InstantiatedTir {
 ///
 /// # Errors
 ///
-/// Returns a compiler diagnostic if retained checking results are unavailable.
+/// Returns [`Cancelled`](crate::cancellation::Cancelled) when `cancellation`
+/// is cancelled.
 pub fn collect_override_dependency_summary(
     tir: &crate::tir::typed::CheckedTir,
-    src: SourceId,
-) -> Result<OverrideDependencySummary, SemanticError> {
-    crate::outcome::without_cancellation(|cancellation| {
-        collect_override_dependency_summary_with_cancellation(tir, src, cancellation)
-    })
-}
-
-/// Collect override dependencies while observing cooperative cancellation.
-///
-/// # Errors
-///
-/// Returns a compiler diagnostic for inconsistent TIR or cancellation.
-pub fn collect_override_dependency_summary_with_cancellation(
-    tir: &crate::tir::typed::CheckedTir,
-    src: SourceId,
     cancellation: &crate::cancellation::CancellationToken,
-) -> Result<OverrideDependencySummary, Outcome<SemanticError>> {
+) -> Result<OverrideDependencySummary, crate::cancellation::Cancelled> {
     let mut summary = OverrideDependencySummary::new();
 
     for (_, dag) in tir.local_dags() {
@@ -802,14 +784,8 @@ pub fn collect_override_dependency_summary_with_cancellation(
             };
             cancellation.checkpoint()?;
             let owner = param.identity();
-            if bodies.get(default.id()).is_none() {
-                return Err(SemanticError::internal_error(
-                    format!("missing checked expression: {:?}", default.id()),
-                    src,
-                    DiagnosticAnchor::Source(default.span),
-                )
-                .into());
-            }
+            // A checked body has a tree for each of its expression roots,
+            // its parameter defaults included.
             let mut dependencies: HashSet<_> = bodies
                 .nominal_uses(default.id())
                 .iter()
@@ -937,10 +913,16 @@ fn check_param_defaults(ctx: &DimCheckContext<'_>) -> Result<(), Outcome<Semanti
     for entry in ctx.env.dag.params() {
         ctx.checkpoint()?;
         validate_declared_shape(ctx, &entry.type_ann)?;
-        if entry.default.is_none() {
+        let Some(default) = &entry.default else {
             continue;
-        }
-        check_decl_expr_type(ctx, entry.name(), &entry.identity(), &entry.type_ann)?;
+        };
+        check_decl_expr_type(
+            ctx,
+            entry.name(),
+            &entry.identity(),
+            &entry.type_ann,
+            default,
+        )?;
     }
     Ok(())
 }
@@ -948,6 +930,7 @@ fn check_param_defaults(ctx: &DimCheckContext<'_>) -> Result<(), Outcome<Semanti
 /// Dim-check a single [`DagTIR`] against the file's shared registry and
 /// the full flat dag map.
 fn check_dimensions_dag(
+    position: crate::tir::typed::dag_position::DagPosition,
     dag: &crate::tir::typed::DagTIR,
     tir: &crate::tir::typed::UncheckedTir,
     src: SourceId,
@@ -956,6 +939,7 @@ fn check_dimensions_dag(
 ) -> Result<plot::CheckedPlotChannelShapes, Outcome<SemanticError>> {
     cancellation.checkpoint()?;
     let ctx = DimCheckContext {
+        position,
         env: infer::hir::InferEnv {
             dag,
             tir,
@@ -970,12 +954,26 @@ fn check_dimensions_dag(
     for entry in dag.consts() {
         ctx.checkpoint()?;
         validate_declared_shape(&ctx, &entry.type_ann)?;
-        check_decl_expr_type(&ctx, entry.name(), &entry.identity(), &entry.type_ann)?;
+        check_decl_expr_type(
+            &ctx,
+            entry.name(),
+            &entry.identity(),
+            &entry.type_ann,
+            &entry.expr,
+        )?;
     }
     for entry in dag.nodes() {
         ctx.checkpoint()?;
         validate_declared_shape(&ctx, &entry.type_ann)?;
-        check_decl_expr_type(&ctx, entry.name(), &entry.identity(), &entry.type_ann)?;
+        if let Some(formula) = entry.definition.formula() {
+            check_decl_expr_type(
+                &ctx,
+                entry.name(),
+                &entry.identity(),
+                &entry.type_ann,
+                formula,
+            )?;
+        }
     }
     check_param_defaults(&ctx)?;
 
@@ -985,7 +983,7 @@ fn check_dimensions_dag(
     for entry in dag.asserts() {
         ctx.checkpoint()?;
         let owner = entry.identity();
-        let body = ctx.hir_assert_body(entry.name(), &owner, entry.span)?;
+        let body = &*entry.body;
         let shape = check_hir_assert_body(&ctx, &owner, body, entry.span)?;
         if let Some(metadata) = dag.expected_fail.get(&owner) {
             validate_expected_fail(&metadata.expected, &shape, src, metadata.attribute_span)?;

@@ -157,19 +157,82 @@ pub struct DeclarationBody<'t> {
     declaration: &'t Decl<Typed>,
 }
 
+/// The body of a [`DeclarationBody`], by the declaration's kind, in the
+/// scope of its owner.
+#[derive(Debug, Clone, Copy)]
+pub enum BodyKind<'t> {
+    /// A constant and its expression.
+    Const(Scoped<'t, Expr>),
+    /// A parameter and its default, when it has one.
+    Param { default: Option<Scoped<'t, Expr>> },
+    /// A node.
+    Node(NodeBody<'t>),
+    /// An assertion.
+    Assert(Scoped<'t, TypedAssertEntry>),
+    /// A plot.
+    Plot(Scoped<'t, TypedPlotEntry>),
+    /// A figure.
+    Figure(Scoped<'t, TypedFigureEntry>),
+    /// A layer.
+    Layer(Scoped<'t, TypedLayerEntry>),
+}
+
+/// The body of a node.
+#[derive(Debug, Clone, Copy)]
+pub enum NodeBody<'t> {
+    /// Its formula.
+    Formula(Scoped<'t, Expr>),
+    /// An unfinished node (`todo`): it has no formula.
+    Todo,
+}
+
 impl<'t> DeclarationBody<'t> {
+    /// The body of `declaration`, an entry of the DAG of `scope`.
+    const fn of(scope: BodyScope<'t>, declaration: &'t Decl<Typed>) -> Self {
+        let identity = match declaration {
+            Decl::Const(entry) => &entry.identity,
+            Decl::Param(entry) => &entry.identity,
+            Decl::Node(entry) => &entry.identity,
+            Decl::Assert(entry) => &entry.identity,
+            Decl::Plot(entry) => &entry.identity,
+            Decl::Figure(entry) => &entry.identity,
+            Decl::Layer(entry) => &entry.identity,
+        };
+        Self {
+            scope,
+            identity,
+            declaration,
+        }
+    }
+
     /// The declaration's identity.
     #[must_use]
     pub const fn identity(self) -> &'t ResolvedDeclName {
         self.identity
     }
 
-    /// The expression of a constant.
+    /// The declaration's body, by kind, in its owner's scope.
     #[must_use]
-    pub fn const_expression(self) -> Option<Scoped<'t, Expr>> {
+    pub fn kind(self) -> BodyKind<'t> {
+        let scope = self.scope;
         match self.declaration {
-            Decl::Const(entry) => Some(Scoped::new(self.scope, &*entry.expr)),
-            _ => None,
+            Decl::Const(entry) => BodyKind::Const(Scoped::new(scope, &*entry.expr)),
+            Decl::Param(entry) => BodyKind::Param {
+                default: entry
+                    .default
+                    .as_deref()
+                    .map(|expr| Scoped::new(scope, expr)),
+            },
+            Decl::Node(entry) => BodyKind::Node(match &entry.definition {
+                crate::node_definition::NodeDefinition::Formula(expr) => {
+                    NodeBody::Formula(Scoped::new(scope, &**expr))
+                }
+                crate::node_definition::NodeDefinition::Todo(_) => NodeBody::Todo,
+            }),
+            Decl::Assert(entry) => BodyKind::Assert(Scoped::new(scope, entry)),
+            Decl::Plot(entry) => BodyKind::Plot(Scoped::new(scope, entry)),
+            Decl::Figure(entry) => BodyKind::Figure(Scoped::new(scope, entry)),
+            Decl::Layer(entry) => BodyKind::Layer(Scoped::new(scope, entry)),
         }
     }
 
@@ -177,23 +240,16 @@ impl<'t> DeclarationBody<'t> {
     /// formula).
     #[must_use]
     pub fn runtime_expression(self) -> Option<Scoped<'t, Expr>> {
-        match self.declaration {
-            Decl::Param(entry) => entry
-                .default
-                .as_deref()
-                .map(|expr| Scoped::new(self.scope, expr)),
-            Decl::Node(entry) => entry
-                .definition
-                .formula()
-                .map(|expr| Scoped::new(self.scope, &**expr)),
-            _ => None,
+        match self.kind() {
+            BodyKind::Param { default } => default,
+            BodyKind::Node(NodeBody::Formula(formula)) => Some(formula),
+            BodyKind::Const(_)
+            | BodyKind::Node(NodeBody::Todo)
+            | BodyKind::Assert(_)
+            | BodyKind::Plot(_)
+            | BodyKind::Figure(_)
+            | BodyKind::Layer(_) => None,
         }
-    }
-
-    /// Whether the declaration is an unfinished node.
-    #[must_use]
-    pub const fn is_todo(self) -> bool {
-        matches!(self.declaration, Decl::Node(entry) if entry.definition.todo().is_some())
     }
 
     /// The domain bounds of the declaration's type annotation.
@@ -207,28 +263,10 @@ impl<'t> DeclarationBody<'t> {
             .map(|bounds| Scoped::new(self.scope, bounds))
     }
 
-    /// The assertion this declaration is.
-    #[must_use]
-    pub const fn assertion(self) -> Option<Scoped<'t, TypedAssertEntry>> {
-        match self.declaration {
-            Decl::Assert(entry) => Some(Scoped::new(self.scope, entry)),
-            _ => None,
-        }
-    }
-
     /// The assertion's resolved `#[expected_fail]` configuration.
     #[must_use]
     pub fn expected_fail(self) -> Option<&'t crate::assertion_expectation::ExpectedFail> {
         self.scope.dag().body().expected_fail(self.identity)
-    }
-
-    /// The plot this declaration is.
-    #[must_use]
-    pub const fn plot(self) -> Option<Scoped<'t, TypedPlotEntry>> {
-        match self.declaration {
-            Decl::Plot(entry) => Some(Scoped::new(self.scope, entry)),
-            _ => None,
-        }
     }
 
     /// The checked presentation of each channel of the plot.
@@ -242,24 +280,6 @@ impl<'t> DeclarationBody<'t> {
         >,
     > {
         self.scope.dag().plot_channel_presentations(self.identity)
-    }
-
-    /// The figure this declaration is.
-    #[must_use]
-    pub const fn figure(self) -> Option<Scoped<'t, TypedFigureEntry>> {
-        match self.declaration {
-            Decl::Figure(entry) => Some(Scoped::new(self.scope, entry)),
-            _ => None,
-        }
-    }
-
-    /// The layer this declaration is.
-    #[must_use]
-    pub const fn layer(self) -> Option<Scoped<'t, TypedLayerEntry>> {
-        match self.declaration {
-            Decl::Layer(entry) => Some(Scoped::new(self.scope, entry)),
-            _ => None,
-        }
     }
 }
 
@@ -367,22 +387,30 @@ impl CheckedTir {
         declaration: &ResolvedDeclName,
     ) -> Option<DeclarationBody<'t>> {
         let scope = self.dag_registry().scope(declaration.owner())?;
-        let dag = scope.dag();
-        let entry = dag.decls().get(declaration)?;
-        let identity = match entry {
-            Decl::Const(entry) => &entry.identity,
-            Decl::Param(entry) => &entry.identity,
-            Decl::Node(entry) => &entry.identity,
-            Decl::Assert(entry) => &entry.identity,
-            Decl::Plot(entry) => &entry.identity,
-            Decl::Figure(entry) => &entry.identity,
-            Decl::Layer(entry) => &entry.identity,
-        };
-        Some(DeclarationBody {
-            scope,
-            identity,
-            declaration: entry,
-        })
+        scope
+            .dag()
+            .decls()
+            .get(declaration)
+            .map(|entry| DeclarationBody::of(scope, entry))
+    }
+
+    /// The source of every declaration of the DAG at `position`, in its
+    /// scope, in source order.
+    ///
+    /// # Panics
+    ///
+    /// Panics when `position` is a position of another program with more
+    /// DAGs.
+    pub fn declaration_bodies(
+        &self,
+        position: super::dag_position::DagPosition,
+    ) -> impl Iterator<Item = DeclarationBody<'_>> {
+        let scope = self.dag_registry().scope_at(position);
+        scope
+            .dag()
+            .decls()
+            .iter()
+            .map(move |entry| DeclarationBody::of(scope, entry))
     }
 
     /// The dynamic scale definition of `unit` in the scope of its owner.

@@ -55,12 +55,12 @@ pub(super) fn validate_concrete_type_obligations(
 }
 
 pub(super) fn validate_project(
-    checking: &crate::tir::typed::CheckingTir<'_>,
+    checking: &crate::tir::typed::checking_tir::CheckingTir<'_>,
     src: SourceId,
     cancellation: &CancellationToken,
 ) -> Result<(), Outcome<SemanticError>> {
     let tir: &dyn TirRead = checking;
-    for (dag_id, dag) in checking.tir.local_dags() {
+    for (dag, bodies) in checking.tir.dags.with_local_facts(checking.bodies) {
         for (_, annotation) in dag.value_decl_types() {
             validate_concrete_type_obligations(
                 &annotation.checked().declared().to_symbolic(),
@@ -71,13 +71,6 @@ pub(super) fn validate_project(
                 cancellation,
             )?;
         }
-        let bodies = checking.bodies.get(dag_id).ok_or_else(|| {
-            SemanticError::internal_error(
-                format!("DAG `{dag_id}` has no published typed bodies"),
-                src,
-                DiagnosticAnchor::WholeFile,
-            )
-        })?;
         for (_, body) in bodies.roots() {
             for (checked_type, span) in constructor_applications(body) {
                 validate_concrete_type_obligations(

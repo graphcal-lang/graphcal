@@ -34,13 +34,11 @@ impl CheckedDagRegistry {
                 }
             })
         })?;
-        let mut dags = self
-            .other_dags
+        let (locals, _) = self.dags.into_locals();
+        let dags = locals
             .into_iter()
-            .map(|(id, dag)| (id, Arc::new(dag)))
+            .map(|dag| (dag.dag_id().clone(), Arc::new(dag)))
             .collect::<HashMap<_, _>>();
-        let root_id = self.root.dag_id().clone();
-        dags.insert(root_id, Arc::new(self.root));
         // Imported unit definitions stay in their publishing module, just like
         // imported bodies. Only the final importing TIR needs their lookup index.
         let runtime_units = runtime_units
