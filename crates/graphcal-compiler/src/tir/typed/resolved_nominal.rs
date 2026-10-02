@@ -4,14 +4,17 @@
 use crate::semantic_error::domain::{DomainSubject, NominalFieldPath};
 use std::sync::Arc;
 
-use crate::hir::nominal::{NominalConstructor, NominalField, NominalTypeDef, ResolvedConstructor};
+use crate::generic_param::GenericArgArity;
+use crate::hir::nominal::{
+    NominalConstructor, NominalField, NominalGenericParam, NominalTypeDef, ResolvedConstructor,
+};
 use crate::resolved_name::ResolvedStructTypeName;
 use crate::source_id::SourceId;
 use crate::syntax::non_empty::NonEmpty;
 use crate::syntax::span::Span;
 use crate::syntax::type_name::FieldName;
 
-use super::resolved_type::ResolvedDeclType;
+use super::resolved_type::{ResolvedDeclType, ResolvedGenericArg};
 
 /// A `min:`/`max:` domain bound with its expression lowered to HIR.
 ///
@@ -66,6 +69,51 @@ impl ResolvedStructFieldSemantics {
     }
 }
 
+/// A nominal type definition with each generic parameter's default resolved
+/// in the type's generic scope, aligned with the definition's parameters.
+#[derive(Debug, Clone)]
+pub struct ResolvedGenericDefaults {
+    definition: Arc<NominalTypeDef>,
+    /// `defaults[p]` is the resolved default of parameter `p`, if it has one.
+    defaults: Vec<Option<ResolvedGenericArg>>,
+}
+
+impl ResolvedGenericDefaults {
+    /// Resolve the default of every parameter of `definition` that has one
+    /// with `resolve`, in parameter order.
+    ///
+    /// # Errors
+    ///
+    /// Returns the first error `resolve` reports.
+    pub(crate) fn try_resolve<E>(
+        definition: Arc<NominalTypeDef>,
+        mut resolve: impl FnMut(
+            &NominalGenericParam,
+            &crate::hir::types::GenericArg,
+        ) -> Result<ResolvedGenericArg, E>,
+    ) -> Result<Self, E> {
+        let defaults = definition
+            .generic_params()
+            .iter()
+            .map(|param| {
+                param
+                    .default()
+                    .map(|default| resolve(param, default))
+                    .transpose()
+            })
+            .collect::<Result<_, E>>()?;
+        Ok(Self {
+            definition,
+            defaults,
+        })
+    }
+
+    /// Every resolved default, in parameter order.
+    pub fn resolved(&self) -> impl Iterator<Item = &ResolvedGenericArg> {
+        self.defaults.iter().flatten()
+    }
+}
+
 /// One nominal type definition with the resolved semantics of every field.
 ///
 /// The semantics are resolved by walking the definition's own constructors
@@ -75,25 +123,32 @@ impl ResolvedStructFieldSemantics {
 #[derive(Debug, Clone)]
 pub struct ResolvedNominal {
     definition: Arc<NominalTypeDef>,
+    /// The resolved default of each generic parameter, in parameter order.
+    generic_defaults: Vec<Option<ResolvedGenericArg>>,
     /// `fields[m][f]` belongs to field `f` of union member `m`, both in the
     /// definition's order. A required (bodiless) type has no members.
     fields: Vec<Vec<ResolvedStructFieldSemantics>>,
 }
 
 impl ResolvedNominal {
-    /// Resolve the semantics of every field of `definition` with `resolve`,
-    /// visiting constructors and their fields in definition order.
+    /// Resolve the semantics of every field of the definition `defaults`
+    /// resolved, with `resolve`, visiting constructors and their fields in
+    /// definition order.
     ///
     /// # Errors
     ///
     /// Returns the first error `resolve` reports.
     pub(crate) fn try_resolve<E>(
-        definition: Arc<NominalTypeDef>,
+        defaults: ResolvedGenericDefaults,
         mut resolve: impl FnMut(
             &NominalConstructor,
             &NominalField,
         ) -> Result<ResolvedStructFieldSemantics, E>,
     ) -> Result<Self, E> {
+        let ResolvedGenericDefaults {
+            definition,
+            defaults: generic_defaults,
+        } = defaults;
         let fields = definition
             .union_members()
             .into_iter()
@@ -106,7 +161,31 @@ impl ResolvedNominal {
                     .collect::<Result<Vec<_>, E>>()
             })
             .collect::<Result<Vec<_>, E>>()?;
-        Ok(Self { definition, fields })
+        Ok(Self {
+            definition,
+            generic_defaults,
+            fields,
+        })
+    }
+
+    /// The parameters an application of `got` leading generic arguments
+    /// leaves to their defaults, each with its resolved default, in order.
+    ///
+    /// # Errors
+    ///
+    /// Returns the type's generic arity when `got` arguments are not
+    /// accepted.
+    pub fn defaulted_generic_tail(
+        &self,
+        got: usize,
+    ) -> Result<Vec<(&NominalGenericParam, &ResolvedGenericArg)>, GenericArgArity> {
+        GenericArgArity::defaulted_tail(
+            self.definition
+                .generic_params()
+                .iter()
+                .zip(self.generic_defaults.iter().map(Option::as_ref)),
+            got,
+        )
     }
 
     /// The shared definition handle.

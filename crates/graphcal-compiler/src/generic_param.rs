@@ -82,6 +82,32 @@ impl GenericArgArity {
     pub const fn accepts(self, got: usize) -> bool {
         self.required <= got && got <= self.max
     }
+
+    /// The parameters an application of `got` leading arguments leaves to
+    /// their defaults, each paired with its default, in order.
+    ///
+    /// `params` pairs each declared parameter, in order, with its default.
+    /// An application is accepted exactly when every parameter after its
+    /// arguments has a default, so the defaults it needs always exist.
+    ///
+    /// # Errors
+    ///
+    /// Returns the arity of `params` when `got` arguments are not accepted.
+    pub fn defaulted_tail<P, D>(
+        params: impl IntoIterator<Item = (P, Option<D>)>,
+        got: usize,
+    ) -> Result<Vec<(P, D)>, Self> {
+        let params = params.into_iter().collect::<Vec<_>>();
+        let arity = Self::of_defaults(params.iter().map(|(_, default)| default.is_some()));
+        if got > params.len() {
+            return Err(arity);
+        }
+        params
+            .into_iter()
+            .skip(got)
+            .map(|(param, default)| default.map(|default| (param, default)).ok_or(arity))
+            .collect()
+    }
 }
 
 impl std::fmt::Display for GenericArgArity {
@@ -170,5 +196,28 @@ mod tests {
         assert_ne!(type_param("N"), other);
         assert_eq!(type_param("N").to_string(), other.to_string());
         assert_eq!(type_param("N").to_string(), "N");
+    }
+
+    #[test]
+    fn an_accepted_application_leaves_only_defaulted_parameters() {
+        let params = [("A", None), ("B", Some(2)), ("C", Some(3))];
+        assert_eq!(
+            GenericArgArity::defaulted_tail(params, 1),
+            Ok(vec![("B", 2), ("C", 3)])
+        );
+        assert_eq!(GenericArgArity::defaulted_tail(params, 3), Ok(Vec::new()));
+        let arity = GenericArgArity::of_defaults([false, true, true]);
+        assert_eq!(GenericArgArity::defaulted_tail(params, 0), Err(arity));
+        assert_eq!(GenericArgArity::defaulted_tail(params, 4), Err(arity));
+        // A parameter without a default after a defaulted one is required.
+        let interleaved = [("A", Some(1)), ("B", None)];
+        assert_eq!(
+            GenericArgArity::defaulted_tail(interleaved, 1),
+            Err(GenericArgArity::exactly(2))
+        );
+        assert_eq!(
+            GenericArgArity::defaulted_tail(interleaved, 2),
+            Ok(Vec::new())
+        );
     }
 }

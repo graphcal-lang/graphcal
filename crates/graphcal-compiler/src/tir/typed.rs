@@ -1093,15 +1093,13 @@ impl<'d, 'c> TypeDefCollector<'d, 'c> {
         };
         let definition_src = type_def.source();
 
-        for param in type_def.generic_params() {
-            if let Some(default) = param.default() {
-                let resolved = resolve_hir_generic_arg(param, default, definition_src, ctx)?;
-                if let ResolvedGenericArg::Type(type_expr) = &resolved {
-                    self.resolved_type(type_expr)?;
-                }
-                self.defs
-                    .generic_defaults
-                    .insert(param.id().clone(), ResolvedGenericDefault { resolved });
+        let defaults =
+            ResolvedGenericDefaults::try_resolve(Arc::clone(&type_def), |param, default| {
+                resolve_hir_generic_arg(param, default, definition_src, ctx)
+            })?;
+        for resolved in defaults.resolved() {
+            if let ResolvedGenericArg::Type(type_expr) = resolved {
+                self.resolved_type(type_expr)?;
             }
         }
 
@@ -1115,7 +1113,7 @@ impl<'d, 'c> TypeDefCollector<'d, 'c> {
                     .map(|view| (complete, view))
             })
             .transpose()?;
-        let nominal = ResolvedNominal::try_resolve(Arc::clone(&type_def), |_, field| {
+        let nominal = ResolvedNominal::try_resolve(defaults, |_, field| {
             let annotation = field.type_annotation();
             let resolved = match &instance_view {
                 Some((substitution, view)) => resolve_instance_decl_type(
