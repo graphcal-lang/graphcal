@@ -114,7 +114,7 @@ struct Analysis<'a> {
 }
 
 impl Analysis<'_> {
-    fn invalid(&self, message: impl Into<String>) -> SemanticError {
+    fn internal_error(&self, message: impl Into<String>) -> SemanticError {
         SemanticError::internal_error(message, self.source, DiagnosticAnchor::WholeFile)
     }
 
@@ -141,12 +141,12 @@ impl Analysis<'_> {
         }
         if !self.active.insert(query.clone()) {
             return Err(self
-                .invalid(format!("cyclic checked call dependency at `{name}`"))
+                .internal_error(format!("cyclic checked call dependency at `{name}`"))
                 .into());
         }
         let plan = self.plan;
         let declaration = plan.declaration(name).ok_or_else(|| {
-            self.invalid(format!(
+            self.internal_error(format!(
                 "declaration `{name}` has no prepared physical location"
             ))
         })?;
