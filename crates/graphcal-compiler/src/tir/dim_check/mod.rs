@@ -169,26 +169,6 @@ fn check_dynamic_unit_scale_type(
     entry: &crate::ir::model::DynamicUnitScaleEntry,
 ) -> Result<(), Outcome<SemanticError>> {
     ctx.checkpoint()?;
-    if entry.declared_dimension != entry.base_unit_dimension {
-        return Err(SemanticError::located(
-            ctx.env.src,
-            entry.span,
-            DimensionError::UnitDefinitionDimensionMismatch {
-                name: entry.spelling.leaf().clone(),
-                declared: ctx
-                    .env
-                    .registry
-                    .dimensions
-                    .format_dimension(&entry.declared_dimension),
-                definition: ctx
-                    .env
-                    .registry
-                    .dimensions
-                    .format_dimension(&entry.base_unit_dimension),
-            },
-        )
-        .into());
-    }
     let inferred = ctx.infer_hir(&entry.expr, None)?;
     if !matches!(
         &inferred,
@@ -262,12 +242,9 @@ fn check_ineffective_conversions_inner(
             }
             Ok(())
         }
-        ExprKind::ConstructorCall { fields, .. } => {
-            for init in fields {
-                check_ineffective_conversions(&init.value, display_position, src)?;
-            }
-            Ok(())
-        }
+        ExprKind::ConstructorCall { fields, .. } => fields
+            .iter()
+            .try_for_each(|init| check_ineffective_conversions(&init.value, display_position, src)),
         ExprKind::MapLiteral { entries } => {
             for entry in entries {
                 check_ineffective_conversions(&entry.value, display_position, src)?;
@@ -327,6 +304,7 @@ fn check_ineffective_conversions_inner(
         | ExprKind::StringLiteral(_)
         | ExprKind::OffsetDateTimeLiteral(_)
         | ExprKind::CivilDateTimeLiteral(_)
+        | ExprKind::EpochLiteral(_)
         | ExprKind::ZonedDateTimeLiteral(_)
         | ExprKind::IanaTimeZoneLiteral(_)
         | ExprKind::TypeSystemRef(_)
@@ -1406,36 +1384,28 @@ fn detect_cross_dag_cycles(
             (dag_id, targets)
         })
         .collect();
+    // Each call edge is labelled with its call span, so a cycle names the
+    // span of the call that re-entered its entry.
     let mut graph = crate::dependency_graph::DependencyGraph::new();
     for caller in calls.keys() {
         graph.add_node(*caller);
     }
     for (caller, targets) in &calls {
-        for target in targets.keys().filter(|target| calls.contains_key(target)) {
-            graph.add_dependency(*caller, target);
+        for (target, span) in targets
+            .iter()
+            .filter(|(target, _)| calls.contains_key(target))
+        {
+            graph.add_labelled_dependency(*caller, target, *span);
         }
     }
     let Err(cycle) = graph.into_topo_order() else {
         return Ok(());
     };
-    let entry = *cycle.entry();
-    // The last dag on the cycle path is the caller that re-entered the entry.
-    let reentering_caller = cycle.path().last().copied().unwrap_or(entry);
-    let span = calls
-        .get(reentering_caller)
-        .and_then(|targets| targets.get(entry))
-        .ok_or_else(|| {
-            SemanticError::internal_error(
-                format!("cycle entry `{entry}` has no incoming call span"),
-                src,
-                DiagnosticAnchor::WholeFile,
-            )
-        })?;
     Err(SemanticError::located(
         src,
-        *span,
+        *cycle.closing_label(),
         GraphError::CyclicDependency {
-            name: entry.to_string(),
+            name: cycle.entry().to_string(),
         },
     ))
 }

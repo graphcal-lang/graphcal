@@ -320,6 +320,7 @@ impl<'a> HirRefCollector<'a> {
             | hir::expr::ExprKind::StringLiteral(_)
             | hir::expr::ExprKind::OffsetDateTimeLiteral(_)
             | hir::expr::ExprKind::CivilDateTimeLiteral(_)
+            | hir::expr::ExprKind::EpochLiteral(_)
             | hir::expr::ExprKind::ZonedDateTimeLiteral(_)
             | hir::expr::ExprKind::IanaTimeZoneLiteral(_) => {}
             hir::expr::ExprKind::GraphRef(target) => {

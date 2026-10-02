@@ -516,12 +516,8 @@ fn specialize_instance_declarations(
     Ok(())
 }
 
-fn specialize_dynamic_unit_scales(
-    instance: &mut DagTIR,
-    specialization: &StaticSpecializationId,
-    tir: &UncheckedTir,
-    src: SourceId,
-) -> Result<(), SemanticError> {
+/// Rebase every dynamic unit scale of `instance` onto the instance frame.
+fn rebase_dynamic_unit_scales(instance: &mut DagTIR) {
     instance.semantic.dynamic_unit_scales = instance
         .semantic
         .dynamic_unit_scales
@@ -530,22 +526,9 @@ fn specialize_dynamic_unit_scales(
             let unit = instance.frame.rebase(unit);
             let mut entry = entry.clone();
             entry.unit = unit.clone();
-            entry.declared_dimension = specialize_dimension(
-                &entry.declared_dimension,
-                &specialization.substitution,
-                tir.project_type_store(),
-                src,
-            )?;
-            entry.base_unit_dimension = specialize_dimension(
-                &entry.base_unit_dimension,
-                &specialization.substitution,
-                tir.project_type_store(),
-                src,
-            )?;
-            Ok((unit, entry))
+            (unit, entry)
         })
-        .collect::<Result<_, SemanticError>>()?;
-    Ok(())
+        .collect();
 }
 
 fn specialize_instance_semantics(
@@ -632,7 +615,7 @@ fn clone_checked_instance(
             .extend_from(&dag.semantic.type_defs);
     }
     specialize_instance_declarations(&mut instance, edge, src)?;
-    specialize_dynamic_unit_scales(&mut instance, edge.instance.specialization(), tir, src)?;
+    rebase_dynamic_unit_scales(&mut instance);
     specialize_instance_semantics(&mut instance, edge, tir, src)?;
     Ok(instance)
 }

@@ -4,7 +4,7 @@ use thiserror::Error;
 
 use crate::builtin::ScalarFn;
 use crate::dimension::{BaseDimId, Dimension, PreludeBaseDimension, Rational};
-use crate::function_signature::FunctionSignature;
+use crate::function_signature::{FunctionSignature, QuantitySignature};
 use crate::syntax::function_name::FnParamName;
 
 const fn dimensionless() -> Dimension {
@@ -37,18 +37,24 @@ impl BuiltinKernel {
 }
 
 /// A scalar built-in: a private, arity-encoded evaluation kernel paired with
-/// its typed [`FunctionSignature`].
+/// its typed, all-quantity [`QuantitySignature`].
 pub struct ScalarFunction {
     kernel: BuiltinKernel,
-    signature: FunctionSignature,
+    signature: QuantitySignature,
 }
 
 impl ScalarFunction {
+    #[expect(
+        clippy::expect_used,
+        reason = "built-in signature shapes are all-quantity by construction; a failure is a compiler bug caught by tests"
+    )]
     fn new(function: ScalarFn, kernel: BuiltinKernel, signature: FunctionSignature) -> Self {
         assert!(
             kernel.arity() == function.arity() && signature.arity() == function.arity(),
             "built-in `{function}` kernel, signature, and static arities must agree"
         );
+        let signature = QuantitySignature::try_new(signature)
+            .expect("scalar built-in signatures must be all-quantity");
         Self { kernel, signature }
     }
 
@@ -61,6 +67,12 @@ impl ScalarFunction {
     /// Returns the function's typed dimension signature.
     #[must_use]
     pub const fn signature(&self) -> &FunctionSignature {
+        self.signature.signature()
+    }
+
+    /// Returns the function's signature as all-quantity.
+    #[must_use]
+    pub const fn quantity_signature(&self) -> &QuantitySignature {
         &self.signature
     }
 

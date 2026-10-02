@@ -1119,6 +1119,112 @@ pub enum SignatureError {
 }
 
 // ---------------------------------------------------------------------------
+// All-quantity signatures
+// ---------------------------------------------------------------------------
+
+/// A signature whose parameters and result are all scalar quantities, the
+/// shape of every scalar built-in: a call is checked by dimension alone.
+///
+/// [`QuantitySignature::try_new`] is the only construction point; afterwards
+/// every parameter and the result are dimension monomials by type.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct QuantitySignature {
+    signature: FunctionSignature,
+    params: Vec<QuantityParam>,
+    result: DimMonomial,
+}
+
+/// One scalar quantity parameter of a [`QuantitySignature`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct QuantityParam {
+    name: FnParamName,
+    monomial: DimMonomial,
+}
+
+impl QuantityParam {
+    /// The parameter name.
+    #[must_use]
+    pub const fn name(&self) -> &FnParamName {
+        &self.name
+    }
+
+    /// The parameter's dimension monomial.
+    #[must_use]
+    pub const fn monomial(&self) -> &DimMonomial {
+        &self.monomial
+    }
+}
+
+/// A signature with a parameter or result that is not a scalar quantity.
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+pub enum QuantitySignatureError {
+    #[error("parameter `{param}` is not a scalar quantity")]
+    Param { param: FnParamName },
+    #[error("the result is not a scalar quantity")]
+    Result,
+}
+
+impl QuantitySignature {
+    /// View `signature` as all-quantity.
+    ///
+    /// # Errors
+    ///
+    /// Returns the first parameter, or the result, that is not a scalar
+    /// quantity.
+    pub fn try_new(signature: FunctionSignature) -> Result<Self, QuantitySignatureError> {
+        let params = signature
+            .params()
+            .iter()
+            .map(|param| match &param.kind {
+                ParamKind::Scalar(ScalarValueKind::Quantity(monomial)) => Ok(QuantityParam {
+                    name: param.name.clone(),
+                    monomial: monomial.clone(),
+                }),
+                ParamKind::Scalar(ScalarValueKind::Bool | ScalarValueKind::Int)
+                | ParamKind::Indexed { .. } => Err(QuantitySignatureError::Param {
+                    param: param.name.clone(),
+                }),
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let ResultKind::Value(ParamKind::Scalar(ScalarValueKind::Quantity(result))) =
+            signature.result()
+        else {
+            return Err(QuantitySignatureError::Result);
+        };
+        let result = result.clone();
+        Ok(Self {
+            signature,
+            params,
+            result,
+        })
+    }
+
+    /// The underlying signature.
+    #[must_use]
+    pub const fn signature(&self) -> &FunctionSignature {
+        &self.signature
+    }
+
+    /// The quantity parameters, in declaration order.
+    #[must_use]
+    pub fn params(&self) -> &[QuantityParam] {
+        &self.params
+    }
+
+    /// The result monomial.
+    #[must_use]
+    pub const fn result(&self) -> &DimMonomial {
+        &self.result
+    }
+
+    /// Number of parameters.
+    #[must_use]
+    pub const fn arity(&self) -> usize {
+        self.params.len()
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Built-in signature shapes
 // ---------------------------------------------------------------------------
 
@@ -1274,6 +1380,45 @@ mod tests {
         Dimension::base(BaseDimId::Prelude(
             crate::dimension::PreludeBaseDimension::Time,
         ))
+    }
+
+    #[test]
+    fn quantity_signature_admits_only_all_quantity_shapes() {
+        let all_quantity = super::FunctionSignature::same_dim(&["a", "b"]);
+        let viewed = QuantitySignature::try_new(all_quantity.clone()).unwrap();
+        assert_eq!(viewed.signature(), &all_quantity);
+        assert_eq!(viewed.arity(), 2);
+        assert_eq!(viewed.params()[1].name(), &fn_param("b"));
+        assert_eq!(
+            viewed.params()[1].monomial().as_bare_var().unwrap().index(),
+            0
+        );
+        assert_eq!(viewed.result().as_bare_var().unwrap().index(), 0);
+
+        let bool_param = super::FunctionSignature::try_new(
+            Vec::new(),
+            Vec::new(),
+            vec![param("flag", ParamKind::bool())],
+            ParamKind::dimensionless().into(),
+        )
+        .unwrap();
+        assert_eq!(
+            QuantitySignature::try_new(bool_param),
+            Err(QuantitySignatureError::Param {
+                param: fn_param("flag")
+            })
+        );
+        let int_result = super::FunctionSignature::try_new(
+            Vec::new(),
+            Vec::new(),
+            vec![param("x", ParamKind::dimensionless())],
+            ParamKind::int().into(),
+        )
+        .unwrap();
+        assert_eq!(
+            QuantitySignature::try_new(int_result),
+            Err(QuantitySignatureError::Result)
+        );
     }
 
     #[test]

@@ -101,7 +101,7 @@ impl PendingNodes {
         let literal = match expr.kind() {
             ExprKind::StringLiteral(value) => ContextualLiteral::String(value.clone()),
             ExprKind::OffsetDateTimeLiteral(value) => ContextualLiteral::OffsetDateTime(*value),
-            ExprKind::CivilDateTimeLiteral(value) => ContextualLiteral::CivilDateTime(*value),
+            ExprKind::EpochLiteral(value) => ContextualLiteral::Epoch(*value),
             ExprKind::ZonedDateTimeLiteral(value) => {
                 ContextualLiteral::ZonedDateTime(value.clone())
             }
@@ -222,6 +222,7 @@ impl PendingNodes {
             ExprKind::StringLiteral(_)
             | ExprKind::OffsetDateTimeLiteral(_)
             | ExprKind::CivilDateTimeLiteral(_)
+            | ExprKind::EpochLiteral(_)
             | ExprKind::ZonedDateTimeLiteral(_)
             | ExprKind::IanaTimeZoneLiteral(_)
             | ExprKind::TypeSystemRef(_) => return Err(AssemblyError::ContextualValue(id())),
@@ -644,17 +645,14 @@ fn call(
                 result: signature.result().clone(),
             });
         }
-        FunctionRef::Epoch { scale } => {
-            let [TArg::Contextual(civil)] = args.as_slice() else {
+        FunctionRef::Epoch { .. } => {
+            let [TArg::Contextual(literal)] = args.as_slice() else {
                 return None;
             };
-            let ContextualLiteral::CivilDateTime(civil) = civil.literal() else {
+            let ContextualLiteral::Epoch(literal) = literal.literal() else {
                 return None;
             };
-            return Some(TExprKind::DatetimeLiteral(DatetimeLiteral::Epoch {
-                civil: *civil,
-                scale: scale.value,
-            }));
+            return Some(TExprKind::DatetimeLiteral(DatetimeLiteral::Epoch(*literal)));
         }
         FunctionRef::Builtin(builtin) => builtin.function(),
     };
@@ -1265,6 +1263,12 @@ mod tests {
         crate::datetime_literal::CivilDateTimeLiteral::parse("2026-01-01T09:00:00").unwrap()
     }
 
+    fn epoch_literal(scale: TimeScale) -> ContextualLiteral {
+        ContextualLiteral::Epoch(
+            crate::datetime_literal::EpochLiteral::resolve(civil(), scale).unwrap(),
+        )
+    }
+
     fn zone(name: &str) -> crate::semantic::time_zone::IanaTimeZoneId {
         crate::semantic::time_zone::TimeZoneRegistry::bundled()
             .parse_iana_id(name)
@@ -1392,9 +1396,9 @@ mod tests {
             scale: Spanned::new(scale, crate::syntax::span::Span::new(0, 1)),
         };
         assert!(matches!(
-            call(&epoch, vec![contextual(ContextualLiteral::CivilDateTime(civil()))], None),
-            Some(TExprKind::DatetimeLiteral(DatetimeLiteral::Epoch { scale: built, .. }))
-                if built == scale
+            call(&epoch, vec![contextual(epoch_literal(scale))], None),
+            Some(TExprKind::DatetimeLiteral(DatetimeLiteral::Epoch(built)))
+                if built.scale() == scale
         ));
     }
 
@@ -1414,7 +1418,7 @@ mod tests {
             vec![contextual(offset()), time_zone()],
             // A literal of another kind.
             vec![contextual(ContextualLiteral::String("2026".to_owned()))],
-            vec![contextual(ContextualLiteral::CivilDateTime(civil()))],
+            vec![contextual(epoch_literal(TimeScale::ALL[0]))],
             // The timezone first.
             vec![time_zone(), contextual(zoned("Asia/Tokyo"))],
             // A value argument, or none.
@@ -1433,8 +1437,8 @@ mod tests {
             call(
                 &epoch,
                 vec![
-                    contextual(ContextualLiteral::CivilDateTime(civil())),
-                    contextual(ContextualLiteral::CivilDateTime(civil())),
+                    contextual(epoch_literal(TimeScale::ALL[0])),
+                    contextual(epoch_literal(TimeScale::ALL[0])),
                 ],
                 None,
             )

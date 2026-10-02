@@ -20,7 +20,7 @@ use crate::static_interface::{Requirement, StaticInputKind as NominalKind};
 use crate::assertion_expectation::ExpectedFail;
 use crate::dag_id::DagId;
 use crate::declaration_category::{DeclCategory, ValueDeclCategory};
-use crate::declaration_kind::{AttributeTarget, DeclarationKind};
+use crate::declaration_kind::DeclarationKind;
 use crate::desugar::desugared_ast::{
     AssertBody, DeclKind, Declaration, DimExpr, ExprKind, File, IndexDeclKind, IndexExpr,
     TypeDeclBody, TypeExpr, TypeExprKind,
@@ -29,6 +29,7 @@ use crate::ir::entry::{
     AssertEntry, ConstEntry, Decl, FigureEntry, InScope, LayerEntry, NodeEntry, ParamEntry,
     PlotEntry, PlotSyntax, Syntax,
 };
+use crate::ir::resolve::attribute_validation::DeclarationAttributeRole;
 use crate::ir::resolve::collected::{CollectedExpectedFail, ExternalDeclSurface};
 use crate::plot_visibility::PlotVisibility;
 use crate::resolve::ModuleResolver;
@@ -38,7 +39,6 @@ use crate::resolve::reserved_name::validate_reserved_name;
 use crate::resolved_name::ResolvedDeclName;
 use crate::semantic_error::SemanticError;
 use crate::syntax::ast::{DeclExposure, ImportItemNamespace, IntroducedKind};
-use crate::syntax::attribute::AttributeName;
 use crate::syntax::decl_name::DeclName;
 use crate::syntax::names::NameAtom;
 use crate::syntax::phase::never;
@@ -576,16 +576,15 @@ fn validate_declaration_attributes(
         .kind
         .declared_name()
         .map(|introduced| DeclName::classify(introduced.atom().clone()));
-    let declaration_kind = DeclarationKind::from_decl_kind(&decl.kind);
-    let target = AttributeTarget::declaration(declaration_kind);
-    let attributes =
-        attribute_validation::validate_attributes(&decl.attributes, &target).map_err(|error| {
-            attribute_validation::attribute_validation_error_to_graphcal(error, src)
-        })?;
+    let attributes = attribute_validation::validate_attributes(
+        &decl.attributes,
+        &attribute_validation::DeclarationSite::new(&decl.kind),
+    )
+    .map_err(|error| attribute_validation::attribute_validation_error_to_graphcal(error, src))?;
     for validated in attributes {
         let attr = validated.attribute();
-        match validated.name() {
-            AttributeName::Assumes => {
+        match validated.role() {
+            DeclarationAttributeRole::Assumes => {
                 // Shared applicability and structural validation guarantee
                 // a node/param target with a non-empty set
                 // of unique, plain assertion names.
@@ -607,14 +606,7 @@ fn validate_declaration_attributes(
                     }
                 }
             }
-            AttributeName::ExpectedFail => {
-                let DeclKind::Assert(assertion) = &decl.kind else {
-                    return Err(SemanticError::internal_error(
-                        "attribute applicability accepted expected_fail on a non-assert",
-                        src,
-                        crate::diagnostic_anchor::DiagnosticAnchor::Source(attr.span),
-                    ));
-                };
+            DeclarationAttributeRole::ExpectedFail(assertion) => {
                 let expected = parse_expected_fail_args(&attr.args, src)?;
                 // A blanket expected failure on an indexed assertion is
                 // ambiguous; users must name the expected failing keys.
@@ -641,7 +633,7 @@ fn validate_declaration_attributes(
                     );
                 }
             }
-            AttributeName::Hidden => {
+            DeclarationAttributeRole::Hidden => {
                 if !attr.args.is_empty() {
                     return Err(SemanticError::located(
                         src,
@@ -652,13 +644,6 @@ fn validate_declaration_attributes(
                     ));
                 }
                 visibility = PlotVisibility::CompositionOnly;
-            }
-            AttributeName::Lazy => {
-                return Err(SemanticError::located(
-                    src,
-                    attr.span,
-                    AttributeError::LazyNotSupported,
-                ));
             }
         }
     }

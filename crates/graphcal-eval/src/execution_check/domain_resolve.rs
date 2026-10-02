@@ -21,8 +21,8 @@ use graphcal_compiler::tir::typed::{
 
 use crate::constant_pools::RuntimeValueMap;
 use crate::domain_constraint::{
-    ResolvedDomainBound as EvaluatedDomainBound, ResolvedDomainBounds as EvaluatedDomainBounds,
-    ResolvedDomainConstraint,
+    DomainInstant, ResolvedDomainBound as EvaluatedDomainBound,
+    ResolvedDomainBounds as EvaluatedDomainBounds, ResolvedDomainConstraint,
 };
 use crate::eval_expr::{EvalSession, RuntimeValue, eval_root};
 use graphcal_compiler::resolved_name::ResolvedDeclName;
@@ -83,8 +83,7 @@ pub(super) fn resolve_domain_constraints_for_dag(
         };
         let constraint_src = domain_bounds.get().first().src;
         let target = resolve_constraint_target(
-            &name.to_string(),
-            Some(annotation.checked().resolved().element()),
+            annotation.checked().resolved().element(),
             decl_span,
             constraint_src,
         )?;
@@ -188,10 +187,21 @@ fn resolve_constraint_from_bounds(
                 values,
                 ctx,
                 src,
+                // Each bound is admitted as an instant only from an epoch in
+                // the constrained scale; its display keeps the epoch.
                 |value, bound| match value {
-                    RuntimeValue::Datetime(epoch) if epoch.time_scale == scale.to_hifitime() => {
-                        Ok(*epoch)
-                    }
+                    RuntimeValue::Datetime(epoch) => DomainInstant::from_epoch(*epoch, scale)
+                        .map(|instant| (instant, *epoch))
+                        .map_err(|_| {
+                            domain_bound_value_error(
+                                display_name,
+                                bound,
+                                &format!("Datetime<{scale}>"),
+                                value,
+                                src,
+                            )
+                            .into()
+                        }),
                     other => Err(domain_bound_value_error(
                         display_name,
                         bound,
@@ -201,18 +211,12 @@ fn resolve_constraint_from_bounds(
                     )
                     .into()),
                 },
-                |_expr, epoch| epoch.to_string(),
+                |_expr, (_, epoch)| epoch.to_string(),
             )?;
-            ResolvedDomainConstraint::datetime(scale, evaluated).map_err(|error| {
-                let anchor = DiagnosticAnchor::Source(bounds.get().first().span);
-                SemanticError::internal_error(
-                    format!(
-                        "datetime domain bounds on `{display_name}` violated their checked scale invariant: {error}"
-                    ),
-                    src,
-                    anchor,
-                )
-            }).map_err(Outcome::Failed)
+            Ok(ResolvedDomainConstraint::datetime(
+                scale,
+                evaluated.map(|(instant, _)| instant),
+            ))
         }
     }
 }
@@ -496,8 +500,7 @@ fn resolve_application_field_constraints(
         let bound_span = first_bound.span;
         let constraint_src = &first_bound.src;
         let target = resolve_constraint_target(
-            &display_name,
-            Some(field_semantics.resolved_type().element()),
+            field_semantics.resolved_type().element(),
             bound_span,
             *constraint_src,
         )?;
@@ -769,18 +772,10 @@ fn format_runtime_value(rv: &RuntimeValue) -> String {
 
 /// Resolve the typed constraint family selected by a declaration or field type.
 fn resolve_constraint_target(
-    name: &str,
-    base_resolved: Option<&ResolvedValueType>,
+    resolved: &ResolvedValueType,
     decl_span: Span,
     src: SourceId,
 ) -> Result<ConstraintTarget, SemanticError> {
-    let Some(resolved) = base_resolved else {
-        return Err(SemanticError::internal_error(
-            format!("domain constraint target `{name}` has no resolved type"),
-            src,
-            graphcal_compiler::diagnostic_anchor::DiagnosticAnchor::Source(decl_span),
-        ));
-    };
     match resolved {
         ResolvedValueType::Quantity(_) => Ok(ConstraintTarget::Quantity),
         ResolvedValueType::Int => Ok(ConstraintTarget::Int),

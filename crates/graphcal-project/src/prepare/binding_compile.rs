@@ -619,26 +619,9 @@ impl PreparedProject {
             return self.lower_binding_expr_in_owner(expr, owner);
         };
         let constructor_owner = type_id.identity().resolved().owner();
-        let signature_expr = Expr::new(
-            AstExprKind::ConstructorCall {
-                callee: callee.clone(),
-                generic_args: generic_args.to_vec(),
-                fields: Vec::new(),
-            },
-            expr.span,
-        );
-        let signature = self.lower_binding_expr_in_owner(&signature_expr, constructor_owner)?;
-        let HirExprKind::ConstructorCall {
-            callee,
-            generic_args,
-            ..
-        } = signature.into_kind()
-        else {
-            return Err(self.binding_internal_error(
-                "canonical external constructor did not lower to a constructor call",
-                expr.span,
-            ));
-        };
+        let (callee, generic_args) = self.lower_in_owner(constructor_owner, |context| {
+            graphcal_compiler::hir::lower_constructor_head(callee, generic_args, expr.span, context)
+        })?;
         let fields = fields
             .iter()
             .map(|field| {
@@ -685,30 +668,9 @@ impl PreparedProject {
             .map(|entry| {
                 // Resolve source-shaped keys normally, but lower each value
                 // against its recursive schema so nested constructor owners survive.
-                let mut key_entry = entry.clone();
-                key_entry.value = Expr::new(AstExprKind::Bool(true), entry.value.span);
-                let key_expr = Expr::new(
-                    AstExprKind::MapLiteral {
-                        entries: vec![key_entry],
-                    },
-                    span,
-                );
-                let lowered_key = self.lower_binding_expr_in_owner(&key_expr, owner)?;
-                let HirExprKind::MapLiteral {
-                    entries: lowered_entries,
-                } = lowered_key.into_kind()
-                else {
-                    return Err(self.binding_internal_error(
-                        "external map key did not lower to a map literal",
-                        span,
-                    ));
-                };
-                let Some(lowered_entry) = lowered_entries.into_iter().next() else {
-                    return Err(self.binding_internal_error(
-                        "external map key lowering produced no entry",
-                        span,
-                    ));
-                };
+                let keys = self.lower_in_owner(owner, |context| {
+                    graphcal_compiler::hir::lower_map_entry_keys(entry, span, context)
+                })?;
                 let entry_schema =
                     map_entry_value_schema(expected, entry.keys.len()).map_err(|message| {
                         CompileError::semantic(
@@ -723,10 +685,7 @@ impl PreparedProject {
                         )
                     })?;
                 let value = self.lower_closed_binding_expr(&entry.value, entry_schema, owner)?;
-                Ok(graphcal_compiler::hir::expr::MapEntry {
-                    keys: lowered_entry.keys,
-                    value,
-                })
+                Ok(graphcal_compiler::hir::expr::MapEntry { keys, value })
             })
             .collect::<Result<Vec<_>, CompileError>>()?;
         Ok(graphcal_compiler::hir::expr::Expr::new(
@@ -741,12 +700,23 @@ impl PreparedProject {
         owner: &graphcal_compiler::dag_id::DagId,
     ) -> Result<graphcal_compiler::hir::expr::Expr<graphcal_compiler::hir::expr::Draft>, CompileError>
     {
+        self.lower_in_owner(owner, |context| {
+            graphcal_compiler::hir::lower_expr_draft(expr, context)
+        })
+    }
+
+    /// Run one HIR lowering in the scope of `owner`.
+    fn lower_in_owner<T>(
+        &self,
+        owner: &graphcal_compiler::dag_id::DagId,
+        lower: impl FnOnce(ExprLoweringContext<'_>) -> Result<T, graphcal_compiler::hir::ExprLowerError>,
+    ) -> Result<T, CompileError> {
         let scope = GenericScope::new();
         let context = ExprLoweringContext::new(
             ModuleScope::new(owner, &self.module_resolver, &scope),
             &self.tir().registry().time_zones,
         );
-        graphcal_compiler::hir::lower_expr_draft(expr, context).map_err(|error| {
+        lower(context).map_err(|error| {
             CompileError::semantic(
                 graphcal_compiler::hir::expr_lower_error_to_semantic(&error, self.source),
                 &self.sources,

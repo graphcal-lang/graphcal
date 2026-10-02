@@ -271,6 +271,72 @@ impl ZonedDateTimeLiteral {
     }
 }
 
+/// Error returned when civil coordinates have no instant in a time scale.
+#[derive(Debug, Error)]
+pub enum ResolveEpochLiteralError {
+    #[error("civil datetime component is out of range: {0}")]
+    Component(#[from] std::num::TryFromIntError),
+    #[error("civil datetime has no instant in its time scale: {0}")]
+    Hifitime(#[from] hifitime::HifitimeError),
+}
+
+/// An `epoch<S>("…")` literal: civil coordinates interpreted in an explicit
+/// scientific time scale, resolved to its instant during HIR lowering.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct EpochLiteral {
+    civil: CivilDateTimeLiteral,
+    scale: TimeScale,
+    epoch: hifitime::Epoch,
+}
+
+impl EpochLiteral {
+    /// Interpret the Gregorian civil coordinates `civil` in `scale`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the coordinates do not denote an instant that
+    /// hifitime can represent in `scale`.
+    pub fn resolve(
+        civil: CivilDateTimeLiteral,
+        scale: TimeScale,
+    ) -> Result<Self, ResolveEpochLiteralError> {
+        let datetime = civil.datetime();
+        let epoch = hifitime::Epoch::maybe_from_gregorian(
+            i32::from(datetime.year()),
+            u8::try_from(datetime.month())?,
+            u8::try_from(datetime.day())?,
+            u8::try_from(datetime.hour())?,
+            u8::try_from(datetime.minute())?,
+            u8::try_from(datetime.second())?,
+            u32::try_from(datetime.subsec_nanosecond())?,
+            scale.to_hifitime(),
+        )?;
+        Ok(Self {
+            civil,
+            scale,
+            epoch,
+        })
+    }
+
+    /// The source civil coordinates.
+    #[must_use]
+    pub const fn civil(self) -> CivilDateTimeLiteral {
+        self.civil
+    }
+
+    /// The time scale the coordinates are interpreted in.
+    #[must_use]
+    pub const fn scale(self) -> TimeScale {
+        self.scale
+    }
+
+    /// The instant the coordinates denote in the time scale.
+    #[must_use]
+    pub const fn epoch(self) -> hifitime::Epoch {
+        self.epoch
+    }
+}
+
 /// The constructor context that determines a datetime literal's required
 /// interpretation shape.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -411,5 +477,30 @@ mod tests {
             ZonedDateTimeLiteral::resolve(fold, time_zone, &time_zones),
             Err(ResolveZonedDateTimeLiteralError::Repeated { .. })
         ));
+    }
+
+    #[test]
+    fn epoch_literal_interprets_civil_coordinates_in_its_scale() {
+        let civil = CivilDateTimeLiteral::parse("2000-01-01T12:00:00.25").unwrap();
+        for scale in TimeScale::ALL {
+            let literal = EpochLiteral::resolve(civil, scale).unwrap();
+            assert_eq!(literal.scale(), scale);
+            assert_eq!(literal.civil(), civil);
+            assert_eq!(
+                literal.epoch(),
+                hifitime::Epoch::maybe_from_gregorian(
+                    2000,
+                    1,
+                    1,
+                    12,
+                    0,
+                    0,
+                    250_000_000,
+                    scale.to_hifitime()
+                )
+                .unwrap(),
+                "{scale}"
+            );
+        }
     }
 }

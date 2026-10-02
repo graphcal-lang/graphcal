@@ -15,7 +15,6 @@ use graphcal_compiler::outcome::Outcome;
 use graphcal_compiler::resolved_name::ResolvedDeclName;
 use graphcal_compiler::semantic::index_def::IndexBindingTarget;
 use graphcal_compiler::semantic_error::SemanticError;
-use graphcal_compiler::semantic_error::attribute::AttributeError;
 use graphcal_compiler::semantic_error::evaluation::EvaluationError;
 use graphcal_compiler::semantic_error::graph::GraphError;
 use graphcal_compiler::semantic_error::index::IndexError;
@@ -36,16 +35,19 @@ use super::module_resolve_errors::module_resolve_compile_error;
 use crate::compile_error::PipelineError;
 
 use super::model::{
-    ImportAlias, ImportContext, IncludeInstanceRequest, IncludeStaticBindings, IndexBindingSite,
+    BoundIndexPort, ImportAlias, ImportContext, IncludeInstanceRequest, IncludeStaticBindings,
     ProjectModuleBinding, UnitProjectionAlias,
 };
 use crate::import_surface::{
     import_item_not_found_error, validate_constructor_alias, validate_reserved_alias,
 };
-use graphcal_compiler::declaration_kind::{AttributeTarget, DeclarationKind};
+use graphcal_compiler::declaration_kind::DeclarationKind;
 use graphcal_compiler::desugar::desugared_ast::DeclKind;
 use graphcal_compiler::ir::module_interface::{
     ModuleInterface, PureImportRejection, PureImportTermDisposition,
+};
+use graphcal_compiler::ir::resolve::attribute_validation::{
+    IncludeItemAttributeRole, IncludeItemSite,
 };
 use graphcal_compiler::ir::static_dependencies::{
     ModuleDeclarations, StaticImportRejection, StaticScope, declaration_static_references,
@@ -59,7 +61,6 @@ use graphcal_compiler::static_interface::{
     StaticInputKind, StaticInterface, StaticRole, static_binding_valid,
 };
 use graphcal_compiler::syntax::ast::{DeclExposure, ImportItemNamespace, IntroducedKind};
-use graphcal_compiler::syntax::attribute::AttributeName;
 use graphcal_compiler::syntax::dimension::UnitName;
 use graphcal_compiler::syntax::names::NameAtom;
 
@@ -405,11 +406,11 @@ fn validate_include_item_attributes(
         (false, true) => Some(DeclarationKind::Assert),
         (false, false) => None,
     };
-    let target = AttributeTarget::include_item(producer, import_item.name.name.atom().clone());
+    let site = IncludeItemSite::new(producer, import_item.name.name.atom().clone());
     let attributes =
         graphcal_compiler::ir::resolve::attribute_validation::validate_attributes(
             &import_item.attributes,
-            &target,
+            &site,
         )
         .map_err(|error| {
             PipelineError::Semantic(
@@ -421,8 +422,8 @@ fn validate_include_item_attributes(
         })?;
     for validated in attributes {
         let attr = validated.attribute();
-        match validated.name() {
-            AttributeName::Hidden => {
+        match validated.role() {
+            IncludeItemAttributeRole::Hidden => {
                 if !attr.args.is_empty() {
                     return Err(PipelineError::Semantic(SemanticError::located(
                         file_src,
@@ -434,21 +435,7 @@ fn validate_include_item_attributes(
                 }
                 visibility = PlotVisibility::CompositionOnly;
             }
-            AttributeName::ExpectedFail => {}
-            AttributeName::Assumes => {
-                return Err(PipelineError::Semantic(SemanticError::internal_error(
-                    "attribute applicability accepted assumes on an include item",
-                    file_src,
-                    graphcal_compiler::diagnostic_anchor::DiagnosticAnchor::Source(attr.span),
-                )));
-            }
-            AttributeName::Lazy => {
-                return Err(PipelineError::Semantic(SemanticError::located(
-                    file_src,
-                    attr.span,
-                    AttributeError::LazyNotSupported,
-                )));
-            }
+            IncludeItemAttributeRole::ExpectedFail => {}
         }
     }
     Ok(visibility)
@@ -601,13 +588,14 @@ fn resolve_include_static_bindings(
             ),
             IndexBindingTarget::Finite(finite) => InstanceIndexBindingTarget::Finite(*finite),
         };
-        bindings
-            .substitution
-            .indexes
-            .insert(identity.clone(), target);
-        bindings
-            .index_sites
-            .insert(identity, IndexBindingSite { authored, span });
+        bindings.indexes.insert(
+            identity,
+            BoundIndexPort {
+                target,
+                authored,
+                span,
+            },
+        );
     }
     for (port, target) in types {
         let identity = resolver
@@ -618,7 +606,7 @@ fn resolve_include_static_bindings(
             .resolve_struct_type_path(scope.owner(), &NamePath::local(target.atom().clone()))
             .map(SymbolRef::into_resolved)
             .map_err(|error| module_resolve_compile_error(error, src))?;
-        bindings.substitution.types.insert(identity, target);
+        bindings.types.insert(identity, target);
     }
     let prelude = graphcal_compiler::resolve::prelude::prelude_type_scope();
     for (port, target) in dims {
@@ -636,7 +624,7 @@ fn resolve_include_static_bindings(
                 .resolve_dimension_path(&path)
                 .ok_or_else(|| module_resolve_compile_error(error, src))?,
         };
-        bindings.substitution.dimensions.insert(identity, target);
+        bindings.dimensions.insert(identity, target);
     }
     Ok(bindings)
 }

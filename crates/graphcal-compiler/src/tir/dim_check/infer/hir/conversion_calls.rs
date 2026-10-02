@@ -160,7 +160,6 @@ impl Infer<'_> {
     pub(super) fn infer_hir_datetime_constructor(
         &self,
         kind: DatetimeConstructorFn,
-        epoch_scale: Option<crate::semantic::time_scale::TimeScale>,
         span: crate::syntax::span::Span,
         args: &[Expr],
     ) -> Result<CheckedType<Symbolic>, Outcome<SemanticError>> {
@@ -223,7 +222,7 @@ impl Infer<'_> {
                 ))
             }
             DatetimeConstructorFn::Epoch => {
-                if !matches!(args[0].kind(), ExprKind::CivilDateTimeLiteral(_)) {
+                let ExprKind::EpochLiteral(literal) = args[0].kind() else {
                     let found = self.infer_arg(&args[0])?;
                     return Err(SemanticError::located(
                         self.env.src,
@@ -236,19 +235,9 @@ impl Infer<'_> {
                         },
                     )
                     .into());
-                }
+                };
                 self.record_contextual_args(args)?;
-                epoch_scale
-                    .map(CheckedType::Datetime)
-                    .ok_or_else(|| {
-                        SemanticError::internal_error(
-                            "epoch call reached type inference without a static time scale"
-                                .to_string(),
-                            self.env.src,
-                            crate::diagnostic_anchor::DiagnosticAnchor::Source(span),
-                        )
-                    })
-                    .map_err(Outcome::Failed)
+                Ok(CheckedType::Datetime(literal.scale()))
             }
         }
     }

@@ -777,7 +777,7 @@ fn instance_substitution(
     importer: &graphcal_compiler::dag_id::DagId,
     module_resolver: &graphcal_compiler::resolve::ModuleResolver,
 ) -> StaticSubstitution {
-    let mut substitution = request.static_bindings.substitution.clone();
+    let mut substitution = request.static_bindings.substitution();
     if let Some(aliases) = &request.selective_names {
         for alias in aliases {
             let source_path =
@@ -1175,16 +1175,16 @@ fn elaborate_include_instances(
                 template: &dep_resolution_owner,
                 template_declarations: body_decls_for_aliases,
                 importer_src,
-                include_span: instance.include_span,
             },
             &instance.static_bindings,
         )?;
 
         // ---- 4. Validation checks -----------------------------------------
+        let static_substitution = instance.static_bindings.substitution();
         let override_reconciliations = dep_unfrozen
             .include_override_reconciliations(
                 &instance.bindings,
-                &instance.static_bindings.substitution,
+                &static_substitution,
                 module_resolver,
                 &dep_resolution_owner,
                 importer_src,
@@ -1195,7 +1195,7 @@ fn elaborate_include_instances(
             body_decls_for_aliases,
             StaticScope::new(&dep_resolution_owner, module_resolver),
             &instance.pub_reexport_items,
-            &instance.static_bindings.substitution,
+            &static_substitution,
             &IncludingModule {
                 interface: importer.interface(),
                 source: importer_src,
@@ -1242,14 +1242,13 @@ fn elaborate_include_instances(
     Ok(())
 }
 
-/// The two modules one include's index bindings connect, with the
-/// diagnostic provenance of the include.
+/// The two modules one include's index bindings connect, with the source
+/// file of the include for diagnostics.
 struct IndexBindingSites<'a> {
     importer: &'a graphcal_compiler::dag_id::DagId,
     template: &'a graphcal_compiler::dag_id::DagId,
     template_declarations: &'a [graphcal_compiler::desugar::desugared_ast::Declaration],
     importer_src: SourceId,
-    include_span: Span,
 }
 
 fn validate_index_binding_contracts(
@@ -1260,15 +1259,8 @@ fn validate_index_binding_contracts(
     use graphcal_compiler::ir::static_substitution::InstanceIndexBindingTarget;
     use graphcal_compiler::semantic::index_def::IndexBindingContractError;
 
-    for (port, target) in &bindings.substitution.indexes {
-        let site = bindings.index_sites.get(port).ok_or_else(|| {
-            PipelineError::Semantic(SemanticError::internal_error(
-                format!("bound index port `{port}` has no binding site"),
-                sites.importer_src,
-                graphcal_compiler::diagnostic_anchor::DiagnosticAnchor::Source(sites.include_span),
-            ))
-        })?;
-        let candidate = match target {
+    for (port, site) in &bindings.indexes {
+        let candidate = match &site.target {
             InstanceIndexBindingTarget::Declared(identity) => definitions.index(identity)?,
             InstanceIndexBindingTarget::Finite(finite) => {
                 graphcal_compiler::semantic::index_def::IndexDef::finite(*finite)
@@ -1278,7 +1270,7 @@ fn validate_index_binding_contracts(
             definitions,
             sites,
             port,
-            &bindings.substitution.dimensions,
+            &bindings.dimensions,
             site.span,
         )?;
         let dep_index = port.to_unowned_def_name();

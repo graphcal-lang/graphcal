@@ -108,9 +108,9 @@ impl Infer<'_> {
         callee: &crate::syntax::span::Spanned<FunctionRef>,
         args: &[Expr],
     ) -> Result<CheckedType<Symbolic>, Outcome<SemanticError>> {
-        let (builtin, epoch_scale) = match &callee.value {
-            FunctionRef::Builtin(builtin) => (builtin.function(), None),
-            FunctionRef::Epoch { scale } => (BuiltinFn::EPOCH, Some(scale.value)),
+        let builtin = match &callee.value {
+            FunctionRef::Builtin(builtin) => builtin.function(),
+            FunctionRef::Epoch { .. } => BuiltinFn::EPOCH,
             FunctionRef::External(ext) => {
                 return self.infer_extern_fn_call(ext, callee.span, args);
             }
@@ -224,7 +224,7 @@ impl Infer<'_> {
                 self.infer_hir_timescale_conversion(builtin, conversion.target(), args)
             }
             BuiltinFn::Datetime(DatetimeFn::Constructor(kind)) => {
-                self.infer_hir_datetime_constructor(kind, epoch_scale, callee.span, args)
+                self.infer_hir_datetime_constructor(kind, callee.span, args)
             }
             BuiltinFn::Datetime(DatetimeFn::Field(_)) => {
                 self.infer_hir_datetime_unary(builtin, args, CheckedType::Int)
@@ -362,7 +362,7 @@ impl Infer<'_> {
             .collect::<Result<Vec<_>, Outcome<SemanticError>>>()?;
         infer_fn_dim(
             name.into(),
-            func.signature(),
+            func.quantity_signature(),
             &dimension_args,
             callee_span,
             self.env.registry,

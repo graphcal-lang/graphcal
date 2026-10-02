@@ -1396,6 +1396,7 @@ impl HirPolicyChecker<'_> {
             | crate::hir::expr::ExprKind::StringLiteral(_)
             | crate::hir::expr::ExprKind::OffsetDateTimeLiteral(_)
             | crate::hir::expr::ExprKind::CivilDateTimeLiteral(_)
+            | crate::hir::expr::ExprKind::EpochLiteral(_)
             | crate::hir::expr::ExprKind::ZonedDateTimeLiteral(_)
             | crate::hir::expr::ExprKind::IanaTimeZoneLiteral(_)
             | crate::hir::expr::ExprKind::TypeSystemRef(_)

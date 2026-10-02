@@ -11,7 +11,6 @@ use crate::source_id::SourceId;
 use crate::dimension::Dimension;
 use crate::semantic::checked_type::{IndexTypeRef, StructTypeRef, Symbolic};
 use crate::semantic_error::SemanticError;
-use crate::syntax::ast::GenericConstraint;
 use crate::syntax::names::NamePath;
 use crate::syntax::span::Span;
 
@@ -20,7 +19,8 @@ use crate::semantic::checked_type::{CheckedGenericArg, CheckedType};
 use super::context::InferEnv;
 use super::nat_forms::finite_index_error;
 use crate::tir::dim_check::generic_substitution::{
-    generic_arg_internal_sort_error, generic_substitution_prefix, instantiate_concrete_generic_arg,
+    SortedGenericArg, generic_arg_internal_sort_error, generic_substitution_prefix,
+    instantiate_concrete_generic_arg,
 };
 
 impl InferEnv<'_> {
@@ -222,14 +222,7 @@ impl InferEnv<'_> {
         let mut args = Vec::with_capacity(total_params);
         for (param, arg) in type_def.generic_params().iter().zip(applied_generic_args) {
             let inferred = self.infer_hir_sorted_generic_arg(arg)?;
-            let matches_sort = matches!(
-                (param.constraint(), &inferred),
-                (GenericConstraint::Dim, CheckedGenericArg::Dim(_))
-                    | (GenericConstraint::Index, CheckedGenericArg::Index(_))
-                    | (GenericConstraint::Nat, CheckedGenericArg::Nat(_))
-                    | (GenericConstraint::Type, CheckedGenericArg::Type(_))
-            );
-            if !matches_sort {
+            if SortedGenericArg::of(param, &inferred).is_none() {
                 return Err(generic_arg_internal_sort_error(param, self.src, arg.span()));
             }
             args.push(inferred);

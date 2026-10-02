@@ -2584,6 +2584,11 @@ role = "checking"
 
 [[module]]
 package = "compiler"
+path = ["tir", "dim_check", "generic_substitution", "tests"]
+role = "checking"
+
+[[module]]
+package = "compiler"
 path = ["tir", "dim_check", "domain_bound_type"]
 role = "checking"
 

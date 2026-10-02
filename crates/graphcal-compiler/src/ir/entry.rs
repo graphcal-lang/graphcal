@@ -16,7 +16,6 @@ use std::fmt;
 use crate::dag_id::DagId;
 use crate::declaration_category::{DeclCategory, ValueDeclCategory};
 use crate::desugar::desugared_ast::{AssertBody, Encoding, Expr, PlotField, TypeExpr};
-use crate::dimension::Dimension;
 use crate::plot_visibility::PlotVisibility;
 use crate::resolved_name::ResolvedDeclName;
 use crate::source_id::SourceId;
@@ -166,7 +165,8 @@ pub struct LayerEntry<P: BodyPhase> {
     pub fields: P::CompositionFields,
 }
 
-/// A validated dynamic unit scale definition.
+/// A validated dynamic unit scale definition, whose base-unit expression was
+/// proved to have the declared dimension when the definition was collected.
 #[derive(Debug, Clone)]
 pub struct DynamicUnitScaleEntry<P: BodyPhase> {
     /// Identity of the unit being defined.
@@ -175,10 +175,6 @@ pub struct DynamicUnitScaleEntry<P: BodyPhase> {
     pub spelling: UnitRef,
     /// Scalar scale expression.
     pub expr: P::Expr,
-    /// Dimension declared on the unit definition.
-    pub declared_dimension: Dimension,
-    /// Dimension proved from the RHS base-unit expression.
-    pub base_unit_dimension: Dimension,
     /// Span of the scalar expression.
     pub span: Span,
     /// Source of the owning DAG, whose bytes `expr` and `span` index. The

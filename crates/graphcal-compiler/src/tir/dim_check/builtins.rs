@@ -10,10 +10,7 @@ use std::collections::HashMap;
 use crate::diagnostic_anchor::DiagnosticAnchor;
 use crate::dimension::Dimension;
 use crate::display::formatting_registry::FormattingRegistry;
-use crate::function_signature::{
-    DimBinder, DimMonomial, DimMonomialEvalError, FunctionSignature, ParamKind, ResultKind,
-    ScalarValueKind,
-};
+use crate::function_signature::{DimBinder, DimMonomial, DimMonomialEvalError, QuantitySignature};
 use crate::semantic_error::SemanticError;
 use crate::semantic_error::dimension::DimensionError;
 use crate::semantic_error::name::NameError;
@@ -24,12 +21,11 @@ use crate::syntax::span::{Span, Spanned};
 /// dimension.
 ///
 /// Arguments are quantity dimensions; callers verify non-quantity scalar kinds
-/// before reaching this walk. All
-/// built-in registry signatures are all-quantity, so built-in inference calls
-/// this directly.
+/// before reaching this walk. Scalar built-in signatures are all-quantity by
+/// type, so built-in inference calls this directly.
 pub(super) fn infer_fn_dim(
     function: crate::builtin::BuiltinFn,
-    sig: &FunctionSignature,
+    sig: &QuantitySignature,
     args: &[Spanned<Dimension>],
     call_span: Span,
     registry: &FormattingRegistry,
@@ -55,30 +51,9 @@ pub(super) fn infer_fn_dim(
     let mut walk = SignatureDimWalk::new(fn_name, registry, src);
 
     for (param, arg) in sig.params().iter().zip(args) {
-        let ParamKind::Scalar(ScalarValueKind::Quantity(monomial)) = &param.kind else {
-            return Err(SemanticError::internal_error(
-                format!(
-                    "signature for `{fn_name}` has a non-quantity parameter `{}` in the quantity checking path",
-                    param.name
-                ),
-                src,
-                DiagnosticAnchor::Source(arg.span),
-            ));
-        };
-        walk.check_quantity_param(&param.name, monomial, &arg.value, arg.span)?;
+        walk.check_quantity_param(param.name(), param.monomial(), &arg.value, arg.span)?;
     }
-
-    let ResultKind::Value(ParamKind::Scalar(ScalarValueKind::Quantity(result))) = sig.result()
-    else {
-        return Err(SemanticError::internal_error(
-            format!(
-                "signature for `{fn_name}` has a non-quantity result in the quantity checking path"
-            ),
-            src,
-            DiagnosticAnchor::Source(call_span),
-        ));
-    };
-    walk.result(result, call_span)
+    walk.result(sig.result(), call_span)
 }
 
 /// Dimension-variable bindings accumulated while checking one call against
@@ -204,6 +179,7 @@ fn eval_monomial(
 mod tests {
     use super::*;
     use crate::dimension::{BaseDimId, PreludeBaseDimension};
+    use crate::function_signature::{FunctionSignature, ParamKind, ScalarValueKind};
     use crate::semantic_error::SemanticErrorKind;
     use crate::syntax::function_name::FnParamName;
 
@@ -254,11 +230,12 @@ mod tests {
 
     #[test]
     fn zero_argument_arity_error_uses_the_explicit_call_span() {
-        let signature = FunctionSignature::fixed_to_fixed(
+        let signature = QuantitySignature::try_new(FunctionSignature::fixed_to_fixed(
             FnParamName::expect_valid("value"),
             Dimension::dimensionless(),
             Dimension::dimensionless(),
-        );
+        ))
+        .unwrap();
         let registry = crate::display::formatting_registry::FormattingRegistry::new(
             std::collections::BTreeMap::new(),
             Vec::new(),

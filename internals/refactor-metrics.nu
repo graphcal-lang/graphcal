@@ -7,16 +7,19 @@
 # baseline to be lowered when a metric improves, so counts only ever go down.
 #
 # Usage:
-#   nu internals/refactor-metrics.nu            # print current counts
-#   nu internals/refactor-metrics.nu check      # compare against the baseline
-#   nu internals/refactor-metrics.nu update     # rewrite the baseline
+#   nu internals/refactor-metrics.nu                # print current counts
+#   nu internals/refactor-metrics.nu check          # compare against the baseline
+#   nu internals/refactor-metrics.nu update         # rewrite the baseline
+#   nu internals/refactor-metrics.nu list [metric]  # list the counted sites
 
 const BASELINE = "internals/refactor-metrics-baseline.toml"
+const LAYERS_BASELINE = "internals/pipeline-layers/baseline.toml"
 
 # Production Rust sources of the given crates: `tests.rs`, `tests/` trees, and
 # inline `#[cfg(test)] mod … {` blocks (and everything after them) are excluded.
-# Comment lines are dropped so doc references are not counted.
-def production-sources [crates: list<string>]: nothing -> table<path: string, text: string> {
+# Comment lines are dropped so doc references are not counted; `lines` keeps
+# every remaining line with its 1-based line number in the file.
+def production-sources [crates: list<string>]: nothing -> table<path: string, lines: table<line: int, item: string>> {
     $crates
     | each {|krate| glob $"crates/($krate)/src/**/*.rs" }
     | flatten
@@ -33,23 +36,54 @@ def production-sources [crates: list<string>]: nothing -> table<path: string, te
             null => $lines
             $index => ($lines | first $index)
         }
-        let text = $code | where {|line| not ($line | str trim | str starts-with "//") } | str join "\n"
-        {path: ($path | path relative-to $env.PWD), text: $text}
+        let kept = $code
+            | enumerate
+            | where {|line| not ($line.item | str trim | str starts-with "//") }
+            | each {|line| {line: ($line.index + 1), item: $line.item} }
+        {path: ($path | path relative-to $env.PWD), lines: $kept}
     }
 }
 
-def count-matches [sources: table, pattern: string]: nothing -> int {
-    $sources | each {|source| $source.text | parse --regex $pattern | length } | math sum
+# Every match of `pattern` in the sources, one row per match, located at the
+# line where the match starts. Matching runs on the joined code lines, so a
+# pattern may span lines; a NUL sentinel inserted before each match recovers
+# the line it starts on.
+def match-sites [sources: table, pattern: string]: nothing -> table<site: string, text: string> {
+    $sources
+    | each {|source|
+        let marked = $source.lines.item
+            | str join "\n"
+            | str replace --all --regex $pattern "\u{0}$0"
+            | split row "\n"
+        $source.lines
+        | zip $marked
+        | each {|pair|
+            let hits = ($pair.1 | split row "\u{0}" | length) - 1
+            let site = {site: $"($source.path):($pair.0.line)", text: ($pair.0.item | str trim)}
+            if $hits == 0 { [] } else { 1..$hits | each {|_| $site } }
+        }
+        | flatten
+    }
+    | flatten
 }
 
-def reading-order-sccs []: nothing -> int {
+def pipeline-layers-exceptions []: nothing -> table<site: string, text: string> {
+    open $LAYERS_BASELINE
+    | default [] exception
+    | get exception
+    | each {|exception| {site: $LAYERS_BASELINE, text: ($exception | to nuon)} }
+}
+
+def reading-order-cycles []: nothing -> table<site: string, text: string> {
     uv run --quiet internals/reading-order.py
     | lines
     | where {|line| $line | str starts-with "  cycle: " }
-    | length
+    | each {|line| {site: "internals/reading-order.py", text: ($line | str trim)} }
 }
 
-def measure []: nothing -> record {
+# Every metric with a closure that lists its counted sites. A metric's count is
+# the length of that list, so `list` shows exactly what the counts count.
+def metrics []: nothing -> table<metric: string, sites: closure> {
     let core = production-sources [graphcal-compiler graphcal-eval graphcal-project]
     let consumers = production-sources [graphcal-compiler graphcal-eval graphcal-project graphcal-lsp]
     let outside_resolver = $consumers
@@ -57,17 +91,23 @@ def measure []: nothing -> record {
     let semantic_families = $core
         | where {|source| $source.path | str contains "graphcal-compiler/src/semantic_error/" }
     let resolver = $core | where {|source| $source.path | str contains "graphcal-compiler/src/resolve/" }
-    {
-        internal_error_calls: (count-matches $core '(?<!fn )\b(?:\w*(?:internal|invariant)\w*|Invariant::violated|InternalError::new)\(')
-        resolved_name_from_def_outside_resolver: (count-matches $outside_resolver 'Resolved[A-Za-z]*Name::from_def\b')
-        expect_valid_format: (count-matches $core 'expect_valid\(\s*&?format!\(')
-        too_many_arguments_expects: (count-matches $consumers 'clippy::too_many_arguments')
-        build_declared_types_calls: (count-matches $core '\.build_declared_types\(')
-        module_resolve_str_key_lookups: (count-matches $resolver '\.(?:get|get_mut|contains_key|remove)\(\s*[^()]*(?:\.as_str\(\)|\.as_ref\(\)|&\*)')
-        pipeline_layers_exceptions: (open internals/pipeline-layers/baseline.toml | default [] exception | get exception | length)
-        reading_order_sccs: (reading-order-sccs)
-        semantic_error_string_payloads: (count-matches $semantic_families '\b[a-z_][a-z0-9_]*: String\b')
-    }
+    [
+        {metric: internal_error_calls, sites: {|| match-sites $core '(?<!fn )\b(?:\w*(?:internal|invariant)\w*|Invariant::violated|InternalError::new)\(' }}
+        {metric: resolved_name_from_def_outside_resolver, sites: {|| match-sites $outside_resolver 'Resolved[A-Za-z]*Name::from_def\b' }}
+        {metric: expect_valid_format, sites: {|| match-sites $core 'expect_valid\(\s*&?format!\(' }}
+        {metric: too_many_arguments_expects, sites: {|| match-sites $consumers 'clippy::too_many_arguments' }}
+        {metric: build_declared_types_calls, sites: {|| match-sites $core '\.build_declared_types\(' }}
+        {metric: module_resolve_str_key_lookups, sites: {|| match-sites $resolver '\.(?:get|get_mut|contains_key|remove)\(\s*[^()]*(?:\.as_str\(\)|\.as_ref\(\)|&\*)' }}
+        {metric: pipeline_layers_exceptions, sites: {|| pipeline-layers-exceptions }}
+        {metric: reading_order_sccs, sites: {|| reading-order-cycles }}
+        {metric: semantic_error_string_payloads, sites: {|| match-sites $semantic_families '\b[a-z_][a-z0-9_]*: String\b' }}
+    ]
+}
+
+def measure []: nothing -> record {
+    metrics
+    | each {|row| {metric: $row.metric, count: (do $row.sites | length)} }
+    | transpose --header-row --as-record
 }
 
 def main [] {
@@ -100,4 +140,23 @@ def "main check" [] {
 # Rewrite the baseline with the current counts.
 def "main update" [] {
     measure | to toml | save --force $BASELINE
+}
+
+# Print every counted site as `path:line: <matched line>`, grouped per metric
+# (or for the given metric only); each group's length equals the metric's count.
+def "main list" [
+    metric?: string # the metric to list; all metrics when omitted
+] {
+    let selected = metrics | where {|row| $metric == null or $row.metric == $metric }
+    if ($selected | is-empty) {
+        error make {msg: $"unknown metric: ($metric)"}
+    }
+    for row in $selected {
+        let sites = do $row.sites
+        print $"## ($row.metric) \(($sites | length)\)"
+        for site in $sites {
+            print $"($site.site): ($site.text)"
+        }
+        print ""
+    }
 }

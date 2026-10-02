@@ -1,7 +1,7 @@
 //! The typed expression tree data model.
 
 use crate::builtin::AggregationFn;
-use crate::datetime_literal::{CivilDateTimeLiteral, OffsetDateTimeLiteral, ZonedDateTimeLiteral};
+use crate::datetime_literal::{EpochLiteral, OffsetDateTimeLiteral, ZonedDateTimeLiteral};
 use crate::expression_id::ExprId;
 use crate::extern_struct_result::ExternStructResult;
 use crate::function_signature::{
@@ -13,7 +13,6 @@ use crate::hir::expr::{
 };
 use crate::resolved_name::ResolvedDeclName;
 use crate::semantic::checked_type::{CheckedType, Concrete, Concreteness, IndexTypeRef};
-use crate::semantic::time_scale::TimeScale;
 use crate::semantic::time_zone::IanaTimeZoneId;
 use crate::syntax::function_name::FnParamName;
 use crate::syntax::non_empty::NonEmpty;
@@ -312,10 +311,7 @@ pub enum DatetimeLiteral {
     /// `datetime("…", "Area/City")`, resolved in its timezone.
     Zoned(ZonedDateTimeLiteral),
     /// `epoch<S>("…")`.
-    Epoch {
-        civil: CivilDateTimeLiteral,
-        scale: TimeScale,
-    },
+    Epoch(EpochLiteral),
 }
 
 /// How a key introduction selects its key.
@@ -418,7 +414,7 @@ impl TContextual {
 pub enum ContextualLiteral {
     String(String),
     OffsetDateTime(OffsetDateTimeLiteral),
-    CivilDateTime(CivilDateTimeLiteral),
+    Epoch(EpochLiteral),
     ZonedDateTime(ZonedDateTimeLiteral),
     TimeZone(IanaTimeZoneId),
 }

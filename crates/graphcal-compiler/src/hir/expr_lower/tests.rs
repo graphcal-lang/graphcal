@@ -324,7 +324,7 @@ fn lowers_unambiguous_timezone_datetime_to_resolved_hir() {
 }
 
 #[test]
-fn lowers_epoch_static_scale_and_civil_literal_to_typed_hir() {
+fn lowers_epoch_static_scale_and_literal_to_resolved_instant() {
     let owner = DagId::root_in_package("test", "main");
     let file = desugared_source("node t: Datetime<TT> = epoch<TT>(\"2024-11-05T12:00:00\");");
     let resolver =
@@ -349,7 +349,14 @@ fn lowers_epoch_static_scale_and_civil_literal_to_typed_hir() {
     };
     assert_eq!(scale.value, TimeScale::TT);
     assert_eq!(args.len(), 1);
-    assert!(matches!(args[0].kind(), ExprKind::CivilDateTimeLiteral(_)));
+    let ExprKind::EpochLiteral(literal) = args[0].kind() else {
+        panic!("expected a resolved epoch literal, got {:?}", args[0]);
+    };
+    assert_eq!(literal.scale(), TimeScale::TT);
+    assert_eq!(
+        literal.epoch(),
+        hifitime::Epoch::from_gregorian(2024, 11, 5, 12, 0, 0, 0, hifitime::TimeScale::TT)
+    );
 }
 
 #[test]
@@ -879,5 +886,67 @@ fn qualified_source_graph_ref_requires_a_module_alias() {
             source: ModuleResolveError::UnknownModuleAlias { alias, .. },
             ..
         } if alias.as_str() == "nope"
+    ));
+}
+
+#[test]
+fn map_entry_keys_lower_without_their_value() {
+    let owner = DagId::root_in_package("test", "main");
+    let file = desugared_source(
+        "index Phase = { Burn, Coast };\nnode x: Dimensionless[Phase] = { Phase#Burn: unresolved_name, Phase#Coast: 2.0 };",
+    );
+    let resolver =
+        ModuleResolver::without_edges([(owner.clone(), file.declarations.as_slice())]).unwrap();
+    let scope = GenericScope::new();
+    let time_zones = TimeZoneRegistry::bundled();
+    let ast::ExprKind::MapLiteral { entries } = &node_value(&file, "x").kind else {
+        panic!("expected a map literal");
+    };
+    let keys = super::lower::lower_map_entry_keys(
+        &entries[0],
+        Span::new(0, 1),
+        ExprLoweringContext::new(ModuleScope::new(&owner, &resolver, &scope), &time_zones),
+    )
+    .unwrap();
+    assert_eq!(keys.iter().count(), 1);
+}
+
+#[test]
+fn constructor_head_lowers_callee_and_generic_arguments_only() {
+    let owner = DagId::root_in_package("test", "main");
+    let file = desugared_source(
+        "type Holder<D: Dim> {\n    Holder(value: D),\n}\nnode x: Holder<Length> = Holder<Length>(value: unresolved_name);\nnode f: Dimensionless = sqrt(value: 1.0);",
+    );
+    let resolver =
+        ModuleResolver::without_edges([(owner.clone(), file.declarations.as_slice())]).unwrap();
+    let scope = GenericScope::new();
+    let time_zones = TimeZoneRegistry::bundled();
+    let context =
+        || ExprLoweringContext::new(ModuleScope::new(&owner, &resolver, &scope), &time_zones);
+    let ast::ExprKind::ConstructorCall {
+        callee,
+        generic_args,
+        ..
+    } = &node_value(&file, "x").kind
+    else {
+        panic!("expected a constructor call");
+    };
+    let (lowered, lowered_args) =
+        super::lower::lower_constructor_head(callee, generic_args, Span::new(0, 1), context())
+            .unwrap();
+    assert_eq!(lowered.value.to_string(), "main.Holder");
+    assert_eq!(lowered_args.len(), 1);
+
+    let ast::ExprKind::ConstructorCall {
+        callee,
+        generic_args,
+        ..
+    } = &node_value(&file, "f").kind
+    else {
+        panic!("expected a named-argument call");
+    };
+    assert!(matches!(
+        super::lower::lower_constructor_head(callee, generic_args, Span::new(0, 1), context()),
+        Err(ExprLowerError::NamedArgumentsOnFunction { .. })
     ));
 }

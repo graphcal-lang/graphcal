@@ -64,7 +64,7 @@ impl<'t> Scoped<'t, Expr> {
             Some(CheckedBody::Executable(TBody::Contextual(literal))) => match literal.literal() {
                 ContextualLiteral::String(text) => Ok(text),
                 ContextualLiteral::OffsetDateTime(_)
-                | ContextualLiteral::CivilDateTime(_)
+                | ContextualLiteral::Epoch(_)
                 | ContextualLiteral::ZonedDateTime(_)
                 | ContextualLiteral::TimeZone(_) => Err(CheckedStringError::NotString),
             },
@@ -335,8 +335,6 @@ pub struct UnitScaleBody<'t> {
     scope: BodyScope<'t>,
     spelling: &'t crate::syntax::dimension::UnitRef,
     expression: &'t Expr,
-    declared_dimension: &'t crate::dimension::Dimension,
-    base_unit_dimension: &'t crate::dimension::Dimension,
     span: crate::syntax::span::Span,
     source: SourceId,
 }
@@ -352,18 +350,6 @@ impl<'t> UnitScaleBody<'t> {
     #[must_use]
     pub const fn expression(self) -> Scoped<'t, Expr> {
         Scoped::new(self.scope, self.expression)
-    }
-
-    /// The dimension declared on the unit definition.
-    #[must_use]
-    pub const fn declared_dimension(self) -> &'t crate::dimension::Dimension {
-        self.declared_dimension
-    }
-
-    /// The dimension proved from the base-unit expression.
-    #[must_use]
-    pub const fn base_unit_dimension(self) -> &'t crate::dimension::Dimension {
-        self.base_unit_dimension
     }
 
     /// The span of the scale expression.
@@ -425,8 +411,6 @@ impl CheckedTir {
                 scope,
                 spelling: &scale.spelling,
                 expression: &scale.expr,
-                declared_dimension: &scale.declared_dimension,
-                base_unit_dimension: &scale.base_unit_dimension,
                 span: scale.span,
                 source: scale.src,
             })

@@ -9,7 +9,9 @@ use crate::syntax::dimension::UnitRef as SyntaxUnitRef;
 
 use crate::builtin::{BuiltinConst, BuiltinFn, ScaleFreeBuiltin};
 use crate::dag_id::DagId;
-use crate::datetime_literal::{CivilDateTimeLiteral, OffsetDateTimeLiteral, ZonedDateTimeLiteral};
+use crate::datetime_literal::{
+    CivilDateTimeLiteral, EpochLiteral, OffsetDateTimeLiteral, ZonedDateTimeLiteral,
+};
 use crate::desugar::desugared_ast as ast;
 use crate::semantic::time_scale::TimeScale;
 use crate::semantic::time_zone::IanaTimeZoneId;
@@ -350,10 +352,13 @@ pub enum ExprKind<C: Completeness = Strict> {
     StringLiteral(String),
     /// An offset-bearing instant parsed during HIR lowering.
     OffsetDateTimeLiteral(OffsetDateTimeLiteral),
-    /// An offset/scale-free civil coordinate parsed during HIR lowering.
+    /// An offset/scale-free civil coordinate parsed during HIR lowering for a
+    /// timezone-based `datetime` whose timezone argument is not a literal.
     CivilDateTimeLiteral(CivilDateTimeLiteral),
     /// A civil coordinate and timezone resolved to one unambiguous instant.
     ZonedDateTimeLiteral(ZonedDateTimeLiteral),
+    /// An `epoch<S>` civil coordinate resolved to its instant in `S`.
+    EpochLiteral(EpochLiteral),
     /// An IANA timezone literal validated and canonicalized during HIR lowering.
     IanaTimeZoneLiteral(IanaTimeZoneId),
     TypeSystemRef(Spanned<TypeSystemRef>),
