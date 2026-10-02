@@ -314,7 +314,7 @@ fn find_non_earlier_type_reference(
 ) -> Option<(GenericParamName, Span)> {
     use ast::TypeExprKind;
 
-    match &type_expr.kind {
+    let element = match &type_expr.element.kind {
         TypeExprKind::IndexLabel { .. }
         | TypeExprKind::Dimensionless
         | TypeExprKind::Bool
@@ -323,13 +323,6 @@ fn find_non_earlier_type_reference(
         TypeExprKind::DimExpr(dim_expr) => dim_expr.terms.iter().find_map(|item| {
             find_non_earlier_path_reference(&item.term.name, current_index, positions)
         }),
-        TypeExprKind::Indexed { base, indexes } => {
-            find_non_earlier_type_reference(base, current_index, positions).or_else(|| {
-                indexes.iter().find_map(|index| {
-                    find_non_earlier_index_reference(index, current_index, positions)
-                })
-            })
-        }
         TypeExprKind::TypeApplication { generic_args, .. } => generic_args
             .iter()
             .find_map(|arg| find_non_earlier_generic_reference(arg, current_index, positions)),
@@ -340,7 +333,14 @@ fn find_non_earlier_type_reference(
         TypeExprKind::DatetimeApplication { type_args } => type_args.iter().find_map(|type_arg| {
             find_non_earlier_type_reference(type_arg, current_index, positions)
         }),
-    }
+    };
+    element.or_else(|| {
+        type_expr
+            .indexes
+            .iter()
+            .flatten()
+            .find_map(|index| find_non_earlier_index_reference(index, current_index, positions))
+    })
 }
 
 fn lower_generic_params(

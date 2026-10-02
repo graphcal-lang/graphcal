@@ -825,7 +825,6 @@ fn plugin_payloads_render_their_text_as_before() {
         ExternSignatureError::NotARecordType(StructTypeName::expect_valid("Pair")),
         ExternSignatureError::UnsupportedStructField(FieldName::expect_valid("x")),
         ExternSignatureError::ArrayAxesMustBeBinders,
-        ExternSignatureError::ArrayWithoutAxes,
         ExternSignatureError::ArrayElementKind,
     ];
     let texts: HashSet<String> = errors.iter().map(ToString::to_string).collect();

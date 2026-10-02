@@ -181,7 +181,7 @@ impl Collector<'_> {
     }
 
     fn type_expr(&mut self, type_expr: &TypeExpr) {
-        match &type_expr.kind {
+        match &type_expr.element.kind {
             TypeExprKind::DimExpr(dim_expr) => match dim_expr.terms.as_slice() {
                 [item] if item.term.power.is_none() => {
                     self.path(&item.term.name.value, StaticPosition::TypeOrDimension);
@@ -192,14 +192,6 @@ impl Collector<'_> {
                     }
                 }
             },
-            TypeExprKind::Indexed { base, indexes } => {
-                self.type_expr(base);
-                for index in indexes {
-                    if let IndexExpr::Name(path) = index {
-                        self.path(&path.value, StaticPosition::Index);
-                    }
-                }
-            }
             TypeExprKind::TypeApplication { name, generic_args } => {
                 self.path(&name.value, StaticPosition::Type);
                 for argument in generic_args {
@@ -222,6 +214,11 @@ impl Collector<'_> {
             | TypeExprKind::Bool
             | TypeExprKind::Int
             | TypeExprKind::Datetime => {}
+        }
+        for index in type_expr.indexes.iter().flatten() {
+            if let IndexExpr::Name(path) = index {
+                self.path(&path.value, StaticPosition::Index);
+            }
         }
     }
 

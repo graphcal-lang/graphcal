@@ -59,12 +59,6 @@ pub enum HirLowerError {
     /// An index name appeared where a value type is required.
     #[error("index `{index}` cannot be used as a type")]
     IndexAsType { index: IndexRef },
-    /// An indexed type was itself used as the element of an indexed type.
-    ///
-    /// The parser spells every axis in one bracket list, so only a synthetic
-    /// syntax tree can reach this.
-    #[error("an indexed type cannot be indexed again; list every axis in one bracket list")]
-    NestedIndexedType { span: Span },
     /// A natural-number expression referenced a non-Nat generic parameter.
     #[error(
         "generic parameter `{name}` has constraint `{actual:?}`, but this position expects {}",
@@ -316,18 +310,19 @@ fn lower_type_syntax(
     type_ann: &ast::TypeExpr,
     ctx: ModuleScope<'_>,
 ) -> Result<LoweredTypeSyntax, HirLowerError> {
-    match &type_ann.kind {
-        ast::TypeExprKind::Indexed { base, indexes } => Ok(LoweredTypeSyntax::Indexed {
-            element: lower_type_slot(base, ctx)?,
+    let element = lower_type_slot(&type_ann.element, ctx)?;
+    match &type_ann.indexes {
+        Some(indexes) => Ok(LoweredTypeSyntax::Indexed {
+            element,
             indexes: indexes.try_map_ref(|index| lower_index_expr(index, ctx))?,
             span: type_ann.span,
         }),
-        _ => lower_type_slot(type_ann, ctx).map(LoweredTypeSyntax::Slot),
+        None => Ok(LoweredTypeSyntax::Slot(element)),
     }
 }
 
 fn lower_type_slot(
-    type_ann: &ast::TypeExpr,
+    type_ann: &ast::ElementTypeExpr,
     ctx: ModuleScope<'_>,
 ) -> Result<TypeSlot, HirLowerError> {
     let kind = match &type_ann.kind {
@@ -353,11 +348,6 @@ fn lower_type_slot(
         }
         ast::TypeExprKind::DimExpr(dim_expr) => {
             return lower_dim_expr_as_type(dim_expr, type_ann.span, ctx);
-        }
-        ast::TypeExprKind::Indexed { .. } => {
-            return Err(HirLowerError::NestedIndexedType {
-                span: type_ann.span,
-            });
         }
         ast::TypeExprKind::TypeApplication { name, generic_args } => {
             let struct_type = ctx
@@ -662,14 +652,14 @@ pub(crate) fn ambiguous_generic_arg_as_nat(arg: &ast::AmbiguousGenericArg) -> as
 pub(crate) fn ambiguous_generic_arg_as_type(arg: &ast::AmbiguousGenericArg) -> ast::TypeExpr {
     let mut terms = Vec::new();
     collect_ambiguous_dim_terms(arg, &mut terms);
-    ast::TypeExpr {
+    ast::TypeExpr::unindexed(ast::ElementTypeExpr {
         kind: ast::TypeExprKind::DimExpr(ast::DimExpr {
             terms,
             span: arg.span(),
         }),
         constraints: Vec::new(),
         span: arg.span(),
-    }
+    })
 }
 
 fn collect_ambiguous_dim_terms(arg: &ast::AmbiguousGenericArg, terms: &mut Vec<ast::DimExprItem>) {
@@ -704,7 +694,7 @@ fn lower_datetime_application(
 }
 
 fn lower_time_scale_arg(arg: &ast::TypeExpr) -> Result<TimeScale, HirLowerError> {
-    let ast::TypeExprKind::DimExpr(dim_expr) = &arg.kind else {
+    let (ast::TypeExprKind::DimExpr(dim_expr), None) = (&arg.element.kind, &arg.indexes) else {
         return Err(HirLowerError::ExpectedTimeScale { span: arg.span });
     };
     let [item] = dim_expr.terms.as_slice() else {
@@ -1497,31 +1487,6 @@ mod tests {
             ValueTypeKind::TypeApplication { ref generic_args, .. }
                 if matches!(generic_args.as_slice(), [GenericArg::Type(_)])
         ));
-    }
-
-    #[test]
-    fn nested_indexed_syntax_is_rejected() {
-        let owner_id = DagId::root_in_package("test", "main");
-        let file = desugared_source(&format!("{INDEX_PRELUDE} param p: Length[M];"));
-        let mut modules = crate::resolve::builder::TestModules::default();
-        modules.add(owner_id.clone(), &file.declarations);
-        let resolver = modules.build().unwrap();
-        let scope = GenericScope::new();
-        let inner = first_param_type(&file).clone();
-        let ast::TypeExprKind::Indexed { indexes, .. } = &inner.kind else {
-            panic!("expected indexed syntax");
-        };
-        let nested = ast::TypeExpr {
-            kind: ast::TypeExprKind::Indexed {
-                indexes: indexes.clone(),
-                base: Box::new(inner.clone()),
-            },
-            constraints: Vec::new(),
-            span: inner.span,
-        };
-        let error =
-            lower_decl_type(&nested, ModuleScope::new(&owner_id, &resolver, &scope)).unwrap_err();
-        assert_eq!(error, HirLowerError::NestedIndexedType { span: inner.span });
     }
 
     #[test]

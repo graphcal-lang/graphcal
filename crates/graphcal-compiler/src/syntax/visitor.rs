@@ -161,10 +161,10 @@ pub trait ExprVisitor<P: Phase> {
     }
 
     fn visit_type_expr(&mut self, type_expr: &TypeExpr<P>) -> Result<(), Self::Error> {
-        for bound in &type_expr.constraints {
+        for bound in &type_expr.element.constraints {
             self.visit_expr(&bound.value)?;
         }
-        match &type_expr.kind {
+        match &type_expr.element.kind {
             TypeExprKind::DatetimeApplication { type_args } => {
                 for arg in type_args {
                     self.visit_type_expr(arg)?;
@@ -177,7 +177,6 @@ pub trait ExprVisitor<P: Phase> {
             | TypeExprKind::KeyApplication { generic_args } => {
                 self.visit_generic_args(generic_args)?;
             }
-            TypeExprKind::Indexed { base, .. } => self.visit_type_expr(base)?,
             TypeExprKind::IndexLabel { .. }
             | TypeExprKind::Dimensionless
             | TypeExprKind::Bool

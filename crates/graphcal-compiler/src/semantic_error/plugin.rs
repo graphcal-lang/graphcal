@@ -36,7 +36,6 @@ pub enum ExternSignatureError {
     NotARecordType(StructTypeName),
     UnsupportedStructField(FieldName),
     ArrayAxesMustBeBinders,
-    ArrayWithoutAxes,
     ArrayElementKind,
     Signature(crate::function_signature::SignatureError),
 }
@@ -83,7 +82,6 @@ impl std::fmt::Display for ExternSignatureError {
             Self::ArrayAxesMustBeBinders => f.write_str(
                 "extern array axes must name the signature's `Index` binders (concrete indexes and `Fin(N)` axes cannot appear in the declaration)",
             ),
-            Self::ArrayWithoutAxes => f.write_str("extern arrays must have at least one axis"),
             Self::ArrayElementKind => {
                 f.write_str("extern array elements must be Bool, Int, or quantities")
             }

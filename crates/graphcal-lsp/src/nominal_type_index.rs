@@ -170,10 +170,7 @@ fn nominal_constructor(
     owner: &DagId,
     resolver: &ModuleResolver,
 ) -> Option<ResolvedConstructorName> {
-    let type_name = match &type_expr.kind {
-        TypeExprKind::Indexed { base, .. } => {
-            return nominal_constructor(base, owner, resolver);
-        }
+    let type_name = match &type_expr.element.kind {
         TypeExprKind::TypeApplication { name, .. } => resolver
             .resolve_struct_type_path(owner, &name.value)
             .map(graphcal_compiler::resolve::symbols::SymbolRef::into_resolved)

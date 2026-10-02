@@ -483,11 +483,11 @@ mod tests {
         MultiDeclSlot {
             kind: SlotKind::Param,
             name: Spanned::new(DeclName::expect_valid(name), span(0)),
-            type_ann: TypeExpr {
+            type_ann: TypeExpr::unindexed(crate::syntax::ast::ElementTypeExpr {
                 kind: TypeExprKind::Dimensionless,
                 constraints: vec![],
                 span: span(0),
-            },
+            }),
             axis,
             header_span: span(0),
         }

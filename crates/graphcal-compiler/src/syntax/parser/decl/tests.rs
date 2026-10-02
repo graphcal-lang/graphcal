@@ -16,7 +16,7 @@ fn type_members(t: &TypeDecl) -> &[UnionMember] {
 }
 
 fn dim_expr_name(te: &crate::syntax::ast::TypeExpr) -> &str {
-    match &te.kind {
+    match &te.element.kind {
         TypeExprKind::DimExpr(dim) => {
             assert_eq!(dim.terms.len(), 1, "expected single-term DimExpr");
             dim.terms[0].term.name.value.leaf().as_str()
@@ -34,7 +34,10 @@ fn parse_param_with_type() {
     match &file.declarations[0].kind {
         DeclKind::Param(p) => {
             assert_eq!(p.name.value.as_str(), "x");
-            assert!(matches!(p.type_ann.kind, TypeExprKind::Dimensionless));
+            assert!(matches!(
+                p.type_ann.element.kind,
+                TypeExprKind::Dimensionless
+            ));
             assert!(
                 matches!(p.value.as_ref().unwrap().kind, ExprKind::Number(n) if (n - 42.0).abs() < f64::EPSILON)
             );
@@ -116,7 +119,7 @@ fn parse_param_with_dim_type() {
     match &file.declarations[0].kind {
         DeclKind::Param(p) => {
             assert_eq!(p.name.value.as_str(), "alt");
-            match &p.type_ann.kind {
+            match &p.type_ann.element.kind {
                 TypeExprKind::DimExpr(d) => {
                     assert_eq!(d.terms.len(), 1);
                     assert_eq!(d.terms[0].term.name.value.leaf().as_str(), "Length");
@@ -139,7 +142,7 @@ fn parse_param_required() {
     match &file.declarations[0].kind {
         DeclKind::Param(p) => {
             assert_eq!(p.name.value.as_str(), "dry_mass");
-            match &p.type_ann.kind {
+            match &p.type_ann.element.kind {
                 TypeExprKind::DimExpr(d) => {
                     assert_eq!(d.terms.len(), 1);
                     assert_eq!(d.terms[0].term.name.value.leaf().as_str(), "Mass");
@@ -160,7 +163,7 @@ fn parse_node_with_compound_dim_type() {
     match &file.declarations[0].kind {
         DeclKind::Node(n) => {
             assert_eq!(n.name.value.as_str(), "gm");
-            match &n.type_ann.kind {
+            match &n.type_ann.element.kind {
                 TypeExprKind::DimExpr(d) => {
                     assert_eq!(d.terms.len(), 2);
                     assert_eq!(d.terms[0].term.name.value.leaf().as_str(), "Length");
@@ -184,7 +187,10 @@ fn parse_const_node_with_type() {
     match &file.declarations[0].kind {
         DeclKind::ConstNode(c) => {
             assert_eq!(c.name.value.as_str(), "g0");
-            assert!(matches!(c.type_ann.kind, TypeExprKind::Dimensionless));
+            assert!(matches!(
+                c.type_ann.element.kind,
+                TypeExprKind::Dimensionless
+            ));
         }
         _ => panic!("expected const node"),
     }
@@ -537,7 +543,7 @@ fn parse_type_decl_with_dim_expr_field() {
             let fields = type_members(u)[0].payload.as_ref().expect("payload");
             assert_eq!(fields.len(), 1);
             assert_eq!(fields[0].name.value.as_str(), "dv");
-            match &fields[0].type_ann.kind {
+            match &fields[0].type_ann.element.kind {
                 TypeExprKind::DimExpr(_) => {}
                 other => panic!("expected DimExpr, got {other:?}"),
             }
@@ -2034,13 +2040,13 @@ fn parse_plugin_import_block() {
         crate::syntax::ast::ExternGenericBinder::Dim(var) if var.value.as_str() == "D"
     ));
     assert!(matches!(
-        smooth.params[1].type_ann.kind,
+        smooth.params[1].type_ann.element.kind,
         TypeExprKind::Dimensionless
     ));
 
     let torque = &plugin.functions[2];
     assert_eq!(torque.generics.len(), 2);
-    let TypeExprKind::DimExpr(result) = &torque.result.kind else {
+    let TypeExprKind::DimExpr(result) = &torque.result.element.kind else {
         panic!("expected DimExpr result");
     };
     assert_eq!(result.terms.len(), 2);

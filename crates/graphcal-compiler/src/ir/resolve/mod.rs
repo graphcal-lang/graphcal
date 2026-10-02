@@ -785,16 +785,8 @@ fn validate_private_in_public(
 
 /// Recursively collect type-system references from a [`TypeExpr`].
 fn collect_type_refs(type_expr: &TypeExpr, refs: &mut Vec<(crate::syntax::names::NamePath, Span)>) {
-    match &type_expr.kind {
+    match &type_expr.element.kind {
         TypeExprKind::DimExpr(dim_expr) => collect_dim_refs(dim_expr, refs),
-        TypeExprKind::Indexed { base, indexes } => {
-            collect_type_refs(base, refs);
-            for idx in indexes {
-                if let IndexExpr::Name(path) = idx {
-                    refs.push((path.value.clone(), path.span));
-                }
-            }
-        }
         TypeExprKind::TypeApplication { name, generic_args } => {
             refs.push((name.value.clone(), name.span));
             for arg in generic_args {
@@ -850,6 +842,11 @@ fn collect_type_refs(type_expr: &TypeExpr, refs: &mut Vec<(crate::syntax::names:
         | TypeExprKind::Bool
         | TypeExprKind::Int
         | TypeExprKind::Datetime => {}
+    }
+    for idx in type_expr.indexes.iter().flatten() {
+        if let IndexExpr::Name(path) = idx {
+            refs.push((path.value.clone(), path.span));
+        }
     }
 }
 

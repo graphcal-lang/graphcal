@@ -1443,13 +1443,7 @@ fn validate_type_expr_finite_indexes(
     type_expr: &ast::TypeExpr,
     src: SourceId,
 ) -> Result<(), SemanticError> {
-    match &type_expr.kind {
-        ast::TypeExprKind::Indexed { base, indexes } => {
-            validate_type_expr_finite_indexes(base, src)?;
-            for index in indexes {
-                validate_index_expr_finite_indexes(index, src)?;
-            }
-        }
+    match &type_expr.element.kind {
         ast::TypeExprKind::TypeApplication { generic_args, .. } => {
             for arg in generic_args {
                 validate_generic_arg_finite_indexes(arg, src)?;
@@ -1461,6 +1455,9 @@ fn validate_type_expr_finite_indexes(
             }
         }
         _ => {}
+    }
+    for index in type_expr.indexes.iter().flatten() {
+        validate_index_expr_finite_indexes(index, src)?;
     }
     Ok(())
 }
