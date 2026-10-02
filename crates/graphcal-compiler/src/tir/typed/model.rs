@@ -572,7 +572,6 @@ impl crate::ir::entry::BodyPhase for Typed {
     type AssertBody = crate::hir::expr::CheckedAssertBody;
     type PlotBody = crate::ir::model::LoweredPlotBody;
     type CompositionFields = Vec<crate::ir::model::LoweredPlotField>;
-    type UnitIdentity = ResolvedUnitName;
 }
 
 /// A checked value, assertion, or visualization declaration.

@@ -161,7 +161,7 @@ pub fn resolve_hir_signature_with_modules_and_cancellation(
     cancellation: &crate::cancellation::CancellationToken,
 ) -> Result<SignatureResolvedHirDag, Outcome<SemanticError>> {
     cancellation.checkpoint()?;
-    let ctx = ModuleTypeContext::try_new(hir.dag_id(), module_resolver, project_types, src)?;
+    let ctx = ModuleTypeContext::new(hir.module(), module_resolver, project_types);
     let decl_types = resolve_declared_type_exprs(&hir, src, ctx, cancellation)?;
     Ok(SignatureResolvedHirDag { hir, decl_types })
 }
@@ -210,9 +210,8 @@ impl TirDraft {
     ) -> Result<Self, Outcome<SemanticError>> {
         cancellation.checkpoint()?;
         let imported_bindings = checked_imported_bindings(signed.hir(), imported_types, src)?;
-        let dag_id = signed.dag_id().clone();
         let context_types = Arc::clone(&project_types);
-        let ctx = ModuleTypeContext::try_new(&dag_id, module_resolver, &context_types, src)?;
+        let ctx = ModuleTypeContext::new(signed.hir().module(), module_resolver, &context_types);
         type_resolve_impl(
             signed,
             imported_bindings,
@@ -420,8 +419,7 @@ fn type_resolve_signed_single_with_imported_bindings_and_cancellation(
 ) -> Result<DagTIR, Outcome<SemanticError>> {
     cancellation.checkpoint()?;
     let imported_bindings = checked_imported_bindings(signed.hir(), imported_types, src)?;
-    let dag_id = signed.dag_id().clone();
-    let ctx = ModuleTypeContext::try_new(&dag_id, module_resolver, project_types, src)?;
+    let ctx = ModuleTypeContext::new(signed.hir().module(), module_resolver, project_types);
     type_resolve_single_impl(signed, imported_bindings, src, ctx, cancellation)
 }
 

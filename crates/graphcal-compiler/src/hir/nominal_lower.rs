@@ -13,7 +13,6 @@ use crate::semantic_error::structure::StructError;
 use std::collections::HashMap;
 
 use crate::desugar::desugared_ast::{self as ast, TypeDecl, TypeDeclBody};
-use crate::diagnostic_anchor::DiagnosticAnchor;
 use crate::ir::static_substitution::{InstanceIndexBindingTarget, StaticSubstitution};
 use crate::nat::{NatOverflowError, NatPolyForm};
 use crate::resolve::ModuleResolver;
@@ -43,6 +42,9 @@ use crate::outcome::Outcome;
 #[derive(Debug, Clone, Copy)]
 pub struct NominalLowering<'a> {
     pub resolver: &'a ModuleResolver,
+    /// The module that declares the type, whose scope its generic
+    /// parameters must not shadow.
+    pub module: crate::resolve::ModuleRef<'a>,
     pub cancellation: &'a crate::cancellation::CancellationToken,
 }
 
@@ -82,51 +84,40 @@ pub fn lower_type_declaration(
                         .iter()
                         .map(|field| {
                             lower_nominal_field(field, &identity, &generic_scope, src, lowering)
+                                .map(|lowered| Spanned::new(lowered, field.name.span))
                         })
                         .collect::<Result<Vec<_>, SemanticError>>()?;
                     NominalConstructor::try_new(
                         identity.constructor(member.name.value.clone()),
                         fields,
                     )
-                    .map_err(|error| member_error(error, declaration, payload, src).into())
+                    .map_err(|error| member_error(error, declaration, src).into())
                 })
                 .collect::<Result<Vec<_>, Outcome<SemanticError>>>()?;
             NominalTypeDef::try_union(identity, generic_params, lowered, src, span)
-                .map_err(|error| member_error(error, declaration, &[], src).into())
+                .map_err(|error| member_error(error, declaration, src).into())
         }
     }
 }
 
 /// Render a rejected constructor list at its source declaration.
-fn member_error(
-    error: NominalTypeError,
-    declaration: &TypeDecl,
-    payload: &[ast::FieldDecl],
-    src: SourceId,
-) -> SemanticError {
+fn member_error(error: NominalTypeError, declaration: &TypeDecl, src: SourceId) -> SemanticError {
     match error {
         NominalTypeError::DuplicateConstructorField {
             constructor,
             field,
-            first_index,
-            duplicate_index,
-        } => match (payload.get(first_index), payload.get(duplicate_index)) {
-            (Some(first), Some(duplicate)) => SemanticError::located(
-                src,
-                duplicate.name.span,
-                NameError::DuplicateConstructorField {
-                    type_name: declaration.name.value.clone(),
-                    constructor,
-                    field,
-                    first: first.name.span,
-                },
-            ),
-            _ => invariant_error(
-                format!("duplicate field `{field}` has no source declaration"),
-                src,
-                declaration.name.span,
-            ),
-        },
+            first,
+            duplicate,
+        } => SemanticError::located(
+            src,
+            duplicate,
+            NameError::DuplicateConstructorField {
+                type_name: declaration.name.value.clone(),
+                constructor,
+                field,
+                first,
+            },
+        ),
         NominalTypeError::DuplicateConstructor { constructor } => {
             let mut members = match &declaration.body {
                 TypeDeclBody::Constructors(members) => members
@@ -366,16 +357,7 @@ fn lower_generic_params(
                 param.name.span,
             ));
             let atom = param.name.value.atom();
-            let visible = lowering
-                .resolver
-                .visible_span(identity.owner(), Namespace::Static, atom)
-                .map_err(|error| {
-                    SemanticError::internal_error(
-                        format!("failed to inspect Static scope for `{atom}`: {error}"),
-                        src,
-                        DiagnosticAnchor::Source(param.name.span),
-                    )
-                })?;
+            let visible = lowering.module.visible_span(Namespace::Static, atom);
             if validate_reserved_name(Namespace::Static, atom).is_err() || visible.is_some() {
                 return Err(super::diagnostics::hir_lower_error_to_graphcal(
                     &super::lower::HirLowerError::GenericParamShadowsStatic {
@@ -519,24 +501,13 @@ pub fn specialize_nominal_type(
             let members = members
                 .iter()
                 .map(|member| {
-                    NominalConstructor::try_new(
-                        identity.constructor(member.name()),
-                        member
-                            .fields()
-                            .iter()
-                            .map(|field| {
-                                let annotation = field.type_annotation();
-                                Ok(NominalField::new(
-                                    field.name().clone(),
-                                    TypeAnnotation {
-                                        decl_type: specializer.decl_type(&annotation.decl_type)?,
-                                        domain_bounds: annotation.domain_bounds.clone(),
-                                        span: annotation.span,
-                                    },
-                                ))
-                            })
-                            .collect::<Result<_, NatOverflowError>>()?,
-                    )
+                    member.try_map_annotations(identity.constructor(member.name()), |annotation| {
+                        Ok::<_, NatOverflowError>(TypeAnnotation {
+                            decl_type: specializer.decl_type(&annotation.decl_type)?,
+                            domain_bounds: annotation.domain_bounds.clone(),
+                            span: annotation.span,
+                        })
+                    })
                 })
                 .collect::<Result<Vec<_>, _>>()?;
             NominalTypeDef::try_union(identity, generic_params, members, source, span)
@@ -751,6 +722,7 @@ mod tests {
         let src = crate::source_registry::SourceRegistry::new()
             .register("main.gcl", std::sync::Arc::new(source.to_string()));
         let declaration = first_type(&file);
+        let module = resolver.module(resolver.module_handle(&owner).unwrap());
         crate::outcome::without_cancellation(|cancellation| {
             lower_type_declaration(
                 declaration,
@@ -759,6 +731,7 @@ mod tests {
                 src,
                 NominalLowering {
                     resolver: &resolver,
+                    module,
                     cancellation,
                 },
             )
@@ -829,6 +802,7 @@ mod tests {
         let src = crate::source_registry::SourceRegistry::new()
             .register("lib.gcl", std::sync::Arc::new(source.to_string()));
         let declaration = type_named(&file, "Box");
+        let module = resolver.module(resolver.module_handle(template_id).unwrap());
         let template = lower_type_declaration(
             declaration,
             ResolvedStructTypeName::for_test(template_id.clone(), declaration.name.value.clone()),
@@ -836,6 +810,7 @@ mod tests {
             src,
             NominalLowering {
                 resolver: &resolver,
+                module,
                 cancellation: &crate::cancellation::CancellationToken::unbounded(),
             },
         )

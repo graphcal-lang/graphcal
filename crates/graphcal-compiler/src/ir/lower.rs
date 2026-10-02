@@ -94,11 +94,7 @@ pub fn definition_evaluator<'a>(
     src: SourceId,
 ) -> Result<StaticDefinitionEvaluator<'a>, SemanticError> {
     StaticDefinitionEvaluator::new(resolver, sources, src).map_err(|error| {
-        SemanticError::internal_error(
-            format!("prelude failed to load: {error}"),
-            src,
-            DiagnosticAnchor::Builtin,
-        )
+        SemanticError::internal_error(error.to_string(), src, DiagnosticAnchor::Builtin)
     })
 }
 

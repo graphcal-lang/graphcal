@@ -39,8 +39,6 @@ pub trait BodyPhase {
     type PlotBody: fmt::Debug + Clone;
     /// A figure's or layer's property fields.
     type CompositionFields: fmt::Debug + Clone;
-    /// Identity of the unit defined by a dynamic unit scale.
-    type UnitIdentity: fmt::Debug + Clone;
 }
 
 /// Pre-freeze phase: bodies are desugared syntax awaiting HIR lowering.
@@ -84,9 +82,6 @@ impl BodyPhase for Syntax {
     type AssertBody = InScope<AssertBody>;
     type PlotBody = InScope<PlotSyntax>;
     type CompositionFields = InScope<Vec<PlotField>>;
-    /// The DAG that declares the unit; the canonical identity is resolved at
-    /// the freeze boundary.
-    type UnitIdentity = DagId;
 }
 
 /// A `const node` declaration.
@@ -170,7 +165,7 @@ pub struct LayerEntry<P: BodyPhase> {
 #[derive(Debug, Clone)]
 pub struct DynamicUnitScaleEntry<P: BodyPhase> {
     /// Identity of the unit being defined.
-    pub unit: P::UnitIdentity,
+    pub unit: crate::resolved_name::ResolvedUnitName,
     /// Source spelling under which the unit is registered in this IR.
     pub spelling: UnitRef,
     /// Scalar scale expression.

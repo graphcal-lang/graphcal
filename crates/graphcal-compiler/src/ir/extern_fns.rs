@@ -44,9 +44,10 @@ impl ExternSignatureScope<'_, '_> {
         if let Some(definition) = self.nominal_types.get(identity) {
             return Ok(Some(Arc::clone(definition)));
         }
+        let resolver = self.resolver();
         self.definitions
             .type_declaration(identity)
-            .map(|(declaration, src)| {
+            .map(|(declaration, src, module)| {
                 crate::outcome::without_cancellation(|cancellation| {
                     crate::hir::nominal_lower::lower_type_declaration(
                         declaration,
@@ -54,7 +55,8 @@ impl ExternSignatureScope<'_, '_> {
                         declaration.name.span,
                         src,
                         crate::hir::nominal_lower::NominalLowering {
-                            resolver: self.resolver(),
+                            resolver,
+                            module: resolver.module(module),
                             cancellation,
                         },
                     )

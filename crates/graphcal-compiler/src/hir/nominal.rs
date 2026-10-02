@@ -13,7 +13,7 @@ use crate::ir::static_substitution::StaticSubstitution;
 use crate::resolved_name::{ResolvedConstructorName, ResolvedStructTypeName};
 use crate::source_id::SourceId;
 use crate::syntax::ast::GenericConstraint;
-use crate::syntax::span::Span;
+use crate::syntax::span::{Span, Spanned};
 use crate::syntax::type_name::{ConstructorName, FieldName, GenericParamName, StructTypeName};
 
 use super::type_annotation::TypeAnnotation;
@@ -55,27 +55,61 @@ pub struct NominalConstructor {
 }
 
 impl NominalConstructor {
+    /// A constructor with the given source fields, each with the span of its
+    /// name.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`NominalTypeError::DuplicateConstructorField`] when two fields
+    /// share a name.
     pub(crate) fn try_new(
         identity: ResolvedConstructorName,
-        fields: Vec<NominalField>,
+        fields: Vec<Spanned<NominalField>>,
     ) -> Result<Self, NominalTypeError> {
-        let mut first_positions = HashMap::new();
-        for (duplicate_index, field) in fields.iter().enumerate() {
-            match first_positions.entry(field.name.clone()) {
+        let mut first_spans = HashMap::new();
+        for field in &fields {
+            match first_spans.entry(field.value.name.clone()) {
                 std::collections::hash_map::Entry::Vacant(entry) => {
-                    entry.insert(duplicate_index);
+                    entry.insert(field.span);
                 }
                 std::collections::hash_map::Entry::Occupied(entry) => {
                     return Err(NominalTypeError::DuplicateConstructorField {
                         constructor: identity.to_unowned_def_name(),
-                        field: field.name.clone(),
-                        first_index: *entry.get(),
-                        duplicate_index,
+                        field: field.value.name.clone(),
+                        first: *entry.get(),
+                        duplicate: field.span,
                     });
                 }
             }
         }
-        Ok(Self { identity, fields })
+        Ok(Self {
+            identity,
+            fields: fields.into_iter().map(|field| field.value).collect(),
+        })
+    }
+
+    /// This constructor under another identity, with every field type
+    /// rewritten by `annotation`.
+    ///
+    /// The field names are kept, so they stay unique.
+    pub(crate) fn try_map_annotations<E>(
+        &self,
+        identity: ResolvedConstructorName,
+        mut annotation: impl FnMut(&TypeAnnotation) -> Result<TypeAnnotation, E>,
+    ) -> Result<Self, E> {
+        Ok(Self {
+            identity,
+            fields: self
+                .fields
+                .iter()
+                .map(|field| {
+                    Ok(NominalField::new(
+                        field.name.clone(),
+                        annotation(&field.type_annotation)?,
+                    ))
+                })
+                .collect::<Result<_, E>>()?,
+        })
     }
 
     /// Canonical constructor identity, including its defining DAG.
@@ -389,8 +423,8 @@ pub enum NominalTypeError {
     DuplicateConstructorField {
         constructor: ConstructorName,
         field: FieldName,
-        first_index: usize,
-        duplicate_index: usize,
+        first: Span,
+        duplicate: Span,
     },
     #[error("constructor `{constructor}` is declared more than once")]
     DuplicateConstructor { constructor: ConstructorName },

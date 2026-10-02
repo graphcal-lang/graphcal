@@ -116,7 +116,6 @@ impl BodyPhase for Lowered {
     type AssertBody = crate::hir::expr::CheckedAssertBody;
     type PlotBody = LoweredPlotBody;
     type CompositionFields = Vec<LoweredPlotField>;
-    type UnitIdentity = ResolvedUnitName;
 }
 
 /// A lowered value, assertion, or visualization declaration.
@@ -170,6 +169,8 @@ pub struct HirDag {
     /// Canonical identity carried by the body itself, so storage and consumers
     /// cannot pair this HIR with a different DAG key.
     pub(super) dag_id: crate::dag_id::DagId,
+    /// The handle of this DAG in the resolver that lowered it.
+    pub(super) module: crate::resolve::module_table::ModuleHandle,
     /// Every dimension, unit, index, and nominal definition this DAG owns,
     /// keyed by canonical identity. Syntax-backed nominal definitions are
     /// unrepresentable; its nominal types carry canonical HIR signatures.
@@ -213,6 +214,12 @@ impl HirDag {
     #[must_use]
     pub const fn dag_id(&self) -> &crate::dag_id::DagId {
         &self.dag_id
+    }
+
+    /// The handle of this DAG in the resolver that lowered it.
+    #[must_use]
+    pub const fn module(&self) -> crate::resolve::module_table::ModuleHandle {
+        self.module
     }
 
     /// Value, assertion, and visualization declarations of this DAG.

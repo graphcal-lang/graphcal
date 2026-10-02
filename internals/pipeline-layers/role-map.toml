@@ -1238,6 +1238,16 @@ role = "contracts"
 
 [[module]]
 package = "compiler"
+path = ["resolve", "module_table"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["resolve", "module_table", "tests"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
 path = ["resolve", "namespace"]
 role = "contracts"
 

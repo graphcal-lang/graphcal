@@ -1,17 +1,15 @@
 //! Module-aware type-resolution context for one DAG body.
 
-use crate::diagnostic_anchor::DiagnosticAnchor;
-use crate::resolve::ModuleResolver;
 use crate::resolve::symbols::ModuleSymbols;
-use crate::semantic_error::SemanticError;
-use crate::source_id::SourceId;
+use crate::resolve::{ModuleHandle, ModuleResolver};
 
 use super::model::ProjectTypeStore;
 
 /// Module-aware type-resolution context for one DAG body.
 ///
-/// It carries the owner's own symbol table, looked up once when the context
-/// is created, so the owner's declarations are read without a lookup.
+/// It carries the owner's own symbol table, read once through the owner's
+/// module handle when the context is created, so the owner's declarations are
+/// read without a lookup.
 #[derive(Debug, Clone, Copy)]
 pub struct ModuleTypeContext<'a> {
     pub(in crate::tir::typed) owner: &'a crate::dag_id::DagId,
@@ -21,31 +19,20 @@ pub struct ModuleTypeContext<'a> {
 }
 
 impl<'a> ModuleTypeContext<'a> {
-    /// The context of the DAG `owner`, which `resolver` must know.
-    ///
-    /// # Errors
-    ///
-    /// Returns an internal error when `resolver` has no symbol table for
-    /// `owner`.
-    pub(crate) fn try_new(
-        owner: &'a crate::dag_id::DagId,
+    /// The context of the DAG `resolver` issued `module` for.
+    #[must_use]
+    pub(crate) fn new(
+        module: ModuleHandle,
         resolver: &'a ModuleResolver,
         types: &'a ProjectTypeStore,
-        src: SourceId,
-    ) -> Result<Self, SemanticError> {
-        let symbols = resolver.symbols(owner).ok_or_else(|| {
-            SemanticError::internal_error(
-                format!("module symbol table missing for DAG `{owner}`"),
-                src,
-                DiagnosticAnchor::WholeFile,
-            )
-        })?;
-        Ok(Self {
-            owner,
+    ) -> Self {
+        let module = resolver.module(module);
+        Self {
+            owner: module.owner(),
             resolver,
-            symbols,
+            symbols: module.symbols(),
             types,
-        })
+        }
     }
 
     #[must_use]

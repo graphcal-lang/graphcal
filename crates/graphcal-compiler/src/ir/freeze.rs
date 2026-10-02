@@ -68,6 +68,15 @@ impl UnfrozenIR {
     ) -> Result<HirDag, Outcome<SemanticError>> {
         cancellation.checkpoint()?;
         let resolver = definitions.resolver();
+        // The one lookup of this DAG by identity: everything below reads its
+        // module through the handle.
+        let module = resolver.module_handle(owner).ok_or_else(|| {
+            SemanticError::internal_error(
+                format!("DAG `{owner}` is not a module of its resolver"),
+                src,
+                DiagnosticAnchor::WholeFile,
+            )
+        })?;
         let time_zones = crate::semantic::time_zone::TimeZoneRegistry::bundled();
         // Entries already visible in this IR (including prefixed include
         // instances and dag self-imports) bind their written names to
@@ -82,7 +91,7 @@ impl UnfrozenIR {
                 )
             })
             .collect::<HashMap<_, _>>();
-        let nominal_types = self.lower_nominal_types(owner, definitions, src, cancellation)?;
+        let nominal_types = self.lower_nominal_types(module, definitions, src, cancellation)?;
         let table = DeclTable::new(owner, self.decls).map_err(|error| {
             SemanticError::internal_error(error.to_string(), src, DiagnosticAnchor::WholeFile)
         })?;
@@ -174,27 +183,20 @@ impl UnfrozenIR {
             })
         };
 
-        let dynamic_unit_scales =
-            self.dynamic_unit_scales
-                .iter()
-                .map(|entry| {
-                    cancellation.checkpoint()?;
-                    let unit = resolver
-                    .resolve_unit_path(&entry.unit, &entry.spelling.to_name_path())
-                    .map(crate::resolve::symbols::SymbolRef::into_resolved)
-                    .map_err(|err| SemanticError::internal_error(format!(
-                            "registered dynamic unit `{}` did not resolve canonically: {err}",
-                            entry.spelling
-                        ), src, crate::diagnostic_anchor::DiagnosticAnchor::Source(entry.span)))?;
-                    Ok(DynamicUnitScaleEntry {
-                        unit,
-                        spelling: entry.spelling.clone(),
-                        expr: lower_scoped(&entry.expr)?,
-                        span: entry.span,
-                        src: entry.src,
-                    })
+        let dynamic_unit_scales = self
+            .dynamic_unit_scales
+            .iter()
+            .map(|entry| {
+                cancellation.checkpoint()?;
+                Ok(DynamicUnitScaleEntry {
+                    unit: entry.unit.clone(),
+                    spelling: entry.spelling.clone(),
+                    expr: lower_scoped(&entry.expr)?,
+                    span: entry.span,
+                    src: entry.src,
                 })
-                .collect::<Result<Vec<_>, Outcome<SemanticError>>>()?;
+            })
+            .collect::<Result<Vec<_>, Outcome<SemanticError>>>()?;
 
         let lower_fields = |fields: &[crate::desugar::desugared_ast::PlotField],
                             resolution_owner: &crate::dag_id::DagId,
@@ -432,6 +434,7 @@ impl UnfrozenIR {
 
         Ok(HirDag {
             dag_id: owner.clone(),
+            module,
             extern_functions,
             definitions,
             display_dimensions,
@@ -456,7 +459,7 @@ impl UnfrozenIR {
     /// that include's canonical substitution.
     fn lower_nominal_types(
         &self,
-        owner: &crate::dag_id::DagId,
+        module: crate::resolve::ModuleHandle,
         definitions: &super::static_definitions::StaticDefinitionEvaluator<'_>,
         src: SourceId,
         cancellation: &crate::cancellation::CancellationToken,
@@ -466,11 +469,10 @@ impl UnfrozenIR {
         };
 
         let resolver = definitions.resolver();
-        let Some(symbols) = resolver.symbols(owner) else {
-            return Ok(crate::hir::nominal::NominalTypeRegistry::default());
-        };
-        let lowering = NominalLowering {
+        let symbols = resolver.module(module).symbols();
+        let lowering = |declaring_module| NominalLowering {
             resolver,
+            module: resolver.module(declaring_module),
             cancellation,
         };
         let invariant = |message: String, span: Span| {
@@ -491,7 +493,8 @@ impl UnfrozenIR {
                     &identity,
                     crate::resolve::symbols::StaticProjection::template,
                 );
-                let Some((declaration, declaration_src)) = definitions.type_declaration(source)
+                let Some((declaration, declaration_src, declaring_module)) =
+                    definitions.type_declaration(source)
                 else {
                     return Err(invariant(
                         format!("nominal type `{source}` has no source declaration"),
@@ -506,7 +509,7 @@ impl UnfrozenIR {
                             projection.template().clone(),
                             declaration.name.span,
                             declaration_src,
-                            lowering,
+                            lowering(declaring_module),
                         )?;
                         let substitution = self
                             .projection_substitution(symbols, projection)
@@ -525,9 +528,13 @@ impl UnfrozenIR {
                         )
                         .map_err(|error| invariant(error.to_string(), symbol.span()))?
                     }
-                    None => {
-                        lower_type_declaration(declaration, identity, symbol.span(), src, lowering)?
-                    }
+                    None => lower_type_declaration(
+                        declaration,
+                        identity,
+                        symbol.span(),
+                        src,
+                        lowering(declaring_module),
+                    )?,
                 };
                 lowered.insert(definition).map_err(|error| {
                     invariant(

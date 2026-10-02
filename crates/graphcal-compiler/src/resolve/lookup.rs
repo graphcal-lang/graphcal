@@ -659,12 +659,12 @@ impl ModuleResolver {
         namespace: Namespace,
         name: &NameAtom,
     ) -> Result<Option<Span>, ModuleResolveError> {
-        let local = self.module_symbols(owner)?.occupant(namespace, name);
-        let occupant = match local {
-            Some(occupant) => Some(occupant),
-            None => self.module_scope(owner)?.occupant(namespace, name),
-        };
-        Ok(occupant.map(|occupant| occupant.span))
+        let module =
+            self.module_handle(owner)
+                .ok_or_else(|| ModuleResolveError::UnknownModule {
+                    owner: owner.clone(),
+                })?;
+        Ok(self.module(module).visible_span(namespace, name))
     }
 
     pub(super) fn ensure_module_path_visible(
