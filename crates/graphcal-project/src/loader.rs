@@ -37,17 +37,17 @@ use budget::{
 };
 pub use budget::{LoaderArtifactByteLimits, LoaderBudget};
 pub use budget_violation::{LoaderBudgetExceeded, LoaderResource};
+use build::{build_loaded_files, reject_file_root_stem_imports};
+use inline_dags::lift_inline_dags;
 pub use loaded_file::{LoadedDag, LoadedFile};
 pub use loaded_project::{
     LoadedDependency, LoadedFiles, LoadedPackageClosure, LoadedPlugin, LoadedProject,
     PluginCallPolicy, PluginFileEntry, PluginFileError,
 };
+use module_path::PackageSelector;
 pub use module_path::{
-    InlineBodyImportResolution, ModulePathKey, ResolvedModuleTarget, ResolvedModuleTargetError,
+    InlineBodyImportResolution, ResolvedModuleTarget, ResolvedModuleTargetError,
 };
-
-use build::{build_loaded_files, reject_file_root_stem_imports};
-use inline_dags::lift_inline_dags;
 use source_authority::{
     ModuleSourceAuthority, ProjectSources, SelectedPackage, SourceTree, fetch_source_snapshot,
 };
@@ -416,7 +416,7 @@ fn resolved_module_target_from(
     path: &ModulePath,
     project: &LoadedProject,
 ) -> Option<DagId> {
-    let key = ModulePathKey::from_path(path);
+    let key = path.key();
     let resolved = project.file(source).map_or_else(
         || {
             project.inline_dag(source).and_then(|(_, inline)| {
@@ -901,17 +901,12 @@ impl ModuleSourceAuthority for PackageLoadContext<'_> {
     /// importing file's package.
     fn select_package(
         &self,
-        path: &ModulePath,
+        selector: PackageSelector<'_>,
         from: &PackageFileKey,
     ) -> Result<SelectedPackage<PackageInstanceId>, ResolveFailure> {
-        let segments = path
-            .segments
-            .iter()
-            .map(|segment| segment.name.to_string())
-            .collect::<Vec<_>>();
         let resolved = self
             .graph
-            .resolve_module_path(&from.package, &segments)
+            .resolve_package_selector(&from.package, selector.name().as_str())
             .map_err(|error| ResolveFailure::NotLocked {
                 message: error.to_string(),
             })?;

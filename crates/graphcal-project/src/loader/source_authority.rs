@@ -24,6 +24,7 @@ use super::budget::{
     LoaderArtifact, LoaderBudgetState, LoaderReadError, PackageAuthorityError, io_not_found,
     loader_manifest_error,
 };
+use super::module_path::PackageSelector;
 use super::source_snapshot::{
     FetchedFile, ModuleLocation, ModuleResolution, ParsedFile, ParsedSource, ResolveFailure,
     ResolvedFile, SourceKey, SourceSnapshot,
@@ -64,16 +65,16 @@ pub(super) trait ModuleSourceAuthority {
         package: &<Self::Key as SourceKey>::Package,
     ) -> Result<SourceTree<'_>, PackageAuthorityError>;
 
-    /// Package whose module namespace the first segment of `path` names when
-    /// imported from the file `from`.
+    /// Package whose module namespace `selector` names when imported from the
+    /// file `from`.
     ///
     /// # Errors
     ///
-    /// Returns the [`ResolveFailure`] recorded for `path` when the first
-    /// segment names no package visible from `from`.
+    /// Returns the [`ResolveFailure`] recorded for the path when the selector
+    /// names no package visible from `from`.
     fn select_package(
         &self,
-        path: &ModulePath,
+        selector: PackageSelector<'_>,
         from: &Self::Key,
     ) -> Result<SelectedPackage<<Self::Key as SourceKey>::Package>, ResolveFailure>;
 }
@@ -201,10 +202,10 @@ pub(super) fn resolve_module<A: ModuleSourceAuthority>(
     path: &ModulePath,
     from: &A::Key,
 ) -> ModuleResolution<A::Key> {
-    if names_stdlib(path) {
+    let Ok(selector) = PackageSelector::classify(path) else {
         return ModuleResolution::Failed(ResolveFailure::StdlibNotImplemented);
-    }
-    let selected = match authority.select_package(path, from) {
+    };
+    let selected = match authority.select_package(selector, from) {
         Ok(selected) => selected,
         Err(failure) => return ModuleResolution::Failed(failure),
     };
@@ -217,7 +218,7 @@ pub(super) fn resolve_module<A: ModuleSourceAuthority>(
         }
     };
     let namespace_dir = tree.root.join(&selected.namespace_dir);
-    let module_segments = &path.segments()[1..];
+    let module_segments = selector.module_segments();
     for file_segment_count in (0..=module_segments.len()).rev() {
         let mut file_path = module_segments[..file_segment_count]
             .iter()
@@ -242,12 +243,6 @@ pub(super) fn resolve_module<A: ModuleSourceAuthority>(
         });
     }
     ModuleResolution::Failed(ResolveFailure::FileNotFound)
-}
-
-/// Whether a module path names the reserved (deferred) standard library.
-/// Both `graphcal` and `std` first segments are reserved (Concept §6.2).
-fn names_stdlib(path: &ModulePath) -> bool {
-    matches!(path.segments.first().name.as_str(), "graphcal" | "std")
 }
 
 /// Filesystem authority of a single-package project: a real package whose
@@ -275,7 +270,7 @@ impl ModuleSourceAuthority for ProjectSources<'_> {
 
     fn select_package(
         &self,
-        path: &ModulePath,
+        selector: PackageSelector<'_>,
         _from: &PathBuf,
     ) -> Result<SelectedPackage<()>, ResolveFailure> {
         // Without a manifest the project is a single standalone file whose
@@ -285,7 +280,7 @@ impl ModuleSourceAuthority for ProjectSources<'_> {
             return Err(ResolveFailure::CrossFileImportInVirtualPackage);
         };
         // Real package: the first segment must match the package name.
-        if path.segments.first().name.as_str() != manifest.name.as_str() {
+        if !selector.names(&manifest.name) {
             return Err(ResolveFailure::PackageNameMismatch {
                 package_name: manifest.name.to_string(),
             });

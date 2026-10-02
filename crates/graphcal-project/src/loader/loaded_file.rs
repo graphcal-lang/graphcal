@@ -11,7 +11,9 @@ use graphcal_compiler::desugar::desugared_ast::{Declaration, File};
 use graphcal_compiler::ir::module_interface::ModuleInterface;
 use graphcal_compiler::syntax::ast::DeclKind;
 
-use super::module_path::{InlineBodyImportResolution, ModulePathKey, ResolvedModuleTarget};
+use graphcal_compiler::syntax::module_path_key::ModulePathKey;
+
+use super::module_path::{InlineBodyImportResolution, ResolvedModuleTarget};
 
 /// Validated path from a file AST root to one nested inline-DAG body.
 ///
@@ -298,7 +300,7 @@ impl LoadedFile {
         self.ast.declarations.iter().filter_map(|decl| {
             if let DeclKind::Import(import_decl) = &decl.kind {
                 self.resolved_imports
-                    .get(&ModulePathKey::from_path(import_decl.path()))
+                    .get(&import_decl.path().key())
                     .map(|target| (decl, import_decl, target))
             } else {
                 None
@@ -319,7 +321,7 @@ impl LoadedFile {
         self.ast.declarations.iter().filter_map(|decl| {
             if let DeclKind::Include(include_decl) = &decl.kind {
                 self.resolved_imports
-                    .get(&ModulePathKey::from_path(&include_decl.path))
+                    .get(&include_decl.path.key())
                     .map(|target| (decl, include_decl, target))
             } else {
                 None

@@ -2,7 +2,9 @@
 //! them to.
 
 use graphcal_compiler::dag_id::DagId;
-use graphcal_compiler::syntax::ast::ModulePath;
+use graphcal_compiler::syntax::ast::{Ident, ModulePath};
+use graphcal_compiler::syntax::names::NameAtom;
+use graphcal_package::PackageName;
 
 /// Loader-resolved identities for one module path.
 ///
@@ -48,28 +50,60 @@ pub enum ResolvedModuleTargetError {
     UnknownOwner { target: DagId },
 }
 
-/// Span-free identity for an `import`/`include` path.
-///
-/// Used as a `HashMap` key in `LoadedFile::resolved_imports` /
-/// `LoadedDag::resolved_imports` so that two equal logical paths always
-/// produce equal keys without depending on a shared join format
-/// (e.g. `.` vs `/`).
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct ModulePathKey(Vec<String>);
+/// A reserved standard-library namespace (Concept §6.2): a module path whose
+/// first segment is one of these names never resolves to a package.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum ReservedNamespace {
+    /// `graphcal.…`
+    Graphcal,
+    /// `std.…`
+    Std,
+}
 
-impl ModulePathKey {
-    /// Build a key from a parsed [`ModulePath`] AST node. Segment names are
-    /// cloned and spans are dropped — span-aware lookup is never useful at
-    /// this layer.
-    #[must_use]
-    pub(crate) fn from_path(path: &ModulePath) -> Self {
-        Self(path.segments.iter().map(|s| s.name.to_string()).collect())
+impl ReservedNamespace {
+    /// The reserved namespace a first module-path segment names, if any. This
+    /// is the only place the reserved spellings are recognized.
+    pub(super) fn parse(segment: &NameAtom) -> Option<Self> {
+        match segment.as_str() {
+            "graphcal" => Some(Self::Graphcal),
+            "std" => Some(Self::Std),
+            _ => None,
+        }
+    }
+}
+
+/// A module path whose first segment selects a package, split into that
+/// selector and the module segments that walk the selected package.
+#[derive(Debug, Clone, Copy)]
+pub(super) struct PackageSelector<'p> {
+    path: &'p ModulePath,
+}
+
+impl<'p> PackageSelector<'p> {
+    /// Classify the first segment of `path` once: a reserved namespace, or a
+    /// package selector.
+    ///
+    /// # Errors
+    ///
+    /// Returns the [`ReservedNamespace`] the first segment names.
+    pub(super) fn classify(path: &'p ModulePath) -> Result<Self, ReservedNamespace> {
+        ReservedNamespace::parse(path.segments.first().name.atom()).map_or(Ok(Self { path }), Err)
     }
 
-    /// Segments in order, without separators.
-    #[must_use]
-    pub fn segments(&self) -> &[String] {
-        &self.0
+    /// The selector: the module path's first segment.
+    pub(super) fn name(self) -> &'p NameAtom {
+        self.path.segments.first().name.atom()
+    }
+
+    /// Whether the selector names `package` by its real package name.
+    pub(super) fn names(self, package: &PackageName) -> bool {
+        self.name().as_str() == package.as_str()
+    }
+
+    /// Segments after the selector, which walk the selected package's module
+    /// namespace.
+    pub(super) fn module_segments(self) -> &'p [Ident] {
+        self.path.segments.split_first().1
     }
 }
 
@@ -85,14 +119,58 @@ pub enum InlineBodyImportResolution {
     Unresolved,
 }
 
-impl std::fmt::Display for ModulePathKey {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        for (i, seg) in self.0.iter().enumerate() {
-            if i > 0 {
-                f.write_str(".")?;
-            }
-            f.write_str(seg)?;
-        }
-        Ok(())
+#[cfg(test)]
+mod tests {
+    use graphcal_compiler::syntax::ast::DeclKind;
+    use graphcal_compiler::syntax::parser::Parser;
+
+    use super::*;
+
+    fn with_import_path(source: &str, check: impl FnOnce(&ModulePath)) {
+        let file = Parser::new(source).parse_file().unwrap();
+        let DeclKind::Import(import) = &file.declarations[0].kind else {
+            panic!("expected an import");
+        };
+        check(import.path());
+    }
+
+    #[test]
+    fn reserved_first_segments_classify_as_reserved_namespaces() {
+        with_import_path("import std.math::{x};", |path| {
+            assert_eq!(
+                PackageSelector::classify(path).err(),
+                Some(ReservedNamespace::Std)
+            );
+        });
+        with_import_path("import graphcal::{x};", |path| {
+            assert_eq!(
+                PackageSelector::classify(path).err(),
+                Some(ReservedNamespace::Graphcal)
+            );
+        });
+    }
+
+    #[test]
+    fn package_selector_splits_the_first_segment_from_the_module_segments() {
+        with_import_path("import pkg.lib.inner::{x};", |path| {
+            let selector = PackageSelector::classify(path).unwrap();
+            assert_eq!(selector.name().as_str(), "pkg");
+            assert!(selector.names(&PackageName::new("pkg").unwrap()));
+            assert!(!selector.names(&PackageName::new("other").unwrap()));
+            let segments = selector
+                .module_segments()
+                .iter()
+                .map(|segment| segment.name.as_str())
+                .collect::<Vec<_>>();
+            assert_eq!(segments, ["lib", "inner"]);
+        });
+        with_import_path("import pkg::{x};", |path| {
+            assert!(
+                PackageSelector::classify(path)
+                    .unwrap()
+                    .module_segments()
+                    .is_empty()
+            );
+        });
     }
 }

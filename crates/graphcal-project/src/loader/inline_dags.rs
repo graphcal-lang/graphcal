@@ -14,7 +14,9 @@ use graphcal_compiler::desugar::desugared_ast::{Declaration, File};
 use graphcal_compiler::syntax::ast::{DeclKind, ModulePath};
 
 use super::loaded_file::{DagBodyLocator, LoadedDag};
-use super::module_path::{InlineBodyImportResolution, ModulePathKey, ResolvedModuleTarget};
+use graphcal_compiler::syntax::module_path_key::ModulePathKey;
+
+use super::module_path::{InlineBodyImportResolution, ResolvedModuleTarget};
 
 struct InlineDagLiftContext<'a, ResolveExternal> {
     file_dag_id: &'a DagId,
@@ -94,7 +96,7 @@ where
         })
         .map(|path| {
             (
-                ModulePathKey::from_path(path),
+                path.key(),
                 resolve_inline_body_import(path, lexical_parent_id, context),
             )
         })

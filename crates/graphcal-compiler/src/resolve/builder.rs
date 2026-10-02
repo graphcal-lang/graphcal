@@ -22,6 +22,7 @@ use crate::dag_id::{DagId, DagPackageId};
 use crate::dependency_graph::DependencyGraph;
 use crate::desugar::desugared_ast as ast;
 use crate::syntax::ast::ModulePath;
+use crate::syntax::module_path_key::ModulePathKey;
 
 use super::error::ModuleResolveError;
 use super::scope::{ModuleScope, declare_aliases};
@@ -77,14 +78,14 @@ struct SourceModule<'a> {
 }
 
 /// Module-path spelling of a source module within its package.
-type ModulePathKey = (DagPackageId, Vec<String>);
+type PackageModulePath = (DagPackageId, ModulePathKey);
 
 /// Stage 1: the declarations of every source module.
 #[derive(Debug, Default)]
 pub struct SymbolTables<'a> {
     modules: HashMap<DagId, SourceModule<'a>>,
     order: Vec<DagId>,
-    module_paths: HashMap<ModulePathKey, DagId>,
+    module_paths: HashMap<PackageModulePath, DagId>,
 }
 
 impl<'a> SymbolTables<'a> {
@@ -136,18 +137,18 @@ impl<'a> SymbolTables<'a> {
 
     /// Check that `owner` is new and its module path is unambiguous,
     /// returning the path key it will claim.
-    fn new_module_path(&self, owner: &DagId) -> Result<Option<ModulePathKey>, ModuleResolveError> {
+    fn new_module_path(
+        &self,
+        owner: &DagId,
+    ) -> Result<Option<PackageModulePath>, ModuleResolveError> {
         if self.modules.contains_key(owner) {
             return Err(ModuleResolveError::DuplicateModule {
                 owner: owner.clone(),
             });
         }
-        let path_key = owner.module_path_spelling().map(|spelling| {
-            (
-                owner.package().clone(),
-                spelling.into_iter().map(str::to_owned).collect::<Vec<_>>(),
-            )
-        });
+        let path_key = owner
+            .module_path_key()
+            .map(|key| (owner.package().clone(), key));
         if let Some(first) = path_key.as_ref().and_then(|key| self.module_paths.get(key)) {
             return Err(ModuleResolveError::AmbiguousModulePath {
                 first: first.clone(),
@@ -160,7 +161,7 @@ impl<'a> SymbolTables<'a> {
     fn insert(
         &mut self,
         owner: DagId,
-        path_key: Option<ModulePathKey>,
+        path_key: Option<PackageModulePath>,
         declarations: &'a [ast::Declaration],
         entry: ModuleEntry,
     ) {

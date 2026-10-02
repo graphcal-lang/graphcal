@@ -2,6 +2,7 @@ use crate::syntax::format_equivalent::FormatEquivalent;
 use crate::syntax::import_category::ImportItemNamespace;
 use crate::syntax::index_name::IndexVariantName;
 use crate::syntax::module_name::ModuleAliasName;
+use crate::syntax::module_path_key::ModulePathKey;
 use crate::syntax::names::{NameDef, NameNamespace, NamePath};
 use crate::syntax::non_empty::NonEmpty;
 use crate::syntax::span::{Span, Spanned};
@@ -177,11 +178,13 @@ impl ModulePath {
     /// Human-readable path string for diagnostics: `"nasa.rocket.dynamics"`.
     #[must_use]
     pub fn display_path(&self) -> String {
-        self.segments
-            .iter()
-            .map(|s| s.name.as_str())
-            .collect::<Vec<_>>()
-            .join(".")
+        self.key().to_string()
+    }
+
+    /// Span-free identity of this path.
+    #[must_use]
+    pub fn key(&self) -> ModulePathKey {
+        ModulePathKey::new(self.segments.map_ref(|segment| segment.name.atom().clone()))
     }
 
     /// Returns the leaf segment of the path.

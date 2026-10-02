@@ -563,9 +563,7 @@ fn process_dag_body_import_declarations<'a>(
             continue;
         };
         let Some(crate::loader::module_path::InlineBodyImportResolution::Resolved(target)) =
-            loaded_dag.resolved_imports().get(
-                &crate::loader::module_path::ModulePathKey::from_path(import_decl.path()),
-            )
+            loaded_dag.resolved_imports().get(&import_decl.path().key())
         else {
             continue;
         };
@@ -601,9 +599,7 @@ fn process_dag_body_include_declarations<'a>(
             continue;
         };
         let Some(crate::loader::module_path::InlineBodyImportResolution::Resolved(target)) =
-            loaded_dag.resolved_imports().get(
-                &crate::loader::module_path::ModulePathKey::from_path(&include_decl.path),
-            )
+            loaded_dag.resolved_imports().get(&include_decl.path.key())
         else {
             continue;
         };

@@ -21,7 +21,6 @@ use miette::NamedSource;
 use super::budget::io_not_found;
 use super::inline_dags::lift_inline_dags;
 use super::loaded_file::LoadedFile;
-use super::module_path::ModulePathKey;
 use super::source_snapshot::{
     DependencySite, FetchedFile, FileRootDependencyKind, ModuleResolution, ParsedSource,
     ResolveFailure, ResolvedFile, SourceKey, SourceSnapshot, collect_inline_dag_names,
@@ -37,6 +36,7 @@ use graphcal_compiler::import_cycle::ImportCycle;
 use graphcal_compiler::semantic_error::SemanticError;
 use graphcal_compiler::source_registry::SourceRegistry;
 use graphcal_compiler::syntax::ast::ModulePath;
+use graphcal_compiler::syntax::module_path_key::ModulePathKey;
 
 /// Build every loaded file reachable from the snapshot root, dependencies
 /// before dependents and ending with the root.
@@ -263,7 +263,7 @@ impl<K: SourceKey> Builder<'_, K> {
             } else {
                 ImportOwner::Dependency(self.dependency(file, &resolved.file)?)
             };
-            imports.insert(ModulePathKey::from_path(path), (owner, resolved));
+            imports.insert(path.key(), (owner, resolved));
         }
         Ok(imports)
     }

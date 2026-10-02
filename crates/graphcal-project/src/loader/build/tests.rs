@@ -522,7 +522,7 @@ fn dag_body_imports_load_dependencies_and_keep_failures_unresolved() {
         inner
             .resolved_imports
             .iter()
-            .find(|(key, _)| key.segments() == segments)
+            .find(|(key, _)| key.to_string() == segments.join("."))
             .map(|(_, resolution)| resolution.clone())
             .unwrap()
     };

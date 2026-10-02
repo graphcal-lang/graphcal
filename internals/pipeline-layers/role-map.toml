@@ -1188,6 +1188,16 @@ role = "contracts"
 
 [[module]]
 package = "compiler"
+path = ["syntax", "module_path_key"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["syntax", "module_path_key", "tests"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
 path = ["resolved_name"]
 role = "contracts"
 
@@ -2770,6 +2780,11 @@ role = "contracts"
 [[module]]
 package = "project"
 path = ["loader", "module_path"]
+role = "contracts"
+
+[[module]]
+package = "project"
+path = ["loader", "module_path", "tests"]
 role = "contracts"
 
 [[module]]

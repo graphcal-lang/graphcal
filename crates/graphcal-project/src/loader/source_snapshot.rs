@@ -17,7 +17,9 @@ use std::sync::Arc;
 
 use miette::NamedSource;
 
-use super::module_path::{ModulePathKey, ResolvedModuleTarget};
+use graphcal_compiler::syntax::module_path_key::ModulePathKey;
+
+use super::module_path::ResolvedModuleTarget;
 use crate::compile_error::CompileError;
 use graphcal_compiler::cancellation::CancellationToken;
 use graphcal_compiler::dag_id::{DagId, DagPackageId};
@@ -210,9 +212,7 @@ impl<K: SourceKey> ParsedSource<K> {
     ) -> Result<Self, E> {
         let mut resolutions = HashMap::new();
         for dependency in dependency_paths(&file.ast) {
-            if let Entry::Vacant(slot) =
-                resolutions.entry(ModulePathKey::from_path(dependency.path))
-            {
+            if let Entry::Vacant(slot) = resolutions.entry(dependency.path.key()) {
                 slot.insert(resolve(dependency.path)?);
             }
         }
@@ -243,7 +243,7 @@ impl<K: SourceKey> ParsedSource<K> {
     /// Recorded resolution for a dependency path of this file. Only a path
     /// that is not a dependency path of this file can be absent.
     pub(super) fn resolution(&self, path: &ModulePath) -> Option<&ModuleResolution<K>> {
-        self.resolutions.get(&ModulePathKey::from_path(path))
+        self.resolutions.get(&path.key())
     }
 
     /// Other files this file loads, in load order (duplicates retained).
