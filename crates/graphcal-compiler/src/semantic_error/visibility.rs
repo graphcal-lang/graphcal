@@ -38,7 +38,10 @@ pub enum VisibilityError {
     // --- Visibility errors ---
     /// Attempting to import a private (non-`pub`) item from another file.
     #[error("cannot import private item `{name}` from `{file_path}`")]
-    ImportPrivateItem { name: String, file_path: DagReference },
+    ImportPrivateItem {
+        name: String,
+        file_path: DagReference,
+    },
     /// A required `index`, `type`, or `dim` is not marked `pub(bind)`.
     ///
     /// `param` is excluded: the declaration kind itself creates a required or

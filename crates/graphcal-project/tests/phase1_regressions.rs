@@ -259,8 +259,11 @@ node bad: a::Box<a::Foo> = a::Box<a::Foo>(x: 1.0 b::foo);
             ..
         }) => {
             assert_ne!(expected, found);
-            assert!(expected.contains("owner_dims.a.Foo"), "{expected}");
-            assert!(found.contains("owner_dims.b.Foo"), "{found}");
+            assert!(
+                expected.to_string().contains("owner_dims.a.Foo"),
+                "{expected}"
+            );
+            assert!(found.to_string().contains("owner_dims.b.Foo"), "{found}");
         }
         other => panic!("expected owner-qualified field mismatch, got {other:?}"),
     }

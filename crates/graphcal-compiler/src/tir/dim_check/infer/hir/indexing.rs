@@ -5,6 +5,7 @@ use crate::outcome::Outcome;
 use crate::semantic_error::dimension::DimensionError;
 use crate::semantic_error::index::IndexError;
 use crate::semantic_error::structure::StructError;
+use crate::semantic_error::structure::UnknownLocal;
 use crate::source_id::SourceId;
 
 use crate::diagnostic_anchor::DiagnosticAnchor;
@@ -320,7 +321,7 @@ impl Infer<'_> {
                             self.env.src,
                             local.span,
                             StructError::UnknownLocalRef {
-                                name: format!("#{}", local.value.index()),
+                                name: UnknownLocal::Slot(local.value),
                             },
                         )
                         .into());

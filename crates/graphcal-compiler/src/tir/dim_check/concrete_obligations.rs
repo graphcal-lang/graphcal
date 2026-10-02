@@ -12,6 +12,7 @@ use crate::semantic_error::SemanticError;
 use crate::semantic_error::domain::DomainError;
 use crate::semantic_error::index::IndexError;
 use crate::semantic_error::structure::StructError;
+use crate::semantic_error::structure::UnknownStructTypeName;
 use crate::source_id::SourceId;
 use crate::syntax::span::Span;
 use crate::tir::texpr::{CheckedBody, TBody, TNodeRef, visit_tnodes};
@@ -131,7 +132,7 @@ fn validate(
                         ctx.src,
                         ctx.span,
                         StructError::UnknownStructType {
-                            name: identity.to_string(),
+                            name: UnknownStructTypeName::Checked(identity.clone()),
                         },
                     )
                 })?;

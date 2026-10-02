@@ -1073,6 +1073,25 @@ impl<V: Concreteness> CheckedType<V> {
         TypeSpelling(self.format(dims))
     }
 
+    /// Spell two unequal types without emitting a self-contradictory
+    /// leaf-only diagnostic such as `expected Foo, found Foo`.
+    #[must_use]
+    pub fn distinct_spellings(
+        expected: &Self,
+        found: &Self,
+        dims: &DimensionFormattingRegistry,
+    ) -> (TypeSpelling, TypeSpelling) {
+        let expected_display = expected.format(dims);
+        let found_display = found.format(dims);
+        if expected_display != found_display {
+            return (TypeSpelling(expected_display), TypeSpelling(found_display));
+        }
+        (
+            TypeSpelling(expected.format_owner_qualified(dims)),
+            TypeSpelling(found.format_owner_qualified(dims)),
+        )
+    }
+
     /// Format every nominal identity with its canonical owner.
     ///
     /// Used only when two unequal semantic types would otherwise render with

@@ -5,6 +5,7 @@ use graphcal_compiler::semantic_error::dimension::DimensionError;
 use graphcal_compiler::semantic_error::index::IndexError;
 use graphcal_compiler::semantic_error::name::NameError;
 use graphcal_compiler::semantic_error::structure::StructError;
+use graphcal_compiler::semantic_error::structure::UnknownLocal;
 use graphcal_compiler::semantic_error::visibility::VisibilityError;
 use std::collections::HashMap;
 
@@ -296,11 +297,17 @@ fn structured_data(error: &CompileError) -> Option<serde_json::Value> {
         SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
             kind: SemanticErrorKind::Struct(StructError::UnknownStructType { name, .. }),
             ..
-        }) => auto_import_data(name, AutoImportCategory::Type),
+        }) => auto_import_data(name.to_string(), AutoImportCategory::Type),
         SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
             kind: SemanticErrorKind::Struct(StructError::UnknownLocalRef { name, .. }),
             ..
-        }) => auto_import_data(name, AutoImportCategory::Term),
+        }) => match name {
+            UnknownLocal::Named(name) => auto_import_data(name.as_str(), AutoImportCategory::Term),
+            UnknownLocal::Unbound(name) => {
+                auto_import_data(name.as_str(), AutoImportCategory::Term)
+            }
+            UnknownLocal::Slot(_) => None,
+        },
         SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
             kind: SemanticErrorKind::Name(NameError::UnknownGraphRef { name, .. }),
             ..

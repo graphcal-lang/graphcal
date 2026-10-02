@@ -128,7 +128,9 @@ mod tests {
             &interface,
             &jpy,
             ImportItemNamespace::Type,
-            &DagReference::Dag(graphcal_compiler::dag_id::DagId::root_in_package("pkg", "lib")),
+            &DagReference::Dag(graphcal_compiler::dag_id::DagId::root_in_package(
+                "pkg", "lib",
+            )),
             src(),
             Span::new(0, 3),
         ) {
@@ -154,7 +156,9 @@ mod tests {
                 &interface,
                 &NameAtom::parse("missing").unwrap(),
                 ImportItemNamespace::Term,
-                &DagReference::Dag(graphcal_compiler::dag_id::DagId::root_in_package("pkg", "lib")),
+                &DagReference::Dag(graphcal_compiler::dag_id::DagId::root_in_package(
+                    "pkg", "lib"
+                )),
                 src(),
                 Span::new(0, 7),
             ),

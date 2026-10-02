@@ -9,6 +9,7 @@ use crate::semantic_error::dimension::DimensionError;
 use crate::semantic_error::index::IndexError;
 use crate::semantic_error::module::ModuleError;
 use crate::semantic_error::structure::StructError;
+use crate::semantic_error::structure::UnknownStructTypeName;
 use crate::source_id::SourceId;
 use crate::syntax::ast::GenericConstraint;
 use crate::syntax::index_name::IndexName;
@@ -175,7 +176,7 @@ fn hir_struct_type_def<'a>(
             ctx.src,
             span,
             StructError::UnknownStructType {
-                name: name.to_string(),
+                name: UnknownStructTypeName::Resolved(name.clone()),
             },
         )
     })

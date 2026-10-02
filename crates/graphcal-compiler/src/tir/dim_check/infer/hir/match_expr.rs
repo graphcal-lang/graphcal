@@ -4,6 +4,7 @@ use crate::hir::expr::{Expr, MatchArm, MatchPattern, PatternBinding};
 use crate::outcome::Outcome;
 use crate::semantic_error::index::IndexError;
 use crate::semantic_error::structure::StructError;
+use crate::semantic_error::structure::UnknownStructTypeName;
 use crate::source_id::SourceId;
 
 use crate::display::formatting_registry::FormattingRegistry;
@@ -168,7 +169,7 @@ impl Infer<'_> {
                         self.env.src,
                         scrutinee.span,
                         StructError::UnknownStructType {
-                            name: type_name.to_string(),
+                            name: UnknownStructTypeName::Checked(type_name.clone()),
                         },
                     )
                 })?;

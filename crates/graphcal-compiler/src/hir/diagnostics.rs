@@ -15,6 +15,7 @@ use crate::semantic_error::module::ModuleError;
 use crate::semantic_error::name::NameError;
 use crate::semantic_error::plugin::PluginError;
 use crate::semantic_error::structure::StructError;
+use crate::semantic_error::structure::UnknownLocal;
 use crate::semantic_error::visibility::VisibilityError;
 use crate::source_id::SourceId;
 use crate::syntax::index_name::IndexName;
@@ -165,7 +166,7 @@ pub fn expr_lower_error_to_semantic(err: &ExprLowerError, src: SourceId) -> Sema
             src,
             *span,
             StructError::UnknownLocalRef {
-                name: name.to_string(),
+                name: UnknownLocal::Named(name.clone()),
             },
         ),
         ExprLowerError::UnknownGraphRef { name, span } => SemanticError::located(
@@ -368,7 +369,7 @@ pub fn expr_lower_error_to_semantic(err: &ExprLowerError, src: SourceId) -> Sema
             src,
             *span,
             StructError::UnknownLocalRef {
-                name: name.to_string(),
+                name: UnknownLocal::Unbound(name.clone()),
             },
         ),
         ExprLowerError::TooManyLocals { span } => {

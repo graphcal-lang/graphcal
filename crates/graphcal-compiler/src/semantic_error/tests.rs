@@ -296,3 +296,41 @@ fn graph_payloads_render_their_names_as_before() {
         format!("unknown param `x` in DAG call to `{dag}`")
     );
 }
+
+#[test]
+fn structure_payloads_render_their_names_as_before() {
+    use super::structure::{FieldlessOperand, StructError, UnknownLocal, UnknownStructTypeName};
+    use crate::dag_id::DagId;
+    use crate::resolved_name::ResolvedStructTypeName;
+    use crate::semantic::checked_type::StructTypeRef;
+    use crate::syntax::type_name::StructTypeName;
+
+    let resolved = ResolvedStructTypeName::for_test(
+        DagId::root_in_package("pkg", "lib"),
+        StructTypeName::expect_valid("Pair"),
+    );
+    let checked = StructTypeRef::from_resolved(resolved.clone());
+    assert_eq!(
+        UnknownStructTypeName::Resolved(resolved.clone()).to_string(),
+        resolved.to_string()
+    );
+    assert_eq!(
+        UnknownStructTypeName::Checked(checked.clone()).to_string(),
+        "Pair"
+    );
+    assert_eq!(
+        StructError::NotAStruct {
+            name: FieldlessOperand::RequiredType(checked.clone()),
+        }
+        .to_string(),
+        "cannot access field of non-struct value `required type `Pair` has no fields`"
+    );
+    assert_eq!(
+        FieldlessOperand::Union(checked).to_string(),
+        "union type `Pair` (use `match` to access fields)"
+    );
+    assert_eq!(
+        UnknownLocal::Unbound(crate::syntax::names::NameAtom::parse("x").unwrap()).to_string(),
+        "x"
+    );
+}

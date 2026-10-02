@@ -36,24 +36,6 @@ pub fn format_checked_type<V: Concreteness>(
     ty.format(&registry.dimensions)
 }
 
-/// Format unequal inferred types without emitting a self-contradictory
-/// leaf-only diagnostic such as `expected Foo, found Foo`.
-pub(super) fn format_distinct_types(
-    expected: &CheckedType<Symbolic>,
-    found: &CheckedType<Symbolic>,
-    registry: &FormattingRegistry,
-) -> (String, String) {
-    let expected_display = expected.format(&registry.dimensions);
-    let found_display = found.format(&registry.dimensions);
-    if expected_display != found_display {
-        return (expected_display, found_display);
-    }
-    (
-        expected.format_owner_qualified(&registry.dimensions),
-        found.format_owner_qualified(&registry.dimensions),
-    )
-}
-
 pub fn expect_quantity<V: Concreteness>(
     inferred: &CheckedType<V>,
     registry: &FormattingRegistry,

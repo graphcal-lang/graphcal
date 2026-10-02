@@ -6,15 +6,14 @@ use crate::hir::types::GenericArg;
 use crate::outcome::Outcome;
 use crate::resolved_name::ResolvedConstructorName;
 use crate::semantic_error::structure::StructError;
+use crate::semantic_error::structure::{FieldlessOperand, UnknownStructTypeName};
 
 use crate::semantic::checked_type::{StructTypeRef, Symbolic};
 use crate::semantic_error::SemanticError;
 use crate::syntax::type_name::FieldName;
 
 use crate::semantic::checked_type::CheckedType;
-use crate::tir::dim_check::helpers::{
-    format_checked_type, format_distinct_types, nominal_for_inferred,
-};
+use crate::tir::dim_check::helpers::nominal_for_inferred;
 
 use super::context::Infer;
 use super::override_deps::TypeNominalUse;
@@ -32,7 +31,9 @@ impl Infer<'_> {
                 self.env.src,
                 inner.span,
                 StructError::NotAStruct {
-                    name: format_checked_type(&inner_type, self.env.registry),
+                    name: FieldlessOperand::NonStruct(
+                        inner_type.spelling(&self.env.registry.dimensions),
+                    ),
                 },
             )
             .into());
@@ -49,18 +50,15 @@ impl Infer<'_> {
                 self.env.src,
                 inner.span,
                 StructError::UnknownStructType {
-                    name: type_name.to_string(),
+                    name: UnknownStructTypeName::Checked(type_name.clone()),
                 },
             )
         })?;
         let member = nominal.record_member().ok_or_else(|| {
             let detail = if nominal.definition().is_required() {
-                format!("required type `{}` has no fields", type_name.name())
+                FieldlessOperand::RequiredType(type_name.clone())
             } else {
-                format!(
-                    "union type `{}` (use `match` to access fields)",
-                    type_name.name()
-                )
+                FieldlessOperand::Union(type_name.clone())
             };
             SemanticError::located(
                 self.env.src,
@@ -196,8 +194,11 @@ impl Infer<'_> {
             )?
             .to_symbolic();
             if value_type != expected {
-                let (expected, found) =
-                    format_distinct_types(&expected, &value_type, self.env.registry);
+                let (expected, found) = CheckedType::distinct_spellings(
+                    &expected,
+                    &value_type,
+                    &self.env.registry.dimensions,
+                );
                 return Err(SemanticError::located(
                     self.env.src,
                     field_init.name.span,

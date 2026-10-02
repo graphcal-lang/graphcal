@@ -8,6 +8,7 @@ use crate::semantic_error::SemanticError;
 use crate::semantic_error::dimension::DimensionError;
 use crate::semantic_error::name::NameError;
 use crate::semantic_error::structure::StructError;
+use crate::semantic_error::structure::UnknownLocal;
 
 use crate::semantic::checked_type::CheckedType;
 
@@ -86,7 +87,7 @@ impl Infer<'_> {
                         self.env.src,
                         local.span,
                         StructError::UnknownLocalRef {
-                            name: format!("#{}", local.value.index()),
+                            name: UnknownLocal::Slot(local.value),
                         },
                     )
                 })?
