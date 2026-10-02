@@ -19,7 +19,7 @@ use graphcal_compiler::syntax::span::Span;
 use graphcal_compiler::display::include_scope_names::IncludeScopeNames;
 
 use crate::eval::output_decl_name::{OutputDeclName, OutputUnavailable};
-use crate::eval::types::{AssertResult, NodeUnavailable};
+use crate::eval::types::{AssertResult, RuntimeUnavailable};
 use crate::eval_expr::{EvalSession, RuntimeValueMap};
 use crate::execution_plan::ExecPlan;
 use crate::host_fns::HostFunctionRegistry;
@@ -34,7 +34,7 @@ pub struct RootOutcome {
     unfinished_calls: RefCell<BTreeSet<ResolvedDeclName>>,
     values: RuntimeValueMap,
     presentations: PendingPresentedMap,
-    errors: HashMap<ResolvedDeclName, NodeUnavailable>,
+    errors: HashMap<ResolvedDeclName, RuntimeUnavailable>,
     assertions: Vec<(ScopedName, AssertResult, Span)>,
 }
 
@@ -42,7 +42,7 @@ pub struct RootOutcome {
 pub struct RootOutcomeParts {
     pub unfinished_calls: BTreeSet<ResolvedDeclName>,
     pub values: RuntimeValueMap,
-    pub errors: HashMap<ResolvedDeclName, NodeUnavailable>,
+    pub errors: HashMap<ResolvedDeclName, RuntimeUnavailable>,
     pub assertions: Vec<(ScopedName, AssertResult, Span)>,
 }
 
@@ -124,7 +124,7 @@ impl RootOutcome {
     }
 
     /// The declarations that failed or are unavailable.
-    pub const fn errors(&self) -> &HashMap<ResolvedDeclName, NodeUnavailable> {
+    pub const fn errors(&self) -> &HashMap<ResolvedDeclName, RuntimeUnavailable> {
         &self.errors
     }
 

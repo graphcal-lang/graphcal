@@ -8,7 +8,7 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 use graphcal_compiler::cancellation::CancellationToken;
 use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
 use graphcal_compiler::hir::expr::{Expr, ExprKind, visit_expr};
-use graphcal_compiler::node_unavailable::NodeUnavailable;
+use graphcal_compiler::node_unavailable::{NodeUnavailable, RuntimeUnavailable};
 use graphcal_compiler::outcome::Outcome;
 use graphcal_compiler::resolved_name::ResolvedDeclName;
 use graphcal_compiler::semantic_error::SemanticError;
@@ -61,7 +61,7 @@ pub fn collect(
     plan: &ExecPlan<'_>,
     source: SourceId,
     cancellation: &CancellationToken,
-) -> Result<Vec<(ResolvedDeclName, NodeUnavailable)>, Outcome<SemanticError>> {
+) -> Result<Vec<(ResolvedDeclName, RuntimeUnavailable)>, Outcome<SemanticError>> {
     if !plan.has_unfinished_definitions() {
         return Ok(Vec::new());
     }

@@ -16,7 +16,7 @@ use crate::eval_expr::RuntimeValueMap;
 use crate::execution_plan::ExecPlan;
 use crate::runtime_presentation::ResolvedPresentedMap;
 
-use super::types::{EvalResult, NodeUnavailable};
+use super::types::{EvalResult, RuntimeUnavailable};
 
 mod assertions;
 mod dependency_failures;
@@ -40,7 +40,7 @@ pub struct RuntimeEvaluation {
     pub(super) result: EvalResult,
     pub(super) presentations: ResolvedPresentedMap,
     pub(super) values: RuntimeValueMap,
-    pub(super) errors: HashMap<ResolvedDeclName, NodeUnavailable>,
+    pub(super) errors: HashMap<ResolvedDeclName, RuntimeUnavailable>,
 }
 
 impl std::fmt::Debug for RuntimeEvaluation {
@@ -66,7 +66,7 @@ impl RuntimeEvaluation {
     /// Whether evaluation produced a node, assertion, or plot failure.
     #[must_use]
     pub fn has_errors(&self) -> bool {
-        self.errors.values().any(NodeUnavailable::has_failure) || self.result.has_errors()
+        self.errors.values().any(RuntimeUnavailable::has_failure) || self.result.has_errors()
     }
 
     /// Display-aware result for the directly evaluated root DAG.

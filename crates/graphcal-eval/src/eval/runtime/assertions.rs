@@ -16,7 +16,7 @@ use graphcal_compiler::tir::typed::model::TypedAssertEntry;
 use graphcal_compiler::tir::typed::{AssertionOperands, BodyKind, Scoped};
 
 use crate::assertion_eval::evaluate_assert_with_expected_fail;
-use crate::eval::types::{AssertResult, NodeUnavailable};
+use crate::eval::types::{AssertResult, RuntimeUnavailable};
 use crate::eval_expr::{EvalSession, RuntimeValueMap, eval_root};
 
 use super::dependency_failures::dependency_failure_message;
@@ -35,7 +35,7 @@ pub(super) fn evaluate_assertions(
     src: SourceId,
     ctx: &EvalSession<'_>,
     values: &RuntimeValueMap,
-    errors: &HashMap<ResolvedDeclName, NodeUnavailable>,
+    errors: &HashMap<ResolvedDeclName, RuntimeUnavailable>,
     names: &RootNames<'_>,
 ) -> Result<Vec<(ScopedName, AssertResult, Span)>, Outcome<SemanticError>> {
     let tir = plan.tir();
@@ -72,11 +72,15 @@ pub(super) fn evaluate_assertions(
             .expected_fail
             .as_ref()
             .or_else(|| unit.expected_fail());
-        let result = evaluate_assert_with_expected_fail(
-            entry.map(|entry| &*entry.body),
-            expected,
-            &mut |expr| eval_root(&assertion_ctx.executable(expr)?, values, &assertion_ctx),
-        )?;
+        let body = entry.map(|entry| &*entry.body);
+        // A dependency failure names its declarations as the root does,
+        // exactly as for the root's own assertions.
+        let result = match assert_dependency_failure(body, errors, names, &assertion_ctx)? {
+            Some(result) => result,
+            None => evaluate_assert_with_expected_fail(body, expected, &mut |expr| {
+                eval_root(&assertion_ctx.executable(expr)?, values, &assertion_ctx)
+            })?,
+        };
         assertions.push((
             projected_assertion_name(parent, planned, projection),
             result.map_names(|declaration| names.name(declaration)),
@@ -200,7 +204,7 @@ pub(super) fn root_assumes_map(
 /// declaration).
 fn assert_dependency_failure(
     body: Scoped<'_, graphcal_compiler::hir::expr::AssertBody>,
-    errors: &HashMap<ResolvedDeclName, NodeUnavailable>,
+    errors: &HashMap<ResolvedDeclName, RuntimeUnavailable>,
     names: &RootNames<'_>,
     ctx: &EvalSession<'_>,
 ) -> Result<Option<AssertResult<ResolvedDeclName>>, Cancelled> {

@@ -9,7 +9,7 @@
 
 use std::collections::BTreeSet;
 
-use graphcal_compiler::node_unavailable::NodeUnavailable;
+use graphcal_compiler::node_unavailable::{NodeUnavailable, RuntimeUnavailable};
 use graphcal_compiler::resolved_name::ResolvedDeclName;
 use graphcal_compiler::syntax::decl_name::DeclName;
 use graphcal_compiler::syntax::non_empty::NonEmpty;
@@ -67,7 +67,7 @@ impl ComposedPlotsUnavailable<ResolvedDeclName> {
     /// unavailable plot is a valid case.
     #[must_use]
     pub(crate) fn blocked_by<'a>(
-        plots: impl IntoIterator<Item = (&'a DeclName, &'a NodeUnavailable)>,
+        plots: impl IntoIterator<Item = (&'a DeclName, &'a RuntimeUnavailable)>,
     ) -> Option<Self> {
         let plots = plots.into_iter().collect::<Vec<_>>();
         let unfinished = plots
@@ -165,7 +165,7 @@ impl<N: std::fmt::Display + std::fmt::Debug> std::error::Error for ComposedPlots
 mod tests {
     use super::*;
 
-    fn failed() -> NodeUnavailable {
+    fn failed() -> RuntimeUnavailable {
         NodeUnavailable::EvalFailed {
             message: "boom".to_string(),
         }

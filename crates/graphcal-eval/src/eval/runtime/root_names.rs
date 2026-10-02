@@ -13,7 +13,7 @@ use std::collections::HashMap;
 
 use graphcal_compiler::dag_id::DagId;
 use graphcal_compiler::ir::instance::ExposedValueBody;
-use graphcal_compiler::node_unavailable::NodeUnavailable;
+use graphcal_compiler::node_unavailable::RuntimeUnavailable;
 use graphcal_compiler::resolved_name::ResolvedDeclName;
 use graphcal_compiler::syntax::module_name::ScopedName;
 use graphcal_compiler::syntax::non_empty::NonEmpty;
@@ -127,7 +127,7 @@ impl<'p> RootNames<'p> {
     }
 
     /// `reason`, naming its declarations as the output does.
-    pub(super) fn present(&self, reason: &NodeUnavailable) -> OutputUnavailable {
+    pub(super) fn present(&self, reason: &RuntimeUnavailable) -> OutputUnavailable {
         reason.map_names(|declaration| self.name(declaration))
     }
 }

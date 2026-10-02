@@ -4,17 +4,19 @@
 //! dependency set; allowing incomplete evaluation must never hide a failure.
 //!
 //! A reason names the declarations it involves. Evaluation records them by
-//! runtime identity ([`ResolvedDeclName`], the default); an output boundary
-//! renames them, with [`NodeUnavailable::map_names`], to the names its reader
-//! knows them by before displaying the reason.
+//! runtime identity ([`RuntimeUnavailable`]); an output boundary renames them,
+//! with [`NodeUnavailable::map_names`], to the names its reader knows them by
+//! ([`ReportedName`]) before displaying the reason. A reason naming runtime
+//! identities has no `Display`, so an internal identity cannot be shown by
+//! mistake.
 
 use std::collections::BTreeSet;
 
 use crate::resolved_name::ResolvedDeclName;
 use crate::syntax::non_empty::NonEmpty;
 
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-pub enum NodeUnavailable<N = ResolvedDeclName> {
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NodeUnavailable<N> {
     EvalFailed {
         message: String,
     },
@@ -29,6 +31,14 @@ pub enum NodeUnavailable<N = ResolvedDeclName> {
         failed_deps: Vec<N>,
     },
 }
+
+/// A reason as evaluation records it, naming declarations by runtime
+/// identity.
+pub type RuntimeUnavailable = NodeUnavailable<ResolvedDeclName>;
+
+/// A name the reader of a reported reason knows a declaration by, which a
+/// displayed [`NodeUnavailable`] names it with.
+pub trait ReportedName: std::fmt::Display {}
 
 impl<N> NodeUnavailable<N> {
     #[must_use]
@@ -52,6 +62,13 @@ impl<N> NodeUnavailable<N> {
     #[must_use]
     pub fn is_incomplete(&self) -> bool {
         !self.unfinished().is_empty()
+    }
+
+    /// What kind of reason this is, without the declarations it names: the
+    /// text of a reason no reader has renamed yet.
+    #[must_use]
+    pub const fn summary(&self) -> UnavailableSummary<'_, N> {
+        UnavailableSummary(self)
     }
 
     /// The same reason with every declaration it names renamed by `rename`.
@@ -78,7 +95,7 @@ impl<N> NodeUnavailable<N> {
     }
 }
 
-impl NodeUnavailable {
+impl RuntimeUnavailable {
     /// Derive a dependent's outcome, preserving every unfinished origin and
     /// any independently failed input. No unavailable input is a valid case.
     #[must_use]
@@ -111,6 +128,8 @@ impl NodeUnavailable {
     }
 }
 
+impl<N: ReportedName + std::fmt::Debug> std::error::Error for NodeUnavailable<N> {}
+
 fn names<N: std::fmt::Display>(declarations: &[N]) -> String {
     declarations
         .iter()
@@ -119,7 +138,7 @@ fn names<N: std::fmt::Display>(declarations: &[N]) -> String {
         .join(", ")
 }
 
-impl<N: std::fmt::Display> std::fmt::Display for NodeUnavailable<N> {
+impl<N: ReportedName> std::fmt::Display for NodeUnavailable<N> {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::EvalFailed { message } => formatter.write_str(message),
@@ -142,6 +161,27 @@ impl<N: std::fmt::Display> std::fmt::Display for NodeUnavailable<N> {
                 )?;
                 if !failed_deps.is_empty() {
                     write!(formatter, "; dependency failed: {}", names(failed_deps))?;
+                }
+                Ok(())
+            }
+        }
+    }
+}
+
+/// A [`NodeUnavailable`] displayed without the declarations it names; see
+/// [`NodeUnavailable::summary`].
+pub struct UnavailableSummary<'a, N>(&'a NodeUnavailable<N>);
+
+impl<N> std::fmt::Display for UnavailableSummary<'_, N> {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.0 {
+            NodeUnavailable::EvalFailed { message } => formatter.write_str(message),
+            NodeUnavailable::DependencyFailed { .. } => formatter.write_str("dependency failed"),
+            NodeUnavailable::Todo { .. } => formatter.write_str("TODO — formula unfinished"),
+            NodeUnavailable::Blocked { failed_deps, .. } => {
+                formatter.write_str("BLOCKED — unfinished dependencies")?;
+                if !failed_deps.is_empty() {
+                    formatter.write_str("; dependency failed")?;
                 }
                 Ok(())
             }

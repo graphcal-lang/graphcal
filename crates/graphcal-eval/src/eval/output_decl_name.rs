@@ -5,7 +5,7 @@
 //! reason the output reports (a failed dependency, an unfinished formula)
 //! names its declarations this way.
 
-use graphcal_compiler::node_unavailable::NodeUnavailable;
+use graphcal_compiler::node_unavailable::{NodeUnavailable, ReportedName};
 use graphcal_compiler::resolved_name::ResolvedDeclName;
 use graphcal_compiler::syntax::module_name::ScopedName;
 
@@ -30,6 +30,8 @@ impl std::fmt::Display for OutputDeclName {
         }
     }
 }
+
+impl ReportedName for OutputDeclName {}
 
 /// Why a declaration the output reports has no value, naming the
 /// declarations involved as the output names them.

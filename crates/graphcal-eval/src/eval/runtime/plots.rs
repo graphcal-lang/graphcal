@@ -27,7 +27,7 @@ use crate::eval::plot_unavailable::{ComposedPlotsUnavailable, PlotUnavailable};
 use crate::eval::public_projection;
 use crate::eval::types::{
     AxisMeta, CompositionProperty, FigureSpec, LayerSpec, NodeUnavailable, PlotError,
-    PlotFieldValue, PlotPropertyType, PlotSpec,
+    PlotFieldValue, PlotPropertyType, PlotSpec, RuntimeUnavailable,
 };
 use crate::eval_expr::{
     EvalSession, RuntimeValue, RuntimeValueMap, eval_root, eval_root_with_presentation,
@@ -93,7 +93,7 @@ fn root_plots<'p>(plan: &'p crate::execution_plan::ExecPlan<'p>) -> Vec<RootPlot
 
 /// The root plots that could not be rendered, by their name in the root's
 /// namespace, with the reason.
-type UnavailablePlots<'p> = HashMap<&'p DeclName, NodeUnavailable>;
+type UnavailablePlots<'p> = HashMap<&'p DeclName, RuntimeUnavailable>;
 
 /// Evaluate every root plot, figure and layer.
 ///
@@ -257,12 +257,10 @@ fn eval_plot_property(
         .and_then(|rv| runtime_to_plot_field_value(&rv).map_err(PlotEvaluationError::from))
 }
 
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug)]
 enum PlotEvaluationError {
-    #[error("{0}")]
-    Unavailable(NodeUnavailable),
+    Unavailable(RuntimeUnavailable),
     /// Cancellation or a violated invariant, which aborts the whole run.
-    #[error("plot evaluation aborted")]
     Fatal(Outcome<SemanticError>),
 }
 

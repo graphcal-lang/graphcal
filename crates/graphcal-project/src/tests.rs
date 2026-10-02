@@ -9323,3 +9323,23 @@ fn assumes_inside_an_instance_name_private_assumers_and_skip_unreported_assertio
         )]
     );
 }
+
+#[test]
+fn projected_assertions_name_failed_dependencies_as_the_root_does() {
+    // Before 7-5 an assertion an include site exposes reported a failed
+    // dependency by its runtime identity (`test.other.bad`).
+    let source = "dag producer {\n\
+                      param v: Length;\n\
+                      node bad: Length = @v / 0.0;\n\
+                      pub assert positive = @bad > 0.0 m;\n\
+                  }\n\
+                  include producer(v: 2.0 m) as other;\n";
+    let result = compile_and_eval_named(source, "test.gcl").unwrap();
+    let [(name, graphcal_eval::eval::types::AssertResult::Error { message }, _)] =
+        result.assertions.as_slice()
+    else {
+        panic!("expected one errored assertion: {:?}", result.assertions);
+    };
+    assert_eq!(name.to_string(), "other::positive");
+    assert_eq!(message, "dependency failed: other::bad (division by zero)");
+}

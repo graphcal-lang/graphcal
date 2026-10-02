@@ -641,7 +641,7 @@ fn epoch_to_jiff_timestamp(
     jiff::Timestamp::new(seconds, nanoseconds).map_err(Into::into)
 }
 
-pub use graphcal_compiler::node_unavailable::NodeUnavailable;
+pub use graphcal_compiler::node_unavailable::{NodeUnavailable, RuntimeUnavailable};
 
 use super::output_decl_name::{OutputDeclName, OutputUnavailable};
 

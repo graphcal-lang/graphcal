@@ -10,7 +10,7 @@ use graphcal_compiler::semantic_error::SemanticError;
 use graphcal_compiler::source_id::SourceId;
 use graphcal_compiler::syntax::span::Span;
 
-use crate::eval::types::NodeUnavailable;
+use crate::eval::types::RuntimeUnavailable;
 use crate::eval_expr::{EvalSession, RuntimeValueMap, eval_root_with_presentation};
 use crate::execution_plan::ExecPlan;
 use crate::runtime_presentation::PendingPresentedMap;
@@ -20,7 +20,7 @@ pub struct EvalLoopResult {
     pub unfinished_calls: std::cell::RefCell<BTreeSet<ResolvedDeclName>>,
     pub values: RuntimeValueMap,
     pub presentations: PendingPresentedMap,
-    pub errors: HashMap<ResolvedDeclName, NodeUnavailable>,
+    pub errors: HashMap<ResolvedDeclName, RuntimeUnavailable>,
 }
 
 /// Execute the root with ordinary failures contained by the shared machine.

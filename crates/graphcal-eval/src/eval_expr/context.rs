@@ -66,7 +66,7 @@ pub struct EvalEnvironment<'a> {
     pub unavailable: Option<
         &'a HashMap<
             graphcal_compiler::resolved_name::ResolvedDeclName,
-            graphcal_compiler::node_unavailable::NodeUnavailable,
+            graphcal_compiler::node_unavailable::RuntimeUnavailable,
         >,
     >,
     pub unfinished_calls: Option<&'a std::cell::RefCell<BTreeSet<ResolvedDeclName>>>,
@@ -208,7 +208,7 @@ impl<'a> EvalSession<'a> {
         mut self,
         unavailable: &'a HashMap<
             graphcal_compiler::resolved_name::ResolvedDeclName,
-            graphcal_compiler::node_unavailable::NodeUnavailable,
+            graphcal_compiler::node_unavailable::RuntimeUnavailable,
         >,
     ) -> Self {
         self.environment.unavailable = Some(unavailable);
@@ -230,8 +230,10 @@ impl<'a> EvalSession<'a> {
     pub(crate) fn unavailable_dependencies<'e>(
         &self,
         roots: impl IntoIterator<Item = Scoped<'e, Expr>>,
-    ) -> Result<Option<graphcal_compiler::node_unavailable::NodeUnavailable>, Outcome<SemanticError>>
-    {
+    ) -> Result<
+        Option<graphcal_compiler::node_unavailable::RuntimeUnavailable>,
+        Outcome<SemanticError>,
+    > {
         let roots = roots.into_iter().collect::<Vec<_>>();
         self.unavailable_among(
             || roots.iter().flat_map(|root| root.graph_refs()).collect(),
@@ -244,8 +246,10 @@ impl<'a> EvalSession<'a> {
         &self,
         graph_refs: impl FnOnce() -> Vec<ResolvedDeclName>,
         expressions: impl IntoIterator<Item = E>,
-    ) -> Result<Option<graphcal_compiler::node_unavailable::NodeUnavailable>, Outcome<SemanticError>>
-    {
+    ) -> Result<
+        Option<graphcal_compiler::node_unavailable::RuntimeUnavailable>,
+        Outcome<SemanticError>,
+    > {
         let plan = match self.capabilities {
             Capabilities::ProvisionalConstants => None,
             Capabilities::Checked { plan, .. } => Some(plan),
