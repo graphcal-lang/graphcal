@@ -115,7 +115,11 @@ impl CheckedEntryInterface {
     }
 }
 
-fn missing_interface_fact(message: String, source: SourceId, span: Span) -> PipelineError {
+fn missing_interface_fact_internal_error(
+    message: String,
+    source: SourceId,
+    span: Span,
+) -> PipelineError {
     PipelineError::Semantic(SemanticError::internal_error(
         message,
         source,
@@ -147,7 +151,7 @@ pub(super) fn build_checked_entry_interface(
                     .declaration(identity)
                     .and_then(DeclarationView::value)
                 else {
-                    return Err(missing_interface_fact(
+                    return Err(missing_interface_fact_internal_error(
                         format!("HIR entry parameter `{identity}` is absent from checked TIR"),
                         source,
                         *span,
@@ -171,7 +175,7 @@ pub(super) fn build_checked_entry_interface(
                     .declaration(identity)
                     .and_then(DeclarationView::value)
                 else {
-                    return Err(missing_interface_fact(
+                    return Err(missing_interface_fact_internal_error(
                         format!("HIR entry node `{identity}` is absent from checked TIR"),
                         source,
                         *span,
@@ -191,7 +195,7 @@ pub(super) fn build_checked_entry_interface(
             }
             SourceDeclaration::Index { identity, span } => {
                 let definition = tir.declared_index_def(identity).ok_or_else(|| {
-                    missing_interface_fact(
+                    missing_interface_fact_internal_error(
                         format!("HIR entry index `{identity}` is absent from checked TIR"),
                         source,
                         *span,
