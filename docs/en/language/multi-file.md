@@ -1125,7 +1125,8 @@ pub node result: Output = @value; // OK for every Output binding
 ```
 
 The rule covers `node`, `const node`, `assert`, `plot`, `figure`, `layer`, and
-runtime `unit` bodies. Parameter defaults are intentionally outside V007: they
+runtime `unit` bodies, the dimension a runtime `unit` measures, and domain
+bounds such as `(min: 10.0 m)`. Parameter defaults are intentionally outside V007: they
 are checked as input defaults, and nominal `type`/`index` defaults remain
 subject to V005 reconciliation when an include replaces their dependency.
 

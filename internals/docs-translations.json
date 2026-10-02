@@ -78,8 +78,8 @@
     },
     {
       "path": "language/multi-file.md",
-      "english_sha256": "dc4452bf47a3f575da80258d90c3907b40c97f2efee6af1e5ebd0f6b5f366e38",
-      "japanese_sha256": "45e76d5af183d2776a6e8e0d20666ee7615f9fd325840fd11969301ffc29c364"
+      "english_sha256": "bcdd6a94c9c17e9f888f710597d3fc87c4c5c92d7cbb9d0d09740b67780821ae",
+      "japanese_sha256": "a39d56940fc52614e55804a5fe06d4b7398a3cb07638140e7eed49f95493cfbb"
     },
     {
       "path": "language/plots.md",

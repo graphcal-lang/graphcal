@@ -948,6 +948,9 @@ impl<'a> StaticDefinitionEvaluator<'a> {
                 None,
             )
             .map_err(|failure| dim_expr_error(failure, src, unit.dim_type.span))?;
+        if !unit.constness.is_const() {
+            self.reject_default_dependent_runtime_unit(owner, unit, src)?;
+        }
         let Some(def) = &unit.definition else {
             let base = dim.base_dimension_id().cloned();
             let registered = base.as_ref().map(|base| {
@@ -1076,6 +1079,58 @@ impl<'a> StaticDefinitionEvaluator<'a> {
         Ok(UnitInfo {
             dimension: dim,
             scale,
+        })
+    }
+
+    /// Reject a runtime unit whose declared dimension is defined over one of
+    /// its module's defaulted bindable dimension ports.
+    ///
+    /// A runtime unit is copied into every instance of its module, which may
+    /// rebind the port; its definition is a unit expression, and no unit
+    /// expression measures an opaque port. So, like a node body checked with
+    /// the port rigid, such a unit only type-checks against the port's
+    /// default (V007). Every accepted runtime unit therefore measures the same
+    /// dimension in every instance.
+    fn reject_default_dependent_runtime_unit(
+        &mut self,
+        owner: &DagId,
+        unit: &'a UnitDecl,
+        src: SourceId,
+    ) -> Result<(), SemanticError> {
+        let generic = self
+            .evaluate_dim_expr(
+                owner,
+                &unit.dim_type,
+                &HashMap::new(),
+                &PortView::Generic(owner.clone()),
+                None,
+            )
+            .map_err(|failure| dim_expr_error(failure, src, unit.dim_type.span))?;
+        let Some(port) = generic.iter().find_map(|(base, _)| match base {
+            BaseDimId::UserDefined(port) if self.is_defaulted_dimension_port(port) => Some(port),
+            BaseDimId::UserDefined(_) | BaseDimId::Prelude(_) => None,
+        }) else {
+            return Ok(());
+        };
+        let check = crate::tir::template_closure::TemplateClosureCheck {
+            kind: crate::static_interface::StaticInputKind::Dimension,
+            role: crate::static_interface::StaticRole::OptionalInput,
+            context: crate::tir::template_closure::StaticUseContext::TemplateBody,
+            dependency: crate::tir::template_closure::StaticDependency::DefaultDefinition,
+        };
+        crate::tir::template_closure::validate(check).map_err(|violation| {
+            SemanticError::located(
+                src,
+                unit.definition
+                    .as_ref()
+                    .map_or(unit.dim_type.span, |definition| definition.unit_expr.span),
+                crate::semantic_error::visibility::VisibilityError::TemplateBodyDependsOnStaticDefault {
+                    body_kind: crate::declaration_kind::DeclarationKind::Unit,
+                    body_name: unit.name.value.atom().clone(),
+                    port_kind: violation.kind,
+                    port_name: port.atom().clone(),
+                },
+            )
         })
     }
 

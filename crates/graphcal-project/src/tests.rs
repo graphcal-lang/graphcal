@@ -1238,8 +1238,7 @@ fn derived_dimension_over_bindable_dimension_is_accepted() {
     let with_default = "dag blib {\n\
                             pub(bind) dim Q = Length;\n\
                             pub dim QR = Q / Time;\n\
-                            pub unit per_two_seconds: QR = 0.5 m / s;\n\
-                            param q: QR = 3.0 per_two_seconds;\n\
+                            param q: QR = 1.5 m / s;\n\
                             pub node rate: QR = @q;\n\
                         }\n\
                         include blib()::{rate, dim QR};\n\

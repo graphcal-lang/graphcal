@@ -10,7 +10,7 @@ use crate::static_interface::{StaticInputKind, StaticRole};
 
 /// Semantic context in which a Static dependency occurs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub(super) enum StaticUseContext {
+pub enum StaticUseContext {
     /// A parameter default, protected by V005 reconciliation.
     #[cfg_attr(
         not(test),
@@ -26,7 +26,7 @@ pub(super) enum StaticUseContext {
 
 /// Whether an operation is parametric or observes a concrete Static default.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub(super) enum StaticDependency {
+pub enum StaticDependency {
     /// The operation remains valid for every admissible binding.
     #[cfg_attr(
         not(test),
@@ -42,21 +42,21 @@ pub(super) enum StaticDependency {
 
 /// One complete input to the pure template-closure rule.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub(super) struct TemplateClosureCheck {
-    pub(super) kind: StaticInputKind,
-    pub(super) role: StaticRole,
-    pub(super) context: StaticUseContext,
-    pub(super) dependency: StaticDependency,
+pub struct TemplateClosureCheck {
+    pub kind: StaticInputKind,
+    pub role: StaticRole,
+    pub context: StaticUseContext,
+    pub dependency: StaticDependency,
 }
 
 /// Typed semantic reason for rejecting a template body.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) struct TemplateClosureViolation {
-    pub(super) kind: StaticInputKind,
+pub struct TemplateClosureViolation {
+    pub kind: StaticInputKind,
 }
 
 /// Validate one dependency without consulting syntax or diagnostic prose.
-pub(super) const fn validate(check: TemplateClosureCheck) -> Result<(), TemplateClosureViolation> {
+pub const fn validate(check: TemplateClosureCheck) -> Result<(), TemplateClosureViolation> {
     if matches!(check.role, StaticRole::OptionalInput)
         && matches!(check.context, StaticUseContext::TemplateBody)
         && matches!(check.dependency, StaticDependency::DefaultDefinition)
