@@ -23,6 +23,8 @@ use thiserror::Error;
 
 use crate::syntax::decl_name::DeclName;
 use crate::syntax::module_name::{ModuleAliasName, ScopeSegment};
+use crate::syntax::module_path_key::ModulePathKey;
+use crate::syntax::names::NameAtom;
 use crate::syntax::non_empty::NonEmpty;
 
 /// Opaque package component of a [`DagId`].
@@ -130,12 +132,13 @@ impl DagSegment {
         }
     }
 
-    /// Source spelling of a file or inline-DAG segment; instances have none
-    /// on a module path.
-    fn module_path_spelling(&self) -> Option<&str> {
+    /// Module-path segment spelling this segment, if any. Instances have none
+    /// on a module path, and neither has a file-path component that is not a
+    /// single name atom (for example a file stem containing `.`).
+    fn module_path_segment(&self) -> Option<NameAtom> {
         match self {
-            Self::File(name) => Some(name),
-            Self::InlineDag(name) => Some(name.as_str()),
+            Self::File(name) => NameAtom::parse(name.as_ref()).ok(),
+            Self::InlineDag(name) => Some(name.atom().clone()),
             Self::Instance(_) => None,
         }
     }
@@ -435,17 +438,18 @@ impl DagId {
     }
 
     /// The spelling of this module on an import path (file-path components,
-    /// then inline DAG names), or `None` for a concrete instance, which no
-    /// module path can name.
+    /// then inline DAG names) within its package, or `None` for a module no
+    /// module path can name (a concrete instance, or a file whose path
+    /// component is not a single name atom).
     ///
-    /// Two distinct source modules of one package with equal spellings would
-    /// make that module path ambiguous.
+    /// Two distinct source modules of one package with equal keys would make
+    /// that module path ambiguous.
     #[must_use]
-    pub fn module_path_spelling(&self) -> Option<Vec<&str>> {
+    pub fn module_path_key(&self) -> Option<ModulePathKey> {
         self.segments
-            .iter()
-            .map(DagSegment::module_path_spelling)
-            .collect()
+            .try_map_ref(|segment| segment.module_path_segment().ok_or(()))
+            .ok()
+            .map(ModulePathKey::new)
     }
 
     /// Create a package-qualified `DagId` from a relative file path, stripping
@@ -636,23 +640,32 @@ mod tests {
 
         assert_eq!(inline.to_string(), file.to_string());
         assert_ne!(inline, file);
-        assert_eq!(inline.module_path_spelling(), file.module_path_spelling());
+        assert_eq!(inline.module_path_key(), file.module_path_key());
         // A file submodule is not nested in the file its path extends.
         assert_eq!(file.parent(), None);
         assert!(!file.is_descendant_of(&parent));
         assert!(inline.is_descendant_of(&parent));
     }
 
+    fn path_key(segments: &[&str]) -> ModulePathKey {
+        let atoms = segments
+            .iter()
+            .map(|segment| NameAtom::parse(*segment).unwrap())
+            .collect();
+        ModulePathKey::new(NonEmpty::try_from_vec(atoms).unwrap())
+    }
+
     #[test]
-    fn module_path_spelling_excludes_instances() {
+    fn module_path_key_excludes_instances_and_non_atom_files() {
         let root = DagId::root_in_package("test", "main");
-        assert_eq!(root.module_path_spelling(), Some(vec!["main"]));
+        assert_eq!(root.module_path_key(), Some(path_key(&["main"])));
         assert_eq!(
-            root.inline_dag_child(dag("inner")).module_path_spelling(),
-            Some(vec!["main", "inner"])
+            root.inline_dag_child(dag("inner")).module_path_key(),
+            Some(path_key(&["main", "inner"]))
         );
+        assert_eq!(root.instance_child(named("inner")).module_path_key(), None);
         assert_eq!(
-            root.instance_child(named("inner")).module_path_spelling(),
+            DagId::root_in_package("test", "my.model").module_path_key(),
             None
         );
     }

@@ -1,6 +1,5 @@
 use crate::load_error::LoadError;
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::fmt::Write as _;
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
@@ -37,25 +36,24 @@ use budget::{
 };
 pub use budget::{LoaderArtifactByteLimits, LoaderBudget};
 pub use budget_violation::{LoaderBudgetExceeded, LoaderResource};
+use build::{build_loaded_files, reject_file_root_stem_imports};
+use inline_dags::lift_inline_dags;
 pub use loaded_file::{LoadedDag, LoadedFile};
 pub use loaded_project::{
     LoadedDependency, LoadedFiles, LoadedPackageClosure, LoadedPlugin, LoadedProject,
     PluginCallPolicy, PluginFileEntry, PluginFileError,
 };
-pub use module_path::{
-    InlineBodyImportResolution, ModulePathKey, ResolvedModuleTarget, ResolvedModuleTargetError,
-};
-
-use build::{build_loaded_files, reject_file_root_stem_imports};
-use inline_dags::lift_inline_dags;
+use module_path::PackageSelector;
+pub use module_path::{ResolvedModuleTarget, ResolvedModuleTargetError};
 use source_authority::{
     ModuleSourceAuthority, ProjectSources, SelectedPackage, SourceTree, fetch_source_snapshot,
 };
 use source_snapshot::{PackageFileKey, ParsedFile, ResolveFailure, file_stem};
 
 use graphcal_package::{
-    GitSourceId, LockedPackage, PackageInstanceId, PackageManifest, PackageSource, STDLIB_VERSION,
-    ValidatedPackageGraph, parse_lockfile_str_with_limits, parse_manifest_str,
+    GitSourceId, LockedPackage, PackageInstanceId, PackageManifest, PackageResolveError,
+    PackageSource, STDLIB_VERSION, Sha256Digest, ValidatedPackageGraph,
+    parse_lockfile_str_with_limits, parse_manifest_str,
 };
 
 #[cfg(test)]
@@ -214,7 +212,7 @@ fn read_plugin_file(
     Ok(
         match budget.read_bytes(fs, &artifact.0, LoaderArtifact::Plugin, cancellation) {
             Ok(bytes) => Ok(LoadedPlugin {
-                sha256_hex: hex_string(&Sha256::digest(&bytes)),
+                sha256: Sha256Digest::from_bytes(Sha256::digest(&bytes).into()),
                 bytes: bytes.into(),
             }),
             Err(Outcome::Cancelled) => return Err(graphcal_compiler::cancellation::Cancelled),
@@ -239,7 +237,7 @@ fn read_plugin_file(
 /// entry with a hard error surfaced at the declaring import.
 fn apply_plugin_pins(
     plugins: &mut HashMap<PluginIdentity, PluginFileEntry>,
-    pins: &BTreeMap<String, String>,
+    pins: &BTreeMap<String, Sha256Digest>,
 ) {
     for (path, entry) in plugins.iter_mut() {
         let Ok(loaded) = entry.as_ref() else {
@@ -247,10 +245,10 @@ fn apply_plugin_pins(
         };
         match pins.get(path.path().as_str()) {
             None => *entry = Err(PluginFileError::NotPinned),
-            Some(expected) if *expected != loaded.sha256_hex => {
+            Some(expected) if *expected != loaded.sha256 => {
                 *entry = Err(PluginFileError::HashMismatch {
-                    expected: expected.clone(),
-                    actual: loaded.sha256_hex.clone(),
+                    expected: *expected,
+                    actual: loaded.sha256,
                 });
             }
             Some(_) => {}
@@ -326,9 +324,13 @@ impl LoadedProject {
                 &sources,
             )
         })?;
-        // No project root or manifest in single-file mode — only the
-        // file-stem self-reference (Concept 7) can be detected here.
-        let inline_dags = lift_inline_dags(&parsed.ast, &dag_id, stem, |_| None);
+        // No project root or manifest in single-file mode — only same-file
+        // DAGs and the file-stem self-reference (Concept 7) resolve here. Like
+        // the file-root imports of this mode, a cross-file body path has no
+        // target: an editor buffer analyzed without its project stays usable.
+        let Ok(inline_dags) = lift_inline_dags(&parsed.ast, &dag_id, stem, |_| {
+            Ok::<_, std::convert::Infallible>(None)
+        });
         cancellation.checkpoint()?;
         // No filesystem to read wasm plugin files from; the entries carry
         // the reason so evaluation can report it at the import site.
@@ -416,15 +418,12 @@ fn resolved_module_target_from(
     path: &ModulePath,
     project: &LoadedProject,
 ) -> Option<DagId> {
-    let key = ModulePathKey::from_path(path);
+    let key = path.key();
     let resolved = project.file(source).map_or_else(
         || {
-            project.inline_dag(source).and_then(|(_, inline)| {
-                match inline.resolved_imports.get(&key) {
-                    Some(InlineBodyImportResolution::Resolved(target)) => Some(target.clone()),
-                    Some(InlineBodyImportResolution::Unresolved) | None => None,
-                }
-            })
+            project
+                .inline_dag(source)
+                .and_then(|(_, inline)| inline.resolved_imports.get(&key).cloned())
         },
         |file| file.resolved_imports.get(&key).cloned(),
     )?;
@@ -649,7 +648,7 @@ fn load_plugin_pins(
     fs: &dyn FileSystemReader,
     budget: &mut LoaderBudgetState,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
-) -> Result<BTreeMap<String, String>, Outcome<CompileError>> {
+) -> Result<BTreeMap<String, Sha256Digest>, Outcome<CompileError>> {
     let lockfile_path = project_root.join("graphcal.lock");
     let lockfile_text =
         match budget.read_text(fs, &lockfile_path, LoaderArtifact::Lockfile, cancellation) {
@@ -683,7 +682,7 @@ fn load_plugin_pins(
         })?;
     Ok(validated
         .plugins()
-        .map(|plugin| (plugin.path().to_string(), plugin.sha256().to_string()))
+        .map(|plugin| (plugin.path().to_string(), *plugin.sha256()))
         .collect())
 }
 
@@ -770,7 +769,7 @@ struct PackageLoadContext<'a> {
         BTreeMap<PackageInstanceId, graphcal_package::PluginExecutionPolicy>,
     closure: LoadedPackageClosure,
     /// Root-package plugin pins from `graphcal.lock`: path → SHA-256.
-    plugin_pins: BTreeMap<String, String>,
+    plugin_pins: BTreeMap<String, Sha256Digest>,
 }
 
 impl<'a> PackageLoadContext<'a> {
@@ -847,7 +846,7 @@ impl<'a> PackageLoadContext<'a> {
             .map_err(|error| loader_manifest_error(error.to_string()))?;
         let plugin_pins = validated
             .plugins()
-            .map(|plugin| (plugin.path().to_string(), plugin.sha256().to_string()))
+            .map(|plugin| (plugin.path().to_string(), *plugin.sha256()))
             .collect();
         Ok(Self {
             graph,
@@ -901,26 +900,28 @@ impl ModuleSourceAuthority for PackageLoadContext<'_> {
     /// importing file's package.
     fn select_package(
         &self,
-        path: &ModulePath,
+        selector: PackageSelector<'_>,
         from: &PackageFileKey,
     ) -> Result<SelectedPackage<PackageInstanceId>, ResolveFailure> {
-        let segments = path
-            .segments
-            .iter()
-            .map(|segment| segment.name.to_string())
-            .collect::<Vec<_>>();
         let resolved = self
             .graph
-            .resolve_module_path(&from.package, &segments)
-            .map_err(|error| ResolveFailure::NotLocked {
-                message: error.to_string(),
+            .resolve_package_selector(&from.package, selector.name().as_str())
+            .map_err(|error| match error {
+                // The importing file's package instance came from this graph.
+                PackageResolveError::UnknownCurrentPackage { package } => {
+                    ResolveFailure::PackageAuthority(PackageAuthorityError::MissingPackage(package))
+                }
+                PackageResolveError::UnknownDependency { package_name, .. } => {
+                    ResolveFailure::UnknownDependency {
+                        package: package_name,
+                    }
+                }
             })?;
-        let package =
-            self.graph
-                .package(&resolved.package)
-                .ok_or_else(|| ResolveFailure::Manifest {
-                    message: format!("lockfile package `{}` is missing", resolved.package),
-                })?;
+        let package = self.graph.package(&resolved.package).ok_or_else(|| {
+            ResolveFailure::PackageAuthority(PackageAuthorityError::MissingPackage(
+                resolved.package.clone(),
+            ))
+        })?;
         Ok(SelectedPackage {
             namespace_dir: package.source_dir.to_path_buf().join(package.name.as_str()),
             package: resolved.package,
@@ -1120,14 +1121,6 @@ fn package_cache_root() -> Result<crate::package_cache::PackageCacheRoot, String
     crate::package_cache::PackageCacheRoot::from_environment().map_err(|error| error.to_string())
 }
 
-fn hex_string(bytes: &[u8]) -> String {
-    let mut out = String::with_capacity(bytes.len().saturating_mul(2));
-    for byte in bytes {
-        let _ = write!(out, "{byte:02x}");
-    }
-    out
-}
-
 /// Walk up from `start_dir` looking for a `graphcal.toml` manifest. Returns
 /// the directory containing the manifest, or `None` if no ancestor has one.
 ///
@@ -1290,13 +1283,13 @@ fn virtual_package_id_for_path(path: &Path) -> Result<DagPackageId, CompileError
         .and_then(|name| name.to_str())
         .ok_or_else(|| {
             CompileError::Load(LoadError::InvalidSourcePath {
-                path: path.display().to_string(),
+                path: path.to_path_buf(),
                 reason: "source path has no UTF-8 file name".to_string(),
             })
         })?;
     let stem = file_name.strip_suffix(".gcl").ok_or_else(|| {
         CompileError::Load(LoadError::InvalidSourcePath {
-            path: path.display().to_string(),
+            path: path.to_path_buf(),
             reason: "source path must end with `.gcl`".to_string(),
         })
     })?;

@@ -65,8 +65,8 @@ pub fn preprocess_dag_body_self_imports(
     parent_dag_id: &DagId,
     parent_interface: &ModuleInterface,
     body_resolved_imports: &HashMap<
-        crate::loader::module_path::ModulePathKey,
-        crate::loader::module_path::InlineBodyImportResolution,
+        graphcal_compiler::syntax::module_path_key::ModulePathKey,
+        crate::loader::module_path::ResolvedModuleTarget,
     >,
     module_resolver: &ModuleResolver,
     src: SourceId,
@@ -96,16 +96,8 @@ pub fn preprocess_dag_body_self_imports(
         };
 
         let is_self_import = body_resolved_imports
-            .get(&crate::loader::module_path::ModulePathKey::from_path(
-                import_decl.path(),
-            ))
-            .is_some_and(|resolution| {
-                matches!(
-                    resolution,
-                    crate::loader::module_path::InlineBodyImportResolution::Resolved(target)
-                        if target.target() == parent_dag_id
-                )
-            });
+            .get(&import_decl.path().key())
+            .is_some_and(|target| target.target() == parent_dag_id);
         if !is_self_import {
             stripped_body.push(decl.clone());
             continue;

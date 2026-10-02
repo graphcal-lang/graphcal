@@ -11,8 +11,9 @@ use std::sync::Arc;
 
 use graphcal_compiler::ir::resolve::ImportedValueNames;
 use graphcal_compiler::outcome::Outcome;
+use graphcal_compiler::plugin_identity::PluginDigest;
 use graphcal_compiler::semantic_error::SemanticError;
-use graphcal_compiler::semantic_error::plugin::PluginError;
+use graphcal_compiler::semantic_error::plugin::{PluginError, PluginLoadFailure};
 use graphcal_compiler::source_id::SourceId;
 
 use super::{checking, imports, lowering};
@@ -375,8 +376,8 @@ fn verify_host_functions(
                 PluginError::ExternSignatureMismatch {
                     plugin: function.plugin.clone(),
                     name: function.name.clone(),
-                    declared: function.signature.format_with(format_dim),
-                    provided: provided.format_with(format_dim),
+                    declared: function.signature.spelling(format_dim),
+                    provided: provided.spelling(format_dim),
                 },
             ))
             .into());
@@ -416,8 +417,8 @@ fn verify_wasm_plugin(
                 function.path_span,
                 PluginError::PluginHashMismatch {
                     plugin: function.plugin.clone(),
-                    expected: expected.clone(),
-                    actual: actual.clone(),
+                    expected: PluginDigest::from_bytes(*expected.as_bytes()),
+                    actual: PluginDigest::from_bytes(*actual.as_bytes()),
                 },
             )));
         }
@@ -427,20 +428,20 @@ fn verify_wasm_plugin(
                 function.path_span,
                 PluginError::PluginLoadFailed {
                     plugin: function.plugin.clone(),
-                    reason: file_error.to_string(),
+                    reason: PluginLoadFailure::Artifact(std::sync::Arc::new(file_error.clone())),
                 },
             )));
         }
-        // Defensive: the loader records an entry for every root-package wasm
-        // import, so an absent entry means an embedder skipped `load_project`.
+        // The loader records an entry for every root-package wasm import of
+        // the project it loaded.
         None => {
-            return Err(PipelineError::Semantic(SemanticError::located(
+            return Err(PipelineError::Semantic(SemanticError::internal_error(
+                format!(
+                    "the project loader recorded no artifact for plugin \"{}\"",
+                    function.plugin
+                ),
                 src,
-                function.path_span,
-                PluginError::PluginLoadFailed {
-                    plugin: function.plugin.clone(),
-                    reason: "the project loader provided no bytes for this plugin".to_string(),
-                },
+                DiagnosticAnchor::Source(function.path_span),
             )));
         }
         Some(Ok(_)) => {}
@@ -465,7 +466,9 @@ fn verify_wasm_plugin(
                 function.path_span,
                 PluginError::PluginLoadFailed {
                     plugin: function.plugin.clone(),
-                    reason: reason.clone(),
+                    reason: PluginLoadFailure::Module {
+                        reason: reason.clone(),
+                    },
                 },
             )))
         }

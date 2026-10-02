@@ -562,11 +562,7 @@ fn process_dag_body_import_declarations<'a>(
         let DeclKind::Import(import_decl) = &decl.kind else {
             continue;
         };
-        let Some(crate::loader::module_path::InlineBodyImportResolution::Resolved(target)) =
-            loaded_dag.resolved_imports().get(
-                &crate::loader::module_path::ModulePathKey::from_path(import_decl.path()),
-            )
-        else {
+        let Some(target) = loaded_dag.resolved_imports().get(&import_decl.path().key()) else {
             continue;
         };
         if target.target() == loaded_dag.parent_dag_id() {
@@ -600,11 +596,7 @@ fn process_dag_body_include_declarations<'a>(
         let DeclKind::Include(include_decl) = &decl.kind else {
             continue;
         };
-        let Some(crate::loader::module_path::InlineBodyImportResolution::Resolved(target)) =
-            loaded_dag.resolved_imports().get(
-                &crate::loader::module_path::ModulePathKey::from_path(&include_decl.path),
-            )
-        else {
+        let Some(target) = loaded_dag.resolved_imports().get(&include_decl.path.key()) else {
             continue;
         };
         if target.target() == target.source_file() {

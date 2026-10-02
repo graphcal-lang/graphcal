@@ -2204,18 +2204,19 @@ impl ValidatedPackageGraph {
         self.manifests.get(id)
     }
 
-    /// Resolve a module path through the validated contextual lock graph.
+    /// Resolve the package selector of a module path through the validated
+    /// contextual lock graph.
     ///
     /// # Errors
     ///
     /// Returns [`PackageResolveError`] under the same conditions as
-    /// [`PackageGraph::resolve_module_path`].
-    pub fn resolve_module_path(
+    /// [`PackageGraph::resolve_package_selector`].
+    pub fn resolve_package_selector(
         &self,
         current: &PackageInstanceId,
-        segments: &[String],
-    ) -> Result<ResolvedPackageModule, PackageResolveError> {
-        self.graph.resolve_module_path(current, segments)
+        selector: &str,
+    ) -> Result<SelectedPackageInstance, PackageResolveError> {
+        self.graph.resolve_package_selector(current, selector)
     }
 }
 
@@ -2239,75 +2240,66 @@ impl PackageGraph {
         self.packages.get(id)
     }
 
-    /// Resolve a module path in the dependency namespace of `current`.
+    /// Resolve the package selector of a module path — its first segment —
+    /// in the dependency namespace of `current`.
+    ///
+    /// The selector names either `current`'s own real package name or one of
+    /// its direct dependency aliases. The remaining module-path segments are
+    /// not this graph's concern: they walk the selected package's source tree.
+    ///
+    /// Lock validation rejects a dependency alias equal to its package's own
+    /// name, so a selector equal to that name is always a self-reference.
     ///
     /// # Errors
     ///
-    /// Returns [`PackageResolveError`] if the current package id is missing,
-    /// the path is empty, the first segment is unknown, or an ambiguity is
-    /// detected.
-    pub fn resolve_module_path(
+    /// Returns [`PackageResolveError`] if the current package id is missing or
+    /// the selector names neither the package nor a direct dependency.
+    pub fn resolve_package_selector(
         &self,
         current: &PackageInstanceId,
-        segments: &[String],
-    ) -> Result<ResolvedPackageModule, PackageResolveError> {
+        selector: &str,
+    ) -> Result<SelectedPackageInstance, PackageResolveError> {
         let current_package = self.packages.get(current).ok_or_else(|| {
             PackageResolveError::UnknownCurrentPackage {
                 package: current.clone(),
             }
         })?;
-        let [first, rest @ ..] = segments else {
-            return Err(PackageResolveError::EmptyPath {
+        if selector == current_package.name.as_str() {
+            return Ok(SelectedPackageInstance {
                 package: current.clone(),
-            });
-        };
-        if first == current_package.name.as_str() {
-            if current_package
-                .dependencies
-                .contains_key(&DependencyName(first.clone()))
-            {
-                return Err(PackageResolveError::SelfReferenceAmbiguity {
-                    package: current.clone(),
-                    name: first.clone(),
-                });
-            }
-            return Ok(ResolvedPackageModule {
-                package: current.clone(),
-                module_segments: rest.to_vec(),
                 relation: PackageResolutionRelation::SelfReference,
             });
         }
-        let dependency = DependencyName::new(first.clone()).map_err(|_| {
-            PackageResolveError::UnknownDependency {
-                package: current.clone(),
-                name: first.clone(),
-            }
-        })?;
-        let target = current_package
+        let (name, target) = current_package
             .dependencies
-            .get(&dependency)
+            .get_key_value(&DependencyName(selector.to_owned()))
             .ok_or_else(|| PackageResolveError::UnknownDependency {
                 package: current.clone(),
-                name: first.clone(),
+                package_name: current_package.name.clone(),
+                name: selector.to_owned(),
             })?;
-        Ok(ResolvedPackageModule {
+        Ok(SelectedPackageInstance {
             package: target.clone(),
-            module_segments: rest.to_vec(),
-            relation: PackageResolutionRelation::Dependency { name: dependency },
+            relation: PackageResolutionRelation::Dependency { name: name.clone() },
         })
     }
 }
 
-/// Result of resolving the first module segment through a package instance.
+/// Package instance selected by the first segment of a module path.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ResolvedPackageModule {
+pub struct SelectedPackageInstance {
     /// Package instance that owns the remaining module path.
     pub package: PackageInstanceId,
-    /// Module path under the selected package's `source_dir`, excluding the
-    /// self/dependency selector segment.
-    pub module_segments: Vec<String>,
     /// How the first segment resolved.
     relation: PackageResolutionRelation,
+}
+
+impl SelectedPackageInstance {
+    /// How the selector resolved.
+    #[must_use]
+    pub const fn relation(&self) -> &PackageResolutionRelation {
+        &self.relation
+    }
 }
 
 /// First-segment package resolution relation.
@@ -2328,19 +2320,13 @@ pub enum PackageResolveError {
     /// The requested current package id does not exist in the graph.
     #[error("unknown current package instance `{package}`")]
     UnknownCurrentPackage { package: PackageInstanceId },
-    /// The module path had no first segment.
-    #[error("empty module path in package `{package}`")]
-    EmptyPath { package: PackageInstanceId },
     /// The first segment is neither self-reference nor direct dependency alias.
-    #[error("unknown dependency `{name}` in package `{package}`")]
+    #[error("unknown dependency `{name}` in package `{package_name}`")]
     UnknownDependency {
         package: PackageInstanceId,
-        name: String,
-    },
-    /// A dependency alias conflicts with the current package self-reference.
-    #[error("package `{package}` has ambiguous self-reference/dependency name `{name}`")]
-    SelfReferenceAmbiguity {
-        package: PackageInstanceId,
+        /// Real name of `package`.
+        package_name: PackageName,
+        /// Source spelling of the module path's first segment.
         name: String,
     },
 }
@@ -3671,15 +3657,52 @@ mission = { git = "https://github.com/acme/mission.git", rev = "aaaaaaaaaaaaaaaa
         .unwrap();
 
         let orbital_units = graph
-            .resolve_module_path(&id("pkg-orbital"), &["units".into(), "si".into()])
+            .resolve_package_selector(&id("pkg-orbital"), "units")
             .unwrap();
         let thermal_units = graph
-            .resolve_module_path(&id("pkg-thermal"), &["units".into(), "si".into()])
+            .resolve_package_selector(&id("pkg-thermal"), "units")
             .unwrap();
 
         assert_eq!(orbital_units.package, id("pkg-units-v1"));
         assert_eq!(thermal_units.package, id("pkg-units-v2"));
-        assert_eq!(orbital_units.module_segments, ["si"]);
+        assert_eq!(
+            orbital_units.relation(),
+            &PackageResolutionRelation::Dependency { name: dep("units") }
+        );
+    }
+
+    #[test]
+    fn package_graph_selects_the_current_package_by_its_own_name() {
+        let mut mission_deps = BTreeMap::new();
+        mission_deps.insert(dep("units"), id("pkg-units"));
+        let graph = lockfile(vec![
+            package("pkg-mission", "mission", path_source(), mission_deps),
+            package(
+                "pkg-units",
+                "units",
+                git_source("https://github.com/acme/units.git", '1'),
+                BTreeMap::new(),
+            ),
+        ])
+        .package_graph(GRAPHCAL_VERSION, STDLIB_VERSION)
+        .unwrap();
+
+        let selected = graph
+            .resolve_package_selector(&id("pkg-mission"), "mission")
+            .unwrap();
+        assert_eq!(selected.package, id("pkg-mission"));
+        assert_eq!(
+            selected.relation(),
+            &PackageResolutionRelation::SelfReference
+        );
+        assert!(matches!(
+            graph.resolve_package_selector(&id("pkg-absent"), "mission"),
+            Err(PackageResolveError::UnknownCurrentPackage { .. })
+        ));
+        assert!(matches!(
+            graph.resolve_package_selector(&id("pkg-mission"), "Not-A-Name"),
+            Err(PackageResolveError::UnknownDependency { .. })
+        ));
     }
 
     #[test]
@@ -3707,7 +3730,7 @@ mission = { git = "https://github.com/acme/mission.git", rev = "aaaaaaaaaaaaaaaa
         .unwrap();
 
         let err = graph
-            .resolve_module_path(&id("pkg-mission"), &["units".into(), "si".into()])
+            .resolve_package_selector(&id("pkg-mission"), "units")
             .unwrap_err();
 
         assert!(matches!(err, PackageResolveError::UnknownDependency { .. }));

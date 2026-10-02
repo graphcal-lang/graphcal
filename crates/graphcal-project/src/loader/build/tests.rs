@@ -1,7 +1,4 @@
 use crate::load_error::LoadError;
-use graphcal_compiler::semantic_error::SemanticErrorKind;
-use graphcal_compiler::semantic_error::evaluation::EvaluationError;
-use graphcal_compiler::semantic_error::rendered::RenderedSemanticError;
 use std::path::{Path, PathBuf};
 
 use graphcal_compiler::dag_id::DagPackageId;
@@ -9,7 +6,7 @@ use graphcal_compiler::import_cycle::ImportChainFile;
 use graphcal_compiler::syntax::decl_name::DeclName;
 use graphcal_package::PackageInstanceId;
 
-use super::super::module_path::{InlineBodyImportResolution, ResolvedModuleTarget};
+use super::super::module_path::ResolvedModuleTarget;
 use super::super::source_snapshot::{ModuleLocation, PackageFileKey, ParsedFile, ResolvedFile};
 use super::*;
 
@@ -289,7 +286,7 @@ fn earlier_import_failure_wins_over_later_file_failure() {
         ],
     ));
     assert!(
-        matches!(error, CompileError::Load(LoadError::StdlibNotImplemented { ref path, .. }) if path == "graphcal.core"),
+        matches!(error, CompileError::Load(LoadError::StdlibNotImplemented { ref path, .. }) if path.to_string() == "graphcal.core"),
         "{error:?}"
     );
 }
@@ -314,7 +311,7 @@ fn dependency_failure_is_reported_when_reached() {
         ],
     ));
     assert!(
-        matches!(error, CompileError::Load(LoadError::FileNotFound { ref path }) if path == "/p/src/b.gcl"),
+        matches!(error, CompileError::Load(LoadError::FileNotFound { ref path }) if path == std::path::Path::new("/p/src/b.gcl")),
         "{error:?}"
     );
 }
@@ -330,12 +327,12 @@ fn file_missing_from_snapshot_is_not_found() {
         )],
     ));
     assert!(
-        matches!(error, CompileError::Load(LoadError::FileNotFound { ref path }) if path == "/p/src/b.gcl"),
+        matches!(error, CompileError::Load(LoadError::FileNotFound { ref path }) if path == std::path::Path::new("/p/src/b.gcl")),
         "{error:?}"
     );
     let error = build_error(snapshot("main", []));
     assert!(
-        matches!(error, CompileError::Load(LoadError::FileNotFound { ref path }) if path == "/p/src/main.gcl"),
+        matches!(error, CompileError::Load(LoadError::FileNotFound { ref path }) if path == std::path::Path::new("/p/src/main.gcl")),
         "{error:?}"
     );
 }
@@ -354,40 +351,42 @@ fn failing_import(failure: ResolveFailure) -> CompileError {
 #[test]
 fn resolution_failures_render_at_the_import_site() {
     let error = failing_import(ResolveFailure::PackageNameMismatch {
-        package_name: "other".to_string(),
+        package_name: graphcal_package::PackageName::new("other").unwrap(),
     });
     assert!(
         matches!(
             error,
             CompileError::Load(LoadError::PackageNameMismatch { ref path_first, ref package_name, .. })
-                if path_first == "pkg" && package_name == "other"
+                if path_first.as_str() == "pkg" && package_name.as_str() == "other"
         ),
         "{error:?}"
     );
     let error = failing_import(ResolveFailure::FileNotFound);
     assert!(
-        matches!(error, CompileError::Load(LoadError::ImportFileNotFound { ref path, .. }) if path == "pkg.b"),
+        matches!(error, CompileError::Load(LoadError::ImportFileNotFound { ref path, .. }) if path.to_string() == "pkg.b"),
         "{error:?}"
     );
     let error = failing_import(ResolveFailure::CrossFileImportInVirtualPackage);
     assert!(
-        matches!(error, CompileError::Load(LoadError::CrossFileImportInVirtualPackage { ref path, .. }) if path == "pkg.b"),
+        matches!(error, CompileError::Load(LoadError::CrossFileImportInVirtualPackage { ref path, .. }) if path.to_string() == "pkg.b"),
         "{error:?}"
     );
-    let error = failing_import(ResolveFailure::NotLocked {
-        message: "no dependency `b`".to_string(),
+    let error = failing_import(ResolveFailure::UnknownDependency {
+        package: graphcal_package::PackageName::new("pkg").unwrap(),
     });
     assert!(
         matches!(
             &error,
-            CompileError::Eval(RenderedSemanticError { error: SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic { kind: SemanticErrorKind::Evaluation(EvaluationError::Failed { message, .. }), .. }), .. })
-                if message == "no dependency `b`; run `graphcal deps lock` after changing dependencies"
+            CompileError::Load(LoadError::UnknownDependency { name, package, .. })
+                if name.as_str() == "pkg" && package.as_str() == "pkg"
         ),
         "{error:?}"
     );
-    let error = failing_import(ResolveFailure::Manifest {
-        message: "lockfile package `b` is missing".to_string(),
-    });
+    let error = failing_import(ResolveFailure::PackageAuthority(
+        super::super::budget::PackageAuthorityError::MissingPackage(
+            graphcal_package::PackageInstanceId::new("b").unwrap(),
+        ),
+    ));
     assert!(
         matches!(
             error,
@@ -408,7 +407,7 @@ fn file_root_self_import_is_rejected() {
         )],
     ));
     assert!(
-        matches!(error, CompileError::Load(LoadError::FileRootSelfImport { ref path, .. }) if path == "pkg.main"),
+        matches!(error, CompileError::Load(LoadError::FileRootSelfImport { ref path, .. }) if path.to_string() == "pkg.main"),
         "{error:?}"
     );
 
@@ -417,7 +416,7 @@ fn file_root_self_import_is_rejected() {
         [fetched("main", "import main::{x};", &[])],
     ));
     assert!(
-        matches!(error, CompileError::Load(LoadError::FileRootSelfImport { ref path, .. }) if path == "main"),
+        matches!(error, CompileError::Load(LoadError::FileRootSelfImport { ref path, .. }) if path.to_string() == "main"),
         "{error:?}"
     );
 }
@@ -482,26 +481,22 @@ fn outside_root_is_rejected_at_file_root_and_in_dag_bodies() {
             )],
         ));
         assert!(
-            matches!(error, CompileError::Load(LoadError::ImportOutsideRoot { ref path, .. }) if path == "pkg.b"),
+            matches!(error, CompileError::Load(LoadError::ImportOutsideRoot { ref path, .. }) if path.to_string() == "pkg.b"),
             "{error:?}"
         );
     }
 }
 
 #[test]
-fn dag_body_imports_load_dependencies_and_keep_failures_unresolved() {
+fn dag_body_imports_load_dependencies() {
     let files = build_files(snapshot(
             "main",
             [
                 fetched(
                     "main",
-                    "dag inner {\n  import pkg.b::{y};\n  import pkg.missing::{z};\n  import pkg.main::{w};\n}\nparam w: Dimensionless = 1.0;",
+                    "dag inner {\n  import pkg.b::{y};\n  import pkg.main::{w};\n}\nparam w: Dimensionless = 1.0;",
                     &[
                         ("pkg.b", resolved("b", &[])),
-                        (
-                            "pkg.missing",
-                            ModuleResolution::Failed(ResolveFailure::FileNotFound),
-                        ),
                         ("pkg.main", resolved("main", &[])),
                     ],
                 ),
@@ -522,29 +517,52 @@ fn dag_body_imports_load_dependencies_and_keep_failures_unresolved() {
         inner
             .resolved_imports
             .iter()
-            .find(|(key, _)| key.segments() == segments)
+            .find(|(key, _)| key.to_string() == segments.join("."))
             .map(|(_, resolution)| resolution.clone())
             .unwrap()
     };
     assert_eq!(
         resolution(&["pkg", "b"]),
-        InlineBodyImportResolution::Resolved(ResolvedModuleTarget::file_root(dag_id("b")))
-    );
-    assert_eq!(
-        resolution(&["pkg", "missing"]),
-        InlineBodyImportResolution::Unresolved
+        ResolvedModuleTarget::file_root(dag_id("b"))
     );
     assert_eq!(
         resolution(&["pkg", "main"]),
-        InlineBodyImportResolution::Resolved(ResolvedModuleTarget::file_root(dag_id("main")))
+        ResolvedModuleTarget::file_root(dag_id("main"))
+    );
+}
+
+fn failing_dag_body_import(failure: ResolveFailure) -> CompileError {
+    build_error(snapshot(
+        "main",
+        [fetched(
+            "main",
+            "dag inner {\n  import pkg.missing::{z};\n}",
+            &[("pkg.missing", ModuleResolution::Failed(failure))],
+        )],
+    ))
+}
+
+#[test]
+fn unresolvable_dag_body_import_is_rejected_like_a_file_root_import() {
+    let error = failing_dag_body_import(ResolveFailure::FileNotFound);
+    assert!(
+        matches!(&error, CompileError::Load(LoadError::ImportFileNotFound { path, .. }) if path.to_string() == "pkg.missing"),
+        "{error:?}"
+    );
+    let error = failing_dag_body_import(ResolveFailure::PackageNameMismatch {
+        package_name: graphcal_package::PackageName::new("other").unwrap(),
+    });
+    assert!(
+        matches!(&error, CompileError::Load(LoadError::PackageNameMismatch { path_first, .. }) if path_first.as_str() == "pkg"),
+        "{error:?}"
     );
 }
 
 #[test]
-fn dag_body_reference_to_an_unloaded_file_stays_unresolved() {
+fn dag_body_reference_to_an_unloaded_file_is_rejected() {
     // A single-segment body path naming a same-file DAG outside lexical
-    // scope never loads the file it would resolve to.
-    let files = build_files(snapshot(
+    // scope never loads the file it would resolve to, so it names no module.
+    let error = build_error(snapshot(
         "main",
         [
             fetched(
@@ -554,24 +572,10 @@ fn dag_body_reference_to_an_unloaded_file_stays_unresolved() {
             ),
             fetched("other", "param x: Dimensionless = 1.0;", &[]),
         ],
-    ))
-    .unwrap();
-    assert_eq!(files.len(), 1);
-    let b = files
-        .root()
-        .inline_dags
-        .iter()
-        .find(|dag| {
-            dag.dag_id
-                .leaf()
-                .inline_dag()
-                .is_some_and(|name| name.as_str() == "b")
-        })
-        .unwrap();
+    ));
     assert!(
-        b.resolved_imports
-            .values()
-            .all(|resolution| *resolution == InlineBodyImportResolution::Unresolved)
+        matches!(&error, CompileError::Load(LoadError::ImportFileNotFound { path, .. }) if path.to_string() == "pkg"),
+        "{error:?}"
     );
 }
 

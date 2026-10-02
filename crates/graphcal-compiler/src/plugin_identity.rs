@@ -62,6 +62,25 @@ pub struct ExternFnKey {
     pub name: FnName,
 }
 
+/// SHA-256 digest of a plugin artifact's bytes: a `graphcal.lock` pin or the
+/// hash of the file on disk. Rendered as 64 lowercase hexadecimal digits.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct PluginDigest([u8; 32]);
+
+impl PluginDigest {
+    /// The digest with this exact binary representation.
+    #[must_use]
+    pub const fn from_bytes(bytes: [u8; 32]) -> Self {
+        Self(bytes)
+    }
+}
+
+impl std::fmt::Display for PluginDigest {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.iter().try_for_each(|byte| write!(f, "{byte:02x}"))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -80,5 +99,16 @@ mod tests {
             PluginIdentity::resolve(&host, &first),
             PluginIdentity::resolve(&host, &second)
         );
+    }
+
+    #[test]
+    fn plugin_digests_render_as_lowercase_hex() {
+        let mut bytes = [0_u8; 32];
+        bytes[0] = 0xab;
+        bytes[31] = 0x0f;
+        let rendered = PluginDigest::from_bytes(bytes).to_string();
+        assert_eq!(rendered.len(), 64);
+        assert!(rendered.starts_with("ab00"));
+        assert!(rendered.ends_with("000f"));
     }
 }

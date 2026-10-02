@@ -50,8 +50,7 @@ use graphcal::format::{
 
 use crate::display::{OutputBlock, build_output_blocks, format_indexed_table, max_flat_name_len};
 use crate::overrides::{
-    JsonOverrideSource, OverrideParseError, ParameterArgs, ParsedOverrides,
-    parse_overrides_with_sources,
+    OverrideParseError, ParameterArgs, ParsedOverrides, parse_overrides_with_sources,
 };
 
 const VERSION: &str = if env!("GIT_HASH").is_empty() {
@@ -678,13 +677,8 @@ fn handle_eval(
                 .host_fns(&host_fns)
                 .prepare()?;
             let mut bindings = prepared.binding_builder();
-            for (name, expression) in &overrides.values {
-                match overrides.json_sources.get(name) {
-                    Some(JsonOverrideSource { source, span }) => {
-                        bindings.bind_external_expression(name, expression, source, *span)?;
-                    }
-                    None => bindings.bind_expression(name, expression)?,
-                }
+            for (name, value) in &overrides.values {
+                value.bind(name, &mut bindings)?;
             }
             prepared.evaluate(&bindings.finish()?)
         })

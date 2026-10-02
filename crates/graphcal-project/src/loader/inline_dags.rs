@@ -14,7 +14,9 @@ use graphcal_compiler::desugar::desugared_ast::{Declaration, File};
 use graphcal_compiler::syntax::ast::{DeclKind, ModulePath};
 
 use super::loaded_file::{DagBodyLocator, LoadedDag};
-use super::module_path::{InlineBodyImportResolution, ModulePathKey, ResolvedModuleTarget};
+use graphcal_compiler::syntax::module_path_key::ModulePathKey;
+
+use super::module_path::ResolvedModuleTarget;
 
 struct InlineDagLiftContext<'a, ResolveExternal> {
     file_dag_id: &'a DagId,
@@ -27,16 +29,22 @@ struct InlineDagLiftContext<'a, ResolveExternal> {
 /// into a [`LoadedDag`] with pre-resolved imports, in source preorder.
 ///
 /// Same-file DAG references and `file_stem` self references resolve locally;
-/// any other path is passed to `resolve_external`, and `None` records the
-/// import as [`InlineBodyImportResolution::Unresolved`].
-pub(super) fn lift_inline_dags<ResolveExternal>(
+/// any other path is passed to `resolve_external`, which either resolves it,
+/// rejects it (an unresolvable body path is an error, exactly like a
+/// file-root one), or — only in a load without cross-file resolution —
+/// leaves it without a target.
+///
+/// # Errors
+///
+/// Returns the first error `resolve_external` reports, in source preorder.
+pub(super) fn lift_inline_dags<ResolveExternal, E>(
     ast: &File,
     file_dag_id: &DagId,
     file_stem: &str,
     resolve_external: ResolveExternal,
-) -> Vec<LoadedDag>
+) -> Result<Vec<LoadedDag>, E>
 where
-    ResolveExternal: Fn(&ModulePath) -> Option<ResolvedModuleTarget>,
+    ResolveExternal: Fn(&ModulePath) -> Result<Option<ResolvedModuleTarget>, E>,
 {
     let same_file_dag_ids = collect_inline_dag_ids(&ast.declarations, file_dag_id);
     let context = InlineDagLiftContext {
@@ -46,25 +54,26 @@ where
         resolve_external,
     };
     let mut out = Vec::new();
-    lift_inline_dags_from_declarations(&ast.declarations, file_dag_id, &context, &[], &mut out);
-    out
+    lift_inline_dags_from_declarations(&ast.declarations, file_dag_id, &context, &[], &mut out)?;
+    Ok(out)
 }
 
-fn lift_inline_dags_from_declarations<ResolveExternal>(
+fn lift_inline_dags_from_declarations<ResolveExternal, E>(
     declarations: &[Declaration],
     lexical_parent_id: &DagId,
     context: &InlineDagLiftContext<'_, ResolveExternal>,
     parent_path: &[usize],
     out: &mut Vec<LoadedDag>,
-) where
-    ResolveExternal: Fn(&ModulePath) -> Option<ResolvedModuleTarget>,
+) -> Result<(), E>
+where
+    ResolveExternal: Fn(&ModulePath) -> Result<Option<ResolvedModuleTarget>, E>,
 {
-    declarations.iter().enumerate().for_each(|(index, decl)| {
+    for (index, decl) in declarations.iter().enumerate() {
         let DeclKind::Dag(dag) = &decl.kind else {
-            return;
+            continue;
         };
         let dag_id = lexical_parent_id.inline_dag_child(dag.name.value.clone());
-        let resolved_imports = resolve_inline_body_imports(&dag.body, &dag_id, context);
+        let resolved_imports = resolve_inline_body_imports(&dag.body, &dag_id, context)?;
         let mut body_path = parent_path.to_vec();
         body_path.push(index);
         out.push(LoadedDag {
@@ -74,55 +83,56 @@ fn lift_inline_dags_from_declarations<ResolveExternal>(
             resolved_imports,
             interface: graphcal_compiler::ir::module_interface::ModuleInterface::new(&dag.body),
         });
-        lift_inline_dags_from_declarations(&dag.body, &dag_id, context, &body_path, out);
-    });
+        lift_inline_dags_from_declarations(&dag.body, &dag_id, context, &body_path, out)?;
+    }
+    Ok(())
 }
 
-fn resolve_inline_body_imports<ResolveExternal>(
+fn resolve_inline_body_imports<ResolveExternal, E>(
     body: &[Declaration],
     lexical_parent_id: &DagId,
     context: &InlineDagLiftContext<'_, ResolveExternal>,
-) -> HashMap<ModulePathKey, InlineBodyImportResolution>
+) -> Result<HashMap<ModulePathKey, ResolvedModuleTarget>, E>
 where
-    ResolveExternal: Fn(&ModulePath) -> Option<ResolvedModuleTarget>,
+    ResolveExternal: Fn(&ModulePath) -> Result<Option<ResolvedModuleTarget>, E>,
 {
-    body.iter()
-        .filter_map(|body_decl| match &body_decl.kind {
-            DeclKind::Import(import_decl) => Some(import_decl.path()),
-            DeclKind::Include(include_decl) => Some(&include_decl.path),
-            _ => None,
-        })
-        .map(|path| {
-            (
-                ModulePathKey::from_path(path),
-                resolve_inline_body_import(path, lexical_parent_id, context),
-            )
-        })
-        .collect()
+    let mut resolved = HashMap::new();
+    for path in body.iter().filter_map(|body_decl| match &body_decl.kind {
+        DeclKind::Import(import_decl) => Some(import_decl.path()),
+        DeclKind::Include(include_decl) => Some(&include_decl.path),
+        _ => None,
+    }) {
+        if let Some(target) = resolve_inline_body_import(path, lexical_parent_id, context)? {
+            resolved.insert(path.key(), target);
+        }
+    }
+    Ok(resolved)
 }
 
-fn resolve_inline_body_import<ResolveExternal>(
+fn resolve_inline_body_import<ResolveExternal, E>(
     path: &ModulePath,
     lexical_parent_id: &DagId,
     context: &InlineDagLiftContext<'_, ResolveExternal>,
-) -> InlineBodyImportResolution
+) -> Result<Option<ResolvedModuleTarget>, E>
 where
-    ResolveExternal: Fn(&ModulePath) -> Option<ResolvedModuleTarget>,
+    ResolveExternal: Fn(&ModulePath) -> Result<Option<ResolvedModuleTarget>, E>,
 {
-    let same_file_target =
+    if let Some(target) =
         resolve_same_file_inline_dag_path(path, lexical_parent_id, context.same_file_dag_ids)
-            .map(|target| ResolvedModuleTarget::in_file(context.file_dag_id.clone(), target));
-    let file_root_target = (path.segments.len() == 1
-        && path.segments[0].name.as_str() == context.file_stem)
-        .then(|| ResolvedModuleTarget::file_root(context.file_dag_id.clone()));
-
-    same_file_target
-        .or(file_root_target)
-        .or_else(|| (context.resolve_external)(path))
-        .map_or(
-            InlineBodyImportResolution::Unresolved,
-            InlineBodyImportResolution::Resolved,
-        )
+    {
+        return Ok(Some(ResolvedModuleTarget::in_file(
+            context.file_dag_id.clone(),
+            target,
+        )));
+    }
+    if let [segment] = path.segments()
+        && segment.name.as_str() == context.file_stem
+    {
+        return Ok(Some(ResolvedModuleTarget::file_root(
+            context.file_dag_id.clone(),
+        )));
+    }
+    (context.resolve_external)(path)
 }
 
 fn resolve_same_file_inline_dag_path(

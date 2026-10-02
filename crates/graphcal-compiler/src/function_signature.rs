@@ -458,6 +458,20 @@ impl FunctionParam {
 /// A [`FunctionParam`] as written, with binders referenced by name.
 pub type NamedFunctionParam = FunctionParam<DimVarName, IndexVarName>;
 
+/// The diagnostic spelling of one function signature.
+///
+/// Spelled only through [`FunctionSignature::spelling`], so a diagnostic
+/// payload holding a `SignatureSpelling` always names a signature, never free
+/// text.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SignatureSpelling(String);
+
+impl fmt::Display for SignatureSpelling {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
 /// A typed, serializable function signature: declared dimension and index
 /// variables, named parameters, and the result kind.
 ///
@@ -781,6 +795,13 @@ impl<S: StructResult> FunctionSignature<S> {
         self.format_with_result(&mut format_dim, &mut |payload, format_dim| {
             format_struct_shape(payload.shape(), format_dim)
         })
+    }
+
+    /// The diagnostic spelling of this signature: [`Self::format_with`] as a
+    /// typed payload.
+    #[must_use]
+    pub fn spelling(&self, format_dim: impl FnMut(&Dimension) -> String) -> SignatureSpelling {
+        SignatureSpelling(self.format_with(format_dim))
     }
 
     /// Render like [`Self::format_with`], but spell a struct result with

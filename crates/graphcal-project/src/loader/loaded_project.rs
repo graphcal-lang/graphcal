@@ -17,6 +17,7 @@ use crate::dependency_ordered::DependencyOrdered;
 use super::budget_violation::LoaderBudgetExceeded;
 use super::loaded_file::{LoadedDag, LoadedFile, LoadedModule};
 use super::module_path::{ResolvedModuleTarget, ResolvedModuleTargetError};
+use graphcal_package::Sha256Digest;
 
 /// Fuel policies resolved from each owning package manifest into compiler-owned
 /// plugin and function identities.
@@ -190,7 +191,7 @@ pub struct LoadedPlugin {
     /// The raw module bytes.
     pub(super) bytes: Arc<[u8]>,
     /// Lowercase-hex SHA-256 of the bytes — the form `graphcal.lock` pins.
-    pub(super) sha256_hex: String,
+    pub(super) sha256: Sha256Digest,
 }
 
 impl LoadedPlugin {
@@ -206,7 +207,7 @@ impl std::fmt::Debug for LoadedPlugin {
         formatter
             .debug_struct("LoadedPlugin")
             .field("byte_len", &self.bytes.len())
-            .field("sha256_hex", &self.sha256_hex)
+            .field("sha256", &self.sha256)
             .finish_non_exhaustive()
     }
 }
@@ -247,9 +248,9 @@ pub enum PluginFileError {
     )]
     HashMismatch {
         /// The digest recorded in `graphcal.lock`.
-        expected: String,
+        expected: Sha256Digest,
         /// The digest of the file actually on disk.
-        actual: String,
+        actual: Sha256Digest,
     },
 }
 

@@ -210,8 +210,11 @@ node x: Dimensionless = demo::lerp(1.0, 3.0, 0.5);
         panic!("expected ExternSignatureMismatch, got {err:?}");
     };
     assert_eq!(name.as_str(), "lerp");
-    assert!(declared.contains("D^2"), "declared: {declared}");
-    assert!(!provided.contains("D^2"), "provided: {provided}");
+    assert!(declared.to_string().contains("D^2"), "declared: {declared}");
+    assert!(
+        !provided.to_string().contains("D^2"),
+        "provided: {provided}"
+    );
 }
 
 #[test]
@@ -334,7 +337,10 @@ fn missing_plugin_file_is_reported_at_the_import() {
     else {
         panic!("expected PluginLoadFailed, got {err:?}");
     };
-    assert!(reason.contains("cannot read"), "reason: {reason}");
+    assert!(
+        reason.to_string().contains("cannot read"),
+        "reason: {reason}"
+    );
 }
 
 /// A dag body that imports the lerp plugin and exposes one call through
@@ -381,7 +387,10 @@ fn missing_plugin_file_inside_a_dag_body_is_reported_at_the_import() {
     else {
         panic!("expected PluginLoadFailed, got {err:?}");
     };
-    assert!(reason.contains("cannot read"), "reason: {reason}");
+    assert!(
+        reason.to_string().contains("cannot read"),
+        "reason: {reason}"
+    );
     let import_path = NESTED_LERP_SOURCE.find("\"plugins/demo.wasm\"").unwrap();
     assert_eq!(span.offset(), import_path);
 }
@@ -471,7 +480,10 @@ node x: Dimensionless = demo::lerp(0.0, 1.0, 0.5);
     else {
         panic!("expected PluginLoadFailed, got {err:?}");
     };
-    assert!(reason.contains("must be relative"), "reason: {reason}");
+    assert!(
+        reason.to_string().contains("must be relative"),
+        "reason: {reason}"
+    );
 }
 
 #[test]
@@ -494,7 +506,10 @@ fn from_source_projects_report_missing_filesystem() {
     else {
         panic!("expected PluginLoadFailed, got {err:?}");
     };
-    assert!(reason.contains("without a project on disk"), "{reason}");
+    assert!(
+        reason.to_string().contains("without a project on disk"),
+        "{reason}"
+    );
 }
 
 #[test]
@@ -635,7 +650,7 @@ fn hash_mismatches_against_the_pin_are_hard_errors() {
         matches!(
             &err,
             CompileError::Eval(RenderedSemanticError { error: SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic { kind: SemanticErrorKind::Plugin(PluginError::PluginHashMismatch { expected, .. }), .. }), .. })
-                if *expected == wrong_sha
+                if expected.to_string() == wrong_sha
         ),
         "expected PluginHashMismatch, got {err:?}"
     );
@@ -1065,11 +1080,11 @@ node bad: Dimensionless[Phase] = arrays::scale(@xs, 2.0);
         panic!("expected ExternSignatureMismatch, got {err:?}");
     };
     assert_eq!(
-        declared,
+        declared.to_string(),
         "<D: Dim, I: Index>(xs: D[I], k: Dimensionless) -> Dimensionless[I]"
     );
     assert_eq!(
-        provided,
+        provided.to_string(),
         "<D: Dim, I: Index>(xs: D[I], k: Dimensionless) -> D[I]"
     );
 }
@@ -1220,5 +1235,5 @@ node span: DvSpan = stats::span(@dv);
     else {
         panic!("expected ExternSignatureMismatch, got {err:?}");
     };
-    assert!(declared.contains("minimum:"), "{declared}");
+    assert!(declared.to_string().contains("minimum:"), "{declared}");
 }

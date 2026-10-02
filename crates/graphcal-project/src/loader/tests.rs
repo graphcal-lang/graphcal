@@ -23,12 +23,12 @@ fn fs() -> RealFileSystem {
 fn loaded_plugin_debug_never_exposes_module_bytes() {
     let plugin = LoadedPlugin {
         bytes: Arc::from(b"private-wasm-payload".as_slice()),
-        sha256_hex: "digest".to_string(),
+        sha256: graphcal_package::Sha256Digest::from_bytes([7; 32]),
     };
 
     let rendered = format!("{plugin:#?}");
     assert!(rendered.contains("byte_len: 20"));
-    assert!(rendered.contains("sha256_hex: \"digest\""));
+    assert!(rendered.contains("sha256: Sha256Digest("));
     assert!(!rendered.contains("private-wasm-payload"));
     assert!(!rendered.contains("112, 114, 105, 118, 97, 116, 101"));
 }
@@ -475,7 +475,9 @@ fn from_source_keeps_absolute_diagnostic_label_out_of_semantic_identity() {
 }
 
 #[test]
-fn inline_dag_unresolved_body_import_is_recorded_explicitly() {
+fn single_buffer_load_leaves_cross_file_body_imports_without_a_target() {
+    // Like its file-root imports, a single buffer loaded without a project
+    // has no cross-file targets; editor analysis of the buffer stays usable.
     let source = r"
 dag calc {
   import missing::{x};
@@ -496,12 +498,7 @@ dag calc {
         })
         .expect("inline DAG should be lifted");
 
-    assert!(
-        loaded_dag
-            .resolved_imports
-            .values()
-            .any(|resolution| { matches!(resolution, InlineBodyImportResolution::Unresolved) })
-    );
+    assert!(loaded_dag.resolved_imports.is_empty());
 }
 
 #[test]
@@ -935,6 +932,30 @@ fn dependency_enabled_loader_rejects_file_root_self_import() {
 }
 
 #[test]
+fn dependency_enabled_loader_reports_an_unknown_dependency_at_the_import() {
+    let fixture = locked_package_fixture(
+        "import units.si::{ one };",
+        "pub const node one: Dimensionless = 1.0;",
+    );
+
+    let error = load_project(&fixture.root_file, None, &RealFileSystem::default())
+        .expect_err("`units` is a package name, not the root's dependency alias");
+    let CompileError::Load(load_error @ LoadError::UnknownDependency { name, package, .. }) =
+        &error
+    else {
+        panic!("expected an unknown-dependency error, got {error:?}");
+    };
+    assert_eq!(name.as_str(), "units");
+    assert_eq!(package.as_str(), "mission");
+    assert_eq!(
+        miette::Diagnostic::code(load_error)
+            .map(|code| code.to_string())
+            .as_deref(),
+        Some("graphcal::M035")
+    );
+}
+
+#[test]
 fn dependency_enabled_loader_uses_overlay_for_root_package_import() {
     let fixture = locked_package_fixture(
         "import mission.helper::{ local_value };\nnode result: Dimensionless = @local_value;",
@@ -1091,7 +1112,7 @@ fn assert_outside_root(error: &CompileError, expected_path: &str) {
         matches!(
             error,
             CompileError::Load(LoadError::ImportOutsideRoot { path, .. })
-                if path == expected_path
+                if path.to_string() == expected_path
         ),
         "expected an outside-root import error, got {error:?}"
     );
@@ -1458,7 +1479,7 @@ fn snapshot_fetch_skips_unresolved_and_self_paths() {
     assert_eq!(sources.fetched(), [scripted_path("main")]);
     assert!(matches!(
         build_files(snapshot),
-        Err(CompileError::Load(LoadError::ImportFileNotFound { ref path, .. })) if path == "pkg.missing"
+        Err(CompileError::Load(LoadError::ImportFileNotFound { ref path, .. })) if path.to_string() == "pkg.missing"
     ));
 }
 
@@ -1512,7 +1533,7 @@ fn project_module_resolution_is_typed_and_span_free() {
     assert_eq!(
         resolve("import other.lib::{x};"),
         ModuleResolution::Failed(ResolveFailure::PackageNameMismatch {
-            package_name: "pkg".to_string(),
+            package_name: graphcal_package::PackageName::new("pkg").unwrap(),
         })
     );
     let parsed = graphcal_compiler::syntax::parser::Parser::new("import pkg.lib::{x};")

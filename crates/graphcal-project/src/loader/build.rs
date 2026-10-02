@@ -21,7 +21,7 @@ use miette::NamedSource;
 use super::budget::io_not_found;
 use super::inline_dags::lift_inline_dags;
 use super::loaded_file::LoadedFile;
-use super::module_path::ModulePathKey;
+use super::module_path::ResolvedModuleTarget;
 use super::source_snapshot::{
     DependencySite, FetchedFile, FileRootDependencyKind, ModuleResolution, ParsedSource,
     ResolveFailure, ResolvedFile, SourceKey, SourceSnapshot, collect_inline_dag_names,
@@ -37,6 +37,7 @@ use graphcal_compiler::import_cycle::ImportCycle;
 use graphcal_compiler::semantic_error::SemanticError;
 use graphcal_compiler::source_registry::SourceRegistry;
 use graphcal_compiler::syntax::ast::ModulePath;
+use graphcal_compiler::syntax::module_path_key::ModulePathKey;
 
 /// Build every loaded file reachable from the snapshot root, dependencies
 /// before dependents and ending with the root.
@@ -47,7 +48,8 @@ use graphcal_compiler::syntax::ast::ModulePath;
 /// # Errors
 ///
 /// Returns the first failure in load order: a recorded read/parse failure, an
-/// unresolved file-root import/include, an import outside the permitted root,
+/// unresolved import/include (at file root or in an inline DAG body), an
+/// import outside the permitted root,
 /// a file-root self import, an import cycle, or an invalid module path.
 pub(super) fn build_loaded_files<K: SourceKey>(
     snapshot: SourceSnapshot<K>,
@@ -195,18 +197,8 @@ impl<K: SourceKey> Builder<'_, K> {
             })
             .collect();
         let inline_dags = lift_inline_dags(parsed.ast(), &dag_id, stem, |path| {
-            let Some(ModuleResolution::Resolved(resolved)) = parsed.resolution(path) else {
-                return None;
-            };
-            let source_file = if resolved.file == *file {
-                Some(dag_id.clone())
-            } else {
-                self.built
-                    .get(&resolved.file)
-                    .map(|loaded| loaded.dag_id.clone())
-            }?;
-            Some(resolved.target_from(&source_file))
-        });
+            self.dag_body_target(file, &dag_id, &parsed, path).map(Some)
+        })?;
 
         self.loading.pop();
         self.built.insert(file.clone(), {
@@ -245,14 +237,10 @@ impl<K: SourceKey> Builder<'_, K> {
                     return Err(CompileError::Load(outside_root(path, src.clone())).into());
                 }
                 Some(ModuleResolution::Failed(failure)) => {
-                    return Err(failure
-                        .to_error(path, src, parsed.source_id(), self.sources)
-                        .into());
+                    return Err(failure.to_error(path, src).into());
                 }
                 None => {
-                    return Err(ResolveFailure::FileNotFound
-                        .to_error(path, src, parsed.source_id(), self.sources)
-                        .into());
+                    return Err(ResolveFailure::FileNotFound.to_error(path, src).into());
                 }
             };
             let owner = if resolved.file == *file {
@@ -263,14 +251,15 @@ impl<K: SourceKey> Builder<'_, K> {
             } else {
                 ImportOwner::Dependency(self.dependency(file, &resolved.file)?)
             };
-            imports.insert(ModulePathKey::from_path(path), (owner, resolved));
+            imports.insert(path.key(), (owner, resolved));
         }
         Ok(imports)
     }
 
-    /// Load the files named by inline-DAG body imports/includes. Unresolved
-    /// body paths stay in the AST for the module resolver to report with their
-    /// spans; only a path outside the project root is an error here.
+    /// Load the files named by inline-DAG body imports/includes. A body path
+    /// that does not resolve is reported when its DAG is lifted
+    /// ([`Self::dag_body_target`]); a path outside the project root is
+    /// rejected here, before any file it names is loaded.
     fn load_dag_body_dependencies(
         &mut self,
         file: &K,
@@ -296,6 +285,38 @@ impl<K: SourceKey> Builder<'_, K> {
         }
         Ok(())
     }
+
+    /// Target of an inline-DAG body path of `file` (whose id is `dag_id`)
+    /// that is not a same-file reference. Every such path must resolve, as a
+    /// file-root path must.
+    fn dag_body_target(
+        &self,
+        file: &K,
+        dag_id: &DagId,
+        parsed: &ParsedSource<K>,
+        path: &ModulePath,
+    ) -> Result<ResolvedModuleTarget, CompileError> {
+        let src = parsed.named_source();
+        let resolved = match parsed.resolution(path) {
+            Some(ModuleResolution::Resolved(resolved)) => resolved,
+            Some(ModuleResolution::OutsideRoot) => {
+                return Err(CompileError::Load(outside_root(path, src.clone())));
+            }
+            Some(ModuleResolution::Failed(failure)) => return Err(failure.to_error(path, src)),
+            // An unrecorded path did not resolve to any file.
+            None => return Err(ResolveFailure::FileNotFound.to_error(path, src)),
+        };
+        if resolved.file == *file {
+            return Ok(resolved.target_from(dag_id));
+        }
+        // A body path spelled like a same-file DAG that is not in lexical
+        // scope does not drive loading (`loading_dependency_paths`), so the
+        // file it names may be unloaded: it names no module of this load.
+        self.built.get(&resolved.file).map_or_else(
+            || Err(ResolveFailure::FileNotFound.to_error(path, src)),
+            |loaded| Ok(resolved.target_from(&loaded.dag_id)),
+        )
+    }
 }
 
 pub(super) fn file_root_self_import_error(
@@ -303,7 +324,7 @@ pub(super) fn file_root_self_import_error(
     src: &NamedSource<Arc<String>>,
 ) -> CompileError {
     CompileError::Load(LoadError::FileRootSelfImport {
-        path: path.display_path(),
+        path: path.key(),
         src: src.clone(),
         span: path.span().into(),
     })

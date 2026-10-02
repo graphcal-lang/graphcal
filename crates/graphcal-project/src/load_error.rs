@@ -4,26 +4,31 @@
 //! The loader is the shell that owns file names and source text, so its
 //! located diagnostics carry the [`NamedSource`] they point into.
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use miette::{Diagnostic, NamedSource, SourceSpan};
 use thiserror::Error;
 
 use graphcal_compiler::import_cycle::ImportCycle;
+use graphcal_compiler::syntax::module_path_key::ModulePathKey;
+use graphcal_compiler::syntax::names::NameAtom;
+use graphcal_package::PackageName;
 
 /// Why a project could not be loaded.
 #[derive(Debug, Clone, Error, Diagnostic)]
 pub enum LoadError {
-    #[error("file not found: {path}")]
+    #[error("file not found: {}", path.display())]
     #[diagnostic(code(graphcal::M000), help("check that the file path is correct"))]
-    FileNotFound { path: String },
+    FileNotFound { path: PathBuf },
 
-    #[error("invalid source path `{path}`: {reason}")]
+    /// `reason` is host text (an OS path or overlay-capability failure).
+    #[error("invalid source path `{}`: {reason}", path.display())]
     #[diagnostic(
         code(graphcal::M023),
         help("Graphcal source files must be UTF-8 `.gcl` files")
     )]
-    InvalidSourcePath { path: String, reason: String },
+    InvalidSourcePath { path: PathBuf, reason: String },
 
     #[error("circular import detected: {cycle}")]
     #[diagnostic(
@@ -32,6 +37,7 @@ pub enum LoadError {
     )]
     CircularImport { cycle: ImportCycle },
 
+    /// `message` is host text (TOML, lockfile, and filesystem failures).
     #[error("failed to parse graphcal.toml: {message}")]
     #[diagnostic(code(graphcal::M015))]
     ManifestError { message: String },
@@ -39,7 +45,7 @@ pub enum LoadError {
     #[error("imported file not found: {path}")]
     #[diagnostic(code(graphcal::M002))]
     ImportFileNotFound {
-        path: String,
+        path: ModulePathKey,
         #[source_code]
         src: NamedSource<Arc<String>>,
         #[label("referenced here")]
@@ -54,7 +60,7 @@ pub enum LoadError {
         )
     )]
     ImportOutsideRoot {
-        path: String,
+        path: ModulePathKey,
         #[source_code]
         src: NamedSource<Arc<String>>,
         #[label("resolves outside project root")]
@@ -67,8 +73,8 @@ pub enum LoadError {
         help("module paths must start with the package name from graphcal.toml")
     )]
     PackageNameMismatch {
-        path_first: String,
-        package_name: String,
+        path_first: NameAtom,
+        package_name: PackageName,
         #[source_code]
         src: NamedSource<Arc<String>>,
         #[label("should start with `{package_name}`")]
@@ -83,7 +89,7 @@ pub enum LoadError {
         )
     )]
     StdlibNotImplemented {
-        path: String,
+        path: ModulePathKey,
         #[source_code]
         src: NamedSource<Arc<String>>,
         #[label("stdlib not yet available")]
@@ -98,7 +104,7 @@ pub enum LoadError {
         )
     )]
     CrossFileImportInVirtualPackage {
-        path: String,
+        path: ModulePathKey,
         #[source_code]
         src: NamedSource<Arc<String>>,
         #[label("not reachable from a virtual-package file")]
@@ -113,10 +119,28 @@ pub enum LoadError {
         )
     )]
     FileRootSelfImport {
-        path: String,
+        path: ModulePathKey,
         #[source_code]
         src: NamedSource<Arc<String>>,
         #[label("this import resolves to its own file root")]
+        span: SourceSpan,
+    },
+
+    #[error("unknown dependency `{name}` in package `{package}`")]
+    #[diagnostic(
+        code(graphcal::M035),
+        help(
+            "module paths must start with the package name or a dependency declared in graphcal.toml; run `graphcal deps lock` after changing dependencies"
+        )
+    )]
+    UnknownDependency {
+        /// The module path's first segment.
+        name: NameAtom,
+        /// The importing package.
+        package: PackageName,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("not a dependency of `{package}`")]
         span: SourceSpan,
     },
 }
@@ -136,7 +160,8 @@ impl LoadError {
             | Self::PackageNameMismatch { src, .. }
             | Self::StdlibNotImplemented { src, .. }
             | Self::CrossFileImportInVirtualPackage { src, .. }
-            | Self::FileRootSelfImport { src, .. } => Some(src),
+            | Self::FileRootSelfImport { src, .. }
+            | Self::UnknownDependency { src, .. } => Some(src),
         }
     }
 }
@@ -150,13 +175,13 @@ mod tests {
         for (error, code) in [
             (
                 LoadError::FileNotFound {
-                    path: "a.gcl".to_owned(),
+                    path: PathBuf::from("a.gcl"),
                 },
                 "graphcal::M000",
             ),
             (
                 LoadError::InvalidSourcePath {
-                    path: "a.txt".to_owned(),
+                    path: PathBuf::from("a.txt"),
                     reason: "wrong extension".to_owned(),
                 },
                 "graphcal::M023",
@@ -176,11 +201,17 @@ mod tests {
         }
     }
 
+    fn atom(name: &str) -> NameAtom {
+        NameAtom::parse(name).unwrap()
+    }
+
     #[test]
     fn located_failures_point_into_their_source() {
         let src = NamedSource::new("main.gcl", Arc::new("import x;".to_owned()));
         let error = LoadError::FileRootSelfImport {
-            path: "x".to_owned(),
+            path: ModulePathKey::new(graphcal_compiler::syntax::non_empty::NonEmpty::singleton(
+                atom("x"),
+            )),
             src,
             span: (0, 6).into(),
         };
@@ -191,6 +222,29 @@ mod tests {
         assert_eq!(
             error.code().map(|code| code.to_string()).as_deref(),
             Some("graphcal::M033")
+        );
+    }
+
+    #[test]
+    fn unknown_dependency_names_the_selector_and_the_importing_package() {
+        let src = NamedSource::new("main.gcl", Arc::new("import units.si::{x};".to_owned()));
+        let error = LoadError::UnknownDependency {
+            name: atom("units"),
+            package: PackageName::new("mission").unwrap(),
+            src,
+            span: (7, 8).into(),
+        };
+        assert_eq!(
+            error.to_string(),
+            "unknown dependency `units` in package `mission`"
+        );
+        assert_eq!(
+            error.code().map(|code| code.to_string()).as_deref(),
+            Some("graphcal::M035")
+        );
+        assert_eq!(
+            error.named_source().map(NamedSource::name),
+            Some("main.gcl")
         );
     }
 }

@@ -28,6 +28,7 @@ use graphcal_eval::runtime_value::{IndexAxis, KeyValue, RuntimeValue};
 use miette::{NamedSource, SourceSpan};
 use thiserror::Error;
 
+use crate::binding_error::{BindingError, BindingValueKind};
 use crate::compile_error::CompileError;
 use graphcal_compiler::resolved_name::ResolvedDeclName;
 use graphcal_eval::domain_constraint::{ResolvedDomainConstraint, ResolvedDomainConstraintRef};
@@ -54,7 +55,8 @@ mod tenax_model;
 
 use binding_compile::build_parameter_ports;
 pub use binding_compile::{
-    ParameterBindingRow, StructuredBindingError, StructuredBindingPathSegment, StructuredValueExpr,
+    ExternalValue, ParameterBindingRow, StructuredBindingError, StructuredBindingErrorKind,
+    StructuredBindingPathSegment, StructuredValueExpr,
 };
 pub use tenax_model::{
     InclusiveBounds, InclusiveBoundsError, ModelDefinitionError, ModelExecutionError,
@@ -106,9 +108,14 @@ pub struct ParameterBindingBuilder<'project> {
 }
 
 impl ParameterBindingBuilder<'_> {
-    /// Bind a parsed, desugared closed Graphcal value expression by entry name.
-    pub fn bind_expression(&mut self, name: &DeclName, expr: &Expr) -> Result<(), CompileError> {
-        let value = self.project.compile_named_parameter_value(name, expr)?;
+    /// Bind a closed Graphcal value parsed from its own text by entry name.
+    /// Diagnostics about the value are drawn against that text.
+    pub fn bind_expression(
+        &mut self,
+        name: &DeclName,
+        value: &ExternalValue,
+    ) -> Result<(), CompileError> {
+        let value = self.project.compile_named_parameter_value(name, value)?;
         self.bind_value(value)
     }
 
@@ -123,7 +130,8 @@ impl ParameterBindingBuilder<'_> {
     ) -> Result<(), CompileError> {
         let value = self
             .project
-            .compile_named_parameter_value(name, expr)
+            .parameter_position(name)
+            .and_then(|position| self.project.compile_synthesized_value(position, expr))
             .map_err(|error| CompileError::ExternalBinding {
                 name: name.clone(),
                 reason: error.to_string(),
@@ -157,11 +165,17 @@ impl ParameterBindingBuilder<'_> {
     ) -> Result<(), CompileError> {
         let port = self.project.port_at(position)?;
         if !matches!(port.declared_type, CheckedType::Quantity(_)) {
-            return Err(self.project.binding_kind_error(port, "Quantity"));
+            return Err(self
+                .project
+                .binding_kind_error(port, BindingValueKind::Quantity));
         }
         let value = RuntimeValue::quantity(si_value).map_err(|_| {
             self.project
-                .binding_value_error(port, "quantity must be finite")
+                .port_error(port, |name, src, span| BindingError::NonFiniteQuantity {
+                    name,
+                    src,
+                    span,
+                })
         })?;
         self.insert(position, RuntimeParameterBinding::plain(value))
     }
@@ -174,7 +188,7 @@ impl ParameterBindingBuilder<'_> {
     ) -> Result<(), CompileError> {
         let port = self.project.port_at(position)?;
         if port.declared_type != CheckedType::Int {
-            return Err(self.project.binding_kind_error(port, "Int"));
+            return Err(self.project.binding_kind_error(port, BindingValueKind::Int));
         }
         self.insert(
             position,
@@ -190,7 +204,9 @@ impl ParameterBindingBuilder<'_> {
     ) -> Result<(), CompileError> {
         let port = self.project.port_at(position)?;
         if port.declared_type != CheckedType::Bool {
-            return Err(self.project.binding_kind_error(port, "Bool"));
+            return Err(self
+                .project
+                .binding_kind_error(port, BindingValueKind::Bool));
         }
         self.insert(
             position,
@@ -206,23 +222,37 @@ impl ParameterBindingBuilder<'_> {
     ) -> Result<(), CompileError> {
         let port = self.project.port_at(position)?;
         let CheckedType::Key(index) = &port.declared_type else {
-            return Err(self.project.binding_kind_error(port, "Key"));
+            return Err(self.project.binding_kind_error(port, BindingValueKind::Key));
         };
+        // A checked `Key<I>` port type names an index the checked program defines.
         let Some(axis) = IndexAxis::resolve(self.project.tir(), index) else {
-            return Err(self
-                .project
-                .binding_value_error(port, "index definition is unavailable"));
+            return Err(CompileError::semantic(
+                SemanticError::internal_error(
+                    format!(
+                        "index `{index}` of parameter `{}` is not defined",
+                        port.name
+                    ),
+                    self.project.source,
+                    DiagnosticAnchor::Source(port.span),
+                ),
+                &self.project.sources,
+            ));
         };
         if !matches!(axis.kind(), ConcreteIndexKind::Named { .. }) {
-            return Err(self
-                .project
-                .binding_value_error(port, "Tenax v2 requires a concrete named index"));
+            return Err(self.project.port_error(port, |name, src, span| {
+                BindingError::KeyIndexNotNamed { name, src, span }
+            }));
         }
         let Some(key) = KeyValue::for_entry(axis, &IndexEntryKey::named(variant.clone())) else {
-            return Err(self.project.binding_value_error(
-                port,
-                &format!("unknown category `{variant}` for index `{index}`"),
-            ));
+            return Err(self.project.port_error(port, |name, src, span| {
+                BindingError::UnknownCategory {
+                    name,
+                    variant: variant.clone(),
+                    index: index.clone(),
+                    src,
+                    span,
+                }
+            }));
         };
         self.insert(
             position,
@@ -662,7 +692,7 @@ impl<Mode: CancellationMode> ProjectCompiler<'_, HostFunctionRegistry, Mode> {
         self,
         overrides: &std::collections::HashMap<
             graphcal_compiler::syntax::decl_name::DeclName,
-            graphcal_compiler::desugar::desugared_ast::Expr,
+            ExternalValue,
         >,
     ) -> Result<graphcal_eval::eval::types::EvalResult, Mode::Failure<CompileError>> {
         let mode = self.mode().clone();

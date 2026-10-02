@@ -292,11 +292,13 @@ pub(super) enum PackageAuthorityError {
     NoSourceRoot(PackageInstanceId),
     #[error("lockfile package `{0}` has no filesystem capability")]
     NoFilesystem(PackageInstanceId),
+    #[error("lockfile package `{0}` is missing")]
+    MissingPackage(PackageInstanceId),
 }
 
 /// Helper to create a `FileNotFound` error (used for the root file itself).
 pub(super) fn io_not_found(path: &Path) -> CompileError {
     CompileError::Load(LoadError::FileNotFound {
-        path: path.display().to_string(),
+        path: path.to_path_buf(),
     })
 }

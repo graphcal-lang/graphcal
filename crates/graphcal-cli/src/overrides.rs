@@ -22,6 +22,8 @@ use graphcal_compiler::desugar::desugared_ast::Expr;
 use graphcal_compiler::syntax::decl_name::DeclName;
 use graphcal_compiler::syntax::names::NameAtomError;
 use graphcal_compiler::syntax::parser::ParseError;
+use graphcal_project::compile_error::CompileError;
+use graphcal_project::prepare::{ExternalValue, ParameterBindingBuilder};
 use miette::{Diagnostic, NamedSource, SourceSpan};
 use thiserror::Error;
 
@@ -95,13 +97,45 @@ pub struct DirectParameterBinding {
     pub expression: String,
 }
 
+/// One parameter value supplied on the command line.
+#[derive(Debug)]
+pub enum ParameterOverride {
+    /// A direct `--param` value, parsed from its own text; diagnostics about
+    /// it are drawn against that text.
+    Direct(ExternalValue),
+    /// A value synthesized from a JSON document; diagnostics about it point
+    /// to its parameter key in the document.
+    Json {
+        expression: Expr,
+        source: JsonOverrideSource,
+    },
+}
+
+impl ParameterOverride {
+    /// Bind this value to the entry parameter `name`.
+    ///
+    /// # Errors
+    ///
+    /// Returns the binding diagnostic.
+    pub fn bind(
+        &self,
+        name: &DeclName,
+        bindings: &mut ParameterBindingBuilder<'_>,
+    ) -> Result<(), CompileError> {
+        match self {
+            Self::Direct(value) => bindings.bind_expression(name, value),
+            Self::Json { expression, source } => {
+                bindings.bind_external_expression(name, expression, &source.source, source.span)
+            }
+        }
+    }
+}
+
 /// Parsed CLI bindings plus source metadata for diagnostics and report replay.
 #[derive(Debug)]
 pub struct ParsedOverrides {
     /// Values keyed by their typed entry parameter names.
-    pub values: HashMap<DeclName, Expr>,
-    /// Diagnostic sources for values synthesized from a JSON document.
-    pub json_sources: HashMap<DeclName, JsonOverrideSource>,
+    pub values: HashMap<DeclName, ParameterOverride>,
     /// Direct bindings in command-line order.
     pub direct_parameters: Vec<DirectParameterBinding>,
     /// Bulk JSON source selected for this invocation, including an empty object.
@@ -283,20 +317,21 @@ pub fn parse_overrides_with_sources(
     }
 
     let mut overrides = HashMap::new();
-    let mut json_sources = HashMap::new();
     let mut direct_parameters = Vec::new();
 
     for raw in &args.param {
         let binding = DirectParameterBinding::parse(raw)?;
-        let raw_expr = graphcal_compiler::syntax::parser::Parser::new(&binding.expression)
-            .parse_single_expr()
-            .map_err(|source| OverrideParseError::ExpressionParse {
-                name: binding.name.clone(),
-                source: Box::new(source),
-            })?;
+        let value = ExternalValue::parse(
+            format!("<--param {}>", binding.name),
+            binding.expression.as_str(),
+        )
+        .map_err(|source| OverrideParseError::ExpressionParse {
+            name: binding.name.clone(),
+            source: Box::new(source),
+        })?;
         match overrides.entry(binding.name.clone()) {
             std::collections::hash_map::Entry::Vacant(entry) => {
-                entry.insert(resolve_parameter_expr(raw_expr));
+                entry.insert(ParameterOverride::Direct(value));
                 direct_parameters.push(binding);
             }
             std::collections::hash_map::Entry::Occupied(_) => {
@@ -322,18 +357,17 @@ pub fn parse_overrides_with_sources(
         for (name, expression) in json_overrides {
             match overrides.entry(name.clone()) {
                 std::collections::hash_map::Entry::Vacant(entry) => {
-                    entry.insert(resolve_parameter_expr(expression));
                     let span = parameter_spans
                         .get(&name)
                         .copied()
                         .unwrap_or_else(|| (0usize, 0usize).into());
-                    json_sources.insert(
-                        name,
-                        JsonOverrideSource {
+                    entry.insert(ParameterOverride::Json {
+                        expression: resolve_parameter_expr(expression),
+                        source: JsonOverrideSource {
                             source: diagnostic_source.clone(),
                             span,
                         },
-                    );
+                    });
                 }
                 std::collections::hash_map::Entry::Occupied(_) => {
                     return Err(OverrideParseError::DuplicateParameterBinding { name });
@@ -344,7 +378,6 @@ pub fn parse_overrides_with_sources(
 
     Ok(ParsedOverrides {
         values: overrides,
-        json_sources,
         direct_parameters,
         json_source,
         json_max_bytes: args.params_json_max_bytes,
@@ -567,7 +600,9 @@ mod tests {
         }
     }
 
-    fn parse_values(args: &ParameterArgs) -> Result<HashMap<DeclName, Expr>, OverrideParseError> {
+    fn parse_values(
+        args: &ParameterArgs,
+    ) -> Result<HashMap<DeclName, ParameterOverride>, OverrideParseError> {
         parse_overrides_with_sources(args).map(|parsed| parsed.values)
     }
 
@@ -716,7 +751,11 @@ mod tests {
         };
 
         let parsed = parse_overrides_with_sources(&args).unwrap();
-        let source = &parsed.json_sources[&DeclName::expect_valid("matrix")];
+        let ParameterOverride::Json { source, .. } =
+            &parsed.values[&DeclName::expect_valid("matrix")]
+        else {
+            panic!("expected a JSON-sourced value");
+        };
         assert_eq!(source.span.offset(), 4);
         assert_eq!(source.span.len(), 8);
         assert_eq!(source.source.name(), "<--params-json>");

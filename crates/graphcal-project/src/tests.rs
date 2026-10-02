@@ -3473,11 +3473,14 @@ fn eval_boolean_or_eagerly_evaluates_the_right_operand() {
 
 // --- Override tests ---
 
-fn parse_expr(s: &str) -> graphcal_compiler::desugar::desugared_ast::Expr {
-    let raw = graphcal_compiler::syntax::parser::Parser::new(s)
-        .parse_single_expr()
-        .unwrap();
-    raw.into()
+/// A closed value parsed from its own text, as a `--param` value is.
+fn parse_expr(s: &str) -> ExternalValue {
+    ExternalValue::parse("<--param>", s).unwrap()
+}
+
+/// A value expression synthesized without text of its own (JSON, editor).
+fn parse_synthesized_expr(s: &str) -> graphcal_compiler::desugar::desugared_ast::Expr {
+    parse_expr(s).expr().clone()
 }
 
 #[test]
@@ -3870,6 +3873,183 @@ fn prepared_bindings_reject_computations_and_cross_plan_positions() {
     assert!(error.to_string().contains("another prepared project"));
 }
 
+fn binding_error_code(error: &CompileError) -> String {
+    miette::Diagnostic::code(error)
+        .expect("binding diagnostics have codes")
+        .to_string()
+}
+
+#[test]
+fn rejected_expression_bindings_report_typed_binding_errors() {
+    let project = crate::loader::LoadedProject::from_source(
+        "pub index I = { a, b };\nparam n: Dimensionless = 1.0;\nparam x: Length = 1.0 m;\n\
+         param d: Length(min: 0.0 m) = 1.0 m;\nparam k: Int = 1;\nparam values: Length[I];",
+        "bindings.gcl",
+    )
+    .unwrap();
+    let prepared = prepare_from_project(&project).unwrap();
+    let bind = |name: &str, value: &str| {
+        prepared
+            .binding_builder()
+            .bind_expression(&DeclName::expect_valid(name), &parse_expr(value))
+            .unwrap_err()
+    };
+
+    let error = bind("x", "@n");
+    assert!(
+        matches!(&error, CompileError::Binding(BindingError::NotClosed { name, .. }) if name.as_str() == "x"),
+        "{error:?}"
+    );
+    assert_eq!(binding_error_code(&error), "graphcal::O006");
+    // Value diagnostics are drawn against the value's own text.
+    let source = error.named_source().expect("located in the value");
+    assert_eq!(source.name(), "<--param>");
+    assert_eq!(source.inner().as_str(), "@n");
+    // Declaration diagnostics stay in the entry source.
+    let error = bind("d", "-1.0 m");
+    assert_eq!(
+        error.named_source().map(miette::NamedSource::name),
+        Some("bindings.gcl")
+    );
+    assert!(ExternalValue::parse("<--param>", "1.0 +").is_err());
+
+    let error = bind("k", "1.5");
+    assert!(
+        matches!(
+            &error,
+            CompileError::Binding(BindingError::InvalidLiteral {
+                reason: crate::binding_error::BindingLiteralError::InexactInt,
+                ..
+            })
+        ),
+        "{error:?}"
+    );
+    assert_eq!(binding_error_code(&error), "graphcal::O005");
+
+    let error = bind("d", "-1.0 m");
+    assert!(
+        matches!(&error, CompileError::Binding(BindingError::DomainViolation { name, .. }) if name.as_str() == "d"),
+        "{error:?}"
+    );
+    assert_eq!(error.to_string(), "below minimum (0 m)");
+    assert_eq!(binding_error_code(&error), "graphcal::O010");
+
+    // The value's kind is checked before its shape: a map for a scalar is a
+    // kind mismatch, not an incomplete map.
+    let error = bind("x", "{I#a: 1.0 m}");
+    assert!(
+        matches!(
+            &error,
+            CompileError::Binding(BindingError::KindMismatch {
+                actual: crate::binding_error::BindingValueKind::MapLiteral,
+                ..
+            })
+        ),
+        "{error:?}"
+    );
+    assert_eq!(
+        error.to_string(),
+        "cannot bind a map literal to `x` of type `Length`"
+    );
+    assert_eq!(binding_error_code(&error), "graphcal::O007");
+
+    let mut bindings = prepared.binding_builder();
+    bindings
+        .bind_expression(&DeclName::expect_valid("x"), &parse_expr("2.0 m"))
+        .unwrap();
+    let error = bindings
+        .bind_expression(&DeclName::expect_valid("x"), &parse_expr("3.0 m"))
+        .unwrap_err();
+    assert!(
+        matches!(
+            &error,
+            CompileError::Binding(BindingError::BoundMoreThanOnce { .. })
+        ),
+        "{error:?}"
+    );
+    assert_eq!(binding_error_code(&error), "graphcal::O009");
+}
+
+#[test]
+fn typed_scalar_bindings_report_typed_binding_errors() {
+    let project = crate::loader::LoadedProject::from_source(
+        "pub index Mode = { fast, slow };\nparam x: Length = 1.0 m;\n\
+         param mode: Key<Mode> = Mode#fast;\nparam step: Key<Fin(2)>;",
+        "scalars.gcl",
+    )
+    .unwrap();
+    let prepared = prepare_from_project(&project).unwrap();
+    let ports = prepared.parameter_ports();
+    let position = |name: &str| {
+        ports
+            .iter()
+            .find(|port| port.name().as_str() == name)
+            .unwrap()
+            .position()
+    };
+
+    let error = prepared
+        .binding_builder()
+        .bind_integer(position("x"), 1)
+        .unwrap_err();
+    assert_eq!(error.to_string(), "cannot bind Int to `x` of type `Length`");
+    assert_eq!(binding_error_code(&error), "graphcal::O007");
+
+    let error = prepared
+        .binding_builder()
+        .bind_quantity(position("x"), f64::INFINITY)
+        .unwrap_err();
+    assert_eq!(binding_error_code(&error), "graphcal::O008");
+
+    let error = prepared
+        .binding_builder()
+        .bind_named_key(position("mode"), &IndexVariantName::expect_valid("medium"))
+        .unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "unknown category `medium` for index `Mode`"
+    );
+    assert_eq!(binding_error_code(&error), "graphcal::O012");
+
+    let error = prepared
+        .binding_builder()
+        .bind_named_key(position("step"), &IndexVariantName::expect_valid("first"))
+        .unwrap_err();
+    assert_eq!(binding_error_code(&error), "graphcal::O011");
+}
+
+/// P3-3: binding a coordinate-indexed value entry by entry is out of scope;
+/// the structured binding reports that clearly instead of failing elsewhere.
+#[test]
+fn structured_binding_of_coordinate_indexed_entries_is_rejected_clearly() {
+    let project = crate::loader::LoadedProject::from_source(
+        "pub index T = range(0.0 s, 1.0 s, step: 0.5 s);\nparam v: Length[T];",
+        "coordinates.gcl",
+    )
+    .unwrap();
+    let prepared = prepare_from_project(&project).unwrap();
+    let value = StructuredValueExpr::Indexed {
+        entries: (0..3)
+            .map(|_| StructuredValueExpr::Literal(parse_synthesized_expr("1.0 m")))
+            .collect(),
+    };
+
+    let error = prepared
+        .binding_builder()
+        .bind_structured_expression(&DeclName::expect_valid("v"), &value)
+        .unwrap_err();
+
+    assert!(
+        matches!(error.kind(), StructuredBindingErrorKind::CoordinateEntries),
+        "{error:?}"
+    );
+    assert!(error.path().is_empty());
+    assert_eq!(
+        error.to_string(),
+        "coordinate-indexed values cannot be bound entry by entry"
+    );
+}
+
 #[test]
 fn external_map_bindings_reject_entries_deeper_than_the_declared_schema() {
     let project = crate::loader::LoadedProject::from_source(
@@ -3887,7 +4067,7 @@ fn external_map_bindings_reject_entries_deeper_than_the_declared_schema() {
     let error = bindings
         .bind_external_expression(
             &DeclName::expect_valid("samples"),
-            &parse_expr("{ (Axis#X, Extra#Only): 1 }"),
+            &parse_synthesized_expr("{ (Axis#X, Extra#Only): 1 }"),
             &input,
             (4usize, 9usize).into(),
         )
@@ -3919,7 +4099,7 @@ fn external_binding_errors_retain_boundary_source_and_parameter() {
     let error = bindings
         .bind_external_expression(
             &DeclName::expect_valid("sample_count"),
-            &parse_expr("true"),
+            &parse_synthesized_expr("true"),
             &input,
             (4usize, 7usize).into(),
         )

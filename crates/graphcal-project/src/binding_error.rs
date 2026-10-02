@@ -7,7 +7,43 @@ use miette::{Diagnostic, NamedSource, SourceSpan};
 use thiserror::Error;
 
 use graphcal_compiler::declaration_category::DeclCategory;
+use graphcal_compiler::hir::closed_expr::ClosedExpressionError;
+use graphcal_compiler::semantic::checked_type::{IndexTypeRef, TypeSpelling};
 use graphcal_compiler::syntax::decl_name::DeclName;
+use graphcal_compiler::syntax::index_name::IndexVariantName;
+
+/// Why a literal value cannot be normalized onto its declared value schema.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+pub enum BindingLiteralError {
+    #[error("integer is not exactly representable as a real quantity")]
+    InexactRealInteger,
+    #[error("number is not exactly representable as Int")]
+    InexactInt,
+    #[error("map entry has more keys than the declared value has indexed axes")]
+    OverNestedMapEntry,
+}
+
+/// Kind of value an external binding supplied, for kind mismatches.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BindingValueKind {
+    Quantity,
+    Int,
+    Bool,
+    Key,
+    MapLiteral,
+}
+
+impl std::fmt::Display for BindingValueKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Quantity => "Quantity",
+            Self::Int => "Int",
+            Self::Bool => "Bool",
+            Self::Key => "Key",
+            Self::MapLiteral => "a map literal",
+        })
+    }
+}
 
 /// Why an external parameter binding was rejected.
 #[derive(Debug, Clone, Error, Diagnostic)]
@@ -43,6 +79,97 @@ pub enum BindingError {
         #[label("declared here without a default value")]
         span: SourceSpan,
     },
+
+    #[error("invalid binding for `{name}`: {reason}")]
+    #[diagnostic(code(graphcal::O005))]
+    InvalidLiteral {
+        name: DeclName,
+        reason: BindingLiteralError,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("invalid value")]
+        span: SourceSpan,
+    },
+
+    #[error("binding for `{name}` is not a closed value: {reason}")]
+    #[diagnostic(
+        code(graphcal::O006),
+        help("external bindings accept literal values only")
+    )]
+    NotClosed {
+        name: DeclName,
+        reason: ClosedExpressionError,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("not a closed value")]
+        span: SourceSpan,
+    },
+
+    #[error("cannot bind {actual} to `{name}` of type `{expected}`")]
+    #[diagnostic(code(graphcal::O007))]
+    KindMismatch {
+        name: DeclName,
+        actual: BindingValueKind,
+        expected: TypeSpelling,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("expects `{expected}`")]
+        span: SourceSpan,
+    },
+
+    #[error("quantity must be finite")]
+    #[diagnostic(code(graphcal::O008))]
+    NonFiniteQuantity {
+        name: DeclName,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("bound to a non-finite quantity")]
+        span: SourceSpan,
+    },
+
+    #[error("parameter `{name}` is bound more than once")]
+    #[diagnostic(code(graphcal::O009))]
+    BoundMoreThanOnce {
+        name: DeclName,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("bound more than once")]
+        span: SourceSpan,
+    },
+
+    #[error("{violation}")]
+    #[diagnostic(code(graphcal::O010))]
+    DomainViolation {
+        name: DeclName,
+        /// The domain checker's description of the violated bound.
+        violation: String,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("value for `{name}` is out of its declared domain")]
+        span: SourceSpan,
+    },
+
+    #[error("Tenax v2 requires a concrete named index")]
+    #[diagnostic(code(graphcal::O011))]
+    KeyIndexNotNamed {
+        name: DeclName,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("this key's index is not a named index")]
+        span: SourceSpan,
+    },
+
+    #[error("unknown category `{variant}` for index `{index}`")]
+    #[diagnostic(code(graphcal::O012))]
+    UnknownCategory {
+        name: DeclName,
+        variant: IndexVariantName,
+        index: IndexTypeRef,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("expects a category of `{index}`")]
+        span: SourceSpan,
+    },
 }
 
 impl BindingError {
@@ -51,7 +178,15 @@ impl BindingError {
     pub const fn named_source(&self) -> Option<&NamedSource<Arc<String>>> {
         match self {
             Self::NotAParam { .. } | Self::UnknownParam { .. } => None,
-            Self::RequiredParamNotProvided { src, .. } => Some(src),
+            Self::RequiredParamNotProvided { src, .. }
+            | Self::InvalidLiteral { src, .. }
+            | Self::NotClosed { src, .. }
+            | Self::KindMismatch { src, .. }
+            | Self::NonFiniteQuantity { src, .. }
+            | Self::BoundMoreThanOnce { src, .. }
+            | Self::DomainViolation { src, .. }
+            | Self::KeyIndexNotNamed { src, .. }
+            | Self::UnknownCategory { src, .. } => Some(src),
         }
     }
 }

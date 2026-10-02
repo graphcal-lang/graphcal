@@ -3,7 +3,6 @@
 use std::collections::HashMap;
 use std::path::Path;
 
-use graphcal_compiler::desugar::desugared_ast::Expr;
 use graphcal_compiler::syntax::decl_name::DeclName;
 
 use crate::compile_error::CompileError;
@@ -20,12 +19,12 @@ pub use model_schema::{
     ModelValueSchema,
 };
 pub use prepared::{
-    InclusiveBounds, InclusiveBoundsError, ModelDefinitionError, ModelExecutionError,
-    ModelOutputPort, ModelRowFailure, ModelRowOutcome, ParameterBindingBuilder,
-    ParameterBindingRow, ParameterDomain, ParameterPort, ParameterPosition, ParameterValue,
-    PreparedModel, PreparedProject, StructuredBindingError, StructuredBindingPathSegment,
-    StructuredValueExpr, TenaxV2Input, TenaxV2InputKind, TenaxV2Model, TenaxV2Output,
-    TenaxV2RowOutcome,
+    ExternalValue, InclusiveBounds, InclusiveBoundsError, ModelDefinitionError,
+    ModelExecutionError, ModelOutputPort, ModelRowFailure, ModelRowOutcome,
+    ParameterBindingBuilder, ParameterBindingRow, ParameterDomain, ParameterPort,
+    ParameterPosition, ParameterValue, PreparedModel, PreparedProject, StructuredBindingError,
+    StructuredBindingErrorKind, StructuredBindingPathSegment, StructuredValueExpr, TenaxV2Input,
+    TenaxV2InputKind, TenaxV2Model, TenaxV2Output, TenaxV2RowOutcome,
 };
 
 /// Prepare a loaded project once for repeated typed evaluation.
@@ -55,7 +54,7 @@ pub fn prepare_from_project(
 )]
 pub fn compile_and_eval_from_project(
     project: &crate::loader::LoadedProject,
-    overrides: &HashMap<DeclName, Expr>,
+    overrides: &HashMap<DeclName, ExternalValue>,
 ) -> Result<EvalResult, CompileError> {
     ProjectCompiler::new(project).eval(overrides)
 }
@@ -73,7 +72,7 @@ pub fn compile_and_eval_from_project(
 )]
 pub fn compile_and_eval_project<F: graphcal_io::FileSystemReader>(
     root_path: &Path,
-    overrides: &HashMap<DeclName, Expr>,
+    overrides: &HashMap<DeclName, ExternalValue>,
     project_root: Option<&Path>,
     fs: &F,
 ) -> Result<EvalResult, CompileError> {
@@ -113,7 +112,7 @@ pub fn compile_and_eval_named(source: &str, name: &str) -> Result<EvalResult, Co
 pub(crate) fn compile_and_eval_with_overrides(
     source: &str,
     name: &str,
-    overrides: &HashMap<DeclName, graphcal_compiler::desugar::desugared_ast::Expr>,
+    overrides: &HashMap<DeclName, ExternalValue>,
 ) -> Result<EvalResult, CompileError> {
     let project = crate::loader::LoadedProject::from_source(source, name)?;
     compile_and_eval_from_project(&project, overrides)

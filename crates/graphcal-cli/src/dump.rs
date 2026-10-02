@@ -247,13 +247,8 @@ fn build_bindings(
     overrides: &ParsedOverrides,
 ) -> Result<ParameterBindingRow, DumpError> {
     let mut bindings = prepared.binding_builder();
-    for (name, expression) in &overrides.values {
-        match overrides.json_sources.get(name) {
-            Some(source) => {
-                bindings.bind_external_expression(name, expression, &source.source, source.span)?;
-            }
-            None => bindings.bind_expression(name, expression)?,
-        }
+    for (name, value) in &overrides.values {
+        value.bind(name, &mut bindings)?;
     }
     Ok(bindings.finish()?)
 }
