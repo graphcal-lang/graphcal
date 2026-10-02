@@ -15,9 +15,10 @@ use crate::semantic_error::SemanticError;
 use crate::semantic_error::graph::CycleMember;
 use crate::semantic_error::graph::GraphError;
 use crate::source_id::SourceId;
-use crate::tir::schedule::{ConstSchedule, RuntimeSchedule, RuntimeScheduleError};
+use crate::tir::schedule::{ConstSchedule, RuntimeSchedule};
 use crate::tir::typed::UncheckedTir;
 use crate::tir::typed::dag_slots::LocalDagFacts;
+use crate::tir::typed::instance_graph::InstanceGraph;
 
 /// Schedules computed for one checking revision, paired with the bodies only
 /// after the whole TIR has been accepted.
@@ -37,20 +38,20 @@ impl Schedules {
     ///
     /// Returns [`GraphError::CyclicDependency`](GraphError::CyclicDependency) for the first cycle found,
     /// at the declaration that closes it.
-    pub(super) fn build(tir: &UncheckedTir, src: SourceId) -> Result<Self, SemanticError> {
+    pub(super) fn build(
+        tir: &UncheckedTir,
+        instances: &InstanceGraph,
+        src: SourceId,
+    ) -> Result<Self, SemanticError> {
         let constants = ConstSchedule::build(tir.dags.local_positioned())
             .map_err(|cycle| cyclic_dependency(tir, &cycle, None, src))?;
-        let callables = tir.dags.map_local(|_, dag| {
-            RuntimeSchedule::build(dag, |owner| tir.dags.get(owner)).map_err(|error| match error {
-                RuntimeScheduleError::Cycle(cycle) => {
-                    cyclic_dependency(tir, &cycle, Some(dag.dag_id()), src)
-                }
-                RuntimeScheduleError::MissingInstance(owner) => SemanticError::internal_error(
-                    format!("semantic runtime instance `{owner}` has no compiled DAG"),
-                    src,
-                    DiagnosticAnchor::WholeFile,
-                ),
-            })
+        let callables = tir.dags.map_local(|position, dag| {
+            RuntimeSchedule::build(
+                position,
+                |position| tir.dags.at(position),
+                |position| instances.instances_of(position),
+            )
+            .map_err(|cycle| cyclic_dependency(tir, &cycle, Some(dag.dag_id()), src))
         })?;
         Ok(Self {
             constants,

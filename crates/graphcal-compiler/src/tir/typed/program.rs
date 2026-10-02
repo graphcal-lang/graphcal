@@ -284,10 +284,6 @@ pub(crate) struct UncheckedTir {
 }
 
 impl UncheckedTir {
-    pub(super) fn insert_materialized_dag(&mut self, dag: DagTIR) -> Result<(), DagRegistryError> {
-        self.dags.push_local(dag).map(|_| ())
-    }
-
     pub(crate) fn into_parts(self) -> (TirCore, DagRegistry) {
         (self.core, self.dags)
     }
@@ -462,4 +458,6 @@ impl TirRead for UncheckedTir {
 #[derive(Debug)]
 pub struct InstantiatedTir {
     pub(crate) tir: UncheckedTir,
+    /// The semantic instance edges of `tir`, by position.
+    pub(crate) instances: super::instance_graph::InstanceGraph,
 }

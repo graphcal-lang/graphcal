@@ -7,54 +7,46 @@ use crate::source_id::SourceId;
 use crate::tir::presentation::DagPresentationFacts;
 use crate::tir::typed::UncheckedTir;
 use crate::tir::typed::dag_slots::LocalDagFacts;
+use crate::tir::typed::instance_graph::{
+    CanonicalFacts, InstanceFacts, InstanceGraph, TemplateFact,
+};
 
-use super::instance_bodies::{InstanceOf, PlotsStage};
+use super::instance_bodies::{CanonicalChecked, InstanceChecked, InstanceOf};
 
 /// The presentation facts of every local body: a canonical body's checked plot
 /// shapes, or an instance's template shapes specialized with its
 /// substitution; then each body's projections of its instances' plots.
 pub(super) fn collect_presentation_facts(
     tir: &UncheckedTir,
-    plots: &LocalDagFacts<PlotsStage<'_>>,
+    graph: &InstanceGraph,
+    canonical: &CanonicalFacts<CanonicalChecked>,
+    instances: &InstanceFacts<InstanceOf<'_>>,
+    checked: &InstanceFacts<InstanceChecked>,
     src: SourceId,
     cancellation: &crate::cancellation::CancellationToken,
 ) -> Result<LocalDagFacts<DagPresentationFacts>, Outcome<SemanticError>> {
-    let presentation = plots.try_map_ref(|stage| match stage {
-        PlotsStage::Canonical(shapes) => {
-            cancellation.checkpoint()?;
-            Ok(DagPresentationFacts {
-                plot_channels: shapes.clone(),
-            })
-        }
-        PlotsStage::Instance {
-            instance:
-                InstanceOf {
-                    dag,
-                    specialization,
-                    substitution,
-                    ..
-                },
-            port_generic,
-        } => {
-            let template = match tir.dags.local_fact(plots, &specialization.template) {
-                Some(PlotsStage::Canonical(shapes)) => Some(shapes),
-                Some(PlotsStage::Instance { .. }) => None,
-                None => tir
-                    .dags
-                    .shared(&specialization.template)
-                    .map(|template| &template.presentation().plot_channels),
+    let canonical_facts = canonical.try_map_ref(|checked| {
+        cancellation.checkpoint()?;
+        Ok::<_, Outcome<SemanticError>>(DagPresentationFacts {
+            plot_channels: checked.plot_shapes.clone(),
+        })
+    })?;
+    let instance_facts = instances
+        .zip_ref(checked)
+        .try_map_ref(|(instance, checked)| {
+            let template = match canonical.template(instance.origin.template()) {
+                TemplateFact::Local(template) => &template.plot_shapes,
+                TemplateFact::Shared(template) => &template.presentation().plot_channels,
             };
             crate::tir::typed::specialization::instance_presentation_facts(
-                dag.dag_id(),
-                dag.frame(),
-                specialization,
-                substitution,
-                port_generic.as_ref().or(template),
+                instance.dag.frame(),
+                &instance.substitution,
+                checked.port_generic.as_ref().unwrap_or(template),
                 src,
             )
             .map_err(Outcome::Failed)
-        }
-    })?;
+        })?;
+    let presentation = graph.join(canonical_facts, instance_facts);
     crate::tir::typed::specialization::add_plot_projections(tir, presentation, src)
         .map_err(Outcome::Failed)
 }

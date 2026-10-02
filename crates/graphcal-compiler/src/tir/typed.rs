@@ -56,6 +56,7 @@ pub mod dag_slots;
 pub mod program;
 pub use program::*;
 pub(crate) mod frame_mint;
+pub mod instance_graph;
 pub use checked::*;
 pub mod evaluation_unit;
 pub use evaluation_unit::*;
@@ -276,10 +277,10 @@ impl TirDraft {
         src: SourceId,
     ) -> Result<InstantiatedTir, SemanticError> {
         let mut tir = self.finish();
-        specialization::instantiate_semantic_edges(&mut tir, src)?;
+        let instances = specialization::instantiate_semantic_edges(&mut tir, src)?;
         augment_runtime_deps_for_dynamic_units(&mut tir);
         overrides.reconcile(&mut tir);
-        Ok(InstantiatedTir { tir })
+        Ok(InstantiatedTir { tir, instances })
     }
 }
 

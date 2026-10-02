@@ -75,15 +75,6 @@ impl ConstSchedule {
     }
 }
 
-/// Why a callable's [`RuntimeSchedule`] could not be built.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum RuntimeScheduleError {
-    /// A semantic instance edge names a DAG absent from the TIR.
-    MissingInstance(DagId),
-    /// The params and nodes of the closure depend on each other cyclically.
-    Cycle(Cycle<ResolvedDeclName>),
-}
-
 /// Runtime evaluation schedule of one callable DAG and every semantic
 /// instance it transitively includes.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -99,15 +90,18 @@ impl RuntimeSchedule {
     /// source order, except that every declaration follows the scheduled
     /// declarations it reads.
     ///
+    /// `dag_at` reads the DAG at a position and `instances_of` the
+    /// positions of the instances a DAG's edges materialize.
+    ///
     /// # Errors
     ///
-    /// Returns [`RuntimeScheduleError`] for a dangling instance edge or a
-    /// dependency cycle.
+    /// Returns the first [`Cycle`] among the params and nodes.
     pub(crate) fn build<'a>(
-        callable: &'a DagTIR,
-        dag: impl Fn(&DagId) -> Option<&'a DagTIR>,
-    ) -> Result<Self, RuntimeScheduleError> {
-        let dags = instance_closure(callable, dag)?;
+        callable: DagPosition,
+        dag_at: impl Fn(DagPosition) -> &'a DagTIR,
+        instances_of: impl Fn(DagPosition) -> &'a [DagPosition],
+    ) -> Result<Self, Cycle<ResolvedDeclName>> {
+        let dags = instance_closure(callable, dag_at, instances_of);
         let mut graph = DependencyGraph::new();
         let mut dependencies = HashMap::new();
         for dag in &dags {
@@ -144,9 +138,7 @@ impl RuntimeSchedule {
         }
         Ok(Self {
             execution_dags: dags.iter().map(|dag| dag.dag_id().clone()).collect(),
-            order: graph
-                .into_topo_order()
-                .map_err(RuntimeScheduleError::Cycle)?,
+            order: graph.into_topo_order()?,
             dependencies,
         })
     }
@@ -187,23 +179,21 @@ impl RuntimeSchedule {
 /// `callable` followed by every DAG its semantic instance edges reach, in
 /// [`DagId`] order.
 fn instance_closure<'a>(
-    callable: &'a DagTIR,
-    dag_of: impl Fn(&DagId) -> Option<&'a DagTIR>,
-) -> Result<Vec<&'a DagTIR>, RuntimeScheduleError> {
+    callable: DagPosition,
+    dag_at: impl Fn(DagPosition) -> &'a DagTIR,
+    instances_of: impl Fn(DagPosition) -> &'a [DagPosition],
+) -> Vec<&'a DagTIR> {
     let mut pending = vec![callable];
-    let mut visited = HashSet::from([callable.dag_id()]);
+    let mut visited = HashSet::from([callable]);
     let mut instances = Vec::new();
-    while let Some(dag) = pending.pop() {
-        for edge in dag.semantic_instances() {
-            let owner = edge.instance.id().owner();
-            let instance = dag_of(owner)
-                .ok_or_else(|| RuntimeScheduleError::MissingInstance(owner.clone()))?;
-            if visited.insert(instance.dag_id()) {
+    while let Some(position) = pending.pop() {
+        for &instance in instances_of(position) {
+            if visited.insert(instance) {
                 pending.push(instance);
-                instances.push(instance);
+                instances.push(dag_at(instance));
             }
         }
     }
     instances.sort_by(|left, right| left.dag_id().cmp(right.dag_id()));
-    Ok(std::iter::once(callable).chain(instances).collect())
+    std::iter::once(dag_at(callable)).chain(instances).collect()
 }

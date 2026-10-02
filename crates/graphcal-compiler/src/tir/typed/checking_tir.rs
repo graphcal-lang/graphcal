@@ -27,24 +27,11 @@ impl PublishedBodies for crate::tir::texpr::CheckedBodies {
     }
 }
 
-impl<B: PublishedBodies> CheckingTir<'_, B> {
-    /// The body at `position` with the checked trees already published for
-    /// it: an imported body's, or a local body's once checking published
-    /// them.
-    ///
-    /// # Panics
-    ///
-    /// Panics when `position` is a position of another program with more
-    /// DAGs.
-    pub fn checked_at(
-        &self,
-        position: super::dag_position::DagPosition,
-    ) -> Option<(&DagTIR, &crate::tir::texpr::CheckedBodies)> {
-        let bodies = match self.tir.dags.local_fact_at(self.bodies, position) {
-            Some(fact) => fact.published()?,
-            None => self.tir.dags.shared_at(position)?.bodies(),
-        };
-        Some((self.tir.dags.at(position), bodies))
+/// A body whose trees are published once it is canonical, and not yet for
+/// an instance still to specialize.
+impl PublishedBodies for Option<&crate::tir::texpr::CheckedBodies> {
+    fn published(&self) -> Option<&crate::tir::texpr::CheckedBodies> {
+        *self
     }
 }
 

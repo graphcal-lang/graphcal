@@ -645,80 +645,63 @@ impl crate::tir::typed::InstantiatedTir {
         src: SourceId,
         cancellation: &crate::cancellation::CancellationToken,
     ) -> Result<crate::tir::typed::CheckedTir, Outcome<SemanticError>> {
-        let tir = self.tir;
+        let Self {
+            tir,
+            instances: graph,
+        } = self;
         cancellation.checkpoint()?;
-        let schedules = schedules::Schedules::build(&tir, src)?;
+        let schedules = schedules::Schedules::build(&tir, &graph, src)?;
         detect_cross_dag_cycles(&tir, src)?;
 
         // Canonical bodies are checked once. Instance trees are specialized
         // below from the canonical trees; only independently lowered bindings
         // infer.
-        let inferred = tir.dags.map_local(|position, dag| {
-            if let Some(specialization) = dag.frame().specialization() {
-                let substitution =
-                    crate::tir::typed::complete_substitution::CompleteSubstitution::try_new(
-                        &specialization.substitution,
-                        tir.project_type_store(),
-                    )
-                    .map_err(|error| error.into_graphcal(src))?;
-                return Ok(Inferred::Instance(instance_bodies::InstanceOf {
-                    position,
-                    dag,
-                    specialization,
-                    substitution,
-                }));
-            }
+        let inferred = graph.map_canonical(&tir.dags, |position, dag| {
             cancellation.checkpoint()?;
             let observations = infer::hir::BodyObservations::default();
             let plot_shapes =
                 check_dimensions_dag(position, dag, &tir, src, cancellation, &observations)?;
-            Ok::<_, Outcome<SemanticError>>(Inferred::Canonical {
+            Ok::<_, Outcome<SemanticError>>(InferredCanonical {
                 dag,
                 observations: Box::new(observations),
                 plot_shapes,
             })
         })?;
-        let sinks: HashMap<_, _> = tir
-            .dags
-            .with_local_facts(&inferred)
-            .filter_map(|(dag, inferred)| match inferred {
-                Inferred::Canonical { observations, .. } => Some((dag.dag_id(), &**observations)),
-                Inferred::Instance(_) => None,
+        let instances = graph.map_instances(&tir.dags, |position, dag, origin| {
+            let substitution =
+                crate::tir::typed::complete_substitution::CompleteSubstitution::try_new(
+                    &origin.specialization().substitution,
+                    tir.project_type_store(),
+                )
+                .map_err(|error| error.into_graphcal(src))?;
+            Ok::<_, SemanticError>(instance_bodies::InstanceOf {
+                position,
+                dag,
+                origin,
+                substitution,
             })
+        })?;
+        let sinks: HashMap<_, _> = inferred
+            .iter()
+            .map(|inferred| (inferred.dag.dag_id(), &*inferred.observations))
             .collect();
         check_field_domain_constraint_targets(&tir)?;
         check_field_domain_constraint_dimensions(&tir, cancellation, &sinks)?;
         drop(sinks);
-        let canonical = inferred.try_map(|inferred| match inferred {
-            Inferred::Canonical {
-                dag,
-                observations,
-                plot_shapes,
-            } => {
-                let bodies = observations
-                    .finish()
-                    .publish(
-                        &dag.owned_expression_roots().collect::<Vec<_>>(),
-                        &|index| expression_axes::concrete_index_kind(&tir, index),
-                    )
-                    .map_err(|error| {
-                        SemanticError::internal_error(
-                            format!("DAG `{}`: {error}", dag.dag_id()),
-                            src,
-                            DiagnosticAnchor::WholeFile,
-                        )
-                    })?;
-                Ok::<_, SemanticError>(instance_bodies::CanonicalStage::Canonical {
-                    bodies,
-                    plot_shapes,
-                })
-            }
-            Inferred::Instance(instance) => Ok(instance_bodies::CanonicalStage::Instance(instance)),
-        })?;
+        let canonical = inferred.try_map(|inferred| inferred.publish(&tir, src))?;
 
-        let (bodies, plots) =
-            instance_bodies::local_bodies(&tir, &canonical, src, cancellation)?.unzip();
-        drop(canonical);
+        let checked = instance_bodies::instance_bodies(
+            &tir,
+            &graph,
+            &canonical,
+            &instances,
+            src,
+            cancellation,
+        )?;
+        let bodies = graph.join(
+            canonical.map_ref(|canonical| canonical.bodies.clone()),
+            checked.map_ref(|checked| checked.bodies.clone()),
+        );
         let checking = crate::tir::typed::checking_tir::CheckingTir {
             tir: &tir,
             bodies: &bodies,
@@ -729,9 +712,16 @@ impl crate::tir::typed::InstantiatedTir {
         // specializing instance trees does not change their nominal
         // definitions.
         cancellation.checkpoint()?;
-        let presentation =
-            presentation::collect_presentation_facts(&tir, &plots, src, cancellation)?;
-        drop(plots);
+        let presentation = presentation::collect_presentation_facts(
+            &tir,
+            &graph,
+            &canonical,
+            &instances,
+            &checked,
+            src,
+            cancellation,
+        )?;
+        drop((canonical, checked, instances));
         let published = bodies.zip(presentation).zip(schedules.callables).map(
             |((bodies, presentation), runtime_schedule)| crate::tir::typed::PublishedDag {
                 bodies,
@@ -744,16 +734,44 @@ impl crate::tir::typed::InstantiatedTir {
     }
 }
 
-/// What inference left to publish for one local body: a canonical body's
-/// observations and plot shapes, or a semantic instance, whose trees are
-/// specialized from its template's.
-enum Inferred<'t> {
-    Canonical {
-        dag: &'t crate::tir::typed::DagTIR,
-        observations: Box<infer::hir::BodyObservations>,
-        plot_shapes: plot::CheckedPlotChannelShapes,
-    },
-    Instance(instance_bodies::InstanceOf<'t>),
+/// What inference left to publish for one canonical body: its observations
+/// and plot shapes.
+struct InferredCanonical<'t> {
+    dag: &'t crate::tir::typed::DagTIR,
+    observations: Box<infer::hir::BodyObservations>,
+    plot_shapes: plot::CheckedPlotChannelShapes,
+}
+
+impl InferredCanonical<'_> {
+    /// Publish the body's checked trees.
+    fn publish(
+        self,
+        tir: &crate::tir::typed::UncheckedTir,
+        src: SourceId,
+    ) -> Result<instance_bodies::CanonicalChecked, SemanticError> {
+        let Self {
+            dag,
+            observations,
+            plot_shapes,
+        } = self;
+        let bodies = observations
+            .finish()
+            .publish(
+                &dag.owned_expression_roots().collect::<Vec<_>>(),
+                &|index| expression_axes::concrete_index_kind(tir, index),
+            )
+            .map_err(|error| {
+                SemanticError::internal_error(
+                    format!("DAG `{}`: {error}", dag.dag_id()),
+                    src,
+                    DiagnosticAnchor::WholeFile,
+                )
+            })?;
+        Ok(instance_bodies::CanonicalChecked {
+            bodies,
+            plot_shapes,
+        })
+    }
 }
 
 /// Collect canonical nominal dependencies for every checked parameter default
