@@ -173,11 +173,12 @@ impl ParsedFile {
         cancellation: &CancellationToken,
     ) -> Result<Self, Outcome<CompileError>> {
         let source_id = sources.register(name, Arc::clone(&source));
-        let named_source = NamedSource::new(name, Arc::clone(&source));
+        let named_source = sources.renderable(source_id);
+        let registered: &SourceRegistry = sources;
         let raw_ast = Parser::new(&source)
             .parse_file_with_cancellation(cancellation)
             .map_err(|outcome| {
-                outcome.map_failed(|error| CompileError::parse(error, named_source.clone()))
+                outcome.map_failed(|error| CompileError::parse(error, source_id, registered))
             })?;
         Ok(Self {
             source,
