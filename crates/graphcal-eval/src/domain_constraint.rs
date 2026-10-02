@@ -78,7 +78,7 @@ impl DomainInstant {
 
 /// Failure to canonicalize a datetime value for a same-scale domain constraint.
 #[derive(Debug, Clone, thiserror::Error)]
-pub enum DomainInstantError {
+pub(crate) enum DomainInstantError {
     #[error("expected time scale {expected}, got {actual:?}")]
     ScaleMismatch {
         expected: TimeScale,

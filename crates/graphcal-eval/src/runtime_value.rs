@@ -50,7 +50,7 @@ impl RuntimeValue {
 
     /// Describe this value's variant (not its contents) for diagnostics.
     #[must_use]
-    pub const fn describe(&self) -> RuntimeValueDescription<'_> {
+    pub(crate) const fn describe(&self) -> RuntimeValueDescription<'_> {
         RuntimeValueDescription(self)
     }
 }
@@ -58,7 +58,7 @@ impl RuntimeValue {
 /// Diagnostic rendering of a [`RuntimeValue`]'s variant, from
 /// [`RuntimeValue::describe`].
 #[derive(Debug, Clone, Copy)]
-pub struct RuntimeValueDescription<'a>(&'a RuntimeValue);
+pub(crate) struct RuntimeValueDescription<'a>(&'a RuntimeValue);
 
 impl std::fmt::Display for RuntimeValueDescription<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

@@ -10,7 +10,7 @@
 //! once, and every other operation keeps it.
 //!
 //! A value is [pending](EvaluatedRuntimeValue) while a display unit it
-//! requests still waits for its owner's frame, and [resolved](ResolvedValue)
+//! requests still waits for its owner's frame, and [resolved](Presented)
 //! once every request was computed.
 
 use std::borrow::Cow;
@@ -70,7 +70,7 @@ impl<L> Copy for PresentedView<'_, L> {}
 pub type EvaluatedRuntimeValue = Presented<PendingLeaf>;
 
 /// A value whose every display unit was computed.
-pub type ResolvedValue = Presented<ResolvedLeaf>;
+pub(crate) type ResolvedValue = Presented<ResolvedLeaf>;
 
 /// The presented values of evaluated declarations, kept only for values with
 /// a presentation. A frame holds every value in its value map too, for the
@@ -428,7 +428,7 @@ impl<L> Copy for RefNode<'_, L> {}
 
 /// The borrowed entries of an indexed part of a presented value.
 #[derive(Debug)]
-pub struct EntriesRef<'a, L>(EntriesNode<'a, L>);
+pub(crate) struct EntriesRef<'a, L>(EntriesNode<'a, L>);
 
 #[derive(Debug)]
 enum EntriesNode<'a, L> {
@@ -481,7 +481,7 @@ impl<'a, L> PresentedRef<'a, L> {
 
     /// The entries of an indexed value; `None` for any other value.
     #[must_use]
-    pub const fn entries(self) -> Option<EntriesRef<'a, L>> {
+    pub(crate) const fn entries(self) -> Option<EntriesRef<'a, L>> {
         let (value, leaf) = match self.0 {
             RefNode::Whole { value, leaf } => (value, leaf),
             RefNode::Presented(presented) => match &presented.0 {

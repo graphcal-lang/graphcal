@@ -14,7 +14,7 @@ pub use plot_unavailable::{ComposedPlotsUnavailable, PlotUnavailable};
 pub use runtime::RuntimeEvaluation;
 pub use types::{
     AssertResult, AxisMeta, CompositionProperty, DisplayProjectionError, DisplayUnit,
-    DisplayValueError, EvalOutputView, EvalResult, FigureSpec, KeyRendering, LayerSpec,
-    MarkProperty, NodeUnavailable, PlotError, PlotFieldValue, PlotProperty, PlotSpec,
-    RenderContext, UnitLabel, Value, ValueError, datetime_literal, quantity_display_value,
+    EvalOutputView, EvalResult, FigureSpec, KeyRendering, LayerSpec, MarkProperty, NodeUnavailable,
+    PlotError, PlotFieldValue, PlotProperty, PlotSpec, RenderContext, UnitLabel, Value,
+    datetime_literal, quantity_display_value,
 };
