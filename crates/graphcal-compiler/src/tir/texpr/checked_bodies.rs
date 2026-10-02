@@ -16,10 +16,11 @@ use thiserror::Error;
 
 use crate::expression_id::ExprId;
 use crate::hir::expr::{Expr, MapEntryKey};
+use crate::resolved_name::ResolvedIndexVariant;
 use crate::semantic::checked_type::{CheckedType, Concrete, IndexTypeRef, Symbolic};
 use crate::semantic::index_axis::IndexAxis;
 use crate::semantic::index_def::IndexCardinality;
-use crate::semantic::key_value::KeyValue;
+use crate::semantic::key_value::{FinKeyShift, KeyValue};
 use crate::syntax::index_name::IndexEntryKey;
 use crate::syntax::non_empty::NonEmpty;
 use crate::syntax::span::Span;
@@ -29,6 +30,7 @@ use crate::tir::static_index::{
 
 use super::assembly::PendingNodes;
 use super::call_targets::{CallSlot, CallTargets};
+use super::label_dispatch::LabelDispatch;
 use super::map::{KeyEntry, TypeMap};
 use super::map_layout::MapLayout;
 use super::model::{StaticPosition, TArg, TBody, TContextual, TExpr, TNodeRef};
@@ -58,6 +60,13 @@ pub enum DischargeError {
     #[error("a constant key at {span:?} names no entry of its axis `{axis}`")]
     KeyOutsideAxis {
         axis: Box<IndexTypeRef<Concrete>>,
+        span: Span,
+    },
+    #[error("the key shift at {0:?} does not widen a `Fin` axis")]
+    KeyShift(Span),
+    #[error("the label match at {span:?} cannot be laid out on its axis: {error}")]
+    LabelDispatch {
+        error: super::label_dispatch::LabelDispatchError,
         span: Span,
     },
     #[error("the map literal at {span:?} cannot be placed on its axes: {error}")]
@@ -238,6 +247,31 @@ impl TypeMap<Symbolic, Concrete> for ToConcrete<'_, '_> {
         span: Span,
     ) -> Result<IndexAxis, NotConcrete> {
         self.concrete_axis(index, span)
+    }
+
+    fn key_shift(
+        &mut self,
+        (): &(),
+        source: Option<&IndexTypeRef<Concrete>>,
+        target: Option<&IndexTypeRef<Concrete>>,
+        span: Span,
+    ) -> Result<FinKeyShift, NotConcrete> {
+        let source = self.concrete_axis(source, span)?;
+        let target = self.concrete_axis(target, span)?;
+        FinKeyShift::try_new(source, target)
+            .ok_or(NotConcrete::Discharge(DischargeError::KeyShift(span)))
+    }
+
+    fn label_dispatch(
+        &mut self,
+        (): &(),
+        index: Option<&IndexTypeRef<Concrete>>,
+        labels: &[&ResolvedIndexVariant],
+        span: Span,
+    ) -> Result<LabelDispatch, NotConcrete> {
+        let axis = self.concrete_axis(index, span)?;
+        LabelDispatch::try_new(axis, labels)
+            .map_err(|error| NotConcrete::Discharge(DischargeError::LabelDispatch { error, span }))
     }
 
     fn map_layout(

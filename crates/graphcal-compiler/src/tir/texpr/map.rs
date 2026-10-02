@@ -10,12 +10,14 @@
 use std::borrow::Cow;
 
 use super::call_targets::{CallSlot, CallTargets};
+use super::label_dispatch::LabelDispatch;
 use super::map_layout::MapLayout;
 use super::nominal::{ConstructorApplication, ConstructorMatch};
 use crate::hir::expr::MapEntryKey;
+use crate::resolved_name::ResolvedIndexVariant;
 use crate::semantic::checked_type::{CheckedType, Concrete, Concreteness, IndexTypeRef, Symbolic};
 use crate::semantic::index_axis::IndexAxis;
-use crate::semantic::key_value::KeyValue;
+use crate::semantic::key_value::{FinKeyShift, KeyValue};
 use crate::syntax::index_name::IndexVariantName;
 use crate::syntax::non_empty::NonEmpty;
 use crate::syntax::span::{Span, Spanned};
@@ -71,6 +73,29 @@ pub trait TypeMap<V: Concreteness, W: Concreteness> {
         index: Option<&IndexTypeRef<W>>,
         span: Span,
     ) -> Result<W::Discharged<IndexAxis>, Self::Error>;
+
+    /// The shift of a `k + c` node from the axis `source` its key operand's
+    /// mapped type names onto the axis `target` its own mapped type names
+    /// (`None` where a type has no axis), given the shift it carried.
+    fn key_shift(
+        &mut self,
+        carried: &V::Discharged<FinKeyShift>,
+        source: Option<&IndexTypeRef<W>>,
+        target: Option<&IndexTypeRef<W>>,
+        span: Span,
+    ) -> Result<W::Discharged<FinKeyShift>, Self::Error>;
+
+    /// The arm each entry of the axis `index` a label match's mapped
+    /// scrutinee type names takes (`None` when that type has no axis), whose
+    /// arms' labels are `labels` in written order, given the dispatch it
+    /// carried.
+    fn label_dispatch(
+        &mut self,
+        carried: &V::Discharged<LabelDispatch>,
+        index: Option<&IndexTypeRef<W>>,
+        labels: &[&ResolvedIndexVariant],
+        span: Span,
+    ) -> Result<W::Discharged<LabelDispatch>, Self::Error>;
 
     /// The placement of a map literal's entries, whose keys are `entries`, on
     /// the axes `indexes` its mapped type names, outermost first (`None` where
@@ -142,6 +167,26 @@ impl<V: Concreteness> TypeMap<V, V> for Rehome<'_> {
         _index: Option<&IndexTypeRef<V>>,
         _span: Span,
     ) -> Result<V::Discharged<IndexAxis>, Self::Error> {
+        Ok(carried.clone())
+    }
+
+    fn key_shift(
+        &mut self,
+        carried: &V::Discharged<FinKeyShift>,
+        _source: Option<&IndexTypeRef<V>>,
+        _target: Option<&IndexTypeRef<V>>,
+        _span: Span,
+    ) -> Result<V::Discharged<FinKeyShift>, Self::Error> {
+        Ok(carried.clone())
+    }
+
+    fn label_dispatch(
+        &mut self,
+        carried: &V::Discharged<LabelDispatch>,
+        _index: Option<&IndexTypeRef<V>>,
+        _labels: &[&ResolvedIndexVariant],
+        _span: Span,
+    ) -> Result<V::Discharged<LabelDispatch>, Self::Error> {
         Ok(carried.clone())
     }
 
@@ -356,12 +401,13 @@ impl<V: Concreteness> TExpr<V> {
             TExprKind::Datetime(operation) => {
                 TExprKind::Datetime(operation.try_map(|operand| operand.boxed(map))?)
             }
-            TExprKind::KeyShift { key, addend, axis } => {
-                let axis = map.axis(axis, key_index(ty), span)?;
+            TExprKind::KeyShift { key, addend, shift } => {
+                let key = key.boxed(map)?;
+                let shift = map.key_shift(shift, key_index(key.ty()), key_index(ty), span)?;
                 TExprKind::KeyShift {
-                    key: key.boxed(map)?,
+                    key,
                     addend: addend.boxed(map)?,
-                    axis,
+                    shift,
                 }
             }
             TExprKind::GraphRef(target) => TExprKind::GraphRef(target.clone()),
@@ -534,7 +580,7 @@ impl<V: Concreteness> TExpr<V> {
             TExprKind::Match { scrutinee, arms } => {
                 // The node's own match targets precede its children.
                 let targets = match arms {
-                    TMatchArms::Labels(_) => Vec::new(),
+                    TMatchArms::Labels { .. } => Vec::new(),
                     TMatchArms::Constructors(arms) => arms
                         .iter()
                         .map(|arm| map.match_target(&arm.target))
@@ -542,17 +588,27 @@ impl<V: Concreteness> TExpr<V> {
                 };
                 let scrutinee = scrutinee.boxed(map)?;
                 let arms = match arms {
-                    TMatchArms::Labels(arms) => TMatchArms::Labels(
-                        arms.iter()
-                            .map(|arm| {
-                                Ok(TLabelArm {
-                                    label: arm.label.clone(),
-                                    body: arm.body.map_types(map)?,
-                                    span: arm.span,
+                    TMatchArms::Labels { arms, dispatch } => {
+                        let labels = arms
+                            .iter()
+                            .map(|arm| &arm.label.variant)
+                            .collect::<Vec<_>>();
+                        let dispatch =
+                            map.label_dispatch(dispatch, key_index(scrutinee.ty()), &labels, span)?;
+                        TMatchArms::Labels {
+                            arms: arms
+                                .iter()
+                                .map(|arm| {
+                                    Ok(TLabelArm {
+                                        label: arm.label.clone(),
+                                        body: arm.body.map_types(map)?,
+                                        span: arm.span,
+                                    })
                                 })
-                            })
-                            .collect::<Result<_, M::Error>>()?,
-                    ),
+                                .collect::<Result<_, M::Error>>()?,
+                            dispatch,
+                        }
+                    }
                     TMatchArms::Constructors(arms) => TMatchArms::Constructors(
                         arms.iter()
                             .zip(targets)

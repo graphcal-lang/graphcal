@@ -20,7 +20,7 @@ use crate::hir::expr::{
 use crate::resolved_name::{ResolvedDeclName, ResolvedUnitName};
 use crate::semantic::checked_type::CheckedType;
 use crate::semantic::index_axis::IndexAxis;
-use crate::semantic::key_value::KeyValue;
+use crate::semantic::key_value::{FinKeyShift, KeyValue};
 use crate::semantic::struct_value::StructValue;
 use crate::semantic::time_zone::IanaTimeZoneId;
 use crate::syntax::non_empty::NonEmpty;
@@ -28,9 +28,9 @@ use crate::syntax::span::{Span, Spanned};
 use crate::syntax::type_name::FieldName;
 use crate::tir::texpr::operators::{BExpr, CExpr, DExpr, IExpr, LinearAlgebraCall, QExpr};
 use crate::tir::texpr::{
-    CallSlot, ConstructorApplication, DatetimeLiteral, MapLayout, StaticPosition, TConstRef,
-    TConstruct, TConstructorArm, TExpr, TExprKind, TExternArg, TFieldInit, TForBinding, TIndexArg,
-    TKeyForm, TLabelArm, TMapEntry, TMatchArms, TNodeRef, TParamBinding, visit_tnodes,
+    CallSlot, ConstructorApplication, DatetimeLiteral, LabelDispatch, MapLayout, StaticPosition,
+    TConstRef, TConstruct, TConstructorArm, TExpr, TExprKind, TExternArg, TFieldInit, TForBinding,
+    TIndexArg, TKeyForm, TLabelArm, TMapEntry, TMatchArms, TNodeRef, TParamBinding, visit_tnodes,
 };
 
 use super::body_scope::Scoped;
@@ -52,10 +52,10 @@ pub enum NodeKind<'t> {
     Bool(BExpr<ScopedNode<'t>>),
     Complex(CExpr<ScopedNode<'t>>),
     Datetime(DExpr<ScopedNode<'t>>),
+    /// `k + c` on a `Fin` key; the static addend is part of the shift.
     KeyShift {
         key: ScopedNode<'t>,
-        addend: ScopedNode<'t>,
-        axis: &'t IndexAxis,
+        shift: &'t FinKeyShift,
     },
     /// `@name`: the declaration it denotes in the node's scope.
     GraphRef(Spanned<ResolvedDeclName>),
@@ -205,7 +205,11 @@ impl<'t> ScopedCall<'t> {
 /// The arms of a match node, in the node's scope.
 #[derive(Debug, Clone, Copy)]
 pub enum ScopedMatchArms<'t> {
-    Labels(Scoped<'t, [TLabelArm]>),
+    /// Label arms with the arm each entry of the scrutinee's axis takes.
+    Labels {
+        arms: Scoped<'t, [TLabelArm]>,
+        dispatch: &'t LabelDispatch,
+    },
     Constructors(Scoped<'t, [TConstructorArm]>),
 }
 
@@ -275,10 +279,9 @@ impl<'t> Scoped<'t, TExpr> {
                 let Ok(operation) = operation.try_map(operand);
                 NodeKind::Datetime(operation)
             }
-            TExprKind::KeyShift { key, addend, axis } => NodeKind::KeyShift {
+            TExprKind::KeyShift { key, shift, .. } => NodeKind::KeyShift {
                 key: node(key),
-                addend: node(addend),
-                axis,
+                shift,
             },
             TExprKind::GraphRef(target) => {
                 NodeKind::GraphRef(Spanned::new(resolve(&target.value), target.span))
@@ -377,9 +380,10 @@ impl<'t> Scoped<'t, TExpr> {
             TExprKind::Match { scrutinee, arms } => NodeKind::Match {
                 scrutinee: node(scrutinee),
                 arms: match arms {
-                    TMatchArms::Labels(arms) => {
-                        ScopedMatchArms::Labels(Scoped::new(scope, arms.as_slice()))
-                    }
+                    TMatchArms::Labels { arms, dispatch } => ScopedMatchArms::Labels {
+                        arms: Scoped::new(scope, arms.as_slice()),
+                        dispatch,
+                    },
                     TMatchArms::Constructors(arms) => {
                         ScopedMatchArms::Constructors(Scoped::new(scope, arms.as_slice()))
                     }

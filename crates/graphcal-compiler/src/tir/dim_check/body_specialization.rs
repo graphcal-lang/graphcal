@@ -173,6 +173,26 @@ impl<V: SymbolicView> TypeMap<V, Symbolic> for Specializer<'_> {
         Ok(())
     }
 
+    fn key_shift(
+        &mut self,
+        _carried: &V::Discharged<crate::semantic::key_value::FinKeyShift>,
+        _source: Option<&IndexTypeRef<Symbolic>>,
+        _target: Option<&IndexTypeRef<Symbolic>>,
+        _span: Span,
+    ) -> Result<(), SemanticError> {
+        Ok(())
+    }
+
+    fn label_dispatch(
+        &mut self,
+        _carried: &V::Discharged<crate::tir::texpr::LabelDispatch>,
+        _index: Option<&IndexTypeRef<Symbolic>>,
+        _labels: &[&crate::resolved_name::ResolvedIndexVariant],
+        _span: Span,
+    ) -> Result<(), SemanticError> {
+        Ok(())
+    }
+
     fn map_layout(
         &mut self,
         _carried: &V::Discharged<crate::tir::texpr::MapLayout>,
@@ -367,6 +387,8 @@ pub(super) fn specialize_bound_body(
             | crate::tir::texpr::DischargeError::AxisShape(_)
             | crate::tir::texpr::DischargeError::NonFiniteAxis(_)
             | crate::tir::texpr::DischargeError::KeyOutsideAxis { .. }
+            | crate::tir::texpr::DischargeError::KeyShift(_)
+            | crate::tir::texpr::DischargeError::LabelDispatch { .. }
             | crate::tir::texpr::DischargeError::MapLayout { .. }) => diagnostic(error.to_string()),
         },
     )?;

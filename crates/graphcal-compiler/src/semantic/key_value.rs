@@ -98,13 +98,68 @@ impl KeyValue {
     }
 }
 
+/// `k + c` on `Fin` keys: the shift from a key of the axis `Fin(N)` to the
+/// key `c` positions later on the axis `Fin(N + c)`.
+///
+/// Built only by [`FinKeyShift::try_new`], which admits two structural axes
+/// whose target is at least as long as its source, so shifting any key the
+/// source admits lands on the target.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FinKeyShift {
+    source: IndexAxis,
+    target: IndexAxis,
+    distance: usize,
+}
+
+impl FinKeyShift {
+    /// The shift from keys of `source` onto `target` by the difference of
+    /// their lengths, when both are structural `Fin` axes and `target` is at
+    /// least as long as `source`.
+    #[must_use]
+    pub fn try_new(source: IndexAxis, target: IndexAxis) -> Option<Self> {
+        let finite = |axis: &IndexAxis| matches!(axis.kind(), ConcreteIndexKind::Finite { .. });
+        if !(finite(&source) && finite(&target)) {
+            return None;
+        }
+        let distance = target.len().checked_sub(source.len())?;
+        Some(Self {
+            source,
+            target,
+            distance,
+        })
+    }
+
+    /// The axis shifted keys belong to.
+    #[must_use]
+    pub const fn target(&self) -> &IndexAxis {
+        &self.target
+    }
+
+    /// `key` shifted onto the target axis.
+    ///
+    /// # Errors
+    ///
+    /// Returns `key` back when the source axis does not admit it.
+    pub fn shift(&self, key: KeyValue) -> Result<KeyValue, KeyValue> {
+        if !self.source.admits(key.axis()) {
+            return Err(key);
+        }
+        // An admitted key is a position of the source axis, which is
+        // `distance` shorter than the target.
+        Ok(KeyValue {
+            axis: self.target.clone(),
+            position: key.position + self.distance,
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::dag_id::DagId;
     use crate::semantic::index_def::FiniteIndex;
     use crate::syntax::index_name::{IndexEntryKey, IndexVariantName};
 
-    use super::{IndexAxis, KeyElement, KeyValue};
+    use super::{FinKeyShift, IndexAxis, KeyElement, KeyValue};
 
     fn phase() -> IndexAxis {
         IndexAxis::named_for_test(
@@ -165,5 +220,28 @@ mod tests {
         assert!(!fin(3).admits(&fin(4)));
         assert!(!fin(2).admits(&phase()));
         assert!(phase().admits(&phase()));
+    }
+
+    #[test]
+    fn fin_shifts_land_on_the_wider_axis() {
+        let shift = FinKeyShift::try_new(fin(3), fin(5)).unwrap();
+        assert_eq!(shift.target(), &fin(5));
+        let shifted = shift.shift(KeyValue::at(fin(3), 2).unwrap()).unwrap();
+        assert_eq!(shifted, KeyValue::at(fin(5), 4).unwrap());
+        // A narrower `Fin` key is admitted by the source axis.
+        let narrow = shift.shift(KeyValue::at(fin(1), 0).unwrap()).unwrap();
+        assert_eq!(narrow, KeyValue::at(fin(5), 2).unwrap());
+        let wide = KeyValue::at(fin(4), 3).unwrap();
+        assert_eq!(shift.shift(wide.clone()), Err(wide));
+        let named = KeyValue::at(phase(), 0).unwrap();
+        assert_eq!(shift.shift(named.clone()), Err(named));
+    }
+
+    #[test]
+    fn fin_shifts_need_a_wider_finite_target() {
+        assert!(FinKeyShift::try_new(fin(3), fin(3)).is_some());
+        assert!(FinKeyShift::try_new(fin(3), fin(2)).is_none());
+        assert!(FinKeyShift::try_new(phase(), fin(3)).is_none());
+        assert!(FinKeyShift::try_new(fin(1), phase()).is_none());
     }
 }

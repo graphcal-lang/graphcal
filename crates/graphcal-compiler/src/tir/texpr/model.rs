@@ -14,7 +14,7 @@ use crate::hir::expr::{
 use crate::resolved_name::ResolvedDeclName;
 use crate::semantic::checked_type::{CheckedType, Concrete, Concreteness, IndexTypeRef};
 use crate::semantic::index_axis::IndexAxis;
-use crate::semantic::key_value::KeyValue;
+use crate::semantic::key_value::{FinKeyShift, KeyValue};
 use crate::semantic::struct_value::{StructFieldsError, StructValue};
 use crate::semantic::time_zone::IanaTimeZoneId;
 use crate::syntax::function_name::FnParamName;
@@ -220,11 +220,13 @@ pub enum TExprKind<V: Concreteness = Concrete> {
     Complex(CExpr<Box<TExpr<V>>>),
     Datetime(DExpr<Box<TExpr<V>>>),
     /// `k + c` on a `Fin` key: the key `c` positions later, on the wider
-    /// axis the node's type names.
+    /// axis the node's type names. The static addend stays as the shift's
+    /// source; the concrete shift is derived from the key's and the node's
+    /// axes.
     KeyShift {
         key: Box<TExpr<V>>,
         addend: Box<TExpr<V>>,
-        axis: V::Discharged<IndexAxis>,
+        shift: V::Discharged<FinKeyShift>,
     },
     GraphRef(Spanned<crate::hir::expr::LocalDecl>),
     Const(Spanned<TConstRef<V>>),
@@ -644,8 +646,12 @@ pub struct StaticPosition<V: Concreteness = Concrete> {
 /// The checked arms of a match, by what its scrutinee's type selects on.
 #[derive(Debug, Clone)]
 pub enum TMatchArms<V: Concreteness = Concrete> {
-    /// A key scrutinee, matched by the label of its entry.
-    Labels(Vec<TLabelArm<V>>),
+    /// A key scrutinee, matched by the label of its entry, with the arm
+    /// each entry of its axis takes.
+    Labels {
+        arms: Vec<TLabelArm<V>>,
+        dispatch: V::Discharged<super::label_dispatch::LabelDispatch>,
+    },
     /// A union scrutinee, matched by its constructor.
     Constructors(Vec<TConstructorArm<V>>),
 }
@@ -655,7 +661,7 @@ impl<V: Concreteness> TMatchArms<V> {
     #[must_use]
     pub fn bodies(&self) -> Box<dyn Iterator<Item = &TExpr<V>> + '_> {
         match self {
-            Self::Labels(arms) => Box::new(arms.iter().map(|arm| &arm.body)),
+            Self::Labels { arms, .. } => Box::new(arms.iter().map(|arm| &arm.body)),
             Self::Constructors(arms) => Box::new(arms.iter().map(|arm| &arm.body)),
         }
     }

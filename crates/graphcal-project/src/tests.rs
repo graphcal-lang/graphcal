@@ -5862,7 +5862,7 @@ fn eval_constructor_match_rejects_runtime_owner_mismatch_with_same_leaf_construc
     match err {
         Outcome::Failed(SemanticError::Internal(internal)) => {
             assert!(
-                internal.message().contains("no match arm for variant"),
+                internal.message().contains("a union value one arm takes apart"),
                 "{}",
                 internal.message()
             );
@@ -6792,7 +6792,7 @@ fn eval_index_access_rejects_runtime_owner_mismatch_with_same_leaf_variant() {
     match err {
         Outcome::Failed(SemanticError::Internal(internal)) => {
             assert!(
-                internal.message().contains("checked index entry"),
+                internal.message().contains("an indexed value with the entry"),
                 "{}",
                 internal.message()
             );
@@ -6884,7 +6884,7 @@ fn eval_label_match_rejects_runtime_owner_mismatch_with_same_leaf_variant() {
     match err {
         Outcome::Failed(SemanticError::Internal(internal)) => {
             assert!(
-                internal.message().contains("no match arm for label"),
+                internal.message().contains("operand checked as a key of"),
                 "{}",
                 internal.message()
             );

@@ -1613,6 +1613,16 @@ role = "contracts"
 
 [[module]]
 package = "compiler"
+path = ["tir", "texpr", "label_dispatch"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["tir", "texpr", "label_dispatch", "tests"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
 path = ["tir", "texpr", "map_layout"]
 role = "contracts"
 

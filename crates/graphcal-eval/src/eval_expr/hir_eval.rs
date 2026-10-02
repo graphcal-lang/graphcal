@@ -8,7 +8,7 @@ use graphcal_compiler::syntax::index_name::IndexEntryKey;
 use graphcal_compiler::syntax::span::{Span, Spanned};
 use graphcal_compiler::tir::texpr::{
     CoordinateSearch, TConstruct, TConstructorArm, TExpr, TExternArg, TForBinding, TIndexArg,
-    TKeyForm, TLabelArm, TParamBinding,
+    TKeyForm, TParamBinding,
 };
 use graphcal_compiler::tir::typed::body_scope::Scoped;
 use graphcal_compiler::tir::typed::evaluation_unit::{BodyKind, ScopedTree};
@@ -57,16 +57,6 @@ fn invariant_error(invariant: Invariant, span: Span, ctx: &EvalSession<'_>) -> S
         Failure::<std::convert::Infallible>::Invariant(invariant),
         span,
     )
-}
-
-/// The diagnostic for a value whose shape contradicts the checked type of
-/// the node that produced it.
-fn type_invariant(
-    message: impl std::fmt::Display,
-    span: Span,
-    ctx: &EvalSession<'_>,
-) -> SemanticError {
-    invariant_error(Invariant::violated(message), span, ctx)
 }
 
 /// Evaluate the root tree of an evaluation unit in the scope it was handed
@@ -205,10 +195,8 @@ fn eval_texpr_inner(
             .map(|value| plain(RuntimeValue::Complex(value))),
         NodeKind::Datetime(operation) => super::operations::datetime(&operation, span, &operands)
             .map(|value| plain(RuntimeValue::Datetime(value))),
-        NodeKind::KeyShift { key, addend, axis } => {
-            super::operations::key_shift(axis, key, addend, span, &operands)
-                .map(|value| plain(RuntimeValue::Key(value)))
-        }
+        NodeKind::KeyShift { key, shift } => super::operations::key_shift(shift, key, &operands)
+            .map(|value| plain(RuntimeValue::Key(value))),
         NodeKind::QuantityLiteral { value, unit } => {
             let scale = resolve_unit_scale(unit, values, ctx, eval_executable)?;
             let value = checked_unit_scaled_value(value, scale, span, ctx)?;
@@ -323,7 +311,6 @@ fn eval_texpr_inner(
         NodeKind::Map { entries, layout } => eval_map_literal(
             entries,
             layout,
-            span,
             values,
             presentation_values,
             local_values,
@@ -373,10 +360,12 @@ fn eval_texpr_inner(
         NodeKind::Key { form, arg, axis } => eval_key_form(form, axis, arg, span, &operands)
             .map(|key| EvaluatedRuntimeValue::plain(RuntimeValue::Key(key))),
         NodeKind::Match { scrutinee, arms } => match arms {
-            ScopedMatchArms::Labels(arms) => {
-                let arm = match_label(span, &operands.key(scrutinee)?, arms, ctx)?;
+            ScopedMatchArms::Labels { arms, dispatch } => {
+                // The dispatch covers every entry of the scrutinee's checked
+                // axis, so only a key of another axis takes no arm.
+                let arm = operands.key_arm(scrutinee, dispatch)?;
                 eval_texpr_evaluated(
-                    arm.map(|arm| &arm.body),
+                    arms.map(|arms| &arms[arm].body),
                     values,
                     presentation_values,
                     local_values,
@@ -384,7 +373,6 @@ fn eval_texpr_inner(
                 )
             }
             ScopedMatchArms::Constructors(arms) => eval_constructor_match(
-                span,
                 scrutinee,
                 arms,
                 values,
@@ -741,53 +729,25 @@ fn eval_constructor_call(
 fn eval_map_literal(
     entries: Scoped<'_, [graphcal_compiler::tir::texpr::TMapEntry]>,
     layout: &MapLayout,
-    span: Span,
     values: &RuntimeValueMap,
     presentation_values: Option<&PendingPresentedMap>,
     local_values: &HirLocalValueMap<'_>,
     ctx: &EvalSession<'_>,
 ) -> Result<EvaluatedRuntimeValue, Outcome<SemanticError>> {
-    let mut cells = std::iter::repeat_with(|| None)
-        .take(layout.cells())
-        .collect::<Vec<_>>();
-    for placement in layout.placements() {
-        let entry = entries
-            .nth(placement.entry)
-            .map(|entry| entry.map(|entry| &entry.value));
-        if let Some(entry) = entry {
-            cells[placement.cell] = Some(eval_texpr_evaluated(
-                entry,
+    // The layout belongs to this node, so its entry positions are positions
+    // of `entries`.
+    layout.fill(
+        |entry| {
+            eval_texpr_evaluated(
+                entries.map(|entries| &entries[entry].value),
                 values,
                 presentation_values,
                 local_values,
                 ctx,
-            )?);
-        }
-    }
-    // The layout fills every cell, row-major, exactly once.
-    let mut cells = cells.into_iter();
-    let (outer, inner) = layout.axes().split_first();
-    nest_cells(outer, inner, &mut cells)
-        .ok_or_else(|| type_invariant("a map literal left a cell unfilled", span, ctx))
-        .map_err(Outcome::Failed)
-}
-
-/// The nested indexed value over `axis` and `inner` whose leaves are the next
-/// row-major `cells`; `None` when a cell is unfilled.
-fn nest_cells(
-    axis: &IndexAxis,
-    inner: &[IndexAxis],
-    cells: &mut impl Iterator<Item = Option<EvaluatedRuntimeValue>>,
-) -> Option<EvaluatedRuntimeValue> {
-    IndexedValue::try_from_axis(axis.clone(), |_| {
-        match inner.split_first() {
-            None => cells.next().flatten(),
-            Some((next, rest)) => nest_cells(next, rest, cells),
-        }
-        .ok_or(())
-    })
-    .ok()
-    .map(EvaluatedRuntimeValue::from_indexed)
+            )
+        },
+        |cells| EvaluatedRuntimeValue::from_indexed(IndexedValue::from_axis_cells(cells)),
+    )
 }
 
 /// Evaluate a comprehension over `binding`'s axis and, inside each of its
@@ -859,23 +819,14 @@ fn eval_index_access(
     let operands = super::operations::Operands::new(&evaluate, ctx);
     let mut current = base;
     for arg in args.iter() {
-        let indexed = read_shape(current, "an indexed value", span, ctx, |current| {
-            current.entries().ok_or(current)
-        })?;
-        let (entry, entry_key) = match arg.view() {
+        let selector = match arg.view() {
             // A label selects only on its own axis, never by its leaf name.
-            ScopedIndexArg::Variant(variant) => {
-                let entry_key = IndexEntryKey::named(variant.variant.variant().clone());
-                let entry = index_ref_matches_resolved(indexed.index(), variant.variant.index())
-                    .then(|| indexed.get(&entry_key))
-                    .flatten();
-                (entry, entry_key)
-            }
+            ScopedIndexArg::Variant(variant) => EntrySelector::Label(&variant.variant),
             ScopedIndexArg::Var(local) => {
                 let bound = local_values
                     .get(local.value)
                     .ok_or_else(|| ctx.runtime_error(UnboundReference::Local, local.span))?;
-                let key = read_shape(
+                EntrySelector::Key(read_shape(
                     bound.value().into_owned(),
                     "a key",
                     local.span,
@@ -884,29 +835,67 @@ fn eval_index_access(
                         RuntimeValue::Key(key) => Ok(key),
                         other => Err(other),
                     },
-                )?;
-                (indexed.get_key(&key), key.entry_key().clone())
+                )?)
             }
-            ScopedIndexArg::Key(operand) => {
-                let key = operands.key(operand)?;
-                (indexed.get_key(&key), key.entry_key().clone())
-            }
+            ScopedIndexArg::Key(operand) => EntrySelector::Key(operands.key(operand)?),
             // A static integer position on a `Fin` axis (`@m[0, 1]`), proved
             // in range.
             ScopedIndexArg::Position(position) => {
-                let entry_key = IndexEntryKey::position(position.position);
-                (indexed.get(&entry_key), entry_key)
+                EntrySelector::Entry(IndexEntryKey::position(position.position))
             }
         };
-        current = entry.ok_or_else(|| {
-            type_invariant(
-                format_args!("checked index entry `{entry_key}` is missing"),
-                span,
-                ctx,
-            )
-        })?;
+        // The checker proved the selector names an entry of the value's
+        // axis, so a value without that entry contradicts its checked type.
+        current = read_shape(
+            current,
+            format_args!("an indexed value with the entry {selector}"),
+            span,
+            ctx,
+            |current| {
+                current
+                    .entries()
+                    .and_then(|indexed| selector.select(indexed))
+                    .ok_or(current)
+            },
+        )?;
     }
     Ok(current.to_owned_with(clone_index_access_result))
+}
+
+/// How one index argument selects an entry of an indexed value.
+enum EntrySelector<'t> {
+    /// A qualified label: an entry of its own axis only.
+    Label(&'t graphcal_compiler::resolved_name::ResolvedIndexVariant),
+    /// A key of the value's axis, or a narrower `Fin` key widened onto it.
+    Key(KeyValue),
+    /// A static position on a `Fin` axis.
+    Entry(IndexEntryKey),
+}
+
+impl EntrySelector<'_> {
+    /// The entry of `indexed` this selector names, if its axis has one.
+    fn select<'a, L>(
+        &self,
+        indexed: crate::runtime_presentation::EntriesRef<'a, L>,
+    ) -> Option<PresentedRef<'a, L>> {
+        match self {
+            Self::Label(variant) => index_ref_matches_resolved(indexed.index(), variant.index())
+                .then(|| indexed.get(&IndexEntryKey::named(variant.variant().clone())))
+                .flatten(),
+            Self::Key(key) => indexed.get_key(key),
+            Self::Entry(entry) => indexed.get(entry),
+        }
+    }
+}
+
+impl std::fmt::Display for EntrySelector<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Label(variant) => write!(f, "`{variant}`"),
+            Self::Key(key) => write!(f, "`{}`", key.entry_key()),
+            Self::Entry(entry) => write!(f, "`{entry}`"),
+        }
+    }
 }
 
 fn eval_scan(
@@ -1004,34 +993,10 @@ fn eval_unfold(
     Ok(EvaluatedRuntimeValue::from_indexed(result_entries))
 }
 
-/// The arm matching the label of `key`; the checker proved the arms
-/// exhaustive over its axis.
-fn match_label<'t>(
-    span: Span,
-    key: &KeyValue,
-    arms: Scoped<'t, [TLabelArm]>,
-    ctx: &EvalSession<'_>,
-) -> Result<Scoped<'t, TLabelArm>, SemanticError> {
-    arms.iter()
-        .find(|arm| {
-            let label = &arm.get().label.variant;
-            index_ref_matches_resolved(key.index(), label.index())
-                && matches!(key.entry_key(), IndexEntryKey::Named(name) if name == label.variant())
-        })
-        .ok_or_else(|| {
-            type_invariant(
-                format_args!("no match arm for label `{}`", key.entry_key()),
-                span,
-                ctx,
-            )
-        })
-}
-
 /// Evaluate the arm matching the constructor of the union value
 /// `scrutinee` evaluates to, with its field bindings; the checker proved the
 /// arms exhaustive over the union.
 fn eval_constructor_match(
-    span: Span,
     scrutinee: ScopedNode<'_>,
     arms: Scoped<'_, [TConstructorArm]>,
     values: &RuntimeValueMap,
@@ -1039,41 +1004,30 @@ fn eval_constructor_match(
     local_values: &HirLocalValueMap<'_>,
     ctx: &EvalSession<'_>,
 ) -> Result<EvaluatedRuntimeValue, Outcome<SemanticError>> {
-    let union = read_shape(
+    // The checker proved the arms exhaustive over the union and each arm's
+    // bindings fields of its constructor, so a value no arm takes apart
+    // contradicts the scrutinee's checked type.
+    let (arm, bound) = read_shape(
         eval_texpr_evaluated(scrutinee, values, presentation_values, local_values, ctx)?,
-        "a union value",
+        "a union value one arm takes apart",
         scrutinee.span(),
         ctx,
-        EvaluatedRuntimeValue::into_fields,
+        |value| {
+            let union = value.into_fields()?;
+            let taken = arms
+                .iter()
+                .find(|arm| {
+                    let target = &arm.get().target;
+                    *union.constructor() == target.constructor
+                        && *union.type_name() == target.runtime_type
+                })
+                .and_then(|arm| Some((arm, arm_bindings(arm.get(), &union)?)));
+            taken.ok_or_else(|| EvaluatedRuntimeValue::from_struct(union))
+        },
     )?;
-    let arm = arms
-        .iter()
-        .find(|arm| {
-            let target = &arm.get().target;
-            *union.constructor() == target.constructor && *union.type_name() == target.runtime_type
-        })
-        .ok_or_else(|| {
-            type_invariant(
-                format_args!("no match arm for variant `{}`", union.type_name()),
-                span,
-                ctx,
-            )
-        })?;
     let mut arm_locals = local_values.child(Vec::new());
-    for binding in &arm.get().bindings {
-        match binding {
-            graphcal_compiler::hir::expr::PatternBinding::Bind { field, local } => {
-                let value = union.field(&field.value).cloned().ok_or_else(|| {
-                    type_invariant(
-                        format_args!("matched union value has no field `{}`", field.value),
-                        field.span,
-                        ctx,
-                    )
-                })?;
-                arm_locals.bind(local.id, value);
-            }
-            graphcal_compiler::hir::expr::PatternBinding::Wildcard { .. } => {}
-        }
+    for (local, value) in bound {
+        arm_locals.bind(local, value);
     }
     eval_texpr_evaluated(
         arm.map(|arm| &arm.body),
@@ -1082,6 +1036,26 @@ fn eval_constructor_match(
         &arm_locals,
         ctx,
     )
+}
+
+/// The values `arm` binds from the fields of `union`; `None` when `union`
+/// lacks a bound field.
+fn arm_bindings(
+    arm: &TConstructorArm,
+    union: &graphcal_compiler::semantic::struct_value::StructValue<EvaluatedRuntimeValue>,
+) -> Option<Vec<(graphcal_compiler::hir::expr::LocalId, EvaluatedRuntimeValue)>> {
+    arm.bindings
+        .iter()
+        .filter_map(|binding| match binding {
+            graphcal_compiler::hir::expr::PatternBinding::Bind { field, local } => Some(
+                union
+                    .field(&field.value)
+                    .cloned()
+                    .map(|value| (local.id, value)),
+            ),
+            graphcal_compiler::hir::expr::PatternBinding::Wildcard { .. } => None,
+        })
+        .collect()
 }
 
 fn eval_dag_call(

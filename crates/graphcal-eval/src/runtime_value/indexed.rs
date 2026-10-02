@@ -33,6 +33,12 @@ impl<V> IndexedValue<V> {
         Ok(Self { axis, entries })
     }
 
+    /// The level of a filled map literal: one value per axis key.
+    pub(crate) fn from_axis_cells(cells: graphcal_compiler::tir::texpr::AxisCells<V>) -> Self {
+        let (axis, entries) = cells.into_parts();
+        Self { axis, entries }
+    }
+
     /// An indexed value with its entries given positionally, for tests.
     #[cfg(any(test, feature = "test-internals"))]
     #[must_use]

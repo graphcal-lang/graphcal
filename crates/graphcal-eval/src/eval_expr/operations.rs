@@ -10,17 +10,18 @@ use graphcal_compiler::builtin::{DatetimeField, DatetimeFromNumericFn, DatetimeT
 use graphcal_compiler::complex_value::ComplexValue;
 use graphcal_compiler::finite_value::FiniteQuantity;
 use graphcal_compiler::outcome::Outcome;
+use graphcal_compiler::semantic::key_value::FinKeyShift;
 use graphcal_compiler::semantic_error::SemanticError;
 use graphcal_compiler::syntax::span::Span;
-use graphcal_compiler::tir::texpr::DatetimeLiteral;
 use graphcal_compiler::tir::texpr::operators::{
     BExpr, CExpr, DExpr, EqualityOp, IExpr, OrderedOperands, QExpr, ShiftOp,
 };
+use graphcal_compiler::tir::texpr::{DatetimeLiteral, LabelDispatch};
 use graphcal_compiler::tir::typed::scoped_node::ScopedNode;
 
 use crate::host_abi::marshal::ArgumentReader;
 use crate::invariant::{Failure, Invariant};
-use crate::runtime_value::{IndexAxis, IndexedValue, KeyElement, KeyValue, RuntimeValue};
+use crate::runtime_value::{IndexedValue, KeyElement, KeyValue, RuntimeValue};
 
 use super::EvalSession;
 use super::arithmetic::apply_ordering;
@@ -97,7 +98,7 @@ impl<'o, 't> Operands<'o, 't> {
     fn read<T>(
         &self,
         node: ScopedNode<'t>,
-        expected: &str,
+        expected: impl std::fmt::Display,
         extract: impl FnOnce(RuntimeValue) -> Result<T, RuntimeValue>,
     ) -> Result<T, Outcome<SemanticError>> {
         read_shape(
@@ -126,6 +127,23 @@ impl<'o, 't> Operands<'o, 't> {
             RuntimeValue::Quantity(value) => Ok(value),
             other => Err(other),
         })
+    }
+
+    /// The written position of the arm of a label match `dispatch` lays out
+    /// that the key `node` evaluates to takes.
+    pub(super) fn key_arm(
+        &self,
+        node: ScopedNode<'t>,
+        dispatch: &LabelDispatch,
+    ) -> Result<usize, Outcome<SemanticError>> {
+        self.read(
+            node,
+            format_args!("a key of `{}`", dispatch.axis().index()),
+            |value| match value {
+                RuntimeValue::Key(key) => dispatch.arm(&key).ok_or(RuntimeValue::Key(key)),
+                other => Err(other),
+            },
+        )
     }
 
     pub(super) fn int(&self, node: ScopedNode<'t>) -> Result<i64, Outcome<SemanticError>> {
@@ -587,29 +605,20 @@ pub(super) fn datetime_literal(literal: &DatetimeLiteral) -> hifitime::Epoch {
 }
 
 /// Evaluate `k + c` on a `Fin` key: the key at position `k + c` of the wider
-/// target axis `Fin(N + c)`, which the checker derived from the static addend.
+/// target axis `Fin(N + c)`. The shift was derived from the key's checked
+/// axis `Fin(N)` and the target when the tree was discharged, so the static
+/// addend is not evaluated again.
 pub(super) fn key_shift<'t>(
-    target: &IndexAxis,
+    shift: &FinKeyShift,
     key: ScopedNode<'t>,
-    addend: ScopedNode<'t>,
-    span: Span,
     operands: &Operands<'_, 't>,
 ) -> Result<KeyValue, Outcome<SemanticError>> {
-    let ctx = operands.ctx;
-    let key = operands.key(key)?;
-    let addend = operands.int(addend)?;
-    usize::try_from(addend)
-        .ok()
-        .and_then(|addend| key.position().checked_add(addend))
-        .and_then(|position| KeyValue::at(target.clone(), position))
-        .ok_or_else(|| {
-            ctx.internal_error(
-                format!(
-                    "key shifted by {addend} left its checked axis `{}`",
-                    target.index()
-                ),
-                span,
-            )
-        })
-        .map_err(Outcome::Failed)
+    operands.read(
+        key,
+        format_args!("a key shifting onto `{}`", shift.target().index()),
+        |value| match value {
+            RuntimeValue::Key(key) => shift.shift(key).map_err(RuntimeValue::Key),
+            other => Err(other),
+        },
+    )
 }
