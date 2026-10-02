@@ -158,9 +158,7 @@ pub fn expr_lower_error_to_semantic(err: &ExprLowerError, src: SourceId) -> Sema
         ExprLowerError::InvalidStaticBindingValue { name, span } => SemanticError::located(
             src,
             *span,
-            ModuleError::InvalidTypeLevelBindingValue {
-                name: name.to_string(),
-            },
+            ModuleError::InvalidTypeLevelBindingValue { name: name.clone() },
         ),
         ExprLowerError::UnknownLocalRef { name, span } => SemanticError::located(
             src,

@@ -1005,7 +1005,7 @@ fn qualified_import_rejects_transitive_required_static_dependencies() {
     let error = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap_err();
     assert!(matches!(
         error,
-        CompileError::Eval(RenderedSemanticError { error: SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic { kind: SemanticErrorKind::Module(ModuleError::ImportUnresolvedStaticDependency { dependency_kind: graphcal_compiler::static_interface::StaticInputKind::Type, dependency, .. }), .. }), .. }) if dependency == "Element"
+        CompileError::Eval(RenderedSemanticError { error: SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic { kind: SemanticErrorKind::Module(ModuleError::ImportUnresolvedStaticDependency { dependency_kind: graphcal_compiler::static_interface::StaticInputKind::Type, dependency, .. }), .. }), .. }) if dependency.as_str() == "Element"
     ));
 }
 
@@ -1030,7 +1030,7 @@ fn qualified_import_resolves_ambiguous_static_dependencies_to_their_symbol() {
     let error = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap_err();
     assert!(matches!(
         error,
-        CompileError::Eval(RenderedSemanticError { error: SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic { kind: SemanticErrorKind::Module(ModuleError::ImportUnresolvedStaticDependency { dependency_kind: graphcal_compiler::static_interface::StaticInputKind::Dimension, dependency, .. }), .. }), .. }) if dependency == "Basis"
+        CompileError::Eval(RenderedSemanticError { error: SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic { kind: SemanticErrorKind::Module(ModuleError::ImportUnresolvedStaticDependency { dependency_kind: graphcal_compiler::static_interface::StaticInputKind::Dimension, dependency, .. }), .. }), .. }) if dependency.as_str() == "Basis"
     ));
 }
 
@@ -1054,7 +1054,7 @@ fn selective_import_rejects_transitive_required_static_dependencies() {
     let error = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap_err();
     assert!(matches!(
         error,
-        CompileError::Eval(RenderedSemanticError { error: SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic { kind: SemanticErrorKind::Module(ModuleError::ImportUnresolvedStaticDependency { dependency_kind: graphcal_compiler::static_interface::StaticInputKind::Type, dependency, .. }), .. }), .. }) if dependency == "Element"
+        CompileError::Eval(RenderedSemanticError { error: SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic { kind: SemanticErrorKind::Module(ModuleError::ImportUnresolvedStaticDependency { dependency_kind: graphcal_compiler::static_interface::StaticInputKind::Type, dependency, .. }), .. }), .. }) if dependency.as_str() == "Element"
     ));
 }
 
@@ -1639,7 +1639,7 @@ fn include_rejects_required_static_inputs_as_binding_targets() {
     let error = compile_and_eval(source).unwrap_err();
     assert!(matches!(
         error,
-        CompileError::Eval(RenderedSemanticError { error: SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic { kind: SemanticErrorKind::Module(ModuleError::InvalidStaticBindingTarget { kind: graphcal_compiler::static_interface::StaticInputKind::Type, name, target, .. }), .. }), .. }) if name == "Slot" && target == "Replacement"
+        CompileError::Eval(RenderedSemanticError { error: SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic { kind: SemanticErrorKind::Module(ModuleError::InvalidStaticBindingTarget { kind: graphcal_compiler::static_interface::StaticInputKind::Type, name, target, .. }), .. }), .. }) if name.as_str() == "Slot" && target.as_str() == "Replacement"
     ));
 }
 
@@ -6841,8 +6841,8 @@ fn project_injectable_index_kind_mismatch() {
                 }),
             ..
         })) => {
-            assert_eq!(dep_index, "Phase");
-            assert_eq!(bound_index, "TimeStep");
+            assert_eq!(dep_index.to_string(), "Phase");
+            assert_eq!(bound_index.to_string(), "TimeStep");
         }
         other => panic!("expected IndexKindMismatch, got {other:?}"),
     }
@@ -7307,10 +7307,10 @@ include pass_through(
                 }),
             ..
         })) => {
-            assert_eq!(dep_index, "Step");
-            assert_eq!(dep_kind, "coordinate");
-            assert_eq!(bound_index, "Phase");
-            assert_eq!(bound_kind, "named");
+            assert_eq!(dep_index.to_string(), "Step");
+            assert_eq!(dep_kind.to_string(), "coordinate");
+            assert_eq!(bound_index.to_string(), "Phase");
+            assert_eq!(bound_kind.to_string(), "named");
         }
         other => panic!("expected IndexKindMismatch, got {other:?}"),
     }

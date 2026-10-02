@@ -11,9 +11,11 @@ use crate::declaration_kind::DeclarationKind;
 use crate::diagnostic::{DiagnosticKind, SecondaryLabel};
 use crate::resolve::error::ModuleResolveError;
 use crate::resolved_name::ResolvedStructTypeName;
+use crate::semantic::index_def::{IndexBindingCategory, IndexBindingTarget, IndexCategory};
 use crate::semantic_error::graph::DagReference;
 use crate::syntax::dimension::UnitRef;
 use crate::syntax::import_category::{ImportItemCategoryMismatch, ImportItemNamespace};
+use crate::syntax::index_name::IndexName;
 use crate::syntax::module_name::ModuleAliasName;
 use crate::syntax::names::NameAtom;
 use crate::syntax::span::Span;
@@ -23,29 +25,29 @@ use crate::syntax::type_name::ConstructorName;
 #[derive(Debug, Clone, Error)]
 pub enum ModuleError {
     #[error("cannot `import` plot `{name}`")]
-    ImportPlotItem { name: String },
+    ImportPlotItem { name: NameAtom },
     #[error("cannot `import` assertion `{name}` from a module blueprint")]
-    ImportAssertionItem { name: String },
+    ImportAssertionItem { name: NameAtom },
     #[error("cannot `import` runtime unit `{name}`")]
     ImportRuntimeUnit { name: UnitRef },
     #[error("cannot `import` required {kind} input `{name}`")]
     ImportRequiredStaticInput {
         kind: crate::static_interface::StaticInputKind,
-        name: String,
+        name: NameAtom,
     },
     #[error(
         "cannot `import` `{name}` because it depends on required {dependency_kind} input `{dependency}`"
     )]
     ImportUnresolvedStaticDependency {
-        name: String,
+        name: NameAtom,
         dependency_kind: crate::static_interface::StaticInputKind,
-        dependency: String,
+        dependency: NameAtom,
     },
     #[error("cannot bind {kind} input `{name}` to non-concrete {kind} `{target}`")]
     InvalidStaticBindingTarget {
         kind: crate::static_interface::StaticInputKind,
-        name: String,
-        target: String,
+        name: NameAtom,
+        target: NameAtom,
     },
     #[error("cannot project `{name}` from a configured DAG instance")]
     IncludeItemNotProjectable { name: NameAtom },
@@ -64,7 +66,7 @@ pub enum ModuleError {
     },
     #[error("name `{name}` not found in imported file `{file_path}`")]
     ImportNameNotFound {
-        name: String,
+        name: NameAtom,
         file_path: DagReference,
     },
     #[error("in imported file `{file_path}`, {mismatch}")]
@@ -78,32 +80,35 @@ pub enum ModuleError {
     UnknownModule { name: ModuleAliasName },
     #[error("unknown param `{name}` in import binding for `{file_path}`")]
     UnknownParamBinding {
-        name: String,
+        name: NameAtom,
         file_path: DagReference,
     },
     #[error("binding target `{name}` is a {actual_kind}, not a param")]
     BindingNotAParam {
-        name: String,
+        name: NameAtom,
         actual_kind: DeclarationKind,
     },
     #[error("`{name}` is not a {expected} input of the invoked DAG")]
     DagInputCategoryMismatch {
-        name: String,
+        name: NameAtom,
         expected: &'static str,
     },
     #[error("invalid type-level binding value for `{name}`")]
-    InvalidTypeLevelBindingValue { name: String },
+    InvalidTypeLevelBindingValue { name: NameAtom },
     #[error("index binding `{dep_index}: {value}`: `{value}` is not a known index")]
-    IndexBindingNotAnIndex { dep_index: String, value: String },
+    IndexBindingNotAnIndex {
+        dep_index: IndexName,
+        value: IndexBindingTarget,
+    },
     #[error("index kind mismatch: `{dep_index}` is {dep_kind} but `{bound_index}` is {bound_kind}")]
     IndexKindMismatch {
-        dep_index: String,
-        dep_kind: String,
-        bound_index: String,
-        bound_kind: String,
+        dep_index: IndexName,
+        dep_kind: IndexBindingCategory,
+        bound_index: IndexBindingTarget,
+        bound_kind: IndexCategory,
     },
     #[error("cannot import runtime item `{name}`; use `include` for runtime nodes and params")]
-    ImportRuntimeItem { name: String },
+    ImportRuntimeItem { name: NameAtom },
     /// A module-aware lookup failed in a way no more specific diagnostic covers.
     #[error("{error}")]
     ModuleResolution { error: Box<ModuleResolveError> },

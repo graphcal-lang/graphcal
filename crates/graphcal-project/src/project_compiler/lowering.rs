@@ -1275,10 +1275,10 @@ fn validate_index_binding_contracts(
                     sites.importer_src,
                     site.span,
                     ModuleError::IndexKindMismatch {
-                        dep_index: dep_index.to_string(),
-                        dep_kind: expected.to_string(),
-                        bound_index: site.authored.to_string(),
-                        bound_kind: found.to_string(),
+                        dep_index,
+                        dep_kind: expected,
+                        bound_index: site.authored.clone(),
+                        bound_kind: found,
                     },
                 )));
             }

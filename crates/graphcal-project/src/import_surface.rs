@@ -84,7 +84,7 @@ pub fn import_item_not_found_error(
                 src,
                 span,
                 ModuleError::ImportNameNotFound {
-                    name: name.to_string(),
+                    name: name.clone(),
                     file_path: file_path.clone(),
                 },
             )

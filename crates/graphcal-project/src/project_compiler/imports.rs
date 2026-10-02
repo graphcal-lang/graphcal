@@ -261,7 +261,7 @@ fn ensure_include_item_selectable(
             file_src,
             span,
             ModuleError::ImportNameNotFound {
-                name: name.to_string(),
+                name: name.clone(),
                 file_path: file_path.clone(),
             },
         ))),
@@ -281,10 +281,7 @@ fn validate_static_import_capability(
             Err(PipelineError::Semantic(SemanticError::located(
                 src,
                 span,
-                ModuleError::ImportRequiredStaticInput {
-                    kind,
-                    name: name.to_string(),
-                },
+                ModuleError::ImportRequiredStaticInput { kind, name },
             )))
         }
         Some(StaticImportRejection::UnresolvedDependency(dependency)) => {
@@ -292,9 +289,9 @@ fn validate_static_import_capability(
                 src,
                 span,
                 ModuleError::ImportUnresolvedStaticDependency {
-                    name: name.to_string(),
+                    name: name.clone(),
                     dependency_kind: dependency.kind(),
-                    dependency: dependency.name().to_string(),
+                    dependency: dependency.name().clone(),
                 },
             )))
         }
@@ -575,8 +572,8 @@ fn resolve_include_static_bindings(
                             src,
                             span,
                             ModuleError::IndexBindingNotAnIndex {
-                                dep_index: port.to_string(),
-                                value: authored.to_string(),
+                                dep_index: port.clone(),
+                                value: authored.clone(),
                             },
                         ))
                     })?,
@@ -656,7 +653,7 @@ fn classify_param_bindings(
             {
                 let rhs_name = extract_type_name_from_binding_expr(
                     &binding.value,
-                    binding_name.as_str(),
+                    binding_name.atom(),
                     file_src,
                 )?;
                 out.types.insert(
@@ -673,7 +670,7 @@ fn classify_param_bindings(
             {
                 let rhs_name = extract_type_name_from_binding_expr(
                     &binding.value,
-                    binding_name.as_str(),
+                    binding_name.atom(),
                     file_src,
                 )?;
                 out.dims.insert(
@@ -695,7 +692,7 @@ fn classify_param_bindings(
                         file_src,
                         binding.name.span,
                         ModuleError::BindingNotAParam {
-                            name: binding_name.to_string(),
+                            name: binding_name.atom().clone(),
                             actual_kind: kind,
                         },
                     )));
@@ -704,7 +701,7 @@ fn classify_param_bindings(
                     file_src,
                     binding.name.span,
                     ModuleError::UnknownParamBinding {
-                        name: binding_name.to_string(),
+                        name: binding_name.atom().clone(),
                         file_path: dep_path_for_error.clone(),
                     },
                 )));
@@ -714,7 +711,7 @@ fn classify_param_bindings(
                     file_src,
                     binding.name.span,
                     ModuleError::DagInputCategoryMismatch {
-                        name: binding_name.to_string(),
+                        name: binding_name.atom().clone(),
                         expected: match category {
                             InputBindingCategory::Unmarked => "param",
                             InputBindingCategory::Type => "type",
@@ -756,8 +753,8 @@ fn validate_concrete_static_binding_targets(
         let target_interface = importer.static_interface(StaticInputKind::Type, target.atom())?;
         (!static_binding_composition_valid(source, target_interface)).then_some((
             StaticInputKind::Type,
-            input.to_string(),
-            target.to_string(),
+            input.atom().clone(),
+            target.atom().clone(),
         ))
     });
     let invalid_dimension = dim_bindings.iter().find_map(|(input, target)| {
@@ -766,8 +763,8 @@ fn validate_concrete_static_binding_targets(
             importer.static_interface(StaticInputKind::Dimension, target.atom())?;
         (!static_binding_composition_valid(source, target_interface)).then_some((
             StaticInputKind::Dimension,
-            input.to_string(),
-            target.to_string(),
+            input.atom().clone(),
+            target.atom().clone(),
         ))
     });
     let invalid_index = index_bindings.iter().find_map(|(input, target)| {
@@ -778,8 +775,8 @@ fn validate_concrete_static_binding_targets(
         let target_interface = importer.static_interface(StaticInputKind::Index, target.atom())?;
         (!static_binding_composition_valid(source, target_interface)).then_some((
             StaticInputKind::Index,
-            input.to_string(),
-            target.to_string(),
+            input.atom().clone(),
+            target.atom().clone(),
         ))
     });
     match invalid_type.or(invalid_dimension).or(invalid_index) {
@@ -1544,7 +1541,7 @@ pub(super) fn process_pure_import<'a>(
                             file_src,
                             import_item.name.span,
                             ModuleError::ImportNameNotFound {
-                                name: orig_name.to_string(),
+                                name: orig_name.atom().clone(),
                                 file_path: DagReference::Path(import_path.clone()),
                             },
                         ))

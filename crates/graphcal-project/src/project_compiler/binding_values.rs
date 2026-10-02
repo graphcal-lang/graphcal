@@ -28,7 +28,7 @@ pub(super) fn extract_index_binding_target(
             file_src,
             expr.span,
             ModuleError::InvalidTypeLevelBindingValue {
-                name: dep_index_name.to_string(),
+                name: dep_index_name.atom().clone(),
             },
         ))
     };
@@ -99,7 +99,7 @@ fn closed_binding_cardinality(
 /// AST) or a zero-arg `ConstructorCall` for constructor-shaped RHSs.
 pub(super) fn extract_type_name_from_binding_expr(
     expr: &Expr,
-    dep_type_name: &str,
+    dep_type_name: &graphcal_compiler::syntax::names::NameAtom,
     file_src: SourceId,
 ) -> Result<String, PipelineError> {
     let invalid_binding = || {
@@ -107,7 +107,7 @@ pub(super) fn extract_type_name_from_binding_expr(
             file_src,
             expr.span,
             ModuleError::InvalidTypeLevelBindingValue {
-                name: dep_type_name.to_string(),
+                name: dep_type_name.clone(),
             },
         ))
     };
