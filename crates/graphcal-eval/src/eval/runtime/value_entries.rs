@@ -8,7 +8,6 @@
 
 use std::collections::{HashMap, HashSet};
 
-use graphcal_compiler::dag_id::DagId;
 use graphcal_compiler::declaration_category::ValueDeclCategory;
 use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
 use graphcal_compiler::resolved_name::ResolvedDeclName;
@@ -24,7 +23,6 @@ use crate::presentation_evidence::PresentationDiagnostic;
 use crate::runtime_presentation::PresentedRef;
 
 use super::evaluated_root::EvaluatedRoot;
-use super::root_names::instance_member_name;
 
 /// Whether an entry belongs to the root's consumer-facing output surface or
 /// only to the debug view.
@@ -106,11 +104,10 @@ pub(super) fn assemble_value_entries(
     ctx: &EvalSession<'_>,
 ) -> Result<ValueEntries, SemanticError> {
     let root = root_entries(plan, evaluated, ctx)?;
-    let root_id = plan.tir().root_dag_id();
     let mut projected = Vec::new();
     for planned in plan.root().semantic_instances() {
         projected.extend(projection_entries(planned, evaluated, ctx)?);
-        projected.extend(debug_entries(planned, root_id, evaluated, ctx)?);
+        projected.extend(debug_entries(planned, evaluated, ctx)?);
     }
     ValueEntries::collect(root.into_iter().chain(projected), ctx)
 }
@@ -182,7 +179,6 @@ fn projection_entries(
 /// instance member name (the instance's scope in the root, then its leaf).
 fn debug_entries(
     planned: &PlannedInstance<'_>,
-    root: &DagId,
     evaluated: EvaluatedRoot<'_>,
     ctx: &EvalSession<'_>,
 ) -> Result<Vec<ValueEntry>, SemanticError> {
@@ -194,7 +190,7 @@ fn debug_entries(
         .filter_map(|entry| entry.value().map(|value| (entry, value.category)))
         .map(|(entry, category)| {
             let key = entry.identity().clone();
-            let name = instance_member_name(root, &key, ctx.src)?;
+            let name = planned.closure().member(entry.name());
             let (result, diagnostics) = evaluated_value(&key, evaluated, &instance_ctx)?;
             Ok(ValueEntry {
                 name,

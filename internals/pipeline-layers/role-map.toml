@@ -2230,6 +2230,11 @@ role = "contracts"
 
 [[module]]
 package = "eval"
+path = ["execution_plan", "tests"]
+role = "contracts"
+
+[[module]]
+package = "eval"
 path = ["constant_pools"]
 role = "contracts"
 

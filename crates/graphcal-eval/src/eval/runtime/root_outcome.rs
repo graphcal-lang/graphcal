@@ -27,7 +27,7 @@ use crate::runtime_presentation::PendingPresentedMap;
 
 use super::assertions::evaluate_assertions;
 use super::root_loop::{EvalLoopResult, run_eval_loop_with_bindings};
-use super::root_names::{RootNames, instance_member_name, root_source_names};
+use super::root_names::{RootNames, root_source_names};
 
 /// One evaluation of the root DAG with one row of bindings.
 pub struct RootOutcome {
@@ -150,16 +150,12 @@ impl RootOutcome {
     /// A declaration the root exposes is reported first, in root-exposure
     /// order, under its source name; otherwise the smallest failed
     /// declaration of a semantic instance, under its instance member name.
-    ///
-    /// # Errors
-    ///
-    /// Returns an internal error when a failed declaration has neither name.
+    #[must_use]
     pub fn first_failure(
         &self,
         plan: &ExecPlan<'_>,
-        src: SourceId,
         include_scopes: &IncludeScopeNames,
-    ) -> Result<Option<RootFailure<'_>>, SemanticError> {
+    ) -> Option<RootFailure<'_>> {
         let names = RootNames::new(plan, include_scopes);
         let exposed = root_source_names(plan).into_iter().find_map(|(key, name)| {
             self.errors
@@ -169,22 +165,29 @@ impl RootOutcome {
                     reason: names.present(reason),
                 })
         });
-        let declaration = match exposed {
-            Some(failure) => Some(failure),
-            None => self
-                .errors
+        // Otherwise the smallest failed declaration of a semantic instance:
+        // every declaration the root evaluates is one of its closure DAGs'.
+        let declaration = exposed.or_else(|| {
+            plan.root()
+                .execution_dags()
                 .iter()
-                .min_by(|(left, _), (right, _)| left.cmp(right))
-                .map(|(key, reason)| {
-                    instance_member_name(plan.tir().root_dag_id(), key, src).map(|name| {
-                        RootFailure::Declaration {
-                            name,
-                            reason: names.present(reason),
-                        }
-                    })
+                .flat_map(|closure| {
+                    closure
+                        .scope()
+                        .dag()
+                        .declarations()
+                        .filter_map(move |entry| {
+                            self.errors.get(entry.identity()).map(|reason| {
+                                (entry.identity(), closure.member(entry.name()), reason)
+                            })
+                        })
                 })
-                .transpose()?,
-        };
+                .min_by(|(left, ..), (right, ..)| left.cmp(right))
+                .map(|(_, name, reason)| RootFailure::Declaration {
+                    name,
+                    reason: names.present(reason),
+                })
+        });
         let assertion = || {
             self.assertions
                 .iter()
@@ -208,6 +211,6 @@ impl RootOutcome {
                 )
             })
         };
-        Ok(declaration.or_else(assertion).or_else(unfinished))
+        declaration.or_else(assertion).or_else(unfinished)
     }
 }

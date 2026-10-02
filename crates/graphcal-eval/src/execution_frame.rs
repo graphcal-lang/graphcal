@@ -124,7 +124,7 @@ impl<'a> ExecutionFrame<'a> {
             callable
                 .execution_dags()
                 .iter()
-                .flat_map(|scope| scope.const_values().iter())
+                .flat_map(|closure| closure.scope().const_values().iter())
                 .map(|(key, value)| (key.clone(), value.clone())),
         );
         let presented = plan

@@ -12,8 +12,8 @@ use graphcal_compiler::tir::typed::evaluation_unit::{BodyKind, NodeBody};
 
 use crate::checked_program::{CheckedProgram, SealedDag};
 use crate::execution_plan::{
-    CallablePlan, ComputedBody, ExecPlan, PlannedBody, PlannedDeclaration, PlannedInstance,
-    PreparedConstantImport,
+    CallablePlan, ClosureDag, ComputedBody, ExecPlan, PlannedBody, PlannedDeclaration,
+    PlannedInstance, PreparedConstantImport,
 };
 
 self_cell::self_cell!(
@@ -211,17 +211,26 @@ fn prepare_callable_plan<'p>(
     crate::pipeline_metrics::record(crate::pipeline_metrics::Event::PlanConstruction);
     let src = body.source();
     let schedule = body.dag().runtime_schedule();
-    let execution_dags = schedule
-        .execution_dags()
-        .iter()
-        .map(|owner| {
-            scopes.get(owner).copied().ok_or_else(|| {
+    let callable = body.dag().dag_id();
+    // Every DAG the callable runs, and every instance a DAG of its closure
+    // includes, is the callable's body or a DAG below it.
+    let closure_dag = |owner: &DagId| {
+        scopes
+            .get(owner)
+            .and_then(|scope| ClosureDag::below(callable, *scope))
+            .ok_or_else(|| {
                 plan_internal_error(
-                    format!("semantic runtime instance `{owner}` has no compiled DAG"),
+                    format!(
+                        "semantic runtime instance `{owner}` has no compiled DAG below callable `{callable}`"
+                    ),
                     src,
                 )
             })
-        })
+    };
+    let execution_dags = schedule
+        .execution_dags()
+        .iter()
+        .map(closure_dag)
         .collect::<Result<Vec<_>, _>>()?;
     let scheduled = schedule
         .order()
@@ -250,19 +259,17 @@ fn prepare_callable_plan<'p>(
             .iter()
             .map(|record| {
                 let owner = record.instance.id().owner();
-                let instance = tir.dag_registry().semantic_instance(record);
-                instance
-                    .zip(scopes.get(owner).copied())
+                let instance = tir
+                    .dag_registry()
+                    .semantic_instance(record)
                     .ok_or_else(|| {
                         plan_internal_error(
-                            format!("semantic instance `{owner}` has no compiled DAG"),
+                            format!("semantic instance `{owner}` has no checked DAG"),
                             src,
                         )
-                    })
-                    .and_then(|(instance, scope)| {
-                        PlannedInstance::try_new(tir, instance, scope)
-                            .map_err(|error| plan_internal_error(error.to_string(), src))
-                    })
+                    })?;
+                PlannedInstance::try_new(tir, instance, closure_dag(owner)?)
+                    .map_err(|error| plan_internal_error(error.to_string(), src))
             })
             .collect::<Result<Vec<_>, _>>()
     };
@@ -271,13 +278,21 @@ fn prepare_callable_plan<'p>(
     // in `DagId` order, each with the instances it includes.
     let mut parents = execution_dags
         .iter()
-        .copied()
-        .filter(|scope| std::ptr::eq(scope.dag(), body.dag()) || scope.dag().is_semantic_instance())
+        .filter(|closure| {
+            let dag = closure.scope().dag();
+            std::ptr::eq(dag, body.dag()) || dag.is_semantic_instance()
+        })
+        .cloned()
         .collect::<Vec<_>>();
-    parents.sort_by(|left, right| left.dag().dag_id().cmp(right.dag().dag_id()));
+    parents.sort_by(|left, right| {
+        left.scope()
+            .dag()
+            .dag_id()
+            .cmp(right.scope().dag().dag_id())
+    });
     let closure_instances = parents
         .into_iter()
-        .map(|parent| Ok((parent, plan_instances(parent)?)))
+        .map(|parent| Ok((parent.clone(), plan_instances(parent.scope())?)))
         .collect::<Result<Vec<_>, SemanticError>>()?;
     let imports = prepare_imports(&execution_dags);
     CallablePlan::new(
@@ -308,12 +323,13 @@ fn located<'a, 'p>(
 
 /// Select the constant imports of a callable's execution DAGs, which the
 /// program resolved when it was sealed.
-fn prepare_imports(dags: &[SealedDag<'_>]) -> Vec<PreparedConstantImport> {
+fn prepare_imports(dags: &[ClosureDag<'_>]) -> Vec<PreparedConstantImport> {
     dags.iter()
+        .map(ClosureDag::scope)
         .flat_map(|dag| {
             dag.imported_constants()
                 .iter()
-                .map(|constant| PreparedConstantImport {
+                .map(move |constant| PreparedConstantImport {
                     destination: dag.dag().imported_destination(constant.value().key()),
                     value: constant.value().clone(),
                 })

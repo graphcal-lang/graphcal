@@ -140,7 +140,7 @@ pub fn evaluate_plan_with_values_and_bindings_and_cancellation(
             .iter()
             .flat_map(|plot| plot.presentation_diagnostics.iter().cloned()),
     );
-    let assumes_map = assertions::root_assumes_map(plan, src)?;
+    let assumes_map = assertions::root_assumes_map(plan);
 
     let root_outcome::RootOutcomeParts {
         unfinished_calls,

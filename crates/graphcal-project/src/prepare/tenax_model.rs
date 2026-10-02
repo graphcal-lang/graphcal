@@ -336,13 +336,8 @@ impl PreparedProject {
             )
         })
         .map_err(|error| self.render(error))?;
-        if let Some(failure) = outcome
-            .first_failure(
-                self.plan(),
-                self.source,
-                &self.output_assembly.include_debug_names,
-            )
-            .map_err(|error| self.render(error))?
+        if let Some(failure) =
+            outcome.first_failure(self.plan(), &self.output_assembly.include_debug_names)
         {
             return Ok(ModelRowOutcome::Failure(self.row_failure(failure)));
         }

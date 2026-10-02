@@ -752,7 +752,7 @@ fn every_body_has_one_prepared_callable_with_retained_single_body_pools() {
             callable
                 .execution_dags()
                 .iter()
-                .map(|scope| scope.dag().dag_id())
+                .map(|closure| closure.scope().dag().dag_id())
                 .collect::<Vec<_>>(),
             [dag.dag_id()]
         );
@@ -864,7 +864,8 @@ fn prepared_imports_and_instance_constant_pools_borrow_canonical_values() {
     let mut constants = 0;
     let mut imports = 0;
     for callable in plan.callables() {
-        for scope in callable.execution_dags() {
+        for closure in callable.execution_dags() {
+            let scope = closure.scope();
             for (key, value) in scope.const_values().iter() {
                 let body = plan.declaration(key).unwrap().scope();
                 let canonical = plan
@@ -9285,4 +9286,40 @@ fn assumes_targets_resolve_through_semantic_instances() {
         .collect::<Vec<_>>();
     assumers.sort();
     assert_eq!(assumers, ["dependent", "y_out"]);
+}
+
+#[test]
+fn assumes_inside_an_instance_name_private_assumers_and_skip_unreported_assertions() {
+    // Before 7-1 an assumer the root does not expose, or an assertion the
+    // root does not report, aborted evaluation with an internal error.
+    let source = "dag producer {\n\
+                      param v: Length;\n\
+                      assert positive = @v > 0.0 m;\n\
+                      #[assumes(positive)]\n\
+                      node hidden: Length = @v * 2.0;\n\
+                      pub node result: Length = @hidden;\n\
+                  }\n\
+                  include producer(v: 1.0 m)::{ result as r1 };\n\
+                  include producer(v: -1.0 m) as other;\n\
+                  node y: Length = @other::result;\n";
+    let result = compile_and_eval_named(source, "test.gcl").unwrap();
+    let assumes = result
+        .assumes_map
+        .iter()
+        .map(|(assertion, assumers)| {
+            (
+                assertion.to_string(),
+                assumers.iter().map(ToString::to_string).collect::<Vec<_>>(),
+            )
+        })
+        .collect::<Vec<_>>();
+    // The selective include does not report its instance's assertion, so
+    // only the aliased include's assertion has an entry.
+    assert_eq!(
+        assumes,
+        [(
+            "other::positive".to_owned(),
+            vec!["other::hidden".to_owned()]
+        )]
+    );
 }

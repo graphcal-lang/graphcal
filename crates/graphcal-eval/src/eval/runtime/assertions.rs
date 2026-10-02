@@ -4,13 +4,15 @@
 use std::collections::HashMap;
 
 use graphcal_compiler::cancellation::Cancelled;
-use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
+use graphcal_compiler::ir::instance::InstanceAssertionProjection;
 use graphcal_compiler::outcome::Outcome;
 use graphcal_compiler::resolved_name::ResolvedDeclName;
 use graphcal_compiler::semantic_error::SemanticError;
 use graphcal_compiler::source_id::SourceId;
 use graphcal_compiler::syntax::module_name::ScopedName;
 use graphcal_compiler::syntax::span::Span;
+use graphcal_compiler::tir::typed::evaluation_unit::DeclarationBody;
+use graphcal_compiler::tir::typed::model::TypedAssertEntry;
 use graphcal_compiler::tir::typed::{AssertionOperands, BodyKind, Scoped};
 
 use crate::assertion_eval::evaluate_assert_with_expected_fail;
@@ -18,8 +20,8 @@ use crate::eval::types::{AssertResult, NodeUnavailable};
 use crate::eval_expr::{EvalSession, RuntimeValueMap, eval_root};
 
 use super::dependency_failures::dependency_failure_message;
-use super::root_names::{RootNames, qualified_below, root_source_names};
-use crate::execution_plan::PlannedAssertion;
+use super::root_names::{RootNames, root_source_names};
+use crate::execution_plan::{ClosureDag, PlannedAssertion, PlannedInstance};
 
 /// Evaluate every assertion reported for the root DAG: root assertions in
 /// source order, then assertions projected from the semantic instances the
@@ -63,94 +65,129 @@ pub(super) fn evaluate_assertions(
             ))
         })
         .collect::<Result<_, Outcome<SemanticError>>>()?;
-    for (parent, instances) in plan.root().closure_instances() {
-        let parent_dag = parent.dag();
-        for planned in instances {
-            let record = planned.instance().record();
-            for &PlannedAssertion {
-                projection,
-                body: unit,
-                entry,
-            } in planned.assertions()
-            {
-                let owner = unit.identity();
-                let assertion_ctx = ctx.with_src(src).for_decl(owner);
-                let expected = projection
-                    .expected_fail
-                    .as_ref()
-                    .or_else(|| unit.expected_fail());
-                let result = evaluate_assert_with_expected_fail(
-                    entry.map(|entry| &*entry.body),
-                    expected,
-                    &mut |expr| eval_root(&assertion_ctx.executable(expr)?, values, &assertion_ctx),
-                )?;
-                // A parent outside the root's subtree contributes no qualifier.
-                let exposed = record.instance.exposed_name(projection);
-                let name = qualified_below(tir.root_dag_id(), parent_dag.dag_id(), &exposed)
-                    .unwrap_or(exposed);
-                assertions.push((
-                    name,
-                    result.map_names(|declaration| names.name(declaration)),
-                    entry.get().span,
-                ));
-            }
-        }
+    for (parent, planned, projection, unit, entry) in projected_assertions(plan) {
+        let owner = unit.identity();
+        let assertion_ctx = ctx.with_src(src).for_decl(owner);
+        let expected = projection
+            .expected_fail
+            .as_ref()
+            .or_else(|| unit.expected_fail());
+        let result = evaluate_assert_with_expected_fail(
+            entry.map(|entry| &*entry.body),
+            expected,
+            &mut |expr| eval_root(&assertion_ctx.executable(expr)?, values, &assertion_ctx),
+        )?;
+        assertions.push((
+            projected_assertion_name(parent, planned, projection),
+            result.map_names(|declaration| names.name(declaration)),
+            entry.get().span,
+        ));
     }
     Ok(assertions)
 }
 
-/// The `#[assumes]` table of the root DAG and its execution closure, keyed
-/// by the root source names of the assertions and their assumers.
-pub(super) fn root_assumes_map(
-    plan: &crate::execution_plan::ExecPlan<'_>,
-    src: SourceId,
-) -> Result<HashMap<ScopedName, Vec<ScopedName>>, SemanticError> {
-    let source_names_by_key = root_source_names(plan)
-        .into_iter()
-        .collect::<HashMap<_, _>>();
-    let source_name = |key: &ResolvedDeclName, role: &str| {
-        source_names_by_key.get(key).cloned().ok_or_else(|| {
-            SemanticError::internal_error(
-                format!("{role} `{key}` is missing from checked source order"),
-                src,
-                DiagnosticAnchor::WholeFile,
-            )
+/// Every assertion an include site of the root's closure exposes, with the
+/// closure DAG that includes the instance, in report order.
+fn projected_assertions<'a, 'p>(
+    plan: &'a crate::execution_plan::ExecPlan<'p>,
+) -> impl Iterator<
+    Item = (
+        &'a ClosureDag<'p>,
+        &'a PlannedInstance<'p>,
+        &'p InstanceAssertionProjection,
+        DeclarationBody<'p>,
+        Scoped<'p, TypedAssertEntry>,
+    ),
+> {
+    plan.root()
+        .closure_instances()
+        .iter()
+        .flat_map(|(parent, instances)| {
+            instances.iter().flat_map(move |planned| {
+                planned.assertions().iter().map(
+                    move |&PlannedAssertion {
+                              projection,
+                              body,
+                              entry,
+                          }| (parent, planned, projection, body, entry),
+                )
+            })
         })
-    };
-    merge_assumes_maps(
-        plan.root()
-            .execution_dags()
-            .iter()
-            .map(|scope| scope.dag().assumes_map()),
-    )
-    .iter()
-    .map(|(assertion, assumers)| {
-        let assumer_names = assumers
-            .iter()
-            .map(|assumer| source_name(assumer, "assertion assumer"))
-            .collect::<Result<Vec<_>, SemanticError>>()?;
-        Ok((source_name(assertion, "assertion")?, assumer_names))
-    })
-    .collect()
 }
 
-/// Merge per-DAG `#[assumes]` tables keyed by runtime identity.
+/// The name the root reports an assertion `projection` of `planned`
+/// exposes under: its exposed name, qualified by the scopes of `parent`, the
+/// DAG that includes the instance, below the root.
+fn projected_assertion_name(
+    parent: &ClosureDag<'_>,
+    planned: &PlannedInstance<'_>,
+    projection: &InstanceAssertionProjection,
+) -> ScopedName {
+    parent.qualify(
+        &planned
+            .instance()
+            .record()
+            .instance
+            .exposed_name(projection),
+    )
+}
+
+/// The `#[assumes]` table of the root DAG and its execution closure, keyed
+/// by the names the root reports the assertions under, each with the names
+/// of its assumers.
 ///
-/// One assertion can be assumed both inside its semantic instance and by the
-/// importer through a projection, so tables of different DAGs share keys.
-fn merge_assumes_maps<'a>(
-    maps: impl IntoIterator<Item = &'a HashMap<ResolvedDeclName, Vec<ResolvedDeclName>>>,
-) -> HashMap<ResolvedDeclName, Vec<ResolvedDeclName>> {
-    let mut merged = HashMap::<ResolvedDeclName, Vec<ResolvedDeclName>>::new();
-    for (assertion, assumers) in maps.into_iter().flatten() {
-        let entry = merged.entry(assertion.clone()).or_default();
-        for assumer in assumers {
-            if !entry.contains(assumer) {
-                entry.push(assumer.clone());
+/// An assumer is a declaration of the closure DAG whose table names it, so
+/// it has the name the root exposes it under, else its name qualified by the
+/// scopes of that DAG. An assertion the root does not report (one private to
+/// a semantic instance) has no entry.
+pub(super) fn root_assumes_map(
+    plan: &crate::execution_plan::ExecPlan<'_>,
+) -> HashMap<ScopedName, Vec<ScopedName>> {
+    let tir = plan.tir();
+    let reported = tir
+        .declaration_bodies(plan.root().scope().position())
+        .filter(|unit| matches!(unit.kind(), BodyKind::Assert(_)))
+        .map(|unit| {
+            (
+                unit.identity().clone(),
+                ScopedName::local(unit.identity().leaf().clone()),
+            )
+        })
+        .chain(
+            projected_assertions(plan).map(|(parent, planned, projection, unit, _)| {
+                (
+                    unit.identity().clone(),
+                    projected_assertion_name(parent, planned, projection),
+                )
+            }),
+        )
+        .collect::<HashMap<_, _>>();
+    let exposed = root_source_names(plan)
+        .into_iter()
+        .collect::<HashMap<_, _>>();
+    let mut merged = HashMap::<ResolvedDeclName, Vec<ScopedName>>::new();
+    for closure in plan.root().execution_dags() {
+        for (assertion, assumers) in closure.scope().dag().assumes_map() {
+            let names = merged.entry(assertion.clone()).or_default();
+            for assumer in assumers {
+                let name = exposed
+                    .get(assumer)
+                    .cloned()
+                    .unwrap_or_else(|| closure.member(assumer.leaf()));
+                if !names.contains(&name) {
+                    names.push(name);
+                }
             }
         }
     }
     merged
+        .into_iter()
+        .filter_map(|(assertion, assumers)| {
+            reported
+                .get(&assertion)
+                .map(|name| (name.clone(), assumers))
+        })
+        .collect()
 }
 
 /// If any declaration referenced by an assertion body failed to evaluate,

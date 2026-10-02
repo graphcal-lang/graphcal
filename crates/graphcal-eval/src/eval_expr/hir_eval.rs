@@ -1213,9 +1213,10 @@ fn check_inline_plan_asserts(
     span: Span,
     ctx: &EvalSession<'_>,
 ) -> Result<(), Outcome<SemanticError>> {
-    callable.execution_dags().iter().try_for_each(|scope| {
+    callable.execution_dags().iter().try_for_each(|closure| {
+        let scope = closure.scope();
         check_inline_dag_asserts(
-            *scope,
+            scope,
             values,
             &ctx.with_src(scope.source()),
             target,
