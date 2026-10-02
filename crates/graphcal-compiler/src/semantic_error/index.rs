@@ -11,7 +11,8 @@ use crate::hir::expr::LocalId;
 use crate::nat::NatOverflowError;
 use crate::resolved_name::ResolvedIndexVariant;
 use crate::semantic::checked_type::{IndexDisplayName, TypeSpelling};
-use crate::semantic::index_def::IndexCardinalityError;
+use crate::semantic::dimension_table::DimensionSpelling;
+use crate::semantic::index_def::{CoordinateIndexError, IndexBindingTarget, IndexCardinalityError};
 use crate::syntax::ast::{KeyFormKind, NatExpr};
 use crate::syntax::index_name::{IndexEntryKey, IndexName, IndexVariantName};
 use crate::syntax::names::NameAtom;
@@ -33,6 +34,37 @@ impl std::fmt::Display for MapEntryCoordinate {
         match self {
             Self::Declared(variant) => variant.fmt(f),
             Self::Position { axis, position } => write!(f, "{axis}.#{position}"),
+        }
+    }
+}
+
+/// Coordinate-constructor arguments whose dimensions disagree.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CoordinateArgumentDimensions {
+    Range {
+        start: DimensionSpelling,
+        end: DimensionSpelling,
+        step: DimensionSpelling,
+    },
+    Linspace {
+        start: DimensionSpelling,
+        end: DimensionSpelling,
+    },
+}
+
+impl std::fmt::Display for CoordinateArgumentDimensions {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Range { start, end, step } => write!(
+                f,
+                "range start, end, and step have dimensions {start}, {end}, and {step}"
+            ),
+            Self::Linspace { start, end } => {
+                write!(
+                    f,
+                    "linspace start and end have dimensions {start} and {end}"
+                )
+            }
         }
     }
 }
@@ -102,13 +134,15 @@ pub enum IndexError {
         expected: IndexDisplayName,
         found: IndexDisplayName,
     },
-    #[error("coordinate index `{name}`: {message}")]
-    CoordinateIndexDimensionMismatch { name: IndexName, message: String },
-    #[error("coordinate index `{name}`: {message}")]
+    #[error("coordinate index `{name}`: {mismatch}")]
+    CoordinateIndexDimensionMismatch {
+        name: IndexName,
+        mismatch: CoordinateArgumentDimensions,
+    },
+    #[error("coordinate index `{name}`: {error}")]
     CoordinateIndexInvalid {
         name: IndexName,
-        message: String,
-        help: String,
+        error: CoordinateIndexError,
     },
     #[error("expected Index, found Nat `{expression}`")]
     ExpectedIndexFoundNat { expression: FoundNat },
@@ -116,16 +150,16 @@ pub enum IndexError {
         "index dimension mismatch: `{dep_index}` requires dimension {expected_dim} but `{bound_index}` has dimension {found_dim}"
     )]
     IndexBindingDimensionMismatch {
-        dep_index: String,
-        expected_dim: String,
-        bound_index: String,
-        found_dim: String,
+        dep_index: IndexName,
+        expected_dim: DimensionSpelling,
+        bound_index: IndexBindingTarget,
+        found_dim: DimensionSpelling,
     },
     /// A required typed Static input was not bound at a DAG instantiation boundary.
     #[error("required {kind} `{name}` must be bound at DAG instantiation")]
     RequiredStaticInputNotBound {
         kind: crate::static_interface::StaticInputKind,
-        name: String,
+        name: NameAtom,
     },
     #[error(
         "key() constructs Fin-axis keys; named-axis keys are written as qualified labels and coordinate keys come from argmax/argmin or the coordinate searches"
@@ -373,7 +407,7 @@ impl DiagnosticKind for IndexError {
             Self::MissingVariants { .. } => Some("map literals must cover all variants of the index".to_owned()),
             Self::ExtraVariants { .. } => Some("only variants declared in the index are allowed".to_owned()),
             Self::CoordinateIndexDimensionMismatch { .. } => Some("coordinate constructor arguments must have exactly the same dimension".to_owned()),
-            Self::CoordinateIndexInvalid { help, .. } => Some(help.clone()),
+            Self::CoordinateIndexInvalid { error, .. } => Some(error.help()),
             Self::ExpectedIndexFoundNat { expression, .. } => Some(format!("write `Fin({expression})` for an explicit finite structural index")),
             Self::IndexBindingDimensionMismatch { .. } => Some("coordinate-index bindings must have matching dimensions".to_owned()),
             Self::RequiredStaticInputNotBound { kind, .. } => Some(format!("bind the input with its explicit `{kind}` marker at the include or direct-call site")),

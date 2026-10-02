@@ -907,7 +907,7 @@ include pkg.lib()::{ cost };
         matches!(
             &result,
             Err(CompileError::Eval(RenderedSemanticError { error: SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic { kind: SemanticErrorKind::Index(IndexError::RequiredStaticInputNotBound { name, .. }), .. }), .. }))
-                if name == "Phase"
+                if name.as_str() == "Phase"
         ),
         "explicit instance should report its unsatisfied index: {result:?}",
     );

@@ -12,6 +12,7 @@
 use crate::semantic::dimension_table::DimensionSpelling;
 use crate::semantic_error::dimension::BaseUnitRejection;
 use crate::semantic_error::dimension::UnitScaleSite;
+use crate::semantic_error::index::CoordinateArgumentDimensions;
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use crate::dag_id::DagId;
@@ -1203,13 +1204,13 @@ impl<'a> StaticDefinitionEvaluator<'a> {
         src: SourceId,
         decl_span: Span,
     ) -> Result<IndexKind, SemanticError> {
-        let dimension_mismatch = |message: String| {
+        let dimension_mismatch = |mismatch: CoordinateArgumentDimensions| {
             SemanticError::located(
                 src,
                 decl_span,
                 IndexError::CoordinateIndexDimensionMismatch {
                     name: name.clone(),
-                    message,
+                    mismatch,
                 },
             )
         };
@@ -1218,27 +1219,24 @@ impl<'a> StaticDefinitionEvaluator<'a> {
             .map_err(|error| match error {
                 CoordinateAxisError::Expr(error) => const_expr_error(error, src),
                 CoordinateAxisError::RangeDimensionMismatch { start, end, step } => {
-                    dimension_mismatch(format!(
-                        "range start, end, and step have dimensions {}, {}, and {}",
-                        self.format_dimension(owner, &start),
-                        self.format_dimension(owner, &end),
-                        self.format_dimension(owner, &step)
-                    ))
+                    dimension_mismatch(CoordinateArgumentDimensions::Range {
+                        start: self.dimension_spelling(owner, &start),
+                        end: self.dimension_spelling(owner, &end),
+                        step: self.dimension_spelling(owner, &step),
+                    })
                 }
                 CoordinateAxisError::LinspaceDimensionMismatch { start, end } => {
-                    dimension_mismatch(format!(
-                        "linspace start and end have dimensions {} and {}",
-                        self.format_dimension(owner, &start),
-                        self.format_dimension(owner, &end)
-                    ))
+                    dimension_mismatch(CoordinateArgumentDimensions::Linspace {
+                        start: self.dimension_spelling(owner, &start),
+                        end: self.dimension_spelling(owner, &end),
+                    })
                 }
                 CoordinateAxisError::Invalid { error, point_count } => SemanticError::located(
                     src,
                     point_count.unwrap_or(decl_span),
                     IndexError::CoordinateIndexInvalid {
                         name: name.clone(),
-                        message: error.to_string(),
-                        help: error.help(),
+                        error,
                     },
                 ),
             })

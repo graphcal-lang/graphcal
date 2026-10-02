@@ -695,3 +695,33 @@ fn dimension_payloads_render_their_text_as_before() {
         Some("replace the float exponent with `(1/2)`")
     );
 }
+
+#[test]
+fn index_payloads_render_their_text_as_before() {
+    use super::index::CoordinateArgumentDimensions;
+    use crate::dimension::Dimension;
+    use crate::semantic::dimension_table::DimensionFormattingRegistry;
+
+    let registry = DimensionFormattingRegistry::new(std::collections::BTreeMap::new(), []);
+    let dimensionless = || registry.dimension_spelling(&Dimension::dimensionless());
+    let rendered = dimensionless().to_string();
+    assert_eq!(
+        CoordinateArgumentDimensions::Range {
+            start: dimensionless(),
+            end: dimensionless(),
+            step: dimensionless(),
+        }
+        .to_string(),
+        format!(
+            "range start, end, and step have dimensions {rendered}, {rendered}, and {rendered}"
+        )
+    );
+    assert_eq!(
+        CoordinateArgumentDimensions::Linspace {
+            start: dimensionless(),
+            end: dimensionless(),
+        }
+        .to_string(),
+        format!("linspace start and end have dimensions {rendered} and {rendered}")
+    );
+}

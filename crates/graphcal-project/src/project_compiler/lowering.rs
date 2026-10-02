@@ -1287,10 +1287,10 @@ fn validate_index_binding_contracts(
                     sites.importer_src,
                     site.span,
                     IndexError::IndexBindingDimensionMismatch {
-                        dep_index: dep_index.to_string(),
-                        expected_dim: definitions.format_dimension(sites.importer, &expected),
-                        bound_index: site.authored.to_string(),
-                        found_dim: definitions.format_dimension(sites.importer, &found),
+                        dep_index,
+                        expected_dim: definitions.dimension_spelling(sites.importer, &expected),
+                        bound_index: site.authored.clone(),
+                        found_dim: definitions.dimension_spelling(sites.importer, &found),
                     },
                 )));
             }

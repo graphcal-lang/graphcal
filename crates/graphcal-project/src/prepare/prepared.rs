@@ -620,7 +620,7 @@ pub(super) fn prepare_checked_project(
                 span,
                 IndexError::RequiredStaticInputNotBound {
                     kind: StaticInputKind::Index,
-                    name: index.name().to_string(),
+                    name: index.name().atom().clone(),
                 },
             ),
             &sources,

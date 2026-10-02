@@ -828,7 +828,7 @@ fn validate_required_static_bindings(
                     }
                 }
         })
-        .map(|(kind, name, _)| (kind, name.to_string()))
+        .map(|(kind, name, _)| (kind, name.clone()))
         .collect::<Vec<_>>();
     missing.sort_by(|(first_kind, first_name), (second_kind, second_name)| {
         first_kind

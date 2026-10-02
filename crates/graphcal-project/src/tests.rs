@@ -7262,10 +7262,10 @@ include pass_through(
                 }),
             ..
         })) => {
-            assert_eq!(dep_index, "Step");
-            assert_eq!(expected_dim, "Time");
-            assert_eq!(bound_index, "DistanceStep");
-            assert_eq!(found_dim, "Length");
+            assert_eq!(dep_index.as_str(), "Step");
+            assert_eq!(expected_dim.to_string(), "Time");
+            assert_eq!(bound_index.to_string(), "DistanceStep");
+            assert_eq!(found_dim.to_string(), "Length");
         }
         other => panic!("expected IndexBindingDimensionMismatch, got {other:?}"),
     }
@@ -7341,7 +7341,7 @@ include pass_through(samples: 1.0 m) as output;
                 }),
             ..
         })) => {
-            assert_eq!(name, "Step");
+            assert_eq!(name.as_str(), "Step");
         }
         other => panic!("expected RequiredStaticInputNotBound, got {other:?}"),
     }
