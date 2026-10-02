@@ -298,6 +298,26 @@ impl PreparedProject {
         row: &ParameterBindingRow,
         model: &PreparedModel,
     ) -> Result<ModelRowOutcome, ModelExecutionError> {
+        self.evaluate_row(row, model, |runtime, output| {
+            graphcal_eval::eval::public_projection::project(
+                graphcal_eval::runtime_presentation::PresentedRef::plain(runtime),
+                &output.declared_type,
+            )
+            .map(|(value, _)| value)
+        })
+    }
+
+    /// Evaluate one row of `model`, projecting each selected output with
+    /// `project`, which reports a value contradicting its checked type.
+    fn evaluate_row<T>(
+        &self,
+        row: &ParameterBindingRow,
+        model: &PreparedModel,
+        project: impl Fn(
+            &graphcal_eval::eval_expr::RuntimeValue,
+            &ModelOutputPort,
+        ) -> Result<T, graphcal_eval::invariant::Invariant>,
+    ) -> Result<ModelRowOutcome<T>, ModelExecutionError> {
         self.validate_row_identity(row)
             .map_err(ModelExecutionError::from)?;
         if model.plan_id != self.plan_id {
@@ -326,7 +346,7 @@ impl PreparedProject {
         {
             return Ok(ModelRowOutcome::Failure(self.row_failure(failure)));
         }
-        self.project_model_outputs(model, outcome.values())
+        self.project_model_outputs(model, outcome.values(), project)
             .map(ModelRowOutcome::Success)
     }
 
@@ -339,28 +359,28 @@ impl PreparedProject {
                 &self.output_assembly.include_debug_names,
             )
         };
-        let message = match failure {
-            RootFailure::Declaration { name, reason } => format!("{}: {reason}", display(&name)),
-            RootFailure::Assertion { name, message } => {
-                format!("assertion `{}`: {message}", display(name))
-            }
-            RootFailure::UnfinishedCalls(calls) => format!(
-                "unfinished formulas in invoked DAGs: {}",
-                calls
-                    .iter()
-                    .map(ToString::to_string)
-                    .collect::<Vec<_>>()
-                    .join("; ")
-            ),
-        };
-        ModelRowFailure { message }
+        match failure {
+            RootFailure::Declaration { name, reason } => ModelRowFailure::Declaration {
+                name: display(&name),
+                reason,
+            },
+            RootFailure::Assertion { name, message } => ModelRowFailure::Assertion {
+                name: display(name),
+                message,
+            },
+            RootFailure::UnfinishedCalls(calls) => ModelRowFailure::UnfinishedCalls(calls),
+        }
     }
 
-    fn project_model_outputs(
+    fn project_model_outputs<T>(
         &self,
         model: &PreparedModel,
         values: &graphcal_eval::eval_expr::RuntimeValueMap,
-    ) -> Result<Vec<Value>, ModelExecutionError> {
+        project: impl Fn(
+            &graphcal_eval::eval_expr::RuntimeValue,
+            &ModelOutputPort,
+        ) -> Result<T, graphcal_eval::invariant::Invariant>,
+    ) -> Result<Vec<T>, ModelExecutionError> {
         model
             .outputs
             .iter()
@@ -370,12 +390,7 @@ impl PreparedProject {
                         name: output.name.clone(),
                     }
                 })?;
-                graphcal_eval::eval::public_projection::project(
-                    graphcal_eval::runtime_presentation::PresentedRef::plain(runtime),
-                    &output.declared_type,
-                )
-                .map(|(value, _)| value)
-                .map_err(|invariant| {
+                project(runtime, output).map_err(|invariant| {
                     ModelExecutionError::Compile(
                         self.render(invariant.into_internal_error(self.source)),
                     )
@@ -390,20 +405,14 @@ impl PreparedProject {
         row: &ParameterBindingRow,
         model: &TenaxV2Model,
     ) -> Result<TenaxV2RowOutcome, ModelExecutionError> {
-        match self.evaluate_model_row(row, &model.model)? {
-            ModelRowOutcome::Failure(failure) => Ok(TenaxV2RowOutcome::Failure(failure)),
-            ModelRowOutcome::Success(values) => values
-                .into_iter()
-                .zip(&model.outputs)
-                .map(|(value, output)| match value {
-                    Value::Bool(value) => Ok(value),
-                    _ => Err(ModelExecutionError::NonBooleanOutput {
-                        name: output.name.clone(),
-                    }),
-                })
-                .collect::<Result<Vec<_>, _>>()
-                .map(TenaxV2RowOutcome::Success),
-        }
+        // Every v2 output is checked as `Bool`.
+        let outcome = self.evaluate_row(row, &model.model, |runtime, _| {
+            graphcal_eval::eval::public_projection::project_bool(runtime)
+        })?;
+        Ok(match outcome {
+            ModelRowOutcome::Failure(failure) => TenaxV2RowOutcome::Failure(failure),
+            ModelRowOutcome::Success(values) => TenaxV2RowOutcome::Success(values),
+        })
     }
 
     fn tenax_v2_input(&self, port: &ParameterPort) -> Result<TenaxV2Input, ModelDefinitionError> {
@@ -604,10 +613,11 @@ impl TenaxV2Model {
     }
 }
 
-/// Ordinary recursive typed per-row model outcome.
+/// Ordinary recursive typed per-row model outcome: the selected outputs,
+/// each projected as a `T`.
 #[derive(Debug, Clone, PartialEq)]
-pub enum ModelRowOutcome {
-    Success(Vec<Value>),
+pub enum ModelRowOutcome<T = Value> {
+    Success(Vec<T>),
     Failure(ModelRowFailure),
 }
 
@@ -618,18 +628,34 @@ pub enum TenaxV2RowOutcome {
     Failure(ModelRowFailure),
 }
 
-/// Stable human diagnostic for one ordinary Graphcal row failure.
+/// The first ordinary Graphcal failure of a model row, naming declarations
+/// as the project displays them; its rendering is the row's stable human
+/// diagnostic.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
-#[error("{message}")]
-pub struct ModelRowFailure {
-    message: String,
+pub enum ModelRowFailure {
+    /// A declaration failed, or is unavailable.
+    #[error("{name}: {reason}")]
+    Declaration {
+        name: graphcal_compiler::syntax::module_name::ScopedName,
+        reason: graphcal_eval::eval::OutputUnavailable,
+    },
+    /// An assertion did not pass.
+    #[error("assertion `{name}`: {message}")]
+    Assertion {
+        name: graphcal_compiler::syntax::module_name::ScopedName,
+        message: String,
+    },
+    /// A call reached unfinished formulas of the DAG it invoked.
+    #[error("unfinished formulas in invoked DAGs: {}", unfinished_calls(.0))]
+    UnfinishedCalls(Vec<graphcal_eval::eval::OutputDeclName>),
 }
 
-impl ModelRowFailure {
-    #[must_use]
-    pub fn message(&self) -> &str {
-        &self.message
-    }
+fn unfinished_calls(calls: &[graphcal_eval::eval::OutputDeclName]) -> String {
+    calls
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join("; ")
 }
 
 /// Process-scoped failure while evaluating a prepared model.
@@ -644,11 +670,6 @@ pub enum ModelExecutionError {
         "internal model projection invariant failed: selected output `{name}` has no runtime value"
     )]
     MissingOutputValue { name: DeclName },
-    /// A checked Boolean output produced a non-Boolean value.
-    #[error(
-        "internal model projection invariant failed: selected Tenax v2 output `{name}` did not produce Bool"
-    )]
-    NonBooleanOutput { name: DeclName },
 }
 
 /// Why a Graphcal model cannot be projected into Tenax schema v2.

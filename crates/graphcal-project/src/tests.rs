@@ -4221,7 +4221,7 @@ fn model_row_fails_when_an_included_assertion_fails() {
     );
     match evaluate_included_model_row(leaf, "-1.0") {
         ModelRowOutcome::Failure(failure) => assert!(
-            failure.message().contains("positive"),
+            failure.to_string().contains("positive"),
             "unexpected failure: {failure}"
         ),
         ModelRowOutcome::Success(values) => panic!("expected assertion failure, got {values:?}"),
@@ -4239,7 +4239,7 @@ fn model_row_reports_runtime_errors_inside_included_dags_as_row_failures() {
     );
     match evaluate_included_model_row(leaf, "0.0") {
         ModelRowOutcome::Failure(failure) => assert!(
-            failure.message().contains("division by zero"),
+            failure.to_string().contains("division by zero"),
             "unexpected failure: {failure}"
         ),
         ModelRowOutcome::Success(values) => panic!("expected runtime failure, got {values:?}"),
@@ -4295,7 +4295,7 @@ fn private_include_failures_are_labelled_by_the_include_scope() {
         match prepared.evaluate_model_row(&row, &model).unwrap() {
             ModelRowOutcome::Failure(failure) => assert!(
                 failure
-                    .message()
+                    .to_string()
                     .starts_with(&format!("{label}: division by zero")),
                 "unexpected failure for `{include}`: {failure}"
             ),
