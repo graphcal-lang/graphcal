@@ -4,11 +4,14 @@ use crate::binding_error::{BindingError, BindingLiteralError, BindingValueKind};
 
 use std::sync::Arc;
 
+use graphcal_compiler::source_id::SourceId;
+use graphcal_compiler::source_registry::SourceRegistry;
 use graphcal_compiler::syntax::ast::{
     FieldInit, GenericArg, Ident, IdentPath, MapEntry, MapEntryKey,
 };
 use graphcal_compiler::syntax::fin_position::FinPosition;
 use graphcal_compiler::syntax::non_empty::NonEmpty;
+use graphcal_compiler::syntax::parser::{ParseError, Parser};
 use graphcal_compiler::syntax::phase::Desugared;
 use graphcal_compiler::syntax::span::Spanned;
 use graphcal_compiler::syntax::token::SourceIdentifier;
@@ -123,6 +126,99 @@ fn structured_error(
     }
 }
 
+/// Where a bound value's text lives. Diagnostics about the value are drawn
+/// against `source` and rendered with `sources`, which also resolves every
+/// project source id.
+#[derive(Clone, Copy)]
+struct ValueSite<'a> {
+    /// Entry parameter receiving the value.
+    name: &'a DeclName,
+    source: SourceId,
+    sources: &'a SourceRegistry,
+}
+
+impl ValueSite<'_> {
+    fn render(self, error: SemanticError) -> CompileError {
+        CompileError::semantic(error, self.sources)
+    }
+
+    /// A binding error located in the value at `span`.
+    fn error(
+        self,
+        span: Span,
+        error: impl FnOnce(DeclName, NamedSource<Arc<String>>, SourceSpan) -> BindingError,
+    ) -> CompileError {
+        CompileError::Binding(error(
+            self.name.clone(),
+            self.sources.renderable(self.source),
+            span.into(),
+        ))
+    }
+
+    /// Validate that a lowered binding value is a closed literal tree.
+    fn closed(
+        self,
+        hir: graphcal_compiler::hir::expr::Expr<graphcal_compiler::hir::expr::Draft>,
+    ) -> Result<graphcal_compiler::hir::closed_expr::ClosedExpr, CompileError> {
+        let span = hir.span;
+        graphcal_compiler::hir::closed_expr::ClosedExpr::try_new(hir).map_err(|reason| {
+            self.error(span, |name, src, span| BindingError::NotClosed {
+                name,
+                reason,
+                src,
+                span,
+            })
+        })
+    }
+}
+
+/// A closed value expression parsed from external text of its own.
+///
+/// A `--param` value or an editor field keeps its text next to the parsed
+/// expression, so the expression's spans are always drawn against the text
+/// they index.
+#[derive(Debug, Clone)]
+pub struct ExternalValue {
+    label: String,
+    text: Arc<String>,
+    expr: Expr,
+}
+
+impl ExternalValue {
+    /// Parse closed value syntax from `text`, named `label` in diagnostics.
+    ///
+    /// # Errors
+    ///
+    /// Returns the [`ParseError`] of `text`.
+    pub fn parse(label: impl Into<String>, text: impl Into<String>) -> Result<Self, ParseError> {
+        let text = text.into();
+        let expr = Parser::new(&text).parse_single_expr()?.into();
+        Ok(Self {
+            label: label.into(),
+            text: Arc::new(text),
+            expr,
+        })
+    }
+
+    /// Diagnostic name of the value's text.
+    #[must_use]
+    pub fn label(&self) -> &str {
+        &self.label
+    }
+
+    /// The text the expression's spans index.
+    #[must_use]
+    pub const fn text(&self) -> &Arc<String> {
+        &self.text
+    }
+
+    /// The parsed, desugared expression.
+    #[must_use]
+    pub const fn expr(&self) -> &Expr {
+        &self.expr
+    }
+}
+
 fn structured_compile_error(
     path: &[StructuredBindingPathSegment],
     error: CompileError,
@@ -141,38 +237,80 @@ impl PreparedProject {
     }
 
     /// Compile and validate one closed recursive value for a plan position.
+    ///
+    /// Diagnostics about the value are drawn against the value's own text.
     pub fn compile_parameter_value(
         &self,
         position: ParameterPosition,
-        expr: &Expr,
+        value: &ExternalValue,
     ) -> Result<ParameterValue, CompileError> {
         let port = self.port_at(position)?;
-        let normalized =
-            normalize_binding_literal(expr.clone(), &port.value_schema, &self.schema_graph)
-                .map_err(|reason| {
-                    self.value_error(expr.span, |src, span| BindingError::InvalidLiteral {
-                        name: port.name.clone(),
-                        reason,
-                        src,
-                        span,
-                    })
-                })?;
-        let tree = self.check_closed_binding(port, &normalized)?;
-        Ok(ParameterValue {
-            plan_id: self.plan_id,
-            position,
-            binding: self.evaluate_closed_binding(&tree)?,
-        })
+        let mut sources = SourceRegistry::extending(Arc::clone(&self.sources));
+        let source = sources.register(value.label(), Arc::clone(value.text()));
+        self.compile_value(
+            port,
+            value.expr(),
+            ValueSite {
+                name: &port.name,
+                source,
+                sources: &sources,
+            },
+        )
     }
 
     /// Resolve an entry parameter name and compile one closed recursive value.
     pub fn compile_named_parameter_value(
         &self,
         name: &DeclName,
+        value: &ExternalValue,
+    ) -> Result<ParameterValue, CompileError> {
+        self.compile_parameter_value(self.parameter_position(name)?, value)
+    }
+
+    /// Compile a value synthesized without text of its own (from a JSON
+    /// document or a structured editor value). Its diagnostics are reported
+    /// as messages by the caller, so its synthetic spans are never drawn.
+    pub(super) fn compile_synthesized_value(
+        &self,
+        position: ParameterPosition,
         expr: &Expr,
     ) -> Result<ParameterValue, CompileError> {
-        let index = self.parameter_index(name)?;
-        self.compile_parameter_value(self.parameter_ports[index].position, expr)
+        let port = self.port_at(position)?;
+        self.compile_value(port, expr, self.entry_site(port))
+    }
+
+    fn compile_value(
+        &self,
+        port: &ParameterPort,
+        expr: &Expr,
+        site: ValueSite<'_>,
+    ) -> Result<ParameterValue, CompileError> {
+        let normalized =
+            normalize_binding_literal(expr.clone(), &port.value_schema, &self.schema_graph)
+                .map_err(|reason| {
+                    site.error(expr.span, |name, src, span| BindingError::InvalidLiteral {
+                        name,
+                        reason,
+                        src,
+                        span,
+                    })
+                })?;
+        let tree = self.check_closed_binding(site, port, &normalized)?;
+        Ok(ParameterValue {
+            plan_id: self.plan_id,
+            position: port.position,
+            binding: self.evaluate_closed_binding(site, &tree)?,
+        })
+    }
+
+    /// The value site of a synthesized value: the entry source, whose
+    /// registry resolves every project source id.
+    fn entry_site<'a>(&'a self, port: &'a ParameterPort) -> ValueSite<'a> {
+        ValueSite {
+            name: &port.name,
+            source: self.source,
+            sources: &self.sources,
+        }
     }
 
     /// Build and compile a structured browser value without reparsing its
@@ -186,19 +324,19 @@ impl PreparedProject {
             .port_at(position)
             .map_err(|error| structured_compile_error(&[], error))?;
         let expr = self.structured_binding_expr(
-            &port.name,
+            self.entry_site(port),
             value,
             &port.value_schema,
             self.tir().root_dag_id(),
             &mut Vec::new(),
         )?;
-        self.compile_parameter_value(position, &expr)
+        self.compile_synthesized_value(position, &expr)
             .map_err(|error| structured_compile_error(&[], error))
     }
 
     fn structured_binding_expr(
         &self,
-        name: &DeclName,
+        site: ValueSite<'_>,
         value: &StructuredValueExpr,
         expected: &ModelValueSchema,
         owner: &graphcal_compiler::dag_id::DagId,
@@ -212,7 +350,7 @@ impl PreparedProject {
                 structured_error(path, StructuredBindingErrorKind::ExpectedIndexed),
             ),
             (StructuredValueExpr::Literal(expr), _) => {
-                self.structured_literal_expr(name, expr, expected, owner, path)
+                self.structured_literal_expr(site, expr, expected, owner, path)
             }
             (
                 StructuredValueExpr::Algebraic {
@@ -222,7 +360,7 @@ impl PreparedProject {
                 },
                 ModelValueSchema::Algebraic(expected_id),
             ) => self.structured_algebraic_expr(
-                name,
+                site,
                 *definition,
                 *constructor,
                 fields,
@@ -232,7 +370,7 @@ impl PreparedProject {
             (
                 StructuredValueExpr::Indexed { entries },
                 ModelValueSchema::Indexed { element, axis },
-            ) => self.structured_indexed_expr(name, entries, element, axis, owner, path),
+            ) => self.structured_indexed_expr(site, entries, element, axis, owner, path),
             (StructuredValueExpr::Algebraic { .. }, _) => Err(structured_error(
                 path,
                 StructuredBindingErrorKind::UnexpectedAlgebraic,
@@ -246,7 +384,7 @@ impl PreparedProject {
 
     fn structured_literal_expr(
         &self,
-        name: &DeclName,
+        site: ValueSite<'_>,
         expr: &Expr,
         expected: &ModelValueSchema,
         owner: &graphcal_compiler::dag_id::DagId,
@@ -256,8 +394,8 @@ impl PreparedProject {
             .map_err(|reason| {
                 structured_compile_error(
                     path,
-                    self.value_error(expr.span, |src, span| BindingError::InvalidLiteral {
-                        name: name.clone(),
+                    site.error(expr.span, |name, src, span| BindingError::InvalidLiteral {
+                        name,
                         reason,
                         src,
                         span,
@@ -265,24 +403,24 @@ impl PreparedProject {
                 )
             })?;
         let hir = self
-            .lower_closed_binding_expr(name, &normalized, expected, owner)
+            .lower_closed_binding_expr(site, &normalized, expected, owner)
             .map_err(|error| structured_compile_error(path, error))?;
-        let hir = self
-            .closed_binding(name, hir)
+        let hir = site
+            .closed(hir)
             .map_err(|error| structured_compile_error(path, error))?;
         graphcal_compiler::tir::dim_check::check_external_value_expr_type(
             self.tir(),
             &hir,
             &expected.declared_type(),
-            self.source,
+            site.source,
         )
-        .map_err(|error| structured_compile_error(path, self.render(error)))?;
+        .map_err(|error| structured_compile_error(path, site.render(error)))?;
         Ok(normalized)
     }
 
     fn structured_algebraic_expr(
         &self,
-        name: &DeclName,
+        site: ValueSite<'_>,
         definition_index: usize,
         constructor_index: usize,
         fields: &[StructuredValueExpr],
@@ -337,7 +475,7 @@ impl PreparedProject {
             .enumerate()
             .map(|(index, (value, schema))| {
                 path.push(StructuredBindingPathSegment::Field(index));
-                let value = self.structured_binding_expr(name, value, schema.value(), owner, path);
+                let value = self.structured_binding_expr(site, value, schema.value(), owner, path);
                 path.pop();
                 value.map(|value| FieldInit {
                     name: Spanned::new(schema.name().clone(), span),
@@ -357,7 +495,7 @@ impl PreparedProject {
 
     fn structured_indexed_expr(
         &self,
-        name: &DeclName,
+        site: ValueSite<'_>,
         entries: &[StructuredValueExpr],
         element: &ModelValueSchema,
         axis: &ModelIndexSchema,
@@ -384,7 +522,7 @@ impl PreparedProject {
             .enumerate()
             .map(|(index, entry)| {
                 path.push(StructuredBindingPathSegment::Entry(index));
-                let value = self.structured_binding_expr(name, entry, element, owner, path);
+                let value = self.structured_binding_expr(site, entry, element, owner, path);
                 path.pop();
                 Ok(MapEntry {
                     keys: NonEmpty::singleton(self.structured_map_key(axis, index, span, path)?),
@@ -540,6 +678,14 @@ struct CanonicalConstructorCall<'a> {
 }
 
 impl PreparedProject {
+    pub(super) fn parameter_position(
+        &self,
+        name: &DeclName,
+    ) -> Result<ParameterPosition, CompileError> {
+        let index = self.parameter_index(name)?;
+        Ok(self.parameter_ports[index].position)
+    }
+
     fn parameter_index(&self, name: &DeclName) -> Result<usize, CompileError> {
         self.parameter_lookup.get(name).copied().ok_or_else(|| {
             let actual_kind = self
@@ -588,6 +734,7 @@ impl PreparedProject {
     /// Lower and check one closed binding value; returns its executable tree.
     fn check_closed_binding(
         &self,
+        site: ValueSite<'_>,
         port: &ParameterPort,
         expr: &Expr,
     ) -> Result<
@@ -595,19 +742,19 @@ impl PreparedProject {
         CompileError,
     > {
         let hir = self.lower_closed_binding_expr(
-            &port.name,
+            site,
             expr,
             &port.value_schema,
             self.tir().root_dag_id(),
         )?;
-        let hir = self.closed_binding(&port.name, hir)?;
+        let hir = site.closed(hir)?;
         graphcal_compiler::tir::dim_check::check_external_value_expr_type(
             self.tir(),
             &hir,
             &port.declared_type,
-            self.source,
+            site.source,
         )
-        .map_err(|error| self.render(error))
+        .map_err(|error| site.render(error))
     }
 
     /// Lower a closed boundary value against its canonical recursive schema.
@@ -620,7 +767,7 @@ impl PreparedProject {
     /// switch owners again at each canonical constructor boundary.
     fn lower_closed_binding_expr(
         &self,
-        name: &DeclName,
+        site: ValueSite<'_>,
         expr: &Expr,
         expected: &ModelValueSchema,
         owner: &graphcal_compiler::dag_id::DagId,
@@ -635,7 +782,7 @@ impl PreparedProject {
                 },
                 ModelValueSchema::Algebraic(type_id),
             ) if callee.as_bare().is_some() => self.lower_canonical_constructor_binding(
-                name,
+                site,
                 CanonicalConstructorCall {
                     expr,
                     callee,
@@ -669,17 +816,17 @@ impl PreparedProject {
                     },
                     expr.span,
                 );
-                self.lower_closed_binding_expr(name, &constructor_expr, expected, owner)
+                self.lower_closed_binding_expr(site, &constructor_expr, expected, owner)
             }
             (AstExprKind::MapLiteral { entries }, ModelValueSchema::Indexed { .. }) => {
-                self.lower_closed_map_binding(name, entries, expr.span, expected, owner)
+                self.lower_closed_map_binding(site, entries, expr.span, expected, owner)
             }
             // The value's kind is checked before its shape: a map literal for
             // a non-indexed value is a kind mismatch, not a map to lower.
             (AstExprKind::MapLiteral { .. }, _) => {
                 Err(
-                    self.value_error(expr.span, |src, span| BindingError::KindMismatch {
-                        name: name.clone(),
+                    site.error(expr.span, |name, src, span| BindingError::KindMismatch {
+                        name,
                         actual: BindingValueKind::MapLiteral,
                         expected: expected
                             .declared_type()
@@ -689,13 +836,13 @@ impl PreparedProject {
                     }),
                 )
             }
-            _ => self.lower_binding_expr_in_owner(expr, owner),
+            _ => self.lower_binding_expr_in_owner(site, expr, owner),
         }
     }
 
     fn lower_canonical_constructor_binding(
         &self,
-        name: &DeclName,
+        site: ValueSite<'_>,
         call: CanonicalConstructorCall<'_>,
         type_id: &ModelTypeId,
         owner: &graphcal_compiler::dag_id::DagId,
@@ -718,10 +865,10 @@ impl PreparedProject {
             .iter()
             .find(|constructor| constructor.name().atom() == callee.leaf().name.atom())
         else {
-            return self.lower_binding_expr_in_owner(expr, owner);
+            return self.lower_binding_expr_in_owner(site, expr, owner);
         };
         let constructor_owner = type_id.identity().resolved().owner();
-        let (callee, generic_args) = self.lower_in_owner(constructor_owner, |context| {
+        let (callee, generic_args) = self.lower_in_owner(site, constructor_owner, |context| {
             graphcal_compiler::hir::lower_constructor_head(callee, generic_args, expr.span, context)
         })?;
         let fields = fields
@@ -732,10 +879,10 @@ impl PreparedProject {
                     .iter()
                     .find(|schema| schema.name() == &field.name.value)
                     .map_or_else(
-                        || self.lower_binding_expr_in_owner(&field.value, constructor_owner),
+                        || self.lower_binding_expr_in_owner(site, &field.value, constructor_owner),
                         |schema| {
                             self.lower_closed_binding_expr(
-                                name,
+                                site,
                                 &field.value,
                                 schema.value(),
                                 constructor_owner,
@@ -760,7 +907,7 @@ impl PreparedProject {
 
     fn lower_closed_map_binding(
         &self,
-        name: &DeclName,
+        site: ValueSite<'_>,
         entries: &[MapEntry<Desugared>],
         span: Span,
         expected: &ModelValueSchema,
@@ -772,14 +919,14 @@ impl PreparedProject {
             .map(|entry| {
                 // Resolve source-shaped keys normally, but lower each value
                 // against its recursive schema so nested constructor owners survive.
-                let keys = self.lower_in_owner(owner, |context| {
+                let keys = self.lower_in_owner(site, owner, |context| {
                     graphcal_compiler::hir::lower_map_entry_keys(entry, span, context)
                 })?;
                 let entry_schema =
                     map_entry_value_schema(expected, entry.keys.len()).map_err(|reason| {
-                        self.value_error(entry.value.span, |src, span| {
+                        site.error(entry.value.span, |name, src, span| {
                             BindingError::InvalidLiteral {
-                                name: name.clone(),
+                                name,
                                 reason,
                                 src,
                                 span,
@@ -787,7 +934,7 @@ impl PreparedProject {
                         })
                     })?;
                 let value =
-                    self.lower_closed_binding_expr(name, &entry.value, entry_schema, owner)?;
+                    self.lower_closed_binding_expr(site, &entry.value, entry_schema, owner)?;
                 Ok(graphcal_compiler::hir::expr::MapEntry { keys, value })
             })
             .collect::<Result<Vec<_>, CompileError>>()?;
@@ -799,11 +946,12 @@ impl PreparedProject {
 
     fn lower_binding_expr_in_owner(
         &self,
+        site: ValueSite<'_>,
         expr: &Expr,
         owner: &graphcal_compiler::dag_id::DagId,
     ) -> Result<graphcal_compiler::hir::expr::Expr<graphcal_compiler::hir::expr::Draft>, CompileError>
     {
-        self.lower_in_owner(owner, |context| {
+        self.lower_in_owner(site, owner, |context| {
             graphcal_compiler::hir::lower_expr_draft(expr, context)
         })
     }
@@ -811,6 +959,7 @@ impl PreparedProject {
     /// Run one HIR lowering in the scope of `owner`.
     fn lower_in_owner<T>(
         &self,
+        site: ValueSite<'_>,
         owner: &graphcal_compiler::dag_id::DagId,
         lower: impl FnOnce(ExprLoweringContext<'_>) -> Result<T, graphcal_compiler::hir::ExprLowerError>,
     ) -> Result<T, CompileError> {
@@ -820,10 +969,10 @@ impl PreparedProject {
             &self.tir().registry().time_zones,
         );
         lower(context).map_err(|error| {
-            CompileError::semantic(
-                graphcal_compiler::hir::expr_lower_error_to_semantic(&error, self.source),
-                &self.sources,
-            )
+            site.render(graphcal_compiler::hir::expr_lower_error_to_semantic(
+                &error,
+                site.source,
+            ))
         })
     }
 
@@ -840,14 +989,15 @@ impl PreparedProject {
 
     fn evaluate_closed_binding(
         &self,
+        site: ValueSite<'_>,
         tree: &graphcal_compiler::tir::typed::ScopedTree<'_, graphcal_compiler::tir::texpr::TExpr>,
     ) -> Result<graphcal_eval::runtime_presentation::EvaluatedRuntimeValue, CompileError> {
         let values = RuntimeValueMap::new();
         graphcal_compiler::outcome::without_cancellation(|cancellation| {
             let session = EvalSession::checked(
                 self.plan(),
-                self.source,
-                &self.sources,
+                site.source,
+                site.sources,
                 &self.host_fns,
                 cancellation.clone(),
             );
@@ -858,7 +1008,7 @@ impl PreparedProject {
                 &session,
             )
         })
-        .map_err(|error| self.render(error))
+        .map_err(|error| site.render(error))
     }
 
     pub(super) fn binding_kind_error(
@@ -888,32 +1038,6 @@ impl PreparedProject {
             self.sources.renderable(self.source),
             port.span.into(),
         ))
-    }
-
-    /// A binding error located in the bound value expression.
-    fn value_error(
-        &self,
-        span: Span,
-        error: impl FnOnce(NamedSource<Arc<String>>, SourceSpan) -> BindingError,
-    ) -> CompileError {
-        CompileError::Binding(error(self.sources.renderable(self.source), span.into()))
-    }
-
-    /// Validate that a lowered binding value is a closed literal tree.
-    fn closed_binding(
-        &self,
-        name: &DeclName,
-        hir: graphcal_compiler::hir::expr::Expr<graphcal_compiler::hir::expr::Draft>,
-    ) -> Result<graphcal_compiler::hir::closed_expr::ClosedExpr, CompileError> {
-        let span = hir.span;
-        graphcal_compiler::hir::closed_expr::ClosedExpr::try_new(hir).map_err(|reason| {
-            self.value_error(span, |src, span| BindingError::NotClosed {
-                name: name.clone(),
-                reason,
-                src,
-                span,
-            })
-        })
     }
 }
 

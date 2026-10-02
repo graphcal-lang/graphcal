@@ -74,12 +74,13 @@ pub fn bind_one(
     }
     let name = DeclName::try_new(&binding.name)
         .map_err(|error| format!("invalid parameter name: {error}"))?;
-    let raw = graphcal_compiler::syntax::parser::Parser::new(&binding.expr)
-        .parse_single_expr()
-        .map_err(|error| error.to_string())?;
-    let expr: graphcal_compiler::desugar::desugared_ast::Expr = raw.into();
+    let value = graphcal_project::prepare::ExternalValue::parse(
+        format!("<binding {}>", binding.name),
+        binding.expr.as_str(),
+    )
+    .map_err(|error| error.to_string())?;
     builder
-        .bind_expression(&name, &expr)
+        .bind_expression(&name, &value)
         .map_err(|error| error.to_string())
 }
 

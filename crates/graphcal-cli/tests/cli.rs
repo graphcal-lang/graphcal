@@ -2384,6 +2384,33 @@ fn eval_invalid_syntax_fails() {
 
 // --- --param flag tests ---
 
+/// A `--param` value's diagnostics are drawn against the value's own text,
+/// labelled with the parameter, not against the entry file.
+#[test]
+fn param_value_diagnostics_point_into_the_param_value() {
+    let dir = tempfile::tempdir().unwrap();
+    let main = write_temp_file(
+        dir.path(),
+        "main.gcl",
+        "param x: Length = 1.0 m;\nparam n: Dimensionless = 1.0;\n",
+    );
+    for (value, code, label) in [
+        ("x=@n", "graphcal::O006", "not a closed value"),
+        ("x={I#a: 1.0 m}", "graphcal::O007", "expects `Length`"),
+    ] {
+        let output = graphcal_bin()
+            .args(["eval", main.to_str().unwrap(), "--param", value])
+            .output()
+            .expect("failed to run graphcal");
+        assert!(!output.status.success());
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains(code), "{value}: {stderr}");
+        assert!(stderr.contains("<--param x>"), "{value}: {stderr}");
+        assert!(stderr.contains(label), "{value}: {stderr}");
+        assert!(!stderr.contains("main.gcl"), "{value}: {stderr}");
+    }
+}
+
 #[test]
 fn eval_with_param_flag() {
     let output = graphcal_bin()

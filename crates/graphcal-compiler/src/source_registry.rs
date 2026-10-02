@@ -16,9 +16,13 @@ use crate::source_id::SourceId;
 static NEXT_REGISTRY: AtomicU64 = AtomicU64::new(0);
 
 /// Owner of the named sources that diagnostics refer to by [`SourceId`].
+///
+/// A registry may extend a shared parent registry: it then also resolves every
+/// id the parent issued, while ids it issues itself resolve only here.
 #[derive(Debug)]
 pub struct SourceRegistry {
     identity: u64,
+    parent: Option<Arc<Self>>,
     sources: Vec<NamedSource<Arc<String>>>,
 }
 
@@ -33,7 +37,19 @@ impl SourceRegistry {
     pub fn new() -> Self {
         Self {
             identity: NEXT_REGISTRY.fetch_add(1, Ordering::Relaxed),
+            parent: None,
             sources: Vec::new(),
+        }
+    }
+
+    /// Create an empty registry with a fresh identity that also resolves every
+    /// id issued by `parent`, for sources that exist only next to an already
+    /// shared registry (such as an external value bound to a prepared project).
+    #[must_use]
+    pub fn extending(parent: Arc<Self>) -> Self {
+        Self {
+            parent: Some(parent),
+            ..Self::new()
         }
     }
 
@@ -50,10 +66,12 @@ impl SourceRegistry {
     ///
     /// Returns [`ForeignSourceId`] if `id` was issued by another registry.
     pub fn named_source(&self, id: SourceId) -> Result<&NamedSource<Arc<String>>, ForeignSourceId> {
-        if id.registry() != self.identity {
-            return Err(ForeignSourceId);
+        if id.registry() == self.identity {
+            return self.sources.get(id.index()).ok_or(ForeignSourceId);
         }
-        self.sources.get(id.index()).ok_or(ForeignSourceId)
+        self.parent
+            .as_deref()
+            .map_or(Err(ForeignSourceId), |parent| parent.named_source(id))
     }
 }
 
@@ -108,5 +126,32 @@ mod tests {
         other.register("b.gcl", Arc::new(String::new()));
 
         assert!(matches!(other.named_source(foreign), Err(ForeignSourceId)));
+    }
+
+    #[test]
+    fn an_extending_registry_resolves_its_parent_ids_but_not_vice_versa() {
+        let mut parent = SourceRegistry::new();
+        let inherited = parent.register("main.gcl", Arc::new("main".to_string()));
+        let parent = Arc::new(parent);
+        let mut child = SourceRegistry::extending(Arc::clone(&parent));
+        let own = child.register("<--param x>", Arc::new("1.0 m".to_string()));
+
+        assert_eq!(
+            child.named_source(inherited).expect("parent id").name(),
+            "main.gcl"
+        );
+        assert_eq!(
+            child.named_source(own).expect("own id").name(),
+            "<--param x>"
+        );
+        assert!(matches!(parent.named_source(own), Err(ForeignSourceId)));
+        let unrelated = SourceRegistry::new();
+        let mut sibling = SourceRegistry::extending(parent);
+        let sibling_id = sibling.register("<other>", Arc::new(String::new()));
+        assert!(matches!(
+            child.named_source(sibling_id),
+            Err(ForeignSourceId)
+        ));
+        assert!(matches!(unrelated.named_source(own), Err(ForeignSourceId)));
     }
 }

@@ -55,7 +55,7 @@ mod tenax_model;
 
 use binding_compile::build_parameter_ports;
 pub use binding_compile::{
-    ParameterBindingRow, StructuredBindingError, StructuredBindingErrorKind,
+    ExternalValue, ParameterBindingRow, StructuredBindingError, StructuredBindingErrorKind,
     StructuredBindingPathSegment, StructuredValueExpr,
 };
 pub use tenax_model::{
@@ -108,9 +108,14 @@ pub struct ParameterBindingBuilder<'project> {
 }
 
 impl ParameterBindingBuilder<'_> {
-    /// Bind a parsed, desugared closed Graphcal value expression by entry name.
-    pub fn bind_expression(&mut self, name: &DeclName, expr: &Expr) -> Result<(), CompileError> {
-        let value = self.project.compile_named_parameter_value(name, expr)?;
+    /// Bind a closed Graphcal value parsed from its own text by entry name.
+    /// Diagnostics about the value are drawn against that text.
+    pub fn bind_expression(
+        &mut self,
+        name: &DeclName,
+        value: &ExternalValue,
+    ) -> Result<(), CompileError> {
+        let value = self.project.compile_named_parameter_value(name, value)?;
         self.bind_value(value)
     }
 
@@ -125,7 +130,8 @@ impl ParameterBindingBuilder<'_> {
     ) -> Result<(), CompileError> {
         let value = self
             .project
-            .compile_named_parameter_value(name, expr)
+            .parameter_position(name)
+            .and_then(|position| self.project.compile_synthesized_value(position, expr))
             .map_err(|error| CompileError::ExternalBinding {
                 name: name.clone(),
                 reason: error.to_string(),
@@ -686,7 +692,7 @@ impl<Mode: CancellationMode> ProjectCompiler<'_, HostFunctionRegistry, Mode> {
         self,
         overrides: &std::collections::HashMap<
             graphcal_compiler::syntax::decl_name::DeclName,
-            graphcal_compiler::desugar::desugared_ast::Expr,
+            ExternalValue,
         >,
     ) -> Result<graphcal_eval::eval::types::EvalResult, Mode::Failure<CompileError>> {
         let mode = self.mode().clone();

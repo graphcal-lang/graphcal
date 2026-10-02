@@ -3473,11 +3473,14 @@ fn eval_boolean_or_eagerly_evaluates_the_right_operand() {
 
 // --- Override tests ---
 
-fn parse_expr(s: &str) -> graphcal_compiler::desugar::desugared_ast::Expr {
-    let raw = graphcal_compiler::syntax::parser::Parser::new(s)
-        .parse_single_expr()
-        .unwrap();
-    raw.into()
+/// A closed value parsed from its own text, as a `--param` value is.
+fn parse_expr(s: &str) -> ExternalValue {
+    ExternalValue::parse("<--param>", s).unwrap()
+}
+
+/// A value expression synthesized without text of its own (JSON, editor).
+fn parse_synthesized_expr(s: &str) -> graphcal_compiler::desugar::desugared_ast::Expr {
+    parse_expr(s).expr().clone()
 }
 
 #[test]
@@ -3898,6 +3901,17 @@ fn rejected_expression_bindings_report_typed_binding_errors() {
         "{error:?}"
     );
     assert_eq!(binding_error_code(&error), "graphcal::O006");
+    // Value diagnostics are drawn against the value's own text.
+    let source = error.named_source().expect("located in the value");
+    assert_eq!(source.name(), "<--param>");
+    assert_eq!(source.inner().as_str(), "@n");
+    // Declaration diagnostics stay in the entry source.
+    let error = bind("d", "-1.0 m");
+    assert_eq!(
+        error.named_source().map(miette::NamedSource::name),
+        Some("bindings.gcl")
+    );
+    assert!(ExternalValue::parse("<--param>", "1.0 +").is_err());
 
     let error = bind("k", "1.5");
     assert!(
@@ -4016,7 +4030,7 @@ fn structured_binding_of_coordinate_indexed_entries_is_rejected_clearly() {
     let prepared = prepare_from_project(&project).unwrap();
     let value = StructuredValueExpr::Indexed {
         entries: (0..3)
-            .map(|_| StructuredValueExpr::Literal(parse_expr("1.0 m")))
+            .map(|_| StructuredValueExpr::Literal(parse_synthesized_expr("1.0 m")))
             .collect(),
     };
 
@@ -4053,7 +4067,7 @@ fn external_map_bindings_reject_entries_deeper_than_the_declared_schema() {
     let error = bindings
         .bind_external_expression(
             &DeclName::expect_valid("samples"),
-            &parse_expr("{ (Axis#X, Extra#Only): 1 }"),
+            &parse_synthesized_expr("{ (Axis#X, Extra#Only): 1 }"),
             &input,
             (4usize, 9usize).into(),
         )
@@ -4085,7 +4099,7 @@ fn external_binding_errors_retain_boundary_source_and_parameter() {
     let error = bindings
         .bind_external_expression(
             &DeclName::expect_valid("sample_count"),
-            &parse_expr("true"),
+            &parse_synthesized_expr("true"),
             &input,
             (4usize, 7usize).into(),
         )

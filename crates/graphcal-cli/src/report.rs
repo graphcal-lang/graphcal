@@ -28,7 +28,7 @@ use graphcal_report::report_ir::{
 };
 use graphcal_report::report_markdown::render_report_markdown;
 
-use crate::overrides::{JsonOverrideSource, ParameterArgs, ParameterJsonSource, ParsedOverrides};
+use crate::overrides::{ParameterArgs, ParameterJsonSource, ParsedOverrides};
 
 /// Environment variable overriding the browser engine bundled with the CLI.
 const ENGINE_DIR_ENV: &str = "GRAPHCAL_REPORT_ENGINE_DIR";
@@ -151,13 +151,8 @@ pub fn run_build(
         .prepare()?;
 
     let mut bindings = prepared.binding_builder();
-    for (name, expression) in &overrides.values {
-        match overrides.json_sources.get(name) {
-            Some(JsonOverrideSource { source, span }) => {
-                bindings.bind_external_expression(name, expression, source, *span)?;
-            }
-            None => bindings.bind_expression(name, expression)?,
-        }
+    for (name, value) in &overrides.values {
+        value.bind(name, &mut bindings)?;
     }
     let result = prepared.evaluate(&bindings.finish()?)?;
 
