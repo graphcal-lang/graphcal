@@ -30,7 +30,7 @@ use super::model::ExternSignature;
 use super::model::{
     ContextualLiteral, CoordinateSearch, DatetimeLiteral, ExternArgKind, StaticPosition, TArg,
     TConstRef, TConstruct, TConstructorArm, TContextual, TExpr, TExprKind, TExternArg, TFieldInit,
-    TForBinding, TIndexArg, TKeyForm, TLabelArm, TMapEntry, TMatchArms, TParamBinding,
+    TForBinding, TIndexArg, TKeyForm, TLabelArm, TMapEntry, TMatchArms, TParamBinding, TResultAxis,
 };
 use super::nominal::{ConstructorApplication, ConstructorMatch};
 use super::operators::{
@@ -667,7 +667,15 @@ fn call(
                         value: *arg,
                     })
                     .collect(),
-                result: signature.result().clone(),
+                result: signature
+                    .result()
+                    .try_map_indexes(|_, binder| {
+                        Ok::<_, std::convert::Infallible>(TResultAxis {
+                            binder: binder.clone(),
+                            axis: (),
+                        })
+                    })
+                    .unwrap_or_else(|never| match never {}),
             });
         }
         FunctionRef::Epoch { .. } => {
@@ -1367,7 +1375,14 @@ mod tests {
         else {
             panic!("a checked extern call builds its node");
         };
-        assert_eq!(&result, signature.result());
+        // The node keeps the declared result kind, naming each result axis
+        // by its index variable until the tree is concrete.
+        assert_eq!(
+            result
+                .try_map_indexes(|_, axis| Ok::<_, std::convert::Infallible>(axis.binder.clone()))
+                .unwrap_or_else(|never| match never {}),
+            *signature.result()
+        );
         let kinds = built.iter().map(|arg| &arg.kind).collect::<Vec<_>>();
         assert!(matches!(
             kinds.as_slice(),

@@ -246,7 +246,7 @@ pub enum TExprKind<V: Concreteness = Concrete> {
     Extern {
         function: ExternFnRef,
         args: Vec<TExternArg<V>>,
-        result: ResultKind<ExternStructResult>,
+        result: TExternResult<V>,
     },
     If {
         condition: Box<TExpr<V>>,
@@ -448,6 +448,20 @@ pub enum ContextualLiteral {
 
 /// The resolved signature of a plugin function.
 pub type ExternSignature = crate::function_signature::FunctionSignature<ExternStructResult>;
+
+/// One axis of the indexed result of a plugin call: the index variable the
+/// signature names it by, and, once the tree is concrete, the axis of the
+/// call node's checked type at that place.
+#[derive(Debug, Clone)]
+pub struct TResultAxis<V: Concreteness = Concrete> {
+    pub binder: IndexBinder,
+    pub axis: V::Discharged<IndexAxis>,
+}
+
+/// The declared result kind of a plugin call, each axis of an indexed result
+/// with the axis the call's checked type ranges over there.
+pub type TExternResult<V = Concrete> =
+    ResultKind<ExternStructResult, crate::function_signature::DimBinder, TResultAxis<V>>;
 
 /// The declared parameter of one plugin-call argument, by the ABI kind the
 /// argument crosses as.

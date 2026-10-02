@@ -70,9 +70,7 @@ pub enum NodeKind<'t> {
     Extern {
         function: &'t ExternFnRef,
         args: Scoped<'t, [TExternArg]>,
-        result: &'t crate::function_signature::ResultKind<
-            crate::extern_struct_result::ExternStructResult,
-        >,
+        result: &'t crate::tir::texpr::TExternResult,
     },
     If {
         condition: ScopedNode<'t>,

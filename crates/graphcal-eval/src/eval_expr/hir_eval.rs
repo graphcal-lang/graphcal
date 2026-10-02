@@ -621,9 +621,7 @@ fn eval_extern_fn(
     span: Span,
     ext: &graphcal_compiler::hir::expr::ExternFnRef,
     args: Scoped<'_, [TExternArg]>,
-    result: &graphcal_compiler::function_signature::ResultKind<
-        graphcal_compiler::extern_struct_result::ExternStructResult,
-    >,
+    result: &graphcal_compiler::tir::texpr::TExternResult,
     values: &RuntimeValueMap,
     local_values: &HirLocalValueMap<'_>,
     ctx: &EvalSession<'_>,
