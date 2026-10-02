@@ -5,6 +5,7 @@
 //! bare binding occurrences, check compound monomials by evaluation, and
 //! compute the result monomial from the bindings.
 
+use crate::semantic_error::dimension_mismatch::{MismatchOperand, MismatchRule};
 use std::collections::HashMap;
 
 use crate::diagnostic_anchor::DiagnosticAnchor;
@@ -99,12 +100,18 @@ impl<'a> SignatureDimWalk<'a> {
                         self.src,
                         arg_span,
                         DimensionError::DimensionMismatch {
-                            expected: self.registry.dimensions.format_dimension(&bound.dimension),
-                            found: self.registry.dimensions.format_dimension(arg_dim),
-                            help: format!(
-                                "parameter `{param_name}` must have the same dimension as `{}`",
-                                bound.parameter
-                            ),
+                            expected: Box::new(MismatchOperand::Dimension(
+                                self.registry
+                                    .dimensions
+                                    .dimension_spelling(&bound.dimension),
+                            )),
+                            found: Box::new(MismatchOperand::Dimension(
+                                self.registry.dimensions.dimension_spelling(arg_dim),
+                            )),
+                            help: Box::new(MismatchRule::ParameterSameDimension {
+                                parameter: param_name.clone(),
+                                bound_by: bound.parameter.clone(),
+                            }),
                         },
                     ));
                 }
@@ -126,12 +133,16 @@ impl<'a> SignatureDimWalk<'a> {
                 self.src,
                 arg_span,
                 DimensionError::DimensionMismatch {
-                    expected: self.registry.dimensions.format_dimension(&expected),
-                    found: self.registry.dimensions.format_dimension(arg_dim),
-                    help: format!(
-                        "parameter `{param_name}` requires {}",
-                        self.registry.dimensions.format_dimension(&expected),
-                    ),
+                    expected: Box::new(MismatchOperand::Dimension(
+                        self.registry.dimensions.dimension_spelling(&expected),
+                    )),
+                    found: Box::new(MismatchOperand::Dimension(
+                        self.registry.dimensions.dimension_spelling(arg_dim),
+                    )),
+                    help: Box::new(MismatchRule::ParameterDimension {
+                        parameter: param_name.clone(),
+                        dimension: self.registry.dimensions.dimension_spelling(&expected),
+                    }),
                 },
             ));
         }
@@ -223,7 +234,7 @@ mod tests {
             panic!("expected a dimension mismatch, got {error:?}");
         };
         assert_eq!(
-            help,
+            help.to_string(),
             "parameter `second` must have the same dimension as `first`"
         );
     }

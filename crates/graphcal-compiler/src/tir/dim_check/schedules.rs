@@ -12,6 +12,7 @@ use crate::diagnostic_anchor::DiagnosticAnchor;
 use crate::ir::entry::Decl;
 use crate::resolved_name::ResolvedDeclName;
 use crate::semantic_error::SemanticError;
+use crate::semantic_error::graph::CycleMember;
 use crate::semantic_error::graph::GraphError;
 use crate::source_id::SourceId;
 use crate::tir::schedule::{ConstSchedule, RuntimeSchedule, RuntimeScheduleError};
@@ -96,7 +97,7 @@ fn cyclic_dependency(
             src,
             span,
             GraphError::CyclicDependency {
-                name: name.to_string(),
+                name: CycleMember::Declaration(name.clone()),
             },
         ),
         None => SemanticError::internal_error(

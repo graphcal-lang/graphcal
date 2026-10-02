@@ -1,5 +1,6 @@
 //! External plugin function signature resolution.
 
+use crate::semantic_error::plugin::ExternSignatureError;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -173,7 +174,7 @@ impl ExternGenerics {
                         src,
                         binder.span(),
                         PluginError::InvalidExternSignature {
-                            message: format!("generic binder `{atom}` is declared more than once"),
+                            error: ExternSignatureError::DuplicateGenericBinder(atom.clone()),
                         },
                     )
                 })?;
@@ -229,8 +230,7 @@ fn resolve_extern_value_kind(
             src,
             type_ann.span,
             PluginError::InvalidExternSignature {
-                message: "domain constraints are not allowed in extern function signatures"
-                    .to_string(),
+                error: ExternSignatureError::DomainConstraint,
             },
         ));
     }
@@ -250,8 +250,13 @@ fn resolve_extern_value_kind(
         | TypeExprKind::DatetimeApplication { .. }
         | TypeExprKind::ComplexApplication { .. }
         | TypeExprKind::KeyApplication { .. }
-        | TypeExprKind::TypeApplication { .. } => Err(SemanticError::located(src, type_ann.span, PluginError::InvalidExternSignature { message: "extern function signatures support Bool, Int, quantity types, and indexed scalar collections over one or more declared index variables"
-                    .to_string() })),
+        | TypeExprKind::TypeApplication { .. } => Err(SemanticError::located(
+            src,
+            type_ann.span,
+            PluginError::InvalidExternSignature {
+                error: ExternSignatureError::UnsupportedParameterType,
+            },
+        )),
     }
 }
 
@@ -311,7 +316,7 @@ fn resolve_extern_function(
             src,
             function.span,
             PluginError::InvalidExternSignature {
-                message: err.to_string(),
+                error: ExternSignatureError::Signature(err),
             },
         )
     })?;
@@ -360,9 +365,7 @@ fn resolve_extern_result_kind(
             src,
             type_ann.span,
             PluginError::InvalidExternSignature {
-                message: "generic struct returns are not supported in this phase; use a record \
-                      type with concrete field types"
-                    .to_string(),
+                error: ExternSignatureError::GenericStructReturn,
             },
         ));
     }
@@ -379,8 +382,8 @@ pub(super) fn resolve_extern_struct_return(
 ) -> Result<crate::function_signature::NamedResultKind<ExternStructResult>, SemanticError> {
     use crate::function_signature::{ResultKind, StructShape, StructShapeField};
 
-    let invalid = |message: String| {
-        SemanticError::located(src, span, PluginError::InvalidExternSignature { message })
+    let invalid = |error: ExternSignatureError| {
+        SemanticError::located(src, span, PluginError::InvalidExternSignature { error })
     };
     let Ok(resolved_type) = scope
         .resolver()
@@ -397,23 +400,14 @@ pub(super) fn resolve_extern_struct_return(
     };
     let leaf = resolved_type.to_unowned_def_name();
     let Some(type_def) = scope.nominal_type(&resolved_type)? else {
-        return Err(invalid(format!(
-            "record type `{leaf}` has no declaration; extern struct returns must use a type \
-             declared in (or imported into) the declaring file"
-        )));
+        return Err(invalid(ExternSignatureError::UndeclaredRecordType(leaf)));
     };
     if !type_def.generic_params().is_empty() {
-        return Err(invalid(format!(
-            "record type `{leaf}` is generic; generic struct returns are not supported in \
-             this phase"
-        )));
+        return Err(invalid(ExternSignatureError::GenericRecordType(leaf)));
     }
     let (Some(fields), Some([record])) = (type_def.record_fields(), type_def.union_members())
     else {
-        return Err(invalid(format!(
-            "`{leaf}` is not a record type; extern struct returns need a single constructor \
-             named after the type"
-        )));
+        return Err(invalid(ExternSignatureError::NotARecordType(leaf)));
     };
 
     let shape_fields = fields
@@ -426,7 +420,8 @@ pub(super) fn resolve_extern_struct_return(
             })
         })
         .collect::<Result<Vec<_>, SemanticError>>()?;
-    let shape = StructShape::try_new(shape_fields).map_err(|err| invalid(err.to_string()))?;
+    let shape = StructShape::try_new(shape_fields)
+        .map_err(|err| invalid(ExternSignatureError::Signature(err)))?;
     Ok(ResultKind::Struct(ExternStructResult::new(
         resolved_type,
         record.name(),
@@ -449,11 +444,7 @@ fn resolve_extern_struct_field(
             src,
             annotation.span,
             PluginError::InvalidExternSignature {
-                message: format!(
-                    "field `{}` has a type that cannot cross the plugin boundary; struct-return \
-             fields support Bool, Int, and quantity types in this phase",
-                    field.name()
-                ),
+                error: ExternSignatureError::UnsupportedStructField(field.name().clone()),
             },
         )
     };
@@ -526,9 +517,7 @@ fn resolve_extern_array_kind(
                     src,
                     index_expr.span(),
                     PluginError::InvalidExternSignature {
-                        message: "extern array axes must name the signature's `Index` binders \
-                          (concrete indexes and `Fin(N)` axes cannot appear in the declaration)"
-                            .to_string(),
+                        error: ExternSignatureError::ArrayAxesMustBeBinders,
                     },
                 )
             })
@@ -540,7 +529,7 @@ fn resolve_extern_array_kind(
                 src,
                 type_ann_indexes_span(indexes, base),
                 PluginError::InvalidExternSignature {
-                    message: "extern arrays must have at least one axis".to_string(),
+                    error: ExternSignatureError::ArrayWithoutAxes,
                 },
             )
         })?;
@@ -550,8 +539,7 @@ fn resolve_extern_array_kind(
             src,
             base.span,
             PluginError::InvalidExternSignature {
-                message: "domain constraints are not allowed in extern function signatures"
-                    .to_string(),
+                error: ExternSignatureError::DomainConstraint,
             },
         ));
     }
@@ -567,7 +555,7 @@ fn resolve_extern_array_kind(
                 src,
                 base.span,
                 PluginError::InvalidExternSignature {
-                    message: "extern array elements must be Bool, Int, or quantities".to_string(),
+                    error: ExternSignatureError::ArrayElementKind,
                 },
             ));
         }
@@ -638,7 +626,9 @@ fn resolve_extern_dim_monomial(
             src,
             dim_expr.span,
             PluginError::InvalidExternSignature {
-                message: crate::function_signature::SignatureError::from(error).to_string(),
+                error: ExternSignatureError::Signature(
+                    crate::function_signature::SignatureError::from(error),
+                ),
             },
         )
     })

@@ -473,7 +473,7 @@ pub enum TypeSystemRef {
 
 impl TypeSystemRef {
     #[must_use]
-    fn surface_description(&self) -> String {
+    pub(crate) fn surface_description(&self) -> String {
         match self {
             Self::Type(name) => format!("type `{}`", name.as_str()),
             Self::Dimension(name) => format!("dimension `{}`", name.as_str()),
@@ -484,11 +484,6 @@ impl TypeSystemRef {
                 variant.variant()
             ),
         }
-    }
-
-    #[must_use]
-    pub(crate) fn value_position_error(&self) -> String {
-        format!("{} cannot be used as a value", self.surface_description())
     }
 }
 

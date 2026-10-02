@@ -9,4 +9,4 @@ Begin snippet for finite_index_constant_index_out_of_bounds.gcl starting at line
 snippet line 3: 
 snippet line 4: node a: Dimensionless = @v[5];
     label at line 4, column 28: error here
-diagnostic code: graphcal::E001
+diagnostic code: graphcal::I024

@@ -5,13 +5,13 @@
     clippy::allow_attributes,
     reason = "project compiler pass uses the shared internal model"
 )]
+use graphcal_compiler::semantic_error::graph::GraphError;
 use std::collections::HashMap;
 use std::sync::Arc;
 
 use graphcal_compiler::ir::resolve::ImportedValueNames;
 use graphcal_compiler::outcome::Outcome;
 use graphcal_compiler::semantic_error::SemanticError;
-use graphcal_compiler::semantic_error::evaluation::EvaluationError;
 use graphcal_compiler::semantic_error::plugin::PluginError;
 use graphcal_compiler::source_id::SourceId;
 
@@ -28,7 +28,7 @@ use graphcal_compiler::dag_id::DagId;
 use graphcal_compiler::dependency_graph::Cycle;
 use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
 
-/// E001 for templates that include each other in a circle, reported at the
+/// G009 for templates that include each other in a circle, reported at the
 /// declaration of the template the include expansion re-entered.
 ///
 /// Each template is named by its path inside its file (`outer.inner`), or by
@@ -37,10 +37,10 @@ pub(super) fn recursive_dag_instantiation(
     project: &crate::loader::loaded_project::LoadedProject,
     cycle: &Cycle<DagId>,
 ) -> PipelineError {
-    let names = cycle
+    let templates = cycle
         .path()
         .chain(std::iter::once(cycle.entry()))
-        .map(template_name)
+        .cloned()
         .collect::<Vec<_>>();
     let (src, span) = match project.module(cycle.entry()) {
         Some(crate::loader::loaded_file::LoadedModule::InlineDag { file, dag }) => {
@@ -57,26 +57,8 @@ pub(super) fn recursive_dag_instantiation(
     PipelineError::Semantic(SemanticError::located(
         src,
         span,
-        EvaluationError::Failed {
-            message: format!("recursive DAG instantiation: {}", names.join(" -> ")),
-        },
+        GraphError::RecursiveDagInstantiation { templates },
     ))
-}
-
-/// A template's inline-DAG path inside its file, or the file root's identity.
-fn template_name(template: &DagId) -> String {
-    let file_depth = template.file_root().segments().len();
-    let inline_path = template
-        .segments()
-        .iter()
-        .skip(file_depth)
-        .map(ToString::to_string)
-        .collect::<Vec<_>>();
-    if inline_path.is_empty() {
-        template.to_string()
-    } else {
-        inline_path.join(".")
-    }
 }
 
 /// Lower one physical file after every dependency HIR interface is available.

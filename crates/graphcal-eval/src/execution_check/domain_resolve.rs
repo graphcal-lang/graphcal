@@ -1,10 +1,13 @@
 //! Domain-bound resolution and compile-time constraint validation.
 
 use graphcal_compiler::declaration_category::ValueDeclCategory;
-use graphcal_compiler::semantic_error::domain::DomainError;
+use graphcal_compiler::semantic_error::domain::{
+    DomainError, DomainSubject, ValuePath, ValuePathStep,
+};
 use graphcal_compiler::semantic_error::evaluation::EvaluationError;
 use graphcal_compiler::source_registry::SourceRegistry;
 use graphcal_compiler::syntax::non_empty::NonEmpty;
+use graphcal_compiler::tir::typed::DomainFamily;
 use std::collections::{HashMap, HashSet};
 
 use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
@@ -89,7 +92,7 @@ pub(super) fn resolve_domain_constraints_for_dag(
         )?;
         let resolved_constraint = resolve_constraint_from_bounds(
             domain_bounds,
-            &name.to_string(),
+            &DomainSubject::Declaration(name.clone()),
             target,
             &visible_const_values,
             BoundCheckingContext {
@@ -107,7 +110,7 @@ pub(super) fn resolve_domain_constraints_for_dag(
                 src,
                 decl_span,
                 DomainError::DomainViolation {
-                    name: name.to_string(),
+                    name: DomainSubject::Declaration(name.clone()),
                     value: format_runtime_value(value),
                     violation: violation.message,
                 },
@@ -117,13 +120,6 @@ pub(super) fn resolve_domain_constraints_for_dag(
         constraints.insert(resolved_key, resolved_constraint);
     }
     Ok(constraints)
-}
-
-#[derive(Debug, Clone, Copy)]
-enum ConstraintTarget {
-    Quantity,
-    Int,
-    Datetime(graphcal_compiler::semantic::time_scale::TimeScale),
 }
 
 /// Checking-only substitution services never enter the interpreter context.
@@ -137,14 +133,14 @@ struct BoundCheckingContext<'a, 'b> {
 /// representation selected by its constrained value family.
 fn resolve_constraint_from_bounds(
     bounds: Scoped<'_, NonEmpty<graphcal_compiler::tir::typed::ResolvedDomainBound>>,
-    display_name: &str,
-    target: ConstraintTarget,
+    display_name: &DomainSubject,
+    target: DomainFamily,
     values: &RuntimeValueMap,
     ctx: BoundCheckingContext<'_, '_>,
     src: SourceId,
 ) -> Result<ResolvedDomainConstraint, Outcome<SemanticError>> {
     match target {
-        ConstraintTarget::Quantity => evaluate_domain_bounds(
+        DomainFamily::Quantity => evaluate_domain_bounds(
             bounds,
             display_name,
             values,
@@ -165,7 +161,7 @@ fn resolve_constraint_from_bounds(
             |expr, value| format_quantity_bound_display(expr, *value),
         )
         .map(ResolvedDomainConstraint::quantity),
-        ConstraintTarget::Int => evaluate_domain_bounds(
+        DomainFamily::Int => evaluate_domain_bounds(
             bounds,
             display_name,
             values,
@@ -180,7 +176,7 @@ fn resolve_constraint_from_bounds(
             |_expr, value| value.to_string(),
         )
         .map(ResolvedDomainConstraint::int),
-        ConstraintTarget::Datetime(scale) => {
+        DomainFamily::Datetime(scale) => {
             let evaluated = evaluate_domain_bounds(
                 bounds,
                 display_name,
@@ -223,7 +219,7 @@ fn resolve_constraint_from_bounds(
 
 fn evaluate_domain_bounds<T: PartialOrd>(
     scoped_bounds: Scoped<'_, NonEmpty<graphcal_compiler::tir::typed::ResolvedDomainBound>>,
-    display_name: &str,
+    display_name: &DomainSubject,
     values: &RuntimeValueMap,
     ctx: BoundCheckingContext<'_, '_>,
     src: SourceId,
@@ -265,7 +261,7 @@ fn evaluate_domain_bounds<T: PartialOrd>(
             src,
             constraint_span,
             DomainError::DomainMinExceedsMax {
-                name: display_name.to_string(),
+                name: display_name.clone(),
                 min: min.display().to_string(),
                 max: max.display().to_string(),
             },
@@ -276,7 +272,7 @@ fn evaluate_domain_bounds<T: PartialOrd>(
 }
 
 fn domain_bound_value_error(
-    display_name: &str,
+    display_name: &DomainSubject,
     bound: &graphcal_compiler::tir::typed::ResolvedDomainBound,
     expected: &str,
     actual: &RuntimeValue,
@@ -524,11 +520,10 @@ fn resolve_application_field_constraints(
     for (constrained, bounds) in nominal.constrained_fields() {
         let field = constrained.field();
         let field_semantics = field.semantics();
-        let display_name = format!(
-            "{}.{}",
-            field.member().constructor().name(),
-            field.field().name()
-        );
+        let display_name = DomainSubject::ConstructorField(Box::new((
+            field.member().constructor().name().clone(),
+            field.field().name().clone(),
+        )));
         let first_bound = bounds.get().first();
         let bound_span = first_bound.span;
         let constraint_src = &first_bound.src;
@@ -671,7 +666,7 @@ pub(super) fn check_dag_const_struct_field_constraints_at_compile_time(
             struct_type_ref_from_resolved_type(declared.annotation.checked().resolved());
         check_const_struct_field_constraints(
             value,
-            entry.name().as_str(),
+            &ValuePath::new(entry.name().clone()),
             declared.span,
             owning_type.as_ref(),
             field_constraints,
@@ -713,7 +708,7 @@ fn find_struct_field_constraint<'a>(
 /// to `Ok(())`.
 fn check_const_struct_field_constraints(
     value: &RuntimeValue,
-    decl_name: &str,
+    path: &ValuePath,
     decl_span: Span,
     owning_type: Option<&StructTypeRef>,
     field_constraints: &HashMap<StructFieldConstraintKey, ResolvedDomainConstraint>,
@@ -737,7 +732,9 @@ fn check_const_struct_field_constraints(
                         src,
                         decl_span,
                         DomainError::DomainViolation {
-                            name: format!("{decl_name}.{field_name}"),
+                            name: DomainSubject::Value(Box::new(
+                                path.child(ValuePathStep::Field(field_name.clone())),
+                            )),
                             value: format_runtime_value(field_value),
                             violation: violation.message,
                         },
@@ -749,7 +746,7 @@ fn check_const_struct_field_constraints(
                 // owner even without a field-declared type side channel.
                 check_const_struct_field_constraints(
                     field_value,
-                    &format!("{decl_name}.{field_name}"),
+                    &path.child(ValuePathStep::Field(field_name.clone())),
                     decl_span,
                     None,
                     field_constraints,
@@ -762,7 +759,7 @@ fn check_const_struct_field_constraints(
             for (variant, entry) in entries.iter() {
                 check_const_struct_field_constraints(
                     entry,
-                    &format!("{decl_name}.{variant}"),
+                    &path.child(ValuePathStep::Entry(variant.clone())),
                     decl_span,
                     owning_type,
                     field_constraints,
@@ -798,49 +795,14 @@ fn resolve_constraint_target(
     resolved: &ResolvedValueType,
     decl_span: Span,
     src: SourceId,
-) -> Result<ConstraintTarget, SemanticError> {
-    match resolved {
-        ResolvedValueType::Quantity(_) => Ok(ConstraintTarget::Quantity),
-        ResolvedValueType::Int => Ok(ConstraintTarget::Int),
-        ResolvedValueType::Datetime(scale) => Ok(ConstraintTarget::Datetime(*scale)),
-        ResolvedValueType::Bool => Err(SemanticError::located(
+) -> Result<DomainFamily, SemanticError> {
+    resolved.domain_family().map_err(|type_kind| {
+        SemanticError::located(
             src,
             decl_span,
-            DomainError::InvalidDomainTarget {
-                type_kind: "Bool".to_string(),
-            },
-        )),
-        ResolvedValueType::Complex { .. } => Err(SemanticError::located(
-            src,
-            decl_span,
-            DomainError::InvalidDomainTarget {
-                type_kind: "Complex".to_string(),
-            },
-        )),
-        ResolvedValueType::Key { .. } => Err(SemanticError::located(
-            src,
-            decl_span,
-            DomainError::InvalidDomainTarget {
-                type_kind: "Key".to_string(),
-            },
-        )),
-        ResolvedValueType::Struct {
-            name: struct_name, ..
-        } => Err(SemanticError::located(
-            src,
-            decl_span,
-            DomainError::InvalidDomainTarget {
-                type_kind: format!("struct `{}`", struct_name.as_str()),
-            },
-        )),
-        ResolvedValueType::GenericTypeParam(param, _) => Err(SemanticError::located(
-            src,
-            decl_span,
-            DomainError::InvalidDomainTarget {
-                type_kind: format!("generic Type parameter `{param}`"),
-            },
-        )),
-    }
+            DomainError::InvalidDomainTarget { type_kind },
+        )
+    })
 }
 
 /// Format a bound expression for display (e.g., `"100 kg"`, `"0.01 N"`).
@@ -854,15 +816,7 @@ fn exact_domain_int_bound(
     span: graphcal_compiler::syntax::span::Span,
 ) -> Result<f64, SemanticError> {
     crate::eval_expr::numeric::exact_i64_to_f64(value).map_err(|_| {
-        SemanticError::located(
-            src,
-            span,
-            EvaluationError::Failed {
-                message: format!(
-                    "domain bound integer {value} is too large for exact quantity comparison"
-                ),
-            },
-        )
+        SemanticError::located(src, span, DomainError::InexactIntDomainBound { value })
     })
 }
 

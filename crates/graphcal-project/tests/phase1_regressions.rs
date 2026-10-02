@@ -9,7 +9,7 @@ use graphcal_compiler::semantic_error::dimension::DimensionError;
 use graphcal_compiler::semantic_error::graph::GraphError;
 use graphcal_compiler::semantic_error::name::NameError;
 use graphcal_compiler::semantic_error::structure::StructError;
-use graphcal_compiler::semantic_error::visibility::VisibilityError;
+use graphcal_compiler::semantic_error::visibility::{OverriddenKind, VisibilityError};
 
 use graphcal_compiler::semantic_error::rendered::RenderedSemanticError;
 use graphcal_io::RealFileSystem;
@@ -224,8 +224,8 @@ plot p = {
     assert!(matches!(
         error,
         CompileError::Eval(RenderedSemanticError { error: SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic { kind: SemanticErrorKind::Dimension(DimensionError::PlotEncodingAxisMismatch { channels, .. }), .. }), .. })
-            if channels.contains("owner_dims.a.Axis")
-                && channels.contains("owner_dims.b.Axis")
+            if channels.iter().any(|channel| channel.to_string().contains("owner_dims.a.Axis"))
+                && channels.iter().any(|channel| channel.to_string().contains("owner_dims.b.Axis"))
     ));
 }
 
@@ -259,8 +259,11 @@ node bad: a::Box<a::Foo> = a::Box<a::Foo>(x: 1.0 b::foo);
             ..
         }) => {
             assert_ne!(expected, found);
-            assert!(expected.contains("owner_dims.a.Foo"), "{expected}");
-            assert!(found.contains("owner_dims.b.Foo"), "{found}");
+            assert!(
+                expected.to_string().contains("owner_dims.a.Foo"),
+                "{expected}"
+            );
+            assert!(found.to_string().contains("owner_dims.b.Foo"), "{found}");
         }
         other => panic!("expected owner-qualified field mismatch, got {other:?}"),
     }
@@ -407,9 +410,9 @@ fn assert_reconciliation_error(
                 );
             };
             let src = rendered.named_source();
-            assert_eq!(overridden, expected_override);
-            assert_eq!(overridden_kind, expected_kind);
-            assert_eq!(orphan_decl, expected_orphan);
+            assert_eq!(overridden.as_str(), expected_override);
+            assert_eq!(overridden_kind.to_string(), expected_kind);
+            assert_eq!(orphan_decl.as_str(), expected_orphan);
             assert!(src.name().ends_with("main.gcl"));
             assert!(span.offset() + span.len() <= src.inner().len());
             assert!(src.inner()[span.offset()..span.offset() + span.len()].contains("include"));
@@ -646,9 +649,9 @@ include reusable(type Record: Other, record: Other(x: 2.0)) as instance;
 
     assert!(matches!(
         error,
-        SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic { kind: SemanticErrorKind::Visibility(VisibilityError::IncludeMustReconcileOverride { overridden, overridden_kind, orphan_decl, .. }), .. }) if overridden == "Record"
-            && overridden_kind == "type"
-            && orphan_decl == "extracted"
+        SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic { kind: SemanticErrorKind::Visibility(VisibilityError::IncludeMustReconcileOverride { overridden, overridden_kind, orphan_decl, .. }), .. }) if overridden.as_str() == "Record"
+            && overridden_kind == OverriddenKind::Type
+            && orphan_decl.as_str() == "extracted"
     ));
 }
 

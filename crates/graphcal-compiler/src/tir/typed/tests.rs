@@ -7,8 +7,9 @@ use crate::resolved_name::{ResolvedIndexName, ResolvedStructTypeName, ResolvedUn
 use crate::semantic::time_scale::TimeScale;
 use crate::semantic_error::SemanticErrorKind;
 use crate::semantic_error::dimension::DimensionError;
-use crate::semantic_error::evaluation::EvaluationError;
 use crate::semantic_error::index::IndexError;
+use crate::semantic_error::name::NameError;
+use crate::semantic_error::structure::StructError;
 use crate::syntax::dimension::UnitName;
 use crate::syntax::index_name::IndexName;
 use crate::syntax::non_empty::NonEmpty;
@@ -409,8 +410,8 @@ fn generic_dim_param_cannot_shadow_struct_type() {
     );
     assert!(matches!(
         result,
-        Err(SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Evaluation(EvaluationError::Failed { message, .. }), .. }))
-            if message.contains("shadows a visible Static name")
+        Err(SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Name(kind @ NameError::GenericParamShadowsStatic { .. }), .. }))
+            if kind.to_string().contains("shadows a visible Static name")
     ));
 }
 
@@ -1215,8 +1216,8 @@ pub type Wrap<I: Index> {
 ";
     assert!(matches!(
         parse_and_type_resolve(source),
-        Err(SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Evaluation(EvaluationError::Failed { message, .. }), .. }))
-            if message.contains("shadows a visible Static name")
+        Err(SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Name(kind @ NameError::GenericParamShadowsStatic { .. }), .. }))
+            if kind.to_string().contains("shadows a visible Static name")
     ));
 }
 
@@ -1430,16 +1431,16 @@ fn convert_generic_dim_param_fails() {
         .unwrap_err();
     assert!(matches!(
         err,
-        SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Evaluation(EvaluationError::Failed { message, .. }), .. })
-            if message == "cannot use generic dimension parameter `D` as a concrete type"
+        SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Struct(kind @ StructError::UnboundGenericInConcreteType { .. }), .. })
+            if kind.to_string() == "cannot use generic dimension parameter `D` as a concrete type"
     ));
     let err = ResolvedValueType::Quantity(dimension(2))
         .to_checked_type(make_src())
         .unwrap_err();
     assert!(matches!(
         err,
-        SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Evaluation(EvaluationError::Failed { message, .. }), .. })
-            if message == "cannot use generic dimension expression as a concrete type"
+        SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Struct(kind @ StructError::UnboundGenericInConcreteType { .. }), .. })
+            if kind.to_string() == "cannot use generic dimension expression as a concrete type"
     ));
 }
 
@@ -1457,7 +1458,7 @@ fn convert_generic_index_fails() {
     assert!(matches!(
         err,
         SemanticError::Located(crate::diagnostic::Diagnostic {
-            kind: SemanticErrorKind::Evaluation(EvaluationError::Failed { .. }),
+            kind: SemanticErrorKind::Struct(StructError::UnboundGenericInConcreteType { .. }),
             ..
         })
     ));
@@ -1513,7 +1514,7 @@ fn resolve_datetime_unknown_scale_error() {
     assert!(matches!(
         err,
         SemanticError::Located(crate::diagnostic::Diagnostic {
-            kind: SemanticErrorKind::Evaluation(EvaluationError::Failed { .. }),
+            kind: SemanticErrorKind::Dimension(DimensionError::UnknownTimeScale { .. }),
             ..
         })
     ));

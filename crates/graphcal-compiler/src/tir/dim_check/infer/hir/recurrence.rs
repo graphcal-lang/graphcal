@@ -5,10 +5,10 @@ use crate::outcome::Outcome;
 use crate::semantic::checked_type::{IndexTypeRef, Symbolic};
 use crate::semantic_error::SemanticError;
 use crate::semantic_error::dimension::DimensionError;
-use crate::semantic_error::evaluation::EvaluationError;
+use crate::semantic_error::dimension_mismatch::{MismatchOperand, MismatchRule};
+use crate::semantic_error::index::IndexError;
 
 use crate::semantic::checked_type::CheckedType;
-use crate::tir::dim_check::helpers::format_checked_type;
 
 use super::context::Infer;
 
@@ -27,9 +27,7 @@ impl Infer<'_> {
             return Err(SemanticError::located(
                 self.env.src,
                 source.span,
-                EvaluationError::Failed {
-                    message: "scan source must be an indexed value".to_string(),
-                },
+                IndexError::ScanSourceNotIndexed,
             )
             .into());
         };
@@ -51,9 +49,13 @@ impl Infer<'_> {
                 self.env.src,
                 body.span,
                 DimensionError::DimensionMismatch {
-                    expected: format_checked_type(&accumulator_type, self.env.registry),
-                    found: format_checked_type(&body_type, self.env.registry),
-                    help: "scan body must return the same type as the accumulator".to_string(),
+                    expected: Box::new(MismatchOperand::Type(
+                        accumulator_type.spelling(&self.env.registry.dimensions),
+                    )),
+                    found: Box::new(MismatchOperand::Type(
+                        body_type.spelling(&self.env.registry.dimensions),
+                    )),
+                    help: Box::new(MismatchRule::ScanBody),
                 },
             )
             .into());
@@ -90,8 +92,8 @@ impl Infer<'_> {
             return Err(SemanticError::located(
                 self.env.src,
                 axis.span,
-                EvaluationError::Failed {
-                    message: format!("unfold requires a coordinate index, got `{index}`"),
+                IndexError::UnfoldRequiresCoordinateIndex {
+                    index: index.display_name(),
                 },
             )
             .into());
@@ -110,9 +112,13 @@ impl Infer<'_> {
                 self.env.src,
                 body.span,
                 DimensionError::DimensionMismatch {
-                    expected: format_checked_type(&init_type, self.env.registry),
-                    found: format_checked_type(&body_type, self.env.registry),
-                    help: "unfold body must return the same type as the previous state".to_string(),
+                    expected: Box::new(MismatchOperand::Type(
+                        init_type.spelling(&self.env.registry.dimensions),
+                    )),
+                    found: Box::new(MismatchOperand::Type(
+                        body_type.spelling(&self.env.registry.dimensions),
+                    )),
+                    help: Box::new(MismatchRule::UnfoldBody),
                 },
             )
             .into());

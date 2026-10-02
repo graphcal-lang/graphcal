@@ -8,6 +8,7 @@ use crate::datetime_literal::{
 use crate::desugar::desugared_ast as ast;
 use crate::semantic::time_scale::TimeScale;
 use crate::semantic::time_zone::IanaTimeZoneId;
+use crate::semantic_error::dimension::DatetimeLiteralError;
 use crate::syntax::span::{Span, Spanned};
 
 use super::error::ExprLowerError;
@@ -42,7 +43,7 @@ impl ExprLowerer<'_> {
     pub(super) fn lower_function_application(
         function_ref: UnappliedFunctionRef,
         generic_args: &[ast::GenericArg],
-        path: String,
+        path: crate::syntax::names::NamePath,
         callee_span: Span,
     ) -> Result<FunctionRef, ExprLowerError> {
         let applied = match function_ref {
@@ -220,7 +221,7 @@ impl ExprLowerer<'_> {
             error @ ResolveZonedDateTimeLiteralError::OutOfRange { .. } => {
                 ExprLowerError::InvalidDatetimeLiteral {
                     expectation: DatetimeLiteralExpectation::ZonedCivilDateTime,
-                    reason: error.to_string(),
+                    reason: DatetimeLiteralError::Zoned(Box::new(error)),
                     span: datetime_span,
                 }
             }
@@ -235,7 +236,7 @@ impl ExprLowerer<'_> {
             .map(|literal| Expr::new(ExprKind::OffsetDateTimeLiteral(literal), span))
             .map_err(|error| ExprLowerError::InvalidDatetimeLiteral {
                 expectation: DatetimeLiteralExpectation::OffsetDateTime,
-                reason: error.to_string(),
+                reason: DatetimeLiteralError::Offset(error),
                 span,
             })
     }
@@ -249,7 +250,7 @@ impl ExprLowerer<'_> {
             .map(|literal| Expr::new(ExprKind::CivilDateTimeLiteral(literal), span))
             .map_err(|error| ExprLowerError::InvalidDatetimeLiteral {
                 expectation,
-                reason: error.to_string(),
+                reason: DatetimeLiteralError::Civil(error),
                 span,
             })
     }
@@ -259,16 +260,16 @@ impl ExprLowerer<'_> {
         scale: TimeScale,
         span: Span,
     ) -> Result<Expr<Tolerant>, ExprLowerError> {
-        let invalid = |reason: String| ExprLowerError::InvalidDatetimeLiteral {
+        let invalid = |reason: DatetimeLiteralError| ExprLowerError::InvalidDatetimeLiteral {
             expectation: DatetimeLiteralExpectation::Epoch(scale),
             reason,
             span,
         };
-        let civil =
-            CivilDateTimeLiteral::parse(source).map_err(|error| invalid(error.to_string()))?;
+        let civil = CivilDateTimeLiteral::parse(source)
+            .map_err(|error| invalid(DatetimeLiteralError::Civil(error)))?;
         EpochLiteral::resolve(civil, scale)
             .map(|literal| Expr::new(ExprKind::EpochLiteral(literal), span))
-            .map_err(|error| invalid(error.to_string()))
+            .map_err(|error| invalid(DatetimeLiteralError::Epoch(std::sync::Arc::new(error))))
     }
 
     pub(super) fn lower_iana_time_zone_id(

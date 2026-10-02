@@ -6,32 +6,84 @@
 
 use thiserror::Error;
 
+use crate::dag_id::DagId;
 use crate::diagnostic::{DiagnosticKind, SecondaryLabel};
+use crate::semantic::checked_type::TypeSpelling;
+use crate::syntax::ast::ModulePath;
+use crate::syntax::decl_name::DeclName;
+use crate::tir::typed::declared_type_spelling::DeclaredTypeSpelling;
+
+/// How a diagnostic names the DAG an import, include, or DAG call refers
+/// to: the module path as the source wrote it, a resolved DAG identity, or
+/// an inline `dag` declaration by its declared name.
+#[derive(Debug, Clone)]
+pub enum DagReference {
+    Path(ModulePath),
+    Dag(DagId),
+    InlineDag(DeclName),
+}
+
+impl std::fmt::Display for DagReference {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Path(path) => f.write_str(&path.display_path()),
+            Self::Dag(dag) => dag.fmt(f),
+            Self::InlineDag(name) => name.fmt(f),
+        }
+    }
+}
+
+/// The member a dependency cycle is reported at: a DAG that inline-calls
+/// itself, or a declaration that depends on itself.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CycleMember {
+    Dag(DagId),
+    Declaration(DeclName),
+}
+
+impl std::fmt::Display for CycleMember {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Dag(dag) => dag.fmt(f),
+            Self::Declaration(name) => name.fmt(f),
+        }
+    }
+}
 
 /// Diagnostics of the declaration graph and of DAG calls.
 #[derive(Debug, Clone, Error)]
 pub enum GraphError {
     #[error("DAG call `{name}` is not allowed in a compile-time expression")]
-    DagCallInCompileTime { name: String },
+    DagCallInCompileTime { name: DagId },
     #[error("cyclic dependency involving `{name}`")]
-    CyclicDependency { name: String },
+    CyclicDependency { name: CycleMember },
     #[error("unknown dag `{name}`")]
-    UnknownDag { name: String },
+    UnknownDag { name: DagId },
     #[error("unknown param `{name}` in DAG call to `{dag_name}`")]
-    UnknownDagParam { name: String, dag_name: String },
-    #[error("missing required binding(s) {missing:?} when instantiating DAG `{dag_name}`")]
+    UnknownDagParam { name: DeclName, dag_name: DagId },
+    #[error(
+        "missing required binding(s) {} when instantiating DAG `{dag_name}`",
+        format_missing_bindings(missing)
+    )]
     MissingDagBindings {
-        missing: Vec<String>,
-        dag_name: String,
+        /// Sorted by spelling.
+        missing: Vec<DeclName>,
+        dag_name: DagReference,
     },
     #[error("unknown output `{name}` in DAG call to `{dag_name}`")]
-    UnknownDagOutput { name: String, dag_name: String },
+    UnknownDagOutput { name: DeclName, dag_name: DagId },
     #[error("DAG call binding `{param_name}`: expected {expected}, found {found}")]
     DagArgTypeMismatch {
-        param_name: String,
-        expected: String,
-        found: String,
+        param_name: DeclName,
+        expected: DeclaredTypeSpelling,
+        found: TypeSpelling,
     },
+    #[error("inline DAG target not found in project: {target}")]
+    InlineDagTargetNotFound { target: DagId },
+    /// Templates that include each other in a circle, from the template the
+    /// include expansion re-entered back to it.
+    #[error("recursive DAG instantiation: {}", format_template_cycle(templates))]
+    RecursiveDagInstantiation { templates: Vec<DagId> },
 }
 
 impl DiagnosticKind for GraphError {
@@ -44,6 +96,8 @@ impl DiagnosticKind for GraphError {
             Self::MissingDagBindings { .. } => "graphcal::G004",
             Self::UnknownDagOutput { .. } => "graphcal::G005",
             Self::DagArgTypeMismatch { .. } => "graphcal::G006",
+            Self::InlineDagTargetNotFound { .. } => "graphcal::G008",
+            Self::RecursiveDagInstantiation { .. } => "graphcal::G009",
         }
     }
 
@@ -60,6 +114,9 @@ impl DiagnosticKind for GraphError {
                 Some(format!("not a projectable value in `{dag_name}`"))
             }
             Self::DagArgTypeMismatch { .. } => Some("type mismatch".to_owned()),
+            Self::InlineDagTargetNotFound { .. } | Self::RecursiveDagInstantiation { .. } => {
+                Some("error here".to_owned())
+            }
         }
     }
 
@@ -72,6 +129,8 @@ impl DiagnosticKind for GraphError {
             Self::MissingDagBindings { .. } => Some("every required `param` declared in the DAG must be bound at each `include` or call site".to_owned()),
             Self::UnknownDagOutput { .. } => Some("the projection after `).` must name a param input port or an explicitly exported node in the called DAG".to_owned()),
             Self::DagArgTypeMismatch { .. } => Some("the binding expression must have the same type as the DAG's param declaration".to_owned()),
+            Self::InlineDagTargetNotFound { .. }
+            | Self::RecursiveDagInstantiation { .. }=> None,
         }
     }
 
@@ -83,7 +142,41 @@ impl DiagnosticKind for GraphError {
             | Self::UnknownDagParam { .. }
             | Self::MissingDagBindings { .. }
             | Self::UnknownDagOutput { .. }
-            | Self::DagArgTypeMismatch { .. } => Vec::new(),
+            | Self::DagArgTypeMismatch { .. }
+            | Self::InlineDagTargetNotFound { .. }
+            | Self::RecursiveDagInstantiation { .. } => Vec::new(),
         }
     }
+}
+
+/// Render missing bindings as the quoted, bracketed list diagnostics have
+/// always shown (`["a", "b"]`).
+fn format_missing_bindings(missing: &[DeclName]) -> String {
+    format!(
+        "{:?}",
+        missing.iter().map(ToString::to_string).collect::<Vec<_>>()
+    )
+}
+
+/// Each template is named by its path inside its file (`outer.inner`), or by
+/// its module identity when it is a file root.
+fn format_template_cycle(templates: &[DagId]) -> String {
+    templates
+        .iter()
+        .map(|template| {
+            let file_depth = template.file_root().segments().len();
+            let inline_path = template
+                .segments()
+                .iter()
+                .skip(file_depth)
+                .map(ToString::to_string)
+                .collect::<Vec<_>>();
+            if inline_path.is_empty() {
+                template.to_string()
+            } else {
+                inline_path.join(".")
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" -> ")
 }

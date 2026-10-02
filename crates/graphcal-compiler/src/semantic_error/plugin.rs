@@ -8,7 +8,103 @@ use thiserror::Error;
 
 use crate::diagnostic::{DiagnosticKind, SecondaryLabel};
 use crate::syntax::function_name::FnParamName;
+use crate::syntax::names::NameAtom;
 use crate::syntax::span::Span;
+use crate::syntax::type_name::{FieldName, StructTypeName};
+
+/// Why an extern function signature is invalid.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ExternSignatureError {
+    ConflictingSignature {
+        function: crate::syntax::function_name::FnName,
+        plugin: crate::plugin_identity::PluginIdentity,
+    },
+    ConflictingResultType {
+        function: crate::syntax::function_name::FnName,
+        plugin: crate::plugin_identity::PluginIdentity,
+    },
+    DuplicateGenericBinder(NameAtom),
+    DomainConstraint,
+    UnsupportedParameterType,
+    GenericStructReturn,
+    UndeclaredRecordType(StructTypeName),
+    GenericRecordType(StructTypeName),
+    NotARecordType(StructTypeName),
+    UnsupportedStructField(FieldName),
+    ArrayAxesMustBeBinders,
+    ArrayWithoutAxes,
+    ArrayElementKind,
+    Signature(crate::function_signature::SignatureError),
+}
+
+impl std::fmt::Display for ExternSignatureError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::ConflictingSignature { function, plugin } => write!(
+                f,
+                "function `{function}` of plugin \"{plugin}\" is declared elsewhere with a different signature"
+            ),
+            Self::ConflictingResultType { function, plugin } => write!(
+                f,
+                "function `{function}` of plugin \"{plugin}\" is declared elsewhere with a different result type"
+            ),
+            Self::DuplicateGenericBinder(atom) => {
+                write!(f, "generic binder `{atom}` is declared more than once")
+            }
+            Self::DomainConstraint => {
+                f.write_str("domain constraints are not allowed in extern function signatures")
+            }
+            Self::UnsupportedParameterType => f.write_str(
+                "extern function signatures support Bool, Int, quantity types, and indexed scalar collections over one or more declared index variables",
+            ),
+            Self::GenericStructReturn => f.write_str(
+                "generic struct returns are not supported in this phase; use a record type with concrete field types",
+            ),
+            Self::UndeclaredRecordType(leaf) => write!(
+                f,
+                "record type `{leaf}` has no declaration; extern struct returns must use a type declared in (or imported into) the declaring file"
+            ),
+            Self::GenericRecordType(leaf) => write!(
+                f,
+                "record type `{leaf}` is generic; generic struct returns are not supported in this phase"
+            ),
+            Self::NotARecordType(leaf) => write!(
+                f,
+                "`{leaf}` is not a record type; extern struct returns need a single constructor named after the type"
+            ),
+            Self::UnsupportedStructField(field) => write!(
+                f,
+                "field `{field}` has a type that cannot cross the plugin boundary; struct-return fields support Bool, Int, and quantity types in this phase"
+            ),
+            Self::ArrayAxesMustBeBinders => f.write_str(
+                "extern array axes must name the signature's `Index` binders (concrete indexes and `Fin(N)` axes cannot appear in the declaration)",
+            ),
+            Self::ArrayWithoutAxes => f.write_str("extern arrays must have at least one axis"),
+            Self::ArrayElementKind => {
+                f.write_str("extern array elements must be Bool, Int, or quantities")
+            }
+            Self::Signature(error) => error.fmt(f),
+        }
+    }
+}
+
+/// Where an extern call is rejected because it is not a runtime position.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExternCallContext {
+    DomainBound,
+    UnitScaleExpression,
+    ConstExpression,
+}
+
+impl std::fmt::Display for ExternCallContext {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::DomainBound => "domain bound",
+            Self::UnitScaleExpression => "unit scale expression",
+            Self::ConstExpression => "const expression",
+        })
+    }
+}
 
 /// Plugin diagnostics: extern declarations, host functions, and plugin loading.
 #[derive(Debug, Clone, Error)]
@@ -18,8 +114,8 @@ pub enum PluginError {
         alias: crate::syntax::module_name::ModuleAliasName,
         name: crate::syntax::function_name::FnName,
     },
-    #[error("invalid extern function signature: {message}")]
-    InvalidExternSignature { message: String },
+    #[error("invalid extern function signature: {error}")]
+    InvalidExternSignature { error: ExternSignatureError },
     #[error("duplicate parameter `{name}` in extern function signature")]
     DuplicateExternParameter { name: FnParamName, first: Span },
     #[error("extern function `{name}` (plugin \"{plugin}\") is not provided by the host")]
@@ -28,7 +124,10 @@ pub enum PluginError {
         name: crate::syntax::function_name::FnName,
     },
     #[error("extern function call `{name}` not allowed in {context}")]
-    ExternCallNotAllowed { name: String, context: String },
+    ExternCallNotAllowed {
+        name: crate::hir::expr::ExternFnRef,
+        context: ExternCallContext,
+    },
     #[error(
         "extern function `{name}` is declared with signature {declared}, but plugin \"{plugin}\" provides {provided}"
     )]

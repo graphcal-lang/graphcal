@@ -10,4 +10,4 @@ snippet line 6:
 snippet line 7: node x: Dimensionless = match @k {
     label at line 7, columns 31 to 32: error here
 snippet line 8:     Maneuver#Departure => 1.0,
-diagnostic code: graphcal::E001
+diagnostic code: graphcal::S011

@@ -11,4 +11,4 @@ snippet line 10:     Nominal => 0.0,
 snippet line 11:     Nominal => 1.0,
     label at line 11, columns 5 to 11: error here
 snippet line 12:     Warning(code: code) => code,
-diagnostic code: graphcal::E001
+diagnostic code: graphcal::S017

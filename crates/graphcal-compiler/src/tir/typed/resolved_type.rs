@@ -21,10 +21,14 @@ use crate::semantic::checked_type::{
 use crate::semantic::index_def::FiniteIndex;
 use crate::semantic::time_scale::TimeScale;
 use crate::semantic_error::SemanticError;
-use crate::semantic_error::evaluation::EvaluationError;
+use crate::semantic_error::domain::UnconstrainableType;
+use crate::semantic_error::index::IndexError;
+use crate::semantic_error::structure::StructError;
+use crate::semantic_error::structure::UnboundGeneric;
 use crate::source_id::SourceId;
 use crate::syntax::non_empty::NonEmpty;
 use crate::syntax::span::Span;
+use crate::tir::typed::declared_type_spelling::DeclaredTypeSpelling;
 
 /// A resolved dimension: fully concrete, or symbolic in at least one generic
 /// dimension parameter.
@@ -208,7 +212,44 @@ pub enum ResolvedValueType {
     GenericTypeParam(GenericParamId, Span),
 }
 
+/// The value family a `min`/`max` domain constraint is checked in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DomainFamily {
+    Quantity,
+    Int,
+    Datetime(TimeScale),
+}
+
 impl ResolvedValueType {
+    /// Spell this declared value type for a diagnostic payload.
+    #[must_use]
+    pub fn spelling(&self, registry: &FormattingRegistry) -> DeclaredTypeSpelling {
+        DeclaredTypeSpelling::new(self.format(registry))
+    }
+
+    /// The `min`/`max` domain family of this value type.
+    ///
+    /// # Errors
+    ///
+    /// Returns why the type cannot carry a domain constraint when it is not
+    /// a quantity, `Int`, or `Datetime`.
+    pub fn domain_family(&self) -> Result<DomainFamily, UnconstrainableType> {
+        match self {
+            Self::Quantity(_) => Ok(DomainFamily::Quantity),
+            Self::Int => Ok(DomainFamily::Int),
+            Self::Datetime(scale) => Ok(DomainFamily::Datetime(*scale)),
+            Self::Bool => Err(UnconstrainableType::Bool),
+            Self::Complex { .. } => Err(UnconstrainableType::Complex),
+            Self::Key { .. } => Err(UnconstrainableType::Key),
+            Self::Struct { name, .. } => {
+                Err(UnconstrainableType::Struct(name.to_unowned_def_name()))
+            }
+            Self::GenericTypeParam(param, _) => {
+                Err(UnconstrainableType::GenericTypeParam(param.clone()))
+            }
+        }
+    }
+
     /// Format as a human-readable string, e.g. `"Length / Time^2"`, `"Bool"`, `"Vec3<Length, ECI>"`.
     #[must_use]
     pub fn format(&self, registry: &FormattingRegistry) -> String {
@@ -257,27 +298,23 @@ impl ResolvedValueType {
             Self::Datetime(scale) => Ok(CheckedType::Datetime(*scale)),
             Self::Quantity(ResolvedDim::Concrete(dim)) => Ok(CheckedType::Quantity(dim.clone())),
             Self::Quantity(symbolic @ ResolvedDim::Symbolic { span, .. }) => {
-                let message = symbolic.lone_generic_param().map_or_else(
-                    || "cannot use generic dimension expression as a concrete type".to_string(),
-                    |(name, _)| {
-                        format!(
-                            "cannot use generic dimension parameter `{name}` as a concrete type"
-                        )
-                    },
-                );
-                let span = symbolic
-                    .lone_generic_param()
-                    .map_or(*span, |(_, span)| span);
-                Err(eval_error(message, src, span))
+                let lone = symbolic.lone_generic_param();
+                let span = lone.map_or(*span, |(_, span)| span);
+                Err(unbound_generic(
+                    UnboundGeneric::QuantityDimension(lone.map(|(name, _)| name.clone())),
+                    src,
+                    span,
+                ))
             }
             Self::Complex { dimension, span } => match dimension {
                 ResolvedDim::Concrete(dimension) => Ok(CheckedType::Complex(dimension.clone())),
                 symbolic @ ResolvedDim::Symbolic { .. } => {
-                    let message = symbolic.lone_generic_param().map_or_else(
-                        || "complex dimension expression is not concrete".to_string(),
-                        |(name, _)| format!("complex dimension parameter `{name}` is not bound"),
-                    );
-                    Err(eval_error(message, src, *span))
+                    let name = symbolic.lone_generic_param().map(|(name, _)| name.clone());
+                    Err(unbound_generic(
+                        UnboundGeneric::ComplexDimension(name),
+                        src,
+                        *span,
+                    ))
                 }
             },
             Self::Key { index, .. } => index_type_ref(index, src).map(CheckedType::Key),
@@ -290,8 +327,8 @@ impl ResolvedValueType {
                     .map(|arg| resolved_generic_arg_to_declared(arg, src))
                     .collect::<Result<Vec<_>, _>>()?,
             )),
-            Self::GenericTypeParam(name, span) => Err(eval_error(
-                format!("cannot use generic type parameter `{name}` as a concrete type"),
+            Self::GenericTypeParam(name, span) => Err(unbound_generic(
+                UnboundGeneric::TypeParameter(name.clone()),
                 src,
                 *span,
             )),
@@ -334,6 +371,12 @@ impl ResolvedDeclType {
         }
     }
 
+    /// Spell this declared type for a diagnostic payload.
+    #[must_use]
+    pub fn spelling(&self, registry: &FormattingRegistry) -> DeclaredTypeSpelling {
+        DeclaredTypeSpelling::new(self.format(registry))
+    }
+
     /// Format as a human-readable string, e.g. `"Velocity[Maneuver]"`.
     #[must_use]
     pub fn format(&self, registry: &FormattingRegistry) -> String {
@@ -364,10 +407,8 @@ impl ResolvedDeclType {
                         IndexTypeRef::Finite(finite_index(form, src, *span)?)
                     }
                     ResolvedIndex::GenericParam(name, span) => {
-                        return Err(eval_error(
-                            format!(
-                                "cannot use generic index parameter `{name}` as a concrete type"
-                            ),
+                        return Err(unbound_generic(
+                            UnboundGeneric::IndexParameterAsType(name.clone()),
                             src,
                             *span,
                         ));
@@ -381,8 +422,14 @@ impl ResolvedDeclType {
     }
 }
 
-fn eval_error(message: String, src: SourceId, span: Span) -> SemanticError {
-    SemanticError::located(src, span, EvaluationError::Failed { message })
+fn unbound_generic(generic: UnboundGeneric, src: SourceId, span: Span) -> SemanticError {
+    SemanticError::located(
+        src,
+        span,
+        StructError::UnboundGenericInConcreteType {
+            generic: Box::new(generic),
+        },
+    )
 }
 
 pub fn resolved_generic_arg_to_declared(
@@ -394,18 +441,12 @@ pub fn resolved_generic_arg_to_declared(
             Ok(CheckedGenericArg::Dim(dim.clone()))
         }
         ResolvedGenericArg::Dim(symbolic @ ResolvedDim::Symbolic { span, .. }) => {
-            Err(match symbolic.lone_generic_param() {
-                Some((name, span)) => eval_error(
-                    format!("generic dimension parameter `{name}` is not bound"),
-                    src,
-                    span,
-                ),
-                None => eval_error(
-                    "generic dimension expression is not concrete".to_string(),
-                    src,
-                    *span,
-                ),
-            })
+            let lone = symbolic.lone_generic_param();
+            Err(unbound_generic(
+                UnboundGeneric::DimensionArgument(lone.map(|(name, _)| name.clone())),
+                src,
+                lone.map_or(*span, |(_, span)| span),
+            ))
         }
         ResolvedGenericArg::Index(index) => {
             index_type_ref(index, src).map(CheckedGenericArg::Index)
@@ -413,13 +454,7 @@ pub fn resolved_generic_arg_to_declared(
         ResolvedGenericArg::Nat(form, span) => form
             .constant_value()
             .map(CheckedGenericArg::Nat)
-            .ok_or_else(|| {
-                eval_error(
-                    format!("generic Nat argument `{}` is not concrete", form.format()),
-                    src,
-                    *span,
-                )
-            }),
+            .ok_or_else(|| unbound_generic(UnboundGeneric::NatArgument(form.clone()), src, *span)),
         ResolvedGenericArg::Type(value_type) => {
             value_type.to_checked_type(src).map(CheckedGenericArg::Type)
         }
@@ -432,18 +467,16 @@ fn finite_index(
     src: SourceId,
     span: Span,
 ) -> Result<FiniteIndex, SemanticError> {
-    let size = form.constant_value().ok_or_else(|| {
-        eval_error(
-            format!(
-                "cannot use generic nat expression `{}` as a concrete type",
-                form.format()
-            ),
+    let size = form
+        .constant_value()
+        .ok_or_else(|| unbound_generic(UnboundGeneric::NatAxis(form.clone()), src, span))?;
+    FiniteIndex::try_from_u64(size).map_err(|error| {
+        SemanticError::located(
             src,
             span,
+            IndexError::InvalidFiniteIndexCardinality { error },
         )
-    })?;
-    FiniteIndex::try_from_u64(size)
-        .map_err(|err| eval_error(err.describe_finite_index(), src, span))
+    })
 }
 
 fn index_type_ref(index: &ResolvedIndex, src: SourceId) -> Result<IndexTypeRef, SemanticError> {
@@ -452,8 +485,8 @@ fn index_type_ref(index: &ResolvedIndex, src: SourceId) -> Result<IndexTypeRef, 
         ResolvedIndex::Finite(form, span) => {
             finite_index(form, src, *span).map(IndexTypeRef::Finite)
         }
-        ResolvedIndex::GenericParam(name, span) => Err(eval_error(
-            format!("generic index parameter `{name}` is not bound"),
+        ResolvedIndex::GenericParam(name, span) => Err(unbound_generic(
+            UnboundGeneric::IndexParameter(name.clone()),
             src,
             *span,
         )),

@@ -5,7 +5,7 @@ use crate::hir::expr::{Expr, ParamBinding};
 use crate::ir::static_substitution::StaticSubstitution;
 use crate::outcome::Outcome;
 use crate::resolved_name::ResolvedDeclName;
-use crate::semantic_error::graph::GraphError;
+use crate::semantic_error::graph::{DagReference, GraphError};
 use crate::semantic_error::visibility::VisibilityError;
 use std::collections::HashMap;
 
@@ -13,7 +13,6 @@ use crate::semantic_error::SemanticError;
 use crate::tir::typed::specialization::specialize_type;
 
 use crate::semantic::checked_type::{CheckedType, Symbolic};
-use crate::tir::dim_check::helpers::format_checked_type;
 
 use super::context::Infer;
 
@@ -26,13 +25,12 @@ impl Infer<'_> {
         static_bindings: &StaticSubstitution,
         output: &crate::syntax::span::Spanned<ResolvedDeclName>,
     ) -> Result<CheckedType<Symbolic>, Outcome<SemanticError>> {
-        let display_path = target.value.to_string();
         let dag_tir = self.env.tir.dag(&target.value).ok_or_else(|| {
             SemanticError::located(
                 self.env.src,
                 target.span,
                 GraphError::UnknownDag {
-                    name: display_path.clone(),
+                    name: target.value.clone(),
                 },
             )
         })?;
@@ -69,8 +67,8 @@ impl Infer<'_> {
                     self.env.src,
                     binding.target.span,
                     GraphError::UnknownDagParam {
-                        name: target_key.as_str().to_string(),
-                        dag_name: display_path.clone(),
+                        name: target_key.to_unowned_def_name(),
+                        dag_name: target.value.clone(),
                     },
                 )
             })?;
@@ -91,28 +89,28 @@ impl Infer<'_> {
                     self.env.src,
                     binding.value.span,
                     GraphError::DagArgTypeMismatch {
-                        param_name: target_key.as_str().to_string(),
-                        expected: expected.format(self.env.registry),
-                        found: format_checked_type(&found, self.env.registry),
+                        param_name: target_key.to_unowned_def_name(),
+                        expected: expected.spelling(self.env.registry),
+                        found: found.spelling(&self.env.registry.dimensions),
                     },
                 )
                 .into());
             }
         }
 
-        let mut missing: Vec<String> = required_param_keys
+        let mut missing: Vec<_> = required_param_keys
             .iter()
             .filter(|param| !bound_resolved_names.contains(*param))
-            .map(|param| param.as_str().to_string())
+            .map(ResolvedDeclName::to_unowned_def_name)
             .collect();
         if !missing.is_empty() {
-            missing.sort();
+            missing.sort_by_key(ToString::to_string);
             return Err(SemanticError::located(
                 self.env.src,
                 expr.span,
                 GraphError::MissingDagBindings {
                     missing,
-                    dag_name: display_path.clone(),
+                    dag_name: DagReference::Dag(target.value.clone()),
                 },
             )
             .into());
@@ -127,12 +125,11 @@ impl Infer<'_> {
                     self.env.src,
                     output.span,
                     GraphError::UnknownDagOutput {
-                        name: output_key.as_str().to_string(),
-                        dag_name: display_path.clone(),
+                        name: output_key.to_unowned_def_name(),
+                        dag_name: target.value.clone(),
                     },
                 )
             })?;
-        let output_name = output_key.as_str();
         if !dag_tir
             .projectable_outputs
             .contains(&output_key.to_unowned_def_name())
@@ -141,8 +138,8 @@ impl Infer<'_> {
                 self.env.src,
                 output.span,
                 VisibilityError::ImportPrivateItem {
-                    name: output_name.to_string(),
-                    file_path: display_path,
+                    name: output_key.atom().clone(),
+                    file_path: DagReference::Dag(target.value.clone()),
                 },
             )
             .into());

@@ -8,8 +8,91 @@
 //! same-spelled parameters of different owners can never be confused.
 
 use crate::plugin_identity::ExternFnKey;
-use crate::resolved_name::ResolvedStructTypeName;
+use crate::resolved_name::{ResolvedConstructorName, ResolvedStructTypeName};
+use crate::syntax::ast::GenericConstraint;
 use crate::syntax::type_name::GenericParamName;
+
+/// Render accepted generic constraints as `A or B` at the diagnostic boundary.
+pub(crate) fn render_accepted_constraints(accepted: &[GenericConstraint]) -> String {
+    accepted
+        .iter()
+        .map(|constraint| constraint.as_str())
+        .collect::<Vec<_>>()
+        .join(" or ")
+}
+
+/// The generic type or constructor a generic argument list is applied to.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GenericApplicationTarget {
+    /// A user-declared generic struct type.
+    StructType(ResolvedStructTypeName),
+    /// A constructor of a user-declared generic type.
+    Constructor(ResolvedConstructorName),
+    /// The built-in `Complex<D>` type.
+    Complex,
+    /// The built-in `Key<I>` type.
+    Key,
+}
+
+impl std::fmt::Display for GenericApplicationTarget {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::StructType(name) => f.write_str(name.as_str()),
+            Self::Constructor(name) => f.write_str(name.as_str()),
+            Self::Complex => f.write_str("Complex"),
+            Self::Key => f.write_str("Key"),
+        }
+    }
+}
+
+/// The accepted number of generic arguments: every parameter up to the last
+/// one without a default is required.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GenericArgArity {
+    required: usize,
+    max: usize,
+}
+
+impl GenericArgArity {
+    /// Exactly `count` arguments.
+    #[must_use]
+    pub const fn exactly(count: usize) -> Self {
+        Self {
+            required: count,
+            max: count,
+        }
+    }
+
+    /// The arity of a declared generic parameter list, given whether each
+    /// parameter, in order, has a default.
+    #[must_use]
+    pub fn of_defaults(has_default: impl IntoIterator<Item = bool>) -> Self {
+        let (required, max) = has_default.into_iter().enumerate().fold(
+            (0, 0),
+            |(required, _), (index, defaulted)| {
+                let position = index.saturating_add(1);
+                (if defaulted { required } else { position }, position)
+            },
+        );
+        Self { required, max }
+    }
+
+    /// Whether `got` arguments are accepted.
+    #[must_use]
+    pub const fn accepts(self, got: usize) -> bool {
+        self.required <= got && got <= self.max
+    }
+}
+
+impl std::fmt::Display for GenericArgArity {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.required == self.max {
+            write!(f, "{}", self.max)
+        } else {
+            write!(f, "{}..{}", self.required, self.max)
+        }
+    }
+}
 
 /// Canonical identity for a generic parameter in a lexical generic scope.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]

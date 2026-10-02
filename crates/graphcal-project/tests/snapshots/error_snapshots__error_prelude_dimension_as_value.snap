@@ -9,4 +9,4 @@ Begin snippet for prelude_dimension_as_value.gcl starting at line 1, column 1
 snippet line 1: // Error: prelude dimensions are type-system names, not values.
 snippet line 2: node x: Dimensionless = Length;
     label at line 2, columns 25 to 30: error here
-diagnostic code: graphcal::E001
+diagnostic code: graphcal::M033

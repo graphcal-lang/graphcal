@@ -1,9 +1,9 @@
 //! Project diagnostics for module-resolution failures.
 
 use graphcal_compiler::semantic_error::SemanticError;
-use graphcal_compiler::semantic_error::evaluation::EvaluationError;
+use graphcal_compiler::semantic_error::graph::DagReference;
 use graphcal_compiler::semantic_error::module::ModuleError;
-use graphcal_compiler::semantic_error::name::NameError;
+use graphcal_compiler::semantic_error::name::{DuplicateDeclaration, NameError};
 use graphcal_compiler::semantic_error::visibility::VisibilityError;
 use graphcal_compiler::source_id::SourceId;
 use graphcal_compiler::syntax::span::Span;
@@ -11,7 +11,12 @@ use graphcal_compiler::syntax::span::Span;
 use crate::compile_error::PipelineError;
 
 /// N001 for a resolver duplicate, rendered with its spelled name.
-fn duplicate_name(name: String, first: Span, duplicate: Span, src: SourceId) -> PipelineError {
+fn duplicate_name(
+    name: DuplicateDeclaration,
+    first: Span,
+    duplicate: Span,
+    src: SourceId,
+) -> PipelineError {
     PipelineError::Semantic(SemanticError::located(
         src,
         duplicate,
@@ -30,8 +35,8 @@ pub(super) fn module_resolve_compile_error(
             src,
             src.whole_span(),
             VisibilityError::ImportPrivateItem {
-                name: name.to_string(),
-                file_path: owner.to_string(),
+                name,
+                file_path: DagReference::Dag(owner),
             },
         )),
         graphcal_compiler::resolve::error::ModuleResolveError::WrongImportCategory {
@@ -42,7 +47,7 @@ pub(super) fn module_resolve_compile_error(
             src,
             span,
             ModuleError::ImportCategoryMismatch {
-                file_path: owner.to_string(),
+                file_path: DagReference::Dag(owner),
                 mismatch,
             },
         )),
@@ -53,9 +58,7 @@ pub(super) fn module_resolve_compile_error(
         } => PipelineError::Semantic(SemanticError::located(
             src,
             span,
-            ModuleError::IncludeItemNotProjectable {
-                name: name.to_string(),
-            },
+            ModuleError::IncludeItemNotProjectable { name },
         )),
         graphcal_compiler::resolve::error::ModuleResolveError::ConstructorOwnerRebound {
             constructor,
@@ -66,8 +69,8 @@ pub(super) fn module_resolve_compile_error(
             src,
             span,
             ModuleError::IncludeConstructorOwnerRebound {
-                constructor: constructor.to_string(),
-                owner_type: owner_type.to_string(),
+                constructor,
+                owner_type,
             },
         )),
         graphcal_compiler::resolve::error::ModuleResolveError::DuplicateSymbol {
@@ -81,25 +84,33 @@ pub(super) fn module_resolve_compile_error(
             first,
             duplicate,
             ..
-        } => duplicate_name(name.to_string(), first, duplicate, src),
+        } => duplicate_name(DuplicateDeclaration::Name(name), first, duplicate, src),
         graphcal_compiler::resolve::error::ModuleResolveError::DuplicateIndexVariant {
             variant,
             first,
             duplicate,
             ..
-        } => duplicate_name(variant.to_string(), first, duplicate, src),
+        } => duplicate_name(
+            DuplicateDeclaration::IndexVariant(variant),
+            first,
+            duplicate,
+            src,
+        ),
         graphcal_compiler::resolve::error::ModuleResolveError::DuplicatePluginFunction {
             function,
             first,
             duplicate,
             ..
-        } => duplicate_name(function.to_string(), first, duplicate, src),
+        } => duplicate_name(
+            DuplicateDeclaration::Name(function.atom().clone()),
+            first,
+            duplicate,
+            src,
+        ),
         other => PipelineError::Semantic(SemanticError::located(
             src,
             src.whole_span(),
-            EvaluationError::Failed {
-                message: other.to_string(),
-            },
+            ModuleError::resolution(other),
         )),
     }
 }

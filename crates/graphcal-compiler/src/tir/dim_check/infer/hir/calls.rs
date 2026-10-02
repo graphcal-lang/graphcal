@@ -3,7 +3,10 @@
 use crate::hir::expr::{Expr, FunctionRef};
 use crate::outcome::Outcome;
 use crate::semantic_error::dimension::DimensionError;
-use crate::semantic_error::evaluation::EvaluationError;
+use crate::semantic_error::dimension::LinearAlgebraAxisMismatch;
+use crate::semantic_error::dimension_mismatch::{
+    MismatchOperand, MismatchRule, OperandExpectation,
+};
 use crate::semantic_error::name::NameError;
 use crate::source_id::SourceId;
 
@@ -16,7 +19,7 @@ use crate::syntax::span::Span;
 
 use crate::semantic::checked_type::{CheckedType, Symbolic};
 use crate::tir::dim_check::builtins::infer_fn_dim;
-use crate::tir::dim_check::helpers::{expect_quantity, format_checked_type};
+use crate::tir::dim_check::helpers::expect_quantity;
 use crate::tir::dim_check::infer::linear_algebra::{
     LinearAlgebraTypeError, infer_linear_algebra_type,
 };
@@ -47,8 +50,10 @@ fn check_builtin_arity(
             Err(SemanticError::located(
                 src,
                 span,
-                EvaluationError::Failed {
-                    message: format!("{function}() expects {arity} arguments, got {got}"),
+                NameError::WrongOptionalArity {
+                    function,
+                    arity,
+                    got,
                 },
             ))
         }
@@ -69,38 +74,70 @@ impl Infer<'_> {
             .collect::<Result<Vec<_>, _>>()?;
 
         infer_linear_algebra_type(function, &argument_types, |index| {
-        crate::tir::dim_check::infer::concrete_cardinality_for_inferred(index, self.env.tir)
-    })
-    .map_err(|error| match error {
-        LinearAlgebraTypeError::ExpectedIndexedQuantity { argument, rank } => {
-            SemanticError::located(self.env.src, args[argument].span, DimensionError::DimensionMismatch { expected: format!("rank-{rank} indexed quantity"), found: format_checked_type(&argument_types[argument], self.env.registry), help: format!(
-                    "{}() requires argument {} to be a rank-{rank} indexed quantity",
-                    function.as_str(),
-                    argument.saturating_add(1)
-                ) })
-        }
-        LinearAlgebraTypeError::AxisMismatch {
-            argument,
-            expected,
-            found,
-        } => SemanticError::located(self.env.src, args[argument].span, DimensionError::LinearAlgebraShapeMismatch { function, expected: expected.to_string(), found: found.to_string(), help: "linear-algebra contractions match axes by typed identity; use the same declared index (or the same Fin(N) structural index) at both contracted positions"
-                .to_string() }),
-        LinearAlgebraTypeError::CardinalityMismatch {
-            argument,
-            expected,
-            found,
-        } => SemanticError::located(self.env.src, args[argument].span, DimensionError::LinearAlgebraShapeMismatch { function, expected: format!("an axis with exactly {expected} entries"), found: found.map_or_else(
-                || "an axis whose cardinality is not concrete".to_string(),
-                |cardinality| format!("an axis with {cardinality} entries"),
-            ), help: format!("{}() is defined only for three-component vectors", function.as_str()) }),
-        LinearAlgebraTypeError::ConcreteCardinalityRequired { argument } => {
-            SemanticError::located(self.env.src, args[argument].span, DimensionError::LinearAlgebraShapeMismatch { function, expected: "an axis with a concrete cardinality".to_string(), found: "an axis whose cardinality is still generic".to_string(), help: format!(
-                    "{}() needs a concrete matrix size because its result dimension depends on that size",
-                    function.as_str()
-                ) })
-        }
-        LinearAlgebraTypeError::DimensionOverflow => SemanticError::located(self.env.src, callee_span, DimensionError::DimensionOverflow),
-    }).map_err(Outcome::Failed)
+            crate::tir::dim_check::infer::concrete_cardinality_for_inferred(index, self.env.tir)
+        })
+        .map_err(|error| match error {
+            LinearAlgebraTypeError::ExpectedIndexedQuantity { argument, rank } => {
+                SemanticError::located(
+                    self.env.src,
+                    args[argument].span,
+                    DimensionError::DimensionMismatch {
+                        expected: Box::new(MismatchOperand::Expected(
+                            OperandExpectation::RankIndexedQuantity { rank },
+                        )),
+                        found: Box::new(MismatchOperand::Type(
+                            argument_types[argument].spelling(&self.env.registry.dimensions),
+                        )),
+                        help: Box::new(MismatchRule::LinearAlgebraArgument {
+                            function,
+                            argument: argument.saturating_add(1),
+                            rank,
+                        }),
+                    },
+                )
+            }
+            LinearAlgebraTypeError::AxisMismatch {
+                argument,
+                expected,
+                found,
+            } => SemanticError::located(
+                self.env.src,
+                args[argument].span,
+                DimensionError::LinearAlgebraShapeMismatch {
+                    function,
+                    mismatch: LinearAlgebraAxisMismatch::Identity {
+                        expected: Box::new(expected),
+                        found: Box::new(found),
+                    },
+                },
+            ),
+            LinearAlgebraTypeError::CardinalityMismatch {
+                argument,
+                expected,
+                found,
+            } => SemanticError::located(
+                self.env.src,
+                args[argument].span,
+                DimensionError::LinearAlgebraShapeMismatch {
+                    function,
+                    mismatch: LinearAlgebraAxisMismatch::Cardinality { expected, found },
+                },
+            ),
+            LinearAlgebraTypeError::ConcreteCardinalityRequired { argument } => {
+                SemanticError::located(
+                    self.env.src,
+                    args[argument].span,
+                    DimensionError::LinearAlgebraShapeMismatch {
+                        function,
+                        mismatch: LinearAlgebraAxisMismatch::ConcreteCardinalityRequired,
+                    },
+                )
+            }
+            LinearAlgebraTypeError::DimensionOverflow => {
+                SemanticError::located(self.env.src, callee_span, DimensionError::DimensionOverflow)
+            }
+        })
+        .map_err(Outcome::Failed)
     }
 
     pub(super) fn infer_hir_fn_call(
@@ -128,9 +165,13 @@ impl Infer<'_> {
                         self.env.src,
                         args[0].span,
                         DimensionError::DimensionMismatch {
-                            expected: "indexed collection".to_string(),
-                            found: format_checked_type(&arg_type, self.env.registry),
-                            help: format!("{}() requires an indexed value", builtin.as_str()),
+                            expected: Box::new(MismatchOperand::Expected(
+                                OperandExpectation::IndexedCollection,
+                            )),
+                            found: Box::new(MismatchOperand::Type(
+                                arg_type.spelling(&self.env.registry.dimensions),
+                            )),
+                            help: Box::new(MismatchRule::IndexedArgument(builtin)),
                         },
                     )
                     .into());
@@ -159,12 +200,13 @@ impl Infer<'_> {
                             self.env.src,
                             args[0].span,
                             DimensionError::DimensionMismatch {
-                                expected: "indexed quantity collection".to_string(),
-                                found: format_checked_type(element, self.env.registry),
-                                help: format!(
-                                    "{}() requires every indexed element to be quantity",
-                                    builtin.as_str()
-                                ),
+                                expected: Box::new(MismatchOperand::Expected(
+                                    OperandExpectation::IndexedQuantityCollection,
+                                )),
+                                found: Box::new(MismatchOperand::Type(
+                                    element.spelling(&self.env.registry.dimensions),
+                                )),
+                                help: Box::new(MismatchRule::QuantityElements(builtin)),
                             },
                         )
                         .into());
@@ -176,12 +218,13 @@ impl Infer<'_> {
                         self.env.src,
                         args[0].span,
                         DimensionError::DimensionMismatch {
-                            expected: "indexed quantity collection".to_string(),
-                            found: format_checked_type(element, self.env.registry),
-                            help: format!(
-                                "{}() requires every indexed element to be quantity",
-                                builtin.as_str()
-                            ),
+                            expected: Box::new(MismatchOperand::Expected(
+                                OperandExpectation::IndexedQuantityCollection,
+                            )),
+                            found: Box::new(MismatchOperand::Type(
+                                element.spelling(&self.env.registry.dimensions),
+                            )),
+                            help: Box::new(MismatchRule::QuantityElements(builtin)),
                         },
                     )
                     .into());
@@ -241,12 +284,13 @@ impl Infer<'_> {
                             self.env.src,
                             args[0].span,
                             DimensionError::DimensionMismatch {
-                                expected: "Dimensionless or Int".to_string(),
-                                found: format_checked_type(&arg_type, self.env.registry),
-                                help: format!(
-                                    "{}() requires a dimensionless numeric argument",
-                                    builtin.as_str()
-                                ),
+                                expected: Box::new(MismatchOperand::Expected(
+                                    OperandExpectation::DimensionlessOrInt,
+                                )),
+                                found: Box::new(MismatchOperand::Type(
+                                    arg_type.spelling(&self.env.registry.dimensions),
+                                )),
+                                help: Box::new(MismatchRule::DimensionlessNumericArgument(builtin)),
                             },
                         )
                         .into());
@@ -282,62 +326,79 @@ impl Infer<'_> {
                     self.env.src,
                     args[argument].span,
                     DimensionError::DimensionMismatch {
-                        expected: "quantity type".to_string(),
-                        found: format_checked_type(&inferred[argument], self.env.registry),
-                        help: format!(
-                            "{}() requires a quantity in argument {}",
-                            function.as_str(),
-                            argument.saturating_add(1)
-                        ),
+                        expected: Box::new(MismatchOperand::Expected(
+                            OperandExpectation::QuantityType,
+                        )),
+                        found: Box::new(MismatchOperand::Type(
+                            inferred[argument].spelling(&self.env.registry.dimensions),
+                        )),
+                        help: Box::new(MismatchRule::ComplexQuantityArgument {
+                            function,
+                            argument: argument.saturating_add(1),
+                        }),
                     },
                 ),
                 ComplexTypeError::ExpectedComplex { argument } => SemanticError::located(
                     self.env.src,
                     args[argument].span,
                     DimensionError::DimensionMismatch {
-                        expected: "Complex<D>".to_string(),
-                        found: format_checked_type(&inferred[argument], self.env.registry),
-                        help: format!("{}() requires a complex quantity", function.as_str()),
+                        expected: Box::new(MismatchOperand::Expected(
+                            OperandExpectation::ComplexQuantity,
+                        )),
+                        found: Box::new(MismatchOperand::Type(
+                            inferred[argument].spelling(&self.env.registry.dimensions),
+                        )),
+                        help: Box::new(MismatchRule::ComplexArgument(function)),
                     },
                 ),
                 ComplexTypeError::ExpectedQuantityOrComplex { argument } => SemanticError::located(
                     self.env.src,
                     args[argument].span,
                     DimensionError::DimensionMismatch {
-                        expected: "a real or complex quantity".to_string(),
-                        found: format_checked_type(&inferred[argument], self.env.registry),
-                        help: format!(
-                            "{}() requires a real or complex quantity",
-                            function.as_str()
-                        ),
+                        expected: Box::new(MismatchOperand::Expected(
+                            OperandExpectation::RealOrComplexQuantity,
+                        )),
+                        found: Box::new(MismatchOperand::Type(
+                            inferred[argument].spelling(&self.env.registry.dimensions),
+                        )),
+                        help: Box::new(MismatchRule::RealOrComplexArgument(function)),
                     },
                 ),
                 ComplexTypeError::DimensionMismatch { left, right } => SemanticError::located(
                     self.env.src,
                     args[right].span,
                     DimensionError::DimensionMismatch {
-                        expected: format_checked_type(&inferred[left], self.env.registry),
-                        found: format_checked_type(&inferred[right], self.env.registry),
-                        help: "real and imaginary components must have the same dimension"
-                            .to_string(),
+                        expected: Box::new(MismatchOperand::Type(
+                            inferred[left].spelling(&self.env.registry.dimensions),
+                        )),
+                        found: Box::new(MismatchOperand::Type(
+                            inferred[right].spelling(&self.env.registry.dimensions),
+                        )),
+                        help: Box::new(MismatchRule::ComplexComponentsSameDimension),
                     },
                 ),
                 ComplexTypeError::ExpectedAngle { argument } => SemanticError::located(
                     self.env.src,
                     args[argument].span,
                     DimensionError::DimensionMismatch {
-                        expected: "Angle".to_string(),
-                        found: format_checked_type(&inferred[argument], self.env.registry),
-                        help: "polar() phase must be an Angle quantity".to_string(),
+                        expected: Box::new(MismatchOperand::Expected(OperandExpectation::Angle)),
+                        found: Box::new(MismatchOperand::Type(
+                            inferred[argument].spelling(&self.env.registry.dimensions),
+                        )),
+                        help: Box::new(MismatchRule::PolarPhaseAngle),
                     },
                 ),
                 ComplexTypeError::ExpectedDimensionless { argument } => SemanticError::located(
                     self.env.src,
                     args[argument].span,
                     DimensionError::DimensionMismatch {
-                        expected: "Dimensionless or Complex<Dimensionless>".to_string(),
-                        found: format_checked_type(&inferred[argument], self.env.registry),
-                        help: "exp() requires a dimensionless real or complex argument".to_string(),
+                        expected: Box::new(MismatchOperand::Expected(
+                            OperandExpectation::DimensionlessOrComplexDimensionless,
+                        )),
+                        found: Box::new(MismatchOperand::Type(
+                            inferred[argument].spelling(&self.env.registry.dimensions),
+                        )),
+                        help: Box::new(MismatchRule::ExpDimensionless),
                     },
                 ),
             })

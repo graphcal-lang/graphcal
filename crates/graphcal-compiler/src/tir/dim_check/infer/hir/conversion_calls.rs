@@ -6,10 +6,13 @@ use crate::hir::expr::{Expr, ExprKind};
 use crate::outcome::Outcome;
 use crate::semantic_error::SemanticError;
 use crate::semantic_error::dimension::DimensionError;
+use crate::semantic_error::dimension_mismatch::{
+    MismatchOperand, MismatchRule, OperandExpectation,
+};
 use crate::semantic_error::index::IndexError;
 
 use crate::semantic::checked_type::{CheckedType, Symbolic};
-use crate::tir::dim_check::helpers::{expect_quantity, format_checked_type};
+use crate::tir::dim_check::helpers::expect_quantity;
 
 use super::context::Infer;
 
@@ -27,9 +30,11 @@ impl Infer<'_> {
                         self.env.src,
                         args[0].span,
                         DimensionError::DimensionMismatch {
-                            expected: "Int".to_string(),
-                            found: format_checked_type(&arg_type, self.env.registry),
-                            help: "to_float() requires an Int argument".to_string(),
+                            expected: Box::new(MismatchOperand::Expected(OperandExpectation::Int)),
+                            found: Box::new(MismatchOperand::Type(
+                                arg_type.spelling(&self.env.registry.dimensions),
+                            )),
+                            help: Box::new(MismatchRule::ToFloatInt),
                         },
                     )
                     .into());
@@ -47,11 +52,13 @@ impl Infer<'_> {
                         self.env.src,
                         args[0].span,
                         DimensionError::DimensionMismatch {
-                            expected: "Key<Fin(N)>".to_string(),
-                            found: format_checked_type(&arg_type, self.env.registry),
-                            help: "to_int() extracts positions from Fin-axis keys only; \
-                           named and coordinate keys have no ordinal"
-                                .to_string(),
+                            expected: Box::new(MismatchOperand::Expected(
+                                OperandExpectation::FiniteKey,
+                            )),
+                            found: Box::new(MismatchOperand::Type(
+                                arg_type.spelling(&self.env.registry.dimensions),
+                            )),
+                            help: Box::new(MismatchRule::ToIntFiniteKeys),
                         },
                     )
                     .into());
@@ -63,9 +70,13 @@ impl Infer<'_> {
                         self.env.src,
                         args[0].span,
                         DimensionError::DimensionMismatch {
-                            expected: "Dimensionless".to_string(),
-                            found: self.env.registry.dimensions.format_dimension(&dim),
-                            help: "to_int() requires a Dimensionless argument".to_string(),
+                            expected: Box::new(MismatchOperand::Expected(
+                                OperandExpectation::Dimensionless,
+                            )),
+                            found: Box::new(MismatchOperand::Dimension(
+                                self.env.registry.dimensions.dimension_spelling(&dim),
+                            )),
+                            help: Box::new(MismatchRule::ToIntDimensionless),
                         },
                     )
                     .into());
@@ -78,11 +89,13 @@ impl Infer<'_> {
                         self.env.src,
                         args[0].span,
                         DimensionError::DimensionMismatch {
-                            expected: "Key<C> for a coordinate axis C".to_string(),
-                            found: format_checked_type(&arg_type, self.env.registry),
-                            help: "coord() extracts the coordinate quantity of a \
-                           coordinate-axis key"
-                                .to_string(),
+                            expected: Box::new(MismatchOperand::Expected(
+                                OperandExpectation::CoordinateKey,
+                            )),
+                            found: Box::new(MismatchOperand::Type(
+                                arg_type.spelling(&self.env.registry.dimensions),
+                            )),
+                            help: Box::new(MismatchRule::CoordExtractsCoordinate),
                         },
                     )
                     .into());
@@ -92,11 +105,13 @@ impl Infer<'_> {
                         self.env.src,
                         args[0].span,
                         DimensionError::DimensionMismatch {
-                            expected: "Key<C> for a coordinate axis C".to_string(),
-                            found: format_checked_type(&arg_type, self.env.registry),
-                            help: "coord() applies to coordinate-axis keys only; named \
-                           keys are opaque and Fin keys expose to_int()"
-                                .to_string(),
+                            expected: Box::new(MismatchOperand::Expected(
+                                OperandExpectation::CoordinateKey,
+                            )),
+                            found: Box::new(MismatchOperand::Type(
+                                arg_type.spelling(&self.env.registry.dimensions),
+                            )),
+                            help: Box::new(MismatchRule::CoordCoordinateKeysOnly),
                         },
                     )
                     .into());
@@ -120,11 +135,13 @@ impl Infer<'_> {
                                 self.env.src,
                                 args[0].span,
                                 DimensionError::DimensionMismatch {
-                                    expected: "Key<C> for a coordinate axis C".to_string(),
-                                    found: format_checked_type(&arg_type, self.env.registry),
-                                    help: "coord() applies to coordinate-axis keys only; named \
-                               keys are opaque and Fin keys expose to_int()"
-                                        .to_string(),
+                                    expected: Box::new(MismatchOperand::Expected(
+                                        OperandExpectation::CoordinateKey,
+                                    )),
+                                    found: Box::new(MismatchOperand::Type(
+                                        arg_type.spelling(&self.env.registry.dimensions),
+                                    )),
+                                    help: Box::new(MismatchRule::CoordCoordinateKeysOnly),
                                 },
                             ))
                         },
@@ -147,9 +164,11 @@ impl Infer<'_> {
                 self.env.src,
                 args[0].span,
                 DimensionError::DimensionMismatch {
-                    expected: "Datetime".to_string(),
-                    found: format_checked_type(&arg_type, self.env.registry),
-                    help: format!("{}() requires a Datetime argument", name.as_str()),
+                    expected: Box::new(MismatchOperand::Expected(OperandExpectation::Datetime)),
+                    found: Box::new(MismatchOperand::Type(
+                        arg_type.spelling(&self.env.registry.dimensions),
+                    )),
+                    help: Box::new(MismatchRule::DatetimeArgument(name)),
                 },
             )
             .into());
@@ -176,10 +195,13 @@ impl Infer<'_> {
                         self.env.src,
                         args[0].span,
                         DimensionError::DimensionMismatch {
-                            expected: "datetime literal".to_string(),
-                            found: format_checked_type(&found, self.env.registry),
-                            help: "datetime() requires a contextual datetime string literal"
-                                .to_string(),
+                            expected: Box::new(MismatchOperand::Expected(
+                                OperandExpectation::DatetimeLiteral,
+                            )),
+                            found: Box::new(MismatchOperand::Type(
+                                found.spelling(&self.env.registry.dimensions),
+                            )),
+                            help: Box::new(MismatchRule::DatetimeStringLiteral),
                         },
                     )
                     .into());
@@ -190,10 +212,13 @@ impl Infer<'_> {
                         self.env.src,
                         args[1].span,
                         DimensionError::DimensionMismatch {
-                            expected: "timezone literal".to_string(),
-                            found: format_checked_type(&found, self.env.registry),
-                            help: "datetime() second argument must be an IANA timezone literal"
-                                .to_string(),
+                            expected: Box::new(MismatchOperand::Expected(
+                                OperandExpectation::TimezoneLiteral,
+                            )),
+                            found: Box::new(MismatchOperand::Type(
+                                found.spelling(&self.env.registry.dimensions),
+                            )),
+                            help: Box::new(MismatchRule::DatetimeTimezoneLiteral),
                         },
                     )
                     .into());
@@ -228,10 +253,13 @@ impl Infer<'_> {
                         self.env.src,
                         args[0].span,
                         DimensionError::DimensionMismatch {
-                            expected: "scale-free datetime literal".to_string(),
-                            found: format_checked_type(&found, self.env.registry),
-                            help: "epoch<S>() requires one civil datetime string literal"
-                                .to_string(),
+                            expected: Box::new(MismatchOperand::Expected(
+                                OperandExpectation::ScaleFreeDatetimeLiteral,
+                            )),
+                            found: Box::new(MismatchOperand::Type(
+                                found.spelling(&self.env.registry.dimensions),
+                            )),
+                            help: Box::new(MismatchRule::EpochCivilLiteral),
                         },
                     )
                     .into());
@@ -263,9 +291,11 @@ impl Infer<'_> {
                 self.env.src,
                 args[0].span,
                 DimensionError::DimensionMismatch {
-                    expected: "Datetime".to_string(),
-                    found: format_checked_type(&arg_type, self.env.registry),
-                    help: format!("{}() requires a Datetime argument", name.as_str()),
+                    expected: Box::new(MismatchOperand::Expected(OperandExpectation::Datetime)),
+                    found: Box::new(MismatchOperand::Type(
+                        arg_type.spelling(&self.env.registry.dimensions),
+                    )),
+                    help: Box::new(MismatchRule::DatetimeArgument(name)),
                 },
             )
             .into());

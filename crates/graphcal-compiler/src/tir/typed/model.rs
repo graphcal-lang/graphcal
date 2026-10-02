@@ -1,3 +1,4 @@
+use crate::semantic_error::index::IndexError;
 use crate::syntax::non_empty::NonEmpty;
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
@@ -18,7 +19,6 @@ use crate::semantic::dimension_table::BaseDimensionInfo;
 use crate::semantic::index_def::IndexDef;
 use crate::semantic::unit_scale::UnitInfo;
 use crate::semantic_error::SemanticError;
-use crate::semantic_error::evaluation::EvaluationError;
 use crate::source_id::SourceId;
 use crate::syntax::decl_name::DeclName;
 use crate::syntax::module_name::ScopedName;
@@ -38,13 +38,7 @@ pub fn nat_overflow_error(
     src: SourceId,
     span: Span,
 ) -> SemanticError {
-    SemanticError::located(
-        src,
-        span,
-        EvaluationError::Failed {
-            message: err.to_string(),
-        },
-    )
+    SemanticError::located(src, span, IndexError::NatOverflow { error: err })
 }
 
 /// Authoritative project type-system definitions keyed by

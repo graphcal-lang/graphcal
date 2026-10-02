@@ -162,7 +162,10 @@ impl<'a, R: Copy> ValidatedAttribute<'a, R> {
 pub enum AttributeValidationError {
     /// The attribute name is not part of the language vocabulary.
     #[error("unknown attribute `{name}`")]
-    UnknownAttribute { name: String, span: Span },
+    UnknownAttribute {
+        name: crate::syntax::token::SourceIdentifier,
+        span: Span,
+    },
     /// A known attribute does not apply at this source target.
     #[error("`#[{name}]` is not valid on `{target}`")]
     InvalidTarget {
@@ -216,8 +219,8 @@ pub fn validate_attributes<'a, S: AttributeSite>(
                 .name
                 .as_str()
                 .parse::<AttributeName>()
-                .map_err(|error| AttributeValidationError::UnknownAttribute {
-                    name: error.into_raw(),
+                .map_err(|_| AttributeValidationError::UnknownAttribute {
+                    name: attribute.name.name.clone(),
                     span: attribute.span,
                 })?;
 
@@ -348,9 +351,7 @@ pub fn attribute_validation_error_to_graphcal(
                 AttributeTarget::IncludeItem { name, .. } => SemanticError::located(
                     src,
                     span,
-                    AttributeError::HiddenIncludeItemNotAPlot {
-                        name: name.to_string(),
-                    },
+                    AttributeError::HiddenIncludeItemNotAPlot { name },
                 ),
                 target @ AttributeTarget::Declaration(_) => SemanticError::located(
                     src,

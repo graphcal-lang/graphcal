@@ -3,9 +3,12 @@
 use crate::hir::expr::{Expr, ForBinding, ForBindingIndex, IndexArg};
 use crate::outcome::Outcome;
 use crate::semantic_error::dimension::DimensionError;
-use crate::semantic_error::evaluation::EvaluationError;
+use crate::semantic_error::dimension_mismatch::{
+    MismatchOperand, MismatchRule, OperandExpectation,
+};
 use crate::semantic_error::index::IndexError;
 use crate::semantic_error::structure::StructError;
+use crate::semantic_error::structure::UnknownLocal;
 use crate::source_id::SourceId;
 
 use crate::diagnostic_anchor::DiagnosticAnchor;
@@ -15,7 +18,7 @@ use crate::syntax::span::Span;
 use crate::tir::typed::NatPolyForm;
 
 use crate::semantic::checked_type::CheckedType;
-use crate::tir::dim_check::helpers::{expect_quantity, format_checked_type};
+use crate::tir::dim_check::helpers::expect_quantity;
 
 use super::context::Infer;
 use super::nat_forms::finite_index_error;
@@ -71,13 +74,7 @@ impl Infer<'_> {
                     return Err(SemanticError::located(
                         self.env.src,
                         axis_span,
-                        EvaluationError::Failed {
-                            message:
-                                "key() constructs Fin-axis keys; named-axis keys are written as \
-                              qualified labels and coordinate keys come from argmax/argmin or \
-                              the coordinate searches"
-                                    .to_string(),
-                        },
+                        IndexError::KeyRequiresFiniteAxis,
                     )
                     .into());
                 };
@@ -86,9 +83,13 @@ impl Infer<'_> {
                         self.env.src,
                         arg.span,
                         DimensionError::DimensionMismatch {
-                            expected: "a static Nat position".to_string(),
-                            found: format_checked_type(&arg_type, self.env.registry),
-                            help: "key(Fin(N), position) takes an integer position".to_string(),
+                            expected: Box::new(MismatchOperand::Expected(
+                                OperandExpectation::StaticNatPosition,
+                            )),
+                            found: Box::new(MismatchOperand::Type(
+                                arg_type.spelling(&self.env.registry.dimensions),
+                            )),
+                            help: Box::new(MismatchRule::KeyStaticPosition),
                         },
                     )
                     .into());
@@ -97,11 +98,7 @@ impl Infer<'_> {
                     return Err(SemanticError::located(
                         self.env.src,
                         arg.span,
-                        EvaluationError::Failed {
-                            message: "key() requires a static position; use fin_key() for a \
-                              runtime-checked position"
-                                .to_string(),
-                        },
+                        IndexError::KeyPositionNotStatic,
                     )
                     .into());
                 };
@@ -109,11 +106,7 @@ impl Infer<'_> {
                     return Err(SemanticError::located(
                         self.env.src,
                         arg.span,
-                        EvaluationError::Failed {
-                            message: format!(
-                                "key() position evaluated to negative value: {position}"
-                            ),
-                        },
+                        IndexError::NegativeKeyPosition { position },
                     )
                     .into());
                 };
@@ -123,11 +116,9 @@ impl Infer<'_> {
                         return Err(SemanticError::located(
                             self.env.src,
                             arg.span,
-                            EvaluationError::Failed {
-                                message: format!(
-                                    "key() position {position} is out of bounds for {}",
-                                    IndexDisplayName::Finite(form.clone())
-                                ),
+                            IndexError::KeyPositionOutOfBounds {
+                                position,
+                                axis: IndexDisplayName::Finite(form.clone()),
                             },
                         )
                         .into());
@@ -147,10 +138,8 @@ impl Infer<'_> {
                     return Err(SemanticError::located(
                         self.env.src,
                         axis_span,
-                        EvaluationError::Failed {
-                            message: format!(
-                                "fin_key() requires a Fin(...) axis, got `{index_identity}`"
-                            ),
+                        IndexError::FinKeyRequiresFiniteAxis {
+                            axis: index_identity.display_name(),
                         },
                     )
                     .into());
@@ -160,11 +149,11 @@ impl Infer<'_> {
                         self.env.src,
                         arg.span,
                         DimensionError::DimensionMismatch {
-                            expected: "Int".to_string(),
-                            found: format_checked_type(&arg_type, self.env.registry),
-                            help: "fin_key(Fin(N), position) takes an Int position, checked at \
-                           runtime"
-                                .to_string(),
+                            expected: Box::new(MismatchOperand::Expected(OperandExpectation::Int)),
+                            found: Box::new(MismatchOperand::Type(
+                                arg_type.spelling(&self.env.registry.dimensions),
+                            )),
+                            help: Box::new(MismatchRule::FinKeyIntPosition),
                         },
                     )
                     .into());
@@ -185,12 +174,9 @@ impl Infer<'_> {
                         return Err(SemanticError::located(
                             self.env.src,
                             axis_span,
-                            EvaluationError::Failed {
-                                message: format!(
-                                    "{}() requires a coordinate axis, got `{}`",
-                                    kind.as_str(),
-                                    index_identity
-                                ),
+                            IndexError::CoordinateSearchRequiresCoordinateAxis {
+                                function: kind,
+                                axis: index_identity.display_name(),
                             },
                         )
                         .into());
@@ -203,12 +189,13 @@ impl Infer<'_> {
                         self.env.src,
                         arg.span,
                         DimensionError::DimensionMismatch {
-                            expected: self.env.registry.dimensions.format_dimension(&dimension),
-                            found: self.env.registry.dimensions.format_dimension(&arg_dim),
-                            help: format!(
-                                "{}() takes a quantity in the axis dimension",
-                                kind.as_str()
-                            ),
+                            expected: Box::new(MismatchOperand::Dimension(
+                                self.env.registry.dimensions.dimension_spelling(&dimension),
+                            )),
+                            found: Box::new(MismatchOperand::Dimension(
+                                self.env.registry.dimensions.dimension_spelling(&arg_dim),
+                            )),
+                            help: Box::new(MismatchRule::CoordinateSearchAxisDimension(kind)),
                         },
                     )
                     .into());
@@ -313,9 +300,7 @@ impl Infer<'_> {
                 return Err(SemanticError::located(
                     self.env.src,
                     expr.span,
-                    EvaluationError::Failed {
-                        message: "indexing a non-indexed value".to_string(),
-                    },
+                    IndexError::IndexingNonIndexedValue,
                 )
                 .into());
             };
@@ -344,7 +329,7 @@ impl Infer<'_> {
                             self.env.src,
                             local.span,
                             StructError::UnknownLocalRef {
-                                name: format!("#{}", local.value.index()),
+                                name: UnknownLocal::Slot(local.value),
                             },
                         )
                         .into());
@@ -380,20 +365,20 @@ impl Infer<'_> {
                             }
                         }
                         CheckedType::Quantity(_) => {
-                            return Err(SemanticError::located(self.env.src, local.span, EvaluationError::Failed { message: format!(
-                                    "quantity local cannot index into coordinate index `{index}`; use that coordinate index's loop variable"
-                                ) }).into());
+                            return Err(SemanticError::located(
+                                self.env.src,
+                                local.span,
+                                IndexError::QuantityLocalIndexesCoordinateIndex {
+                                    index: index.display_name(),
+                                },
+                            )
+                            .into());
                         }
                         _ => {
                             return Err(SemanticError::located(
                                 self.env.src,
                                 local.span,
-                                EvaluationError::Failed {
-                                    message: format!(
-                                        "`#{}` is not a valid index variable",
-                                        local.value.index()
-                                    ),
-                                },
+                                IndexError::InvalidIndexVariable { local: local.value },
                             )
                             .into());
                         }
@@ -430,9 +415,14 @@ impl Infer<'_> {
                         continue;
                     }
                     let Some(index_form) = index_form else {
-                        return Err(SemanticError::located(self.env.src, index_expr.span, EvaluationError::Failed { message: format!(
-                                "integer expression cannot index into non-finite-index index `{index}`"
-                            ) }).into());
+                        return Err(SemanticError::located(
+                            self.env.src,
+                            index_expr.span,
+                            IndexError::IntegerIndexIntoNonFiniteIndex {
+                                index: index.display_name(),
+                            },
+                        )
+                        .into());
                     };
                     match expr_type {
                         CheckedType::Int => {
@@ -440,10 +430,13 @@ impl Infer<'_> {
                             // statically discharged constant selects implicitly;
                             // a runtime Int goes through the explicit fin_key().
                             let Some(constant) = try_const_int(index_expr) else {
-                                return Err(SemanticError::located(self.env.src, index_expr.span, EvaluationError::Failed { message: format!(
-                                        "a runtime Int cannot index `{index}` implicitly; write \
-                                     `fin_key({index}, ...)` to make the range check explicit",
-                                    ) })
+                                return Err(SemanticError::located(
+                                    self.env.src,
+                                    index_expr.span,
+                                    IndexError::ImplicitRuntimeIntIndex {
+                                        index: index.display_name(),
+                                    },
+                                )
                                 .into());
                             };
                             let position = check_constant_finite_index_index(
@@ -464,11 +457,8 @@ impl Infer<'_> {
                             return Err(SemanticError::located(
                                 self.env.src,
                                 index_expr.span,
-                                EvaluationError::Failed {
-                                    message: format!(
-                                        "index expression must be an integer type, got {}",
-                                        format_checked_type(&expr_type, self.env.registry)
-                                    ),
+                                IndexError::NonIntegerIndexExpression {
+                                    found: expr_type.spelling(&self.env.registry.dimensions),
                                 },
                             )
                             .into());
@@ -492,9 +482,7 @@ fn check_constant_finite_index_index(
         return Err(SemanticError::located(
             src,
             index_span,
-            EvaluationError::Failed {
-                message: format!("index expression evaluated to negative value: {index}"),
-            },
+            IndexError::NegativeIndex { index },
         ));
     };
     if !index_form.is_constant() {
@@ -505,11 +493,9 @@ fn check_constant_finite_index_index(
         return Err(SemanticError::located(
             src,
             index_span,
-            EvaluationError::Failed {
-                message: format!(
-                    "index {index} out of bounds for {}",
-                    IndexDisplayName::Finite(index_form.clone())
-                ),
+            IndexError::IndexOutOfBounds {
+                index,
+                axis: IndexDisplayName::Finite(index_form.clone()),
             },
         ));
     }

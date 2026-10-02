@@ -5,7 +5,6 @@
 //! `ResolvedName<Ns>` values or lexical `GenericParamId`s instead of carrying
 //! syntax paths forward.
 
-use crate::resolved_name::{ResolvedConstructorName, ResolvedStructTypeName};
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 
@@ -13,6 +12,9 @@ use thiserror::Error;
 
 use crate::dag_id::DagId;
 use crate::desugar::desugared_ast as ast;
+use crate::generic_param::{
+    GenericApplicationTarget, GenericArgArity, render_accepted_constraints,
+};
 use crate::resolve::ModuleResolver;
 use crate::resolve::category::SurfaceNameKind;
 use crate::resolve::error::ModuleResolveError;
@@ -29,15 +31,6 @@ use super::types::{
     GenericParamId, IndexRef, ValueType, ValueTypeKind,
 };
 use crate::nat::{NatOverflowError, NatPolyForm};
-
-/// Render accepted generic constraints as `A or B` at the diagnostic boundary.
-fn render_accepted_constraints(accepted: &[GenericConstraint]) -> String {
-    accepted
-        .iter()
-        .map(|constraint| constraint.as_str())
-        .collect::<Vec<_>>()
-        .join(" or ")
-}
 
 /// Errors produced while lowering syntax type expressions into HIR.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
@@ -157,77 +150,6 @@ pub enum TypePathSlot {
     IndexAxis,
     /// A term of a dimension expression in a type position: `L` in `L / T`.
     DimensionTerm,
-}
-
-/// The generic type or constructor a generic argument list is applied to.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum GenericApplicationTarget {
-    /// A user-declared generic struct type.
-    StructType(ResolvedStructTypeName),
-    /// A constructor of a user-declared generic type.
-    Constructor(ResolvedConstructorName),
-    /// The built-in `Complex<D>` type.
-    Complex,
-    /// The built-in `Key<I>` type.
-    Key,
-}
-
-impl std::fmt::Display for GenericApplicationTarget {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::StructType(name) => f.write_str(name.as_str()),
-            Self::Constructor(name) => f.write_str(name.as_str()),
-            Self::Complex => f.write_str("Complex"),
-            Self::Key => f.write_str("Key"),
-        }
-    }
-}
-
-/// The accepted number of generic arguments: every parameter up to the last
-/// one without a default is required.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct GenericArgArity {
-    required: usize,
-    max: usize,
-}
-
-impl GenericArgArity {
-    /// Exactly `count` arguments.
-    #[must_use]
-    pub const fn exactly(count: usize) -> Self {
-        Self {
-            required: count,
-            max: count,
-        }
-    }
-
-    /// The arity of a declared generic parameter list.
-    fn of_params(params: &[crate::resolve::symbols::GenericParamSignature]) -> Self {
-        let required = params
-            .iter()
-            .rposition(|param| !param.has_default)
-            .map_or(0, |index| index.saturating_add(1));
-        Self {
-            required,
-            max: params.len(),
-        }
-    }
-
-    /// Whether `got` arguments are accepted.
-    #[must_use]
-    pub const fn accepts(self, got: usize) -> bool {
-        self.required <= got && got <= self.max
-    }
-}
-
-impl std::fmt::Display for GenericArgArity {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        if self.required == self.max {
-            write!(f, "{}", self.max)
-        } else {
-            write!(f, "{}..{}", self.required, self.max)
-        }
-    }
 }
 
 /// A generic parameter binding in a lexical generic scope.
@@ -540,7 +462,7 @@ fn check_generic_arg_count(
     got: usize,
     span: Span,
 ) -> Result<(), HirLowerError> {
-    let expected = GenericArgArity::of_params(params);
+    let expected = GenericArgArity::of_defaults(params.iter().map(|param| param.has_default));
     if expected.accepts(got) {
         Ok(())
     } else {
@@ -1667,10 +1589,7 @@ mod tests {
         assert!(!exact.accepts(2));
         assert_eq!(exact.to_string(), "1");
 
-        let ranged = GenericArgArity {
-            required: 1,
-            max: 3,
-        };
+        let ranged = GenericArgArity::of_defaults([false, true, true]);
         assert!(!ranged.accepts(0));
         assert!(ranged.accepts(1));
         assert!(ranged.accepts(3));
@@ -1680,29 +1599,21 @@ mod tests {
 
     #[test]
     fn generic_arg_arity_requires_every_parameter_before_the_last_undefaulted_one() {
-        let param = |name: &str, has_default| crate::resolve::symbols::GenericParamSignature {
-            name: GenericParamName::expect_valid(name),
-            constraint: GenericConstraint::Type,
-            has_default,
-        };
-        assert_eq!(GenericArgArity::of_params(&[]), GenericArgArity::exactly(0));
         assert_eq!(
-            GenericArgArity::of_params(&[param("A", false), param("B", true)]),
-            GenericArgArity {
-                required: 1,
-                max: 2
-            }
+            GenericArgArity::of_defaults([]),
+            GenericArgArity::exactly(0)
         );
         assert_eq!(
-            GenericArgArity::of_params(&[param("A", true), param("B", false)]),
+            GenericArgArity::of_defaults([false, true]).to_string(),
+            "1..2"
+        );
+        assert_eq!(
+            GenericArgArity::of_defaults([true, false]),
             GenericArgArity::exactly(2)
         );
         assert_eq!(
-            GenericArgArity::of_params(&[param("A", true), param("B", true)]),
-            GenericArgArity {
-                required: 0,
-                max: 2
-            }
+            GenericArgArity::of_defaults([true, true]).to_string(),
+            "0..2"
         );
     }
 

@@ -2,7 +2,11 @@ use crate::outcome::Outcome;
 use crate::resolved_name::ResolvedDeclName;
 use crate::semantic_error::attribute::AttributeError;
 use crate::semantic_error::dimension::DimensionError;
+use crate::semantic_error::dimension::ShapeContext;
+use crate::semantic_error::dimension_mismatch::{MismatchOperand, MismatchRule};
 use crate::semantic_error::domain::DomainError;
+use crate::semantic_error::domain::{DomainSubject, DomainTypeSpelling, UnconstrainableType};
+use crate::semantic_error::graph::CycleMember;
 use crate::semantic_error::graph::GraphError;
 use crate::source_id::SourceId;
 use std::collections::{HashMap, HashSet};
@@ -17,7 +21,7 @@ use crate::syntax::span::Span;
 use crate::display::formatting_registry::FormattingRegistry;
 use crate::semantic_error::SemanticError;
 
-pub(crate) use helpers::{expect_quantity, format_checked_type};
+pub(crate) use helpers::expect_quantity;
 
 use domain_bound_type::{
     ExpectedBound, check_one_bound_with_display_name, expected_bound_from_resolved,
@@ -144,8 +148,8 @@ fn check_decl_expr_type(
             ctx.env.src,
             *type_ann_span,
             DimensionError::DimensionMismatchInAnnotation {
-                declared: format_checked_type(declared, ctx.env.registry),
-                inferred: format_checked_type(&inferred, ctx.env.registry),
+                declared: declared.spelling(&ctx.env.registry.dimensions),
+                inferred: inferred.spelling(&ctx.env.registry.dimensions),
             },
         )
         .into());
@@ -179,7 +183,7 @@ fn check_dynamic_unit_scale_type(
             entry.expr.span,
             DimensionError::DynamicUnitScaleTypeMismatch {
                 name: entry.spelling.clone(),
-                found: format_checked_type(&inferred, ctx.env.registry),
+                found: inferred.spelling(&ctx.env.registry.dimensions),
             },
         )
         .into());
@@ -354,7 +358,7 @@ fn check_hir_assert_body(
                     src,
                     span,
                     AttributeError::AssertBodyNotBool {
-                        found: format_checked_type(&inferred, registry),
+                        found: inferred.spelling(&registry.dimensions),
                     },
                 )
                 .into());
@@ -394,8 +398,19 @@ fn check_hir_assert_body(
             let actual_dim = expect_quantity(actual_elem, registry, src, actual.span)?;
             let expected_dim = expect_quantity(expected_elem, registry, src, expected.span)?;
             if actual_dim != expected_dim {
-                return Err(SemanticError::located(src, expected.span, DimensionError::DimensionMismatch { expected: registry.dimensions.format_dimension(&actual_dim), found: registry.dimensions.format_dimension(&expected_dim), help: "actual and expected in tolerance assertion must have the same dimension"
-                        .to_string() })
+                return Err(SemanticError::located(
+                    src,
+                    expected.span,
+                    DimensionError::DimensionMismatch {
+                        expected: Box::new(MismatchOperand::Dimension(
+                            registry.dimensions.dimension_spelling(&actual_dim),
+                        )),
+                        found: Box::new(MismatchOperand::Dimension(
+                            registry.dimensions.dimension_spelling(&expected_dim),
+                        )),
+                        help: Box::new(MismatchRule::ToleranceSameDimension),
+                    },
+                )
                 .into());
             }
 
@@ -405,10 +420,13 @@ fn check_hir_assert_body(
                     src,
                     tolerance.span,
                     DimensionError::DimensionMismatch {
-                        expected: registry.dimensions.format_dimension(&actual_dim),
-                        found: format_checked_type(&tolerance_type, registry),
-                        help: "absolute tolerance must have the same dimension as actual/expected"
-                            .to_string(),
+                        expected: Box::new(MismatchOperand::Dimension(
+                            registry.dimensions.dimension_spelling(&actual_dim),
+                        )),
+                        found: Box::new(MismatchOperand::Type(
+                            tolerance_type.spelling(&registry.dimensions),
+                        )),
+                        help: Box::new(MismatchRule::AbsoluteToleranceDimension),
                     },
                 )
                 .into());
@@ -421,14 +439,10 @@ fn check_hir_assert_body(
             if let Some(value) = statically_known_tolerance(tolerance)
                 && value.is_sign_negative()
             {
-                let found = match value {
-                    value if value == 0.0 && value.is_sign_negative() => "-0".to_string(),
-                    value => crate::display::number::format_number(value),
-                };
                 return Err(SemanticError::located(
                     src,
                     tolerance.span,
-                    AttributeError::NegativeTolerance { found },
+                    AttributeError::NegativeTolerance { value },
                 )
                 .into());
             }
@@ -468,9 +482,9 @@ fn broadcast_operand_element<'a>(
             src,
             operand_span,
             DimensionError::IndexedShapeMismatch {
-                context: "tolerance assertion".to_string(),
-                lhs: format_checked_type(actual_type, registry),
-                rhs: format_checked_type(operand_type, registry),
+                context: ShapeContext::ToleranceAssertion,
+                lhs: actual_type.spelling(&registry.dimensions),
+                rhs: operand_type.spelling(&registry.dimensions),
             },
         ));
     }
@@ -538,8 +552,8 @@ fn validate_expected_fail_key(
                         src,
                         part.span(),
                         AttributeError::ExpectedFailKeyIndexMismatch {
-                            expected: expected_axis.display_name().to_string(),
-                            found: part.display(),
+                            expected: expected_axis.display_name(),
+                            found: Box::new(part.clone()),
                         },
                     ));
                 }
@@ -550,8 +564,8 @@ fn validate_expected_fail_key(
                         src,
                         *span,
                         AttributeError::ExpectedFailKeyIndexMismatch {
-                            expected: expected_axis.display_name().to_string(),
-                            found: part.display(),
+                            expected: expected_axis.display_name(),
+                            found: Box::new(part.clone()),
                         },
                     ));
                 };
@@ -880,8 +894,8 @@ fn check_callless_value_expr_type<'t>(
             src,
             expr.span,
             DimensionError::DimensionMismatchInAnnotation {
-                declared: format_checked_type(expected, tir.registry()),
-                inferred: format_checked_type(&inferred, tir.registry()),
+                declared: expected.spelling(&tir.registry().dimensions),
+                inferred: inferred.spelling(&tir.registry().dimensions),
             },
         ))
     }
@@ -1057,7 +1071,14 @@ fn check_one_bound(
     registry: &FormattingRegistry,
     src: SourceId,
 ) -> Result<(), SemanticError> {
-    check_one_bound_with_display_name(&name.to_string(), bound, inferred, expected, registry, src)
+    check_one_bound_with_display_name(
+        &DomainSubject::Declaration(name.clone()),
+        bound,
+        inferred,
+        expected,
+        registry,
+        src,
+    )
 }
 
 /// Reject domain constraints on base types that don't accept them.
@@ -1097,23 +1118,10 @@ fn check_domain_constraint_targets_dag(
     Ok(())
 }
 
-fn invalid_domain_target_kind(resolved: &crate::tir::typed::ResolvedDeclType) -> Option<String> {
-    use crate::tir::typed::ResolvedValueType;
-
-    match resolved.element() {
-        ResolvedValueType::Bool => Some("Bool".to_string()),
-        ResolvedValueType::Complex { .. } => Some("Complex".to_string()),
-        ResolvedValueType::Key { .. } => Some("Key".to_string()),
-        ResolvedValueType::Struct {
-            name: struct_name, ..
-        } => Some(format!("struct `{}`", struct_name.as_str())),
-        ResolvedValueType::GenericTypeParam(param, _) => {
-            Some(format!("generic Type parameter `{param}`"))
-        }
-        ResolvedValueType::Quantity(_)
-        | ResolvedValueType::Int
-        | ResolvedValueType::Datetime(_) => None,
-    }
+fn invalid_domain_target_kind(
+    resolved: &crate::tir::typed::ResolvedDeclType,
+) -> Option<UnconstrainableType> {
+    resolved.element().domain_family().err()
 }
 
 /// Reject constraints on struct/union fields outside the explicitly
@@ -1208,7 +1216,7 @@ fn check_field_domain_constraint_dimensions(
             )
             .into());
         }
-        let display_name = field.display_name();
+        let display_name = field.domain_subject();
         let definition_dag = field_constraint_definition_dag(
             tir,
             field.member().nominal().identity(),
@@ -1250,7 +1258,7 @@ fn check_field_domain_constraint_dimensions(
 }
 
 fn check_deferred_generic_quantity_bound(
-    display_name: &str,
+    display_name: &DomainSubject,
     resolved_target: &crate::tir::typed::ResolvedValueType,
     bound: &crate::tir::typed::ResolvedDomainBound,
     inferred: &CheckedType<Symbolic>,
@@ -1263,10 +1271,10 @@ fn check_deferred_generic_quantity_bound(
         bound.src,
         bound.span,
         DomainError::DomainDimensionMismatch {
-            name: display_name.to_string(),
-            type_dim: resolved_target.format(registry),
-            bound_name: bound.kind.to_string(),
-            bound_dim: format_checked_type(inferred, registry),
+            name: display_name.clone(),
+            type_dim: DomainTypeSpelling::Declared(resolved_target.spelling(registry)),
+            bound_name: bound.kind,
+            bound_dim: DomainTypeSpelling::Checked(inferred.spelling(&registry.dimensions)),
         },
     ))
 }
@@ -1333,7 +1341,7 @@ fn detect_cross_dag_cycles(
         src,
         *cycle.closing_label(),
         GraphError::CyclicDependency {
-            name: cycle.entry().to_string(),
+            name: CycleMember::Dag((*cycle.entry()).clone()),
         },
     ))
 }

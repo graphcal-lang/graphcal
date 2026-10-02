@@ -14,4 +14,4 @@ snippet line 7:         Maneuver#Correction => 2.0,
 snippet line 8:     }
     label ending at line 8, column 5: error here
 snippet line 9: };
-diagnostic code: graphcal::E001
+diagnostic code: graphcal::S015

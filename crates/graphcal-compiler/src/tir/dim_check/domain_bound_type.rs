@@ -6,9 +6,8 @@ use crate::display::formatting_registry::FormattingRegistry;
 use crate::semantic::checked_type::{CheckedType, Concrete, Concreteness};
 use crate::semantic_error::SemanticError;
 use crate::semantic_error::domain::DomainError;
+use crate::semantic_error::domain::{DomainSubject, DomainTypeSpelling};
 use crate::source_id::SourceId;
-
-use super::helpers::format_checked_type;
 
 /// What a domain bound expression must infer to for a given target type.
 pub(super) enum ExpectedBound {
@@ -54,7 +53,7 @@ pub(super) fn expected_bound_from_inferred<V: Concreteness>(
 /// for the constrained target (e.g. `"SatelliteSpec.mass"`) so a single
 /// helper can serve both top-level decls and struct fields.
 pub(super) fn check_one_bound_with_display_name<V: Concreteness>(
-    display_name: &str,
+    display_name: &DomainSubject,
     bound: &crate::tir::typed::ResolvedDomainBound,
     inferred: &CheckedType<V>,
     expected: &ExpectedBound,
@@ -70,18 +69,20 @@ pub(super) fn check_one_bound_with_display_name<V: Concreteness>(
             if ok {
                 return Ok(());
             }
-            let bound_dim_str = inferred.quantity_dimension().map_or_else(
-                || format_checked_type(inferred, registry),
-                |d| registry.dimensions.format_dimension(d),
+            let bound_dim = inferred.quantity_dimension().map_or_else(
+                || DomainTypeSpelling::Checked(inferred.spelling(&registry.dimensions)),
+                |d| DomainTypeSpelling::Dimension(registry.dimensions.dimension_spelling(d)),
             );
             Err(SemanticError::located(
                 src,
                 bound.span,
                 DomainError::DomainDimensionMismatch {
-                    name: display_name.to_string(),
-                    type_dim: registry.dimensions.format_dimension(target_dim),
-                    bound_name: bound.kind.to_string(),
-                    bound_dim: bound_dim_str,
+                    name: display_name.clone(),
+                    type_dim: DomainTypeSpelling::Dimension(
+                        registry.dimensions.dimension_spelling(target_dim),
+                    ),
+                    bound_name: bound.kind,
+                    bound_dim,
                 },
             ))
         }
@@ -93,9 +94,9 @@ pub(super) fn check_one_bound_with_display_name<V: Concreteness>(
                 src,
                 bound.span,
                 DomainError::IntDomainBoundTypeMismatch {
-                    name: display_name.to_string(),
-                    bound_name: bound.kind.to_string(),
-                    bound_type: format_checked_type(inferred, registry),
+                    name: display_name.clone(),
+                    bound_name: bound.kind,
+                    bound_type: inferred.spelling(&registry.dimensions),
                 },
             ))
         }
@@ -108,13 +109,11 @@ pub(super) fn check_one_bound_with_display_name<V: Concreteness>(
                 src,
                 bound.span,
                 DomainError::DatetimeDomainBoundTypeMismatch {
-                    name: display_name.to_string(),
-                    target_type: format_checked_type(
-                        &CheckedType::<Concrete>::Datetime(*target_scale),
-                        registry,
-                    ),
-                    bound_name: bound.kind.to_string(),
-                    bound_type: format_checked_type(inferred, registry),
+                    name: display_name.clone(),
+                    target_type: CheckedType::<Concrete>::Datetime(*target_scale)
+                        .spelling(&registry.dimensions),
+                    bound_name: bound.kind,
+                    bound_type: inferred.spelling(&registry.dimensions),
                 },
             ))
         }

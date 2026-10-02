@@ -2,8 +2,8 @@
 
 use crate::hir::expr::LocalDecl;
 use crate::hir::expr::{ConstRef, ResolvedUnitExpr};
-use crate::semantic_error::evaluation::EvaluationError;
 use crate::semantic_error::name::NameError;
+use crate::semantic_error::structure::StructError;
 use crate::source_id::SourceId;
 
 use crate::dimension::Dimension;
@@ -72,11 +72,8 @@ impl Infer<'_> {
                     return Err(SemanticError::located(
                         self.env.src,
                         target.span,
-                        EvaluationError::Failed {
-                            message: format!(
-                                "constructor `{}` requires field arguments",
-                                target_def.name()
-                            ),
+                        StructError::ConstructorRequiresFields {
+                            constructor: target_def.name(),
                         },
                     ));
                 }

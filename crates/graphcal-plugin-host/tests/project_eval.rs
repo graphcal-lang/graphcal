@@ -409,7 +409,7 @@ node y: Length = @inner()::mid;
     let CompileError::Eval(RenderedSemanticError {
         error:
             SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
-                kind: SemanticErrorKind::Plugin(PluginError::InvalidExternSignature { message, .. }),
+                kind: SemanticErrorKind::Plugin(PluginError::InvalidExternSignature { error, .. }),
                 primary: span,
                 ..
             }),
@@ -418,6 +418,7 @@ node y: Length = @inner()::mid;
     else {
         panic!("expected InvalidExternSignature, got {err:?}");
     };
+    let message = error.to_string();
     assert!(message.contains("different signature"), "{message}");
     let nested_decl = source.find("fn lerp(a: Length").unwrap();
     assert_eq!(span.offset(), nested_decl);

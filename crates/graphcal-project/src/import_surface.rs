@@ -11,6 +11,7 @@ use graphcal_compiler::resolve::category::ExportedImportItemKind;
 use graphcal_compiler::resolve::namespace::Namespace;
 use graphcal_compiler::resolve::reserved_name::validate_reserved_name;
 use graphcal_compiler::semantic_error::SemanticError;
+use graphcal_compiler::semantic_error::graph::DagReference;
 use graphcal_compiler::semantic_error::module::ModuleError;
 use graphcal_compiler::semantic_error::name::NameError;
 use graphcal_compiler::source_id::SourceId;
@@ -60,7 +61,7 @@ pub fn validate_reserved_alias(
             import_item.local_span(),
             NameError::BuiltinNameShadowed {
                 kind,
-                name: local_name.to_string(),
+                name: local_name.clone(),
             },
         )
     })
@@ -73,7 +74,7 @@ pub fn import_item_not_found_error(
     interface: &ModuleInterface,
     name: &NameAtom,
     expected: ImportItemNamespace,
-    file_path: &str,
+    file_path: &DagReference,
     src: SourceId,
     span: Span,
 ) -> SemanticError {
@@ -83,8 +84,8 @@ pub fn import_item_not_found_error(
                 src,
                 span,
                 ModuleError::ImportNameNotFound {
-                    name: name.to_string(),
-                    file_path: file_path.to_string(),
+                    name: name.clone(),
+                    file_path: file_path.clone(),
                 },
             )
         },
@@ -93,7 +94,7 @@ pub fn import_item_not_found_error(
                 src,
                 span,
                 ModuleError::ImportCategoryMismatch {
-                    file_path: file_path.to_string(),
+                    file_path: file_path.clone(),
                     mismatch: ImportItemCategoryMismatch::new(name.clone(), expected, alternatives),
                 },
             )
@@ -127,7 +128,9 @@ mod tests {
             &interface,
             &jpy,
             ImportItemNamespace::Type,
-            "pkg.lib",
+            &DagReference::Dag(graphcal_compiler::dag_id::DagId::root_in_package(
+                "pkg", "lib",
+            )),
             src(),
             Span::new(0, 3),
         ) {
@@ -153,7 +156,9 @@ mod tests {
                 &interface,
                 &NameAtom::parse("missing").unwrap(),
                 ImportItemNamespace::Term,
-                "pkg.lib",
+                &DagReference::Dag(graphcal_compiler::dag_id::DagId::root_in_package(
+                    "pkg", "lib"
+                )),
                 src(),
                 Span::new(0, 7),
             ),

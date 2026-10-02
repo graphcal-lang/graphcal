@@ -6,12 +6,27 @@
 
 use thiserror::Error;
 
+use crate::builtin::{BuiltinArity, BuiltinFn};
 use crate::diagnostic::{DiagnosticKind, SecondaryLabel};
+use crate::expression_source::ExpressionSourceError;
+use crate::generic_param::{
+    GenericApplicationTarget, GenericArgArity, render_accepted_constraints,
+};
+use crate::hir::expr::{TypeSystemRef, UnappliedFunctionRef};
+use crate::hir::types::IndexRef;
 use crate::resolve::category::DeclSymbolKind;
+use crate::resolved_name::ResolvedConstructorName;
 use crate::semantic::time_scale::TimeScale;
+use crate::syntax::ast::GenericConstraint;
 use crate::syntax::function_name::FnName;
+use crate::syntax::index_name::IndexVariantName;
+use crate::syntax::index_name::QualifiedIndexVariantName;
+use crate::syntax::local_name::LocalName;
 use crate::syntax::module_name::ScopedName;
+use crate::syntax::names::NameAtom;
+use crate::syntax::names::NamePath;
 use crate::syntax::span::Span;
+use crate::syntax::type_name::GenericParamName;
 use crate::syntax::type_name::{ConstructorName, FieldName, StructTypeName};
 
 /// The function an arity diagnostic names: a closed built-in or a plugin
@@ -32,10 +47,76 @@ impl std::fmt::Display for CalledFunction {
 }
 
 /// Name-resolution diagnostics: duplicate, unknown, and misused names.
+/// A name declared twice in one scope.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DuplicateDeclaration {
+    Name(NameAtom),
+    Scoped(ScopedName),
+    IndexVariant(QualifiedIndexVariantName),
+}
+
+impl std::fmt::Display for DuplicateDeclaration {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Name(name) => name.fmt(f),
+            Self::Scoped(name) => name.fmt(f),
+            Self::IndexVariant(variant) => variant.fmt(f),
+        }
+    }
+}
+
+/// The plot-family block a property was written in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PlotPropertyContext {
+    MarkBlock,
+    PlotDeclaration,
+    FigureDeclaration,
+    LayerDeclaration,
+}
+
+impl PlotPropertyContext {
+    /// The help listing the properties valid in this block.
+    fn valid_properties(self) -> String {
+        use crate::plot_props::{CompositionProperty, MarkProperty, PlotProperty};
+        let list = |names: Vec<&str>| format!("valid properties are: {}", names.join(", "));
+        match self {
+            Self::MarkBlock => list(MarkProperty::ALL.iter().map(|p| p.name()).collect()),
+            Self::PlotDeclaration => list(PlotProperty::ALL.iter().map(|p| p.name()).collect()),
+            Self::FigureDeclaration => format!(
+                "{}; figures render as side-by-side concatenation, so sizes belong on the constituent plots or layers",
+                list(
+                    CompositionProperty::ALL
+                        .iter()
+                        .filter(|p| p.applies_to_figure())
+                        .map(|p| p.name())
+                        .collect()
+                )
+            ),
+            Self::LayerDeclaration => {
+                list(CompositionProperty::ALL.iter().map(|p| p.name()).collect())
+            }
+        }
+    }
+}
+
+impl std::fmt::Display for PlotPropertyContext {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::MarkBlock => "a mark block",
+            Self::PlotDeclaration => "a plot declaration",
+            Self::FigureDeclaration => "a figure declaration",
+            Self::LayerDeclaration => "a layer declaration",
+        })
+    }
+}
+
 #[derive(Debug, Clone, Error)]
 pub enum NameError {
     #[error("duplicate name `{name}`")]
-    DuplicateName { name: String, first: Span },
+    DuplicateName {
+        name: DuplicateDeclaration,
+        first: Span,
+    },
     /// A constructor payload repeats a field declaration.
     #[error("constructor `{constructor}` declares field `{field}` more than once")]
     DuplicateConstructorField {
@@ -45,13 +126,11 @@ pub enum NameError {
         first: Span,
     },
     #[error("{kind} `{name}` shadows a built-in name")]
-    BuiltinNameShadowed { kind: &'static str, name: String },
-    #[error("property `{property}` is not valid in {context}")]
+    BuiltinNameShadowed { kind: &'static str, name: NameAtom },
+    #[error("property `{}` is not valid in {context}", property.name())]
     InvalidPlotProperty {
-        property: String,
-        context: &'static str,
-        /// Preformatted help listing the valid property set for `context`.
-        valid: String,
+        property: crate::ir::model::LoweredPlotProperty,
+        context: PlotPropertyContext,
     },
     #[error("{owner_kind} `{owner}` references unknown plot `{name}`")]
     UnknownPlotReference {
@@ -81,11 +160,11 @@ pub enum NameError {
     #[error("time scale `{scale}` cannot be used as a value")]
     TimeScaleInValuePosition { scale: TimeScale },
     #[error("unknown function `{name}`")]
-    UnknownFunction { name: String },
-    #[error("function `{name}` uses positional arguments")]
+    UnknownFunction { name: NamePath },
+    #[error("function `{function}` uses positional arguments")]
     NamedArgumentsOnFunction {
-        name: String,
-        positional_call: String,
+        function: UnappliedFunctionRef,
+        arguments: Vec<FieldName>,
     },
     #[error("graph reference `@{name}` not allowed in const expression")]
     GraphRefInConst { name: ScopedName },
@@ -93,6 +172,71 @@ pub enum NameError {
     WrongArity {
         name: CalledFunction,
         expected: usize,
+        got: usize,
+    },
+    #[error("unknown type-level name `{path}`")]
+    UnknownTypeName { path: NamePath },
+    #[error("index label `{index}#{label}` cannot be used as a type")]
+    IndexLabelAsType {
+        index: NamePath,
+        label: IndexVariantName,
+    },
+    #[error("index `{index}` cannot be used as a type")]
+    IndexAsType { index: IndexRef },
+    #[error(
+        "generic parameter `{name}` has constraint `{actual:?}`, but this position expects {}",
+        render_accepted_constraints(expected)
+    )]
+    GenericConstraintMismatch {
+        name: GenericParamName,
+        actual: GenericConstraint,
+        expected: &'static [GenericConstraint],
+    },
+    #[error("unknown generic parameter `{name}`")]
+    UnknownGenericParam { name: GenericParamName },
+    #[error("`{target}` expects {expected} generic argument(s), got {got}")]
+    WrongGenericArgCount {
+        target: GenericApplicationTarget,
+        expected: GenericArgArity,
+        got: usize,
+    },
+    #[error(
+        "generic parameter `{parameter}` expects an argument of sort `{expected}`, got {actual}"
+    )]
+    GenericArgumentSortMismatch {
+        parameter: GenericParamName,
+        expected: GenericConstraint,
+        actual: &'static str,
+    },
+    #[error("duplicate generic parameter `{name}`")]
+    DuplicateGenericParam { name: GenericParamName },
+    #[error("generic parameter `{name}` shadows a visible Static name")]
+    GenericParamShadowsStatic { name: GenericParamName },
+    #[error("too many local bindings in one expression")]
+    TooManyLocals,
+    #[error("{source}")]
+    ExpressionIdentity { source: ExpressionSourceError },
+    #[error("unknown match pattern `{path}`")]
+    UnknownPattern { path: NamePath },
+    #[error("constructor `{constructor}` requires named field arguments")]
+    PositionalArgumentsOnConstructor {
+        constructor: ResolvedConstructorName,
+    },
+    #[error("function `{path}` does not accept generic arguments")]
+    UnsupportedFunctionGenericArgs { path: NamePath },
+    #[error("duplicate local binding `{name}`")]
+    DuplicateLocalBinding { name: LocalName },
+    #[error("local binding `{name}` shadows a visible Term")]
+    LocalBindingShadowsTerm { name: LocalName },
+    #[error(
+        "{} cannot be used as a value",
+        reference.surface_description()
+    )]
+    TypeSystemRefAsValue { reference: TypeSystemRef },
+    #[error("{function}() expects {arity} arguments, got {got}")]
+    WrongOptionalArity {
+        function: BuiltinFn,
+        arity: BuiltinArity,
         got: usize,
     },
 }
@@ -114,6 +258,24 @@ impl DiagnosticKind for NameError {
             Self::NamedArgumentsOnFunction { .. } => "graphcal::N015",
             Self::GraphRefInConst { .. } => "graphcal::N005",
             Self::WrongArity { .. } => "graphcal::N006",
+            Self::UnknownTypeName { .. } => "graphcal::N019",
+            Self::IndexLabelAsType { .. } => "graphcal::N020",
+            Self::IndexAsType { .. } => "graphcal::N021",
+            Self::GenericConstraintMismatch { .. } => "graphcal::N022",
+            Self::UnknownGenericParam { .. } => "graphcal::N023",
+            Self::WrongGenericArgCount { .. } => "graphcal::N024",
+            Self::GenericArgumentSortMismatch { .. } => "graphcal::N025",
+            Self::DuplicateGenericParam { .. } => "graphcal::N026",
+            Self::GenericParamShadowsStatic { .. } => "graphcal::N027",
+            Self::TooManyLocals => "graphcal::N028",
+            Self::ExpressionIdentity { .. } => "graphcal::N029",
+            Self::UnknownPattern { .. } => "graphcal::N030",
+            Self::PositionalArgumentsOnConstructor { .. } => "graphcal::N031",
+            Self::UnsupportedFunctionGenericArgs { .. } => "graphcal::N032",
+            Self::DuplicateLocalBinding { .. } => "graphcal::N033",
+            Self::LocalBindingShadowsTerm { .. } => "graphcal::N034",
+            Self::TypeSystemRefAsValue { .. } => "graphcal::N035",
+            Self::WrongOptionalArity { .. } => "graphcal::N036",
         }
     }
 
@@ -146,6 +308,24 @@ impl DiagnosticKind for NameError {
             }
             Self::GraphRefInConst { .. } => Some("@ reference not allowed here".to_owned()),
             Self::WrongArity { .. } => Some("wrong number of arguments".to_owned()),
+            Self::UnknownTypeName { .. }
+            | Self::IndexLabelAsType { .. }
+            | Self::IndexAsType { .. }
+            | Self::GenericConstraintMismatch { .. }
+            | Self::UnknownGenericParam { .. }
+            | Self::WrongGenericArgCount { .. }
+            | Self::GenericArgumentSortMismatch { .. }
+            | Self::DuplicateGenericParam { .. }
+            | Self::GenericParamShadowsStatic { .. }
+            | Self::TooManyLocals
+            | Self::ExpressionIdentity { .. }
+            | Self::UnknownPattern { .. }
+            | Self::PositionalArgumentsOnConstructor { .. }
+            | Self::UnsupportedFunctionGenericArgs { .. }
+            | Self::DuplicateLocalBinding { .. }
+            | Self::LocalBindingShadowsTerm { .. }
+            | Self::TypeSystemRefAsValue { .. }
+            | Self::WrongOptionalArity { .. } => Some("error here".to_owned()),
         }
     }
 
@@ -154,7 +334,7 @@ impl DiagnosticKind for NameError {
             Self::DuplicateName { .. } => Some("each name must be unique within a file".to_owned()),
             Self::DuplicateConstructorField { .. } => Some("constructor field names must be unique; remove or rename one declaration".to_owned()),
             Self::BuiltinNameShadowed { .. } => Some("choose a different name; prelude dimensions, built-in types, prelude units, and built-in numeric constants cannot be redefined in their namespaces".to_owned()),
-            Self::InvalidPlotProperty { valid, .. } => Some(valid.clone()),
+            Self::InvalidPlotProperty { context, .. } => Some(context.valid_properties()),
             Self::UnknownPlotReference { .. } => Some("`plots:` entries must name `plot` declarations visible in this file".to_owned()),
             Self::CompositionReferencesNonPlot { actual_kind, owner_kind, .. } => Some(format!("{owner_kind}s compose `plot` declarations; they cannot nest other {actual_kind}s")),
             Self::DuplicatePlotReference { .. } => Some("each plot may appear at most once in a `plots:` list".to_owned()),
@@ -162,9 +342,34 @@ impl DiagnosticKind for NameError {
             Self::BareGraphDeclarationRef { kind, name, .. } => Some(format!("write `@{name}` to reference this {kind}")),
             Self::TimeScaleInValuePosition { scale, .. } => Some(format!("time scales are Static atoms; use `{scale}` in `Datetime<{scale}>` or `epoch<{scale}>(...)`")),
             Self::UnknownFunction { .. } => Some("check function name and ensure it is defined".to_owned()),
-            Self::NamedArgumentsOnFunction { positional_call, .. } => Some(format!("write `{positional_call}`")),
+            Self::NamedArgumentsOnFunction { function, arguments } => Some(format!(
+                "write `{function}({})`",
+                arguments
+                    .iter()
+                    .map(|argument| format!("{argument}_value"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )),
             Self::GraphRefInConst { .. } => Some("const expressions are evaluated at compile time and cannot reference params or nodes".to_owned()),
-            Self::WrongArity { .. } => None,
+            Self::WrongArity { .. }
+            | Self::UnknownTypeName { .. }
+            | Self::IndexLabelAsType { .. }
+            | Self::IndexAsType { .. }
+            | Self::GenericConstraintMismatch { .. }
+            | Self::UnknownGenericParam { .. }
+            | Self::WrongGenericArgCount { .. }
+            | Self::GenericArgumentSortMismatch { .. }
+            | Self::DuplicateGenericParam { .. }
+            | Self::GenericParamShadowsStatic { .. }
+            | Self::TooManyLocals
+            | Self::ExpressionIdentity { .. }
+            | Self::UnknownPattern { .. }
+            | Self::PositionalArgumentsOnConstructor { .. }
+            | Self::UnsupportedFunctionGenericArgs { .. }
+            | Self::DuplicateLocalBinding { .. }
+            | Self::LocalBindingShadowsTerm { .. }
+            | Self::TypeSystemRefAsValue { .. }
+            | Self::WrongOptionalArity { .. } => None,
         }
     }
 
@@ -189,7 +394,25 @@ impl DiagnosticKind for NameError {
             | Self::UnknownFunction { .. }
             | Self::NamedArgumentsOnFunction { .. }
             | Self::GraphRefInConst { .. }
-            | Self::WrongArity { .. } => Vec::new(),
+            | Self::WrongArity { .. }
+            | Self::UnknownTypeName { .. }
+            | Self::IndexLabelAsType { .. }
+            | Self::IndexAsType { .. }
+            | Self::GenericConstraintMismatch { .. }
+            | Self::UnknownGenericParam { .. }
+            | Self::WrongGenericArgCount { .. }
+            | Self::GenericArgumentSortMismatch { .. }
+            | Self::DuplicateGenericParam { .. }
+            | Self::GenericParamShadowsStatic { .. }
+            | Self::TooManyLocals
+            | Self::ExpressionIdentity { .. }
+            | Self::UnknownPattern { .. }
+            | Self::PositionalArgumentsOnConstructor { .. }
+            | Self::UnsupportedFunctionGenericArgs { .. }
+            | Self::DuplicateLocalBinding { .. }
+            | Self::LocalBindingShadowsTerm { .. }
+            | Self::TypeSystemRefAsValue { .. }
+            | Self::WrongOptionalArity { .. } => Vec::new(),
         }
     }
 }

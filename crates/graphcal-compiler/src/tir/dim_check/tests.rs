@@ -6,9 +6,9 @@ use crate::semantic_error::SemanticErrorKind;
 use crate::semantic_error::attribute::AttributeError;
 use crate::semantic_error::dimension::DimensionError;
 use crate::semantic_error::domain::DomainError;
-use crate::semantic_error::evaluation::EvaluationError;
 use crate::semantic_error::graph::GraphError;
 use crate::semantic_error::index::IndexError;
+use crate::semantic_error::module::ModuleError;
 use crate::semantic_error::name::NameError;
 use crate::semantic_error::structure::StructError;
 use crate::semantic_error::visibility::VisibilityError;
@@ -1027,10 +1027,10 @@ fn incomplete_large_axis_map_reports_one_bounded_missing_witness() {
 
     let error = check(&source).unwrap_err();
     assert!(
-        matches!(&error, SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Evaluation(EvaluationError::Failed { message, .. }), .. })
-            if message.contains("missing 524287 entries")
-                && message.contains("first missing entry")
-                && message.contains("A18#Y")),
+        matches!(&error, SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Index(kind @ IndexError::NonExhaustiveMapLiteral { .. }), .. })
+            if kind.to_string().contains("missing 524287 entries")
+                && kind.to_string().contains("first missing entry")
+                && kind.to_string().contains("A18#Y")),
         "got: {error:?}"
     );
 }
@@ -1378,13 +1378,16 @@ fn optional_trailing_arity_is_checked_before_arguments_are_inferred() {
     let source = format!("node x: Datetime<UTC> = datetime({ILL_TYPED_ARG}, 1.0, 2.0);");
     let error = check(&source).unwrap_err();
     let SemanticError::Located(crate::diagnostic::Diagnostic {
-        kind: SemanticErrorKind::Evaluation(EvaluationError::Failed { message, .. }),
+        kind: SemanticErrorKind::Name(kind @ NameError::WrongOptionalArity { .. }),
         ..
     }) = &error
     else {
         panic!("expected optional-trailing arity diagnostic, got: {error:?}");
     };
-    assert_eq!(message, "datetime() expects 1 or 2 arguments, got 3");
+    assert_eq!(
+        kind.to_string(),
+        "datetime() expects 1 or 2 arguments, got 3"
+    );
 }
 
 #[test]
@@ -1526,7 +1529,7 @@ Case#B: 2.0 m,
                 matches!(
                     &err,
                     SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Dimension(DimensionError::IndexedComparisonOperand { found, .. }), .. })
-                        if found == "Length[Case]"
+                        if found.to_string() == "Length[Case]"
                 ),
                 "operator `{op}` in `{expr}` produced: {err:?}"
             );
@@ -1961,7 +1964,7 @@ node o: Orbit = Orbit(altitude: 400.0 km, altitude: 401.0 km, speed: 7.6 km / s)
         matches!(
             err,
             SemanticError::Located(crate::diagnostic::Diagnostic {
-                kind: SemanticErrorKind::Evaluation(EvaluationError::Failed { .. }),
+                kind: SemanticErrorKind::Struct(StructError::DuplicateConstructionField { .. }),
                 ..
             })
         ),
@@ -1999,7 +2002,7 @@ node y: Length = match @x { Pair(a: left, a: right) => left + right };";
         matches!(
             err,
             SemanticError::Located(crate::diagnostic::Diagnostic {
-                kind: SemanticErrorKind::Evaluation(EvaluationError::Failed { .. }),
+                kind: SemanticErrorKind::Struct(StructError::DuplicatePatternBinding { .. }),
                 ..
             })
         ),
@@ -2090,7 +2093,7 @@ node bad: Dimensionless = scan(@x, 0.0, |acc, val| acc + val);";
         matches!(
             err,
             SemanticError::Located(crate::diagnostic::Diagnostic {
-                kind: SemanticErrorKind::Evaluation(EvaluationError::Failed { .. }),
+                kind: SemanticErrorKind::Index(IndexError::ScanSourceNotIndexed),
                 ..
             })
         ),
@@ -2166,7 +2169,7 @@ param bad: Dimensionless = @x[Phase#Coast];";
         matches!(
             err,
             SemanticError::Located(crate::diagnostic::Diagnostic {
-                kind: SemanticErrorKind::Evaluation(EvaluationError::Failed { .. }),
+                kind: SemanticErrorKind::Index(IndexError::IndexingNonIndexedValue),
                 ..
             })
         ),
@@ -2206,7 +2209,7 @@ param v: Dimensionless[Fin(3)] = table[Fin(3)] { 1.0; 2.0; 3.0; };
 node bad: Dimensionless = @v[5];";
     let err = check(source).unwrap_err();
     assert!(
-        matches!(&err, SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Evaluation(EvaluationError::Failed { message, .. }), .. }) if message.contains("index 5 out of bounds for Fin(3)")),
+        matches!(&err, SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Index(kind @ IndexError::IndexOutOfBounds { .. }), .. }) if kind.to_string().contains("index 5 out of bounds for Fin(3)")),
         "got: {err:?}"
     );
 }
@@ -2218,7 +2221,7 @@ param v: Dimensionless[Fin(3)] = table[Fin(3)] { 1.0; 2.0; 3.0; };
 node bad: Dimensionless = @v[0 - 1];";
     let err = check(source).unwrap_err();
     assert!(
-        matches!(&err, SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Evaluation(EvaluationError::Failed { message, .. }), .. }) if message.contains("index expression evaluated to negative value: -1")),
+        matches!(&err, SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Index(kind @ IndexError::NegativeIndex { .. }), .. }) if kind.to_string().contains("index expression evaluated to negative value: -1")),
         "got: {err:?}"
     );
 }
@@ -2231,7 +2234,7 @@ pub index P = { A };
 node x: Dimensionless = A;";
     let err = check(source).unwrap_err();
     assert!(
-        matches!(&err, SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Evaluation(EvaluationError::Failed { message, .. }), .. }) if message.contains("unknown Term `A`")),
+        matches!(&err, SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Module(kind @ ModuleError::ModuleResolution { .. }), .. }) if kind.to_string().contains("unknown Term `A`")),
         "got: {err:?}"
     );
 }
@@ -2241,7 +2244,7 @@ fn value_position_does_not_probe_static_prelude_dimension() {
     let source = "node x: Dimensionless = Length;";
     let err = check(source).unwrap_err();
     assert!(
-        matches!(&err, SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Evaluation(EvaluationError::Failed { message, .. }), .. }) if message.contains("unknown Term `Length`")),
+        matches!(&err, SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Module(kind @ ModuleError::ModuleResolution { .. }), .. }) if kind.to_string().contains("unknown Term `Length`")),
         "got: {err:?}"
     );
 }
@@ -2265,8 +2268,8 @@ pub index M = { A };
 param x: M#A = 1.0;";
     let err = check(source).unwrap_err();
     assert!(
-        matches!(&err, SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Evaluation(EvaluationError::Failed { message, .. }), .. })
-            if message == "index label `M#A` cannot be used as a type"),
+        matches!(&err, SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Name(kind @ NameError::IndexLabelAsType { .. }), .. })
+            if kind.to_string() == "index label `M#A` cannot be used as a type"),
         "got: {err:?}"
     );
 }
@@ -2290,7 +2293,7 @@ pub index M = { A };
 param x: M<Length> = 1.0;";
     let err = check(source).unwrap_err();
     assert!(
-        matches!(&err, SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Evaluation(EvaluationError::Failed { message, .. }), .. }) if message.contains("`M` is an index, not a type")),
+        matches!(&err, SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Module(kind @ ModuleError::ModuleResolution { .. }), .. }) if kind.to_string().contains("`M` is an index, not a type")),
         "got: {err:?}"
     );
 }
@@ -2776,8 +2779,8 @@ node state: Dimensionless[Element, Step] = unfold(
     assert!(
         matches!(
             &err,
-            SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Dimension(DimensionError::DimensionMismatchInAnnotation { declared, inferred, .. }), .. }) if declared == "Dimensionless[Element, Step]"
-                && inferred == "Dimensionless[Step, Element]"
+            SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Dimension(DimensionError::DimensionMismatchInAnnotation { declared, inferred, .. }), .. }) if declared.to_string() == "Dimensionless[Element, Step]"
+                && inferred.to_string() == "Dimensionless[Step, Element]"
         ),
         "got: {err:?}"
     );
@@ -2799,8 +2802,8 @@ node state: Dimensionless[Step, Element] = unfold(
     assert!(
         matches!(
             &err,
-            SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Dimension(DimensionError::DimensionMismatch { expected, found, .. }), .. }) if expected == "Dimensionless[Element]"
-                && found == "Dimensionless[Other]"
+            SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Dimension(DimensionError::DimensionMismatch { expected, found, .. }), .. }) if expected.to_string() == "Dimensionless[Element]"
+                && found.to_string() == "Dimensionless[Other]"
         ),
         "got: {err:?}"
     );
@@ -2817,7 +2820,7 @@ node values: Dimensionless[Phase] = unfold(
 );";
     let err = check(source).unwrap_err();
     assert!(
-        matches!(&err, SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Evaluation(EvaluationError::Failed { message, .. }), .. }) if message.contains("unfold requires a coordinate index")),
+        matches!(&err, SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Index(kind @ IndexError::UnfoldRequiresCoordinateIndex { .. }), .. }) if kind.to_string().contains("unfold requires a coordinate index")),
         "got: {err:?}"
     );
 }
@@ -2872,7 +2875,7 @@ param v: Dimensionless[Fin(3)] = for i: Fin(3) { 1.0 };
 node w: Dimensionless[Fin(3)] = for i: Fin(3) { @v[-i] };";
     let err = check(source).unwrap_err();
     assert!(
-        matches!(&err, SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Dimension(DimensionError::DimensionMismatch { found, .. }), .. }) if found.contains("Fin")),
+        matches!(&err, SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Dimension(DimensionError::DimensionMismatch { found, .. }), .. }) if found.to_string().contains("Fin")),
         "got: {err:?}"
     );
 }
@@ -2882,7 +2885,7 @@ fn negation_rejects_datetime() {
     let source = "node t: Datetime<UTC> = -datetime(\"2026-01-01T00:00:00Z\");";
     let err = check(source).unwrap_err();
     assert!(
-        matches!(&err, SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Dimension(DimensionError::DimensionMismatch { found, .. }), .. }) if found.contains("Datetime")),
+        matches!(&err, SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Dimension(DimensionError::DimensionMismatch { found, .. }), .. }) if found.to_string().contains("Datetime")),
         "got: {err:?}"
     );
 }
@@ -2895,7 +2898,7 @@ param flags: Bool[Phase] = for p: Phase { true };
 node total: Dimensionless = sum(@flags);";
     let err = check(source).unwrap_err();
     assert!(
-        matches!(&err, SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Dimension(DimensionError::DimensionMismatch { expected, .. }), .. }) if expected == "indexed quantity collection"),
+        matches!(&err, SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Dimension(DimensionError::DimensionMismatch { expected, .. }), .. }) if expected.to_string() == "indexed quantity collection"),
         "got: {err:?}"
     );
 }
@@ -2907,7 +2910,7 @@ param counts: Int[Fin(3)] = for i: Fin(3) { i };
 node total: Int = sum(@counts);";
     let err = check(source).unwrap_err();
     assert!(
-        matches!(&err, SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Dimension(DimensionError::DimensionMismatch { expected, .. }), .. }) if expected == "indexed quantity collection"),
+        matches!(&err, SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Dimension(DimensionError::DimensionMismatch { expected, .. }), .. }) if expected.to_string() == "indexed quantity collection"),
         "got: {err:?}"
     );
 }
@@ -3504,8 +3507,8 @@ node bad: T<1> = T<1>(x: 1);
 ";
     let error = check(source).unwrap_err();
     assert!(
-        matches!(&error, SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Evaluation(EvaluationError::Failed { message, .. }), .. })
-            if message.contains("out of bounds for Fin(1)")),
+        matches!(&error, SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Index(kind), .. })
+            if kind.to_string().contains("out of bounds for Fin(1)")),
         "got: {error:?}"
     );
 }
@@ -3518,9 +3521,9 @@ node bad: T<0> = T<0>(x: 0);
 ";
     let error = check(source).unwrap_err();
     assert!(
-        matches!(&error, SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Evaluation(EvaluationError::Failed { message, .. }), .. })
-            if message.contains("finite index size must be greater than zero")
-                || message.contains("Fin(0)")),
+        matches!(&error, SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Index(kind @ IndexError::InvalidFiniteIndexCardinality { .. }), .. })
+            if kind.to_string().contains("finite index size must be greater than zero")
+                || kind.to_string().contains("Fin(0)")),
         "got: {error:?}"
     );
 }
@@ -3535,8 +3538,8 @@ node bad: T<1> = T<1>(x: 1);
 ";
     let error = check(source).unwrap_err();
     assert!(
-        matches!(&error, SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Evaluation(EvaluationError::Failed { message, .. }), .. })
-            if message.contains("index 1 out of bounds for Fin(1)")),
+        matches!(&error, SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Index(kind), .. })
+            if kind.to_string().contains("index 1 out of bounds for Fin(1)")),
         "got: {error:?}"
     );
 }
@@ -3551,8 +3554,8 @@ node value: T<2> = T<2>(x: 1);
 ";
     let error = check(source).unwrap_err();
     assert!(
-        matches!(&error, SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Evaluation(EvaluationError::Failed { message, .. }), .. })
-            if message.contains("negative value: -1")),
+        matches!(&error, SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Index(kind @ IndexError::NegativeIndex { .. }), .. })
+            if kind.to_string().contains("negative value: -1")),
         "got: {error:?}"
     );
 }
@@ -3668,7 +3671,7 @@ node y: Length = @nope(v: @src)::result;
 ";
     let err = check(source).unwrap_err();
     assert!(
-        matches!(&err, SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Evaluation(EvaluationError::Failed { message, .. }), .. }) if message.contains("unknown module")),
+        matches!(&err, SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Module(kind @ ModuleError::ModuleResolution { .. }), .. }) if kind.to_string().contains("unknown module")),
         "got: {err:?}"
     );
 }
@@ -3711,7 +3714,7 @@ node y: Length = @scale(v: @src)::result;
 ";
     let err = check(source).unwrap_err();
     assert!(
-        matches!(&err, SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Graph(GraphError::MissingDagBindings { missing, .. }), .. }) if missing == &vec!["factor".to_string()]),
+        matches!(&err, SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Graph(GraphError::MissingDagBindings { missing, .. }), .. }) if missing.iter().map(ToString::to_string).collect::<Vec<_>>() == ["factor"]),
         "got: {err:?}"
     );
 }
@@ -3935,7 +3938,7 @@ node y: Length = @a(v: @src)::out;
     else {
         panic!("expected CyclicDependency, got: {err:?}");
     };
-    assert!(name.ends_with('a'), "{name}");
+    assert!(name.to_string().ends_with('a'), "{name}");
     let dag_b = source.find("dag b").unwrap();
     let param_src = source.find("param src").unwrap();
     assert!((dag_b..param_src).contains(&span.offset()), "{span:?}");
@@ -4058,7 +4061,7 @@ fn check_rejects_non_plottable_encoding_leaves() {
         assert!(
             matches!(
                 check(source),
-                Err(SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Dimension(DimensionError::PlotEncodingTypeMismatch { channel: crate::syntax::ast::EncodingChannel::X, found, .. }), .. })) if found == expected
+                Err(SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Dimension(DimensionError::PlotEncodingTypeMismatch { channel: crate::syntax::ast::EncodingChannel::X, found, .. }), .. })) if found.to_string() == expected
             ),
             "non-plottable leaf `{expected}` was accepted"
         );
@@ -4082,7 +4085,8 @@ plot p = {
     assert!(matches!(
         error,
         SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Dimension(DimensionError::PlotEncodingAxisMismatch { channels, .. }), .. })
-            if channels.contains("test.Step") && channels.contains("test.Pair")
+            if channels.iter().any(|channel| channel.to_string().contains("test.Step"))
+                && channels.iter().any(|channel| channel.to_string().contains("test.Pair"))
     ));
 }
 
@@ -4143,7 +4147,7 @@ param vals: Dimensionless[Step] = { Step#A: 1.0, Step#B: 2.0 };
 plot p = { mark: line, encode: { x: for s: Step { @vals[s] } }, caption: \"typo\" };";
     let err = check(source).unwrap_err();
     assert!(
-        matches!(&err, SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Name(NameError::InvalidPlotProperty { property, .. }), .. }) if property == "caption"),
+        matches!(&err, SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Name(NameError::InvalidPlotProperty { property, .. }), .. }) if property.name() == "caption"),
         "got: {err:?}"
     );
 }
@@ -4156,7 +4160,7 @@ param vals: Dimensionless[Step] = { Step#A: 1.0, Step#B: 2.0 };
 plot p = { mark: line { strokewidth: 3.0 }, encode: { x: for s: Step { @vals[s] } } };";
     let err = check(source).unwrap_err();
     assert!(
-        matches!(&err, SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Name(NameError::InvalidPlotProperty { property, .. }), .. }) if property == "strokewidth"),
+        matches!(&err, SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Name(NameError::InvalidPlotProperty { property, .. }), .. }) if property.name() == "strokewidth"),
         "got: {err:?}"
     );
 }
@@ -4236,7 +4240,7 @@ plot p = { mark: line, encode: { x: for s: Step { @vals[s] } } };
 figure f = { plots: [p], width: 300.0 };";
     let err = check(source).unwrap_err();
     assert!(
-        matches!(&err, SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Name(NameError::InvalidPlotProperty { property, context: "a figure declaration", .. }), .. }) if property == "width"),
+        matches!(&err, SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Name(NameError::InvalidPlotProperty { property, context: crate::semantic_error::name::PlotPropertyContext::FigureDeclaration, .. }), .. }) if property.name() == "width"),
         "got: {err:?}"
     );
 }
@@ -4392,7 +4396,7 @@ param vals: Dimensionless[Step] = { Step#A: 1.0, Step#B: 2.0 };
 plot p = { mark: line, encode: { x: for s: Step { @vals[s] } } };";
     let err = check(source).unwrap_err();
     assert!(
-        matches!(&err, SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Evaluation(EvaluationError::Failed { message, .. }), .. }) if message.contains("no arguments")),
+        matches!(&err, SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Attribute(kind @ AttributeError::HiddenTakesNoArguments), .. }) if kind.to_string().contains("no arguments")),
         "got: {err:?}"
     );
 }
@@ -4505,7 +4509,7 @@ fn resolved_nominal_aligns_field_semantics_with_its_definition() {
     assert!(burn.field(&FieldName::expect_valid("missing")).is_none());
     let dv = burn.field(&FieldName::expect_valid("dv")).unwrap();
     assert_eq!(dv.member().constructor().name(), burn.constructor().name());
-    assert_eq!(dv.display_name(), "Maneuver.Burn.dv");
+    assert_eq!(dv.domain_subject().to_string(), "Maneuver.Burn.dv");
 
     // Only a one-constructor type named like its constructor is a record.
     assert!(maneuver.record_member().is_none());
@@ -4515,13 +4519,19 @@ fn resolved_nominal_aligns_field_semantics_with_its_definition() {
         record
             .field(&FieldName::expect_valid("y"))
             .unwrap()
-            .display_name(),
+            .domain_subject()
+            .to_string(),
         "Point.y"
     );
 
     let mut constrained = defs
         .constrained_fields()
-        .map(|field| (field.field().display_name(), field.bounds().len()))
+        .map(|field| {
+            (
+                field.field().domain_subject().to_string(),
+                field.bounds().len(),
+            )
+        })
         .collect::<Vec<_>>();
     constrained.sort();
     assert_eq!(
@@ -4648,7 +4658,7 @@ fn declaration_cycles_are_reported_deterministically_at_the_closing_declaration(
             let (tir, src) = module_aware_tir(source);
             let error = check_draft(tir, src).unwrap_err();
             assert!(
-                matches!(&error, SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Graph(GraphError::CyclicDependency { name, .. }), .. }) if name == expected),
+                matches!(&error, SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Graph(GraphError::CyclicDependency { name, .. }), .. }) if name.to_string() == expected),
                 "{source}: {error:?}"
             );
         }

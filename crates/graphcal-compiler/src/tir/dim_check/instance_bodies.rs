@@ -6,6 +6,8 @@ use crate::diagnostic_anchor::DiagnosticAnchor;
 use crate::outcome::Outcome;
 use crate::semantic_error::SemanticError;
 use crate::semantic_error::dimension::DimensionError;
+use crate::semantic_error::visibility::OverriddenKind;
+use crate::semantic_error::visibility::OverrideMention;
 use crate::semantic_error::visibility::VisibilityError;
 use crate::source_id::SourceId;
 use crate::tir::texpr::{CheckedBodies, CheckedBody, NominalObservation, TBody};
@@ -43,27 +45,31 @@ fn check_retained_reconciliations(
                         observation,
                     ) => {
                         let (identity, detail) = match observation {
-                            NominalObservation::Field { identity, field } => {
-                                (identity, format!("field `{field}` of type `{overridden}`"))
-                            }
+                            NominalObservation::Field { identity, field } => (
+                                identity,
+                                OverrideMention::Field {
+                                    field: field.clone(),
+                                    owner: overridden.clone(),
+                                },
+                            ),
                             NominalObservation::Constructor {
                                 identity,
                                 constructor,
                             } => (
                                 identity,
-                                format!(
-                                    "constructor `{}` of type `{overridden}`",
-                                    constructor.as_str()
-                                ),
+                                OverrideMention::Constructor {
+                                    constructor: constructor.to_unowned_def_name(),
+                                    owner: overridden.clone(),
+                                },
                             ),
                             NominalObservation::TypeArgument(identity) => {
-                                (identity, format!("type `{overridden}`"))
+                                (identity, OverrideMention::TypeArgument(overridden.clone()))
                             }
                             NominalObservation::IndexLabel { .. }
                             | NominalObservation::IndexArgument(_) => continue,
                         };
                         (identity == source || identity == replacement)
-                            .then(|| (overridden.to_string(), "type", detail))
+                            .then(|| (overridden.atom().clone(), OverriddenKind::Type, detail))
                     }
                     (
                         OverrideTarget::Index {
@@ -74,11 +80,15 @@ fn check_retained_reconciliations(
                         observation,
                     ) => {
                         let (identity, detail) = match observation {
-                            NominalObservation::IndexLabel { identity, variant } => {
-                                (identity, format!("index label `{overridden}#{variant}`"))
-                            }
+                            NominalObservation::IndexLabel { identity, variant } => (
+                                identity,
+                                OverrideMention::IndexLabel {
+                                    index: overridden.clone(),
+                                    variant: variant.clone(),
+                                },
+                            ),
                             NominalObservation::IndexArgument(identity) => {
-                                (identity, format!("index `{overridden}`"))
+                                (identity, OverrideMention::IndexArgument(overridden.clone()))
                             }
                             NominalObservation::Field { .. }
                             | NominalObservation::Constructor { .. }
@@ -86,7 +96,7 @@ fn check_retained_reconciliations(
                         };
                         (identity.declared_resolved() == Some(source)
                             || replacement.to_symbolic().matches_ref(identity))
-                        .then(|| (overridden.to_string(), "index", detail))
+                        .then(|| (overridden.atom().clone(), OverriddenKind::Index, detail))
                     }
                 };
                 if let Some((overridden, kind, detail)) = matched {
@@ -95,8 +105,8 @@ fn check_retained_reconciliations(
                         reconciliation.include_span,
                         VisibilityError::IncludeMustReconcileOverride {
                             overridden,
-                            overridden_kind: kind.to_string(),
-                            orphan_decl: reconciliation.orphan_decl().to_string(),
+                            overridden_kind: kind,
+                            orphan_decl: reconciliation.orphan_decl(),
                             detail,
                         },
                     ));
@@ -197,8 +207,8 @@ fn check_instance_defaults(
                 ctx.env.src,
                 default.span,
                 DimensionError::DimensionMismatchInAnnotation {
-                    declared: expected.format(&ctx.env.registry.dimensions),
-                    inferred: specialized.format(&ctx.env.registry.dimensions),
+                    declared: expected.spelling(&ctx.env.registry.dimensions),
+                    inferred: specialized.spelling(&ctx.env.registry.dimensions),
                 },
             )
             .into());

@@ -848,6 +848,11 @@ role = "contracts"
 
 [[module]]
 package = "compiler"
+path = ["semantic_error", "dimension_mismatch"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
 path = ["semantic_error", "module"]
 role = "contracts"
 
@@ -1856,6 +1861,11 @@ role = "contracts"
 [[module]]
 package = "compiler"
 path = ["tir", "typed", "resolved_type"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["tir", "typed", "declared_type_spelling"]
 role = "contracts"
 
 [[module]]

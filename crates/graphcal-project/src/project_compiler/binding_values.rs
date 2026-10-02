@@ -4,7 +4,6 @@
 use graphcal_compiler::desugar::desugared_ast::{Expr, ExprKind};
 use graphcal_compiler::semantic::index_def::IndexBindingTarget;
 use graphcal_compiler::semantic_error::SemanticError;
-use graphcal_compiler::semantic_error::evaluation::EvaluationError;
 use graphcal_compiler::semantic_error::index::IndexError;
 use graphcal_compiler::semantic_error::module::ModuleError;
 use graphcal_compiler::source_id::SourceId;
@@ -29,7 +28,7 @@ pub(super) fn extract_index_binding_target(
             file_src,
             expr.span,
             ModuleError::InvalidTypeLevelBindingValue {
-                name: dep_index_name.to_string(),
+                name: dep_index_name.atom().clone(),
             },
         ))
     };
@@ -45,9 +44,7 @@ pub(super) fn extract_index_binding_target(
                 PipelineError::Semantic(SemanticError::located(
                     file_src,
                     expr.span,
-                    EvaluationError::Failed {
-                        message: error.describe_finite_index(),
-                    },
+                    IndexError::InvalidFiniteIndexCardinality { error },
                 ))
             })?;
             Ok(IndexBindingTarget::Finite(finite))
@@ -69,8 +66,8 @@ fn closed_binding_cardinality(
         SemanticError::located(
             file_src,
             span,
-            EvaluationError::Failed {
-                message: graphcal_compiler::nat::NatOverflowError.to_string(),
+            IndexError::NatOverflow {
+                error: graphcal_compiler::nat::NatOverflowError,
             },
         )
     };
@@ -102,7 +99,7 @@ fn closed_binding_cardinality(
 /// AST) or a zero-arg `ConstructorCall` for constructor-shaped RHSs.
 pub(super) fn extract_type_name_from_binding_expr(
     expr: &Expr,
-    dep_type_name: &str,
+    dep_type_name: &graphcal_compiler::syntax::names::NameAtom,
     file_src: SourceId,
 ) -> Result<String, PipelineError> {
     let invalid_binding = || {
@@ -110,7 +107,7 @@ pub(super) fn extract_type_name_from_binding_expr(
             file_src,
             expr.span,
             ModuleError::InvalidTypeLevelBindingValue {
-                name: dep_type_name.to_string(),
+                name: dep_type_name.clone(),
             },
         ))
     };

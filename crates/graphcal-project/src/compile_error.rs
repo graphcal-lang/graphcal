@@ -1,5 +1,6 @@
 //! Top-level project compilation error.
 
+use graphcal_compiler::source_id::SourceId;
 use std::sync::Arc;
 
 use miette::{Diagnostic, NamedSource, SourceSpan};
@@ -132,11 +133,14 @@ impl CompileError {
         Self::Eval(RenderedSemanticError::new(error, sources))
     }
 
-    /// Attach the named source a parse error was produced from.
+    /// Render a parse error against the registered source it was produced
+    /// from, like [`Self::semantic`] renders a semantic error.
     #[must_use]
-    pub fn parse(error: ParseError, source: NamedSource<Arc<String>>) -> Self {
+    pub fn parse(error: ParseError, source: SourceId, sources: &SourceRegistry) -> Self {
         Self::Parse(RenderableDiagnostic::in_source(
-            error.kind, error.span, source,
+            error.kind,
+            error.span,
+            sources.renderable(source),
         ))
     }
 

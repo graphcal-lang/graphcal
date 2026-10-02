@@ -64,9 +64,7 @@ fn reject_constant_call(
         Some((target, span)) => Err(SemanticError::located(
             src,
             span,
-            GraphError::DagCallInCompileTime {
-                name: target.to_string(),
-            },
+            GraphError::DagCallInCompileTime { name: target },
         )),
         None => Ok(()),
     }

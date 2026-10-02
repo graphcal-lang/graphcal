@@ -8,4 +8,4 @@ Begin snippet for complex_requires_dimension_arg.gcl starting at line 1, column 
 
 snippet line 1: node invalid: Complex = complex(1.0, 2.0);
     label at line 1, columns 15 to 21: error here
-diagnostic code: graphcal::E001
+diagnostic code: graphcal::N024

@@ -118,6 +118,20 @@ fn canonical_unit_symbols(
         .collect()
 }
 
+/// How a diagnostic spells a dimension.
+///
+/// It is constructed only by
+/// [`DimensionFormattingRegistry::dimension_spelling`], so a payload holding a
+/// `DimensionSpelling` always names a dimension, never free text.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DimensionSpelling(String);
+
+impl std::fmt::Display for DimensionSpelling {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
 /// Dimension formatting data retained after semantic name resolution.
 ///
 /// Named dimensions are display aliases only: this type deliberately exposes
@@ -157,6 +171,12 @@ impl DimensionFormattingRegistry {
     #[must_use]
     pub fn format_dimension(&self, dim: &Dimension) -> String {
         format_dimension_preferring_alias(&self.display_aliases, dim)
+    }
+
+    /// Spell a dimension for a diagnostic payload.
+    #[must_use]
+    pub fn dimension_spelling(&self, dim: &Dimension) -> DimensionSpelling {
+        DimensionSpelling(self.format_dimension(dim))
     }
 
     /// Add diagnostic formatting for one rigid template dimension port.

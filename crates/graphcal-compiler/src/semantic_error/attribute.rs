@@ -8,21 +8,23 @@ use thiserror::Error;
 
 use crate::declaration_kind::AttributeTarget;
 use crate::diagnostic::{DiagnosticKind, SecondaryLabel};
+use crate::semantic::checked_type::{IndexDisplayName, TypeSpelling};
 use crate::syntax::attribute::AttributeName;
 use crate::syntax::decl_name::DeclName;
+use crate::syntax::names::NameAtom;
 use crate::syntax::span::Span;
 
 /// Diagnostics of declaration attributes and assertion annotations.
 #[derive(Debug, Clone, Error)]
 pub enum AttributeError {
     #[error("attribute `hidden` does not apply to include item `{name}`")]
-    HiddenIncludeItemNotAPlot { name: String },
+    HiddenIncludeItemNotAPlot { name: NameAtom },
     #[error("cannot reference assert `{name}` with `@`")]
     GraphRefToAssert { name: DeclName },
     #[error("assert body must evaluate to Bool, got {found}")]
-    AssertBodyNotBool { found: String },
+    AssertBodyNotBool { found: TypeSpelling },
     #[error("unknown assert `{name}` in #[assumes(...)]")]
-    UnknownAssertInAssumes { name: String },
+    UnknownAssertInAssumes { name: DeclName },
     #[error("`#[assumes(...)]` is not valid on `{kind}` declarations")]
     InvalidAssumesTarget { kind: AttributeTarget },
     #[error("attribute `#[{name}]` appears more than once")]
@@ -38,7 +40,9 @@ pub enum AttributeError {
     #[error("attribute `hidden` does not apply to `{kind}` declarations")]
     InvalidHiddenTarget { kind: AttributeTarget },
     #[error("unknown attribute `{name}`")]
-    UnknownAttribute { name: String },
+    UnknownAttribute {
+        name: crate::syntax::token::SourceIdentifier,
+    },
     #[error("`#[expected_fail]` is not valid on `{kind}` declarations")]
     InvalidExpectedFailTarget { kind: AttributeTarget },
     #[error(
@@ -54,11 +58,16 @@ pub enum AttributeError {
     #[error("`#[expected_fail(...)]` key has the wrong index shape")]
     ExpectedFailKeyShapeMismatch { expected: usize, found: usize },
     #[error("`#[expected_fail(...)]` key does not belong to the assertion index")]
-    ExpectedFailKeyIndexMismatch { expected: String, found: String },
+    ExpectedFailKeyIndexMismatch {
+        expected: IndexDisplayName,
+        found: Box<crate::assertion_expectation::ExpectedFailKeyPart>,
+    },
     #[error("`#[expected_fail(...)]` finite-index position `#{position}` is out of bounds")]
     ExpectedFailFinitePositionOutOfBounds { position: u64, size: u64 },
     #[error("negative tolerance in tolerance assertion")]
-    NegativeTolerance { found: String },
+    NegativeTolerance { value: f64 },
+    #[error("`#[hidden]` takes no arguments")]
+    HiddenTakesNoArguments,
 }
 
 impl DiagnosticKind for AttributeError {
@@ -85,6 +94,7 @@ impl DiagnosticKind for AttributeError {
             Self::ExpectedFailKeyIndexMismatch { .. } => "graphcal::A014",
             Self::ExpectedFailFinitePositionOutOfBounds { .. } => "graphcal::A016",
             Self::NegativeTolerance { .. } => "graphcal::A015",
+            Self::HiddenTakesNoArguments => "graphcal::A024",
         }
     }
 
@@ -118,11 +128,22 @@ impl DiagnosticKind for AttributeError {
             )),
             Self::ExpectedFailKeyIndexMismatch {
                 expected, found, ..
-            } => Some(format!("expected index `{expected}`, found `{found}`")),
+            } => Some(format!(
+                "expected index `{expected}`, found `{}`",
+                found.display()
+            )),
             Self::ExpectedFailFinitePositionOutOfBounds { position, size, .. } => {
                 Some(format!("position #{position} on an axis of size {size}"))
             }
-            Self::NegativeTolerance { found, .. } => Some(format!("tolerance is {found}")),
+            Self::NegativeTolerance { value } => Some(format!(
+                "tolerance is {}",
+                if *value == 0.0 {
+                    "-0".to_owned()
+                } else {
+                    crate::display::number::format_number(*value)
+                }
+            )),
+            Self::HiddenTakesNoArguments => Some("error here".to_owned()),
         }
     }
 
@@ -141,7 +162,8 @@ impl DiagnosticKind for AttributeError {
             Self::InvalidHiddenTarget { .. } => Some("`#[hidden]` suppresses a plot's standalone output; it is only valid on `plot` declarations".to_owned()),
             Self::UnknownAttribute { .. } => Some("recognized attributes are `#[assumes(...)]`, `#[expected_fail]`, `#[hidden]`, and `#[lazy]`".to_owned()),
             Self::InvalidExpectedFailTarget { .. } => Some("`#[expected_fail]` is only valid on `assert` declarations".to_owned()),
-            Self::ExpectedFailInvalidArg => None,
+            Self::ExpectedFailInvalidArg
+            | Self::HiddenTakesNoArguments => None,
             Self::ExpectedFailNotIndexed => Some("use `#[expected_fail]` without arguments for non-indexed assertions".to_owned()),
             Self::ExpectedFailAllOnIndexed => Some("use `#[expected_fail(Index#Variant, ...)]` (qualified `module::Index#Variant` also works) to specify which variants are expected to fail; for finite structural axes use `#[expected_fail(#N, ...)]`".to_owned()),
             Self::ExpectedFailDuplicateKey => Some("each expected-fail key must be unique".to_owned()),
@@ -172,7 +194,8 @@ impl DiagnosticKind for AttributeError {
             | Self::ExpectedFailKeyShapeMismatch { .. }
             | Self::ExpectedFailKeyIndexMismatch { .. }
             | Self::ExpectedFailFinitePositionOutOfBounds { .. }
-            | Self::NegativeTolerance { .. } => Vec::new(),
+            | Self::NegativeTolerance { .. }
+            | Self::HiddenTakesNoArguments => Vec::new(),
             Self::RepeatedSingletonAttribute { first, name, .. } => vec![SecondaryLabel {
                 span: *first,
                 text: format!("first `#[{name}]` attribute"),

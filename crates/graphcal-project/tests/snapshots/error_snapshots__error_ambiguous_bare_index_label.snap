@@ -9,4 +9,4 @@ Begin snippet for ambiguous_bare_index_label.gcl starting at line 4, column 1
 snippet line 4: 
 snippet line 5: node x: Dimensionless = A;
     label at line 5, column 25: error here
-diagnostic code: graphcal::E001
+diagnostic code: graphcal::M033

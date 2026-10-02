@@ -9,6 +9,11 @@
 //! regardless of lowering order. There is no source-name keyed registry and no
 //! merge of one module's tables into another's.
 
+use crate::semantic::dimension_table::DimensionSpelling;
+use crate::semantic_error::dimension::BaseUnitRejection;
+use crate::semantic_error::dimension::UnitScaleSite;
+use crate::semantic_error::index::CoordinateArgumentDimensions;
+use crate::semantic_error::name::DuplicateDeclaration;
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use crate::dag_id::DagId;
@@ -36,7 +41,6 @@ use crate::semantic::unit_scale::{
 };
 use crate::semantic_error::SemanticError;
 use crate::semantic_error::dimension::DimensionError;
-use crate::semantic_error::evaluation::EvaluationError;
 use crate::semantic_error::index::IndexError;
 use crate::semantic_error::name::NameError;
 use crate::source_id::SourceId;
@@ -573,6 +577,17 @@ impl<'a> StaticDefinitionEvaluator<'a> {
     /// already evaluated.
     #[must_use]
     pub fn format_dimension(&self, owner: &DagId, dimension: &Dimension) -> String {
+        self.display_registry(owner).format_dimension(dimension)
+    }
+
+    /// Spell a dimension for a diagnostic in `owner`, using only dimensions
+    /// already evaluated.
+    #[must_use]
+    pub fn dimension_spelling(&self, owner: &DagId, dimension: &Dimension) -> DimensionSpelling {
+        self.display_registry(owner).dimension_spelling(dimension)
+    }
+
+    fn display_registry(&self, owner: &DagId) -> DimensionFormattingRegistry {
         DimensionFormattingRegistry::new(
             self.base_dimensions.clone(),
             self.display_spellings(owner)
@@ -583,7 +598,6 @@ impl<'a> StaticDefinitionEvaluator<'a> {
                         .map(|dimension| (spelling, dimension.clone()))
                 }),
         )
-        .format_dimension(dimension)
     }
 
     fn annotate_base(&mut self, owner: &DagId, id: BaseDimId) {
@@ -923,32 +937,19 @@ impl<'a> StaticDefinitionEvaluator<'a> {
             });
             let reason = match registered {
                 Some(Ok(())) => None,
-                Some(Err(error)) => Some((
-                    format!(
-                        "`{}` already has canonical base unit `{}`",
-                        self.format_dimension(owner, &dim),
-                        error.existing
-                    ),
-                    "a dimension can have only one canonical base unit; if another multiplicative unit is valid for this dimension, define its scale explicitly with `const unit` or `unit`"
-                        .to_string(),
-                )),
-                None => Some((
-                    format!("`{}` is not a base dimension", self.format_dimension(owner, &dim)),
-                    format!(
-                        "`base unit` can only define the canonical unit of a bare base dimension; define `{}` with an explicit `const unit` or `unit` scale instead",
-                        unit.name.value
-                    ),
-                )),
+                Some(Err(error)) => Some(BaseUnitRejection::CanonicalUnitTaken {
+                    existing: error.existing,
+                }),
+                None => Some(BaseUnitRejection::NotBaseDimension),
             };
-            if let Some((reason, help)) = reason {
+            if let Some(rejection) = reason {
                 return Err(SemanticError::located(
                     src,
                     unit.name.span,
                     DimensionError::InvalidBaseUnitDeclaration {
                         name: unit.name.value.clone(),
-                        dim: self.format_dimension(owner, &dim),
-                        reason,
-                        help,
+                        dim: self.dimension_spelling(owner, &dim),
+                        rejection,
                     },
                 ));
             }
@@ -970,7 +971,7 @@ impl<'a> StaticDefinitionEvaluator<'a> {
                 src,
                 unit.name.span,
                 DimensionError::AffineProneUnitDefinition {
-                    dim: self.format_dimension(owner, &dim),
+                    dim: self.dimension_spelling(owner, &dim),
                 },
             ));
         }
@@ -1010,8 +1011,8 @@ impl<'a> StaticDefinitionEvaluator<'a> {
                 def.unit_expr.span,
                 DimensionError::UnitDefinitionDimensionMismatch {
                     name: unit.name.value.clone(),
-                    declared: self.format_dimension(owner, &dim),
-                    definition: self.format_dimension(owner, &base_unit_dimension),
+                    declared: self.dimension_spelling(owner, &dim),
+                    definition: self.dimension_spelling(owner, &base_unit_dimension),
                 },
             ));
         }
@@ -1044,7 +1045,7 @@ impl<'a> StaticDefinitionEvaluator<'a> {
                     .map_err(|error| const_expr_error(error, src))?;
                 let scale = scale_expr
                     .checked_mul(base_scale)
-                    .map_err(|err| scale_error("unit scale", err, src, def.span))?;
+                    .map_err(|err| scale_error(UnitScaleSite::Definition, err, src, def.span))?;
                 match unit.constness {
                     UnitConstness::Const => UnitScale::Const(scale),
                     UnitConstness::Dynamic => UnitScale::Runtime(scale),
@@ -1111,10 +1112,9 @@ impl<'a> StaticDefinitionEvaluator<'a> {
                                 src,
                                 variants[duplicate].span,
                                 NameError::DuplicateName {
-                                    name: variants[duplicate]
-                                        .value
-                                        .qualified_by(&index.name.value)
-                                        .to_string(),
+                                    name: DuplicateDeclaration::IndexVariant(
+                                        variants[duplicate].value.qualified_by(&index.name.value),
+                                    ),
                                     first: variants[first].span,
                                 },
                             )
@@ -1204,13 +1204,13 @@ impl<'a> StaticDefinitionEvaluator<'a> {
         src: SourceId,
         decl_span: Span,
     ) -> Result<IndexKind, SemanticError> {
-        let dimension_mismatch = |message: String| {
+        let dimension_mismatch = |mismatch: CoordinateArgumentDimensions| {
             SemanticError::located(
                 src,
                 decl_span,
                 IndexError::CoordinateIndexDimensionMismatch {
                     name: name.clone(),
-                    message,
+                    mismatch,
                 },
             )
         };
@@ -1219,27 +1219,24 @@ impl<'a> StaticDefinitionEvaluator<'a> {
             .map_err(|error| match error {
                 CoordinateAxisError::Expr(error) => const_expr_error(error, src),
                 CoordinateAxisError::RangeDimensionMismatch { start, end, step } => {
-                    dimension_mismatch(format!(
-                        "range start, end, and step have dimensions {}, {}, and {}",
-                        self.format_dimension(owner, &start),
-                        self.format_dimension(owner, &end),
-                        self.format_dimension(owner, &step)
-                    ))
+                    dimension_mismatch(CoordinateArgumentDimensions::Range {
+                        start: self.dimension_spelling(owner, &start),
+                        end: self.dimension_spelling(owner, &end),
+                        step: self.dimension_spelling(owner, &step),
+                    })
                 }
                 CoordinateAxisError::LinspaceDimensionMismatch { start, end } => {
-                    dimension_mismatch(format!(
-                        "linspace start and end have dimensions {} and {}",
-                        self.format_dimension(owner, &start),
-                        self.format_dimension(owner, &end)
-                    ))
+                    dimension_mismatch(CoordinateArgumentDimensions::Linspace {
+                        start: self.dimension_spelling(owner, &start),
+                        end: self.dimension_spelling(owner, &end),
+                    })
                 }
                 CoordinateAxisError::Invalid { error, point_count } => SemanticError::located(
                     src,
                     point_count.unwrap_or(decl_span),
                     IndexError::CoordinateIndexInvalid {
                         name: name.clone(),
-                        message: error.to_string(),
-                        help: error.help(),
+                        error,
                     },
                 ),
             })
@@ -1273,23 +1270,13 @@ fn dim_expr_error(failure: DimExprFailure, src: SourceId, span: Span) -> Semanti
     }
 }
 
-fn eval_error(message: impl Into<String>, src: SourceId, span: Span) -> SemanticError {
-    SemanticError::located(
-        src,
-        span,
-        EvaluationError::Failed {
-            message: message.into(),
-        },
-    )
-}
-
 fn scale_error(
-    context: &str,
-    err: PositiveFiniteScaleError,
+    site: UnitScaleSite,
+    error: PositiveFiniteScaleError,
     src: SourceId,
     span: Span,
 ) -> SemanticError {
-    eval_error(format!("{context} {err}"), src, span)
+    SemanticError::located(src, span, DimensionError::InvalidUnitScale { site, error })
 }
 
 /// Convert a typed unit-resolution failure into a spanned diagnostic.
@@ -1301,11 +1288,9 @@ fn unit_resolve_error(err: UnitResolveError, src: SourceId, span: Span) -> Seman
         UnitResolveError::DynamicScale(name) => SemanticError::located(
             src,
             span,
-            EvaluationError::Failed {
-                message: format!("unit `{name}` has a dynamic scale and cannot be used here"),
-            },
+            DimensionError::DynamicUnitScaleNotAllowed { name },
         ),
-        UnitResolveError::InvalidScale(err) => scale_error("compound unit scale", err, src, span),
+        UnitResolveError::InvalidScale(err) => scale_error(UnitScaleSite::Compound, err, src, span),
         UnitResolveError::Overflow(_) => {
             SemanticError::located(src, span, DimensionError::DimensionOverflow)
         }
@@ -1319,7 +1304,11 @@ fn const_expr_error(error: ConstExprError, src: SourceId) -> SemanticError {
         ConstExprError::DimensionOverflow { span } => {
             SemanticError::located(src, span, DimensionError::DimensionOverflow)
         }
-        error => eval_error(error.to_string(), src, error.span()),
+        error => SemanticError::located(
+            src,
+            error.span(),
+            DimensionError::InvalidConstantExpression { error },
+        ),
     }
 }
 
@@ -1378,10 +1367,13 @@ fn concrete_nat_value(expr: &ast::NatExpr, src: SourceId) -> Result<Option<u64>,
         ast::NatExpr::Add(operands, span) => {
             operands.iter().try_fold(Some(0_u64), |sum, operand| {
                 match (sum, concrete_nat_value(operand, src)?) {
-                    (Some(sum), Some(value)) => sum
-                        .checked_add(value)
-                        .map(Some)
-                        .ok_or_else(|| eval_error("Fin cardinality addition overflow", src, *span)),
+                    (Some(sum), Some(value)) => sum.checked_add(value).map(Some).ok_or_else(|| {
+                        SemanticError::located(
+                            src,
+                            *span,
+                            IndexError::FinCardinalityAdditionOverflow,
+                        )
+                    }),
                     _ => Ok(None),
                 }
             })
@@ -1391,7 +1383,11 @@ fn concrete_nat_value(expr: &ast::NatExpr, src: SourceId) -> Result<Option<u64>,
                 match (product, concrete_nat_value(operand, src)?) {
                     (Some(product), Some(value)) => {
                         product.checked_mul(value).map(Some).ok_or_else(|| {
-                            eval_error("Fin cardinality multiplication overflow", src, *span)
+                            SemanticError::located(
+                                src,
+                                *span,
+                                IndexError::FinCardinalityMultiplicationOverflow,
+                            )
                         })
                     }
                     _ => Ok(None),
@@ -1408,7 +1404,13 @@ fn validate_finite_cardinality(
 ) -> Result<(), SemanticError> {
     FiniteIndex::try_from_u64(cardinality)
         .map(|_| ())
-        .map_err(|error| eval_error(error.describe_finite_index(), src, span))
+        .map_err(|error| {
+            SemanticError::located(
+                src,
+                span,
+                IndexError::InvalidFiniteIndexCardinality { error },
+            )
+        })
 }
 
 fn validate_index_expr_finite_indexes(
@@ -1844,7 +1846,7 @@ mod tests {
             .module_definitions(&Project::id("main"))
             .unwrap_err();
         assert!(
-            matches!(&error, SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Dimension(DimensionError::InvalidBaseUnitDeclaration { reason, .. }), .. }) if reason.contains("already has canonical base unit `USD`")),
+            matches!(&error, SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Dimension(DimensionError::InvalidBaseUnitDeclaration { rejection: BaseUnitRejection::CanonicalUnitTaken { existing }, .. }), .. }) if existing.as_str() == "USD"),
             "{error:?}"
         );
     }
@@ -1900,7 +1902,7 @@ mod tests {
         assert!(matches!(
             evaluator.module_definitions(&Project::id("main")),
             Err(SemanticError::Located(crate::diagnostic::Diagnostic {
-                kind: SemanticErrorKind::Evaluation(EvaluationError::Failed { .. }),
+                kind: SemanticErrorKind::Index(IndexError::InvalidFiniteIndexCardinality { .. }),
                 ..
             }))
         ));

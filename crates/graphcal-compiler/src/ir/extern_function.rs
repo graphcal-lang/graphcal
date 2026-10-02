@@ -1,6 +1,7 @@
 //! A resolved extern plugin function signature, as the IR records it, and
 //! the rule that merges repeated declarations of one plugin function.
 
+use crate::semantic_error::plugin::ExternSignatureError;
 use std::collections::HashMap;
 
 use crate::extern_struct_result::ExternStructResult;
@@ -85,10 +86,10 @@ pub(crate) fn merge_extern_function(
                     src,
                     entry.decl_span,
                     PluginError::InvalidExternSignature {
-                        message: format!(
-                            "function `{}` of plugin \"{}\" is declared elsewhere with a different signature",
-                            entry.name, entry.plugin
-                        ),
+                        error: ExternSignatureError::ConflictingSignature {
+                            function: entry.name.clone(),
+                            plugin: entry.plugin,
+                        },
                     },
                 ));
             }
@@ -103,10 +104,10 @@ pub(crate) fn merge_extern_function(
                     src,
                     entry.decl_span,
                     PluginError::InvalidExternSignature {
-                        message: format!(
-                            "function `{}` of plugin \"{}\" is declared elsewhere with a different result type",
-                            entry.name, entry.plugin
-                        ),
+                        error: ExternSignatureError::ConflictingResultType {
+                            function: entry.name.clone(),
+                            plugin: entry.plugin.clone(),
+                        },
                     },
                 ));
             }

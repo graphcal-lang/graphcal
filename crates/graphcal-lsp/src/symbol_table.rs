@@ -224,11 +224,11 @@ impl<'a> HirRefCollector<'a> {
                 (UnresolvedSymbol::Unit(path), *span)
             }
             hir::ExprLowerError::UnknownFunction { path, span } => {
-                let Ok(name) = NameAtom::parse(path) else {
+                let Some(name) = path.as_bare() else {
                     return;
                 };
                 (
-                    UnresolvedSymbol::Function(SourceSymbolPath::local(name)),
+                    UnresolvedSymbol::Function(SourceSymbolPath::local(name.clone())),
                     *span,
                 )
             }

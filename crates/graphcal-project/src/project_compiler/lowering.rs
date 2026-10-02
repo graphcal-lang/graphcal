@@ -16,7 +16,7 @@ use graphcal_compiler::semantic_error::SemanticErrorKind;
 use graphcal_compiler::semantic_error::dimension::DimensionError;
 use graphcal_compiler::semantic_error::index::IndexError;
 use graphcal_compiler::semantic_error::module::ModuleError;
-use graphcal_compiler::semantic_error::name::NameError;
+use graphcal_compiler::semantic_error::name::{DuplicateDeclaration, NameError};
 use graphcal_compiler::source_id::SourceId;
 
 use graphcal_compiler::declaration_category::DeclCategory;
@@ -80,7 +80,7 @@ impl ExprVisitor<Desugared> for DirectDagCallValidator<'_> {
                 args,
                 dependency.interface(),
                 self.importer,
-                &target.to_string(),
+                &graphcal_compiler::semantic_error::graph::DagReference::Dag(target.clone()),
                 self.src,
                 expr.span,
             )?;
@@ -205,13 +205,7 @@ fn remap_imported_dynamic_unit_error(
             is_imported_dynamic_unit_during_lowering(alias, name.leaf(), module_map, project)
         }) =>
         {
-            SemanticError::located(
-                src,
-                primary,
-                ModuleError::ImportRuntimeUnit {
-                    name: name.to_string(),
-                },
-            )
+            SemanticError::located(src, primary, ModuleError::ImportRuntimeUnit { name })
         }
         other => other,
     }
@@ -245,7 +239,7 @@ pub(super) fn validate_imported_runtime_units(
             src,
             span,
             ModuleError::ImportRuntimeUnit {
-                name: unit.to_string(),
+                name: unit.spelling().clone(),
             },
         )),
         None => Ok(()),
@@ -546,7 +540,7 @@ fn extend_imported_bindings(
                 src,
                 binding.span,
                 NameError::DuplicateName {
-                    name: name.to_string(),
+                    name: DuplicateDeclaration::Scoped(name),
                     first: first.span,
                 },
             )));
@@ -635,7 +629,7 @@ fn process_dag_body_include_declarations<'a>(
         imports::process_inline_dag_include(
             &imports::InlineDagIncludeTarget {
                 module: target_dag.module(target_file),
-                dag_name: target_dag.declaration(target_file).name.value.as_str(),
+                dag_name: &target_dag.declaration(target_file).name.value,
             },
             include_decl,
             decl,
@@ -1281,10 +1275,10 @@ fn validate_index_binding_contracts(
                     sites.importer_src,
                     site.span,
                     ModuleError::IndexKindMismatch {
-                        dep_index: dep_index.to_string(),
-                        dep_kind: expected.to_string(),
-                        bound_index: site.authored.to_string(),
-                        bound_kind: found.to_string(),
+                        dep_index,
+                        dep_kind: expected,
+                        bound_index: site.authored.clone(),
+                        bound_kind: found,
                     },
                 )));
             }
@@ -1293,10 +1287,10 @@ fn validate_index_binding_contracts(
                     sites.importer_src,
                     site.span,
                     IndexError::IndexBindingDimensionMismatch {
-                        dep_index: dep_index.to_string(),
-                        expected_dim: definitions.format_dimension(sites.importer, &expected),
-                        bound_index: site.authored.to_string(),
-                        found_dim: definitions.format_dimension(sites.importer, &found),
+                        dep_index,
+                        expected_dim: definitions.dimension_spelling(sites.importer, &expected),
+                        bound_index: site.authored.clone(),
+                        found_dim: definitions.dimension_spelling(sites.importer, &found),
                     },
                 )));
             }

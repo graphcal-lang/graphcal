@@ -4,18 +4,17 @@ use crate::hir::expr::{Expr, MapEntry, MapEntryKey};
 use crate::outcome::Outcome;
 use crate::resolved_name::ResolvedIndexVariant;
 use crate::semantic_error::dimension::DimensionError;
-use crate::semantic_error::evaluation::EvaluationError;
 use crate::semantic_error::index::IndexError;
 use crate::source_id::SourceId;
 
 use crate::semantic::checked_type::{IndexDisplayName, IndexTypeRef, Symbolic};
 use crate::semantic_error::SemanticError;
+use crate::semantic_error::index::MapEntryCoordinate;
 use crate::syntax::index_name::IndexEntryKey;
 use crate::syntax::span::Span;
 use crate::tir::typed::NatPolyForm;
 
 use crate::semantic::checked_type::CheckedType;
-use crate::tir::dim_check::helpers::format_checked_type;
 
 use super::context::Infer;
 use super::nat_forms::finite_index_error;
@@ -35,12 +34,13 @@ impl MapLiteralVariantKey {
         }
     }
 
-    fn display(&self) -> String {
+    fn coordinate(&self) -> MapEntryCoordinate {
         match self {
-            Self::Declared(resolved) => resolved.to_string(),
-            Self::Finite { form, position } => {
-                format!("{}.#{position}", IndexDisplayName::Finite(form.clone()))
-            }
+            Self::Declared(resolved) => MapEntryCoordinate::Declared(resolved.clone()),
+            Self::Finite { form, position } => MapEntryCoordinate::Position {
+                axis: IndexDisplayName::Finite(form.clone()),
+                position: *position,
+            },
         }
     }
 }
@@ -67,14 +67,7 @@ impl MapCoverageCardinality {
         axes.iter()
             .try_fold(1_usize, |product, axis| {
                 product.checked_mul(axis.len()).ok_or_else(|| {
-                    SemanticError::located(
-                        src,
-                        span,
-                        EvaluationError::Failed {
-                            message: "map literal key-space cardinality exceeds supported size"
-                                .to_string(),
-                        },
-                    )
+                    SemanticError::located(src, span, IndexError::MapKeySpaceTooLarge)
                 })
             })
             .map(Self)
@@ -189,19 +182,22 @@ impl Infer<'_> {
             return Err(SemanticError::located(
                 self.env.src,
                 expr.span,
-                EvaluationError::Failed {
-                    message: "empty map literal".to_string(),
-                },
+                IndexError::EmptyMapLiteral,
             )
             .into());
         };
         let arity = first_entry.keys.len();
         for entry in entries.iter().skip(1) {
             if entry.keys.len() != arity {
-                return Err(SemanticError::located(self.env.src, expr.span, EvaluationError::Failed { message: format!(
-                        "map literal entries have inconsistent key arity: expected {arity}, found {}",
-                        entry.keys.len()
-                    ) }).into());
+                return Err(SemanticError::located(
+                    self.env.src,
+                    expr.span,
+                    IndexError::InconsistentMapKeyArity {
+                        expected: arity,
+                        found: entry.keys.len(),
+                    },
+                )
+                .into());
             }
         }
 
@@ -220,9 +216,14 @@ impl Infer<'_> {
                         )
                     })?;
             if idx_def.is_coordinate() {
-                return Err(SemanticError::located(self.env.src, expr.span, EvaluationError::Failed { message: format!(
-                        "coordinate index `{index}` cannot be used as a map/table literal key; use a `for` comprehension instead"
-                    ) }).into());
+                return Err(SemanticError::located(
+                    self.env.src,
+                    expr.span,
+                    IndexError::CoordinateIndexMapKey {
+                        index: index.display_name(),
+                    },
+                )
+                .into());
             }
             axes.push(MapLiteralAxis {
                 index,
@@ -250,9 +251,7 @@ impl Infer<'_> {
             SemanticError::located(
                 self.env.src,
                 expr.span,
-                EvaluationError::Failed {
-                    message: format!("map entry key `{key}` does not match its index category"),
-                },
+                IndexError::MapKeyCategoryMismatch { key },
             )
         };
         let axes_variant_keys: Vec<Vec<MapLiteralVariantKey>> = axes
@@ -297,11 +296,9 @@ impl Infer<'_> {
                             (_, IndexEntryKey::Position(position)) => Err(SemanticError::located(
                                 self.env.src,
                                 expr.span,
-                                EvaluationError::Failed {
-                                    message: format!(
-                                        "position #{position} is outside index `{}`",
-                                        axes[i].index
-                                    ),
+                                IndexError::MapPositionOutsideIndex {
+                                    position,
+                                    index: axes[i].index.display_name(),
                                 },
                             )),
                         };
@@ -315,9 +312,7 @@ impl Infer<'_> {
                 return Err(SemanticError::located(
                     self.env.src,
                     expr.span,
-                    EvaluationError::Failed {
-                        message: "duplicate map literal entry".to_string(),
-                    },
+                    IndexError::DuplicateMapEntry,
                 )
                 .into());
             }
@@ -352,14 +347,18 @@ impl Infer<'_> {
                         crate::diagnostic_anchor::DiagnosticAnchor::Source(expr.span),
                     )
                 })?;
-            let witness = first_missing
-                .iter()
-                .map(MapLiteralVariantKey::display)
-                .collect::<Vec<_>>()
-                .join(", ");
-            return Err(SemanticError::located(self.env.src, expr.span, EvaluationError::Failed { message: format!(
-                    "non-exhaustive map literal: missing {missing_count} entries; first missing entry is ({witness})"
-                ) }).into());
+            return Err(SemanticError::located(
+                self.env.src,
+                expr.span,
+                IndexError::NonExhaustiveMapLiteral {
+                    missing_count,
+                    witness: first_missing
+                        .iter()
+                        .map(MapLiteralVariantKey::coordinate)
+                        .collect(),
+                },
+            )
+            .into());
         }
 
         let first_type = self.infer_hir_type(&first_entry.value)?;
@@ -368,7 +367,12 @@ impl Infer<'_> {
                 crate::tir::dim_check::infer::index_def_for_inferred(index, self.env.tir)
                     .is_some_and(|def| !def.is_coordinate());
             if inner_is_label {
-                return Err(SemanticError::located(self.env.src, first_entry.value.span, EvaluationError::Failed { message: "map literal element type must be a value type, not an indexed type; use tuple keys for multi-axis map literals".to_string() }).into());
+                return Err(SemanticError::located(
+                    self.env.src,
+                    first_entry.value.span,
+                    IndexError::IndexedMapElement,
+                )
+                .into());
             }
         }
         for entry in entries.iter().skip(1) {
@@ -378,8 +382,8 @@ impl Infer<'_> {
                     self.env.src,
                     entry.value.span,
                     DimensionError::DimensionMismatchInAnnotation {
-                        declared: format_checked_type(&first_type, self.env.registry),
-                        inferred: format_checked_type(&entry_type, self.env.registry),
+                        declared: first_type.spelling(&self.env.registry.dimensions),
+                        inferred: entry_type.spelling(&self.env.registry.dimensions),
                     },
                 )
                 .into());

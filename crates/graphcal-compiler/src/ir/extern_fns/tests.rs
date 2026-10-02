@@ -30,9 +30,10 @@ fn only_signature(dag: &HirDag) -> &FunctionSignature<ExternStructResult> {
 fn expect_invalid_signature(source: &str, fragment: &str) {
     match lower(source) {
         Err(SemanticError::Located(crate::diagnostic::Diagnostic {
-            kind: SemanticErrorKind::Plugin(PluginError::InvalidExternSignature { message, .. }),
+            kind: SemanticErrorKind::Plugin(PluginError::InvalidExternSignature { error, .. }),
             ..
         })) => {
+            let message = error.to_string();
             assert!(message.contains(fragment), "{message}");
         }
         Err(other) => panic!("expected an invalid extern signature, got {other:?}"),

@@ -18,7 +18,6 @@ use graphcal_compiler::semantic_error::SemanticErrorKind;
 use graphcal_compiler::semantic_error::attribute::AttributeError;
 use graphcal_compiler::semantic_error::dimension::DimensionError;
 use graphcal_compiler::semantic_error::domain::DomainError;
-use graphcal_compiler::semantic_error::evaluation::EvaluationError;
 use graphcal_compiler::semantic_error::graph::GraphError;
 use graphcal_compiler::semantic_error::index::IndexError;
 use graphcal_compiler::semantic_error::module::ModuleError;
@@ -1006,7 +1005,7 @@ fn qualified_import_rejects_transitive_required_static_dependencies() {
     let error = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap_err();
     assert!(matches!(
         error,
-        CompileError::Eval(RenderedSemanticError { error: SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic { kind: SemanticErrorKind::Module(ModuleError::ImportUnresolvedStaticDependency { dependency_kind: graphcal_compiler::static_interface::StaticInputKind::Type, dependency, .. }), .. }), .. }) if dependency == "Element"
+        CompileError::Eval(RenderedSemanticError { error: SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic { kind: SemanticErrorKind::Module(ModuleError::ImportUnresolvedStaticDependency { dependency_kind: graphcal_compiler::static_interface::StaticInputKind::Type, dependency, .. }), .. }), .. }) if dependency.as_str() == "Element"
     ));
 }
 
@@ -1031,7 +1030,7 @@ fn qualified_import_resolves_ambiguous_static_dependencies_to_their_symbol() {
     let error = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap_err();
     assert!(matches!(
         error,
-        CompileError::Eval(RenderedSemanticError { error: SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic { kind: SemanticErrorKind::Module(ModuleError::ImportUnresolvedStaticDependency { dependency_kind: graphcal_compiler::static_interface::StaticInputKind::Dimension, dependency, .. }), .. }), .. }) if dependency == "Basis"
+        CompileError::Eval(RenderedSemanticError { error: SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic { kind: SemanticErrorKind::Module(ModuleError::ImportUnresolvedStaticDependency { dependency_kind: graphcal_compiler::static_interface::StaticInputKind::Dimension, dependency, .. }), .. }), .. }) if dependency.as_str() == "Basis"
     ));
 }
 
@@ -1055,7 +1054,7 @@ fn selective_import_rejects_transitive_required_static_dependencies() {
     let error = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap_err();
     assert!(matches!(
         error,
-        CompileError::Eval(RenderedSemanticError { error: SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic { kind: SemanticErrorKind::Module(ModuleError::ImportUnresolvedStaticDependency { dependency_kind: graphcal_compiler::static_interface::StaticInputKind::Type, dependency, .. }), .. }), .. }) if dependency == "Element"
+        CompileError::Eval(RenderedSemanticError { error: SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic { kind: SemanticErrorKind::Module(ModuleError::ImportUnresolvedStaticDependency { dependency_kind: graphcal_compiler::static_interface::StaticInputKind::Type, dependency, .. }), .. }), .. }) if dependency.as_str() == "Element"
     ));
 }
 
@@ -1585,7 +1584,7 @@ fn selective_include_rejects_dag_blueprint_projection() {
     let error = compile_and_eval(source).unwrap_err();
     assert!(matches!(
         error,
-        CompileError::Eval(RenderedSemanticError { error: SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic { kind: SemanticErrorKind::Module(ModuleError::IncludeItemNotProjectable { name, .. }), .. }), .. }) if name == "child"
+        CompileError::Eval(RenderedSemanticError { error: SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic { kind: SemanticErrorKind::Module(ModuleError::IncludeItemNotProjectable { name, .. }), .. }), .. }) if name.as_str() == "child"
     ));
 }
 
@@ -1598,7 +1597,7 @@ fn selective_include_rejects_constructor_of_rebound_owner_type() {
     let error = compile_and_eval(source).unwrap_err();
     assert!(matches!(
         error,
-        CompileError::Eval(RenderedSemanticError { error: SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic { kind: SemanticErrorKind::Module(ModuleError::IncludeConstructorOwnerRebound { constructor, owner_type, .. }), .. }), .. }) if constructor == "Pick" && owner_type.ends_with("Choice")
+        CompileError::Eval(RenderedSemanticError { error: SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic { kind: SemanticErrorKind::Module(ModuleError::IncludeConstructorOwnerRebound { constructor, owner_type, .. }), .. }), .. }) if constructor.as_str() == "Pick" && owner_type.to_string().ends_with("Choice")
     ));
 }
 
@@ -1626,8 +1625,8 @@ fn structural_index_binding_cardinality_must_be_closed() {
     ));
     assert!(matches!(
         compile_and_eval(&program("4294967296 * 4294967296")).unwrap_err(),
-        CompileError::Eval(RenderedSemanticError { error: SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic { kind: SemanticErrorKind::Evaluation(EvaluationError::Failed { message, .. }), .. }), .. })
-            if message.contains("type-level Nat arithmetic overflow")
+        CompileError::Eval(RenderedSemanticError { error: SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic { kind: SemanticErrorKind::Index(kind @ IndexError::NatOverflow { .. }), .. }), .. })
+            if kind.to_string().contains("type-level Nat arithmetic overflow")
     ));
 }
 
@@ -1640,7 +1639,7 @@ fn include_rejects_required_static_inputs_as_binding_targets() {
     let error = compile_and_eval(source).unwrap_err();
     assert!(matches!(
         error,
-        CompileError::Eval(RenderedSemanticError { error: SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic { kind: SemanticErrorKind::Module(ModuleError::InvalidStaticBindingTarget { kind: graphcal_compiler::static_interface::StaticInputKind::Type, name, target, .. }), .. }), .. }) if name == "Slot" && target == "Replacement"
+        CompileError::Eval(RenderedSemanticError { error: SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic { kind: SemanticErrorKind::Module(ModuleError::InvalidStaticBindingTarget { kind: graphcal_compiler::static_interface::StaticInputKind::Type, name, target, .. }), .. }), .. }) if name.as_str() == "Slot" && target.as_str() == "Replacement"
     ));
 }
 
@@ -1977,7 +1976,7 @@ fn reserved_name_policy_covers_import_include_and_reexport_aliases() {
         assert!(matches!(
             error,
             CompileError::Eval(RenderedSemanticError { error: SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic { kind: SemanticErrorKind::Name(NameError::BuiltinNameShadowed { name, .. }), .. }), .. })
-                if name == expected_name
+                if name.to_string() == expected_name
         ));
     }
 
@@ -1997,7 +1996,7 @@ fn reserved_name_policy_covers_import_include_and_reexport_aliases() {
         };
         assert!(matches!(
             error,
-            CompileError::Eval(RenderedSemanticError { error: SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic { kind: SemanticErrorKind::Name(NameError::BuiltinNameShadowed { name, .. }), .. }), .. }) if name == "E"
+            CompileError::Eval(RenderedSemanticError { error: SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic { kind: SemanticErrorKind::Name(NameError::BuiltinNameShadowed { name, .. }), .. }), .. }) if name.to_string() == "E"
         ));
     }
 
@@ -2012,7 +2011,7 @@ fn reserved_name_policy_covers_import_include_and_reexport_aliases() {
     let reexport_error = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap_err();
     assert!(matches!(
         reexport_error,
-        CompileError::Eval(RenderedSemanticError { error: SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic { kind: SemanticErrorKind::Name(NameError::BuiltinNameShadowed { name, .. }), .. }), .. }) if name == "E"
+        CompileError::Eval(RenderedSemanticError { error: SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic { kind: SemanticErrorKind::Name(NameError::BuiltinNameShadowed { name, .. }), .. }), .. }) if name.to_string() == "E"
     ));
 
     let (_directory, root) = write_pipeline_project(
@@ -2027,7 +2026,7 @@ fn reserved_name_policy_covers_import_include_and_reexport_aliases() {
         compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap_err();
     assert!(matches!(
         constructor_reexport_error,
-        CompileError::Eval(RenderedSemanticError { error: SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic { kind: SemanticErrorKind::Name(NameError::BuiltinNameShadowed { name, .. }), .. }), .. }) if name == "sum"
+        CompileError::Eval(RenderedSemanticError { error: SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic { kind: SemanticErrorKind::Name(NameError::BuiltinNameShadowed { name, .. }), .. }), .. }) if name.to_string() == "sum"
     ));
 
     let (_directory, root) = write_pipeline_project(
@@ -2048,7 +2047,7 @@ fn reserved_name_policy_covers_import_include_and_reexport_aliases() {
         compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap_err();
     assert!(matches!(
         self_import_error,
-        CompileError::Eval(RenderedSemanticError { error: SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic { kind: SemanticErrorKind::Name(NameError::BuiltinNameShadowed { name, .. }), .. }), .. }) if name == "E"
+        CompileError::Eval(RenderedSemanticError { error: SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic { kind: SemanticErrorKind::Name(NameError::BuiltinNameShadowed { name, .. }), .. }), .. }) if name.to_string() == "E"
     ));
 }
 
@@ -2200,9 +2199,9 @@ fn assert_missing_dag_bindings(
                 }),
             ..
         }) => {
-            assert_eq!(dag_name, expected_dag_name);
+            assert_eq!(dag_name.to_string(), expected_dag_name);
             assert_eq!(
-                missing,
+                missing.iter().map(ToString::to_string).collect::<Vec<_>>(),
                 expected_missing
                     .iter()
                     .map(ToString::to_string)
@@ -3306,7 +3305,7 @@ fn assert_literal_negative_zero_tolerance_is_rejected() {
     .unwrap_err();
     assert!(matches!(
         error,
-        CompileError::Eval(RenderedSemanticError { error: SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic { kind: SemanticErrorKind::Attribute(AttributeError::NegativeTolerance { found, .. }), .. }), .. }) if found == "-0"
+        CompileError::Eval(RenderedSemanticError { error: SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic { kind: SemanticErrorKind::Attribute(AttributeError::NegativeTolerance { value }), .. }), .. }) if value == 0.0 && value.is_sign_negative()
     ));
 }
 
@@ -4412,8 +4411,8 @@ fn aliased_include_does_not_bind_the_source_module_name() {
     assert!(
         matches!(
             &error,
-            CompileError::Eval(RenderedSemanticError { error: SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic { kind: SemanticErrorKind::Evaluation(EvaluationError::Failed { message, .. }), .. }), .. })
-                if message == "unknown module `src.app.defaults`"
+            CompileError::Eval(RenderedSemanticError { error: SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic { kind: SemanticErrorKind::Module(kind @ ModuleError::ModuleResolution { .. }), .. }), .. })
+                if kind.to_string() == "unknown module `src.app.defaults`"
         ),
         "unexpected alias-leak diagnostic: {error:?}"
     );
@@ -4815,7 +4814,7 @@ fn module_aliases_and_same_named_nodes_are_duplicate_names() {
                     }),
                 ..
             })) => {
-                assert_eq!(name, "parking", "{alias_decl}");
+                assert_eq!(name.to_string(), "parking", "{alias_decl}");
             }
             other => panic!("expected N001 for `{alias_decl}`, got {other:?}"),
         }
@@ -4862,16 +4861,17 @@ fn project_module_includes_still_reject_duplicate_default_aliases() {
                 }),
             ..
         })) => {
-            assert_eq!(name, "shared");
+            assert_eq!(name.as_str(), "shared");
         }
         Err(CompileError::Eval(RenderedSemanticError {
             error:
                 SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
-                    kind: SemanticErrorKind::Evaluation(EvaluationError::Failed { message, .. }),
+                    kind: SemanticErrorKind::Module(kind @ ModuleError::ModuleResolution { .. }),
                     ..
                 }),
             ..
         })) => {
+            let message = kind.to_string();
             assert!(
                 message.contains("duplicate module") && message.contains("shared"),
                 "unexpected duplicate-alias diagnostic: {message}",
@@ -4972,7 +4972,7 @@ fn project_selective_import_item_rejects_unknown_attribute() {
                 }),
             ..
         })) => {
-            assert_eq!(name, "bogus");
+            assert_eq!(name.as_str(), "bogus");
         }
         other => panic!("expected UnknownAttribute, got {other:?}"),
     }
@@ -6841,8 +6841,8 @@ fn project_injectable_index_kind_mismatch() {
                 }),
             ..
         })) => {
-            assert_eq!(dep_index, "Phase");
-            assert_eq!(bound_index, "TimeStep");
+            assert_eq!(dep_index.to_string(), "Phase");
+            assert_eq!(bound_index.to_string(), "TimeStep");
         }
         other => panic!("expected IndexKindMismatch, got {other:?}"),
     }
@@ -6929,9 +6929,9 @@ fn project_include_overrides_index_no_param_binding_v005() {
                 }),
             ..
         })) => {
-            assert_eq!(overridden, "Phase");
-            assert_eq!(overridden_kind, "index");
-            assert_eq!(orphan_decl, "cost");
+            assert_eq!(overridden.as_str(), "Phase");
+            assert_eq!(overridden_kind.to_string(), "index");
+            assert_eq!(orphan_decl.as_str(), "cost");
         }
         other => panic!("expected IncludeMustReconcileOverride, got {other:?}"),
     }
@@ -7021,9 +7021,9 @@ fn project_selective_include_leaks_private_type_v006() {
                 }),
             ..
         })) => {
-            assert_eq!(reexport_name, "origin");
-            assert_eq!(leaked_name, "PrivateInner");
-            assert_eq!(leaked_kind, "type");
+            assert_eq!(reexport_name.as_str(), "origin");
+            assert_eq!(leaked_name.as_str(), "PrivateInner");
+            assert_eq!(leaked_kind.noun(), "type");
         }
         other => panic!("expected GenericsLeakage, got {other:?}"),
     }
@@ -7050,9 +7050,9 @@ fn project_selective_include_rejects_private_generic_default_binding() {
                 }),
             ..
         })) => {
-            assert_eq!(reexport_name, "Wrapper");
-            assert_eq!(leaked_name, "PrivateElement");
-            assert_eq!(leaked_kind, "type");
+            assert_eq!(reexport_name.as_str(), "Wrapper");
+            assert_eq!(leaked_name.as_str(), "PrivateElement");
+            assert_eq!(leaked_kind.noun(), "type");
         }
         other => panic!("expected generic-default GenericsLeakage, got {other:?}"),
     }
@@ -7262,10 +7262,10 @@ include pass_through(
                 }),
             ..
         })) => {
-            assert_eq!(dep_index, "Step");
-            assert_eq!(expected_dim, "Time");
-            assert_eq!(bound_index, "DistanceStep");
-            assert_eq!(found_dim, "Length");
+            assert_eq!(dep_index.as_str(), "Step");
+            assert_eq!(expected_dim.to_string(), "Time");
+            assert_eq!(bound_index.to_string(), "DistanceStep");
+            assert_eq!(found_dim.to_string(), "Length");
         }
         other => panic!("expected IndexBindingDimensionMismatch, got {other:?}"),
     }
@@ -7307,10 +7307,10 @@ include pass_through(
                 }),
             ..
         })) => {
-            assert_eq!(dep_index, "Step");
-            assert_eq!(dep_kind, "coordinate");
-            assert_eq!(bound_index, "Phase");
-            assert_eq!(bound_kind, "named");
+            assert_eq!(dep_index.to_string(), "Step");
+            assert_eq!(dep_kind.to_string(), "coordinate");
+            assert_eq!(bound_index.to_string(), "Phase");
+            assert_eq!(bound_kind.to_string(), "named");
         }
         other => panic!("expected IndexKindMismatch, got {other:?}"),
     }
@@ -7341,7 +7341,7 @@ include pass_through(samples: 1.0 m) as output;
                 }),
             ..
         })) => {
-            assert_eq!(name, "Step");
+            assert_eq!(name.as_str(), "Step");
         }
         other => panic!("expected RequiredStaticInputNotBound, got {other:?}"),
     }
@@ -7639,7 +7639,7 @@ node used: Force = @internal_scratch;
     assert!(matches!(
         error,
         CompileError::Eval(RenderedSemanticError { error: SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic { kind: SemanticErrorKind::Visibility(VisibilityError::ImportPrivateItem { name, .. }), .. }), .. })
-            if name == "internal_scratch"
+            if name.as_str() == "internal_scratch"
     ));
 }
 
@@ -7660,7 +7660,7 @@ node used: Force = @inst::internal_scratch;
     assert!(matches!(
         error,
         CompileError::Eval(RenderedSemanticError { error: SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic { kind: SemanticErrorKind::Visibility(VisibilityError::ImportPrivateItem { name, .. }), .. }), .. })
-            if name == "internal_scratch"
+            if name.as_str() == "internal_scratch"
     ));
 }
 
@@ -7836,7 +7836,7 @@ include recursive(x: 1.0)::{result};
 ";
     let result = compile_and_eval(source);
     assert!(result.is_err(), "recursive DAG should fail");
-    let err_msg = format!("{:?}", result.unwrap_err());
+    let err_msg = result.unwrap_err().to_string();
     assert!(
         err_msg.contains("recursive DAG instantiation"),
         "error should mention recursive DAG: {err_msg}"
@@ -7860,25 +7860,26 @@ fn include_closure_cycles_are_rejected_at_the_including_declaration() {
                 }),
             ..
         })) => {
-            assert_eq!(name, "a");
+            assert_eq!(name.to_string(), "a");
             assert_eq!(span.offset(), source.find("node a").unwrap());
         }
         other => panic!("expected a cyclic dependency, got {other:?}"),
     }
 }
 
-/// Message and label start of the E001 a recursive inline-DAG source reports.
+/// Message and label start of the G009 a recursive inline-DAG source reports.
 fn recursive_dag_error(source: &str) -> (String, usize) {
     match compile_and_eval(source) {
         Err(CompileError::Eval(RenderedSemanticError {
             error:
                 SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
-                    kind: SemanticErrorKind::Evaluation(EvaluationError::Failed { message, .. }),
+                    kind:
+                        SemanticErrorKind::Graph(kind @ GraphError::RecursiveDagInstantiation { .. }),
                     primary: span,
                     ..
                 }),
             ..
-        })) => (message, span.offset()),
+        })) => (kind.to_string(), span.offset()),
         other => panic!("expected a recursive DAG instantiation error, got {other:?}"),
     }
 }
@@ -8094,7 +8095,7 @@ fn absolute_inline_call_path_reports_imported_name_diagnostic() {
     let err = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap_err();
     assert!(matches!(
         err,
-        CompileError::Eval(RenderedSemanticError { error: SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic { kind: SemanticErrorKind::Module(ModuleError::UnknownModule { name, .. }), .. }), .. }) if name == "callable"
+        CompileError::Eval(RenderedSemanticError { error: SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic { kind: SemanticErrorKind::Module(ModuleError::UnknownModule { name, .. }), .. }), .. }) if name.as_str() == "callable"
     ));
 }
 
@@ -8810,7 +8811,7 @@ const node SAT: Spec = Spec(mass: 5000.0 kg);
     else {
         panic!("expected DomainViolation, got {err:?}");
     };
-    assert_eq!(name, "SAT.mass");
+    assert_eq!(name.to_string(), "SAT.mass");
     assert!(
         violation.contains("above maximum"),
         "violation = {violation}"
@@ -8851,7 +8852,7 @@ node bad: T<0> = T<0>(x: 0);
         error,
         CompileError::Eval(RenderedSemanticError {
             error: SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
-                kind: SemanticErrorKind::Evaluation(EvaluationError::Failed { .. }),
+                kind: SemanticErrorKind::Index(IndexError::InvalidFiniteIndexCardinality { .. }),
                 ..
             }),
             ..
@@ -8874,7 +8875,7 @@ fn struct_field_min_exceeds_max_at_compile_time() {
     else {
         panic!("expected DomainMinExceedsMax, got {err:?}");
     };
-    assert_eq!(name, "Foo.x");
+    assert_eq!(name.to_string(), "Foo.x");
 }
 
 #[test]
@@ -8911,7 +8912,7 @@ fn struct_field_dim_mismatch_at_compile_time() {
     else {
         panic!("expected DomainDimensionMismatch, got {err:?}");
     };
-    assert_eq!(name, "Foo.x");
+    assert_eq!(name.to_string(), "Foo.x");
 }
 
 // ---- Position 4: domain constraint on a generic type argument ----

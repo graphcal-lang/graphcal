@@ -4,7 +4,8 @@
 use crate::hir::nominal::{NominalGenericParam, NominalTypeDef, ResolvedConstructor};
 use crate::hir::types::GenericParamId;
 use crate::resolved_name::{ResolvedConstructorName, ResolvedStructTypeName};
-use crate::semantic_error::evaluation::EvaluationError;
+use crate::semantic_error::structure::StructError;
+use crate::semantic_error::structure::SymbolicGenericArgument;
 use crate::source_id::SourceId;
 use std::collections::HashMap;
 
@@ -27,13 +28,10 @@ pub(in crate::tir::dim_check) fn generic_substitution_prefix(
         return Err(SemanticError::located(
             src,
             span,
-            EvaluationError::Failed {
-                message: format!(
-                    "type `{}` expects at most {} generic arguments, got {}",
-                    type_def.name(),
-                    type_def.generic_params().len(),
-                    type_args.len()
-                ),
+            StructError::TooManyGenericArgs {
+                type_name: type_def.name(),
+                maximum: type_def.generic_params().len(),
+                got: type_args.len(),
             },
         ));
     }
@@ -52,19 +50,29 @@ pub(in crate::tir::dim_check) fn generic_substitution_prefix(
             SortedGenericArg::Dim(dim) => CheckedGenericArg::Dim(dim.clone()),
             SortedGenericArg::Index(index) => {
                 CheckedGenericArg::Index(index.to_concrete().ok_or_else(|| {
-                    non_concrete_generic_argument(param.name(), &index.to_string(), src, span)
+                    non_concrete_generic_argument(
+                        param.name(),
+                        SymbolicGenericArgument::Index(index.display_name()),
+                        src,
+                        span,
+                    )
                 })?)
             }
             SortedGenericArg::Nat(form) => {
                 CheckedGenericArg::Nat(form.constant_value().ok_or_else(|| {
-                    non_concrete_generic_argument(param.name(), &form.format(), src, span)
+                    non_concrete_generic_argument(
+                        param.name(),
+                        SymbolicGenericArgument::Nat(form.clone()),
+                        src,
+                        span,
+                    )
                 })?)
             }
             SortedGenericArg::Type(type_expr) => {
                 CheckedGenericArg::Type(type_expr.to_concrete().ok_or_else(|| {
                     non_concrete_generic_argument(
                         param.name(),
-                        &format!("{type_expr:?}"),
+                        SymbolicGenericArgument::Type(type_expr.clone()),
                         src,
                         span,
                     )
@@ -118,13 +126,10 @@ pub(in crate::tir::dim_check) fn concrete_generic_substitutions(
         return Err(SemanticError::located(
             src,
             span,
-            EvaluationError::Failed {
-                message: format!(
-                    "concrete type `{}` requires exactly {} generic arguments, got {}",
-                    type_def.name(),
-                    type_def.generic_params().len(),
-                    type_args.len()
-                ),
+            StructError::ConcreteGenericArgCount {
+                type_name: type_def.name(),
+                expected: type_def.generic_params().len(),
+                got: type_args.len(),
             },
         ));
     }
@@ -147,15 +152,16 @@ pub(in crate::tir::dim_check) fn concrete_generic_substitutions(
 
 pub(in crate::tir::dim_check) fn non_concrete_generic_argument(
     parameter: &GenericParamName,
-    argument: &str,
+    argument: SymbolicGenericArgument,
     src: SourceId,
     span: Span,
 ) -> SemanticError {
     SemanticError::located(
         src,
         span,
-        EvaluationError::Failed {
-            message: format!("generic argument `{argument}` for `{parameter}` is not concrete"),
+        StructError::NonConcreteGenericArgument {
+            parameter: parameter.clone(),
+            argument: Box::new(argument),
         },
     )
 }

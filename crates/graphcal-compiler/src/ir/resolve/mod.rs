@@ -7,11 +7,11 @@ pub(crate) mod names;
 #[cfg(test)]
 mod tests;
 
+use crate::semantic_error::name::DuplicateDeclaration;
 use std::collections::{HashMap, HashSet};
 
 use super::required_bindability::{self, InterfaceDecl, Violation as RequiredBindabilityViolation};
 use crate::semantic_error::attribute::AttributeError;
-use crate::semantic_error::evaluation::EvaluationError;
 use crate::semantic_error::name::NameError;
 use crate::semantic_error::visibility::VisibilityError;
 use crate::source_id::SourceId;
@@ -65,7 +65,7 @@ fn register_value_namespace_name(
             src,
             span,
             NameError::DuplicateName {
-                name: name.to_string(),
+                name: DuplicateDeclaration::Name(name.clone()),
                 first: *first_span,
             },
         ));
@@ -85,7 +85,7 @@ fn register_exclusive_universe_name(
             src,
             span,
             NameError::DuplicateName {
-                name: atom.to_string(),
+                name: DuplicateDeclaration::Name(atom.clone()),
                 first,
             },
         ))
@@ -106,7 +106,7 @@ fn check_builtin_name_shadowing(file: &File, src: SourceId) -> Result<(), Semant
                         introduced.span(),
                         NameError::BuiltinNameShadowed {
                             kind: introduced.kind().describe(),
-                            name: introduced.atom().to_string(),
+                            name: introduced.atom().clone(),
                         },
                     )
                 })
@@ -131,7 +131,7 @@ fn check_imported_graph_value_names(
                     *span,
                     NameError::BuiltinNameShadowed {
                         kind: "graph-value alias",
-                        name: atom.to_string(),
+                        name: atom.clone(),
                     },
                 )
             })
@@ -327,8 +327,8 @@ fn validate_required_bindability(file: &File, src: SourceId) -> Result<(), Seman
                         src,
                         introduced.span(),
                         VisibilityError::RequiredItemMustBeBindable {
-                            kind: kind.to_string(),
-                            name: introduced.atom().to_string(),
+                            kind,
+                            name: introduced.atom().clone(),
                         },
                     )
                 }
@@ -594,7 +594,7 @@ fn validate_declaration_attributes(
                             src,
                             argument.span,
                             AttributeError::UnknownAssertInAssumes {
-                                name: argument.value.to_string(),
+                                name: argument.value.clone(),
                             },
                         ));
                     }
@@ -638,9 +638,7 @@ fn validate_declaration_attributes(
                     return Err(SemanticError::located(
                         src,
                         attr.span,
-                        EvaluationError::Failed {
-                            message: "`#[hidden]` takes no arguments".to_string(),
-                        },
+                        AttributeError::HiddenTakesNoArguments,
                     ));
                 }
                 visibility = PlotVisibility::CompositionOnly;

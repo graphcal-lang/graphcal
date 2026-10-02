@@ -5,6 +5,7 @@
     clippy::allow_attributes,
     reason = "project compiler pass uses the shared internal model"
 )]
+use graphcal_compiler::semantic_error::attribute::AttributeError;
 use graphcal_compiler::syntax::span::Spanned;
 use std::collections::{HashMap, HashSet};
 
@@ -15,11 +16,10 @@ use graphcal_compiler::outcome::Outcome;
 use graphcal_compiler::resolved_name::ResolvedDeclName;
 use graphcal_compiler::semantic::index_def::IndexBindingTarget;
 use graphcal_compiler::semantic_error::SemanticError;
-use graphcal_compiler::semantic_error::evaluation::EvaluationError;
-use graphcal_compiler::semantic_error::graph::GraphError;
+use graphcal_compiler::semantic_error::graph::{DagReference, GraphError};
 use graphcal_compiler::semantic_error::index::IndexError;
 use graphcal_compiler::semantic_error::module::ModuleError;
-use graphcal_compiler::semantic_error::name::NameError;
+use graphcal_compiler::semantic_error::name::{DuplicateDeclaration, NameError};
 use graphcal_compiler::semantic_error::visibility::VisibilityError;
 use graphcal_compiler::source_id::SourceId;
 use graphcal_compiler::syntax::decl_name::DeclName;
@@ -124,7 +124,7 @@ fn static_input_is_bindable(
 
 pub(super) struct InlineDagIncludeTarget<'a> {
     pub(super) module: crate::loader::loaded_file::LoadedModule<'a>,
-    pub(super) dag_name: &'a str,
+    pub(super) dag_name: &'a DeclName,
 }
 
 /// Populate one file body's pure imports and concrete include requests.
@@ -188,7 +188,7 @@ pub(super) fn process_file_body_declarations<'a>(
         process_inline_dag_include(
             &InlineDagIncludeTarget {
                 module: loaded_dag.module(dag_file),
-                dag_name: loaded_dag.declaration(dag_file).name.value.as_str(),
+                dag_name: &loaded_dag.declaration(dag_file).name.value,
             },
             include,
             declaration,
@@ -206,11 +206,8 @@ pub(super) fn process_file_body_declarations<'a>(
             return Err(PipelineError::Semantic(SemanticError::located(
                 file_src,
                 include.path.span(),
-                EvaluationError::Failed {
-                    message: format!(
-                        "inline DAG target not found in project: {}",
-                        target.target()
-                    ),
+                GraphError::InlineDagTargetNotFound {
+                    target: target.target().clone(),
                 },
             ))
             .into());
@@ -222,8 +219,8 @@ pub(super) fn process_file_body_declarations<'a>(
                 file_src,
                 include.path.leaf().span,
                 VisibilityError::ImportPrivateItem {
-                    name: target.target().leaf().to_string(),
-                    file_path: include.path.display_path(),
+                    name: include.path.leaf().name.atom().clone(),
+                    file_path: DagReference::Path(include.path.clone()),
                 },
             ))
             .into());
@@ -231,7 +228,7 @@ pub(super) fn process_file_body_declarations<'a>(
         process_inline_dag_include(
             &InlineDagIncludeTarget {
                 module: target_dag.module(target_loaded),
-                dag_name: target_dag.declaration(target_loaded).name.value.as_str(),
+                dag_name: &target_dag.declaration(target_loaded).name.value,
             },
             include,
             declaration,
@@ -246,7 +243,7 @@ fn ensure_include_item_selectable(
     interface: &ModuleInterface,
     name: &NameAtom,
     namespace: ImportItemNamespace,
-    file_path: &str,
+    file_path: &DagReference,
     file_src: SourceId,
     span: Span,
 ) -> Result<(), PipelineError> {
@@ -256,16 +253,16 @@ fn ensure_include_item_selectable(
             file_src,
             span,
             VisibilityError::ImportPrivateItem {
-                name: name.to_string(),
-                file_path: file_path.to_string(),
+                name: name.clone(),
+                file_path: file_path.clone(),
             },
         ))),
         None => Err(PipelineError::Semantic(SemanticError::located(
             file_src,
             span,
             ModuleError::ImportNameNotFound {
-                name: name.to_string(),
-                file_path: file_path.to_string(),
+                name: name.clone(),
+                file_path: file_path.clone(),
             },
         ))),
     }
@@ -284,10 +281,7 @@ fn validate_static_import_capability(
             Err(PipelineError::Semantic(SemanticError::located(
                 src,
                 span,
-                ModuleError::ImportRequiredStaticInput {
-                    kind,
-                    name: name.to_string(),
-                },
+                ModuleError::ImportRequiredStaticInput { kind, name },
             )))
         }
         Some(StaticImportRejection::UnresolvedDependency(dependency)) => {
@@ -295,9 +289,9 @@ fn validate_static_import_capability(
                 src,
                 span,
                 ModuleError::ImportUnresolvedStaticDependency {
-                    name: name.to_string(),
+                    name: name.clone(),
                     dependency_kind: dependency.kind(),
-                    dependency: dependency.name().to_string(),
+                    dependency: dependency.name().clone(),
                 },
             )))
         }
@@ -351,7 +345,7 @@ fn reject_runtime_unit_import(
             src,
             span,
             ModuleError::ImportRuntimeUnit {
-                name: name.to_string(),
+                name: graphcal_compiler::syntax::dimension::UnitRef::local(unit_name),
             },
         )));
     }
@@ -428,9 +422,7 @@ fn validate_include_item_attributes(
                     return Err(PipelineError::Semantic(SemanticError::located(
                         file_src,
                         attr.span,
-                        EvaluationError::Failed {
-                            message: "`#[hidden]` takes no arguments".to_string(),
-                        },
+                        AttributeError::HiddenTakesNoArguments,
                     )));
                 }
                 visibility = PlotVisibility::CompositionOnly;
@@ -580,8 +572,8 @@ fn resolve_include_static_bindings(
                             src,
                             span,
                             ModuleError::IndexBindingNotAnIndex {
-                                dep_index: port.to_string(),
-                                value: authored.to_string(),
+                                dep_index: port.clone(),
+                                value: authored.clone(),
                             },
                         ))
                     })?,
@@ -636,7 +628,7 @@ fn classify_param_bindings(
     param_bindings: &[graphcal_compiler::desugar::desugared_ast::ParamBinding],
     dep: &ModuleInterface,
     file_src: SourceId,
-    dep_path_for_error: &str,
+    dep_path_for_error: &DagReference,
 ) -> Result<ClassifiedBindings, PipelineError> {
     let mut out = ClassifiedBindings {
         params: HashMap::new(),
@@ -661,7 +653,7 @@ fn classify_param_bindings(
             {
                 let rhs_name = extract_type_name_from_binding_expr(
                     &binding.value,
-                    binding_name.as_str(),
+                    binding_name.atom(),
                     file_src,
                 )?;
                 out.types.insert(
@@ -678,7 +670,7 @@ fn classify_param_bindings(
             {
                 let rhs_name = extract_type_name_from_binding_expr(
                     &binding.value,
-                    binding_name.as_str(),
+                    binding_name.atom(),
                     file_src,
                 )?;
                 out.dims.insert(
@@ -700,7 +692,7 @@ fn classify_param_bindings(
                         file_src,
                         binding.name.span,
                         ModuleError::BindingNotAParam {
-                            name: binding_name.to_string(),
+                            name: binding_name.atom().clone(),
                             actual_kind: kind,
                         },
                     )));
@@ -709,8 +701,8 @@ fn classify_param_bindings(
                     file_src,
                     binding.name.span,
                     ModuleError::UnknownParamBinding {
-                        name: binding_name.to_string(),
-                        file_path: dep_path_for_error.to_string(),
+                        name: binding_name.atom().clone(),
+                        file_path: dep_path_for_error.clone(),
                     },
                 )));
             }
@@ -719,7 +711,7 @@ fn classify_param_bindings(
                     file_src,
                     binding.name.span,
                     ModuleError::DagInputCategoryMismatch {
-                        name: binding_name.to_string(),
+                        name: binding_name.atom().clone(),
                         expected: match category {
                             InputBindingCategory::Unmarked => "param",
                             InputBindingCategory::Type => "type",
@@ -761,8 +753,8 @@ fn validate_concrete_static_binding_targets(
         let target_interface = importer.static_interface(StaticInputKind::Type, target.atom())?;
         (!static_binding_composition_valid(source, target_interface)).then_some((
             StaticInputKind::Type,
-            input.to_string(),
-            target.to_string(),
+            input.atom().clone(),
+            target.atom().clone(),
         ))
     });
     let invalid_dimension = dim_bindings.iter().find_map(|(input, target)| {
@@ -771,8 +763,8 @@ fn validate_concrete_static_binding_targets(
             importer.static_interface(StaticInputKind::Dimension, target.atom())?;
         (!static_binding_composition_valid(source, target_interface)).then_some((
             StaticInputKind::Dimension,
-            input.to_string(),
-            target.to_string(),
+            input.atom().clone(),
+            target.atom().clone(),
         ))
     });
     let invalid_index = index_bindings.iter().find_map(|(input, target)| {
@@ -783,8 +775,8 @@ fn validate_concrete_static_binding_targets(
         let target_interface = importer.static_interface(StaticInputKind::Index, target.atom())?;
         (!static_binding_composition_valid(source, target_interface)).then_some((
             StaticInputKind::Index,
-            input.to_string(),
-            target.to_string(),
+            input.atom().clone(),
+            target.atom().clone(),
         ))
     });
     match invalid_type.or(invalid_dimension).or(invalid_index) {
@@ -836,7 +828,7 @@ fn validate_required_static_bindings(
                     }
                 }
         })
-        .map(|(kind, name, _)| (kind, name.to_string()))
+        .map(|(kind, name, _)| (kind, name.clone()))
         .collect::<Vec<_>>();
     missing.sort_by(|(first_kind, first_name), (second_kind, second_name)| {
         first_kind
@@ -858,7 +850,7 @@ pub(super) fn validate_direct_dag_call_bindings(
     args: &[graphcal_compiler::desugar::desugared_ast::ParamBinding],
     dependency: &ModuleInterface,
     importer: &ModuleInterface,
-    dag_name: &str,
+    dag_name: &DagReference,
     file_src: SourceId,
     span: Span,
 ) -> Result<(), PipelineError> {
@@ -886,7 +878,7 @@ pub(super) fn validate_direct_dag_call_bindings(
 fn validate_required_param_bindings(
     dep: &ModuleInterface,
     bindings: &HashMap<DeclName, graphcal_compiler::desugar::desugared_ast::Expr>,
-    dag_name: &str,
+    dag_name: &DagReference,
     file_src: SourceId,
     include_span: Span,
 ) -> Result<(), PipelineError> {
@@ -894,19 +886,19 @@ fn validate_required_param_bindings(
         .required_params()
         .iter()
         .filter(|name| !bindings.contains_key(*name))
-        .map(ToString::to_string)
+        .cloned()
         .collect::<Vec<_>>();
     if missing.is_empty() {
         return Ok(());
     }
 
-    missing.sort();
+    missing.sort_by_key(ToString::to_string);
     Err(PipelineError::Semantic(SemanticError::located(
         file_src,
         include_span,
         GraphError::MissingDagBindings {
             missing,
-            dag_name: dag_name.to_string(),
+            dag_name: dag_name.clone(),
         },
     )))
 }
@@ -960,7 +952,7 @@ pub(super) fn process_file_include<'a>(
                 file_src,
                 include_decl.path.span(),
                 ModuleError::DuplicateModuleName {
-                    name: prefix.to_string(),
+                    name: prefix.clone(),
                     first: first.span(),
                 },
             )));
@@ -979,7 +971,7 @@ pub(super) fn process_file_include<'a>(
     // binding lands in one of params/types/dims/indexes, or is rejected as
     // an unknown / non-bindable name. Caller-specific cross-checks (importer
     // scope for index bindings) layer on top of the shared classification.
-    let dep_path_display = include_decl.path.display_path();
+    let dep_path_display = DagReference::Path(include_decl.path.clone());
     let ClassifiedBindings {
         params: bindings,
         indexes: index_bindings,
@@ -1029,7 +1021,7 @@ pub(super) fn process_file_include<'a>(
                     dep,
                     orig_name.atom(),
                     import_item.namespace,
-                    &include_decl.path.display_path(),
+                    &dep_path_display,
                     file_src,
                     import_item.name.span,
                 )?;
@@ -1199,6 +1191,7 @@ pub(super) fn process_inline_dag_include<'a>(
 
     let dep = target.module.interface();
     let dag_name = target.dag_name;
+    let dag_reference = DagReference::InlineDag(dag_name.clone());
     let dag_id = target.module.dag_id();
 
     // As for file-root includes, only the module form introduces an alias.
@@ -1210,7 +1203,7 @@ pub(super) fn process_inline_dag_include<'a>(
                 file_src,
                 include_decl.path.span(),
                 ModuleError::DuplicateModuleName {
-                    name: prefix.to_string(),
+                    name: prefix.clone(),
                     first: first.span(),
                 },
             )));
@@ -1236,7 +1229,7 @@ pub(super) fn process_inline_dag_include<'a>(
         index_spans: index_binding_spans,
         types: type_bindings,
         dims: dim_bindings,
-    } = classify_param_bindings(&include_decl.param_bindings, dep, file_src, dag_name)?;
+    } = classify_param_bindings(&include_decl.param_bindings, dep, file_src, &dag_reference)?;
     validate_concrete_static_binding_targets(
         importer,
         dep,
@@ -1269,7 +1262,7 @@ pub(super) fn process_inline_dag_include<'a>(
                     dep,
                     orig_name.atom(),
                     import_item.namespace,
-                    dag_name,
+                    &dag_reference,
                     file_src,
                     import_item.name.span,
                 )?;
@@ -1361,7 +1354,7 @@ pub(super) fn process_inline_dag_include<'a>(
         file_src,
         include_decl.path.span(),
     )?;
-    validate_required_param_bindings(dep, &bindings, dag_name, file_src, decl.span)?;
+    validate_required_param_bindings(dep, &bindings, &dag_reference, file_src, decl.span)?;
     let static_bindings = resolve_include_static_bindings(
         AuthoredStaticBindings {
             indexes: index_bindings,
@@ -1387,7 +1380,7 @@ pub(super) fn process_inline_dag_include<'a>(
     ctx.include_instances.push(IncludeInstanceRequest {
         template: target.module,
         instance_scope,
-        debug_scope: ModuleAliasName::expect_valid(dag_name),
+        debug_scope: ModuleAliasName::expect_valid(dag_name.as_str()),
         bindings,
         static_bindings,
         selective_names,
@@ -1474,8 +1467,8 @@ pub(super) fn process_pure_import<'a>(
                             file_src,
                             import_item.name.span,
                             VisibilityError::ImportPrivateItem {
-                                name: orig_name.to_string(),
-                                file_path: import_path.display_path(),
+                                name: orig_name.atom().clone(),
+                                file_path: DagReference::Path(import_path.clone()),
                             },
                         )));
                     }
@@ -1483,7 +1476,7 @@ pub(super) fn process_pure_import<'a>(
                         dep_interface,
                         orig_name.atom(),
                         import_item.namespace,
-                        &import_path.display_path(),
+                        &DagReference::Path(import_path.clone()),
                         file_src,
                         import_item.name.span,
                     )));
@@ -1548,8 +1541,8 @@ pub(super) fn process_pure_import<'a>(
                             file_src,
                             import_item.name.span,
                             ModuleError::ImportNameNotFound {
-                                name: orig_name.to_string(),
-                                file_path: import_path.display_path(),
+                                name: orig_name.atom().clone(),
+                                file_path: DagReference::Path(import_path.clone()),
                             },
                         ))
                     })?;
@@ -1610,7 +1603,7 @@ pub(super) fn process_pure_import<'a>(
                     file_src,
                     import_path.span(),
                     ModuleError::DuplicateModuleName {
-                        name: module_name.to_string(),
+                        name: module_name.clone(),
                         first: first.span(),
                     },
                 )));
@@ -1665,7 +1658,7 @@ fn insert_imported_binding(
             src,
             span,
             NameError::DuplicateName {
-                name: lexical_name.to_string(),
+                name: DuplicateDeclaration::Scoped(lexical_name),
                 first: first.span,
             },
         )));

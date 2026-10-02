@@ -10,8 +10,10 @@ use crate::semantic::checked_type::{
 };
 use crate::semantic_error::SemanticError;
 use crate::semantic_error::domain::DomainError;
-use crate::semantic_error::evaluation::EvaluationError;
+use crate::semantic_error::domain::UnconstrainableType;
+use crate::semantic_error::index::IndexError;
 use crate::semantic_error::structure::StructError;
+use crate::semantic_error::structure::UnknownStructTypeName;
 use crate::source_id::SourceId;
 use crate::syntax::span::Span;
 use crate::tir::texpr::{CheckedBody, TBody, TNodeRef, visit_tnodes};
@@ -131,7 +133,7 @@ fn validate(
                         ctx.src,
                         ctx.span,
                         StructError::UnknownStructType {
-                            name: identity.to_string(),
+                            name: UnknownStructTypeName::Checked(identity.clone()),
                         },
                     )
                 })?;
@@ -145,9 +147,14 @@ fn validate(
                 if ancestor == &application {
                     return Ok(());
                 }
-                return Err(SemanticError::located(ctx.src, ctx.span, EvaluationError::Failed { message: format!(
-                        "recursive generic type `{identity}` changes its arguments; concrete field obligations cannot be discharged finitely"
-                    ) }).into());
+                return Err(SemanticError::located(
+                    ctx.src,
+                    ctx.span,
+                    StructError::RecursiveGenericTypeArguments {
+                        type_name: identity.name().clone(),
+                    },
+                )
+                .into());
             }
             stack.push(application);
             // A type whose constructors have no fields needs no field
@@ -191,8 +198,8 @@ fn validate_index(index: &IndexTypeRef<Symbolic>, ctx: &Context<'_>) -> Result<(
         None => Err(SemanticError::located(
             ctx.src,
             ctx.span,
-            EvaluationError::Failed {
-                message: format!("unresolved finite-index obligation `{index}`"),
+            IndexError::UnresolvedFiniteIndexObligation {
+                index: index.display_name(),
             },
         )),
     }
@@ -211,11 +218,13 @@ fn check_bound(
                 bound.src,
                 bound.span,
                 DomainError::InvalidDomainTarget {
-                    type_kind: super::format_checked_type(target, ctx.tir.registry()),
+                    type_kind: UnconstrainableType::Checked(
+                        target.spelling(&ctx.tir.registry().dimensions),
+                    ),
                 },
             )
         })?;
-    let display = field.display_name();
+    let display = field.domain_subject();
     let owning_dag = field.member().nominal().identity().owner();
     let (Some(owner), Some(bodies)) = (ctx.tir.dag(owning_dag), ctx.tir.checked_bodies(owning_dag))
     else {

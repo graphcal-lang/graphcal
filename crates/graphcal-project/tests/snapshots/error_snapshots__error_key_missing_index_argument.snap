@@ -9,4 +9,4 @@ Begin snippet for key_missing_index_argument.gcl starting at line 1, column 1
 snippet line 1: // Bare `Key` is rejected: the index axis argument is mandatory.
 snippet line 2: param k: Key = 0.0;
     label at line 2, columns 10 to 12: error here
-diagnostic code: graphcal::E001
+diagnostic code: graphcal::N024

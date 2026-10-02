@@ -5,6 +5,7 @@
 //! tree is specialized with one application's `Nat` arguments. Both rewrite
 //! only types (see `TypeMap`) and then classify the result.
 
+use crate::semantic_error::index::IndexError;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -15,7 +16,6 @@ use crate::semantic::checked_type::{CheckedType, IndexTypeRef, Symbolic};
 use crate::semantic::index_axis::IndexAxis;
 use crate::semantic::key_value::KeyValue;
 use crate::semantic_error::SemanticError;
-use crate::semantic_error::evaluation::EvaluationError;
 use crate::source_id::SourceId;
 use crate::syntax::span::Span;
 use crate::tir::texpr::map::{KeyEntry, SymbolicView, TypeMap};
@@ -364,13 +364,9 @@ pub(super) fn specialize_bound_body(
     let tree = specializer.body(body)?;
     let checked = CheckedBody::discharge(tree, &|index| concrete_index_kind(tir, index)).map_err(
         |error| match error {
-            crate::tir::texpr::DischargeError::StaticIndex(error) => SemanticError::located(
-                src,
-                root.span,
-                EvaluationError::Failed {
-                    message: error.to_string(),
-                },
-            ),
+            crate::tir::texpr::DischargeError::StaticIndex(error) => {
+                SemanticError::located(src, root.span, IndexError::StaticIndexOutOfBounds { error })
+            }
             error @ (crate::tir::texpr::DischargeError::UnavailableIndex(_)
             | crate::tir::texpr::DischargeError::AxisShape(_)
             | crate::tir::texpr::DischargeError::NonFiniteAxis(_)

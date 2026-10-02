@@ -4,7 +4,7 @@
 //! (`hir::lower`); inference only validates the resulting forms.
 
 use crate::semantic_error::SemanticError;
-use crate::semantic_error::evaluation::EvaluationError;
+use crate::semantic_error::index::IndexError;
 use crate::source_id::SourceId;
 use crate::syntax::span::Span;
 
@@ -16,8 +16,6 @@ pub(super) fn finite_index_error(
     SemanticError::located(
         src,
         span,
-        EvaluationError::Failed {
-            message: err.describe_finite_index(),
-        },
+        IndexError::InvalidFiniteIndexCardinality { error: err },
     )
 }

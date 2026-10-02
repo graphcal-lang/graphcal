@@ -89,7 +89,7 @@ impl PureImportRejection {
     /// Build the diagnostic shared by cross-file and inline-self imports.
     #[must_use]
     pub fn diagnostic(self, name: &NameAtom, src: SourceId, span: Span) -> SemanticError {
-        let name = name.to_string();
+        let name = name.clone();
         match self {
             Self::Runtime => {
                 SemanticError::located(src, span, ModuleError::ImportRuntimeItem { name })

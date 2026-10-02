@@ -9,18 +9,18 @@
 use crate::outcome::Outcome;
 use crate::semantic::checked_type::Symbolic;
 use crate::semantic_error::dimension::DimensionError;
+use crate::semantic_error::dimension::{PlotChannelAxes, PlotPropertyValue};
 use crate::semantic_error::name::NameError;
+use crate::semantic_error::name::PlotPropertyContext;
 use std::collections::HashMap;
 
 use crate::hir::expr::ExprKind;
 use crate::ir::model::{LoweredPlotField, LoweredPlotProperty};
-use crate::plot_props::{CompositionProperty, MarkProperty, PlotProperty, PlotPropertyType};
+use crate::plot_props::PlotPropertyType;
 use crate::plot_shape::{PlotChannelShape, PlotLeafKind, align_plot_channel_axes};
 use crate::semantic_error::SemanticError;
 
-use super::{
-    CheckedType, DimCheckContext, check_ineffective_conversions, helpers::format_checked_type,
-};
+use super::{CheckedType, DimCheckContext, check_ineffective_conversions};
 
 pub(super) type CheckedPlotChannelShapes = HashMap<
     crate::resolved_name::ResolvedDeclName,
@@ -61,25 +61,13 @@ pub(super) fn check_plot_entry(
     let types = check_plot_encodings(ctx, &owner, body)?;
     for field in &body.mark_properties {
         let LoweredPlotProperty::Mark(prop) = &field.property else {
-            return Err(invalid_property(
-                ctx,
-                field,
-                "a mark block",
-                &valid_names(MarkProperty::ALL.iter().map(|p| p.name())),
-            )
-            .into());
+            return Err(invalid_property(ctx, field, PlotPropertyContext::MarkBlock).into());
         };
         check_property_value(ctx, &owner, prop.name(), prop.value_type(), field)?;
     }
     for field in &body.properties {
         let LoweredPlotProperty::Plot(prop) = &field.property else {
-            return Err(invalid_property(
-                ctx,
-                field,
-                "a plot declaration",
-                &valid_names(PlotProperty::ALL.iter().map(|p| p.name())),
-            )
-            .into());
+            return Err(invalid_property(ctx, field, PlotPropertyContext::PlotDeclaration).into());
         };
         check_property_value(ctx, &owner, prop.name(), prop.value_type(), field)?;
     }
@@ -93,40 +81,14 @@ pub(super) fn check_figure_entry(
     let owner = entry.identity();
     for field in &entry.fields {
         let LoweredPlotProperty::Composition(prop) = &field.property else {
-            return Err(invalid_property(
-                ctx,
-                field,
-                "a figure declaration",
-                &format!(
-                    "{}; figures render as side-by-side concatenation, so sizes belong on \
-                     the constituent plots or layers",
-                    valid_names(
-                        CompositionProperty::ALL
-                            .iter()
-                            .filter(|p| p.applies_to_figure())
-                            .map(|p| p.name()),
-                    )
-                ),
-            )
-            .into());
+            return Err(
+                invalid_property(ctx, field, PlotPropertyContext::FigureDeclaration).into(),
+            );
         };
         if !prop.applies_to_figure() {
-            return Err(invalid_property(
-                ctx,
-                field,
-                "a figure declaration",
-                &format!(
-                    "{}; figures render as side-by-side concatenation, so sizes belong on \
-                     the constituent plots or layers",
-                    valid_names(
-                        CompositionProperty::ALL
-                            .iter()
-                            .filter(|p| p.applies_to_figure())
-                            .map(|p| p.name()),
-                    )
-                ),
-            )
-            .into());
+            return Err(
+                invalid_property(ctx, field, PlotPropertyContext::FigureDeclaration).into(),
+            );
         }
         check_property_value(ctx, &owner, prop.name(), prop.value_type(), field)?;
     }
@@ -140,13 +102,7 @@ pub(super) fn check_layer_entry(
     let owner = entry.identity();
     for field in &entry.fields {
         let LoweredPlotProperty::Composition(prop) = &field.property else {
-            return Err(invalid_property(
-                ctx,
-                field,
-                "a layer declaration",
-                &valid_names(CompositionProperty::ALL.iter().map(|p| p.name())),
-            )
-            .into());
+            return Err(invalid_property(ctx, field, PlotPropertyContext::LayerDeclaration).into());
         };
         check_property_value(ctx, &owner, prop.name(), prop.value_type(), field)?;
     }
@@ -244,7 +200,7 @@ fn check_plot_encodings(
                     expr.span,
                     DimensionError::PlotEncodingTypeMismatch {
                         channel: *channel,
-                        found: format_checked_type(&inferred, ctx.env.registry),
+                        found: inferred.spelling(&ctx.env.registry.dimensions),
                     },
                 )
                 .into()
@@ -261,7 +217,15 @@ fn check_plot_encodings(
             ctx.env.src,
             expr.span,
             DimensionError::PlotEncodingAxisMismatch {
-                channels: describe_channel_axes(body, &shapes),
+                channels: body
+                    .encodings
+                    .iter()
+                    .zip(&shapes)
+                    .map(|((channel, _), shape)| PlotChannelAxes {
+                        channel: *channel,
+                        axes: shape.axes().to_vec(),
+                    })
+                    .collect(),
             },
         )
         .into());
@@ -298,54 +262,17 @@ fn plot_leaf_kind(
     }
 }
 
-fn describe_channel_axes(
-    body: &crate::ir::model::LoweredPlotBody,
-    shapes: &[PlotChannelShape],
-) -> String {
-    body.encodings
-        .iter()
-        .zip(shapes)
-        .map(|((channel, _), shape)| {
-            let axes = if shape.axes().is_empty() {
-                "no index".to_string()
-            } else {
-                shape
-                    .axes()
-                    .iter()
-                    .map(|index| {
-                        index
-                            .declared_resolved()
-                            .map_or_else(|| index.display_name().to_string(), ToString::to_string)
-                    })
-                    .collect::<Vec<_>>()
-                    .join(" × ")
-            };
-            format!("`{channel}` ranges over {axes}")
-        })
-        .collect::<Vec<_>>()
-        .join(", ")
-}
-
-fn valid_names<'a>(names: impl Iterator<Item = &'a str>) -> String {
-    format!(
-        "valid properties are: {}",
-        names.collect::<Vec<_>>().join(", ")
-    )
-}
-
 fn invalid_property(
     ctx: &DimCheckContext<'_>,
     field: &LoweredPlotField,
-    context: &'static str,
-    valid: &str,
+    context: PlotPropertyContext,
 ) -> SemanticError {
     SemanticError::located(
         ctx.env.src,
         field.name_span,
         NameError::InvalidPlotProperty {
-            property: field.property.name().to_string(),
+            property: field.property.clone(),
             context,
-            valid: valid.to_string(),
         },
     )
 }
@@ -359,7 +286,7 @@ pub(super) fn check_property_value(
     field: &LoweredPlotField,
 ) -> Result<(), Outcome<SemanticError>> {
     let is_string_literal = matches!(field.value.kind(), ExprKind::StringLiteral(_));
-    let mismatch = |found: String| {
+    let mismatch = |found: PlotPropertyValue| {
         SemanticError::located(
             ctx.env.src,
             field.value.span,
@@ -380,12 +307,12 @@ pub(super) fn check_property_value(
             } else {
                 // No expression other than a literal can produce a string —
                 // graphcal has no runtime string values.
-                Err(mismatch("not a string literal".to_string()).into())
+                Err(mismatch(PlotPropertyValue::NotStringLiteral).into())
             }
         }
         PlotPropertyType::Number | PlotPropertyType::PositiveNumber => {
             if is_string_literal {
-                return Err(mismatch("a string literal".to_string()).into());
+                return Err(mismatch(PlotPropertyValue::StringLiteral).into());
             }
             match infer_expression_type(ctx, owner, &field.value)? {
                 CheckedType::Int => Ok(()),
@@ -395,20 +322,26 @@ pub(super) fn check_property_value(
                     field.value.span,
                     DimensionError::PlotPropertyDimensioned {
                         property,
-                        dimension: ctx.env.registry.dimensions.format_dimension(&d),
+                        dimension: ctx.env.registry.dimensions.dimension_spelling(&d),
                     },
                 )
                 .into()),
-                other => Err(mismatch(format_checked_type(&other, ctx.env.registry)).into()),
+                other => Err(mismatch(PlotPropertyValue::Type(
+                    other.spelling(&ctx.env.registry.dimensions),
+                ))
+                .into()),
             }
         }
         PlotPropertyType::Bool => {
             if is_string_literal {
-                return Err(mismatch("a string literal".to_string()).into());
+                return Err(mismatch(PlotPropertyValue::StringLiteral).into());
             }
             match infer_expression_type(ctx, owner, &field.value)? {
                 CheckedType::Bool => Ok(()),
-                other => Err(mismatch(format_checked_type(&other, ctx.env.registry)).into()),
+                other => Err(mismatch(PlotPropertyValue::Type(
+                    other.spelling(&ctx.env.registry.dimensions),
+                ))
+                .into()),
             }
         }
     }

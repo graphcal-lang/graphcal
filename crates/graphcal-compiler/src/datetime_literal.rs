@@ -11,7 +11,7 @@ use crate::semantic::time_zone::{IanaTimeZoneId, TimeZoneRegistry};
 use thiserror::Error;
 
 /// Error returned when parsing an offset-bearing datetime literal.
-#[derive(Debug, Error)]
+#[derive(Debug, Clone, Error)]
 pub enum ParseOffsetDateTimeLiteralError {
     #[error(transparent)]
     Invalid(#[from] jiff::Error),
@@ -78,7 +78,7 @@ fn two_ascii_digits_in_range(digits: [u8; 2], min: u8, max: u8) -> bool {
 }
 
 /// Error returned when parsing an offset/zone-free civil datetime literal.
-#[derive(Debug, Error)]
+#[derive(Debug, Clone, Error)]
 pub enum ParseCivilDateTimeLiteralError {
     #[error(transparent)]
     Invalid(#[from] jiff::Error),
@@ -91,7 +91,7 @@ pub enum ParseCivilDateTimeLiteralError {
 }
 
 /// Error returned when resolving local civil coordinates in an IANA timezone.
-#[derive(Debug, Error)]
+#[derive(Debug, Clone, Error)]
 pub enum ResolveZonedDateTimeLiteralError {
     #[error("validated timezone `{time_zone}` could not be loaded: {source}")]
     TimeZoneRegistryInvariant {
