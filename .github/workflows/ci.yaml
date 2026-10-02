@@ -395,7 +395,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: crate-ci/typos@512fc24f32f44ab01972217aaaf3dc86ec234d53 # v1.50.2
+      - uses: crate-ci/typos@00f422f3b19c57bc6338715ebfe3316d38768461 # v1.50.3
 
   ci-gate:
     needs: [checks, public-surface, dependency-policy, test, formal, qa-corpus, windows, wasm, coverage, msrv, refactor-metrics, typos]
