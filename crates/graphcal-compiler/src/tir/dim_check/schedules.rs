@@ -8,14 +8,11 @@
 
 use crate::dag_id::DagId;
 use crate::dependency_graph::Cycle;
-use crate::diagnostic_anchor::DiagnosticAnchor;
-use crate::ir::entry::Decl;
-use crate::resolved_name::ResolvedDeclName;
 use crate::semantic_error::SemanticError;
 use crate::semantic_error::graph::CycleMember;
 use crate::semantic_error::graph::GraphError;
 use crate::source_id::SourceId;
-use crate::tir::schedule::{ConstSchedule, RuntimeSchedule};
+use crate::tir::schedule::{ConstSchedule, RuntimeSchedule, ScheduledDecl};
 use crate::tir::typed::UncheckedTir;
 use crate::tir::typed::dag_slots::LocalDagFacts;
 use crate::tir::typed::instance_graph::InstanceGraph;
@@ -44,14 +41,14 @@ impl Schedules {
         src: SourceId,
     ) -> Result<Self, SemanticError> {
         let constants = ConstSchedule::build(tir.dags.local_positioned())
-            .map_err(|cycle| cyclic_dependency(tir, &cycle, None, src))?;
+            .map_err(|cycle| cyclic_dependency(&cycle, None, src))?;
         let callables = tir.dags.map_local(|position, dag| {
             RuntimeSchedule::build(
                 position,
                 |position| tir.dags.at(position),
                 |position| instances.instances_of(position),
             )
-            .map_err(|cycle| cyclic_dependency(tir, &cycle, Some(dag.dag_id()), src))
+            .map_err(|cycle| cyclic_dependency(&cycle, Some(dag.dag_id()), src))
         })?;
         Ok(Self {
             constants,
@@ -69,8 +66,7 @@ impl Schedules {
 /// reported at the last declaration on the path that `callable` owns itself,
 /// so the diagnostic points into the source being checked.
 fn cyclic_dependency(
-    tir: &UncheckedTir,
-    cycle: &Cycle<ResolvedDeclName>,
+    cycle: &Cycle<ScheduledDecl>,
     callable: Option<&DagId>,
     src: SourceId,
 ) -> SemanticError {
@@ -78,33 +74,16 @@ fn cyclic_dependency(
         .and_then(|owner| {
             cycle
                 .path()
-                .filter(|declaration| declaration.owner() == owner)
+                .filter(|declaration| declaration.identity().owner() == owner)
                 .last()
         })
         .or_else(|| cycle.path().last())
         .unwrap_or_else(|| cycle.entry());
-    let site = tir
-        .dags
-        .get(closing.owner())
-        .and_then(|dag| dag.decls().get(closing))
-        .and_then(|decl| match decl {
-            Decl::Const(entry) => Some((entry.name(), entry.span)),
-            Decl::Param(entry) => Some((entry.name(), entry.span)),
-            Decl::Node(entry) => Some((entry.name(), entry.span)),
-            Decl::Assert(_) | Decl::Plot(_) | Decl::Figure(_) | Decl::Layer(_) => None,
-        });
-    match site {
-        Some((name, span)) => SemanticError::located(
-            src,
-            span,
-            GraphError::CyclicDependency {
-                name: CycleMember::Declaration(name.clone()),
-            },
-        ),
-        None => SemanticError::internal_error(
-            format!("cycle node `{closing}` is missing declaration metadata"),
-            src,
-            DiagnosticAnchor::WholeFile,
-        ),
-    }
+    SemanticError::located(
+        src,
+        closing.span(),
+        GraphError::CyclicDependency {
+            name: CycleMember::Declaration(closing.name().clone()),
+        },
+    )
 }

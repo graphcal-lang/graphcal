@@ -83,6 +83,33 @@ impl<K: Clone + Eq + Hash, E: Clone> DependencyGraph<K, E> {
         }
     }
 
+    /// Record that the node `dependent` depends on the node `dependency`
+    /// through an edge labelled `label`, when both are nodes of this graph,
+    /// naming each by any form `K` borrows as; returns whether both are.
+    /// Recording the same edge twice is a no-op that keeps the first label.
+    pub fn add_labelled_dependency_between<Q>(
+        &mut self,
+        dependent: &Q,
+        dependency: &Q,
+        label: E,
+    ) -> bool
+    where
+        K: std::borrow::Borrow<Q>,
+        Q: Eq + Hash + ?Sized,
+    {
+        let (Some(&dependent), Some(&dependency)) = (
+            self.positions.get(dependent),
+            self.positions.get(dependency),
+        ) else {
+            return false;
+        };
+        if self.edges.insert((dependent, dependency)) {
+            self.dependencies[dependent].push((dependency, label));
+            self.dependents[dependency].push(dependent);
+        }
+        true
+    }
+
     /// Whether `key` is a node of this graph.
     #[must_use]
     pub fn contains(&self, key: &K) -> bool {
@@ -297,6 +324,14 @@ impl<K> TopoOrder<K> {
     pub fn into_vec(self) -> Vec<K> {
         self.order
     }
+
+    /// Transform every node, keeping the order.
+    #[must_use]
+    pub fn map<U>(self, f: impl FnMut(K) -> U) -> TopoOrder<U> {
+        TopoOrder {
+            order: self.order.into_iter().map(f).collect(),
+        }
+    }
 }
 
 impl<K> IntoIterator for TopoOrder<K> {
@@ -420,6 +455,30 @@ mod tests {
         assert_eq!(cycle.entry(), &"a");
         assert_eq!(cycle.closing_label(), &3);
         assert_eq!(cycle.map(str::len).closing_label(), &3);
+    }
+
+    #[test]
+    fn edges_between_existing_nodes_are_named_by_a_borrowed_form() {
+        let mut graph = DependencyGraph::<String>::new();
+        graph.add_node("a".to_owned());
+        graph.add_node("b".to_owned());
+        assert!(graph.add_labelled_dependency_between("a", "b", ()));
+        // A dependency on a key that is not a node is not recorded.
+        assert!(!graph.add_labelled_dependency_between("a", "missing", ()));
+        assert!(!graph.add_labelled_dependency_between("missing", "a", ()));
+        assert_eq!(graph.len(), 2);
+        let order = graph.into_topo_order().unwrap().map(|key| key.len());
+        assert_eq!(order.as_slice(), [1, 1]);
+        let mut cyclic = DependencyGraph::<String, u8>::new();
+        cyclic.add_node("a".to_owned());
+        cyclic.add_node("b".to_owned());
+        assert!(cyclic.add_labelled_dependency_between("a", "b", 1));
+        assert!(cyclic.add_labelled_dependency_between("b", "a", 2));
+        // The first label of an edge is kept.
+        assert!(cyclic.add_labelled_dependency_between("b", "a", 3));
+        let cycle = cyclic.into_topo_order().unwrap_err();
+        assert_eq!(cycle.path().cloned().collect::<Vec<_>>(), ["a", "b"]);
+        assert_eq!(cycle.closing_label(), &2);
     }
 
     #[test]
