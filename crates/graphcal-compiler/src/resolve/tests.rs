@@ -1105,6 +1105,41 @@ fn aliased_include_does_not_expose_same_named_file_module() {
 }
 
 #[test]
+fn source_modules_keep_the_handles_they_took_when_added() {
+    let main_id = DagId::root_in_package("test", "main");
+    let lib_id = DagId::root_in_package("test", "lib");
+    let main = desugared_source("import lib::{dim Length}; include lib() as inst;");
+    let lib = desugared_source("pub dim Length;");
+    let mut tables = SymbolTables::default();
+    let main_handle = tables
+        .add_module(main_id.clone(), &main.declarations)
+        .unwrap();
+    let lib_handle = tables
+        .add_module(lib_id.clone(), &lib.declarations)
+        .unwrap();
+    let targets = |_: &DagId, _: &ModulePath| Some(lib_id.clone());
+    let resolver = tables.scopes(&targets).unwrap().freeze().unwrap();
+    assert_eq!(resolver.module(main_handle).owner(), &main_id);
+    assert_eq!(resolver.module(lib_handle).owner(), &lib_id);
+    assert_eq!(resolver.module_handle(&lib_id), Some(lib_handle));
+    let exported = resolver.module(lib_handle).exported_bindings();
+    assert_eq!(
+        exported
+            .iter()
+            .map(|binding| binding.name.as_str())
+            .collect::<Vec<_>>(),
+        ["Length"]
+    );
+    assert_eq!(resolver.exported_bindings(&lib_id), Ok(exported));
+    assert_eq!(
+        resolver.exported_bindings(&DagId::root_in_package("test", "other")),
+        Err(ModuleResolveError::UnknownModule {
+            owner: DagId::root_in_package("test", "other"),
+        })
+    );
+}
+
+#[test]
 fn local_dag_and_imported_module_alias_collide_in_term_namespace() {
     let main_id = DagId::root_in_package("test", "main");
     let main = desugared_source("dag shared {} import lib as shared;");
@@ -1130,7 +1165,7 @@ fn duplicate_term_alias(source: &str) -> Option<(String, Span, Span)> {
     match SymbolTables::default()
         .add_module(DagId::root_in_package("test", "main"), &main.declarations)
     {
-        Ok(()) => None,
+        Ok(_) => None,
         Err(ModuleResolveError::DuplicateImportName {
             namespace: Namespace::Term,
             name,

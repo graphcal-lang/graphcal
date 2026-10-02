@@ -3,7 +3,7 @@
 use crate::constant_pools::RuntimeValueMap;
 use crate::domain_check::check_domain_constraint;
 use crate::domain_constraint::ResolvedDomainConstraint;
-use crate::eval::types::NodeUnavailable;
+use crate::eval::types::{NodeUnavailable, RuntimeUnavailable};
 use crate::execution_plan::{CallablePlan, ComputedBody, ExecPlan};
 use crate::invariant::Failure;
 use crate::runtime_presentation::EvaluatedRuntimeValue;
@@ -40,7 +40,7 @@ pub struct ExecutionFrame<'a> {
     policy: FailurePolicy,
     values: RuntimeValueMap,
     presented: PendingPresentedMap,
-    errors: HashMap<ResolvedDeclName, NodeUnavailable>,
+    errors: HashMap<ResolvedDeclName, RuntimeUnavailable>,
 }
 
 /// What a finished frame computed.
@@ -48,7 +48,7 @@ pub struct FrameOutcome {
     pub values: RuntimeValueMap,
     /// The presented value of every value with a presentation.
     pub presented: PendingPresentedMap,
-    pub errors: HashMap<ResolvedDeclName, NodeUnavailable>,
+    pub errors: HashMap<ResolvedDeclName, RuntimeUnavailable>,
 }
 
 /// One scheduled declaration handed to a frame's expression adapter.
@@ -82,7 +82,7 @@ impl<'a> ScheduledDeclaration<'a> {
 }
 
 #[must_use]
-pub fn eval_failed_node_error(error: &SemanticError) -> NodeUnavailable {
+pub fn eval_failed_node_error(error: &SemanticError) -> RuntimeUnavailable {
     match error {
         SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
             kind:
@@ -124,7 +124,7 @@ impl<'a> ExecutionFrame<'a> {
             callable
                 .execution_dags()
                 .iter()
-                .flat_map(|scope| scope.const_values().iter())
+                .flat_map(|closure| closure.scope().const_values().iter())
                 .map(|(key, value)| (key.clone(), value.clone())),
         );
         let presented = plan
@@ -158,7 +158,7 @@ impl<'a> ExecutionFrame<'a> {
 
     /// Declarations found unavailable so far.
     #[must_use]
-    pub const fn errors(&self) -> &HashMap<ResolvedDeclName, NodeUnavailable> {
+    pub const fn errors(&self) -> &HashMap<ResolvedDeclName, RuntimeUnavailable> {
         &self.errors
     }
 

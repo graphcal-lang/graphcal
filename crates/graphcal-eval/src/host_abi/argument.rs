@@ -73,7 +73,7 @@ pub enum HostArrayElements {
 impl HostArrayElements {
     /// The number of elements.
     #[must_use]
-    pub const fn len(&self) -> usize {
+    const fn len(&self) -> usize {
         match self {
             Self::Quantity(values) => values.len(),
             Self::Bool(values) => values.len(),
@@ -82,8 +82,9 @@ impl HostArrayElements {
     }
 
     /// Whether there are no elements (never true of an array argument).
+    #[cfg(test)]
     #[must_use]
-    pub const fn is_empty(&self) -> bool {
+    const fn is_empty(&self) -> bool {
         self.len() == 0
     }
 

@@ -17,7 +17,6 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 
 use graphcal_compiler::resolved_name::ResolvedDeclName;
-use graphcal_compiler::syntax::type_name::FieldName;
 
 use crate::presentation_evidence::{
     LeafKind, PendingLeaf, PendingQuantityDisplay, PresentationLeaf, QuantityDisplay, ResolvedLeaf,
@@ -267,7 +266,7 @@ impl<L> Presented<L> {
     /// # Errors
     ///
     /// Returns the part of `value` that is not of this value's type.
-    pub(crate) fn present_alike(&self, value: RuntimeValue) -> Result<Self, RuntimeValue>
+    fn present_alike(&self, value: RuntimeValue) -> Result<Self, RuntimeValue>
     where
         L: PresentationLeaf,
     {
@@ -472,7 +471,7 @@ impl<'a, L> PresentedRef<'a, L> {
 
     /// The outermost level of this part.
     #[must_use]
-    pub const fn view(self) -> PresentedView<'a, L> {
+    pub(crate) const fn view(self) -> PresentedView<'a, L> {
         match self.0 {
             RefNode::Whole { value, leaf } => PresentedView::Whole { value, leaf },
             RefNode::Presented(presented) => presented.view(),
@@ -502,8 +501,9 @@ impl<'a, L> PresentedRef<'a, L> {
 
     /// The value of `field` of a struct value; `None` when this is not a
     /// struct value or has no such field.
+    #[cfg(test)]
     #[must_use]
-    pub fn field(self, field: &FieldName) -> Option<Self> {
+    fn field(self, field: &graphcal_compiler::syntax::type_name::FieldName) -> Option<Self> {
         let (value, leaf) = match self.0 {
             RefNode::Whole { value, leaf } => (value, leaf),
             RefNode::Presented(presented) => match &presented.0 {

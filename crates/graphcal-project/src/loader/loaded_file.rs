@@ -13,7 +13,7 @@ use graphcal_compiler::syntax::ast::DeclKind;
 
 use graphcal_compiler::syntax::module_path_key::ModulePathKey;
 
-use super::module_path::ResolvedModuleTarget;
+use super::module_path::{LoadedModuleId, ModuleTarget, ResolvedModuleTarget};
 
 /// Validated path from a file AST root to one nested inline-DAG body.
 ///
@@ -80,7 +80,7 @@ impl DagBodyLocator {
 /// uniformly with file DAGs, looking up `resolved_imports` for both the body's
 /// own imports and `import <self>::{...}` references back to the parent file.
 #[derive(Debug, Clone)]
-pub struct LoadedDag {
+pub struct LoadedDag<T = ResolvedModuleTarget> {
     /// Abstract DAG identity for this inline dag, formed by appending the
     /// dag's name to its parent file's `DagId`.
     pub(super) dag_id: DagId,
@@ -94,7 +94,7 @@ pub struct LoadedDag {
     /// to `parent_dag_id`; cross-file imports map to the dependency file's id.
     /// A project load rejects a body path it cannot resolve; only a
     /// single-buffer load (no loader) leaves cross-file paths absent.
-    pub(super) resolved_imports: HashMap<ModulePathKey, ResolvedModuleTarget>,
+    pub(super) resolved_imports: HashMap<ModulePathKey, T>,
     /// Declared interface of the body, computed once at load.
     pub(super) interface: ModuleInterface,
 }
@@ -190,7 +190,7 @@ impl<'a> LoadedModule<'a> {
 
 /// A single loaded and parsed file.
 #[derive(Debug)]
-pub struct LoadedFile {
+pub struct LoadedFile<T = ResolvedModuleTarget> {
     /// Canonical path of this file (retained for I/O: diagnostics, LSP URIs).
     pub(super) path: PathBuf,
     /// Abstract DAG identity (filesystem-independent).
@@ -205,16 +205,16 @@ pub struct LoadedFile {
     /// import path's display string (e.g. `"./lib.gcl"` or `"nasa/rocket"`).
     /// Produced by the loader so that downstream consumers (evaluator, LSP) can
     /// look up resolved imports without re-resolving.
-    pub(super) resolved_imports: HashMap<ModulePathKey, ResolvedModuleTarget>,
+    pub(super) resolved_imports: HashMap<ModulePathKey, T>,
     /// Inline `dag X { ... }` metadata indexed from this file, with per-DAG
     /// pre-resolved imports. Entries retain source preorder and borrow their
     /// authoritative bodies from `ast` through validated locators.
-    pub(super) inline_dags: Vec<LoadedDag>,
+    pub(super) inline_dags: Vec<LoadedDag<T>>,
     /// Declared interface of the file root, computed once at load.
     pub(super) interface: ModuleInterface,
 }
 
-impl LoadedFile {
+impl LoadedFile<ModuleTarget> {
     /// Assemble a loaded file from its parsed source; the declared interface
     /// is computed here, once, from exactly the parsed declarations.
     pub(super) fn new(
@@ -223,8 +223,8 @@ impl LoadedFile {
         source: Arc<String>,
         source_id: SourceId,
         ast: File,
-        resolved_imports: HashMap<ModulePathKey, ResolvedModuleTarget>,
-        inline_dags: Vec<LoadedDag>,
+        resolved_imports: HashMap<ModulePathKey, ModuleTarget>,
+        inline_dags: Vec<LoadedDag<ModuleTarget>>,
     ) -> Self {
         Self {
             path,
@@ -238,16 +238,120 @@ impl LoadedFile {
         }
     }
 
-    /// Declared interface of this file root module.
-    #[must_use]
-    pub(crate) const fn interface(&self) -> &ModuleInterface {
-        &self.interface
+    /// Place every module target of this file with `place`, which knows the
+    /// loaded module of each identity.
+    ///
+    /// Targets are placed in source order: the file root's declarations,
+    /// then each inline DAG body in source preorder.
+    ///
+    /// # Errors
+    ///
+    /// Returns the first target that names no loaded module (an inline DAG
+    /// the named file does not declare), at its module path.
+    pub(super) fn place(
+        self,
+        place: &impl Fn(&DagId) -> Option<LoadedModuleId>,
+    ) -> Result<LoadedFile, UnplacedTarget> {
+        let Self {
+            path,
+            dag_id,
+            source,
+            ast,
+            source_id,
+            resolved_imports,
+            inline_dags,
+            interface,
+        } = self;
+        let resolved_imports =
+            place_targets(&ast.declarations, resolved_imports, place, source_id)?;
+        let inline_dags = inline_dags
+            .into_iter()
+            .map(|dag| {
+                let LoadedDag {
+                    dag_id,
+                    parent_dag_id,
+                    body_locator,
+                    resolved_imports,
+                    interface,
+                } = dag;
+                let body = &body_locator.declaration(&ast).body;
+                Ok(LoadedDag {
+                    resolved_imports: place_targets(body, resolved_imports, place, source_id)?,
+                    dag_id,
+                    parent_dag_id,
+                    body_locator,
+                    interface,
+                })
+            })
+            .collect::<Result<_, _>>()?;
+        Ok(LoadedFile {
+            path,
+            dag_id,
+            source,
+            ast,
+            source_id,
+            resolved_imports,
+            inline_dags,
+            interface,
+        })
     }
+}
 
+/// A module path whose loaded file declares no inline DAG it names.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct UnplacedTarget {
+    /// The source declaring the module path.
+    pub(super) source: SourceId,
+    /// The module path.
+    pub(super) span: graphcal_compiler::syntax::span::Span,
+    /// The module the path names.
+    pub(super) target: DagId,
+}
+
+/// Place the target of every `import` / `include` path among `declarations`.
+fn place_targets(
+    declarations: &[Declaration],
+    mut targets: HashMap<ModulePathKey, ModuleTarget>,
+    place: &impl Fn(&DagId) -> Option<LoadedModuleId>,
+    source: SourceId,
+) -> Result<HashMap<ModulePathKey, ResolvedModuleTarget>, UnplacedTarget> {
+    let mut placed = HashMap::with_capacity(targets.len());
+    for path in declarations
+        .iter()
+        .filter_map(|declaration| match &declaration.kind {
+            DeclKind::Import(import) => Some(import.path()),
+            DeclKind::Include(include) => Some(&include.path),
+            _ => None,
+        })
+    {
+        let key = path.key();
+        // A path written twice is placed once; an unresolved path has no target.
+        let Some(target) = targets.remove(&key) else {
+            continue;
+        };
+        let module = place(target.target()).ok_or_else(|| UnplacedTarget {
+            source,
+            span: path.span(),
+            target: target.target().clone(),
+        })?;
+        placed.insert(key, target.placed_at(module));
+    }
+    Ok(placed)
+}
+
+impl LoadedFile {
     /// This file root as a module.
     #[must_use]
     pub(crate) const fn module(&self) -> LoadedModule<'_> {
         LoadedModule::FileRoot(self)
+    }
+}
+
+impl<T> LoadedFile<T> {
+    /// Declared interface of this file root module.
+    #[must_use]
+    pub(crate) const fn interface(&self) -> &ModuleInterface {
+        &self.interface
     }
 
     /// Canonical path used for I/O and diagnostic URI mapping.
@@ -281,7 +385,7 @@ impl LoadedFile {
     }
 
     #[must_use]
-    pub(crate) fn inline_dags(&self) -> &[LoadedDag] {
+    pub(crate) fn inline_dags(&self) -> &[LoadedDag<T>] {
         &self.inline_dags
     }
 
@@ -292,7 +396,7 @@ impl LoadedFile {
         Item = (
             &graphcal_compiler::desugar::desugared_ast::Declaration,
             &graphcal_compiler::syntax::ast::ImportDecl,
-            &ResolvedModuleTarget,
+            &T,
         ),
     > {
         self.ast.declarations.iter().filter_map(|decl| {
@@ -313,7 +417,7 @@ impl LoadedFile {
         Item = (
             &graphcal_compiler::desugar::desugared_ast::Declaration,
             &graphcal_compiler::desugar::desugared_ast::IncludeDecl,
-            &ResolvedModuleTarget,
+            &T,
         ),
     > {
         self.ast.declarations.iter().filter_map(|decl| {

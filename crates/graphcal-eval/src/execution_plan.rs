@@ -16,6 +16,9 @@ use graphcal_compiler::ir::instance::{
     ExposedValueBody, InstanceAssertionProjection, InstancePlotProjection, InstanceValueProjection,
 };
 use graphcal_compiler::resolved_name::ResolvedDeclName;
+use graphcal_compiler::syntax::decl_name::DeclName;
+use graphcal_compiler::syntax::module_name::{ScopeSegment, ScopedName};
+use graphcal_compiler::syntax::non_empty::NonEmpty;
 use graphcal_compiler::tir::texpr::{ExecutableBodyError, TExpr};
 use graphcal_compiler::tir::typed::body_scope::Scoped;
 use graphcal_compiler::tir::typed::checked::CheckedTir;
@@ -247,7 +250,7 @@ impl<'p> Step<'p> {
 
 #[derive(Debug)]
 pub struct PreparedConstantImport {
-    pub destination: ResolvedDeclName,
+    pub(crate) destination: ResolvedDeclName,
     pub value: ConstantReference,
 }
 
@@ -265,12 +268,65 @@ pub(crate) enum StepIndexError {
     },
 }
 
+/// One DAG a callable executes — its own body, or a semantic instance below
+/// it — with the instance scopes that name it below the callable's body.
+///
+/// Created only by `ClosureDag::below`, so every DAG of a callable's
+/// closure has a name in the callable's body.
+#[derive(Debug, Clone)]
+pub struct ClosureDag<'p> {
+    scope: SealedDag<'p>,
+    scopes: Vec<ScopeSegment>,
+}
+
+impl<'p> ClosureDag<'p> {
+    /// `scope` as a DAG of the closure of the callable whose body is
+    /// `owner`, when it is that body or a DAG below it.
+    #[must_use]
+    pub(crate) fn below(owner: &DagId, scope: SealedDag<'p>) -> Option<Self> {
+        scope
+            .dag()
+            .dag_id()
+            .scopes_below(owner)
+            .map(|scopes| Self { scope, scopes })
+    }
+
+    /// The sealed DAG.
+    #[must_use]
+    pub const fn scope(&self) -> SealedDag<'p> {
+        self.scope
+    }
+
+    /// `name`, written in this DAG, as the callable's body names it:
+    /// qualified by the scopes of this DAG below the body.
+    #[must_use]
+    pub(crate) fn qualify(&self, name: &ScopedName) -> ScopedName {
+        qualified(&self.scopes, name)
+    }
+
+    /// The declaration `leaf` of this DAG, as the callable's body names it.
+    #[must_use]
+    pub(crate) fn member(&self, leaf: &DeclName) -> ScopedName {
+        self.qualify(&ScopedName::local(leaf.clone()))
+    }
+}
+
+/// `name` qualified by `scopes`, then by its own qualifier.
+fn qualified(scopes: &[ScopeSegment], name: &ScopedName) -> ScopedName {
+    let qualifier = scopes
+        .iter()
+        .chain(name.qualifier())
+        .cloned()
+        .collect::<Vec<_>>();
+    ScopedName::from_parts(NonEmpty::try_from_vec(qualifier).ok(), name.leaf().clone())
+}
+
 /// One semantic instance a callable's body includes, with the sealed DAG
 /// that runs it and the checked declarations its include site exposes.
 #[derive(Debug, Clone)]
 pub struct PlannedInstance<'p> {
     instance: CheckedInstance<'p>,
-    scope: SealedDag<'p>,
+    scope: ClosureDag<'p>,
     outputs: Vec<PlannedOutput<'p>>,
     assertions: Vec<PlannedAssertion<'p>>,
     plots: Vec<PlannedPlot<'p>>,
@@ -330,7 +386,7 @@ pub enum PlannedInstanceError {
 }
 
 impl<'p> PlannedInstance<'p> {
-    /// Pair `instance` with `scope`, the sealed DAG that runs it, and find
+    /// Pair `instance` with `scope`, the closure DAG that runs it, and find
     /// the checked declarations its include site exposes in `tir`.
     ///
     /// # Errors
@@ -340,12 +396,12 @@ impl<'p> PlannedInstance<'p> {
     pub fn try_new(
         tir: &'p CheckedTir,
         instance: CheckedInstance<'p>,
-        scope: SealedDag<'p>,
+        scope: ClosureDag<'p>,
     ) -> Result<Self, PlannedInstanceError> {
-        if !std::ptr::eq(instance.dag(), scope.dag()) {
+        if !std::ptr::eq(instance.dag(), scope.scope().dag()) {
             return Err(PlannedInstanceError::ForeignScope {
                 instance: instance.dag().dag_id().clone(),
-                actual: scope.dag().dag_id().clone(),
+                actual: scope.scope().dag().dag_id().clone(),
             });
         }
         // A value the including DAG declares itself (a projection alias) is
@@ -414,7 +470,13 @@ impl<'p> PlannedInstance<'p> {
     /// The instance's sealed DAG, with the source its diagnostics point into.
     #[must_use]
     pub const fn scope(&self) -> SealedDag<'p> {
-        self.scope
+        self.scope.scope()
+    }
+
+    /// The instance's DAG in the closure of the callable that plans it.
+    #[must_use]
+    pub const fn closure(&self) -> &ClosureDag<'p> {
+        &self.scope
     }
 
     /// The values the include site exposes from the instance's own body, in
@@ -440,9 +502,9 @@ impl<'p> PlannedInstance<'p> {
 /// One body and its included-instance closure, prepared before evaluation.
 pub struct CallablePlan<'p> {
     scope: SealedDag<'p>,
-    execution_dags: Vec<SealedDag<'p>>,
+    execution_dags: Vec<ClosureDag<'p>>,
     instances: Vec<PlannedInstance<'p>>,
-    closure_instances: Vec<(SealedDag<'p>, Vec<PlannedInstance<'p>>)>,
+    closure_instances: Vec<(ClosureDag<'p>, Vec<PlannedInstance<'p>>)>,
     imports: Vec<PreparedConstantImport>,
     steps: IndexVec<StepIdx, Step<'p>>,
 }
@@ -460,9 +522,9 @@ impl<'p> CallablePlan<'p> {
     /// before a scheduled declaration it reads.
     pub(crate) fn new(
         scope: SealedDag<'p>,
-        execution_dags: Vec<SealedDag<'p>>,
+        execution_dags: Vec<ClosureDag<'p>>,
         instances: Vec<PlannedInstance<'p>>,
-        closure_instances: Vec<(SealedDag<'p>, Vec<PlannedInstance<'p>>)>,
+        closure_instances: Vec<(ClosureDag<'p>, Vec<PlannedInstance<'p>>)>,
         imports: Vec<PreparedConstantImport>,
         scheduled: Vec<PlannedDeclaration<'p>>,
     ) -> Result<Self, StepIndexError> {
@@ -529,7 +591,7 @@ impl<'p> CallablePlan<'p> {
 
     /// The callable followed by its instance closure in [`DagId`] order.
     #[must_use]
-    pub fn execution_dags(&self) -> &[SealedDag<'p>] {
+    pub fn execution_dags(&self) -> &[ClosureDag<'p>] {
         &self.execution_dags
     }
 
@@ -544,7 +606,7 @@ impl<'p> CallablePlan<'p> {
     /// closure, in [`DagId`] order, each with the semantic instances it
     /// includes, in record order.
     #[must_use]
-    pub(crate) fn closure_instances(&self) -> &[(SealedDag<'p>, Vec<PlannedInstance<'p>>)] {
+    pub(crate) fn closure_instances(&self) -> &[(ClosureDag<'p>, Vec<PlannedInstance<'p>>)] {
         &self.closure_instances
     }
 
@@ -553,7 +615,7 @@ impl<'p> CallablePlan<'p> {
     pub(crate) fn executes(&self, dag: &DagId) -> bool {
         self.execution_dags
             .iter()
-            .any(|scope| scope.dag().dag_id() == dag)
+            .any(|closure| closure.scope().dag().dag_id() == dag)
     }
 
     /// The constants the callable's execution DAGs import.
@@ -584,7 +646,7 @@ impl std::fmt::Debug for CallablePlan<'_> {
                 &self
                     .execution_dags
                     .iter()
-                    .map(|scope| scope.dag().dag_id())
+                    .map(|closure| closure.scope().dag().dag_id())
                     .collect::<Vec<_>>(),
             )
             .field("imports", &self.imports)
@@ -694,7 +756,7 @@ impl<'p> ExecPlan<'p> {
     /// The call comes from a tree of this plan's program, whose every DAG
     /// has a callable.
     #[must_use]
-    pub fn call(&self, call: ScopedCall<'_>) -> &CallablePlan<'p> {
+    pub(crate) fn call(&self, call: ScopedCall<'_>) -> &CallablePlan<'p> {
         &self.callables[self.calls[call.caller()][call.get().index()]]
     }
 
@@ -728,5 +790,42 @@ impl std::fmt::Debug for ExecPlan<'_> {
             .field("declarations", &declarations)
             .field("callables", &self.callables.items)
             .finish()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use graphcal_compiler::syntax::module_name::ModuleAliasName;
+
+    use super::*;
+
+    fn named(alias: &str) -> ScopeSegment {
+        ScopeSegment::Named(ModuleAliasName::expect_valid(alias))
+    }
+
+    fn leaf(name: &str) -> DeclName {
+        DeclName::expect_valid(name)
+    }
+
+    #[test]
+    fn closure_names_are_qualified_by_every_scope_then_their_own_qualifier() {
+        let local = ScopedName::local(leaf("x"));
+        assert_eq!(qualified(&[], &local), local);
+        assert_eq!(
+            qualified(&[named("outer"), named("inner")], &local),
+            ScopedName::qualified(
+                NonEmpty::new(named("outer"), vec![named("inner")]),
+                leaf("x")
+            )
+        );
+        let exposed = ScopedName::in_scope(named("inst"), leaf("ok"));
+        assert_eq!(
+            qualified(&[named("outer")], &exposed),
+            ScopedName::qualified(
+                NonEmpty::new(named("outer"), vec![named("inst")]),
+                leaf("ok")
+            )
+        );
+        assert_eq!(qualified(&[], &exposed), exposed);
     }
 }

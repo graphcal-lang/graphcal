@@ -80,7 +80,7 @@ fn lower_single_file_to_hir(
     imports::process_file_body_declarations(
         semantic.project,
         loaded_file,
-        semantic.module_resolver,
+        semantic.modules,
         &mut ctx,
         cancellation,
     )?;
@@ -140,7 +140,7 @@ fn store_module_artifact(
 /// body checking, constant evaluation, or host verification occurs here.
 pub(super) fn lower_project_perfile<'project, Mode>(
     project: &'project crate::loader::loaded_project::LoadedProject,
-    module_resolver: graphcal_compiler::resolve::ModuleResolver,
+    modules: crate::loader::loaded_module_resolver::LoadedModuleResolver,
     mode: Mode,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<HirProject<'project, Mode>, Outcome<PipelineError>> {
@@ -149,7 +149,7 @@ pub(super) fn lower_project_perfile<'project, Mode>(
 
     let files = {
         let mut definitions = graphcal_compiler::ir::lower::definition_evaluator(
-            &module_resolver,
+            modules.resolver(),
             project.files().iter().flat_map(|loaded_file| {
                 let src = loaded_file.source_id();
                 std::iter::once((
@@ -174,7 +174,7 @@ pub(super) fn lower_project_perfile<'project, Mode>(
         .map_err(PipelineError::from)?;
         let mut semantic = ProjectSemanticContext {
             project,
-            module_resolver: &module_resolver,
+            modules: &modules,
             module_templates: &mut module_templates,
             definitions: &mut definitions,
         };
@@ -209,7 +209,7 @@ pub(super) fn lower_project_perfile<'project, Mode>(
         files,
         plugins: project.plugins(),
         exported_runtime_units,
-        module_resolver,
+        module_resolver: modules.into_resolver(),
         sources: std::sync::Arc::clone(project.sources()),
         mode,
     })

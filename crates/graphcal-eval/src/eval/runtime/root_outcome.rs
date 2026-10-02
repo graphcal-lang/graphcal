@@ -19,7 +19,7 @@ use graphcal_compiler::syntax::span::Span;
 use graphcal_compiler::display::include_scope_names::IncludeScopeNames;
 
 use crate::eval::output_decl_name::{OutputDeclName, OutputUnavailable};
-use crate::eval::types::{AssertResult, NodeUnavailable};
+use crate::eval::types::{AssertResult, RuntimeUnavailable};
 use crate::eval_expr::{EvalSession, RuntimeValueMap};
 use crate::execution_plan::ExecPlan;
 use crate::host_fns::HostFunctionRegistry;
@@ -27,14 +27,14 @@ use crate::runtime_presentation::PendingPresentedMap;
 
 use super::assertions::evaluate_assertions;
 use super::root_loop::{EvalLoopResult, run_eval_loop_with_bindings};
-use super::root_names::{RootNames, instance_member_name, root_source_names};
+use super::root_names::{RootNames, root_source_names};
 
 /// One evaluation of the root DAG with one row of bindings.
 pub struct RootOutcome {
     unfinished_calls: RefCell<BTreeSet<ResolvedDeclName>>,
     values: RuntimeValueMap,
     presentations: PendingPresentedMap,
-    errors: HashMap<ResolvedDeclName, NodeUnavailable>,
+    errors: HashMap<ResolvedDeclName, RuntimeUnavailable>,
     assertions: Vec<(ScopedName, AssertResult, Span)>,
 }
 
@@ -42,7 +42,7 @@ pub struct RootOutcome {
 pub struct RootOutcomeParts {
     pub unfinished_calls: BTreeSet<ResolvedDeclName>,
     pub values: RuntimeValueMap,
-    pub errors: HashMap<ResolvedDeclName, NodeUnavailable>,
+    pub errors: HashMap<ResolvedDeclName, RuntimeUnavailable>,
     pub assertions: Vec<(ScopedName, AssertResult, Span)>,
 }
 
@@ -105,7 +105,7 @@ impl RootOutcome {
 
     /// A session over this outcome, for further root-level evaluation; calls
     /// that reach unfinished formulas are recorded in this outcome.
-    pub fn session<'a>(
+    pub(crate) fn session<'a>(
         &'a self,
         plan: &'a ExecPlan<'a>,
         src: SourceId,
@@ -124,17 +124,17 @@ impl RootOutcome {
     }
 
     /// The declarations that failed or are unavailable.
-    pub const fn errors(&self) -> &HashMap<ResolvedDeclName, NodeUnavailable> {
+    pub(crate) const fn errors(&self) -> &HashMap<ResolvedDeclName, RuntimeUnavailable> {
         &self.errors
     }
 
     /// The presentations of the evaluated declarations, still pending: the
     /// result assembly resolves them against the complete root frame.
-    pub const fn presentations(&self) -> &PendingPresentedMap {
+    pub(crate) const fn presentations(&self) -> &PendingPresentedMap {
         &self.presentations
     }
 
-    pub fn into_parts(self) -> RootOutcomeParts {
+    pub(crate) fn into_parts(self) -> RootOutcomeParts {
         RootOutcomeParts {
             unfinished_calls: self.unfinished_calls.into_inner(),
             values: self.values,
@@ -150,16 +150,12 @@ impl RootOutcome {
     /// A declaration the root exposes is reported first, in root-exposure
     /// order, under its source name; otherwise the smallest failed
     /// declaration of a semantic instance, under its instance member name.
-    ///
-    /// # Errors
-    ///
-    /// Returns an internal error when a failed declaration has neither name.
+    #[must_use]
     pub fn first_failure(
         &self,
         plan: &ExecPlan<'_>,
-        src: SourceId,
         include_scopes: &IncludeScopeNames,
-    ) -> Result<Option<RootFailure<'_>>, SemanticError> {
+    ) -> Option<RootFailure<'_>> {
         let names = RootNames::new(plan, include_scopes);
         let exposed = root_source_names(plan).into_iter().find_map(|(key, name)| {
             self.errors
@@ -169,22 +165,29 @@ impl RootOutcome {
                     reason: names.present(reason),
                 })
         });
-        let declaration = match exposed {
-            Some(failure) => Some(failure),
-            None => self
-                .errors
+        // Otherwise the smallest failed declaration of a semantic instance:
+        // every declaration the root evaluates is one of its closure DAGs'.
+        let declaration = exposed.or_else(|| {
+            plan.root()
+                .execution_dags()
                 .iter()
-                .min_by(|(left, _), (right, _)| left.cmp(right))
-                .map(|(key, reason)| {
-                    instance_member_name(plan.tir().root_dag_id(), key, src).map(|name| {
-                        RootFailure::Declaration {
-                            name,
-                            reason: names.present(reason),
-                        }
-                    })
+                .flat_map(|closure| {
+                    closure
+                        .scope()
+                        .dag()
+                        .declarations()
+                        .filter_map(move |entry| {
+                            self.errors.get(entry.identity()).map(|reason| {
+                                (entry.identity(), closure.member(entry.name()), reason)
+                            })
+                        })
                 })
-                .transpose()?,
-        };
+                .min_by(|(left, ..), (right, ..)| left.cmp(right))
+                .map(|(_, name, reason)| RootFailure::Declaration {
+                    name,
+                    reason: names.present(reason),
+                })
+        });
         let assertion = || {
             self.assertions
                 .iter()
@@ -208,6 +211,6 @@ impl RootOutcome {
                 )
             })
         };
-        Ok(declaration.or_else(assertion).or_else(unfinished))
+        declaration.or_else(assertion).or_else(unfinished)
     }
 }

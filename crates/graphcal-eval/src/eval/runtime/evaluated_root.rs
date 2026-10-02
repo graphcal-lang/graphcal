@@ -5,7 +5,7 @@ use std::collections::HashMap;
 
 use graphcal_compiler::resolved_name::ResolvedDeclName;
 
-use crate::eval::types::NodeUnavailable;
+use crate::eval::types::RuntimeUnavailable;
 use crate::eval_expr::RuntimeValueMap;
 use crate::runtime_presentation::{PendingPresentedMap, ResolvedPresentedMap};
 
@@ -16,7 +16,7 @@ use super::root_names::RootNames;
 #[derive(Clone, Copy)]
 pub(super) struct EvaluatedRoot<'a> {
     pub(super) values: &'a RuntimeValueMap,
-    pub(super) errors: &'a HashMap<ResolvedDeclName, NodeUnavailable>,
+    pub(super) errors: &'a HashMap<ResolvedDeclName, RuntimeUnavailable>,
     /// The names the root gives the declarations the failures name.
     pub(super) names: &'a RootNames<'a>,
     /// The presented values of the declarations with a presentation,

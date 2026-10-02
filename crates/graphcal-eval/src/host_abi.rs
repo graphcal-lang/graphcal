@@ -9,7 +9,8 @@
 use std::fmt;
 
 use graphcal_compiler::function_signature::{
-    DimMonomial, IndexBinder, ParamKind, ResultKind, ScalarValueKind, StructFieldKind, StructResult,
+    DimBinder, DimMonomial, IndexBinder, ParamKind, ResultKind, ScalarValueKind, StructFieldKind,
+    StructResult,
 };
 use graphcal_compiler::syntax::non_empty::NonEmpty;
 use graphcal_compiler::syntax::type_name::FieldName;
@@ -112,18 +113,19 @@ pub enum ValidatedHostArrayValues {
 }
 
 /// A validated dense scalar array plus the typed result metadata needed by
-/// consumers to rebuild or render it.
+/// consumers to rebuild or render it: the declared axes `I` of the result
+/// kind it was decoded as.
 #[derive(Debug, Clone, PartialEq)]
-pub struct ValidatedHostArray {
-    indexes: NonEmpty<IndexBinder>,
+pub struct ValidatedHostArray<I = IndexBinder> {
+    indexes: NonEmpty<I>,
     shape: Vec<usize>,
     values: ValidatedHostArrayValues,
 }
 
-impl ValidatedHostArray {
-    /// Declared index variables in row-major axis order.
+impl<I> ValidatedHostArray<I> {
+    /// Declared axes in row-major order.
     #[must_use]
-    pub const fn indexes(&self) -> &NonEmpty<IndexBinder> {
+    const fn indexes(&self) -> &NonEmpty<I> {
         &self.indexes
     }
 
@@ -172,9 +174,14 @@ impl ValidatedHostField {
     }
 }
 
-/// A host-function result proven to match its declared ABI kind `'d`.
+/// A host-function result proven to match its declared ABI kind `'d`, whose
+/// indexed results name their axes by `I`.
 #[derive(Debug, Clone, PartialEq)]
-pub enum ValidatedHostResult<'d, S = graphcal_compiler::function_signature::StructShape> {
+pub enum ValidatedHostResult<
+    'd,
+    S = graphcal_compiler::function_signature::StructShape,
+    I = IndexBinder,
+> {
     /// Boolean result.
     Bool(bool),
     /// Integer result.
@@ -187,7 +194,7 @@ pub enum ValidatedHostResult<'d, S = graphcal_compiler::function_signature::Stru
         value: FiniteQuantity,
     },
     /// Dense typed scalar array.
-    Array(ValidatedHostArray),
+    Array(ValidatedHostArray<I>),
     /// Fixed-layout record whose fields are decoded by declared kind, with
     /// the declared struct result it was decoded as.
     Struct {
@@ -203,10 +210,10 @@ pub enum ValidatedHostResult<'d, S = graphcal_compiler::function_signature::Stru
 ///
 /// Returns [`HostResultDecodeError`] for a wrong wire shape, rank/arity
 /// mismatch, non-finite quantity, invalid `Int`, or invalid `Bool` encoding.
-pub fn decode_result<'d, S: StructResult>(
-    declared: &'d ResultKind<S>,
+pub fn decode_result<'d, S: StructResult, I: Clone>(
+    declared: &'d ResultKind<S, DimBinder, I>,
     raw: &HostFnValue,
-) -> Result<ValidatedHostResult<'d, S>, HostResultDecodeError> {
+) -> Result<ValidatedHostResult<'d, S, I>, HostResultDecodeError> {
     match declared {
         ResultKind::Value(ParamKind::Scalar(ScalarValueKind::Bool)) => {
             scalar_slot(raw).and_then(|value| {
@@ -474,7 +481,7 @@ mod tests {
         .unwrap();
         assert!(matches!(
             decode_result(
-                &ResultKind::Struct(shape),
+                &ResultKind::<_, DimBinder, IndexBinder>::Struct(shape),
                 &HostFnValue::Record(vec![f64::NAN])
             ),
             Err(HostResultDecodeError::InvalidSlot {

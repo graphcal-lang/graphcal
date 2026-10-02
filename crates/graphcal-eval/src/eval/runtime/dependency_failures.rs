@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use graphcal_compiler::resolved_name::ResolvedDeclName;
 use graphcal_compiler::tir::typed::Scoped;
 
-use crate::eval::types::NodeUnavailable;
+use crate::eval::types::{NodeUnavailable, RuntimeUnavailable};
 
 use super::root_names::RootNames;
 
@@ -20,7 +20,7 @@ use super::root_names::RootNames;
 /// point at the root cause.
 pub(super) fn dependency_failure_message<'a>(
     exprs: impl IntoIterator<Item = Scoped<'a, graphcal_compiler::hir::expr::Expr>>,
-    errors: &HashMap<ResolvedDeclName, NodeUnavailable>,
+    errors: &HashMap<ResolvedDeclName, RuntimeUnavailable>,
     names: &RootNames<'_>,
 ) -> Option<String> {
     if errors.is_empty() {

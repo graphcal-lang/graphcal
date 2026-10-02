@@ -12,12 +12,9 @@
 use std::collections::HashMap;
 
 use graphcal_compiler::dag_id::DagId;
-use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
 use graphcal_compiler::ir::instance::ExposedValueBody;
-use graphcal_compiler::node_unavailable::NodeUnavailable;
+use graphcal_compiler::node_unavailable::RuntimeUnavailable;
 use graphcal_compiler::resolved_name::ResolvedDeclName;
-use graphcal_compiler::semantic_error::SemanticError;
-use graphcal_compiler::source_id::SourceId;
 use graphcal_compiler::syntax::module_name::ScopedName;
 use graphcal_compiler::syntax::non_empty::NonEmpty;
 
@@ -30,7 +27,7 @@ use crate::execution_plan::ExecPlan;
 /// scopes of `dag` below the root.
 ///
 /// Returns `None` when `dag` is neither the root nor a module below it.
-pub(super) fn qualified_below(root: &DagId, dag: &DagId, name: &ScopedName) -> Option<ScopedName> {
+fn qualified_below(root: &DagId, dag: &DagId, name: &ScopedName) -> Option<ScopedName> {
     let path = dag.scopes_below(root)?;
     let qualifier = path
         .into_iter()
@@ -42,40 +39,13 @@ pub(super) fn qualified_below(root: &DagId, dag: &DagId, name: &ScopedName) -> O
     ))
 }
 
-/// The name of `declaration`, a declaration of a semantic instance in the
-/// root's closure, qualified by the instance scopes below the root.
-///
-/// # Errors
-///
-/// Returns an internal error when the declaration's owner is not below the
-/// root: every declaration the root evaluates is its own or an instance's.
-pub(super) fn instance_member_name(
-    root: &DagId,
-    declaration: &ResolvedDeclName,
-    src: SourceId,
-) -> Result<ScopedName, SemanticError> {
-    member_name(root, declaration).ok_or_else(|| {
-        SemanticError::internal_error(
-            format!("declaration `{declaration}` is not a member of an instance below the root"),
-            src,
-            DiagnosticAnchor::WholeFile,
-        )
-    })
-}
-
-fn member_name(root: &DagId, declaration: &ResolvedDeclName) -> Option<ScopedName> {
-    let owner = declaration.owner();
-    (owner != root)
-        .then(|| qualified_below(root, owner, &ScopedName::local(declaration.leaf().clone())))
-        .flatten()
-}
-
 /// Source-level names of the runtime declarations the root DAG exposes, in
 /// deterministic order: root declarations in source order, then the output
 /// and assertion projections of each root semantic instance in record order.
 ///
 /// Declarations private to a semantic instance have no root source name and
-/// are absent; [`instance_member_name`] names them.
+/// are absent; the closure DAG that declares one names it
+/// ([`ClosureDag::member`](crate::execution_plan::ClosureDag::member)).
 pub(super) fn root_source_names(plan: &ExecPlan<'_>) -> Vec<(ResolvedDeclName, ScopedName)> {
     let root = plan.root();
     let own = root.scope().dag().declarations().map(|entry| {
@@ -157,7 +127,7 @@ impl<'p> RootNames<'p> {
     }
 
     /// `reason`, naming its declarations as the output does.
-    pub(super) fn present(&self, reason: &NodeUnavailable) -> OutputUnavailable {
+    pub(super) fn present(&self, reason: &RuntimeUnavailable) -> OutputUnavailable {
         reason.map_names(|declaration| self.name(declaration))
     }
 }
@@ -175,31 +145,6 @@ mod tests {
 
     fn leaf(name: &str) -> DeclName {
         DeclName::expect_valid(name)
-    }
-
-    #[test]
-    fn instance_members_are_qualified_by_every_instance_scope_below_the_root() {
-        let root = DagId::root_in_package("test", "main");
-        let outer = root.instance_child(named("outer"));
-        let inner = outer.instance_child(named("inner"));
-        let member = |owner: &DagId| {
-            member_name(&root, &ResolvedDeclName::for_test(owner.clone(), leaf("x")))
-        };
-        assert_eq!(
-            member(&outer),
-            Some(ScopedName::in_scope(named("outer"), leaf("x")))
-        );
-        assert_eq!(
-            member(&inner),
-            Some(ScopedName::qualified(
-                NonEmpty::new(named("outer"), vec![named("inner")]),
-                leaf("x")
-            ))
-        );
-        // The root's own declarations and modules outside the root are not
-        // instance members.
-        assert_eq!(member(&root), None);
-        assert_eq!(member(&DagId::root_in_package("test", "other")), None);
     }
 
     #[test]

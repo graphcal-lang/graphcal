@@ -9,11 +9,67 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::dag_id::DagId;
-use crate::declaration_category::{DeclCategory, ValueDeclCategory};
 use crate::dependency_graph::{Cycle, DependencyGraph, TopoOrder};
+use crate::ir::entry::Decl;
 use crate::resolved_name::ResolvedDeclName;
+use crate::syntax::decl_name::DeclName;
+use crate::syntax::span::Span;
 use crate::tir::typed::dag_position::DagPosition;
 use crate::tir::typed::model::DagTIR;
+
+/// One scheduled declaration, with the site a dependency cycle through it is
+/// reported at.
+///
+/// A scheduled declaration is identified by its identity alone: equality and
+/// hashing ignore the site, so the scheduling graph is keyed (and can be
+/// queried) by identity.
+#[derive(Debug, Clone)]
+pub(crate) struct ScheduledDecl {
+    identity: ResolvedDeclName,
+    name: DeclName,
+    span: Span,
+}
+
+impl ScheduledDecl {
+    /// The declaration's identity.
+    pub(crate) const fn identity(&self) -> &ResolvedDeclName {
+        &self.identity
+    }
+
+    /// The declaration's local name.
+    pub(crate) const fn name(&self) -> &DeclName {
+        &self.name
+    }
+
+    /// The span of the declaration.
+    pub(crate) const fn span(&self) -> Span {
+        self.span
+    }
+
+    fn into_identity(self) -> ResolvedDeclName {
+        self.identity
+    }
+}
+
+impl PartialEq for ScheduledDecl {
+    fn eq(&self, other: &Self) -> bool {
+        self.identity == other.identity
+    }
+}
+
+impl Eq for ScheduledDecl {}
+
+impl std::hash::Hash for ScheduledDecl {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.identity.hash(state);
+    }
+}
+
+impl std::borrow::Borrow<ResolvedDeclName> for ScheduledDecl {
+    fn borrow(&self) -> &ResolvedDeclName {
+        &self.identity
+    }
+}
 
 /// Evaluation order of every constant of a checked file's local DAGs.
 ///
@@ -36,13 +92,17 @@ impl ConstSchedule {
     /// Returns the first [`Cycle`] among the constants.
     pub(crate) fn build<'a>(
         dags: impl IntoIterator<Item = (DagPosition, &'a DagTIR)>,
-    ) -> Result<Self, Cycle<ResolvedDeclName>> {
+    ) -> Result<Self, Cycle<ScheduledDecl>> {
         let mut dags = dags.into_iter().collect::<Vec<_>>();
         dags.sort_by(|(_, left), (_, right)| left.dag_id().cmp(right.dag_id()));
         let mut graph = DependencyGraph::new();
         for (_, dag) in &dags {
             for entry in dag.consts() {
-                graph.add_node(entry.identity());
+                graph.add_node(ScheduledDecl {
+                    identity: entry.identity(),
+                    name: entry.name().clone(),
+                    span: entry.span,
+                });
             }
         }
         for (_, dag) in &dags {
@@ -50,15 +110,13 @@ impl ConstSchedule {
             for entry in dag.consts() {
                 let constant = entry.identity();
                 for dependency in const_deps.get(&constant).into_iter().flatten() {
-                    if graph.contains(dependency) {
-                        graph.add_dependency(constant.clone(), dependency.clone());
-                    }
+                    graph.add_labelled_dependency_between(&constant, dependency, ());
                 }
             }
         }
         Ok(Self {
             dags: dags.iter().map(|(position, _)| *position).collect(),
-            order: graph.into_topo_order()?,
+            order: graph.into_topo_order()?.map(ScheduledDecl::into_identity),
         })
     }
 
@@ -73,15 +131,6 @@ impl ConstSchedule {
     pub const fn order(&self) -> &TopoOrder<ResolvedDeclName> {
         &self.order
     }
-}
-
-/// Why a callable's [`RuntimeSchedule`] could not be built.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum RuntimeScheduleError {
-    /// A semantic instance edge names a DAG absent from the TIR.
-    MissingInstance(DagId),
-    /// The params and nodes of the closure depend on each other cyclically.
-    Cycle(Cycle<ResolvedDeclName>),
 }
 
 /// Runtime evaluation schedule of one callable DAG and every semantic
@@ -99,24 +148,30 @@ impl RuntimeSchedule {
     /// source order, except that every declaration follows the scheduled
     /// declarations it reads.
     ///
+    /// `dag_at` reads the DAG at a position and `instances_of` the
+    /// positions of the instances a DAG's edges materialize.
+    ///
     /// # Errors
     ///
-    /// Returns [`RuntimeScheduleError`] for a dangling instance edge or a
-    /// dependency cycle.
+    /// Returns the first [`Cycle`] among the params and nodes.
     pub(crate) fn build<'a>(
-        callable: &'a DagTIR,
-        dag: impl Fn(&DagId) -> Option<&'a DagTIR>,
-    ) -> Result<Self, RuntimeScheduleError> {
-        let dags = instance_closure(callable, dag)?;
+        callable: DagPosition,
+        dag_at: impl Fn(DagPosition) -> &'a DagTIR,
+        instances_of: impl Fn(DagPosition) -> &'a [DagPosition],
+    ) -> Result<Self, Cycle<ScheduledDecl>> {
+        let dags = instance_closure(callable, dag_at, instances_of);
         let mut graph = DependencyGraph::new();
         let mut dependencies = HashMap::new();
         for dag in &dags {
             let runtime_deps = &dag.semantic().dependencies.runtime_deps;
-            for entry in dag.decls().iter().filter(|entry| {
-                matches!(
-                    entry.category(),
-                    DeclCategory::Value(ValueDeclCategory::Param | ValueDeclCategory::Node)
-                )
+            for (entry, span) in dag.decls().iter().filter_map(|entry| match entry {
+                Decl::Param(param) => Some((entry, param.span)),
+                Decl::Node(node) => Some((entry, node.span)),
+                Decl::Const(_)
+                | Decl::Assert(_)
+                | Decl::Plot(_)
+                | Decl::Figure(_)
+                | Decl::Layer(_) => None,
             }) {
                 let declaration = entry.identity();
                 let reads = runtime_deps
@@ -125,7 +180,11 @@ impl RuntimeSchedule {
                     .flatten()
                     .cloned()
                     .collect::<Vec<_>>();
-                graph.add_node(declaration.clone());
+                graph.add_node(ScheduledDecl {
+                    identity: declaration.clone(),
+                    name: entry.name().clone(),
+                    span,
+                });
                 dependencies.insert(declaration, reads);
             }
         }
@@ -136,17 +195,13 @@ impl RuntimeSchedule {
                     continue;
                 };
                 for dependency in reads {
-                    if graph.contains(dependency) {
-                        graph.add_dependency(declaration.clone(), dependency.clone());
-                    }
+                    graph.add_labelled_dependency_between(&declaration, dependency, ());
                 }
             }
         }
         Ok(Self {
             execution_dags: dags.iter().map(|dag| dag.dag_id().clone()).collect(),
-            order: graph
-                .into_topo_order()
-                .map_err(RuntimeScheduleError::Cycle)?,
+            order: graph.into_topo_order()?.map(ScheduledDecl::into_identity),
             dependencies,
         })
     }
@@ -187,23 +242,21 @@ impl RuntimeSchedule {
 /// `callable` followed by every DAG its semantic instance edges reach, in
 /// [`DagId`] order.
 fn instance_closure<'a>(
-    callable: &'a DagTIR,
-    dag_of: impl Fn(&DagId) -> Option<&'a DagTIR>,
-) -> Result<Vec<&'a DagTIR>, RuntimeScheduleError> {
+    callable: DagPosition,
+    dag_at: impl Fn(DagPosition) -> &'a DagTIR,
+    instances_of: impl Fn(DagPosition) -> &'a [DagPosition],
+) -> Vec<&'a DagTIR> {
     let mut pending = vec![callable];
-    let mut visited = HashSet::from([callable.dag_id()]);
+    let mut visited = HashSet::from([callable]);
     let mut instances = Vec::new();
-    while let Some(dag) = pending.pop() {
-        for edge in dag.semantic_instances() {
-            let owner = edge.instance.id().owner();
-            let instance = dag_of(owner)
-                .ok_or_else(|| RuntimeScheduleError::MissingInstance(owner.clone()))?;
-            if visited.insert(instance.dag_id()) {
+    while let Some(position) = pending.pop() {
+        for &instance in instances_of(position) {
+            if visited.insert(instance) {
                 pending.push(instance);
-                instances.push(instance);
+                instances.push(dag_at(instance));
             }
         }
     }
     instances.sort_by(|left, right| left.dag_id().cmp(right.dag_id()));
-    Ok(std::iter::once(callable).chain(instances).collect())
+    std::iter::once(dag_at(callable)).chain(instances).collect()
 }

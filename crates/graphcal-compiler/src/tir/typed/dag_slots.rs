@@ -77,6 +77,14 @@ pub struct DagSlots<L> {
     shared_order: BTreeMap<DagId, usize>,
 }
 
+/// Where one DAG of a registry lives (see [`DagSlots::slot_at`]).
+pub(super) enum SlotRef<'a> {
+    /// The local body at this index.
+    Local(usize),
+    /// The imported handle.
+    Shared(&'a Arc<CheckedDag>),
+}
+
 /// Failure to add a DAG to a TIR registry.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum DagRegistryError {
@@ -287,6 +295,52 @@ impl<L: SlotBody> DagSlots<L> {
         &mut self.locals[index]
     }
 
+    /// Number of local bodies.
+    pub(super) const fn local_count(&self) -> usize {
+        self.locals.len()
+    }
+
+    /// The indices of the local bodies in visiting order: the root, then
+    /// the others in identity order.
+    pub(super) fn visiting_local_indices(&self) -> impl Iterator<Item = usize> + '_ {
+        std::iter::once(0).chain(self.local_order.values().copied())
+    }
+
+    /// The local body at `index` with its position.
+    ///
+    /// # Panics
+    ///
+    /// Panics when `index` is not the index of one of the local bodies.
+    pub(super) fn local_at_index(&self, index: usize) -> (DagPosition, &L) {
+        (self.local_positions[index], &self.locals[index])
+    }
+
+    /// Where the DAG at `position` lives: the index of a local body, or the
+    /// imported handle.
+    ///
+    /// # Panics
+    ///
+    /// Panics when `position` is a position of another program with more
+    /// DAGs.
+    pub(super) fn slot_at(&self, position: DagPosition) -> SlotRef<'_> {
+        match self.slots[position.index()] {
+            Slot::Local(index) => SlotRef::Local(index),
+            Slot::Shared(index) => SlotRef::Shared(&self.shared[index]),
+        }
+    }
+
+    /// Every DAG with its position, in visiting order: the local bodies,
+    /// then the imported handles in identity order.
+    pub(super) fn iter_positions(&self) -> impl Iterator<Item = DagPosition> + '_ {
+        self.visiting_local_indices()
+            .map(|index| self.local_positions[index])
+            .chain(
+                self.shared_order
+                    .keys()
+                    .map(|dag_id| self.positions[dag_id]),
+            )
+    }
+
     /// Number of DAGs, local and imported.
     #[must_use]
     pub const fn len(&self) -> usize {
@@ -451,6 +505,13 @@ impl<L: SlotBody> DagSlots<L> {
             local_order: self.local_order,
             shared_order: self.shared_order,
         }
+    }
+}
+
+impl<T> LocalDagFacts<T> {
+    /// The table of `facts`, one for each local body in local-index order.
+    pub(super) const fn from_aligned(facts: Vec<T>) -> Self {
+        Self { facts }
     }
 }
 

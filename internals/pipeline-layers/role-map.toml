@@ -2230,6 +2230,11 @@ role = "contracts"
 
 [[module]]
 package = "eval"
+path = ["execution_plan", "tests"]
+role = "contracts"
+
+[[module]]
+package = "eval"
 path = ["constant_pools"]
 role = "contracts"
 
@@ -2588,6 +2593,11 @@ role = "checking"
 
 [[module]]
 package = "project"
+path = ["project_compiler", "include_static_bindings"]
+role = "contracts"
+
+[[module]]
+package = "project"
 path = ["project_compiler", "including_module"]
 role = "checking"
 
@@ -2734,6 +2744,11 @@ role = "contracts"
 
 [[module]]
 package = "compiler"
+path = ["tir", "typed", "instance_graph"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
 path = ["tir", "typed", "freeze"]
 role = "contracts"
 
@@ -2801,6 +2816,11 @@ role = "contracts"
 package = "project"
 path = ["loader", "loaded_project"]
 role = "contracts"
+
+[[module]]
+package = "project"
+path = ["loader", "loaded_module_resolver"]
+role = "checking"
 
 [[module]]
 package = "project"

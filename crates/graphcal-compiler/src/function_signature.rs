@@ -317,6 +317,34 @@ pub enum ResultKind<S = StructShape, V = DimBinder, I = IndexBinder> {
 /// A [`ResultKind`] as written, with binders referenced by name.
 pub type NamedResultKind<S = StructShape> = ResultKind<S, DimVarName, IndexVarName>;
 
+impl<S: Clone, V: Clone, I> ResultKind<S, V, I> {
+    /// The same result kind with each index variable of an indexed result,
+    /// in row-major axis order, replaced by `index` of its axis position.
+    ///
+    /// # Errors
+    ///
+    /// Returns the first error of `index`.
+    pub fn try_map_indexes<J, E>(
+        &self,
+        mut index: impl FnMut(usize, &I) -> Result<J, E>,
+    ) -> Result<ResultKind<S, V, J>, E> {
+        Ok(match self {
+            Self::Value(ParamKind::Scalar(scalar)) => {
+                ResultKind::Value(ParamKind::Scalar(scalar.clone()))
+            }
+            Self::Value(ParamKind::Indexed { element, indexes }) => {
+                let mut depth = 0..;
+                ResultKind::Value(ParamKind::Indexed {
+                    element: element.clone(),
+                    indexes: indexes
+                        .try_map_ref(|binder| index(depth.next().unwrap_or(usize::MAX), binder))?,
+                })
+            }
+            Self::Struct(payload) => ResultKind::Struct(payload.clone()),
+        })
+    }
+}
+
 impl<S, V, I> From<ParamKind<V, I>> for ResultKind<S, V, I> {
     fn from(kind: ParamKind<V, I>) -> Self {
         Self::Value(kind)

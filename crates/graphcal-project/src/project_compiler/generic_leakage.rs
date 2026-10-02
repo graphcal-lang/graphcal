@@ -6,7 +6,7 @@ use graphcal_compiler::semantic_error::visibility::ReexportedDeclarationKind;
     clippy::allow_attributes,
     reason = "leakage checks consume project compiler model types"
 )]
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 use graphcal_compiler::semantic_error::SemanticError;
 use graphcal_compiler::semantic_error::visibility::VisibilityError;
@@ -14,39 +14,28 @@ use graphcal_compiler::syntax::span::Span;
 
 use crate::compile_error::PipelineError;
 
+use super::include_static_bindings::IncludeStaticBindings;
 use super::including_module::IncludingModule;
 
 use graphcal_compiler::dag_id::DagId;
-use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
 use graphcal_compiler::ir::static_dependencies::{
     StaticReference, StaticScope, declaration_static_references,
 };
 use graphcal_compiler::ir::static_substitution::{InstanceIndexBindingTarget, StaticSubstitution};
 use graphcal_compiler::resolved_name::ResolvedStaticName;
-use graphcal_compiler::static_interface::{StaticRole, static_interface};
 use graphcal_compiler::syntax::ast::IntroducedKind;
 use graphcal_compiler::syntax::import_category::ImportItemNamespace;
 use graphcal_compiler::syntax::names::NameAtom;
-
-fn collect_required_binding_names(
-    declarations: &[graphcal_compiler::desugar::desugared_ast::Declaration],
-) -> HashMap<NameAtom, ImportItemNamespace> {
-    declarations
-        .iter()
-        .filter(|declaration| {
-            static_interface(&declaration.kind)
-                .is_some_and(|interface| interface.role() == StaticRole::RequiredInput)
-        })
-        .filter_map(|declaration| declaration.kind.declared_name())
-        .map(|introduced| (introduced.atom().clone(), introduced.namespace()))
-        .collect()
-}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum ReferenceSubstitution {
     /// The reference names a symbol of another module; includes never
     /// substitute it.
     External,
+    /// The include binds no target for this port of the dependency, which
+    /// keeps its own definition. Every required port is bound
+    /// ([`IncludeStaticBindings`]), so this is an optional port or an
+    /// ordinary declaration.
     Unbound,
     StructuralIndex,
     /// The canonical importer-side definition the include binds.
@@ -136,7 +125,7 @@ pub(super) fn check_generics_leakage(
     dep_declarations: &[graphcal_compiler::desugar::desugared_ast::Declaration],
     dep_scope: StaticScope<'_>,
     pub_reexport_items: &HashSet<NameAtom>,
-    substitution: &StaticSubstitution,
+    bindings: &IncludeStaticBindings,
     importer: &IncludingModule<'_>,
     include_span: Span,
 ) -> Result<(), PipelineError> {
@@ -149,7 +138,7 @@ pub(super) fn check_generics_leakage(
     if pub_reexport_items.is_empty() {
         return Ok(());
     }
-    let required_bindings = collect_required_binding_names(dep_declarations);
+    let substitution = bindings.substitution();
 
     for decl in dep_declarations {
         // Is this decl part of the importer's re-exported surface?
@@ -167,33 +156,17 @@ pub(super) fn check_generics_leakage(
         let refs = declaration_static_references(&decl.kind, dep_scope);
 
         // Only a concrete importer-side substitution can leak an importer
-        // declaration. Unsubstituted names remain dependency-local or builtin;
-        // required ports, however, must have a substitution by this phase.
+        // declaration. Unsubstituted names remain dependency-local or builtin.
         for reference in refs {
-            let reference_name = reference.target().atom();
-            let substituted = match reference_substitution(
-                &reference,
-                dep_scope.owner(),
-                substitution,
-            ) {
-                ReferenceSubstitution::External | ReferenceSubstitution::StructuralIndex => {
-                    continue;
-                }
-                ReferenceSubstitution::Unbound => {
-                    if let Some(namespace) = required_bindings.get(reference_name) {
-                        return Err(PipelineError::Semantic(SemanticError::internal_error(
-                            format!(
-                                "required {} binding `{reference_name}` is absent during generic-leakage analysis",
-                                namespace.noun(),
-                            ),
-                            importer_src,
-                            DiagnosticAnchor::Source(include_span),
-                        )));
+            let substituted =
+                match reference_substitution(&reference, dep_scope.owner(), &substitution) {
+                    ReferenceSubstitution::External
+                    | ReferenceSubstitution::StructuralIndex
+                    | ReferenceSubstitution::Unbound => {
+                        continue;
                     }
-                    continue;
-                }
-                ReferenceSubstitution::Importer(name) => name,
-            };
+                    ReferenceSubstitution::Importer(name) => name,
+                };
 
             let namespace = static_namespace(&substituted);
             if substituted.owner() == importer

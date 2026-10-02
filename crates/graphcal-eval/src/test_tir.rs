@@ -13,7 +13,11 @@ use graphcal_compiler::tir::typed::ProjectTypeStore;
 
 /// Check a single-file program named `test.gcl`, together with the source
 /// registry its source ids resolve in.
-pub fn checked_tir_from_source(
+#[expect(
+    clippy::redundant_pub_crate,
+    reason = "test-only module; `pub` would widen the test surface"
+)]
+pub(crate) fn checked_tir_from_source(
     source: &str,
 ) -> Result<
     (

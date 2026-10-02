@@ -15,8 +15,11 @@ use graphcal_package::PackageInstanceId;
 use crate::dependency_ordered::DependencyOrdered;
 
 use super::budget_violation::LoaderBudgetExceeded;
-use super::loaded_file::{LoadedDag, LoadedFile, LoadedModule};
-use super::module_path::{ResolvedModuleTarget, ResolvedModuleTargetError};
+use super::loaded_file::{LoadedDag, LoadedFile, LoadedModule, UnplacedTarget};
+use super::module_path::{LoadedModuleId, ModuleTarget, ResolvedModuleTarget};
+use crate::compile_error::CompileError;
+use graphcal_compiler::semantic_error::SemanticError;
+use graphcal_compiler::semantic_error::graph::GraphError;
 use graphcal_package::Sha256Digest;
 
 /// Fuel policies resolved from each owning package manifest into compiler-owned
@@ -100,25 +103,67 @@ pub struct LoadedProject {
 #[derive(Debug)]
 pub struct LoadedFiles {
     ordered: DependencyOrdered<LoadedFile>,
-    /// Position (in `ordered`) of the owner source file for every file-root
-    /// and inline DAG identity. Derived from `ordered` at construction.
-    owners: HashMap<DagId, usize>,
+    /// The loaded module of every file-root and inline DAG identity. Derived
+    /// from `ordered` at construction.
+    modules: HashMap<DagId, LoadedModuleId>,
 }
 
 impl LoadedFiles {
-    pub(super) fn new(ordered: DependencyOrdered<LoadedFile>) -> Self {
-        let owners = ordered
+    /// Index `ordered` and place the module target of every `import` /
+    /// `include` path, so each names a loaded module.
+    ///
+    /// # Errors
+    ///
+    /// Returns the first path, in dependency order and then source order,
+    /// that names an inline DAG its file does not declare.
+    pub(super) fn new(
+        ordered: DependencyOrdered<LoadedFile<ModuleTarget>>,
+    ) -> Result<Self, UnplacedTarget> {
+        let modules = ordered
             .iter()
             .enumerate()
-            .flat_map(|(position, file)| {
-                std::iter::once((file.dag_id.clone(), position)).chain(
-                    file.inline_dags
-                        .iter()
-                        .map(move |dag| (dag.dag_id.clone(), position)),
-                )
+            .flat_map(|(file, loaded)| {
+                std::iter::once((loaded.dag_id.clone(), LoadedModuleId { file, inline: None }))
+                    .chain(
+                        loaded
+                            .inline_dags
+                            .iter()
+                            .enumerate()
+                            .map(move |(inline, dag)| {
+                                (
+                                    dag.dag_id.clone(),
+                                    LoadedModuleId {
+                                        file,
+                                        inline: Some(inline),
+                                    },
+                                )
+                            }),
+                    )
             })
-            .collect();
-        Self { ordered, owners }
+            .collect::<HashMap<_, _>>();
+        let ordered = ordered.try_map(|file| file.place(&|target| modules.get(target).copied()))?;
+        Ok(Self { ordered, modules })
+    }
+
+    /// The loaded module `id` names.
+    #[expect(
+        clippy::expect_used,
+        reason = "module ids are issued only by this project's placement, over these files"
+    )]
+    pub(crate) fn module(&self, id: LoadedModuleId) -> LoadedModule<'_> {
+        let file = self
+            .ordered
+            .get(id.file)
+            .expect("a placed module id names a loaded file");
+        id.inline.map_or_else(
+            || file.module(),
+            |inline| {
+                file.inline_dags
+                    .get(inline)
+                    .expect("a placed module id names an inline DAG of its file")
+                    .module(file)
+            },
+        )
     }
 
     /// Files in dependency order, ending with the root file.
@@ -153,9 +198,16 @@ impl LoadedFiles {
 
     /// Source file that owns a file-root or inline DAG identity.
     pub(super) fn owner(&self, dag_id: &DagId) -> Option<&LoadedFile> {
-        self.owners
+        self.modules
             .get(dag_id)
-            .and_then(|position| self.ordered.get(*position))
+            .and_then(|module| self.ordered.get(module.file))
+    }
+
+    /// The loaded module of a file-root or inline DAG identity, with its id.
+    pub(crate) fn module_of(&self, dag_id: &DagId) -> Option<(LoadedModuleId, LoadedModule<'_>)> {
+        self.modules
+            .get(dag_id)
+            .map(|module| (*module, self.module(*module)))
     }
 }
 
@@ -255,19 +307,37 @@ pub enum PluginFileError {
 }
 
 impl LoadedProject {
+    /// Assemble a loaded project, placing every module path of its files.
+    ///
+    /// # Errors
+    ///
+    /// Returns G008 at the first module path naming an inline DAG its file
+    /// does not declare.
     pub(super) fn from_parts(
-        files: DependencyOrdered<LoadedFile>,
+        files: DependencyOrdered<LoadedFile<ModuleTarget>>,
         sources: SourceRegistry,
         plugins: HashMap<PluginIdentity, PluginFileEntry>,
         plugin_call_policy: PluginCallPolicy,
-    ) -> Self {
-        Self {
-            files: LoadedFiles::new(files),
+    ) -> Result<Self, CompileError> {
+        let files = LoadedFiles::new(files).map_err(|unplaced| {
+            CompileError::semantic(
+                SemanticError::located(
+                    unplaced.source,
+                    unplaced.span,
+                    GraphError::InlineDagTargetNotFound {
+                        target: unplaced.target,
+                    },
+                ),
+                &sources,
+            )
+        })?;
+        Ok(Self {
+            files,
             sources: Arc::new(sources),
             plugins,
             plugin_call_policy,
             package_closure: None,
-        }
+        })
     }
 
     /// Exact verified dependency closure, when the project has dependencies.
@@ -297,18 +367,24 @@ impl LoadedProject {
     /// The file root or inline DAG module `dag_id`.
     #[must_use]
     pub(crate) fn module(&self, dag_id: &DagId) -> Option<LoadedModule<'_>> {
-        self.file(dag_id).map_or_else(
-            || self.inline_dag(dag_id).map(|(file, dag)| dag.module(file)),
-            |file| Some(file.module()),
-        )
+        self.files.module_of(dag_id).map(|(_, module)| module)
     }
 
-    pub(crate) fn inline_dag(&self, dag_id: &DagId) -> Option<(&LoadedFile, &LoadedDag)> {
-        let file = self.files.owner(dag_id)?;
-        file.inline_dags
-            .iter()
-            .find(|inline| inline.dag_id == *dag_id)
-            .map(|inline| (file, inline))
+    /// The loaded module a resolved module path names.
+    #[must_use]
+    pub(crate) fn target_module(&self, target: &ResolvedModuleTarget) -> LoadedModule<'_> {
+        self.files.module(target.module())
+    }
+
+    /// The inline DAG module `dag_id`, with its id.
+    pub(crate) fn inline_dag(
+        &self,
+        dag_id: &DagId,
+    ) -> Option<(LoadedModuleId, &LoadedFile, &LoadedDag)> {
+        match self.files.module_of(dag_id)? {
+            (id, LoadedModule::InlineDag { file, dag }) => Some((id, file, dag)),
+            (_, LoadedModule::FileRoot(_)) => None,
+        }
     }
 
     /// Root source-file identity.
@@ -333,25 +409,5 @@ impl LoadedProject {
     #[must_use]
     pub const fn plugin_call_policy(&self) -> &PluginCallPolicy {
         &self.plugin_call_policy
-    }
-
-    /// Pair an exact DAG identity with the loaded source file that owns it.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`ResolvedModuleTargetError`] when `resolved` is not a file root
-    /// or inline DAG in this immutable project snapshot.
-    pub fn resolved_module_target(
-        &self,
-        resolved: &DagId,
-    ) -> Result<ResolvedModuleTarget, ResolvedModuleTargetError> {
-        self.files
-            .owner(resolved)
-            .map(|source_file| {
-                ResolvedModuleTarget::in_file(source_file.dag_id.clone(), resolved.clone())
-            })
-            .ok_or_else(|| ResolvedModuleTargetError::UnknownOwner {
-                target: resolved.clone(),
-            })
     }
 }

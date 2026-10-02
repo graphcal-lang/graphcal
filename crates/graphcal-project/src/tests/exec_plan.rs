@@ -92,7 +92,7 @@ fn callable_plans_use_the_checked_closure_schedule() {
         plan.root()
             .execution_dags()
             .iter()
-            .map(|scope| scope.dag().dag_id().clone())
+            .map(|closure| closure.scope().dag().dag_id().clone())
             .collect::<Vec<_>>(),
         schedule.execution_dags()
     );
@@ -118,9 +118,12 @@ fn callable_plans_use_the_checked_closure_schedule() {
         planned.scope().dag().dag_id(),
         instance.record().instance.id().owner()
     );
-    assert!(PlannedInstance::try_new(tir, instance, planned.scope()).is_ok());
+    assert!(PlannedInstance::try_new(tir, instance, planned.closure().clone()).is_ok());
+    let [root_closure, ..] = plan.root().execution_dags() else {
+        panic!("the root callable runs its own body");
+    };
     assert!(matches!(
-        PlannedInstance::try_new(tir, instance, plan.root().scope()),
+        PlannedInstance::try_new(tir, instance, root_closure.clone()),
         Err(graphcal_eval::execution_plan::PlannedInstanceError::ForeignScope { .. })
     ));
 }

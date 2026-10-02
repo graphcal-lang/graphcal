@@ -69,7 +69,11 @@ mod observer {
 
     thread_local! { static COUNTS: Cell<Counts> = Cell::new(Counts::default()); }
 
-    pub fn record_many(event: Event, amount: u64) {
+    #[expect(
+        clippy::redundant_pub_crate,
+        reason = "only the test-observing evaluator records batched events"
+    )]
+    pub(crate) fn record_many(event: Event, amount: u64) {
         COUNTS.with(|cell| {
             let mut counts = cell.get();
             let count = match event {

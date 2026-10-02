@@ -16,7 +16,7 @@ use graphcal_compiler::syntax::ast::{DeclKind, ModulePath};
 use super::loaded_file::{DagBodyLocator, LoadedDag};
 use graphcal_compiler::syntax::module_path_key::ModulePathKey;
 
-use super::module_path::ResolvedModuleTarget;
+use super::module_path::ModuleTarget;
 
 struct InlineDagLiftContext<'a, ResolveExternal> {
     file_dag_id: &'a DagId,
@@ -42,9 +42,9 @@ pub(super) fn lift_inline_dags<ResolveExternal, E>(
     file_dag_id: &DagId,
     file_stem: &str,
     resolve_external: ResolveExternal,
-) -> Result<Vec<LoadedDag>, E>
+) -> Result<Vec<LoadedDag<ModuleTarget>>, E>
 where
-    ResolveExternal: Fn(&ModulePath) -> Result<Option<ResolvedModuleTarget>, E>,
+    ResolveExternal: Fn(&ModulePath) -> Result<Option<ModuleTarget>, E>,
 {
     let same_file_dag_ids = collect_inline_dag_ids(&ast.declarations, file_dag_id);
     let context = InlineDagLiftContext {
@@ -63,10 +63,10 @@ fn lift_inline_dags_from_declarations<ResolveExternal, E>(
     lexical_parent_id: &DagId,
     context: &InlineDagLiftContext<'_, ResolveExternal>,
     parent_path: &[usize],
-    out: &mut Vec<LoadedDag>,
+    out: &mut Vec<LoadedDag<ModuleTarget>>,
 ) -> Result<(), E>
 where
-    ResolveExternal: Fn(&ModulePath) -> Result<Option<ResolvedModuleTarget>, E>,
+    ResolveExternal: Fn(&ModulePath) -> Result<Option<ModuleTarget>, E>,
 {
     for (index, decl) in declarations.iter().enumerate() {
         let DeclKind::Dag(dag) = &decl.kind else {
@@ -92,9 +92,9 @@ fn resolve_inline_body_imports<ResolveExternal, E>(
     body: &[Declaration],
     lexical_parent_id: &DagId,
     context: &InlineDagLiftContext<'_, ResolveExternal>,
-) -> Result<HashMap<ModulePathKey, ResolvedModuleTarget>, E>
+) -> Result<HashMap<ModulePathKey, ModuleTarget>, E>
 where
-    ResolveExternal: Fn(&ModulePath) -> Result<Option<ResolvedModuleTarget>, E>,
+    ResolveExternal: Fn(&ModulePath) -> Result<Option<ModuleTarget>, E>,
 {
     let mut resolved = HashMap::new();
     for path in body.iter().filter_map(|body_decl| match &body_decl.kind {
@@ -113,14 +113,14 @@ fn resolve_inline_body_import<ResolveExternal, E>(
     path: &ModulePath,
     lexical_parent_id: &DagId,
     context: &InlineDagLiftContext<'_, ResolveExternal>,
-) -> Result<Option<ResolvedModuleTarget>, E>
+) -> Result<Option<ModuleTarget>, E>
 where
-    ResolveExternal: Fn(&ModulePath) -> Result<Option<ResolvedModuleTarget>, E>,
+    ResolveExternal: Fn(&ModulePath) -> Result<Option<ModuleTarget>, E>,
 {
     if let Some(target) =
         resolve_same_file_inline_dag_path(path, lexical_parent_id, context.same_file_dag_ids)
     {
-        return Ok(Some(ResolvedModuleTarget::in_file(
+        return Ok(Some(ModuleTarget::in_file(
             context.file_dag_id.clone(),
             target,
         )));
@@ -128,9 +128,7 @@ where
     if let [segment] = path.segments()
         && segment.name.as_str() == context.file_stem
     {
-        return Ok(Some(ResolvedModuleTarget::file_root(
-            context.file_dag_id.clone(),
-        )));
+        return Ok(Some(ModuleTarget::file_root(context.file_dag_id.clone())));
     }
     (context.resolve_external)(path)
 }

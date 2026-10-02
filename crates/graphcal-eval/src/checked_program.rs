@@ -103,7 +103,7 @@ impl ExecutionFacts {
 
     /// The compile-time presented value of every constant with a
     /// presentation.
-    pub fn const_presentations(
+    pub(crate) fn const_presentations(
         &self,
     ) -> impl Iterator<Item = (&ResolvedDeclName, &EvaluatedRuntimeValue)> {
         self.by_dag
@@ -165,7 +165,7 @@ impl<'a> SealedDag<'a> {
 
     /// The DAG's position in its program's registry.
     #[must_use]
-    pub const fn position(self) -> DagPosition {
+    pub(crate) const fn position(self) -> DagPosition {
         self.position
     }
 
@@ -246,13 +246,13 @@ impl EvaluatedTir {
     /// Panics when `position` is a position of another registry with more
     /// DAGs.
     #[must_use]
-    pub fn pool_at(&self, position: DagPosition) -> &Arc<RuntimeValueMap> {
+    pub(crate) fn pool_at(&self, position: DagPosition) -> &Arc<RuntimeValueMap> {
         self.pools.at(position)
     }
 
     /// Facts of the checked modules this TIR includes.
     #[must_use]
-    pub const fn inherited(&self) -> &ExecutionFacts {
+    pub(crate) const fn inherited(&self) -> &ExecutionFacts {
         &self.inherited
     }
 
@@ -344,7 +344,7 @@ impl CheckedProgram {
 
     /// Every DAG of the program with its execution facts, in registry
     /// position order.
-    pub fn positioned(&self) -> impl Iterator<Item = (DagPosition, SealedDag<'_>)> {
+    pub(crate) fn positioned(&self) -> impl Iterator<Item = (DagPosition, SealedDag<'_>)> {
         self.tir
             .dag_registry()
             .positioned()

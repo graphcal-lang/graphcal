@@ -502,14 +502,22 @@ fn runtime_value_tree_node_count(value: &RuntimeValue) -> usize {
 /// Test-only: reset the count of runtime value nodes cloned by graph
 /// references and index accesses.
 #[cfg(test)]
-pub fn reset_cloned_runtime_node_count() {
+#[expect(
+    clippy::redundant_pub_crate,
+    reason = "test-only helper of a private module; `pub` would widen the test surface"
+)]
+pub(crate) fn reset_cloned_runtime_node_count() {
     CLONED_RUNTIME_NODES.with(|count| count.set(0));
 }
 
 /// Test-only: take the count of cloned runtime value nodes.
 #[cfg(test)]
 #[must_use]
-pub fn take_cloned_runtime_node_count() -> usize {
+#[expect(
+    clippy::redundant_pub_crate,
+    reason = "test-only helper of a private module; `pub` would widen the test surface"
+)]
+pub(crate) fn take_cloned_runtime_node_count() -> usize {
     CLONED_RUNTIME_NODES.with(|count| count.replace(0))
 }
 
@@ -621,9 +629,7 @@ fn eval_extern_fn(
     span: Span,
     ext: &graphcal_compiler::hir::expr::ExternFnRef,
     args: Scoped<'_, [TExternArg]>,
-    result: &graphcal_compiler::function_signature::ResultKind<
-        graphcal_compiler::extern_struct_result::ExternStructResult,
-    >,
+    result: &graphcal_compiler::tir::texpr::TExternResult,
     values: &RuntimeValueMap,
     local_values: &HirLocalValueMap<'_>,
     ctx: &EvalSession<'_>,
@@ -1213,9 +1219,10 @@ fn check_inline_plan_asserts(
     span: Span,
     ctx: &EvalSession<'_>,
 ) -> Result<(), Outcome<SemanticError>> {
-    callable.execution_dags().iter().try_for_each(|scope| {
+    callable.execution_dags().iter().try_for_each(|closure| {
+        let scope = closure.scope();
         check_inline_dag_asserts(
-            *scope,
+            scope,
             values,
             &ctx.with_src(scope.source()),
             target,

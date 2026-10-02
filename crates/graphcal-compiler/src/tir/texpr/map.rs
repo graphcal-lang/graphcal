@@ -25,6 +25,7 @@ use crate::syntax::span::{Span, Spanned};
 use super::model::{
     StaticPosition, TBody, TConstRef, TConstruct, TConstructorArm, TExpr, TExprKind, TExternArg,
     TFieldInit, TForBinding, TIndexArg, TKeyForm, TLabelArm, TMapEntry, TMatchArms, TParamBinding,
+    TResultAxis,
 };
 
 /// The entry of its axis a constant key a node carries names.
@@ -435,7 +436,12 @@ impl<V: Concreteness> TExpr<V> {
                 result,
             } => TExprKind::Extern {
                 function: function.clone(),
-                result: result.clone(),
+                result: result.try_map_indexes(|depth, carried| {
+                    Ok(TResultAxis {
+                        binder: carried.binder.clone(),
+                        axis: map.axis(&carried.axis, nested_index(ty, depth), span)?,
+                    })
+                })?,
                 args: args
                     .iter()
                     .map(|arg| {

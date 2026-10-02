@@ -599,7 +599,8 @@ fn unit_overlay_tir_with(
     let info = tir.unit_info(&unit).unwrap().clone();
     tir.insert_runtime_unit(unit.clone(), info).unwrap();
     extra(&mut tir, &unit);
-    let tir = InstantiatedTir { tir }
+    let instances = super::instance_graph::InstanceGraph::new(&tir.dags);
+    let tir = InstantiatedTir { tir, instances }
         .check(
             crate::source_registry::SourceRegistry::new()
                 .register(path, Arc::new(source.to_string())),
@@ -1876,6 +1877,84 @@ fn checked_tir_pairs_each_local_body_with_everything_its_check_published() {
     assert_eq!(
         root.runtime_schedule().execution_dags(),
         std::slice::from_ref(tir.root_dag_id())
+    );
+}
+
+#[test]
+fn instance_graph_splits_canonical_bodies_from_materialized_instances() {
+    use super::instance_graph::{InstanceGraph, TemplateBody};
+    use crate::syntax::module_name::{ModuleAliasName, ScopeSegment};
+
+    let mut tir = draft_with_local_children().finish();
+    let root_id = tir.root_dag_id().clone();
+    let a_id = root_id.inline_dag_child(crate::syntax::decl_name::DeclName::expect_valid("a"));
+    let mut graph = InstanceGraph::new(&tir.dags);
+    assert!(
+        graph
+            .template(
+                &tir.dags,
+                &root_id.instance_child(ScopeSegment::Named(ModuleAliasName::expect_valid("nope")))
+            )
+            .is_none()
+    );
+    let (a_position, template) = graph.template(&tir.dags, &a_id).unwrap();
+    assert!(matches!(template, TemplateBody::Local(_)));
+
+    // Materialize one instance of `a` under the root.
+    let instance_id =
+        root_id.instance_child(ScopeSegment::Named(ModuleAliasName::expect_valid("i")));
+    let mut instance = tir.dags.at(a_position).clone();
+    instance.dag_id = instance_id.clone();
+    let specialization = crate::ir::static_substitution::StaticSpecializationId::new(
+        a_id.clone(),
+        crate::ir::static_substitution::StaticSubstitution::default(),
+    );
+    let instance_position = graph
+        .push_instance(
+            &mut tir.dags,
+            instance,
+            (a_position, template),
+            specialization.clone(),
+        )
+        .unwrap();
+    graph.record_edge(super::dag_position::DagPosition::ROOT, instance_position);
+    assert_eq!(
+        graph.instances_of(super::dag_position::DagPosition::ROOT),
+        [instance_position]
+    );
+    assert!(graph.instances_of(a_position).is_empty());
+    // An instance is never a template.
+    assert!(graph.template(&tir.dags, &instance_id).is_none());
+
+    let canonical = graph
+        .map_canonical(&tir.dags, |position, dag| {
+            assert_eq!(tir.dags.position(dag.dag_id()), Some(position));
+            Ok::<_, ()>(dag.dag_id().clone())
+        })
+        .unwrap();
+    assert_eq!(canonical.iter().count(), 3);
+    assert!(canonical.iter().all(|dag_id| dag_id != &instance_id));
+    let instances = graph
+        .map_instances(&tir.dags, |position, dag, origin| {
+            assert_eq!(position, instance_position);
+            assert_eq!(origin.template_position(), a_position);
+            assert_eq!(origin.specialization(), &specialization);
+            match canonical.template(origin.template()) {
+                super::instance_graph::TemplateFact::Local(template) => {
+                    assert_eq!(template, &a_id);
+                }
+                super::instance_graph::TemplateFact::Shared(_) => panic!("local template"),
+            }
+            Ok::<_, ()>(dag.dag_id().clone())
+        })
+        .unwrap();
+    // The joined table pairs every local body with its own fact.
+    let joined = graph.join(canonical, instances);
+    assert_eq!(tir.dags.with_local_facts(&joined).count(), 4);
+    assert!(
+        tir.dags
+            .with_local_facts(&joined)
+            .all(|(dag, fact)| dag.dag_id() == fact)
     );
 }
 

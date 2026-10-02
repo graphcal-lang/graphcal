@@ -25,6 +25,7 @@ use crate::syntax::ast::ModulePath;
 use crate::syntax::module_path_key::ModulePathKey;
 
 use super::error::ModuleResolveError;
+use super::module_table::{ModuleHandle, ModuleTable};
 use super::scope::{ModuleScope, declare_aliases};
 use super::symbols::ModuleSymbols;
 use super::{ModuleEntry, ModuleResolver};
@@ -81,10 +82,12 @@ struct SourceModule<'a> {
 type PackageModulePath = (DagPackageId, ModulePathKey);
 
 /// Stage 1: the declarations of every source module.
+///
+/// Each module takes its [`ModuleHandle`] when it is added; the resolver this
+/// stage builds keeps that handle for it.
 #[derive(Debug, Default)]
 pub struct SymbolTables<'a> {
-    modules: HashMap<DagId, SourceModule<'a>>,
-    order: Vec<DagId>,
+    modules: ModuleTable<SourceModule<'a>>,
     module_paths: HashMap<PackageModulePath, DagId>,
 }
 
@@ -99,18 +102,20 @@ impl<'a> SymbolTables<'a> {
     /// submodule and an inline `dag` of one name), and the first
     /// symbol-collection error of the module's own declarations and aliases.
     /// The module is not added on error.
+    ///
+    /// The returned handle names the module in the resolver this stage
+    /// builds.
     pub fn add_module(
         &mut self,
         owner: DagId,
         declarations: &'a [ast::Declaration],
-    ) -> Result<(), ModuleResolveError> {
+    ) -> Result<ModuleHandle, ModuleResolveError> {
         let path_key = self.new_module_path(&owner)?;
         let (entry, errors) = collected_entry(owner.clone(), declarations);
         if let Some(error) = errors.into_iter().next() {
             return Err(error);
         }
-        self.insert(owner, path_key, declarations, entry);
-        Ok(())
+        Ok(self.insert(owner, path_key, declarations, entry))
     }
 
     /// Add one source module even when some of its declarations cannot be
@@ -164,18 +169,17 @@ impl<'a> SymbolTables<'a> {
         path_key: Option<PackageModulePath>,
         declarations: &'a [ast::Declaration],
         entry: ModuleEntry,
-    ) {
+    ) -> ModuleHandle {
         if let Some(key) = path_key {
             self.module_paths.insert(key, owner.clone());
         }
-        self.order.push(owner.clone());
         self.modules.insert(
             owner,
             SourceModule {
                 declarations,
                 entry,
             },
-        );
+        )
     }
 
     /// Add a file root and, in source preorder, every inline `dag` nested in
@@ -223,19 +227,14 @@ impl<'a> SymbolTables<'a> {
         self,
         targets: &impl ModuleTargets,
     ) -> Result<ScopeBuilder<'a>, ModuleResolveError> {
-        let Self {
-            mut modules, order, ..
-        } = self;
-        // Source modules take their handles in registration order, so one
-        // set of registrations always yields the same handles.
-        let mut entries = super::module_table::ModuleTable::default();
-        let mut declarations = HashMap::with_capacity(modules.len());
-        for owner in &order {
-            if let Some(module) = modules.remove(owner) {
-                declarations.insert(owner.clone(), module.declarations);
-                entries.insert(owner.clone(), module.entry);
-            }
-        }
+        let Self { modules, .. } = self;
+        let order = modules.owners().cloned().collect::<Vec<_>>();
+        let declarations = modules
+            .iter()
+            .map(|(owner, module)| (owner.clone(), module.declarations))
+            .collect::<HashMap<_, _>>();
+        // Every source module keeps the handle it took when it was added.
+        let entries = modules.map(|module| module.entry);
         let own_edges = order
             .iter()
             .cloned()

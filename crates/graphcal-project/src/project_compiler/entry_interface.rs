@@ -80,7 +80,8 @@ impl CheckedEntryOutput {
 #[derive(Debug)]
 pub struct RequiredEntryIndex {
     name: IndexName,
-    anchor: DiagnosticAnchor,
+    /// The index declaration in the entry source.
+    span: Span,
 }
 
 impl RequiredEntryIndex {
@@ -88,8 +89,9 @@ impl RequiredEntryIndex {
         &self.name
     }
 
-    pub const fn anchor(&self) -> DiagnosticAnchor {
-        self.anchor
+    /// The index declaration in the entry source.
+    pub const fn span(&self) -> Span {
+        self.span
     }
 }
 
@@ -123,7 +125,7 @@ fn missing_interface_fact_internal_error(
     PipelineError::Semantic(SemanticError::internal_error(
         message,
         source,
-        graphcal_compiler::diagnostic_anchor::DiagnosticAnchor::Source(span),
+        DiagnosticAnchor::Source(span),
     ))
 }
 
@@ -204,7 +206,7 @@ pub(super) fn build_checked_entry_interface(
                 if required_index.is_none() && definition.is_required() {
                     required_index = Some(RequiredEntryIndex {
                         name: identity.leaf().clone(),
-                        anchor: DiagnosticAnchor::Source(*span),
+                        span: *span,
                     });
                 }
             }

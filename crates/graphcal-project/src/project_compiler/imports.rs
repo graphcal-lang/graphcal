@@ -17,7 +17,6 @@ use graphcal_compiler::resolved_name::ResolvedDeclName;
 use graphcal_compiler::semantic::index_def::IndexBindingTarget;
 use graphcal_compiler::semantic_error::SemanticError;
 use graphcal_compiler::semantic_error::graph::{DagReference, GraphError};
-use graphcal_compiler::semantic_error::index::IndexError;
 use graphcal_compiler::semantic_error::module::ModuleError;
 use graphcal_compiler::semantic_error::name::{DuplicateDeclaration, NameError};
 use graphcal_compiler::semantic_error::visibility::VisibilityError;
@@ -31,13 +30,16 @@ use graphcal_compiler::syntax::type_name::StructTypeName;
 
 use super::binding_values::{extract_index_binding_target, extract_type_name_from_binding_expr};
 use super::including_module::IncludingModule;
-use super::module_resolve_errors::module_resolve_compile_error;
 use crate::compile_error::PipelineError;
+use crate::loader::loaded_file::LoadedModule;
 
-use super::model::{
-    BoundIndexPort, ImportAlias, ImportContext, IncludeInstanceRequest, IncludeStaticBindings,
-    ProjectModuleBinding, UnitProjectionAlias,
+use super::include_static_bindings::{
+    CoveredStaticBindings, StaticBindingResolution, validate_required_static_bindings,
 };
+use super::model::{
+    ImportAlias, ImportContext, IncludeInstanceRequest, ProjectModuleBinding, UnitProjectionAlias,
+};
+use super::module_resolve_errors::module_resolve_compile_error;
 use crate::import_surface::{
     import_item_not_found_error, validate_constructor_alias, validate_reserved_alias,
 };
@@ -54,7 +56,7 @@ use graphcal_compiler::ir::static_dependencies::{
     static_import_rejection,
 };
 use graphcal_compiler::plot_visibility::PlotVisibility;
-use graphcal_compiler::resolve::category::{DeclSymbolKind, ExportedImportItemKind};
+use graphcal_compiler::resolve::category::DeclSymbolKind;
 use graphcal_compiler::resolve::exports::ExportedBindingTarget;
 use graphcal_compiler::resolve::namespace::Namespace;
 use graphcal_compiler::static_interface::{
@@ -124,6 +126,8 @@ fn static_input_is_bindable(
 
 pub(super) struct InlineDagIncludeTarget<'a> {
     pub(super) module: crate::loader::loaded_file::LoadedModule<'a>,
+    /// The same module in the module resolver.
+    pub(super) resolved: graphcal_compiler::resolve::ModuleRef<'a>,
     pub(super) dag_name: &'a DeclName,
 }
 
@@ -135,10 +139,11 @@ pub(super) struct InlineDagIncludeTarget<'a> {
 pub(super) fn process_file_body_declarations<'a>(
     project: &'a crate::loader::loaded_project::LoadedProject,
     loaded_file: &crate::loader::loaded_file::LoadedFile,
-    module_resolver: &graphcal_compiler::resolve::ModuleResolver,
+    modules: &'a crate::loader::loaded_module_resolver::LoadedModuleResolver,
     ctx: &mut ImportContext<'a>,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<(), Outcome<PipelineError>> {
+    let module_resolver = modules.resolver();
     let file_dag_id = loaded_file.dag_id();
     let file_src = loaded_file.source_id();
     let including = IncludingModule {
@@ -158,17 +163,25 @@ pub(super) fn process_file_body_declarations<'a>(
                 StaticScope::new(file_dag_id, module_resolver),
             ),
             file_src,
-            module_resolver,
+            modules,
             ctx,
         )?;
     }
 
     for (declaration, include, target) in loaded_file.includes_with_targets() {
         cancellation.checkpoint()?;
-        if target.target() != target.source_file() {
+        if !matches!(project.target_module(target), LoadedModule::FileRoot(_)) {
             continue;
         }
-        process_file_include(project, target, include, declaration, &including, ctx)?;
+        process_file_include(
+            project,
+            modules,
+            target,
+            include,
+            declaration,
+            &including,
+            ctx,
+        )?;
     }
 
     for declaration in &loaded_file.ast().declarations {
@@ -182,12 +195,13 @@ pub(super) fn process_file_body_declarations<'a>(
         let dag_name = &include.path.segments[0].name;
         // A single-segment include names a top-level `dag` of this file.
         let dag_id = file_dag_id.inline_dag_child(DeclName::classify(dag_name.atom().clone()));
-        let Some((dag_file, loaded_dag)) = project.inline_dag(&dag_id) else {
+        let Some((module, dag_file, loaded_dag)) = project.inline_dag(&dag_id) else {
             continue;
         };
         process_inline_dag_include(
             &InlineDagIncludeTarget {
                 module: loaded_dag.module(dag_file),
+                resolved: modules.module(module),
                 dag_name: &loaded_dag.declaration(dag_file).name.value,
             },
             include,
@@ -199,18 +213,12 @@ pub(super) fn process_file_body_declarations<'a>(
 
     for (declaration, include, target) in loaded_file.includes_with_targets() {
         cancellation.checkpoint()?;
-        if target.target() == target.source_file() {
+        let LoadedModule::InlineDag {
+            file: target_loaded,
+            dag: target_dag,
+        } = project.target_module(target)
+        else {
             continue;
-        }
-        let Some((target_loaded, target_dag)) = project.inline_dag(target.target()) else {
-            return Err(PipelineError::Semantic(SemanticError::located(
-                file_src,
-                include.path.span(),
-                GraphError::InlineDagTargetNotFound {
-                    target: target.target().clone(),
-                },
-            ))
-            .into());
         };
         if !target_dag.declaration(target_loaded).visibility.is_public()
             && target.source_file() != file_dag_id
@@ -228,6 +236,7 @@ pub(super) fn process_file_body_declarations<'a>(
         process_inline_dag_include(
             &InlineDagIncludeTarget {
                 module: target_dag.module(target_loaded),
+                resolved: modules.target(target),
                 dag_name: &target_dag.declaration(target_loaded).name.value,
             },
             include,
@@ -433,21 +442,6 @@ fn validate_include_item_attributes(
     Ok(visibility)
 }
 
-fn exported_bindings(
-    resolver: &graphcal_compiler::resolve::ModuleResolver,
-    owner: &graphcal_compiler::dag_id::DagId,
-    file_src: SourceId,
-    span: Span,
-) -> Result<Vec<graphcal_compiler::resolve::exports::ExportedBinding>, PipelineError> {
-    resolver.exported_bindings(owner).map_err(|error| {
-        PipelineError::Semantic(SemanticError::internal_error(
-            format!("module resolver could not enumerate exports of `{owner}`: {error}"),
-            file_src,
-            graphcal_compiler::diagnostic_anchor::DiagnosticAnchor::Source(span),
-        ))
-    })
-}
-
 fn validate_include_producers(
     items: &[graphcal_compiler::desugar::desugared_ast::ImportItem],
     file_src: SourceId,
@@ -508,7 +502,7 @@ fn file_exports_plot(
 /// four binding maps based on what the dependency declares the binding name
 /// as, keyed by the dependency-side name. Index values retain a typed
 /// declared-or-structural target. The Static maps serve interface-level
-/// validation only; [`resolve_include_static_bindings`] turns them into the
+/// validation only; [`CoveredStaticBindings::resolve`] turns them into the
 /// canonical bindings an include instance carries.
 struct ClassifiedBindings {
     params: HashMap<DeclName, graphcal_compiler::desugar::desugared_ast::Expr>,
@@ -518,58 +512,63 @@ struct ClassifiedBindings {
     dims: HashMap<DimName, DimName>,
 }
 
-/// One include's authored Static bindings, keyed by dependency-side name.
-struct AuthoredStaticBindings {
-    indexes: HashMap<IndexName, IndexBindingTarget>,
-    index_spans: HashMap<IndexName, Span>,
-    types: HashMap<StructTypeName, StructTypeName>,
-    dims: HashMap<DimName, DimName>,
+/// The Static binding resolution of one include site: each port in the
+/// template's scope, each target in the importer's.
+struct IncludeSite<'a> {
+    template: &'a graphcal_compiler::dag_id::DagId,
+    importer: StaticScope<'a>,
+    src: SourceId,
 }
 
-/// Resolve one include's authored Static bindings canonically: each port in
-/// the template's scope, each target in the importer's (`scope`).
-///
-/// A dimension target may also name a prelude dimension.
-fn resolve_include_static_bindings(
-    authored: AuthoredStaticBindings,
-    template: &graphcal_compiler::dag_id::DagId,
-    scope: StaticScope<'_>,
-    src: SourceId,
-    include_span: Span,
-) -> Result<IncludeStaticBindings, PipelineError> {
-    use graphcal_compiler::ir::static_substitution::InstanceIndexBindingTarget;
-    use graphcal_compiler::resolve::symbols::SymbolRef;
-    use graphcal_compiler::syntax::names::NamePath;
+impl IncludeSite<'_> {
+    /// The canonical identity of the Static port `port` the template
+    /// declares.
+    fn port<Ns: graphcal_compiler::resolve::tables::NamespaceTables>(
+        &self,
+        port: &graphcal_compiler::syntax::names::NameDef<Ns>,
+    ) -> Result<graphcal_compiler::resolved_name::ResolvedName<Ns>, PipelineError> {
+        self.importer
+            .resolver()
+            .declaration(self.template, port)
+            .map(graphcal_compiler::resolve::symbols::SymbolRef::into_resolved)
+            .map_err(|error| {
+                PipelineError::Semantic(SemanticError::internal_error(
+                    format!("template port `{port}` has no canonical identity: {error}"),
+                    self.src,
+                    graphcal_compiler::diagnostic_anchor::DiagnosticAnchor::WholeFile,
+                ))
+            })
+    }
+}
 
-    let AuthoredStaticBindings {
-        indexes,
-        index_spans,
-        types,
-        dims,
-    } = authored;
-    let resolver = scope.resolver();
-    let missing_port_internal_error = |kind: &str, port: &dyn std::fmt::Display| {
-        PipelineError::Semantic(SemanticError::internal_error(
-            format!("template {kind} port `{port}` has no canonical identity"),
-            src,
-            graphcal_compiler::diagnostic_anchor::DiagnosticAnchor::WholeFile,
-        ))
-    };
-    let mut bindings = IncludeStaticBindings::default();
-    for (port, authored) in indexes {
-        let span = index_spans.get(&port).copied().unwrap_or(include_span);
-        let identity = resolver
-            .resolve_index_path(template, &NamePath::local(port.atom().clone()))
-            .map(SymbolRef::into_resolved)
-            .map_err(|_| missing_port_internal_error("index", &port))?;
-        let target = match &authored {
+impl StaticBindingResolution for IncludeSite<'_> {
+    fn index(
+        &self,
+        port: &IndexName,
+        authored: &IndexBindingTarget,
+        span: Span,
+    ) -> Result<
+        (
+            graphcal_compiler::resolved_name::ResolvedIndexName,
+            graphcal_compiler::ir::static_substitution::InstanceIndexBindingTarget,
+        ),
+        PipelineError,
+    > {
+        use graphcal_compiler::ir::static_substitution::InstanceIndexBindingTarget;
+
+        let identity = self.port(port)?;
+        let target = match authored {
             IndexBindingTarget::Declared(target) => InstanceIndexBindingTarget::Declared(
-                resolver
-                    .resolve_index_path(scope.owner(), &NamePath::local(target.atom().clone()))
-                    .map(SymbolRef::into_resolved)
+                self.importer
+                    .resolver()
+                    .resolve_index_path(
+                        self.importer.owner(),
+                        &graphcal_compiler::syntax::names::NamePath::local(target.atom().clone()),
+                    )
+                    .map(graphcal_compiler::resolve::symbols::SymbolRef::into_resolved)
                     .map_err(|_| {
                         PipelineError::Semantic(SemanticError::located(
-                            src,
+                            self.src,
                             span,
                             ModuleError::IndexBindingNotAnIndex {
                                 dep_index: port.clone(),
@@ -580,45 +579,60 @@ fn resolve_include_static_bindings(
             ),
             IndexBindingTarget::Finite(finite) => InstanceIndexBindingTarget::Finite(*finite),
         };
-        bindings.indexes.insert(
-            identity,
-            BoundIndexPort {
-                target,
-                authored,
-                span,
-            },
-        );
+        Ok((identity, target))
     }
-    for (port, target) in types {
-        let identity = resolver
-            .resolve_struct_type_path(template, &NamePath::local(port.atom().clone()))
-            .map(SymbolRef::into_resolved)
-            .map_err(|_| missing_port_internal_error("type", &port))?;
-        let target = resolver
-            .resolve_struct_type_path(scope.owner(), &NamePath::local(target.atom().clone()))
-            .map(SymbolRef::into_resolved)
-            .map_err(|error| module_resolve_compile_error(error, src))?;
-        bindings.types.insert(identity, target);
+
+    fn struct_type(
+        &self,
+        port: &StructTypeName,
+        target: &StructTypeName,
+    ) -> Result<
+        (
+            graphcal_compiler::resolved_name::ResolvedStructTypeName,
+            graphcal_compiler::resolved_name::ResolvedStructTypeName,
+        ),
+        PipelineError,
+    > {
+        let identity = self.port(port)?;
+        let target = self
+            .importer
+            .resolver()
+            .resolve_struct_type_path(
+                self.importer.owner(),
+                &graphcal_compiler::syntax::names::NamePath::local(target.atom().clone()),
+            )
+            .map(graphcal_compiler::resolve::symbols::SymbolRef::into_resolved)
+            .map_err(|error| module_resolve_compile_error(error, self.src))?;
+        Ok((identity, target))
     }
-    let prelude = graphcal_compiler::resolve::prelude::prelude_type_scope();
-    for (port, target) in dims {
-        let identity = resolver
-            .resolve_dimension_path(template, &NamePath::local(port.atom().clone()))
-            .map(SymbolRef::into_resolved)
-            .map_err(|_| missing_port_internal_error("dimension", &port))?;
-        let path = NamePath::local(target.atom().clone());
-        let target = match resolver
-            .resolve_dimension_path(scope.owner(), &path)
-            .map(SymbolRef::into_resolved)
+
+    /// A dimension target may also name a prelude dimension.
+    fn dimension(
+        &self,
+        port: &DimName,
+        target: &DimName,
+    ) -> Result<
+        (
+            graphcal_compiler::resolved_name::ResolvedDimName,
+            graphcal_compiler::resolved_name::ResolvedDimName,
+        ),
+        PipelineError,
+    > {
+        let identity = self.port(port)?;
+        let path = graphcal_compiler::syntax::names::NamePath::local(target.atom().clone());
+        let target = match self
+            .importer
+            .resolver()
+            .resolve_dimension_path(self.importer.owner(), &path)
+            .map(graphcal_compiler::resolve::symbols::SymbolRef::into_resolved)
         {
             Ok(identity) => identity,
-            Err(error) => prelude
+            Err(error) => graphcal_compiler::resolve::prelude::prelude_type_scope()
                 .resolve_dimension_path(&path)
-                .ok_or_else(|| module_resolve_compile_error(error, src))?,
+                .ok_or_else(|| module_resolve_compile_error(error, self.src))?,
         };
-        bindings.dimensions.insert(identity, target);
+        Ok((identity, target))
     }
-    Ok(bindings)
 }
 
 /// Route each binding through the namespace/category selected by its authored
@@ -804,48 +818,6 @@ fn record_unit_projection(
     }
 }
 
-fn validate_required_static_bindings(
-    dep: &ModuleInterface,
-    type_bindings: &HashMap<StructTypeName, StructTypeName>,
-    dim_bindings: &HashMap<DimName, DimName>,
-    index_bindings: &HashMap<IndexName, IndexBindingTarget>,
-    file_src: SourceId,
-    include_span: Span,
-) -> Result<(), PipelineError> {
-    let mut missing = dep
-        .static_declarations()
-        .filter(|(kind, name, role)| {
-            role.is_required()
-                && !match kind {
-                    StaticInputKind::Type => {
-                        type_bindings.contains_key(&StructTypeName::classify((*name).clone()))
-                    }
-                    StaticInputKind::Dimension => {
-                        dim_bindings.contains_key(&DimName::classify((*name).clone()))
-                    }
-                    StaticInputKind::Index => {
-                        index_bindings.contains_key(&IndexName::classify((*name).clone()))
-                    }
-                }
-        })
-        .map(|(kind, name, _)| (kind, name.clone()))
-        .collect::<Vec<_>>();
-    missing.sort_by(|(first_kind, first_name), (second_kind, second_name)| {
-        first_kind
-            .marker()
-            .cmp(second_kind.marker())
-            .then_with(|| first_name.cmp(second_name))
-    });
-    let Some((kind, name)) = missing.into_iter().next() else {
-        return Ok(());
-    };
-    Err(PipelineError::Semantic(SemanticError::located(
-        file_src,
-        include_span,
-        IndexError::RequiredStaticInputNotBound { kind, name },
-    )))
-}
-
 pub(super) fn validate_direct_dag_call_bindings(
     args: &[graphcal_compiler::desugar::desugared_ast::ParamBinding],
     dependency: &ModuleInterface,
@@ -911,6 +883,7 @@ fn validate_required_param_bindings(
 )]
 pub(super) fn process_file_include<'a>(
     project: &'a crate::loader::loaded_project::LoadedProject,
+    modules: &crate::loader::loaded_module_resolver::LoadedModuleResolver,
     target: &crate::loader::module_path::ResolvedModuleTarget,
     include_decl: &graphcal_compiler::desugar::desugared_ast::IncludeDecl,
     decl: &graphcal_compiler::desugar::desugared_ast::Declaration,
@@ -922,24 +895,10 @@ pub(super) fn process_file_include<'a>(
         source: file_src,
         scope: importer_scope,
     } = *including;
-    let module_resolver = importer_scope.resolver();
-    let dependency = project.module(target.target()).ok_or_else(|| {
-        PipelineError::Semantic(SemanticError::internal_error(
-            format!("included module `{}` is not loaded", target.target()),
-            file_src,
-            graphcal_compiler::diagnostic_anchor::DiagnosticAnchor::Source(
-                include_decl.path.span(),
-            ),
-        ))
-    })?;
+    let dependency = project.target_module(target);
     let import_dag_id = dependency.dag_id();
     let dep = dependency.interface();
-    let exported_bindings = exported_bindings(
-        module_resolver,
-        import_dag_id,
-        file_src,
-        include_decl.path.span(),
-    )?;
+    let exported_bindings = modules.target(target).exported_bindings();
 
     // A module-form include introduces a source-visible alias and therefore
     // participates in duplicate-alias checks. A selective include introduces
@@ -1109,25 +1068,22 @@ pub(super) fn process_file_include<'a>(
     };
     let surface_outputs = include_surface_outputs(dep, &instance_scope, selective_names.as_deref());
 
-    validate_required_static_bindings(
+    let covered_static_bindings = CoveredStaticBindings::check(
         dep,
-        &type_bindings,
-        &dim_bindings,
-        &index_bindings,
+        index_bindings,
+        index_binding_spans,
+        type_bindings,
+        dim_bindings,
         file_src,
         include_decl.path.span(),
     )?;
     validate_required_param_bindings(dep, &bindings, &dep_path_display, file_src, decl.span)?;
-    let static_bindings = resolve_include_static_bindings(
-        AuthoredStaticBindings {
-            indexes: index_bindings,
-            index_spans: index_binding_spans,
-            types: type_bindings,
-            dims: dim_bindings,
+    let static_bindings = covered_static_bindings.resolve(
+        &IncludeSite {
+            template: import_dag_id,
+            importer: importer_scope,
+            src: file_src,
         },
-        import_dag_id,
-        importer_scope,
-        file_src,
         decl.span,
     )?;
 
@@ -1187,8 +1143,6 @@ pub(super) fn process_inline_dag_include<'a>(
         scope: importer_scope,
     } = *including;
 
-    let module_resolver = importer_scope.resolver();
-
     let dep = target.module.interface();
     let dag_name = target.dag_name;
     let dag_reference = DagReference::InlineDag(dag_name.clone());
@@ -1218,8 +1172,7 @@ pub(super) fn process_inline_dag_include<'a>(
         );
     }
 
-    let exported_bindings =
-        exported_bindings(module_resolver, dag_id, file_src, include_decl.path.span())?;
+    let exported_bindings = target.resolved.exported_bindings();
 
     // Classify bindings against the DAG body's declarations. Typed index
     // compatibility is deferred to the same registry-backed path as file DAGs.
@@ -1346,25 +1299,22 @@ pub(super) fn process_inline_dag_include<'a>(
     };
     let surface_outputs = include_surface_outputs(dep, &instance_scope, selective_names.as_deref());
 
-    validate_required_static_bindings(
+    let covered_static_bindings = CoveredStaticBindings::check(
         dep,
-        &type_bindings,
-        &dim_bindings,
-        &index_bindings,
+        index_bindings,
+        index_binding_spans,
+        type_bindings,
+        dim_bindings,
         file_src,
         include_decl.path.span(),
     )?;
     validate_required_param_bindings(dep, &bindings, &dag_reference, file_src, decl.span)?;
-    let static_bindings = resolve_include_static_bindings(
-        AuthoredStaticBindings {
-            indexes: index_bindings,
-            index_spans: index_binding_spans,
-            types: type_bindings,
-            dims: dim_bindings,
+    let static_bindings = covered_static_bindings.resolve(
+        &IncludeSite {
+            template: dag_id,
+            importer: importer_scope,
+            src: file_src,
         },
-        dag_id,
-        importer_scope,
-        file_src,
         decl.span,
     )?;
 
@@ -1411,35 +1361,20 @@ pub(super) fn process_pure_import<'a>(
     import: &graphcal_compiler::desugar::desugared_ast::ImportDecl,
     importer: ModuleDeclarations<'_>,
     file_src: SourceId,
-    module_resolver: &graphcal_compiler::resolve::ModuleResolver,
+    modules: &crate::loader::loaded_module_resolver::LoadedModuleResolver,
     ctx: &mut ImportContext<'a>,
 ) -> Result<(), PipelineError> {
+    let module_resolver = modules.resolver();
     let import_path = import.path();
     let module_target = resolved_module.target();
-    let dep_module = project.module(module_target).ok_or_else(|| {
-        PipelineError::Semantic(SemanticError::internal_error(
-            format!("inline module `{module_target}` has no owning declaration"),
-            file_src,
-            graphcal_compiler::diagnostic_anchor::DiagnosticAnchor::Source(import_path.span()),
-        ))
-    })?;
+    let dep_module = project.target_module(resolved_module);
     let declarations = dep_module.declarations();
     let dependency = ModuleDeclarations::new(
         declarations,
         StaticScope::new(module_target, module_resolver),
     );
     let dep_interface = dep_module.interface();
-    let exported_bindings = module_resolver
-        .exported_bindings(module_target)
-        .map_err(|error| {
-            PipelineError::Semantic(SemanticError::internal_error(
-                format!(
-                    "module resolver could not enumerate exports of `{module_target}`: {error}"
-                ),
-                file_src,
-                graphcal_compiler::diagnostic_anchor::DiagnosticAnchor::Source(import_path.span()),
-            ))
-        })?;
+    let exported_bindings = modules.target(resolved_module).exported_bindings();
 
     match import {
         graphcal_compiler::desugar::desugared_ast::ImportDecl::Selective {
@@ -1509,33 +1444,13 @@ pub(super) fn process_pure_import<'a>(
                     continue;
                 }
 
-                let disposition = resolved_export
-                    .and_then(|binding| match binding.target.kind() {
-                        ExportedImportItemKind::Decl(kind) => Some(match kind {
-                            DeclSymbolKind::Const => PureImportTermDisposition::BindConstant,
-                            DeclSymbolKind::Param | DeclSymbolKind::Node => {
-                                PureImportTermDisposition::Reject(PureImportRejection::Runtime)
-                            }
-                            DeclSymbolKind::Assert => {
-                                PureImportTermDisposition::Reject(PureImportRejection::Assertion)
-                            }
-                            DeclSymbolKind::Plot
-                            | DeclSymbolKind::Figure
-                            | DeclSymbolKind::Layer => PureImportTermDisposition::Reject(
-                                PureImportRejection::Visualization,
-                            ),
-                            DeclSymbolKind::Dag => PureImportTermDisposition::ResolverOnly,
-                        }),
-                        ExportedImportItemKind::Constructor => {
-                            Some(PureImportTermDisposition::ResolverOnly)
-                        }
-                        // A Term item never resolves to a Static or Unit export.
-                        ExportedImportItemKind::Dimension
-                        | ExportedImportItemKind::Unit(_)
-                        | ExportedImportItemKind::Type
-                        | ExportedImportItemKind::Index => None,
+                let term_import = resolved_export
+                    .and_then(|binding| TermImport::of_export(&binding.target))
+                    .or_else(|| {
+                        dep_interface
+                            .pure_import_term_disposition(orig_name.atom())
+                            .and_then(TermImport::of_source_disposition)
                     })
-                    .or_else(|| dep_interface.pure_import_term_disposition(orig_name.atom()))
                     .ok_or_else(|| {
                         PipelineError::Semantic(SemanticError::located(
                             file_src,
@@ -1547,12 +1462,12 @@ pub(super) fn process_pure_import<'a>(
                         ))
                     })?;
                 let is_visualization = matches!(
-                    disposition,
-                    PureImportTermDisposition::Reject(PureImportRejection::Visualization)
+                    term_import,
+                    TermImport::Reject(PureImportRejection::Visualization)
                 );
                 let is_assertion = matches!(
-                    disposition,
-                    PureImportTermDisposition::Reject(PureImportRejection::Assertion)
+                    term_import,
+                    TermImport::Reject(PureImportRejection::Assertion)
                 );
                 validate_include_item_attributes(
                     import_item,
@@ -1561,19 +1476,11 @@ pub(super) fn process_pure_import<'a>(
                     file_src,
                 )?;
 
-                match disposition {
-                    PureImportTermDisposition::BindConstant => {
+                match term_import {
+                    TermImport::Constant(canonical) => {
                         validate_reserved_alias(Namespace::Term, import_item, file_src)?;
-                        let canonical = resolved_export
-                            .and_then(|binding| binding.target.constant())
-                            .cloned()
-                            .ok_or_else(|| {
-                                PipelineError::Semantic(SemanticError::internal_error(format!(
-                                        "exported constant `{orig_name}` has no canonical declaration target"
-                                    ), file_src, graphcal_compiler::diagnostic_anchor::DiagnosticAnchor::Source(import_item.name.span)))
-                            })?;
                         import_selective_resolved_item(
-                            canonical,
+                            canonical.clone(),
                             &local_name,
                             import_item.local_span(),
                             file_src,
@@ -1582,8 +1489,8 @@ pub(super) fn process_pure_import<'a>(
                             Some(&mut ctx.imported_source_order),
                         )?;
                     }
-                    PureImportTermDisposition::ResolverOnly => {}
-                    PureImportTermDisposition::Reject(reason) => {
+                    TermImport::ResolverOnly => {}
+                    TermImport::Reject(reason) => {
                         return Err(PipelineError::Semantic(reason.diagnostic(
                             orig_name.atom(),
                             file_src,
@@ -1729,6 +1636,56 @@ fn import_module_values_from_resolver(
 }
 
 /// Derive the source-facing module alias from a module path leaf.
+/// How a pure import handles one Term item.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TermImport<'e> {
+    /// Bind the local name to this exported constant.
+    Constant(&'e ResolvedDeclName),
+    /// The resolver registers the item (a DAG or a constructor).
+    ResolverOnly,
+    /// The item cannot be imported.
+    Reject(PureImportRejection),
+}
+
+impl<'e> TermImport<'e> {
+    /// The handling of a Term item the module exports as `target`; `None`
+    /// for a Static or Unit export, which no Term item names.
+    const fn of_export(target: &'e ExportedBindingTarget) -> Option<Self> {
+        match target {
+            ExportedBindingTarget::Decl { identity, kind } => Some(match kind {
+                DeclSymbolKind::Const => Self::Constant(identity),
+                DeclSymbolKind::Param | DeclSymbolKind::Node => {
+                    Self::Reject(PureImportRejection::Runtime)
+                }
+                DeclSymbolKind::Assert => Self::Reject(PureImportRejection::Assertion),
+                DeclSymbolKind::Plot | DeclSymbolKind::Figure | DeclSymbolKind::Layer => {
+                    Self::Reject(PureImportRejection::Visualization)
+                }
+                DeclSymbolKind::Dag => Self::ResolverOnly,
+            }),
+            ExportedBindingTarget::Constructor(_) => Some(Self::ResolverOnly),
+            ExportedBindingTarget::Dimension(_)
+            | ExportedBindingTarget::Unit { .. }
+            | ExportedBindingTarget::Type(_)
+            | ExportedBindingTarget::Index(_) => None,
+        }
+    }
+
+    /// The handling of a Term item the module's source declares but does
+    /// not export, such as an input port.
+    ///
+    /// A constant binds only through the module's export surface, which
+    /// carries its canonical identity; one the surface does not export is
+    /// not importable.
+    const fn of_source_disposition(disposition: PureImportTermDisposition) -> Option<Self> {
+        match disposition {
+            PureImportTermDisposition::BindConstant => None,
+            PureImportTermDisposition::ResolverOnly => Some(Self::ResolverOnly),
+            PureImportTermDisposition::Reject(reason) => Some(Self::Reject(reason)),
+        }
+    }
+}
+
 pub(super) fn derive_module_name_from_import_path(import_path: &ModulePath) -> ModuleAliasName {
     ModuleAliasName::classify(import_path.leaf().name.atom().clone())
 }

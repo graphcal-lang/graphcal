@@ -152,3 +152,131 @@ fn selective_import_records_only_the_canonical_hir_target() {
         )
     );
 }
+
+fn static_declarations(
+    source: &str,
+) -> Vec<graphcal_compiler::desugar::desugared_ast::Declaration> {
+    let raw = graphcal_compiler::syntax::parser::Parser::new(source)
+        .parse_file()
+        .unwrap();
+    graphcal_compiler::desugar::desugared_ast::File::from(raw).declarations
+}
+
+fn virtual_module(name: &str) -> graphcal_compiler::dag_id::DagId {
+    graphcal_compiler::dag_id::DagId::from_virtual_relative_path(std::path::Path::new(name))
+        .unwrap()
+}
+
+#[test]
+fn covered_bindings_resolve_every_port_and_target_canonically() {
+    let template = static_declarations("pub(bind) dim Q;\npub(bind) type T;\npub(bind) index I;");
+    let importer =
+        static_declarations("dim Length;\ntype Box { Box(value: Int), }\nindex Phase = { A, B };");
+    let (template_id, importer_id) = (virtual_module("dep.gcl"), virtual_module("main.gcl"));
+    let resolver = graphcal_compiler::resolve::ModuleResolver::without_edges([
+        (template_id.clone(), template.as_slice()),
+        (importer_id.clone(), importer.as_slice()),
+    ])
+    .unwrap();
+    let src = graphcal_compiler::source_registry::SourceRegistry::new()
+        .register("main.gcl", std::sync::Arc::new(String::new()));
+    let span = Span::new(0, 0);
+    let covered = CoveredStaticBindings::check(
+        &ModuleInterface::new(&template),
+        HashMap::from([(
+            IndexName::expect_valid("I"),
+            IndexBindingTarget::Declared(IndexName::expect_valid("Phase")),
+        )]),
+        HashMap::new(),
+        HashMap::from([(
+            StructTypeName::expect_valid("T"),
+            StructTypeName::expect_valid("Box"),
+        )]),
+        HashMap::from([(DimName::expect_valid("Q"), DimName::expect_valid("Length"))]),
+        src,
+        span,
+    )
+    .unwrap();
+    let bindings = covered
+        .resolve(
+            &IncludeSite {
+                template: &template_id,
+                importer: StaticScope::new(&importer_id, &resolver),
+                src,
+            },
+            span,
+        )
+        .unwrap();
+
+    let substitution = bindings.substitution();
+    let [(port, target)] = substitution.dimensions.iter().collect::<Vec<_>>()[..] else {
+        panic!("{substitution:?}");
+    };
+    assert_eq!((port.owner(), port.as_str()), (&template_id, "Q"));
+    assert_eq!((target.owner(), target.as_str()), (&importer_id, "Length"));
+    let [(port, target)] = substitution.types.iter().collect::<Vec<_>>()[..] else {
+        panic!("{substitution:?}");
+    };
+    assert_eq!((port.owner(), port.as_str()), (&template_id, "T"));
+    assert_eq!((target.owner(), target.as_str()), (&importer_id, "Box"));
+    let [(port, bound)] = bindings.indexes().iter().collect::<Vec<_>>()[..] else {
+        panic!("{substitution:?}");
+    };
+    assert_eq!((port.owner(), port.as_str()), (&template_id, "I"));
+    assert!(matches!(
+        &bound.target,
+        graphcal_compiler::ir::static_substitution::InstanceIndexBindingTarget::Declared(target)
+            if target.owner() == &importer_id && target.as_str() == "Phase"
+    ));
+    assert_eq!(bindings.dimensions().len(), 1);
+}
+
+#[test]
+fn a_target_the_importer_does_not_declare_is_a_user_error() {
+    let template = static_declarations("pub(bind) index I;");
+    let importer = static_declarations("dim Length;");
+    let (template_id, importer_id) = (virtual_module("dep.gcl"), virtual_module("main.gcl"));
+    let resolver = graphcal_compiler::resolve::ModuleResolver::without_edges([
+        (template_id.clone(), template.as_slice()),
+        (importer_id.clone(), importer.as_slice()),
+    ])
+    .unwrap();
+    let src = graphcal_compiler::source_registry::SourceRegistry::new()
+        .register("main.gcl", std::sync::Arc::new(String::new()));
+    let covered = CoveredStaticBindings::check(
+        &ModuleInterface::new(&template),
+        HashMap::from([(
+            IndexName::expect_valid("I"),
+            IndexBindingTarget::Declared(IndexName::expect_valid("Length")),
+        )]),
+        HashMap::new(),
+        HashMap::new(),
+        HashMap::new(),
+        src,
+        Span::new(0, 0),
+    )
+    .unwrap();
+    let error = covered
+        .resolve(
+            &IncludeSite {
+                template: &template_id,
+                importer: StaticScope::new(&importer_id, &resolver),
+                src,
+            },
+            Span::new(0, 0),
+        )
+        .unwrap_err();
+    assert!(
+        matches!(
+            error,
+            PipelineError::Semantic(SemanticError::Located(ref diagnostic))
+                if matches!(
+                    diagnostic.kind,
+                    graphcal_compiler::semantic_error::SemanticErrorKind::Module(
+                        ModuleError::IndexBindingNotAnIndex { .. }
+                    )
+                )
+        ),
+        "{error:?}"
+    );
+}

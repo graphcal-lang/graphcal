@@ -15,6 +15,6 @@ pub use runtime::RuntimeEvaluation;
 pub use types::{
     AssertResult, AxisMeta, CompositionProperty, DisplayProjectionError, DisplayUnit,
     EvalOutputView, EvalResult, FigureSpec, KeyRendering, LayerSpec, MarkProperty, NodeUnavailable,
-    PlotError, PlotFieldValue, PlotProperty, PlotSpec, RenderContext, UnitLabel, Value,
-    datetime_literal, quantity_display_value,
+    PlotError, PlotFieldValue, PlotProperty, PlotSpec, RenderContext, RuntimeUnavailable,
+    UnitLabel, Value, datetime_literal, quantity_display_value,
 };

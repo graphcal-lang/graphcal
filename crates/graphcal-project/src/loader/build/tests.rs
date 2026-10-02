@@ -6,7 +6,7 @@ use graphcal_compiler::import_cycle::ImportChainFile;
 use graphcal_compiler::syntax::decl_name::DeclName;
 use graphcal_package::PackageInstanceId;
 
-use super::super::module_path::ResolvedModuleTarget;
+use super::super::module_path::ModuleTarget;
 use super::super::source_snapshot::{ModuleLocation, PackageFileKey, ParsedFile, ResolvedFile};
 use super::*;
 
@@ -97,11 +97,11 @@ fn build_error<K: SourceKey>(snapshot: SourceSnapshot<K>) -> CompileError {
     }
 }
 
-fn order(files: &DependencyOrdered<LoadedFile>) -> Vec<DagId> {
+fn order(files: &DependencyOrdered<LoadedFile<ModuleTarget>>) -> Vec<DagId> {
     files.iter().map(|file| file.dag_id.clone()).collect()
 }
 
-fn import_targets(file: &LoadedFile) -> Vec<ResolvedModuleTarget> {
+fn import_targets(file: &LoadedFile<ModuleTarget>) -> Vec<ModuleTarget> {
     file.imports_with_targets()
         .map(|(_, _, target)| target.clone())
         .collect()
@@ -133,8 +133,8 @@ fn dependencies_precede_dependents_in_post_order() {
     assert_eq!(
         import_targets(root),
         [
-            ResolvedModuleTarget::file_root(dag_id("b")),
-            ResolvedModuleTarget::file_root(dag_id("c")),
+            ModuleTarget::file_root(dag_id("b")),
+            ModuleTarget::file_root(dag_id("c")),
         ]
     );
 }
@@ -162,7 +162,7 @@ fn diamond_dependency_is_built_once() {
     );
     assert_eq!(
         import_targets(files.iter().nth(2).unwrap()),
-        [ResolvedModuleTarget::file_root(dag_id("d"))]
+        [ModuleTarget::file_root(dag_id("d"))]
     );
 }
 
@@ -451,7 +451,7 @@ fn self_references_through_inline_paths_and_includes_are_allowed() {
     ))
     .unwrap();
     let (_, _, target) = files.root().includes_with_targets().next().unwrap();
-    assert_eq!(target, &ResolvedModuleTarget::file_root(dag_id("main")));
+    assert_eq!(target, &ModuleTarget::file_root(dag_id("main")));
 }
 
 #[test]
@@ -523,11 +523,11 @@ fn dag_body_imports_load_dependencies() {
     };
     assert_eq!(
         resolution(&["pkg", "b"]),
-        ResolvedModuleTarget::file_root(dag_id("b"))
+        ModuleTarget::file_root(dag_id("b"))
     );
     assert_eq!(
         resolution(&["pkg", "main"]),
-        ResolvedModuleTarget::file_root(dag_id("main"))
+        ModuleTarget::file_root(dag_id("main"))
     );
 }
 
@@ -603,6 +603,6 @@ fn invalid_module_location_is_an_error() {
 /// Build the loaded files of `snapshot`, without its source registry.
 fn build_files<K: SourceKey>(
     snapshot: SourceSnapshot<K>,
-) -> Result<DependencyOrdered<LoadedFile>, CompileError> {
+) -> Result<DependencyOrdered<LoadedFile<ModuleTarget>>, CompileError> {
     build_loaded_files(snapshot).map(|(files, _)| files)
 }

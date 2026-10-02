@@ -6,18 +6,18 @@ use graphcal_compiler::syntax::ast::{Ident, ModulePath};
 use graphcal_compiler::syntax::names::NameAtom;
 use graphcal_package::PackageName;
 
-/// Loader-resolved identities for one module path.
+/// Loader-resolved identities for one module path, before the loaded project
+/// places the module they name.
 ///
-/// A path may name a file-root DAG or an inline DAG inside a loaded file.
-/// Consumers need the source file to retrieve compiled artifacts and the exact
-/// module target for semantic name resolution, so both identities are retained.
+/// A path may name a file-root DAG or an inline DAG inside a loaded file. The
+/// file is loaded, but nothing has checked yet that the inline DAG exists.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ResolvedModuleTarget {
+pub struct ModuleTarget {
     source_file: DagId,
     target: DagId,
 }
 
-impl ResolvedModuleTarget {
+impl ModuleTarget {
     pub(super) const fn in_file(source_file: DagId, target: DagId) -> Self {
         Self {
             source_file,
@@ -29,6 +29,55 @@ impl ResolvedModuleTarget {
         Self::in_file(source_file.clone(), source_file)
     }
 
+    /// Exact file-root or inline-DAG module named by the source path.
+    pub(super) const fn target(&self) -> &DagId {
+        &self.target
+    }
+
+    /// Loaded file that owns the target.
+    #[cfg(test)]
+    pub(super) const fn source_file(&self) -> &DagId {
+        &self.source_file
+    }
+
+    /// This target, naming the loaded module at `module`.
+    pub(super) fn placed_at(self, module: LoadedModuleId) -> ResolvedModuleTarget {
+        ResolvedModuleTarget {
+            source_file: self.source_file,
+            target: self.target,
+            module,
+        }
+    }
+}
+
+/// The position of one loaded module (a file root or one of its inline DAGs)
+/// in the [`LoadedFiles`](super::loaded_project::LoadedFiles) that placed it.
+///
+/// Issued only by that placement, so a lookup by id in the same project is
+/// total.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct LoadedModuleId {
+    /// Position of the owning file, in dependency order.
+    pub(super) file: usize,
+    /// Position of the inline DAG among the file's inline DAGs (source
+    /// preorder), or `None` for the file root.
+    pub(super) inline: Option<usize>,
+}
+
+/// Loader-resolved identities for one module path, naming a loaded module.
+///
+/// A path may name a file-root DAG or an inline DAG inside a loaded file.
+/// Consumers need the source file to retrieve compiled artifacts and the exact
+/// module target for semantic name resolution, so both identities are retained,
+/// together with the loaded module they name.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedModuleTarget {
+    source_file: DagId,
+    target: DagId,
+    module: LoadedModuleId,
+}
+
+impl ResolvedModuleTarget {
     /// Loaded file that owns the target's compiled artifacts.
     #[must_use]
     pub const fn source_file(&self) -> &DagId {
@@ -40,14 +89,12 @@ impl ResolvedModuleTarget {
     pub const fn target(&self) -> &DagId {
         &self.target
     }
-}
 
-/// Failure to associate a loader-resolved module with its owning source file.
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-pub enum ResolvedModuleTargetError {
-    /// The resolved identity is neither a loaded file root nor one of its inline DAGs.
-    #[error("resolved module `{target}` is not owned by a loaded source file")]
-    UnknownOwner { target: DagId },
+    /// The loaded module named by the source path.
+    #[must_use]
+    pub(crate) const fn module(&self) -> LoadedModuleId {
+        self.module
+    }
 }
 
 /// A reserved standard-library namespace (Concept §6.2): a module path whose

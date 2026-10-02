@@ -7,13 +7,12 @@
 use graphcal_compiler::syntax::span::Spanned;
 use std::collections::HashMap;
 
+use crate::loader::loaded_module_resolver::LoadedModuleResolver;
 use graphcal_compiler::dag_id::DagId;
 use graphcal_compiler::desugar::desugared_ast::{DeclKind, Declaration};
-use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
 use graphcal_compiler::ir::lower::DagBodySelfImports;
 use graphcal_compiler::ir::module_interface::{ModuleInterface, PureImportTermDisposition};
 use graphcal_compiler::ir::resolve::{ImportedValueNames, ScopedName};
-use graphcal_compiler::resolve::ModuleResolver;
 use graphcal_compiler::semantic_error::SemanticError;
 use graphcal_compiler::semantic_error::graph::DagReference;
 use graphcal_compiler::semantic_error::visibility::VisibilityError;
@@ -68,20 +67,9 @@ pub fn preprocess_dag_body_self_imports(
         graphcal_compiler::syntax::module_path_key::ModulePathKey,
         crate::loader::module_path::ResolvedModuleTarget,
     >,
-    module_resolver: &ModuleResolver,
+    modules: &LoadedModuleResolver,
     src: SourceId,
 ) -> Result<DagBodySelfImports, SemanticError> {
-    let exported_bindings = module_resolver
-        .exported_bindings(parent_dag_id)
-        .map_err(|error| {
-            SemanticError::internal_error(
-                format!(
-                    "module resolver could not enumerate exports of `{parent_dag_id}`: {error}"
-                ),
-                src,
-                DiagnosticAnchor::WholeFile,
-            )
-        })?;
     let mut names = ImportedValueNames::default();
     let mut bindings: HashMap<
         ScopedName,
@@ -95,13 +83,14 @@ pub fn preprocess_dag_body_self_imports(
             continue;
         };
 
-        let is_self_import = body_resolved_imports
+        let Some(parent) = body_resolved_imports
             .get(&import_decl.path().key())
-            .is_some_and(|target| target.target() == parent_dag_id);
-        if !is_self_import {
+            .filter(|target| target.target() == parent_dag_id)
+        else {
             stripped_body.push(decl.clone());
             continue;
-        }
+        };
+        let exported_bindings = modules.target(parent).exported_bindings();
 
         match import_decl {
             graphcal_compiler::syntax::ast::ImportDecl::Selective { items, .. } => {

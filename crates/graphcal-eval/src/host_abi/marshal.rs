@@ -6,21 +6,20 @@
 //! are flattened through [`DenseArray`] into row-major host arrays, recording
 //! the typed axis each index variable binds. The expression kernel reads every
 //! argument at its kind through [`ArgumentReader`], so no argument can arrive
-//! at another kind, count, or rank than its checked parameter. A host result is validated by
-//! [`decode_result`] and rebuilt over those recorded axes, so an indexed result
-//! can only range over axes that some argument supplied.
+//! at another kind, count, or rank than its checked parameter. A host result
+//! is validated by [`decode_result`] and rebuilt over the axes the call
+//! node's checked type ranges over, which checking bound from the arguments.
 
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 use std::convert::Infallible;
 use std::fmt;
 
-use graphcal_compiler::extern_struct_result::ExternStructResult;
 use graphcal_compiler::finite_value::FiniteQuantity;
-use graphcal_compiler::function_signature::{IndexBinder, ResultKind, ScalarValueKind};
+use graphcal_compiler::function_signature::{IndexBinder, ScalarValueKind};
 use graphcal_compiler::syntax::function_name::FnParamName;
 use graphcal_compiler::syntax::non_empty::NonEmpty;
-use graphcal_compiler::tir::texpr::ExternArgKind;
+use graphcal_compiler::tir::texpr::{ExternArgKind, TExternResult};
 
 use super::argument::{HostArgument, HostArgumentArray, HostArrayElements};
 use super::{
@@ -32,14 +31,11 @@ use crate::invariant::{Failure, Invariant};
 use crate::runtime_value::dense_array::DenseArray;
 use crate::runtime_value::{IndexAxis, IndexedValue, RuntimeValue, StructFieldsError, StructValue};
 
-/// The declared result kind of an extern function.
-type ExternResultKind = ResultKind<ExternStructResult>;
-
 /// Encoded arguments of one extern call, with the typed axes their indexed
 /// arguments bound.
 #[derive(Debug)]
 pub struct HostArguments<'s> {
-    result: &'s ExternResultKind,
+    result: &'s TExternResult,
     values: Vec<HostArgument>,
     bound: HashMap<IndexBinder, IndexAxis>,
 }
@@ -263,7 +259,7 @@ impl<'s> HostArguments<'s> {
     /// Returns [`EncodeError`] for a failed argument value or an argument
     /// that cannot cross the ABI.
     pub fn encode<'k, N, R: ArgumentReader<N>>(
-        result: &'s ExternResultKind,
+        result: &'s TExternResult,
         arguments: impl IntoIterator<Item = (&'k ExternArgKind, N)>,
         reader: &R,
     ) -> Result<Self, EncodeError<R::Error>> {
@@ -339,7 +335,7 @@ impl<'s> HostArguments<'s> {
     }
 
     /// Validate `raw` against the declared result kind and rebuild it as a
-    /// runtime value over the axes the arguments bound.
+    /// runtime value over the axes of the call's checked type.
     ///
     /// # Errors
     ///
@@ -355,13 +351,7 @@ impl<'s> HostArguments<'s> {
             ValidatedHostResult::Int(value) => Ok(RuntimeValue::Int(value)),
             ValidatedHostResult::Bool(value) => Ok(RuntimeValue::Bool(value)),
             ValidatedHostResult::Array(array) => {
-                let axes = array.indexes().try_map_ref(|index| {
-                    self.bound.get(index).cloned().ok_or_else(|| {
-                        Invariant::violated(format_args!(
-                            "result index variable `{index}` was not bound by any argument"
-                        ))
-                    })
-                })?;
+                let axes = array.indexes().map_ref(|index| index.axis.clone());
                 let expected = axes.iter().map(IndexAxis::len).collect::<Vec<_>>();
                 if array.shape() != expected {
                     return Err(Failure::Error(ResultError::Shape {
@@ -415,10 +405,11 @@ fn rebuild_array<T: Clone>(
 mod tests {
     use graphcal_compiler::dag_id::DagId;
     use graphcal_compiler::dimension::Dimension;
+    use graphcal_compiler::extern_struct_result::ExternStructResult;
     use graphcal_compiler::function_signature::{DimMonomial, FunctionParam, NamedResultKind};
     use graphcal_compiler::syntax::dimension::DimVarName;
     use graphcal_compiler::syntax::index_name::IndexVarName;
-    use graphcal_compiler::tir::texpr::ExternSignature;
+    use graphcal_compiler::tir::texpr::{ExternSignature, TResultAxis};
 
     use super::*;
     use crate::host_fns::HostArray;
@@ -526,17 +517,33 @@ mod tests {
         }
     }
 
-    /// Encode `values` as the arguments of a checked call of `signature`.
-    fn encode(
+    /// The result kind of a checked call of `signature` whose checked type
+    /// ranges over `axes`, outermost first.
+    fn result_over(signature: &ExternSignature, axes: &[IndexAxis]) -> TExternResult {
+        signature
+            .result()
+            .try_map_indexes(|depth, binder| {
+                Ok::<_, std::convert::Infallible>(TResultAxis {
+                    binder: binder.clone(),
+                    axis: axes[depth].clone(),
+                })
+            })
+            .unwrap_or_else(|never| match never {})
+    }
+
+    /// Encode `values` as the arguments of a checked call of `signature`
+    /// whose result kind is `result`.
+    fn encode<'s>(
         signature: &ExternSignature,
+        result: &'s TExternResult,
         values: Vec<RuntimeValue>,
-    ) -> Result<HostArguments<'_>, EncodeError<&'static str>> {
+    ) -> Result<HostArguments<'s>, EncodeError<&'static str>> {
         let kinds = signature
             .params()
             .iter()
             .map(ExternArgKind::for_param)
             .collect::<Vec<_>>();
-        HostArguments::encode(signature.result(), kinds.iter().zip(values), &ValueReader)
+        HostArguments::encode(result, kinds.iter().zip(values), &ValueReader)
     }
 
     fn argument_failure<E: fmt::Debug>(error: EncodeError<E>) -> (usize, Failure<ArgumentError>) {
@@ -568,6 +575,7 @@ mod tests {
             vec![indexed(quantity(), &["I", "J"])],
             indexed(quantity(), &["J", "I"]).into(),
         );
+        let kind = result_over(&signature, &[columns(), rows()]);
         let matrix = vector(
             rows(),
             vec![
@@ -575,7 +583,7 @@ mod tests {
                 vector(columns(), quantities(&[4.0, 5.0, 6.0])),
             ],
         );
-        let arguments = encode(&signature, vec![matrix]).unwrap();
+        let arguments = encode(&signature, &kind, vec![matrix]).unwrap();
         let [HostArgument::Array(array)] = arguments.values() else {
             panic!("expected one array argument");
         };
@@ -623,8 +631,10 @@ mod tests {
             ],
             ParamKind::Scalar(ScalarValueKind::Int).into(),
         );
+        let kind = result_over(&signature, &[]);
         let arguments = encode(
             &signature,
+            &kind,
             vec![
                 RuntimeValue::quantity(2.5).unwrap(),
                 RuntimeValue::Int(-3),
@@ -677,9 +687,11 @@ mod tests {
             ],
             indexed(ScalarValueKind::Int, &["I"]).into(),
         );
+        let kind = result_over(&signature, &[rows()]);
         assert!(matches!(
             encode(
                 &signature,
+                &kind,
                 vec![
                     RuntimeValue::Bool(true),
                     vector(rows(), vec![RuntimeValue::Int(1), RuntimeValue::Int(2)]),
@@ -692,6 +704,7 @@ mod tests {
         let (position, failure) = argument_failure(
             encode(
                 &signature,
+                &kind,
                 vec![
                     RuntimeValue::Int(inexact),
                     vector(rows(), vec![RuntimeValue::Int(1), RuntimeValue::Int(2)]),
@@ -713,6 +726,7 @@ mod tests {
         let (position, failure) = argument_failure(
             encode(
                 &signature,
+                &kind,
                 vec![
                     RuntimeValue::Int(1),
                     vector(
@@ -741,10 +755,12 @@ mod tests {
             ],
             indexed(quantity(), &["I"]).into(),
         );
+        let kind = result_over(&signature, &[rows()]);
         let row_values = || vector(rows(), quantities(&[1.0, 2.0]));
         let row_ints = || vector(rows(), vec![RuntimeValue::Int(1), RuntimeValue::Int(2)]);
         let invariant = |values| {
-            let (position, failure) = argument_failure(encode(&signature, values).unwrap_err());
+            let (position, failure) =
+                argument_failure(encode(&signature, &kind, values).unwrap_err());
             let Failure::Invariant(invariant) = failure else {
                 panic!("expected an invariant");
             };
@@ -752,7 +768,7 @@ mod tests {
         };
         // An argument of another rank, element kind, or a ragged one is no
         // array of its parameter: the reader reports it.
-        let unread = |values| match encode(&signature, values).unwrap_err() {
+        let unread = |values| match encode(&signature, &kind, values).unwrap_err() {
             EncodeError::Value(error) => error,
             EncodeError::Argument { position, .. } => {
                 panic!("expected a reader failure, got an argument failure at {position}")
@@ -800,7 +816,12 @@ mod tests {
             not_an_array
         );
 
-        let arguments = encode(&signature, vec![row_values(), row_values(), row_ints()]).unwrap();
+        let arguments = encode(
+            &signature,
+            &kind,
+            vec![row_values(), row_values(), row_ints()],
+        )
+        .unwrap();
         let result = arguments
             .decode(&HostFnValue::Array(
                 HostArray::vector(vec![3.0, 4.0]).unwrap(),

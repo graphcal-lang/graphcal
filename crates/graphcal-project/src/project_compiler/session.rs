@@ -146,14 +146,15 @@ fn lower_project<'project, Mode>(
 ) -> Result<HirProject<'project, Mode>, Outcome<PipelineError>> {
     cancellation.checkpoint()?;
     let root_source = project.root_file().source_id();
-    let module_resolver = project
-        .build_module_resolver()
-        .map_err(|error| match error {
-            graphcal_compiler::resolve::error::ModuleResolveError::RecursiveIncludeExpansion {
-                cycle,
-            } => pipeline::recursive_dag_instantiation(project, &cycle),
-            error => module_resolve_compile_error(error, root_source),
-        })?;
+    let module_resolver = crate::loader::loaded_module_resolver::LoadedModuleResolver::build(
+        project,
+    )
+    .map_err(|error| match error {
+        graphcal_compiler::resolve::error::ModuleResolveError::RecursiveIncludeExpansion {
+            cycle,
+        } => pipeline::recursive_dag_instantiation(project, &cycle),
+        error => module_resolve_compile_error(error, root_source),
+    })?;
     pipeline::lower_project_perfile(project, module_resolver, mode, cancellation)
 }
 

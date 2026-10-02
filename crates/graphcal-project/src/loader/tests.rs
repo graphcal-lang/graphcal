@@ -388,6 +388,73 @@ fn loaded_project_builds_module_resolver_for_qualified_index_variant() {
     assert_eq!(resolved_variant.variant().as_str(), "Burn");
 }
 
+/// The code, message and labelled source text of the load error of `main`.
+fn load_error_at(files: &[(&str, &str)]) -> (String, String, String) {
+    use miette::Diagnostic;
+
+    let dir = setup_temp_dir(files);
+    let error = load_project(&dir.path().join("src/pkg/main.gcl"), None, &fs()).unwrap_err();
+    let label = error.labels().unwrap().next().unwrap();
+    let source = error.source_code().unwrap();
+    let text = source.read_span(label.inner(), 0, 0).unwrap();
+    (
+        error.code().unwrap().to_string(),
+        error.to_string(),
+        String::from_utf8(text.data().to_vec()).unwrap(),
+    )
+}
+
+#[test]
+fn module_path_naming_an_undeclared_inline_dag_is_reported_at_the_path() {
+    let lib = (
+        "src/pkg/lib.gcl",
+        "pub dag present { pub node r: Dimensionless = 1.0; }",
+    );
+    let manifest = ("graphcal.toml", "[package]\nname = \"pkg\"\n");
+    for main in [
+        "import pkg.lib.absent::{x};",
+        "include pkg.lib.absent();",
+        "dag outer { import pkg.lib.absent::{x}; }",
+    ] {
+        let (code, message, text) = load_error_at(&[manifest, lib, ("src/pkg/main.gcl", main)]);
+        assert_eq!(code, "graphcal::G008", "{main}");
+        assert!(message.contains("lib.absent"), "{main}: {message}");
+        assert_eq!(text, "pkg.lib.absent", "{main}");
+    }
+}
+
+#[test]
+fn every_module_path_names_its_loaded_module_and_resolver_module() {
+    let dir = setup_temp_dir(&[
+        ("graphcal.toml", "[package]\nname = \"pkg\"\n"),
+        (
+            "src/pkg/lib.gcl",
+            "pub dim Mass;\npub dag present { pub dim Length; }",
+        ),
+        (
+            "src/pkg/main.gcl",
+            "import pkg.lib::{dim Mass};\nimport pkg.lib.present::{dim Length};\ndag local { import pkg.lib::{dim Mass}; }",
+        ),
+    ]);
+    let project = load_project(&dir.path().join("src/pkg/main.gcl"), None, &fs()).unwrap();
+    let modules = loaded_module_resolver::LoadedModuleResolver::build(&project).unwrap();
+    let root = project.root_file();
+    let targets = root
+        .imports_with_targets()
+        .map(|(_, _, target)| target)
+        .chain(root.inline_dags()[0].resolved_imports().values())
+        .collect::<Vec<_>>();
+    assert_eq!(targets.len(), 3);
+    for target in targets {
+        assert_eq!(project.target_module(target).dag_id(), target.target());
+        assert_eq!(modules.target(target).owner(), target.target());
+        assert_eq!(
+            Ok(modules.target(target).exported_bindings()),
+            modules.resolver().exported_bindings(target.target())
+        );
+    }
+}
+
 #[test]
 fn load_cross_file_import_in_virtual_package_rejected() {
     // Without a `graphcal.toml`, the project is a single-file virtual
@@ -1560,7 +1627,9 @@ fn project_module_resolution_is_typed_and_span_free() {
 fn build_files<K: super::source_snapshot::SourceKey>(
     snapshot: super::source_snapshot::SourceSnapshot<K>,
 ) -> Result<
-    crate::dependency_ordered::DependencyOrdered<super::loaded_file::LoadedFile>,
+    crate::dependency_ordered::DependencyOrdered<
+        super::loaded_file::LoadedFile<super::module_path::ModuleTarget>,
+    >,
     CompileError,
 > {
     super::build::build_loaded_files(snapshot).map(|(files, _)| files)

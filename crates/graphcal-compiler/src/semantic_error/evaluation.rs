@@ -9,15 +9,17 @@ use std::sync::Arc;
 use thiserror::Error;
 
 use crate::diagnostic::DiagnosticKind;
-use crate::node_unavailable::NodeUnavailable;
+use crate::node_unavailable::RuntimeUnavailable;
 
 /// Evaluation diagnostics: failed and unavailable values.
 #[derive(Debug, Clone, Error)]
 pub enum EvaluationError {
     /// Runtime propagation of an unavailable projected value. This is not a
-    /// static checking error; evaluator boundaries retain the typed reason.
-    #[error("{reason}")]
-    Unavailable { reason: NodeUnavailable },
+    /// static checking error; evaluator boundaries retain the typed reason
+    /// and rename its declarations before reporting it, so its own text
+    /// names none.
+    #[error("{}", .reason.summary())]
+    Unavailable { reason: RuntimeUnavailable },
     /// A failure the evaluator reported at runtime, kept as its typed error.
     #[error("{0}")]
     Runtime(EvaluatorFailure),
@@ -91,5 +93,52 @@ mod tests {
         assert_eq!(error.to_string(), "sentinel failure");
         assert_eq!(error.code(), "graphcal::E001");
         assert_eq!(error.primary_label().as_deref(), Some("error here"));
+    }
+
+    #[test]
+    fn unavailable_values_render_no_runtime_identity() {
+        use crate::dag_id::DagId;
+        use crate::node_unavailable::NodeUnavailable;
+        use crate::resolved_name::ResolvedDeclName;
+        use crate::syntax::decl_name::DeclName;
+        use crate::syntax::non_empty::NonEmpty;
+
+        let identity = ResolvedDeclName::for_test(
+            DagId::root_in_package("test", "lib"),
+            DeclName::expect_valid("hidden"),
+        );
+        let render = |reason| EvaluationError::Unavailable { reason }.to_string();
+        assert_eq!(
+            render(NodeUnavailable::DependencyFailed {
+                failed_deps: NonEmpty::singleton(identity.clone()),
+            }),
+            "dependency failed"
+        );
+        assert_eq!(
+            render(NodeUnavailable::Todo {
+                declaration: identity.clone(),
+            }),
+            "TODO — formula unfinished"
+        );
+        assert_eq!(
+            render(NodeUnavailable::Blocked {
+                unfinished: NonEmpty::singleton(identity.clone()),
+                failed_deps: vec![identity.clone()],
+            }),
+            "BLOCKED — unfinished dependencies; dependency failed"
+        );
+        assert_eq!(
+            render(NodeUnavailable::Blocked {
+                unfinished: NonEmpty::singleton(identity),
+                failed_deps: Vec::new(),
+            }),
+            "BLOCKED — unfinished dependencies"
+        );
+        assert_eq!(
+            render(NodeUnavailable::EvalFailed {
+                message: "division by zero".to_owned(),
+            }),
+            "division by zero"
+        );
     }
 }
