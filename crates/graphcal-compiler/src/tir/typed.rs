@@ -121,11 +121,17 @@ impl DagTIR {
 /// A HIR DAG whose complete declaration signature has been resolved once.
 ///
 /// Owning the HIR body prevents a signature from being paired with another DAG
-/// between the signature and body passes of project TIR construction.
+/// between the signature and body passes of project TIR construction: the
+/// declarations move out of the HIR body into a table that carries each value
+/// declaration's checked type on its own record.
 #[derive(Debug)]
 pub struct SignatureResolvedHirDag {
+    /// The HIR body, whose declarations moved into `decls`.
     hir: HirDag,
-    decl_types: HashMap<ResolvedDeclName, CheckedDeclType>,
+    /// Every declaration, each value declaration with its checked type.
+    decls: crate::ir::decl_table::DeclTable<Typed>,
+    /// The domain bounds of the value declarations, by canonical identity.
+    domain_bounds: DomainBounds,
 }
 
 impl SignatureResolvedHirDag {
@@ -135,17 +141,21 @@ impl SignatureResolvedHirDag {
         self.hir.dag_id()
     }
 
-    /// Borrow HIR while project import interfaces are assembled.
-    #[must_use]
-    pub const fn hir(&self) -> &HirDag {
+    /// The HIR body other than its declarations.
+    const fn hir(&self) -> &HirDag {
         &self.hir
     }
 
-    /// Borrow the checked value-declaration types produced by the signature
-    /// pass, keyed by canonical identity.
-    #[must_use]
-    pub const fn decl_types(&self) -> &HashMap<ResolvedDeclName, CheckedDeclType> {
-        &self.decl_types
+    /// The checked value-declaration types produced by the signature pass,
+    /// with their canonical identities, in source order.
+    pub fn decl_types(&self) -> impl Iterator<Item = (&ResolvedDeclName, &CheckedDeclType)> {
+        use crate::ir::entry::Decl;
+        self.decls.iter().filter_map(|decl| match decl {
+            Decl::Const(entry) => Some((&entry.identity, entry.type_ann.checked())),
+            Decl::Param(entry) => Some((&entry.identity, entry.type_ann.checked())),
+            Decl::Node(entry) => Some((&entry.identity, entry.type_ann.checked())),
+            Decl::Assert(_) | Decl::Plot(_) | Decl::Figure(_) | Decl::Layer(_) => None,
+        })
     }
 }
 
@@ -163,9 +173,19 @@ pub fn resolve_hir_signature_with_modules_and_cancellation(
     cancellation: &crate::cancellation::CancellationToken,
 ) -> Result<SignatureResolvedHirDag, Outcome<SemanticError>> {
     cancellation.checkpoint()?;
-    let ctx = ModuleTypeContext::new(hir.module(), module_resolver, project_types);
-    let decl_types = resolve_declared_type_exprs(&hir, src, ctx, cancellation)?;
-    Ok(SignatureResolvedHirDag { hir, decl_types })
+    let mut hir = hir;
+    let (decls, domain_bounds) = resolve_signature(
+        std::mem::take(&mut hir.decls),
+        &hir.semantic_instances,
+        ModuleTypeContext::new(hir.module(), module_resolver, project_types).types,
+        src,
+        cancellation,
+    )?;
+    Ok(SignatureResolvedHirDag {
+        hir,
+        decls,
+        domain_bounds,
+    })
 }
 
 /// Resolve a HIR DAG without imports into a draft whose only DAG is its root.
@@ -337,12 +357,11 @@ fn type_resolve_impl(
 ) -> Result<TirDraft, Outcome<SemanticError>> {
     cancellation.checkpoint()?;
     let SignatureResolvedHirDag {
-        hir: mut ir,
-        decl_types,
+        hir: ir,
+        decls,
+        domain_bounds,
     } = signed;
     let imported_bindings_for_hir = imported_bindings.clone();
-    let (decls, domain_bounds) =
-        attach_checked_types(std::mem::take(&mut ir.decls), decl_types, src)?;
     let mut root_dag = type_resolve_dag(
         decls,
         src,
@@ -434,12 +453,11 @@ fn type_resolve_single_impl(
 ) -> Result<DagTIR, Outcome<SemanticError>> {
     cancellation.checkpoint()?;
     let SignatureResolvedHirDag {
-        hir: mut ir,
-        decl_types,
+        hir: ir,
+        decls,
+        domain_bounds,
     } = signed;
     let imported_bindings_for_hir = imported_bindings.clone();
-    let (decls, domain_bounds) =
-        attach_checked_types(std::mem::take(&mut ir.decls), decl_types, src)?;
     let mut dag = type_resolve_dag(
         decls,
         src,
@@ -472,42 +490,149 @@ fn type_resolve_single_impl(
     Ok(dag)
 }
 
-/// Resolve every const/param/node annotation of one HIR DAG.
-fn resolve_declared_type_exprs(
-    hir: &HirDag,
-    src: SourceId,
-    module_ctx: ModuleTypeContext<'_>,
-    cancellation: &crate::cancellation::CancellationToken,
-) -> Result<HashMap<ResolvedDeclName, CheckedDeclType>, Outcome<SemanticError>> {
-    let decls = hir.decls();
-    resolve_declared_types(
-        decls
-            .consts()
-            .map(|entry| (entry.identity(), &entry.type_ann.decl_type))
-            .chain(
-                decls
-                    .params()
-                    .map(|entry| (entry.identity(), &entry.type_ann.decl_type)),
-            )
-            .chain(
-                decls
-                    .nodes()
-                    .map(|entry| (entry.identity(), &entry.type_ann.decl_type)),
-            ),
-        &hir.semantic_instances,
-        module_ctx.types,
-        src,
-        cancellation,
-    )
+/// The rank of a declaration in the signature pass: constants, then
+/// parameters, then nodes (each in source order), then every other
+/// declaration.
+const fn signature_rank<P: crate::ir::entry::BodyPhase>(decl: &crate::ir::entry::Decl<P>) -> u8 {
+    use crate::ir::entry::Decl;
+    match decl {
+        Decl::Const(_) => 0,
+        Decl::Param(_) => 1,
+        Decl::Node(_) => 2,
+        Decl::Assert(_) | Decl::Plot(_) | Decl::Figure(_) | Decl::Layer(_) => 3,
+    }
 }
 
-/// Resolve declaration annotations in the type view `types`.
+/// Signature phase: value declarations carry their resolved type, not yet
+/// required to be concrete.
+#[derive(Debug, Clone, Copy)]
+enum SignatureResolved {}
+
+/// A value declaration's annotation with its resolved type.
+#[derive(Debug, Clone)]
+struct ResolvedAnnotation {
+    annotation: crate::hir::type_annotation::TypeAnnotation,
+    resolved: ResolvedDeclType,
+}
+
+impl crate::ir::entry::BodyPhase for SignatureResolved {
+    type Expr = crate::hir::expr::CheckedExpr;
+    type TypeAnnotation = ResolvedAnnotation;
+    type NodeDefinition = crate::hir::node_definition::NodeDefinition;
+    type AssertBody = crate::hir::expr::CheckedAssertBody;
+    type PlotBody = crate::ir::model::LoweredPlotBody;
+    type CompositionFields =
+        Vec<crate::ir::model::LoweredPlotField<crate::plot_props::CompositionProperty>>;
+}
+
+/// Resolve every const/param/node annotation of one HIR DAG on its own
+/// record: every annotation resolves (constants, then parameters, then
+/// nodes) before any is required to be concrete (in the same order).
+fn resolve_signature(
+    decls: crate::ir::decl_table::DeclTable<crate::ir::model::Lowered>,
+    semantic_instances: &[crate::ir::instance::HirInstanceRecord],
+    types: &ProjectTypeStore,
+    src: SourceId,
+    cancellation: &crate::cancellation::CancellationToken,
+) -> Result<(crate::ir::decl_table::DeclTable<Typed>, DomainBounds), Outcome<SemanticError>> {
+    let annotation_types = DeclTypeResolver::new(semantic_instances, types, src)?;
+    let resolved = decls.try_map(signature_rank, |decl| {
+        map_value_annotation(decl, |identity, annotation| {
+            cancellation.checkpoint()?;
+            let resolved = annotation_types.resolve(&identity, &annotation.decl_type)?;
+            Ok::<_, Outcome<SemanticError>>(ResolvedAnnotation {
+                annotation,
+                resolved,
+            })
+        })
+    })?;
+    attach_checked_types(resolved, src).map_err(Outcome::Failed)
+}
+
+/// Resolves declaration annotations in one type view.
 ///
 /// A value projected from a semantic include instance keeps the annotation of
 /// its template declaration, resolved in the template's scope (with the
 /// defaulted dimension ports the include binds kept rigid). Its declared type
 /// is that annotation specialized through the instance's Static substitution,
 /// exactly as the instance output itself is specialized.
+struct DeclTypeResolver<'a> {
+    types: &'a ProjectTypeStore,
+    /// The substitution of the instance each projected name comes from.
+    projection_substitutions:
+        HashMap<&'a DeclName, &'a crate::ir::static_substitution::StaticSubstitution>,
+    /// The type view and complete substitution of each such instance.
+    views: HashMap<
+        &'a crate::ir::static_substitution::StaticSubstitution,
+        (
+            std::borrow::Cow<'a, ProjectTypeStore>,
+            complete_substitution::CompleteSubstitution<'a>,
+        ),
+    >,
+    src: SourceId,
+}
+
+impl<'a> DeclTypeResolver<'a> {
+    /// The resolver of a DAG with `semantic_instances` in the type view
+    /// `types`.
+    fn new(
+        semantic_instances: &'a [crate::ir::instance::HirInstanceRecord],
+        types: &'a ProjectTypeStore,
+        src: SourceId,
+    ) -> Result<Self, SemanticError> {
+        let projection_substitutions = semantic_instances
+            .iter()
+            .flat_map(|record| {
+                record
+                    .output_projections
+                    .iter()
+                    .filter_map(|projection| {
+                        crate::ir::instance::InstanceProjection::exposure(projection).selected()
+                    })
+                    .map(|exposed| (exposed, record.instance.substitution()))
+            })
+            .collect::<HashMap<_, _>>();
+        let mut views = HashMap::new();
+        for substitution in projection_substitutions.values() {
+            let complete =
+                complete_substitution::CompleteSubstitution::try_new(substitution, types)
+                    .map_err(|error| error.into_graphcal(src))?;
+            views.insert(
+                *substitution,
+                (instance_type_view(types, substitution, src)?, complete),
+            );
+        }
+        Ok(Self {
+            types,
+            projection_substitutions,
+            views,
+            src,
+        })
+    }
+
+    /// The resolved type of the annotation `decl_type` of `identity`.
+    fn resolve(
+        &self,
+        identity: &ResolvedDeclName,
+        decl_type: &crate::hir::types::DeclType,
+    ) -> Result<ResolvedDeclType, SemanticError> {
+        let instance = self
+            .projection_substitutions
+            .get(&identity.to_unowned_def_name())
+            .and_then(|substitution| self.views.get(substitution));
+        match instance {
+            Some((view, complete)) => {
+                resolve_instance_decl_type(decl_type, complete, view, self.src)
+            }
+            None => {
+                type_expr::resolve_hir_decl_type_with_project_types(decl_type, self.src, self.types)
+            }
+        }
+    }
+}
+
+/// Resolve declaration annotations in the type view `types` (see
+/// [`DeclTypeResolver`]).
 fn resolve_declared_types<'d>(
     declarations: impl Iterator<Item = (ResolvedDeclName, &'d crate::hir::types::DeclType)>,
     semantic_instances: &[crate::ir::instance::HirInstanceRecord],
@@ -515,37 +640,11 @@ fn resolve_declared_types<'d>(
     src: SourceId,
     cancellation: &crate::cancellation::CancellationToken,
 ) -> Result<HashMap<ResolvedDeclName, CheckedDeclType>, Outcome<SemanticError>> {
-    let projection_substitutions = semantic_instances
-        .iter()
-        .flat_map(|record| {
-            record
-                .output_projections
-                .iter()
-                .filter_map(|projection| {
-                    crate::ir::instance::InstanceProjection::exposure(projection).selected()
-                })
-                .map(|exposed| (exposed, record.instance.substitution()))
-        })
-        .collect::<HashMap<_, _>>();
-    let mut views = HashMap::new();
-    for substitution in projection_substitutions.values() {
-        let complete = complete_substitution::CompleteSubstitution::try_new(substitution, types)
-            .map_err(|error| error.into_graphcal(src))?;
-        views.insert(
-            *substitution,
-            (instance_type_view(types, substitution, src)?, complete),
-        );
-    }
+    let annotation_types = DeclTypeResolver::new(semantic_instances, types, src)?;
     let mut resolved = Vec::new();
     for (identity, decl_type) in declarations {
         cancellation.checkpoint()?;
-        let instance = projection_substitutions
-            .get(&identity.to_unowned_def_name())
-            .and_then(|substitution| views.get(substitution));
-        let ty = match instance {
-            Some((view, complete)) => resolve_instance_decl_type(decl_type, complete, view, src)?,
-            None => type_expr::resolve_hir_decl_type_with_project_types(decl_type, src, types)?,
-        };
+        let ty = annotation_types.resolve(&identity, decl_type)?;
         resolved.push((identity, ty));
     }
     // Every annotation resolves before any is required to be concrete.
@@ -591,92 +690,107 @@ fn resolve_instance_decl_type(
 /// Declaration domain bounds keyed by the canonical declaration they bound.
 type DomainBounds = HashMap<ResolvedDeclName, NonEmpty<ResolvedDomainBound>>;
 
-/// Attach each value declaration's checked type to its record, moving its
-/// domain bounds into a table keyed by canonical identity.
+/// Require each value declaration's resolved type to be concrete (constants,
+/// then parameters, then nodes), moving its domain bounds into a table keyed
+/// by canonical identity.
 fn attach_checked_types(
-    decls: crate::ir::decl_table::DeclTable<crate::ir::model::Lowered>,
-    mut decl_types: HashMap<ResolvedDeclName, CheckedDeclType>,
+    decls: crate::ir::decl_table::DeclTable<SignatureResolved>,
     src: SourceId,
 ) -> Result<(crate::ir::decl_table::DeclTable<Typed>, DomainBounds), SemanticError> {
+    let mut domain_bounds = HashMap::new();
+    let decls = decls.try_map(signature_rank, |decl| {
+        map_value_annotation(
+            decl,
+            |identity,
+             ResolvedAnnotation {
+                 annotation,
+                 resolved,
+             }| {
+                let checked = CheckedDeclType::new(resolved, src)?;
+                if let Ok(bounds) = NonEmpty::try_from_vec(annotation.domain_bounds) {
+                    domain_bounds.insert(
+                        identity,
+                        bounds.map(|bound| ResolvedDomainBound {
+                            kind: bound.kind,
+                            value: bound.value,
+                            span: bound.span,
+                            src,
+                        }),
+                    );
+                }
+                Ok::<_, SemanticError>(CheckedTypeAnnotation {
+                    decl_type: annotation.decl_type,
+                    span: annotation.span,
+                    checked,
+                })
+            },
+        )
+    })?;
+    Ok((decls, domain_bounds))
+}
+
+/// Replace a value declaration's annotation with `map` of it, keeping every
+/// other part of every declaration.
+fn map_value_annotation<P, Q, E>(
+    decl: crate::ir::entry::Decl<P>,
+    map: impl FnOnce(ResolvedDeclName, P::TypeAnnotation) -> Result<Q::TypeAnnotation, E>,
+) -> Result<crate::ir::entry::Decl<Q>, E>
+where
+    P: crate::ir::entry::BodyPhase,
+    Q: crate::ir::entry::BodyPhase<
+            Expr = P::Expr,
+            NodeDefinition = P::NodeDefinition,
+            AssertBody = P::AssertBody,
+            PlotBody = P::PlotBody,
+            CompositionFields = P::CompositionFields,
+        >,
+{
     use crate::ir::entry::{
         AssertEntry, ConstEntry, Decl, FigureEntry, LayerEntry, NodeEntry, ParamEntry, PlotEntry,
     };
-    let mut domain_bounds = HashMap::new();
-    let mut check = |identity: ResolvedDeclName,
-                     annotation: crate::hir::type_annotation::TypeAnnotation| {
-        let checked = decl_types.remove(&identity).ok_or_else(|| {
-            SemanticError::internal_error(
-                format!("value declaration `{identity}` has no resolved signature"),
-                src,
-                DiagnosticAnchor::Source(annotation.span),
-            )
-        })?;
-        if let Ok(bounds) = NonEmpty::try_from_vec(annotation.domain_bounds) {
-            domain_bounds.insert(
-                identity,
-                bounds.map(|bound| ResolvedDomainBound {
-                    kind: bound.kind,
-                    value: bound.value,
-                    span: bound.span,
-                    src,
-                }),
-            );
-        }
-        Ok::<_, SemanticError>(CheckedTypeAnnotation {
-            decl_type: annotation.decl_type,
-            span: annotation.span,
-            checked,
-        })
-    };
-    let decls = decls.try_map(
-        |_| (),
-        |decl| {
-            let identity = decl.identity();
-            Ok::<_, SemanticError>(match decl {
-                Decl::Const(entry) => Decl::Const(ConstEntry {
-                    type_ann: check(identity, entry.type_ann)?,
-                    identity: entry.identity,
-                    expr: entry.expr,
-                    span: entry.span,
-                }),
-                Decl::Param(entry) => Decl::Param(ParamEntry {
-                    type_ann: check(identity, entry.type_ann)?,
-                    identity: entry.identity,
-                    default: entry.default,
-                    span: entry.span,
-                    override_reconciliations: entry.override_reconciliations,
-                }),
-                Decl::Node(entry) => Decl::Node(NodeEntry {
-                    type_ann: check(identity, entry.type_ann)?,
-                    identity: entry.identity,
-                    definition: entry.definition,
-                    span: entry.span,
-                }),
-                Decl::Assert(entry) => Decl::Assert(AssertEntry {
-                    identity: entry.identity,
-                    body: entry.body,
-                    span: entry.span,
-                }),
-                Decl::Plot(entry) => Decl::Plot(PlotEntry {
-                    identity: entry.identity,
-                    mark_type: entry.mark_type,
-                    body: entry.body,
-                    visibility: entry.visibility,
-                }),
-                Decl::Figure(entry) => Decl::Figure(FigureEntry {
-                    identity: entry.identity,
-                    plot_names: entry.plot_names,
-                    fields: entry.fields,
-                }),
-                Decl::Layer(entry) => Decl::Layer(LayerEntry {
-                    identity: entry.identity,
-                    plot_names: entry.plot_names,
-                    fields: entry.fields,
-                }),
-            })
-        },
-    )?;
-    Ok((decls, domain_bounds))
+    let identity = decl.identity();
+    Ok(match decl {
+        Decl::Const(entry) => Decl::Const(ConstEntry {
+            type_ann: map(identity, entry.type_ann)?,
+            identity: entry.identity,
+            expr: entry.expr,
+            span: entry.span,
+        }),
+        Decl::Param(entry) => Decl::Param(ParamEntry {
+            type_ann: map(identity, entry.type_ann)?,
+            identity: entry.identity,
+            default: entry.default,
+            span: entry.span,
+            override_reconciliations: entry.override_reconciliations,
+        }),
+        Decl::Node(entry) => Decl::Node(NodeEntry {
+            type_ann: map(identity, entry.type_ann)?,
+            identity: entry.identity,
+            definition: entry.definition,
+            span: entry.span,
+        }),
+        Decl::Assert(entry) => Decl::Assert(AssertEntry {
+            identity: entry.identity,
+            body: entry.body,
+            span: entry.span,
+        }),
+        Decl::Plot(entry) => Decl::Plot(PlotEntry {
+            identity: entry.identity,
+            mark_type: entry.mark_type,
+            body: entry.body,
+            visibility: entry.visibility,
+        }),
+        Decl::Figure(entry) => Decl::Figure(FigureEntry {
+            identity: entry.identity,
+            plot_names: entry.plot_names,
+            fields: entry.fields,
+        }),
+        Decl::Layer(entry) => Decl::Layer(LayerEntry {
+            identity: entry.identity,
+            plot_names: entry.plot_names,
+            fields: entry.fields,
+        }),
+    })
 }
 
 /// Internal helper: resolve type annotations for the const/param/node

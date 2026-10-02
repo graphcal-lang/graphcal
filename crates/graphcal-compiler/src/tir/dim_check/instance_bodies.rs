@@ -10,7 +10,7 @@ use crate::semantic_error::visibility::OverriddenKind;
 use crate::semantic_error::visibility::OverrideMention;
 use crate::semantic_error::visibility::VisibilityError;
 use crate::source_id::SourceId;
-use crate::tir::texpr::{CheckedBodies, CheckedBody, NominalObservation, TBody};
+use crate::tir::texpr::{CheckedBodies, NominalObservation};
 use crate::tir::typed::complete_substitution::CompleteSubstitution;
 use crate::tir::typed::instance_graph::{
     CanonicalFacts, InstanceFacts, InstanceGraph, InstanceOrigin, TemplateFact,
@@ -151,20 +151,29 @@ fn rebound_defaults<'d>(
 /// Check the instance's parameter defaults: a rebound default is inferred
 /// independently; an inherited one keeps its template tree's type,
 /// specialized, and must still match its annotation.
+///
+/// The template checked each of its defaults against its own annotation, so
+/// an inherited default's tree has the template parameter's declared type.
+/// An instance's parameters are its template's, in the same order:
+/// specialization rebases the template's declaration table, rebinding only
+/// defaults.
 fn check_instance_defaults(
     ctx: &DimCheckContext<'_>,
     template: &crate::tir::typed::model::DagTIR,
     template_bodies: &CheckedBodies,
     substitution: &CompleteSubstitution<'_>,
 ) -> Result<(), Outcome<SemanticError>> {
-    let template_defaults = inherited_defaults(template);
-    for entry in ctx.env.dag.params() {
+    for (template_entry, entry) in template.params().zip(ctx.env.dag.params()) {
+        debug_assert_eq!(template_entry.name(), entry.name());
         ctx.checkpoint()?;
         let Some(default) = &entry.default else {
             continue;
         };
         let id = default.id();
-        let inherited = template_defaults.contains(id);
+        let inherited = template_entry
+            .default
+            .as_deref()
+            .is_some_and(|template_default| template_default.id() == id);
         if !inherited {
             check_decl_expr_type(
                 ctx,
@@ -175,32 +184,13 @@ fn check_instance_defaults(
             )?;
             continue;
         }
-        let internal = |message: String| {
-            SemanticError::internal_error(
-                message,
-                ctx.env.src,
-                DiagnosticAnchor::Source(default.span),
-            )
-        };
-        let body = template_bodies
-            .get(id)
-            .ok_or_else(|| internal(format!("missing checked expression: {id:?}")))?;
         let declaration = entry.identity();
         check_retained_reconciliations(
             ctx.env.dag,
             &declaration,
             template_bodies.nominal_uses(id),
         )?;
-        let checked_type = match body {
-            CheckedBody::Executable(TBody::Value(tree)) => tree.ty().to_symbolic(),
-            CheckedBody::Deferred(TBody::Value(tree)) => tree.ty().clone(),
-            CheckedBody::Executable(TBody::Contextual(_))
-            | CheckedBody::Deferred(TBody::Contextual(_)) => {
-                return Err(
-                    internal("parameter default has no value checking result".to_owned()).into(),
-                );
-            }
-        };
+        let checked_type = template_entry.type_ann.checked().declared().to_symbolic();
         let specialized = specialize_expression_type(&checked_type, substitution, ctx.env.src)?;
         let expected = entry.type_ann.checked().declared();
         if specialized != expected.to_symbolic() {
