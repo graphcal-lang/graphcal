@@ -53,7 +53,7 @@ pub struct RevisionClock(AtomicU64);
 impl RevisionClock {
     pub fn next(&self) -> Result<DocumentRevision, RevisionExhausted> {
         self.0
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
                 current.checked_add(1)
             })
             .map(|previous| DocumentRevision(previous + 1))

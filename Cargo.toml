@@ -9,7 +9,7 @@ default-members = ["crates/graphcal-cli"]
 [workspace.package]
 version = "0.0.1-alpha.32"
 edition = "2024"
-rust-version = "1.91"
+rust-version = "1.95"
 description = "Type-safe, unit-aware, Git-friendly reactive programming language for engineering calculations"
 readme = "README.md"
 repository = "https://github.com/graphcal-lang/graphcal"

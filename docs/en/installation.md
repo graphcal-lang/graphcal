@@ -6,7 +6,7 @@ icon: material/download
 
 ## Requirements
 
-- Rust stable toolchain (1.91 or later)
+- Rust stable toolchain (1.95 or later)
 
 If you don't have Rust installed, get it from [rustup.rs](https://rustup.rs/).
 

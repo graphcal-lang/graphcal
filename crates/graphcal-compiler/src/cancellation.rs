@@ -103,7 +103,7 @@ impl CancellationToken {
         self.deterministic.as_ref().is_some_and(|state| {
             state
                 .remaining_successful_checkpoints
-                .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |remaining| {
+                .try_update(Ordering::Relaxed, Ordering::Relaxed, |remaining| {
                     remaining.checked_sub(1)
                 })
                 .is_err()
