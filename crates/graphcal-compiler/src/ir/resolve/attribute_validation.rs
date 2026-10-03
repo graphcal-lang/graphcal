@@ -15,7 +15,7 @@ use crate::desugar::desugared_ast::{AssertDecl, Attribute, AttributeArg, DeclKin
 use crate::semantic_error::SemanticError;
 use crate::semantic_error::attribute::AttributeError;
 use crate::source_id::SourceId;
-use crate::syntax::attribute::AttributeName;
+use crate::syntax::attribute::{AttributeName, AttributeNameError, ReservedAttributeName};
 use crate::syntax::decl_name::DeclName;
 use crate::syntax::names::NameAtom;
 use crate::syntax::span::{Span, Spanned};
@@ -193,16 +193,23 @@ pub enum AttributeValidationError {
         first: Span,
         duplicate: Span,
     },
-    /// Lazy evaluation syntax is reserved but has no semantics yet.
-    #[error("`#[lazy]` is reserved but not supported")]
-    UnsupportedLazy { span: Span },
+    /// A `hidden` attribute was given arguments.
+    #[error("`#[hidden]` takes no arguments")]
+    HiddenArguments { span: Span },
+    /// A reserved attribute name has no semantics yet.
+    #[error("`#[{name}]` is reserved but not supported")]
+    Reserved {
+        name: ReservedAttributeName,
+        span: Span,
+    },
 }
 
 /// Parse known attributes, admit each at `site`, and enforce shared
 /// singleton/argument invariants.
 ///
 /// Singleton metadata is classified by [`AttributeName::is_singleton`].
-/// `assumes` must also contain a non-empty set of unique plain assertion names.
+/// `assumes` must also contain a non-empty set of unique plain assertion names,
+/// and `hidden` accepts no arguments.
 /// The function has no registry or I/O dependencies, so declarations and
 /// include items cannot drift onto separate validation rules.
 pub fn validate_attributes<'a, S: AttributeSite>(
@@ -219,16 +226,17 @@ pub fn validate_attributes<'a, S: AttributeSite>(
                 .name
                 .as_str()
                 .parse::<AttributeName>()
-                .map_err(|_| AttributeValidationError::UnknownAttribute {
-                    name: attribute.name.name.clone(),
-                    span: attribute.span,
+                .map_err(|error| match error {
+                    AttributeNameError::Unknown(_) => AttributeValidationError::UnknownAttribute {
+                        name: attribute.name.name.clone(),
+                        span: attribute.span,
+                    },
+                    AttributeNameError::Reserved(name) => AttributeValidationError::Reserved {
+                        name,
+                        span: attribute.span,
+                    },
                 })?;
 
-            if matches!(name, AttributeName::Lazy) {
-                return Err(AttributeValidationError::UnsupportedLazy {
-                    span: attribute.span,
-                });
-            }
             let role = site
                 .admit(name)
                 .ok_or_else(|| AttributeValidationError::InvalidTarget {
@@ -243,9 +251,15 @@ pub fn validate_attributes<'a, S: AttributeSite>(
 
             let assumes_arguments = match name {
                 AttributeName::Assumes => validate_assumes_arguments(attribute)?,
-                AttributeName::ExpectedFail | AttributeName::Hidden | AttributeName::Lazy => {
+                AttributeName::Hidden => {
+                    if !attribute.args.is_empty() {
+                        return Err(AttributeValidationError::HiddenArguments {
+                            span: attribute.span,
+                        });
+                    }
                     Vec::new()
                 }
+                AttributeName::ExpectedFail => Vec::new(),
             };
 
             Ok(ValidatedAttribute {
@@ -359,9 +373,6 @@ pub fn attribute_validation_error_to_graphcal(
                     AttributeError::InvalidHiddenTarget { kind: target },
                 ),
             },
-            AttributeName::Lazy => {
-                SemanticError::located(src, span, AttributeError::LazyNotSupported)
-            }
         },
         AttributeValidationError::RepeatedSingleton {
             name,
@@ -387,9 +398,14 @@ pub fn attribute_validation_error_to_graphcal(
             duplicate,
             AttributeError::DuplicateAssumesArgument { name, first },
         ),
-        AttributeValidationError::UnsupportedLazy { span } => {
-            SemanticError::located(src, span, AttributeError::LazyNotSupported)
+        AttributeValidationError::HiddenArguments { span } => {
+            SemanticError::located(src, span, AttributeError::HiddenTakesNoArguments)
         }
+        AttributeValidationError::Reserved { name, span } => match name {
+            ReservedAttributeName::Lazy => {
+                SemanticError::located(src, span, AttributeError::LazyNotSupported)
+            }
+        },
     }
 }
 
@@ -485,8 +501,30 @@ mod tests {
                     &declaration.attributes,
                     &DeclarationSite::new(&declaration.kind)
                 ),
-                Err(AttributeValidationError::UnsupportedLazy { .. })
+                Err(AttributeValidationError::Reserved {
+                    name: ReservedAttributeName::Lazy,
+                    ..
+                })
             ));
+        }
+    }
+
+    #[test]
+    fn hidden_rejects_arguments_on_plots_and_include_items() {
+        let declaration = declaration(
+            "#[hidden(now)]\nplot output = { mark: line, encode: { x: 1.0, y: 1.0 } };",
+        );
+        let attributes = &declaration.attributes;
+        for result in [
+            validate_attributes(attributes, &DeclarationSite::new(&declaration.kind)).map(|_| ()),
+            validate_attributes(attributes, &include_item(DeclarationKind::Plot)).map(|_| ()),
+        ] {
+            assert_eq!(
+                result,
+                Err(AttributeValidationError::HiddenArguments {
+                    span: attributes[0].span
+                })
+            );
         }
     }
 

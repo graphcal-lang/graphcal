@@ -1903,6 +1903,33 @@ fn repeated_hidden_is_rejected_on_plots_and_include_items() {
 }
 
 #[test]
+fn hidden_with_arguments_is_rejected_on_include_items() {
+    let producer = "pub node x: Dimensionless = 1.0;\n\
+                    pub plot chart = { mark: point, encode: { x: @x } };\n";
+    let (_directory, root) = write_pipeline_project(
+        &[
+            ("lib.gcl", producer),
+            (
+                "main.gcl",
+                "include pipeline.lib()::{ #[hidden(now)] chart };\n",
+            ),
+        ],
+        "main.gcl",
+    );
+    let include_error = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap_err();
+    assert!(matches!(
+        include_error,
+        CompileError::Eval(RenderedSemanticError {
+            error: SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
+                kind: SemanticErrorKind::Attribute(AttributeError::HiddenTakesNoArguments),
+                ..
+            }),
+            ..
+        })
+    ));
+}
+
+#[test]
 fn time_scale_spellings_are_disjoint_from_graph_value_namespaces() {
     for scale in graphcal_compiler::semantic::time_scale::TimeScale::ALL {
         for declaration in [

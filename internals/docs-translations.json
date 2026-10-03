@@ -33,8 +33,8 @@
     },
     {
       "path": "language/assertions.md",
-      "english_sha256": "9cc6cf8ca99cc30fb4588a4cd61f2b41cc611b0e427abdcb21c13cd00a49fa8d",
-      "japanese_sha256": "cebd073c91576ddca69b7eafff3a2d67f76c17cdf5d4761f57a1a5f868927c0c"
+      "english_sha256": "f5ea1b2d45f3e30305c55013a867a184870c9bb97e00418c4b6d7b5548f184c4",
+      "japanese_sha256": "6d573e3757e7bdce4e521790ddeeb047ee669f89c717db9992f02f25bea1b726"
     },
     {
       "path": "language/built-ins.md",

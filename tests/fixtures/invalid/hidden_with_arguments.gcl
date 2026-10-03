@@ -1,0 +1,3 @@
+node x: Dimensionless = 1.0;
+#[hidden(now)]
+plot chart = { mark: point, encode: { x: @x } };

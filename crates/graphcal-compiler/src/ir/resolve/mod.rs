@@ -634,13 +634,7 @@ fn validate_declaration_attributes(
                 }
             }
             DeclarationAttributeRole::Hidden => {
-                if !attr.args.is_empty() {
-                    return Err(SemanticError::located(
-                        src,
-                        attr.span,
-                        AttributeError::HiddenTakesNoArguments,
-                    ));
-                }
+                // Shared structural validation guarantees no arguments.
                 visibility = PlotVisibility::CompositionOnly;
             }
         }

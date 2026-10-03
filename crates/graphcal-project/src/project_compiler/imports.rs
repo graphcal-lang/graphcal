@@ -5,7 +5,6 @@
     clippy::allow_attributes,
     reason = "project compiler pass uses the shared internal model"
 )]
-use graphcal_compiler::semantic_error::attribute::AttributeError;
 use graphcal_compiler::syntax::span::Spanned;
 use std::collections::{HashMap, HashSet};
 
@@ -424,16 +423,9 @@ fn validate_include_item_attributes(
             )
         })?;
     for validated in attributes {
-        let attr = validated.attribute();
         match validated.role() {
             IncludeItemAttributeRole::Hidden => {
-                if !attr.args.is_empty() {
-                    return Err(PipelineError::Semantic(SemanticError::located(
-                        file_src,
-                        attr.span,
-                        AttributeError::HiddenTakesNoArguments,
-                    )));
-                }
+                // Shared structural validation guarantees no arguments.
                 visibility = PlotVisibility::CompositionOnly;
             }
             IncludeItemAttributeRole::ExpectedFail => {}
