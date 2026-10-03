@@ -7,7 +7,9 @@
 //! scopes below the root, then its own leaf (`l2::reciprocal`,
 //! `outer::inner::x`); anonymous include scopes are given display names at
 //! the project boundary, which also supplies them to [`RootNames`] so the
-//! reasons an evaluation reports name declarations the same way.
+//! reasons an evaluation reports name declarations the same way. The project
+//! likewise supplies the source module paths that name the declarations of
+//! invoked modules outside the root's subtree (`pipeline.lib::pending`).
 
 use std::collections::HashMap;
 
@@ -18,7 +20,8 @@ use graphcal_compiler::resolved_name::ResolvedDeclName;
 use graphcal_compiler::syntax::module_name::ScopedName;
 use graphcal_compiler::syntax::non_empty::NonEmpty;
 
-use graphcal_compiler::display::include_scope_names::{IncludeScopeNames, name_include_scopes};
+use graphcal_compiler::display::include_scope_names::name_include_scopes;
+use graphcal_compiler::display::source_display_names::SourceDisplayNames;
 
 use crate::eval::output_decl_name::{OutputDeclName, OutputUnavailable};
 use crate::execution_plan::ExecPlan;
@@ -76,13 +79,13 @@ pub(super) struct RootNames<'p> {
     /// Values an include site exposes under a name of the root's own that
     /// no root declaration materializes.
     exposed: HashMap<ResolvedDeclName, ScopedName>,
-    include_scopes: &'p IncludeScopeNames,
+    display_names: &'p SourceDisplayNames,
 }
 
 impl<'p> RootNames<'p> {
     /// The names the root of `plan` gives its declarations, with private
-    /// include scopes named by `include_scopes`.
-    pub(super) fn new(plan: &'p ExecPlan<'_>, include_scopes: &'p IncludeScopeNames) -> Self {
+    /// include scopes and invoked modules named by `display_names`.
+    pub(super) fn new(plan: &'p ExecPlan<'_>, display_names: &'p SourceDisplayNames) -> Self {
         let exposed = plan
             .root()
             .semantic_instances()
@@ -101,28 +104,35 @@ impl<'p> RootNames<'p> {
         Self {
             root: plan.tir().root_dag_id(),
             exposed,
-            include_scopes,
+            display_names,
         }
     }
 
     /// The output name of `declaration`: the name the root exposes it under,
     /// else its name qualified by the scopes below the root (none for the
     /// root's own declarations), else (a declaration of an invoked module
-    /// outside the root's subtree) its identity.
+    /// outside the root's subtree) its name under its module's source path,
+    /// else its identity.
     pub(super) fn name(&self, declaration: &ResolvedDeclName) -> OutputDeclName {
-        self.exposed
-            .get(declaration)
-            .cloned()
-            .or_else(|| {
-                qualified_below(
-                    self.root,
-                    declaration.owner(),
-                    &ScopedName::local(declaration.leaf().clone()),
-                )
-            })
+        let below_root = self.exposed.get(declaration).cloned().or_else(|| {
+            qualified_below(
+                self.root,
+                declaration.owner(),
+                &ScopedName::local(declaration.leaf().clone()),
+            )
+        });
+        if let Some(name) = below_root {
+            return OutputDeclName::Root(name_include_scopes(
+                &name,
+                self.display_names.include_scopes(),
+            ));
+        }
+        self.display_names
+            .module_paths()
+            .name(declaration.owner(), declaration.leaf())
             .map_or_else(
-                || OutputDeclName::Invoked(declaration.clone()),
-                |name| OutputDeclName::Root(name_include_scopes(&name, self.include_scopes)),
+                || OutputDeclName::Unnamed(declaration.clone()),
+                OutputDeclName::Invoked,
             )
     }
 

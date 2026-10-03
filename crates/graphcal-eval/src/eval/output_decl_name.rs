@@ -5,6 +5,7 @@
 //! reason the output reports (a failed dependency, an unfinished formula)
 //! names its declarations this way.
 
+use graphcal_compiler::display::module_paths::ModuleDeclName;
 use graphcal_compiler::node_unavailable::{NodeUnavailable, ReportedName};
 use graphcal_compiler::resolved_name::ResolvedDeclName;
 use graphcal_compiler::syntax::module_name::ScopedName;
@@ -17,16 +18,20 @@ pub enum OutputDeclName {
     /// below the root, qualified by their scopes (`inst::pending`).
     Root(ScopedName),
     /// A declaration of a module outside the root's subtree that the
-    /// evaluation invoked. The root has no name for it, so it is reported by
-    /// its identity.
-    Invoked(ResolvedDeclName),
+    /// evaluation invoked, named by its module's source path
+    /// (`pipeline.lib::pending`).
+    Invoked(ModuleDeclName),
+    /// A declaration of an invoked module whose source path the project did
+    /// not supply, reported by its identity.
+    Unnamed(ResolvedDeclName),
 }
 
 impl std::fmt::Display for OutputDeclName {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Root(name) => name.fmt(formatter),
-            Self::Invoked(identity) => identity.fmt(formatter),
+            Self::Invoked(name) => name.fmt(formatter),
+            Self::Unnamed(identity) => identity.fmt(formatter),
         }
     }
 }
@@ -59,9 +64,9 @@ mod tests {
     }
 
     #[test]
-    fn invoked_declarations_keep_their_identity() {
+    fn unnamed_declarations_keep_their_identity() {
         let identity = ResolvedDeclName::for_test(DagId::root_in_package("test", "lib"), leaf("x"));
-        let name = OutputDeclName::Invoked(identity.clone());
+        let name = OutputDeclName::Unnamed(identity.clone());
         assert_eq!(name.to_string(), identity.to_string());
     }
 }

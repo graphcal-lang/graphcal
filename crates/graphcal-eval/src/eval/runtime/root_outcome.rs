@@ -16,7 +16,7 @@ use graphcal_compiler::source_id::SourceId;
 use graphcal_compiler::syntax::module_name::ScopedName;
 use graphcal_compiler::syntax::span::Span;
 
-use graphcal_compiler::display::include_scope_names::IncludeScopeNames;
+use graphcal_compiler::display::source_display_names::SourceDisplayNames;
 
 use crate::eval::output_decl_name::{OutputDeclName, OutputUnavailable};
 use crate::eval::types::{AssertResult, RuntimeUnavailable};
@@ -66,14 +66,14 @@ pub enum RootFailure<'o> {
 
 impl RootOutcome {
     /// Run the root's plan with `bindings`, then evaluate every assertion the
-    /// root reports, naming private include scopes by `include_scopes`.
+    /// root reports, naming private include scopes and invoked modules by `display_names`.
     pub fn evaluate(
         plan: &ExecPlan<'_>,
         bindings: &crate::eval::bindings::RuntimeParameterBindings,
         src: SourceId,
         sources: &SourceRegistry,
         host_fns: &HostFunctionRegistry,
-        include_scopes: &IncludeScopeNames,
+        display_names: &SourceDisplayNames,
         cancellation: &graphcal_compiler::cancellation::CancellationToken,
     ) -> Result<Self, Outcome<SemanticError>> {
         let EvalLoopResult {
@@ -97,7 +97,7 @@ impl RootOutcome {
             &ctx,
             &outcome.values,
             &outcome.errors,
-            &RootNames::new(plan, include_scopes),
+            &RootNames::new(plan, display_names),
         )?;
         outcome.assertions = assertions;
         Ok(outcome)
@@ -154,9 +154,9 @@ impl RootOutcome {
     pub fn first_failure(
         &self,
         plan: &ExecPlan<'_>,
-        include_scopes: &IncludeScopeNames,
+        display_names: &SourceDisplayNames,
     ) -> Option<RootFailure<'_>> {
-        let names = RootNames::new(plan, include_scopes);
+        let names = RootNames::new(plan, display_names);
         let exposed = root_source_names(plan).into_iter().find_map(|(key, name)| {
             self.errors
                 .get(&key)

@@ -331,13 +331,13 @@ impl PreparedProject {
                 self.source,
                 &self.sources,
                 &self.host_fns,
-                &self.output_assembly.include_debug_names,
+                &self.output_assembly.display_names,
                 cancellation,
             )
         })
         .map_err(|error| self.render(error))?;
         if let Some(failure) =
-            outcome.first_failure(self.plan(), &self.output_assembly.include_debug_names)
+            outcome.first_failure(self.plan(), &self.output_assembly.display_names)
         {
             return Ok(ModelRowOutcome::Failure(self.row_failure(failure)));
         }
@@ -351,7 +351,7 @@ impl PreparedProject {
         let display = |name: &graphcal_compiler::syntax::module_name::ScopedName| {
             graphcal_compiler::display::include_scope_names::name_include_scopes(
                 name,
-                &self.output_assembly.include_debug_names,
+                self.output_assembly.display_names.include_scopes(),
             )
         };
         match failure {

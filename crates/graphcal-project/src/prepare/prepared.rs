@@ -262,7 +262,7 @@ impl ParameterBindingBuilder<'_> {
 }
 struct ProjectOutputAssembly {
     output_surface: HashSet<ScopedName>,
-    include_debug_names: graphcal_compiler::display::include_scope_names::IncludeScopeNames,
+    display_names: graphcal_compiler::display::source_display_names::SourceDisplayNames,
     imported_source_order: Vec<(ScopedName, DeclCategory)>,
     imported_values: HashMap<ScopedName, graphcal_eval::checked_program::ImportedConstant>,
 }
@@ -321,6 +321,7 @@ impl PreparedProject {
         sources: Arc<SourceRegistry>,
         host_fns: graphcal_eval::host_fns::HostFunctionRegistry,
         module_resolver: ModuleResolver,
+        module_paths: graphcal_compiler::display::module_paths::ModulePaths,
         cancellation: &graphcal_compiler::cancellation::CancellationToken,
     ) -> Result<Self, Outcome<CompileError>> {
         let CompiledFile {
@@ -376,7 +377,11 @@ impl PreparedProject {
             schema_graph,
             output_assembly: ProjectOutputAssembly {
                 output_surface,
-                include_debug_names,
+                display_names:
+                    graphcal_compiler::display::source_display_names::SourceDisplayNames::new(
+                        include_debug_names,
+                        module_paths,
+                    ),
                 imported_source_order,
                 imported_values,
             },
@@ -446,7 +451,7 @@ impl PreparedProject {
                 self.source,
                 &self.sources,
                 &self.host_fns,
-                &self.output_assembly.include_debug_names,
+                &self.output_assembly.display_names,
                 cancellation,
             )
             .map_err(|outcome| outcome.map_failed(|error| self.render(error)))?;
@@ -485,7 +490,7 @@ impl PreparedProject {
             self.source,
             &self.sources,
             &self.host_fns,
-            &self.output_assembly.include_debug_names,
+            &self.output_assembly.display_names,
             cancellation,
         )
         .map_err(|outcome| outcome.map_failed(|error| self.render(error)))
@@ -517,7 +522,10 @@ impl PreparedProject {
         cancellation: &graphcal_compiler::cancellation::CancellationToken,
     ) -> Result<EvalResult, Outcome<CompileError>> {
         let (mut eval_result, presentations) = evaluation.into_result_and_presentations();
-        apply_include_debug_names(&mut eval_result, &self.output_assembly.include_debug_names);
+        apply_include_debug_names(
+            &mut eval_result,
+            self.output_assembly.display_names.include_scopes(),
+        );
 
         let mut entries = Vec::new();
         let mut seen = HashSet::new();
@@ -628,6 +636,7 @@ pub(super) fn prepare_checked_project(
         source,
         sources,
         module_resolver,
+        module_paths,
     } = checked.into_runtime_parts();
     if let Some(index) = compiled.entry_interface.required_index() {
         return Err(CompileError::semantic(
@@ -650,6 +659,7 @@ pub(super) fn prepare_checked_project(
         sources,
         host_fns.clone(),
         module_resolver,
+        module_paths,
         cancellation,
     )
 }

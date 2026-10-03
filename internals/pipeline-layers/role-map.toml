@@ -888,6 +888,21 @@ role = "contracts"
 
 [[module]]
 package = "compiler"
+path = ["display", "module_paths"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["display", "module_paths", "tests"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["display", "source_display_names"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
 path = ["display", "number"]
 role = "contracts"
 

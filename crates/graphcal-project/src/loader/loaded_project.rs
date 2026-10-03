@@ -209,6 +209,29 @@ impl LoadedFiles {
             .get(dag_id)
             .map(|module| (*module, self.module(*module)))
     }
+
+    /// The source module path of every file another file imports or
+    /// includes, as its importers spell it.
+    ///
+    /// A file's references to itself (the file-stem self-reference, and
+    /// inline DAG bodies importing their own file) are not module paths
+    /// another module can write, so they name nothing.
+    #[must_use]
+    pub(crate) fn module_paths(&self) -> graphcal_compiler::display::module_paths::ModulePaths {
+        let mut paths = graphcal_compiler::display::module_paths::ModulePaths::default();
+        for file in self.iter() {
+            let file_imports = file.resolved_imports.iter();
+            let body_imports = file
+                .inline_dags
+                .iter()
+                .flat_map(|dag| dag.resolved_imports.iter());
+            file_imports
+                .chain(body_imports)
+                .filter(|(_, target)| *target.source_file() != file.dag_id)
+                .for_each(|(path, target)| paths.record(path, target.target()));
+        }
+        paths
+    }
 }
 
 impl<'a> IntoIterator for &'a LoadedFiles {

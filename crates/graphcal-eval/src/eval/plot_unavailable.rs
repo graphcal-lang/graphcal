@@ -189,7 +189,7 @@ mod tests {
     }
 
     fn invoked(declaration: &ResolvedDeclName) -> OutputDeclName {
-        OutputDeclName::Invoked(declaration.clone())
+        OutputDeclName::Unnamed(declaration.clone())
     }
 
     #[test]
