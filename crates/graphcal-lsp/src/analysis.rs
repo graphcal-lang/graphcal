@@ -11,7 +11,7 @@ use crate::symbol_table::{SymbolKey, SymbolTable};
 use crate::workspace_revision::AnalysisInputs;
 use graphcal_compiler::syntax::module_name::ScopedName;
 
-use crate::fn_signatures::FnSignatureInfo;
+use crate::fn_signatures::{ExternCallee, FnSignatureInfo};
 use crate::imported_definitions::ImportedDefinition;
 
 /// A loader-resolved import link for Document Links.
@@ -61,9 +61,9 @@ pub struct AnalysisResult {
     /// Points to a lazily-initialized static map (builtins never change).
     pub fn_signatures: &'static HashMap<String, FnSignatureInfo>,
     /// Extern (plugin) function signatures from this file's `import plugin`
-    /// blocks, keyed by the qualified `alias.name` call spelling. Per-file,
+    /// blocks, keyed by the typed `alias::name` call spelling. Per-file,
     /// unlike the static builtin map.
-    pub extern_fn_signatures: HashMap<String, FnSignatureInfo>,
+    pub extern_fn_signatures: HashMap<ExternCallee, FnSignatureInfo>,
     /// Loader-resolved import links (for Document Links).
     pub import_links: Vec<ResolvedImportLink>,
     /// `false` when this result is a parse-failure fallback: the buffer did

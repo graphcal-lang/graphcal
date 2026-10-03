@@ -8,6 +8,9 @@ use graphcal_compiler::cancellation::{CancellationToken, Cancelled};
 use graphcal_compiler::dimension::Dimension;
 use graphcal_compiler::function_signature::FunctionSignature;
 use graphcal_compiler::semantic::scalar_function::scalar_function;
+use graphcal_compiler::syntax::function_name::FnName;
+use graphcal_compiler::syntax::module_name::ModuleAliasName;
+use graphcal_compiler::syntax::names::NamePath;
 
 /// Structured function signature for Signature Help.
 pub struct FnSignatureInfo {
@@ -17,15 +20,48 @@ pub struct FnSignatureInfo {
     pub parameters: Vec<String>,
 }
 
+/// Signature Help lookup key of an extern (plugin) function: the
+/// `alias::name` call spelling, kept as its two typed parts.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ExternCallee {
+    /// The module alias the file bound the plugin to.
+    pub alias: ModuleAliasName,
+    /// The function leaf name inside the plugin.
+    pub name: FnName,
+}
+
+impl ExternCallee {
+    /// Classify a call-site source path as an extern callee.
+    ///
+    /// Only the `alias::name` shape (exactly one owner segment) can name an
+    /// extern function; any other path yields `None`.
+    #[must_use]
+    pub fn from_call_path(path: &NamePath) -> Option<Self> {
+        match path.qualifier() {
+            [alias] => Some(Self {
+                alias: ModuleAliasName::classify(alias.clone()),
+                name: FnName::classify(path.leaf().clone()),
+            }),
+            _ => None,
+        }
+    }
+}
+
+impl std::fmt::Display for ExternCallee {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}::{}", self.alias, self.name)
+    }
+}
+
 /// Build extern (plugin) function signatures for Signature Help, keyed by
-/// the qualified `alias.name` call spelling.
+/// the typed `alias::name` call spelling.
 ///
 /// Unlike builtins, extern signatures are per-file (they depend on the
 /// file's `import plugin` blocks and its registry's dimension names).
 pub fn build_extern_fn_signatures(
     tir: &graphcal_compiler::tir::typed::CheckedTir,
     cancellation: &CancellationToken,
-) -> std::result::Result<HashMap<String, FnSignatureInfo>, Cancelled> {
+) -> std::result::Result<HashMap<ExternCallee, FnSignatureInfo>, Cancelled> {
     let mut format_dim = |dim: &Dimension| tir.registry().dimensions.format_dimension(dim);
     let mut sigs = HashMap::new();
     for function in tir.extern_functions().values() {
@@ -41,9 +77,12 @@ pub fn build_extern_fn_signatures(
             .format_with_result(&mut format_dim, &mut |result_struct, _| {
                 result_struct.record_type().as_str().to_string()
             });
-        let qualified = format!("{}::{}", function.alias, function.name);
-        let label = format!("fn {qualified}{rendered}");
-        sigs.insert(qualified, FnSignatureInfo { label, parameters });
+        let callee = ExternCallee {
+            alias: function.alias.clone(),
+            name: function.name.clone(),
+        };
+        let label = format!("fn {callee}{rendered}");
+        sigs.insert(callee, FnSignatureInfo { label, parameters });
     }
     Ok(sigs)
 }

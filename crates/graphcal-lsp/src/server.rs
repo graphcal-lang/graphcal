@@ -1494,8 +1494,9 @@ mod tests {
     use graphcal_compiler::function_signature::{
         FunctionParam, FunctionSignature, ParamKind, ScalarValueKind,
     };
-    use graphcal_compiler::syntax::function_name::FnParamName;
+    use graphcal_compiler::syntax::function_name::{FnName, FnParamName};
     use graphcal_compiler::syntax::index_name::{IndexName, IndexVarName, IndexVariantName};
+    use graphcal_compiler::syntax::module_name::ModuleAliasName;
     use graphcal_compiler::syntax::non_empty::NonEmpty;
     use graphcal_compiler::syntax::type_name::{FieldName, StructTypeName};
     use graphcal_eval::eval::Value;
@@ -1508,7 +1509,7 @@ mod tests {
         AnalysisDegradation, dependency_artifact_identities, run_analysis, run_analysis_for_test,
         run_analysis_run, test_plugin_host,
     };
-    use crate::fn_signatures::build_fn_signatures;
+    use crate::fn_signatures::{ExternCallee, build_fn_signatures};
     use crate::project_symbols::{ProjectDocumentSymbols, ProjectSymbols};
     use crate::symbol_identity::VisibleBinding;
     use crate::symbol_table::{SymbolKey, SymbolTable};
@@ -1542,35 +1543,75 @@ mod tests {
         );
         let analysis = run_analysis(&uri, source, &[], test_plugin_host());
         let signature = |name: &str| {
+            let callee = ExternCallee {
+                alias: ModuleAliasName::expect_valid("demo"),
+                name: FnName::expect_valid(name),
+            };
             analysis
                 .extern_fn_signatures
-                .get(name)
+                .get(&callee)
                 .map(|info| (info.label.as_str(), info.parameters.join("; ")))
         };
         assert_eq!(
-            signature("demo::inverse"),
+            signature("inverse"),
             Some(("fn demo::inverse<D: Dim>(x: D) -> D^-1", "x: D".to_string()))
         );
         assert_eq!(
-            signature("demo::geometric_mean"),
+            signature("geometric_mean"),
             Some((
                 "fn demo::geometric_mean<D1: Dim, D2: Dim>(x: D1, y: D2) -> D1^(1/2) * D2^(1/2)",
                 "x: D1; y: D2".to_string()
             ))
         );
         assert_eq!(
-            signature("demo::lerp"),
+            signature("lerp"),
             Some((
                 "fn demo::lerp<D: Dim>(a: D, b: D, t: Dimensionless) -> D^2 * Frequency",
                 "a: D; b: D; t: Dimensionless".to_string()
             ))
         );
         assert_eq!(
-            signature("demo::dv_range"),
+            signature("dv_range"),
             Some((
                 "fn demo::dv_range<I: Index>(xs: Velocity[I]) -> DvRange",
                 "xs: Velocity[I]".to_string()
             ))
+        );
+    }
+
+    #[test]
+    fn signature_help_resolves_alias_qualified_extern_calls() {
+        let uri = Url::parse("file:///extern-signature-help.gcl").unwrap();
+        let declarations = concat!(
+            "import plugin \"graphcal:demo\" as demo {\n",
+            "    fn lerp<D: Dim>(a: D, b: D, t: Dimensionless) -> D^2 / Time;\n",
+            "}\n",
+        );
+        let analysis = run_analysis(
+            &uri,
+            &format!("{declarations}node y: Dimensionless = 1.0;\n"),
+            &[],
+            test_plugin_host(),
+        );
+        let active = |call: &str| {
+            let source = format!("{declarations}node y: Dimensionless = {call}");
+            crate::signature_help::signature_help(&analysis, &source, source.len())
+                .map(|help| (help.signatures[0].label.clone(), help.active_parameter))
+        };
+        let label = "fn demo::lerp<D: Dim>(a: D, b: D, t: Dimensionless) -> D^2 * Frequency";
+        assert_eq!(active("demo::lerp("), Some((label.to_string(), Some(0))));
+        assert_eq!(
+            active("demo::lerp(1.0, 2.0, "),
+            Some((label.to_string(), Some(2)))
+        );
+        // The extern leaf alone, a wrong alias, or a dotted owner is no match.
+        assert_eq!(active("lerp("), None);
+        assert_eq!(active("other::lerp("), None);
+        assert_eq!(active("x.demo::lerp("), None);
+        // Bare builtins still resolve.
+        assert_eq!(
+            active("sqrt(").map(|(label, _)| label),
+            Some("fn sqrt<D: Dim>(x: D) -> D^(1/2)".to_string())
         );
     }
 
