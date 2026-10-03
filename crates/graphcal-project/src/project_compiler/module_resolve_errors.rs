@@ -39,6 +39,19 @@ pub(super) fn module_resolve_compile_error(
                 file_path: DagReference::Dag(owner),
             },
         )),
+        graphcal_compiler::resolve::error::ModuleResolveError::PrivateImportItem {
+            owner,
+            name,
+            span,
+            ..
+        } => PipelineError::Semantic(SemanticError::located(
+            src,
+            span,
+            VisibilityError::ImportPrivateItem {
+                name,
+                file_path: DagReference::Dag(owner),
+            },
+        )),
         graphcal_compiler::resolve::error::ModuleResolveError::WrongImportCategory {
             owner,
             mismatch,

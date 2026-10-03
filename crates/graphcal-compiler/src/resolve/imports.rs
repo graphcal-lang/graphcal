@@ -210,10 +210,11 @@ impl ModuleResolver {
 
         match (additions.is_empty(), saw_private) {
             (false, _) => Ok(additions),
-            (true, true) => Err(ModuleResolveError::PrivateName {
+            (true, true) => Err(ModuleResolveError::PrivateImportItem {
                 owner: target.clone(),
                 category: NameCategory::TermImport,
                 name: source_atom.atom().clone(),
+                span: item.name.span,
             }),
             (true, false) => Err(self
                 .exported_import_item_categories(target, source_atom.atom(), access)?
@@ -245,10 +246,11 @@ impl ModuleResolver {
     ) -> Result<Symbol<Ns, Ns::Declared>, ModuleResolveError> {
         match self.exported_symbol_for_import::<Ns>(target, source_atom, access)? {
             ExportLookup::Public(target_name) => Ok(target_name),
-            ExportLookup::Private => Err(ModuleResolveError::PrivateName {
+            ExportLookup::Private => Err(ModuleResolveError::PrivateImportItem {
                 owner: target.clone(),
                 category: NameCategory::Table(Ns::TABLE),
                 name: source_atom.clone(),
+                span: item.name.span,
             }),
             ExportLookup::Missing => Err(self
                 .exported_import_item_categories(target, source_atom, access)?

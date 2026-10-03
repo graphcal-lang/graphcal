@@ -169,7 +169,8 @@ fn run_import(source: OracleRole, dependency: Option<OracleRole>) -> OracleDecis
         .expect("oracle scenario declares distinct names");
     let resolver = tables
         .scopes(&crate::resolve::builder::NoModuleTargets)
-        .and_then(crate::resolve::builder::ScopeBuilder::freeze)
+        .expect("oracle scenario has no includes")
+        .freeze()
         .expect("oracle scenario has no imports");
     match static_import_rejection(
         ModuleDeclarations::new(&file.declarations, StaticScope::new(&owner, &resolver)),

@@ -8,6 +8,6 @@ Begin snippet for complex_aggregation_unsupported.gcl starting at line 5, column
 
 snippet line 5: };
 snippet line 6: node invalid: Complex<Length> = sum(@values);
-    label at line 6, columns 37 to 43: has dimension Complex<Length>
+    label at line 6, columns 37 to 43: has type Complex<Length>
 diagnostic help: sum() requires every indexed element to be quantity
 diagnostic code: graphcal::D001

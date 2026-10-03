@@ -8,6 +8,6 @@ Begin snippet for convert_int_source.gcl starting at line 3, column 1
 
 snippet line 3: param n: Int = 5;
 snippet line 4: node bad: Int = @n -> km;
-    label at line 4, columns 17 to 18: has dimension Int
+    label at line 4, columns 17 to 18: has type Int
 diagnostic help: expected a quantity value, not an Int value
 diagnostic code: graphcal::D001

@@ -8,6 +8,6 @@ Begin snippet for datetime_scale_mismatch.gcl starting at line 2, column 1
 
 snippet line 2: param t_utc: Datetime = datetime("2024-11-05T12:00:00Z");
 snippet line 3: node bad: Time = @t_tt - @t_utc;
-    label at line 3, columns 26 to 31: has dimension Datetime
+    label at line 3, columns 26 to 31: has type Datetime
 diagnostic help: cannot subtract datetimes with different time scales
 diagnostic code: graphcal::D001

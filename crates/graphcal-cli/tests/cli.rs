@@ -2215,6 +2215,49 @@ assert order = for m: Mode { @lhs[m] > @rhs[m] };
 }
 
 #[test]
+fn check_reports_private_import_at_the_import_item_of_a_non_root_file() {
+    // The importing file is not the checked root, and the label must point at
+    // its import item rather than the root file or a whole file.
+    let dir = tempfile::tempdir().unwrap();
+    let pkg = dir.path().join("src/pkg");
+    std::fs::create_dir_all(&pkg).unwrap();
+    std::fs::write(
+        dir.path().join("graphcal.toml"),
+        "[package]\nname = \"pkg\"\n",
+    )
+    .unwrap();
+    std::fs::write(pkg.join("lib.gcl"), "const node g0: Dimensionless = 1.0;\n").unwrap();
+    std::fs::write(
+        pkg.join("mid.gcl"),
+        "import pkg.lib::{ g0 };\npub node x: Dimensionless = 1.0;\n",
+    )
+    .unwrap();
+    let root = write_temp_file(
+        dir.path(),
+        "src/pkg/main.gcl",
+        "include pkg.mid()::{ x };\nnode y: Dimensionless = @x;\n",
+    );
+
+    let output = graphcal_bin()
+        .args([
+            "check",
+            "--root",
+            dir.path().to_str().unwrap(),
+            root.to_str().unwrap(),
+        ])
+        .output()
+        .expect("failed to run graphcal");
+    assert_diagnostic_failure(
+        &output,
+        &[
+            "graphcal::V001",
+            "cannot import private item `g0`",
+            "mid.gcl:1:19]",
+        ],
+    );
+}
+
+#[test]
 fn check_rejects_private_include_output() {
     // Include brace selection must not expose a private node from a public DAG
     // in another module.

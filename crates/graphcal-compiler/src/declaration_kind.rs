@@ -72,7 +72,7 @@ impl std::fmt::Display for DeclarationKind {
             Self::Dimension => "dim",
             Self::Unit => "unit",
             Self::Type => "type",
-            Self::Index => "cat/range",
+            Self::Index => "index",
             Self::Import => "import",
             Self::Include => "include",
             Self::Dag => "dag",

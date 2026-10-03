@@ -406,6 +406,10 @@ fn visibility_payloads_render_their_mentions_as_before() {
     for (kind, expected) in kinds {
         assert_eq!(kind.to_string(), expected);
     }
+    assert_eq!(
+        crate::declaration_kind::DeclarationKind::Index.to_string(),
+        "index"
+    );
     assert_eq!(ImportItemNamespace::Term.noun(), "term");
     assert_eq!(ImportItemNamespace::Dimension.noun(), "dim");
 }
@@ -610,6 +614,15 @@ fn dimension_mismatch_payloads_render_distinct_texts() {
     assert_eq!(
         MismatchOperand::ContextualStringLiteral.to_string(),
         "contextual string literal"
+    );
+    // A found operand that is not a dimension is not labeled as one.
+    assert_eq!(
+        MismatchOperand::IntExponent(-2).found_label(),
+        "exponent is -2"
+    );
+    assert_eq!(
+        MismatchOperand::Expected(OperandExpectation::Int).found_label(),
+        "is Int"
     );
 }
 

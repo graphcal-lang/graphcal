@@ -96,7 +96,8 @@ pub fn file_local_resolver(
     add_modules(&mut tables, root, &ast.declarations);
     tables
         .scopes(&NoModuleTargets)
-        .and_then(ScopeBuilder::freeze)
+        .ok()
+        .and_then(|scopes| ScopeBuilder::freeze(scopes).ok())
         .unwrap_or_default()
 }
 

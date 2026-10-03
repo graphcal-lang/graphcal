@@ -3,13 +3,13 @@
     "code": "graphcal::V001",
     "labels": [
       {
-        "length": 5304,
+        "length": 8,
         "location": {
-          "column": 1,
-          "line": 1,
+          "column": 33,
+          "line": 141,
           "source": "<root>/tests/fixtures/invalid/format_edge_cases.gcl"
         },
-        "offset": 0,
+        "offset": 4239,
         "primary": false
       }
     ],
