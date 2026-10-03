@@ -184,13 +184,11 @@ impl Collector<'_> {
         match &type_expr.element.kind {
             TypeExprKind::DimExpr(dim_expr) => match dim_expr.terms.as_slice() {
                 [item] if item.term.power.is_none() => {
-                    self.path(&item.term.name.value, StaticPosition::TypeOrDimension);
-                }
-                terms => {
-                    for item in terms {
-                        self.path(&item.term.name.value, StaticPosition::Dimension);
+                    if let Some(path) = item.term.name.as_path() {
+                        self.path(&path.value, StaticPosition::TypeOrDimension);
                     }
                 }
+                _ => self.dim_expr(dim_expr),
             },
             TypeExprKind::TypeApplication { name, generic_args } => {
                 self.path(&name.value, StaticPosition::Type);
@@ -254,8 +252,12 @@ impl Collector<'_> {
     }
 
     fn dim_expr(&mut self, dim_expr: &crate::desugar::desugared_ast::DimExpr) {
-        for item in &dim_expr.terms {
-            self.path(&item.term.name.value, StaticPosition::Dimension);
+        for path in dim_expr
+            .terms
+            .iter()
+            .filter_map(|item| item.term.name.as_path())
+        {
+            self.path(&path.value, StaticPosition::Dimension);
         }
     }
 

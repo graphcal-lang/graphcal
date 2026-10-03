@@ -19,7 +19,14 @@ fn dim_expr_name(te: &crate::syntax::ast::TypeExpr) -> &str {
     match &te.element.kind {
         TypeExprKind::DimExpr(dim) => {
             assert_eq!(dim.terms.len(), 1, "expected single-term DimExpr");
-            dim.terms[0].term.name.value.leaf().as_str()
+            dim.terms[0]
+                .term
+                .name
+                .as_path()
+                .unwrap()
+                .value
+                .leaf()
+                .as_str()
         }
         other => panic!("expected DimExpr, got {other:?}"),
     }
@@ -122,7 +129,17 @@ fn parse_param_with_dim_type() {
             match &p.type_ann.element.kind {
                 TypeExprKind::DimExpr(d) => {
                     assert_eq!(d.terms.len(), 1);
-                    assert_eq!(d.terms[0].term.name.value.leaf().as_str(), "Length");
+                    assert_eq!(
+                        d.terms[0]
+                            .term
+                            .name
+                            .as_path()
+                            .unwrap()
+                            .value
+                            .leaf()
+                            .as_str(),
+                        "Length"
+                    );
                 }
                 other => panic!("expected DimExpr, got {other:?}"),
             }
@@ -145,7 +162,17 @@ fn parse_param_required() {
             match &p.type_ann.element.kind {
                 TypeExprKind::DimExpr(d) => {
                     assert_eq!(d.terms.len(), 1);
-                    assert_eq!(d.terms[0].term.name.value.leaf().as_str(), "Mass");
+                    assert_eq!(
+                        d.terms[0]
+                            .term
+                            .name
+                            .as_path()
+                            .unwrap()
+                            .value
+                            .leaf()
+                            .as_str(),
+                        "Mass"
+                    );
                 }
                 other => panic!("expected DimExpr, got {other:?}"),
             }
@@ -166,10 +193,30 @@ fn parse_node_with_compound_dim_type() {
             match &n.type_ann.element.kind {
                 TypeExprKind::DimExpr(d) => {
                     assert_eq!(d.terms.len(), 2);
-                    assert_eq!(d.terms[0].term.name.value.leaf().as_str(), "Length");
+                    assert_eq!(
+                        d.terms[0]
+                            .term
+                            .name
+                            .as_path()
+                            .unwrap()
+                            .value
+                            .leaf()
+                            .as_str(),
+                        "Length"
+                    );
                     assert_eq!(d.terms[0].term.power, Some(Rational::from(3)));
                     assert_eq!(d.terms[1].op, MulDivOp::Div);
-                    assert_eq!(d.terms[1].term.name.value.leaf().as_str(), "Time");
+                    assert_eq!(
+                        d.terms[1]
+                            .term
+                            .name
+                            .as_path()
+                            .unwrap()
+                            .value
+                            .leaf()
+                            .as_str(),
+                        "Time"
+                    );
                     assert_eq!(d.terms[1].term.power, Some(Rational::from(2)));
                 }
                 other => panic!("expected DimExpr, got {other:?}"),
@@ -217,9 +264,29 @@ fn parse_derived_dimension() {
             assert_eq!(d.name.value.as_str(), "Velocity");
             let def = d.definition.as_ref().expect("derived dim has a body");
             assert_eq!(def.terms.len(), 2);
-            assert_eq!(def.terms[0].term.name.value.leaf().as_str(), "Length");
+            assert_eq!(
+                def.terms[0]
+                    .term
+                    .name
+                    .as_path()
+                    .unwrap()
+                    .value
+                    .leaf()
+                    .as_str(),
+                "Length"
+            );
             assert_eq!(def.terms[1].op, MulDivOp::Div);
-            assert_eq!(def.terms[1].term.name.value.leaf().as_str(), "Time");
+            assert_eq!(
+                def.terms[1]
+                    .term
+                    .name
+                    .as_path()
+                    .unwrap()
+                    .value
+                    .leaf()
+                    .as_str(),
+                "Time"
+            );
         }
         _ => panic!("expected dimension"),
     }
@@ -247,7 +314,14 @@ fn parse_base_unit() {
             assert_eq!(u.constness, UnitConstness::Const);
             assert_eq!(u.name.value.as_str(), "m");
             assert_eq!(
-                u.dim_type.terms[0].term.name.value.leaf().as_str(),
+                u.dim_type.terms[0]
+                    .term
+                    .name
+                    .as_path()
+                    .unwrap()
+                    .value
+                    .leaf()
+                    .as_str(),
                 "Length"
             );
             assert!(u.definition.is_none());
@@ -1467,7 +1541,17 @@ fn parse_required_range_simple() {
             match &idx.kind {
                 IndexDeclKind::RequiredCoordinate { dimension } => {
                     assert_eq!(dimension.terms.len(), 1);
-                    assert_eq!(dimension.terms[0].term.name.value.leaf().as_str(), "Time");
+                    assert_eq!(
+                        dimension.terms[0]
+                            .term
+                            .name
+                            .as_path()
+                            .unwrap()
+                            .value
+                            .leaf()
+                            .as_str(),
+                        "Time"
+                    );
                 }
                 other => panic!("expected required coordinate index, got {other:?}"),
             }
@@ -1545,9 +1629,39 @@ fn parse_required_range_compound_dim() {
             match &idx.kind {
                 IndexDeclKind::RequiredCoordinate { dimension } => {
                     assert_eq!(dimension.terms.len(), 3);
-                    assert_eq!(dimension.terms[0].term.name.value.leaf().as_str(), "Mass");
-                    assert_eq!(dimension.terms[1].term.name.value.leaf().as_str(), "Length");
-                    assert_eq!(dimension.terms[2].term.name.value.leaf().as_str(), "Time");
+                    assert_eq!(
+                        dimension.terms[0]
+                            .term
+                            .name
+                            .as_path()
+                            .unwrap()
+                            .value
+                            .leaf()
+                            .as_str(),
+                        "Mass"
+                    );
+                    assert_eq!(
+                        dimension.terms[1]
+                            .term
+                            .name
+                            .as_path()
+                            .unwrap()
+                            .value
+                            .leaf()
+                            .as_str(),
+                        "Length"
+                    );
+                    assert_eq!(
+                        dimension.terms[2]
+                            .term
+                            .name
+                            .as_path()
+                            .unwrap()
+                            .value
+                            .leaf()
+                            .as_str(),
+                        "Time"
+                    );
                     assert_eq!(dimension.terms[2].term.power, Some(Rational::from(2)));
                     assert_eq!(dimension.terms[2].op, MulDivOp::Div);
                 }

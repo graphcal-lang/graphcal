@@ -1,8 +1,8 @@
 use crate::dimension::Rational;
 use crate::syntax::ast::{
-    AmbiguousGenericArg, DimExpr, DimExprItem, DimTerm, ElementTypeExpr, Expr, ExprKind,
-    GenericArg, GenericConstraint, GenericParam, Ident, IdentPath, IndexExpr, MulDivOp, NatExpr,
-    TypeExpr, TypeExprKind, UnitDef, UnitExpr, UnitExprItem,
+    AmbiguousGenericArg, DimExpr, DimExprItem, DimTerm, DimTermName, ElementTypeExpr, Expr,
+    ExprKind, GenericArg, GenericConstraint, GenericParam, Ident, IdentPath, IndexExpr, MulDivOp,
+    NatExpr, TypeExpr, TypeExprKind, UnitDef, UnitExpr, UnitExprItem,
 };
 use crate::syntax::builtin_type_name::BuiltinTypeName;
 use crate::syntax::index_name::IndexVariantName;
@@ -48,11 +48,15 @@ impl Parser<'_> {
                     .as_bare()
                     .and_then(|ident| BuiltinTypeName::parse(ident.name.as_str()));
                 match builtin {
-                    Some(BuiltinTypeName::Dimensionless) => ElementTypeExpr {
-                        kind: TypeExprKind::Dimensionless,
-                        constraints: vec![],
-                        span: path_span,
-                    },
+                    // Followed by `*`, `/`, or `^`, `Dimensionless` is a term
+                    // of a dimension expression (`Dimensionless / Time`).
+                    Some(BuiltinTypeName::Dimensionless) if !self.peeks_dim_operator() => {
+                        ElementTypeExpr {
+                            kind: TypeExprKind::Dimensionless,
+                            constraints: vec![],
+                            span: path_span,
+                        }
+                    }
                     Some(BuiltinTypeName::Bool) => ElementTypeExpr {
                         kind: TypeExprKind::Bool,
                         constraints: vec![],
@@ -100,25 +104,11 @@ impl Parser<'_> {
                             span,
                         }
                     }
-                    _ => {
-                        let dim_expr = self.parse_dim_expr_after_first_path(path)?;
-                        let span = dim_expr.span;
-                        ElementTypeExpr {
-                            kind: TypeExprKind::DimExpr(dim_expr),
-                            constraints: vec![],
-                            span,
-                        }
-                    }
+                    _ => Self::dim_expr_element(self.parse_dim_expr_after_first_path(path)?),
                 }
             }
         } else {
-            let dim_expr = self.parse_dim_expr()?;
-            let span = dim_expr.span;
-            ElementTypeExpr {
-                kind: TypeExprKind::DimExpr(dim_expr),
-                constraints: vec![],
-                span,
-            }
+            Self::dim_expr_element(self.parse_dim_expr()?)
         };
 
         // Check for optional domain constraints: `(min: expr, max: expr)`
@@ -144,6 +134,41 @@ impl Parser<'_> {
         }
 
         Ok(TypeExpr::unindexed(base))
+    }
+
+    /// The element type a dimension expression denotes in type position.
+    ///
+    /// A lone, unpowered `Dimensionless` term (as in `(Dimensionless)`) is the
+    /// built-in type itself, so it gets the same tree as bare `Dimensionless`.
+    fn dim_expr_element(dim_expr: DimExpr) -> ElementTypeExpr {
+        let span = dim_expr.span;
+        let kind = match dim_expr.terms.as_slice() {
+            [
+                DimExprItem {
+                    term:
+                        DimTerm {
+                            name: DimTermName::Dimensionless(_),
+                            power: None,
+                            ..
+                        },
+                    ..
+                },
+            ] => TypeExprKind::Dimensionless,
+            _ => TypeExprKind::DimExpr(dim_expr),
+        };
+        ElementTypeExpr {
+            kind,
+            constraints: vec![],
+            span,
+        }
+    }
+
+    /// Whether the next token continues a dimension expression after a term.
+    fn peeks_dim_operator(&mut self) -> bool {
+        matches!(
+            self.lexer.peek(),
+            Some(&Token::Star | &Token::Slash | &Token::Caret)
+        )
     }
 
     /// Parse the built-in `Complex<D>` type former into its dedicated syntax variant.
@@ -360,9 +385,18 @@ impl Parser<'_> {
 
         let power = self.parse_term_power(&mut end_span)?;
 
+        let is_dimensionless = path
+            .as_bare()
+            .and_then(|ident| BuiltinTypeName::parse(ident.name.as_str()))
+            == Some(BuiltinTypeName::Dimensionless);
+        let name = if is_dimensionless {
+            DimTermName::Dimensionless(name_span)
+        } else {
+            DimTermName::Path(path.into_spanned_name_path())
+        };
         Ok(DimTerm {
             span: name_span.merge(end_span),
-            name: path.into_spanned_name_path(),
+            name,
             power,
         })
     }
@@ -721,19 +755,21 @@ impl Parser<'_> {
         if first.op != MulDivOp::Mul || first.term.power.is_some() {
             return None;
         }
-        let first_atom = first.term.name.value.as_bare()?;
+        let first_path = first.term.name.as_path()?;
+        let first_atom = first_path.value.as_bare()?;
         let initial = AmbiguousGenericArg::Name(Ident {
             name: SourceIdentifier::new_unchecked_for_parser(first_atom.as_str().to_owned()),
-            span: first.term.name.span,
+            span: first_path.span,
         });
         terms.try_fold(initial, |lhs, item| {
             if item.op != MulDivOp::Mul || item.term.power.is_some() {
                 return None;
             }
-            let atom = item.term.name.value.as_bare()?;
+            let path = item.term.name.as_path()?;
+            let atom = path.value.as_bare()?;
             let rhs = AmbiguousGenericArg::Name(Ident {
                 name: SourceIdentifier::new_unchecked_for_parser(atom.as_str().to_owned()),
-                span: item.term.name.span,
+                span: path.span,
             });
             let span = lhs.span().merge(rhs.span());
             Some(AmbiguousGenericArg::mul(lhs, rhs, span))
@@ -907,7 +943,14 @@ mod tests {
         match &te.element.kind {
             TypeExprKind::DimExpr(dim) => {
                 assert_eq!(dim.terms.len(), 1, "expected single-term DimExpr");
-                dim.terms[0].term.name.value.leaf().as_str()
+                dim.terms[0]
+                    .term
+                    .name
+                    .as_path()
+                    .unwrap()
+                    .value
+                    .leaf()
+                    .as_str()
             }
             other => panic!("expected DimExpr, got {other:?}"),
         }
@@ -939,6 +982,66 @@ mod tests {
         let start = error.span.offset();
         let end = start + error.span.len();
         &source[start..end]
+    }
+
+    /// The element kind of the first `param`'s type annotation.
+    fn param_type_kind(source: &str) -> TypeExprKind {
+        let file = Parser::new(source)
+            .parse_file()
+            .unwrap_or_else(|error| panic!("source: {source}; got {error:?}"));
+        let DeclKind::Param(param) = &file.declarations[0].kind else {
+            panic!("expected param");
+        };
+        param.type_ann.element.kind.clone()
+    }
+
+    /// `Dimensionless` is the identity dimension: as a term of a compound
+    /// dimension expression it is classified as the built-in, not as a path,
+    /// and parenthesized groups keep that classification (#1369).
+    #[test]
+    fn dimensionless_is_a_typed_dimension_term() {
+        for (source, dimensionless_terms) in [
+            (
+                "param n: Dimensionless / Time = 1.0 Hz;",
+                [true, false].as_slice(),
+            ),
+            ("param n: Length * Dimensionless = 1.0 m;", &[false, true]),
+            ("param n: Dimensionless^2 = 1.0;", &[true]),
+            (
+                "param n: Length / (Time * Dimensionless) = 1.0 m / 1.0 s;",
+                &[false, false, true],
+            ),
+            (
+                "param n: units::Dimensionless / Time = 1.0 Hz;",
+                &[false, false],
+            ),
+        ] {
+            let TypeExprKind::DimExpr(dim_expr) = param_type_kind(source) else {
+                panic!("source: {source}; expected a dimension expression");
+            };
+            let actual: Vec<bool> = dim_expr
+                .terms
+                .iter()
+                .map(|item| matches!(item.term.name, DimTermName::Dimensionless(_)))
+                .collect();
+            assert_eq!(actual, dimensionless_terms, "source: {source}");
+        }
+    }
+
+    /// A lone, unpowered `Dimensionless` term is the built-in type however it
+    /// is parenthesized, so formatting `(Dimensionless)` keeps the tree.
+    #[test]
+    fn lone_dimensionless_term_is_the_builtin_type() {
+        for source in [
+            "param n: Dimensionless = 1.0;",
+            "param n: (Dimensionless) = 1.0;",
+            "param n: ((Dimensionless)) = 1.0;",
+        ] {
+            assert!(
+                matches!(param_type_kind(source), TypeExprKind::Dimensionless),
+                "source: {source}"
+            );
+        }
     }
 
     #[test]
@@ -1210,10 +1313,25 @@ mod tests {
                 TypeExprKind::DimExpr(dim_expr) => {
                     assert_eq!(dim_expr.terms.len(), 2);
                     assert_eq!(
-                        dim_expr.terms[0].term.name.value.display_path(),
+                        dim_expr.terms[0]
+                            .term
+                            .name
+                            .as_path()
+                            .unwrap()
+                            .value
+                            .display_path(),
                         "physics::Length"
                     );
-                    assert_eq!(dim_expr.terms[1].term.name.value.display_path(), "Time");
+                    assert_eq!(
+                        dim_expr.terms[1]
+                            .term
+                            .name
+                            .as_path()
+                            .unwrap()
+                            .value
+                            .display_path(),
+                        "Time"
+                    );
                 }
                 other => panic!("expected DimExpr, got {other:?}"),
             },

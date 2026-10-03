@@ -862,7 +862,11 @@ impl<'a> StaticDefinitionEvaluator<'a> {
     ) -> Result<Dimension, DimExprFailure> {
         let mut factors = Vec::with_capacity(expr.terms.len());
         for item in &expr.terms {
-            let reference: DimRef = item.term.name.value.clone().classify_leaf();
+            // The built-in `Dimensionless` term is the identity factor.
+            let Some(path) = item.term.name.as_path() else {
+                continue;
+            };
+            let reference: DimRef = path.value.clone().classify_leaf();
             let Some(identity) = self.resolve_dimension(owner, &reference) else {
                 return Err(DimExprFailure::Unknown(reference));
             };
@@ -1830,7 +1834,10 @@ mod tests {
             terms: vec![ast::DimExprItem {
                 op: ast::MulDivOp::Mul,
                 term: ast::DimTerm {
-                    name: Spanned::new(NamePath::expect_local("Q"), Span::new(0, 1)),
+                    name: ast::DimTermName::Path(Spanned::new(
+                        NamePath::expect_local("Q"),
+                        Span::new(0, 1),
+                    )),
                     power: None,
                     span: Span::new(0, 1),
                 },

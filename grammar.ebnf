@@ -770,7 +770,9 @@ NAT_LITERAL
 (* 5. Dimension and Unit Expressions                                  *)
 (* ================================================================== *)
 (* --- Dimension expressions --- *)
-(* Used in type annotations and dimension declarations. *)
+(* Used in type annotations and dimension declarations. A bare
+   `Dimensionless` term is the identity dimension, so
+   `Dimensionless / Time` denotes the same dimension as `Time^-1`. *)
 dim_expr
    = dim_term, { ( "*" | "/" ), dim_term };
 

@@ -12,7 +12,7 @@ use crate::semantic_error::dimension::DimensionError;
 use crate::semantic_error::plugin::PluginError;
 use crate::source_id::SourceId;
 use crate::syntax::names::NamePath;
-use crate::syntax::span::Span;
+use crate::syntax::span::{Span, Spanned};
 
 #[cfg(test)]
 mod tests;
@@ -67,30 +67,43 @@ impl ExternSignatureScope<'_, '_> {
     }
 
     /// What one dimension term of a signature denotes: a binder of the
-    /// signature or a dimension defined in (or imported into) the declaring
-    /// module. `None` when it denotes neither.
-    fn dimension_term(
+    /// signature, a dimension defined in (or imported into) the declaring
+    /// module, or the built-in `Dimensionless`. `Err` carries the path of a
+    /// term that denotes none of these.
+    fn dimension_term<'t>(
         &mut self,
-        term: &crate::desugar::desugared_ast::DimTerm,
+        term: &'t crate::desugar::desugared_ast::DimTerm,
         generics: &ExternGenerics,
-    ) -> Result<Option<ExternDimTerm>, SemanticError> {
+    ) -> Result<Result<ExternDimTerm, &'t Spanned<NamePath>>, SemanticError> {
         use crate::hir::types::DimTermTarget;
+        use crate::syntax::ast::DimTermName;
 
+        let path = match &term.name {
+            DimTermName::Dimensionless(_) => {
+                return Ok(Ok(ExternDimTerm::Fixed(
+                    crate::dimension::Dimension::dimensionless(),
+                )));
+            }
+            DimTermName::Path(path) => path,
+        };
         let lowered = crate::hir::lower::lower_dim_term(term, self.type_context(generics));
         match lowered.map(|term| term.target) {
             Ok(DimTermTarget::GenericParam(id)) => Ok(generics
                 .dims
                 .get(&id.value)
                 .cloned()
-                .map(ExternDimTerm::Var)),
+                .map(ExternDimTerm::Var)
+                .ok_or(path)),
             Ok(DimTermTarget::Dimension(identity))
                 if self.definitions.defines_dimension(&identity.value) =>
             {
                 self.definitions
                     .dimension(&identity.value)
-                    .map(|dimension| Some(ExternDimTerm::Fixed(dimension)))
+                    .map(|dimension| Ok(ExternDimTerm::Fixed(dimension)))
             }
-            Ok(DimTermTarget::Dimension(_)) | Err(_) => Ok(None),
+            Ok(DimTermTarget::Dimension(_) | DimTermTarget::Dimensionless) | Err(_) => {
+                Ok(Err(path))
+            }
         }
     }
 
@@ -353,15 +366,10 @@ fn resolve_extern_result_kind(
         && let TypeExprKind::DimExpr(dim_expr) = &type_ann.element.kind
         && let [item] = dim_expr.terms.as_slice()
         && item.term.power.is_none()
-        && scope.dimension_term(&item.term, generics)?.is_none()
+        && let Err(path) = scope.dimension_term(&item.term, generics)?
     {
         // Not a dimension: the only remaining reading is a record type.
-        return resolve_extern_struct_return(
-            &item.term.name.value,
-            item.term.name.span,
-            scope,
-            src,
-        );
+        return resolve_extern_struct_return(&path.value, path.span, scope, src);
     }
     if type_ann.indexes.is_none()
         && let TypeExprKind::TypeApplication { .. } = &type_ann.element.kind
@@ -472,14 +480,12 @@ fn resolve_extern_struct_field(
                 || SemanticError::located(src, annotation.span, DimensionError::DimensionOverflow);
             let mut dimension = crate::dimension::Dimension::dimensionless();
             for item in &expr.terms {
-                let DimTermTarget::Dimension(name) = &item.term.target else {
-                    return Err(unsupported());
+                let base = match &item.term.target {
+                    DimTermTarget::Dimension(name) => scope.definitions.dimension(&name.value)?,
+                    DimTermTarget::Dimensionless => crate::dimension::Dimension::dimensionless(),
+                    DimTermTarget::GenericParam(_) => return Err(unsupported()),
                 };
-                let factor = scope
-                    .definitions
-                    .dimension(&name.value)?
-                    .pow(item.term.power)
-                    .map_err(|_| overflow())?;
+                let factor = base.pow(item.term.power).map_err(|_| overflow())?;
                 dimension = match item.op {
                     crate::syntax::ast::MulDivOp::Mul => dimension.checked_mul(&factor),
                     crate::syntax::ast::MulDivOp::Div => dimension.checked_div(&factor),
@@ -575,14 +581,14 @@ fn resolve_extern_dim_monomial(
         let term = &item.term;
         let power = term.effective_power();
         match scope.dimension_term(term, generics)? {
-            Some(ExternDimTerm::Var(var)) => {
+            Ok(ExternDimTerm::Var(var)) => {
                 let power = match item.op {
                     MulDivOp::Mul => power,
                     MulDivOp::Div => -power,
                 };
                 vars.push((var, power));
             }
-            Some(ExternDimTerm::Fixed(dim)) => {
+            Ok(ExternDimTerm::Fixed(dim)) => {
                 let powered = dim.pow(power).map_err(|_| overflow(term.span))?;
                 fixed = match item.op {
                     MulDivOp::Mul => fixed.checked_mul(&powered),
@@ -590,12 +596,12 @@ fn resolve_extern_dim_monomial(
                 }
                 .map_err(|_| overflow(term.span))?;
             }
-            None => {
+            Err(path) => {
                 return Err(SemanticError::located(
                     src,
-                    term.name.span,
+                    path.span,
                     DimensionError::UnknownDimension {
-                        name: term.name.value.clone(),
+                        name: path.value.clone(),
                     },
                 ));
             }

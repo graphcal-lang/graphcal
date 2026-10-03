@@ -458,7 +458,7 @@ pub struct DimExprItem {
 /// A single dimension term: `ident_path` or `ident_path ^ INTEGER`
 #[derive(Debug, Clone, FormatEquivalent)]
 pub struct DimTerm {
-    pub name: Spanned<NamePath>,
+    pub name: DimTermName,
     /// Source-written exponent; `None` preserves omission for formatting.
     pub power: Option<Rational>,
     #[fe(skip)]
@@ -470,6 +470,37 @@ impl DimTerm {
     #[must_use]
     pub fn effective_power(&self) -> Rational {
         effective_power(self.power)
+    }
+}
+
+/// What a dimension term names.
+#[derive(Debug, Clone, FormatEquivalent)]
+pub enum DimTermName {
+    /// The built-in identity dimension `Dimensionless`, as in
+    /// `Dimensionless / Time`. It contributes no factor.
+    Dimensionless(#[fe(skip)] Span),
+    /// A dimension or generic dimension parameter, by path. A lone path in
+    /// type position may also name a nominal type until resolution decides.
+    Path(Spanned<NamePath>),
+}
+
+impl DimTermName {
+    /// Source span of the name.
+    #[must_use]
+    pub const fn span(&self) -> Span {
+        match self {
+            Self::Dimensionless(span) => *span,
+            Self::Path(path) => path.span,
+        }
+    }
+
+    /// The path, unless this is the built-in `Dimensionless`.
+    #[must_use]
+    pub const fn as_path(&self) -> Option<&Spanned<NamePath>> {
+        match self {
+            Self::Dimensionless(_) => None,
+            Self::Path(path) => Some(path),
+        }
     }
 }
 

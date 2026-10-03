@@ -310,9 +310,11 @@ fn find_non_earlier_type_reference(
         | TypeExprKind::Bool
         | TypeExprKind::Int
         | TypeExprKind::Datetime => None,
-        TypeExprKind::DimExpr(dim_expr) => dim_expr.terms.iter().find_map(|item| {
-            find_non_earlier_path_reference(&item.term.name, current_index, positions)
-        }),
+        TypeExprKind::DimExpr(dim_expr) => dim_expr
+            .terms
+            .iter()
+            .filter_map(|item| item.term.name.as_path())
+            .find_map(|path| find_non_earlier_path_reference(path, current_index, positions)),
         TypeExprKind::TypeApplication { generic_args, .. } => generic_args
             .iter()
             .find_map(|arg| find_non_earlier_generic_reference(arg, current_index, positions)),
@@ -618,6 +620,7 @@ impl Specializer<'_> {
                             DimTermTarget::GenericParam(id) => {
                                 DimTermTarget::GenericParam(self.spanned_param(id))
                             }
+                            DimTermTarget::Dimensionless => DimTermTarget::Dimensionless,
                         },
                         power: item.term.power,
                         span: item.term.span,

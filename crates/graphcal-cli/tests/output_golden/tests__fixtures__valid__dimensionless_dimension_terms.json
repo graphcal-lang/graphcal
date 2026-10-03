@@ -1,0 +1,61 @@
+{
+  "check": "ok",
+  "eval": {
+    "exit_code": 0,
+    "stdout": {
+      "assert": {
+        "field_value": {
+          "status": "pass"
+        },
+        "rate_roundtrip": {
+          "status": "pass"
+        },
+        "speed_value": {
+          "status": "pass"
+        },
+        "squared_value": {
+          "status": "pass"
+        }
+      },
+      "const": {},
+      "incomplete": false,
+      "node": {
+        "field": {
+          "fields": {
+            "rate": {
+              "display_value": 2.0,
+              "si_value": 2.0,
+              "unit": "per_s"
+            }
+          },
+          "type": "Rated"
+        },
+        "named_rate": {
+          "si_value": 0.5,
+          "unit": "s^-1"
+        },
+        "rate": {
+          "si_value": 0.5,
+          "unit": "s^-1"
+        },
+        "same_rate": {
+          "si_value": 0.5,
+          "unit": "s^-1"
+        },
+        "speed": {
+          "si_value": 3.0,
+          "unit": "m/s"
+        },
+        "squared": {
+          "si_value": 4.0
+        }
+      },
+      "param": {
+        "ratio": {
+          "si_value": 2.0
+        }
+      },
+      "unfinished_calls": []
+    }
+  }
+}

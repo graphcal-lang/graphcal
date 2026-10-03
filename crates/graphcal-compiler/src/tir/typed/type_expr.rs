@@ -233,6 +233,11 @@ fn resolve_hir_dim_expr_item(
             power,
             op: item.op,
         }),
+        crate::hir::types::DimTermTarget::Dimensionless => Ok(ResolvedDimTerm::Concrete {
+            dim: Dimension::dimensionless(),
+            power,
+            op: item.op,
+        }),
         crate::hir::types::DimTermTarget::GenericParam(param) => {
             Ok(ResolvedDimTerm::GenericParam {
                 name: param.value.clone(),

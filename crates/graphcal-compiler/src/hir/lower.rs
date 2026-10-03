@@ -676,7 +676,10 @@ fn collect_ambiguous_dim_terms(arg: &ast::AmbiguousGenericArg, terms: &mut Vec<a
         ast::AmbiguousGenericArg::Name(ident) => terms.push(ast::DimExprItem {
             op: ast::MulDivOp::Mul,
             term: ast::DimTerm {
-                name: Spanned::new(NamePath::local(ident.name.atom().clone()), ident.span),
+                name: ast::DimTermName::Path(Spanned::new(
+                    NamePath::local(ident.name.atom().clone()),
+                    ident.span,
+                )),
                 power: None,
                 span: ident.span,
             },
@@ -712,7 +715,12 @@ fn lower_time_scale_arg(arg: &ast::TypeExpr) -> Result<TimeScale, HirLowerError>
     if item.term.power.is_some() {
         return Err(HirLowerError::ExpectedTimeScale { span: arg.span });
     }
-    let Some(atom) = item.term.name.value.as_bare() else {
+    let Some((atom, atom_span)) = item
+        .term
+        .name
+        .as_path()
+        .and_then(|path| Some((path.value.as_bare()?, path.span)))
+    else {
         return Err(HirLowerError::ExpectedTimeScale { span: arg.span });
     };
     atom.as_str()
@@ -720,7 +728,7 @@ fn lower_time_scale_arg(arg: &ast::TypeExpr) -> Result<TimeScale, HirLowerError>
         .map_err(|_| HirLowerError::UnknownTimeScale {
             name: atom.clone(),
             expected: "UTC, TAI, TT, TDB, ET, GPST, GST, BDT, QZSST",
-            span: item.term.name.span,
+            span: atom_span,
         })
 }
 
@@ -763,14 +771,17 @@ fn lower_single_term_nominal_type(
         return Ok(NominalTypeLookup::absent());
     }
 
-    let path = &item.term.name.value;
+    let Some(name) = item.term.name.as_path() else {
+        return Ok(NominalTypeLookup::absent());
+    };
+    let path = &name.value;
     if let Some(atom) = path.as_bare()
         && let Some(binding) = ctx.generic_scope.get_atom(atom)
     {
         match binding.constraint {
             GenericConstraint::Type => {
                 return Ok(NominalTypeLookup::Found(TypeSlot::Value(ValueType::new(
-                    ValueTypeKind::GenericTypeParam(binding.spanned_id(item.term.name.span)),
+                    ValueTypeKind::GenericTypeParam(binding.spanned_id(name.span)),
                     type_span,
                 ))));
             }
@@ -779,7 +790,7 @@ fn lower_single_term_nominal_type(
             GenericConstraint::Dim => {}
             GenericConstraint::Index => {
                 return Ok(NominalTypeLookup::Found(TypeSlot::Index(
-                    IndexRef::GenericParam(binding.spanned_id(item.term.name.span)),
+                    IndexRef::GenericParam(binding.spanned_id(name.span)),
                 )));
             }
             GenericConstraint::Nat => {
@@ -787,7 +798,7 @@ fn lower_single_term_nominal_type(
                     name: GenericParamName::classify(atom.clone()),
                     actual: binding.constraint,
                     expected: &[GenericConstraint::Dim, GenericConstraint::Type],
-                    span: item.term.name.span,
+                    span: name.span,
                 });
             }
         }
@@ -802,7 +813,7 @@ fn lower_single_term_nominal_type(
     ) {
         LookupCandidate::Found(index) => {
             return Ok(NominalTypeLookup::Found(TypeSlot::Index(
-                IndexRef::Concrete(Spanned::new(index, item.term.name.span)),
+                IndexRef::Concrete(Spanned::new(index, name.span)),
             )));
         }
         LookupCandidate::Absent => {}
@@ -816,16 +827,16 @@ fn lower_single_term_nominal_type(
             let generic_params = symbol.kind();
             let struct_type = symbol.into_resolved();
             let kind = if generic_params.is_empty() {
-                ValueTypeKind::Struct(Spanned::new(struct_type, item.term.name.span))
+                ValueTypeKind::Struct(Spanned::new(struct_type, name.span))
             } else {
                 check_generic_arg_count(
                     GenericApplicationTarget::StructType(struct_type.clone()),
                     generic_params,
                     0,
-                    item.term.name.span,
+                    name.span,
                 )?;
                 ValueTypeKind::TypeApplication {
-                    name: Spanned::new(struct_type, item.term.name.span),
+                    name: Spanned::new(struct_type, name.span),
                     generic_args: Vec::new(),
                 }
             };
@@ -868,12 +879,22 @@ pub(crate) fn lower_dim_term(
     term: &ast::DimTerm,
     ctx: ModuleScope<'_>,
 ) -> Result<DimTermRef, HirLowerError> {
-    if let Some(atom) = term.name.value.as_bare()
+    let name = match &term.name {
+        ast::DimTermName::Dimensionless(_) => {
+            return Ok(DimTermRef {
+                target: DimTermTarget::Dimensionless,
+                power: term.effective_power(),
+                span: term.span,
+            });
+        }
+        ast::DimTermName::Path(name) => name,
+    };
+    if let Some(atom) = name.value.as_bare()
         && let Some(binding) = ctx.generic_scope.get_atom(atom)
     {
         return match binding.constraint {
             GenericConstraint::Dim => Ok(DimTermRef {
-                target: DimTermTarget::GenericParam(binding.spanned_id(term.name.span)),
+                target: DimTermTarget::GenericParam(binding.spanned_id(name.span)),
                 power: term.effective_power(),
                 span: term.span,
             }),
@@ -882,7 +903,7 @@ pub(crate) fn lower_dim_term(
                     name: GenericParamName::classify(atom.clone()),
                     actual: binding.constraint,
                     expected: &[GenericConstraint::Dim],
-                    span: term.name.span,
+                    span: name.span,
                 })
             }
         };
@@ -890,29 +911,29 @@ pub(crate) fn lower_dim_term(
 
     let resolved = match ctx
         .resolver
-        .resolve_dimension_path(ctx.owner, &term.name.value)
+        .resolve_dimension_path(ctx.owner, &name.value)
         .map(crate::resolve::symbols::SymbolRef::into_resolved)
     {
         Ok(resolved) => resolved,
         Err(ModuleResolveError::UnknownName { .. }) => {
             crate::resolve::prelude::prelude_type_scope()
-                .resolve_dimension_path(&term.name.value)
+                .resolve_dimension_path(&name.value)
                 .ok_or_else(|| HirLowerError::UnknownTypePath {
-                    path: term.name.value.clone(),
+                    path: name.value.clone(),
                     slot: TypePathSlot::DimensionTerm,
-                    span: term.name.span,
+                    span: name.span,
                 })?
         }
         Err(source) => {
             return Err(HirLowerError::ModuleResolve {
                 source,
-                span: term.name.span,
+                span: name.span,
             });
         }
     };
 
     Ok(DimTermRef {
-        target: DimTermTarget::Dimension(Spanned::new(resolved, term.name.span)),
+        target: DimTermTarget::Dimension(Spanned::new(resolved, name.span)),
         power: term.effective_power(),
         span: term.span,
     })

@@ -183,7 +183,7 @@ fn nominal_constructor(
                 return None;
             }
             resolver
-                .resolve_struct_type_path(owner, &term.term.name.value)
+                .resolve_struct_type_path(owner, &term.term.name.as_path()?.value)
                 .map(graphcal_compiler::resolve::symbols::SymbolRef::into_resolved)
                 .ok()?
         }
