@@ -43,6 +43,21 @@ impl std::fmt::Display for MismatchOperand {
     }
 }
 
+impl MismatchOperand {
+    /// The label of the operand found where a mismatch was detected.
+    #[must_use]
+    pub fn found_label(&self) -> String {
+        match self {
+            Self::Type(ty) => format!("has type {ty}"),
+            Self::Dimension(dimension) => format!("has dimension {dimension}"),
+            Self::Expected(expectation) => format!("is {expectation}"),
+            Self::ContextualStringLiteral => "contextual string literal".to_owned(),
+            Self::IntExponent(value) => format!("exponent is {value}"),
+            Self::ModuloOperands { lhs, rhs } => format!("operands have types {lhs} % {rhs}"),
+        }
+    }
+}
+
 /// A scalar element kind of an extern parameter.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExternScalar {

@@ -200,10 +200,29 @@ pub enum ModuleResolveError {
         category: NameCategory,
         name: NameAtom,
     },
+    /// A selective import item names an item that is not public in its module.
+    #[error("private {category} `{name}` in module `{owner}`")]
+    PrivateImportItem {
+        owner: DagId,
+        category: NameCategory,
+        name: NameAtom,
+        /// The import item's source name.
+        span: Span,
+    },
     /// The index exists, but the requested variant is absent.
     #[error("unknown variant `{variant}` for index `{index}`")]
     UnknownIndexVariant {
         index: ResolvedIndexName,
         variant: IndexVariantName,
     },
+}
+
+/// A [`ModuleResolveError`] raised while registering the import/include edges
+/// of one source module, whose source the error's spans belong to.
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+#[error("{error}")]
+pub struct ScopeError {
+    /// The module whose edges failed.
+    pub module: DagId,
+    pub error: ModuleResolveError,
 }

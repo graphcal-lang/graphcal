@@ -383,6 +383,7 @@ impl LoadedProject {
     > {
         loaded_module_resolver::LoadedModuleResolver::build(self)
             .map(loaded_module_resolver::LoadedModuleResolver::into_resolver)
+            .map_err(|loaded_module_resolver::ModuleResolverBuildError { error, .. }| error)
     }
 
     /// The top-level `dag` of the file root `owner` that a single-segment

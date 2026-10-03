@@ -1,8 +1,9 @@
 //! The module resolver of one loaded project, with the resolver handle of
 //! every loaded module.
 
-use graphcal_compiler::resolve::error::ModuleResolveError;
+use graphcal_compiler::resolve::error::{ModuleResolveError, ScopeError};
 use graphcal_compiler::resolve::{ModuleHandle, ModuleRef, ModuleResolver};
+use graphcal_compiler::source_id::SourceId;
 
 use super::loaded_project::LoadedProject;
 use super::module_path::{LoadedModuleId, ResolvedModuleTarget};
@@ -29,29 +30,58 @@ pub struct LoadedModuleResolver {
     handles: Vec<FileModuleHandles>,
 }
 
+/// A failure to build the module resolver of a loaded project.
+#[derive(Debug)]
+pub struct ModuleResolverBuildError {
+    /// The loaded source the error's spans belong to, or `None` when the
+    /// error concerns the include graph as a whole.
+    pub source: Option<SourceId>,
+    pub error: ModuleResolveError,
+}
+
 impl LoadedModuleResolver {
     /// Build the module resolver of `project`.
     ///
     /// # Errors
     ///
     /// Returns the [`ModuleResolveError`] of
-    /// [`LoadedProject::build_module_resolver`].
-    pub(crate) fn build(project: &LoadedProject) -> Result<Self, ModuleResolveError> {
+    /// [`LoadedProject::build_module_resolver`], with the loaded source it
+    /// was raised in.
+    pub(crate) fn build(project: &LoadedProject) -> Result<Self, ModuleResolverBuildError> {
         let mut tables = graphcal_compiler::resolve::builder::SymbolTables::default();
         let handles = project
             .files()
             .iter()
             .map(|loaded| {
-                let root = tables.add_module(loaded.dag_id.clone(), &loaded.ast.declarations)?;
+                let in_file = |error| ModuleResolverBuildError {
+                    source: Some(loaded.source_id()),
+                    error,
+                };
+                let root = tables
+                    .add_module(loaded.dag_id.clone(), &loaded.ast.declarations)
+                    .map_err(in_file)?;
                 let inline_dags = loaded
                     .inline_dags
                     .iter()
                     .map(|inline| tables.add_module(inline.dag_id.clone(), inline.body(loaded)))
-                    .collect::<Result<_, _>>()?;
+                    .collect::<Result<_, _>>()
+                    .map_err(in_file)?;
                 Ok(FileModuleHandles { root, inline_dags })
             })
-            .collect::<Result<_, ModuleResolveError>>()?;
-        let resolver = tables.scopes(project)?.freeze()?;
+            .collect::<Result<_, _>>()?;
+        let resolver = tables
+            .scopes(project)
+            .map_err(|error| ModuleResolverBuildError {
+                source: None,
+                error,
+            })?
+            .freeze()
+            .map_err(|ScopeError { module, error }| ModuleResolverBuildError {
+                source: project
+                    .file(&module.file_root())
+                    .map(super::loaded_file::LoadedFile::source_id),
+                error,
+            })?;
         Ok(Self { resolver, handles })
     }
 

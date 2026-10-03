@@ -7,6 +7,6 @@ dimension mismatch: expected Length, found Time
 Begin snippet for complex_component_dimension_mismatch.gcl starting at line 1, column 1
 
 snippet line 1: node invalid: Complex<Length> = complex(1.0 m, 2.0 s);
-    label at line 1, columns 48 to 52: has dimension Time
+    label at line 1, columns 48 to 52: has type Time
 diagnostic help: real and imaginary components must have the same dimension
 diagnostic code: graphcal::D001

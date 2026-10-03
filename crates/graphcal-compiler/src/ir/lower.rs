@@ -220,6 +220,7 @@ fn single_module_resolver(
             tables
                 .scopes(&crate::resolve::builder::NoModuleTargets)?
                 .freeze()
+                .map_err(|crate::resolve::error::ScopeError { error, .. }| error)
         })
         .map_err(|error| {
             SemanticError::internal_error(error.to_string(), src, DiagnosticAnchor::WholeFile)

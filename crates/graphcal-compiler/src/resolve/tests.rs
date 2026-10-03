@@ -615,13 +615,17 @@ fn include_selective_private_decl_is_rejected() {
     modules.edge(&main_id, &include.path, &lib_id);
     let err = modules.build().unwrap_err();
 
+    // The span names the include item, so the diagnostic points at it.
     assert!(matches!(
         err,
-        ModuleResolveError::PrivateName {
+        ModuleResolveError::PrivateImportItem {
             owner,
             category: _,
             name,
-        } if owner == instance_id && name.as_str() == "hidden"
+            span,
+        } if owner == instance_id
+            && name.as_str() == "hidden"
+            && span == Span::new("include lib()::{ ".len(), "hidden".len())
     ));
 }
 

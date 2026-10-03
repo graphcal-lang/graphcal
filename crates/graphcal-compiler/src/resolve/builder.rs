@@ -24,7 +24,7 @@ use crate::desugar::desugared_ast as ast;
 use crate::syntax::ast::ModulePath;
 use crate::syntax::module_path_key::ModulePathKey;
 
-use super::error::ModuleResolveError;
+use super::error::{ModuleResolveError, ScopeError};
 use super::module_table::{ModuleHandle, ModuleTable};
 use super::scope::{ModuleScope, declare_aliases};
 use super::symbols::ModuleSymbols;
@@ -452,10 +452,10 @@ impl ScopeBuilder<'_> {
     ///
     /// # Errors
     ///
-    /// Returns the first [`ModuleResolveError`] of registering an edge:
-    /// unknown, private, or wrongly categorized items, duplicate local names,
-    /// and invalid include projections.
-    pub fn freeze(self) -> Result<ModuleResolver, ModuleResolveError> {
+    /// Returns the first [`ModuleResolveError`] of registering an edge
+    /// (unknown, private, or wrongly categorized items, duplicate local names,
+    /// and invalid include projections), with the module whose edge failed.
+    pub fn freeze(self) -> Result<ModuleResolver, ScopeError> {
         let Self {
             mut resolver,
             sources,
@@ -486,13 +486,23 @@ impl ScopeBuilder<'_> {
                     }
                     continue;
                 }
-                resolver.complete_own_scope(owner, edges)?;
+                resolver
+                    .complete_own_scope(owner, edges)
+                    .map_err(|error| ScopeError {
+                        module: owner.clone(),
+                        error,
+                    })?;
                 open.pop();
             }
         }
         for (instance, source) in &sources {
             if let ScopeSource::InheritFrom(template) = source {
-                resolver.inherit_scope(instance, template)?;
+                resolver
+                    .inherit_scope(instance, template)
+                    .map_err(|error| ScopeError {
+                        module: instance.clone(),
+                        error,
+                    })?;
             }
         }
         Ok(resolver)
@@ -525,7 +535,10 @@ impl ModuleResolver {
         for (owner, declarations) in modules {
             tables.add_module(owner, declarations)?;
         }
-        tables.scopes(targets)?.freeze()
+        tables
+            .scopes(targets)?
+            .freeze()
+            .map_err(|ScopeError { error, .. }| error)
     }
 
     /// Register a source module's edges, in declaration order.

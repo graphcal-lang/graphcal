@@ -430,7 +430,7 @@ impl DiagnosticKind for DimensionError {
             }
             Self::NonConstUnitInConst { .. } => Some("unit is not const".to_owned()),
             Self::DimensionOverflow => Some("overflow here".to_owned()),
-            Self::DimensionMismatch { found, .. } => Some(format!("has dimension {found}")),
+            Self::DimensionMismatch { found, .. } => Some(found.found_label()),
             Self::IndexedShapeMismatch { rhs, .. } => Some(format!("has type {rhs}")),
             Self::LinearAlgebraShapeMismatch { mismatch, .. } => {
                 Some(format!("found {}", mismatch.found()))

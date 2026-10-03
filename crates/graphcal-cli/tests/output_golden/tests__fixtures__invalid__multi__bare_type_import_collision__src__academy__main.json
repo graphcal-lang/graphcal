@@ -5,9 +5,9 @@
       {
         "length": 7,
         "location": {
-          "column": 29,
-          "line": 3,
-          "source": "<root>/tests/fixtures/invalid/multi/bare_type_import_collision/src/academy/main.gcl"
+          "column": 16,
+          "line": 5,
+          "source": "<root>/tests/fixtures/invalid/multi/bare_type_import_collision/src/academy/lib.gcl"
         },
         "offset": 62,
         "primary": false
@@ -15,9 +15,9 @@
       {
         "length": 7,
         "location": {
-          "column": 24,
-          "line": 1,
-          "source": "<root>/tests/fixtures/invalid/multi/bare_type_import_collision/src/academy/main.gcl"
+          "column": 5,
+          "line": 2,
+          "source": "<root>/tests/fixtures/invalid/multi/bare_type_import_collision/src/academy/lib.gcl"
         },
         "offset": 23,
         "primary": false

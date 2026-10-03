@@ -3,13 +3,13 @@
     "code": "graphcal::V001",
     "labels": [
       {
-        "length": 89,
+        "length": 6,
         "location": {
-          "column": 1,
-          "line": 1,
+          "column": 19,
+          "line": 2,
           "source": "<root>/tests/fixtures/invalid/multi/import_private_item/src/lib/main.gcl"
         },
-        "offset": 0,
+        "offset": 79,
         "primary": false
       }
     ],
