@@ -890,27 +890,56 @@ figure f = { plots: [p] };
         // while `references` expands alias keys (TopLevel↔Constructor), so
         // some occurrences were silently left un-renamed.
         let source = "\
-type Status { Idle, Active }
+pub type Status { Idle, Active }
 param s: Status = Idle;
 node t: Dimensionless = match @s { Idle => 1.0, Active => 2.0 };
 ";
         let analysis = analysis_from_source(source);
         let uri = Url::parse("file:///test.gcl").unwrap();
+        let original = crate::analysis_pipeline::run_analysis_for_test(&uri, source);
+        assert!(
+            original.has_no_diagnostics(),
+            "fixture must check cleanly: {:?}",
+            original.diagnostics
+        );
 
         let offset = source.find("Idle,").unwrap();
-        if let Ok(Some(result)) = rename(&analysis, &uri, offset, "Standby") {
-            let edits = result.changes.unwrap();
-            let file_edits = edits.get(&uri).unwrap();
-            let lines = LineIndex::new(&analysis.source);
-            let _ = lines;
-            // Every textual occurrence of `Idle` must be covered: the
-            // definition, the initializer, and the match arm.
-            assert!(
-                file_edits.len() >= 3,
-                "expected all 3 occurrences renamed, got {}: {file_edits:?}",
-                file_edits.len()
-            );
-        }
+        let result = rename(&analysis, &uri, offset, "Standby")
+            .expect("constructor rename should be accepted")
+            .expect("constructor rename should produce a workspace edit");
+        let edits = result.changes.unwrap();
+        let file_edits = &edits[&uri];
+
+        // Exactly the definition, the initializer, and the match arm.
+        let mut actual: Vec<_> = file_edits
+            .iter()
+            .map(|edit| {
+                assert_eq!(edit.new_text, "Standby");
+                (
+                    crate::convert::position_to_byte_offset(source, edit.range.start),
+                    crate::convert::position_to_byte_offset(source, edit.range.end),
+                )
+            })
+            .collect();
+        actual.sort_unstable();
+        let expected: Vec<_> = [
+            source.find("Idle,").unwrap(),
+            source.find("= Idle").unwrap() + "= ".len(),
+            source.find("Idle =>").unwrap(),
+        ]
+        .into_iter()
+        .map(|start| (start, start + "Idle".len()))
+        .collect();
+        assert_eq!(actual, expected, "edits: {file_edits:?}");
+
+        let updated = apply_edits(source, file_edits);
+        assert!(!updated.contains("Idle"), "{updated}");
+        let checked = crate::analysis_pipeline::run_analysis_for_test(&uri, &updated);
+        assert!(
+            checked.has_no_diagnostics(),
+            "{updated}: {:?}",
+            checked.diagnostics
+        );
     }
 
     /// Issue #829: renaming a declaration to the name of another visible
