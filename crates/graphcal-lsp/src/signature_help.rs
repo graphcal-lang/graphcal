@@ -6,6 +6,7 @@ use tower_lsp::lsp_types::{
 
 use crate::analysis::AnalysisResult;
 use crate::cursor_context::find_fn_call_context;
+use crate::fn_signatures::ExternCallee;
 
 /// Resolve signature help for a cursor position.
 ///
@@ -24,12 +25,13 @@ pub fn signature_help(
     offset: usize,
 ) -> Option<SignatureHelp> {
     let ctx = find_fn_call_context(source, offset)?;
-    // Extern signatures are keyed by their qualified `alias.name` spelling
-    // and shadow nothing: builtins are always bare names.
-    let sig_info = analysis
-        .extern_fn_signatures
-        .get(&ctx.fn_name)
-        .or_else(|| analysis.fn_signatures.get(&ctx.fn_name))?;
+    // Builtins are always bare names; extern signatures are keyed by their
+    // typed `alias::name` parts, so the two never shadow each other.
+    let sig_info = match ctx.callee.as_bare() {
+        Some(name) => analysis.fn_signatures.get(name.as_str()),
+        None => ExternCallee::from_call_path(&ctx.callee)
+            .and_then(|callee| analysis.extern_fn_signatures.get(&callee)),
+    }?;
 
     let active_param = ctx.active_param as u32;
 

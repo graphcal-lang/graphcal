@@ -5,13 +5,17 @@
 //! backward from the cursor to determine context.
 
 use graphcal_compiler::syntax::lexer::Lexer;
+use graphcal_compiler::syntax::names::{NameAtom, NamePath};
+use graphcal_compiler::syntax::non_empty::NonEmpty;
 use graphcal_compiler::syntax::span::Span;
 use graphcal_compiler::syntax::token::Token;
 
 /// Context for a cursor inside a function call's argument list.
 pub struct FnCallContext {
-    /// The function name being called.
-    pub fn_name: String,
+    /// Source path of the called function: a bare `name` or a qualified
+    /// `owner::name`. Unclassified because the token scan runs over raw
+    /// editor text; consumers classify it against their own namespaces.
+    pub callee: NamePath,
     /// 0-based index of the parameter the cursor is currently on.
     pub active_param: usize,
 }
@@ -122,34 +126,11 @@ pub fn find_fn_call_context(source: &str, offset: usize) -> Option<FnCallContext
             Token::LParen => {
                 if depth == 0 {
                     // Found unmatched `(`. Check if preceded by identifier,
-                    // walking back over dotted DAG paths and an explicit
-                    // `::` member boundary so extern calls
-                    // (`fluids::density(`) keep their qualified name.
-                    if i > 0
-                        && let (name_token, name_span) = &tokens[i - 1]
-                        && name_token.is_identifier()
-                    {
-                        let mut name = source
-                            [name_span.offset()..name_span.offset() + name_span.len()]
-                            .to_string();
-                        let mut j = i - 1;
-                        while j >= 2
-                            && matches!(tokens[j - 1].0, Token::Dot | Token::DoubleColon)
-                            && let (seg_token, seg_span) = &tokens[j - 2]
-                            && seg_token.is_identifier()
-                        {
-                            let separator = if tokens[j - 1].0 == Token::Dot {
-                                "."
-                            } else {
-                                "::"
-                            };
-                            let segment =
-                                &source[seg_span.offset()..seg_span.offset() + seg_span.len()];
-                            name = format!("{segment}{separator}{name}");
-                            j -= 2;
-                        }
-                        return Some(FnCallContext {
-                            fn_name: name,
+                    // and recover the callee's source path so extern calls
+                    // (`fluids::density(`) keep their qualifier.
+                    if i > 0 && tokens[i - 1].0.is_identifier() {
+                        return callee_path(source, &tokens, i - 1).map(|callee| FnCallContext {
+                            callee,
                             active_param: comma_count,
                         });
                     }
@@ -177,6 +158,38 @@ pub fn find_fn_call_context(source: &str, offset: usize) -> Option<FnCallContext
     }
 
     None
+}
+
+/// Recover the source path ending at the identifier token `leaf_idx`.
+///
+/// Walks backward over the one source-path shape `seg.seg::leaf`: the
+/// separator nearest the leaf must be `::` and any further ones `.`. Returns
+/// `None` for any other separator arrangement (for example the dotted DAG
+/// path of an `include`), which no callable signature can match.
+fn callee_path(source: &str, tokens: &[(Token, Span)], leaf_idx: usize) -> Option<NamePath> {
+    let atom_at = |span: Span| NameAtom::parse(&source[span.offset()..span.offset() + span.len()]);
+    let leaf = atom_at(tokens[leaf_idx].1).ok()?;
+    let mut reversed_owner = Vec::new();
+    let mut j = leaf_idx;
+    while j >= 2 && tokens[j - 2].0.is_identifier() {
+        let expected = if reversed_owner.is_empty() {
+            Token::DoubleColon
+        } else {
+            Token::Dot
+        };
+        match &tokens[j - 1].0 {
+            separator if *separator == expected => {}
+            Token::Dot | Token::DoubleColon => return None,
+            _ => break,
+        }
+        reversed_owner.push(atom_at(tokens[j - 2].1).ok()?);
+        j -= 2;
+    }
+    reversed_owner.reverse();
+    Some(NamePath::from_parts(
+        NonEmpty::try_from_vec(reversed_owner).ok(),
+        leaf,
+    ))
 }
 
 /// Determine whether the cursor is at a contextual coordinate-constructor or
@@ -473,13 +486,25 @@ mod tests {
 
     // ---- FnCallContext tests ----
 
+    /// The callee's owner segments and leaf, as source text.
+    fn callee_parts(ctx: &FnCallContext) -> (Vec<&str>, &str) {
+        (
+            ctx.callee
+                .qualifier()
+                .iter()
+                .map(NameAtom::as_str)
+                .collect(),
+            ctx.callee.leaf().as_str(),
+        )
+    }
+
     #[test]
     fn fn_call_cursor_after_open_paren() {
         // sqrt(|)
         let source = "sqrt()";
         let offset = 5; // after `(`
         let ctx = find_fn_call_context(source, offset).unwrap();
-        assert_eq!(ctx.fn_name, "sqrt");
+        assert_eq!(callee_parts(&ctx), (vec![], "sqrt"));
         assert_eq!(ctx.active_param, 0);
     }
 
@@ -489,7 +514,7 @@ mod tests {
         let source = "atan2(@y, )";
         let offset = 10; // after `, `
         let ctx = find_fn_call_context(source, offset).unwrap();
-        assert_eq!(ctx.fn_name, "atan2");
+        assert_eq!(callee_parts(&ctx), (vec![], "atan2"));
         assert_eq!(ctx.active_param, 1);
     }
 
@@ -499,7 +524,7 @@ mod tests {
         let source = "sqrt(least(@a, @b))";
         let offset = 5; // after outer `(`
         let ctx = find_fn_call_context(source, offset).unwrap();
-        assert_eq!(ctx.fn_name, "sqrt");
+        assert_eq!(callee_parts(&ctx), (vec![], "sqrt"));
         assert_eq!(ctx.active_param, 0);
     }
 
@@ -509,7 +534,7 @@ mod tests {
         let source = "sqrt(least(@a, ))";
         let offset = source.find(", ").unwrap() + 2;
         let ctx = find_fn_call_context(source, offset).unwrap();
-        assert_eq!(ctx.fn_name, "least");
+        assert_eq!(callee_parts(&ctx), (vec![], "least"));
         assert_eq!(ctx.active_param, 1);
     }
 
@@ -518,8 +543,28 @@ mod tests {
         let source = "plugin::scan()";
         let offset = source.len() - 1;
         let ctx = find_fn_call_context(source, offset).unwrap();
-        assert_eq!(ctx.fn_name, "plugin::scan");
+        assert_eq!(callee_parts(&ctx), (vec!["plugin"], "scan"));
         assert_eq!(ctx.active_param, 0);
+    }
+
+    #[test]
+    fn dotted_owner_before_member_boundary_is_kept() {
+        let source = "a.b::f(1, )";
+        let offset = source.len() - 1;
+        let ctx = find_fn_call_context(source, offset).unwrap();
+        assert_eq!(callee_parts(&ctx), (vec!["a", "b"], "f"));
+        assert_eq!(ctx.active_param, 1);
+    }
+
+    #[test]
+    fn non_path_separator_shapes_have_no_callee() {
+        for source in ["include nasa.rocket.thrust()", "a::b::f()", "a::b.f()"] {
+            let offset = source.len() - 1;
+            assert!(
+                find_fn_call_context(source, offset).is_none(),
+                "`{source}` is not a callable source path"
+            );
+        }
     }
 
     #[test]
@@ -528,7 +573,7 @@ mod tests {
         let source = "lerp(@a, @b, )";
         let offset = 13; // after third `, `
         let ctx = find_fn_call_context(source, offset).unwrap();
-        assert_eq!(ctx.fn_name, "lerp");
+        assert_eq!(callee_parts(&ctx), (vec![], "lerp"));
         assert_eq!(ctx.active_param, 2);
     }
 
