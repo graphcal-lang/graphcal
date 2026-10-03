@@ -62,7 +62,7 @@ impl WorkBudget {
 
     pub(super) fn consume(&self, amount: WorkAmount) -> Result<(), WorkBudgetError> {
         self.remaining
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |remaining| {
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |remaining| {
                 remaining.checked_sub(amount.get())
             })
             .map(|_| ())

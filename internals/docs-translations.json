@@ -23,8 +23,8 @@
     },
     {
       "path": "installation.md",
-      "english_sha256": "76ec2891a6c1dd0b2ebcd874de5cbc86eeba204a8f2d7c7a53ec9b59ea07a506",
-      "japanese_sha256": "83efa321d31472cd8dafd8ec1dec940b82fffd3d24023716fd1fd9456eca7d74"
+      "english_sha256": "158c399522c270be748ce3aabd6eb8954a1bbeaced60d6ee421fbb7d586b61ee",
+      "japanese_sha256": "6ba4395203db58ab9553262190f765513d30f6efb88cb02c89f1060d709d5f2f"
     },
     {
       "path": "language/algebraic-data-types.md",

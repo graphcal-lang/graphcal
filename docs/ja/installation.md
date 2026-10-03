@@ -6,7 +6,7 @@ icon: material/download
 
 ## 要件 { #requirements }
 
-- Rust stable ツールチェーン (1.91 以降)
+- Rust stable ツールチェーン (1.95 以降)
 
 Rust がインストールされていない場合は、[rustup.rs](https://rustup.rs/) から入手してください。
 
