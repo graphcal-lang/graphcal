@@ -103,7 +103,7 @@ unwrap_used = { level = "warn", priority = 1 }
 [workspace.lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ["cfg(loom)"] }
 # missing-docs = "warn"
-unsafe-code = "warn"
+unsafe_code = "warn"
 
 # Keep useful backtraces while minimizing debug-build codegen and link time.
 [profile.dev]
