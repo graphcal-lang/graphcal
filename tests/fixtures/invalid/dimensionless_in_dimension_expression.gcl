@@ -1,0 +1,2 @@
+// `Dimensionless` is a type, not a dimension term; write `Time^-1` instead.
+node rate: Dimensionless / Time = 0.5 / 1.0 s;

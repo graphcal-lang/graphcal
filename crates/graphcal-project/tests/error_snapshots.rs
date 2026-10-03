@@ -603,6 +603,14 @@ fn error_obsolete_structural_range() {
 }
 
 #[test]
+fn error_dimensionless_in_dimension_expression() {
+    let source =
+        include_str!("../../../tests/fixtures/invalid/dimensionless_in_dimension_expression.gcl");
+    let rendered = render_error(source, "dimensionless_in_dimension_expression.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
 fn error_unknown_index() {
     let source = include_str!("../../../tests/fixtures/invalid/unknown_index.gcl");
     let rendered = render_error(source, "unknown_index.gcl");

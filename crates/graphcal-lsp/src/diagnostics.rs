@@ -1165,6 +1165,21 @@ param event: Datetime<TT>(
     }
 
     #[test]
+    fn dimensionless_dimension_term_suggests_negative_exponent() {
+        let diagnostics =
+            produce_diagnostics("node n: Dimensionless / Time = 0.5 / 1.0 s;", "test.gcl");
+        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+        let diagnostic = &diagnostics[0];
+        assert!(matches!(
+            &diagnostic.code,
+            Some(NumberOrString::String(code)) if code == "graphcal::P026"
+        ));
+        assert!(diagnostic.message.contains("`Time^-1`"), "{diagnostic:?}");
+        assert_eq!(diagnostic.range.start.character, 8);
+        assert_eq!(diagnostic.range.end.character, 21);
+    }
+
+    #[test]
     fn function_generic_arguments_produce_a_diagnostic() {
         let diagnostics = produce_diagnostics("node x: Dimensionless = sqrt<3>(4.0);", "test.gcl");
         assert!(diagnostics.iter().any(|diagnostic| {

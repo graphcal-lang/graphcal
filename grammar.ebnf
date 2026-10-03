@@ -777,6 +777,9 @@ dim_expr
 dim_term
    = ident_path, [ "^", exponent ]
    | "(", dim_expr, ")", [ "^", exponent ];
+(* `Dimensionless` is a type, not a dimension term: a dim_expr with more
+   than one term or an exponent must not use it (P026). Write `Time^-1`,
+   not `Dimensionless / Time`. *)
 
 exponent
    = signed_integer

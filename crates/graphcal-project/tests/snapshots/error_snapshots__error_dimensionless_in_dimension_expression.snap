@@ -1,0 +1,13 @@
+---
+source: crates/graphcal-project/tests/error_snapshots.rs
+expression: rendered
+---
+`Dimensionless` cannot be a term of a compound dimension expression
+    Diagnostic severity: error
+Begin snippet for dimensionless_in_dimension_expression.gcl starting at line 1, column 1
+
+snippet line 1: // `Dimensionless` is a type, not a dimension term; write `Time^-1` instead.
+snippet line 2: node rate: Dimensionless / Time = 0.5 / 1.0 s;
+    label at line 2, columns 12 to 24: `Dimensionless` is a type, not a dimension term
+diagnostic help: replace the whole dimension expression with `Time^-1`
+diagnostic code: graphcal::P026

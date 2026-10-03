@@ -11,8 +11,10 @@ use std::fmt;
 use std::num::{ParseFloatError, ParseIntError};
 
 use crate::diagnostic::{Diagnostic, DiagnosticKind, SecondaryLabel};
+use crate::dimension::Rational;
+use crate::ratio::ExponentStyle;
 use crate::source_id::SourceId;
-use crate::syntax::ast::{DomainBoundKind, NatExpr};
+use crate::syntax::ast::{DimExprItem, DomainBoundKind, MulDivOp, NatExpr};
 use crate::syntax::decl_name::DeclName;
 use crate::syntax::index_name::IndexEntryKey;
 use crate::syntax::names::{NameAtom, NamePath};
@@ -119,6 +121,48 @@ pub enum ParseErrorKind {
     MissingPlotEncoding,
     /// A figure or layer without plots.
     EmptyCompositionPlots { kind: CompositionKind },
+    /// `Dimensionless` used as a term of a compound dimension expression,
+    /// such as `Dimensionless / Time`.
+    DimensionlessInCompoundDimension {
+        /// The expression's other terms, in source order; empty when every
+        /// term is `Dimensionless`.
+        remaining: Vec<DimExprItem>,
+    },
+}
+
+/// Source spelling of the dimension expression formed by `terms`, suggested
+/// in place of an expression that used `Dimensionless` as a term.
+///
+/// Dimension expressions have no `1/` numerator, so a leading division is
+/// written as a negative exponent (`/ Time` becomes `Time^-1`); no terms at
+/// all spell `Dimensionless` itself.
+struct DimensionSuggestion<'a>(&'a [DimExprItem]);
+
+impl fmt::Display for DimensionSuggestion<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if self.0.is_empty() {
+            return f.write_str("Dimensionless");
+        }
+        for (position, item) in self.0.iter().enumerate() {
+            let power = match (position, item.op) {
+                (0, MulDivOp::Mul) => item.term.power,
+                (0, MulDivOp::Div) => Some(-item.term.effective_power()),
+                (_, MulDivOp::Mul) => {
+                    f.write_str(" * ")?;
+                    item.term.power
+                }
+                (_, MulDivOp::Div) => {
+                    f.write_str(" / ")?;
+                    item.term.power
+                }
+            };
+            write!(f, "{}", item.term.name.value)?;
+            if let Some(power) = power.filter(|power| *power != Rational::ONE) {
+                write!(f, "{}", power.fmt_exponent(ExponentStyle::Source))?;
+            }
+        }
+        Ok(())
+    }
 }
 
 /// Why a numeric literal was rejected.
@@ -368,6 +412,9 @@ impl fmt::Display for ParseErrorKind {
             }
             Self::MissingPlotEncoding => f.write_str("plot declaration has no encoding channels"),
             Self::EmptyCompositionPlots { kind } => write!(f, "{kind} declaration has no plots"),
+            Self::DimensionlessInCompoundDimension { .. } => {
+                f.write_str("`Dimensionless` cannot be a term of a compound dimension expression")
+            }
         }
     }
 }
@@ -397,6 +444,7 @@ impl DiagnosticKind for ParseErrorKind {
             Self::ExpectedIndexFoundNat { .. } => "graphcal::P023",
             Self::ObsoleteStructuralRange { .. } => "graphcal::P024",
             Self::DuplicateDagBinding { .. } => "graphcal::P025",
+            Self::DimensionlessInCompoundDimension { .. } => "graphcal::P026",
         }
     }
 
@@ -434,6 +482,9 @@ impl DiagnosticKind for ParseErrorKind {
             }
             Self::EmptyCompositionPlots { kind } => {
                 format!("this {kind} has an empty or missing `plots:` list")
+            }
+            Self::DimensionlessInCompoundDimension { .. } => {
+                "`Dimensionless` is a type, not a dimension term".to_string()
             }
         })
     }
@@ -508,6 +559,10 @@ impl DiagnosticKind for ParseErrorKind {
             Self::EmptyCompositionPlots { .. } => {
                 Some("add a non-empty `plots:` list, e.g. `plots: [my_plot]`".to_string())
             }
+            Self::DimensionlessInCompoundDimension { remaining } => Some(format!(
+                "replace the whole dimension expression with `{}`",
+                DimensionSuggestion(remaining)
+            )),
         }
     }
 

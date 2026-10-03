@@ -48,11 +48,15 @@ impl Parser<'_> {
                     .as_bare()
                     .and_then(|ident| BuiltinTypeName::parse(ident.name.as_str()));
                 match builtin {
-                    Some(BuiltinTypeName::Dimensionless) => ElementTypeExpr {
-                        kind: TypeExprKind::Dimensionless,
-                        constraints: vec![],
-                        span: path_span,
-                    },
+                    // Before a dimension operator, fall through to the dim-expr
+                    // arm for the targeted `Dimensionless`-term error (#1369).
+                    Some(BuiltinTypeName::Dimensionless) if !self.peeks_dim_operator() => {
+                        ElementTypeExpr {
+                            kind: TypeExprKind::Dimensionless,
+                            constraints: vec![],
+                            span: path_span,
+                        }
+                    }
                     Some(BuiltinTypeName::Bool) => ElementTypeExpr {
                         kind: TypeExprKind::Bool,
                         constraints: vec![],
@@ -144,6 +148,14 @@ impl Parser<'_> {
         }
 
         Ok(TypeExpr::unindexed(base))
+    }
+
+    /// Whether the next token continues a dimension expression after a term.
+    fn peeks_dim_operator(&mut self) -> bool {
+        matches!(
+            self.lexer.peek(),
+            Some(&Token::Star | &Token::Slash | &Token::Caret)
+        )
     }
 
     /// Parse the built-in `Complex<D>` type former into its dedicated syntax variant.
@@ -244,7 +256,19 @@ impl Parser<'_> {
     /// A term-or-group is either `ident_path ("^" INTEGER)?` or `"(" DimExpr ")" ("^" INTEGER)?`.
     /// Parenthesized groups are flattened: `(A * B / C)^2` becomes `A^2 * B^2 / C^2`,
     /// and `D / (A * B)` becomes `D / A / B`.
+    ///
+    /// A complete dimension expression must not use `Dimensionless` as one of
+    /// its terms; see [`Self::reject_dimensionless_term`].
     pub(super) fn parse_dim_expr(&mut self) -> Result<DimExpr, ParseError> {
+        let dim_expr = self.parse_dim_expr_group_contents()?;
+        Self::reject_dimensionless_term(dim_expr)
+    }
+
+    /// Parse a dimension expression that is only part of a larger one (the
+    /// contents of a parenthesized group). The `Dimensionless`-term check runs
+    /// on the enclosing, flattened expression so its suggestion covers the
+    /// whole expression rather than one group.
+    fn parse_dim_expr_group_contents(&mut self) -> Result<DimExpr, ParseError> {
         self.with_nesting_budget(Self::parse_dim_expr_inner)
     }
 
@@ -255,10 +279,52 @@ impl Parser<'_> {
 
     fn parse_dim_expr_after_first_path(&mut self, path: IdentPath) -> Result<DimExpr, ParseError> {
         let term = self.parse_dim_term_after_path(path)?;
-        self.parse_dim_expr_after_first_items(vec![DimExprItem {
+        let dim_expr = self.parse_dim_expr_after_first_items(vec![DimExprItem {
             op: MulDivOp::Mul,
             term,
-        }])
+        }])?;
+        Self::reject_dimensionless_term(dim_expr)
+    }
+
+    /// Reject `Dimensionless` as a term of a compound dimension expression
+    /// (more than one term, or an explicit exponent), such as
+    /// `Dimensionless / Time` (#1369).
+    ///
+    /// `Dimensionless` names the type of dimensionless quantities, not a
+    /// dimension factor, so it is not silently treated as an identity term.
+    /// The error carries the remaining terms so the diagnostic can suggest
+    /// the supported spelling (`Time^-1`). A bare `Dimensionless` term is left
+    /// to name resolution, which already reports it.
+    fn reject_dimensionless_term(dim_expr: DimExpr) -> Result<DimExpr, ParseError> {
+        let is_compound =
+            dim_expr.terms.len() > 1 || dim_expr.terms.iter().any(|item| item.term.power.is_some());
+        let Some(first_span) = dim_expr
+            .terms
+            .iter()
+            .find(|item| Self::is_dimensionless_term(&item.term))
+            .map(|item| item.term.span)
+            .filter(|_| is_compound)
+        else {
+            return Ok(dim_expr);
+        };
+        let remaining = dim_expr
+            .terms
+            .into_iter()
+            .filter(|item| !Self::is_dimensionless_term(&item.term))
+            .collect();
+        Err(ParseError::new(
+            ParseErrorKind::DimensionlessInCompoundDimension { remaining },
+            first_span,
+        ))
+    }
+
+    /// Whether `term` is spelled as the bare built-in `Dimensionless` type.
+    fn is_dimensionless_term(term: &DimTerm) -> bool {
+        term.name
+            .value
+            .as_bare()
+            .and_then(|atom| BuiltinTypeName::parse(atom.as_str()))
+            == Some(BuiltinTypeName::Dimensionless)
     }
 
     fn parse_dim_expr_after_first_items(
@@ -308,7 +374,7 @@ impl Parser<'_> {
     fn parse_dim_term_or_group(&mut self) -> Result<Vec<DimExprItem>, ParseError> {
         if self.lexer.peek() == Some(&Token::LParen) {
             self.lexer.next_token();
-            let inner = self.parse_dim_expr()?;
+            let inner = self.parse_dim_expr_group_contents()?;
             self.expect(Token::RParen)?;
 
             let outer_power = self.parse_outer_power()?;
@@ -690,9 +756,13 @@ impl Parser<'_> {
                     return Ok(Self::ambiguous_generic_arg(&type_expr)
                         .map_or(GenericArg::Type(type_expr), GenericArg::Ambiguous));
                 }
+                // Neither error can be recovered by reparsing the argument
+                // as a Nat expression, so report them as-is.
                 Err(
                     error @ ParseError {
-                        kind: ParseErrorKind::TooDeeplyNested,
+                        kind:
+                            ParseErrorKind::TooDeeplyNested
+                            | ParseErrorKind::DimensionlessInCompoundDimension { .. },
                         ..
                     },
                 ) => return Err(error),
@@ -939,6 +1009,87 @@ mod tests {
         let start = error.span.offset();
         let end = start + error.span.len();
         &source[start..end]
+    }
+
+    /// `Dimensionless` as a dimension term is rejected at the `Dimensionless`
+    /// span, and the help suggests the equivalent dimension expression (#1369).
+    #[test]
+    fn dimensionless_term_in_compound_dimension_suggests_the_supported_spelling() {
+        use crate::diagnostic::DiagnosticKind;
+
+        for (source, suggestion) in [
+            ("node n: Dimensionless / Time = 1.0 / 1.0 s;", "Time^-1"),
+            ("node n: Dimensionless / Time^2 = 1.0 / 1.0 s^2;", "Time^-2"),
+            (
+                "node n: Dimensionless / Time^(1/2) = 1.0 / 1.0 s;",
+                "Time^(-1/2)",
+            ),
+            ("node n: Dimensionless / Time^-1 = 1.0 Hz;", "Time"),
+            ("node n: Dimensionless * Length = 1.0 m;", "Length"),
+            ("node n: Length * Dimensionless = 1.0 m;", "Length"),
+            ("node n: Length / Dimensionless = 1.0 m;", "Length"),
+            ("node n: Dimensionless^2 = 1.0;", "Dimensionless"),
+            (
+                "node n: Dimensionless / Length * Time = 1.0 s / 1.0 m;",
+                "Length^-1 * Time",
+            ),
+            (
+                "node n: (Dimensionless / Time)^2 = 1.0 / 1.0 s^2;",
+                "Time^-2",
+            ),
+            (
+                "node n: Length / (Time * Dimensionless) = 1.0 m / 1.0 s;",
+                "Length / Time",
+            ),
+            ("node n: Complex<Dimensionless / Time> = 0.0;", "Time^-1"),
+            ("dim Rate = Dimensionless / Time;", "Time^-1"),
+            ("unit per_s: Dimensionless / Time = 1/s;", "Time^-1"),
+        ] {
+            let error = Parser::new(source).parse_file().unwrap_err();
+            assert!(
+                matches!(
+                    error.kind,
+                    ParseErrorKind::DimensionlessInCompoundDimension { .. }
+                ),
+                "source: {source}; got {error:?}"
+            );
+            let start = error.span.offset();
+            assert_eq!(
+                &source[start..start + error.span.len()],
+                if source.contains("Dimensionless^2") {
+                    "Dimensionless^2"
+                } else {
+                    "Dimensionless"
+                },
+                "source: {source}"
+            );
+            assert_eq!(
+                error.kind.help().as_deref(),
+                Some(
+                    format!("replace the whole dimension expression with `{suggestion}`").as_str()
+                ),
+                "source: {source}"
+            );
+        }
+    }
+
+    /// A lone `Dimensionless` keeps its meaning as a type and is left to
+    /// later phases as a dimension, and qualified names are not the built-in.
+    #[test]
+    fn non_compound_or_qualified_dimensionless_is_not_a_compound_term_error() {
+        for source in [
+            "node n: Dimensionless = 1.0;",
+            "param n: Dimensionless(min: 0.0) = 1.0;",
+            "param n: Dimensionless[Fin(2)] = table[Fin(2)] { 1.0; 2.0; };",
+            "node c: Complex<Dimensionless> = 0.0;",
+            "dim Ratio = Dimensionless;",
+            "node n: (Dimensionless) = 1.0;",
+            "node n: units::Dimensionless / Time = 1.0 / 1.0 s;",
+        ] {
+            Parser::new(source)
+                .parse_file()
+                .unwrap_or_else(|error| panic!("source: {source}; got {error:?}"));
+        }
     }
 
     #[test]
