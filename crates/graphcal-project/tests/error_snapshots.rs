@@ -923,6 +923,13 @@ fn error_unknown_attribute() {
 }
 
 #[test]
+fn error_hidden_with_arguments() {
+    let source = include_str!("../../../tests/fixtures/invalid/hidden_with_arguments.gcl");
+    let rendered = render_error(source, "hidden_with_arguments.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
 fn error_lazy_not_supported() {
     let source = include_str!("../../../tests/fixtures/invalid/lazy_not_supported.gcl");
     let rendered = render_error(source, "lazy_not_supported.gcl");

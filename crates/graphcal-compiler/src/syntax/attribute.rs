@@ -2,13 +2,16 @@
 
 use thiserror::Error;
 
-/// Known attribute names in the language.
+/// Attribute names the language gives semantics to.
+///
+/// Reserved names without semantics (see [`ReservedAttributeName`]) are not
+/// part of this vocabulary, so a consumer of an `AttributeName` never has to
+/// handle an attribute that cannot be used.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum AttributeName {
     Assumes,
     ExpectedFail,
     Hidden,
-    Lazy,
 }
 
 impl AttributeName {
@@ -16,7 +19,7 @@ impl AttributeName {
     #[must_use]
     pub const fn is_singleton(self) -> bool {
         match self {
-            Self::Assumes | Self::ExpectedFail | Self::Hidden | Self::Lazy => true,
+            Self::Assumes | Self::ExpectedFail | Self::Hidden => true,
         }
     }
 }
@@ -27,6 +30,19 @@ impl std::fmt::Display for AttributeName {
             Self::Assumes => "assumes",
             Self::ExpectedFail => "expected_fail",
             Self::Hidden => "hidden",
+        })
+    }
+}
+
+/// Attribute names reserved by the language but not yet given semantics.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ReservedAttributeName {
+    Lazy,
+}
+
+impl std::fmt::Display for ReservedAttributeName {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
             Self::Lazy => "lazy",
         })
     }
@@ -59,16 +75,27 @@ impl UnknownAttributeName {
     }
 }
 
+/// Why source text is not a usable [`AttributeName`].
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+pub enum AttributeNameError {
+    /// The name is not part of the language vocabulary.
+    #[error(transparent)]
+    Unknown(#[from] UnknownAttributeName),
+    /// The name is reserved but has no semantics yet.
+    #[error("attribute `{0}` is reserved but not supported")]
+    Reserved(ReservedAttributeName),
+}
+
 impl std::str::FromStr for AttributeName {
-    type Err = UnknownAttributeName;
+    type Err = AttributeNameError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
             "assumes" => Ok(Self::Assumes),
             "expected_fail" => Ok(Self::ExpectedFail),
             "hidden" => Ok(Self::Hidden),
-            "lazy" => Ok(Self::Lazy),
-            _ => Err(UnknownAttributeName::new(s)),
+            "lazy" => Err(AttributeNameError::Reserved(ReservedAttributeName::Lazy)),
+            _ => Err(UnknownAttributeName::new(s).into()),
         }
     }
 }

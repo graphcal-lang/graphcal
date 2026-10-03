@@ -377,3 +377,4 @@ bindings happen to be equal.
 | A021 | Duplicate assertion name in `#[assumes(...)]` |
 | A022 | Non-identifier argument in `#[assumes(...)]` |
 | A023 | Reserved `#[lazy]` syntax is not supported |
+| A024 | `#[hidden]` with arguments |

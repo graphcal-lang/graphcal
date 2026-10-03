@@ -143,7 +143,7 @@ impl DiagnosticKind for AttributeError {
                     crate::display::number::format_number(*value)
                 }
             )),
-            Self::HiddenTakesNoArguments => Some("error here".to_owned()),
+            Self::HiddenTakesNoArguments => Some("unexpected arguments".to_owned()),
         }
     }
 
@@ -162,8 +162,7 @@ impl DiagnosticKind for AttributeError {
             Self::InvalidHiddenTarget { .. } => Some("`#[hidden]` suppresses a plot's standalone output; it is only valid on `plot` declarations".to_owned()),
             Self::UnknownAttribute { .. } => Some("recognized attributes are `#[assumes(...)]`, `#[expected_fail]`, `#[hidden]`, and `#[lazy]`".to_owned()),
             Self::InvalidExpectedFailTarget { .. } => Some("`#[expected_fail]` is only valid on `assert` declarations".to_owned()),
-            Self::ExpectedFailInvalidArg
-            | Self::HiddenTakesNoArguments => None,
+            Self::ExpectedFailInvalidArg => None,
             Self::ExpectedFailNotIndexed => Some("use `#[expected_fail]` without arguments for non-indexed assertions".to_owned()),
             Self::ExpectedFailAllOnIndexed => Some("use `#[expected_fail(Index#Variant, ...)]` (qualified `module::Index#Variant` also works) to specify which variants are expected to fail; for finite structural axes use `#[expected_fail(#N, ...)]`".to_owned()),
             Self::ExpectedFailDuplicateKey => Some("each expected-fail key must be unique".to_owned()),
@@ -171,6 +170,7 @@ impl DiagnosticKind for AttributeError {
             Self::ExpectedFailKeyIndexMismatch { .. } => Some("expected-fail keys must use the assertion's indexes in axis order".to_owned()),
             Self::ExpectedFailFinitePositionOutOfBounds { .. } => Some("finite-index positions in expected-fail keys must satisfy `0 <= N < size` for a `Fin(size)` axis".to_owned()),
             Self::NegativeTolerance { .. } => Some("a literal tolerance must not have a negative sign; use `0` for exact-match semantics".to_owned()),
+            Self::HiddenTakesNoArguments => Some("write `#[hidden]` without parentheses".to_owned()),
         }
     }
 
