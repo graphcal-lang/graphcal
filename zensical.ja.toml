@@ -52,6 +52,7 @@ alternate = [
 custom_dir = "internals/docs-theme"
 language = "ja"
 logo = "/docs/assets/graphcal-wordmark-transparent.png"
+favicon = "/docs/assets/favicon.svg"
 features = [
   "announce.dismiss",
   "content.code.annotate",
