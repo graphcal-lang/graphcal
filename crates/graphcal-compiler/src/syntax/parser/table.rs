@@ -119,7 +119,7 @@ impl Parser<'_> {
     }
 
     /// Parse one table axis: a named index path or concrete `Fin(N)`.
-    fn parse_table_index_spec(&mut self) -> Result<TableIndexSpec, ParseError> {
+    pub(super) fn parse_table_index_spec(&mut self) -> Result<TableIndexSpec, ParseError> {
         self.reject_obsolete_structural_range()?;
         if self.lexer.peek() == Some(&Token::ContextualKeyword(ContextualKeyword::Fin))
             && self.lexer.peek_second() == Some(&Token::LParen)
