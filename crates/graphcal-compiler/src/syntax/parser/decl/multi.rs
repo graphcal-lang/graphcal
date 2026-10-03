@@ -28,7 +28,7 @@ use crate::syntax::index_name::{IndexEntryKey, IndexVariantName};
 use crate::syntax::non_empty::AtLeastTwo;
 use crate::syntax::span::Span;
 use crate::syntax::span::Spanned;
-use crate::syntax::token::{ContextualKeyword, Token};
+use crate::syntax::token::Token;
 
 use super::super::{
     Expected, InvalidNumberReason, ParseError, ParseErrorKind, Parser, UnsupportedMultiDeclShape,
@@ -150,7 +150,7 @@ impl Parser<'_> {
         let mut shared_axes: Vec<TableIndexSpec> = Vec::new();
         if self.lexer.peek() != Some(&Token::LParen) {
             loop {
-                shared_axes.push(self.parse_table_index_spec_for_multi()?);
+                shared_axes.push(self.parse_table_index_spec()?);
                 self.expect(Token::Comma)?;
                 if self.lexer.peek() == Some(&Token::LParen) {
                     break;
@@ -396,48 +396,6 @@ impl Parser<'_> {
 
         slice.finish();
         Ok(())
-    }
-
-    /// Parse a table index spec inside a multi-decl's shared-axis prefix.
-    ///
-    /// Same shape as the single-decl `parse_table_index_spec`, but split out
-    /// so the multi-decl parser can stop at the opening paren of the slot tuple
-    /// without also advancing past a comma. Named axes retain their full path.
-    fn parse_table_index_spec_for_multi(&mut self) -> Result<TableIndexSpec, ParseError> {
-        self.reject_obsolete_structural_range()?;
-        if self.lexer.peek() == Some(&Token::ContextualKeyword(ContextualKeyword::Fin))
-            && self.lexer.peek_second() == Some(&Token::LParen)
-        {
-            let (_, start_span) = self.advance()?;
-            self.expect(Token::LParen)?;
-            let (_, cardinality_span) = self.expect(Token::Number)?;
-            let text = self.lexer.slice_at(cardinality_span).replace('_', "");
-            let cardinality = text.parse().map_err(|_| {
-                Self::invalid_number(InvalidNumberReason::TableFinCardinality, cardinality_span)
-            })?;
-            let (_, end_span) = self.expect(Token::RParen)?;
-            return Ok(TableIndexSpec::Finite {
-                cardinality,
-                span: start_span.merge(end_span),
-            });
-        }
-        match self.lexer.peek() {
-            Some(Token::Number) => {
-                let (_, span) = self.advance()?;
-                let expression = self.lexer.slice_at(span).to_string();
-                Err(ParseError::new(
-                    ParseErrorKind::ExpectedIndexFoundNat { expression },
-                    span,
-                ))
-            }
-            Some(token) if token.is_identifier() => Ok(TableIndexSpec::Named(
-                self.parse_ident_path()?.into_spanned_name_path(),
-            )),
-            _ => {
-                let (tok, span) = self.advance()?;
-                Err(Self::unexpected(Expected::TableAxis, tok, span))
-            }
-        }
     }
 
     /// Parse a slot tuple: `( slot_axes { , slot_axes } [,] )`.
