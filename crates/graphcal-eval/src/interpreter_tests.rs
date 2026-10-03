@@ -3,7 +3,7 @@
 //! plan. Programs that need project loading, imports, includes, or inline
 //! DAGs are tested in `graphcal-project`.
 
-use graphcal_compiler::display::include_scope_names::IncludeScopeNames;
+use graphcal_compiler::display::source_display_names::SourceDisplayNames;
 use graphcal_compiler::semantic_error::SemanticError;
 use graphcal_compiler::tir::typed::CheckedTir;
 
@@ -27,7 +27,7 @@ fn compile_and_eval(source: &str) -> Result<EvalResult, SemanticError> {
             src,
             &sources,
             &HostFunctionRegistry::new(),
-            &IncludeScopeNames::new(),
+            &SourceDisplayNames::default(),
             cancellation,
         )
     })

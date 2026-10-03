@@ -22,6 +22,12 @@ impl ModulePathKey {
     pub const fn new(segments: NonEmpty<NameAtom>) -> Self {
         Self(segments)
     }
+
+    /// The segments, in source order.
+    #[must_use]
+    pub const fn segments(&self) -> &NonEmpty<NameAtom> {
+        &self.0
+    }
 }
 
 impl fmt::Display for ModulePathKey {

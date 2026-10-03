@@ -30,6 +30,8 @@ pub struct CheckedProject {
     /// The registry every source id of the checked program resolves in.
     pub(super) sources: std::sync::Arc<graphcal_compiler::source_registry::SourceRegistry>,
     pub(super) module_resolver: graphcal_compiler::resolve::ModuleResolver,
+    /// Source module paths of the loaded files.
+    pub(super) module_paths: graphcal_compiler::display::module_paths::ModulePaths,
 }
 
 impl std::fmt::Debug for CheckedProject {
@@ -76,6 +78,7 @@ impl CheckedProject {
             source: self.source,
             sources: self.sources,
             module_resolver: self.module_resolver,
+            module_paths: self.module_paths,
         }
     }
 }
@@ -86,4 +89,5 @@ pub struct CheckedProjectRuntimeParts {
     pub(crate) source: SourceId,
     pub(crate) sources: std::sync::Arc<graphcal_compiler::source_registry::SourceRegistry>,
     pub(crate) module_resolver: graphcal_compiler::resolve::ModuleResolver,
+    pub(crate) module_paths: graphcal_compiler::display::module_paths::ModulePaths,
 }

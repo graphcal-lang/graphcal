@@ -9343,3 +9343,65 @@ fn projected_assertions_name_failed_dependencies_as_the_root_does() {
     assert_eq!(name.to_string(), "other::positive");
     assert_eq!(message, "dependency failed: other::bad (division by zero)");
 }
+
+#[test]
+fn invoked_modules_name_unavailable_declarations_by_source_module_path() {
+    // Before #1941 a declaration of an invoked module outside the root's
+    // subtree was reported by its identity (`src.pipeline.lib.d.pending`).
+    let (_directory, root) = write_pipeline_project(
+        &[
+            (
+                "lib.gcl",
+                "pub dag d {\n    node pending: Dimensionless = todo {};\n    pub node out: Dimensionless = @pending;\n}\n\
+                 dag helper {\n    node inner: Dimensionless = todo {};\n    pub node out: Dimensionless = @inner;\n}\n\
+                 node pending: Dimensionless = todo {};\n\
+                 pub node output: Dimensionless = @pending;\n\
+                 pub node via_helper: Dimensionless = @helper()::out;\n",
+            ),
+            (
+                "main.gcl",
+                "import pipeline.lib as lib;\nimport pipeline.lib.d as d;\n\
+                 node from_file: Dimensionless = @lib()::output;\n\
+                 node from_inline: Dimensionless = @d()::out;\n\
+                 node from_nested: Dimensionless = @lib()::via_helper;\n\
+                 assert waits = @d()::out > 0.0;\n",
+            ),
+        ],
+        "main.gcl",
+    );
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap();
+    let reason = |name: &str| {
+        result
+            .entries
+            .iter()
+            .find(|(candidate, _, _)| candidate.to_string() == name)
+            .unwrap_or_else(|| panic!("missing `{name}`"))
+            .1
+            .as_ref()
+            .expect_err("unavailable")
+            .to_string()
+    };
+    assert_eq!(
+        reason("from_file"),
+        "BLOCKED — unfinished dependencies: pipeline.lib::pending"
+    );
+    assert_eq!(
+        reason("from_inline"),
+        "BLOCKED — unfinished dependencies: pipeline.lib.d::pending"
+    );
+    // An inline DAG no file imports is named under its file's path.
+    assert_eq!(
+        reason("from_nested"),
+        "BLOCKED — unfinished dependencies: pipeline.lib.helper::inner"
+    );
+    let [(name, graphcal_eval::eval::types::AssertResult::Blocked { reason }, _)] =
+        result.assertions.as_slice()
+    else {
+        panic!("expected one blocked assertion: {:?}", result.assertions);
+    };
+    assert_eq!(name.to_string(), "waits");
+    assert_eq!(
+        reason.to_string(),
+        "BLOCKED — unfinished dependencies: pipeline.lib.d::pending"
+    );
+}

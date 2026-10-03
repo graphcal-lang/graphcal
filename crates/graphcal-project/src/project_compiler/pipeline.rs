@@ -210,6 +210,7 @@ pub(super) fn lower_project_perfile<'project, Mode>(
         plugins: project.plugins(),
         exported_runtime_units,
         module_resolver: modules.into_resolver(),
+        module_paths: project.files().module_paths(),
         sources: std::sync::Arc::clone(project.sources()),
         mode,
     })
@@ -259,6 +260,7 @@ pub(super) fn check_hir_project<Mode>(
         plugins,
         exported_runtime_units,
         module_resolver,
+        module_paths,
         sources,
         mode: _,
     } = hir;
@@ -315,6 +317,7 @@ pub(super) fn check_hir_project<Mode>(
         source,
         sources,
         module_resolver,
+        module_paths,
     })
 }
 
