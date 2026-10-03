@@ -1,0 +1,24 @@
+// dimensionless_dimension_terms.gcl -- `Dimensionless` is the identity
+// dimension, so it may appear as a term of a dimension expression (#1369).
+// Each spelling below denotes exactly the dimension without the term.
+pub dim Ratio = Dimensionless;
+pub dim Rate = Dimensionless / Time;
+
+const unit per_s: Dimensionless / Time = 1 Hz;
+
+type Rated {
+    Rated(rate: Dimensionless / Time),
+}
+
+param ratio: Ratio = 2.0;
+node rate: Dimensionless / Time = 0.5 / 1.0 s;
+node same_rate: Time^-1 = @rate;
+node named_rate: Rate = @same_rate;
+node squared: Dimensionless^2 = @ratio * @ratio;
+node speed: Length / Dimensionless * Time^-1 = 3.0 m / 1.0 s;
+node field: Rated = Rated(rate: 2.0 per_s);
+
+assert rate_roundtrip = @named_rate == 0.5 Hz;
+assert squared_value = @squared == 4.0;
+assert speed_value = @speed == 3.0 m / 1.0 s;
+assert field_value = @field.rate == 2.0 Hz;

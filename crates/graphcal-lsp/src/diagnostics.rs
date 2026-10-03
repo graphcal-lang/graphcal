@@ -1165,6 +1165,17 @@ param event: Datetime<TT>(
     }
 
     #[test]
+    fn dimensionless_dimension_terms_produce_no_diagnostics() {
+        let diagnostics = produce_diagnostics(
+            "dim Rate = Dimensionless / Time;\n\
+             node n: Dimensionless / Time = 0.5 / 1.0 s;\n\
+             node m: Rate = @n;\n",
+            "test.gcl",
+        );
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+    }
+
+    #[test]
     fn function_generic_arguments_produce_a_diagnostic() {
         let diagnostics = produce_diagnostics("node x: Dimensionless = sqrt<3>(4.0);", "test.gcl");
         assert!(diagnostics.iter().any(|diagnostic| {

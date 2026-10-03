@@ -2427,13 +2427,13 @@ fn collect_dim_expr_refs_in_scope(
     table: &mut SymbolTable,
 ) {
     for item in &dim_expr.terms {
+        // The built-in `Dimensionless` term references no declaration.
+        let Some(path) = item.term.name.as_path() else {
+            continue;
+        };
         table.references.push(ReferenceInfo {
             span: item.term.span,
-            target: reference_target_in_generic_scope(
-                &item.term.name.value,
-                generic_scope,
-                unresolved,
-            ),
+            target: reference_target_in_generic_scope(&path.value, generic_scope, unresolved),
         });
     }
 }

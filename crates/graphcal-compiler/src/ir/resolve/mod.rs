@@ -861,11 +861,15 @@ fn collect_ambiguous_generic_refs(
     }
 }
 
-/// Collect every term name in a [`DimExpr`] as a `(name, span)` reference.
+/// Collect every term path in a [`DimExpr`] as a `(name, span)` reference;
+/// the built-in `Dimensionless` term references nothing.
 fn collect_dim_refs(dim_expr: &DimExpr, refs: &mut Vec<(crate::syntax::names::NamePath, Span)>) {
-    for item in &dim_expr.terms {
-        refs.push((item.term.name.value.clone(), item.term.span));
-    }
+    refs.extend(dim_expr.terms.iter().filter_map(|item| {
+        item.term
+            .name
+            .as_path()
+            .map(|path| (path.value.clone(), item.term.span))
+    }));
 }
 
 /// Validate declaration shells through the production imported-binding path,

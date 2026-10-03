@@ -173,6 +173,8 @@ pub enum DimTermTarget {
     Dimension(Spanned<ResolvedDimName>),
     /// A generic dimension parameter (`D: Dim`).
     GenericParam(Spanned<GenericParamId>),
+    /// The built-in identity dimension `Dimensionless`.
+    Dimensionless,
 }
 
 /// A resolved index reference in an indexed type.

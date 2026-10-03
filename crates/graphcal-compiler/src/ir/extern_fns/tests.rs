@@ -69,6 +69,28 @@ fn imported_dimensions_resolve_canonically() {
     }
 }
 
+/// `Dimensionless` is the identity term in extern signatures, matching the
+/// plugin SDK's dimension vocabulary.
+#[test]
+fn dimensionless_terms_are_the_identity_dimension() {
+    let with_identity = lower(
+        "import plugin \"graphcal:demo\" as demo {\n\
+           fn f<D: Dim>(x: Dimensionless / Time, y: D * Dimensionless) -> Dimensionless^2;\n\
+         }\n",
+    )
+    .unwrap();
+    let without_identity = lower(
+        "import plugin \"graphcal:demo\" as demo {\n\
+           fn f<D: Dim>(x: Time^-1, y: D) -> Dimensionless;\n\
+         }\n",
+    )
+    .unwrap();
+    assert!(
+        only_signature(&with_identity.root)
+            .structurally_equivalent(only_signature(&without_identity.root))
+    );
+}
+
 #[test]
 fn binders_are_generic_parameters_of_the_function() {
     let lowered = lower(

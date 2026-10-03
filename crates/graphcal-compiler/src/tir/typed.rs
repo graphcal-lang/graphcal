@@ -976,7 +976,8 @@ fn collect_public_signature_dim_arg_dependencies(
                 crate::hir::types::DimTermTarget::Dimension(name) => {
                     Some(PublicSignatureDependency::Dimension(name.clone()))
                 }
-                crate::hir::types::DimTermTarget::GenericParam(_) => None,
+                crate::hir::types::DimTermTarget::GenericParam(_)
+                | crate::hir::types::DimTermTarget::Dimensionless => None,
             }),
     );
 }
@@ -1007,7 +1008,8 @@ fn collect_public_signature_type_dependencies(
                         crate::hir::types::DimTermTarget::Dimension(name) => {
                             Some(PublicSignatureDependency::Dimension(name.clone()))
                         }
-                        crate::hir::types::DimTermTarget::GenericParam(_) => None,
+                        crate::hir::types::DimTermTarget::GenericParam(_)
+                        | crate::hir::types::DimTermTarget::Dimensionless => None,
                     }),
             );
         }

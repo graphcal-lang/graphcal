@@ -152,6 +152,7 @@ fn infer_hir_dim_expr_arg(
                     })?;
                     (dim, item.term.power, item.term.span)
                 }
+                DimTermTarget::Dimensionless => return Ok(acc),
                 DimTermTarget::GenericParam(param) => {
                     return Err(SemanticError::located(
                         src,

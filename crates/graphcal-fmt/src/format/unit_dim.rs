@@ -1,6 +1,7 @@
 //! Dimension and unit expressions, which never contain value expressions.
 
-use graphcal_compiler::syntax::ast::{DimExpr, DimTerm, MulDivOp, UnitExpr};
+use graphcal_compiler::syntax::ast::{DimExpr, DimTerm, DimTermName, MulDivOp, UnitExpr};
+use graphcal_compiler::syntax::builtin_type_name::BuiltinTypeName;
 use pretty::RcDoc;
 
 // ---------------------------------------------------------------------------
@@ -22,7 +23,11 @@ pub fn format_dim_expr_inline(de: &DimExpr) -> RcDoc<'static> {
 }
 
 fn format_dim_term(t: &DimTerm) -> RcDoc<'static> {
-    let mut doc = RcDoc::text(t.name.value.display_path());
+    let name = match &t.name {
+        DimTermName::Dimensionless(_) => BuiltinTypeName::Dimensionless.as_str().to_owned(),
+        DimTermName::Path(path) => path.value.display_path(),
+    };
+    let mut doc = RcDoc::text(name);
     if let Some(power) = t.power {
         doc = doc.append(RcDoc::text(format_power(power)));
     }

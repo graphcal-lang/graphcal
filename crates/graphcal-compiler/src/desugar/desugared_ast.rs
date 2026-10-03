@@ -51,6 +51,7 @@ pub type TypeExprKind = crate::syntax::ast::TypeExprKind<Desugared>;
 pub type DimExpr = crate::syntax::ast::DimExpr;
 pub(crate) type DimExprItem = crate::syntax::ast::DimExprItem;
 pub(crate) type DimTerm = crate::syntax::ast::DimTerm;
+pub(crate) type DimTermName = crate::syntax::ast::DimTermName;
 pub type IndexExpr = crate::syntax::ast::IndexExpr;
 pub type IndexDecl = crate::syntax::ast::IndexDecl<Desugared>;
 pub type IndexDeclKind = crate::syntax::ast::IndexDeclKind<Desugared>;
