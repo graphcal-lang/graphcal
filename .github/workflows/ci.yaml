@@ -27,7 +27,7 @@ jobs:
 
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
 
-      - uses: ./.github/actions/report-engine-tools # zizmor: ignore[self-repository] -- actionlint requires ./ for local actions
+      - uses: $/.github/actions/report-engine-tools
 
       - name: Clippy (all features)
         run: cargo clippy --workspace --all-targets --all-features --keep-going
@@ -63,7 +63,7 @@ jobs:
         with:
           tool: cargo-hawk@0.1.14
 
-      - uses: ./.github/actions/report-engine-tools # zizmor: ignore[self-repository] -- actionlint requires ./ for local actions
+      - uses: $/.github/actions/report-engine-tools
 
       - name: Check closed-world public surface
         run: >-
@@ -119,7 +119,7 @@ jobs:
 
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
 
-      - uses: ./.github/actions/report-engine-tools # zizmor: ignore[self-repository] -- actionlint requires ./ for local actions
+      - uses: $/.github/actions/report-engine-tools
 
       - name: Test
         run: cargo test --workspace
@@ -191,7 +191,7 @@ jobs:
 
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
 
-      - uses: ./.github/actions/report-engine-tools # zizmor: ignore[self-repository] -- actionlint requires ./ for local actions
+      - uses: $/.github/actions/report-engine-tools
 
       - name: Build Graphcal
         run: cargo build --locked --package graphcal
@@ -242,7 +242,7 @@ jobs:
         with:
           key: windows
 
-      - uses: ./.github/actions/report-engine-tools # zizmor: ignore[self-repository] -- actionlint requires ./ for local actions
+      - uses: $/.github/actions/report-engine-tools
 
       # `--no-fail-fast` so a failure in one crate does not mask the remaining
       # crates. Windows is the newest platform here, so a round of CI should
@@ -282,7 +282,7 @@ jobs:
       - name: Test browser evaluator on Wasm
         run: wasm-pack test --node crates/graphcal-wasm
 
-      - uses: ./.github/actions/report-engine-tools # zizmor: ignore[self-repository] -- actionlint requires ./ for local actions
+      - uses: $/.github/actions/report-engine-tools
 
       - name: Smoke-test the automatically embedded report engine
         run: |
@@ -324,7 +324,7 @@ jobs:
         with:
           tool: cargo-llvm-cov
 
-      - uses: ./.github/actions/report-engine-tools # zizmor: ignore[self-repository] -- actionlint requires ./ for local actions
+      - uses: $/.github/actions/report-engine-tools
 
       - name: Generate coverage
         run: >-
@@ -355,7 +355,7 @@ jobs:
         with:
           tool: cargo-hack
 
-      - uses: ./.github/actions/report-engine-tools # zizmor: ignore[self-repository] -- actionlint requires ./ for local actions
+      - uses: $/.github/actions/report-engine-tools
 
       - name: Check MSRV
         run: cargo hack check --workspace --rust-version --ignore-private
@@ -413,7 +413,7 @@ jobs:
       - name: Install Rust toolchain
         run: rustup toolchain install --no-self-update
 
-      - uses: ./.github/actions/report-engine-tools # zizmor: ignore[self-repository] -- actionlint requires ./ for local actions
+      - uses: $/.github/actions/report-engine-tools
 
       - name: Check installed tools
         run: |
