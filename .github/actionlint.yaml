@@ -2,6 +2,8 @@ paths:
   .github/workflows/**/*.yaml:
     ignore:
       # actionlint does not yet parse GitHub's self-repository `uses: $/...`
-      # syntax (rhysd/actionlint#711). Only that parse error is ignored; other
-      # checks still apply. Remove once actionlint supports the syntax.
+      # syntax (rhysd/actionlint#711). Only its parse errors for such actions
+      # and reusable workflows are ignored; other checks still apply. Remove
+      # once actionlint supports the syntax.
       - 'specifying action "\$/[^"]*" in invalid format because ref is missing'
+      - 'reusable workflow call "\$/[^"]*" at "uses" is not following the format'

@@ -1,0 +1,4 @@
+# Steps that dist runs before `dist build`: every CLI build generates the
+# embedded report engine, which needs the pinned Wasm toolchain.
+- name: Install report-engine tools
+  uses: $/.github/actions/report-engine-tools
