@@ -22,24 +22,42 @@ runs:
       shell: bash
       env:
         RUNNER_PLATFORM: ${{ runner.os }}
+        RUNNER_ARCHITECTURE: ${{ runner.arch }}
       # Only a runner-owned path containing checksum-verified binaries is added.
       run: | # zizmor: ignore[github-env]
-        case "$RUNNER_PLATFORM" in
-          Linux)
+        case "$RUNNER_PLATFORM/$RUNNER_ARCHITECTURE" in
+          Linux/X64)
             platform=x86_64-linux
             checksum=3dc677006555b355ea2da5e82602065a161d5e83eaefd3f759afa00b96e83212
             ;;
-          Windows)
+          Linux/ARM64)
+            platform=aarch64-linux
+            checksum=ad560204426015a815faa45693c83bef7d58677d38a39422c272a30ba4b6da2a
+            ;;
+          macOS/X64)
+            platform=x86_64-macos
+            checksum=c0be7b448888f2c851a853ca19299b09d42cac8c3090c716d14cc8ec3c0ac849
+            ;;
+          macOS/ARM64)
+            platform=arm64-macos
+            checksum=f2d962ff294b38ea3cfbbae8f6c728089d9375a57bac9a1880eb86779d6d3a84
+            ;;
+          Windows/X64)
             platform=x86_64-windows
             checksum=b09f260176483bd30194303ccb15ac81c2247e4e566894f9d931e4313cb36d58
             ;;
-          *) echo "Unsupported report-engine CI platform: $RUNNER_PLATFORM" >&2; exit 1 ;;
+          *) echo "Unsupported report-engine CI platform: $RUNNER_PLATFORM/$RUNNER_ARCHITECTURE" >&2; exit 1 ;;
         esac
         mkdir -p "$RUNNER_TEMP/report-engine-tools"
         cd "$RUNNER_TEMP/report-engine-tools"
         archive="binaryen-version_117-$platform.tar.gz"
         curl --fail --location --retry 3 --output "$archive" "https://github.com/WebAssembly/binaryen/releases/download/version_117/$archive"
-        echo "$checksum  $archive" | sha256sum --check
+        # macOS runners provide `shasum`, not GNU `sha256sum`.
+        if [ "$RUNNER_PLATFORM" = macOS ]; then
+          echo "$checksum  $archive" | shasum --algorithm 256 --check
+        else
+          echo "$checksum  $archive" | sha256sum --check
+        fi
         tar -xzf "$archive"
         bin="$(pwd)/binaryen-version_117/bin"
         if [ "$RUNNER_PLATFORM" = Windows ]; then bin=$(cygpath -w "$bin"); fi
