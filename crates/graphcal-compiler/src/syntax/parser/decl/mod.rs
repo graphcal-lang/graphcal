@@ -248,7 +248,7 @@ impl Parser<'_> {
         attributes: Vec<Attribute>,
         prefix_span: Option<Span>,
     ) -> Result<Declaration, ParseError> {
-        let header = self.parse_slot_header_tail(kind, kind_span)?;
+        let header = self.parse_slot_header_tail(kind, kind_span, prefix_span)?;
 
         if self.lexer.peek() == Some(&Token::Comma) {
             // Multi-decl. Attributes are still forbidden; visibility now

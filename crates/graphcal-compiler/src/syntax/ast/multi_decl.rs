@@ -82,7 +82,7 @@ pub struct MultiDeclSlot {
     pub type_ann: TypeExpr,
     /// The slot's entry in the slot tuple `(…)`.
     pub axis: MultiSlotAxis,
-    /// Span from kind keyword through end of the type annotation.
+    /// Span from visibility prefix (or kind keyword) through end of the type annotation.
     #[fe(skip)]
     pub(crate) header_span: Span,
 }

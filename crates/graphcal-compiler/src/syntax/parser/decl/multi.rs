@@ -43,7 +43,7 @@ pub(super) struct SlotHeader {
     pub kind_span: Span,
     pub name: Spanned<DeclName>,
     pub type_ann: TypeExpr,
-    /// Span from kind keyword through end of type annotation.
+    /// Span from visibility prefix (or kind keyword) through end of type annotation.
     pub header_span: Span,
 }
 
@@ -100,11 +100,12 @@ impl Parser<'_> {
         &mut self,
         kind: SlotKind,
         kind_span: Span,
+        prefix_span: Option<Span>,
     ) -> Result<SlotHeader, ParseError> {
         let name: Spanned<DeclName> = self.parse_any_ident()?.classify();
         self.expect(Token::Colon)?;
         let type_ann = self.parse_type_expr()?;
-        let header_span = kind_span.merge(type_ann.span);
+        let header_span = prefix_span.unwrap_or(kind_span).merge(type_ann.span);
         Ok(SlotHeader {
             kind,
             kind_span,
@@ -119,7 +120,7 @@ impl Parser<'_> {
         self.expect(Token::Comma)?;
         let prefix = self.parse_visibility_prefix()?;
         let (kind, kind_span) = self.parse_slot_kind(prefix)?;
-        self.parse_slot_header_tail(kind, kind_span)
+        self.parse_slot_header_tail(kind, kind_span, prefix.span())
     }
 
     /// Parse the remainder of a multi-decl given the first slot header, the
@@ -132,8 +133,8 @@ impl Parser<'_> {
         &mut self,
         first_slot: SlotHeader,
     ) -> Result<Declaration, ParseError> {
-        // Full multi-decl surface span starts at the first slot's kind keyword.
-        let first_kind_span = first_slot.kind_span;
+        // Include the first slot's visibility prefix in the surface span.
+        let first_header_span = first_slot.header_span;
         let second_slot = self.parse_next_slot_header()?;
         let mut slots = AtLeastTwo::new(first_slot, second_slot);
         while self.lexer.peek() == Some(&Token::Comma) {
@@ -229,9 +230,9 @@ impl Parser<'_> {
         let (_, rbrace_span) = self.expect(Token::RBrace)?;
         let (_, semi_span) = self.expect(Token::Semicolon)?;
 
-        // Full multi-decl surface span: from the first slot's kind keyword
-        // through the closing `;`.
-        let surface_span = first_kind_span.merge(semi_span);
+        // Full multi-decl surface span: from the first slot's visibility prefix
+        // (or kind keyword) through the closing `;`.
+        let surface_span = first_header_span.merge(semi_span);
         let multi = builder.finish(surface_span, table_span.merge(rbrace_span));
 
         Ok(Declaration {
@@ -751,6 +752,37 @@ pub node a: Int[Component], node b: Int[Component]
         let multi = sole_multi_decl(&file);
         assert_eq!(multi.slots()[0].kind, SlotKind::Node(Visibility::Public));
         assert_eq!(multi.slots()[1].kind, SlotKind::Node(Visibility::Private));
+    }
+
+    #[test]
+    fn multi_decl_spans_include_slot_visibility_prefixes() {
+        let kinds = ["param", "node", "const node", "pub node", "pub const node"];
+        for first in kinds {
+            for second in kinds {
+                let first_header = format!("{first} a: Int[Component]");
+                let second_header = format!("{second} b: Int[Component]");
+                let surface = format!(
+                    "{first_header},\n{second_header}\n\
+                     = table[Component, (_, _)] {{ : _, _; A: 1, 2; }};"
+                );
+                let source = format!("// Leading comment\n{surface}\n// Trailing comment\n");
+                let file = Parser::new(&source).parse_file().unwrap();
+                let declaration = &file.declarations[0];
+                let multi = sole_multi_decl(&file);
+                let expected_span = Span::new("// Leading comment\n".len(), surface.len());
+                assert_eq!(declaration.span, expected_span);
+                assert_eq!(multi.span, expected_span);
+                for (slot, expected_header) in
+                    multi.slots().iter().zip([first_header, second_header])
+                {
+                    let span = slot.header_span;
+                    assert_eq!(
+                        &source[span.offset()..span.offset() + span.len()],
+                        expected_header
+                    );
+                }
+            }
+        }
     }
 
     #[test]
