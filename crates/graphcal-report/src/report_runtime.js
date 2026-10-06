@@ -486,25 +486,16 @@
     var draft = cloneStructured(initialDraft);
     var startingDraft = cloneStructured(initialDraft);
     var latestDefaultDraft = cloneStructured(initialDraft);
-    var rawDraft = initialBinding && typeof initialBinding.expr === "string" ? initialBinding.expr : "";
-    var startingRawDraft = rawDraft;
-    var mode = "form";
     var dirty = false;
     var sourceChanged = false;
     var pending = false;
     var pendingBinding = null;
-    var pendingMode = null;
+    // The submitted form draft; null for baseline and default submissions.
     var pendingDraft = null;
     var revision = 0;
     var pendingRevision = 0;
     var submittedRequest = null;
     var autoRunTimer = null;
-    var rawHolder = element("div", "control-raw");
-    var rawField = element("textarea", "control-raw-field");
-    rawField.setAttribute("aria-label", port.name + " complete closed value");
-    rawField.placeholder = "complete closed Graphcal value";
-    rawField.spellcheck = false;
-    rawHolder.appendChild(rawField);
 
     var control = {
       name: port.name,
@@ -554,11 +545,9 @@
         if (!pending || submittedRequest !== id) return;
         control.currentBinding = pendingBinding;
         pending = false;
-        if (pendingMode === "form" && pendingDraft) startingDraft = cloneStructured(pendingDraft);
-        if (pendingMode === "raw") startingRawDraft = pendingDraft;
+        if (pendingDraft) startingDraft = cloneStructured(pendingDraft);
         dirty = revision !== pendingRevision;
         sourceChanged = false;
-        pendingMode = null;
         pendingDraft = null;
         submittedRequest = null;
         updateDraftStatus();
@@ -566,7 +555,6 @@
       rejectPending: function (id) {
         if (!pending || submittedRequest !== id) return;
         pending = false;
-        pendingMode = null;
         pendingDraft = null;
         submittedRequest = null;
         updateDraftStatus();
@@ -576,14 +564,11 @@
         autoRunTimer = null;
         pending = true;
         pendingBinding = initialBinding;
-        pendingMode = "baseline";
         pendingDraft = null;
         pendingRevision = revision;
         submittedRequest = null;
         draft = cloneStructured(initialDraft);
         startingDraft = cloneStructured(initialDraft);
-        rawDraft = initialBinding && typeof initialBinding.expr === "string" ? initialBinding.expr : "";
-        startingRawDraft = rawDraft;
         dirty = false;
         sourceChanged = false;
         render();
@@ -593,7 +578,6 @@
         autoRunTimer = null;
         if (sourceChanged && control.currentBinding === null) startingDraft = cloneStructured(latestDefaultDraft);
         draft = cloneStructured(startingDraft);
-        rawDraft = startingRawDraft;
         dirty = false;
         sourceChanged = false;
         control.setError("");
@@ -653,54 +637,20 @@
     function render() {
       editorHolder.replaceChildren();
       appendStructuredEditor(editorHolder, port, port.schema, draft, editDraft, port.name, true, []);
-      rawField.value = rawDraft;
-      editorHolder.hidden = mode !== "form";
-      rawHolder.hidden = mode !== "raw";
       updateDraftStatus();
       if (workspace && holder.isConnected) workspace.refresh();
     }
 
     var isStructured = port.schema.kind === "algebraic" || port.schema.kind === "indexed";
-    if (isStructured) {
-      var modes = element("div", "control-modes");
-      var formMode = element("button", "control-mode control-mode--active", "Form");
-      var rawMode = element("button", "control-mode", "Raw literal");
-      formMode.type = "button";
-      rawMode.type = "button";
-      formMode.addEventListener("click", function () {
-        mode = "form";
-        formMode.className = "control-mode control-mode--active";
-        rawMode.className = "control-mode";
-        render();
-      });
-      rawMode.addEventListener("click", function () {
-        mode = "raw";
-        rawMode.className = "control-mode control-mode--active";
-        formMode.className = "control-mode";
-        render();
-      });
-      modes.appendChild(formMode);
-      modes.appendChild(rawMode);
-      holder.appendChild(modes);
-    }
-    rawField.addEventListener("input", function () {
-      rawDraft = rawField.value;
-      editDraft();
-    });
     render();
     holder.appendChild(editorHolder);
-    holder.appendChild(rawHolder);
     holder.appendChild(element(
       "p",
       "control-snapshot-note",
       "Each run overrides the whole parameter, including unchanged fields.",
     ));
     function submitDraft(reportIncomplete) {
-      var incomplete = mode === "form"
-        ? incompleteDraft(draft, [])
-        : rawDraft.trim()
-          ? null
-          : { path: [], message: "Enter a complete closed value before applying." };
+      var incomplete = incompleteDraft(draft, []);
       if (incomplete) {
         if (reportIncomplete) control.setError(incomplete.message, incomplete.path);
         updateDraftStatus();
@@ -710,13 +660,12 @@
       if (autoRunTimer) clearTimeout(autoRunTimer);
       autoRunTimer = null;
       pending = true;
-      pendingMode = mode;
-      pendingDraft = mode === "form" ? cloneStructured(draft) : rawDraft;
+      pendingDraft = cloneStructured(draft);
       pendingRevision = revision;
       submittedRequest = null;
-      pendingBinding = mode === "form" && isStructured
+      pendingBinding = isStructured
         ? { name: port.name, value: cloneStructured(pendingDraft) }
-        : { name: port.name, expr: mode === "form" ? pendingDraft.expr : pendingDraft };
+        : { name: port.name, expr: pendingDraft.expr };
       updateDraftStatus();
       scheduleEvaluate();
     }
@@ -738,7 +687,6 @@
         autoRunTimer = null;
         pending = true;
         pendingBinding = null;
-        pendingMode = "default";
         pendingDraft = null;
         pendingRevision = revision;
         submittedRequest = null;

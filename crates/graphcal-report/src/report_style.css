@@ -167,24 +167,22 @@ footer#provenance h2 { font-size: 0.95rem; margin-top: 0; }
 .apply-all:disabled { cursor: default; color: var(--faint); background: transparent; border-color: var(--line); font-weight: 500; }
 .card--interactive > .value-scroll { max-height: 3rem; font-size: 0.78rem; }
 .control { margin-top: 0.5rem; display: flex; flex-direction: column; gap: 0.3rem; }
-.control-field, .control-raw-field { font: inherit; font-family: var(--font-mono); font-size: 0.88rem; font-variant-numeric: tabular-nums; padding: 0.3rem 0.5rem; border: 1px solid var(--line-strong); border-radius: var(--radius-sm); width: 100%; background: var(--paper); }
-.control-field:focus, .control-raw-field:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+.control-field { font: inherit; font-family: var(--font-mono); font-size: 0.88rem; font-variant-numeric: tabular-nums; padding: 0.3rem 0.5rem; border: 1px solid var(--line-strong); border-radius: var(--radius-sm); width: 100%; background: var(--paper); }
+.control-field:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
 .control-slider { width: 100%; accent-color: var(--accent); }
 .control-select { font: inherit; font-size: 0.88rem; padding: 0.3rem 0.4rem; border: 1px solid var(--line-strong); border-radius: var(--radius-sm); background: var(--paper); }
 .control-toggle { font-size: 0.88rem; }
 .control-toggle input { accent-color: var(--accent); }
 .control-editor, .control-structure, .control-indexed { display: flex; flex-direction: column; gap: 0.4rem; min-width: 0; }
-.control-editor, .control-raw { max-height: min(14rem, 35vh); overflow: auto; overscroll-behavior: contain; padding-right: 0.15rem; }
+.control-editor { max-height: min(14rem, 35vh); overflow: auto; overscroll-behavior: contain; padding-right: 0.15rem; }
 .control-constructor { align-self: flex-start; min-width: 10rem; }
 .control-fieldset { min-width: 0; margin: 0; padding: 0.45rem 0.55rem 0.55rem; border: 1px solid var(--line); border-radius: var(--radius-sm); }
 .control-legend { padding: 0 0.25rem; color: var(--muted); font: 0.76rem var(--font-mono); }
 .control-index-entry { background: color-mix(in srgb, var(--panel) 75%, transparent); }
-.control-actions, .control-modes { display: flex; flex-wrap: wrap; gap: 0.35rem; align-items: center; }
-.control-actions button, .control-mode, .control-more { font: inherit; font-size: 0.82rem; border: 1px solid var(--line-strong); background: var(--paper); border-radius: var(--radius-sm); padding: 0.22rem 0.6rem; cursor: pointer; }
-.control-actions button:hover, .control-mode:hover, .control-more:hover { border-color: var(--accent); }
+.control-actions { display: flex; flex-wrap: wrap; gap: 0.35rem; align-items: center; }
+.control-actions button, .control-more { font: inherit; font-size: 0.82rem; border: 1px solid var(--line-strong); background: var(--paper); border-radius: var(--radius-sm); padding: 0.22rem 0.6rem; cursor: pointer; }
+.control-actions button:hover, .control-more:hover { border-color: var(--accent); }
 .control-apply { color: var(--accent-ink); background: var(--accent) !important; border-color: var(--accent) !important; font-weight: 600; }
-.control-mode--active { border-color: var(--accent); color: var(--accent); font-weight: 600; }
-.control-raw-field { min-height: 5rem; resize: vertical; }
 .control-snapshot-note, .control-draft-status { margin: 0; color: var(--muted); font-size: 0.75rem; }
 .control-draft-status { color: var(--warn); }
 .control-error { margin: 0; color: var(--fail); font-size: 0.8rem; }
@@ -432,7 +430,7 @@ figcaption > .workspace-output-pin { position: static; margin: -0.25rem 0 0 auto
   .outline-error { grid-column: 1 / -1; grid-row: 6; }
   .outline-group-body { padding: 0 0.2rem; }
   /* 16px fields avoid iOS focus zoom; full-width rows leave room for explicit units. */
-  .outline-value, .outline-search, .control-field, .control-select, .control-raw-field { font-size: 1rem; min-height: 2.75rem; max-width: 100%; }
+  .outline-value, .outline-search, .control-field, .control-select { font-size: 1rem; min-height: 2.75rem; max-width: 100%; }
   .control-constructor { min-width: 0; }
   .outline-value[type=checkbox] { min-height: 1.5rem; width: 1.5rem; height: 1.5rem; margin: 0.5rem; }
   button, .outline-row-actions > summary, .outline-group > summary, .workspace-output-details > summary, .report-nav a { min-height: 2.75rem; }

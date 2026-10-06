@@ -280,20 +280,6 @@ console.log("structured controls: constructor drafts, nested fields and fixed-ax
 }
 console.log("recursive controls: finite schema graph and deep edits passed");
 
-{
-  const run = runtime(`pub type Choice { Amount(value: Dimensionless), Off, }
-    param choice: Choice = Off;`);
-  run.descendants(run.cards.get("choice")).find(child => child.textContent === "Raw literal").events.click();
-  const raw = run.descendants(run.cards.get("choice")).find(child => child.className === "control-raw-field");
-  raw.value = "Amount(value: 6.0)";
-  raw.events.input();
-  assert.deepEqual(run.bindings(), [], "raw edits remain unapplied");
-  run.apply("choice");
-  assert.equal(value(run.evaluate(), "choice").type_name, "Amount");
-  run.prepared.free();
-}
-console.log("structured controls: raw mode preserves explicit apply semantics");
-
 const vegaContext = { console, structuredClone };
 runInNewContext(readFileSync("crates/graphcal-report/assets/vega.min.js", "utf8"), vegaContext);
 runInNewContext(readFileSync("crates/graphcal-report/assets/vega-lite.min.js", "utf8"), vegaContext);

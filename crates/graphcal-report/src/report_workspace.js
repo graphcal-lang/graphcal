@@ -1,6 +1,6 @@
 // Adaptive report workspace: DOM shell over explicitly registered typed controls.
-// The original controls remain the advanced form/raw surface. Both presentations
-// use the same handlers and draft lifecycle; this module never creates bindings.
+// The typed controls stay mounted but hidden; outline rows mirror their widgets
+// and reuse the same handlers and draft lifecycle. This module never creates bindings.
 (function (global) {
   "use strict";
   var SEARCH_FIELD_LIMIT = 4096;
@@ -248,7 +248,7 @@
         cached.widget.checked = field.widget.checked;
         cached.widget.indeterminate = field.widget.indeterminate;
       } else if (cached.widget.value !== field.widget.value) {
-        // The native draft is authoritative, including reset/default/raw changes
+        // The native draft is authoritative, including reset and default changes
         // while a mirrored field still has focus (notably on Safari buttons).
         var start = cached.widget.selectionStart;
         var end = cached.widget.selectionEnd;
