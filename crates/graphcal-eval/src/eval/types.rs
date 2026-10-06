@@ -985,6 +985,8 @@ pub use graphcal_compiler::plot_props::{
 /// A single evaluated plot specification.
 #[derive(Debug, Clone)]
 pub struct PlotSpec {
+    /// Documentation from the producing declaration, independent of its output alias.
+    pub doc: Option<String>,
     /// The plot declaration name.
     pub name: ScopedName,
     /// The mark type (point, line, bar, area, rect, tick).
@@ -1008,6 +1010,8 @@ pub struct PlotSpec {
 /// A single evaluated figure specification.
 #[derive(Debug, Clone)]
 pub struct FigureSpec {
+    /// Documentation from the producing declaration, independent of its output alias.
+    pub doc: Option<String>,
     /// The figure declaration name.
     pub name: ScopedName,
     /// The plot names referenced by this figure.
@@ -1019,6 +1023,8 @@ pub struct FigureSpec {
 /// A single evaluated layer specification.
 #[derive(Debug, Clone)]
 pub struct LayerSpec {
+    /// Documentation from the producing declaration, independent of its output alias.
+    pub doc: Option<String>,
     /// The layer declaration name.
     pub name: ScopedName,
     /// The plot names to overlay in this layer.

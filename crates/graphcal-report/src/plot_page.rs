@@ -114,6 +114,7 @@ mod tests {
     #[test]
     fn script_close_sequence_in_title_is_escaped() {
         let rendered = vec![RenderedFigure {
+            doc: None,
             name: "legitimate title".to_string(),
             spec: json!({"title": "</script><script>alert(1)</script>"}),
         }];
@@ -137,6 +138,7 @@ mod tests {
     #[test]
     fn inline_page_embeds_vega_and_references_no_cdn() {
         let rendered = vec![RenderedFigure {
+            doc: None,
             name: "p".to_string(),
             spec: json!({"mark": "line"}),
         }];

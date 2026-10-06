@@ -114,7 +114,13 @@ pub(super) fn evaluate_root_plots(
     for plot in &root_plots {
         let name = ScopedName::local(plot.name.clone());
         match evaluate_plot(plot.unit, plot.entry, evaluated, ctx) {
-            Ok(evaluated) => plots.push(evaluated.into_spec(name, plot.visibility)),
+            Ok(evaluated) => {
+                plots.push(evaluated.into_spec(
+                    name,
+                    plot.visibility,
+                    plot.entry.get().doc.clone(),
+                ));
+            }
             Err(PlotEvaluationError::Unavailable(reason)) => {
                 plot_errors.push(PlotError {
                     name,
@@ -149,6 +155,7 @@ pub(super) fn evaluate_root_plots(
                     &figure.get().plot_names,
                 )?
                 .map(|composed| FigureSpec {
+                    doc: figure.get().doc.clone(),
                     name: ScopedName::local(name.clone()),
                     plot_names: composed.plot_names,
                     properties: composed.properties,
@@ -173,6 +180,7 @@ pub(super) fn evaluate_root_plots(
                     &layer.get().plot_names,
                 )?
                 .map(|composed| LayerSpec {
+                    doc: layer.get().doc.clone(),
                     name: ScopedName::local(name.clone()),
                     plot_names: composed.plot_names,
                     properties: composed.properties,
@@ -351,8 +359,14 @@ struct EvaluatedPlot {
 
 impl EvaluatedPlot {
     /// The plot as the root reports it, under `name`.
-    fn into_spec(self, name: ScopedName, visibility: PlotVisibility) -> PlotSpec {
+    fn into_spec(
+        self,
+        name: ScopedName,
+        visibility: PlotVisibility,
+        doc: Option<String>,
+    ) -> PlotSpec {
         PlotSpec {
+            doc,
             name,
             mark_type: self.mark_type,
             encodings: self.encodings,

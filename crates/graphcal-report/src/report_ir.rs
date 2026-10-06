@@ -189,7 +189,7 @@ pub fn build_report(inputs: ReportInputs<'_>) -> Result<ReportDocument, ReportBu
         .map(|mut figure| {
             crate::vega::add_pan_zoom(&mut figure.spec);
             FigureCard {
-                doc: inputs.docs.get(&figure.name).cloned(),
+                doc: figure.doc.take(),
                 figure,
             }
         })

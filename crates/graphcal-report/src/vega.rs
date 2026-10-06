@@ -20,6 +20,8 @@ const MIN_HORIZONTAL_LABEL_STEP_PX: f64 = 64.0;
 
 /// A rendered figure ready for output.
 pub struct RenderedFigure {
+    /// Caption from the plot, figure, or layer declaration.
+    pub(crate) doc: Option<String>,
     /// The figure name (used for JSON output and HTML div IDs).
     pub name: String,
     /// The Vega-Lite spec as a JSON value.
@@ -84,6 +86,7 @@ pub fn build_figures(
             PlotVisibility::CompositionOnly => continue,
         }
         result.push(RenderedFigure {
+            doc: spec.doc.clone(),
             name: spec.name.to_string(),
             spec: build_single_spec(spec),
         });
@@ -92,6 +95,7 @@ pub fn build_figures(
     // Combined figures from figure specs
     for fig in figures {
         result.push(RenderedFigure {
+            doc: fig.doc.clone(),
             name: fig.name.to_string(),
             spec: build_figure_spec(fig, plots)?,
         });
@@ -100,6 +104,7 @@ pub fn build_figures(
     // Layered figures from layer specs
     for layer in layers {
         result.push(RenderedFigure {
+            doc: layer.doc.clone(),
             name: layer.name.to_string(),
             spec: build_layer_spec(layer, plots)?,
         });

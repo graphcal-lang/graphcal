@@ -322,6 +322,7 @@ impl UnfrozenIR {
                             })
                             .collect::<Result<Vec<_>, SemanticError>>()?;
                         Decl::Plot(PlotEntry {
+                            doc: entry.doc,
                             body: LoweredPlotBody {
                                 encodings,
                                 mark_properties: lower_mark_fields(
@@ -339,6 +340,7 @@ impl UnfrozenIR {
                         })
                     }
                     Decl::Figure(entry) => Decl::Figure(FigureEntry {
+                        doc: entry.doc,
                         fields: lower_composition_fields(
                             &entry.fields,
                             PlotPropertyContext::FigureDeclaration,
@@ -347,6 +349,7 @@ impl UnfrozenIR {
                         plot_names: entry.plot_names,
                     }),
                     Decl::Layer(entry) => Decl::Layer(LayerEntry {
+                        doc: entry.doc,
                         fields: lower_composition_fields(
                             &entry.fields,
                             PlotPropertyContext::LayerDeclaration,

@@ -68,6 +68,7 @@ fn assertion(spelling: &str) -> Decl<Bare> {
 
 fn plot(spelling: &str) -> Decl<Bare> {
     Decl::Plot(PlotEntry {
+        doc: None,
         identity: ResolvedDeclName::for_test(owner(), name(spelling)),
         mark_type: MarkType::Line,
         body: (),
