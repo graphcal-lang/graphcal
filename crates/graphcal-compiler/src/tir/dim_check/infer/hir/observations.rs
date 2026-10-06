@@ -205,11 +205,13 @@ impl BodyObservations {
                 constructor,
                 constructor_matches,
                 extern_signature,
+                dag_call_output,
             } => self.typed.borrow_mut().record_value(
                 expr,
                 checked_type,
                 &NodeFacts {
                     constructor: constructor.as_deref(),
+                    dag_call_output: dag_call_output.as_deref(),
                     extern_signature: extern_signature.as_deref(),
                     constructor_matches: &constructor_matches,
                     static_indexes: &static_indexes,
@@ -346,6 +348,18 @@ impl BodyObservations {
                 constructor: constructor.map(Box::new),
                 constructor_matches,
                 extern_signature,
+                dag_call_output: match expr.kind() {
+                    ExprKind::DagCall {
+                        target,
+                        output_name,
+                        ..
+                    } => tir
+                        .dag(&target.value)
+                        .and_then(|callee| callee.output_identity(output_name))
+                        .cloned()
+                        .map(Box::new),
+                    _ => None,
+                },
             },
             src,
         )
@@ -360,5 +374,6 @@ enum CheckedNode {
         constructor: Option<Box<ConstructorApplication<Symbolic>>>,
         constructor_matches: HashMap<ResolvedConstructorName, ConstructorMatch>,
         extern_signature: Option<Box<ExternSignature>>,
+        dag_call_output: Option<Box<crate::resolved_name::ResolvedDeclName>>,
     },
 }

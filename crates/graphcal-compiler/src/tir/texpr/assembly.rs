@@ -57,6 +57,8 @@ pub enum AssemblyError {
     UnappliedApplication(ExprId),
     #[error("a constructor arm of match {0:?} has no checked target")]
     MissingMatchTarget(ExprId),
+    #[error("DAG call {0:?} has no checked output")]
+    MissingDagOutput(ExprId),
     #[error("a static position of {0:?} belongs to none of its selectors")]
     UnplacedStaticPosition(ExprId),
     #[error("expression {0:?} has no operation for its checked operand types")]
@@ -68,6 +70,8 @@ pub enum AssemblyError {
 /// The node-specific facts checking established for one value expression.
 pub struct NodeFacts<'a> {
     pub constructor: Option<&'a ConstructorApplication<Symbolic>>,
+    /// The checked body-local output identity of a DAG call.
+    pub dag_call_output: Option<&'a crate::resolved_name::ResolvedDeclName>,
     /// The declared signature of the plugin function a call node calls.
     pub extern_signature: Option<&'a ExternSignature>,
     pub constructor_matches: &'a HashMap<ResolvedConstructorName, ConstructorMatch>,
@@ -437,6 +441,7 @@ impl PendingNodes {
                 args,
                 static_bindings,
                 output,
+                ..
             } => TExprKind::DagCall {
                 slot: self.calls.intern(target.value.clone()),
                 args: args
@@ -449,7 +454,13 @@ impl PendingNodes {
                     })
                     .collect::<Result<_, AssemblyError>>()?,
                 static_bindings: static_bindings.clone(),
-                output: output.clone(),
+                output: crate::syntax::span::Spanned::new(
+                    facts
+                        .dag_call_output
+                        .ok_or_else(|| AssemblyError::MissingDagOutput(id()))?
+                        .clone(),
+                    output.span,
+                ),
             },
         };
         if positions.all_placed() {

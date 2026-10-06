@@ -294,6 +294,7 @@ where
             target,
             args,
             static_bindings,
+            output_name,
             output,
         } => ExprKind::DagCall {
             target,
@@ -307,6 +308,7 @@ where
                 })
                 .collect::<Result<_, _>>()?,
             static_bindings,
+            output_name,
             output,
         },
     })
