@@ -564,8 +564,9 @@ Algebraic values provide a constructor selector and recursively render each
 constructor field; fixed-axis indexed values render every entry recursively,
 in pages for larger axes. Leaf controls continue to accept closed literals, so
 quantities, exact integers, keys, datetimes, and nested combinations retain
-their checked types and units. **Raw literal** remains available for advanced
-whole-value input. Readers bind closed typed values under the same rules as
+their checked types and units. Each quantity field shows its canonical SI unit
+(for example, `[kg]`) as a dimension cue; any unit of that dimension is accepted,
+but a slider can only place values written in that unit. Readers bind closed typed values under the same rules as
 `eval --param` — wrong or missing units are rejected at the exact nested field
 or entry, values must satisfy declared domains, and expressions are never
 injected into the prepared model. **Auto run** is enabled by default: after a
@@ -594,26 +595,28 @@ Wide plots retain their authored dimensions and scroll within their own
 keyboard-focusable region rather than widening the page. Scalars and one-field
 records are directly editable rows; small records start expanded, and larger
 structures can be opened as needed. **Search inputs** matches names, field
-paths, and parameter descriptions, revealing matching branches. Stars pin
-editable inputs with their full paths; **Pinned only** hides other inputs.
+paths, and parameter descriptions, revealing matching branches. The pin button
+keeps editable inputs at the top with their full paths; **Pinned only** hides other inputs.
 Pins belong to the current browser session, not the source or shared bindings,
 and nested pins stay associated with their constructor rather than transferring
 to another constructor's same-named field.
 
 Each row's **⋯** menu offers **Apply**, **Discard edits**, and **Use default**
 when available. These actions affect the **whole containing parameter**, not
-just that row. **Advanced controls** exposes parameter metadata, bounded
-sliders, the original recursive form, and **Raw literal** entry; returning to
-the outline retains the draft. Indexed editors initially mount 32 entries per
+just that row. Rows also show each parameter's description, declared range,
+and a slider for bounded values. Indexed editors initially mount 32 entries per
 axis while retaining the complete draft. **Show more entries** exposes more;
 search also loads further pages from currently selected constructors, stopping
 after 128 additional pages or once 4096 fields are loaded. A notice identifies
 limited searches; use **Show more entries** to continue. Inactive constructor
 fields are not searched.
 
-Result tabs switch between values, plots, checks, diagnostics when present,
-and provenance. Pin outputs to keep them visible across tabs and name filters.
-Structured output cards start collapsed; choose **View value** to inspect them.
+The report header summarizes check results, overridden inputs (with **Reset**),
+and whether the results are up to date. Result tabs switch between values,
+plots, checks, diagnostics when present, and provenance, and show their counts.
+Pin values, plots, and checks to keep them in the resizable pinned area above
+the tabs, visible across tabs and name filters. Small structured values are
+shown in place; larger ones start collapsed under a summary of their shape.
 Focus
 a result region and use the arrow keys to inspect overflowing columns.
 Recalculation retains the

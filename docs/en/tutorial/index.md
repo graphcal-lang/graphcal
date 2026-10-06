@@ -39,17 +39,15 @@ a constructor selector with recursive field controls, and fixed-axis indexed
 parameters expose every entry; changing a control does not edit the source.
 **Auto run** is enabled by default and validates a complete parameter after a
 short pause in editing. Turn it off to keep drafts unapplied until **Apply** is
-selected. **Discard edits** restores the accepted snapshot, while **Raw literal**
-keeps advanced whole-value entry available. Invalid inputs show errors and leave
-the last successful results visible.
+selected. **Discard edits** restores the accepted snapshot. Invalid inputs show
+errors and leave the last successful results visible.
 
 The adaptive input outline shows scalars and one-field records as editable
 rows, with larger structures expandable on demand. Search names, paths, or
-parameter descriptions, and star frequently used inputs to pin editable rows.
-The **⋯** menu applies or discards the whole containing parameter.
-**Advanced controls** provides metadata, sliders, and raw entry. On desktop,
-results scroll independently; their tabs and output pins keep useful values in
-view while you edit. On mobile, the report uses normal page scrolling with
+parameter descriptions, and pin frequently used inputs to keep them at the top.
+The **⋯** menu applies or discards the whole containing parameter. On desktop,
+results scroll independently, and pinned values, plots, and checks stay in view
+while you edit. On mobile, the report uses normal page scrolling with
 larger input controls. Sticky **Inputs** and **Results** buttons jump between
 sections without losing edits; wide tables and plots scroll locally rather
 than widening the page. Pins are session-only and are not included in shared links.
