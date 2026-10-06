@@ -1636,6 +1636,38 @@ param      duty:  Dimensionless[Component]
 }
 
 #[test]
+fn multi_decl_slot_comments_preserve_visibility() {
+    let kinds = ["param", "node", "const node", "pub node", "pub const node"];
+    let comments = ["/// Second column.", "// Second column."];
+    for first in kinds {
+        for second in kinds {
+            for comment in comments {
+                let source = format!(
+                    "pub index Part = {{ A, B }};
+
+{first} a: Mass[Part],
+{comment}
+{second} b: Length[Part]
+  = table[Part, (_, _)] {{
+      : _, _;
+      A: 1.0 kg, 2.0 m;
+      B: 3.0 kg, 4.0 m;
+  }};
+"
+                );
+                let formatted = format_source(&source).unwrap_or_else(|error| {
+                    panic!("failed for {first} / {second} with {comment}: {error}")
+                });
+                // Internal comments currently use the verbatim fallback. It must
+                // preserve the complete declaration, including the leading pub.
+                assert_eq!(formatted, source);
+                assert_eq!(format_source(&formatted).unwrap(), formatted);
+            }
+        }
+    }
+}
+
+#[test]
 fn multi_decl_inside_dag_body_is_nested() {
     let source = "\
 index Component = { A, B };
