@@ -54,6 +54,7 @@ impl SlotHeader {
             name: self.name,
             type_ann: self.type_ann,
             axis,
+            doc: None,
             header_span: self.header_span,
         }
     }
