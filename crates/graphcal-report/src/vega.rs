@@ -21,7 +21,7 @@ const MIN_HORIZONTAL_LABEL_STEP_PX: f64 = 64.0;
 /// A rendered figure ready for output.
 pub struct RenderedFigure {
     /// Caption from the plot, figure, or layer declaration.
-    pub doc: Option<String>,
+    pub(crate) doc: Option<String>,
     /// The figure name (used for JSON output and HTML div IDs).
     pub name: String,
     /// The Vega-Lite spec as a JSON value.
