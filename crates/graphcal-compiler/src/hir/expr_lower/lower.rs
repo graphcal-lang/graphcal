@@ -537,6 +537,7 @@ impl ExprLowerer<'_> {
                     target: Spanned::new(target, path.span()),
                     args: lowered_args,
                     static_bindings,
+                    output_name: output.value.clone(),
                     output: Spanned::new(lowered_output, output.span),
                 }
             }

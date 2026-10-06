@@ -928,6 +928,16 @@ impl DagTIR {
         &self.projectable_outputs
     }
 
+    /// The body-local value identity bound to a source-facing output name.
+    ///
+    /// Unlike module re-export resolution, this preserves synthesized include
+    /// aliases, whose bodies read the correct instance in this DAG's frame.
+    pub(crate) fn output_identity(&self, name: &DeclName) -> Option<&ResolvedDeclName> {
+        self.semantic
+            .decl_bindings
+            .get(&ScopedName::local(name.clone()))
+    }
+
     /// The checked type annotation of one of this DAG's value declarations.
     fn value_decl_annotation(&self, key: &ResolvedDeclName) -> Option<&CheckedTypeAnnotation> {
         match self.decls.get(key)? {

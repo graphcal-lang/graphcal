@@ -223,6 +223,26 @@ node repeated_call: Length = @renamed(x: 4.0 m)::answer;
 }
 
 #[test]
+fn dag_call_include_reexport_preserves_static_specialization() {
+    let result = compile_and_eval(
+        r"
+dag identity {
+    pub(bind) dim Measure;
+    param x: Measure;
+    pub node y: Measure = @x;
+}
+dag facade {
+    param x: Length;
+    include identity(dim Measure: Length, x: @x)::{ pub y as answer };
+}
+node result: Length = @facade(x: 3.0 m)::answer;
+",
+    )
+    .expect("re-exported DAG call outputs must retain Static specialization");
+    assert!((value_for(&result, "result").si_value().unwrap().get() - 3.0).abs() < 1e-9);
+}
+
+#[test]
 fn reexported_assertions_and_plots_keep_pure_import_rejections() {
     let files = [
         (

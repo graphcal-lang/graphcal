@@ -175,8 +175,11 @@ impl Infer<'_> {
                 target,
                 args,
                 static_bindings,
+                output_name,
                 output,
-            } => self.infer_hir_dag_call(expr, target, args, static_bindings, output)?,
+            } => {
+                self.infer_hir_dag_call(expr, target, args, static_bindings, output_name, output)?
+            }
         };
         self.control.observations().record(
             expr,

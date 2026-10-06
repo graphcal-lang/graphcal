@@ -127,7 +127,7 @@ impl DiagnosticKind for GraphError {
             Self::UnknownDag { .. } => Some("the inline call references a dag that is not declared in this file".to_owned()),
             Self::UnknownDagParam { .. } => Some("the binding name must match a `param` declared in the called DAG".to_owned()),
             Self::MissingDagBindings { .. } => Some("every required `param` declared in the DAG must be bound at each `include` or call site".to_owned()),
-            Self::UnknownDagOutput { .. } => Some("the projection after `).` must name a param input port or an explicitly exported node in the called DAG".to_owned()),
+            Self::UnknownDagOutput { .. } => Some("the projection after `)::` must name a param input port, an explicitly exported node, or a public include-output alias in the called DAG".to_owned()),
             Self::DagArgTypeMismatch { .. } => Some("the binding expression must have the same type as the DAG's param declaration".to_owned()),
             Self::InlineDagTargetNotFound { .. }
             | Self::RecursiveDagInstantiation { .. }=> None,

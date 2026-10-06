@@ -446,6 +446,8 @@ pub enum ExprKind<C: Completeness = Strict> {
         /// The call's Static bindings: the same canonical substitution an
         /// include applies to its template.
         static_bindings: crate::ir::static_substitution::StaticSubstitution,
+        /// Source-facing output name, retained across canonical alias resolution.
+        output_name: crate::syntax::decl_name::DeclName,
         output: Spanned<ResolvedDeclName>,
     },
 }

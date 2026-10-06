@@ -1591,6 +1591,31 @@ param event: Datetime<TT>(
     }
 
     #[test]
+    fn dag_call_include_reexport_diagnostics_reach_lsp_clients() {
+        let library = "dag double { param x: Length; pub node y: Length = @x * 2.0; }\n\
+                       dag facade { param x: Length; include double(x: @x)::{ pub y as answer }; }\n";
+        let valid = format!("{library}node result: Length = @facade(x: 1.0 m)::answer;\n");
+        let diagnostics = produce_diagnostics(&valid, "reexport_call.gcl");
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+
+        let wrong_type = format!("{library}node result: Time = @facade(x: 1.0 m)::answer;\n");
+        let diagnostics = produce_diagnostics(&wrong_type, "reexport_call.gcl");
+        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+        assert_eq!(diagnostics[0].severity, Some(DiagnosticSeverity::ERROR));
+
+        let private = valid.replace("pub y as answer", "y as answer");
+        let diagnostics = produce_diagnostics(&private, "reexport_call.gcl");
+        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+        assert!(
+            matches!(
+                diagnostics[0].code.as_ref(),
+                Some(NumberOrString::String(code)) if code == "graphcal::V001"
+            ),
+            "{diagnostics:?}"
+        );
+    }
+
+    #[test]
     fn include_projection_policy_diagnostics_reach_lsp_clients() {
         for (source, expected) in [
             (

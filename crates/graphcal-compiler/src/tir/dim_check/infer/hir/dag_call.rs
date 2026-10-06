@@ -24,6 +24,7 @@ impl Infer<'_> {
         target: &crate::syntax::span::Spanned<crate::dag_id::DagId>,
         args: &[ParamBinding],
         static_bindings: &StaticSubstitution,
+        output_name: &crate::syntax::decl_name::DeclName,
         output: &crate::syntax::span::Spanned<ResolvedDeclName>,
     ) -> Result<CheckedType<Symbolic>, Outcome<SemanticError>> {
         let dag_tir = self.env.tir.dag(&target.value).ok_or_else(|| {
@@ -53,14 +54,6 @@ impl Infer<'_> {
                 (key, param.type_ann.checked().resolved())
             })
             .collect();
-        let node_decl_types_by_key: HashMap<
-            ResolvedDeclName,
-            &crate::tir::typed::ResolvedDeclType,
-        > = dag_tir
-            .nodes()
-            .map(|node| (node.identity(), node.type_ann.checked().resolved()))
-            .collect();
-
         let mut bound_resolved_names: std::collections::HashSet<ResolvedDeclName> =
             std::collections::HashSet::with_capacity(args.len());
         for binding in args {
@@ -115,29 +108,28 @@ impl Infer<'_> {
             .into());
         }
 
-        let output_key = &output.value;
-        let output_decl = node_decl_types_by_key
-            .get(output_key)
-            .or_else(|| param_decl_types_by_key.get(output_key))
+        // Module resolution follows re-exports to their producer. Calls read
+        // the called body's alias instead, in that body's instance frame.
+        let output_decl = dag_tir
+            .output_identity(output_name)
+            .and_then(|identity| self.env.tir.decl_type(identity))
+            .map(crate::tir::typed::CheckedDeclType::resolved)
             .ok_or_else(|| {
                 SemanticError::located(
                     self.env.src,
                     output.span,
                     GraphError::UnknownDagOutput {
-                        name: output_key.to_unowned_def_name(),
+                        name: output_name.clone(),
                         dag_name: target.value.clone(),
                     },
                 )
             })?;
-        if !dag_tir
-            .projectable_outputs
-            .contains(&output_key.to_unowned_def_name())
-        {
+        if !dag_tir.projectable_outputs.contains(output_name) {
             return Err(SemanticError::located(
                 self.env.src,
                 output.span,
                 VisibilityError::ImportPrivateItem {
-                    name: output_key.atom().clone(),
+                    name: output_name.atom().clone(),
                     file_path: DagReference::Dag(target.value.clone()),
                 },
             )
