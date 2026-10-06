@@ -4957,11 +4957,11 @@ fn eval_plot_display_units_scale_scalar_and_indexed_data() {
     assert_eq!(values[0]["color"].as_f64(), Some(3.0));
     assert_eq!(values[1]["color"].as_f64(), Some(3.0));
     assert_eq!(
-        spec["encoding"]["x"]["axis"]["title"].as_str(),
+        spec["encoding"]["x"]["title"].as_str(),
         Some("Velocity (km/h)")
     );
     assert_eq!(
-        spec["encoding"]["y"]["axis"]["title"].as_str(),
+        spec["encoding"]["y"]["title"].as_str(),
         Some("Custom distance"),
         "an explicit label must not change the converted y data"
     );
@@ -5022,7 +5022,7 @@ fn eval_plot_display_units_resolve_imported_declarations() {
     assert_eq!(values[0]["x"].as_f64(), Some(36.0));
     assert_eq!(values[1]["x"].as_f64(), Some(72.0));
     assert_eq!(
-        spec["encoding"]["x"]["axis"]["title"].as_str(),
+        spec["encoding"]["x"]["title"].as_str(),
         Some("Velocity (data::display_speed)")
     );
 }

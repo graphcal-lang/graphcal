@@ -5,9 +5,18 @@ use graphcal_compiler::syntax::ast::{EncodingChannel, MarkType};
 use graphcal_compiler::syntax::module_name::ScopedName;
 use graphcal_eval::eval::{
     AxisMeta, CompositionProperty, FigureSpec, LayerSpec, PlotFieldValue, PlotProperty, PlotSpec,
+    PropertyValue,
 };
 use serde_json::{Value as JsonValue, json};
 use thiserror::Error;
+
+/// The narrowest band, in pixels, in which a nominal x label stays
+/// horizontal.
+///
+/// Vega-Lite rotates nominal x labels vertically by default. When a view
+/// with an explicit width gives every distinct label at least this much
+/// room, the labels are kept horizontal instead.
+const MIN_HORIZONTAL_LABEL_STEP_PX: f64 = 64.0;
 
 /// A rendered figure ready for output.
 pub struct RenderedFigure {
@@ -149,8 +158,11 @@ fn build_single_spec(spec: &PlotSpec) -> JsonValue {
     // Mark
     vl["mark"] = build_mark(spec);
 
+    // Width (also decides how the encoding lays out its x labels)
+    let width = get_number_property(&spec.properties, &PlotProperty::Width);
+
     // Encoding
-    vl["encoding"] = build_encoding(spec);
+    vl["encoding"] = build_encoding(spec, x_label_layout(x_labels(spec), width));
 
     // Title
     if let Some(title) = get_string_property(&spec.properties, &PlotProperty::Title) {
@@ -158,7 +170,7 @@ fn build_single_spec(spec: &PlotSpec) -> JsonValue {
     }
 
     // Width/height
-    if let Some(w) = get_number_property(&spec.properties, &PlotProperty::Width) {
+    if let Some(w) = width {
         vl["width"] = json!(w);
     }
     if let Some(h) = get_number_property(&spec.properties, &PlotProperty::Height) {
@@ -227,6 +239,10 @@ fn build_layer_spec(
         all_plots,
     )?;
 
+    // The entries share one x axis, whose labels are the union of theirs.
+    let width = get_number_property(&layer.properties, &CompositionProperty::Width);
+    let label_layout = x_label_layout(referenced.iter().flat_map(|spec| x_labels(spec)), width);
+
     // Each sub-spec is a layer entry: mark + encoding + data (no $schema).
     let sub_specs: Vec<JsonValue> = referenced
         .iter()
@@ -234,7 +250,7 @@ fn build_layer_spec(
             let mut entry = json!({});
             entry["data"] = json!({ "values": build_data_values(spec) });
             entry["mark"] = build_mark(spec);
-            entry["encoding"] = build_encoding(spec);
+            entry["encoding"] = build_encoding(spec, label_layout);
             entry
         })
         .collect();
@@ -249,7 +265,7 @@ fn build_layer_spec(
     }
 
     // Width/height from layer properties
-    if let Some(w) = get_number_property(&layer.properties, &CompositionProperty::Width) {
+    if let Some(w) = width {
         vl["width"] = json!(w);
     }
     if let Some(h) = get_number_property(&layer.properties, &CompositionProperty::Height) {
@@ -308,20 +324,27 @@ fn build_mark(spec: &PlotSpec) -> JsonValue {
     mark_obj.insert("type".to_string(), json!(mark_type_str));
 
     for (prop, value) in &spec.mark_properties {
-        let json_val = match value {
-            PlotFieldValue::Number(n) => json!(n),
-            PlotFieldValue::String(s) => json!(s),
-            PlotFieldValue::Numbers(nums) if nums.len() == 1 => json!(nums[0]),
-            _ => continue,
-        };
-        mark_obj.insert(prop.vega_name().to_string(), json_val);
+        mark_obj.insert(prop.vega_name().to_string(), property_json(value));
     }
 
     JsonValue::Object(mark_obj)
 }
 
-/// Build the Vega-Lite `"encoding"` field.
-fn build_encoding(spec: &PlotSpec) -> JsonValue {
+/// The Vega-Lite JSON of an evaluated property value, keeping its type.
+///
+/// A boolean must stay a JSON boolean: Vega-Lite reads the string `"true"`
+/// (or `"false"`) for `filled` as a transparent, unstroked point.
+fn property_json(value: &PropertyValue) -> JsonValue {
+    match value {
+        PropertyValue::String(text) => json!(text),
+        PropertyValue::Number(number) => json!(number),
+        PropertyValue::Bool(flag) => json!(flag),
+    }
+}
+
+/// Build the Vega-Lite `"encoding"` field, laying out the labels of a
+/// nominal x axis as `label_layout` says.
+fn build_encoding(spec: &PlotSpec, label_layout: XLabelLayout) -> JsonValue {
     let mut encoding = serde_json::Map::new();
 
     for (channel, value) in &spec.encodings {
@@ -331,24 +354,109 @@ fn build_encoding(spec: &PlotSpec) -> JsonValue {
         ch_spec.insert("field".to_string(), json!(ch_name));
         ch_spec.insert("type".to_string(), json!(vega_type));
 
-        // Axis title: explicit x_label/y_label overrides auto-generated titles
-        let explicit_label = match channel {
-            EncodingChannel::X => get_string_property(&spec.properties, &PlotProperty::XLabel),
-            EncodingChannel::Y => get_string_property(&spec.properties, &PlotProperty::YLabel),
-            _ => None,
-        };
-        let axis_title = explicit_label.or_else(|| {
-            let meta = get_encoding_meta(spec, *channel)?;
-            format_axis_title(meta)
-        });
-        if let Some(title) = axis_title {
-            ch_spec.insert("axis".to_string(), json!({ "title": title }));
+        match value {
+            PlotFieldValue::Labels(_) => {
+                // Labels arrive in row order, which follows the declaration
+                // order of their index; Vega-Lite would sort them
+                // alphabetically, so keep the data order instead.
+                if channel_has_scale(*channel) {
+                    ch_spec.insert("sort".to_string(), JsonValue::Null);
+                }
+                if *channel == EncodingChannel::X && label_layout == XLabelLayout::Horizontal {
+                    ch_spec.insert("axis".to_string(), json!({ "labelAngle": 0 }));
+                }
+            }
+            PlotFieldValue::Numbers(_) | PlotFieldValue::Datetimes(_) => {}
         }
+
+        // Without a title, Vega-Lite would title the axis or legend with the
+        // synthetic field name (`x`, `color`, ...); `null` removes it.
+        ch_spec.insert("title".to_string(), json!(channel_title(spec, *channel)));
 
         encoding.insert(ch_name.to_string(), JsonValue::Object(ch_spec));
     }
 
     JsonValue::Object(encoding)
+}
+
+/// The title of an encoding channel: an explicit `x_label`/`y_label`,
+/// otherwise the dimension and unit of a quantity channel, otherwise none.
+fn channel_title(spec: &PlotSpec, channel: EncodingChannel) -> Option<String> {
+    let explicit_property = match channel {
+        EncodingChannel::X => Some(PlotProperty::XLabel),
+        EncodingChannel::Y => Some(PlotProperty::YLabel),
+        EncodingChannel::Color
+        | EncodingChannel::Size
+        | EncodingChannel::Shape
+        | EncodingChannel::Opacity
+        | EncodingChannel::Detail
+        | EncodingChannel::Text
+        | EncodingChannel::Tooltip => None,
+    };
+    explicit_property
+        .and_then(|property| get_string_property(&spec.properties, &property))
+        .or_else(|| get_encoding_meta(spec, channel).and_then(format_axis_title))
+}
+
+/// Whether Vega-Lite gives the channel a scale, whose domain order `sort`
+/// controls.
+const fn channel_has_scale(channel: EncodingChannel) -> bool {
+    match channel {
+        EncodingChannel::X
+        | EncodingChannel::Y
+        | EncodingChannel::Color
+        | EncodingChannel::Size
+        | EncodingChannel::Shape
+        | EncodingChannel::Opacity => true,
+        EncodingChannel::Detail | EncodingChannel::Text | EncodingChannel::Tooltip => false,
+    }
+}
+
+/// How a view lays out the labels of a nominal x axis.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum XLabelLayout {
+    /// Vega-Lite's default, which rotates nominal x labels vertically.
+    Default,
+    /// Horizontal labels, which every label has room for.
+    Horizontal,
+}
+
+/// The labels of a plot's nominal x channel, in row order (none when its x
+/// channel is numeric, temporal, or absent).
+fn x_labels(spec: &PlotSpec) -> impl Iterator<Item = &str> {
+    spec.encodings
+        .iter()
+        .filter(|(channel, _)| *channel == EncodingChannel::X)
+        .flat_map(|(_, value)| match value {
+            PlotFieldValue::Labels(labels) => labels.as_slice(),
+            PlotFieldValue::Numbers(_) | PlotFieldValue::Datetimes(_) => &[],
+        })
+        .map(String::as_str)
+}
+
+/// The layout of nominal x `labels` in a view `view_width` pixels wide:
+/// horizontal when every distinct label gets at least
+/// [`MIN_HORIZONTAL_LABEL_STEP_PX`] of room.
+///
+/// A view without an explicit width keeps Vega-Lite's default layout.
+fn x_label_layout<'a>(
+    labels: impl IntoIterator<Item = &'a str>,
+    view_width: Option<f64>,
+) -> XLabelLayout {
+    let Some(width) = view_width else {
+        return XLabelLayout::Default;
+    };
+    let distinct = labels
+        .into_iter()
+        .collect::<std::collections::HashSet<_>>()
+        .len();
+    let fits = u32::try_from(distinct)
+        .is_ok_and(|count| count > 0 && width / f64::from(count) >= MIN_HORIZONTAL_LABEL_STEP_PX);
+    if fits {
+        XLabelLayout::Horizontal
+    } else {
+        XLabelLayout::Default
+    }
 }
 
 /// The Vega-Lite field name for an encoding channel.
@@ -377,7 +485,7 @@ fn get_encoding_meta(spec: &PlotSpec, channel: EncodingChannel) -> Option<&AxisM
 /// Format an axis title from dimension and unit metadata.
 ///
 /// - Dimension "Velocity" + unit "km/s" -> "Velocity (km/s)"
-/// - Dimension "Velocity" alone -> "Velocity"
+/// - Dimension "Velocity" alone (no canonical unit exists) -> "Velocity"
 /// - Unit "km/s" alone -> None (unit without dimension isn't meaningful as title)
 /// - Neither -> None
 fn format_axis_title(meta: &AxisMeta) -> Option<String> {
@@ -391,9 +499,9 @@ fn format_axis_title(meta: &AxisMeta) -> Option<String> {
 /// Infer Vega-Lite data type from a field value.
 const fn infer_vega_type(value: &PlotFieldValue) -> &'static str {
     match value {
-        PlotFieldValue::Numbers(_) | PlotFieldValue::Number(_) => "quantitative",
-        PlotFieldValue::Labels(_) | PlotFieldValue::String(_) => "nominal",
-        PlotFieldValue::Datetimes(_) | PlotFieldValue::Datetime(_) => "temporal",
+        PlotFieldValue::Numbers(_) => "quantitative",
+        PlotFieldValue::Labels(_) => "nominal",
+        PlotFieldValue::Datetimes(_) => "temporal",
     }
 }
 
@@ -404,8 +512,6 @@ fn field_value_to_json_array(value: &PlotFieldValue) -> Vec<JsonValue> {
         PlotFieldValue::Labels(labels) | PlotFieldValue::Datetimes(labels) => {
             labels.iter().map(|s| json!(s)).collect()
         }
-        PlotFieldValue::Number(n) => vec![json_number(*n)],
-        PlotFieldValue::String(s) | PlotFieldValue::Datetime(s) => vec![json!(s)],
     }
 }
 
@@ -421,29 +527,26 @@ fn json_number(n: f64) -> JsonValue {
 
 /// Look up a property by key and return the associated string value.
 fn get_string_property<P: PartialEq>(
-    properties: &[(P, PlotFieldValue)],
+    properties: &[(P, PropertyValue)],
     prop: &P,
 ) -> Option<String> {
     properties
         .iter()
         .find(|(p, _)| p == prop)
         .and_then(|(_, v)| match v {
-            PlotFieldValue::String(s) => Some(s.clone()),
-            _ => None,
+            PropertyValue::String(s) => Some(s.clone()),
+            PropertyValue::Number(_) | PropertyValue::Bool(_) => None,
         })
 }
 
-/// Look up a property by key and return a single numeric value.
-///
-/// Accepts both `Number(n)` and a single-element `Numbers([n])`.
-fn get_number_property<P: PartialEq>(properties: &[(P, PlotFieldValue)], prop: &P) -> Option<f64> {
+/// Look up a property by key and return its numeric value.
+fn get_number_property<P: PartialEq>(properties: &[(P, PropertyValue)], prop: &P) -> Option<f64> {
     properties
         .iter()
         .find(|(p, _)| p == prop)
         .and_then(|(_, v)| match v {
-            PlotFieldValue::Number(n) => Some(*n),
-            PlotFieldValue::Numbers(nums) if nums.len() == 1 => Some(nums[0]),
-            _ => None,
+            PropertyValue::Number(n) => Some(*n),
+            PropertyValue::String(_) | PropertyValue::Bool(_) => None,
         })
 }
 
@@ -520,5 +623,228 @@ plot p = {
         let row = &figures[0].spec["data"]["values"][0];
         assert_eq!(row["x"], json!(9_007_199_254_740_992.0));
         assert_eq!(row["y"], json!("2026-01-01T00:00:00.000000001Z"));
+    }
+
+    /// The Vega-Lite specs of every figure `source` renders, by figure name.
+    fn rendered_specs(source: &str) -> Vec<(String, JsonValue)> {
+        let result = graphcal_project::prepare::compile_and_eval(source).unwrap();
+        assert!(!result.has_errors(), "{result:?}");
+        build_figures(&result.plots, &result.figures, &result.layers)
+            .unwrap()
+            .into_iter()
+            .map(|figure| (figure.name, figure.spec))
+            .collect()
+    }
+
+    fn spec<'a>(specs: &'a [(String, JsonValue)], name: &str) -> &'a JsonValue {
+        let Some((_, spec)) = specs.iter().find(|(candidate, _)| candidate == name) else {
+            panic!("no figure `{name}` in {specs:?}");
+        };
+        spec
+    }
+
+    #[test]
+    fn boolean_mark_properties_are_json_booleans() {
+        let specs = rendered_specs(
+            r##"
+plot filled_points = {
+    mark: point { filled: true, size: 30.0, color: "#0891b2" },
+    encode: { x: 1.0, y: 2.0 },
+};
+plot hollow_points = { mark: point { filled: false }, encode: { x: 1.0, y: 2.0 } };
+"##,
+        );
+        // Vega-Lite draws a point whose `filled` is the string "true" with a
+        // transparent fill and no stroke: it must be a JSON boolean.
+        assert_eq!(
+            spec(&specs, "filled_points")["mark"],
+            json!({ "type": "point", "filled": true, "size": 30.0, "color": "#0891b2" })
+        );
+        assert_eq!(
+            spec(&specs, "hollow_points")["mark"],
+            json!({ "type": "point", "filled": false })
+        );
+    }
+
+    #[test]
+    fn label_encodings_keep_declaration_order_without_placeholder_titles() {
+        let specs = rendered_specs(
+            r#"
+pub index Maneuver = { Departure, Correction, Insertion };
+param delta_v: Velocity[Maneuver] = table[Maneuver] {
+    Departure: 2.46 km/s;
+    Correction: 0.12 km/s;
+    Insertion: 1.00 km/s;
+};
+param executed: Bool[Maneuver] = table[Maneuver] {
+    Departure: true;
+    Correction: false;
+    Insertion: true;
+};
+plot budget = {
+    mark: point,
+    encode: {
+        x: for m: Maneuver { m },
+        y: for m: Maneuver { @delta_v[m] -> km/s },
+        color: for m: Maneuver { m },
+        shape: for m: Maneuver { @executed[m] },
+        tooltip: for m: Maneuver { m },
+        detail: "budget",
+    },
+};
+"#,
+        );
+        let budget = spec(&specs, "budget");
+        let x_values: Vec<_> = budget["data"]["values"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|row| row["x"].clone())
+            .collect();
+        assert_eq!(
+            x_values,
+            [json!("Departure"), json!("Correction"), json!("Insertion")]
+        );
+        // Labels keep their (declaration) data order instead of Vega-Lite's
+        // alphabetical default, on every channel with a scale, and carry no
+        // synthetic `x`/`color`/... title.
+        for channel in ["x", "color", "shape"] {
+            let encoding = &budget["encoding"][channel];
+            assert_eq!(encoding["type"], json!("nominal"), "{channel}");
+            assert_eq!(encoding.get("sort"), Some(&JsonValue::Null), "{channel}");
+            assert_eq!(encoding.get("title"), Some(&JsonValue::Null), "{channel}");
+        }
+        // Channels without a scale take no sort.
+        for channel in ["tooltip", "detail"] {
+            assert_eq!(budget["encoding"][channel].get("sort"), None, "{channel}");
+        }
+        // A quantity channel keeps no sort and is titled by its unit.
+        assert_eq!(budget["encoding"]["y"].get("sort"), None);
+        assert_eq!(budget["encoding"]["y"]["title"], json!("Velocity (km/s)"));
+    }
+
+    #[test]
+    fn quantity_titles_name_the_unit_of_the_plotted_numbers() {
+        let specs = rendered_specs(
+            r#"
+index Epoch = linspace(0.0 min, 10.0 min, points: 3);
+node elapsed: Time[Epoch] = for t: Epoch { coord(t) };
+node speed: Velocity[Epoch] = for t: Epoch { (2.0 m/s) * coord(t) / (1.0 s) };
+node ratio: Dimensionless[Epoch] = for t: Epoch { coord(t) / (1.0 s) };
+plot unconverted = {
+    mark: point,
+    encode: { x: @elapsed, y: @speed, color: @ratio, tooltip: @speed },
+};
+plot converted = {
+    mark: line,
+    encode: { x: for t: Epoch { t }, y: for t: Epoch { @speed[t] -> km/s } },
+};
+plot labelled = {
+    mark: line,
+    encode: { x: @elapsed, y: @speed },
+    x_label: "Elapsed",
+    y_label: "Speed",
+};
+"#,
+        );
+        let unconverted = &spec(&specs, "unconverted")["encoding"];
+        // Without a conversion, the numbers are SI: the canonical unit says so.
+        assert_eq!(unconverted["x"]["title"], json!("Time (s)"));
+        assert_eq!(unconverted["y"]["title"], json!("Velocity (m/s)"));
+        assert_eq!(unconverted["tooltip"]["title"], json!("Velocity (m/s)"));
+        // A dimensionless channel has no unit to name.
+        assert_eq!(unconverted["color"].get("title"), Some(&JsonValue::Null));
+
+        let converted = spec(&specs, "converted");
+        // A coordinate key plots its SI coordinate, not the minutes its index
+        // displays.
+        assert_eq!(converted["encoding"]["x"]["title"], json!("Time (s)"));
+        assert_eq!(converted["data"]["values"][1]["x"], json!(300));
+        assert_eq!(
+            converted["encoding"]["y"]["title"],
+            json!("Velocity (km/s)")
+        );
+
+        // Explicit labels override generated titles.
+        let labelled = &spec(&specs, "labelled")["encoding"];
+        assert_eq!(labelled["x"]["title"], json!("Elapsed"));
+        assert_eq!(labelled["y"]["title"], json!("Speed"));
+    }
+
+    #[test]
+    fn wide_views_keep_nominal_x_labels_horizontal() {
+        let specs = rendered_specs(
+            r"
+pub index Maneuver = { Departure, Correction, Insertion };
+pub index Phase = { Early, Late };
+param delta_v: Velocity[Maneuver] = table[Maneuver] {
+    Departure: 2.46 km/s;
+    Correction: 0.12 km/s;
+    Insertion: 1.00 km/s;
+};
+plot wide = {
+    mark: bar,
+    encode: { x: for m: Maneuver { m }, y: @delta_v },
+    width: 480,
+};
+plot narrow = {
+    mark: bar,
+    encode: { x: for m: Maneuver { m }, y: @delta_v },
+    width: 150,
+};
+plot unsized = { mark: bar, encode: { x: for m: Maneuver { m }, y: @delta_v } };
+plot sideways = {
+    mark: bar,
+    encode: { x: @delta_v, y: for m: Maneuver { m } },
+    width: 480,
+};
+plot repeated = {
+    mark: rect,
+    encode: {
+        x: for m: Maneuver { m },
+        y: for p: Phase { p },
+        color: for m: Maneuver, p: Phase { @delta_v[m] },
+    },
+    width: 192,
+};
+#[hidden]
+plot bars = { mark: bar, encode: { x: for m: Maneuver { m }, y: @delta_v } };
+#[hidden]
+plot ticks = { mark: tick, encode: { x: for m: Maneuver { m }, y: @delta_v } };
+layer overlay = { plots: [bars, ticks], width: 400 };
+",
+        );
+        let label_angle = |name: &str, channel: &str| {
+            spec(&specs, name)["encoding"][channel].get("axis").cloned()
+        };
+        // 480 px over 3 labels leaves room for horizontal labels.
+        assert_eq!(label_angle("wide", "x"), Some(json!({ "labelAngle": 0 })));
+        // 150 px over 3 labels does not; nor does a view without a width.
+        assert_eq!(label_angle("narrow", "x"), None);
+        assert_eq!(label_angle("unsized", "x"), None);
+        // Only the x axis is affected.
+        assert_eq!(label_angle("sideways", "y"), None);
+        assert_eq!(label_angle("sideways", "x"), None);
+        // Repeated labels count once: 192 px over 3 distinct labels is 64 px.
+        assert_eq!(
+            label_angle("repeated", "x"),
+            Some(json!({ "labelAngle": 0 }))
+        );
+        // A layer's entries share its width.
+        for entry in spec(&specs, "overlay")["layer"].as_array().unwrap() {
+            assert_eq!(entry["encoding"]["x"]["axis"], json!({ "labelAngle": 0 }));
+        }
+    }
+
+    #[test]
+    fn x_label_layout_needs_an_explicit_width_with_room_per_distinct_label() {
+        let labels = ["A", "B", "A", "C"];
+        assert_eq!(
+            x_label_layout(labels, Some(192.0)),
+            XLabelLayout::Horizontal
+        );
+        assert_eq!(x_label_layout(labels, Some(191.9)), XLabelLayout::Default);
+        assert_eq!(x_label_layout(labels, None), XLabelLayout::Default);
+        assert_eq!(x_label_layout([], Some(480.0)), XLabelLayout::Default);
     }
 }
