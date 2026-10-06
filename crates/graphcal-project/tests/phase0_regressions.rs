@@ -175,6 +175,54 @@ node qualified_result: Dimensionless = @namespace::outer_x + 2.0;
 }
 
 #[test]
+fn dag_calls_project_public_include_reexports() {
+    let (_dir, root) = write_test_project(
+        "call_reexport",
+        &[
+            (
+                "lib.gcl",
+                r"
+pub dag double {
+    param x: Length;
+    pub node y: Length = @x * 2.0;
+}
+pub dag facade {
+    param x: Length;
+    include call_reexport.lib.double(x: @x)::{ pub y };
+}
+pub dag renamed {
+    param x: Length;
+    include call_reexport.lib.facade(x: @x)::{ pub y as answer };
+}
+",
+            ),
+            (
+                "main.gcl",
+                r"
+import call_reexport.lib::{ facade, renamed };
+include call_reexport.lib.facade(x: 1.0 m)::{ y };
+node via_include: Length = @y;
+node via_call: Length = @facade(x: 1.0 m)::y;
+node renamed_call: Length = @renamed(x: 3.0 m)::answer;
+node repeated_call: Length = @renamed(x: 4.0 m)::answer;
+",
+            ),
+        ],
+        "main.gcl",
+    );
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, &RealFileSystem::default())
+        .expect("DAG calls must project public include-output aliases like includes");
+    for (name, expected) in [
+        ("via_include", 2.0),
+        ("via_call", 2.0),
+        ("renamed_call", 6.0),
+        ("repeated_call", 8.0),
+    ] {
+        assert!((value_for(&result, name).si_value().unwrap().get() - expected).abs() < 1e-9);
+    }
+}
+
+#[test]
 fn reexported_assertions_and_plots_keep_pure_import_rejections() {
     let files = [
         (
