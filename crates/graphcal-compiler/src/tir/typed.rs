@@ -775,17 +775,20 @@ where
             span: entry.span,
         }),
         Decl::Plot(entry) => Decl::Plot(PlotEntry {
+            doc: entry.doc,
             identity: entry.identity,
             mark_type: entry.mark_type,
             body: entry.body,
             visibility: entry.visibility,
         }),
         Decl::Figure(entry) => Decl::Figure(FigureEntry {
+            doc: entry.doc,
             identity: entry.identity,
             plot_names: entry.plot_names,
             fields: entry.fields,
         }),
         Decl::Layer(entry) => Decl::Layer(LayerEntry {
+            doc: entry.doc,
             identity: entry.identity,
             plot_names: entry.plot_names,
             fields: entry.fields,

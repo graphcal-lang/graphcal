@@ -130,6 +130,8 @@ pub struct AssertEntry<P: BodyPhase> {
 /// A `plot` declaration.
 #[derive(Debug, Clone)]
 pub struct PlotEntry<P: BodyPhase> {
+    /// Attached documentation, preserved through instance specialization.
+    pub doc: Option<String>,
     /// Canonical identity: the owning DAG and the local name in it.
     pub(crate) identity: ResolvedDeclName,
     /// Mark shape rendered for this plot.
@@ -143,6 +145,8 @@ pub struct PlotEntry<P: BodyPhase> {
 /// A `figure` declaration.
 #[derive(Debug, Clone)]
 pub struct FigureEntry<P: BodyPhase> {
+    /// Attached documentation, preserved through instance specialization.
+    pub doc: Option<String>,
     /// Canonical identity: the owning DAG and the local name in it.
     pub(crate) identity: ResolvedDeclName,
     /// Plots composed by this figure, in source order.
@@ -153,6 +157,8 @@ pub struct FigureEntry<P: BodyPhase> {
 /// A `layer` declaration.
 #[derive(Debug, Clone)]
 pub struct LayerEntry<P: BodyPhase> {
+    /// Attached documentation, preserved through instance specialization.
+    pub doc: Option<String>,
     /// Canonical identity: the owning DAG and the local name in it.
     pub(crate) identity: ResolvedDeclName,
     /// Plots composed by this layer, in source order.

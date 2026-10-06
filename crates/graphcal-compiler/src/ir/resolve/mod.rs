@@ -475,6 +475,7 @@ fn entry<E>(
         }),
         DeclKind::Plot(p) => declare(&p.name).map(|(identity, visibility)| {
             Decl::Plot(PlotEntry {
+                doc: decl.doc.as_ref().map(|doc| doc.text().to_string()),
                 identity,
                 mark_type: p.mark.mark_type,
                 body: InScope::new(
@@ -490,6 +491,7 @@ fn entry<E>(
         }),
         DeclKind::Figure(f) => declare(&f.name).map(|(identity, _)| {
             Decl::Figure(FigureEntry {
+                doc: decl.doc.as_ref().map(|doc| doc.text().to_string()),
                 identity,
                 plot_names: f.plot_names.clone(),
                 fields: InScope::new(f.fields.clone(), dag_id.clone()),
@@ -497,6 +499,7 @@ fn entry<E>(
         }),
         DeclKind::Layer(l) => declare(&l.name).map(|(identity, _)| {
             Decl::Layer(LayerEntry {
+                doc: decl.doc.as_ref().map(|doc| doc.text().to_string()),
                 identity,
                 plot_names: l.plot_names.clone(),
                 fields: InScope::new(l.fields.clone(), dag_id.clone()),

@@ -1110,6 +1110,36 @@ assert positive = @delta_v > 0.0 m/s;
     }
 
     #[test]
+    fn report_preserves_included_plot_captions_across_reevaluation() {
+        let prepared = prepare_ok(
+            r"
+param k: Length = 1.0 m;
+dag chart {
+    param k: Length;
+    /// Library <caption> & documentation.
+    pub plot points = { mark: point, encode: { y: @k } };
+}
+include chart(k: @k)::{ points as renamed };
+",
+        );
+        for bindings in [
+            vec![],
+            vec![BindingRequest {
+                name: "k".to_string(),
+                expr: "2.0 m".to_string(),
+            }],
+        ] {
+            let EvaluateReportOutcome::Evaluated { evaluation, html } =
+                prepared.evaluate_report(&bindings)
+            else {
+                panic!("expected report");
+            };
+            assert!(!evaluation.has_errors);
+            assert!(html.contains("<span class=\"figure-name\">renamed</span> — Library &lt;caption&gt; &amp; documentation."));
+        }
+    }
+
+    #[test]
     fn report_binding_rejection_is_recoverable_and_reports_all_errors() {
         let prepared = prepare_ok(DELTA_V);
         let bad = [

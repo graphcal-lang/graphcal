@@ -76,7 +76,11 @@ fn static_reports_keep_si_and_separate_presentation_notices() {
 
 fn build_document(source: &str) -> ReportDocument {
     let project = LoadedProject::from_source(source, "deltav.gcl").unwrap();
-    let result = compile_and_eval_from_project(&project, &HashMap::new()).unwrap();
+    build_project_document(&project)
+}
+
+fn build_project_document(project: &LoadedProject) -> ReportDocument {
+    let result = compile_and_eval_from_project(project, &HashMap::new()).unwrap();
     let docs = collect_doc_captions(project.root_file().ast());
     build_report(ReportInputs {
         title: "deltav",
@@ -325,6 +329,109 @@ fn structured_values_have_one_named_keyboard_scroll_region_without_losing_leaves
         html,
         render_report_html(&document, VegaScriptSource::Inline, None)
     );
+}
+
+#[test]
+fn plot_captions_follow_producers_through_cross_file_and_nested_includes() {
+    use graphcal_project::loader::load_project;
+    use graphcal_project::project_bundle::{ArtifactContent, BundleArtifact, ProjectBundle};
+
+    let library = r"
+pub index P = { A, B };
+pub dag chart {
+    import demo.plotlib::{index P};
+    param k: Length;
+    pub node ys: Length[P] = for p: P { @k };
+    /// Caption written in the library.
+    /// With <unsafe> & text.
+    pub plot points = {
+        mark: point,
+        encode: { x: for p: P { @ys[p] }, y: for p: P { @ys[p] } },
+    };
+    pub plot bare = { mark: point, encode: { y: @k } };
+}
+";
+    let entry = r"
+import demo.plotlib::{index P};
+include demo.plotlib.chart(k: 1.0 m)::{ points, bare };
+include demo.plotlib.chart(k: 3.0 m)::{ points as renamed };
+include demo.wrapper()::{ points as nested };
+/// Caption written at the entry.
+plot local_points = {
+    mark: point,
+    encode: { x: for p: P { 1.0 m }, y: for p: P { 1.0 m } },
+};
+";
+    let bundle = ProjectBundle {
+        dependencies: vec![],
+        entry: "src/demo/entry.gcl".to_string().try_into().unwrap(),
+        files: [
+            (
+                "graphcal.toml",
+                ArtifactContent::Manifest("[package]\nname = \"demo\"\n".to_string()),
+            ),
+            (
+                "src/demo/plotlib.gcl",
+                ArtifactContent::Source(library.to_string()),
+            ),
+            (
+                "src/demo/entry.gcl",
+                ArtifactContent::Source(entry.to_string()),
+            ),
+            (
+                "src/demo/leaf.gcl",
+                ArtifactContent::Source("param k: Length;\n/// Caption written in the library.\n/// With <unsafe> & text.\npub plot points = { mark: point, encode: { y: @k } };".to_string()),
+            ),
+            (
+                "src/demo/wrapper.gcl",
+                ArtifactContent::Source("include demo.leaf(k: 2.0 m)::{ pub points };".to_string()),
+            ),
+        ]
+        .into_iter()
+        .map(|(path, content)| BundleArtifact {
+            path: path.to_string().try_into().unwrap(),
+            content,
+        })
+        .collect(),
+    };
+    let root = std::path::Path::new("/caption-test");
+    let mounted = bundle.mount(root).unwrap();
+    let project =
+        load_project(&root.join(bundle.entry.as_str()), None, &mounted.filesystem).unwrap();
+    let document = build_project_document(&project);
+    let html = render_report_html(&document, VegaScriptSource::Inline, None);
+    let markdown = render_report_markdown(&document);
+    for name in ["points", "renamed", "nested"] {
+        assert!(html.contains(&format!("<span class=\"figure-name\">{name}</span> — Caption written in the library.\nWith &lt;unsafe&gt; &amp; text.")), "missing caption for {name}: {markdown}");
+        assert!(markdown.contains(&format!("- `{name}` — Caption written in the library.")));
+    }
+    assert!(!html.contains("With <unsafe> & text."));
+    assert!(markdown.lines().any(|line| line == "- `bare`"));
+    assert!(markdown.contains("- `local_points` — Caption written at the entry."));
+}
+
+#[test]
+fn plot_figure_and_layer_captions_come_from_their_own_declarations() {
+    let document = build_document(
+        r"
+/// Plot caption.
+plot points = { mark: point, encode: { y: 1.0 } };
+/// Figure caption.
+figure combined = { plots: [points] };
+/// Layer caption.
+layer overlay = { plots: [points] };
+plot bare = { mark: point, encode: { y: 2.0 } };
+",
+    );
+    let markdown = render_report_markdown(&document);
+    for (name, caption) in [
+        ("points", "Plot caption."),
+        ("combined", "Figure caption."),
+        ("overlay", "Layer caption."),
+    ] {
+        assert!(markdown.contains(&format!("- `{name}` — {caption}")));
+    }
+    assert!(markdown.lines().any(|line| line == "- `bare`"));
 }
 
 #[test]
