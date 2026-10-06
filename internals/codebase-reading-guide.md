@@ -835,12 +835,15 @@ the no-modules wasm engine, project sources, and baseline bindings.
 `report_standalone.js` adapts that embedded engine to the transport-neutral
 `window.GraphcalReport.mount` API. `report_form_state.js` owns pure recursive
 schema/value-to-draft projection and completeness checks. `report_outline_state.js`
-provides pure path/search/tree projection. `report_results.js` owns result tabs,
-output pinning and disclosure; `report_workspace.js` composes the independent
+provides pure path/search/tree projection. `report_results.js` owns result tabs
+and their live counts, the pinned board for values, checks, and plots, and value
+disclosure; `report_workspace.js` composes the independent
 panes and adaptive input outline over explicitly registered controls (not DOM
 schema discovery). `report_runtime.js` owns atomic auto-run/Apply/Discard
 transitions, typed-control registration, DOM rendering, debounce, and timeout
-restart lifecycle. Outline edits reuse the same native draft handlers; pins
+restart lifecycle, plus the header title block (checks, overrides, engine
+status). `report_charts.js` themes every `vegaEmbed` call from the page's CSS
+tokens. Outline edits reuse the same native draft handlers; pins
 include constructor identity, separately from diagnostic binding paths. Algebraic and indexed form submissions
 remain tagged data until the evaluator constructs and validates their AST;
 JavaScript never assembles container syntax. Wasm declaration outcomes serialize
@@ -1675,7 +1678,10 @@ For the shared report browser UI, read `crates/graphcal-report/src/` in this
 order: `report_form_state.js`, `report_outline_state.js`, `report_results.js`,
 `report_workspace.js`, `report_runtime.js`, then `report_standalone.js`.
 `report_hydrate.rs` embeds these modules for offline reports;
-`web/playground/src/report.ts` consumes the same modules for sandboxed reports.
+`web/playground/src/report-assets.ts` loads the same modules on demand for sandboxed reports.
+`report_charts.js` stands apart: it loads right after the Vega stack
+(`report_html.rs` for offline reports, `report.ts` in the playground) so every
+figure, static or live, is themed.
 
 ### Library-consumer sequence
 

@@ -62,7 +62,7 @@ if (process.env.GRAPHCAL_PLUGIN_BROWSER_TEST === "1") {
       const page = await browser.newPage();
       await page.route(/^https?:/, route => route.abort());
       await page.goto(pathToFileURL(process.argv[2]).href);
-      await expect(page.locator(".hydration-status")).toHaveText("live · evaluation has errors");
+      await expect(page.locator(".hydration-status")).toHaveText("Up to date");
       const mid = page.locator('[data-decl="mid"] [data-role="value"]');
       await expect(mid).toHaveText("2 m");
       const field = page.getByRole('textbox', { name: 'a', exact: true });

@@ -14,6 +14,9 @@ use crate::report_ir::{CardBody, CheckStatus, ReportDocument, ValueCard};
 use crate::value_display::{GridTable, ValueBody};
 
 const REPORT_CSS: &str = include_str!("report_style.css");
+/// Chart theme for every `vegaEmbed` call on the page; loads after the Vega
+/// stack and before the inline figure scripts that use it.
+const REPORT_CHARTS_JS: &str = include_str!("report_charts.js");
 
 /// Render the complete standalone report page.
 ///
@@ -30,14 +33,19 @@ pub fn render_report_html(
     let vega_scripts = if document.figures.is_empty() && document.plot_errors.is_empty() {
         String::new()
     } else {
-        crate::plot_page::vega_script_tags(scripts)
+        format!(
+            "{}\n<script>{REPORT_CHARTS_JS}</script>",
+            crate::plot_page::vega_script_tags(scripts)
+        )
     };
     let hydration_block = hydration.map_or_else(String::new, render_hydration_block);
     render_page(document, &vega_scripts, &hydration_block)
 }
 
 /// Render a report whose host supplies the chart assets and interaction runtime.
-/// This path does not link the standalone JavaScript bundles into the browser engine.
+///
+/// This path does not link the standalone JavaScript bundles into the browser engine;
+/// the host loads the Vega stack and `report_charts.js` itself.
 #[must_use]
 pub fn render_host_report_html(document: &ReportDocument) -> String {
     render_page(document, "", "")

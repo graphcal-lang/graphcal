@@ -1,12 +1,14 @@
 import { z } from "zod";
-import formState from "../../../crates/graphcal-report/src/report_form_state.js?raw";
-import runtime from "../../../crates/graphcal-report/src/report_runtime.js?raw";
-import outlineState from "../../../crates/graphcal-report/src/report_outline_state.js?raw";
-import workspace from "../../../crates/graphcal-report/src/report_workspace.js?raw";
-import results from "../../../crates/graphcal-report/src/report_results.js?raw";
-import bootstrap from "./report-frame.js?raw";
 import { bindingsSchema, type Binding } from "./bindings";
 import type { ReportOutcome, ParameterPort } from "./protocol";
+import type { ReportAssets } from "./report-assets";
+
+let assetsRequest: Promise<ReportAssets> | undefined;
+/** Load the report frame's scripts on first use; they stay out of the entry bundle. */
+function loadReportAssets(): Promise<ReportAssets> {
+  assetsRequest ??= import("./report-assets").then((module) => module.reportAssets);
+  return assetsRequest;
+}
 
 const messageSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("ready"), session: z.string() }),
@@ -62,14 +64,32 @@ export class Report {
     ports: ParameterPort[],
     bindings: Binding[],
   ) {
-    this.clear();
+    this.clear("Loading report…");
+    const session = crypto.randomUUID();
+    this.session = session;
+    // A clear() or newer render while the scripts load replaces this session.
+    loadReportAssets().then(
+      (assets) => {
+        if (this.session === session) this.mount(assets, session, outcome, ports, bindings);
+      },
+      (error: unknown) => {
+        if (this.session === session) this.clear(`Report unavailable: ${String(error)}`);
+      },
+    );
+  }
+
+  private mount(
+    assets: ReportAssets,
+    session: string,
+    outcome: Extract<ReportOutcome, { status: "evaluated" }>,
+    ports: ParameterPort[],
+    bindings: Binding[],
+  ) {
     const frame = document.createElement("iframe");
     this.frame = frame;
-    this.session = crypto.randomUUID();
     frame.title = "Interactive Graphcal report";
     frame.setAttribute("sandbox", "allow-scripts");
     frame.referrerPolicy = "no-referrer";
-    const session = this.session;
     const origin = window.location.origin;
     this.listener = (event) => {
       if (event.source !== frame.contentWindow || event.origin !== "null") return;
@@ -107,19 +127,22 @@ export class Report {
       }
     };
     window.addEventListener("message", this.listener);
-    const assets = new URL(`${import.meta.env.BASE_URL}vega/`, origin).href;
-    const policy = `default-src 'none'; script-src 'unsafe-inline' 'unsafe-eval' ${assets}; style-src 'unsafe-inline'; img-src data: blob:; base-uri 'none'; form-action 'none'`;
+    const vega = new URL(`${import.meta.env.BASE_URL}vega/`, origin).href;
+    const policy = `default-src 'none'; script-src 'unsafe-inline' 'unsafe-eval' ${vega}; style-src 'unsafe-inline'; img-src data: blob:; base-uri 'none'; form-action 'none'`;
     const needsCharts =
       outcome.evaluation.figures.length > 0 ||
       outcome.evaluation.notices.some((notice) => notice.kind === "plot_error");
-    const scripts = (needsCharts ? ["vega", "vega-lite", "vega-embed"] : [])
-      .map((name) => `<script src="${assets}${name}.min.js"></script>`)
-      .join("");
+    // The chart theme wraps vegaEmbed before report-frame.js adds the sandbox policy.
+    const scripts = needsCharts
+      ? ["vega", "vega-lite", "vega-embed"]
+          .map((name) => `<script src="${vega}${name}.min.js"></script>`)
+          .join("") + `<script>${assets.charts}</script>`
+      : "";
     frame.srcdoc = outcome.html
       .replace(
         "<head>",
         () =>
-          `<head><meta http-equiv="Content-Security-Policy" content="${policy}">${scripts}<script>${formState}</script><script>${outlineState}</script><script>${results}</script><script>${workspace}</script><script>${runtime}</script><script>${bootstrap}</script>`,
+          `<head><meta http-equiv="Content-Security-Policy" content="${policy}">${scripts}<script>${assets.formState}</script><script>${assets.outlineState}</script><script>${assets.results}</script><script>${assets.workspace}</script><script>${assets.runtime}</script><script>${assets.bootstrap}</script>`,
       )
       .replace(
         "</body>",

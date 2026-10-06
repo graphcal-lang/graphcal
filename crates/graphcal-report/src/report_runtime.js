@@ -31,22 +31,77 @@
     return node;
   }
 
-  var statusChip = element("div", "hydration-status", "loading engine…");
+  // Header title block: the report's verification state at a glance, the way a
+  // drawing's title block carries its revision and sign-off.
+  function titleCell(tag, modifier, label) {
+    var cell = element(tag, "title-cell title-cell--" + modifier);
+    if (tag === "button") cell.type = "button";
+    var value = element("span", "title-cell__value");
+    cell.append(element("span", "title-cell__label", label), value);
+    return { cell: cell, value: value };
+  }
+  var titleBlock = element("div", "title-block");
+  var checksCell = titleCell("button", "checks", "Checks");
+  checksCell.cell.hidden = true;
+  var checksText = element("span");
+  checksCell.value.append(element("span", "status-dot"), checksText);
+  var inputsCell = titleCell("div", "inputs", "Inputs");
+  var publishedText = element("span", "", "As published");
+  var engineCell = titleCell("div", "engine", "Engine");
+  titleBlock.append(checksCell.cell, inputsCell.cell, engineCell.cell);
+  var reportHeader = document.querySelector("main > header");
+  if (reportHeader) {
+    reportHeader.classList.add("report-header");
+    reportHeader.appendChild(titleBlock);
+  }
+
+  var statusChip = element("span", "hydration-status", "Loading engine…");
   statusChip.setAttribute("role", "status");
   statusChip.setAttribute("aria-live", "polite");
-  document.body.appendChild(statusChip);
-  function setStatus(text, state) {
+  if (reportHeader) engineCell.value.append(element("span", "status-dot"), statusChip);
+  else document.body.appendChild(statusChip);
+  // `stale` means the visible results no longer match the inputs on screen.
+  function setStatus(text, state, stale) {
     statusChip.textContent = text;
+    statusChip.title = text;
     statusChip.className = "hydration-status" + (state ? " hydration-status--" + state : "");
+    engineCell.cell.className = "title-cell title-cell--engine" + (state ? " is-" + state : "");
+    document.body.classList.toggle("results-stale", Boolean(stale));
   }
 
   var banner = element("div", "modified-banner");
   banner.hidden = true;
   var bannerText = element("span", "", "Values differ from the as-published baseline.");
-  var resetButton = element("button", "modified-banner__reset", "Reset to baseline");
+  var resetButton = element("button", "modified-banner__reset", "Reset");
+  resetButton.type = "button";
+  resetButton.title = "Return every input to its published value";
   banner.appendChild(bannerText);
   banner.appendChild(resetButton);
-  document.body.insertBefore(banner, document.body.firstChild);
+  if (reportHeader) inputsCell.value.append(publishedText, banner);
+  else document.body.insertBefore(banner, document.body.firstChild);
+
+  // Summarize from the rendered checks so the header and the Checks tab agree.
+  function updateChecksSummary() {
+    var checks = document.querySelectorAll(".check[data-check]");
+    var failing = document.querySelectorAll(".check--fail, .check--error, .check--blocked").length;
+    checksCell.cell.hidden = checks.length === 0;
+    checksText.textContent = failing
+      ? failing + " of " + checks.length + " failing"
+      : checks.length === 1 ? "1 passes" : "All " + checks.length + " pass";
+    checksCell.cell.classList.toggle("title-cell--fail", failing > 0);
+    checksCell.cell.classList.toggle("title-cell--pass", failing === 0);
+    checksCell.cell.title = "Show checks";
+  }
+  checksCell.cell.addEventListener("click", function () {
+    if (!workspace || !workspace.showResults("checks")) {
+      var section = document.getElementById("checks");
+      if (section) section.scrollIntoView({ block: "start" });
+      return;
+    }
+    var results = document.getElementById("workspace-results");
+    if (results && results.getBoundingClientRect().top > window.innerHeight * 0.5) results.scrollIntoView({ block: "start" });
+  });
+  updateChecksSummary();
 
   var autoRun = true;
   var autoRunToggle = element("input");
@@ -55,15 +110,32 @@
   autoRunToggle.setAttribute("aria-describedby", "auto-run-description");
   var autoRunLabel = element("label", "auto-run-toggle");
   autoRunLabel.appendChild(autoRunToggle);
-  autoRunLabel.appendChild(document.createTextNode(" Auto run"));
+  autoRunLabel.appendChild(document.createTextNode("Auto run"));
+  autoRunLabel.title = "Recalculate after a short pause once an edit is complete";
   var autoRunDescription = element(
     "span",
     "auto-run-description",
     "Runs complete edits after a short pause.",
   );
   autoRunDescription.id = "auto-run-description";
+  // With auto run off, edits wait here until applied together.
+  var applyAll = element("button", "apply-all", "Apply edits");
+  applyAll.type = "button";
+  applyAll.hidden = true;
+  applyAll.disabled = true;
+  applyAll.addEventListener("click", function () {
+    controls.forEach(function (control) { control.submitIfDirty(); });
+  });
+  function updateApplyAll() {
+    var waiting = 0;
+    controls.forEach(function (control) { if (control.isDirty()) waiting += 1; });
+    applyAll.hidden = autoRun;
+    applyAll.disabled = waiting === 0;
+    applyAll.textContent = waiting > 1 ? "Apply " + waiting + " edits" : "Apply edits";
+  }
   var inputToolbar = element("div", "input-toolbar");
   inputToolbar.appendChild(autoRunLabel);
+  inputToolbar.appendChild(applyAll);
   inputToolbar.appendChild(autoRunDescription);
   var inputsSection = document.getElementById("inputs");
   if (inputsSection) {
@@ -75,7 +147,7 @@
   var workspace = null;
   var parameterDescriptions = new Map();
 
-  function registerField(port, widget, kind, labels, path, identity, constructorControl) {
+  function registerField(port, widget, kind, labels, path, identity, constructorControl, extras) {
     if (workspace) workspace.field({
       parameter: port.name,
       widget: widget,
@@ -85,11 +157,45 @@
       identity: identity,
       constructorControl: Boolean(constructorControl),
       description: parameterDescriptions.get(port.name) || "",
+      hint: extras && extras.hint ? extras.hint : "",
+      slider: extras && extras.slider ? extras.slider : null,
+      unit: extras && extras.unit ? extras.unit : "",
+      unitTitle: extras && extras.unitTitle ? extras.unitTitle : "",
     });
   }
 
+  // Describe a root parameter's declared domain. Quantity bounds and `unit` are
+  // both canonical SI from the engine, so they are shown together unconverted.
+  function controlHint(control) {
+    if (!control) return "";
+    function between(lower, upper, unit) {
+      var suffix = unit ? " " + unit : "";
+      if (lower !== null && upper !== null) return lower + " to " + upper + suffix;
+      if (lower !== null) return "at least " + lower + suffix;
+      if (upper !== null) return "at most " + upper + suffix;
+      return "";
+    }
+    if (control.kind === "quantity") {
+      return between(
+        typeof control.lower_si === "number" ? String(control.lower_si) : null,
+        typeof control.upper_si === "number" ? String(control.upper_si) : null,
+        control.unit || "",
+      );
+    }
+    if (control.kind === "integer") {
+      var range = between(
+        typeof control.lower === "string" ? control.lower : null,
+        typeof control.upper === "string" ? control.upper : null,
+        "",
+      );
+      return range ? "integer, " + range : "integer";
+    }
+    if (control.kind === "datetime") return "datetime, " + control.time_scale;
+    return "";
+  }
+
   function fatal(message) {
-    setStatus("interactive mode unavailable", "error");
+    setStatus("Interactive mode unavailable", "error");
     var main = document.querySelector("main");
     if (!main) return;
     var notice = element(
@@ -180,9 +286,13 @@
     field.value = draft.expr;
     field.placeholder = "closed value literal";
     field.spellcheck = false;
-    field.addEventListener("input", function () { draft.expr = field.value; commit(); });
+    var slider = null;
+    field.addEventListener("input", function () {
+      draft.expr = field.value;
+      if (slider) syncSlider();
+      commit();
+    });
     holder.appendChild(field);
-    registerField(port, field, "literal", labels, path, identity);
 
     var control = root ? port.control : null;
     var integerLower = control && typeof control.lower === "string" ? Number(control.lower) : NaN;
@@ -193,24 +303,54 @@
     var boundedInteger = control && control.kind === "integer" &&
       Number.isSafeInteger(integerLower) && Number.isSafeInteger(integerUpper) &&
       Number.isSafeInteger(integerUpper - integerLower) && integerUpper > integerLower;
+    // Move the slider only when the typed literal is a plain number in the
+    // slider's own (canonical SI) unit; any other spelling leaves it untouched
+    // rather than guessing a conversion.
+    // An unplaceable value hides the thumb: a range input would otherwise show
+    // its midpoint (or a snapped number) as if it were the current value.
+    function syncSlider() {
+      var match = /^\s*(-?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?)\s*(.*?)\s*$/.exec(field.value);
+      var expectedUnit = boundedQuantity && control.unit ? control.unit : "";
+      var placed = Boolean(match) && match[2] === expectedUnit;
+      // Unplaced sliders rest at their minimum so the track shows no filled portion.
+      slider.value = placed ? match[1] : slider.min;
+      slider.classList.toggle("is-unplaced", !placed);
+      slider.title = placed
+        ? ""
+        : "The slider can only show values written in " + (expectedUnit || "plain numbers") + ". Dragging replaces this value.";
+    }
     if (boundedQuantity || boundedInteger) {
-      var slider = element("input", "control-slider");
+      slider = element("input", "control-slider");
       slider.type = "range";
       slider.setAttribute("aria-label", label + " slider");
       slider.min = String(boundedQuantity ? control.lower_si : integerLower);
       slider.max = String(boundedQuantity ? control.upper_si : integerUpper);
       slider.step = boundedQuantity ? String((control.upper_si - control.lower_si) / 200) : "1";
-      var numeric = Number.parseFloat(draft.expr);
-      if (Number.isFinite(numeric)) slider.value = String(numeric);
+      syncSlider();
       slider.addEventListener("input", function () {
         draft.expr = boundedQuantity
           ? numberLiteral(Number(slider.value)) + (control.unit ? " " + control.unit : "")
           : slider.value;
         field.value = draft.expr;
+        slider.classList.remove("is-unplaced");
+        slider.title = "";
         commit();
       });
       holder.appendChild(slider);
     }
+    // The canonical SI unit (or [-] for dimensionless) is the field's dimensional
+    // cue. It is not a display unit: any unit of the same dimension is accepted.
+    var quantity = schema.kind === "quantity" || schema.kind === "complex";
+    registerField(port, field, "literal", labels, path, identity, false, {
+      hint: root ? controlHint(port.control) : "",
+      slider: slider,
+      unit: quantity ? "[" + (schema.unit || "-") + "]" : "",
+      unitTitle: quantity
+        ? schema.unit
+          ? "Dimension of " + schema.unit + " (canonical SI unit). Any unit of this dimension is accepted."
+          : "Dimensionless"
+        : "",
+    });
   }
 
   function appendStructuredEditor(holder, port, schema, draft, commit, label, root, path, labels, identity) {
@@ -465,6 +605,8 @@
         if (enabled && dirty) queueAutoRun();
         updateDraftStatus();
       },
+      isDirty: function () { return dirty && !pending; },
+      submitIfDirty: function () { if (dirty && !pending) submitDraft(true); },
     };
 
     function updateDraftStatus() {
@@ -478,7 +620,14 @@
               : "Unapplied edits. The last accepted results remain visible."
             : "";
       draftStatus.hidden = !draftStatus.textContent;
-      if (workspace) workspace.status(port.name, draftStatus.textContent);
+      if (workspace) {
+        workspace.status(
+          port.name,
+          draftStatus.textContent,
+          pending ? "pending" : sourceChanged ? "stale-default" : dirty ? "unapplied" : "none",
+        );
+      }
+      updateApplyAll();
     }
     function queueAutoRun() {
       if (autoRunTimer) clearTimeout(autoRunTimer);
@@ -496,9 +645,9 @@
       if (workspace) workspace.refresh();
       if (autoRun) {
         queueAutoRun();
-        setStatus("auto run waiting for input · showing last successful evaluation", "warn");
+        setStatus("Waiting for the edit to finish", "warn", true);
       } else {
-        setStatus("unapplied parameter edits · showing last successful evaluation", "warn");
+        setStatus("Edits not applied yet", "warn", true);
       }
     }
     function render() {
@@ -555,11 +704,7 @@
       if (incomplete) {
         if (reportIncomplete) control.setError(incomplete.message, incomplete.path);
         updateDraftStatus();
-        setStatus(
-          (reportIncomplete ? "incomplete parameter draft" : "auto run waiting for complete input") +
-            " · showing last successful evaluation",
-          "warn",
-        );
+        setStatus(reportIncomplete ? "Input incomplete; results not updated" : "Waiting for a complete input", "warn", true);
         return;
       }
       if (autoRunTimer) clearTimeout(autoRunTimer);
@@ -614,9 +759,7 @@
         { label: "Discard edits", run: control.restore },
       ];
       if (clear) parameterActions.push({ label: "Use default", run: function () { clear.click(); } });
-      workspace.parameter(port.name, parameterActions, function () {
-        if (mode === "raw") formMode.click();
-      });
+      workspace.parameter(port.name, parameterActions);
     }
     return control;
   }
@@ -658,14 +801,6 @@
       if (binding) bindings.push(binding);
     });
     return bindings;
-  }
-
-  function anyModified() {
-    var modified = false;
-    controls.forEach(function (control) {
-      if (JSON.stringify(control.currentBinding) !== JSON.stringify(control.initialBinding)) modified = true;
-    });
-    return modified;
   }
 
   // --- Result rendering ----------------------------------------------------
@@ -749,13 +884,24 @@
     return result;
   }
 
+  // The first applied evaluation only verifies the published page; later ones
+  // mark what they changed so readers can follow the effect of an edit.
+  var hasApplied = false;
+  function markChanged(target) {
+    target.classList.remove("value-changed");
+    void target.offsetWidth; // restart the highlight animation
+    target.classList.add("value-changed");
+  }
+
   function patchValues(evaluation) {
+    document.querySelectorAll(".card.value-changed").forEach(function (card) { card.classList.remove("value-changed"); });
     for (var i = 0; i < evaluation.values.length; i += 1) {
       var declaration = evaluation.values[i];
       var card = document.querySelector('[data-decl="' + selectorEscape(declaration.name) + '"]');
       if (!card) continue;
       var slot = card.querySelector('[data-role="value"]');
       if (!slot) continue;
+      var previousText = slot.textContent;
       var replacement;
       if (declaration.outcome.status === "value") {
         replacement = renderView(declaration.outcome.body, declaration.name);
@@ -769,6 +915,7 @@
         replacement = element("p", incomplete ? "notice" : "error-chip", (incomplete ? "" : "ERROR: ") + message);
         replacement.setAttribute("data-role", "value");
       }
+      var changed = hasApplied && previousText !== replacement.textContent;
       if (slot.classList.contains("value-scroll") && replacement.classList.contains("value-scroll")) {
         // Retain keyboard focus and the reader's position across recalculation.
         var left = slot.scrollLeft;
@@ -779,6 +926,7 @@
       } else {
         slot.replaceWith(replacement);
       }
+      if (changed) markChanged(card);
     }
   }
 
@@ -798,7 +946,9 @@
       var item = document.querySelector('[data-check="' + selectorEscape(assertion.name) + '"]');
       if (!item) continue;
       var status = assertion.outcome.status;
+      var statusChanged = hasApplied && !item.classList.contains("check--" + status);
       item.className = "check check--" + status;
+      if (statusChanged) markChanged(item);
       var badge = item.querySelector(".badge");
       if (badge) badge.textContent = status.toUpperCase();
       var messageSpan = item.querySelector(".check-message");
@@ -896,7 +1046,7 @@
         else state.view = result.view;
       }).catch(function (error) {
         fail("rendering failed: " + String(error));
-        if (figureStates.get(name) === state) setStatus("live · chart rendering failed", "warn");
+        if (figureStates.get(name) === state) setStatus("Up to date; a chart failed to render", "warn");
       });
     });
   }
@@ -955,9 +1105,13 @@
         if (provenance && oldProvenance) oldProvenance.replaceWith(provenance);
       }
       patchSectionNavigation();
+      updateChecksSummary();
+      hasApplied = true;
+      // Failures are reported by the Checks cell and the tab counts; this cell
+      // only says whether the results on screen are current.
       setStatus(
-        outcome.evaluation.has_errors ? "live · evaluation has errors" : outcome.evaluation.incomplete ? "live · model incomplete" : "live",
-        outcome.evaluation.has_errors || outcome.evaluation.incomplete ? "warn" : "ok",
+        outcome.evaluation.incomplete ? "Up to date; model incomplete" : "Up to date",
+        outcome.evaluation.incomplete ? "warn" : "ok",
       );
     } else if (outcome.status === "binding_errors") {
       controls.forEach(function (control) { control.rejectPending(completedRequest); });
@@ -967,11 +1121,24 @@
         var control = controls.get(bindingError.name);
         if (control) control.setError(bindingError.message, bindingError.path || []);
       }
-      setStatus("input rejected · showing last successful evaluation", "warn");
+      setStatus("Input rejected; showing previous results", "warn", true);
     } else {
       setStatus("evaluation failed: " + outcome.message, "error");
     }
-    banner.hidden = !anyModified();
+    // A parameter is overridden while its accepted binding differs from the baseline.
+    var overriddenCount = 0;
+    controls.forEach(function (control) {
+      var active = JSON.stringify(control.currentBinding) !== JSON.stringify(control.initialBinding);
+      if (active) overriddenCount += 1;
+      if (workspace) workspace.overridden(control.name, active);
+    });
+    banner.hidden = overriddenCount === 0;
+    publishedText.hidden = !banner.hidden;
+    bannerText.textContent = overriddenCount === 1 ? "1 overridden" : overriddenCount + " overridden";
+    inputsCell.cell.classList.toggle("is-modified", !banner.hidden);
+    inputsCell.cell.title = banner.hidden
+      ? "No input is overridden"
+      : "Results use edited inputs; the source file is unchanged";
   }
 
   // --- Transport loop ------------------------------------------------------
@@ -993,7 +1160,7 @@
   function scheduleEvaluate() {
     if (debounceTimer) clearTimeout(debounceTimer);
     if (options.onPending) options.onPending();
-    setStatus("inputs changed · showing last successful evaluation", "warn");
+    setStatus("Recalculating…", "busy", true);
     debounceTimer = setTimeout(function () {
       debounceTimer = null;
       runEvaluate();
@@ -1012,7 +1179,7 @@
     evaluateQueued = false;
     requestId += 1;
     activeRequest = requestId;
-    setStatus("computing…", "busy");
+    setStatus("Recalculating…", "busy", true);
     if (!options.hostOwnsTimeout) timeoutTimer = setTimeout(function () {
       // Cancellation is worker teardown: a blocked evaluation cannot be
       // interrupted, so replace the whole engine and re-prepare.
@@ -1021,7 +1188,7 @@
       activeRequest = null;
       ready = false;
       evaluateQueued = false;
-      setStatus("evaluation timed out · restarting engine", "warn");
+      setStatus("Timed out; restarting the engine", "warn", true);
       startTransport();
     }, EVALUATION_TIMEOUT_MS);
     controls.forEach(function (control) { control.markSubmitted(requestId); });
@@ -1035,8 +1202,11 @@
       if (options.initial) {
         var initial = options.initial;
         options.initial = null;
-        bannerText.textContent = "Parameter overrides are active. Source code is unchanged.";
+        // A host-provided evaluation compares against source defaults, not a
+        // published baseline.
+        publishedText.textContent = "Source defaults";
         resetButton.textContent = "Reset parameters";
+        resetButton.title = "Return every input to its source default";
         buildControls(storedPorts, initial.evaluation);
         initial.bindings.forEach(function (binding) {
           var control = controls.get(binding.name);
@@ -1090,7 +1260,7 @@
       fatal("this browser refused to start the report engine (" + error + ")");
       return;
     }
-    setStatus("preparing model…", "busy");
+    setStatus("Preparing model…", "busy");
   }
 
   startTransport();

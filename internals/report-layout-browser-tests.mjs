@@ -49,10 +49,10 @@ export async function testReportLayout({ temporary, openReport }) {
     assert.deepEqual([readFileSync(output), readFileSync(markdown)], baseline, "byte-deterministic HTML and Markdown");
     const { command, evaluate, wait, warnings, exceptions, close } = await openReport(output, observeCharts);
     await wait("window.reportCharts?.length > 0");
-    if (interactive) await wait("document.querySelector('.hydration-status')?.textContent === 'live'");
+    if (interactive) await wait("document.querySelector('.hydration-status')?.textContent === 'Up to date'");
     const region = name => `document.querySelector('[data-decl="${name}"] .value-scroll')`;
     async function checkLayout() {
-      if (interactive) await evaluate(`Array.from(document.querySelectorAll('.workspace-result-tabs button')).find(button => button.textContent === 'Values').click(); document.querySelectorAll('.workspace-output-details').forEach(detail => detail.open = true)`);
+      if (interactive) await evaluate(`Array.from(document.querySelectorAll('.workspace-result-tabs button')).find(button => button.querySelector('.tab-label').textContent === 'Values').click(); document.querySelectorAll('.workspace-output-details').forEach(detail => detail.open = true)`);
       for (const width of [1440, 390, 280]) {
         await command("Emulation.setDeviceMetricsOverride", { width, height: 1000, deviceScaleFactor: 1, mobile: false });
         const geometry = await evaluate(`(${horizontalGeometry})()`);
@@ -88,7 +88,7 @@ export async function testReportLayout({ temporary, openReport }) {
       const links = await evaluate("Array.from(document.querySelectorAll('.report-nav a'), link => link.getAttribute('href'))");
       assert.deepEqual(links, ["#inputs", "#values", "#plots", "#checks", "#provenance"]);
       if (interactive) {
-        await evaluate(`Array.from(document.querySelectorAll('.workspace-result-tabs button')).find(button => button.textContent === 'Plots').click()`);
+        await evaluate(`Array.from(document.querySelectorAll('.workspace-result-tabs button')).find(button => button.querySelector('.tab-label').textContent === 'Plots').click()`);
         assert.equal(await evaluate("getComputedStyle(document.getElementById('plots')).display !== 'none'"), true);
         return;
       }
@@ -102,7 +102,7 @@ export async function testReportLayout({ temporary, openReport }) {
       for (const [width, height] of [[390, 844], [320, 568], [280, 400], [667, 375]]) {
         await command("Emulation.setDeviceMetricsOverride", { width, height, deviceScaleFactor: 1, mobile: true });
         if (interactive) {
-          await evaluate(`Array.from(document.querySelectorAll('.workspace-result-tabs button')).find(button => button.textContent === 'Plots').click()`);
+          await evaluate(`Array.from(document.querySelectorAll('.workspace-result-tabs button')).find(button => button.querySelector('.tab-label').textContent === 'Plots').click()`);
           assert.equal(await evaluate(`Array.from(document.querySelectorAll('.outline-value:not([type=checkbox]), .outline-search')).every(field => parseFloat(getComputedStyle(field).fontSize) >= 16 && field.getBoundingClientRect().height >= 44)`), true, "mobile fields are readable touch targets");
           assert.equal(await evaluate("getComputedStyle(document.querySelector('.workspace-result-body')).overflowY"), "visible", "short viewports do not trap results in a tiny pane");
         }
@@ -155,7 +155,7 @@ export async function testReportLayout({ temporary, openReport }) {
     await checkPrint();
     await checkZoom();
     if (interactive) {
-      await evaluate(`Array.from(document.querySelectorAll('.workspace-result-tabs button')).find(button => button.textContent === 'Values').click()`);
+      await evaluate(`Array.from(document.querySelectorAll('.workspace-result-tabs button')).find(button => button.querySelector('.tab-label').textContent === 'Values').click()`);
       await evaluate(`(() => {
         const field = document.querySelector('[data-decl="gain"] .control-field');
         field.value = '3.0'; field.dispatchEvent(new Event('input', { bubbles: true }));
