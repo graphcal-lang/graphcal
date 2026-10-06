@@ -96,6 +96,68 @@ fn build_document(source: &str) -> ReportDocument {
 }
 
 #[test]
+fn included_input_ports_are_derived_values_not_entry_inputs() {
+    let source = "\
+param len: Length = 1.0 m;
+dag double {
+    param x: Length;
+    param offset: Length = 2.0 m;
+    pub node y: Length = @x * 2.0 + @offset;
+}
+dag wrapper {
+    param x: Length;
+    include double(x: @x) as inner;
+    pub node y: Length = @inner::y;
+}
+include double(x: @len) as d;
+include wrapper(x: @len) as nested;
+include double(x: @len)::{x as projected};
+node z: Length = @d::y;
+";
+    let project = LoadedProject::from_source(source, "deltav.gcl").unwrap();
+    let result = compile_and_eval_from_project(&project, &HashMap::new()).unwrap();
+    assert_eq!(
+        result
+            .entry_params()
+            .map(|(name, _)| name.to_string())
+            .collect::<Vec<_>>(),
+        ["len"]
+    );
+    // The report-specific classification must not remove ports from eval/debug views.
+    assert!(result.params().any(|(name, _)| name.to_string() == "d::x"));
+    let document = build_document(source);
+    assert_eq!(
+        document
+            .params
+            .iter()
+            .map(|card| card.name.as_str())
+            .collect::<Vec<_>>(),
+        ["len"]
+    );
+    for name in ["d::x", "d::offset", "nested::x", "projected", "z"] {
+        assert!(
+            document.values.iter().any(|card| card.name == name),
+            "missing derived value {name}"
+        );
+    }
+}
+
+#[test]
+fn blocked_include_ports_are_not_entry_inputs() {
+    let document = build_document(
+        "\
+param len: Length = 1.0 m;
+node broken: Length = todo {};
+dag double { param x: Length; pub node y: Length = @x * 2.0; }
+include double(x: @broken) as d;
+",
+    );
+    assert_eq!(document.params.len(), 1);
+    assert_eq!(document.params[0].name, "len");
+    assert!(document.values.iter().any(|card| card.name == "d::x"));
+}
+
+#[test]
 fn document_derives_sections_from_the_model_alone() {
     let document = build_document(DELTA_V);
     assert_eq!(

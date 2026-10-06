@@ -7443,6 +7443,102 @@ fn report_build_provenance_pins_source_digest_and_parameter_baseline() {
 }
 
 #[test]
+fn report_build_only_lists_externally_bindable_entry_inputs_and_baselines() {
+    let dir = tempfile::tempdir().unwrap();
+    write_temp_file(dir.path(), "graphcal.toml", "[package]\nname = \"demo\"\n");
+    write_temp_file(
+        dir.path(),
+        "src/demo/lib.gcl",
+        "\
+pub dag double {
+    param x: Length;
+    param offset: Length = 2.0 m;
+    pub node y: Length = @x * 2.0 + @offset;
+}
+",
+    );
+    let model = write_temp_file(
+        dir.path(),
+        "src/demo/entry.gcl",
+        "\
+param len: Length = 1.0 m;
+include demo.lib.double(x: @len) as d;
+node z: Length = @d::y;
+",
+    );
+    let html_path = dir.path().join("out.html");
+    let md_path = dir.path().join("out.md");
+    for static_only in [true, false] {
+        for binding in [None, Some("len=5.0 m")] {
+            let mut command = graphcal_bin();
+            command.args(["report", "build"]).arg(&model);
+            if static_only {
+                command.arg("--static");
+            }
+            if let Some(binding) = binding {
+                command.args(["--param", binding]);
+            }
+            let output = command
+                .arg("--output")
+                .arg(&html_path)
+                .arg("--markdown")
+                .arg(&md_path)
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "stderr: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            let markdown = std::fs::read_to_string(&md_path).unwrap();
+            let inputs = markdown
+                .split_once("## Inputs\n")
+                .unwrap()
+                .1
+                .split_once("## Values")
+                .unwrap()
+                .0;
+            let expected = if binding.is_some() { "5 m" } else { "1 m" };
+            assert_eq!(inputs.trim(), format!("- `len` = {expected}"));
+            let baseline = markdown
+                .lines()
+                .filter(|line| line.starts_with("- Baseline:"))
+                .collect::<Vec<_>>();
+            assert_eq!(baseline, [format!("- Baseline: `len` = {expected}")]);
+            assert!(markdown.contains(&format!("- `d::x` = {expected}")));
+            assert!(markdown.contains("- `d::offset` = 2 m"));
+            let html = std::fs::read_to_string(&html_path).unwrap();
+            let inputs = html
+                .split_once("id=\"inputs\"")
+                .unwrap()
+                .1
+                .split_once("id=\"values\"")
+                .unwrap()
+                .0;
+            assert!(inputs.contains("data-decl=\"len\""));
+            assert!(!inputs.contains("data-decl=\"d::"));
+            let baseline = html
+                .split_once("<dt>Baseline</dt>")
+                .unwrap()
+                .1
+                .split_once("</ul>")
+                .unwrap()
+                .0;
+            assert!(baseline.contains(&format!("<li><code>len</code> = {expected}</li>")));
+            assert!(!baseline.contains("d::"));
+        }
+    }
+    let output = graphcal_bin()
+        .arg("eval")
+        .arg(&model)
+        .args(["--param", "d::x=5.0 m"])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("unknown entry parameter `d::x`"));
+}
+
+#[test]
 fn report_build_default_output_is_next_to_the_model() {
     let dir = tempfile::tempdir().unwrap();
     let model = write_temp_file(dir.path(), "deltav.gcl", REPORT_MODEL);

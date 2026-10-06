@@ -922,6 +922,17 @@ impl EvalResult {
         self.category(ValueDeclCategory::Param)
     }
 
+    /// Iterate over externally bindable entry parameters in source order.
+    ///
+    /// Included DAG input ports retain their instance scope; they are bound
+    /// by the caller, not by external entry bindings. Selectively projected
+    /// ports are nodes, so only local param declarations belong here.
+    pub fn entry_params(
+        &self,
+    ) -> impl Iterator<Item = (&ScopedName, &Result<Value, OutputUnavailable>)> {
+        self.params().filter(|(name, _)| name.owner().is_none())
+    }
+
     /// Iterate over every node value in source order.
     pub fn nodes(&self) -> impl Iterator<Item = (&ScopedName, &Result<Value, OutputUnavailable>)> {
         self.category(ValueDeclCategory::Node)
