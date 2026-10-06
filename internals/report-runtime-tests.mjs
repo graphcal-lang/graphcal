@@ -17,12 +17,35 @@ await reportEngine({ module_or_path: readFileSync("target/wasm-report/pkg/graphc
 class Element {
   constructor(tag = "div") { this.tag = tag; this.children = []; this.events = {}; this.textContent = ""; this.className = ""; }
   appendChild(child) { this.children.push(child); return child; }
+  append(...nodes) { for (const node of nodes) this.appendChild(typeof node === "string" ? { textContent: node } : node); }
+  prepend(node) { this.children.unshift(node); }
   insertBefore(child) { return this.appendChild(child); }
   addEventListener(event, listener) { this.events[event] = listener; }
   setAttribute(name, value) { this[name] = value; }
   replaceChildren(...children) { this.children = children; }
   querySelector(selector) { return selector === ".cards" ? this.children.find(child => child.className === "cards") : null; }
+  querySelectorAll() { return []; }
+  // Class tokens are kept in `className`, so exact-className assertions still hold.
+  get classList() {
+    const tokens = () => this.className.split(/\s+/).filter(Boolean);
+    const set = names => { this.className = names.join(" "); };
+    return {
+      add: (...names) => set([...new Set([...tokens(), ...names])]),
+      remove: (...names) => set(tokens().filter(name => !names.includes(name))),
+      toggle: (name, force) => {
+        const on = force === undefined ? !tokens().includes(name) : Boolean(force);
+        set(on ? [...new Set([...tokens(), name])] : tokens().filter(token => token !== name));
+        return on;
+      },
+      contains: name => tokens().includes(name),
+    };
+  }
 }
+const statusText = root => {
+  const find = element => element.className?.startsWith?.("hydration-status") ? element
+    : (element.children ?? []).map(find).find(Boolean);
+  return find(root)?.textContent;
+};
 function runtime(source, baseline = [], files = [], enableAutoRun = false) {
   const entry = files.length ? "src/demo/main.gcl" : "main.gcl";
   const project = { entry, files: [{ path: entry, content: source }, ...files] };
@@ -42,6 +65,7 @@ function runtime(source, baseline = [], files = [], enableAutoRun = false) {
   const context = {
     document: {
       body: new Element(), createElement: tag => new Element(tag), createTextNode: text => ({ textContent: text }),
+      querySelectorAll: () => [],
       getElementById: id => id === "inputs" ? inputsSection
         : ["incomplete-notice", "call-notices"].includes(id) ? main.children.find(child => child.id === id) || null
         : { textContent: payloads[id] },
@@ -256,20 +280,6 @@ console.log("structured controls: constructor drafts, nested fields and fixed-ax
 }
 console.log("recursive controls: finite schema graph and deep edits passed");
 
-{
-  const run = runtime(`pub type Choice { Amount(value: Dimensionless), Off, }
-    param choice: Choice = Off;`);
-  run.descendants(run.cards.get("choice")).find(child => child.textContent === "Raw literal").events.click();
-  const raw = run.descendants(run.cards.get("choice")).find(child => child.className === "control-raw-field");
-  raw.value = "Amount(value: 6.0)";
-  raw.events.input();
-  assert.deepEqual(run.bindings(), [], "raw edits remain unapplied");
-  run.apply("choice");
-  assert.equal(value(run.evaluate(), "choice").type_name, "Amount");
-  run.prepared.free();
-}
-console.log("structured controls: raw mode preserves explicit apply semantics");
-
 const vegaContext = { console, structuredClone };
 runInNewContext(readFileSync("crates/graphcal-report/assets/vega.min.js", "utf8"), vegaContext);
 runInNewContext(readFileSync("crates/graphcal-report/assets/vega-lite.min.js", "utf8"), vegaContext);
@@ -348,6 +358,23 @@ for (const [lower, upper, slider] of [
 }
 console.log("integer controls: exact i64 bounds, one-sided domains and safe sliders passed");
 
+{
+  // Slider bounds are canonical SI; a literal in another unit must not be
+  // placed by its bare number (2.0 km once showed as 0 on a 0–5000 m slider).
+  const run = runtime("param range: Length(min: 0.0 m, max: 5000.0 m) = 2.0 km;");
+  const slider = run.descendants(run.cards.get("range")).find(child => child.classList.contains("control-slider"));
+  assert.ok(slider.classList.contains("is-unplaced"), "a non-canonical literal leaves the slider unplaced");
+  assert.equal(Number(slider.value), Number(slider.min), "an unplaced slider rests at its minimum instead of a guessed value");
+  run.edit("range", "1500.0 m");
+  assert.equal(Number(slider.value), 1500, "typed canonical literals move the slider");
+  assert.ok(!slider.classList.contains("is-unplaced"));
+  slider.value = "2000";
+  slider.events.input();
+  assert.equal(run.field("range").value, "2000.0 m", "dragging writes a canonical literal");
+  run.prepared.free();
+}
+console.log("quantity sliders: only canonical-unit literals are placed; others show an unplaced track");
+
 for (const [prefix, index, files] of [
   ["pub index Mode = { Nominal, Safe };", "Mode", []],
   ["import demo.modes as config;", "config::Mode", [{ path: "graphcal.toml", content: '[package]\nname = "demo"' }, { path: "src/demo/modes.gcl", content: "pub index Mode = { Nominal, Safe };" }]],
@@ -425,6 +452,7 @@ console.log("value body: static and hydrated ranks 0–5 and nested structures h
       createTextNode: text => ({ textContent: text }),
       getElementById: () => null,
       querySelector: () => body,
+      querySelectorAll: () => [],
     },
     setTimeout(fn, milliseconds) { const id = {}; timers.set(id, { fn, milliseconds }); return id; },
     clearTimeout(id) { timers.delete(id); },
@@ -448,13 +476,13 @@ console.log("value body: static and hydrated ranks 0–5 and nested structures h
     { type: "evaluate", id: 1, bindings: [{ name: "mass", expr: "12.0 kg" }] },
   ]);
   first.callbacks.onMessage({ type: "result", id: 999, outcome: { status: "eval_error", message: "stale" } });
-  assert.equal(body.children[0].textContent, "computing…");
+  assert.equal(statusText(body), "Recalculating…");
   [...timers.values()].find(timer => timer.milliseconds === 10000).fn();
   assert.equal(first.terminated, true);
   assert.equal(transports.length, 2);
   transports[1].callbacks.onMessage({ type: "ready", ports: [] });
   assert.equal(transports[1].messages[0].id, 2);
   transports[1].callbacks.onMessage({ type: "result", id: 2, outcome: { status: "eval_error", message: "missing input" } });
-  assert.equal(body.children[0].textContent, "evaluation failed: missing input");
+  assert.equal(statusText(body), "evaluation failed: missing input");
 }
 console.log("report transport: baseline replay, stale response rejection and timeout replacement passed");

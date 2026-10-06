@@ -158,7 +158,31 @@ fn vega_scripts_are_omitted_without_figures() {
     let document = build_document("param x: Dimensionless = 1.0;\nnode y: Dimensionless = @x;");
     let html = render_report_html(&document, VegaScriptSource::Inline, None);
     assert!(!html.contains("vegaEmbed"));
+    assert!(!html.contains(CHART_THEME_MARKER));
     assert!(html.contains("data-decl=\"y\""));
+}
+
+/// The first line of `report_charts.js`, which themes every `vegaEmbed` call.
+const CHART_THEME_MARKER: &str = "// Report chart theme.";
+
+#[test]
+fn chart_theme_loads_between_the_vega_stack_and_the_figures() {
+    for scripts in [VegaScriptSource::Inline, VegaScriptSource::Cdn] {
+        let html = render_report_html(&build_document(DELTA_V), scripts, None);
+        let stack = html
+            .find("vega-embed")
+            .expect("charted reports load the Vega stack");
+        let theme = html
+            .find(CHART_THEME_MARKER)
+            .expect("charted reports load the chart theme");
+        let figure = html
+            .find("vegaEmbed('#graphcal-figure-0'")
+            .expect("the figure renders through vegaEmbed");
+        assert!(
+            stack < theme && theme < figure,
+            "the theme must wrap vegaEmbed before the first figure renders"
+        );
+    }
 }
 
 #[test]

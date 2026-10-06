@@ -50,7 +50,7 @@ test("report controls auto-run, support manual Apply, and share accepted binding
   await open(page);
   await expect(result(page)).toHaveText("4 m/s");
   await report(page).getByRole("button", { name: "Plots", exact: true }).click();
-  await expect(report(page).locator("figure canvas, figure svg")).toBeVisible();
+  await expect(report(page).locator("figure canvas, figure svg:not(.pin-icon)")).toBeVisible();
   await report(page).getByRole("button", { name: "Values", exact: true }).click();
   await expect(report(page).locator(".card-doc")).toHaveText("Speed <script> is plain text.");
   const autoRun = report(page).getByRole("checkbox", { name: "Auto run", exact: true });
@@ -103,7 +103,7 @@ param samples: Int[Fin(40)] = for i: Fin(40) { 1 };`;
   await page.goto(`/playground/?view=report${fragment([], structured)}`);
   await page.locator("#run").click();
   const frame = report(page);
-  await expect(frame.locator(".hydration-status")).toHaveText("live");
+  await expect(frame.locator(".hydration-status")).toHaveText("Up to date");
   await expect(frame.locator('[data-decl="samples"] .control-index-entry')).toHaveCount(32);
   await frame.getByRole("searchbox", { name: "Search inputs" }).fill("samples #39");
   await expect(frame.locator('[data-decl="samples"] .control-index-entry')).toHaveCount(40);
@@ -146,7 +146,7 @@ test("report result tabs stay inside the sandbox and survive recalculation", asy
     await tab.focus();
     await page.keyboard.press("Enter");
     await expect(tab).toHaveAttribute("aria-pressed", "true");
-    await expect(report(page).locator("figure canvas, figure svg")).toBeVisible();
+    await expect(report(page).locator("figure canvas, figure svg:not(.pin-icon)")).toBeVisible();
     await expect(page.locator("#report iframe")).toHaveCount(1);
     expect(page.frames().some((frame) => frame.url() === "about:srcdoc")).toBe(true);
   }
@@ -344,7 +344,7 @@ test("structured report tables are contained, bounded and accessible", async ({ 
   );
   await page.goto(`/playground/?view=report${fragment([], layoutSource)}`);
   await page.locator("#run").click();
-  await expect(report(page).locator(".hydration-status")).toHaveText("live");
+  await expect(report(page).locator(".hydration-status")).toHaveText("Up to date");
   expect(
     (await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa", "wcag21aa"]).analyze())
       .violations,
@@ -394,7 +394,7 @@ test("outline search and editable pins share the native evaluator in the sandbox
   await frame.getByRole("searchbox", { name: "Search inputs" }).fill("");
   await frame.getByRole("checkbox", { name: "Pinned only", exact: true }).check();
   await expect(frame.locator(".outline-content")).toBeHidden();
-  await frame.getByRole("button", { name: "Pin output doubled", exact: true }).click();
+  await frame.getByRole("button", { name: "Pin value doubled", exact: true }).click();
   await frame.getByRole("button", { name: "Checks", exact: true }).click();
   await frame.getByRole("textbox", { name: "speed", exact: true }).fill("5.0 m/s");
   await expect(result(page)).toHaveText("10 m/s");
@@ -420,7 +420,7 @@ test.describe("mobile report", () => {
     await page.goto(`/playground/?view=report${fragment([], layoutSource)}`);
     await page.locator("#run").tap();
     const frame = report(page);
-    await expect(frame.locator(".hydration-status")).toHaveText("live");
+    await expect(frame.locator(".hydration-status")).toHaveText("Up to date");
     const jump = frame.getByRole("navigation", { name: "Report workspace", exact: true });
     const gain = frame.getByRole("textbox", { name: "gain", exact: true });
     await frame.getByRole("checkbox", { name: "Auto run", exact: true }).uncheck();
@@ -442,11 +442,13 @@ test.describe("mobile report", () => {
       expect(
         await gain.evaluate((el) => {
           const box = el.getBoundingClientRect();
+          // The field box (literal plus its unit tag) spans the row.
+          const field = el.closest(".outline-field")!.getBoundingClientRect();
           const row = el.closest(".outline-row")!.getBoundingClientRect();
           return (
             parseFloat(getComputedStyle(el).fontSize) >= 16 &&
             box.height >= 44 &&
-            box.width >= row.width - 1
+            field.width >= row.width - 1
           );
         }),
       ).toBe(true);
@@ -463,7 +465,7 @@ test.describe("mobile report", () => {
       ).toBe(true);
       await frame.getByRole("button", { name: "Plots", exact: true }).tap();
       const plot = frame.getByRole("figure", { name: "bars plot" });
-      await expect(plot.locator("canvas, svg")).toBeVisible();
+      await expect(plot.locator("canvas, svg:not(.pin-icon)")).toBeVisible();
       expect(
         await plot.evaluate(
           (el) =>

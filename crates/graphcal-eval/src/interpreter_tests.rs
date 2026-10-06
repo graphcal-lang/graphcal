@@ -8,7 +8,10 @@ use graphcal_compiler::semantic_error::SemanticError;
 use graphcal_compiler::tir::typed::CheckedTir;
 
 use crate::eval::bindings::RuntimeParameterBindings;
-use crate::eval::{AssertResult, EvalResult, NodeUnavailable, PlotFieldValue, Value};
+use crate::eval::{
+    AssertResult, CompositionProperty, EvalResult, MarkProperty, NodeUnavailable, PlotFieldValue,
+    PlotProperty, PropertyValue, Value,
+};
 use crate::host_fns::HostFunctionRegistry;
 
 /// Check a single-file program.
@@ -1445,6 +1448,121 @@ plot curve = {
             }
         }
     }
+}
+
+#[test]
+fn plot_properties_evaluate_to_their_checked_value_types() {
+    let result = compile_and_eval(
+        r##"
+plot dots = {
+    mark: point { filled: true, size: 30, color: "#0891b2" },
+    encode: { x: 1.0, y: 2.0 },
+    title: "Dots",
+    width: 480,
+};
+layer overlay = { plots: [dots], width: 200.0 };
+"##,
+    )
+    .unwrap();
+    assert!(!result.has_errors(), "{result:?}");
+    let [plot] = result.plots.as_slice() else {
+        panic!("expected one plot, got {:?}", result.plots);
+    };
+    // A boolean property stays a boolean, never a string spelling of one.
+    assert_eq!(
+        plot.mark_properties,
+        [
+            (MarkProperty::Filled, PropertyValue::Bool(true)),
+            (MarkProperty::Size, PropertyValue::Number(30.0)),
+            (
+                MarkProperty::Color,
+                PropertyValue::String("#0891b2".to_string())
+            ),
+        ]
+    );
+    assert_eq!(
+        plot.properties,
+        [
+            (
+                PlotProperty::Title,
+                PropertyValue::String("Dots".to_string())
+            ),
+            (PlotProperty::Width, PropertyValue::Number(480.0)),
+        ]
+    );
+    assert_eq!(
+        result.layers[0].properties,
+        [(CompositionProperty::Width, PropertyValue::Number(200.0))]
+    );
+}
+
+#[test]
+fn plot_axis_metadata_names_the_unit_of_the_plotted_numbers() {
+    use graphcal_compiler::syntax::ast::EncodingChannel;
+
+    fn meta(
+        plot: &crate::eval::PlotSpec,
+        channel: EncodingChannel,
+    ) -> Option<(Option<&str>, Option<&str>)> {
+        plot.encoding_meta
+            .iter()
+            .find(|(candidate, _)| *candidate == channel)
+            .map(|(_, meta)| (meta.dimension_label.as_deref(), meta.unit_label.as_deref()))
+    }
+
+    let result = compile_and_eval(
+        r"
+index Epoch = linspace(0.0 min, 10.0 min, points: 3);
+node elapsed: Time[Epoch] = for t: Epoch { coord(t) };
+node speed: Velocity[Epoch] = for t: Epoch { (2.0 m/s) * coord(t) / (1.0 s) };
+node ratio: Dimensionless[Epoch] = for t: Epoch { coord(t) / (1.0 s) };
+plot unconverted = { mark: line, encode: { x: @elapsed, y: @speed } };
+plot converted = {
+    mark: line,
+    encode: {
+        x: for t: Epoch { t },
+        y: for t: Epoch { @speed[t] -> km/s },
+        color: @ratio,
+    },
+};
+",
+    )
+    .unwrap();
+    assert!(!result.has_errors(), "{result:?}");
+    let [unconverted, converted] = result.plots.as_slice() else {
+        panic!("expected two plots, got {:?}", result.plots);
+    };
+    // Unconverted quantities are plotted in SI and named by the canonical unit.
+    assert_eq!(
+        meta(unconverted, EncodingChannel::X),
+        Some((Some("Time"), Some("s")))
+    );
+    assert_eq!(
+        meta(unconverted, EncodingChannel::Y),
+        Some((Some("Velocity"), Some("m/s")))
+    );
+    // A coordinate key is plotted as its SI coordinate, although its index
+    // displays minutes.
+    assert_eq!(
+        meta(converted, EncodingChannel::X),
+        Some((Some("Time"), Some("s")))
+    );
+    let x = converted
+        .encodings
+        .iter()
+        .find(|(channel, _)| *channel == EncodingChannel::X)
+        .map(|(_, values)| values);
+    assert!(
+        matches!(x, Some(PlotFieldValue::Numbers(values)) if values == &[0.0, 300.0, 600.0]),
+        "{x:?}"
+    );
+    // An explicit conversion names its display unit.
+    assert_eq!(
+        meta(converted, EncodingChannel::Y),
+        Some((Some("Velocity"), Some("km/s")))
+    );
+    // A dimensionless channel names no unit.
+    assert_eq!(meta(converted, EncodingChannel::Color), Some((None, None)));
 }
 
 #[test]

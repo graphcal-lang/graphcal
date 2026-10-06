@@ -69,7 +69,7 @@ if (process.env.GRAPHCAL_PACKAGE_BROWSER_TEST === "1") {
       await page.route(/^https?:/, route => route.abort());
       await page.goto(pathToFileURL(process.argv[2]).href);
       const status = page.locator(".hydration-status");
-      await expect(status).toHaveText("live");
+      await expect(status).toHaveText("Up to date");
       const first = page.locator('[data-decl="first"] [data-role="value"]');
       const later = page.locator('[data-decl="later_result"] [data-role="value"]');
       await expect(first).toHaveText("8");
@@ -96,7 +96,7 @@ if (process.env.GRAPHCAL_PACKAGE_BROWSER_TEST === "1") {
         // Restart can replace the timeout status in the same task. Inspect the
         // recorded text nodes, not only the final DOM at observer delivery.
         new MutationObserver(records => {
-          if (records.some(record => Array.from(record.addedNodes).some(node => node.textContent.includes("timed out")))) globalThis.__timeoutObserved = true;
+          if (records.some(record => Array.from(record.addedNodes).some(node => /timed out/i.test(node.textContent)))) globalThis.__timeoutObserved = true;
         }).observe(status, { childList: true, characterData: true, subtree: true });
       });
       // Negative input enters a metered loop in a dependency-owned plugin.
@@ -111,7 +111,7 @@ if (process.env.GRAPHCAL_PACKAGE_BROWSER_TEST === "1") {
       await page.evaluate(() => { window.setTimeout = globalThis.__originalSetTimeout; });
       await input.fill("5.0");
       await apply();
-      await expect(status).toHaveText("live", { timeout: 20000 });
+      await expect(status).toHaveText("Up to date", { timeout: 20000 });
       await expect(first).toHaveText("10");
       await expect(later).toHaveText("15");
     } finally {

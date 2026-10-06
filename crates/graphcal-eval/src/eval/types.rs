@@ -986,9 +986,9 @@ pub struct PlotSpec {
     /// Display failures associated with this plot's channels; data falls back to SI.
     pub(crate) presentation_diagnostics: Vec<crate::presentation_evidence::PresentationDiagnostic>,
     /// Evaluated mark properties (`stroke_width`, `opacity`, etc.).
-    pub mark_properties: Vec<(MarkProperty, PlotFieldValue)>,
+    pub mark_properties: Vec<(MarkProperty, PropertyValue)>,
     /// Evaluated plot-level properties (title, width, height, etc.).
-    pub properties: Vec<(PlotProperty, PlotFieldValue)>,
+    pub properties: Vec<(PlotProperty, PropertyValue)>,
     /// Whether this plot renders standalone. `#[hidden]` plots are only
     /// usable in figure/layer composition (#847).
     pub visibility: graphcal_compiler::plot_visibility::PlotVisibility,
@@ -1002,7 +1002,7 @@ pub struct FigureSpec {
     /// The plot names referenced by this figure.
     pub plot_names: Vec<ScopedName>,
     /// Additional evaluated properties (e.g., title).
-    pub properties: Vec<(CompositionProperty, PlotFieldValue)>,
+    pub properties: Vec<(CompositionProperty, PropertyValue)>,
 }
 
 /// A single evaluated layer specification.
@@ -1013,7 +1013,7 @@ pub struct LayerSpec {
     /// The plot names to overlay in this layer.
     pub plot_names: Vec<ScopedName>,
     /// Additional evaluated properties (e.g., title, width, height).
-    pub properties: Vec<(CompositionProperty, PlotFieldValue)>,
+    pub properties: Vec<(CompositionProperty, PropertyValue)>,
 }
 
 /// Axis metadata for auto-generating axis titles from dimension/unit info.
@@ -1021,26 +1021,40 @@ pub struct LayerSpec {
 pub struct AxisMeta {
     /// The dimension name (e.g., "Velocity", "Length * Time^-1").
     pub dimension_label: Option<String>,
-    /// The display unit label (e.g., "km/s", "m").
+    /// The label of the unit the channel's numbers are in (e.g., "km/s",
+    /// "m"): the display unit of an explicit `->` conversion, otherwise the
+    /// canonical unit of the SI values. `None` when the numbers carry no unit
+    /// (an unconverted dimensionless or a non-quantity channel) or the
+    /// dimension has no canonical unit.
     pub unit_label: Option<String>,
 }
 
-/// A resolved value for a plot field.
+/// The evaluated data of one plot encoding channel, one value per row.
 #[derive(Debug, Clone)]
 pub enum PlotFieldValue {
-    /// A list of f64 values (from evaluated numeric expressions/for-comprehensions).
+    /// Numeric values (from evaluated numeric expressions/for-comprehensions).
     Numbers(Vec<f64>),
-    /// A list of string labels (from evaluated label expressions/for-comprehensions).
+    /// String labels (from index keys, booleans, or a string literal), in
+    /// row order.
     Labels(Vec<String>),
-    /// A list of datetime instants as RFC 3339 / ISO 8601 strings,
-    /// rendered with Vega-Lite temporal encoding (#846).
+    /// Datetime instants as RFC 3339 / ISO 8601 strings, rendered with
+    /// Vega-Lite temporal encoding (#846).
     Datetimes(Vec<String>),
-    /// A single string value (e.g., title).
+}
+
+/// The evaluated value of one plot, mark, or composition property.
+///
+/// The variant is the property's checked [`PlotPropertyType`]: a `Bool`
+/// property such as `filled` evaluates to [`Self::Bool`], never to a string
+/// spelling of the boolean.
+#[derive(Debug, Clone, PartialEq)]
+pub enum PropertyValue {
+    /// A string literal (e.g. `title: "Thrust"`).
     String(String),
-    /// A single numeric value.
+    /// A dimensionless number (e.g. `width: 480`).
     Number(f64),
-    /// A single datetime instant as an RFC 3339 / ISO 8601 string (#846).
-    Datetime(String),
+    /// A boolean (e.g. `filled: true`).
+    Bool(bool),
 }
 
 #[cfg(test)]

@@ -27,7 +27,8 @@ use crate::eval::plot_unavailable::{ComposedPlotsUnavailable, PlotUnavailable};
 use crate::eval::public_projection;
 use crate::eval::types::{
     AxisMeta, CompositionProperty, FigureSpec, LayerSpec, NodeUnavailable, PlotError,
-    PlotFieldValue, PlotPropertyType, PlotSpec, RuntimeUnavailable,
+    PlotFieldValue, PlotPropertyType, PlotSpec, PropertyValue, RuntimeUnavailable,
+    default_unit_label,
 };
 use crate::eval_expr::{
     EvalSession, RuntimeValue, RuntimeValueMap, eval_root, eval_root_with_presentation,
@@ -38,7 +39,6 @@ use crate::presentation_evidence::{
 };
 use crate::runtime_presentation::PendingPresentedMap;
 use crate::runtime_presentation::PresentedRef;
-use crate::runtime_value::KeyElement;
 
 use super::dependency_failures::dependency_failure_message;
 use super::evaluated_root::EvaluatedRoot;
@@ -231,16 +231,19 @@ impl Compositions<'_, '_> {
     }
 }
 
-/// Evaluate one plot property expression to a `PlotFieldValue`. String
-/// literals are passed through directly (Graphcal has no runtime String
-/// value); any other expression is evaluated and converted from a
-/// `RuntimeValue`. An evaluation failure aborts the whole plot; the error
-/// message is reported on the plot (#842).
+/// Evaluate one plot property expression to a typed [`PropertyValue`].
+///
+/// A string literal passes through directly (Graphcal has no runtime String
+/// value); any other expression is evaluated and keeps its runtime type: a
+/// quantity or exact `Int` is a number, and a `Bool` stays a boolean, never a
+/// string spelling of it. No other value can configure a plot. An evaluation
+/// failure aborts the whole plot; the error message is reported on the plot
+/// (#842).
 fn eval_plot_property(
     expr: Scoped<'_, graphcal_compiler::hir::expr::Expr>,
     values: &RuntimeValueMap,
     ctx: &EvalSession<'_>,
-) -> Result<PlotFieldValue, PlotEvaluationError> {
+) -> Result<PropertyValue, PlotEvaluationError> {
     ctx.cancellation
         .checkpoint()
         .map_err(Outcome::<SemanticError>::from)?;
@@ -248,13 +251,32 @@ fn eval_plot_property(
         let text = ctx
             .checked_string(expr)
             .map_err(PlotEvaluationError::from)?;
-        return Ok(PlotFieldValue::String(text.to_owned()));
+        return Ok(PropertyValue::String(text.to_owned()));
     }
-    ctx.executable(expr)
+    let value = ctx
+        .executable(expr)
         .map_err(Outcome::Failed)
         .and_then(|tree| eval_root(&tree, values, ctx))
-        .map_err(PlotEvaluationError::from)
-        .and_then(|rv| runtime_to_plot_field_value(&rv).map_err(PlotEvaluationError::from))
+        .map_err(PlotEvaluationError::from)?;
+    match value {
+        RuntimeValue::Quantity(quantity) => Ok(PropertyValue::Number(quantity.get())),
+        RuntimeValue::Int(i) => crate::eval_expr::numeric::exact_i64_to_f64(i)
+            .map(PropertyValue::Number)
+            .map_err(|_| {
+                PlotEvaluationError::from(format!(
+                    "Int value {i} cannot be plotted exactly; convert it explicitly with to_float()"
+                ))
+            }),
+        RuntimeValue::Bool(flag) => Ok(PropertyValue::Bool(flag)),
+        other @ (RuntimeValue::Key(_)
+        | RuntimeValue::Indexed(_)
+        | RuntimeValue::Datetime(_)
+        | RuntimeValue::Complex(_)
+        | RuntimeValue::Struct(_)) => Err(PlotEvaluationError::from(format!(
+            "{} cannot configure a plot",
+            other.describe()
+        ))),
+    }
 }
 
 #[derive(Debug)]
@@ -323,8 +345,8 @@ struct EvaluatedPlot {
     )>,
     encoding_meta: Vec<(graphcal_compiler::syntax::ast::EncodingChannel, AxisMeta)>,
     presentation_diagnostics: Vec<PresentationDiagnostic>,
-    mark_properties: Vec<(graphcal_compiler::plot_props::MarkProperty, PlotFieldValue)>,
-    properties: Vec<(graphcal_compiler::plot_props::PlotProperty, PlotFieldValue)>,
+    mark_properties: Vec<(graphcal_compiler::plot_props::MarkProperty, PropertyValue)>,
+    properties: Vec<(graphcal_compiler::plot_props::PlotProperty, PropertyValue)>,
 }
 
 impl EvaluatedPlot {
@@ -408,7 +430,7 @@ fn evaluate_plot(
                     expr.get().span,
                 ))
             })?;
-        let (data, unit_label, diagnostics) =
+        let (data, axis_meta, diagnostics) =
             evaluate_plot_channel(channel, expr, fact, values, frame_presentations, ctx)?;
 
         presentation_diagnostics.extend(diagnostics.into_iter().map(|detail| {
@@ -418,19 +440,7 @@ fn evaluate_plot(
                 detail,
             }
         }));
-        let dimension_label = match fact.leaf() {
-            PlotLeafKind::Quantity(dimension) if !dimension.is_dimensionless() => {
-                Some(ctx.registry.dimensions.format_dimension(dimension))
-            }
-            _ => None,
-        };
-        encoding_meta.push((
-            channel,
-            AxisMeta {
-                dimension_label,
-                unit_label,
-            },
-        ));
+        encoding_meta.push((channel, axis_meta));
         channel_data.push((channel, data));
     }
     let encodings = crate::eval::plot_data::align_encoding_channels(&channel_data)?;
@@ -469,7 +479,7 @@ fn evaluate_mark_properties(
     >,
     values: &RuntimeValueMap,
     ctx: &EvalSession<'_>,
-) -> Result<Vec<(graphcal_compiler::plot_props::MarkProperty, PlotFieldValue)>, PlotEvaluationError>
+) -> Result<Vec<(graphcal_compiler::plot_props::MarkProperty, PropertyValue)>, PlotEvaluationError>
 {
     fields
         .iter()
@@ -492,7 +502,7 @@ fn evaluate_plot_channel(
 ) -> Result<
     (
         crate::eval::plot_data::ChannelData,
-        Option<String>,
+        AxisMeta,
         Vec<LeafPresentationDiagnostic>,
     ),
     PlotEvaluationError,
@@ -501,7 +511,7 @@ fn evaluate_plot_channel(
     if let graphcal_compiler::hir::expr::ExprKind::StringLiteral(value) = expr.kind() {
         return Ok((
             crate::eval::plot_data::ChannelData::unindexed_label(value.clone()),
-            None,
+            AxisMeta::default(),
             Vec::new(),
         ));
     }
@@ -522,24 +532,82 @@ fn evaluate_plot_channel(
     // A numeric channel must use one scale: it is displayed only when every
     // leaf displays and all share one unit. Otherwise it keeps its SI
     // projection whole, rather than mixing converted leaves with SI leaves.
-    let (shown, unit_label) = match crate::eval::plot_data::uniform_quantity_unit_label(&displayed)
-    {
-        Ok(label) if diagnostics.is_empty() => (displayed, label),
-        label => {
-            if let Err(error) = label {
-                diagnostics.push(LeafPresentationDiagnostic {
-                    path: Vec::new(),
-                    failure: PresentationFailure::Projection { message: error },
-                });
+    // Without a shared display unit, every quantity leaf is plotted in SI.
+    let (shown, display_unit) =
+        match crate::eval::plot_data::uniform_quantity_unit_label(&displayed) {
+            Ok(label) if diagnostics.is_empty() => (displayed, label),
+            label => {
+                if let Err(error) = label {
+                    diagnostics.push(LeafPresentationDiagnostic {
+                        path: Vec::new(),
+                        failure: PresentationFailure::Projection { message: error },
+                    });
+                }
+                let (projected, _) = project(PresentedRef::plain(&presented.value()))?;
+                (projected, None)
             }
-            let (projected, _) = project(PresentedRef::plain(&presented.value()))?;
-            (projected, None)
-        }
-    };
+        };
     let data =
         crate::eval::plot_data::channel_data_from_presented_value(&presented.value(), &shown)
             .map_err(|error| format!("encoding channel `{channel}`: {error}"))?;
-    Ok((data, unit_label, diagnostics))
+    let axis_meta = channel_axis_meta(fact.leaf(), display_unit, ctx);
+    Ok((data, axis_meta, diagnostics))
+}
+
+/// Axis metadata of a channel of `leaf` values, whose quantities are plotted
+/// in the unit labelled `display_unit` or, without one, as SI values.
+///
+/// A coordinate key is plotted as its SI coordinate (#839), whatever unit its
+/// index displays coordinates in, so it is labelled like an unconverted
+/// quantity of the coordinate dimension.
+fn channel_axis_meta(
+    leaf: &PlotLeafKind,
+    display_unit: Option<String>,
+    ctx: &EvalSession<'_>,
+) -> AxisMeta {
+    match leaf {
+        PlotLeafKind::Quantity(dimension) => quantity_axis_meta(dimension, display_unit, ctx),
+        // `plot_declared_type` has already proven this channel's shape
+        // concrete. A named or `Fin` key plots as a label or a position, so
+        // only a coordinate index contributes a unit.
+        PlotLeafKind::Key(index) => ctx
+            .tir
+            .index_def(index)
+            .and_then(|definition| definition.coordinate_dimension().cloned())
+            .map_or_else(AxisMeta::default, |dimension| {
+                quantity_axis_meta(&dimension, None, ctx)
+            }),
+        PlotLeafKind::Int
+        | PlotLeafKind::Bool
+        | PlotLeafKind::Datetime(_)
+        | PlotLeafKind::ContextualString => AxisMeta::default(),
+    }
+}
+
+/// Axis metadata of a channel of `dimension` quantities, plotted in the unit
+/// labelled `display_unit` or, without one, as SI values.
+///
+/// A dimensioned channel always names the unit its numbers are in: the
+/// display unit of an explicit conversion, otherwise the canonical unit of
+/// its dimension (e.g. `s` for an unconverted `Time`), so an axis never shows
+/// bare SI numbers. A dimensionless channel has no dimension to name.
+fn quantity_axis_meta(
+    dimension: &graphcal_compiler::dimension::Dimension,
+    display_unit: Option<String>,
+    ctx: &EvalSession<'_>,
+) -> AxisMeta {
+    if dimension.is_dimensionless() {
+        return AxisMeta {
+            dimension_label: None,
+            unit_label: display_unit,
+        };
+    }
+    let dimensions = &ctx.registry.dimensions;
+    AxisMeta {
+        dimension_label: Some(dimensions.format_dimension(dimension)),
+        unit_label: display_unit
+            .or_else(|| default_unit_label(dimension, &dimensions.base_unit_symbols())),
+    }
 }
 
 fn classify_plot_channel_error(
@@ -610,7 +678,7 @@ fn check_plot_expression_dependencies(
 /// Evaluated fields of a figure/layer declaration.
 #[derive(Debug)]
 struct CompositionFields {
-    properties: Vec<(CompositionProperty, PlotFieldValue)>,
+    properties: Vec<(CompositionProperty, PropertyValue)>,
     plot_names: Vec<ScopedName>,
 }
 
@@ -665,51 +733,19 @@ fn eval_composition_fields(
 fn check_positive_property(
     property: &'static str,
     value_type: PlotPropertyType,
-    value: &PlotFieldValue,
+    value: &PropertyValue,
 ) -> Result<(), String> {
     if value_type != PlotPropertyType::PositiveNumber {
         return Ok(());
     }
     match value {
-        PlotFieldValue::Number(n) if n.is_finite() && *n > 0.0 => Ok(()),
-        PlotFieldValue::Number(n) => Err(format!(
+        PropertyValue::Number(n) if n.is_finite() && *n > 0.0 => Ok(()),
+        PropertyValue::Number(n) => Err(format!(
             "property `{property}` must be a positive number, got {n}"
         )),
-        _ => Err(format!("property `{property}` must be a positive number")),
-    }
-}
-
-/// Convert a `RuntimeValue` to a `PlotFieldValue`.
-///
-/// A value that cannot be represented in a plot (a struct, or an indexed
-/// value mixing kinds) is an error — never silently replaced by a
-/// placeholder or by index variant names (#840).
-fn runtime_to_plot_field_value(rv: &RuntimeValue) -> Result<PlotFieldValue, String> {
-    match rv {
-        RuntimeValue::Quantity(v) => Ok(PlotFieldValue::Number(v.get())),
-        RuntimeValue::Int(i) => crate::eval_expr::numeric::exact_i64_to_f64(*i)
-            .map(PlotFieldValue::Number)
-            .map_err(|_| {
-                format!(
-                    "Int value {i} cannot be plotted exactly; convert it explicitly with to_float()"
-                )
-            }),
-        RuntimeValue::Bool(b) => Ok(PlotFieldValue::String(b.to_string())),
-        RuntimeValue::Key(key) => match key.element() {
-            KeyElement::Named(variant) => Ok(PlotFieldValue::String(variant.to_string())),
-            KeyElement::Coordinate { value, .. } => Ok(PlotFieldValue::Number(value.get())),
-            KeyElement::Finite(position) => {
-                crate::eval::plot_data::fin_position_number(position).map(PlotFieldValue::Number)
-            }
-        },
-        RuntimeValue::Indexed(_) => crate::eval::plot_data::flatten_to_field_value(rv),
-        // The checker admits no complex or struct plot channel.
-        RuntimeValue::Complex(_) | RuntimeValue::Struct(_) => {
-            Err(format!("{} cannot be plotted", rv.describe()))
+        PropertyValue::String(_) | PropertyValue::Bool(_) => {
+            Err(format!("property `{property}` must be a positive number"))
         }
-        RuntimeValue::Datetime(epoch) => crate::eval::types::epoch_to_rfc3339(epoch)
-            .map(PlotFieldValue::Datetime)
-            .map_err(|error| error.to_string()),
     }
 }
 

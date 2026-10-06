@@ -19,7 +19,7 @@
 //!   numbers and labels in one channel) is an error — variant names are
 //!   never substituted for data.
 
-use crate::runtime_value::dense_array::{DenseArray, DenseArrayError};
+use crate::runtime_value::dense_array::DenseArray;
 use crate::runtime_value::{IndexAxis, IndexedValue, KeyElement, RuntimeValue};
 use graphcal_compiler::plot_shape::align_plot_channel_axes;
 use graphcal_compiler::syntax::ast::EncodingChannel;
@@ -101,8 +101,8 @@ pub fn fin_position_number(position: usize) -> Result<f64, String> {
 
 /// Convert one leaf runtime value to a plot datum.
 ///
-/// Booleans become the labels `"true"`/`"false"`, matching how a quantity
-/// `Bool` channel encodes (#840). Structs cannot be plotted.
+/// Boolean data becomes the labels `"true"`/`"false"`, plotted as nominal
+/// categories (#840). Structs cannot be plotted.
 fn plot_datum_from_leaf(
     rv: &RuntimeValue,
     display_unit: Option<&DisplayUnit>,
@@ -138,16 +138,20 @@ fn plot_datum_from_leaf(
 
 /// Flatten a (possibly nested) runtime value into axes plus row-major leaf
 /// values.
+#[cfg(test)]
 fn channel_data_from_runtime(rv: &RuntimeValue) -> Result<ChannelData, String> {
     channel_data_from_runtime_with_display_unit(rv, None)
 }
 
 /// Flatten a runtime value while converting quantity leaves to a requested
 /// rendering unit. Canonical runtime values remain unchanged.
+#[cfg(test)]
 fn channel_data_from_runtime_with_display_unit(
     rv: &RuntimeValue,
     display_unit: Option<&DisplayUnit>,
 ) -> Result<ChannelData, String> {
+    use crate::runtime_value::dense_array::DenseArrayError;
+
     let RuntimeValue::Indexed(entries) = rv else {
         return plot_datum_from_leaf(rv, display_unit).map(ChannelData::Unindexed);
     };
@@ -298,13 +302,6 @@ fn plot_field_value_from_data(values: &[PlotDatum]) -> Result<PlotFieldValue, St
         (true, true, false) => Ok(PlotFieldValue::Datetimes(datetimes)),
         _ => Err("mixed value kinds (numbers, labels, or datetimes) in one channel".to_string()),
     }
-}
-
-/// Flatten a runtime value into a `PlotFieldValue` without cross-channel
-/// alignment, for property contexts (mark/plot/composition properties).
-pub(super) fn flatten_to_field_value(rv: &RuntimeValue) -> Result<PlotFieldValue, String> {
-    let data = channel_data_from_runtime(rv)?;
-    plot_field_value_from_data(data.values())
 }
 
 /// Align evaluated encoding channels onto one shared row set.

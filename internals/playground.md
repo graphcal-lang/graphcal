@@ -24,7 +24,8 @@ part of `just lint` and `just test`.
 - `bindings.ts`: at most 256 unique binding names (1 KiB each), with closed-literal
   expressions limited to 4 KiB UTF-8 each. Rust validates their syntax and units.
 - `report.ts` and `report-frame.js`: an opaque-origin sandboxed iframe hosts the
-  shared report controls and rendering runtime. The parent checks sending window,
+  shared report controls and rendering runtime. Its scripts (`report-assets.ts`)
+  load on the first render, outside the entry bundle. The parent checks sending window,
   session identity, request IDs, and binding limits. Fixed local Vega assets,
   restrictive CSP, and rejecting plot loaders prevent source-selected resources.
   The host worker alone prepares/evaluates the model and enforces cancellation.

@@ -91,7 +91,7 @@ ${initial ? "plot healthy = { mark: point, encode: { x: 1.0, y: 2.0 } };" : ""}`
     const edit = async value => { await draft(value); await apply(); };
     const chart = `document.querySelector('figure[data-figure="curve"] canvas')`;
     const failure = `document.querySelector('figure[data-figure="curve"] .error-chip')`;
-    await wait(`document.querySelector('.hydration-status')?.textContent.startsWith('live')`);
+    await wait(`document.querySelector('.hydration-status')?.textContent.startsWith('Up to date')`);
     if (!initial) {
       await wait(`${failure}?.textContent.includes('division by zero')`);
       assert.equal(await evaluate("typeof window.vegaEmbed"), "function", "failed baseline must include renderer assets");
@@ -145,15 +145,9 @@ param samples: Int[Fin(40)] = for i: Fin(40) { 1 };`);
     const built = spawnSync("target/debug/graphcal", ["report", "build", source, "--output", output], { encoding: "utf8", timeout: 30000 });
     assert.equal(built.status, 0, built.stderr);
     const { evaluate, wait, exceptions, close } = await openReport(output);
-    await wait(`document.querySelector('.hydration-status')?.textContent.startsWith('live')`);
+    await wait(`document.querySelector('.hydration-status')?.textContent.startsWith('Up to date')`);
     assert.equal(await evaluate(`document.querySelector('.auto-run-toggle input').checked`), true, "auto run is enabled by default");
-    await evaluate(`Array.from(document.querySelectorAll('.outline-options button')).find(button => button.textContent === 'Advanced controls').click()`);
-    assert.equal(await evaluate(`(() => {
-      const card = document.querySelector('[data-decl="samples"]');
-      const preview = card.querySelector(':scope > [data-role="value"]');
-      const editor = card.querySelector('.control-editor');
-      return preview.clientHeight <= 48 && editor.clientHeight <= 224 && editor.scrollHeight > editor.clientHeight;
-    })()`), true, "interactive input cards keep accepted previews and editors compact");
+    // The typed controls stay mounted (hidden) beneath the outline that mirrors them.
     assert.equal(await evaluate(`document.querySelectorAll('[data-decl="samples"] .control-index-entry').length`), 32);
     await evaluate(`document.querySelector('[data-decl="samples"] .control-more').click()`);
     assert.equal(await evaluate(`document.querySelectorAll('[data-decl="samples"] .control-index-entry').length`), 40);
