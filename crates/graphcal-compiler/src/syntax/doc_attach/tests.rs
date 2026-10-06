@@ -1,3 +1,4 @@
+use crate::syntax::comments::DocComment;
 use crate::syntax::parser::Parser;
 
 fn parse(source: &str) -> crate::syntax::ast::File {
@@ -117,7 +118,7 @@ param third: Int[Fin(1)]
             None,
         ];
         for (slot, expected) in multi.slots().iter().zip(expected) {
-            assert_eq!(slot.doc.as_ref().map(|doc| doc.text()), expected);
+            assert_eq!(slot.doc.as_ref().map(DocComment::text), expected);
             if let Some(doc) = &slot.doc {
                 let text = &source[doc.span().offset()..doc.span().offset() + doc.span().len()];
                 assert!(text.starts_with("/// "));
@@ -133,7 +134,7 @@ param third: Int[Fin(1)]
         assert_eq!(
             declarations
                 .iter()
-                .map(|decl| decl.doc.as_ref().map(|doc| doc.text()))
+                .map(|decl| decl.doc.as_ref().map(DocComment::text))
                 .collect::<Vec<_>>(),
             expected
         );
@@ -168,7 +169,7 @@ fn later_slot_docs_follow_the_same_adjacency_rules_as_ordinary_declarations() {
             panic!("expected multi-declaration");
         };
         assert_eq!(
-            multi.slots()[1].doc.as_ref().map(|doc| doc.text()),
+            multi.slots()[1].doc.as_ref().map(DocComment::text),
             expected
         );
     }
