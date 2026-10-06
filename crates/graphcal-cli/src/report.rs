@@ -504,10 +504,10 @@ fn hex_string(bytes: &[u8]) -> String {
     out
 }
 
-/// Baseline parameter values as displayed, in declaration order.
+/// Baseline entry parameter values as displayed, in declaration order.
 fn baseline_params(result: &EvalResult) -> Vec<(String, String)> {
     result
-        .output_params(graphcal_eval::eval::EvalOutputView::Surface)
+        .entry_params()
         .map(|(name, outcome)| {
             let display = match outcome {
                 Ok(value) => graphcal_report::value_display::scalar_display(value, &result.render)
