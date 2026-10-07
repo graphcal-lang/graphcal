@@ -185,7 +185,7 @@ is exact and never a floating-point lookup.
 
 ```
 index Maneuver = { Departure, Correction, Insertion };
-param delta_v: Velocity[Maneuver] = {
+node delta_v: Velocity[Maneuver] = {
     Maneuver#Departure: 2.46 km/s,
     Maneuver#Correction: 0.12 km/s,
     Maneuver#Insertion: 1.83 km/s,
