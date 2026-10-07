@@ -22,6 +22,26 @@
           "si_value": 169.0,
           "unit": "m^2"
         },
+        "displacement_magnitude::values": {
+          "entries": {
+            "X": {
+              "display_value": 3.0,
+              "si_value": 3.0,
+              "unit": "m"
+            },
+            "Y": {
+              "display_value": 4.0,
+              "si_value": 4.0,
+              "unit": "m"
+            },
+            "Z": {
+              "display_value": 12.0,
+              "si_value": 12.0,
+              "unit": "m"
+            }
+          },
+          "index": "SpatialAxis"
+        },
         "duration_magnitude::result": {
           "si_value": 13.0,
           "unit": "s"
@@ -29,6 +49,21 @@
         "duration_magnitude::squared": {
           "si_value": 169.0,
           "unit": "s^2"
+        },
+        "duration_magnitude::values": {
+          "entries": {
+            "First": {
+              "display_value": 5.0,
+              "si_value": 5.0,
+              "unit": "s"
+            },
+            "Second": {
+              "display_value": 12.0,
+              "si_value": 12.0,
+              "unit": "s"
+            }
+          },
+          "index": "Samples"
         }
       },
       "param": {
@@ -51,41 +86,6 @@
             }
           },
           "index": "SpatialAxis"
-        },
-        "displacement_magnitude::values": {
-          "entries": {
-            "X": {
-              "display_value": 3.0,
-              "si_value": 3.0,
-              "unit": "m"
-            },
-            "Y": {
-              "display_value": 4.0,
-              "si_value": 4.0,
-              "unit": "m"
-            },
-            "Z": {
-              "display_value": 12.0,
-              "si_value": 12.0,
-              "unit": "m"
-            }
-          },
-          "index": "SpatialAxis"
-        },
-        "duration_magnitude::values": {
-          "entries": {
-            "First": {
-              "display_value": 5.0,
-              "si_value": 5.0,
-              "unit": "s"
-            },
-            "Second": {
-              "display_value": 12.0,
-              "si_value": 12.0,
-              "unit": "s"
-            }
-          },
-          "index": "Samples"
         },
         "durations": {
           "entries": {

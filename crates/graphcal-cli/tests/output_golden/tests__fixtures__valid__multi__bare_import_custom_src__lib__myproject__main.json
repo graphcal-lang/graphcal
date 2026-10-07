@@ -6,6 +6,9 @@
       "const": {},
       "incomplete": false,
       "node": {
+        "helpers::x": {
+          "si_value": 42.0
+        },
         "x": {
           "si_value": 42.0
         },
@@ -13,11 +16,7 @@
           "si_value": 43.0
         }
       },
-      "param": {
-        "helpers::x": {
-          "si_value": 42.0
-        }
-      },
+      "param": {},
       "unfinished_calls": []
     }
   }

@@ -12,15 +12,14 @@
         "lib::doubled": {
           "si_value": 200.0
         },
+        "lib::limit": {
+          "si_value": 100.0
+        },
         "result": {
           "si_value": 201.0
         }
       },
-      "param": {
-        "lib::limit": {
-          "si_value": 100.0
-        }
-      },
+      "param": {},
       "unfinished_calls": []
     }
   }

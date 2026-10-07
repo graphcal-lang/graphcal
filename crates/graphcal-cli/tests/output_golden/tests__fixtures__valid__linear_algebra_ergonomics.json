@@ -196,6 +196,20 @@
         "reusable_product::result": {
           "si_value": 24.0
         },
+        "reusable_product::values": {
+          "entries": {
+            "Depth": {
+              "si_value": 4.0
+            },
+            "Height": {
+              "si_value": 3.0
+            },
+            "Width": {
+              "si_value": 2.0
+            }
+          },
+          "index": "Factor"
+        },
         "row_products": {
           "entries": {
             "#0": {
@@ -276,20 +290,6 @@
             }
           },
           "index": "BudgetLine"
-        },
-        "reusable_product::values": {
-          "entries": {
-            "Depth": {
-              "si_value": 4.0
-            },
-            "Height": {
-              "si_value": 3.0
-            },
-            "Width": {
-              "si_value": 2.0
-            }
-          },
-          "index": "Factor"
         },
         "scale_factors": {
           "entries": {

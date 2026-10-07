@@ -6,6 +6,12 @@
       "const": {},
       "incomplete": false,
       "node": {
+        "a::x": {
+          "si_value": 1.0
+        },
+        "b::x": {
+          "si_value": 2.0
+        },
         "combined": {
           "si_value": 3.0
         },
@@ -16,14 +22,7 @@
           "si_value": 2.0
         }
       },
-      "param": {
-        "a::x": {
-          "si_value": 1.0
-        },
-        "b::x": {
-          "si_value": 2.0
-        }
-      },
+      "param": {},
       "unfinished_calls": []
     }
   }

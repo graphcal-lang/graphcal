@@ -29,6 +29,19 @@
           "si_value": 1478.0297917383489,
           "unit": "m/s"
         },
+        "hohmann_transfer::gm": {
+          "display_value": 398600.4418,
+          "si_value": 398600441800000.0,
+          "unit": "km^3/s^2"
+        },
+        "hohmann_transfer::r1": {
+          "si_value": 6571000.0,
+          "unit": "m"
+        },
+        "hohmann_transfer::r2": {
+          "si_value": 42157000.0,
+          "unit": "m"
+        },
         "hohmann_transfer::total_dv": {
           "si_value": 3934.582971727876,
           "unit": "m/s"
@@ -40,6 +53,15 @@
         "hohmann_transfer::v2": {
           "si_value": 3074.921541506354,
           "unit": "m/s"
+        },
+        "orbital_velocity::gm": {
+          "display_value": 398600.4418,
+          "si_value": 398600441800000.0,
+          "unit": "km^3/s^2"
+        },
+        "orbital_velocity::r": {
+          "si_value": 6571000.0,
+          "unit": "m"
         },
         "orbital_velocity::v": {
           "si_value": 7788.487984973157,
@@ -59,28 +81,6 @@
         }
       },
       "param": {
-        "hohmann_transfer::gm": {
-          "display_value": 398600.4418,
-          "si_value": 398600441800000.0,
-          "unit": "km^3/s^2"
-        },
-        "hohmann_transfer::r1": {
-          "si_value": 6571000.0,
-          "unit": "m"
-        },
-        "hohmann_transfer::r2": {
-          "si_value": 42157000.0,
-          "unit": "m"
-        },
-        "orbital_velocity::gm": {
-          "display_value": 398600.4418,
-          "si_value": 398600441800000.0,
-          "unit": "km^3/s^2"
-        },
-        "orbital_velocity::r": {
-          "si_value": 6571000.0,
-          "unit": "m"
-        },
         "parking_alt": {
           "display_value": 200.0,
           "si_value": 200000.0,

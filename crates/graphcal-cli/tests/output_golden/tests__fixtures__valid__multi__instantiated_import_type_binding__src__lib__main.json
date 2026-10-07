@@ -16,6 +16,16 @@
           },
           "type": "MyWidget"
         },
+        "lib::value": {
+          "fields": {
+            "size": {
+              "display_value": 1.0,
+              "si_value": 1.0,
+              "unit": "m"
+            }
+          },
+          "type": "MyWidget"
+        },
         "origin": {
           "fields": {
             "size": {
@@ -32,18 +42,7 @@
           "unit": "m"
         }
       },
-      "param": {
-        "lib::value": {
-          "fields": {
-            "size": {
-              "display_value": 1.0,
-              "si_value": 1.0,
-              "unit": "m"
-            }
-          },
-          "type": "MyWidget"
-        }
-      },
+      "param": {},
       "unfinished_calls": []
     }
   }

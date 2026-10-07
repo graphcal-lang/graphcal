@@ -20,19 +20,6 @@
           "si_value": 4719.987392990735,
           "unit": "m/s"
         },
-        "lib::mass_ratio": {
-          "si_value": 4.5
-        },
-        "lib::v_exhaust": {
-          "si_value": 3138.1279999999997,
-          "unit": "m/s"
-        },
-        "result": {
-          "si_value": 4719.987392990735,
-          "unit": "m/s"
-        }
-      },
-      "param": {
         "lib::dry_mass": {
           "display_value": 800.0,
           "si_value": 800.0,
@@ -48,6 +35,19 @@
           "si_value": 320.0,
           "unit": "s"
         },
+        "lib::mass_ratio": {
+          "si_value": 4.5
+        },
+        "lib::v_exhaust": {
+          "si_value": 3138.1279999999997,
+          "unit": "m/s"
+        },
+        "result": {
+          "si_value": 4719.987392990735,
+          "unit": "m/s"
+        }
+      },
+      "param": {
         "my_mass": {
           "display_value": 800.0,
           "si_value": 800.0,

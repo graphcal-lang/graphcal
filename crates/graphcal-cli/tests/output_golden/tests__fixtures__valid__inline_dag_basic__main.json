@@ -10,6 +10,11 @@
           "si_value": 20.0,
           "unit": "m/s"
         },
+        "double_speed::v": {
+          "display_value": 10.0,
+          "si_value": 10.0,
+          "unit": "m/s"
+        },
         "doubled": {
           "si_value": 20.0,
           "unit": "m/s"
@@ -20,11 +25,6 @@
         }
       },
       "param": {
-        "double_speed::v": {
-          "display_value": 10.0,
-          "si_value": 10.0,
-          "unit": "m/s"
-        },
         "speed": {
           "display_value": 10.0,
           "si_value": 10.0,

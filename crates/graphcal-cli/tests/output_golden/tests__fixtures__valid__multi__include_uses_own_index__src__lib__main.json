@@ -9,6 +9,9 @@
         "s::first": {
           "si_value": 10.0
         },
+        "s::scale": {
+          "si_value": 10.0
+        },
         "s::scaled": {
           "entries": {
             "A": {
@@ -22,14 +25,6 @@
         },
         "s::total": {
           "si_value": 30.0
-        }
-      },
-      "param": {
-        "own": {
-          "si_value": 5.0
-        },
-        "s::scale": {
-          "si_value": 10.0
         },
         "s::vals": {
           "entries": {
@@ -41,6 +36,11 @@
             }
           },
           "index": "Step"
+        }
+      },
+      "param": {
+        "own": {
+          "si_value": 5.0
         }
       },
       "unfinished_calls": []

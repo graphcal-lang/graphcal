@@ -12,6 +12,9 @@
       "const": {},
       "incomplete": false,
       "node": {
+        "lib::value": {
+          "si_value": 42.0
+        },
         "result": {
           "si_value": 43.0
         },
@@ -19,11 +22,7 @@
           "si_value": 42.0
         }
       },
-      "param": {
-        "lib::value": {
-          "si_value": 42.0
-        }
-      },
+      "param": {},
       "unfinished_calls": []
     }
   }

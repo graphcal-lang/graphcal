@@ -14,16 +14,15 @@
           "si_value": 3185500.0,
           "unit": "m"
         },
+        "scale_earth::factor": {
+          "si_value": 0.5
+        },
         "scale_earth::result": {
           "si_value": 3185500.0,
           "unit": "m"
         }
       },
-      "param": {
-        "scale_earth::factor": {
-          "si_value": 0.5
-        }
-      },
+      "param": {},
       "unfinished_calls": []
     }
   }

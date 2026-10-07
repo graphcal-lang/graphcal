@@ -1996,8 +1996,9 @@ node sum2: Dimensionless = @good::out + @bad::out;
     let json: serde_json::Value = serde_json::from_str(&stdout).expect("invalid JSON");
 
     // JSON keeps one entry per instance — nothing is silently dropped.
-    assert_eq!(json["param"]["good::v"]["si_value"].as_f64(), Some(1.0));
-    assert_eq!(json["param"]["bad::v"]["si_value"].as_f64(), Some(-1.0));
+    assert_eq!(json["param"], serde_json::json!({}));
+    assert_eq!(json["node"]["good::v"]["si_value"].as_f64(), Some(1.0));
+    assert_eq!(json["node"]["bad::v"]["si_value"].as_f64(), Some(-1.0));
     assert_eq!(json["node"]["good::out"]["si_value"].as_f64(), Some(2.0));
     assert_eq!(json["node"]["bad::out"]["si_value"].as_f64(), Some(-2.0));
     assert_eq!(json["node"]["sum2"]["si_value"].as_f64(), Some(0.0));

@@ -20,6 +20,20 @@
           },
           "index": "Fin(3)"
         },
+        "scaled::xs": {
+          "entries": {
+            "#0": {
+              "si_value": 1.0
+            },
+            "#1": {
+              "si_value": 2.0
+            },
+            "#2": {
+              "si_value": 3.0
+            }
+          },
+          "index": "Fin(3)"
+        },
         "scaled::ys": {
           "entries": {
             "#0": {
@@ -35,22 +49,7 @@
           "index": "Fin(3)"
         }
       },
-      "param": {
-        "scaled::xs": {
-          "entries": {
-            "#0": {
-              "si_value": 1.0
-            },
-            "#1": {
-              "si_value": 2.0
-            },
-            "#2": {
-              "si_value": 3.0
-            }
-          },
-          "index": "Fin(3)"
-        }
-      },
+      "param": {},
       "unfinished_calls": []
     }
   }

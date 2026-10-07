@@ -6,17 +6,6 @@
       "const": {},
       "incomplete": false,
       "node": {
-        "lib::total": {
-          "si_value": 30.0
-        },
-        "result": {
-          "si_value": 30.0
-        },
-        "total": {
-          "si_value": 30.0
-        }
-      },
-      "param": {
         "lib::cost": {
           "entries": {
             "Make": {
@@ -27,8 +16,18 @@
             }
           },
           "index": "MyPhase"
+        },
+        "lib::total": {
+          "si_value": 30.0
+        },
+        "result": {
+          "si_value": 30.0
+        },
+        "total": {
+          "si_value": 30.0
         }
       },
+      "param": {},
       "unfinished_calls": []
     }
   }
