@@ -3,13 +3,13 @@
     "code": "graphcal::C001",
     "labels": [
       {
-        "length": 82,
+        "length": 9,
         "location": {
-          "column": 1,
+          "column": 53,
           "line": 6,
           "source": "<root>/tests/fixtures/invalid/domain_field_const_violation.gcl"
         },
-        "offset": 194,
+        "offset": 246,
         "primary": false
       }
     ],

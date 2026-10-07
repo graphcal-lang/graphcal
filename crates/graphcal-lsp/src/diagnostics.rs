@@ -444,6 +444,25 @@ mod tests {
     }
 
     #[test]
+    fn temporary_const_constructor_violation_points_to_the_field_value() {
+        let source = concat!(
+            "type Spec { Spec(mass: Mass(max: 2000.0 kg)) }\n",
+            "const node BAD: Mass = Spec(mass: 5000.0 kg).mass;\n",
+        );
+        let diagnostics = produce_diagnostics(source, "test.gcl");
+        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+        let diagnostic = &diagnostics[0];
+        assert_eq!(
+            diagnostic.code,
+            Some(NumberOrString::String("graphcal::C001".into()))
+        );
+        assert!(diagnostic.message.contains("Spec.mass"));
+        assert!(diagnostic.message.contains("above maximum"));
+        assert_eq!(diagnostic.range.start, Position::new(1, 34));
+        assert_eq!(diagnostic.range.end, Position::new(1, 43));
+    }
+
+    #[test]
     fn presentation_failures_have_a_separate_visible_diagnostic() {
         let source = "param rate: Dimensionless = 0.0; unit bad: Length = (@rate) m; node output: Length = 6.0 m -> bad;";
         let diagnostics = produce_diagnostics(source, "presentation.gcl");

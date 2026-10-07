@@ -1965,6 +1965,11 @@ role = "interpreter"
 
 [[module]]
 package = "eval"
+path = ["deferred_field_checks"]
+role = "contracts"
+
+[[module]]
+package = "eval"
 path = ["domain_constraint"]
 role = "contracts"
 
@@ -2584,6 +2589,11 @@ role = "checking"
 [[module]]
 package = "eval"
 path = ["execution_check", "domain_resolve"]
+role = "checking"
+
+[[module]]
+package = "eval"
+path = ["execution_check", "domain_resolve", "tests"]
 role = "checking"
 
 [[module]]

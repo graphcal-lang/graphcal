@@ -11,8 +11,10 @@ use graphcal_compiler::tir::typed::CheckedTir;
 
 use crate::checked_program::{EvaluatedTir, ExecutionFacts};
 use crate::constant_pools::ConstPoolBuildError;
+use crate::deferred_field_checks::DeferredFieldChecks;
 use crate::eval_expr::{EvalSession, eval_root_with_presentation};
 use crate::runtime_presentation::PendingPresentedMap;
+use std::rc::Rc;
 
 /// Evaluate the constants of `tir` with the interpreter, together with the
 /// compile-time presentation of every constant, inherited ones included.
@@ -22,6 +24,7 @@ pub(super) fn eval_const_pool(
     src: SourceId,
     sources: &SourceRegistry,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
+    field_checks: &Rc<DeferredFieldChecks>,
 ) -> Result<(EvaluatedTir, PendingPresentedMap), Outcome<SemanticError>> {
     cancellation.checkpoint()?;
     let mut presentations = inherited
@@ -30,9 +33,14 @@ pub(super) fn eval_const_pool(
         .collect::<PendingPresentedMap>();
     let evaluated = EvaluatedTir::evaluate(tir, inherited, |step| {
         cancellation.checkpoint()?;
-        let session =
-            EvalSession::provisional_constants(step.tir, src, sources, cancellation.clone())
-                .for_decl(step.key);
+        let session = EvalSession::provisional_constants_with_checks(
+            step.tir,
+            src,
+            sources,
+            cancellation.clone(),
+            Rc::clone(field_checks),
+        )
+        .for_decl(step.key);
         reject_constant_call(step.expression.get(), src)?;
         let presented = eval_root_with_presentation(
             &session.executable(step.expression)?,

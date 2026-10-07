@@ -9,6 +9,7 @@
 pub(crate) mod assertion_eval;
 pub mod checked_program;
 pub mod constant_pools;
+mod deferred_field_checks;
 pub mod domain_check;
 pub mod domain_constraint;
 pub mod eval;

@@ -726,9 +726,7 @@ fn eval_constructor_call(
                 local_values,
                 ctx,
             )?;
-            if application.constructor.constrains(&field_init.name)
-                && let Some(field_constraints) = ctx.struct_field_constraints()
-            {
+            if application.constructor.constrains(&field_init.name) {
                 let key =
                     graphcal_compiler::tir::typed::model::StructFieldConstraintKey::for_application(
                         owning_type.clone(),
@@ -736,29 +734,7 @@ fn eval_constructor_call(
                         constructor_name.clone(),
                         field_init.name.clone(),
                     );
-                let constraint = field_constraints.get(&key).ok_or_else(|| {
-                    ctx.internal_error(
-                        format!(
-                            "required field constraint `{constructor_name}.{}` is missing",
-                            field_init.name
-                        ),
-                        field_init.value.span(),
-                    )
-                })?;
-                if let Err(failure) =
-                    crate::domain_check::check_domain_constraint(&evaluated.value(), constraint)
-                {
-                    return Err(ctx
-                        .failure_error(
-                            failure.map_error(|violation| RuntimeFailure::FieldConstraint {
-                                constructor: constructor_name.clone(),
-                                field: field_init.name.clone(),
-                                violation,
-                            }),
-                            field_init.value.span(),
-                        )
-                        .into());
-                }
+                ctx.check_constructor_field(key, &evaluated.value(), field_init.value.span())?;
             }
             Ok::<_, Outcome<SemanticError>>(evaluated)
         })

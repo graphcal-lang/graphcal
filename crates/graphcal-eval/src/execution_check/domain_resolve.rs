@@ -2,9 +2,7 @@
 
 use graphcal_compiler::declaration_category::ValueDeclCategory;
 use graphcal_compiler::finite_value::FiniteQuantity;
-use graphcal_compiler::semantic_error::domain::{
-    DomainBoundSpelling, DomainError, DomainSubject, ValuePath, ValuePathStep,
-};
+use graphcal_compiler::semantic_error::domain::{DomainBoundSpelling, DomainError, DomainSubject};
 use graphcal_compiler::source_registry::SourceRegistry;
 use graphcal_compiler::syntax::non_empty::NonEmpty;
 use graphcal_compiler::tir::typed::DomainFamily;
@@ -16,13 +14,12 @@ use graphcal_compiler::semantic::checked_type::{CheckedGenericArg, CheckedType, 
 use graphcal_compiler::semantic_error::SemanticError;
 use graphcal_compiler::source_id::SourceId;
 use graphcal_compiler::syntax::span::Span;
-use graphcal_compiler::syntax::type_name::{ConstructorName, FieldName};
 use graphcal_compiler::tir::typed::{
-    CheckedDag, CheckedTir, DeclarationBody, ResolvedDeclType, ResolvedValueType, Scoped,
-    StructFieldConstraintKey,
+    CheckedDag, CheckedTir, DeclarationBody, ResolvedValueType, Scoped, StructFieldConstraintKey,
 };
 
 use crate::constant_pools::RuntimeValueMap;
+use crate::deferred_field_checks::DeferredFieldChecks;
 use crate::domain_constraint::{
     DomainInstant, ResolvedDomainBound as EvaluatedDomainBound,
     ResolvedDomainBounds as EvaluatedDomainBounds, ResolvedDomainConstraint,
@@ -30,6 +27,7 @@ use crate::domain_constraint::{
 use crate::eval_expr::{EvalSession, RuntimeValue, eval_root};
 use crate::invariant::Failure;
 use graphcal_compiler::resolved_name::ResolvedDeclName;
+use std::rc::Rc;
 
 /// Resolve domain constraints from type annotations on consts, params, and nodes.
 ///
@@ -40,18 +38,15 @@ use graphcal_compiler::resolved_name::ResolvedDeclName;
 ///
 /// Const constraints are also checked against their already-evaluated values.
 pub(super) fn resolve_domain_constraints_for_dag(
-    tir: &CheckedTir,
     dag: &CheckedDag,
     const_values: &RuntimeValueMap,
     all_const_values: &RuntimeValueMap,
-    src: SourceId,
-    sources: &SourceRegistry,
-    cancellation: &graphcal_compiler::cancellation::CancellationToken,
+    ctx: &EvalSession<'_>,
 ) -> Result<HashMap<ResolvedDeclName, ResolvedDomainConstraint>, Outcome<SemanticError>> {
+    let (tir, src, cancellation) = (ctx.tir, ctx.src, &ctx.cancellation);
     cancellation.checkpoint()?;
     let visible_const_values = visible_values_with_imports(const_values, all_const_values);
 
-    let ctx = EvalSession::provisional_constants(tir, src, sources, cancellation.clone());
     let mut constraints = HashMap::new();
     // Constants first, then parameters, then nodes, each in source order.
     let decl_iter = [
@@ -434,6 +429,7 @@ struct FieldConstraintResolutionContext<'a> {
     const_scopes: &'a ConstScopes<'a>,
     all_const_values: &'a RuntimeValueMap,
     fallback_src: SourceId,
+    field_checks: &'a Rc<DeferredFieldChecks>,
     sources: &'a SourceRegistry,
     cancellation: &'a graphcal_compiler::cancellation::CancellationToken,
 }
@@ -488,11 +484,12 @@ fn resolve_application_field_constraints(
         type_def.source(),
         type_def.span(),
     )?;
-    let application_ctx = EvalSession::provisional_constants(
+    let application_ctx = EvalSession::provisional_constants_with_checks(
         ctx.tir,
         owner_src,
         ctx.sources,
         ctx.cancellation.clone(),
+        Rc::clone(ctx.field_checks),
     );
     let mut constraints = Vec::new();
     for (constrained, bounds) in nominal.constrained_fields() {
@@ -573,6 +570,7 @@ pub(super) fn resolve_struct_field_constraints_for_dags(
     src: SourceId,
     sources: &SourceRegistry,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
+    field_checks: &Rc<DeferredFieldChecks>,
 ) -> Result<DagFieldConstraints, Outcome<SemanticError>> {
     cancellation.checkpoint()?;
     let context = FieldConstraintResolutionContext {
@@ -580,6 +578,7 @@ pub(super) fn resolve_struct_field_constraints_for_dags(
         const_scopes,
         all_const_values,
         fallback_src: src,
+        field_checks,
         sources,
         cancellation,
     };
@@ -609,143 +608,54 @@ fn resolve_struct_field_constraints_with_cancellation(
         source: src,
     });
     let all_const_values = visible_values_with_imports(const_values, &empty);
-    resolve_struct_field_constraints_for_dags(
+    let field_checks = Rc::new(DeferredFieldChecks::default());
+    let constraints = resolve_struct_field_constraints_for_dags(
         tir,
         &const_scopes,
         &all_const_values,
         src,
         sources,
         cancellation,
-    )
-    .map(|grouped| grouped.into_values().flatten().collect())
+        &field_checks,
+    )?
+    .into_values()
+    .flatten()
+    .collect();
+    check_deferred_field_constraints(&field_checks, &constraints, cancellation)?;
+    Ok(constraints)
 }
 
-pub(super) fn check_dag_const_struct_field_constraints_at_compile_time(
-    dag: &CheckedDag,
-    const_values: &RuntimeValueMap,
-    field_constraints: &HashMap<StructFieldConstraintKey, ResolvedDomainConstraint>,
-    src: SourceId,
-) -> Result<(), SemanticError> {
-    for (entry, declared) in dag.declarations().filter_map(|entry| {
-        entry
-            .value()
-            .filter(|value| value.category == ValueDeclCategory::Const)
-            .map(|declared| (entry, declared))
-    }) {
-        let key = entry.identity().clone();
-        let value = const_values.get(&key).ok_or_else(|| {
+/// Discharge every executed constructor field, including temporary values in
+/// constants and in bounds. An absent entry is never treated as unconstrained:
+/// only fields the checked constructor marks as constrained create obligations.
+pub(super) fn check_deferred_field_constraints(
+    checks: &DeferredFieldChecks,
+    constraints: &HashMap<StructFieldConstraintKey, ResolvedDomainConstraint>,
+    cancellation: &graphcal_compiler::cancellation::CancellationToken,
+) -> Result<(), Outcome<SemanticError>> {
+    checks.take().into_iter().try_for_each(|check| {
+        cancellation.checkpoint()?;
+        let constraint = constraints.get(&check.key).ok_or_else(|| {
             SemanticError::internal_error(
-                format!("checked constant `{key}` has no evaluated value"),
-                src,
-                DiagnosticAnchor::Source(declared.span),
+                format!(
+                    "required field constraint `{}.{}` is missing",
+                    check.key.constructor, check.key.field
+                ),
+                check.source,
+                DiagnosticAnchor::Source(check.span),
             )
         })?;
-        let owning_type =
-            struct_type_ref_from_resolved_type(declared.annotation.checked().resolved());
-        check_const_struct_field_constraints(
-            value,
-            &ValuePath::new(entry.name().clone()),
-            declared.span,
-            owning_type.as_ref(),
-            field_constraints,
-            src,
-        )?;
-    }
-    Ok(())
-}
-
-fn struct_type_ref_from_resolved_type(resolved: &ResolvedDeclType) -> Option<StructTypeRef> {
-    match resolved.element() {
-        ResolvedValueType::Struct { name, .. } => Some(StructTypeRef::from_resolved(name.clone())),
-        _ => None,
-    }
-}
-
-fn find_struct_field_constraint<'a>(
-    field_constraints: &'a HashMap<StructFieldConstraintKey, ResolvedDomainConstraint>,
-    owning_type: Option<&StructTypeRef>,
-    generic_args: &[graphcal_compiler::semantic::checked_type::CheckedGenericArg],
-    constructor: &ConstructorName,
-    field: &FieldName,
-) -> Option<&'a ResolvedDomainConstraint> {
-    owning_type.and_then(|owning_type| {
-        field_constraints.get(&StructFieldConstraintKey::for_application(
-            owning_type.clone(),
-            generic_args.to_vec(),
-            constructor.clone(),
-            field.clone(),
-        ))
+        crate::domain_check::check_domain_constraint(&check.value, constraint).map_err(|failure| {
+            domain_check_error(
+                failure,
+                DomainSubject::ConstructorField(Box::new((check.key.constructor, check.key.field))),
+                &check.value,
+                check.source,
+                check.span,
+            )
+            .into()
+        })
     })
-}
-
-/// Recursively validate a const value against resolved struct-field
-/// constraints. For `RuntimeValue::Struct`, looks up each field's
-/// owner-qualified struct/constructor/field constraint and emits
-/// `DomainViolation` on the first violation. Indexed values recurse
-/// element-wise; nested structs recurse field-wise. Other variants short-circuit
-/// to `Ok(())`.
-fn check_const_struct_field_constraints(
-    value: &RuntimeValue,
-    path: &ValuePath,
-    decl_span: Span,
-    owning_type: Option<&StructTypeRef>,
-    field_constraints: &HashMap<StructFieldConstraintKey, ResolvedDomainConstraint>,
-    src: SourceId,
-) -> Result<(), SemanticError> {
-    match value {
-        RuntimeValue::Struct(value) => {
-            let runtime_owning_type = StructTypeRef::from_resolved(value.type_name().clone());
-            let effective_owning_type = owning_type.or(Some(&runtime_owning_type));
-            for (field_name, field_value) in value.fields() {
-                if let Some(constraint) = find_struct_field_constraint(
-                    field_constraints,
-                    effective_owning_type,
-                    value.generic_args(),
-                    value.constructor(),
-                    field_name,
-                ) && let Err(failure) =
-                    crate::domain_check::check_domain_constraint(field_value, constraint)
-                {
-                    return Err(domain_check_error(
-                        failure,
-                        DomainSubject::Value(Box::new(
-                            path.child(ValuePathStep::Field(field_name.clone())),
-                        )),
-                        field_value,
-                        src,
-                        decl_span,
-                    ));
-                }
-                // Recurse for nested struct fields. The nested runtime value
-                // carries its canonical owner when module-aware constructor
-                // evaluation created it, so the recursive call can recover the
-                // owner even without a field-declared type side channel.
-                check_const_struct_field_constraints(
-                    field_value,
-                    &path.child(ValuePathStep::Field(field_name.clone())),
-                    decl_span,
-                    None,
-                    field_constraints,
-                    src,
-                )?;
-            }
-            Ok(())
-        }
-        RuntimeValue::Indexed(entries) => {
-            for (variant, entry) in entries.iter() {
-                check_const_struct_field_constraints(
-                    entry,
-                    &path.child(ValuePathStep::Entry(variant.clone())),
-                    decl_span,
-                    owning_type,
-                    field_constraints,
-                    src,
-                )?;
-            }
-            Ok(())
-        }
-        _ => Ok(()),
-    }
 }
 
 /// The diagnostic for a constant `value` of `subject` that failed its domain
@@ -855,4 +765,41 @@ fn visible_values_with_imports(
             .map(|(name, value)| (name.clone(), value.clone())),
     );
     values
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::deferred_field_checks::DeferredFieldCheck;
+    use graphcal_compiler::cancellation::CancellationToken;
+
+    #[test]
+    fn missing_required_constraint_is_an_error_not_an_unconstrained_field() {
+        let (tir, source, _) = crate::test_tir::checked_tir_from_source(
+            "type Spec { Spec(value: Int(max: 0)) } const node BAD: Int = Spec(value: 1).value;",
+        )
+        .unwrap();
+        let nominal = tir.root().nominal_types().next().unwrap();
+        let constrained = nominal.constrained_fields().next().unwrap();
+        let field = constrained.field();
+        let key = StructFieldConstraintKey::new(
+            StructTypeRef::from_resolved(nominal.identity().clone()),
+            field.member().constructor().name(),
+            field.field().name().clone(),
+        );
+        let checks = DeferredFieldChecks::default();
+        checks.record(DeferredFieldCheck {
+            key,
+            value: RuntimeValue::Int(1),
+            source,
+            span: Span::new(0, 1),
+        });
+        let error = check_deferred_field_constraints(
+            &checks,
+            &HashMap::new(),
+            &CancellationToken::unbounded(),
+        )
+        .unwrap_err();
+        assert!(matches!(error, Outcome::Failed(SemanticError::Internal(_))));
+    }
 }
