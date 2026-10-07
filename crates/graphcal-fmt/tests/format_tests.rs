@@ -1672,6 +1672,32 @@ param count:  Int[Part]
     let formatted = format_source(source).unwrap();
     assert_eq!(formatted, expected);
     assert_eq!(format_source(&formatted).unwrap(), formatted);
+    let file = graphcal_compiler::syntax::parser::Parser::new(&formatted)
+        .parse_file()
+        .unwrap();
+    let graphcal_compiler::syntax::ast::DeclKind::Sugar(
+        graphcal_compiler::syntax::ast::RawDeclSugar::Multi(multi),
+    ) = &file.declarations[1].kind
+    else {
+        panic!("expected a multi-declaration");
+    };
+    let docs = multi
+        .slots()
+        .iter()
+        .map(|slot| {
+            slot.doc
+                .as_ref()
+                .map(graphcal_compiler::syntax::comments::DocComment::text)
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        docs,
+        [
+            Some("Mass of each part."),
+            Some("Length of each part.\nMeasured along the axis."),
+            Some("Count of each part."),
+        ]
+    );
 
     // Nested declarations use the same drain points and must indent doc blocks too.
     let nested = format!("dag d {{\n{source}}}\n");
