@@ -99,6 +99,14 @@ pub struct MultiDeclSlot {
     pub(crate) header_span: Span,
 }
 
+impl MultiDeclSlot {
+    /// Span of the complete header, including its visibility prefix.
+    #[must_use]
+    pub const fn header_span(&self) -> Span {
+        self.header_span
+    }
+}
+
 /// Per-slot entry in the slot tuple `(…)`.
 #[derive(Debug, Clone, FormatEquivalent)]
 pub enum MultiSlotAxis {

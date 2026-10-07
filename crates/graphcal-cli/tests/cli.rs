@@ -4059,6 +4059,47 @@ fn format_check_unformatted_exits_nonzero() {
 }
 
 #[test]
+fn format_check_detects_unformatted_documented_multi_decl() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("documented.gcl");
+    let source = "\
+/// Mass of each part.
+node mass: Mass[Part],
+/// Length of each part.
+node length: Length[Part]
+  = table[Part, (_, _)] {
+      : _, _;
+      A: 1.0 kg, 2.0 m;
+      Bravo: 30.0 kg, 4.0 m;
+  };
+";
+    std::fs::write(&path, source).unwrap();
+    let check = || {
+        graphcal_bin()
+            .args(["format", "--check"])
+            .arg(&path)
+            .output()
+            .unwrap()
+    };
+    let output = check();
+    assert_eq!(output.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("would be reformatted"));
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), source);
+
+    let output = graphcal_bin().arg("format").arg(&path).output().unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        std::fs::read_to_string(&path).unwrap(),
+        graphcal_fmt::format_source(source).unwrap()
+    );
+    assert!(check().status.success());
+}
+
+#[test]
 fn format_check_parse_error_fails() {
     // Files with parse errors are failures: CI must not pass on broken files.
     let dir = std::env::temp_dir().join("graphcal_fmt_test_err");

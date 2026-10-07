@@ -953,9 +953,18 @@ pub fn format_multi_decl(fmt: &mut Formatter<'_>, info: &MultiDecl) -> RcDoc<'st
         .map(|s| render_doc_to_string(&format_type_expr_inline(fmt, &s.type_ann)))
         .collect();
 
-    for idx in 0..info.slots().len() {
+    for (idx, slot) in info.slots().iter().enumerate() {
         if idx > 0 {
             out.push('\n');
+        }
+        if let Some(comments) = fmt.drain_comments_before(slot.header_span().offset()) {
+            out.push_str(&render_doc_to_string(&comments));
+        }
+        // Do not let the next slot's leading-comment drain relocate a comment
+        // from inside this header. Leave it queued for the verbatim fallback.
+        let header_end = slot.header_span().offset() + slot.header_span().len();
+        if fmt.has_comment_before(header_end) {
+            return RcDoc::nil();
         }
         let sep = if idx + 1 == info.slots().len() {
             ""
