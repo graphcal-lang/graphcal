@@ -6,16 +6,32 @@
       "const": {},
       "incomplete": false,
       "node": {
+        "doubled::factor": {
+          "si_value": 2.0
+        },
         "doubled::result": {
           "si_value": 20.0,
+          "unit": "m/s"
+        },
+        "doubled::v": {
+          "display_value": 10.0,
+          "si_value": 10.0,
           "unit": "m/s"
         },
         "doubled_result": {
           "si_value": 20.0,
           "unit": "m/s"
         },
+        "tripled::factor": {
+          "si_value": 3.0
+        },
         "tripled::result": {
           "si_value": 30.0,
+          "unit": "m/s"
+        },
+        "tripled::v": {
+          "display_value": 10.0,
+          "si_value": 10.0,
           "unit": "m/s"
         },
         "tripled_result": {
@@ -24,23 +40,7 @@
         }
       },
       "param": {
-        "doubled::factor": {
-          "si_value": 2.0
-        },
-        "doubled::v": {
-          "display_value": 10.0,
-          "si_value": 10.0,
-          "unit": "m/s"
-        },
         "speed": {
-          "display_value": 10.0,
-          "si_value": 10.0,
-          "unit": "m/s"
-        },
-        "tripled::factor": {
-          "si_value": 3.0
-        },
-        "tripled::v": {
           "display_value": 10.0,
           "si_value": 10.0,
           "unit": "m/s"

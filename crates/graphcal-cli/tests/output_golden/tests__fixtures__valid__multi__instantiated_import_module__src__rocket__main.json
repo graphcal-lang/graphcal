@@ -23,15 +23,6 @@
           "si_value": 4719.987392990735,
           "unit": "m/s"
         },
-        "r::mass_ratio": {
-          "si_value": 4.5
-        },
-        "r::v_exhaust": {
-          "si_value": 3138.1279999999997,
-          "unit": "m/s"
-        }
-      },
-      "param": {
         "r::dry_mass": {
           "display_value": 800.0,
           "si_value": 800.0,
@@ -46,8 +37,16 @@
           "display_value": 320.0,
           "si_value": 320.0,
           "unit": "s"
+        },
+        "r::mass_ratio": {
+          "si_value": 4.5
+        },
+        "r::v_exhaust": {
+          "si_value": 3138.1279999999997,
+          "unit": "m/s"
         }
       },
+      "param": {},
       "unfinished_calls": []
     }
   }

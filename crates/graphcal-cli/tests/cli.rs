@@ -1752,6 +1752,56 @@ include calc(x: @x)::{ out };
 }
 
 #[test]
+fn eval_json_only_classifies_entry_inputs_as_params() {
+    let dir = tempfile::tempdir().unwrap();
+    for (include, name, scale) in [
+        ("include double(x: @len * 3.0) as d;", "d::x", Some(3.0)),
+        ("include double() as d;", "d::x", None),
+        ("include double()::{ x, y };", "x", None),
+    ] {
+        let root = write_temp_file(
+            dir.path(),
+            "main.gcl",
+            &format!(
+                "dag double {{\n\
+                 param x: Length = 2.0 m;\n\
+                 pub node y: Length = @x * 2.0;\n\
+                 }}\n\
+                 param len: Length = 1.0 m;\n{include}\n"
+            ),
+        );
+        for view in ["surface", "all"] {
+            for binding in [None, Some("len=5.0 m")] {
+                let mut command = graphcal_bin();
+                command
+                    .arg("eval")
+                    .arg(&root)
+                    .args(["--format", "json", "--output-view", view]);
+                if let Some(binding) = binding {
+                    command.args(["--param", binding]);
+                }
+                let output = command.output().unwrap();
+                assert!(
+                    output.status.success(),
+                    "stderr: {}",
+                    String::from_utf8_lossy(&output.stderr)
+                );
+                let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+                let len = if binding.is_some() { 5.0 } else { 1.0 };
+                assert_eq!(json["param"].as_object().unwrap().len(), 1, "{json}");
+                assert_eq!(json["param"]["len"]["si_value"], len);
+                let x = scale.map_or(2.0, |scale| len * scale);
+                assert_eq!(json["node"][name]["si_value"], x, "{json}");
+                assert_eq!(json["node"][name]["unit"], "m");
+                if view == "all" && name == "x" {
+                    assert_eq!(json["node"]["double::x"]["si_value"], x, "{json}");
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn eval_output_view_is_consistent_for_empty_file_include_and_json() {
     let dir = tempfile::tempdir().unwrap();
     let package = dir.path().join("src/pkg");
@@ -1946,8 +1996,9 @@ node sum2: Dimensionless = @good::out + @bad::out;
     let json: serde_json::Value = serde_json::from_str(&stdout).expect("invalid JSON");
 
     // JSON keeps one entry per instance — nothing is silently dropped.
-    assert_eq!(json["param"]["good::v"]["si_value"].as_f64(), Some(1.0));
-    assert_eq!(json["param"]["bad::v"]["si_value"].as_f64(), Some(-1.0));
+    assert_eq!(json["param"], serde_json::json!({}));
+    assert_eq!(json["node"]["good::v"]["si_value"].as_f64(), Some(1.0));
+    assert_eq!(json["node"]["bad::v"]["si_value"].as_f64(), Some(-1.0));
     assert_eq!(json["node"]["good::out"]["si_value"].as_f64(), Some(2.0));
     assert_eq!(json["node"]["bad::out"]["si_value"].as_f64(), Some(-2.0));
     assert_eq!(json["node"]["sum2"]["si_value"].as_f64(), Some(0.0));

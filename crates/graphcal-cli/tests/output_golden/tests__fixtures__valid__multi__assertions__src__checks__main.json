@@ -11,6 +11,9 @@
       "const": {},
       "incomplete": false,
       "node": {
+        "lib::limit": {
+          "si_value": 100.0
+        },
         "limit": {
           "si_value": 100.0
         },
@@ -19,9 +22,6 @@
         }
       },
       "param": {
-        "lib::limit": {
-          "si_value": 100.0
-        },
         "value": {
           "si_value": 42.0
         }

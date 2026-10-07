@@ -14,6 +14,9 @@
         "also_fine::out": {
           "si_value": 8.0
         },
+        "also_fine::v": {
+          "si_value": 4.0
+        },
         "y": {
           "si_value": 6.0
         },
@@ -21,11 +24,7 @@
           "si_value": 14.0
         }
       },
-      "param": {
-        "also_fine::v": {
-          "si_value": 4.0
-        }
-      },
+      "param": {},
       "unfinished_calls": []
     }
   }

@@ -47,6 +47,11 @@
           "si_value": 1500.0,
           "unit": "km"
         },
+        "mydag::x": {
+          "display_value": 1500.0,
+          "si_value": 1500.0,
+          "unit": "m"
+        },
         "projected": {
           "display_value": 1.5,
           "si_value": 1500.0,
@@ -98,11 +103,6 @@
         "k": {
           "fields": {},
           "type": "Big"
-        },
-        "mydag::x": {
-          "display_value": 1500.0,
-          "si_value": 1500.0,
-          "unit": "m"
         },
         "t": {
           "datetime": "2026-01-15T12:00:00 UTC",

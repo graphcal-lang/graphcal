@@ -11,6 +11,11 @@
           "si_value": 10.0,
           "unit": "m/s"
         },
+        "lib::value": {
+          "display_value": 10.0,
+          "si_value": 10.0,
+          "unit": "m/s"
+        },
         "result": {
           "display_value": 10.0,
           "si_value": 10.0,
@@ -22,13 +27,7 @@
           "unit": "m/s"
         }
       },
-      "param": {
-        "lib::value": {
-          "display_value": 10.0,
-          "si_value": 10.0,
-          "unit": "m/s"
-        }
-      },
+      "param": {},
       "unfinished_calls": []
     }
   }

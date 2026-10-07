@@ -21,30 +21,6 @@
           "si_value": 4719.987392990735,
           "unit": "m/s"
         },
-        "stage_1::mass_ratio": {
-          "si_value": 4.5
-        },
-        "stage_1::v_exhaust": {
-          "si_value": 3138.1279999999997,
-          "unit": "m/s"
-        },
-        "stage_2::delta_v": {
-          "si_value": 8327.624208157522,
-          "unit": "m/s"
-        },
-        "stage_2::mass_ratio": {
-          "si_value": 6.6
-        },
-        "stage_2::v_exhaust": {
-          "si_value": 4412.992499999999,
-          "unit": "m/s"
-        },
-        "total_dv": {
-          "si_value": 13047.611601148255,
-          "unit": "m/s"
-        }
-      },
-      "param": {
         "stage_1::dry_mass": {
           "display_value": 800.0,
           "si_value": 800.0,
@@ -60,6 +36,17 @@
           "si_value": 320.0,
           "unit": "s"
         },
+        "stage_1::mass_ratio": {
+          "si_value": 4.5
+        },
+        "stage_1::v_exhaust": {
+          "si_value": 3138.1279999999997,
+          "unit": "m/s"
+        },
+        "stage_2::delta_v": {
+          "si_value": 8327.624208157522,
+          "unit": "m/s"
+        },
         "stage_2::dry_mass": {
           "display_value": 500.0,
           "si_value": 500.0,
@@ -74,8 +61,20 @@
           "display_value": 450.0,
           "si_value": 450.0,
           "unit": "s"
+        },
+        "stage_2::mass_ratio": {
+          "si_value": 6.6
+        },
+        "stage_2::v_exhaust": {
+          "si_value": 4412.992499999999,
+          "unit": "m/s"
+        },
+        "total_dv": {
+          "si_value": 13047.611601148255,
+          "unit": "m/s"
         }
       },
+      "param": {},
       "unfinished_calls": []
     }
   }

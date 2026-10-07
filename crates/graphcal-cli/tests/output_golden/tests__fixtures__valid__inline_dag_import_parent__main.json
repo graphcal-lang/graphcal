@@ -17,6 +17,11 @@
       },
       "incomplete": false,
       "node": {
+        "circular_velocity::alt": {
+          "display_value": 400000.0,
+          "si_value": 400000.0,
+          "unit": "m"
+        },
         "circular_velocity::v": {
           "si_value": 7672.598648385013,
           "unit": "m/s"
@@ -32,11 +37,6 @@
       },
       "param": {
         "altitude": {
-          "display_value": 400000.0,
-          "si_value": 400000.0,
-          "unit": "m"
-        },
-        "circular_velocity::alt": {
           "display_value": 400000.0,
           "si_value": 400000.0,
           "unit": "m"

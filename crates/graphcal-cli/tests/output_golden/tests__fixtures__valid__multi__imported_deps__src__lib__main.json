@@ -6,6 +6,9 @@
       "const": {},
       "incomplete": false,
       "node": {
+        "lib::x": {
+          "si_value": 10.0
+        },
         "lib::y": {
           "si_value": 20.0
         },
@@ -19,11 +22,7 @@
           "si_value": 21.0
         }
       },
-      "param": {
-        "lib::x": {
-          "si_value": 10.0
-        }
-      },
+      "param": {},
       "unfinished_calls": []
     }
   }

@@ -16,6 +16,16 @@
           },
           "type": "Inner"
         },
+        "lib::value": {
+          "fields": {
+            "size": {
+              "display_value": 1.0,
+              "si_value": 1.0,
+              "unit": "m"
+            }
+          },
+          "type": "Inner"
+        },
         "origin": {
           "fields": {
             "size": {
@@ -27,18 +37,7 @@
           "type": "Inner"
         }
       },
-      "param": {
-        "lib::value": {
-          "fields": {
-            "size": {
-              "display_value": 1.0,
-              "si_value": 1.0,
-              "unit": "m"
-            }
-          },
-          "type": "Inner"
-        }
-      },
+      "param": {},
       "unfinished_calls": []
     }
   }

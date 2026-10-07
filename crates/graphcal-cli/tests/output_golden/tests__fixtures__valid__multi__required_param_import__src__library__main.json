@@ -17,15 +17,14 @@
         "lib::circumference": {
           "si_value": 40030173.592041105,
           "unit": "m"
-        }
-      },
-      "param": {
+        },
         "lib::radius": {
           "display_value": 6371.0,
           "si_value": 6371000.0,
           "unit": "km"
         }
       },
+      "param": {},
       "unfinished_calls": []
     }
   }

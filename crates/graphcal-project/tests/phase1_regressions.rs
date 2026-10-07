@@ -1047,6 +1047,42 @@ pub dag calculation {
 }
 
 #[test]
+fn eval_output_categories_preserve_included_parameter_declarations() {
+    use graphcal_eval::eval::EvalOutputView;
+
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("main.gcl");
+    std::fs::write(
+        &root,
+        "dag double {\n\
+         param x: Length = 2.0 m;\n\
+         pub node y: Length = @x * 2.0;\n\
+         }\n\
+         param len: Length = 1.0 m;\n\
+         include double(x: @len * 3.0) as d;\n",
+    )
+    .unwrap();
+    let result =
+        compile_and_eval_project(&root, &HashMap::new(), None, &RealFileSystem::default()).unwrap();
+    let names = |entries: Vec<_>| {
+        entries
+            .into_iter()
+            .map(
+                |(name, _): (&graphcal_compiler::syntax::module_name::ScopedName, _)| {
+                    name.to_string()
+                },
+            )
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(names(result.params().collect()), ["len", "d::x"]);
+    assert_eq!(names(result.nodes().collect()), ["d::y"]);
+    for view in [EvalOutputView::Surface, EvalOutputView::All] {
+        assert_eq!(names(result.output_params(view).collect()), ["len"]);
+        assert_eq!(names(result.output_nodes(view).collect()), ["d::x", "d::y"]);
+    }
+}
+
+#[test]
 fn semantic_include_outputs_preserve_presentation_and_unique_names() {
     let directory = tempfile::tempdir().unwrap();
     let package = directory.path().join("src/include_presentation");
