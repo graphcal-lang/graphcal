@@ -38,8 +38,8 @@
     },
     {
       "path": "language/built-ins.md",
-      "english_sha256": "f3ed0313edf0aaa42f25acbb2ebdc22f420a84adfc8880f83f04b7c708785b5b",
-      "japanese_sha256": "4c6c51d5c2d6beb9b746b54361dc7c723fb3f957b63d59b2e1d6e4202e9d9e28"
+      "english_sha256": "54d2a889888cf9357a65caa769867efbb2dcf1cf808dd9d4f8d28977a18b1c28",
+      "japanese_sha256": "c542f209e200e365f8e5e86d6259cf2427a5b55cbff9f504d4080a0f1a43f5e6"
     },
     {
       "path": "language/computation-model.md",
@@ -73,8 +73,8 @@
     },
     {
       "path": "language/indexes.md",
-      "english_sha256": "8ade0c6b89a08953bce8821f211b2a6f014a5e98e23e7f9d28806be779b18f25",
-      "japanese_sha256": "8fe4530185b24ad1e2bafd249aee61b9a097a969fef46a4e1032b47d474d6d9f"
+      "english_sha256": "7fe9bfab17d8040ddfd8046403d2b56ed2b2dc57f02220ab47de8cae47ba0107",
+      "japanese_sha256": "00c15f89d7658a13acbe3bbd9cd7fe5ca5cecc655f1c7c5318965317a4c06a59"
     },
     {
       "path": "language/multi-file.md",

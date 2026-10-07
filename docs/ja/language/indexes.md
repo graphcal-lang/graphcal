@@ -176,7 +176,7 @@ node critical_dv: Velocity = @delta_v[@critical];
 
 ```
 index Maneuver = { Departure, Correction, Insertion };
-param delta_v: Velocity[Maneuver] = {
+node delta_v: Velocity[Maneuver] = {
     Maneuver#Departure: 2.46 km/s,
     Maneuver#Correction: 0.12 km/s,
     Maneuver#Insertion: 1.83 km/s,
