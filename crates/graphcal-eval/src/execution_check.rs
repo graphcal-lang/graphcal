@@ -3,6 +3,7 @@
 
 use graphcal_compiler::source_registry::SourceRegistry;
 use std::collections::HashMap;
+use std::rc::Rc;
 
 use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
 use graphcal_compiler::outcome::Outcome;
@@ -14,14 +15,16 @@ use graphcal_compiler::tir::typed::StructFieldConstraintKey;
 
 use crate::checked_program::{CheckedProgram, ExecutionFacts, ScheduledChecks};
 use crate::constant_pools::RuntimeValueMap;
+use crate::deferred_field_checks::DeferredFieldChecks;
 #[cfg(any(test, feature = "test-internals"))]
 use crate::domain_constraint::ResolvedDomainConstraint;
+use crate::eval_expr::EvalSession;
 
 mod const_eval;
 mod domain_resolve;
 
 use domain_resolve::{
-    ConstScopes, DagConstScope, check_dag_const_struct_field_constraints_at_compile_time,
+    ConstScopes, DagConstScope, check_deferred_field_constraints,
     resolve_domain_constraints_for_dag, resolve_struct_field_constraints_for_dags,
 };
 
@@ -62,8 +65,9 @@ pub fn seal_checked_program(
         |message: String| SemanticError::internal_error(message, src, DiagnosticAnchor::WholeFile);
     // Newly evaluated constants and constraints are provisional until every
     // mandatory check has succeeded; sealing is the last step.
+    let field_checks = Rc::new(DeferredFieldChecks::default());
     let (evaluated, const_presentations) =
-        const_eval::eval_const_pool(tir, inherited, src, sources, cancellation)?;
+        const_eval::eval_const_pool(tir, inherited, src, sources, cancellation, &field_checks)?;
     let (tir, consts) = (evaluated.tir(), evaluated.consts());
     let all_const_values = consts
         .dags()
@@ -71,6 +75,13 @@ pub fn seal_checked_program(
         .flat_map(|values| values.iter())
         .map(|(key, value)| (key.clone(), value.clone()))
         .collect::<RuntimeValueMap>();
+    let session = EvalSession::provisional_constants_with_checks(
+        tir,
+        src,
+        sources,
+        cancellation.clone(),
+        Rc::clone(&field_checks),
+    );
     let scheduled = tir.const_schedule().dags();
     let domain_constraints = scheduled
         .iter()
@@ -78,13 +89,10 @@ pub fn seal_checked_program(
             cancellation.checkpoint()?;
             let dag = tir.dag_registry().at(position);
             resolve_domain_constraints_for_dag(
-                tir,
                 dag,
                 evaluated.pool_at(position),
                 &all_const_values,
-                src,
-                sources,
-                cancellation,
+                &session,
             )
             .map(|constraints| (dag.dag_id().clone(), constraints))
         })
@@ -104,6 +112,7 @@ pub fn seal_checked_program(
         src,
         sources,
         cancellation,
+        &field_checks,
     )?
     .into_values()
     .flatten()
@@ -114,14 +123,7 @@ pub fn seal_checked_program(
             .iter()
             .map(|(key, constraint)| (key.clone(), constraint.clone())),
     );
-    for &position in scheduled {
-        check_dag_const_struct_field_constraints_at_compile_time(
-            tir.dag_registry().at(position),
-            evaluated.pool_at(position),
-            &all_field_constraints,
-            src,
-        )?;
-    }
+    check_deferred_field_constraints(&field_checks, &all_field_constraints, cancellation)?;
 
     evaluated
         .seal(ScheduledChecks {

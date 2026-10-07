@@ -8,6 +8,7 @@
 
 use std::collections::{BTreeSet, HashMap};
 use std::ops::Deref;
+use std::rc::Rc;
 
 use graphcal_compiler::cancellation::CancellationToken;
 use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
@@ -27,6 +28,7 @@ use graphcal_compiler::tir::typed::evaluation_unit::ScopedTree;
 use graphcal_compiler::tir::typed::model::StructFieldConstraintKey;
 use graphcal_compiler::tir::typed::scoped_node::ScopedNode;
 
+use crate::deferred_field_checks::{DeferredFieldCheck, DeferredFieldChecks};
 use crate::domain_constraint::ResolvedDomainConstraint;
 use crate::execution_frame::ScheduledDeclaration;
 use crate::execution_plan::ExecPlan;
@@ -37,10 +39,10 @@ use crate::static_incompleteness::ExpressionDependencies;
 use super::runtime_failure::RuntimeFailure;
 use super::work_budget::WorkBudget;
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 enum Capabilities<'a> {
-    /// Constants are evaluated before field constraints have been resolved.
-    ProvisionalConstants,
+    /// Executed fields retain mandatory checks until bounds are resolved.
+    ProvisionalConstants(Rc<DeferredFieldChecks>),
     /// Field validation is mandatory; callable access is explicitly supplied.
     Checked {
         plan: &'a ExecPlan<'a>,
@@ -122,8 +124,7 @@ impl<'a> EvalSession<'a> {
     }
 
     /// Select provisional constant evaluation. DAG/host calls are unavailable
-    /// and field constraints are deferred to mandatory constant-field
-    /// checking.
+    /// and constructor field checks are retained for later validation.
     #[must_use]
     pub fn provisional_constants(
         tir: &'a CheckedTir,
@@ -131,9 +132,66 @@ impl<'a> EvalSession<'a> {
         sources: &'a SourceRegistry,
         cancellation: CancellationToken,
     ) -> Self {
+        Self::provisional_constants_with_checks(tir, src, sources, cancellation, Rc::default())
+    }
+
+    /// Share the sealing pass's obligations across constant and bound evaluation.
+    pub(crate) fn provisional_constants_with_checks(
+        tir: &'a CheckedTir,
+        src: SourceId,
+        sources: &'a SourceRegistry,
+        cancellation: CancellationToken,
+        checks: Rc<DeferredFieldChecks>,
+    ) -> Self {
         Self {
             environment: Self::environment(tir, src, sources, cancellation),
-            capabilities: Capabilities::ProvisionalConstants,
+            capabilities: Capabilities::ProvisionalConstants(checks),
+        }
+    }
+
+    /// Every executed constrained field is validated now or retained for sealing.
+    pub(super) fn check_constructor_field(
+        &self,
+        key: StructFieldConstraintKey,
+        value: &crate::runtime_value::RuntimeValue,
+        span: Span,
+    ) -> Result<(), SemanticError> {
+        match &self.capabilities {
+            Capabilities::ProvisionalConstants(checks) => {
+                checks.record(DeferredFieldCheck {
+                    key,
+                    value: value.clone(),
+                    source: self.src,
+                    span,
+                });
+                Ok(())
+            }
+            Capabilities::Checked { plan, .. } => {
+                let constraint = plan
+                    .program()
+                    .facts()
+                    .struct_field_constraints()
+                    .get(&key)
+                    .ok_or_else(|| {
+                        self.internal_error(
+                            format!(
+                                "required field constraint `{}.{}` is missing",
+                                key.constructor, key.field
+                            ),
+                            span,
+                        )
+                    })?;
+                crate::domain_check::check_domain_constraint(value, constraint).map_err(|failure| {
+                    self.failure_error(
+                        failure.map_error(|violation| RuntimeFailure::FieldConstraint {
+                            constructor: key.constructor,
+                            field: key.field,
+                            violation,
+                        }),
+                        span,
+                    )
+                })
+            }
         }
     }
 
@@ -174,12 +232,12 @@ impl<'a> EvalSession<'a> {
     }
 
     pub fn execution_plan(&self) -> Result<&'a ExecPlan<'a>, SemanticError> {
-        match self.capabilities {
-            Capabilities::ProvisionalConstants => Err(self.internal_error(
+        match &self.capabilities {
+            Capabilities::ProvisionalConstants(_) => Err(self.internal_error(
                 "provisional constant evaluation has no callable execution plans",
                 DiagnosticAnchor::WholeFile,
             )),
-            Capabilities::Checked { plan, .. } => Ok(plan),
+            Capabilities::Checked { plan, .. } => Ok(*plan),
         }
     }
 
@@ -187,8 +245,8 @@ impl<'a> EvalSession<'a> {
     pub fn struct_field_constraints(
         &self,
     ) -> Option<&'a HashMap<StructFieldConstraintKey, ResolvedDomainConstraint>> {
-        match self.capabilities {
-            Capabilities::ProvisionalConstants => None,
+        match &self.capabilities {
+            Capabilities::ProvisionalConstants(_) => None,
             Capabilities::Checked { plan, .. } => {
                 Some(plan.program().facts().struct_field_constraints())
             }
@@ -197,9 +255,9 @@ impl<'a> EvalSession<'a> {
 
     #[must_use]
     pub const fn host_fns(&self) -> Option<&'a HostFunctionRegistry> {
-        match self.capabilities {
-            Capabilities::ProvisionalConstants => None,
-            Capabilities::Checked { host, .. } => Some(host),
+        match &self.capabilities {
+            Capabilities::ProvisionalConstants(_) => None,
+            Capabilities::Checked { host, .. } => Some(*host),
         }
     }
 
@@ -250,9 +308,9 @@ impl<'a> EvalSession<'a> {
         Option<graphcal_compiler::node_unavailable::RuntimeUnavailable>,
         Outcome<SemanticError>,
     > {
-        let plan = match self.capabilities {
-            Capabilities::ProvisionalConstants => None,
-            Capabilities::Checked { plan, .. } => Some(plan),
+        let plan = match &self.capabilities {
+            Capabilities::ProvisionalConstants(_) => None,
+            Capabilities::Checked { plan, .. } => Some(*plan),
         };
         if self.unavailable.is_none_or(HashMap::is_empty)
             && plan.is_none_or(|plan| !plan.has_unfinished_definitions())

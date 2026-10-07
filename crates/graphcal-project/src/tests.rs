@@ -9043,7 +9043,7 @@ const node SAT: Spec = Spec(mass: 5000.0 kg);
     else {
         panic!("expected DomainViolation, got {err:?}");
     };
-    assert_eq!(name.to_string(), "SAT.mass");
+    assert_eq!(name.to_string(), "Spec.mass");
     assert!(
         violation.to_string().contains("above maximum"),
         "violation = {violation}"
