@@ -875,7 +875,15 @@ impl EvalResult {
         decl_type: ValueDeclCategory,
     ) -> impl Iterator<Item = (&ScopedName, &Result<Value, OutputUnavailable>)> {
         self.entries.iter().filter_map(move |(name, result, kind)| {
-            (*kind == decl_type && self.should_output(name, result, view)).then_some((name, result))
+            // An included input port is a computed value from the entry
+            // DAG's perspective, not an externally bindable parameter.
+            // Keep the declaration category in `entries` intact.
+            let output_kind = match kind {
+                ValueDeclCategory::Param if name.owner().is_some() => ValueDeclCategory::Node,
+                _ => *kind,
+            };
+            (output_kind == decl_type && self.should_output(name, result, view))
+                .then_some((name, result))
         })
     }
 
@@ -887,7 +895,8 @@ impl EvalResult {
         self.output_category(view, ValueDeclCategory::Const)
     }
 
-    /// Iterate over param values selected by `view` in source order.
+    /// Iterate over externally bindable entry parameters selected by `view`
+    /// in source order. Included input ports appear in [`Self::output_nodes`].
     pub fn output_params(
         &self,
         view: EvalOutputView,
@@ -895,7 +904,8 @@ impl EvalResult {
         self.output_category(view, ValueDeclCategory::Param)
     }
 
-    /// Iterate over node values selected by `view` in source order.
+    /// Iterate over node values and included input ports selected by `view`
+    /// in source order.
     pub fn output_nodes(
         &self,
         view: EvalOutputView,
