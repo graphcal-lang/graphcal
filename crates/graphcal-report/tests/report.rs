@@ -60,6 +60,46 @@ fn unfinished_reports_are_explicitly_incomplete_not_errors() {
 }
 
 #[test]
+fn multi_decl_report_captions_belong_to_individual_slots() {
+    let document = build_document(
+        "\
+pub index Part = { A, B };
+/// Mass of each part.
+node mass: Mass[Part],
+/// Length of each part.
+node length: Length[Part],
+node undocumented: Int[Part]
+= table[Part, (_, _, _)] {
+    : _, _, _;
+    A: 1.0 kg, 2.0 m, 1;
+    B: 3.0 kg, 4.0 m, 2;
+};
+",
+    );
+    for (name, expected) in [
+        ("mass", Some("Mass of each part.")),
+        ("length", Some("Length of each part.")),
+        ("undocumented", None),
+    ] {
+        let card = document
+            .values
+            .iter()
+            .find(|card| card.name == name)
+            .unwrap();
+        assert_eq!(card.doc.as_deref(), expected);
+    }
+    let html = render_report_html(&document, VegaScriptSource::Inline, None);
+    let markdown = render_report_markdown(&document);
+    assert!(markdown.contains("- `mass` — Mass of each part."));
+    assert!(markdown.contains("- `length` — Length of each part."));
+    assert!(!markdown.contains("- `undocumented` —"));
+    for rendered in [html, markdown] {
+        assert_eq!(rendered.matches("Mass of each part.").count(), 1);
+        assert_eq!(rendered.matches("Length of each part.").count(), 1);
+    }
+}
+
+#[test]
 fn static_reports_keep_si_and_separate_presentation_notices() {
     let document = build_document(
         "param rate: Dimensionless = 0.0; unit bad: Length = (@rate) m; node output: Length = 6.0 m -> bad;",

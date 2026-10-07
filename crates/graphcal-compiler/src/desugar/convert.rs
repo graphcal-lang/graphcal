@@ -63,9 +63,9 @@ fn convert_decl(d: Declaration<Raw>) -> Vec<Declaration<Desugared>> {
             span,
             doc,
         }],
-        // The parser rejects attributes on a multi-decl; its doc block
-        // documents every expanded slot.
-        Err(RawDeclSugar::Multi(multi)) => super::multi::expand_multi_decl(&multi, doc.as_ref()),
+        // The parser rejects attributes on a multi-decl; documentation
+        // belongs to its individual slots.
+        Err(RawDeclSugar::Multi(multi)) => super::multi::expand_multi_decl(&multi),
     }
 }
 

@@ -19,6 +19,7 @@
 
 use crate::syntax::ast::common::Visibility;
 use crate::syntax::ast::value::{Expr, MapEntryKey, TableIndexSpec, TypeExpr};
+use crate::syntax::comments::DocComment;
 use crate::syntax::decl_name::DeclName;
 use crate::syntax::format_equivalent::FormatEquivalent;
 use crate::syntax::index_name::IndexVariantName;
@@ -62,6 +63,13 @@ impl MultiDecl {
         &self.slots
     }
 
+    /// Attach documentation without exposing mutable access to the slot layout.
+    pub(crate) fn attach_slot_docs(&mut self, doc_before: impl Fn(Span) -> Option<DocComment>) {
+        self.slots.iter_mut().for_each(|slot| {
+            slot.doc = doc_before(slot.header_span);
+        });
+    }
+
     #[must_use]
     pub const fn shared_axes(&self) -> &MultiDeclSharedAxes {
         &self.shared_axes
@@ -82,6 +90,10 @@ pub struct MultiDeclSlot {
     pub type_ann: TypeExpr,
     /// The slot's entry in the slot tuple `(…)`.
     pub axis: MultiSlotAxis,
+    /// The `///` block immediately preceding this slot's header.
+    /// Like `Declaration::doc`, this is re-derived from preserved comments.
+    #[fe(skip)]
+    pub doc: Option<DocComment>,
     /// Span from visibility prefix (or kind keyword) through end of the type annotation.
     #[fe(skip)]
     pub(crate) header_span: Span,
@@ -489,6 +501,7 @@ mod tests {
                 span: span(0),
             }),
             axis,
+            doc: None,
             header_span: span(0),
         }
     }

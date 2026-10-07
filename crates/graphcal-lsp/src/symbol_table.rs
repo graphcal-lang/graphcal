@@ -1397,16 +1397,25 @@ pub fn build_from_ast(
 }
 
 /// Copy each declaration's attached `///` doc block onto the definitions
-/// registered for it, matching by full-declaration span (one span maps to
-/// several definitions for expanded multi-decls).
+/// registered for it. Value declarations also match their name span: expanded
+/// multi-decl slots share a surface span but have independent documentation.
 fn apply_doc_comments(
     declarations: &[graphcal_compiler::desugar::desugared_ast::Declaration],
     table: &mut SymbolTable,
 ) {
     for declaration in declarations {
         if let Some(doc) = &declaration.doc {
+            let name_span = match &declaration.kind {
+                DeclKind::Param(param) => Some(param.name.span),
+                DeclKind::Node(node) => Some(node.name.span),
+                DeclKind::ConstNode(node) => Some(node.name.span),
+                _ => None,
+            };
             for definition in table.definitions.entries.values_mut() {
-                if definition.decl_span == declaration.span && definition.doc.is_none() {
+                if definition.decl_span == declaration.span
+                    && name_span.is_none_or(|span| definition.name_span == span)
+                    && definition.doc.is_none()
+                {
                     definition.doc = Some(doc.text().to_string());
                 }
             }

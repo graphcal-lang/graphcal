@@ -4,9 +4,10 @@
 //! to the parser. This pass runs after a file parse and attaches each doc
 //! block — a contiguous run of own-line `///` comments immediately preceding
 //! a declaration, with no blank line or line comment in between — to that
-//! declaration's [`Declaration::doc`] field.
+//! declaration's [`Declaration::doc`] field (or the individual multi-decl
+//! slot's doc field).
 
-use crate::syntax::ast::{DeclKind, Declaration, File};
+use crate::syntax::ast::{DeclKind, Declaration, File, RawDeclSugar};
 use crate::syntax::comments::{DocComment, SourceMetadata, SpannedComment};
 use crate::syntax::span::Span;
 
@@ -22,9 +23,16 @@ fn attach_to_declarations(
     comments: &[SpannedComment],
 ) {
     for declaration in declarations {
-        declaration.doc = doc_block_before(declaration.span.offset(), source, comments);
-        if let DeclKind::Dag(dag) = &mut declaration.kind {
-            attach_to_declarations(&mut dag.body, source, comments);
+        match &mut declaration.kind {
+            DeclKind::Sugar(RawDeclSugar::Multi(multi)) => {
+                multi.attach_slot_docs(|span| doc_block_before(span.offset(), source, comments));
+            }
+            kind => {
+                declaration.doc = doc_block_before(declaration.span.offset(), source, comments);
+                if let DeclKind::Dag(dag) = kind {
+                    attach_to_declarations(&mut dag.body, source, comments);
+                }
+            }
         }
     }
 }

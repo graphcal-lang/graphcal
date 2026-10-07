@@ -25,18 +25,13 @@ use crate::syntax::ast::{
     ConstNodeDecl, DeclKind, Declaration, Expr, ExprKind, MapEntry, MapEntryKey, MultiDataRow,
     MultiDecl, MultiDeclSlice, MultiHeaderCell, MultiSlotColumnSpan, NodeDecl, ParamDecl, SlotKind,
 };
-use crate::syntax::comments::DocComment;
 use crate::syntax::names::NamePath;
 use crate::syntax::non_empty::NonEmpty;
 use crate::syntax::phase::Desugared;
 use crate::syntax::span::Spanned;
 
-/// Expand a multi-decl into one declaration per slot, in slot order. The doc
-/// block above the multi-decl documents every expanded slot.
-pub(super) fn expand_multi_decl(
-    multi: &MultiDecl,
-    doc: Option<&DocComment>,
-) -> Vec<Declaration<Desugared>> {
+/// Expand a multi-decl into one declaration per slot, preserving each slot's docs.
+pub(super) fn expand_multi_decl(multi: &MultiDecl) -> Vec<Declaration<Desugared>> {
     multi
         .slots()
         .iter()
@@ -76,7 +71,7 @@ pub(super) fn expand_multi_decl(
                 // (first slot keyword through the closing `;`), so
                 // diagnostics land on the source surface.
                 span: slot.header_span.merge(multi.span),
-                doc: doc.cloned(),
+                doc: slot.doc.clone(),
             }
         })
         .collect()
@@ -170,7 +165,7 @@ mod tests {
                 _ => None,
             })
             .expect("file has one multi-decl");
-        expand_multi_decl(multi, None)
+        expand_multi_decl(multi)
     }
 
     fn map_entries(expr: &Expr<Desugared>) -> &[MapEntry<Desugared>] {

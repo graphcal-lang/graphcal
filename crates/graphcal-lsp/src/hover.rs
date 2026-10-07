@@ -249,6 +249,47 @@ node undocumented: Dimensionless = @isp * 2.0;
     }
 
     #[test]
+    fn multi_decl_hover_uses_each_slots_own_documentation() {
+        let source = "\
+pub index Part = { A, B };
+/// Mass of each part.
+node mass: Mass[Part],
+/// Length of each part.
+node length: Length[Part],
+node undocumented: Int[Part]
+= table[Part, (_, _, _)] {
+    : _, _, _;
+    A: 1.0 kg, 2.0 m, 1;
+    B: 3.0 kg, 4.0 m, 2;
+};
+node used: Length = @length[Part#A];
+";
+        let uri = tower_lsp::lsp_types::Url::parse("untitled:multi-doc-hover.gcl").unwrap();
+        let analysis = crate::analysis_pipeline::run_analysis_for_test(&uri, source);
+        assert!(analysis.has_no_diagnostics(), "{:?}", analysis.diagnostics);
+
+        for (needle, expected) in [
+            ("mass:", Some("Mass of each part.")),
+            ("length:", Some("Length of each part.")),
+            ("@length", Some("Length of each part.")),
+            ("undocumented:", None),
+        ] {
+            let result = hover(&analysis, source.find(needle).unwrap()).unwrap();
+            let HoverContents::Markup(markup) = result.contents else {
+                panic!("expected Markdown hover");
+            };
+            for doc in ["Mass of each part.", "Length of each part."] {
+                assert_eq!(
+                    markup.value.contains(doc),
+                    expected == Some(doc),
+                    "{}",
+                    markup.value
+                );
+            }
+        }
+    }
+
+    #[test]
     fn indexed_recurrence_state_has_clean_analysis_and_multi_axis_hover() {
         let source = include_str!("../../../tests/fixtures/valid/indexed_state_recurrence.gcl");
         let uri = tower_lsp::lsp_types::Url::parse("untitled:indexed-recurrence.gcl").unwrap();
