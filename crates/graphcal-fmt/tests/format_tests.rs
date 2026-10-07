@@ -1636,6 +1636,75 @@ param      duty:  Dimensionless[Component]
 }
 
 #[test]
+fn multi_decl_slot_docs_are_aligned_and_stay_attached() {
+    let source = "\
+pub index Part = { A, Bravo };
+
+/// Mass of each part.
+node mass: Mass[Part],
+/// Length of each part.
+/// Measured along the axis.
+node length: Length[Part],
+/// Count of each part.
+param count: Int[Part]
+  = table[Part, (_, _, _)] {
+      : _, _, _;
+      A: 1.0 kg, 2.0 m, 1;
+      Bravo: 30.0 kg, 4.0 m, 2;
+  };
+";
+    let expected = "\
+pub index Part = { A, Bravo };
+
+/// Mass of each part.
+node  mass:   Mass[Part],
+/// Length of each part.
+/// Measured along the axis.
+node  length: Length[Part],
+/// Count of each part.
+param count:  Int[Part]
+    = table[Part, (_, _, _)] {
+             :       _,     _, _;
+        A    :  1.0 kg, 2.0 m, 1;
+        Bravo: 30.0 kg, 4.0 m, 2;
+    };
+";
+    let formatted = format_source(source).unwrap();
+    assert_eq!(formatted, expected);
+    assert_eq!(format_source(&formatted).unwrap(), formatted);
+
+    // Nested declarations use the same drain points and must indent doc blocks too.
+    let nested = format!("dag d {{\n{source}}}\n");
+    let nested_expected = format!(
+        "dag d {{\n{}}}\n",
+        expected
+            .lines()
+            .map(|line| if line.is_empty() {
+                "\n".to_owned()
+            } else {
+                format!("    {line}\n")
+            })
+            .collect::<String>()
+    );
+    let formatted = format_source(&nested).unwrap();
+    assert_eq!(formatted, nested_expected);
+    assert_eq!(format_source(&formatted).unwrap(), formatted);
+}
+
+#[test]
+fn multi_decl_header_internal_comments_remain_verbatim() {
+    for header in [
+        "node mass: Mass[// unit\nPart],\nnode length: Length[Part]",
+        "node mass: Mass[Part],\nnode length: Length[// unit\nPart]",
+    ] {
+        let source = format!(
+            "{header}\n  = table[Part, (_, _)] {{\n      : _, _;\n      A: 1.0 kg, 2.0 m;\n  }};\n"
+        );
+        assert_eq!(format_source(&source).unwrap(), source);
+    }
+}
+
+#[test]
 fn multi_decl_slot_comments_preserve_visibility() {
     let kinds = ["param", "node", "const node", "pub node", "pub const node"];
     let comments = ["/// Second column.", "// Second column."];
@@ -1658,9 +1727,23 @@ fn multi_decl_slot_comments_preserve_visibility() {
                 let formatted = format_source(&source).unwrap_or_else(|error| {
                     panic!("failed for {first} / {second} with {comment}: {error}")
                 });
-                // Internal comments currently use the verbatim fallback. It must
-                // preserve the complete declaration, including the leading pub.
-                assert_eq!(formatted, source);
+                let first_header = format!("{first} a:");
+                let second_header = format!("{second} b:");
+                let normalized = formatted
+                    .lines()
+                    .map(|line| line.split_whitespace().collect::<Vec<_>>().join(" "))
+                    .collect::<Vec<_>>();
+                assert!(normalized.contains(&format!("{first_header} Mass[Part],")));
+                assert!(normalized.contains(&format!("{second_header} Length[Part]")));
+                let comment_line = normalized.iter().position(|line| line == comment).unwrap();
+                assert_eq!(
+                    normalized[comment_line + 1],
+                    format!("{second_header} Length[Part]")
+                );
+                assert_ne!(
+                    formatted, source,
+                    "slot comments must not prevent formatting"
+                );
                 assert_eq!(format_source(&formatted).unwrap(), formatted);
             }
         }

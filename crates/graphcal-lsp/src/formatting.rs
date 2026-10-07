@@ -105,11 +105,20 @@ pub const node b: Length[Part]
         let cancellation = graphcal_compiler::cancellation::CancellationSource::new();
         let edits = format_document_with_cancellation(source, &cancellation.token())
             .expect("commented public multi-declaration should format")
-            .expect("index formatting should produce an edit");
+            .expect("commented multi-declaration should produce an edit");
         assert_eq!(edits.len(), 1);
         assert_eq!(
             edits[0].new_text,
-            source.replacen("index   Part={A,B};", "index Part = { A, B };", 1)
+            "index Part = { A, B };\n\n\
+pub node       a: Mass[Part],
+/// Second column.
+pub const node b: Length[Part]
+    = table[Part, (_, _)] {
+         :      _,     _;
+        A: 1.0 kg, 2.0 m;
+        B: 3.0 kg, 4.0 m;
+    };
+"
         );
         assert!(format_document(&edits[0].new_text).unwrap().is_none());
     }
