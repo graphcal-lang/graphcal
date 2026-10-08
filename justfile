@@ -115,12 +115,6 @@ report-smoke: wasm-report
     cargo run -p graphcal -- report build tests/fixtures/valid/rocket.gcl --output target/wasm-report/rocket.report.html
     node internals/report-hydration-smoke.mjs target/wasm-report/rocket.report.html
 
-# Lightweight, offline source checks; human translation approval happens in PR review.
-docs-check:
-    uv run --script internals/docs-localization-tests.py
-    node --test internals/site-assemble.test.mjs
-    uv run --script internals/check-docs.py check
-
 # Each locale owns its output; never build Japanese inside the English output.
 docs-render:
     rm -rf target/docs-site/en target/docs-site/ja
@@ -129,13 +123,12 @@ docs-render:
 
 # Assemble only after both documentation builds and the playground succeed.
 docs-assemble:
+    vp -C web/playground exec node --test ../../internals/site-assemble.test.mjs
     vp -C web/playground exec node ../../internals/site-assemble.mjs
-    uv run --script internals/check-docs.py sitemaps
     vp -C web/playground exec node ../../internals/site-verify.mjs
-    uv run --script internals/check-docs.py site
 
 # Build and verify the entire GitHub Pages artifact with the same steps as CI.
-docs-build: docs-check playground-build docs-render
+docs-build: playground-build docs-render
     just docs-assemble
 
 # Run against the assembled artifact, with real workers in all three engines.

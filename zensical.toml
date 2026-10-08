@@ -2,13 +2,13 @@
 site_name = "Graphcal Documentation"
 site_description = "Documentation for Graphcal, a type-safe, unit-aware, Git-friendly reactive programming language for engineering calculations."
 site_author = "Shunichiro Nomura"
-site_url = "https://graphcal.org/docs/"
+site_url = "https://graphcal.org/docs/en/"
 # Build each locale in isolation; docs-assemble owns the final Pages artifact.
 docs_dir = "docs/en"
 site_dir = "target/docs-site/en"
 repo_name = "graphcal-lang/graphcal"
 repo_url = "https://github.com/graphcal-lang/graphcal"
-extra_css = ["/docs/assets/stylesheets/graphcal.css"]
+extra_css = ["/docs/en/assets/stylesheets/graphcal.css"]
 nav = [
   { "Home" = "index.md" },
   { "Playground" = "https://graphcal.org/playground/" },
@@ -45,15 +45,14 @@ nav = [
 
 [project.extra]
 alternate = [
-  { name = "English", link = "/docs/", lang = "en" },
+  { name = "English", link = "/docs/en/", lang = "en" },
   { name = "日本語", link = "/docs/ja/", lang = "ja" },
 ]
 
 [project.theme]
-custom_dir = "internals/docs-theme"
 language = "en"
-logo = "/docs/assets/graphcal-wordmark-transparent.png"
-favicon = "/docs/assets/favicon.svg"
+logo = "/docs/en/assets/graphcal-wordmark-transparent.png"
+favicon = "/docs/en/assets/favicon.svg"
 features = [
   "announce.dismiss",
   "content.code.annotate",

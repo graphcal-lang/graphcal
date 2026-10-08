@@ -42,7 +42,7 @@ graphcal report build rocket.gcl
 
 ## Documentation
 
-Everything else is in the [documentation](https://graphcal.org/docs/): the [tutorial](https://graphcal.org/docs/tutorial/), the [editor setup guide](https://graphcal.org/docs/editor-setup/) for VS Code, Zed, Neovim and Helix, and the language and CLI references.
+Everything else is in the [documentation](https://graphcal.org/docs/en/): the [tutorial](https://graphcal.org/docs/en/tutorial/), the [editor setup guide](https://graphcal.org/docs/en/editor-setup/) for VS Code, Zed, Neovim and Helix, and the language and CLI references.
 
 ## Design influences
 

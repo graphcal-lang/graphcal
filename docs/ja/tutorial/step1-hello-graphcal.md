@@ -32,7 +32,7 @@ node mass_ratio: Dimensionless = @total_mass / @dry_mass;
 
 ## ブラウザーで試す { #try-it-in-your-browser }
 
-[このサンプルをプレイグラウンドで開く](https://graphcal.org/playground/?example=hello)か、[ソースを読む](/docs/assets/playground/examples/step-1/main.gcl)ことができます。フルサイズのエディターでコードを編集すると、Auto-run が有効な場合は結果が更新されます。または **Run** を押してください。
+[このサンプルをプレイグラウンドで開く](https://graphcal.org/playground/?example=hello)か、[ソースを読む](/docs/en/assets/playground/examples/step-1/main.gcl)ことができます。フルサイズのエディターでコードを編集すると、Auto-run が有効な場合は結果が更新されます。または **Run** を押してください。
 
 ## ローカルで実行する { #run-it-locally }
 

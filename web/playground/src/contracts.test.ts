@@ -68,7 +68,7 @@ describe("sharing source and applied parameters", () => {
     ).toEqual({ document: { filename: "main.gcl", source: "" }, bindings: [] });
   });
   it("constructs a canonical source-only fragment URL", async () => {
-    const url = new URL(await shareUrl(document, "https://graphcal.org/docs/?example=no"));
+    const url = new URL(await shareUrl(document, "https://graphcal.org/docs/en/?example=no"));
     expect(url.pathname).toBe("/playground/");
     expect(url.search).toBe("");
     expect(await decodeFragment(url.hash)).toEqual({ document, bindings: [] });

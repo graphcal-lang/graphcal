@@ -21,6 +21,14 @@ async function fixture(t) {
   }
   await writeFile(new URL("target/docs-site/en/404.html", root), "not found");
   await writeFile(new URL("site-root/CNAME", root), "graphcal.org\n");
+  await mkdir(new URL("site-root/docs/", root));
+  await writeFile(new URL("site-root/docs/index.html", root), "redirect");
+  await writeFile(
+    new URL("site-root/robots.txt", root),
+    "Sitemap: https://graphcal.org/docs/en/sitemap.xml\nSitemap: https://graphcal.org/docs/ja/sitemap.xml\n",
+  );
+  await mkdir(new URL("target/docs-site/en/assets/", root));
+  await writeFile(new URL("target/docs-site/en/assets/shared.png", root), "shared");
   return root;
 }
 
@@ -28,7 +36,7 @@ test("assembly retains both locales, shared assets, playground, and root files",
   const root = await fixture(t);
   await assembleSite(root);
   assert.equal(
-    await readFile(new URL("site/docs/index.html", root), "utf8"),
+    await readFile(new URL("site/docs/en/index.html", root), "utf8"),
     "target/docs-site/en/",
   );
   assert.equal(
@@ -41,10 +49,14 @@ test("assembly retains both locales, shared assets, playground, and root files",
   );
   assert.equal(await readFile(new URL("site/CNAME", root), "utf8"), "graphcal.org\n");
   assert.equal(await readFile(new URL("site/404.html", root), "utf8"), "not found");
-  assert.match(
-    await readFile(new URL("site/sitemap.xml", root), "utf8"),
-    /\/docs\/ja\/sitemap.xml/,
+  assert.equal(await readFile(new URL("site/index.html", root), "utf8"), "site-root/");
+  assert.equal(await readFile(new URL("site/docs/index.html", root), "utf8"), "redirect");
+  assert.equal(await readFile(new URL("site/docs/en/assets/shared.png", root), "utf8"), "shared");
+  assert.equal(
+    await readFile(new URL("site/robots.txt", root), "utf8"),
+    await readFile(new URL("site-root/robots.txt", root), "utf8"),
   );
+  await assert.rejects(stat(new URL("site/sitemap.xml", root)), { code: "ENOENT" });
   await writeFile(new URL("site/docs/deleted.html", root), "stale");
   await writeFile(new URL("site/docs/ja/deleted.html", root), "stale");
   await assembleSite(root);
@@ -53,18 +65,10 @@ test("assembly retains both locales, shared assets, playground, and root files",
   assert.ok((await stat(new URL("site/playground/index.html", root))).size > 0);
 });
 
-test("an overlapping English output is rejected before removing the current site", async (t) => {
-  const root = await fixture(t);
-  await assembleSite(root);
-  await mkdir(new URL("target/docs-site/en/ja/", root));
-  await assert.rejects(assembleSite(root), /reserved ja/);
-  assert.ok((await stat(new URL("site/docs/ja/index.html", root))).size > 0);
-});
-
 test("a missing build input is rejected before touching the current artifact", async (t) => {
   const root = await fixture(t);
   await assembleSite(root);
   await rm(new URL("target/docs-site/ja/index.html", root));
   await assert.rejects(assembleSite(root), { code: "ENOENT" });
-  assert.ok((await stat(new URL("site/docs/index.html", root))).size > 0);
+  assert.ok((await stat(new URL("site/docs/en/index.html", root))).size > 0);
 });
