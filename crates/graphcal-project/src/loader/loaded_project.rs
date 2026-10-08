@@ -173,7 +173,6 @@ impl LoadedFiles {
     }
 
     /// Iterate dependencies first, ending with the root file.
-    #[must_use]
     pub fn iter(&self) -> impl DoubleEndedIterator<Item = &LoadedFile> + Clone {
         self.ordered.iter()
     }

@@ -1922,7 +1922,7 @@ fn instance_graph_splits_canonical_bodies_from_materialized_instances() {
         graph.instances_of(super::dag_position::DagPosition::ROOT),
         [instance_position]
     );
-    assert!(graph.instances_of(a_position).is_empty());
+    assert_eq!(graph.instances_of(a_position), []);
     // An instance is never a template.
     assert!(graph.template(&tir.dags, &instance_id).is_none());
 

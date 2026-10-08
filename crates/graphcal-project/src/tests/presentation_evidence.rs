@@ -122,7 +122,7 @@ fn literal_constant_and_conversion_label_overflow_preserve_si() {
     );
     let invalid_scale = compile_and_eval("param rate: Dimensionless = 0.0; unit bad: Length = (@rate) m; node value: Length = 1.0 bad;").unwrap();
     assert!(invalid_scale.nodes().next().unwrap().1.is_err());
-    assert!(invalid_scale.presentation_diagnostics.is_empty());
+    assert_eq!(invalid_scale.presentation_diagnostics.as_slice(), []);
 }
 
 #[test]
@@ -459,7 +459,7 @@ node independent: Length = 3.0 m;
             .all(|(_, value)| value.is_err())
     );
     assert_quantity_value(&result, "independent", 3.0);
-    assert!(result.presentation_diagnostics.is_empty());
+    assert_eq!(result.presentation_diagnostics.as_slice(), []);
 }
 
 /// The display request the conversion `declaration` of `tir`'s root makes

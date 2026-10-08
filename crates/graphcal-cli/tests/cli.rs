@@ -7254,7 +7254,7 @@ fn eval_param_rejects_arbitrary_computation() {
         .expect("failed to run graphcal");
 
     assert_eq!(output.status.code(), Some(2));
-    assert!(output.stdout.is_empty());
+    assert_eq!(output.stdout, b"");
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("not a closed value"), "stderr: {stderr}");
 }
@@ -7453,7 +7453,7 @@ fn model_serve_rejects_private_output_before_writing_stdout() {
         .expect("failed to run graphcal");
 
     assert_eq!(output.status.code(), Some(2));
-    assert!(output.stdout.is_empty());
+    assert_eq!(output.stdout, b"");
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("private"), "stderr: {stderr}");
 }

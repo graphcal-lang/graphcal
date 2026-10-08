@@ -489,7 +489,7 @@ mod tests {
         let order = graph.into_topo_order().expect("acyclic");
         assert!(order.is_empty());
         assert_eq!(order.len(), 0);
-        assert!(order.as_slice().is_empty());
+        assert_eq!(order.as_slice(), [] as [u32; 0]);
     }
 
     #[test]

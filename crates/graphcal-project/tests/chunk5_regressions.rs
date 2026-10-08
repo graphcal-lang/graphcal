@@ -207,7 +207,7 @@ plot p = { mark: point, encode: { x: 1.0e300 m -> tiny } };
         }
     ));
     assert_eq!(result.plots.len(), 1);
-    assert!(result.plot_errors.is_empty());
+    assert_eq!(result.plot_errors.as_slice(), []);
     assert_eq!(result.presentation_diagnostics.len(), 2);
     assert!(
         result

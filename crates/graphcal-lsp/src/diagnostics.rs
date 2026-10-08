@@ -658,7 +658,7 @@ mod tests {
     fn valid_source_produces_no_diagnostics() {
         let source = "param x: Dimensionless = 1.0;";
         let diags = produce_diagnostics(source, "test.gcl");
-        assert!(diags.is_empty());
+        assert_eq!(diags.as_slice(), []);
     }
 
     #[test]
@@ -1022,7 +1022,7 @@ param event: Datetime<TT>(
     fn parse_error_produces_diagnostic() {
         let source = "param = ;";
         let diags = produce_diagnostics(source, "test.gcl");
-        assert!(!diags.is_empty());
+        assert_ne!(diags.as_slice(), []);
         assert_eq!(diags[0].severity, Some(DiagnosticSeverity::ERROR));
         assert_eq!(diags[0].source, Some("graphcal".to_string()));
     }
@@ -1263,7 +1263,7 @@ param event: Datetime<TT>(
     fn unknown_ref_produces_diagnostic() {
         let source = "node x: Dimensionless = @nonexistent;";
         let diags = produce_diagnostics(source, "test.gcl");
-        assert!(!diags.is_empty());
+        assert_ne!(diags.as_slice(), []);
         let code = diags[0].code.as_ref();
         assert!(
             code.is_some_and(|c| matches!(c, NumberOrString::String(s) if s.contains("N002"))),
@@ -1389,7 +1389,7 @@ param event: Datetime<TT>(
         let source = "node UTC: Dimensionless = 1.0;\n\
                       node copied: Dimensionless = @UTC;\n\
                       node event: Datetime<UTC> = epoch<UTC>(\"2024-01-01T00:00:00\");";
-        assert!(produce_diagnostics(source, "test.gcl").is_empty());
+        assert_eq!(produce_diagnostics(source, "test.gcl").as_slice(), []);
     }
 
     #[test]
@@ -1432,7 +1432,7 @@ param event: Datetime<TT>(
     fn passing_assertion_produces_no_diagnostic() {
         let source = "param x: Dimensionless = 1.0;\nassert x_pos = @x > 0.0;";
         let diags = produce_diagnostics(source, "test.gcl");
-        assert!(diags.is_empty());
+        assert_eq!(diags.as_slice(), []);
     }
 
     #[test]
@@ -1759,7 +1759,7 @@ dag config {
 }
 node factor: Dimensionless = @config()::factor;
 ";
-        assert!(produce_diagnostics(source, "test.gcl").is_empty());
+        assert_eq!(produce_diagnostics(source, "test.gcl").as_slice(), []);
     }
 
     #[test]
@@ -1776,7 +1776,7 @@ include scale(
 ) as scaled;
 node out: Dimensionless[Fin(3)] = @scaled::ys;
 ";
-        assert!(produce_diagnostics(source, "test.gcl").is_empty());
+        assert_eq!(produce_diagnostics(source, "test.gcl").as_slice(), []);
     }
 
     #[test]
@@ -1860,7 +1860,7 @@ include pass_through(
             "node design: Dimensionless = @x[Phase#Design];\n",
         );
         let diags = produce_diagnostics(source, "test.gcl");
-        assert!(!diags.is_empty());
+        assert_ne!(diags.as_slice(), []);
         let has_v004 = diags.iter().any(|d| {
             d.code
                 .as_ref()

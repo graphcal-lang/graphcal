@@ -1958,7 +1958,7 @@ fn ordinary_plot_and_composition_property_failures_remain_contained() {
     assert_eq!(result.plots.len(), 1);
     assert_eq!(result.figures.len(), 1);
     assert_eq!(result.plot_errors.len(), 3);
-    assert!(result.presentation_diagnostics.is_empty());
+    assert_eq!(result.presentation_diagnostics.as_slice(), []);
 }
 
 #[test]

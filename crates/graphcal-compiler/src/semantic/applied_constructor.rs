@@ -180,7 +180,7 @@ mod tests {
             .unwrap();
         assert_eq!(concrete.constructor(), symbolic.constructor());
         assert_eq!(concrete.runtime_type(), symbolic.runtime_type());
-        assert!(concrete.generic_args().is_empty());
+        assert_eq!(concrete.generic_args(), []);
         let fields = concrete
             .fields()
             .iter()

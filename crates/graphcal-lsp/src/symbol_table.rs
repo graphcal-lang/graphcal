@@ -2740,7 +2740,7 @@ mod tests {
     fn builtin_function_details_show_documented_arities() {
         let mut table = SymbolTable::default();
         register_builtins(&mut table);
-        assert!(table.definition_conflicts().is_empty());
+        assert_eq!(table.definition_conflicts(), []);
         let detail = |name: &str| {
             let key = definition_key(&table, SymbolCategory::BuiltinFn, name);
             table.definitions.get(&key).unwrap().detail.clone()

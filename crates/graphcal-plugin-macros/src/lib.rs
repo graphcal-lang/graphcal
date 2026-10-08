@@ -85,7 +85,7 @@ mod tests {
         assert_eq!(a.vars.len(), 1);
         assert_eq!(a.vars[0].var, "D");
         assert_eq!((a.vars[0].pow.num, a.vars[0].pow.den), (1, 1));
-        assert!(a.fixed.is_empty());
+        assert_eq!(a.fixed.as_slice(), []);
         let t = param_quantity(&function.params[2].kind);
         assert!(t.vars.is_empty() && t.fixed.is_empty());
     }

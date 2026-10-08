@@ -47,7 +47,7 @@ fn render_presentation_error(source: &str, name: &str, expected_si: f64) -> Stri
         expected_si.to_bits()
     );
     assert!(result.has_errors());
-    assert!(!result.presentation_diagnostics.is_empty());
+    assert_ne!(result.presentation_diagnostics.as_slice(), []);
     result
         .presentation_diagnostics
         .iter()

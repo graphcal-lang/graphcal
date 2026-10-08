@@ -542,7 +542,7 @@ mod tests {
         let path = NamePath::local(atom("x"));
         assert_eq!(path.to_string(), "x");
         assert!(!path.is_qualified());
-        assert!(path.qualifier().is_empty());
+        assert_eq!(path.qualifier(), []);
         assert_eq!(path.as_bare().map(NameAtom::as_str), Some("x"));
         assert!(path.qualifier_and_leaf().is_none());
         assert_eq!(NamePath::from(atom("x")), path);

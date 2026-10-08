@@ -253,10 +253,9 @@ mod tests {
             Some(&IndexEntryKey::position(2))
         );
         assert_eq!(axis.keys().len(), 3);
-        assert!(
-            IndexAxis::named_for_test(owner(), "Phase", &["A"])
-                .coordinates()
-                .is_empty()
+        assert_eq!(
+            IndexAxis::named_for_test(owner(), "Phase", &["A"]).coordinates(),
+            []
         );
         assert_eq!(
             format!("{axis:?}"),

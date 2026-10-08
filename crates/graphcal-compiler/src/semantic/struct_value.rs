@@ -169,7 +169,6 @@ impl<V> StructValue<V> {
     }
 
     /// Every field with its value, in declaration order.
-    #[must_use]
     pub fn fields(&self) -> impl ExactSizeIterator<Item = (&FieldName, &V)> {
         self.typed_fields()
             .map(|(field, value)| (field.name(), value))
@@ -177,7 +176,6 @@ impl<V> StructValue<V> {
 
     /// Every declared field, at its instantiated type, with its value, in
     /// declaration order.
-    #[must_use]
     pub fn typed_fields(&self) -> impl ExactSizeIterator<Item = (&AppliedField, &V)> {
         self.application.fields().iter().zip(&self.values)
     }
@@ -303,7 +301,7 @@ mod tests {
         assert_eq!(value.field(&field("other")), None);
         assert_eq!(value.type_name(), &type_name("main"));
         assert_eq!(value.constructor(), &constructor());
-        assert!(value.generic_args().is_empty());
+        assert_eq!(value.generic_args(), []);
         let typed = value
             .typed_fields()
             .map(|(field, value)| (field.field_type().clone(), *value))

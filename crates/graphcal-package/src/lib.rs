@@ -1325,13 +1325,11 @@ impl ValidatedLockfile<'_> {
     }
 
     /// Iterate over the complete, root-reachable package set.
-    #[must_use]
     pub fn packages(&self) -> impl ExactSizeIterator<Item = &LockedPackage> {
         self.lockfile.packages.iter()
     }
 
     /// Iterate over validated root plugin pins.
-    #[must_use]
     pub fn plugins(&self) -> impl ExactSizeIterator<Item = &LockedPlugin> {
         self.lockfile.plugins.iter()
     }
@@ -1916,7 +1914,6 @@ impl LockedDependencyCycle {
     }
 
     /// Packages after [`Self::start`] and before the closing edge back to it.
-    #[must_use]
     pub fn successors(&self) -> impl ExactSizeIterator<Item = &PackageInstanceId> {
         self.successors.iter()
     }
@@ -3968,7 +3965,7 @@ mission = { git = "https://github.com/acme/mission.git", rev = "aaaaaaaaaaaaaaaa
         )]);
         let toml = lock.to_deterministic_toml();
         assert!(!toml.contains("[[plugin]]"));
-        assert!(parse_lockfile_str(&toml).unwrap().plugins.is_empty());
+        assert_eq!(parse_lockfile_str(&toml).unwrap().plugins.as_slice(), []);
     }
 
     #[test]
