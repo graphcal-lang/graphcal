@@ -466,8 +466,8 @@ mod tests {
                 .collect::<Vec<_>>()
         };
         assert_eq!(deps_of("doubled"), ["input"]);
-        assert!(deps_of("input").is_empty());
-        assert!(deps_of("independent").is_empty());
+        assert_eq!(deps_of("input"), [] as [&str; 0]);
+        assert_eq!(deps_of("independent"), [] as [&str; 0]);
     }
 
     /// Index `scheduled` as the steps of a copy of `root`.
@@ -532,7 +532,7 @@ mod tests {
         assert!(
             (quantity(root_constant(plan, &resolved_key("g0"))) - 9.80665).abs() < f64::EPSILON
         );
-        assert!(root_order(plan).is_empty());
+        assert_eq!(root_order(plan), [] as [&ResolvedDeclName; 0]);
     }
 
     #[test]

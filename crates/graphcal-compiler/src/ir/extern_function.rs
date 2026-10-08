@@ -111,11 +111,10 @@ pub(crate) fn merge_extern_function(
                     },
                 ));
             }
-            Ok(())
         }
         Entry::Vacant(slot) => {
             slot.insert(entry);
-            Ok(())
         }
     }
+    Ok(())
 }

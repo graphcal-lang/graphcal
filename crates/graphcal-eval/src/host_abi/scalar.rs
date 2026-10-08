@@ -241,7 +241,6 @@ mod tests {
     }
 
     #[test]
-    #[expect(clippy::float_cmp, reason = "ABI slots encode these values exactly")]
     fn validated_scalars_encode_their_exact_slots() {
         let large = HostInt::try_new(1_i64 << 54).unwrap();
         assert_eq!(

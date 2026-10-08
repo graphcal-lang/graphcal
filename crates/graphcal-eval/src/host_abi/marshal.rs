@@ -618,7 +618,6 @@ mod tests {
     }
 
     #[test]
-    #[expect(clippy::float_cmp, reason = "the ABI encodes these values exactly")]
     fn scalars_and_arrays_encode_with_the_abi_policy() {
         let signature = signature(
             &["I", "J"],

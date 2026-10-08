@@ -260,7 +260,7 @@ impl Infer<'_> {
                 axis.entry_keys
                     .iter()
                     .cloned()
-                    .map(|key| axis.variant_key(key).map_err(&incompatible_key_error))
+                    .map(|key| axis.variant_key(key).map_err(incompatible_key_error))
                     .collect::<Result<Vec<_>, _>>()
             })
             .collect::<Result<Vec<_>, _>>()?;
@@ -305,7 +305,7 @@ impl Infer<'_> {
                     }
                     axes[i]
                         .variant_key(entry_key)
-                        .map_err(&incompatible_key_error)
+                        .map_err(incompatible_key_error)
                 })
                 .collect::<Result<Vec<_>, _>>()?;
             if !provided_tuples.insert(tuple) {

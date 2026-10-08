@@ -58,7 +58,6 @@ impl CallTargets {
     }
 
     /// Every slot with its target, in slot order.
-    #[must_use]
     pub fn iter(&self) -> impl ExactSizeIterator<Item = (CallSlot, &DagId)> {
         self.targets
             .iter()

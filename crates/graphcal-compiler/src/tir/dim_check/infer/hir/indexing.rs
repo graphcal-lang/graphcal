@@ -131,7 +131,6 @@ impl Infer<'_> {
                     position_u64,
                     crate::tir::static_index::StaticIndexUse::Key,
                 );
-                Ok(CheckedType::Key(index_identity))
             }
             KeyFormKind::Fin => {
                 if finite_form.is_none() {
@@ -158,7 +157,6 @@ impl Infer<'_> {
                     )
                     .into());
                 }
-                Ok(CheckedType::Key(index_identity))
             }
             KeyFormKind::Floor | KeyFormKind::Ceil | KeyFormKind::Nearest => {
                 let idx_def = crate::tir::dim_check::infer::index_def_for_inferred(
@@ -200,9 +198,9 @@ impl Infer<'_> {
                     )
                     .into());
                 }
-                Ok(CheckedType::Key(index_identity))
             }
         }
+        Ok(CheckedType::Key(index_identity))
     }
 
     pub(super) fn infer_hir_for_comp(

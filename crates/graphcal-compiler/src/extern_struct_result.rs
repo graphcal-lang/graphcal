@@ -123,7 +123,7 @@ mod tests {
             shape,
         );
         assert_eq!(result.record_type(), &record_type);
-        assert!(result.applied().generic_args().is_empty());
+        assert_eq!(result.applied().generic_args(), []);
         let fields = result
             .applied()
             .fields()

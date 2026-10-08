@@ -3296,7 +3296,7 @@ fn inline_dag_call_with_passing_assert_succeeds() {
     assert!((find_value(&result, "y") - 6.0).abs() < f64::EPSILON);
     // The dag's assert is internal to the instantiation — no spurious
     // top-level assertion report.
-    assert!(result.assertions.is_empty());
+    assert_eq!(result.assertions.as_slice(), []);
 }
 
 #[test]
@@ -4091,7 +4091,7 @@ fn structured_binding_of_coordinate_indexed_entries_is_rejected_clearly() {
         matches!(error.kind(), StructuredBindingErrorKind::CoordinateEntries),
         "{error:?}"
     );
-    assert!(error.path().is_empty());
+    assert_eq!(error.path(), []);
     assert_eq!(
         error.to_string(),
         "coordinate-indexed values cannot be bound entry by entry"

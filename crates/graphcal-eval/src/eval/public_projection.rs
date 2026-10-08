@@ -422,7 +422,7 @@ mod tests {
     fn plain(value: &RuntimeValue, declared: &CheckedType) -> Result<Value, String> {
         project(PresentedRef::plain(value), declared)
             .map(|(value, diagnostics)| {
-                assert!(diagnostics.is_empty());
+                assert_eq!(diagnostics.as_slice(), []);
                 value
             })
             .map_err(|invariant| invariant.to_string())
@@ -549,7 +549,7 @@ mod tests {
         };
         assert_eq!(type_name, StructTypeRef::from_resolved(pair_type()));
         assert_eq!(constructor.as_str(), "Pair");
-        assert!(generic_args.is_empty());
+        assert_eq!(generic_args.as_slice(), []);
         assert!(matches!(
             &fields[&field("left")],
             Value::Quantity { dimension, .. } if *dimension == length()
@@ -567,7 +567,7 @@ mod tests {
             Presented::plain(RuntimeValue::Bool(false)),
         ));
         let (projected, diagnostics) = presented(&value, &pair_checked_type());
-        assert!(diagnostics.is_empty());
+        assert_eq!(diagnostics.as_slice(), []);
         let Value::Struct { fields, .. } = projected else {
             panic!("expected a struct value");
         };

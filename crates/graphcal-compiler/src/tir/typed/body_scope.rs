@@ -142,7 +142,6 @@ impl<'t, T: ?Sized> Scoped<'t, T> {
 
 impl<'t, T> Scoped<'t, [T]> {
     /// Every element of this part, each in the same scope.
-    #[must_use]
     pub fn iter(self) -> impl ExactSizeIterator<Item = Scoped<'t, T>> + use<'t, T> {
         let scope = self.scope;
         self.part.iter().map(move |part| Scoped::new(scope, part))

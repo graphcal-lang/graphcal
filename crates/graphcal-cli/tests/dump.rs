@@ -88,7 +88,7 @@ fn syntax_stages_do_not_follow_missing_imports_but_modules_does() {
 
     let modules = run(&["dump", "modules", path.to_str().unwrap()]);
     assert!(!modules.status.success());
-    assert!(modules.stdout.is_empty());
+    assert_eq!(modules.stdout, b"");
 }
 
 #[test]
@@ -120,7 +120,7 @@ fn hir_exists_before_static_checking_and_tir_requires_validation() {
 
     let tir = run(&["dump", "tir", invalid.to_str().unwrap()]);
     assert!(!tir.status.success());
-    assert!(tir.stdout.is_empty());
+    assert_eq!(tir.stdout, b"");
 }
 
 #[test]
@@ -140,7 +140,7 @@ fn plan_accepts_required_runtime_params_but_runtime_requires_a_binding() {
 
     let runtime = run(&["dump", "runtime", path.to_str().unwrap()]);
     assert_eq!(runtime.status.code(), Some(2));
-    assert!(runtime.stdout.is_empty());
+    assert_eq!(runtime.stdout, b"");
     assert!(String::from_utf8_lossy(&runtime.stderr).contains("required"));
 
     let bound_runtime = run(&[

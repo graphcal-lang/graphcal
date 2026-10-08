@@ -1065,7 +1065,7 @@ mod tests {
             manifest.functions[0].params[0].kind,
             ManifestParamKind::Quantity(ManifestMonomial::default())
         );
-        assert!(manifest.functions[0].dim_vars.is_empty());
+        assert_eq!(manifest.functions[0].dim_vars, [] as [String; 0]);
 
         let encoded = manifest.to_json().unwrap();
         assert!(encoded.contains(r#""quantity""#));

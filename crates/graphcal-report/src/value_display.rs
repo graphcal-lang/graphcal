@@ -148,7 +148,6 @@ fn flatten_entries(
                 };
                 flatten_entries(label, inner, render, out)?;
             }
-            Ok(())
         }
         Value::Indexed { entries, .. } => {
             for key in entries.keys() {
@@ -156,13 +155,12 @@ fn flatten_entries(
                 let label = format!("{prefix}[{display_key}]");
                 flatten_entries(label, &entries[key], render, out)?;
             }
-            Ok(())
         }
         _ => {
             out.push((prefix, scalar_display(value, render)?));
-            Ok(())
         }
     }
+    Ok(())
 }
 
 /// Project a two-axis indexed value into a grid. Columns are the union of

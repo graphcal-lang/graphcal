@@ -200,11 +200,9 @@ mod tests {
             assert_eq!(segments, ["lib", "inner"]);
         });
         with_import_path("import pkg::{x};", |path| {
-            assert!(
-                PackageSelector::classify(path)
-                    .unwrap()
-                    .module_segments()
-                    .is_empty()
+            assert_eq!(
+                PackageSelector::classify(path).unwrap().module_segments(),
+                []
             );
         });
     }

@@ -300,7 +300,7 @@ fn published_trees_cover_their_roots_and_keep_only_their_nominal_uses() {
     assert!(!bodies.cover([&*expr, &*other]));
     assert!(!bodies.cover(std::iter::empty()));
     assert_eq!(bodies.nominal_uses(expr.id()), [observation]);
-    assert!(bodies.nominal_uses(other.id()).is_empty());
+    assert_eq!(bodies.nominal_uses(other.id()), []);
     assert!(bodies.shared_nominal_uses(other.id()).is_none());
     assert!(bodies.executable_value(expr.id()).is_ok());
 }

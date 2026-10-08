@@ -63,13 +63,13 @@ fn convert_function(
         .iter()
         .map(|var| convert_dim_var(var))
         .collect::<Result<Vec<_>, _>>()
-        .map_err(&in_function)?;
+        .map_err(in_function)?;
     let index_vars = function
         .index_vars
         .iter()
         .map(|var| convert_index_var(var))
         .collect::<Result<Vec<_>, _>>()
-        .map_err(&in_function)?;
+        .map_err(in_function)?;
     let params = function
         .params
         .iter()
@@ -84,8 +84,8 @@ fn convert_function(
             Ok(FunctionParam { name, kind })
         })
         .collect::<Result<Vec<_>, _>>()
-        .map_err(&in_function)?;
-    let result = convert_result_kind(&function.result).map_err(&in_function)?;
+        .map_err(in_function)?;
+    let result = convert_result_kind(&function.result).map_err(in_function)?;
 
     let signature = FunctionSignature::try_new(dim_vars, index_vars, params, result)
         .map_err(|source| in_function(ConvertErrorKind::Signature(source)))?;

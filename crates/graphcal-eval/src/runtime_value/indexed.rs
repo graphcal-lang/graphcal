@@ -132,7 +132,6 @@ impl<V> IndexedValue<V> {
     }
 
     /// Entries with their keys, in axis order.
-    #[must_use]
     pub(crate) fn iter(&self) -> impl ExactSizeIterator<Item = (&IndexEntryKey, &V)> {
         self.axis.keys().iter().zip(self.entries.iter())
     }

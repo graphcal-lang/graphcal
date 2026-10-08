@@ -796,10 +796,6 @@ impl fmt::Display for IndexBindingTarget {
 }
 
 #[cfg(test)]
-#[expect(
-    clippy::float_cmp,
-    reason = "coordinate endpoints are reproduced exactly by construction"
-)]
 mod tests {
     use super::*;
     use crate::syntax::non_empty::NonEmpty;

@@ -115,7 +115,7 @@ fn decl_type_exposes_element_and_axes() {
     let element = ResolvedValueType::Quantity(ResolvedDim::Concrete(length()));
     let scalar = ResolvedDeclType::Value(element.clone());
     assert_eq!(scalar.element(), &element);
-    assert!(scalar.indexes().is_empty());
+    assert_eq!(scalar.indexes(), []);
 
     let indexed = ResolvedDeclType::Indexed {
         element: element.clone(),

@@ -236,7 +236,7 @@ mod tests {
             panic!("missing root must not be reported as a complete empty tree");
         };
         let (files, failures) = incomplete.into_parts();
-        assert!(files.is_empty());
+        assert_eq!(files, [] as [PathBuf; 0]);
         assert_eq!(failures.count(), 1);
         assert_eq!(failures.iter().next().unwrap().path(), root);
     }

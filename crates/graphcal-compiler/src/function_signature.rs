@@ -1800,7 +1800,7 @@ mod tests {
                 scalar_array(element, "I").into(),
             )
             .unwrap();
-            assert!(signature.dim_vars().is_empty());
+            assert_eq!(signature.dim_vars(), []);
         }
 
         let bool_signature = FunctionSignature::try_new(

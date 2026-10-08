@@ -596,7 +596,6 @@ impl<V: Concreteness> TConstruct<V> {
     }
 
     /// The field initializers, in written order.
-    #[must_use]
     pub fn fields(&self) -> impl ExactSizeIterator<Item = &TFieldInit<V>> {
         self.fields.iter().map(|(_, init)| init)
     }
@@ -672,7 +671,6 @@ pub enum TMatchArms<V: Concreteness = Concrete> {
 
 impl<V: Concreteness> TMatchArms<V> {
     /// Every arm's body, in written order.
-    #[must_use]
     pub fn bodies(&self) -> Box<dyn Iterator<Item = &TExpr<V>> + '_> {
         match self {
             Self::Labels { arms, .. } => Box::new(arms.iter().map(|arm| &arm.body)),

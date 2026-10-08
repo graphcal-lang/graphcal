@@ -521,7 +521,7 @@ fn materialized_shape_identity_survives_equal_and_shifted_source_coordinates() {
     assert_eq!(totals(&tir), vec![2, 3]);
     let (rebuilt, rebuilt_src) = module_aware_tir(source);
     let rebuilt = check_draft(rebuilt, rebuilt_src).unwrap();
-    assert!(nodes(&rebuilt).is_empty());
+    assert_eq!(nodes(&rebuilt).as_slice(), []);
 }
 
 #[test]

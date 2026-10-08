@@ -4,7 +4,6 @@
 //! and `AddressSanitizer` therefore execute the same pointer construction, copy,
 //! and deallocation paths used by generated Wasm wrappers.
 #![expect(
-    clippy::float_cmp,
     unsafe_code,
     reason = "this focused ABI harness compares exactly copied bits and executes unsafe contracts"
 )]

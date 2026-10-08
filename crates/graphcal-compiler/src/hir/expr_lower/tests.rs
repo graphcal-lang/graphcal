@@ -533,7 +533,7 @@ fn strict_lowering_rejects_with_the_first_tolerant_diagnostic_in_source_order() 
 fn resolved_tolerant_tree_has_no_diagnostics_and_refines_to_the_same_shape() {
     let source = "param a: Dimensionless; node out: Dimensionless = -(@a * 2.0);";
     let tolerant = lower_tolerant_node(source, "out");
-    assert!(tolerant.diagnostics().is_empty());
+    assert_eq!(tolerant.diagnostics(), [] as [&ExprLowerError; 0]);
     let strict = lower_strict_node(source, "out").unwrap();
     let mut tolerant_spans = Vec::new();
     visit_expr(&tolerant, &mut |node| tolerant_spans.push(node.span));
