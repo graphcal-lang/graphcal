@@ -29,7 +29,7 @@ node delta_v: Velocity = @v_exhaust * ln(@mass_ratio);
 
 ロケット方程式を編集し、単位や次元を変更してみてください。次元エラーは該当するソース範囲に対して報告されます。
 
-[このサンプルをプレイグラウンドで開く](https://graphcal.org/playground/?example=units)か、[ソースを読む](/docs/assets/playground/examples/step-2/main.gcl)ことができます。
+[このサンプルをプレイグラウンドで開く](https://graphcal.org/playground/?example=units)か、[ソースを読む](/docs/en/assets/playground/examples/step-2/main.gcl)ことができます。
 
 期待される初期出力には `delta_v = 3778.221 m/s` が含まれます。
 

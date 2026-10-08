@@ -114,7 +114,7 @@ node total: Velocity = @v_parking + @transfer_dv;
 
 この完全なサンプルは、両方の DAG ブロックを定義してインスタンス化します。インクルードの引数や選択する出力を編集して、再実行してみてください。
 
-[このサンプルをプレイグラウンドで開く](https://graphcal.org/playground/?example=functions)か、[ソースを読む](/docs/assets/playground/examples/step-4/main.gcl)ことができます。ファイル名は `main.gcl` のままにしてください。DAG 本体は `main` から宣言を自己インポートしています。
+[このサンプルをプレイグラウンドで開く](https://graphcal.org/playground/?example=functions)か、[ソースを読む](/docs/en/assets/playground/examples/step-4/main.gcl)ことができます。ファイル名は `main.gcl` のままにしてください。DAG 本体は `main` から宣言を自己インポートしています。
 
 期待される初期出力には、選択された `v_parking`、`transfer_dv`、`departure_dv` の出力と `total` が含まれます。
 

@@ -63,7 +63,7 @@ node delta_v: Velocity = @v_exhaust * ln(@mass_ratio);
 
 [スタンドアロンのプレイグラウンド](https://graphcal.org/playground/)は 1 つの `.gcl` ファイルにしか対応していません。この複数ファイルのレッスンには CLI を使ってください。別のブラウザー用サンプルとして平坦化されてはいません。
 
-[エントリーソース](/docs/assets/playground/examples/step-5/src/rocket_project/main.gcl)、[定数](/docs/assets/playground/examples/step-5/src/rocket_project/constants.gcl)、[パラメーター](/docs/assets/playground/examples/step-5/src/rocket_project/params.gcl)、および[パッケージマニフェスト](/docs/assets/playground/examples/step-5/graphcal.toml)を読んでください。上に示したとおりに配置し、以下のコマンドを実行します。
+[エントリーソース](/docs/en/assets/playground/examples/step-5/src/rocket_project/main.gcl)、[定数](/docs/en/assets/playground/examples/step-5/src/rocket_project/constants.gcl)、[パラメーター](/docs/en/assets/playground/examples/step-5/src/rocket_project/params.gcl)、および[パッケージマニフェスト](/docs/en/assets/playground/examples/step-5/graphcal.toml)を読んでください。上に示したとおりに配置し、以下のコマンドを実行します。
 
 期待される出力には、`g0` から `delta_v` までの 7 つの射影された値がすべて含まれます。
 

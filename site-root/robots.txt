@@ -1,4 +1,5 @@
 User-agent: *
 Allow: /
 
-Sitemap: https://graphcal.org/docs/sitemap.xml
+Sitemap: https://graphcal.org/docs/en/sitemap.xml
+Sitemap: https://graphcal.org/docs/ja/sitemap.xml

@@ -15,7 +15,7 @@
   - Document essential concepts, syntax, and workflows users need to understand or use Graphcal correctly. Do not add implementation details, regression-test scenarios, obscure edge cases, or notes that merely announce a fix/change.
   - A bug fix that restores documented behavior does not need a documentation edit. A feature addition alone is not sufficient justification either; apply the learner-value criterion above.
   - When an update is justified, integrate the minimum necessary explanation into the relevant existing section. If the benefit to a new learner is unclear, leave the documentation unchanged.
-- The user-facing documentation is in `docs/en/` (English) and `docs/ja/` (Japanese). The entry points are `docs/en/index.md` and `docs/ja/index.md`. Update both languages together; see `internals/docs-localization.md` for the translation and validation workflow.
+- The user-facing documentation is in `docs/en/` (English) and `docs/ja/` (Japanese). The entry points are `docs/en/index.md` and `docs/ja/index.md`. Update both languages together; see `internals/docs-localization.md` for the translation workflow. Both editions must have the same pages, navigation structure, heading IDs, and byte-identical code fences. Review their synchronization and run `just docs-build`.
   - It is a Zensical site, so you can run it locally with `zensical serve` in the project root and open `http://localhost:8000` in the browser.
 - The formal grammar is in `grammar.ebnf` at the repository root. It serves as the source of truth referenced by tree-sitter and TextMate grammars.
 - Design ideas and feature proposals are tracked as GitHub issues.

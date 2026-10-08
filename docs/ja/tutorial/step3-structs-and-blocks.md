@@ -98,7 +98,7 @@ node tof_hours: Time = @transfer.tof -> h;
 
 構造化された `transfer` の値は出力ペインで展開でき、`total_dv` と `tof_hours` はその射影されたフィールドを表示します。
 
-[このサンプルをプレイグラウンドで開く](https://graphcal.org/playground/?example=structs)か、[ソースを読む](/docs/assets/playground/examples/step-3/main.gcl)ことができます。
+[このサンプルをプレイグラウンドで開く](https://graphcal.org/playground/?example=structs)か、[ソースを読む](/docs/en/assets/playground/examples/step-3/main.gcl)ことができます。
 
 期待される初期出力には、展開可能な `transfer` の値、`total_dv`、`tof_hours` が含まれます。
 

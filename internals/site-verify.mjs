@@ -2,14 +2,16 @@ import { readFile, readdir, stat } from "node:fs/promises";
 import assert from "node:assert/strict";
 const site = new URL("../site/", import.meta.url);
 const text = (path) => readFile(new URL(path, site), "utf8");
-assert.match(await text("index.html"), /url=\/docs\//);
+assert.match(await text("index.html"), /url=\/docs\/en\//);
+assert.match(await text("docs/index.html"), /url=en\//);
 assert.equal((await text("CNAME")).trim(), "graphcal.org");
 for (const file of [
   "404.html",
   "docs/index.html",
+  "docs/en/index.html",
   "docs/ja/index.html",
-  "sitemap.xml",
-  "docs/sitemap.xml",
+  "robots.txt",
+  "docs/en/sitemap.xml",
   "docs/ja/sitemap.xml",
   "playground/index.html",
   "playground/pkg/graphcal_wasm.js",
@@ -37,7 +39,7 @@ const entryBytes = (
   )
 ).reduce((sum, size) => sum + size, 0);
 assert.ok(entryBytes <= 600 * 1024, `600 KiB raw entry JS budget: ${entryBytes}`);
-for (const home of ["docs/index.html", "docs/ja/index.html"]) {
+for (const home of ["docs/en/index.html", "docs/ja/index.html"]) {
   assert.doesNotMatch(await text(home), /javascripts\/playground|stylesheets\/playground/);
 }
 const catalog = JSON.parse(

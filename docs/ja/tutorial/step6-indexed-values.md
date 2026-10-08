@@ -107,7 +107,7 @@ node departure_dv: Velocity = @delta_v[Maneuver#Departure];
 
 プレイグラウンドではインデックス付き値を展開できます。1 次元の値はキーと値のリスト、2 次元の値は表、3 つ以上の軸を持つ値は先頭の軸で選択される表の順序付きリストとして表示されます。マヌーバーの値を 1 つ変更して、集約と累積の出力が更新されるのを確認してください。
 
-[このサンプルをプレイグラウンドで開く](https://graphcal.org/playground/?example=indexed)か、[ソースを読む](/docs/assets/playground/examples/step-6/main.gcl)ことができます。
+[このサンプルをプレイグラウンドで開く](https://graphcal.org/playground/?example=indexed)か、[ソースを読む](/docs/en/assets/playground/examples/step-6/main.gcl)ことができます。
 
 期待される初期出力には `total_dv = 4.41 km/s` と 3 つの累積エントリーが含まれます。
 
