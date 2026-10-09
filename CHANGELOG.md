@@ -4,6 +4,38 @@ Release notes for Graphcal. Each release section becomes the body of its GitHub 
 Add a `## <version>` section before running the release workflow.
 Earlier releases are listed on [GitHub Releases](https://github.com/graphcal-lang/graphcal/releases).
 
+## 0.0.1-alpha.35
+
+This release is the first to ship prebuilt `graphcal` binaries, so you no longer need a Rust toolchain to install Graphcal.
+It contains no language changes.
+
+### Prebuilt Binaries
+
+- Each GitHub Release now includes prebuilt `graphcal` archives for five targets, shell and PowerShell installers, a `sha256.sum` checksum file, and GitHub build attestations. (_#1982_)
+  - Linux x86_64 and arm64 (`x86_64-unknown-linux-musl`, `aarch64-unknown-linux-musl`), statically linked
+  - macOS x86_64 and arm64 (`x86_64-apple-darwin`, `aarch64-apple-darwin`)
+  - Windows x86_64 (`x86_64-pc-windows-msvc`)
+- Alpha releases are marked as the latest release, so the installer URLs under `releases/latest/download/` always point to the newest version. For example, on Linux or macOS:
+
+  ```sh
+  curl --proto '=https' --tlsv1.2 -LsSf https://github.com/graphcal-lang/graphcal/releases/latest/download/graphcal-installer.sh | sh
+  ```
+
+  (_#1982_)
+
+- The Linux binaries use the mimalloc allocator. With musl's default allocator, heavy workloads ran 20–25% slower than a glibc build; with mimalloc the musl build matches or beats it. Other targets are unchanged. (_#1982_)
+
+### Dependency, Toolchain, and Workflow Maintenance
+
+- The release workflow builds the binaries with [dist](https://axodotdev.github.io/cargo-dist/) v0.33.0, publishes the crates to crates.io, and creates the GitHub Release only after publishing succeeds. A dry-run mode builds every artifact without publishing, and pull requests run only `dist plan`. `RELEASING.md` documents the procedure. (_#1982_)
+- Release notes now come from the hand-written `CHANGELOG.md` section for the version. The release fails early when the section is missing. (_#1982_)
+
+### Internal
+
+- Added the v0.0.1-alpha.34 notes to `CHANGELOG.md` and bumped the workspace version to v0.0.1-alpha.35. (_#2025_)
+
+**Full Changelog**: <https://github.com/graphcal-lang/graphcal/compare/v0.0.1-alpha.34...v0.0.1-alpha.35>
+
 ## 0.0.1-alpha.34
 
 This release redesigns the interactive report UI and fixes several defects in the Vega-Lite specs generated for plots.
