@@ -424,6 +424,28 @@ fn deps_lock_writes_deterministic_git_lockfile() {
     let stdout = String::from_utf8(eval.stdout).unwrap();
     assert!(stdout.contains("two = 2"), "stdout: {stdout}");
 
+    let parsed_lock = graphcal_package::parse_lockfile_str(&lock).unwrap();
+    let cache_root = graphcal_project::package_cache::PackageCacheRoot::from_path(&cache).unwrap();
+    let (source, digest) = parsed_lock
+        .packages
+        .iter()
+        .find_map(|package| match &package.source {
+            graphcal_package::PackageSource::Git {
+                url,
+                commit,
+                tree_hashes,
+                ..
+            } => Some((
+                graphcal_package::GitSourceId::new(url.clone(), commit.clone()),
+                tree_hashes.sha256,
+            )),
+            graphcal_package::PackageSource::Root => None,
+        })
+        .unwrap();
+    let checkout = gix::open(cache_root.git_checkout(&source, &digest)).unwrap();
+    let remote = checkout.find_remote("origin").unwrap();
+    assert_eq!(remote.fetch_tags(), gix::remote::fetch::Tags::None);
+
     let offline_repo = dep_repo.with_extension("offline");
     std::fs::rename(&dep_repo, &offline_repo).unwrap();
     let second = graphcal_bin()
