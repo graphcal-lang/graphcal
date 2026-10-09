@@ -85,6 +85,9 @@ jobs:
           name: artifacts-plan-dist-manifest
           path: plan-dist-manifest.json
 
+  # dist's template runs plan jobs unconditionally, alongside `plan`. The
+  # release checks query crates.io and are only meaningful for a release, so
+  # they run only when the workflow is dispatched, as before dist.
   precondition:
     if: ${{ github.event_name == 'workflow_dispatch' }}
     uses: $/.github/workflows/release-precondition.yaml
