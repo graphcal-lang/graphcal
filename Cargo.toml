@@ -45,6 +45,8 @@ insta = "1.46.3"
 jiff = "0.2.21"
 logos = "0.16.1"
 miette = "7.6.0"
+# The musl CLI binaries use it as the global allocator; musl malloc is slow.
+mimalloc = "0.1.52"
 open = "5.3.3"
 pretty = "0.12.5"
 proc-macro2 = "1.0.106"
@@ -133,3 +135,8 @@ debug = true
 [profile.profiling]
 inherits = "release"
 debug = true
+
+# The profile that 'dist' will build with
+[profile.dist]
+inherits = "release"
+lto = "thin"

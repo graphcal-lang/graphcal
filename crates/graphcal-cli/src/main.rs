@@ -16,6 +16,12 @@
     reason = "the CLI is an imperative shell where reviewed graceful-degradation fallbacks are intentional"
 )]
 
+// The prebuilt static Linux binaries target musl, whose malloc made heavy
+// compile/evaluate workloads 20–25% slower than glibc builds.
+#[cfg(target_env = "musl")]
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 mod deps;
 mod display;
 mod dump;

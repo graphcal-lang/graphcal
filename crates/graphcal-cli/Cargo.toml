@@ -61,3 +61,6 @@ sha2.workspace = true
 tempfile.workspace = true
 thiserror.workspace = true
 toml.workspace = true
+
+[target.'cfg(target_env = "musl")'.dependencies]
+mimalloc.workspace = true
