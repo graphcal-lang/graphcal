@@ -4,13 +4,37 @@ icon: material/download
 
 # インストール { #installation }
 
-## 要件 { #requirements }
+## ビルド済みバイナリをインストールする { #install-a-prebuilt-binary }
 
-- Rust stable ツールチェーン (1.95 以降)
+ビルド済みバイナリは [GitHub Releases](https://github.com/graphcal-lang/graphcal/releases) で公開しており、Rust ツールチェーンは必要ありません。
 
-Rust がインストールされていない場合は、[rustup.rs](https://rustup.rs/) から入手してください。
+macOS と Linux の場合:
+
+```bash
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/graphcal-lang/graphcal/releases/latest/download/graphcal-installer.sh | sh
+```
+
+Windows (PowerShell) の場合:
+
+```powershell
+powershell -ExecutionPolicy Bypass -c "irm https://github.com/graphcal-lang/graphcal/releases/latest/download/graphcal-installer.ps1 | iex"
+```
+
+インストーラは `graphcal` を `~/.local/bin` (`$XDG_BIN_HOME` が設定されていればそのディレクトリ) に置き、必要に応じてシェルのプロファイルを書き換えて、そのディレクトリを `PATH` に追加します。インストール後は新しいターミナルを開いてください。
+
+バイナリは x86_64 と ARM64 の Linux、Intel と Apple Silicon の macOS、x86_64 の Windows 向けに用意しています。Linux 版は静的リンクなので、Alpine などの musl ベースのディストリビューションでも動きます。
+
+特定のバージョンをインストールするには、URL の `latest/download` を `download/v<version>` に置き換えます。たとえば `download/v0.0.1-alpha.35` です。
+
+[cargo-binstall](https://github.com/cargo-bins/cargo-binstall) を使う場合も、同じバイナリがダウンロードされます。Graphcal がプレリリースの間は、バージョンを明示してください:
+
+```bash
+cargo binstall graphcal@<version>
+```
 
 ## crates.io からインストールする { #install-from-cratesio }
+
+crates.io からビルドするには、Rust stable ツールチェーン (1.95 以降) が必要です。Rust がインストールされていない場合は、[rustup.rs](https://rustup.rs/) から入手してください。
 
 ```bash
 cargo install graphcal --version '^0.0.1-alpha' --locked
@@ -55,6 +79,35 @@ graphcal --version
 ```
 
 コミットのサフィックスは、ビルドがソースのコミットを特定できる場合に表示されます。
+
+## GitHub Actions で使う { #use-in-github-actions }
+
+[`setup-graphcal`](https://github.com/graphcal-lang/setup-graphcal) アクションを使うと、GitHub Actions のランナーにビルド済みの `graphcal` を数秒でインストールできます。たとえば、push と pull request のたびに、リポジトリ内のすべての `.gcl` ファイルをチェックし、モデルを評価するには次のようにします:
+
+```yaml
+name: Graphcal
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: graphcal-lang/setup-graphcal@v1
+        with:
+          version: 0.0.1-alpha.35
+      - run: graphcal check
+      - run: graphcal eval model.gcl
+```
+
+`graphcal eval` はアサーションが失敗すると 0 以外の終了ステータスで終了するので、ジョブも失敗します。alpha 版の間はリリースごとに言語が変わるため、`version` を固定して CI の再現性を保ってください。省略すると最新のリリースがインストールされます。すべての入力は、アクションの README を参照してください。
 
 ## エディターのセットアップ { #editor-setup }
 

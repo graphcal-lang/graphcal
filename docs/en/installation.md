@@ -4,13 +4,37 @@ icon: material/download
 
 # Installation
 
-## Requirements
+## Install a prebuilt binary
 
-- Rust stable toolchain (1.95 or later)
+Prebuilt binaries are published on [GitHub Releases](https://github.com/graphcal-lang/graphcal/releases) and need no Rust toolchain.
 
-If you don't have Rust installed, get it from [rustup.rs](https://rustup.rs/).
+On macOS and Linux:
+
+```bash
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/graphcal-lang/graphcal/releases/latest/download/graphcal-installer.sh | sh
+```
+
+On Windows (PowerShell):
+
+```powershell
+powershell -ExecutionPolicy Bypass -c "irm https://github.com/graphcal-lang/graphcal/releases/latest/download/graphcal-installer.ps1 | iex"
+```
+
+The installer places `graphcal` in `~/.local/bin` (or `$XDG_BIN_HOME` when it is set) and, if needed, adds that directory to `PATH` through your shell profile. Open a new terminal afterwards.
+
+Binaries are available for x86_64 and ARM64 Linux, Intel and Apple Silicon macOS, and x86_64 Windows. The Linux binaries are statically linked, so they also run on musl-based distributions such as Alpine.
+
+To install a specific version, replace `latest/download` in the URL with `download/v<version>`, for example `download/v0.0.1-alpha.35`.
+
+If you use [cargo-binstall](https://github.com/cargo-bins/cargo-binstall), it downloads the same binaries. Give the version explicitly while Graphcal is a pre-release:
+
+```bash
+cargo binstall graphcal@<version>
+```
 
 ## Install from crates.io
+
+Building from crates.io requires the Rust stable toolchain (1.95 or later). If you don't have Rust installed, get it from [rustup.rs](https://rustup.rs/).
 
 ```bash
 cargo install graphcal --version '^0.0.1-alpha' --locked
@@ -55,6 +79,35 @@ graphcal --version
 ```
 
 The commit suffix is shown when the build can determine the source commit.
+
+## Use in GitHub Actions
+
+The [`setup-graphcal`](https://github.com/graphcal-lang/setup-graphcal) action installs a prebuilt `graphcal` on a GitHub Actions runner in seconds. For example, to check every `.gcl` file in a repository and evaluate a model on each push and pull request:
+
+```yaml
+name: Graphcal
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: graphcal-lang/setup-graphcal@v1
+        with:
+          version: 0.0.1-alpha.35
+      - run: graphcal check
+      - run: graphcal eval model.gcl
+```
+
+`graphcal eval` exits with a non-zero status when an assertion fails, so the job fails too. Pinning `version` keeps CI reproducible while the language still changes between alpha releases; omit it to install the latest release. See the action's README for all inputs.
 
 ## Editor Setup
 

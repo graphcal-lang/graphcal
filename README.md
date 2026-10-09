@@ -23,11 +23,10 @@ For engineers who want more confidence than spreadsheets and ad-hoc scripts prov
 
 ## Quickstart
 
-Install the CLI with [Rust](https://rustup.rs/):
+Install the prebuilt CLI on macOS or Linux (see the [installation guide](https://graphcal.org/docs/en/installation/) for Windows, crates.io, and GitHub Actions):
 
 ```sh
-# The version flag is needed while Graphcal is a pre-release.
-cargo install graphcal --version '^0.0.1-alpha' --locked
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/graphcal-lang/graphcal/releases/latest/download/graphcal-installer.sh | sh
 ```
 
 Save [`rocket.gcl`](tests/fixtures/valid/rocket.gcl), the file shown above, then run:
