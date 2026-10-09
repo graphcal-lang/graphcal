@@ -320,7 +320,7 @@ dependencies = [
 
 [[package]]
 name = "graphcal-ast-derive"
-version = "0.0.1-alpha.33"
+version = "0.0.1-alpha.34"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -329,7 +329,7 @@ dependencies = [
 
 [[package]]
 name = "graphcal-compiler"
-version = "0.0.1-alpha.33"
+version = "0.0.1-alpha.34"
 dependencies = [
  "graphcal-ast-derive",
  "graphcal-ratio",
@@ -345,7 +345,7 @@ dependencies = [
 
 [[package]]
 name = "graphcal-eval"
-version = "0.0.1-alpha.33"
+version = "0.0.1-alpha.34"
 dependencies = [
  "graphcal-compiler",
  "hifitime",
@@ -360,7 +360,7 @@ dependencies = [
 
 [[package]]
 name = "graphcal-fmt"
-version = "0.0.1-alpha.33"
+version = "0.0.1-alpha.34"
 dependencies = [
  "graphcal-compiler",
  "pretty",
@@ -385,7 +385,7 @@ dependencies = [
 
 [[package]]
 name = "graphcal-io"
-version = "0.0.1-alpha.33"
+version = "0.0.1-alpha.34"
 dependencies = [
  "cap-std",
  "graphcal-compiler",
@@ -397,7 +397,7 @@ dependencies = [
 
 [[package]]
 name = "graphcal-package"
-version = "0.0.1-alpha.33"
+version = "0.0.1-alpha.34"
 dependencies = [
  "sha2",
  "thiserror",
@@ -407,7 +407,7 @@ dependencies = [
 
 [[package]]
 name = "graphcal-plugin-abi"
-version = "0.0.1-alpha.33"
+version = "0.0.1-alpha.34"
 dependencies = [
  "serde",
  "serde_json",
@@ -416,7 +416,7 @@ dependencies = [
 
 [[package]]
 name = "graphcal-project"
-version = "0.0.1-alpha.33"
+version = "0.0.1-alpha.34"
 dependencies = [
  "base64",
  "graphcal-compiler",
@@ -433,14 +433,14 @@ dependencies = [
 
 [[package]]
 name = "graphcal-ratio"
-version = "0.0.1-alpha.33"
+version = "0.0.1-alpha.34"
 dependencies = [
  "thiserror",
 ]
 
 [[package]]
 name = "graphcal-test-support"
-version = "0.0.1-alpha.33"
+version = "0.0.1-alpha.34"
 dependencies = [
  "graphcal-compiler",
  "proptest",
