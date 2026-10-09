@@ -4,72 +4,63 @@ icon: material/download
 
 # インストール { #installation }
 
-## ビルド済みバイナリをインストールする { #install-a-prebuilt-binary }
+Graphcal は `graphcal` というコマンドラインプログラム 1 つで動きます。Linux (x86_64、ARM64)、macOS (Intel、Apple Silicon)、Windows (x86_64) 向けにビルド済みバイナリを配布しています。
 
-ビルド済みバイナリは [GitHub Releases](https://github.com/graphcal-lang/graphcal/releases) で公開しており、Rust ツールチェーンは必要ありません。
+## インストーラスクリプトでインストールする { #install-with-the-installer-script }
 
-macOS と Linux の場合:
+macOS と Linux では次のコマンドを実行します。
 
 ```bash
 curl --proto '=https' --tlsv1.2 -LsSf https://github.com/graphcal-lang/graphcal/releases/latest/download/graphcal-installer.sh | sh
 ```
 
-Windows (PowerShell) の場合:
+Windows では PowerShell で次のコマンドを実行します。
 
 ```powershell
 powershell -ExecutionPolicy Bypass -c "irm https://github.com/graphcal-lang/graphcal/releases/latest/download/graphcal-installer.ps1 | iex"
 ```
 
-インストーラは `graphcal` を `~/.local/bin` (`$XDG_BIN_HOME` が設定されていればそのディレクトリ) に置き、必要に応じてシェルのプロファイルを書き換えて、そのディレクトリを `PATH` に追加します。インストール後は新しいターミナルを開いてください。
+インストールが終わったら、新しいターミナルを開くと `graphcal` を使えます。
 
-バイナリは x86_64 と ARM64 の Linux、Intel と Apple Silicon の macOS、x86_64 の Windows 向けに用意しています。Linux 版は静的リンクなので、Alpine などの musl ベースのディストリビューションでも動きます。
+## パッケージマネージャでインストールする { #install-with-a-package-manager }
 
-特定のバージョンをインストールするには、URL の `latest/download` を `download/v<version>` に置き換えます。たとえば `download/v0.0.1-alpha.35` です。
+Graphcal はまだプレリリースなので、以下のコマンドではバージョンを明示する必要があります。`<version>` は [リリース一覧](https://github.com/graphcal-lang/graphcal/releases) にあるバージョン (`0.0.1-alpha.35` など) に置き換えてください。
 
-[cargo-binstall](https://github.com/cargo-bins/cargo-binstall) を使う場合も、同じバイナリがダウンロードされます。Graphcal がプレリリースの間は、バージョンを明示してください:
+### cargo-binstall { #cargo-binstall }
+
+[cargo-binstall](https://github.com/cargo-bins/cargo-binstall) はビルド済みバイナリをダウンロードします。
 
 ```bash
 cargo binstall graphcal@<version>
 ```
 
-## crates.io からインストールする { #install-from-cratesio }
+### cargo install { #cargo-install }
 
-crates.io からビルドするには、Rust stable ツールチェーン (1.95 以降) が必要です。Rust がインストールされていない場合は、[rustup.rs](https://rustup.rs/) から入手してください。
+`cargo install` は [crates.io](https://crates.io/crates/graphcal) のソースから Graphcal をビルドします。Rust 1.95 以降が必要です。Rust は [rustup.rs](https://rustup.rs/) から入手できます。
 
 ```bash
-cargo install graphcal --version '^0.0.1-alpha' --locked
+cargo install graphcal@<version> --locked
 ```
 
-Graphcal がプレリリースとして公開されている間は、明示的なバージョン指定が必要です。このコマンドは [crates.io](https://crates.io/crates/graphcal) から互換性のある最新の Graphcal リリースをダウンロードしてビルドし、`graphcal` バイナリを `~/.cargo/bin/` にインストールします。
+## ソースからビルドする { #build-from-source }
 
-## ソースチェックアウトからビルドする { #build-from-a-source-checkout }
+リポジトリをチェックアウトしてビルドするには、次のツールが必要です。
 
-crates.io からのインストールとは異なり、チェックアウトから CLI をビルドすると、
-組み込みのブラウザーエンジンもビルドされます。まず、次の前提条件をインストールしてください:
-
-- rustup で管理される、`rust-toolchain.toml` に固定された Rust ツールチェーン。
+- `rust-toolchain.toml` で固定した Rust ツールチェーン (rustup で管理)
 - その `wasm32-unknown-unknown` ターゲット (リポジトリのルートで
-  `rustup target add wasm32-unknown-unknown` を実行)。
-- **`Cargo.lock` で解決された `wasm-bindgen` のバージョン**に一致する `wasm-bindgen-cli`:
-  `cargo install wasm-bindgen-cli --version <locked-version> --locked`。
-- `PATH` 上にある Binaryen の `wasm-opt`。CI は Binaryen 117 を使用しています。ビルド済みの配布物は
-  [Binaryen releases](https://github.com/WebAssembly/binaryen/releases/tag/version_117) から入手できます。
+  `rustup target add wasm32-unknown-unknown` を実行)
+- **`Cargo.lock` で解決された `wasm-bindgen` と同じバージョン**の `wasm-bindgen-cli`
+  (`cargo install wasm-bindgen-cli --version <locked-version> --locked` でインストール)
+- `PATH` 上にある Binaryen の `wasm-opt`。CI は Binaryen 117 を使っています。ビルド済みのものは
+  [Binaryen のリリース](https://github.com/WebAssembly/binaryen/releases/tag/version_117) から入手できます。
 
-その後、通常のコマンドを実行します:
+ツールを揃えたら、通常どおりビルドします。
 
 ```bash
 cargo build
 ```
 
-CLI はブラウザーエンジンを自動的にビルドして埋め込みます。初回ビルドは、
-ネイティブコードと Wasm コードの両方をコンパイルするため時間がかかることがあります。
-`cargo check`、Clippy、エディターのチェックでも、このビルドが実行されることがあります。
-
-オフラインでソースビルドを行うには、依存関係を事前に取得し、`CARGO_NET_OFFLINE=true` を設定してください。
-
-公開されているクレートアーカイブには検証済みのエンジンがすでに含まれているため、**crates.io のユーザーは
-これらの追加ツールを必要としません**。レポートの成果物は自己完結したままであり、
-ネットワーク接続なしで動作します。
+初回のビルドは通常より時間がかかります。`cargo check` と Clippy を実行するときも、これらのツールが必要です。
 
 ## インストールの確認 { #verify-installation }
 
@@ -78,11 +69,9 @@ graphcal --version
 # graphcal <version> (commit: <sha>)
 ```
 
-コミットのサフィックスは、ビルドがソースのコミットを特定できる場合に表示されます。
-
 ## GitHub Actions で使う { #use-in-github-actions }
 
-[`setup-graphcal`](https://github.com/graphcal-lang/setup-graphcal) アクションを使うと、GitHub Actions のランナーにビルド済みの `graphcal` を数秒でインストールできます。たとえば、push と pull request のたびに、リポジトリ内のすべての `.gcl` ファイルをチェックし、モデルを評価するには次のようにします:
+[`setup-graphcal`](https://github.com/graphcal-lang/setup-graphcal) アクションを使うと、GitHub Actions のランナーに `graphcal` をインストールできます。次のワークフローは、push と pull request のたびに `.gcl` ファイルをチェックし、モデルを評価します。
 
 ```yaml
 name: Graphcal
@@ -107,7 +96,7 @@ jobs:
       - run: graphcal eval model.gcl
 ```
 
-`graphcal eval` はアサーションが失敗すると 0 以外の終了ステータスで終了するので、ジョブも失敗します。alpha 版の間はリリースごとに言語が変わるため、`version` を固定して CI の再現性を保ってください。省略すると最新のリリースがインストールされます。すべての入力は、アクションの README を参照してください。
+アサーションが失敗すると、ジョブも失敗します。alpha 版の間はリリースごとに Graphcal の仕様が変わるので、`version` を固定して結果を再現できるようにしてください。そのほかの設定は[アクションの README](https://github.com/graphcal-lang/setup-graphcal#readme) を参照してください。
 
 ## エディターのセットアップ { #editor-setup }
 
