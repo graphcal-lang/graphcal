@@ -19,7 +19,7 @@ On a new branch from `main`:
    Update `version` in `[workspace.package]` of `Cargo.toml` and the `version` of every `graphcal-*` entry in `[workspace.dependencies]` to the new version, for example `0.0.1-alpha.34`.
    Then refresh both lockfiles with `cargo update --workspace` and `cargo update --workspace --manifest-path fuzz/Cargo.toml`.
 2. Write the release notes in `CHANGELOG.md`.
-   Add a section whose heading is exactly `## <version>` (for example `## 0.0.1-alpha.34`) above the previous release.
+   Add a section whose heading is exactly `## v<version>` (for example `## v0.0.1-alpha.34`) above the previous release.
    Use `###` for subsections such as `### Breaking Changes`.
    This section becomes the body of the GitHub Release verbatim, and its heading text becomes the release title.
 3. Open the pull request and merge it into `main` after CI passes.
@@ -157,7 +157,7 @@ A new crate must be published once by hand and configured for Trusted Publishing
 ## Troubleshooting
 
 - **`precondition` fails on the CHANGELOG check.**
-  Add or fix the `## <version>` section in `CHANGELOG.md` on `main`, then run the workflow again.
+  Add or fix the `## v<version>` section in `CHANGELOG.md` on `main`, then run the workflow again.
   Nothing has been published.
 - **`plan` fails because the tag already exists.**
   The version in `Cargo.toml` was already released.
