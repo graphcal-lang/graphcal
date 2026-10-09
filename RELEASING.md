@@ -61,6 +61,12 @@ After the run succeeds, check that:
   gh attestation verify graphcal-aarch64-apple-darwin.tar.gz --repo graphcal-lang/graphcal
   ```
 
+- `cargo binstall` downloads the new archive (the version is required because every version is a prerelease):
+
+  ```sh
+  cargo binstall graphcal@<version>
+  ```
+
 ## How the release automation works
 
 ### Overview
@@ -129,6 +135,17 @@ With `precise-builds = true`, only the `graphcal` package (the CLI) produces bin
 Every Graphcal version is currently a `0.0.1-alpha.N` prerelease.
 By default dist marks such releases as prereleases, which GitHub excludes from `releases/latest`.
 `force-latest = true` marks every release as the latest instead, so the installer URLs under `releases/latest/download/` keep working, and `publish-prereleases = true` makes dist run the crates.io publish job for prerelease versions.
+
+### `cargo binstall`
+
+`[package.metadata.binstall]` in `crates/graphcal-cli/Cargo.toml` points [cargo-binstall](https://github.com/cargo-bins/cargo-binstall) at the archives of the GitHub Release, so `cargo binstall` installs the same binaries as the installers.
+It disables the `quick-install` strategy so that targets without an archive are built from source instead of falling back to third-party binaries.
+cargo-binstall reads this metadata from the crates.io package, so a change takes effect from the next release.
+When the archive names or layout change, update the metadata and test it before releasing:
+
+```sh
+cargo binstall --manifest-path crates/graphcal-cli --targets <target> --install-path <scratch-dir> --no-track graphcal
+```
 
 ### crates.io Trusted Publishing
 
