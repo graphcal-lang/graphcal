@@ -710,7 +710,6 @@ fn materialize_git_revision(
         remote
             .with_refspecs([fetch_refspec.as_str()], gix::remote::Direction::Fetch)
             .map(|remote| remote.with_fetch_tags(gix::remote::fetch::Tags::None))
-            .map_err(|source| gix::Exn::new(source).erased())
     });
     let (repo, _) = prepare_fetch
         .fetch_only(gix::progress::Discard, &should_interrupt)
