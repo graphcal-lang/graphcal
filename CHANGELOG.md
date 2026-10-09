@@ -4,6 +4,101 @@ Release notes for Graphcal. Each release section becomes the body of its GitHub 
 Add a `## <version>` section before running the release workflow.
 Earlier releases are listed on [GitHub Releases](https://github.com/graphcal-lang/graphcal/releases).
 
+## 0.0.1-alpha.35
+
+This release is the first to ship prebuilt `graphcal` binaries, so you no longer need a Rust toolchain to install Graphcal.
+It contains no language changes.
+
+### Prebuilt Binaries
+
+- Each GitHub Release now includes prebuilt `graphcal` archives for five targets, shell and PowerShell installers, a `sha256.sum` checksum file, and GitHub build attestations. (_#1982_)
+  - Linux x86_64 and arm64 (`x86_64-unknown-linux-musl`, `aarch64-unknown-linux-musl`), statically linked
+  - macOS x86_64 and arm64 (`x86_64-apple-darwin`, `aarch64-apple-darwin`)
+  - Windows x86_64 (`x86_64-pc-windows-msvc`)
+- Alpha releases are marked as the latest release, so the installer URLs under `releases/latest/download/` always point to the newest version. For example, on Linux or macOS:
+
+  ```sh
+  curl --proto '=https' --tlsv1.2 -LsSf https://github.com/graphcal-lang/graphcal/releases/latest/download/graphcal-installer.sh | sh
+  ```
+
+  (_#1982_)
+
+- The Linux binaries use the mimalloc allocator. With musl's default allocator, heavy workloads ran 20–25% slower than a glibc build; with mimalloc the musl build matches or beats it. Other targets are unchanged. (_#1982_)
+
+### Dependency, Toolchain, and Workflow Maintenance
+
+- The release workflow builds the binaries with [dist](https://axodotdev.github.io/cargo-dist/) v0.33.0, publishes the crates to crates.io, and creates the GitHub Release only after publishing succeeds. A dry-run mode builds every artifact without publishing, and pull requests run only `dist plan`. `RELEASING.md` documents the procedure. (_#1982_)
+- Release notes now come from the hand-written `CHANGELOG.md` section for the version. The release fails early when the section is missing. (_#1982_)
+
+### Internal
+
+- Added the v0.0.1-alpha.34 notes to `CHANGELOG.md` and bumped the workspace version to v0.0.1-alpha.35. (_#2025_)
+
+**Full Changelog**: <https://github.com/graphcal-lang/graphcal/compare/v0.0.1-alpha.34...v0.0.1-alpha.35>
+
+## 0.0.1-alpha.34
+
+This release redesigns the interactive report UI and fixes several defects in the Vega-Lite specs generated for plots.
+It also fixes bugs around included DAGs and multi-declarations in reports, evaluation output, DAG calls, and the formatter, and it validates constructor field constraints on temporary values during constant evaluation.
+The English documentation now lives under `/docs/en/`.
+
+**Some existing Graphcal source programs may need to be modified.** The breaking change rejects programs that were previously accepted only because of a bug. See [Breaking Changes](#breaking-changes).
+
+### Breaking Changes
+
+- A constrained constructor field is now validated even when the constructed value is temporary in constant evaluation, in declaration bounds, or in field bounds.
+  Before, a value discarded by projection or pattern matching was never checked, so `const node BAD: Mass = Spec(mass: 5000.0 kg).mass;` compiled even though `Spec.mass` is declared as `Mass(max: 2000.0 kg)`.
+  Such programs are now rejected with C001, which names the field and points at the offending argument.
+  (_#2014_)
+
+### Interactive Report Redesign
+
+- A header block in interactive reports summarizes checks, lists overridden inputs with a Reset action, and shows the engine status. It replaces the corner chip and the top banner. Clicking the check summary opens the Checks tab. (_#1989_)
+- Result tabs show counts. Values, plots, and checks can be pinned to a resizable pinned area. (_#1989_)
+- Values changed by the last run are marked, and stale results are dimmed while edits are pending or rejected. (_#1989_)
+- Each input row shows its domain hint, a slider when the input is bounded, its description, and override and draft markers. Quantity fields show the canonical SI unit tag, such as `[kg]`. An Apply button appears when Auto run is off. (_#1989_)
+- Sliders appear only for literals written in their canonical SI unit. Before, `2.0 km` on a 0–5000 m slider sat at 0, and touching the slider wrote `0.0 m`. (_#1989_)
+- Reports have a dark mode, all text meets WCAG AA contrast, and charts follow the report theme. (_#1989_)
+- The Advanced controls and the raw-literal entry are removed. The per-input `⋯` menu remains. (_#1989_)
+- The same UI is used by `graphcal report` pages and the playground's Report tab. The playground loads the report scripts on first render. (_#1989_)
+
+### Bug Fixes
+
+- Plots:
+  - Sample points are visible again. Boolean mark properties such as `filled: true` were emitted as strings, which Vega-Lite drew as transparent points. (_#1989_)
+  - Index-label axes keep declaration order instead of being sorted alphabetically. (_#1989_)
+  - Quantity axes without a `->` display unit show the canonical SI unit of the plotted values, for example "Time (s)" instead of "Time". Placeholder `x` and `y` titles are removed. (_#1989_)
+  - Nominal x-axis labels stay horizontal when there is enough room. (_#1989_)
+- Reports list only externally bindable entry parameters under Inputs and Baseline. Parameters of included DAGs that the caller binds now appear under Values. (_#1997_)
+- Plots from included DAGs have their documentation captions again in HTML and Markdown reports, including aliased projections and nested file includes. (_#1998_)
+- A `///` documentation comment on a slot of a multi-declaration now attaches only to that slot. Before, undocumented slots inherited the first slot's comment in hovers and report captions. (_#2005_)
+- Categorized `graphcal eval` JSON output lists only externally bindable entry parameters under `param`. Included DAG input ports are listed under `node`. (_#2011_)
+- A DAG call expression such as `@facade(x: 1.0 m)::y` can project a public alias that re-exports an include output (`include ...::{ pub y }`), as a selective include already could. Before, it was rejected with G005. (_#2000_)
+- `graphcal format` no longer drops the leading `pub` of a multi-declaration slot that has a comment, and it keeps per-slot documentation directly above its slot while aligning headers and table cells. (_#1999_, _#2012_)
+
+### Documentation
+
+- The English documentation moved from `/docs/` to `/docs/en/`, alongside the Japanese edition at `/docs/ja/`. The site root and `/docs/` redirect to `/docs/en/`, but old English deep links no longer work. The language selector keeps you on the same page. (_#2016_)
+- The Index Keys and `argmax` examples use `node` instead of `param`, so they compile with a private index. (_#2013_)
+- The report guide in the tutorial and the CLI reference describe the redesigned report UI. (_#1989_)
+
+### Dependency, Toolchain, and Workflow Maintenance
+
+- Updated the pinned Rust toolchain to v1.99.0. The minimum supported Rust version stays at 1.95. (_#2017_)
+- `rust-toolchain.toml` declares the `wasm32-unknown-unknown` target, so rustup installs it automatically for source builds. (_#2020_)
+- Updated Rust crates: `jiff` to v0.2.38, `jiff-tzdb` to v0.1.9 (bundled IANA time zone database 2026e), `gix` to v0.89.0, and `toml` to v1.1.8. (_#2008_, _#2007_, _#2019_, _#2018_, _#2021_)
+- Updated Zensical to v0.0.67, pnpm to v12.10.0, and `@types/node` to v26.6.4. The documentation workflows pin Zensical v0.0.68. (_#1986_, _#2015_, _#2016_, _#1987_, _#2001_, _#2022_, _#1984_)
+- Updated `taiki-e/install-action` to v2.87.22, `leanprover/lean-action` to v1.6.1, and the pre-commit hooks for rumdl, typos, and zizmor. (_#2006_, _#2023_, _#1988_)
+- Refreshed lock files. (_#1985_)
+- The report engine toolchain action supports Linux arm64, macOS arm64, and macOS x86_64 runners, as preparation for prebuilt binaries. Workflows use GitHub's self-repository `uses: $/...` syntax for local actions. (_#1981_)
+
+### Internal
+
+- Simplified the bilingual documentation build: removed the custom theme overrides, the localization checkers, and the translation manifest, and left language switching to Zensical. (_#2016_)
+- Bumped the workspace version to v0.0.1-alpha.34. (_#2024_)
+
+**Full Changelog**: <https://github.com/graphcal-lang/graphcal/compare/v0.0.1-alpha.33...v0.0.1-alpha.34>
+
 ## 0.0.1-alpha.33
 
 This release finishes the internal refactor of the compiler and evaluator started in v0.0.1-alpha.32.
