@@ -11,10 +11,11 @@
 #
 # Run it with workflow_dispatch:
 #
-# * `tag: dry-run` (default) builds every artifact without publishing.
-# * `tag: vX.Y.Z` checks preconditions, builds artifacts, publishes the crates
-#   to crates.io, and then creates the GitHub Release (and its tag) with the
-#   CHANGELOG.md section of that version as the body.
+# * `mode: dry-run` (default) builds every artifact without publishing.
+# * `mode: release` (from `main` only) releases the version in Cargo.toml as
+#   tag `v<version>`: it checks preconditions, builds artifacts, publishes the
+#   crates to crates.io, and then creates the GitHub Release (and its tag) with
+#   the CHANGELOG.md section of that version as the body.
 #
 # Pull requests only run `dist plan` to catch broken dist configuration.
 
@@ -24,11 +25,14 @@ on:
   pull_request:
   workflow_dispatch:
     inputs:
-      tag:
-        description: Release Tag
+      mode:
+        description: Build only (dry-run) or release the version in Cargo.toml
         required: true
         default: dry-run
-        type: string
+        type: choice
+        options:
+          - dry-run
+          - release
 
 permissions: {}
 
@@ -40,9 +44,9 @@ jobs:
       contents: read
     outputs:
       val: ${{ steps.plan.outputs.manifest }}
-      tag: ${{ (inputs.tag != 'dry-run' && inputs.tag) || '' }}
-      tag-flag: ${{ inputs.tag && inputs.tag != 'dry-run' && format('--tag={0}', inputs.tag) || '' }}
-      publishing: ${{ inputs.tag && inputs.tag != 'dry-run' }}
+      tag: ${{ steps.plan.outputs.tag }}
+      tag-flag: ${{ steps.plan.outputs.tag && format('--tag={0}', steps.plan.outputs.tag) || '' }}
+      publishing: ${{ inputs.mode == 'release' }}
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
@@ -52,12 +56,25 @@ jobs:
       - uses: $/.github/actions/install-dist
       - id: plan
         env:
-          RELEASE_TAG: ${{ inputs.tag }}
+          RELEASE_MODE: ${{ inputs.mode }}
         run: |
-          if [ -n "$RELEASE_TAG" ] && [ "$RELEASE_TAG" != dry-run ]; then
-            dist host --steps=create "--tag=$RELEASE_TAG" --output-format=json > plan-dist-manifest.json
-          else
-            dist plan --output-format=json > plan-dist-manifest.json
+          dist plan --output-format=json > plan-dist-manifest.json
+          if [ "$RELEASE_MODE" = release ]; then
+            if [ "$GITHUB_REF" != refs/heads/main ]; then
+              echo "::error::Releases must be run from main, not $GITHUB_REF"
+              exit 1
+            fi
+            version=$(jq --raw-output '.releases[] | select(.app_name == "graphcal") | .app_version' plan-dist-manifest.json)
+            tag="v$version"
+            # `git ls-remote --exit-code` exits with 2 when no ref matches.
+            status=0
+            git ls-remote --exit-code --tags origin "refs/tags/$tag" > /dev/null || status=$?
+            if [ "$status" -ne 2 ]; then
+              [ "$status" -eq 0 ] && echo "::error::Tag $tag already exists; bump the version in Cargo.toml first"
+              exit 1
+            fi
+            echo "tag=$tag" >> "$GITHUB_OUTPUT"
+            dist host --steps=create "--tag=$tag" --output-format=json > plan-dist-manifest.json
           fi
           echo "dist ran successfully"
           cat plan-dist-manifest.json
@@ -72,7 +89,7 @@ jobs:
     if: ${{ github.event_name == 'workflow_dispatch' }}
     uses: $/.github/workflows/release-precondition.yaml
     with:
-      publishing: ${{ inputs.tag != 'dry-run' }}
+      publishing: ${{ inputs.mode == 'release' }}
     permissions:
       contents: read
 
@@ -83,7 +100,7 @@ jobs:
     needs:
       - plan
       - precondition
-    if: ${{ fromJson(needs.plan.outputs.val).ci.github.artifacts_matrix.include != null && (needs.plan.outputs.publishing == 'true' || fromJson(needs.plan.outputs.val).ci.github.pr_run_mode == 'upload') || inputs.tag == 'dry-run' }}
+    if: ${{ fromJson(needs.plan.outputs.val).ci.github.artifacts_matrix.include != null && (needs.plan.outputs.publishing == 'true' || fromJson(needs.plan.outputs.val).ci.github.pr_run_mode == 'upload') || inputs.mode == 'dry-run' }}
     strategy:
       fail-fast: false
       # Target platforms/runners are computed by dist in create-release.
