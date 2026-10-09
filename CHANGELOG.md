@@ -1,10 +1,10 @@
 # Changelog
 
 Release notes for Graphcal. Each release section becomes the body of its GitHub Release.
-Add a `## <version>` section before running the release workflow.
+Add a `## v<version>` section before running the release workflow.
 Earlier releases are listed on [GitHub Releases](https://github.com/graphcal-lang/graphcal/releases).
 
-## 0.0.1-alpha.35
+## v0.0.1-alpha.35
 
 This release is the first to ship prebuilt `graphcal` binaries, so you no longer need a Rust toolchain to install Graphcal.
 It contains no language changes.
@@ -36,7 +36,7 @@ It contains no language changes.
 
 **Full Changelog**: <https://github.com/graphcal-lang/graphcal/compare/v0.0.1-alpha.34...v0.0.1-alpha.35>
 
-## 0.0.1-alpha.34
+## v0.0.1-alpha.34
 
 This release redesigns the interactive report UI and fixes several defects in the Vega-Lite specs generated for plots.
 It also fixes bugs around included DAGs and multi-declarations in reports, evaluation output, DAG calls, and the formatter, and it validates constructor field constraints on temporary values during constant evaluation.
@@ -99,7 +99,7 @@ The English documentation now lives under `/docs/en/`.
 
 **Full Changelog**: <https://github.com/graphcal-lang/graphcal/compare/v0.0.1-alpha.33...v0.0.1-alpha.34>
 
-## 0.0.1-alpha.33
+## v0.0.1-alpha.33
 
 This release finishes the internal refactor of the compiler and evaluator started in v0.0.1-alpha.32.
 It also accepts `Dimensionless` as the identity term of dimension expressions, fixes several soundness and runtime bugs in rebound and included DAGs, and gives many diagnostics their own error codes and more accurate locations.

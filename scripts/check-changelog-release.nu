@@ -19,11 +19,11 @@ def release-version [] {
     $cargo_result.stdout | from json | get packages | where name == "graphcal" | first | get version
 }
 
-# A release heading is `## <version>`, optionally followed by ` - <date>`.
+# A release heading is `## v<version>`, matching the tag name, optionally followed by ` - <date>`.
 def has-release-section [changelog: string, version: string] {
     $changelog
     | lines
-    | any {|line| $line == $"## ($version)" or ($line | str starts-with $"## ($version) - ") }
+    | any {|line| $line == $"## v($version)" or ($line | str starts-with $"## v($version) - ") }
 }
 
 def main [] {
@@ -36,7 +36,7 @@ def main [] {
     if not (has-release-section (open --raw $CHANGELOG) $version) {
         error make {
             msg: $"($CHANGELOG) has no release notes for ($version)"
-            help: $"Add a `## ($version)` section before releasing."
+            help: $"Add a `## v($version)` section before releasing."
         }
     }
 
