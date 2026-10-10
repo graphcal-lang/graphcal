@@ -4,48 +4,63 @@ icon: material/download
 
 # インストール { #installation }
 
-## 要件 { #requirements }
+Graphcal は `graphcal` というコマンドラインプログラム 1 つで動きます。Linux (x86_64、ARM64)、macOS (Intel、Apple Silicon)、Windows (x86_64) 向けにビルド済みバイナリを配布しています。
 
-- Rust stable ツールチェーン (1.95 以降)
+## インストーラスクリプトでインストールする { #install-with-the-installer-script }
 
-Rust がインストールされていない場合は、[rustup.rs](https://rustup.rs/) から入手してください。
-
-## crates.io からインストールする { #install-from-cratesio }
+macOS と Linux では次のコマンドを実行します。
 
 ```bash
-cargo install graphcal --version '^0.0.1-alpha' --locked
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/graphcal-lang/graphcal/releases/latest/download/graphcal-installer.sh | sh
 ```
 
-Graphcal がプレリリースとして公開されている間は、明示的なバージョン指定が必要です。このコマンドは [crates.io](https://crates.io/crates/graphcal) から互換性のある最新の Graphcal リリースをダウンロードしてビルドし、`graphcal` バイナリを `~/.cargo/bin/` にインストールします。
+Windows では PowerShell で次のコマンドを実行します。
 
-## ソースチェックアウトからビルドする { #build-from-a-source-checkout }
+```powershell
+powershell -ExecutionPolicy Bypass -c "irm https://github.com/graphcal-lang/graphcal/releases/latest/download/graphcal-installer.ps1 | iex"
+```
 
-crates.io からのインストールとは異なり、チェックアウトから CLI をビルドすると、
-組み込みのブラウザーエンジンもビルドされます。まず、次の前提条件をインストールしてください:
+インストールが終わったら、新しいターミナルを開くと `graphcal` を使えます。アップデートするときも、同じコマンドをもう一度実行します。
 
-- rustup で管理される、`rust-toolchain.toml` に固定された Rust ツールチェーン。
+## パッケージマネージャでインストールする { #install-with-a-package-manager }
+
+Graphcal はまだプレリリースなので、以下のコマンドではバージョンを明示する必要があります。`<version>` は [リリース一覧](https://github.com/graphcal-lang/graphcal/releases) にあるバージョン (`0.0.1-alpha.35` など) に置き換えてください。
+
+### cargo-binstall { #cargo-binstall }
+
+[cargo-binstall](https://github.com/cargo-bins/cargo-binstall) はビルド済みバイナリをダウンロードします。
+
+```bash
+cargo binstall graphcal@<version>
+```
+
+### cargo install { #cargo-install }
+
+`cargo install` は [crates.io](https://crates.io/crates/graphcal) のソースから Graphcal をビルドします。Rust 1.95 以降が必要です。Rust は [rustup.rs](https://rustup.rs/) から入手できます。
+
+```bash
+cargo install graphcal@<version> --locked
+```
+
+## ソースからビルドする { #build-from-source }
+
+リポジトリをチェックアウトしてビルドするには、次のツールが必要です。
+
+- `rust-toolchain.toml` で固定した Rust ツールチェーン (rustup で管理)
 - その `wasm32-unknown-unknown` ターゲット (リポジトリのルートで
-  `rustup target add wasm32-unknown-unknown` を実行)。
-- **`Cargo.lock` で解決された `wasm-bindgen` のバージョン**に一致する `wasm-bindgen-cli`:
-  `cargo install wasm-bindgen-cli --version <locked-version> --locked`。
-- `PATH` 上にある Binaryen の `wasm-opt`。CI は Binaryen 117 を使用しています。ビルド済みの配布物は
-  [Binaryen releases](https://github.com/WebAssembly/binaryen/releases/tag/version_117) から入手できます。
+  `rustup target add wasm32-unknown-unknown` を実行)
+- **`Cargo.lock` で解決された `wasm-bindgen` と同じバージョン**の `wasm-bindgen-cli`
+  (`cargo install wasm-bindgen-cli --version <locked-version> --locked` でインストール)
+- `PATH` 上にある Binaryen の `wasm-opt`。CI は Binaryen 117 を使っています。ビルド済みのものは
+  [Binaryen のリリース](https://github.com/WebAssembly/binaryen/releases/tag/version_117) から入手できます。
 
-その後、通常のコマンドを実行します:
+ツールを揃えたら、通常どおりビルドします。
 
 ```bash
 cargo build
 ```
 
-CLI はブラウザーエンジンを自動的にビルドして埋め込みます。初回ビルドは、
-ネイティブコードと Wasm コードの両方をコンパイルするため時間がかかることがあります。
-`cargo check`、Clippy、エディターのチェックでも、このビルドが実行されることがあります。
-
-オフラインでソースビルドを行うには、依存関係を事前に取得し、`CARGO_NET_OFFLINE=true` を設定してください。
-
-公開されているクレートアーカイブには検証済みのエンジンがすでに含まれているため、**crates.io のユーザーは
-これらの追加ツールを必要としません**。レポートの成果物は自己完結したままであり、
-ネットワーク接続なしで動作します。
+初回のビルドは通常より時間がかかります。`cargo check` と Clippy を実行するときも、これらのツールが必要です。
 
 ## インストールの確認 { #verify-installation }
 
@@ -54,7 +69,34 @@ graphcal --version
 # graphcal <version> (commit: <sha>)
 ```
 
-コミットのサフィックスは、ビルドがソースのコミットを特定できる場合に表示されます。
+## GitHub Actions で使う { #use-in-github-actions }
+
+[`setup-graphcal`](https://github.com/graphcal-lang/setup-graphcal) アクションを使うと、GitHub Actions のランナーに `graphcal` をインストールできます。次のワークフローは、push と pull request のたびに `.gcl` ファイルをチェックし、モデルを評価します。
+
+```yaml
+name: Graphcal
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: graphcal-lang/setup-graphcal@v1
+        with:
+          version: 0.0.1-alpha.35
+      - run: graphcal check
+      - run: graphcal eval model.gcl
+```
+
+アサーションが失敗すると、ジョブも失敗します。alpha 版の間はリリースごとに Graphcal の仕様が変わるので、`version` を固定して結果を再現できるようにしてください。そのほかの設定は[アクションの README](https://github.com/graphcal-lang/setup-graphcal#readme) を参照してください。
 
 ## エディターのセットアップ { #editor-setup }
 
