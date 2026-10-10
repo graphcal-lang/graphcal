@@ -36,7 +36,7 @@ cargo binstall graphcal@<version>
 
 ### cargo install
 
-`cargo install` builds Graphcal from [crates.io](https://crates.io/crates/graphcal). It requires Rust 1.95 or later, which you can get from [rustup.rs](https://rustup.rs/):
+`cargo install` builds Graphcal from [crates.io](https://crates.io/crates/graphcal). It requires Rust 1.99 or later, which you can get from [rustup.rs](https://rustup.rs/):
 
 ```bash
 cargo install graphcal@<version> --locked

@@ -36,7 +36,7 @@ cargo binstall graphcal@<version>
 
 ### cargo install { #cargo-install }
 
-`cargo install` は [crates.io](https://crates.io/crates/graphcal) のソースから Graphcal をビルドします。Rust 1.95 以降が必要です。Rust は [rustup.rs](https://rustup.rs/) から入手できます。
+`cargo install` は [crates.io](https://crates.io/crates/graphcal) のソースから Graphcal をビルドします。Rust 1.99 以降が必要です。Rust は [rustup.rs](https://rustup.rs/) から入手できます。
 
 ```bash
 cargo install graphcal@<version> --locked

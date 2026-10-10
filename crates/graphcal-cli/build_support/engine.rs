@@ -104,9 +104,10 @@ fn watch_tool(name: &str) -> Result<(), Error> {
 }
 
 /// Do not pass host coverage/sanitizer flags, wrappers, target directories, or
-/// jobserver tokens to a second target build. One worker uses the slot already
-/// owned by this build script. The engine always uses the repository toolchain,
-/// including when the native CLI is being checked with its older MSRV.
+/// jobserver tokens or dynamic-library search paths to a second target build.
+/// One worker uses the slot already owned by this build script. The engine always
+/// uses the repository toolchain, including when the native CLI is being checked
+/// with its older MSRV.
 fn rust_command(root: &Path, channel: &str, tool: &str) -> Command {
     let mut command = Command::new("rustup");
     env::vars_os()
@@ -162,6 +163,14 @@ pub fn isolated_variable(key: &str) -> bool {
                 | "MAKEFLAGS"
                 | "MFLAGS"
                 | "LLVM_PROFILE_FILE"
+                // Cargo includes the host compiler libraries here. Identical
+                // compilers installed under different rustup names can otherwise
+                // load the host rustc_driver and infer the wrong Wasm sysroot.
+                // Keep PATH: Windows needs it to locate rustup and other tools.
+                | "LD_LIBRARY_PATH"
+                | "DYLD_LIBRARY_PATH"
+                | "DYLD_FALLBACK_LIBRARY_PATH"
+                | "LIBPATH"
         )
 }
 
