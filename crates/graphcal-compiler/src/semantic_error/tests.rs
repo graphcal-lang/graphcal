@@ -58,7 +58,9 @@ fn every_family_contributes_codes_with_its_own_prefix() {
 }
 
 #[test]
-fn diagnostic_codes_are_unique_and_reassignments_are_pinned() {
+fn diagnostic_code_reassignments_are_pinned() {
+    // Workspace-wide uniqueness is checked by
+    // `crates/graphcal-project/tests/diagnostic_codes.rs`.
     let mut catalog = family_code_catalog();
     let internal = crate::internal_error::InternalError::CODE;
     catalog.insert(
@@ -66,13 +68,6 @@ fn diagnostic_codes_are_unique_and_reassignments_are_pinned() {
         internal.trim_start_matches("graphcal::").to_owned(),
     );
     assert!(catalog.len() > 100, "incomplete catalog: {catalog:?}");
-
-    let mut variants_by_code = BTreeMap::new();
-    for (variant, code) in &catalog {
-        if let Some(previous) = variants_by_code.insert(code, variant) {
-            panic!("diagnostic code `{code}` is shared by `{previous}` and `{variant}`");
-        }
-    }
 
     for (variant, expected) in [
         ("LinearAlgebraShapeMismatch", "D022"),
@@ -83,6 +78,9 @@ fn diagnostic_codes_are_unique_and_reassignments_are_pinned() {
         ("InvalidEpochTimeScaleArgument", "D029"),
         ("UnsupportedEpochTimeScale", "D030"),
         ("ImportRuntimeItem", "M020"),
+        ("ModuleResolution", "M036"),
+        ("InvalidExternSignature", "W001"),
+        ("PluginHashMismatch", "W010"),
         ("InternalError", "X001"),
     ] {
         assert_eq!(catalog.get(variant).map(String::as_str), Some(expected));
@@ -217,7 +215,7 @@ fn module_resolution_keeps_ambiguous_paths_apart_and_cycles_name_their_templates
     let unknown = ModuleError::resolution(ModuleResolveError::UnknownModule {
         owner: second.clone(),
     });
-    assert_eq!(unknown.code(), "graphcal::M033");
+    assert_eq!(unknown.code(), "graphcal::M036");
     assert_eq!(
         unknown.to_string(),
         ModuleResolveError::UnknownModule {

@@ -75,7 +75,7 @@ against, reviewable in plain-text diffs and usable by editor tooling
 without the binary. At load time, each declaration is **verified
 structurally against the manifest embedded in the `.wasm` module** —
 renaming dimension variables or parameters is fine, but any difference in
-dimensional shape is a compile error (P005), so drift between source and
+dimensional shape is a compile error (W005), so drift between source and
 binary can never be silently reinterpreted. If a dimensional signature names an
 unknown qualified path, the diagnostic preserves that complete path instead of
 flattening it into a dimension leaf.
@@ -177,7 +177,7 @@ The plugin's manifest never learns the type's *name* — it declares the
 flattened field shape (names, order, and kinds), and the declaration
 binds that shape to the nominal record type. Field names and order are
 part of the contract: a plugin declaring `{min, max}` does not match a
-declaration whose record has `{lo, hi}` (P005). The result evaluates to
+declaration whose record has `{lo, hi}` (W005). The result evaluates to
 an ordinary record-shaped algebraic value with working field access and
 matching. The plugin ABI calls its flattened representation a `struct` shape;
 this is not a separate Graphcal type category.
@@ -207,7 +207,7 @@ node v_mid: Velocity = demo::lerp(@v0, @v1, 0.25);
 Restrictions, all enforced at compile time:
 
 - Extern functions are **runtime-provided**, so they cannot appear in
-  `const` expressions, domain bounds, or unit scale expressions (P004).
+  `const` expressions, domain bounds, or unit scale expressions (W004).
 - Calls must be alias-qualified; a bare `lerp(...)` is an unknown
   function.
 - There is **no auto-lifting** over indexed values: an extern quantity
@@ -274,7 +274,7 @@ at load time before any plugin code runs:
   memory, allocator state, and `start` side effects cannot carry history from
   one graph node or re-evaluation into another. Together these rules make the
   boundary pure by construction. A module importing WASI or other host APIs is
-  rejected with a dedicated diagnostic (P007). A module importing `graphcal::fail`
+  rejected with a dedicated diagnostic (W007). A module importing `graphcal::fail`
   must export its linear memory as `"memory"` so the failure message can
   be read.
 - **Resource bounds.** Plugin modules may be at most 16 MiB by default.
@@ -379,8 +379,8 @@ sha256 = "3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855c"
 ```
 
 At load time the pin is enforced, hard errors and never prompts: a plugin
-without a pin fails with P009 ("run `graphcal deps lock`"), and a plugin
-whose bytes hash differently from the pin fails with P010. New or changed
+without a pin fails with W009 ("run `graphcal deps lock`"), and a plugin
+whose bytes hash differently from the pin fails with W010. New or changed
 plugin code can therefore only enter the project through a reviewable
 `graphcal.lock` diff. Plugin artifacts must be regular files within the package
 root, not symbolic links, and are subject to project loading limits.
@@ -422,7 +422,7 @@ graphcal's per-node containment model:
 If a declared extern function is missing entirely — the plugin file is
 absent, fails validation, or its manifest does not provide the function —
 that is a **load-time** error reported on the declaration before
-evaluation starts (P003, P005–P010 depending on the cause).
+evaluation starts (W003, W005–W010 depending on the cause).
 
 ## The Host Function Registry
 

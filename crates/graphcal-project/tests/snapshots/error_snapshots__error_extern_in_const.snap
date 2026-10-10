@@ -10,4 +10,4 @@ snippet line 4: }
 snippet line 5: const node c: Dimensionless = demo::lerp(1.0, 2.0, 0.5);
     label at line 5, columns 31 to 40: extern call not allowed here
 diagnostic help: extern functions are runtime-provided and can only be called from runtime expressions (nodes, param defaults, and asserts)
-diagnostic code: graphcal::P004
+diagnostic code: graphcal::W004

@@ -121,7 +121,7 @@ expanded to base-dimension exponents in the manifest, so `Pressure` and
 `Mass * Length^-1 * Time^-2` declare the same contract.
 
 Two rules mirror the compiler's checks (violations are compile errors in
-the plugin crate, with the same meaning as P005/P016 on the graphcal
+the plugin crate, with the same meaning as W001/P016 on the graphcal
 side):
 
 - every dimension variable must first appear as a **bare** parameter type

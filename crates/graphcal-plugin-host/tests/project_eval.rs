@@ -1046,7 +1046,7 @@ node bad: Bool[Item] = scalars::invert(@numbers);
 #[test]
 fn declared_array_signature_must_match_the_manifest() {
     // The declaration says the result reuses the input's index variable but
-    // over a *different* element dimension — structural mismatch, P005.
+    // over a *different* element dimension — structural mismatch, W005.
     let dir = tempfile::tempdir().unwrap();
     let source = r#"
 import plugin "plugins/arrays.wasm" as arrays {
