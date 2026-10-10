@@ -20,7 +20,7 @@ On Windows (PowerShell):
 powershell -ExecutionPolicy Bypass -c "irm https://github.com/graphcal-lang/graphcal/releases/latest/download/graphcal-installer.ps1 | iex"
 ```
 
-Open a new terminal afterwards so that `graphcal` is on your `PATH`.
+Open a new terminal afterwards so that `graphcal` is on your `PATH`. To update Graphcal, run the same command again.
 
 ## Install with a package manager
 

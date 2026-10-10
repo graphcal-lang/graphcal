@@ -20,7 +20,7 @@ Windows では PowerShell で次のコマンドを実行します。
 powershell -ExecutionPolicy Bypass -c "irm https://github.com/graphcal-lang/graphcal/releases/latest/download/graphcal-installer.ps1 | iex"
 ```
 
-インストールが終わったら、新しいターミナルを開くと `graphcal` を使えます。
+インストールが終わったら、新しいターミナルを開くと `graphcal` を使えます。アップデートするときも、同じコマンドをもう一度実行します。
 
 ## パッケージマネージャでインストールする { #install-with-a-package-manager }
 
