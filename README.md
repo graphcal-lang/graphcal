@@ -23,7 +23,7 @@ For engineers who want more confidence than spreadsheets and ad-hoc scripts prov
 
 ## Quickstart
 
-Install the prebuilt CLI on macOS or Linux (see the [installation guide](https://graphcal.org/docs/en/installation/) for Windows, crates.io, and GitHub Actions):
+Install the prebuilt CLI on macOS or Linux (see the [installation guide](https://graphcal.org/docs/en/installation/) for Windows, package managers, and GitHub Actions):
 
 ```sh
 curl --proto '=https' --tlsv1.2 -LsSf https://github.com/graphcal-lang/graphcal/releases/latest/download/graphcal-installer.sh | sh
