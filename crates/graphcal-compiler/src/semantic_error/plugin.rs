@@ -180,16 +180,16 @@ pub enum PluginLoadFailure {
 impl DiagnosticKind for PluginError {
     fn code(&self) -> &'static str {
         match self {
-            Self::UnknownExternFunction { .. } => "graphcal::P002",
-            Self::InvalidExternSignature { .. } => "graphcal::P001",
-            Self::DuplicateExternParameter { .. } => "graphcal::P011",
-            Self::MissingHostFunction { .. } => "graphcal::P003",
-            Self::ExternCallNotAllowed { .. } => "graphcal::P004",
-            Self::ExternSignatureMismatch { .. } => "graphcal::P005",
-            Self::PluginLoadFailed { .. } => "graphcal::P006",
-            Self::PluginForbiddenImport { .. } => "graphcal::P007",
-            Self::PluginNotPinned { .. } => "graphcal::P009",
-            Self::PluginHashMismatch { .. } => "graphcal::P010",
+            Self::UnknownExternFunction { .. } => "graphcal::W002",
+            Self::InvalidExternSignature { .. } => "graphcal::W001",
+            Self::DuplicateExternParameter { .. } => "graphcal::W011",
+            Self::MissingHostFunction { .. } => "graphcal::W003",
+            Self::ExternCallNotAllowed { .. } => "graphcal::W004",
+            Self::ExternSignatureMismatch { .. } => "graphcal::W005",
+            Self::PluginLoadFailed { .. } => "graphcal::W006",
+            Self::PluginForbiddenImport { .. } => "graphcal::W007",
+            Self::PluginNotPinned { .. } => "graphcal::W009",
+            Self::PluginHashMismatch { .. } => "graphcal::W010",
         }
     }
 

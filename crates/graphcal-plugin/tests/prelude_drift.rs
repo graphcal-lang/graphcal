@@ -5,7 +5,7 @@
 //! verified against the real thing: for every vocabulary name, a `.gcl`
 //! extern declaration spelling that name is compiled against the
 //! macro-produced manifest signature. The loader's structural verification
-//! (P005) then proves both sides denote the same dimension — if the
+//! (W005) then proves both sides denote the same dimension — if the
 //! macro's table ever disagrees with the prelude, these tests fail.
 
 #![cfg(test)]
@@ -153,7 +153,7 @@ fn every_vocabulary_name_matches_the_prelude() {
     let dir = tempfile::tempdir().expect("tempdir");
     let registry = registry_from_embedded_manifest();
     // Structural verification of every declaration against the macro's
-    // manifest happens during compilation; any table drift is a P005.
+    // manifest happens during compilation; any table drift is a W005.
     compile(dir.path(), GCL_DECLARATIONS, &registry)
         .expect("macro vocabulary must match the prelude");
 }
@@ -161,7 +161,7 @@ fn every_vocabulary_name_matches_the_prelude() {
 #[test]
 fn drift_would_be_detected() {
     // Negative control: declare one function with the wrong signature and
-    // require P005, proving the positive test actually verifies signatures.
+    // require W005, proving the positive test actually verifies signatures.
     let dir = tempfile::tempdir().expect("tempdir");
     let registry = registry_from_embedded_manifest();
     let source = r#"

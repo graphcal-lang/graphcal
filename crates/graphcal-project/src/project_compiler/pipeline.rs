@@ -329,9 +329,9 @@ pub(super) fn check_hir_project<Mode>(
 ///    the plugin file must have been read by the loader, and the plugin
 ///    host must have registered the module (its recorded failure is
 ///    reported otherwise).
-/// 2. The registry must provide the function (`MissingHostFunction`, P003).
+/// 2. The registry must provide the function (`MissingHostFunction`, W003).
 /// 3. When the registry entry carries a manifest-provided signature, the
-///    declared signature must be structurally equivalent to it (P005) —
+///    declared signature must be structurally equivalent to it (W005) —
 ///    this is the "declaration verified against the embedded manifest"
 ///    guarantee of the plugin design (#25).
 fn verify_host_functions(

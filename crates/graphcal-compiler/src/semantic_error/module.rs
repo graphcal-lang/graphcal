@@ -144,7 +144,7 @@ impl DiagnosticKind for ModuleError {
             Self::IndexBindingNotAnIndex { .. } => "graphcal::M019",
             Self::IndexKindMismatch { .. } => "graphcal::M018",
             Self::ImportRuntimeItem { .. } => "graphcal::M020",
-            Self::ModuleResolution { .. } => "graphcal::M033",
+            Self::ModuleResolution { .. } => "graphcal::M036",
             Self::AmbiguousModulePath { .. } => "graphcal::M034",
         }
     }

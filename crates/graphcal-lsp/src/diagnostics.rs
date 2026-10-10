@@ -1069,7 +1069,7 @@ param event: Datetime<TT>(
         assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
         assert!(matches!(
             &diagnostics[0].code,
-            Some(NumberOrString::String(code)) if code == "graphcal::P011"
+            Some(NumberOrString::String(code)) if code == "graphcal::W011"
         ));
         assert!(diagnostics[0].related_information.is_some());
     }

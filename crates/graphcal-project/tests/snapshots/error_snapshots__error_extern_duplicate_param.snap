@@ -12,4 +12,4 @@ snippet line 2:     fn lerp<D: Dim>(a: D, a: D, t: Dimensionless) -> D;
     label at line 2, column 27: duplicate parameter
 snippet line 3: }
 diagnostic help: each extern function parameter name must be unique
-diagnostic code: graphcal::P011
+diagnostic code: graphcal::W011
