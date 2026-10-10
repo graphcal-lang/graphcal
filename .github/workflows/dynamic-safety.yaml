@@ -14,7 +14,7 @@ permissions:
 env:
   CARGO_TERM_COLOR: always
   CARGO_BUILD_WARNINGS: deny
-  SAFETY_NIGHTLY: nightly-2026-02-21
+  SAFETY_NIGHTLY: nightly-2026-07-10
 
 jobs:
   dynamic-safety-changes:
