@@ -207,6 +207,19 @@ fn host_instrumentation_and_build_directories_are_isolated() {
 }
 
 #[test]
+fn host_dynamic_library_paths_are_isolated_without_removing_tool_search_paths() {
+    for key in [
+        "LD_LIBRARY_PATH",
+        "DYLD_LIBRARY_PATH",
+        "DYLD_FALLBACK_LIBRARY_PATH",
+        "LIBPATH",
+    ] {
+        assert!(engine::isolated_variable(key), "{key}");
+    }
+    assert!(!engine::isolated_variable("PATH"));
+}
+
+#[test]
 fn source_fingerprint_tracks_dependency_assets_and_not_cli_only_edits() {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path();

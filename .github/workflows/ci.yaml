@@ -357,11 +357,6 @@ jobs:
 
       - uses: $/.github/actions/report-engine-tools
 
-      - name: Install MSRV Wasm standard library
-        run: |
-          msrv=$(cargo metadata --locked --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "graphcal") | .rust_version')
-          rustup toolchain install "$msrv" --profile minimal --target wasm32-unknown-unknown --no-self-update
-
       - name: Check MSRV
         run: cargo hack check --workspace --rust-version --ignore-private
 
