@@ -864,6 +864,72 @@ fn include_output_ref_resolves_only_through_instance_bindings() {
 }
 
 #[test]
+fn source_graph_refs_keep_alias_rules_with_and_without_overlay_bindings() {
+    use crate::resolve::error::ExpectedDeclKind;
+
+    let lib_id = DagId::root_in_package("test", "lib");
+    let main_id = DagId::root_in_package("test", "main");
+    let lib = desugared_source("pub node p: Dimensionless = 1.0;");
+    let main = desugared_source(
+        "import lib as imported;
+         include lib() as included;
+         node local: Dimensionless = 0.0;
+         node imported_value: Dimensionless = @imported::p;
+         node included_value: Dimensionless = @included::p;
+         node imported_overlay: Dimensionless = @imported::generated;
+         node included_overlay: Dimensionless = @included::generated;",
+    );
+    let resolver = resolver_with_import(&lib_id, &main_id, &lib, &main);
+    let scope = GenericScope::new();
+    let time_zones = TimeZoneRegistry::bundled();
+    let module = ModuleScope::new(&main_id, &resolver, &scope);
+    let no_units = HashMap::new();
+    let no_templates = HashMap::new();
+    let target = ResolvedDeclName::for_test(main_id.clone(), DeclName::expect_valid("local"));
+    let bindings = HashMap::from_iter(["imported", "included"].map(|alias| {
+        (
+            ScopedName::in_scope(
+                crate::syntax::module_name::ModuleAliasName::expect_valid(alias),
+                DeclName::expect_valid("generated"),
+            ),
+            target.clone(),
+        )
+    }));
+
+    for (name, allowed) in [
+        ("imported_value", false),
+        ("included_value", true),
+        ("imported_overlay", false),
+        ("included_overlay", true),
+    ] {
+        let result = lower_expr(
+            node_value(&main, name),
+            ExprLoweringContext::with_overlay(
+                module,
+                &time_zones,
+                BindingOverlay::Frozen(FrozenBindings {
+                    unit_bindings: &no_units,
+                    decl_bindings: &bindings,
+                    instance_templates: &no_templates,
+                }),
+            ),
+        );
+        match (allowed, result) {
+            (true, Ok(body)) => assert!(matches!(body.kind(), ExprKind::GraphRef(_))),
+            (false, Err(ExprLowerError::ModuleResolve { source, .. })) => assert!(matches!(
+                source,
+                ModuleResolveError::UnexpectedDeclKind {
+                    expected: ExpectedDeclKind::InstanceIndependentConst,
+                    actual: DeclSymbolKind::Node,
+                    ..
+                }
+            )),
+            (_, result) => panic!("unexpected result for {name}: {result:?}"),
+        }
+    }
+}
+
+#[test]
 fn qualified_source_graph_ref_requires_a_module_alias() {
     let owner = DagId::root_in_package("test", "main");
     let file = desugared_source("param p: Dimensionless; node out: Dimensionless = @nope::p;");
