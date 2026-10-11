@@ -68,12 +68,6 @@ impl RuntimeEvaluation {
     pub fn has_errors(&self) -> bool {
         self.errors.values().any(RuntimeUnavailable::has_failure) || self.result.has_errors()
     }
-
-    /// Display-aware result for the directly evaluated root DAG.
-    #[must_use]
-    pub const fn result(&self) -> &EvalResult {
-        &self.result
-    }
 }
 
 /// Evaluate a plan with one row of runtime parameter bindings, then assemble

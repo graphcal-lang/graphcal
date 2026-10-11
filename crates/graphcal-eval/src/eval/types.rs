@@ -226,23 +226,6 @@ impl Value {
         }
     }
 
-    /// Get the dimension of a real or complex quantity.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`ValueError`] if this is not a `Quantity` or `Complex` value.
-    pub fn dimension(&self) -> Result<Dimension, ValueError> {
-        match self {
-            Self::Quantity { dimension, .. } | Self::Complex { dimension, .. } => {
-                Ok(dimension.clone())
-            }
-            other => Err(ValueError {
-                expected: "Quantity or Complex",
-                actual: other.variant_description(),
-            }),
-        }
-    }
-
     /// Get the value formatted for display: in display units if available, otherwise SI.
     ///
     /// # Errors

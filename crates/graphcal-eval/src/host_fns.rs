@@ -113,12 +113,6 @@ impl HostArray {
     pub(crate) fn values(&self) -> &[f64] {
         &self.values
     }
-
-    /// Consume into shape and values.
-    #[must_use]
-    pub fn into_parts(self) -> (Vec<usize>, Vec<f64>) {
-        (self.shape, self.values)
-    }
 }
 
 /// One raw value a host function returns, SI-flat.
