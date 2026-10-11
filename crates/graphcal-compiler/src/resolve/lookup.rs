@@ -18,7 +18,8 @@ use super::category::{DeclSymbolKind, SurfaceNameKind};
 use super::error::{ExpectedDeclKind, ModuleResolveError, NameCategory};
 use super::exports::{ExportedBinding, ExportedBindingTarget, ExportedImportItem};
 use super::namespace::Namespace;
-use super::scope::Access;
+use super::scope::{Access, ModuleAliasRole};
+use super::source_path::{SourcePathBoundary, SourcePathResolution};
 use super::symbols::{ConstructorSignature, GenericParamSignature, Symbol, SymbolRef};
 use super::tables::NamespaceTables;
 use super::{ModuleEntry, ModuleResolver};
@@ -27,6 +28,7 @@ use super::{ModuleEntry, ModuleResolver};
 struct ResolvedModuleQualifier {
     owner: DagId,
     access: Access,
+    role: ModuleAliasRole,
 }
 
 impl super::ModuleRef<'_> {
@@ -175,6 +177,19 @@ impl ModuleResolver {
         path: &NamePath,
     ) -> Result<SymbolRef<'_, DeclNameNamespace, DeclSymbolKind>, ModuleResolveError> {
         self.resolve_symbol_path::<DeclNameNamespace>(owner, path)
+    }
+
+    /// Resolve a source declaration path without discarding its alias role.
+    ///
+    /// The role comes from the same alias lookup that enforces visibility;
+    /// consumers must not reconstruct it from the symbol's canonical owner.
+    pub(crate) fn resolve_source_decl_path(
+        &self,
+        owner: &DagId,
+        path: &NamePath,
+    ) -> Result<SourcePathResolution<'_>, ModuleResolveError> {
+        self.resolve_symbol_path_with_boundary::<DeclNameNamespace>(owner, path)
+            .map(|(symbol, boundary)| SourcePathResolution { symbol, boundary })
     }
 
     /// Resolve a declaration path and require that it names a const declaration.
@@ -523,14 +538,23 @@ impl ModuleResolver {
         owner: &DagId,
         path: &NamePath,
     ) -> Result<SymbolRef<'_, Ns, Ns::Declared>, ModuleResolveError> {
+        self.resolve_symbol_path_with_boundary::<Ns>(owner, path)
+            .map(|(symbol, _)| symbol)
+    }
+
+    fn resolve_symbol_path_with_boundary<Ns: NamespaceTables>(
+        &self,
+        owner: &DagId,
+        path: &NamePath,
+    ) -> Result<(SymbolRef<'_, Ns, Ns::Declared>, SourcePathBoundary), ModuleResolveError> {
         let Some((qualifier, leaf)) = path.qualifier_and_leaf() else {
             let atom = path.leaf();
             let name = NameDef::<Ns>::classify(atom.clone());
             if let Some(symbol) = Ns::declared(self.module_symbols(owner)?).get(&name) {
-                return Ok(SymbolRef::new(symbol));
+                return Ok((SymbolRef::new(symbol), SourcePathBoundary::Local));
             }
             if let Some(imported) = Ns::selected(self.module_scope(owner)?).get(&name) {
-                return Ok(SymbolRef::new(imported));
+                return Ok((SymbolRef::new(imported), SourcePathBoundary::Local));
             }
             if let Some(actual) = self.visible_surface_kind(owner, Ns::NAMESPACE, atom, false)? {
                 return Err(ModuleResolveError::WrongUniverseName {
@@ -565,7 +589,10 @@ impl ModuleResolver {
                     name: leaf.clone(),
                 });
             }
-            return Ok(SymbolRef::new(symbol));
+            return Ok((
+                SymbolRef::new(symbol),
+                SourcePathBoundary::ThroughAlias(target_ref.role),
+            ));
         }
 
         if let Some(actual) =
@@ -660,6 +687,7 @@ impl ModuleResolver {
             Ok(ResolvedModuleQualifier {
                 owner: target,
                 access: alias_target.access,
+                role: alias_target.role(),
             })
         } else {
             Err(ModuleResolveError::UnknownModule { owner: target })

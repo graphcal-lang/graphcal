@@ -99,6 +99,60 @@ fn first_dag(file: &ast::File) -> &ast::DagDecl {
 }
 
 #[test]
+fn source_decl_resolution_preserves_local_and_alias_boundaries() {
+    use super::SourcePathBoundary;
+    use super::scope::ModuleAliasRole;
+
+    let lib = desugared_source(
+        "pub const node C: Dimensionless = 1.0;
+         pub dag nested { pub node value: Dimensionless = 2.0; }",
+    );
+    let main = desugared_source(
+        "import lib as imported;
+         import lib::{ C };
+         include lib() as included;
+         node local: Dimensionless = 0.0;",
+    );
+    let lib_id = DagId::root_in_package("test", "lib");
+    let main_id = DagId::root_in_package("test", "main");
+    let mut modules = TestModules::default();
+    modules.add_file(&lib_id, &lib.declarations);
+    modules.add_file(&main_id, &main.declarations);
+    modules.edge(&main_id, &module_path(&["lib"]), &lib_id);
+    let resolver = modules.build().unwrap();
+
+    for (segments, boundary) in [
+        (vec!["local"], SourcePathBoundary::Local),
+        // A selective import is local even though its canonical owner is lib.
+        (vec!["C"], SourcePathBoundary::Local),
+        (
+            vec!["imported", "C"],
+            SourcePathBoundary::ThroughAlias(ModuleAliasRole::ImportedDag),
+        ),
+        (
+            vec!["imported", "nested", "value"],
+            SourcePathBoundary::ThroughAlias(ModuleAliasRole::ImportedDag),
+        ),
+        (
+            vec!["included", "C"],
+            SourcePathBoundary::ThroughAlias(ModuleAliasRole::IncludedInstance),
+        ),
+    ] {
+        let path = path(&segments);
+        let resolution = resolver.resolve_source_decl_path(&main_id, &path).unwrap();
+        assert_eq!(resolution.boundary, boundary, "{path}");
+        assert_eq!(
+            resolution.symbol.resolved(),
+            resolver
+                .resolve_decl_path(&main_id, &path)
+                .unwrap()
+                .resolved(),
+            "{path}"
+        );
+    }
+}
+
+#[test]
 fn local_type_index_name_collision_is_rejected() {
     let owner = DagId::root_in_package("test", "main");
     let file = desugared_source("type M { Mk(v: Dimensionless) }\npub index M = { A, B };");

@@ -1288,6 +1288,11 @@ role = "contracts"
 
 [[module]]
 package = "compiler"
+path = ["resolve", "source_path"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
 path = ["resolve", "symbols"]
 role = "contracts"
 

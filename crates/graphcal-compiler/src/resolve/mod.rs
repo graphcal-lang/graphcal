@@ -44,6 +44,7 @@ pub mod prelude;
 mod projection;
 pub mod reserved_name;
 pub mod scope;
+mod source_path;
 pub mod symbols;
 pub mod tables;
 #[cfg(test)]
@@ -58,6 +59,7 @@ use self::error::ModuleResolveError;
 pub use self::module_table::ModuleHandle;
 use self::module_table::ModuleTable;
 use self::scope::{ModuleAliasRole, ModuleAliasTarget, ModuleScope, PluginAliasTarget};
+pub(crate) use self::source_path::SourcePathBoundary;
 use self::symbols::{ModuleSymbols, SymbolRef};
 use self::tables::NamespaceTables;
 

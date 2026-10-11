@@ -4,6 +4,7 @@ use crate::resolved_name::{ResolvedDeclName, ResolvedIndexVariant};
 
 use crate::builtin::{BuiltinConst, BuiltinFn};
 use crate::desugar::desugared_ast as ast;
+use crate::resolve::SourcePathBoundary;
 use crate::resolve::category::{DeclSymbolKind, SymbolTable};
 use crate::resolve::error::{ExpectedDeclKind, ModuleResolveError, NameCategory};
 use crate::resolve::namespace::Namespace;
@@ -56,6 +57,7 @@ struct SourceDeclTarget<'r> {
     symbol: Option<DeclSymbol<'r>>,
     /// Whether the path was bound by the owner's lexical binding table.
     bound: bool,
+    boundary: GraphRefBoundary,
 }
 
 /// The scope boundary a graph reference crosses. It decides which
@@ -74,6 +76,13 @@ pub(super) enum GraphRefBoundary {
 }
 
 impl GraphRefBoundary {
+    const fn from_source(boundary: SourcePathBoundary) -> Self {
+        match boundary {
+            SourcePathBoundary::Local => Self::Local,
+            SourcePathBoundary::ThroughAlias(role) => Self::through_alias(role),
+        }
+    }
+
     /// The boundary of a reference qualified by a module alias of `role`.
     pub(super) const fn through_alias(role: ModuleAliasRole) -> Self {
         match role {
@@ -360,8 +369,9 @@ impl<'a> ExprLowerer<'a> {
                     resolved,
                     symbol: None,
                     bound: true,
+                    boundary: GraphRefBoundary::IncludedInstance,
                 };
-                self.check_graph_ref_boundary(target, GraphRefBoundary::IncludedInstance, *span)
+                self.check_graph_ref_boundary(target, *span)
             }
         }
     }
@@ -375,6 +385,16 @@ impl<'a> ExprLowerer<'a> {
         let span = reference.span;
         let path = reference.value.to_name_path();
         let target = self.resolve_source_decl(&path, span)?;
+        self.check_graph_ref_boundary(target, span)
+    }
+
+    /// Only elaborated lexical bindings absent from the resolver need their
+    /// source boundary classified separately.
+    fn bound_source_graph_boundary(
+        &self,
+        path: &NamePath,
+        span: Span,
+    ) -> Result<GraphRefBoundary, ExprLowerError> {
         let boundary = match path.qualifier().first() {
             None => GraphRefBoundary::Local,
             Some(head) => {
@@ -398,13 +418,12 @@ impl<'a> ExprLowerer<'a> {
                 }
             }
         };
-        self.check_graph_ref_boundary(target, boundary, span)
+        Ok(boundary)
     }
 
     fn check_graph_ref_boundary(
         &self,
         target: SourceDeclTarget<'a>,
-        boundary: GraphRefBoundary,
         span: Span,
     ) -> Result<Spanned<ResolvedDeclName>, ExprLowerError> {
         let actual = match target
@@ -417,7 +436,8 @@ impl<'a> ExprLowerer<'a> {
             None if target.bound => return Ok(Spanned::new(target.resolved, span)),
             None => return Err(unknown_decl(&target.resolved, span)),
         };
-        boundary
+        target
+            .boundary
             .check(actual)
             .map_err(|expected| ExprLowerError::ModuleResolve {
                 source: ModuleResolveError::UnexpectedDeclKind {
@@ -443,20 +463,32 @@ impl<'a> ExprLowerer<'a> {
             .ctx
             .scope
             .resolver
-            .resolve_decl_path(self.ctx.scope.owner, path);
+            .resolve_source_decl_path(self.ctx.scope.owner, path);
         if let Some(resolved) = self.bound_decl(&name) {
-            let symbol = self.check_bound_source_access(path, lookup, &resolved, span)?;
+            let (symbol, boundary) = match lookup {
+                Ok(resolution) => (
+                    Some(resolution.symbol),
+                    GraphRefBoundary::from_source(resolution.boundary),
+                ),
+                Err(source) => {
+                    let symbol =
+                        self.check_bound_source_access(path, Err(source), &resolved, span)?;
+                    (symbol, self.bound_source_graph_boundary(path, span)?)
+                }
+            };
             return Ok(SourceDeclTarget {
                 resolved,
                 symbol,
                 bound: true,
+                boundary,
             });
         }
         match lookup {
-            Ok(symbol) => Ok(SourceDeclTarget {
-                resolved: symbol.into_resolved(),
-                symbol: Some(symbol),
+            Ok(resolution) => Ok(SourceDeclTarget {
+                resolved: resolution.symbol.into_resolved(),
+                symbol: Some(resolution.symbol),
                 bound: false,
+                boundary: GraphRefBoundary::from_source(resolution.boundary),
             }),
             Err(ModuleResolveError::UnknownName { .. }) => {
                 Err(ExprLowerError::UnknownGraphRef { name, span })
