@@ -8,6 +8,7 @@ export type Value =
   | { kind: "quantity"; display: string; magnitude: string; si_value: number; unit: string | null }
   | { kind: "int"; display: string }
   | { kind: "bool"; display: string; value: boolean }
+  | { kind: "label"; display: string; index: string; variant: string }
   | { kind: "indexed"; display: string; index: string; entries: { key: string; value: Value }[] };
 
 const valueSchema: z.ZodType<Value> = z.lazy(() =>
@@ -21,6 +22,12 @@ const valueSchema: z.ZodType<Value> = z.lazy(() =>
     }),
     z.object({ kind: z.literal("int"), display: z.string() }),
     z.object({ kind: z.literal("bool"), display: z.string(), value: z.boolean() }),
+    z.object({
+      kind: z.literal("label"),
+      display: z.string(),
+      index: z.string(),
+      variant: z.string(),
+    }),
     z.object({
       kind: z.literal("indexed"),
       display: z.string(),

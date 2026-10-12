@@ -34,6 +34,9 @@ function convert(raw, node) {
       const display = unit ? `${magnitude} ${unit}` : magnitude;
       return { kind: "quantity", display, magnitude, si_value: raw.si_value, unit };
     }
+    if ("variant" in raw) {
+      return { kind: "label", display: raw.variant, index: raw.index, variant: raw.variant };
+    }
     if ("entries" in raw) {
       const order = labelsOf[raw.index] ?? Object.keys(raw.entries);
       return {
