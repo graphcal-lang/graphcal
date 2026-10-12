@@ -387,7 +387,6 @@ canvasEl.addEventListener(
 let drag: { x: number; y: number; moved: boolean } | null = null;
 canvasEl.addEventListener("pointerdown", (event) => {
   if ((event.target as HTMLElement).closest(".col")) return;
-  event.preventDefault();
   drag = { x: event.clientX, y: event.clientY, moved: false };
   canvasEl.setPointerCapture(event.pointerId);
   canvasEl.classList.add("panning");
