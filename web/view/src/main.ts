@@ -10,7 +10,7 @@ import { parseViewModel, type ViewModel } from "./model.ts";
 import { renderView, RULER_WIDTH } from "./render.ts";
 import { trace, type Selection } from "./selection.ts";
 import { displayOf, valueAt } from "./values.ts";
-import { channelHeight, drawWires, planRoutes, type RoutePlan } from "./wires.ts";
+import { drawWires, planRoutes, type RoutePlan } from "./wires.ts";
 
 const fixtures = import.meta.glob<unknown>("../fixtures/*.view.json", {
   eager: true,
@@ -121,7 +121,7 @@ function applySelection(): void {
 
 function redraw(): void {
   if (!state) return;
-  drawWires(wiresEl, viewEl, state.plan);
+  drawWires(wiresEl, viewEl, state.layout, state.plan);
   applySelection();
 }
 
@@ -178,10 +178,6 @@ function render(): void {
   state.layout = fit(state.base, state.folded);
   state.plan = planRoutes(state.model, state.layout);
   renderView(viewEl, state.layout, { folded: state.folded });
-  state.plan.lanes.forEach((count, i) => {
-    const channel = viewEl.querySelector<HTMLElement>(`.channel[data-channel="${i}"]`);
-    if (channel) channel.style.height = `${channelHeight(count)}px`;
-  });
   redraw();
 }
 

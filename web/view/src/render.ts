@@ -219,11 +219,13 @@ function renderZoneHead(): HTMLElement {
     ["const", "const"],
     ["param", "param · inputs"],
     ["node", "node · derived"],
-    ["output", "outputs · no consumer · pub · assert"],
+    ["output", "outputs"],
   ] as const) {
     const zone = el("div", `zone zone-${role}`);
     zone.dataset.role = role;
-    zone.append(el("span", `zone-label label-${role}`, label));
+    const text = el("span", `zone-label label-${role}`, label);
+    if (role === "output") text.title = "nodes nothing in this file reads, pub nodes, and asserts";
+    zone.append(text);
     zones.append(zone);
   }
   head.append(zones);

@@ -1,41 +1,39 @@
 import type { Layout } from "./layout.ts";
 import type { ViewModel } from "./model.ts";
 
-// Wires never cross rows. They run through the channels between bands (and the
-// right gutter when two bands are not adjacent); a wire between neighbouring
-// columns of one band is a short arrow at header height.
+// Wires never cross the rows of a table. They run through the channels between
+// bands (and the right gutter when two bands are not adjacent); a wire between
+// neighbouring columns of one band is a short arrow at header height. The
+// no-axis tiers are packed together and share the channel below the last tier.
 
 export interface Edge {
   from: string;
   to: string;
 }
 
-interface Ends {
-  fromSide: "top" | "bottom";
-  toSide: "top" | "bottom";
-}
+type Side = "top" | "bottom";
 
 export type Route =
   | { kind: "adjacent"; edge: Edge }
-  | ({ kind: "channel"; edge: Edge; channel: number; lane: number } & Ends)
-  | ({
+  | { kind: "channel"; edge: Edge; fromSide: Side; toSide: Side; channel: number }
+  | {
       kind: "gutter";
       edge: Edge;
+      fromSide: Side;
+      toSide: Side;
       channel: number;
-      lane: number;
       channel2: number;
-      lane2: number;
       gutterLane: number;
-    } & Ends);
+    };
 
 export interface RoutePlan {
   routes: Route[];
-  /** Number of lanes used in each channel (index = channel). */
-  lanes: number[];
 }
 
 export const LANE_GAP = 6;
 export const CHANNEL_PAD = 10;
+const TIER_GAP = 8;
+const EMPTY_CHANNEL = 14;
 
 export function edgesOf(model: ViewModel, layout: Layout): Edge[] {
   const edges: Edge[] = [];
@@ -47,26 +45,23 @@ export function edgesOf(model: ViewModel, layout: Layout): Edge[] {
   return edges;
 }
 
-type Side = "top" | "bottom";
-
-/**
- * Which side of a column a wire attaches to. Axis bands attach at the header
- * (top). No-axis boxes attach on the side facing the other end, so neighbouring
- * tiers share the channel between them.
- */
-function sideOf(layout: Layout, bandIndex: number, otherBandIndex: number): Side {
-  if (layout.bands[bandIndex]?.axis !== null) return "top";
-  return otherBandIndex < bandIndex ? "top" : "bottom";
+export function scalarTierCount(layout: Layout): number {
+  return layout.bands.filter((b) => b.axis === null).length;
 }
 
-function channelOf(bandIndex: number, side: Side): number {
-  return side === "top" ? bandIndex : bandIndex + 1;
+/** Axis bands attach at the header (top); no-axis boxes always at the bottom. */
+function sideOf(layout: Layout, bandIndex: number): Side {
+  return layout.bands[bandIndex]?.axis === null ? "bottom" : "top";
+}
+
+/** Channel k sits above band k; the no-axis tiers all exit into the channel below the last tier. */
+function channelOf(layout: Layout, bandIndex: number, side: Side): number {
+  return side === "top" ? bandIndex : scalarTierCount(layout);
 }
 
 export function planRoutes(model: ViewModel, layout: Layout): RoutePlan {
-  const lanes: number[] = Array.from({ length: layout.bands.length + 1 }, () => 0);
-  const pending: { edge: Edge; a: number; b: number; order: number; ends: Ends }[] = [];
   const routes: Route[] = [];
+  let gutterLane = 0;
   for (const edge of edgesOf(model, layout)) {
     const from = layout.columns.get(edge.from);
     const to = layout.columns.get(edge.to);
@@ -75,43 +70,25 @@ export function planRoutes(model: ViewModel, layout: Layout): RoutePlan {
       routes.push({ kind: "adjacent", edge });
       continue;
     }
-    const fromSide = sideOf(layout, from.bandIndex, to.bandIndex);
-    const toSide = sideOf(layout, to.bandIndex, from.bandIndex);
-    const a = channelOf(from.bandIndex, fromSide);
-    const b = channelOf(to.bandIndex, toSide);
-    pending.push({
-      edge,
-      a,
-      b,
-      order: from.bandIndex * 1000 + from.position,
-      ends: { fromSide, toSide },
-    });
-  }
-  // Lanes are handed out in source order so wires from neighbouring columns
-  // stay close together; longer wires take the lanes farther from the band.
-  pending.sort((x, y) => x.order - y.order);
-  let gutterLane = 0;
-  for (const { edge, a, b, ends } of pending) {
-    if (a === b) {
-      routes.push({ kind: "channel", edge, channel: a, lane: lanes[a]++, ...ends });
+    const fromSide = sideOf(layout, from.bandIndex);
+    const toSide = sideOf(layout, to.bandIndex);
+    const channel = channelOf(layout, from.bandIndex, fromSide);
+    const channel2 = channelOf(layout, to.bandIndex, toSide);
+    if (channel === channel2) {
+      routes.push({ kind: "channel", edge, fromSide, toSide, channel });
     } else {
       routes.push({
         kind: "gutter",
         edge,
-        channel: a,
-        lane: lanes[a]++,
-        channel2: b,
-        lane2: lanes[b]++,
+        fromSide,
+        toSide,
+        channel,
+        channel2,
         gutterLane: gutterLane++,
-        ...ends,
       });
     }
   }
-  return { routes, lanes };
-}
-
-export function channelHeight(laneCount: number): number {
-  return laneCount === 0 ? 14 : CHANNEL_PAD * 2 + (laneCount - 1) * LANE_GAP;
+  return { routes };
 }
 
 const SVG_NS = "http://www.w3.org/2000/svg";
@@ -166,13 +143,6 @@ function roundedPath(points: Port[], radius: number): string {
   return d;
 }
 
-function laneY(view: HTMLElement, channel: number, lane: number, origin: DOMRect): number {
-  const el = view.querySelector<HTMLElement>(`.channel[data-channel="${channel}"]`);
-  if (!el) return 0;
-  const r = el.getBoundingClientRect();
-  return r.top - origin.top + CHANNEL_PAD + lane * LANE_GAP;
-}
-
 function marker(id: string, cls: string): SVGMarkerElement {
   const m = document.createElementNS(SVG_NS, "marker");
   m.setAttribute("id", id);
@@ -189,8 +159,98 @@ function marker(id: string, cls: string): SVGMarkerElement {
   return m;
 }
 
-export function drawWires(svg: SVGSVGElement, view: HTMLElement, plan: RoutePlan): void {
-  const origin = view.getBoundingClientRect();
+interface Span {
+  channel: number;
+  x0: number;
+  x1: number;
+  /** Receives the assigned lane. */
+  assign: (lane: number) => void;
+}
+
+/** Pack horizontal spans into lanes: spans that do not overlap share a lane. */
+function packLanes(spans: Span[]): Map<number, number> {
+  const byChannel = new Map<number, Span[]>();
+  for (const span of spans)
+    byChannel.set(span.channel, [...(byChannel.get(span.channel) ?? []), span]);
+  const counts = new Map<number, number>();
+  for (const [channel, list] of byChannel) {
+    list.sort((a, b) => a.x0 - b.x0 || a.x1 - b.x1);
+    const laneEnds: number[] = [];
+    for (const span of list) {
+      let lane = laneEnds.findIndex((end) => end + LANE_GAP * 2 < span.x0);
+      if (lane === -1) {
+        lane = laneEnds.length;
+        laneEnds.push(span.x1);
+      } else {
+        laneEnds[lane] = span.x1;
+      }
+      span.assign(lane);
+    }
+    counts.set(channel, laneEnds.length);
+  }
+  return counts;
+}
+
+export function drawWires(
+  svg: SVGSVGElement,
+  view: HTMLElement,
+  layout: Layout,
+  plan: RoutePlan,
+): void {
+  const gutterX = view.clientWidth - 12;
+  const tiers = scalarTierCount(layout);
+
+  // Pass 1: x positions do not depend on channel heights, so pack lanes first.
+  let origin = view.getBoundingClientRect();
+  const lanes = new Map<Route, { lane: number; lane2: number }>();
+  const spans: Span[] = [];
+  for (const route of plan.routes) {
+    if (route.kind === "adjacent") continue;
+    const a = anchorsOf(view, route.edge.from, origin);
+    const b = anchorsOf(view, route.edge.to, origin);
+    if (!a || !b) continue;
+    const slot = { lane: 0, lane2: 0 };
+    lanes.set(route, slot);
+    const sx = a[route.fromSide].x;
+    const tx = b[route.toSide].x;
+    if (route.kind === "channel") {
+      spans.push({
+        channel: route.channel,
+        x0: Math.min(sx, tx),
+        x1: Math.max(sx, tx),
+        assign: (l) => (slot.lane = l),
+      });
+    } else {
+      const gx = gutterX - (route.gutterLane % 8) * LANE_GAP;
+      spans.push({
+        channel: route.channel,
+        x0: Math.min(sx, gx),
+        x1: Math.max(sx, gx),
+        assign: (l) => (slot.lane = l),
+      });
+      spans.push({
+        channel: route.channel2,
+        x0: Math.min(tx, gx),
+        x1: Math.max(tx, gx),
+        assign: (l) => (slot.lane2 = l),
+      });
+    }
+  }
+  const counts = packLanes(spans);
+  for (const channel of view.querySelectorAll<HTMLElement>(".channel")) {
+    const k = Number(channel.dataset.channel);
+    const betweenTiers = k > 0 && k < tiers;
+    const count = counts.get(k) ?? 0;
+    const height = betweenTiers
+      ? TIER_GAP
+      : count === 0
+        ? EMPTY_CHANNEL
+        : CHANNEL_PAD * 2 + (count - 1) * LANE_GAP;
+    channel.style.height = `${height}px`;
+  }
+
+  // Pass 2: heights are final; measure again and draw.
+  origin = view.getBoundingClientRect();
   svg.replaceChildren();
   svg.setAttribute("width", String(view.scrollWidth));
   svg.setAttribute("height", String(view.scrollHeight));
@@ -199,8 +259,12 @@ export function drawWires(svg: SVGSVGElement, view: HTMLElement, plan: RoutePlan
   const defs = document.createElementNS(SVG_NS, "defs");
   defs.append(marker("arrow", "arrow-idle"), marker("arrow-lit", "arrow-lit"));
   svg.append(defs);
+  const laneY = (channel: number, lane: number): number => {
+    const el = view.querySelector<HTMLElement>(`.channel[data-channel="${channel}"]`);
+    if (!el) return 0;
+    return el.getBoundingClientRect().top - origin.top + CHANNEL_PAD + lane * LANE_GAP;
+  };
 
-  const gutterX = view.clientWidth - 12;
   for (const route of plan.routes) {
     const a = anchorsOf(view, route.edge.from, origin);
     const b = anchorsOf(view, route.edge.to, origin);
@@ -210,14 +274,15 @@ export function drawWires(svg: SVGSVGElement, view: HTMLElement, plan: RoutePlan
       const rightward = a.headRight.x <= b.headLeft.x;
       points.push(rightward ? a.headRight : a.headLeft, rightward ? b.headLeft : b.headRight);
     } else {
+      const slot = lanes.get(route) ?? { lane: 0, lane2: 0 };
       const start = a[route.fromSide];
       const end = b[route.toSide];
       if (route.kind === "channel") {
-        const y = laneY(view, route.channel, route.lane, origin);
+        const y = laneY(route.channel, slot.lane);
         points.push(start, { x: start.x, y }, { x: end.x, y }, end);
       } else {
-        const ya = laneY(view, route.channel, route.lane, origin);
-        const yb = laneY(view, route.channel2, route.lane2, origin);
+        const ya = laneY(route.channel, slot.lane);
+        const yb = laneY(route.channel2, slot.lane2);
         const gx = gutterX - (route.gutterLane % 8) * LANE_GAP;
         points.push(
           start,

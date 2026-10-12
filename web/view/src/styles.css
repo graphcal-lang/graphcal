@@ -96,6 +96,7 @@ body {
 /* ---- view ---- */
 .view {
   position: relative;
+  z-index: 1;
   padding: 12px 40px 40px 16px;
   display: flex;
   flex-direction: column;
@@ -260,6 +261,9 @@ body {
 .kind-const .mark {
   color: var(--faint);
 }
+.kind-node .mark {
+  color: var(--sel);
+}
 .kind-assert .mark {
   color: var(--bool);
 }
@@ -417,6 +421,7 @@ body {
 /* ---- wires ---- */
 .wires {
   position: absolute;
+  z-index: 0;
   pointer-events: none;
   overflow: visible;
 }
