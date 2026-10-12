@@ -34,11 +34,13 @@ const formulaEl = need<HTMLElement>("#formula");
 const fixtureEl = need<HTMLSelectElement>("#fixture");
 const stageEl = need<HTMLElement>("#stage");
 const canvasEl = need<HTMLElement>("#canvas");
+const zoomEl = need<HTMLElement>("#zoom");
 
 /** The canvas is a free sheet: the bars stay put, the stage pans and zooms. */
 const camera = { x: 0, y: 0, scale: 1 };
 function applyCamera(): void {
   stageEl.style.transform = `translate(${camera.x}px, ${camera.y}px) scale(${camera.scale})`;
+  zoomEl.textContent = `${Math.round(camera.scale * 100)}%`;
 }
 function resetCamera(): void {
   camera.x = 0;
@@ -67,21 +69,14 @@ interface State {
 let state: State | null = null;
 
 function describeSelection(s: State): string {
-  const { selection, model, layout } = s;
-  if (!selection) {
-    const unrolled = layout.bands.filter((b) => b.axis !== null).length;
-    return `${model.nodes.length} nodes · ${unrolled} unrolled ${unrolled === 1 ? "axis" : "axes"} · click a cell to trace`;
-  }
+  const { selection, model } = s;
+  if (!selection) return "";
   const node = model.nodes.find((n) => n.id === selection.id);
   const labels = [selection.row, selection.sub].filter((x): x is string => x !== null);
   const subject = labels.length > 0 ? `${selection.id}[${labels.join(", ")}]` : selection.id;
   const value = displayOf(valueAt(node?.value ?? null, labels));
   const expr = node?.expr ? ` = ${node.expr}` : "";
-  const mode =
-    selection.mode === "deps"
-      ? "showing ← depends on (click again: → used by)"
-      : "showing → used by (click again: ← depends on)";
-  return `${subject}${expr} = ${value}  ·  ${mode}`;
+  return `${subject}${expr} = ${value}`;
 }
 
 function clearHighlights(): void {

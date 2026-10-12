@@ -289,21 +289,6 @@ function placeHalos(container: HTMLElement): void {
   }
 }
 
-function renderLegend(): HTMLElement {
-  const legend = el("div", "legend");
-  for (const [cls, text] of [
-    ["swatch-idle", "idle"],
-    ["swatch-direct", "direct"],
-    ["swatch-transitive", "transitive"],
-  ] as const) {
-    legend.append(el("span", `swatch ${cls}`), el("span", "legend-text", text));
-  }
-  legend.append(
-    el("span", "legend-text", "◇ param  ○ const  ● node  ✓ assert  ⤴ import   [axis] = shape"),
-  );
-  return legend;
-}
-
 export function renderView(container: HTMLElement, layout: Layout, options: RenderOptions): void {
   container.replaceChildren();
   container.append(renderZoneHead());
@@ -314,7 +299,7 @@ export function renderView(container: HTMLElement, layout: Layout, options: Rend
   });
   const last = el("div", "channel");
   last.dataset.channel = String(layout.bands.length);
-  container.append(last, renderLegend());
+  container.append(last);
   alignZones(container);
   placeHalos(container);
 }
