@@ -3,10 +3,11 @@ import {
   computeLayout,
   orderByBarycenter,
   packScalarBand,
-  ROLES,
+  ZONES,
+  zoneOf,
   type BoxSize,
   type Layout,
-  type Role,
+  type Zone,
 } from "./layout.ts";
 import { parseViewModel, type ViewModel } from "./model.ts";
 import { renderView, RULER_WIDTH } from "./render.ts";
@@ -31,6 +32,14 @@ const fileEl = need<HTMLElement>("#file");
 const unrollEl = need<HTMLElement>("#unroll");
 const formulaEl = need<HTMLElement>("#formula");
 const fixtureEl = need<HTMLSelectElement>("#fixture");
+const stageEl = need<HTMLElement>("#stage");
+const modeButtons = [...document.querySelectorAll<HTMLButtonElement>("[data-mode]")];
+
+/**
+ * fit: keep text readable, fold low-activity intermediates until the view fits.
+ * overview: expand everything and scale the whole stage down to fit.
+ */
+type Mode = "fit" | "overview";
 
 interface State {
   model: ViewModel;
@@ -40,6 +49,7 @@ interface State {
   plan: RoutePlan;
   folded: Set<string>;
   selection: Selection | null;
+  mode: Mode;
 }
 let state: State | null = null;
 
@@ -129,7 +139,7 @@ function redraw(): void {
 
 /** Horizontal room for zones: the window minus ruler, paddings, and the gutter. */
 function availableWidth(): number {
-  const zonePadding = 4 * 24;
+  const zonePadding = 3 * 24;
   return document.documentElement.clientWidth - 16 - 40 - RULER_WIDTH - zonePadding - 56;
 }
 
@@ -148,14 +158,14 @@ function fit(base: Layout, folded: ReadonlySet<string>): Layout {
   }
   const size = (id: string): BoxSize => sizes.get(id) ?? { width: 0, height: 0 };
 
-  const floor = {} as Record<Role, number>;
-  const natural = {} as Record<Role, number>;
-  for (const role of ROLES) {
+  const floor = {} as Record<Zone, number>;
+  const natural = {} as Record<Zone, number>;
+  for (const zone of ZONES) {
     let axisWidth = 0;
-    for (const zone of viewEl.querySelectorAll<HTMLElement>(
-      `.band-axis .zone[data-role="${role}"]`,
+    for (const zoneEl of viewEl.querySelectorAll<HTMLElement>(
+      `.band-axis .zone[data-zone="${zone}"]`,
     )) {
-      const cols = [...zone.querySelectorAll<HTMLElement>(":scope > .col")];
+      const cols = [...zoneEl.querySelectorAll<HTMLElement>(":scope > .col")];
       const inner =
         cols.reduce((sum, col) => sum + col.getBoundingClientRect().width, 0) +
         Math.max(0, cols.length - 1) * BOX_GAP;
@@ -164,10 +174,10 @@ function fit(base: Layout, folded: ReadonlySet<string>): Layout {
     const boxes = base.bands
       .filter((b) => b.axis === null)
       .flatMap((b) => b.columns)
-      .filter((c) => c.role === role)
+      .filter((c) => zoneOf(c.role) === zone)
       .map((c) => size(c.node.id).width);
-    floor[role] = Math.max(axisWidth, ...boxes);
-    natural[role] = boxes.reduce((sum, w) => sum + w, 0) + Math.max(0, boxes.length - 1) * BOX_GAP;
+    floor[zone] = Math.max(axisWidth, ...boxes);
+    natural[zone] = boxes.reduce((sum, w) => sum + w, 0) + Math.max(0, boxes.length - 1) * BOX_GAP;
   }
 
   const available = availableWidth();
@@ -175,27 +185,63 @@ function fit(base: Layout, folded: ReadonlySet<string>): Layout {
   let packed = packScalarBand(base, size, target);
   for (let round = 0; round < 3; round++) {
     const leftover =
-      available - ROLES.reduce((sum, role) => sum + Math.max(target[role], packed.used[role]), 0);
-    const need = {} as Record<Role, number>;
+      available - ZONES.reduce((sum, zone) => sum + Math.max(target[zone], packed.used[zone]), 0);
+    const need = {} as Record<Zone, number>;
     let totalNeed = 0;
-    for (const role of ROLES) {
-      need[role] = packed.stacked[role] ? Math.max(0, natural[role] - target[role]) : 0;
-      totalNeed += need[role];
+    for (const zone of ZONES) {
+      need[zone] = packed.stacked[zone] ? Math.max(0, natural[zone] - target[zone]) : 0;
+      totalNeed += need[zone];
     }
     if (leftover <= 0 || totalNeed === 0) break;
     const share = Math.min(1, leftover / totalNeed);
-    for (const role of ROLES) target[role] += need[role] * share;
+    for (const zone of ZONES) target[zone] += need[zone] * share;
     packed = packScalarBand(base, size, target);
   }
   return packed.layout;
 }
 
-function render(): void {
+function renderOnce(): void {
   if (!state) return;
+  stageEl.style.transform = "";
   state.layout = fit(state.base, state.folded);
   state.plan = planRoutes(state.model, state.layout);
   renderView(viewEl, state.layout, { folded: state.folded });
   redraw();
+}
+
+function overflows(): boolean {
+  return viewEl.scrollWidth > document.documentElement.clientWidth;
+}
+
+/** Re-apply the mode from scratch: fold candidates one by one (fit) or scale (overview). */
+function refit(): void {
+  if (!state) return;
+  state.folded = new Set();
+  renderOnce();
+  if (state.mode === "fit") {
+    const candidates = [...state.base.columns.values()]
+      .filter((c) => c.foldedByDefault)
+      .sort((a, b) => b.depth - a.depth)
+      .map((c) => c.node.id);
+    for (const id of candidates) {
+      if (!overflows()) break;
+      state.folded.add(id);
+      renderOnce();
+    }
+  } else {
+    const width = document.documentElement.clientWidth;
+    const height = document.documentElement.clientHeight - stageEl.offsetTop;
+    const scale = Math.min(1, width / viewEl.scrollWidth, height / viewEl.scrollHeight);
+    stageEl.style.transform = `scale(${scale})`;
+  }
+  for (const button of modeButtons) {
+    button.classList.toggle("active", button.dataset.mode === state.mode);
+  }
+}
+
+/** Render after a manual fold or unfold: the view may overflow now, and that is fine. */
+function render(): void {
+  renderOnce();
 }
 
 function load(name: string): void {
@@ -203,10 +249,15 @@ function load(name: string): void {
   if (raw === undefined) return;
   const model = parseViewModel(raw);
   const base = orderByBarycenter(computeLayout(model), model);
-  const folded = new Set(
-    [...base.columns.values()].filter((c) => c.foldedByDefault).map((c) => c.node.id),
-  );
-  state = { model, base, layout: base, plan: planRoutes(model, base), folded, selection: null };
+  state = {
+    model,
+    base,
+    layout: base,
+    plan: planRoutes(model, base),
+    folded: new Set(),
+    selection: null,
+    mode: state?.mode ?? "fit",
+  };
   fileEl.replaceChildren();
   fileEl.append(
     Object.assign(document.createElement("span"), {
@@ -223,7 +274,7 @@ function load(name: string): void {
     unrolled.length === 0
       ? "no shared axis"
       : unrolled.map((b) => `unroll ${b.axis} · ${b.labels.length} labels`).join("   ");
-  render();
+  refit();
 }
 
 viewEl.addEventListener("click", (event) => {
@@ -292,7 +343,14 @@ window.addEventListener("resize", () => {
   const width = document.documentElement.clientWidth;
   if (width === lastWidth) return;
   lastWidth = width;
-  render();
+  refit();
 });
+for (const button of modeButtons) {
+  button.addEventListener("click", () => {
+    if (!state || !button.dataset.mode) return;
+    state.mode = button.dataset.mode as Mode;
+    refit();
+  });
+}
 new ResizeObserver(() => redraw()).observe(viewEl);
 if (fixtureEl.value) load(fixtureEl.value);

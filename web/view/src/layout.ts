@@ -8,6 +8,13 @@ import type { ViewModel, ViewNode } from "./model.ts";
 export type Role = "const" | "param" | "node" | "output";
 export const ROLES: readonly Role[] = ["const", "param", "node", "output"];
 
+/** Outputs are the right end of the node zone, so zones are three. */
+export type Zone = "const" | "param" | "node";
+export const ZONES: readonly Zone[] = ["const", "param", "node"];
+export function zoneOf(role: Role): Zone {
+  return role === "output" ? "node" : role;
+}
+
 export interface Column {
   node: ViewNode;
   role: Role;
@@ -179,7 +186,8 @@ export interface PackedZone {
 /**
  * Shelf packing of one zone's boxes: keep their order, fill stacks top to
  * bottom up to a height cap, and raise the cap until the stacks fit the zone
- * width. A tall box ends up beside a stack of short ones.
+ * width. A tall box ends up beside a stack of short ones. Output boxes never
+ * share a stack with other node boxes, so the outputs halo stays honest.
  */
 export function packZone(
   boxes: Column[],
@@ -193,14 +201,17 @@ export function packZone(
     const stacks: Column[][] = [];
     const heights: number[] = [];
     const widths: number[] = [];
+    const groups: boolean[] = [];
     for (const box of boxes) {
       const { width: w, height: h } = size(box.node.id);
-      let i = heights.findIndex((used) => used + STACK_GAP + h <= cap);
+      const isOutput = box.role === "output";
+      let i = heights.findIndex((used, k) => groups[k] === isOutput && used + STACK_GAP + h <= cap);
       if (i === -1) {
         i = stacks.length;
         stacks.push([]);
         heights.push(-STACK_GAP);
         widths.push(0);
+        groups.push(isOutput);
       }
       stacks[i].push(box);
       heights[i] += STACK_GAP + h;
@@ -218,23 +229,23 @@ export function packZone(
 export function packScalarBand(
   layout: Layout,
   size: (id: string) => BoxSize,
-  zoneWidth: Record<Role, number>,
-): { layout: Layout; used: Record<Role, number>; stacked: Record<Role, boolean> } {
-  const used = { const: 0, param: 0, node: 0, output: 0 };
-  const stacked = { const: false, param: false, node: false, output: false };
+  zoneWidth: Record<Zone, number>,
+): { layout: Layout; used: Record<Zone, number>; stacked: Record<Zone, boolean> } {
+  const used = { const: 0, param: 0, node: 0 };
+  const stacked = { const: false, param: false, node: false };
   const scalar = layout.bands.find((b) => b.axis === null);
   if (!scalar) return { layout, used, stacked };
   const columns = new Map(layout.columns);
   const packedColumns: Column[] = [];
   let position = 0;
-  for (const role of ROLES) {
+  for (const zone of ZONES) {
     const packed = packZone(
-      scalar.columns.filter((c) => c.role === role),
+      scalar.columns.filter((c) => zoneOf(c.role) === zone),
       size,
-      zoneWidth[role],
+      zoneWidth[zone],
     );
-    used[role] = packed.width;
-    stacked[role] = packed.stacks.some((s) => s.length > 1);
+    used[zone] = packed.width;
+    stacked[zone] = packed.stacks.some((s) => s.length > 1);
     for (const stack of packed.stacks) {
       stack.forEach((column, tierRow) => {
         const placed: Column = { ...column, position, tierRow };

@@ -110,18 +110,25 @@ interface Anchors {
   headRight: Port;
 }
 
+/** The stage may be scaled (overview mode); client rects must be unscaled. */
+function scaleOf(view: HTMLElement, origin: DOMRect): number {
+  return view.offsetWidth > 0 ? origin.width / view.offsetWidth : 1;
+}
+
 function anchorsOf(view: HTMLElement, id: string, origin: DOMRect): Anchors | null {
   const col = view.querySelector<HTMLElement>(`.col[data-node="${id}"]`);
   const head = col?.querySelector<HTMLElement>(".col-head");
   if (!col || !head) return null;
+  const k = scaleOf(view, origin);
   const c = col.getBoundingClientRect();
   const h = head.getBoundingClientRect();
-  const x = c.left + c.width / 2 - origin.left;
+  const x = (c.left + c.width / 2 - origin.left) / k;
+  const headY = (h.top + h.height / 2 - origin.top) / k;
   return {
-    top: { x, y: h.top - origin.top },
-    bottom: { x, y: c.bottom - origin.top },
-    headLeft: { x: h.left - origin.left, y: h.top + h.height / 2 - origin.top },
-    headRight: { x: h.right - origin.left, y: h.top + h.height / 2 - origin.top },
+    top: { x, y: (h.top - origin.top) / k },
+    bottom: { x, y: (c.bottom - origin.top) / k },
+    headLeft: { x: (h.left - origin.left) / k, y: headY },
+    headRight: { x: (h.right - origin.left) / k, y: headY },
   };
 }
 
@@ -264,10 +271,11 @@ export function drawWires(
   const defs = document.createElementNS(SVG_NS, "defs");
   defs.append(marker("arrow", "arrow-idle"), marker("arrow-lit", "arrow-lit"));
   svg.append(defs);
+  const k = scaleOf(view, origin);
   const laneY = (channel: number, lane: number): number => {
     const el = view.querySelector<HTMLElement>(`.channel[data-channel="${channel}"]`);
     if (!el) return 0;
-    return el.getBoundingClientRect().top - origin.top + CHANNEL_PAD + lane * LANE_GAP;
+    return (el.getBoundingClientRect().top - origin.top) / k + CHANNEL_PAD + lane * LANE_GAP;
   };
 
   for (const route of plan.routes) {

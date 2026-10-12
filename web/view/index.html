@@ -11,13 +11,31 @@
       <span class="bar-file" id="file">loading…</span>
       <span class="bar-unroll" id="unroll"></span>
       <span class="bar-right">
+        <span class="modes">
+          <button
+            type="button"
+            data-mode="fit"
+            title="keep text readable; fold low-activity intermediates until the view fits"
+          >
+            fit
+          </button>
+          <button
+            type="button"
+            data-mode="overview"
+            title="expand everything and scale the whole view to fit"
+          >
+            overview
+          </button>
+        </span>
         <span class="bar-eval">Evaluated · fixture</span>
         <label class="bar-fixture"><select id="fixture"></select></label>
       </span>
     </header>
     <div class="formula" id="formula"></div>
-    <main id="view" class="view"></main>
-    <svg id="wires" class="wires" aria-hidden="true"></svg>
+    <div id="stage" class="stage">
+      <main id="view" class="view"></main>
+      <svg id="wires" class="wires" aria-hidden="true"></svg>
+    </div>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>
