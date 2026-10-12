@@ -5,7 +5,7 @@ import { z } from "zod";
 // attached per node and may be absent for folded or unevaluated nodes.
 
 export type Value =
-  | { kind: "quantity"; display: string; si_value: number; unit: string | null }
+  | { kind: "quantity"; display: string; magnitude: string; si_value: number; unit: string | null }
   | { kind: "int"; display: string }
   | { kind: "bool"; display: string; value: boolean }
   | { kind: "indexed"; display: string; index: string; entries: { key: string; value: Value }[] };
@@ -15,6 +15,7 @@ const valueSchema: z.ZodType<Value> = z.lazy(() =>
     z.object({
       kind: z.literal("quantity"),
       display: z.string(),
+      magnitude: z.string(),
       si_value: z.number(),
       unit: z.string().nullable(),
     }),
@@ -32,6 +33,9 @@ const valueSchema: z.ZodType<Value> = z.lazy(() =>
 export const nodeKindSchema = z.enum(["param", "const", "node", "assert", "external"]);
 export type NodeKind = z.infer<typeof nodeKindSchema>;
 
+export const reduceOpSchema = z.enum(["sum", "maximum", "minimum", "count", "rss", "mean"]);
+export type ReduceOp = z.infer<typeof reduceOpSchema>;
+
 export const viewNodeSchema = z.object({
   id: z.string(),
   name: z.string(),
@@ -42,6 +46,10 @@ export const viewNodeSchema = z.object({
   unit: z.string().nullable(),
   pub: z.boolean(),
   deps: z.array(z.string()),
+  /** Source expression text, for the formula bar. */
+  expr: z.string().nullable(),
+  /** The aggregation that removed an axis of a dependency, if any. */
+  reduce: z.object({ op: reduceOpSchema, axis: z.string() }).nullable(),
   source: z.object({ file: z.string().nullable(), line: z.int().nonnegative() }).nullable(),
   value: valueSchema.nullable(),
 });

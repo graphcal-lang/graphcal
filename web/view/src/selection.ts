@@ -5,6 +5,9 @@ export type TraceMode = "deps" | "uses";
 
 export interface Selection {
   id: string;
+  /** Row label when a cell was selected; null for a header or scalar box. */
+  row: string | null;
+  sub: string | null;
   mode: TraceMode;
 }
 

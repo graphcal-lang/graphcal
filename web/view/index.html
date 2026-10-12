@@ -9,12 +9,13 @@
   <body>
     <header class="bar">
       <span class="bar-file" id="file">loading…</span>
-      <span class="bar-status" id="status"></span>
-      <label class="bar-fixture"
-        >fixture
-        <select id="fixture"></select>
-      </label>
+      <span class="bar-unroll" id="unroll"></span>
+      <span class="bar-right">
+        <span class="bar-eval">Evaluated · fixture</span>
+        <label class="bar-fixture"><select id="fixture"></select></label>
+      </span>
     </header>
+    <div class="formula" id="formula"></div>
     <main id="view" class="view"></main>
     <svg id="wires" class="wires" aria-hidden="true"></svg>
     <script type="module" src="/src/main.ts"></script>

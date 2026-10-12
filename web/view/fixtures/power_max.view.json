@@ -28,6 +28,8 @@
       "unit": null,
       "pub": true,
       "deps": [],
+      "expr": "count(for c: Component { 1.0 })",
+      "reduce": null,
       "source": {
         "file": null,
         "line": 4
@@ -47,6 +49,8 @@
       "unit": null,
       "pub": false,
       "deps": [],
+      "expr": "0.2",
+      "reduce": null,
       "source": {
         "file": "src/power_project/power_max.gcl",
         "line": 3
@@ -54,6 +58,7 @@
       "value": {
         "kind": "quantity",
         "display": "0.2",
+        "magnitude": "0.2",
         "si_value": 0.2,
         "unit": null
       }
@@ -68,6 +73,8 @@
       "unit": "W",
       "pub": false,
       "deps": [],
+      "expr": "60.0 W",
+      "reduce": null,
       "source": {
         "file": "src/power_project/power_max.gcl",
         "line": 4
@@ -75,6 +82,7 @@
       "value": {
         "kind": "quantity",
         "display": "60 W",
+        "magnitude": "60",
         "si_value": 60,
         "unit": "W"
       }
@@ -89,6 +97,8 @@
       "unit": null,
       "pub": false,
       "deps": [],
+      "expr": "0.9",
+      "reduce": null,
       "source": {
         "file": "src/power_project/power_max.gcl",
         "line": 5
@@ -96,6 +106,7 @@
       "value": {
         "kind": "quantity",
         "display": "0.9",
+        "magnitude": "0.9",
         "si_value": 0.9,
         "unit": null
       }
@@ -110,6 +121,8 @@
       "unit": "W",
       "pub": false,
       "deps": [],
+      "expr": "table[Component] { … }",
+      "reduce": null,
       "source": {
         "file": "src/power_project/power_max.gcl",
         "line": 7
@@ -124,6 +137,7 @@
             "value": {
               "kind": "quantity",
               "display": "4 W",
+              "magnitude": "4",
               "si_value": 4,
               "unit": "W"
             }
@@ -133,6 +147,7 @@
             "value": {
               "kind": "quantity",
               "display": "12 W",
+              "magnitude": "12",
               "si_value": 12,
               "unit": "W"
             }
@@ -142,6 +157,7 @@
             "value": {
               "kind": "quantity",
               "display": "8 W",
+              "magnitude": "8",
               "si_value": 8,
               "unit": "W"
             }
@@ -151,6 +167,7 @@
             "value": {
               "kind": "quantity",
               "display": "20 W",
+              "magnitude": "20",
               "si_value": 20,
               "unit": "W"
             }
@@ -168,6 +185,8 @@
       "unit": null,
       "pub": false,
       "deps": [],
+      "expr": "table[Component, Mode] { … }",
+      "reduce": null,
       "source": {
         "file": "src/power_project/power_max.gcl",
         "line": 14
@@ -189,6 +208,7 @@
                   "value": {
                     "kind": "quantity",
                     "display": "1",
+                    "magnitude": "1",
                     "si_value": 1,
                     "unit": null
                   }
@@ -198,6 +218,7 @@
                   "value": {
                     "kind": "quantity",
                     "display": "1",
+                    "magnitude": "1",
                     "si_value": 1,
                     "unit": null
                   }
@@ -207,6 +228,7 @@
                   "value": {
                     "kind": "quantity",
                     "display": "1",
+                    "magnitude": "1",
                     "si_value": 1,
                     "unit": null
                   }
@@ -226,6 +248,7 @@
                   "value": {
                     "kind": "quantity",
                     "display": "0.1",
+                    "magnitude": "0.1",
                     "si_value": 0.1,
                     "unit": null
                   }
@@ -235,6 +258,7 @@
                   "value": {
                     "kind": "quantity",
                     "display": "0.3",
+                    "magnitude": "0.3",
                     "si_value": 0.3,
                     "unit": null
                   }
@@ -244,6 +268,7 @@
                   "value": {
                     "kind": "quantity",
                     "display": "0.8",
+                    "magnitude": "0.8",
                     "si_value": 0.8,
                     "unit": null
                   }
@@ -263,6 +288,7 @@
                   "value": {
                     "kind": "quantity",
                     "display": "0.6",
+                    "magnitude": "0.6",
                     "si_value": 0.6,
                     "unit": null
                   }
@@ -272,6 +298,7 @@
                   "value": {
                     "kind": "quantity",
                     "display": "0.4",
+                    "magnitude": "0.4",
                     "si_value": 0.4,
                     "unit": null
                   }
@@ -281,6 +308,7 @@
                   "value": {
                     "kind": "quantity",
                     "display": "0.2",
+                    "magnitude": "0.2",
                     "si_value": 0.2,
                     "unit": null
                   }
@@ -300,6 +328,7 @@
                   "value": {
                     "kind": "quantity",
                     "display": "0",
+                    "magnitude": "0",
                     "si_value": 0,
                     "unit": null
                   }
@@ -309,6 +338,7 @@
                   "value": {
                     "kind": "quantity",
                     "display": "0.5",
+                    "magnitude": "0.5",
                     "si_value": 0.5,
                     "unit": null
                   }
@@ -318,6 +348,7 @@
                   "value": {
                     "kind": "quantity",
                     "display": "1",
+                    "magnitude": "1",
                     "si_value": 1,
                     "unit": null
                   }
@@ -338,6 +369,8 @@
       "unit": "W",
       "pub": false,
       "deps": ["p_unit", "duty"],
+      "expr": "@p_unit[c] * @duty[c, m]",
+      "reduce": null,
       "source": {
         "file": "src/power_project/power_max.gcl",
         "line": 22
@@ -359,6 +392,7 @@
                   "value": {
                     "kind": "quantity",
                     "display": "4 W",
+                    "magnitude": "4",
                     "si_value": 4,
                     "unit": "W"
                   }
@@ -368,6 +402,7 @@
                   "value": {
                     "kind": "quantity",
                     "display": "4 W",
+                    "magnitude": "4",
                     "si_value": 4,
                     "unit": "W"
                   }
@@ -377,6 +412,7 @@
                   "value": {
                     "kind": "quantity",
                     "display": "4 W",
+                    "magnitude": "4",
                     "si_value": 4,
                     "unit": "W"
                   }
@@ -396,6 +432,7 @@
                   "value": {
                     "kind": "quantity",
                     "display": "1.2 W",
+                    "magnitude": "1.2",
                     "si_value": 1.2000000000000002,
                     "unit": "W"
                   }
@@ -405,6 +442,7 @@
                   "value": {
                     "kind": "quantity",
                     "display": "3.6 W",
+                    "magnitude": "3.6",
                     "si_value": 3.5999999999999996,
                     "unit": "W"
                   }
@@ -414,6 +452,7 @@
                   "value": {
                     "kind": "quantity",
                     "display": "9.6 W",
+                    "magnitude": "9.6",
                     "si_value": 9.600000000000001,
                     "unit": "W"
                   }
@@ -433,6 +472,7 @@
                   "value": {
                     "kind": "quantity",
                     "display": "4.8 W",
+                    "magnitude": "4.8",
                     "si_value": 4.8,
                     "unit": "W"
                   }
@@ -442,6 +482,7 @@
                   "value": {
                     "kind": "quantity",
                     "display": "3.2 W",
+                    "magnitude": "3.2",
                     "si_value": 3.2,
                     "unit": "W"
                   }
@@ -451,6 +492,7 @@
                   "value": {
                     "kind": "quantity",
                     "display": "1.6 W",
+                    "magnitude": "1.6",
                     "si_value": 1.6,
                     "unit": "W"
                   }
@@ -470,6 +512,7 @@
                   "value": {
                     "kind": "quantity",
                     "display": "0 W",
+                    "magnitude": "0",
                     "si_value": 0,
                     "unit": "W"
                   }
@@ -479,6 +522,7 @@
                   "value": {
                     "kind": "quantity",
                     "display": "10 W",
+                    "magnitude": "10",
                     "si_value": 10,
                     "unit": "W"
                   }
@@ -488,6 +532,7 @@
                   "value": {
                     "kind": "quantity",
                     "display": "20 W",
+                    "magnitude": "20",
                     "si_value": 20,
                     "unit": "W"
                   }
@@ -508,6 +553,8 @@
       "unit": "W",
       "pub": false,
       "deps": ["p_avg", "eta_dcdc"],
+      "expr": "@p_avg[c, m] / @eta_dcdc",
+      "reduce": null,
       "source": {
         "file": "src/power_project/power_max.gcl",
         "line": 26
@@ -529,6 +576,7 @@
                   "value": {
                     "kind": "quantity",
                     "display": "4.444 W",
+                    "magnitude": "4.444",
                     "si_value": 4.444444444444445,
                     "unit": "W"
                   }
@@ -538,6 +586,7 @@
                   "value": {
                     "kind": "quantity",
                     "display": "4.444 W",
+                    "magnitude": "4.444",
                     "si_value": 4.444444444444445,
                     "unit": "W"
                   }
@@ -547,6 +596,7 @@
                   "value": {
                     "kind": "quantity",
                     "display": "4.444 W",
+                    "magnitude": "4.444",
                     "si_value": 4.444444444444445,
                     "unit": "W"
                   }
@@ -566,6 +616,7 @@
                   "value": {
                     "kind": "quantity",
                     "display": "1.333 W",
+                    "magnitude": "1.333",
                     "si_value": 1.3333333333333335,
                     "unit": "W"
                   }
@@ -575,6 +626,7 @@
                   "value": {
                     "kind": "quantity",
                     "display": "4 W",
+                    "magnitude": "4",
                     "si_value": 3.9999999999999996,
                     "unit": "W"
                   }
@@ -584,6 +636,7 @@
                   "value": {
                     "kind": "quantity",
                     "display": "10.67 W",
+                    "magnitude": "10.67",
                     "si_value": 10.666666666666668,
                     "unit": "W"
                   }
@@ -603,6 +656,7 @@
                   "value": {
                     "kind": "quantity",
                     "display": "5.333 W",
+                    "magnitude": "5.333",
                     "si_value": 5.333333333333333,
                     "unit": "W"
                   }
@@ -612,6 +666,7 @@
                   "value": {
                     "kind": "quantity",
                     "display": "3.556 W",
+                    "magnitude": "3.556",
                     "si_value": 3.555555555555556,
                     "unit": "W"
                   }
@@ -621,6 +676,7 @@
                   "value": {
                     "kind": "quantity",
                     "display": "1.778 W",
+                    "magnitude": "1.778",
                     "si_value": 1.777777777777778,
                     "unit": "W"
                   }
@@ -640,6 +696,7 @@
                   "value": {
                     "kind": "quantity",
                     "display": "0 W",
+                    "magnitude": "0",
                     "si_value": 0,
                     "unit": "W"
                   }
@@ -649,6 +706,7 @@
                   "value": {
                     "kind": "quantity",
                     "display": "11.11 W",
+                    "magnitude": "11.11",
                     "si_value": 11.11111111111111,
                     "unit": "W"
                   }
@@ -658,6 +716,7 @@
                   "value": {
                     "kind": "quantity",
                     "display": "22.22 W",
+                    "magnitude": "22.22",
                     "si_value": 22.22222222222222,
                     "unit": "W"
                   }
@@ -678,6 +737,11 @@
       "unit": "W",
       "pub": false,
       "deps": ["p_bus"],
+      "expr": "sum(for c: Component { @p_bus[c, m] })",
+      "reduce": {
+        "op": "sum",
+        "axis": "Component"
+      },
       "source": {
         "file": "src/power_project/power_max.gcl",
         "line": 30
@@ -692,6 +756,7 @@
             "value": {
               "kind": "quantity",
               "display": "11.11 W",
+              "magnitude": "11.11",
               "si_value": 11.11111111111111,
               "unit": "W"
             }
@@ -701,6 +766,7 @@
             "value": {
               "kind": "quantity",
               "display": "23.11 W",
+              "magnitude": "23.11",
               "si_value": 23.11111111111111,
               "unit": "W"
             }
@@ -710,6 +776,7 @@
             "value": {
               "kind": "quantity",
               "display": "39.11 W",
+              "magnitude": "39.11",
               "si_value": 39.111111111111114,
               "unit": "W"
             }
@@ -727,6 +794,11 @@
       "unit": "W",
       "pub": false,
       "deps": ["p_bus"],
+      "expr": "maximum(for m: Mode { @p_bus[c, m] })",
+      "reduce": {
+        "op": "maximum",
+        "axis": "Mode"
+      },
       "source": {
         "file": "src/power_project/power_max.gcl",
         "line": 34
@@ -741,6 +813,7 @@
             "value": {
               "kind": "quantity",
               "display": "4.444 W",
+              "magnitude": "4.444",
               "si_value": 4.444444444444445,
               "unit": "W"
             }
@@ -750,6 +823,7 @@
             "value": {
               "kind": "quantity",
               "display": "10.67 W",
+              "magnitude": "10.67",
               "si_value": 10.666666666666668,
               "unit": "W"
             }
@@ -759,6 +833,7 @@
             "value": {
               "kind": "quantity",
               "display": "5.333 W",
+              "magnitude": "5.333",
               "si_value": 5.333333333333333,
               "unit": "W"
             }
@@ -768,6 +843,7 @@
             "value": {
               "kind": "quantity",
               "display": "22.22 W",
+              "magnitude": "22.22",
               "si_value": 22.22222222222222,
               "unit": "W"
             }
@@ -785,6 +861,11 @@
       "unit": "W",
       "pub": false,
       "deps": ["p_mode"],
+      "expr": "maximum(@p_mode)",
+      "reduce": {
+        "op": "maximum",
+        "axis": "Mode"
+      },
       "source": {
         "file": "src/power_project/power_max.gcl",
         "line": 38
@@ -792,6 +873,7 @@
       "value": {
         "kind": "quantity",
         "display": "39.11 W",
+        "magnitude": "39.11",
         "si_value": 39.111111111111114,
         "unit": "W"
       }
@@ -806,6 +888,8 @@
       "unit": "W",
       "pub": false,
       "deps": ["p_total", "num"],
+      "expr": "@p_total / to_float(@num)",
+      "reduce": null,
       "source": {
         "file": "src/power_project/power_max.gcl",
         "line": 39
@@ -813,6 +897,7 @@
       "value": {
         "kind": "quantity",
         "display": "9.778 W",
+        "magnitude": "9.778",
         "si_value": 9.777777777777779,
         "unit": "W"
       }
@@ -827,6 +912,8 @@
       "unit": "W",
       "pub": true,
       "deps": ["p_total", "margin"],
+      "expr": "@p_total * (1.0 + @margin)",
+      "reduce": null,
       "source": {
         "file": "src/power_project/power_max.gcl",
         "line": 40
@@ -834,6 +921,7 @@
       "value": {
         "kind": "quantity",
         "display": "46.93 W",
+        "magnitude": "46.93",
         "si_value": 46.93333333333334,
         "unit": "W"
       }
@@ -848,6 +936,11 @@
       "unit": "W",
       "pub": true,
       "deps": ["p_peak", "eta_dcdc"],
+      "expr": "sum(for c: Component { @p_peak[c] }) * (1.0 - @eta_dcdc)",
+      "reduce": {
+        "op": "sum",
+        "axis": "Component"
+      },
       "source": {
         "file": "src/power_project/power_max.gcl",
         "line": 41
@@ -855,6 +948,7 @@
       "value": {
         "kind": "quantity",
         "display": "4.267 W",
+        "magnitude": "4.267",
         "si_value": 4.266666666666667,
         "unit": "W"
       }
@@ -869,6 +963,8 @@
       "unit": null,
       "pub": false,
       "deps": ["p_required", "p_budget"],
+      "expr": "@p_required <= @p_budget",
+      "reduce": null,
       "source": {
         "file": "src/power_project/power_max.gcl",
         "line": 43

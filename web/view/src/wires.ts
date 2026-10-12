@@ -1,13 +1,36 @@
 import type { Layout } from "./layout.ts";
 import type { ViewModel } from "./model.ts";
 
-// Wires run only through band heads (the channel above each band) and the right
-// gutter, never across rows. Each edge is one orthogonal path.
+// Wires never cross rows. They run through the channels between bands (and the
+// right gutter when two bands are not adjacent); a wire between neighbouring
+// columns of one band is a short arrow at header height.
 
 export interface Edge {
   from: string;
   to: string;
 }
+
+export type Route =
+  | { kind: "adjacent"; edge: Edge }
+  | { kind: "channel"; edge: Edge; channel: number; lane: number }
+  | {
+      kind: "gutter";
+      edge: Edge;
+      channel: number;
+      lane: number;
+      channel2: number;
+      lane2: number;
+      gutterLane: number;
+    };
+
+export interface RoutePlan {
+  routes: Route[];
+  /** Number of lanes used in each channel (index = channel). */
+  lanes: number[];
+}
+
+export const LANE_GAP = 6;
+export const CHANNEL_PAD = 10;
 
 export function edgesOf(model: ViewModel, layout: Layout): Edge[] {
   const edges: Edge[] = [];
@@ -19,98 +42,168 @@ export function edgesOf(model: ViewModel, layout: Layout): Edge[] {
   return edges;
 }
 
-const SVG_NS = "http://www.w3.org/2000/svg";
-
-interface Anchor {
-  x: number;
-  top: number;
-  bottom: number;
-  bandIndex: number;
+/** The channel a band's wires leave through: below the no-axis band, above axis bands. */
+function exitChannel(layout: Layout, bandIndex: number): number {
+  return layout.bands[bandIndex]?.axis === null ? bandIndex + 1 : bandIndex;
 }
 
-function anchorOf(view: HTMLElement, id: string, origin: DOMRect): Anchor | null {
-  const head = view.querySelector<HTMLElement>(`.col-head[data-node="${id}"]`);
-  if (!head) return null;
-  const rect = head.getBoundingClientRect();
-  const band = head.closest<HTMLElement>(".band");
-  const bands = [...view.querySelectorAll<HTMLElement>(".band")];
+export function planRoutes(model: ViewModel, layout: Layout): RoutePlan {
+  const lanes: number[] = Array.from({ length: layout.bands.length + 1 }, () => 0);
+  const pending: { edge: Edge; a: number; b: number; order: number }[] = [];
+  const routes: Route[] = [];
+  for (const edge of edgesOf(model, layout)) {
+    const from = layout.columns.get(edge.from);
+    const to = layout.columns.get(edge.to);
+    if (!from || !to) continue;
+    if (from.bandIndex === to.bandIndex && Math.abs(from.position - to.position) === 1) {
+      routes.push({ kind: "adjacent", edge });
+      continue;
+    }
+    const a = exitChannel(layout, from.bandIndex);
+    const b = exitChannel(layout, to.bandIndex);
+    pending.push({ edge, a, b, order: from.bandIndex * 1000 + from.position });
+  }
+  // Lanes are handed out in source order so wires from neighbouring columns
+  // stay close together; longer wires take the lanes farther from the band.
+  pending.sort((x, y) => x.order - y.order);
+  let gutterLane = 0;
+  for (const { edge, a, b } of pending) {
+    if (a === b) {
+      routes.push({ kind: "channel", edge, channel: a, lane: lanes[a]++ });
+    } else {
+      routes.push({
+        kind: "gutter",
+        edge,
+        channel: a,
+        lane: lanes[a]++,
+        channel2: b,
+        lane2: lanes[b]++,
+        gutterLane: gutterLane++,
+      });
+    }
+  }
+  return { routes, lanes };
+}
+
+export function channelHeight(laneCount: number): number {
+  return laneCount === 0 ? 14 : CHANNEL_PAD * 2 + (laneCount - 1) * LANE_GAP;
+}
+
+const SVG_NS = "http://www.w3.org/2000/svg";
+
+interface Port {
+  x: number;
+  y: number;
+}
+
+interface Anchors {
+  /** Where channel wires attach: top of the header (axis band) or bottom of the box (no-axis band). */
+  channelPort: Port;
+  headLeft: Port;
+  headRight: Port;
+}
+
+function anchorsOf(view: HTMLElement, layout: Layout, id: string, origin: DOMRect): Anchors | null {
+  const col = view.querySelector<HTMLElement>(`.col[data-node="${id}"]`);
+  const head = col?.querySelector<HTMLElement>(".col-head");
+  const column = layout.columns.get(id);
+  if (!col || !head || !column) return null;
+  const c = col.getBoundingClientRect();
+  const h = head.getBoundingClientRect();
+  const scalar = layout.bands[column.bandIndex]?.axis === null;
+  const x = c.left + c.width / 2 - origin.left;
   return {
-    x: rect.left + rect.width / 2 - origin.left,
-    top: rect.top - origin.top,
-    bottom: rect.bottom - origin.top,
-    bandIndex: band ? bands.indexOf(band) : -1,
+    channelPort: { x, y: (scalar ? c.bottom : h.top) - origin.top },
+    headLeft: { x: h.left - origin.left, y: h.top + h.height / 2 - origin.top },
+    headRight: { x: h.right - origin.left, y: h.top + h.height / 2 - origin.top },
   };
 }
 
-function channelY(view: HTMLElement, bandIndex: number, lane: number, origin: DOMRect): number {
-  const band = view.querySelectorAll<HTMLElement>(".band")[bandIndex];
-  const head = band?.querySelector<HTMLElement>(".band-head");
-  if (!head) return 0;
-  const rect = head.getBoundingClientRect();
-  return rect.bottom - origin.top - 8 - lane * 5;
+function laneY(view: HTMLElement, channel: number, lane: number, origin: DOMRect): number {
+  const el = view.querySelector<HTMLElement>(`.channel[data-channel="${channel}"]`);
+  if (!el) return 0;
+  const r = el.getBoundingClientRect();
+  return r.top - origin.top + CHANNEL_PAD + lane * LANE_GAP;
 }
 
-export function drawWires(svg: SVGSVGElement, view: HTMLElement, edges: Edge[]): void {
+function marker(id: string, cls: string): SVGMarkerElement {
+  const m = document.createElementNS(SVG_NS, "marker");
+  m.setAttribute("id", id);
+  m.setAttribute("viewBox", "0 0 10 10");
+  m.setAttribute("refX", "8");
+  m.setAttribute("refY", "5");
+  m.setAttribute("markerWidth", "6");
+  m.setAttribute("markerHeight", "6");
+  m.setAttribute("orient", "auto-start-reverse");
+  const tip = document.createElementNS(SVG_NS, "path");
+  tip.setAttribute("d", "M 0 0 L 10 5 L 0 10 z");
+  tip.setAttribute("class", cls);
+  m.append(tip);
+  return m;
+}
+
+export function drawWires(
+  svg: SVGSVGElement,
+  view: HTMLElement,
+  layout: Layout,
+  plan: RoutePlan,
+): void {
   const origin = view.getBoundingClientRect();
   svg.replaceChildren();
   svg.setAttribute("width", String(view.scrollWidth));
   svg.setAttribute("height", String(view.scrollHeight));
   svg.style.left = `${view.offsetLeft}px`;
   svg.style.top = `${view.offsetTop}px`;
-
   const defs = document.createElementNS(SVG_NS, "defs");
-  for (const [id, cls] of [
-    ["arrow", "arrow-idle"],
-    ["arrow-lit", "arrow-lit"],
-  ] as const) {
-    const marker = document.createElementNS(SVG_NS, "marker");
-    marker.setAttribute("id", id);
-    marker.setAttribute("viewBox", "0 0 10 10");
-    marker.setAttribute("refX", "9");
-    marker.setAttribute("refY", "5");
-    marker.setAttribute("markerWidth", "7");
-    marker.setAttribute("markerHeight", "7");
-    marker.setAttribute("orient", "auto-start-reverse");
-    const tip = document.createElementNS(SVG_NS, "path");
-    tip.setAttribute("d", "M 0 0 L 10 5 L 0 10 z");
-    tip.setAttribute("class", cls);
-    marker.append(tip);
-    defs.append(marker);
-  }
+  defs.append(marker("arrow", "arrow-idle"), marker("arrow-lit", "arrow-lit"));
   svg.append(defs);
 
-  const gutterX = view.scrollWidth - 10;
-  let lane = 0;
-  let gutterLane = 0;
-  for (const edge of edges) {
-    const a = anchorOf(view, edge.from, origin);
-    const b = anchorOf(view, edge.to, origin);
+  const gutterX = view.scrollWidth - 16;
+  for (const route of plan.routes) {
+    const a = anchorsOf(view, layout, route.edge.from, origin);
+    const b = anchorsOf(view, layout, route.edge.to, origin);
     if (!a || !b) continue;
-    const laneIndex = lane++ % 5;
-    const points: [number, number][] = [];
-    if (a.bandIndex === b.bandIndex) {
-      const y = channelY(view, a.bandIndex, laneIndex, origin);
-      points.push([a.x, a.top], [a.x, y], [b.x, y], [b.x, b.top]);
+    const points: Port[] = [];
+    if (route.kind === "adjacent") {
+      const rightward = a.headRight.x <= b.headLeft.x;
+      points.push(rightward ? a.headRight : a.headLeft, rightward ? b.headLeft : b.headRight);
+    } else if (route.kind === "channel") {
+      const y = laneY(view, route.channel, route.lane, origin);
+      points.push(
+        a.channelPort,
+        { x: a.channelPort.x, y },
+        { x: b.channelPort.x, y },
+        b.channelPort,
+      );
     } else {
-      const ya = channelY(view, a.bandIndex, laneIndex, origin);
-      const yb = channelY(view, b.bandIndex, laneIndex, origin);
-      const gx = gutterX - (gutterLane++ % 6) * 5;
-      points.push([a.x, a.top], [a.x, ya], [gx, ya], [gx, yb], [b.x, yb], [b.x, b.top]);
+      const ya = laneY(view, route.channel, route.lane, origin);
+      const yb = laneY(view, route.channel2, route.lane2, origin);
+      const gx = gutterX - (route.gutterLane % 8) * LANE_GAP;
+      points.push(
+        a.channelPort,
+        { x: a.channelPort.x, y: ya },
+        { x: gx, y: ya },
+        { x: gx, y: yb },
+        { x: b.channelPort.x, y: yb },
+        b.channelPort,
+      );
     }
     const path = document.createElementNS(SVG_NS, "path");
-    path.setAttribute("d", points.map(([x, y], i) => `${i === 0 ? "M" : "L"}${x},${y}`).join(" "));
+    path.setAttribute("d", points.map((p, i) => `${i === 0 ? "M" : "L"}${p.x},${p.y}`).join(" "));
     path.setAttribute("class", "wire");
     path.setAttribute("marker-end", "url(#arrow)");
-    path.dataset.from = edge.from;
-    path.dataset.to = edge.to;
+    path.dataset.from = route.edge.from;
+    path.dataset.to = route.edge.to;
     svg.append(path);
-    const dot = document.createElementNS(SVG_NS, "circle");
-    dot.setAttribute("cx", String(a.x));
-    dot.setAttribute("cy", String(a.top));
-    dot.setAttribute("r", "3");
-    dot.setAttribute("class", "wire-dot");
-    dot.dataset.from = edge.from;
-    dot.dataset.to = edge.to;
-    svg.append(dot);
+    if (route.kind !== "adjacent") {
+      const dot = document.createElementNS(SVG_NS, "circle");
+      dot.setAttribute("cx", String(points[0].x));
+      dot.setAttribute("cy", String(points[0].y));
+      dot.setAttribute("r", "2.5");
+      dot.setAttribute("class", "wire-dot");
+      dot.dataset.from = route.edge.from;
+      dot.dataset.to = route.edge.to;
+      svg.append(dot);
+    }
   }
 }

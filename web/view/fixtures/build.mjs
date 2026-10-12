@@ -30,8 +30,9 @@ function convert(raw, node) {
     }
     if ("si_value" in raw) {
       const unit = node.unit;
-      const display = unit ? `${formatNumber(raw.si_value)} ${unit}` : formatNumber(raw.si_value);
-      return { kind: "quantity", display, si_value: raw.si_value, unit };
+      const magnitude = formatNumber(raw.si_value);
+      const display = unit ? `${magnitude} ${unit}` : magnitude;
+      return { kind: "quantity", display, magnitude, si_value: raw.si_value, unit };
     }
     if ("entries" in raw) {
       const order = labelsOf[raw.index] ?? Object.keys(raw.entries);
@@ -66,6 +67,8 @@ const nodes = structure.nodes.map((node) => {
     unit: node.unit,
     pub: node.pub,
     deps: node.deps,
+    expr: node.expr ?? null,
+    reduce: node.reduce ?? null,
     source: {
       file: node.module === structure.module.id ? structure.module.file : null,
       line: node.line,

@@ -1,8 +1,9 @@
 import type { ViewModel, ViewNode } from "./model.ts";
 
-// Layout grammar: x = role (const → param → node → outputs), y = shape.
-// A band is one unrolled axis (or none); every node whose first axis is that
-// axis becomes a column of the band. Remaining axes become sub-columns.
+// Layout grammar: x = role (const → param → node, with outputs as the right
+// sub-zone of node), y = shape. An axis gets a band of its own only when two or
+// more nodes share it as their first axis; otherwise the node stays in the
+// no-axis band as a labelled box.
 
 export type Role = "const" | "param" | "node" | "output";
 export const ROLES: readonly Role[] = ["const", "param", "node", "output"];
@@ -11,11 +12,19 @@ export interface Column {
   node: ViewNode;
   role: Role;
   depth: number;
-  /** Axes after the band's unrolled axis; rendered as sub-columns. */
-  subAxes: string[];
+  bandIndex: number;
+  /** Index among the band's columns in render order. */
+  position: number;
+  /** Row labels this column renders (band labels, or its own first axis). */
+  rows: string[];
+  /** Sub-column labels (second axis), if any. */
+  subs: string[];
+  /** Folded by default: a private intermediate with a single consumer. */
+  foldedByDefault: boolean;
 }
 
 export interface Band {
+  index: number;
   /** Unrolled axis, or null for the no-axis band. */
   axis: string | null;
   labels: string[];
@@ -80,41 +89,72 @@ export function computeLayout(model: ViewModel): Layout {
   const labelsOf = new Map(model.indexes.map((i) => [i.name, i.labels]));
   const order = new Map(model.nodes.map((n, i) => [n.id, i]));
 
-  const bands = new Map<string | null, Band>();
-  const columns = new Map<string, Column>();
+  // An axis is unrolled only when shared as the first axis by several nodes.
+  const firstAxisCount = new Map<string, number>();
   for (const node of model.nodes) {
-    const axis = node.axes[0] ?? null;
-    let band = bands.get(axis);
-    if (!band) {
-      band = { axis, labels: axis ? (labelsOf.get(axis) ?? []) : [], columns: [] };
-      bands.set(axis, band);
-    }
-    const column: Column = {
-      node,
-      role: roleOf(node, (users.get(node.id) ?? []).length > 0),
-      depth: depths.get(node.id) ?? 0,
-      subAxes: node.axes.slice(1),
-    };
-    band.columns.push(column);
-    columns.set(node.id, column);
+    const axis = node.axes[0];
+    if (axis !== undefined) firstAxisCount.set(axis, (firstAxisCount.get(axis) ?? 0) + 1);
   }
+  const bandAxisOf = (node: ViewNode): string | null => {
+    const axis = node.axes[0];
+    return axis !== undefined && (firstAxisCount.get(axis) ?? 0) >= 2 ? axis : null;
+  };
+
+  const grouped = new Map<string | null, ViewNode[]>();
+  for (const node of model.nodes) {
+    const axis = bandAxisOf(node);
+    grouped.set(axis, [...(grouped.get(axis) ?? []), node]);
+  }
+  const axisOrder = new Map(model.indexes.map((i, k) => [i.name, k]));
+  const bandAxes = [...grouped.keys()].sort((a, b) => {
+    if (a === null) return -1;
+    if (b === null) return 1;
+    return (axisOrder.get(a) ?? 0) - (axisOrder.get(b) ?? 0);
+  });
 
   const roleRank = new Map(ROLES.map((r, i) => [r, i]));
-  for (const band of bands.values()) {
-    band.columns.sort((a, b) => {
-      const byRole = (roleRank.get(a.role) ?? 0) - (roleRank.get(b.role) ?? 0);
+  const bands: Band[] = [];
+  const columns = new Map<string, Column>();
+  bandAxes.forEach((axis, bandIndex) => {
+    const nodes = [...(grouped.get(axis) ?? [])];
+    const band: Band = {
+      index: bandIndex,
+      axis,
+      labels: axis ? (labelsOf.get(axis) ?? []) : [],
+      columns: [],
+    };
+    const roleOfNode = (node: ViewNode): Role =>
+      roleOf(node, (users.get(node.id) ?? []).length > 0);
+    nodes.sort((a, b) => {
+      const byRole = (roleRank.get(roleOfNode(a)) ?? 0) - (roleRank.get(roleOfNode(b)) ?? 0);
       if (byRole !== 0) return byRole;
-      if (a.depth !== b.depth) return a.depth - b.depth;
-      return (order.get(a.node.id) ?? 0) - (order.get(b.node.id) ?? 0);
+      const byDepth = (depths.get(a.id) ?? 0) - (depths.get(b.id) ?? 0);
+      if (byDepth !== 0) return byDepth;
+      return (order.get(a.id) ?? 0) - (order.get(b.id) ?? 0);
     });
-  }
-
-  // No-axis band first, then axis bands in declaration order of their indexes.
-  const axisOrder = new Map(model.indexes.map((i, k) => [i.name, k]));
-  const sorted = [...bands.values()].sort((a, b) => {
-    if (a.axis === null) return -1;
-    if (b.axis === null) return 1;
-    return (axisOrder.get(a.axis) ?? 0) - (axisOrder.get(b.axis) ?? 0);
+    nodes.forEach((node, position) => {
+      const ownAxis = axis === null ? node.axes[0] : undefined;
+      const subAxis = axis === null ? node.axes[1] : node.axes[1];
+      const consumers = users.get(node.id) ?? [];
+      const column: Column = {
+        node,
+        role: roleOfNode(node),
+        depth: depths.get(node.id) ?? 0,
+        bandIndex,
+        position,
+        rows: axis !== null ? band.labels : ownAxis ? (labelsOf.get(ownAxis) ?? []) : [],
+        subs: subAxis ? (labelsOf.get(subAxis) ?? []) : [],
+        foldedByDefault:
+          axis !== null &&
+          node.kind === "node" &&
+          !node.pub &&
+          consumers.length === 1 &&
+          bandAxisOf(model.nodes.find((n) => n.id === consumers[0]) ?? node) === axis,
+      };
+      band.columns.push(column);
+      columns.set(node.id, column);
+    });
+    bands.push(band);
   });
-  return { bands: sorted, columns, users };
+  return { bands, columns, users };
 }
