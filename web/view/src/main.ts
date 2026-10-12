@@ -36,7 +36,6 @@ const stageEl = need<HTMLElement>("#stage");
 const canvasEl = need<HTMLElement>("#canvas");
 const zoomEl = need<HTMLButtonElement>("#zoom");
 const zoomPopover = need<HTMLElement>("#zoom-popover");
-const zoomRange = need<HTMLInputElement>("#zoom-range");
 const zoomNumber = need<HTMLInputElement>("#zoom-number");
 
 /** The canvas is a free sheet: the bars stay put, the stage pans and zooms. */
@@ -45,7 +44,6 @@ function applyCamera(): void {
   stageEl.style.transform = `translate(${camera.x}px, ${camera.y}px) scale(${camera.scale})`;
   const percent = String(Math.round(camera.scale * 100));
   zoomEl.textContent = `${percent}%`;
-  zoomRange.value = percent;
   if (document.activeElement !== zoomNumber) zoomNumber.value = percent;
 }
 
@@ -422,20 +420,16 @@ canvasEl.addEventListener("pointerup", () => {
   canvasEl.classList.remove("panning");
 });
 
-// Zoom popover: slider (snaps to 100%) and a number field.
+// Zoom popover: a number field.
 zoomEl.addEventListener("click", () => {
   zoomPopover.hidden = !zoomPopover.hidden;
   if (!zoomPopover.hidden) {
     const rect = zoomEl.getBoundingClientRect();
     zoomPopover.style.left = `${Math.min(rect.left, window.innerWidth - zoomPopover.offsetWidth - 8)}px`;
     zoomPopover.style.top = `${rect.bottom + 4}px`;
-    zoomRange.focus();
+    zoomNumber.focus();
+    zoomNumber.select();
   }
-});
-zoomRange.addEventListener("input", () => {
-  let percent = Number(zoomRange.value);
-  if (Math.abs(percent - 100) <= 4) percent = 100;
-  zoomTo(percent / 100);
 });
 zoomNumber.addEventListener("change", () => {
   const percent = Number(zoomNumber.value);

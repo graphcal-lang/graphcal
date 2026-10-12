@@ -254,10 +254,6 @@ body {
 .zoom-popover[hidden] {
   display: none;
 }
-.zoom-popover input[type="range"] {
-  width: 180px;
-  accent-color: var(--sel);
-}
 .zoom-field {
   font-family: var(--mono);
   color: var(--muted);
