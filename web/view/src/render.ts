@@ -202,8 +202,23 @@ function renderBand(band: Band, options: RenderOptions): HTMLElement {
   for (const [role, columns] of parts) {
     const zone = el("div", `zone zone-${role}`);
     zone.dataset.role = role;
-    for (const column of columns) {
-      zone.append(renderColumn(column, band, options.folded.has(column.node.id)));
+    if (band.axis === null) {
+      // Boxes are packed into stacks; a stack is one position in the band.
+      const stacks = new Map<number, Column[]>();
+      for (const column of columns) {
+        stacks.set(column.position, [...(stacks.get(column.position) ?? []), column]);
+      }
+      for (const [, stack] of [...stacks].sort(([a], [b]) => a - b)) {
+        const stackEl = el("div", "stack");
+        for (const column of stack.sort((a, b) => a.tierRow - b.tierRow)) {
+          stackEl.append(renderColumn(column, band, options.folded.has(column.node.id)));
+        }
+        zone.append(stackEl);
+      }
+    } else {
+      for (const column of columns) {
+        zone.append(renderColumn(column, band, options.folded.has(column.node.id)));
+      }
     }
     zones.append(zone);
   }

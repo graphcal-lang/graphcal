@@ -1,8 +1,10 @@
 import {
   BOX_GAP,
   computeLayout,
+  orderByBarycenter,
+  packScalarBand,
   ROLES,
-  splitScalarBand,
+  type BoxSize,
   type Layout,
   type Role,
 } from "./layout.ts";
@@ -132,17 +134,22 @@ function availableWidth(): number {
 }
 
 /**
- * Render once to measure boxes and axis-band zones, then split the no-axis
- * band into tiers so everything fits the width.
+ * Render once to measure boxes and axis-band zones, then pack the no-axis
+ * boxes into stacks so everything fits the width. Width left over after a
+ * first packing is handed to the zones that had to stack, and they repack.
  */
 function fit(base: Layout, folded: ReadonlySet<string>): Layout {
   renderView(viewEl, base, { folded });
-  const boxWidths = new Map<string, number>();
+  const sizes = new Map<string, BoxSize>();
   for (const col of viewEl.querySelectorAll<HTMLElement>(".band-scalar .col")) {
-    if (col.dataset.node) boxWidths.set(col.dataset.node, col.getBoundingClientRect().width);
+    if (!col.dataset.node) continue;
+    const rect = col.getBoundingClientRect();
+    sizes.set(col.dataset.node, { width: rect.width, height: rect.height });
   }
-  const target = {} as Record<Role, number>;
-  const need = {} as Record<Role, number>;
+  const size = (id: string): BoxSize => sizes.get(id) ?? { width: 0, height: 0 };
+
+  const floor = {} as Record<Role, number>;
+  const natural = {} as Record<Role, number>;
   for (const role of ROLES) {
     let axisWidth = 0;
     for (const zone of viewEl.querySelectorAll<HTMLElement>(
@@ -158,19 +165,29 @@ function fit(base: Layout, folded: ReadonlySet<string>): Layout {
       .filter((b) => b.axis === null)
       .flatMap((b) => b.columns)
       .filter((c) => c.role === role)
-      .map((c) => boxWidths.get(c.node.id) ?? 0);
-    const widest = Math.max(0, ...boxes);
-    const natural = boxes.reduce((sum, w) => sum + w, 0) + Math.max(0, boxes.length - 1) * BOX_GAP;
-    target[role] = Math.max(axisWidth, widest);
-    need[role] = Math.max(0, natural - target[role]);
+      .map((c) => size(c.node.id).width);
+    floor[role] = Math.max(axisWidth, ...boxes);
+    natural[role] = boxes.reduce((sum, w) => sum + w, 0) + Math.max(0, boxes.length - 1) * BOX_GAP;
   }
-  const leftover = availableWidth() - ROLES.reduce((sum, role) => sum + target[role], 0);
-  const totalNeed = ROLES.reduce((sum, role) => sum + need[role], 0);
-  if (leftover > 0 && totalNeed > 0) {
+
+  const available = availableWidth();
+  const target = { ...floor };
+  let packed = packScalarBand(base, size, target);
+  for (let round = 0; round < 3; round++) {
+    const leftover =
+      available - ROLES.reduce((sum, role) => sum + Math.max(target[role], packed.used[role]), 0);
+    const need = {} as Record<Role, number>;
+    let totalNeed = 0;
+    for (const role of ROLES) {
+      need[role] = packed.stacked[role] ? Math.max(0, natural[role] - target[role]) : 0;
+      totalNeed += need[role];
+    }
+    if (leftover <= 0 || totalNeed === 0) break;
     const share = Math.min(1, leftover / totalNeed);
     for (const role of ROLES) target[role] += need[role] * share;
+    packed = packScalarBand(base, size, target);
   }
-  return splitScalarBand(base, (id) => boxWidths.get(id) ?? 0, target);
+  return packed.layout;
 }
 
 function render(): void {
@@ -185,7 +202,7 @@ function load(name: string): void {
   const raw = fixtures[name];
   if (raw === undefined) return;
   const model = parseViewModel(raw);
-  const base = computeLayout(model);
+  const base = orderByBarycenter(computeLayout(model), model);
   const folded = new Set(
     [...base.columns.values()].filter((c) => c.foldedByDefault).map((c) => c.node.id),
   );

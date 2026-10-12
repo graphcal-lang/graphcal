@@ -13,8 +13,10 @@ export interface Column {
   role: Role;
   depth: number;
   bandIndex: number;
-  /** Index among the band's columns in render order. */
+  /** Index among the band's columns in render order (for no-axis boxes: the stack). */
   position: number;
+  /** Row within the stack; 0 for the top box and for every axis-band column. */
+  tierRow: number;
   /** Row labels this column renders (band labels, or its own first axis). */
   rows: string[];
   /** Sub-column labels (second axis), if any. */
@@ -142,6 +144,7 @@ export function computeLayout(model: ViewModel): Layout {
         depth: depths.get(node.id) ?? 0,
         bandIndex,
         position,
+        tierRow: 0,
         rows: axis !== null ? band.labels : ownAxis ? (labelsOf.get(ownAxis) ?? []) : [],
         subs: subAxis ? (labelsOf.get(subAxis) ?? []) : [],
         foldedByDefault:
@@ -160,64 +163,138 @@ export function computeLayout(model: ViewModel): Layout {
 }
 
 export const BOX_GAP = 10;
+export const STACK_GAP = 8;
+
+export interface BoxSize {
+  width: number;
+  height: number;
+}
+
+export interface PackedZone {
+  stacks: Column[][];
+  width: number;
+  height: number;
+}
 
 /**
- * Split the no-axis band into tiers so every box fits within its zone's width.
- * Each tier becomes a band of its own, so wires between tiers use the channel
- * between them and never cross a box.
+ * Shelf packing of one zone's boxes: keep their order, fill stacks top to
+ * bottom up to a height cap, and raise the cap until the stacks fit the zone
+ * width. A tall box ends up beside a stack of short ones.
  */
-export function splitScalarBand(
+export function packZone(
+  boxes: Column[],
+  size: (id: string) => BoxSize,
+  width: number,
+): PackedZone {
+  if (boxes.length === 0) return { stacks: [], width: 0, height: 0 };
+  const tallest = Math.max(...boxes.map((b) => size(b.node.id).height));
+  let cap = tallest;
+  for (;;) {
+    const stacks: Column[][] = [];
+    const heights: number[] = [];
+    const widths: number[] = [];
+    for (const box of boxes) {
+      const { width: w, height: h } = size(box.node.id);
+      let i = heights.findIndex((used) => used + STACK_GAP + h <= cap);
+      if (i === -1) {
+        i = stacks.length;
+        stacks.push([]);
+        heights.push(-STACK_GAP);
+        widths.push(0);
+      }
+      stacks[i].push(box);
+      heights[i] += STACK_GAP + h;
+      widths[i] = Math.max(widths[i], w);
+    }
+    const total = widths.reduce((sum, w) => sum + w, 0) + (stacks.length - 1) * BOX_GAP;
+    if (total <= width || cap > tallest * 4) {
+      return { stacks, width: total, height: Math.max(...heights) };
+    }
+    cap += 8;
+  }
+}
+
+/** Re-create the no-axis band with its boxes packed into stacks per zone. */
+export function packScalarBand(
   layout: Layout,
-  boxWidth: (id: string) => number,
+  size: (id: string) => BoxSize,
   zoneWidth: Record<Role, number>,
-): Layout {
+): { layout: Layout; used: Record<Role, number>; stacked: Record<Role, boolean> } {
+  const used = { const: 0, param: 0, node: 0, output: 0 };
+  const stacked = { const: false, param: false, node: false, output: false };
   const scalar = layout.bands.find((b) => b.axis === null);
-  if (!scalar) return layout;
-
-  const tiersByRole = new Map<Role, Column[][]>();
-  let tierCount = 1;
+  if (!scalar) return { layout, used, stacked };
+  const columns = new Map(layout.columns);
+  const packedColumns: Column[] = [];
+  let position = 0;
   for (const role of ROLES) {
-    const rows: Column[][] = [];
-    let current: Column[] = [];
-    let width = 0;
-    for (const column of scalar.columns.filter((c) => c.role === role)) {
-      const w = boxWidth(column.node.id);
-      if (current.length > 0 && width + BOX_GAP + w > zoneWidth[role]) {
-        rows.push(current);
-        current = [];
-        width = 0;
-      }
-      width += (current.length > 0 ? BOX_GAP : 0) + w;
-      current.push(column);
-    }
-    if (current.length > 0) rows.push(current);
-    tiersByRole.set(role, rows);
-    tierCount = Math.max(tierCount, rows.length);
-  }
-
-  const bands: Band[] = [];
-  const columns = new Map<string, Column>();
-  for (let tier = 0; tier < tierCount; tier++) {
-    const band: Band = { index: bands.length, axis: null, labels: [], columns: [] };
-    for (const role of ROLES) {
-      for (const column of tiersByRole.get(role)?.[tier] ?? []) {
-        const placed: Column = { ...column, bandIndex: band.index, position: band.columns.length };
-        band.columns.push(placed);
+    const packed = packZone(
+      scalar.columns.filter((c) => c.role === role),
+      size,
+      zoneWidth[role],
+    );
+    used[role] = packed.width;
+    stacked[role] = packed.stacks.some((s) => s.length > 1);
+    for (const stack of packed.stacks) {
+      stack.forEach((column, tierRow) => {
+        const placed: Column = { ...column, position, tierRow };
+        packedColumns.push(placed);
         columns.set(placed.node.id, placed);
+      });
+      position++;
+    }
+  }
+  const bands = layout.bands.map((b) => (b === scalar ? { ...b, columns: packedColumns } : b));
+  return { layout: { bands, columns, users: layout.users }, used, stacked };
+}
+
+/**
+ * Barycenter ordering: within each zone, sort columns by the mean x of the
+ * columns they are wired to, so wires run short and cross less. Roles stay in
+ * their zones; ties keep the depth / declaration order.
+ */
+export function orderByBarycenter(layout: Layout, model: ViewModel): Layout {
+  const roleRank = new Map(ROLES.map((r, i) => [r, i]));
+  const neighbours = new Map<string, string[]>();
+  for (const node of model.nodes) {
+    const list = [...node.deps, ...(layout.users.get(node.id) ?? [])].filter((id) =>
+      layout.columns.has(id),
+    );
+    neighbours.set(node.id, list);
+  }
+  const x = new Map<string, number>();
+  const assign = (bands: Band[]): void => {
+    for (const band of bands) {
+      for (const role of ROLES) {
+        const zone = band.columns.filter((c) => c.role === role);
+        zone.forEach((c, i) =>
+          x.set(c.node.id, (roleRank.get(role) ?? 0) * 1000 + ((i + 0.5) / zone.length) * 1000),
+        );
       }
     }
-    bands.push(band);
+  };
+  let bands = layout.bands;
+  assign(bands);
+  for (let round = 0; round < 3; round++) {
+    bands = bands.map((band) => {
+      const ordered = [...band.columns].sort((a, b) => {
+        const byRole = (roleRank.get(a.role) ?? 0) - (roleRank.get(b.role) ?? 0);
+        if (byRole !== 0) return byRole;
+        const key = (c: Column): number => {
+          const others = (neighbours.get(c.node.id) ?? []).map((id) => x.get(id) ?? 0);
+          return others.length === 0
+            ? (x.get(c.node.id) ?? 0)
+            : others.reduce((s, v) => s + v, 0) / others.length;
+        };
+        const byKey = key(a) - key(b);
+        if (byKey !== 0) return byKey;
+        return a.position - b.position;
+      });
+      return { ...band, columns: ordered.map((c, position) => ({ ...c, position })) };
+    });
+    assign(bands);
   }
-  for (const band of layout.bands) {
-    if (band.axis === null) continue;
-    const index = bands.length;
-    const moved: Band = { ...band, index, columns: [] };
-    for (const column of band.columns) {
-      const placed: Column = { ...column, bandIndex: index };
-      moved.columns.push(placed);
-      columns.set(placed.node.id, placed);
-    }
-    bands.push(moved);
-  }
+  const columns = new Map<string, Column>();
+  for (const band of bands) for (const c of band.columns) columns.set(c.node.id, c);
   return { bands, columns, users: layout.users };
 }

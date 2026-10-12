@@ -66,7 +66,12 @@ export function planRoutes(model: ViewModel, layout: Layout): RoutePlan {
     const from = layout.columns.get(edge.from);
     const to = layout.columns.get(edge.to);
     if (!from || !to) continue;
-    if (from.bandIndex === to.bandIndex && Math.abs(from.position - to.position) === 1) {
+    if (
+      from.bandIndex === to.bandIndex &&
+      Math.abs(from.position - to.position) === 1 &&
+      from.tierRow === 0 &&
+      to.tierRow === 0
+    ) {
       routes.push({ kind: "adjacent", edge });
       continue;
     }
