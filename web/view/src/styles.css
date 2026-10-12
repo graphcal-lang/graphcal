@@ -229,6 +229,10 @@ body {
   min-width: 52px;
   text-align: right;
 }
+.zoom.active {
+  background: var(--node-head);
+  color: var(--text);
+}
 
 .channel {
   flex: none;

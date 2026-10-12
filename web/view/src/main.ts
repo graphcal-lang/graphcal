@@ -42,6 +42,12 @@ function applyCamera(): void {
   stageEl.style.transform = `translate(${camera.x}px, ${camera.y}px) scale(${camera.scale})`;
   zoomEl.textContent = `${Math.round(camera.scale * 100)}%`;
 }
+
+/** The user moved the camera by hand: no mode is active any more, the percent is. */
+function leaveMode(): void {
+  for (const button of modeButtons) button.classList.remove("active");
+  zoomEl.classList.add("active");
+}
 function resetCamera(): void {
   camera.x = 0;
   camera.y = 0;
@@ -247,6 +253,7 @@ function refit(): void {
   for (const button of modeButtons) {
     button.classList.toggle("active", button.dataset.mode === state.mode);
   }
+  zoomEl.classList.remove("active");
 }
 
 /** Render after a manual fold or unfold: the view may overflow now, and that is fine. */
@@ -371,6 +378,7 @@ canvasEl.addEventListener(
       camera.y -= event.deltaY;
     }
     applyCamera();
+    leaveMode();
   },
   { passive: false },
 );
@@ -390,6 +398,7 @@ canvasEl.addEventListener("pointermove", (event) => {
   camera.y += event.clientY - drag.y;
   drag = { x: event.clientX, y: event.clientY, moved: true };
   applyCamera();
+  leaveMode();
 });
 canvasEl.addEventListener("pointerup", () => {
   drag = null;
