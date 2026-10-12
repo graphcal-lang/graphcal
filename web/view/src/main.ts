@@ -33,6 +33,19 @@ const unrollEl = need<HTMLElement>("#unroll");
 const formulaEl = need<HTMLElement>("#formula");
 const fixtureEl = need<HTMLSelectElement>("#fixture");
 const stageEl = need<HTMLElement>("#stage");
+const canvasEl = need<HTMLElement>("#canvas");
+
+/** The canvas is a free sheet: the bars stay put, the stage pans and zooms. */
+const camera = { x: 0, y: 0, scale: 1 };
+function applyCamera(): void {
+  stageEl.style.transform = `translate(${camera.x}px, ${camera.y}px) scale(${camera.scale})`;
+}
+function resetCamera(): void {
+  camera.x = 0;
+  camera.y = 0;
+  camera.scale = 1;
+  applyCamera();
+}
 const modeButtons = [...document.querySelectorAll<HTMLButtonElement>("[data-mode]")];
 
 /**
@@ -202,7 +215,7 @@ function fit(base: Layout, folded: ReadonlySet<string>): Layout {
 
 function renderOnce(): void {
   if (!state) return;
-  stageEl.style.transform = "";
+  resetCamera();
   state.layout = fit(state.base, state.folded);
   state.plan = planRoutes(state.model, state.layout);
   renderView(viewEl, state.layout, { folded: state.folded });
@@ -210,11 +223,7 @@ function renderOnce(): void {
 }
 
 function overflows(): boolean {
-  const doc = document.documentElement;
-  return (
-    viewEl.scrollWidth > doc.clientWidth ||
-    stageEl.offsetTop + viewEl.scrollHeight > doc.clientHeight
-  );
+  return viewEl.scrollWidth > canvasEl.clientWidth || viewEl.scrollHeight > canvasEl.clientHeight;
 }
 
 /** Re-apply the mode from scratch: fold candidates one by one (fit) or scale (overview). */
@@ -233,10 +242,12 @@ function refit(): void {
       renderOnce();
     }
   } else {
-    const width = document.documentElement.clientWidth;
-    const height = document.documentElement.clientHeight - stageEl.offsetTop;
-    const scale = Math.min(1, width / viewEl.scrollWidth, height / viewEl.scrollHeight);
-    stageEl.style.transform = `scale(${scale})`;
+    const width = canvasEl.clientWidth;
+    const height = canvasEl.clientHeight;
+    camera.scale = Math.min(1, width / viewEl.scrollWidth, height / viewEl.scrollHeight);
+    camera.x = Math.max(0, (width - viewEl.scrollWidth * camera.scale) / 2);
+    camera.y = Math.max(0, (height - viewEl.scrollHeight * camera.scale) / 2);
+    applyCamera();
   }
   for (const button of modeButtons) {
     button.classList.toggle("active", button.dataset.mode === state.mode);
@@ -347,6 +358,49 @@ window.addEventListener("resize", () => {
   lastWidth = width;
   refit();
 });
+// Wheel: pan; with ctrl / cmd (or a trackpad pinch): zoom around the cursor.
+canvasEl.addEventListener(
+  "wheel",
+  (event) => {
+    event.preventDefault();
+    if (event.ctrlKey || event.metaKey) {
+      const rect = canvasEl.getBoundingClientRect();
+      const px = event.clientX - rect.left;
+      const py = event.clientY - rect.top;
+      const next = Math.min(4, Math.max(0.1, camera.scale * Math.exp(-event.deltaY * 0.01)));
+      camera.x = px - ((px - camera.x) * next) / camera.scale;
+      camera.y = py - ((py - camera.y) * next) / camera.scale;
+      camera.scale = next;
+    } else {
+      camera.x -= event.deltaX;
+      camera.y -= event.deltaY;
+    }
+    applyCamera();
+  },
+  { passive: false },
+);
+
+// Drag on empty canvas: pan.
+let drag: { x: number; y: number; moved: boolean } | null = null;
+canvasEl.addEventListener("pointerdown", (event) => {
+  if ((event.target as HTMLElement).closest(".col")) return;
+  event.preventDefault();
+  drag = { x: event.clientX, y: event.clientY, moved: false };
+  canvasEl.setPointerCapture(event.pointerId);
+  canvasEl.classList.add("panning");
+});
+canvasEl.addEventListener("pointermove", (event) => {
+  if (!drag) return;
+  camera.x += event.clientX - drag.x;
+  camera.y += event.clientY - drag.y;
+  drag = { x: event.clientX, y: event.clientY, moved: true };
+  applyCamera();
+});
+canvasEl.addEventListener("pointerup", () => {
+  drag = null;
+  canvasEl.classList.remove("panning");
+});
+
 for (const button of modeButtons) {
   button.addEventListener("click", () => {
     if (!state || !button.dataset.mode) return;

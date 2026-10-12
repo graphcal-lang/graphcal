@@ -33,11 +33,10 @@ function el<K extends keyof HTMLElementTagNameMap>(
   return node;
 }
 
-function shapeText(column: Column): string {
-  const { axes, reduce } = column.node;
-  const shape = axes.length === 0 ? "[] scalar" : `[${axes.join(", ")}]`;
-  if (reduce) return `${shape} ← ${REDUCE_SYMBOL[reduce.op]} ${reduce.axis}`;
-  return shape;
+/** The aggregation that removed an axis, e.g. "Σ Component"; the shape itself is visible. */
+function reduceText(column: Column): string | null {
+  const { reduce } = column.node;
+  return reduce ? `${REDUCE_SYMBOL[reduce.op]} ${reduce.axis}` : null;
 }
 
 function dimensionClass(dimension: string | null): string {
@@ -62,15 +61,18 @@ function renderHead(column: Column): HTMLElement {
   const tag = node.kind === "external" ? "import" : node.pub ? "pub" : node.kind;
   title.append(el("span", "tag", tag));
   head.append(title);
+  const meta = el("div", "col-meta");
+  if (node.dimension !== null) {
+    const type = node.unit ? `${node.dimension} · ${node.unit}` : node.dimension;
+    meta.append(el("span", `col-type ${dimensionClass(node.dimension)}`, type));
+  }
+  const reduce = reduceText(column);
+  if (reduce) meta.append(el("span", "col-reduce", `← ${reduce}`));
   if (node.kind === "external") {
     const origin = node.module.split(".").at(-1) ?? node.module;
-    head.append(el("div", "col-origin", `← ${origin}.gcl`));
-  } else {
-    head.append(el("div", "col-shape", shapeText(column)));
+    meta.append(el("span", "col-origin", `← ${origin}.gcl`));
   }
-  const type =
-    node.dimension === null ? "" : node.unit ? `${node.dimension} · ${node.unit}` : node.dimension;
-  head.append(el("div", `col-type ${dimensionClass(node.dimension)}`, type));
+  head.append(meta);
   return head;
 }
 
@@ -192,8 +194,7 @@ function renderRuler(band: Band): HTMLElement {
   const box = el("div", "ruler-box");
   box.append(
     el("div", "ruler-axis", band.axis),
-    el("div", "ruler-note", `index · ${band.labels.length} labels`),
-    el("div", "ruler-unrolled", "↕ unrolled as rows"),
+    el("div", "ruler-note", `index · ${band.labels.length} labels ↕`),
   );
   ruler.append(box);
   if (band.columns.some((c) => c.subs.length > 0)) ruler.append(el("div", "ruler-sub"));
