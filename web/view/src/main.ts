@@ -1,6 +1,13 @@
-import { computeLayout, type Layout } from "./layout.ts";
+import {
+  BOX_GAP,
+  computeLayout,
+  ROLES,
+  splitScalarBand,
+  type Layout,
+  type Role,
+} from "./layout.ts";
 import { parseViewModel, type ViewModel } from "./model.ts";
-import { renderView } from "./render.ts";
+import { renderView, RULER_WIDTH } from "./render.ts";
 import { trace, type Selection } from "./selection.ts";
 import { displayOf, valueAt } from "./values.ts";
 import { channelHeight, drawWires, planRoutes, type RoutePlan } from "./wires.ts";
@@ -25,6 +32,8 @@ const fixtureEl = need<HTMLSelectElement>("#fixture");
 
 interface State {
   model: ViewModel;
+  /** Layout before the no-axis band is split into tiers. */
+  base: Layout;
   layout: Layout;
   plan: RoutePlan;
   folded: Set<string>;
@@ -112,12 +121,62 @@ function applySelection(): void {
 
 function redraw(): void {
   if (!state) return;
-  drawWires(wiresEl, viewEl, state.layout, state.plan);
+  drawWires(wiresEl, viewEl, state.plan);
   applySelection();
+}
+
+/** Horizontal room for zones: the window minus ruler, paddings, and the gutter. */
+function availableWidth(): number {
+  const zonePadding = 4 * 24;
+  return document.documentElement.clientWidth - 16 - 40 - RULER_WIDTH - zonePadding - 56;
+}
+
+/**
+ * Render once to measure boxes and axis-band zones, then split the no-axis
+ * band into tiers so everything fits the width.
+ */
+function fit(base: Layout, folded: ReadonlySet<string>): Layout {
+  renderView(viewEl, base, { folded });
+  const boxWidths = new Map<string, number>();
+  for (const col of viewEl.querySelectorAll<HTMLElement>(".band-scalar .col")) {
+    if (col.dataset.node) boxWidths.set(col.dataset.node, col.getBoundingClientRect().width);
+  }
+  const target = {} as Record<Role, number>;
+  const need = {} as Record<Role, number>;
+  for (const role of ROLES) {
+    let axisWidth = 0;
+    for (const zone of viewEl.querySelectorAll<HTMLElement>(
+      `.band-axis .zone[data-role="${role}"]`,
+    )) {
+      const cols = [...zone.querySelectorAll<HTMLElement>(":scope > .col")];
+      const inner =
+        cols.reduce((sum, col) => sum + col.getBoundingClientRect().width, 0) +
+        Math.max(0, cols.length - 1) * BOX_GAP;
+      axisWidth = Math.max(axisWidth, inner);
+    }
+    const boxes = base.bands
+      .filter((b) => b.axis === null)
+      .flatMap((b) => b.columns)
+      .filter((c) => c.role === role)
+      .map((c) => boxWidths.get(c.node.id) ?? 0);
+    const widest = Math.max(0, ...boxes);
+    const natural = boxes.reduce((sum, w) => sum + w, 0) + Math.max(0, boxes.length - 1) * BOX_GAP;
+    target[role] = Math.max(axisWidth, widest);
+    need[role] = Math.max(0, natural - target[role]);
+  }
+  const leftover = availableWidth() - ROLES.reduce((sum, role) => sum + target[role], 0);
+  const totalNeed = ROLES.reduce((sum, role) => sum + need[role], 0);
+  if (leftover > 0 && totalNeed > 0) {
+    const share = Math.min(1, leftover / totalNeed);
+    for (const role of ROLES) target[role] += need[role] * share;
+  }
+  return splitScalarBand(base, (id) => boxWidths.get(id) ?? 0, target);
 }
 
 function render(): void {
   if (!state) return;
+  state.layout = fit(state.base, state.folded);
+  state.plan = planRoutes(state.model, state.layout);
   renderView(viewEl, state.layout, { folded: state.folded });
   state.plan.lanes.forEach((count, i) => {
     const channel = viewEl.querySelector<HTMLElement>(`.channel[data-channel="${i}"]`);
@@ -130,11 +189,11 @@ function load(name: string): void {
   const raw = fixtures[name];
   if (raw === undefined) return;
   const model = parseViewModel(raw);
-  const layout = computeLayout(model);
+  const base = computeLayout(model);
   const folded = new Set(
-    [...layout.columns.values()].filter((c) => c.foldedByDefault).map((c) => c.node.id),
+    [...base.columns.values()].filter((c) => c.foldedByDefault).map((c) => c.node.id),
   );
-  state = { model, layout, plan: planRoutes(model, layout), folded, selection: null };
+  state = { model, base, layout: base, plan: planRoutes(model, base), folded, selection: null };
   fileEl.replaceChildren();
   fileEl.append(
     Object.assign(document.createElement("span"), {
@@ -146,7 +205,7 @@ function load(name: string): void {
       textContent: model.module.file.split("/").at(-1) ?? model.module.file,
     }),
   );
-  const unrolled = layout.bands.filter((b) => b.axis !== null);
+  const unrolled = base.bands.filter((b) => b.axis !== null);
   unrollEl.textContent =
     unrolled.length === 0
       ? "no shared axis"
@@ -215,5 +274,12 @@ for (const name of Object.keys(fixtures).sort()) {
   fixtureEl.append(option);
 }
 fixtureEl.addEventListener("change", () => load(fixtureEl.value));
+let lastWidth = document.documentElement.clientWidth;
+window.addEventListener("resize", () => {
+  const width = document.documentElement.clientWidth;
+  if (width === lastWidth) return;
+  lastWidth = width;
+  render();
+});
 new ResizeObserver(() => redraw()).observe(viewEl);
 if (fixtureEl.value) load(fixtureEl.value);

@@ -158,3 +158,66 @@ export function computeLayout(model: ViewModel): Layout {
   });
   return { bands, columns, users };
 }
+
+export const BOX_GAP = 10;
+
+/**
+ * Split the no-axis band into tiers so every box fits within its zone's width.
+ * Each tier becomes a band of its own, so wires between tiers use the channel
+ * between them and never cross a box.
+ */
+export function splitScalarBand(
+  layout: Layout,
+  boxWidth: (id: string) => number,
+  zoneWidth: Record<Role, number>,
+): Layout {
+  const scalar = layout.bands.find((b) => b.axis === null);
+  if (!scalar) return layout;
+
+  const tiersByRole = new Map<Role, Column[][]>();
+  let tierCount = 1;
+  for (const role of ROLES) {
+    const rows: Column[][] = [];
+    let current: Column[] = [];
+    let width = 0;
+    for (const column of scalar.columns.filter((c) => c.role === role)) {
+      const w = boxWidth(column.node.id);
+      if (current.length > 0 && width + BOX_GAP + w > zoneWidth[role]) {
+        rows.push(current);
+        current = [];
+        width = 0;
+      }
+      width += (current.length > 0 ? BOX_GAP : 0) + w;
+      current.push(column);
+    }
+    if (current.length > 0) rows.push(current);
+    tiersByRole.set(role, rows);
+    tierCount = Math.max(tierCount, rows.length);
+  }
+
+  const bands: Band[] = [];
+  const columns = new Map<string, Column>();
+  for (let tier = 0; tier < tierCount; tier++) {
+    const band: Band = { index: bands.length, axis: null, labels: [], columns: [] };
+    for (const role of ROLES) {
+      for (const column of tiersByRole.get(role)?.[tier] ?? []) {
+        const placed: Column = { ...column, bandIndex: band.index, position: band.columns.length };
+        band.columns.push(placed);
+        columns.set(placed.node.id, placed);
+      }
+    }
+    bands.push(band);
+  }
+  for (const band of layout.bands) {
+    if (band.axis === null) continue;
+    const index = bands.length;
+    const moved: Band = { ...band, index, columns: [] };
+    for (const column of band.columns) {
+      const placed: Column = { ...column, bandIndex: index };
+      moved.columns.push(placed);
+      columns.set(placed.node.id, placed);
+    }
+    bands.push(moved);
+  }
+  return { bands, columns, users: layout.users };
+}

@@ -165,7 +165,7 @@ function renderRuler(band: Band): HTMLElement {
   const ruler = el("div", "ruler");
   ruler.style.width = `${RULER_WIDTH}px`;
   if (band.axis === null) {
-    ruler.append(el("div", "ruler-none", "no axis  [ ]"));
+    if (band.index === 0) ruler.append(el("div", "ruler-none", "no axis  [ ]"));
     return ruler;
   }
   const box = el("div", "ruler-box");
