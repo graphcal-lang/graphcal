@@ -34,13 +34,31 @@ const formulaEl = need<HTMLElement>("#formula");
 const fixtureEl = need<HTMLSelectElement>("#fixture");
 const stageEl = need<HTMLElement>("#stage");
 const canvasEl = need<HTMLElement>("#canvas");
-const zoomEl = need<HTMLElement>("#zoom");
+const zoomEl = need<HTMLButtonElement>("#zoom");
+const zoomPopover = need<HTMLElement>("#zoom-popover");
+const zoomRange = need<HTMLInputElement>("#zoom-range");
+const zoomNumber = need<HTMLInputElement>("#zoom-number");
 
 /** The canvas is a free sheet: the bars stay put, the stage pans and zooms. */
 const camera = { x: 0, y: 0, scale: 1 };
 function applyCamera(): void {
   stageEl.style.transform = `translate(${camera.x}px, ${camera.y}px) scale(${camera.scale})`;
-  zoomEl.textContent = `${Math.round(camera.scale * 100)}%`;
+  const percent = String(Math.round(camera.scale * 100));
+  zoomEl.textContent = `${percent}%`;
+  zoomRange.value = percent;
+  if (document.activeElement !== zoomNumber) zoomNumber.value = percent;
+}
+
+/** Zoom to an absolute scale, keeping the point under the canvas centre fixed. */
+function zoomTo(scale: number): void {
+  const next = Math.min(4, Math.max(0.1, scale));
+  const cx = canvasEl.clientWidth / 2;
+  const cy = canvasEl.clientHeight / 2;
+  camera.x = cx - ((cx - camera.x) * next) / camera.scale;
+  camera.y = cy - ((cy - camera.y) * next) / camera.scale;
+  camera.scale = next;
+  applyCamera();
+  leaveMode();
 }
 
 /** The user moved the camera by hand: no mode is active any more, the percent is. */
@@ -402,6 +420,38 @@ canvasEl.addEventListener("pointermove", (event) => {
 canvasEl.addEventListener("pointerup", () => {
   drag = null;
   canvasEl.classList.remove("panning");
+});
+
+// Zoom popover: slider (snaps to 100%) and a number field.
+zoomEl.addEventListener("click", () => {
+  zoomPopover.hidden = !zoomPopover.hidden;
+  if (!zoomPopover.hidden) {
+    const rect = zoomEl.getBoundingClientRect();
+    zoomPopover.style.left = `${Math.min(rect.left, window.innerWidth - zoomPopover.offsetWidth - 8)}px`;
+    zoomPopover.style.top = `${rect.bottom + 4}px`;
+    zoomRange.focus();
+  }
+});
+zoomRange.addEventListener("input", () => {
+  let percent = Number(zoomRange.value);
+  if (Math.abs(percent - 100) <= 4) percent = 100;
+  zoomTo(percent / 100);
+});
+zoomNumber.addEventListener("change", () => {
+  const percent = Number(zoomNumber.value);
+  if (Number.isFinite(percent) && percent > 0) zoomTo(percent / 100);
+});
+zoomNumber.addEventListener("keydown", (event) => {
+  if (event.key === "Enter") zoomNumber.blur();
+});
+document.addEventListener("pointerdown", (event) => {
+  const target = event.target as HTMLElement;
+  if (!zoomPopover.hidden && !zoomPopover.contains(target) && target !== zoomEl) {
+    zoomPopover.hidden = true;
+  }
+});
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape") zoomPopover.hidden = true;
 });
 
 for (const button of modeButtons) {

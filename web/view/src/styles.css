@@ -233,6 +233,48 @@ body {
   background: var(--node-head);
   color: var(--text);
 }
+.modes .zoom {
+  border-top: none;
+  border-right: none;
+  border-bottom: none;
+  cursor: pointer;
+}
+.zoom-popover {
+  position: fixed;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  background: var(--node-head);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.4);
+}
+.zoom-popover[hidden] {
+  display: none;
+}
+.zoom-popover input[type="range"] {
+  width: 180px;
+  accent-color: var(--sel);
+}
+.zoom-field {
+  font-family: var(--mono);
+  color: var(--muted);
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+.zoom-field input {
+  width: 48px;
+  background: var(--node);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 2px 4px;
+  font: inherit;
+  text-align: right;
+}
 
 .channel {
   flex: none;
