@@ -182,7 +182,7 @@ function fit(base: Layout, folded: ReadonlySet<string>): Layout {
 
   const available = availableWidth();
   const target = { ...floor };
-  let packed = packScalarBand(base, size, target);
+  let packed = packScalarBand(base, size, target, folded);
   for (let round = 0; round < 3; round++) {
     const leftover =
       available - ZONES.reduce((sum, zone) => sum + Math.max(target[zone], packed.used[zone]), 0);
@@ -195,7 +195,7 @@ function fit(base: Layout, folded: ReadonlySet<string>): Layout {
     if (leftover <= 0 || totalNeed === 0) break;
     const share = Math.min(1, leftover / totalNeed);
     for (const zone of ZONES) target[zone] += need[zone] * share;
-    packed = packScalarBand(base, size, target);
+    packed = packScalarBand(base, size, target, folded);
   }
   return packed.layout;
 }
@@ -210,7 +210,11 @@ function renderOnce(): void {
 }
 
 function overflows(): boolean {
-  return viewEl.scrollWidth > document.documentElement.clientWidth;
+  const doc = document.documentElement;
+  return (
+    viewEl.scrollWidth > doc.clientWidth ||
+    stageEl.offsetTop + viewEl.scrollHeight > doc.clientHeight
+  );
 }
 
 /** Re-apply the mode from scratch: fold candidates one by one (fit) or scale (overview). */
@@ -220,8 +224,8 @@ function refit(): void {
   renderOnce();
   if (state.mode === "fit") {
     const candidates = [...state.base.columns.values()]
-      .filter((c) => c.foldedByDefault)
-      .sort((a, b) => b.depth - a.depth)
+      .filter((c) => c.foldable)
+      .sort((a, b) => a.activity - b.activity || b.depth - a.depth)
       .map((c) => c.node.id);
     for (const id of candidates) {
       if (!overflows()) break;
@@ -280,7 +284,7 @@ function load(name: string): void {
 viewEl.addEventListener("click", (event) => {
   if (!state) return;
   const target = event.target as HTMLElement;
-  const folded = target.closest<HTMLElement>(".col.folded");
+  const folded = target.closest<HTMLElement>(".col.folded, .col.chip");
   if (folded?.dataset.node) {
     state.folded.delete(folded.dataset.node);
     state.selection = null;
@@ -319,17 +323,15 @@ viewEl.addEventListener("click", (event) => {
 
 viewEl.addEventListener("dblclick", (event) => {
   if (!state) return;
-  const head = (event.target as HTMLElement).closest<HTMLElement>(".col:not(.folded) .col-head");
+  const head = (event.target as HTMLElement).closest<HTMLElement>(
+    ".col:not(.folded):not(.chip) .col-head",
+  );
   const id = head?.dataset.node;
-  if (!id || layoutRows(id) === 0) return;
+  if (!id || !state.base.columns.get(id)?.foldable) return;
   state.folded.add(id);
   state.selection = null;
   render();
 });
-
-function layoutRows(id: string): number {
-  return state?.layout.columns.get(id)?.rows.length ?? 0;
-}
 
 for (const name of Object.keys(fixtures).sort()) {
   const option = document.createElement("option");

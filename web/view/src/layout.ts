@@ -28,8 +28,10 @@ export interface Column {
   rows: string[];
   /** Sub-column labels (second axis), if any. */
   subs: string[];
-  /** Folded by default: a private intermediate with a single consumer. */
-  foldedByDefault: boolean;
+  /** May be folded by fit mode: an intermediate node (never an output). */
+  foldable: boolean;
+  /** How much the node matters to the rest of the file; low activity folds first. */
+  activity: number;
 }
 
 export interface Band {
@@ -154,12 +156,9 @@ export function computeLayout(model: ViewModel): Layout {
         tierRow: 0,
         rows: axis !== null ? band.labels : ownAxis ? (labelsOf.get(ownAxis) ?? []) : [],
         subs: subAxis ? (labelsOf.get(subAxis) ?? []) : [],
-        foldedByDefault:
-          axis !== null &&
-          node.kind === "node" &&
-          !node.pub &&
-          consumers.length === 1 &&
-          bandAxisOf(model.nodes.find((n) => n.id === consumers[0]) ?? node) === axis,
+        foldable: node.kind === "node" && roleOfNode(node) === "node",
+        // Consumers first, then how far the value travels (depth from params).
+        activity: consumers.length * 10 + (depths.get(node.id) ?? 0),
       };
       band.columns.push(column);
       columns.set(node.id, column);
@@ -193,6 +192,7 @@ export function packZone(
   boxes: Column[],
   size: (id: string) => BoxSize,
   width: number,
+  folded: ReadonlySet<string>,
 ): PackedZone {
   if (boxes.length === 0) return { stacks: [], width: 0, height: 0 };
   const tallest = Math.max(...boxes.map((b) => size(b.node.id).height));
@@ -205,7 +205,10 @@ export function packZone(
     for (const box of boxes) {
       const { width: w, height: h } = size(box.node.id);
       const isOutput = box.role === "output";
-      let i = heights.findIndex((used, k) => groups[k] === isOutput && used + STACK_GAP + h <= cap);
+      const chip = folded.has(box.node.id);
+      let i = heights.findIndex(
+        (used, k) => (chip || groups[k] === isOutput) && used + STACK_GAP + h <= cap,
+      );
       if (i === -1) {
         i = stacks.length;
         stacks.push([]);
@@ -230,6 +233,7 @@ export function packScalarBand(
   layout: Layout,
   size: (id: string) => BoxSize,
   zoneWidth: Record<Zone, number>,
+  folded: ReadonlySet<string>,
 ): { layout: Layout; used: Record<Zone, number>; stacked: Record<Zone, boolean> } {
   const used = { const: 0, param: 0, node: 0 };
   const stacked = { const: false, param: false, node: false };
@@ -239,11 +243,15 @@ export function packScalarBand(
   const packedColumns: Column[] = [];
   let position = 0;
   for (const zone of ZONES) {
-    const packed = packZone(
-      scalar.columns.filter((c) => zoneOf(c.role) === zone),
-      size,
-      zoneWidth[zone],
-    );
+    // Node zone order: full node boxes, then outputs, then folded chips, which
+    // slip into whatever stack has room (typically under the outputs).
+    const rank = (c: Column): number => (c.role === "output" ? 1 : folded.has(c.node.id) ? 2 : 0);
+    const boxes = scalar.columns
+      .filter((c) => zoneOf(c.role) === zone)
+      .map((c, i) => ({ c, i }))
+      .sort((a, b) => rank(a.c) - rank(b.c) || a.i - b.i)
+      .map(({ c }) => c);
+    const packed = packZone(boxes, size, zoneWidth[zone], folded);
     used[zone] = packed.width;
     stacked[zone] = packed.stacks.some((s) => s.length > 1);
     for (const stack of packed.stacks) {

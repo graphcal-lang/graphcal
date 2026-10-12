@@ -156,8 +156,28 @@ function renderFolded(column: Column, band: Band): HTMLElement {
   return root;
 }
 
+/** A folded no-axis box: one thin line with mark, name, and value. */
+function renderChip(column: Column): HTMLElement {
+  const root = el("div", `col role-${column.role} chip kind-${column.node.kind}`);
+  root.dataset.node = column.node.id;
+  root.title = `${column.node.name} · click to expand`;
+  const head = el("div", "col-head chip-head");
+  head.dataset.node = column.node.id;
+  head.append(el("span", "mark", MARK[column.node.kind]), el("span", "name", column.node.name));
+  const value = column.node.value;
+  const text =
+    value === null
+      ? "—"
+      : value.kind === "indexed"
+        ? `[${value.index}] · ${value.entries.length}`
+        : value.display;
+  head.append(el("span", "chip-value", text));
+  root.append(head);
+  return root;
+}
+
 export function renderColumn(column: Column, band: Band, folded: boolean): HTMLElement {
-  if (folded) return renderFolded(column, band);
+  if (folded) return band.axis === null ? renderChip(column) : renderFolded(column, band);
   if (column.rows.length === 0) return renderBox(column);
   return renderTable(column, band);
 }

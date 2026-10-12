@@ -174,8 +174,8 @@ body {
 }
 .halo-label {
   position: absolute;
-  top: -16px;
-  left: 6px;
+  top: 3px;
+  right: 8px;
   font-family: var(--mono);
   font-size: 11px;
   color: var(--sel);
@@ -426,6 +426,26 @@ body {
 .box.rel-direct .box-value,
 .box.sel .box-value {
   background: var(--sel-cell-weak);
+}
+
+/* folded no-axis box: a thin chip */
+.col.chip {
+  min-width: 0;
+}
+.chip-head {
+  height: 26px;
+  flex-direction: row;
+  align-items: center;
+  gap: 6px;
+  padding: 0 8px;
+  white-space: nowrap;
+}
+.chip-value {
+  margin-left: auto;
+  padding-left: 10px;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 11px;
 }
 
 /* folded column */
