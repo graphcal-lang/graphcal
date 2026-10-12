@@ -1,0 +1,187 @@
+{
+  "version": 0,
+  "module": {
+    "id": "power_project.power_max",
+    "file": "src/power_project/power_max.gcl",
+    "package": "power_project"
+  },
+  "indexes": [
+    {
+      "name": "Component",
+      "module": "power_project.components",
+      "labels": ["Obc", "Radio", "Heater", "Payload"]
+    },
+    {
+      "name": "Mode",
+      "module": "power_project.components",
+      "labels": ["Safe", "Nominal", "Science"]
+    }
+  ],
+  "nodes": [
+    {
+      "name": "num",
+      "module": "power_project.components",
+      "kind": "external",
+      "axes": [],
+      "dimension": "Int",
+      "unit": null,
+      "pub": true,
+      "deps": [],
+      "line": 4
+    },
+    {
+      "name": "margin",
+      "module": "power_project.power_max",
+      "kind": "param",
+      "axes": [],
+      "dimension": "Dimensionless",
+      "unit": null,
+      "pub": false,
+      "deps": [],
+      "line": 3
+    },
+    {
+      "name": "p_budget",
+      "module": "power_project.power_max",
+      "kind": "param",
+      "axes": [],
+      "dimension": "Power",
+      "unit": "W",
+      "pub": false,
+      "deps": [],
+      "line": 4
+    },
+    {
+      "name": "eta_dcdc",
+      "module": "power_project.power_max",
+      "kind": "const",
+      "axes": [],
+      "dimension": "Dimensionless",
+      "unit": null,
+      "pub": false,
+      "deps": [],
+      "line": 5
+    },
+    {
+      "name": "p_unit",
+      "module": "power_project.power_max",
+      "kind": "param",
+      "axes": ["Component"],
+      "dimension": "Power",
+      "unit": "W",
+      "pub": false,
+      "deps": [],
+      "line": 7
+    },
+    {
+      "name": "duty",
+      "module": "power_project.power_max",
+      "kind": "param",
+      "axes": ["Component", "Mode"],
+      "dimension": "Dimensionless",
+      "unit": null,
+      "pub": false,
+      "deps": [],
+      "line": 14
+    },
+    {
+      "name": "p_avg",
+      "module": "power_project.power_max",
+      "kind": "node",
+      "axes": ["Component", "Mode"],
+      "dimension": "Power",
+      "unit": "W",
+      "pub": false,
+      "deps": ["p_unit", "duty"],
+      "line": 22
+    },
+    {
+      "name": "p_bus",
+      "module": "power_project.power_max",
+      "kind": "node",
+      "axes": ["Component", "Mode"],
+      "dimension": "Power",
+      "unit": "W",
+      "pub": false,
+      "deps": ["p_avg", "eta_dcdc"],
+      "line": 26
+    },
+    {
+      "name": "p_mode",
+      "module": "power_project.power_max",
+      "kind": "node",
+      "axes": ["Mode"],
+      "dimension": "Power",
+      "unit": "W",
+      "pub": false,
+      "deps": ["p_bus"],
+      "line": 30
+    },
+    {
+      "name": "p_peak",
+      "module": "power_project.power_max",
+      "kind": "node",
+      "axes": ["Component"],
+      "dimension": "Power",
+      "unit": "W",
+      "pub": false,
+      "deps": ["p_bus"],
+      "line": 34
+    },
+    {
+      "name": "p_total",
+      "module": "power_project.power_max",
+      "kind": "node",
+      "axes": [],
+      "dimension": "Power",
+      "unit": "W",
+      "pub": false,
+      "deps": ["p_mode"],
+      "line": 38
+    },
+    {
+      "name": "p_mean",
+      "module": "power_project.power_max",
+      "kind": "node",
+      "axes": [],
+      "dimension": "Power",
+      "unit": "W",
+      "pub": false,
+      "deps": ["p_total", "num"],
+      "line": 39
+    },
+    {
+      "name": "p_required",
+      "module": "power_project.power_max",
+      "kind": "node",
+      "axes": [],
+      "dimension": "Power",
+      "unit": "W",
+      "pub": true,
+      "deps": ["p_total", "margin"],
+      "line": 40
+    },
+    {
+      "name": "heat_dcdc",
+      "module": "power_project.power_max",
+      "kind": "node",
+      "axes": [],
+      "dimension": "Power",
+      "unit": "W",
+      "pub": true,
+      "deps": ["p_peak", "eta_dcdc"],
+      "line": 41
+    },
+    {
+      "name": "within_budget",
+      "module": "power_project.power_max",
+      "kind": "assert",
+      "axes": [],
+      "dimension": "Bool",
+      "unit": null,
+      "pub": false,
+      "deps": ["p_required", "p_budget"],
+      "line": 43
+    }
+  ]
+}

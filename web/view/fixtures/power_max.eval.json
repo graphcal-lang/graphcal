@@ -1,0 +1,313 @@
+{
+  "assert": {
+    "within_budget": {
+      "status": "pass"
+    }
+  },
+  "const": {
+    "eta_dcdc": {
+      "si_value": 0.9
+    },
+    "num": 4
+  },
+  "incomplete": false,
+  "node": {
+    "heat_dcdc": {
+      "si_value": 4.266666666666667,
+      "unit": "m^2*kg/s^3"
+    },
+    "p_avg": {
+      "entries": {
+        "Heater": {
+          "entries": {
+            "Nominal": {
+              "si_value": 3.2,
+              "unit": "m^2*kg/s^3"
+            },
+            "Safe": {
+              "si_value": 4.8,
+              "unit": "m^2*kg/s^3"
+            },
+            "Science": {
+              "si_value": 1.6,
+              "unit": "m^2*kg/s^3"
+            }
+          },
+          "index": "Mode"
+        },
+        "Obc": {
+          "entries": {
+            "Nominal": {
+              "si_value": 4.0,
+              "unit": "m^2*kg/s^3"
+            },
+            "Safe": {
+              "si_value": 4.0,
+              "unit": "m^2*kg/s^3"
+            },
+            "Science": {
+              "si_value": 4.0,
+              "unit": "m^2*kg/s^3"
+            }
+          },
+          "index": "Mode"
+        },
+        "Payload": {
+          "entries": {
+            "Nominal": {
+              "si_value": 10.0,
+              "unit": "m^2*kg/s^3"
+            },
+            "Safe": {
+              "si_value": 0.0,
+              "unit": "m^2*kg/s^3"
+            },
+            "Science": {
+              "si_value": 20.0,
+              "unit": "m^2*kg/s^3"
+            }
+          },
+          "index": "Mode"
+        },
+        "Radio": {
+          "entries": {
+            "Nominal": {
+              "si_value": 3.5999999999999996,
+              "unit": "m^2*kg/s^3"
+            },
+            "Safe": {
+              "si_value": 1.2000000000000002,
+              "unit": "m^2*kg/s^3"
+            },
+            "Science": {
+              "si_value": 9.600000000000001,
+              "unit": "m^2*kg/s^3"
+            }
+          },
+          "index": "Mode"
+        }
+      },
+      "index": "Component"
+    },
+    "p_bus": {
+      "entries": {
+        "Heater": {
+          "entries": {
+            "Nominal": {
+              "si_value": 3.555555555555556,
+              "unit": "m^2*kg/s^3"
+            },
+            "Safe": {
+              "si_value": 5.333333333333333,
+              "unit": "m^2*kg/s^3"
+            },
+            "Science": {
+              "si_value": 1.777777777777778,
+              "unit": "m^2*kg/s^3"
+            }
+          },
+          "index": "Mode"
+        },
+        "Obc": {
+          "entries": {
+            "Nominal": {
+              "si_value": 4.444444444444445,
+              "unit": "m^2*kg/s^3"
+            },
+            "Safe": {
+              "si_value": 4.444444444444445,
+              "unit": "m^2*kg/s^3"
+            },
+            "Science": {
+              "si_value": 4.444444444444445,
+              "unit": "m^2*kg/s^3"
+            }
+          },
+          "index": "Mode"
+        },
+        "Payload": {
+          "entries": {
+            "Nominal": {
+              "si_value": 11.11111111111111,
+              "unit": "m^2*kg/s^3"
+            },
+            "Safe": {
+              "si_value": 0.0,
+              "unit": "m^2*kg/s^3"
+            },
+            "Science": {
+              "si_value": 22.22222222222222,
+              "unit": "m^2*kg/s^3"
+            }
+          },
+          "index": "Mode"
+        },
+        "Radio": {
+          "entries": {
+            "Nominal": {
+              "si_value": 3.9999999999999996,
+              "unit": "m^2*kg/s^3"
+            },
+            "Safe": {
+              "si_value": 1.3333333333333335,
+              "unit": "m^2*kg/s^3"
+            },
+            "Science": {
+              "si_value": 10.666666666666668,
+              "unit": "m^2*kg/s^3"
+            }
+          },
+          "index": "Mode"
+        }
+      },
+      "index": "Component"
+    },
+    "p_mean": {
+      "si_value": 9.777777777777779,
+      "unit": "m^2*kg/s^3"
+    },
+    "p_mode": {
+      "entries": {
+        "Nominal": {
+          "si_value": 23.11111111111111,
+          "unit": "m^2*kg/s^3"
+        },
+        "Safe": {
+          "si_value": 11.11111111111111,
+          "unit": "m^2*kg/s^3"
+        },
+        "Science": {
+          "si_value": 39.111111111111114,
+          "unit": "m^2*kg/s^3"
+        }
+      },
+      "index": "Mode"
+    },
+    "p_peak": {
+      "entries": {
+        "Heater": {
+          "si_value": 5.333333333333333,
+          "unit": "m^2*kg/s^3"
+        },
+        "Obc": {
+          "si_value": 4.444444444444445,
+          "unit": "m^2*kg/s^3"
+        },
+        "Payload": {
+          "si_value": 22.22222222222222,
+          "unit": "m^2*kg/s^3"
+        },
+        "Radio": {
+          "si_value": 10.666666666666668,
+          "unit": "m^2*kg/s^3"
+        }
+      },
+      "index": "Component"
+    },
+    "p_required": {
+      "si_value": 46.93333333333334,
+      "unit": "m^2*kg/s^3"
+    },
+    "p_total": {
+      "si_value": 39.111111111111114,
+      "unit": "m^2*kg/s^3"
+    }
+  },
+  "param": {
+    "duty": {
+      "entries": {
+        "Heater": {
+          "entries": {
+            "Nominal": {
+              "si_value": 0.4
+            },
+            "Safe": {
+              "si_value": 0.6
+            },
+            "Science": {
+              "si_value": 0.2
+            }
+          },
+          "index": "Mode"
+        },
+        "Obc": {
+          "entries": {
+            "Nominal": {
+              "si_value": 1.0
+            },
+            "Safe": {
+              "si_value": 1.0
+            },
+            "Science": {
+              "si_value": 1.0
+            }
+          },
+          "index": "Mode"
+        },
+        "Payload": {
+          "entries": {
+            "Nominal": {
+              "si_value": 0.5
+            },
+            "Safe": {
+              "si_value": 0.0
+            },
+            "Science": {
+              "si_value": 1.0
+            }
+          },
+          "index": "Mode"
+        },
+        "Radio": {
+          "entries": {
+            "Nominal": {
+              "si_value": 0.3
+            },
+            "Safe": {
+              "si_value": 0.1
+            },
+            "Science": {
+              "si_value": 0.8
+            }
+          },
+          "index": "Mode"
+        }
+      },
+      "index": "Component"
+    },
+    "margin": {
+      "si_value": 0.2
+    },
+    "p_budget": {
+      "display_value": 60.0,
+      "si_value": 60.0,
+      "unit": "W"
+    },
+    "p_unit": {
+      "entries": {
+        "Heater": {
+          "display_value": 8.0,
+          "si_value": 8.0,
+          "unit": "W"
+        },
+        "Obc": {
+          "display_value": 4.0,
+          "si_value": 4.0,
+          "unit": "W"
+        },
+        "Payload": {
+          "display_value": 20.0,
+          "si_value": 20.0,
+          "unit": "W"
+        },
+        "Radio": {
+          "display_value": 12.0,
+          "si_value": 12.0,
+          "unit": "W"
+        }
+      },
+      "index": "Component"
+    }
+  },
+  "unfinished_calls": []
+}

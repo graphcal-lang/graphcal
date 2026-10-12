@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Graphcal View</title>
+    <link rel="stylesheet" href="/src/styles.css" />
+  </head>
+  <body>
+    <header class="bar">
+      <span class="bar-file" id="file">loading…</span>
+      <span class="bar-status" id="status"></span>
+      <label class="bar-fixture"
+        >fixture
+        <select id="fixture"></select>
+      </label>
+    </header>
+    <main id="view" class="view"></main>
+    <svg id="wires" class="wires" aria-hidden="true"></svg>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
