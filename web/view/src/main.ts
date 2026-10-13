@@ -359,8 +359,9 @@ viewEl.addEventListener("dblclick", (event) => {
   const head = (event.target as HTMLElement).closest<HTMLElement>(
     ".col:not(.folded):not(.chip) .col-head",
   );
+  // Any column folds by hand; `foldable` only limits what fit mode folds on its own.
   const id = head?.dataset.node;
-  if (!id || !state.base.columns.get(id)?.foldable) return;
+  if (!id) return;
   state.folded.add(id);
   state.selection = null;
   render();

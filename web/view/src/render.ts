@@ -1,6 +1,6 @@
 import type { Band, Column, Layout, Role, Zone } from "./layout.ts";
 import { ZONES, zoneOf } from "./layout.ts";
-import type { NodeKind, ReduceOp } from "./model.ts";
+import type { NodeKind } from "./model.ts";
 import { displayOf, valueAt } from "./values.ts";
 
 const MARK: Record<NodeKind, string> = {
@@ -9,15 +9,6 @@ const MARK: Record<NodeKind, string> = {
   node: "●",
   assert: "✓",
   external: "⤴",
-};
-
-const REDUCE_SYMBOL: Record<ReduceOp, string> = {
-  sum: "Σ",
-  maximum: "max",
-  minimum: "min",
-  count: "count",
-  rss: "rss",
-  mean: "mean",
 };
 
 export const RULER_WIDTH = 136;
@@ -31,12 +22,6 @@ function el<K extends keyof HTMLElementTagNameMap>(
   node.className = className;
   if (text !== undefined) node.textContent = text;
   return node;
-}
-
-/** The aggregation that removed an axis, e.g. "Σ Component"; the shape itself is visible. */
-function reduceText(column: Column): string | null {
-  const { reduce } = column.node;
-  return reduce ? `${REDUCE_SYMBOL[reduce.op]} ${reduce.axis}` : null;
 }
 
 function dimensionClass(dimension: string | null): string {
@@ -64,8 +49,6 @@ function renderHead(column: Column): HTMLElement {
     const type = node.unit ? `${node.dimension} · ${node.unit}` : node.dimension;
     meta.append(el("span", `col-type ${dimensionClass(node.dimension)}`, type));
   }
-  const reduce = reduceText(column);
-  if (reduce) meta.append(el("span", "col-reduce", `← ${reduce}`));
   if (node.kind === "external") {
     const origin = node.module.split(".").at(-1) ?? node.module;
     meta.append(el("span", "col-origin", `← ${origin}.gcl`));

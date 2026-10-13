@@ -414,9 +414,6 @@ body {
   line-height: 1.3;
   white-space: nowrap;
 }
-.col-reduce {
-  color: var(--muted);
-}
 .col-origin {
   color: var(--sel);
 }

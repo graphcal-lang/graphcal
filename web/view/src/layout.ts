@@ -28,7 +28,7 @@ export interface Column {
   rows: string[];
   /** Sub-column labels (second axis), if any. */
   subs: string[];
-  /** May be folded by fit mode: an intermediate node (never an output). */
+  /** May be folded by fit mode on its own: an intermediate node (never an output). */
   foldable: boolean;
   /** How much the node matters to the rest of the file; low activity folds first. */
   activity: number;
