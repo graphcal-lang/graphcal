@@ -14,7 +14,7 @@ const MARK: Record<NodeKind, string> = {
 
 const SVG_NS = "http://www.w3.org/2000/svg";
 
-/** The external mark: a param diamond with an arrow leaving its top right corner. */
+/** The external mark: a param diamond with an arrow arriving at its top right corner, from the file it is taken from. */
 export function externalIcon(): SVGSVGElement {
   const svg = document.createElementNS(SVG_NS, "svg");
   svg.setAttribute("class", "mark mark-external");
@@ -22,7 +22,7 @@ export function externalIcon(): SVGSVGElement {
   svg.setAttribute("width", "12");
   svg.setAttribute("height", "12");
   svg.setAttribute("aria-hidden", "true");
-  for (const d of ["M4.5 4 L8 7.5 L4.5 11 L1 7.5 Z", "M7 5 L11 1", "M8 1 H11 V4"]) {
+  for (const d of ["M4.5 4 L8 7.5 L4.5 11 L1 7.5 Z", "M11 1 L7 5", "M7 2 V5 H10"]) {
     const path = document.createElementNS(SVG_NS, "path");
     path.setAttribute("d", d);
     svg.append(path);
