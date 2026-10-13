@@ -2,7 +2,7 @@ import type { Band, Column, Layout, Role, Zone } from "./layout.ts";
 import { ZONES, zoneOf } from "./layout.ts";
 import type { NodeKind } from "./model.ts";
 import { rowRuns, type Hidden } from "./rows.ts";
-import { displayOf, valueAt } from "./values.ts";
+import { displayOf, shortMagnitude, valueAt } from "./values.ts";
 
 const MARK: Record<NodeKind, string> = {
   param: "◇",
@@ -64,7 +64,10 @@ function renderHead(column: Column, folded = false): HTMLElement {
 function valueSpans(column: Column): HTMLElement[] {
   const value = column.node.value;
   if (value && value.kind === "quantity" && value.unit) {
-    return [el("span", "magnitude", value.magnitude), el("span", "unit", value.unit)];
+    return [
+      el("span", "magnitude", shortMagnitude(value.magnitude)),
+      el("span", "unit", value.unit),
+    ];
   }
   if (value && value.kind === "bool" && column.node.kind === "assert") {
     return [el("span", value.value ? "pass" : "fail", value.display.toLowerCase())];
@@ -84,7 +87,7 @@ function valueSpans(column: Column): HTMLElement[] {
 
 function cellText(column: Column, labels: string[]): string {
   const value = valueAt(column.node.value, labels);
-  if (value && value.kind === "quantity") return value.magnitude;
+  if (value && value.kind === "quantity") return shortMagnitude(value.magnitude);
   return displayOf(value);
 }
 

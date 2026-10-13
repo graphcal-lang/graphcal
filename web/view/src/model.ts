@@ -46,6 +46,10 @@ export type NodeKind = z.infer<typeof nodeKindSchema>;
 export const reduceOpSchema = z.enum(["sum", "maximum", "minimum", "count", "rss", "mean"]);
 export type ReduceOp = z.infer<typeof reduceOpSchema>;
 
+const positionSchema = z.object({ line: z.int().nonnegative(), character: z.int().nonnegative() });
+export type Position = z.infer<typeof positionSchema>;
+export type Range = { start: Position; end: Position };
+
 export const viewNodeSchema = z.object({
   id: z.string(),
   name: z.string(),
@@ -65,7 +69,14 @@ export const viewNodeSchema = z.object({
    * `include power_project.eps() …`); null for an import, which has no instance.
    */
   instance: z.string().nullable(),
-  source: z.object({ file: z.string().nullable(), line: z.int().nonnegative() }).nullable(),
+  source: z
+    .object({
+      file: z.string().nullable(),
+      line: z.int().nonnegative(),
+      /** Editor range of the defining expression (0-based lines, UTF-16 columns). */
+      expr_range: z.object({ start: positionSchema, end: positionSchema }).nullable().optional(),
+    })
+    .nullable(),
   value: valueSchema.nullable(),
 });
 export type ViewNode = z.infer<typeof viewNodeSchema>;

@@ -5,18 +5,7 @@
     "file": "src/power_project/components.gcl",
     "package": "power_project"
   },
-  "indexes": [
-    {
-      "name": "Component",
-      "module": "power_project.components",
-      "labels": ["Obc", "Radio", "Heater", "Payload"]
-    },
-    {
-      "name": "Mode",
-      "module": "power_project.components",
-      "labels": ["Safe", "Nominal", "Science"]
-    }
-  ],
+  "indexes": [],
   "nodes": [
     {
       "id": "num",
@@ -33,7 +22,17 @@
       "instance": null,
       "source": {
         "file": "src/power_project/components.gcl",
-        "line": 4
+        "line": 4,
+        "expr_range": {
+          "start": {
+            "line": 3,
+            "character": 26
+          },
+          "end": {
+            "line": 3,
+            "character": 57
+          }
+        }
       },
       "value": {
         "kind": "int",

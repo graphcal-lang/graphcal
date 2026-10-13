@@ -14,3 +14,16 @@ export function valueAt(value: Value | null, labels: readonly string[]): Value |
 export function displayOf(value: Value | null): string {
   return value === null ? "—" : value.display;
 }
+
+/** A magnitude rounded for a cell: four significant digits, no grouping. */
+export function shortMagnitude(magnitude: string): string {
+  const x = Number(magnitude);
+  if (!Number.isFinite(x)) return magnitude;
+  const rounded = Number(x.toPrecision(4));
+  return rounded.toLocaleString("en-US", { maximumFractionDigits: 6, useGrouping: false });
+}
+
+/** An expression on one line: runs of whitespace become one space. */
+export function oneLine(expr: string): string {
+  return expr.replace(/\s+/g, " ").trim();
+}

@@ -92,8 +92,20 @@ export const outcomeSchema = z.discriminatedUnion("status", [
 ]);
 export type Outcome = z.infer<typeof outcomeSchema>;
 
+/** `evaluateView`: the entry file's ViewModel with values, or why not. */
+export const viewOutcomeSchema = z.discriminatedUnion("status", [
+  z.object({ status: z.literal("evaluated"), view: z.unknown() }),
+  z.object({
+    status: z.literal("binding_errors"),
+    errors: z.array(z.object({ name: z.string(), message: z.string() })),
+  }),
+  z.object({ status: z.literal("eval_error"), message: z.string() }),
+  z.object({ status: z.literal("unavailable"), message: z.string() }),
+]);
+
 interface Prepared {
   evaluateReport(bindings: unknown[]): unknown;
+  evaluateView(bindings: unknown[]): unknown;
   free(): void;
 }
 interface Engine {
@@ -123,19 +135,56 @@ export function loadEngine(): Promise<Engine> {
   return loading;
 }
 
-/** Evaluate a whole project from in-memory sources. */
-export async function evaluateProject(entry: string, files: ProjectFile[]): Promise<Outcome> {
+/** Prepare a whole project from in-memory sources; a compile failure is returned, not thrown. */
+async function prepare(entry: string, files: ProjectFile[]): Promise<Prepared | Outcome> {
   const engine = await loadEngine();
-  let prepared: Prepared;
   try {
-    prepared = engine.prepareProject({ entry, files });
+    return engine.prepareProject({ entry, files });
   } catch (error) {
     const failure = outcomeSchema.safeParse(error);
     if (failure.success) return failure.data;
     throw error instanceof Error ? error : new Error(String(error));
   }
+}
+
+function isOutcome(prepared: Prepared | Outcome): prepared is Outcome {
+  return "status" in prepared;
+}
+
+/** Evaluate a whole project from in-memory sources. */
+export async function evaluateProject(entry: string, files: ProjectFile[]): Promise<Outcome> {
+  const prepared = await prepare(entry, files);
+  if (isOutcome(prepared)) return prepared;
   try {
     return outcomeSchema.parse(prepared.evaluateReport([]));
+  } finally {
+    prepared.free();
+  }
+}
+
+/** Evaluate a project and return its entry file's ViewModel with values, or the failure message. */
+export async function evaluateView(
+  entry: string,
+  files: ProjectFile[],
+): Promise<{ view: unknown } | { error: string }> {
+  const prepared = await prepare(entry, files);
+  if (isOutcome(prepared)) {
+    if (prepared.status === "rejected") return { error: prepared.error.message };
+    if (prepared.status === "compile_error") {
+      return { error: prepared.diagnostics[0]?.message ?? "compile error" };
+    }
+    return { error: "unexpected outcome" };
+  }
+  try {
+    const outcome = viewOutcomeSchema.parse(prepared.evaluateView([]));
+    switch (outcome.status) {
+      case "evaluated":
+        return { view: outcome.view };
+      case "binding_errors":
+        return { error: outcome.errors.map((e) => `${e.name}: ${e.message}`).join("; ") };
+      default:
+        return { error: outcome.message };
+    }
   } finally {
     prepared.free();
   }

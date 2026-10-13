@@ -4,7 +4,7 @@
 import type { ProjectFile } from "./engine.ts";
 import type { ViewModel } from "./model.ts";
 
-export { EditError, replaceExpr, replaceTableCell } from "./source.ts";
+export { EditError, replaceExpr, replaceRange, replaceTableCell } from "./source.ts";
 
 const sources = import.meta.glob<string>("../fixtures/*/**/*.{gcl,toml}", {
   query: "?raw",

@@ -99,7 +99,17 @@
       "instance": null,
       "source": {
         "file": "src/power_budget/power_budget.gcl",
-        "line": 58
+        "line": 58,
+        "expr_range": {
+          "start": {
+            "line": 57,
+            "character": 24
+          },
+          "end": {
+            "line": 57,
+            "character": 30
+          }
+        }
       },
       "value": {
         "kind": "quantity",
@@ -119,12 +129,22 @@
       "unit": null,
       "pub": false,
       "deps": [],
-      "expr": "table[Component] { … }",
+      "expr": "table[Component] {\n    RW: 4;\n    RWBracket: 1;\n    STT: 1;\n    STTBracket: 1;\n    SS: 6;\n    SSBracket: 2;\n    IMU: 1;\n    IMUBracket: 1;\n    DSP: 1;\n    XRX: 1;\n    XTX: 1;\n    XMGAPatch: 2;\n    XLGAHelical: 2;\n    DIPCirculator: 1;\n    XSW: 2;\n    DIPBPF: 2;\n    LPF: 1;\n    HYB: 1;\n    USO: 1;\n    XTRPBracket: 1;\n    PYXTMGABracket: 1;\n    PYXTRLGABracket: 1;\n    MYXTRLGASSBracket: 1;\n    CommHarness: 1;\n    CommJig: 1;\n    BAT: 1;\n    SADMSAP: 2;\n    HDRM: 2;\n    DCDCBoard: 1;\n    DCDCCase: 1;\n    PCDU: 1;\n    MOBC: 1;\n    AOBC: 1;\n    TOBC: 1;\n    IOBC: 1;\n    ROBC: 1;\n    COBC: 1;\n    PYBoard: 1;\n    OtherBoards: 3;\n    ElecCase: 1;\n    PanelIFBoards: 3;\n    RWIFBoard: 1;\n    BusHarness: 1;\n    LAUpperRing: 1;\n    LALowerRing: 1;\n    LAParts: 1;\n    PanelPX: 1;\n    PanelMX: 1;\n    PanelPY: 1;\n    PanelMY: 1;\n    PanelPZ: 1;\n    PanelMZ: 1;\n    PanelCenterPX: 1;\n}",
       "reduce": null,
       "instance": null,
       "source": {
         "file": "src/power_budget/power_budget.gcl",
-        "line": 60
+        "line": 60,
+        "expr_range": {
+          "start": {
+            "line": 59,
+            "character": 28
+          },
+          "end": {
+            "line": 113,
+            "character": 1
+          }
+        }
       },
       "value": {
         "kind": "indexed",
@@ -515,12 +535,22 @@
       "unit": "W",
       "pub": false,
       "deps": [],
-      "expr": "table[Component] { … }",
+      "expr": "table[Component] {\n    RW: 2.8 W;\n    RWBracket: 0.0 W;\n    STT: 1.5 W;\n    STTBracket: 0.0 W;\n    SS: 0.076 W;\n    SSBracket: 0.0 W;\n    IMU: 1.5 W;\n    IMUBracket: 0.0 W;\n    DSP: 2.6 W;\n    XRX: 3.0 W;\n    XTX: 7.4 W;\n    XMGAPatch: 0.0 W;\n    XLGAHelical: 0.0 W;\n    DIPCirculator: 0.0 W;\n    XSW: 1.82 W;\n    DIPBPF: 0.0 W;\n    LPF: 0.0 W;\n    HYB: 0.0 W;\n    USO: 0.3 W;\n    XTRPBracket: 0.0 W;\n    PYXTMGABracket: 0.0 W;\n    PYXTRLGABracket: 0.0 W;\n    MYXTRLGASSBracket: 0.0 W;\n    CommHarness: 0.0 W;\n    CommJig: 0.0 W;\n    BAT: 0.0 W;\n    SADMSAP: 3.5 W;\n    HDRM: 10.0 W;\n    DCDCBoard: 0.0 W;\n    DCDCCase: 0.0 W;\n    PCDU: 0.0 W;\n    MOBC: 3.0 W;\n    AOBC: 1.5 W;\n    TOBC: 1.5 W;\n    IOBC: 1.5 W;\n    ROBC: 1.5 W;\n    COBC: 3.0 W;\n    PYBoard: 0.0 W;\n    OtherBoards: 0.0 W;\n    ElecCase: 0.0 W;\n    PanelIFBoards: 0.0 W;\n    RWIFBoard: 1.5 W;\n    BusHarness: 0.0 W;\n    LAUpperRing: 7.84 W;\n    LALowerRing: 0.0 W;\n    LAParts: 0.0 W;\n    PanelPX: 0.0 W;\n    PanelMX: 0.0 W;\n    PanelPY: 0.0 W;\n    PanelMY: 0.0 W;\n    PanelPZ: 0.0 W;\n    PanelMZ: 0.0 W;\n    PanelCenterPX: 0.0 W;\n}",
       "reduce": null,
       "instance": null,
       "source": {
         "file": "src/power_budget/power_budget.gcl",
-        "line": 116
+        "line": 116,
+        "expr_range": {
+          "start": {
+            "line": 115,
+            "character": 36
+          },
+          "end": {
+            "line": 169,
+            "character": 1
+          }
+        }
       },
       "value": {
         "kind": "indexed",
@@ -1070,12 +1100,22 @@
       "unit": "W",
       "pub": false,
       "deps": [],
-      "expr": "table[Component] { … }",
+      "expr": "table[Component] {\n    RW: 3.36 W;\n    RWBracket: 0.0 W;\n    STT: 1.5 W;\n    STTBracket: 0.0 W;\n    SS: 0.076 W;\n    SSBracket: 0.0 W;\n    IMU: 2.0 W;\n    IMUBracket: 0.0 W;\n    DSP: 2.6 W;\n    XRX: 3.0 W;\n    XTX: 7.4 W;\n    XMGAPatch: 0.0 W;\n    XLGAHelical: 0.0 W;\n    DIPCirculator: 0.0 W;\n    XSW: 1.82 W;\n    DIPBPF: 0.0 W;\n    LPF: 0.0 W;\n    HYB: 0.0 W;\n    USO: 0.3 W;\n    XTRPBracket: 0.0 W;\n    PYXTMGABracket: 0.0 W;\n    PYXTRLGABracket: 0.0 W;\n    MYXTRLGASSBracket: 0.0 W;\n    CommHarness: 0.0 W;\n    CommJig: 0.0 W;\n    BAT: 0.0 W;\n    SADMSAP: 3.5 W;\n    HDRM: 10.0 W;\n    DCDCBoard: 0.0 W;\n    DCDCCase: 0.0 W;\n    PCDU: 0.0 W;\n    MOBC: 3.0 W;\n    AOBC: 1.5 W;\n    TOBC: 1.5 W;\n    IOBC: 1.5 W;\n    ROBC: 1.5 W;\n    COBC: 7.0 W;\n    PYBoard: 0.0 W;\n    OtherBoards: 0.0 W;\n    ElecCase: 0.0 W;\n    PanelIFBoards: 0.0 W;\n    RWIFBoard: 1.5 W;\n    BusHarness: 0.0 W;\n    LAUpperRing: 7.84 W;\n    LALowerRing: 0.0 W;\n    LAParts: 0.0 W;\n    PanelPX: 0.0 W;\n    PanelMX: 0.0 W;\n    PanelPY: 0.0 W;\n    PanelMY: 0.0 W;\n    PanelPZ: 0.0 W;\n    PanelMZ: 0.0 W;\n    PanelCenterPX: 0.0 W;\n}",
       "reduce": null,
       "instance": null,
       "source": {
         "file": "src/power_budget/power_budget.gcl",
-        "line": 172
+        "line": 172,
+        "expr_range": {
+          "start": {
+            "line": 171,
+            "character": 32
+          },
+          "end": {
+            "line": 225,
+            "character": 1
+          }
+        }
       },
       "value": {
         "kind": "indexed",
@@ -1625,12 +1665,22 @@
       "unit": null,
       "pub": false,
       "deps": [],
-      "expr": "table[Component] { … }",
+      "expr": "table[Component] {\n    RW: 0.05;\n    RWBracket: 0.0;\n    STT: 0.05;\n    STTBracket: 0.0;\n    SS: 0.05;\n    SSBracket: 0.0;\n    IMU: 0.05;\n    IMUBracket: 0.0;\n    DSP: 0.05;\n    XRX: 0.05;\n    XTX: 0.05;\n    XMGAPatch: 0.0;\n    XLGAHelical: 0.0;\n    DIPCirculator: 0.0;\n    XSW: 0.0;\n    DIPBPF: 0.0;\n    LPF: 0.0;\n    HYB: 0.0;\n    USO: 0.0;\n    XTRPBracket: 0.0;\n    PYXTMGABracket: 0.0;\n    PYXTRLGABracket: 0.0;\n    MYXTRLGASSBracket: 0.0;\n    CommHarness: 0.0;\n    CommJig: 0.0;\n    BAT: 0.0;\n    SADMSAP: 0.05;\n    HDRM: 0.05;\n    DCDCBoard: 0.0;\n    DCDCCase: 0.0;\n    PCDU: 0.0;\n    MOBC: 0.05;\n    AOBC: 0.05;\n    TOBC: 0.05;\n    IOBC: 0.05;\n    ROBC: 0.05;\n    COBC: 0.05;\n    PYBoard: 0.05;\n    OtherBoards: 0.0;\n    ElecCase: 0.0;\n    PanelIFBoards: 0.0;\n    RWIFBoard: 0.05;\n    BusHarness: 0.0;\n    LAUpperRing: 0.05;\n    LALowerRing: 0.0;\n    LAParts: 0.0;\n    PanelPX: 0.0;\n    PanelMX: 0.0;\n    PanelPY: 0.0;\n    PanelMY: 0.0;\n    PanelPZ: 0.0;\n    PanelMZ: 0.0;\n    PanelCenterPX: 0.0;\n}",
       "reduce": null,
       "instance": null,
       "source": {
         "file": "src/power_budget/power_budget.gcl",
-        "line": 228
+        "line": 228,
+        "expr_range": {
+          "start": {
+            "line": 227,
+            "character": 41
+          },
+          "end": {
+            "line": 281,
+            "character": 1
+          }
+        }
       },
       "value": {
         "kind": "indexed",
@@ -2180,12 +2230,22 @@
       "unit": null,
       "pub": false,
       "deps": [],
-      "expr": "table[Component] { … }",
+      "expr": "table[Component] {\n    RW: 1.0;\n    RWBracket: 1.0;\n    STT: 0.9;\n    STTBracket: 1.0;\n    SS: 0.9;\n    SSBracket: 1.0;\n    IMU: 0.9;\n    IMUBracket: 1.0;\n    DSP: 0.9;\n    XRX: 0.9;\n    XTX: 0.9;\n    XMGAPatch: 1.0;\n    XLGAHelical: 1.0;\n    DIPCirculator: 1.0;\n    XSW: 1.0;\n    DIPBPF: 1.0;\n    LPF: 1.0;\n    HYB: 1.0;\n    USO: 0.9;\n    XTRPBracket: 1.0;\n    PYXTMGABracket: 1.0;\n    PYXTRLGABracket: 1.0;\n    MYXTRLGASSBracket: 1.0;\n    CommHarness: 1.0;\n    CommJig: 1.0;\n    BAT: 1.0;\n    SADMSAP: 0.9;\n    HDRM: 1.0;\n    DCDCBoard: 1.0;\n    DCDCCase: 1.0;\n    PCDU: 1.0;\n    MOBC: 1.0;\n    AOBC: 1.0;\n    TOBC: 1.0;\n    IOBC: 0.9;\n    ROBC: 0.9;\n    COBC: 0.9;\n    PYBoard: 1.0;\n    OtherBoards: 1.0;\n    ElecCase: 1.0;\n    PanelIFBoards: 1.0;\n    RWIFBoard: 1.0;\n    BusHarness: 1.0;\n    LAUpperRing: 1.0;\n    LALowerRing: 1.0;\n    LAParts: 1.0;\n    PanelPX: 1.0;\n    PanelMX: 1.0;\n    PanelPY: 1.0;\n    PanelMY: 1.0;\n    PanelPZ: 1.0;\n    PanelMZ: 1.0;\n    PanelCenterPX: 1.0;\n}",
       "reduce": null,
       "instance": null,
       "source": {
         "file": "src/power_budget/power_budget.gcl",
-        "line": 284
+        "line": 284,
+        "expr_range": {
+          "start": {
+            "line": 283,
+            "character": 43
+          },
+          "end": {
+            "line": 337,
+            "character": 1
+          }
+        }
       },
       "value": {
         "kind": "indexed",
@@ -2735,12 +2795,22 @@
       "unit": null,
       "pub": false,
       "deps": [],
-      "expr": "table[Component, Mode] { … }",
+      "expr": "table[Component, Mode] {\n    : Safe, SunPointing, ThreeAxis, Magneto, IonThruster, RegenCooling, DeltaV, Uplink, EclipsePrep, Eclipse, OpticalNav;\n    RW: false, true, true, true, true, true, true, true, true, true, true;\n    RWBracket: false, false, false, false, false, false, false, false, false, false, false;\n    STT: false, true, true, true, true, true, true, true, true, true, true;\n    STTBracket: false, false, false, false, false, false, false, false, false, false, false;\n    SS: false, true, true, true, true, true, true, true, true, true, true;\n    SSBracket: false, false, false, false, false, false, false, false, false, false, false;\n    IMU: false, true, true, true, true, true, true, true, true, true, true;\n    IMUBracket: false, false, false, false, false, false, false, false, false, false, false;\n    DSP: true, true, true, true, true, true, true, true, true, false, true;\n    XRX: true, true, true, true, true, true, true, true, true, false, true;\n    XTX: false, true, true, true, true, true, true, true, true, false, true;\n    XMGAPatch: false, false, false, false, false, false, false, false, false, false, false;\n    XLGAHelical: false, false, false, false, false, false, false, false, false, false, false;\n    DIPCirculator: false, false, false, false, false, false, false, false, false, false, false;\n    XSW: true, true, true, true, true, true, true, true, true, false, true;\n    DIPBPF: false, false, false, false, false, false, false, false, false, false, false;\n    LPF: false, false, false, false, false, false, false, false, false, false, false;\n    HYB: false, false, false, false, false, false, false, false, false, false, false;\n    USO: true, true, true, true, true, true, true, true, true, false, true;\n    XTRPBracket: false, false, false, false, false, false, false, false, false, false, false;\n    PYXTMGABracket: false, false, false, false, false, false, false, false, false, false, false;\n    PYXTRLGABracket: false, false, false, false, false, false, false, false, false, false, false;\n    MYXTRLGASSBracket: false, false, false, false, false, false, false, false, false, false, false;\n    CommHarness: false, false, false, false, false, false, false, false, false, false, false;\n    CommJig: false, false, false, false, false, false, false, false, false, false, false;\n    BAT: false, false, false, false, false, false, false, false, false, false, false;\n    SADMSAP: true, true, true, true, true, true, true, true, true, true, true;\n    HDRM: false, false, false, false, false, false, false, false, false, false, false;\n    DCDCBoard: true, true, true, true, true, true, true, true, true, true, true;\n    DCDCCase: false, false, false, false, false, false, false, false, false, false, false;\n    PCDU: true, true, true, true, true, true, true, true, true, true, true;\n    MOBC: true, true, true, true, true, true, true, true, true, true, true;\n    AOBC: true, true, true, true, true, true, true, true, true, true, true;\n    TOBC: true, true, true, true, true, true, true, true, true, true, true;\n    IOBC: false, false, false, false, true, true, false, false, false, false, false;\n    ROBC: true, true, true, true, true, true, true, true, true, true, true;\n    COBC: false, false, false, false, false, false, false, false, false, false, true;\n    PYBoard: false, false, false, false, false, false, false, false, false, false, false;\n    OtherBoards: false, false, false, false, false, false, false, false, false, false, false;\n    ElecCase: false, false, false, false, false, false, false, false, false, false, false;\n    PanelIFBoards: false, false, false, false, false, false, false, false, false, false, false;\n    RWIFBoard: true, true, true, true, true, true, true, true, true, true, true;\n    BusHarness: false, false, false, false, false, false, false, false, false, false, false;\n    LAUpperRing: false, false, false, false, false, false, false, false, false, false, false;\n    LALowerRing: false, false, false, false, false, false, false, false, false, false, false;\n    LAParts: false, false, false, false, false, false, false, false, false, false, false;\n    PanelPX: false, false, false, false, false, false, false, false, false, false, false;\n    PanelMX: false, false, false, false, false, false, false, false, false, false, false;\n    PanelPY: false, false, false, false, false, false, false, false, false, false, false;\n    PanelMY: false, false, false, false, false, false, false, false, false, false, false;\n    PanelPZ: false, false, false, false, false, false, false, false, false, false, false;\n    PanelMZ: false, false, false, false, false, false, false, false, false, false, false;\n    PanelCenterPX: false, false, false, false, false, false, false, false, false, false, false;\n}",
       "reduce": null,
       "instance": null,
       "source": {
         "file": "src/power_budget/power_budget.gcl",
-        "line": 340
+        "line": 340,
+        "expr_range": {
+          "start": {
+            "line": 339,
+            "character": 34
+          },
+          "end": {
+            "line": 394,
+            "character": 1
+          }
+        }
       },
       "value": {
         "kind": "indexed",
@@ -7953,13 +8023,23 @@
       "dimension": "Power",
       "unit": "W",
       "pub": false,
-      "deps": ["p_nominal", "eta_dcdc"],
-      "expr": "@p_nominal[c] / @eta_dcdc[c] - @p_nominal[c]",
+      "deps": ["eta_dcdc", "p_nominal"],
+      "expr": "for c: Component {\n    @p_nominal[c] / @eta_dcdc[c] - @p_nominal[c]\n}",
       "reduce": null,
       "instance": null,
       "source": {
         "file": "src/power_budget/power_budget.gcl",
-        "line": 397
+        "line": 397,
+        "expr_range": {
+          "start": {
+            "line": 396,
+            "character": 35
+          },
+          "end": {
+            "line": 398,
+            "character": 1
+          }
+        }
       },
       "value": {
         "kind": "indexed",
@@ -7990,8 +8070,8 @@
             "key": "STT",
             "value": {
               "kind": "quantity",
-              "display": "0.1667 W",
-              "magnitude": "0.1667",
+              "display": "0.1666667 W",
+              "magnitude": "0.1666667",
               "si_value": 0.16666666666666652,
               "unit": "W"
             }
@@ -8010,8 +8090,8 @@
             "key": "SS",
             "value": {
               "kind": "quantity",
-              "display": "0.008444 W",
-              "magnitude": "0.008444",
+              "display": "0.008444444 W",
+              "magnitude": "0.008444444",
               "si_value": 0.008444444444444449,
               "unit": "W"
             }
@@ -8030,8 +8110,8 @@
             "key": "IMU",
             "value": {
               "kind": "quantity",
-              "display": "0.1667 W",
-              "magnitude": "0.1667",
+              "display": "0.1666667 W",
+              "magnitude": "0.1666667",
               "si_value": 0.16666666666666652,
               "unit": "W"
             }
@@ -8050,8 +8130,8 @@
             "key": "DSP",
             "value": {
               "kind": "quantity",
-              "display": "0.2889 W",
-              "magnitude": "0.2889",
+              "display": "0.2888889 W",
+              "magnitude": "0.2888889",
               "si_value": 0.28888888888888875,
               "unit": "W"
             }
@@ -8060,8 +8140,8 @@
             "key": "XRX",
             "value": {
               "kind": "quantity",
-              "display": "0.3333 W",
-              "magnitude": "0.3333",
+              "display": "0.3333333 W",
+              "magnitude": "0.3333333",
               "si_value": 0.33333333333333304,
               "unit": "W"
             }
@@ -8070,8 +8150,8 @@
             "key": "XTX",
             "value": {
               "kind": "quantity",
-              "display": "0.8222 W",
-              "magnitude": "0.8222",
+              "display": "0.8222222 W",
+              "magnitude": "0.8222222",
               "si_value": 0.8222222222222229,
               "unit": "W"
             }
@@ -8150,8 +8230,8 @@
             "key": "USO",
             "value": {
               "kind": "quantity",
-              "display": "0.03333 W",
-              "magnitude": "0.03333",
+              "display": "0.03333333 W",
+              "magnitude": "0.03333333",
               "si_value": 0.033333333333333326,
               "unit": "W"
             }
@@ -8230,8 +8310,8 @@
             "key": "SADMSAP",
             "value": {
               "kind": "quantity",
-              "display": "0.3889 W",
-              "magnitude": "0.3889",
+              "display": "0.3888889 W",
+              "magnitude": "0.3888889",
               "si_value": 0.38888888888888884,
               "unit": "W"
             }
@@ -8310,8 +8390,8 @@
             "key": "IOBC",
             "value": {
               "kind": "quantity",
-              "display": "0.1667 W",
-              "magnitude": "0.1667",
+              "display": "0.1666667 W",
+              "magnitude": "0.1666667",
               "si_value": 0.16666666666666652,
               "unit": "W"
             }
@@ -8320,8 +8400,8 @@
             "key": "ROBC",
             "value": {
               "kind": "quantity",
-              "display": "0.1667 W",
-              "magnitude": "0.1667",
+              "display": "0.1666667 W",
+              "magnitude": "0.1666667",
               "si_value": 0.16666666666666652,
               "unit": "W"
             }
@@ -8330,8 +8410,8 @@
             "key": "COBC",
             "value": {
               "kind": "quantity",
-              "display": "0.3333 W",
-              "magnitude": "0.3333",
+              "display": "0.3333333 W",
+              "magnitude": "0.3333333",
               "si_value": 0.33333333333333304,
               "unit": "W"
             }
@@ -8508,13 +8588,23 @@
       "dimension": "Power",
       "unit": "W",
       "pub": false,
-      "deps": ["num", "p_nominal", "margin", "eta_dcdc"],
-      "expr": "to_float(@num[c]) * @p_nominal[c] * (1.0 + @margin[c]) / @eta_dcdc[c]",
+      "deps": ["eta_dcdc", "margin", "num", "p_nominal"],
+      "expr": "for c: Component {\n    to_float(@num[c]) * @p_nominal[c] * (1.0 + @margin[c]) / @eta_dcdc[c]\n}",
       "reduce": null,
       "instance": null,
       "source": {
         "file": "src/power_budget/power_budget.gcl",
-        "line": 401
+        "line": 401,
+        "expr_range": {
+          "start": {
+            "line": 400,
+            "character": 40
+          },
+          "end": {
+            "line": 402,
+            "character": 1
+          }
+        }
       },
       "value": {
         "kind": "indexed",
@@ -8605,8 +8695,8 @@
             "key": "DSP",
             "value": {
               "kind": "quantity",
-              "display": "3.033 W",
-              "magnitude": "3.033",
+              "display": "3.033333 W",
+              "magnitude": "3.033333",
               "si_value": 3.0333333333333337,
               "unit": "W"
             }
@@ -8625,8 +8715,8 @@
             "key": "XTX",
             "value": {
               "kind": "quantity",
-              "display": "8.633 W",
-              "magnitude": "8.633",
+              "display": "8.633333 W",
+              "magnitude": "8.633333",
               "si_value": 8.633333333333333,
               "unit": "W"
             }
@@ -8705,8 +8795,8 @@
             "key": "USO",
             "value": {
               "kind": "quantity",
-              "display": "0.3333 W",
-              "magnitude": "0.3333",
+              "display": "0.3333333 W",
+              "magnitude": "0.3333333",
               "si_value": 0.3333333333333333,
               "unit": "W"
             }
@@ -8785,8 +8875,8 @@
             "key": "SADMSAP",
             "value": {
               "kind": "quantity",
-              "display": "8.167 W",
-              "magnitude": "8.167",
+              "display": "8.166667 W",
+              "magnitude": "8.166667",
               "si_value": 8.166666666666668,
               "unit": "W"
             }
@@ -9063,13 +9153,23 @@
       "dimension": "Power",
       "unit": "W",
       "pub": false,
-      "deps": ["num", "p_max", "margin", "eta_dcdc"],
-      "expr": "to_float(@num[c]) * @p_max[c] * (1.0 + @margin[c]) / @eta_dcdc[c]",
+      "deps": ["eta_dcdc", "margin", "num", "p_max"],
+      "expr": "for c: Component {\n    to_float(@num[c]) * @p_max[c] * (1.0 + @margin[c]) / @eta_dcdc[c]\n}",
       "reduce": null,
       "instance": null,
       "source": {
         "file": "src/power_budget/power_budget.gcl",
-        "line": 405
+        "line": 405,
+        "expr_range": {
+          "start": {
+            "line": 404,
+            "character": 36
+          },
+          "end": {
+            "line": 406,
+            "character": 1
+          }
+        }
       },
       "value": {
         "kind": "indexed",
@@ -9080,8 +9180,8 @@
             "key": "RW",
             "value": {
               "kind": "quantity",
-              "display": "14.11 W",
-              "magnitude": "14.11",
+              "display": "14.112 W",
+              "magnitude": "14.112",
               "si_value": 14.112,
               "unit": "W"
             }
@@ -9140,8 +9240,8 @@
             "key": "IMU",
             "value": {
               "kind": "quantity",
-              "display": "2.333 W",
-              "magnitude": "2.333",
+              "display": "2.333333 W",
+              "magnitude": "2.333333",
               "si_value": 2.3333333333333335,
               "unit": "W"
             }
@@ -9160,8 +9260,8 @@
             "key": "DSP",
             "value": {
               "kind": "quantity",
-              "display": "3.033 W",
-              "magnitude": "3.033",
+              "display": "3.033333 W",
+              "magnitude": "3.033333",
               "si_value": 3.0333333333333337,
               "unit": "W"
             }
@@ -9180,8 +9280,8 @@
             "key": "XTX",
             "value": {
               "kind": "quantity",
-              "display": "8.633 W",
-              "magnitude": "8.633",
+              "display": "8.633333 W",
+              "magnitude": "8.633333",
               "si_value": 8.633333333333333,
               "unit": "W"
             }
@@ -9260,8 +9360,8 @@
             "key": "USO",
             "value": {
               "kind": "quantity",
-              "display": "0.3333 W",
-              "magnitude": "0.3333",
+              "display": "0.3333333 W",
+              "magnitude": "0.3333333",
               "si_value": 0.3333333333333333,
               "unit": "W"
             }
@@ -9340,8 +9440,8 @@
             "key": "SADMSAP",
             "value": {
               "kind": "quantity",
-              "display": "8.167 W",
-              "magnitude": "8.167",
+              "display": "8.166667 W",
+              "magnitude": "8.166667",
               "si_value": 8.166666666666668,
               "unit": "W"
             }
@@ -9440,8 +9540,8 @@
             "key": "COBC",
             "value": {
               "kind": "quantity",
-              "display": "8.167 W",
-              "magnitude": "8.167",
+              "display": "8.166667 W",
+              "magnitude": "8.166667",
               "si_value": 8.166666666666668,
               "unit": "W"
             }
@@ -9619,15 +9719,22 @@
       "unit": "W",
       "pub": false,
       "deps": ["on", "p_unit_nominal"],
-      "expr": "sum(for c: Component { if @on[c, m] { @p_unit_nominal[c] } else { 0.0 W } })",
-      "reduce": {
-        "op": "sum",
-        "axis": "Component"
-      },
+      "expr": "for m: Mode {\n    sum(for c: Component { if @on[c, m] { @p_unit_nominal[c] } else { 0.0 W } })\n}",
+      "reduce": null,
       "instance": null,
       "source": {
         "file": "src/power_budget/power_budget.gcl",
-        "line": 409
+        "line": 409,
+        "expr_range": {
+          "start": {
+            "line": 408,
+            "character": 35
+          },
+          "end": {
+            "line": 410,
+            "character": 1
+          }
+        }
       },
       "value": {
         "kind": "indexed",
@@ -9638,8 +9745,8 @@
             "key": "Safe",
             "value": {
               "kind": "quantity",
-              "display": "28.3 W",
-              "magnitude": "28.3",
+              "display": "28.29833 W",
+              "magnitude": "28.29833",
               "si_value": 28.298333333333336,
               "unit": "W"
             }
@@ -9648,8 +9755,8 @@
             "key": "SunPointing",
             "value": {
               "kind": "quantity",
-              "display": "52.72 W",
-              "magnitude": "52.72",
+              "display": "52.72367 W",
+              "magnitude": "52.72367",
               "si_value": 52.72366666666668,
               "unit": "W"
             }
@@ -9658,8 +9765,8 @@
             "key": "ThreeAxis",
             "value": {
               "kind": "quantity",
-              "display": "52.72 W",
-              "magnitude": "52.72",
+              "display": "52.72367 W",
+              "magnitude": "52.72367",
               "si_value": 52.72366666666668,
               "unit": "W"
             }
@@ -9668,8 +9775,8 @@
             "key": "Magneto",
             "value": {
               "kind": "quantity",
-              "display": "52.72 W",
-              "magnitude": "52.72",
+              "display": "52.72367 W",
+              "magnitude": "52.72367",
               "si_value": 52.72366666666668,
               "unit": "W"
             }
@@ -9678,8 +9785,8 @@
             "key": "IonThruster",
             "value": {
               "kind": "quantity",
-              "display": "54.47 W",
-              "magnitude": "54.47",
+              "display": "54.47367 W",
+              "magnitude": "54.47367",
               "si_value": 54.47366666666668,
               "unit": "W"
             }
@@ -9688,8 +9795,8 @@
             "key": "RegenCooling",
             "value": {
               "kind": "quantity",
-              "display": "54.47 W",
-              "magnitude": "54.47",
+              "display": "54.47367 W",
+              "magnitude": "54.47367",
               "si_value": 54.47366666666668,
               "unit": "W"
             }
@@ -9698,8 +9805,8 @@
             "key": "DeltaV",
             "value": {
               "kind": "quantity",
-              "display": "52.72 W",
-              "magnitude": "52.72",
+              "display": "52.72367 W",
+              "magnitude": "52.72367",
               "si_value": 52.72366666666668,
               "unit": "W"
             }
@@ -9708,8 +9815,8 @@
             "key": "Uplink",
             "value": {
               "kind": "quantity",
-              "display": "52.72 W",
-              "magnitude": "52.72",
+              "display": "52.72367 W",
+              "magnitude": "52.72367",
               "si_value": 52.72366666666668,
               "unit": "W"
             }
@@ -9718,8 +9825,8 @@
             "key": "EclipsePrep",
             "value": {
               "kind": "quantity",
-              "display": "52.72 W",
-              "magnitude": "52.72",
+              "display": "52.72367 W",
+              "magnitude": "52.72367",
               "si_value": 52.72366666666668,
               "unit": "W"
             }
@@ -9728,8 +9835,8 @@
             "key": "Eclipse",
             "value": {
               "kind": "quantity",
-              "display": "33.58 W",
-              "magnitude": "33.58",
+              "display": "33.58367 W",
+              "magnitude": "33.58367",
               "si_value": 33.583666666666666,
               "unit": "W"
             }
@@ -9738,8 +9845,8 @@
             "key": "OpticalNav",
             "value": {
               "kind": "quantity",
-              "display": "56.22 W",
-              "magnitude": "56.22",
+              "display": "56.22367 W",
+              "magnitude": "56.22367",
               "si_value": 56.22366666666668,
               "unit": "W"
             }
@@ -9757,15 +9864,22 @@
       "unit": "W",
       "pub": false,
       "deps": ["on", "p_unit_max"],
-      "expr": "sum(for c: Component { if @on[c, m] { @p_unit_max[c] } else { 0.0 W } })",
-      "reduce": {
-        "op": "sum",
-        "axis": "Component"
-      },
+      "expr": "for m: Mode {\n    sum(for c: Component { if @on[c, m] { @p_unit_max[c] } else { 0.0 W } })\n}",
+      "reduce": null,
       "instance": null,
       "source": {
         "file": "src/power_budget/power_budget.gcl",
-        "line": 413
+        "line": 413,
+        "expr_range": {
+          "start": {
+            "line": 412,
+            "character": 31
+          },
+          "end": {
+            "line": 414,
+            "character": 1
+          }
+        }
       },
       "value": {
         "kind": "indexed",
@@ -9776,8 +9890,8 @@
             "key": "Safe",
             "value": {
               "kind": "quantity",
-              "display": "28.3 W",
-              "magnitude": "28.3",
+              "display": "28.29833 W",
+              "magnitude": "28.29833",
               "si_value": 28.298333333333336,
               "unit": "W"
             }
@@ -9786,8 +9900,8 @@
             "key": "SunPointing",
             "value": {
               "kind": "quantity",
-              "display": "55.66 W",
-              "magnitude": "55.66",
+              "display": "55.659 W",
+              "magnitude": "55.659",
               "si_value": 55.65900000000001,
               "unit": "W"
             }
@@ -9796,8 +9910,8 @@
             "key": "ThreeAxis",
             "value": {
               "kind": "quantity",
-              "display": "55.66 W",
-              "magnitude": "55.66",
+              "display": "55.659 W",
+              "magnitude": "55.659",
               "si_value": 55.65900000000001,
               "unit": "W"
             }
@@ -9806,8 +9920,8 @@
             "key": "Magneto",
             "value": {
               "kind": "quantity",
-              "display": "55.66 W",
-              "magnitude": "55.66",
+              "display": "55.659 W",
+              "magnitude": "55.659",
               "si_value": 55.65900000000001,
               "unit": "W"
             }
@@ -9816,8 +9930,8 @@
             "key": "IonThruster",
             "value": {
               "kind": "quantity",
-              "display": "57.41 W",
-              "magnitude": "57.41",
+              "display": "57.409 W",
+              "magnitude": "57.409",
               "si_value": 57.40900000000001,
               "unit": "W"
             }
@@ -9826,8 +9940,8 @@
             "key": "RegenCooling",
             "value": {
               "kind": "quantity",
-              "display": "57.41 W",
-              "magnitude": "57.41",
+              "display": "57.409 W",
+              "magnitude": "57.409",
               "si_value": 57.40900000000001,
               "unit": "W"
             }
@@ -9836,8 +9950,8 @@
             "key": "DeltaV",
             "value": {
               "kind": "quantity",
-              "display": "55.66 W",
-              "magnitude": "55.66",
+              "display": "55.659 W",
+              "magnitude": "55.659",
               "si_value": 55.65900000000001,
               "unit": "W"
             }
@@ -9846,8 +9960,8 @@
             "key": "Uplink",
             "value": {
               "kind": "quantity",
-              "display": "55.66 W",
-              "magnitude": "55.66",
+              "display": "55.659 W",
+              "magnitude": "55.659",
               "si_value": 55.65900000000001,
               "unit": "W"
             }
@@ -9856,8 +9970,8 @@
             "key": "EclipsePrep",
             "value": {
               "kind": "quantity",
-              "display": "55.66 W",
-              "magnitude": "55.66",
+              "display": "55.659 W",
+              "magnitude": "55.659",
               "si_value": 55.65900000000001,
               "unit": "W"
             }
@@ -9866,8 +9980,8 @@
             "key": "Eclipse",
             "value": {
               "kind": "quantity",
-              "display": "36.52 W",
-              "magnitude": "36.52",
+              "display": "36.519 W",
+              "magnitude": "36.519",
               "si_value": 36.519,
               "unit": "W"
             }
@@ -9876,8 +9990,8 @@
             "key": "OpticalNav",
             "value": {
               "kind": "quantity",
-              "display": "63.83 W",
-              "magnitude": "63.83",
+              "display": "63.82567 W",
+              "magnitude": "63.82567",
               "si_value": 63.82566666666668,
               "unit": "W"
             }
@@ -9896,19 +10010,26 @@
       "pub": true,
       "deps": ["p_mode_max"],
       "expr": "maximum(@p_mode_max)",
-      "reduce": {
-        "op": "maximum",
-        "axis": "Mode"
-      },
+      "reduce": null,
       "instance": null,
       "source": {
         "file": "src/power_budget/power_budget.gcl",
-        "line": 417
+        "line": 417,
+        "expr_range": {
+          "start": {
+            "line": 416,
+            "character": 25
+          },
+          "end": {
+            "line": 416,
+            "character": 45
+          }
+        }
       },
       "value": {
         "kind": "quantity",
-        "display": "63.83 W",
-        "magnitude": "63.83",
+        "display": "63.82567 W",
+        "magnitude": "63.82567",
         "si_value": 63.82566666666668,
         "unit": "W"
       }
@@ -9924,19 +10045,26 @@
       "pub": true,
       "deps": ["heat_dcdc"],
       "expr": "sum(@heat_dcdc)",
-      "reduce": {
-        "op": "sum",
-        "axis": "Component"
-      },
+      "reduce": null,
       "instance": null,
       "source": {
         "file": "src/power_budget/power_budget.gcl",
-        "line": 418
+        "line": 418,
+        "expr_range": {
+          "start": {
+            "line": 417,
+            "character": 29
+          },
+          "end": {
+            "line": 417,
+            "character": 44
+          }
+        }
       },
       "value": {
         "kind": "quantity",
-        "display": "2.875 W",
-        "magnitude": "2.875",
+        "display": "2.875111 W",
+        "magnitude": "2.875111",
         "si_value": 2.8751111111111105,
         "unit": "W"
       }
@@ -9956,7 +10084,17 @@
       "instance": null,
       "source": {
         "file": "src/power_budget/power_budget.gcl",
-        "line": 419
+        "line": 419,
+        "expr_range": {
+          "start": {
+            "line": 418,
+            "character": 33
+          },
+          "end": {
+            "line": 418,
+            "character": 52
+          }
+        }
       },
       "value": {
         "kind": "label",
@@ -9974,13 +10112,23 @@
       "dimension": "Bool",
       "unit": null,
       "pub": false,
-      "deps": ["p_peak", "p_budget"],
+      "deps": ["p_budget", "p_peak"],
       "expr": "@p_peak <= @p_budget",
       "reduce": null,
       "instance": null,
       "source": {
         "file": "src/power_budget/power_budget.gcl",
-        "line": 421
+        "line": 421,
+        "expr_range": {
+          "start": {
+            "line": 420,
+            "character": 23
+          },
+          "end": {
+            "line": 420,
+            "character": 43
+          }
+        }
       },
       "value": {
         "kind": "bool",

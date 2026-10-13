@@ -22,7 +22,17 @@
       "instance": null,
       "source": {
         "file": "src/power_project/eps.gcl",
-        "line": 5
+        "line": 5,
+        "expr_range": {
+          "start": {
+            "line": 4,
+            "character": 21
+          },
+          "end": {
+            "line": 4,
+            "character": 23
+          }
+        }
       },
       "value": {
         "kind": "int",
@@ -44,7 +54,17 @@
       "instance": null,
       "source": {
         "file": "src/power_project/eps.gcl",
-        "line": 6
+        "line": 6,
+        "expr_range": {
+          "start": {
+            "line": 5,
+            "character": 26
+          },
+          "end": {
+            "line": 5,
+            "character": 31
+          }
+        }
       },
       "value": {
         "kind": "quantity",
@@ -69,7 +89,17 @@
       "instance": null,
       "source": {
         "file": "src/power_project/eps.gcl",
-        "line": 7
+        "line": 7,
+        "expr_range": {
+          "start": {
+            "line": 6,
+            "character": 25
+          },
+          "end": {
+            "line": 6,
+            "character": 33
+          }
+        }
       },
       "value": {
         "kind": "quantity",
@@ -94,7 +124,17 @@
       "instance": null,
       "source": {
         "file": "src/power_project/eps.gcl",
-        "line": 8
+        "line": 8,
+        "expr_range": {
+          "start": {
+            "line": 7,
+            "character": 35
+          },
+          "end": {
+            "line": 7,
+            "character": 40
+          }
+        }
       },
       "value": {
         "kind": "quantity",
@@ -119,7 +159,17 @@
       "instance": null,
       "source": {
         "file": "src/power_project/eps.gcl",
-        "line": 9
+        "line": 9,
+        "expr_range": {
+          "start": {
+            "line": 8,
+            "character": 37
+          },
+          "end": {
+            "line": 8,
+            "character": 40
+          }
+        }
       },
       "value": {
         "kind": "quantity",
@@ -144,7 +194,17 @@
       "instance": null,
       "source": {
         "file": "src/power_project/eps.gcl",
-        "line": 10
+        "line": 10,
+        "expr_range": {
+          "start": {
+            "line": 9,
+            "character": 32
+          },
+          "end": {
+            "line": 9,
+            "character": 36
+          }
+        }
       },
       "value": {
         "kind": "quantity",
@@ -169,7 +229,17 @@
       "instance": null,
       "source": {
         "file": "src/power_project/eps.gcl",
-        "line": 11
+        "line": 11,
+        "expr_range": {
+          "start": {
+            "line": 10,
+            "character": 26
+          },
+          "end": {
+            "line": 10,
+            "character": 31
+          }
+        }
       },
       "value": {
         "kind": "quantity",
@@ -194,7 +264,17 @@
       "instance": null,
       "source": {
         "file": "src/power_project/eps.gcl",
-        "line": 12
+        "line": 12,
+        "expr_range": {
+          "start": {
+            "line": 11,
+            "character": 26
+          },
+          "end": {
+            "line": 11,
+            "character": 34
+          }
+        }
       },
       "value": {
         "kind": "quantity",
@@ -219,7 +299,17 @@
       "instance": null,
       "source": {
         "file": "src/power_project/eps.gcl",
-        "line": 13
+        "line": 13,
+        "expr_range": {
+          "start": {
+            "line": 12,
+            "character": 31
+          },
+          "end": {
+            "line": 12,
+            "character": 34
+          }
+        }
       },
       "value": {
         "kind": "quantity",
@@ -244,7 +334,17 @@
       "instance": null,
       "source": {
         "file": "src/power_project/eps.gcl",
-        "line": 14
+        "line": 14,
+        "expr_range": {
+          "start": {
+            "line": 13,
+            "character": 22
+          },
+          "end": {
+            "line": 13,
+            "character": 30
+          }
+        }
       },
       "value": {
         "kind": "quantity",
@@ -269,7 +369,17 @@
       "instance": null,
       "source": {
         "file": "src/power_project/eps.gcl",
-        "line": 15
+        "line": 15,
+        "expr_range": {
+          "start": {
+            "line": 14,
+            "character": 24
+          },
+          "end": {
+            "line": 14,
+            "character": 32
+          }
+        }
       },
       "value": {
         "kind": "quantity",
@@ -294,12 +404,22 @@
       "instance": null,
       "source": {
         "file": "src/power_project/eps.gcl",
-        "line": 17
+        "line": 17,
+        "expr_range": {
+          "start": {
+            "line": 16,
+            "character": 23
+          },
+          "end": {
+            "line": 16,
+            "character": 73
+          }
+        }
       },
       "value": {
         "kind": "quantity",
-        "display": "99.77 W",
-        "magnitude": "99.77",
+        "display": "99.76613 W",
+        "magnitude": "99.76613",
         "si_value": 99.76612651596733,
         "unit": "W"
       }
@@ -313,18 +433,28 @@
       "dimension": "Power",
       "unit": "W",
       "pub": false,
-      "deps": ["p_sa_bol", "degradation", "mission_years"],
+      "deps": ["degradation", "mission_years", "p_sa_bol"],
       "expr": "@p_sa_bol * (1.0 - @degradation) ^ @mission_years",
       "reduce": null,
       "instance": null,
       "source": {
         "file": "src/power_project/eps.gcl",
-        "line": 18
+        "line": 18,
+        "expr_range": {
+          "start": {
+            "line": 17,
+            "character": 23
+          },
+          "end": {
+            "line": 17,
+            "character": 72
+          }
+        }
       },
       "value": {
         "kind": "quantity",
-        "display": "92.47 W",
-        "magnitude": "92.47",
+        "display": "92.46917 W",
+        "magnitude": "92.46917",
         "si_value": 92.4691696687604,
         "unit": "W"
       }
@@ -336,22 +466,32 @@
       "kind": "node",
       "axes": [],
       "dimension": "Time",
-      "unit": "min",
+      "unit": "s",
       "pub": false,
-      "deps": ["t_orbit", "t_eclipse"],
+      "deps": ["t_eclipse", "t_orbit"],
       "expr": "@t_orbit - @t_eclipse",
       "reduce": null,
       "instance": null,
       "source": {
         "file": "src/power_project/eps.gcl",
-        "line": 19
+        "line": 19,
+        "expr_range": {
+          "start": {
+            "line": 18,
+            "character": 19
+          },
+          "end": {
+            "line": 18,
+            "character": 40
+          }
+        }
       },
       "value": {
         "kind": "quantity",
-        "display": "60 min",
-        "magnitude": "60",
+        "display": "3600 s",
+        "magnitude": "3600",
         "si_value": 3600,
-        "unit": "min"
+        "unit": "s"
       }
     },
     {
@@ -363,13 +503,23 @@
       "dimension": "Power",
       "unit": "W",
       "pub": false,
-      "deps": ["e_battery", "dod_max", "t_sun"],
+      "deps": ["dod_max", "e_battery", "t_sun"],
       "expr": "@e_battery * @dod_max / @t_sun",
       "reduce": null,
       "instance": null,
       "source": {
         "file": "src/power_project/eps.gcl",
-        "line": 20
+        "line": 20,
+        "expr_range": {
+          "start": {
+            "line": 19,
+            "character": 23
+          },
+          "end": {
+            "line": 19,
+            "character": 53
+          }
+        }
       },
       "value": {
         "kind": "quantity",
@@ -388,18 +538,28 @@
       "dimension": "Power",
       "unit": "W",
       "pub": false,
-      "deps": ["p_sa_eol", "p_charge", "eta_pcdu", "p_eps_self"],
-      "expr": "(@p_sa_eol - @p_charge) * @eta_pcdu - @p_eps_self",
+      "deps": ["eta_pcdu", "p_charge", "p_eps_self", "p_sa_eol"],
+      "expr": "@p_sa_eol - @p_charge) * @eta_pcdu - @p_eps_self",
       "reduce": null,
       "instance": null,
       "source": {
         "file": "src/power_project/eps.gcl",
-        "line": 21
+        "line": 21,
+        "expr_range": {
+          "start": {
+            "line": 20,
+            "character": 27
+          },
+          "end": {
+            "line": 20,
+            "character": 75
+          }
+        }
       },
       "value": {
         "kind": "quantity",
-        "display": "49.45 W",
-        "magnitude": "49.45",
+        "display": "49.45164 W",
+        "magnitude": "49.45164",
         "si_value": 49.45163609525957,
         "unit": "W"
       }
@@ -413,18 +573,28 @@
       "dimension": "Power",
       "unit": "W",
       "pub": false,
-      "deps": ["e_battery", "dod_max", "t_eclipse", "eta_pcdu", "p_eps_self"],
+      "deps": ["dod_max", "e_battery", "eta_pcdu", "p_eps_self", "t_eclipse"],
       "expr": "@e_battery * @dod_max / @t_eclipse * @eta_pcdu - @p_eps_self",
       "reduce": null,
       "instance": null,
       "source": {
         "file": "src/power_project/eps.gcl",
-        "line": 22
+        "line": 22,
+        "expr_range": {
+          "start": {
+            "line": 21,
+            "character": 30
+          },
+          "end": {
+            "line": 21,
+            "character": 90
+          }
+        }
       },
       "value": {
         "kind": "quantity",
-        "display": "54.28 W",
-        "magnitude": "54.28",
+        "display": "54.27714 W",
+        "magnitude": "54.27714",
         "si_value": 54.27714285714286,
         "unit": "W"
       }
@@ -438,18 +608,28 @@
       "dimension": "Power",
       "unit": "W",
       "pub": true,
-      "deps": ["p_sun_avail", "p_eclipse_avail"],
+      "deps": ["p_eclipse_avail", "p_sun_avail"],
       "expr": "if @p_sun_avail < @p_eclipse_avail { @p_sun_avail } else { @p_eclipse_avail }",
       "reduce": null,
       "instance": null,
       "source": {
         "file": "src/power_project/eps.gcl",
-        "line": 23
+        "line": 23,
+        "expr_range": {
+          "start": {
+            "line": 22,
+            "character": 27
+          },
+          "end": {
+            "line": 22,
+            "character": 104
+          }
+        }
       },
       "value": {
         "kind": "quantity",
-        "display": "49.45 W",
-        "magnitude": "49.45",
+        "display": "49.45164 W",
+        "magnitude": "49.45164",
         "si_value": 49.45163609525957,
         "unit": "W"
       }

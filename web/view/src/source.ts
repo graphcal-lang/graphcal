@@ -21,6 +21,31 @@ export function replaceExpr(source: string, line: number, from: string, to: stri
   return source.slice(0, at) + to + source.slice(at + from.length);
 }
 
+/** A 0-based line and UTF-16 column, as the Language Server Protocol counts. */
+export interface Position {
+  line: number;
+  character: number;
+}
+
+function offsetOf(source: string, position: Position): number {
+  const rows = lines(source);
+  if (position.line >= rows.length) return source.length;
+  const start = rows.slice(0, position.line).join("\n").length + (position.line > 0 ? 1 : 0);
+  return Math.min(start + position.character, source.length);
+}
+
+/** Replace the text between two positions, as the compiler reports an expression's range. */
+export function replaceRange(
+  source: string,
+  range: { start: Position; end: Position },
+  to: string,
+): string {
+  const from = offsetOf(source, range.start);
+  const until = offsetOf(source, range.end);
+  if (until < from) throw new EditError("the expression range is inverted");
+  return source.slice(0, from) + to + source.slice(until);
+}
+
 /** The `[start, end]` 0-based row range of the `table … { … };` starting at `line`. */
 function tableBlock(rows: string[], line: number): [number, number] {
   const start = line - 1;

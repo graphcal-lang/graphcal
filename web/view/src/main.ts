@@ -10,35 +10,31 @@ import {
   type Zone,
 } from "./layout.ts";
 import { crossLinks, drawCrossWires, extraLanes, type CrossSheet } from "./cross.ts";
-import { applyEvaluation, depsOf } from "./edit.ts";
-import { evaluateProject, loadEngine, type Evaluation } from "./engine.ts";
+import { FixtureHost } from "./fixtureHost.ts";
 import { spansOf, subjectTokens, tokenize, type Token } from "./formula.ts";
-import { parseViewModel, type ViewModel, type ViewNode } from "./model.ts";
+import type { Host } from "./host.ts";
+import type { ViewModel, ViewNode } from "./model.ts";
 import { depthsOf, sameKey, type PaneKey } from "./panes.ts";
-import { EditError, projectFor, replaceExpr, replaceTableCell, type Project } from "./project.ts";
+import { EditError, replaceExpr, replaceRange, replaceTableCell } from "./source.ts";
+import { inVsCode, VsCodeHost } from "./vscodeHost.ts";
 import { EXTERNAL_MARK, placeHalo, renderView, RULER_WIDTH, type RenderOptions } from "./render.ts";
 import { hiddenOf, pick, type Hidden, type Picked } from "./rows.ts";
 import { trace, type Selection } from "./selection.ts";
-import { displayOf, valueAt } from "./values.ts";
+import { displayOf, oneLine, valueAt } from "./values.ts";
 import { drawWires, planRoutes, type RoutePlan } from "./wires.ts";
 
-const fixtures = import.meta.glob<unknown>("../fixtures/*.view.json", {
-  eager: true,
-  import: "default",
-});
-const fixtureNames = Object.keys(fixtures).sort();
-const moduleOfFixture = new Map(
-  fixtureNames.map((name) => [name, parseViewModel(fixtures[name]).module.id]),
-);
+/** Where models come from and edits go: the extension in VS Code, bundled fixtures otherwise. */
+const host: Host = inVsCode() ? new VsCodeHost() : new FixtureHost();
 
-/** The fixture that shows a module, if one is bundled. */
-function fixtureOf(module: string): string | null {
-  for (const [name, id] of moduleOfFixture) if (id === module) return name;
-  return null;
+/** Whether the host has a model for `module`. */
+function known(module: string): boolean {
+  return host.model(module) !== null;
 }
 
-function shortName(fixture: string): string {
-  return fixture.replace("../fixtures/", "").replace(".view.json", "");
+/** `power_max.gcl` for a module id, from its model's file. */
+function fileNameOfModule(module: string): string {
+  const model = host.model(module);
+  return model ? fileNameOf(model) : `${module.split(".").at(-1) ?? module}.gcl`;
 }
 
 function need<T extends Element>(selector: string): T {
@@ -102,11 +98,7 @@ type Mode = "fit" | "overview";
 /** One module shown as a sheet: the main one, or a pane pinned beside it. */
 interface Sheet {
   key: PaneKey;
-  /** The fixture the sheet was loaded from. */
-  fixture: string;
   model: ViewModel;
-  /** The sources the model was built from, edited in memory; null when unknown. */
-  project: Project | null;
   /** Layout before the no-axis band is split into tiers. */
   base: Layout;
   layout: Layout;
@@ -127,9 +119,8 @@ interface Sheet {
 interface Workspace {
   /** The main sheet first, then the pinned panes in the order they were pinned. */
   sheets: Sheet[];
-  /** Fixtures opened in turn with "Open"; the last is the main sheet's. */
+  /** Modules opened in turn with "Open"; the last is the main sheet's. */
   trail: string[];
-  edited: boolean;
   mode: Mode;
 }
 let ws: Workspace | null = null;
@@ -152,16 +143,6 @@ function renderOptions(s: Sheet): RenderOptions {
   return { folded: s.folded, hidden: s.hidden };
 }
 
-/** One in-memory project per package, shared by every sheet of that package. */
-const projects = new Map<string, Project>();
-function projectOf(model: ViewModel): Project | null {
-  const cached = projects.get(model.module.package);
-  if (cached) return cached;
-  const project = projectFor(model);
-  if (project) projects.set(model.module.package, project);
-  return project;
-}
-
 function fileNameOf(model: ViewModel): string {
   return model.module.file.split("/").at(-1) ?? model.module.file;
 }
@@ -179,8 +160,9 @@ function button(className: string, textContent: string, title: string): HTMLButt
   });
 }
 
-function createSheet(key: PaneKey, fixture: string): Sheet {
-  const model = parseViewModel(fixtures[fixture]);
+function createSheet(key: PaneKey): Sheet {
+  const model = host.model(key.module);
+  if (!model) throw new Error(`no model for ${key.module}`);
   const base = orderByBarycenter(computeLayout(model), model);
   const paneEl = document.createElement("section");
   paneEl.className = "pane";
@@ -194,9 +176,7 @@ function createSheet(key: PaneKey, fixture: string): Sheet {
   paneEl.append(headEl, viewEl, wiresEl);
   return {
     key,
-    fixture,
     model,
-    project: projectOf(model),
     base,
     layout: base,
     plan: planRoutes(model, base),
@@ -260,11 +240,11 @@ function selected(s: Sheet): { node: ViewNode; labels: string[] } | null {
   return { node, labels };
 }
 
-/** A table literal is elided in the view (`{ … }`), so it has no editable text. */
+/** The expression as edited in the bar: the source text on one line, when its file is at hand. */
 function editableExpr(s: Sheet, node: ViewNode): string | null {
-  if (!s.project || node.expr === null || node.expr.includes("…")) return null;
-  if (node.source === null || s.project.fileOf(s.model, node.module) === null) return null;
-  return node.expr;
+  if (node.expr === null || node.source === null || node.source.file === null) return null;
+  if (host.source(s.model, node.source.file) === null) return null;
+  return oneLine(node.expr);
 }
 
 /** `subject = expr = value`, coloured like the editor; the expr part is editable. */
@@ -289,7 +269,7 @@ function renderFormula(): void {
     expr.classList.toggle("editable", editableExpr(s, node) !== null);
     const coloured = document.createElement("span");
     coloured.className = "formula-coloured";
-    coloured.append(...spansOf(tokenize(node.expr)));
+    coloured.append(...spansOf(tokenize(oneLine(node.expr))));
     expr.append(coloured);
     line.append(...spansOf([eq()]), expr);
   }
@@ -503,25 +483,38 @@ function refit(): void {
   for (const s of ws.sheets) s.folded = new Set();
   resetCamera();
   render();
-  if (ws.mode === "overview") {
-    const width = canvasEl.clientWidth;
-    const height = canvasEl.clientHeight;
-    camera.scale = Math.min(1, width / panesEl.scrollWidth, height / panesEl.scrollHeight);
-    camera.x = Math.max(0, (width - panesEl.scrollWidth * camera.scale) / 2);
-    camera.y = Math.max(0, (height - panesEl.scrollHeight * camera.scale) / 2);
-    applyCamera();
-  }
+  if (ws.mode === "overview") fitOverview();
   for (const button of modeButtons) {
     button.classList.toggle("active", button.dataset.mode === ws.mode);
   }
   zoomEl.classList.remove("active");
 }
 
+/** Scale the whole stage down to fit the canvas, centred. */
+function fitOverview(): void {
+  const width = canvasEl.clientWidth;
+  const height = canvasEl.clientHeight;
+  camera.scale = Math.min(1, width / panesEl.scrollWidth, height / panesEl.scrollHeight);
+  camera.x = Math.max(0, (width - panesEl.scrollWidth * camera.scale) / 2);
+  camera.y = Math.max(0, (height - panesEl.scrollHeight * camera.scale) / 2);
+  applyCamera();
+}
+
+/**
+ * The canvas changed size: lay the sheets out for the new width, keeping the
+ * folds and the camera. Only an active overview is scaled to fit again.
+ */
+function relayout(): void {
+  if (!ws) return;
+  render();
+  if (ws.mode === "overview" && !zoomEl.classList.contains("active")) fitOverview();
+}
+
 /** `package / a.gcl › b.gcl`: the files opened in turn; an earlier one goes back. */
 function renderTrail(w: Workspace): void {
   fileEl.replaceChildren(span("pkg", mainSheet(w).model.module.package), span("sep", "/"));
-  w.trail.forEach((fixture, i) => {
-    const name = `${shortName(fixture)}.gcl`;
+  w.trail.forEach((module, i) => {
+    const name = fileNameOfModule(module);
     if (i > 0) fileEl.append(span("sep", "›"));
     if (i === w.trail.length - 1) {
       fileEl.append(span("", name));
@@ -534,27 +527,55 @@ function renderTrail(w: Workspace): void {
   fileEl.append(resetEl);
 }
 
-/** Show `trail`'s last fixture as the main sheet, with no panes pinned. */
+/** Show `trail`'s last module as the main sheet, with no panes pinned. */
 function open(trail: string[]): void {
-  const fixture = trail.at(-1);
-  if (fixture === undefined || fixtures[fixture] === undefined) return;
-  const model = parseViewModel(fixtures[fixture]);
-  const main = createSheet({ module: model.module.id, instance: null }, fixture);
-  ws = { sheets: [main], trail, edited: ws?.edited ?? false, mode: ws?.mode ?? "fit" };
+  const module = trail.at(-1);
+  if (module === undefined || !known(module)) return;
+  const main = createSheet({ module, instance: null });
+  ws = { sheets: [main], trail, mode: ws?.mode ?? "fit" };
   placePanes(ws);
   renderTrail(ws);
   markEdited();
   refit();
 }
 
+/** Panes asked for before the host had their model. */
+const pendingPins: PaneKey[] = [];
+
 /** Open a sheet for `key` beside its readers; a pane already open just stays. */
 function pin(key: PaneKey): void {
   if (!ws || ws.sheets.some((s) => sameKey(s.key, key))) return;
-  const fixture = fixtureOf(key.module);
-  if (fixture === null) return;
-  ws.sheets.push(createSheet(key, fixture));
+  if (!known(key.module)) {
+    if (!pendingPins.some((k) => sameKey(k, key))) pendingPins.push(key);
+    host.request(key.module);
+    return;
+  }
+  ws.sheets.push(createSheet(key));
   placePanes(ws);
   render();
+}
+
+/** Take fresh models from the host: every sheet showing one of them is re-laid out in place. */
+function adoptModels(models: ViewModel[]): void {
+  if (!ws) return;
+  let changed = false;
+  for (const model of models) {
+    for (const sheet of ws.sheets) {
+      if (sheet.model.module.id !== model.module.id) continue;
+      sheet.model = model;
+      sheet.base = orderByBarycenter(computeLayout(model), model);
+      changed = true;
+    }
+  }
+  for (const key of pendingPins.splice(0)) {
+    if (known(key.module)) pin(key);
+    else pendingPins.push(key);
+  }
+  if (changed) {
+    render();
+    renderFormula();
+  }
+  markEdited();
 }
 
 function unpin(sheet: Sheet): void {
@@ -605,7 +626,7 @@ panesEl.addEventListener("click", (event) => {
   const s = sheetOf(target);
   if (!s) return;
   if (target.closest(".pane-file")) {
-    open([...ws.trail, s.fixture]);
+    open([...ws.trail, s.model.module.id]);
     return;
   }
   if (target.closest(".pane-close")) {
@@ -652,16 +673,16 @@ panesEl.addEventListener("click", (event) => {
 });
 
 // ---- live editing ----
-// Every edit is a textual change to the in-memory sources, followed by a full
-// re-evaluation in WASM of every open sheet of that package. Nothing is saved.
-// An edit that fails to compile is rolled back and its message shown; the
-// editor stays open with the text.
+// Every edit is a textual change to a source file, handed to the host. The
+// dev shell rewrites an in-memory copy and re-projects the open sheets in
+// WASM; VS Code edits the document and the language server's fresh model
+// arrives later. An edit the host refuses shows its message; the editor
+// stays open with the text.
 
-/** A pending change: which file, its new text, and how the model changes on success. */
+/** A pending change: which file and its new text. */
 interface Edit {
   file: string;
   next: string;
-  onModel: () => void;
 }
 
 let evaluating: Promise<void> = Promise.resolve();
@@ -670,52 +691,27 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-/** Apply an edit: swap the source, evaluate each sheet of the project, fold the values back in, re-render. */
+/** Hand an edit to the host, one at a time, and take back whatever models it re-projected. */
 function applyEdit(s: Sheet, edit: Edit): Promise<boolean> {
   const current = ws;
-  const project = s.project;
-  if (!current || !project) return Promise.resolve(false);
+  if (!current) return Promise.resolve(false);
   const run = async (): Promise<boolean> => {
-    const previous = project.files.get(edit.file);
-    if (previous === undefined) {
-      showNote(`unknown file ${edit.file}`);
-      return false;
-    }
-    project.files.set(edit.file, edit.next);
     showNote("evaluating…", "busy");
-    const sheets = current.sheets.filter((other) => other.project === project);
-    const rollback = (message: string): false => {
-      project.files.set(edit.file, previous);
-      showNote(message);
+    const open = current.sheets.map((sheet) => sheet.model.module.id);
+    let result;
+    try {
+      result = await host.edit(s.model, edit, open);
+    } catch (error) {
+      showNote(errorMessage(error));
       return false;
-    };
-    const evaluations: Evaluation[] = [];
-    for (const sheet of sheets) {
-      let outcome;
-      try {
-        outcome = await evaluateProject(sheet.model.module.file, project.request());
-      } catch (error) {
-        return rollback(errorMessage(error));
-      }
-      if (outcome.status !== "evaluated") {
-        return rollback(
-          outcome.status === "rejected"
-            ? outcome.error.message
-            : (outcome.diagnostics[0]?.message ?? "compile error"),
-        );
-      }
-      evaluations.push(outcome.evaluation);
     }
     if (ws !== current) return false;
-    edit.onModel();
-    sheets.forEach((sheet, i) => {
-      const evaluation = evaluations[i];
-      if (evaluation) applyEvaluation(sheet.model, evaluation);
-      sheet.base = orderByBarycenter(computeLayout(sheet.model), sheet.model);
-    });
-    current.edited = true;
-    render();
-    markEdited();
+    if (!result.ok) {
+      showNote(result.message);
+      return false;
+    }
+    showNote(null);
+    adoptModels(result.models);
     return true;
   };
   const result = evaluating.then(run, run);
@@ -741,31 +737,35 @@ function literalFor(node: ViewNode, text: string): string {
   return node.unit ? `${number} ${node.unit}` : number;
 }
 
+/** The file a node is declared in and its text, when the host has it. */
+function sourceOf(s: Sheet, node: ViewNode): { file: string; source: string } | null {
+  const file = node.source?.file ?? null;
+  const source = file === null ? null : host.source(s.model, file);
+  return file === null || source === null ? null : { file, source };
+}
+
 /** Replace the whole expression of a node (formula bar). */
 function editExpr(s: Sheet, node: ViewNode, next: string): Promise<boolean> {
-  const project = s.project;
   const expr = editableExpr(s, node);
-  const file = project ? project.fileOf(s.model, node.module) : null;
-  if (!project || expr === null || file === null || node.source === null) {
+  const at = sourceOf(s, node);
+  if (expr === null || at === null || node.source === null) {
     showNote("this expression cannot be edited");
     return Promise.resolve(false);
   }
-  const source = project.files.get(file) ?? "";
+  const { file, source } = at;
   let rewritten: string;
   try {
-    rewritten = replaceExpr(source, node.source.line, expr, next);
+    // The compiler's range pins the expression; the verbatim search is the
+    // fallback for a model that carries no range.
+    const range = node.source.expr_range;
+    rewritten = range
+      ? replaceRange(source, range, next)
+      : replaceExpr(source, node.source.line, node.expr ?? expr, next);
   } catch (error) {
     showNote(error instanceof EditError ? error.message : errorMessage(error));
     return Promise.resolve(false);
   }
-  return applyEdit(s, {
-    file,
-    next: rewritten,
-    onModel: () => {
-      node.expr = next;
-      node.deps = depsOf(next, s.model);
-    },
-  });
+  return applyEdit(s, { file, next: rewritten });
 }
 
 /** Replace one entry of a table literal, or the literal of a scalar param. */
@@ -777,13 +777,12 @@ function editCell(
   text: string,
 ): Promise<boolean> {
   if (row === null) return editExpr(s, node, literalFor(node, text));
-  const project = s.project;
-  const file = project ? project.fileOf(s.model, node.module) : null;
-  if (!project || file === null || node.source === null) {
+  const at = sourceOf(s, node);
+  if (at === null || node.source === null) {
     showNote("this value cannot be edited");
     return Promise.resolve(false);
   }
-  const source = project.files.get(file) ?? "";
+  const { file, source } = at;
   let rewritten: string;
   try {
     rewritten = replaceTableCell(source, node.source.line, row, sub, literalFor(node, text));
@@ -791,7 +790,7 @@ function editCell(
     showNote(error instanceof EditError ? error.message : errorMessage(error));
     return Promise.resolve(false);
   }
-  return applyEdit(s, { file, next: rewritten, onModel: () => undefined });
+  return applyEdit(s, { file, next: rewritten });
 }
 
 /** Wire an input: Enter or blur commits, Escape cancels; the input stays while evaluating. */
@@ -871,7 +870,6 @@ function startFormulaEdit(): void {
 
 /** Edit a param cell or scalar box in place; other nodes edit through the formula bar. */
 function startCellEdit(s: Sheet, cell: HTMLElement): void {
-  if (!s.project) return;
   const id = cell.dataset.node;
   const node = s.model.nodes.find((n) => n.id === id);
   if (!node) return;
@@ -920,13 +918,12 @@ formulaEl.addEventListener("click", (event) => {
 const resetEl = button("bar-reset", "edited · reset", "discard the in-memory edits and reload");
 resetEl.hidden = true;
 resetEl.addEventListener("click", () => {
-  projects.clear();
-  if (ws) ws.edited = false;
+  host.reset();
   open(ws?.trail ?? [fixtureEl.value]);
 });
 
 function markEdited(): void {
-  resetEl.hidden = !ws?.edited;
+  resetEl.hidden = !host.edited;
 }
 
 // Context menus: on a ruler label, hide the picked rows or show only them; on
@@ -1009,24 +1006,19 @@ function rowMenu(s: Sheet, label: HTMLElement, event: MouseEvent): void {
 /** `Open eps.gcl` goes there (the trail leads back); `Pin eps beside` opens it as a pane. */
 function externalMenu(w: Workspace, node: ViewNode, event: MouseEvent): void {
   const key = { module: node.module, instance: node.instance };
-  const fixture = fixtureOf(node.module);
-  const file = `${node.module.split(".").at(-1) ?? node.module}.gcl`;
+  const file = fileNameOfModule(node.module);
   const pinned = w.sheets.find((other) => sameKey(other.key, key));
   openMenu(event.clientX, event.clientY, [
     {
       label: `Open ${file}`,
-      disabled: fixture === null,
+      disabled: !known(node.module),
       run: () => {
-        if (fixture !== null) open([...w.trail, fixture]);
+        if (known(node.module)) open([...w.trail, node.module]);
       },
     },
     pinned
       ? { label: `Unpin ${node.instance ?? file}`, run: () => unpin(pinned) }
-      : {
-          label: `Pin ${node.instance ?? file} beside`,
-          disabled: fixture === null,
-          run: () => pin(key),
-        },
+      : { label: `Pin ${node.instance ?? file} beside`, run: () => pin(key) },
   ]);
 }
 
@@ -1067,21 +1059,23 @@ panesEl.addEventListener("dblclick", (event) => {
   render();
 });
 
-for (const name of fixtureNames) {
+for (const module of host.modules) {
   const option = document.createElement("option");
-  option.value = name;
-  option.textContent = shortName(name);
+  option.value = module;
+  option.textContent = module;
   fixtureEl.append(option);
 }
+fixtureEl.closest("label")?.toggleAttribute("hidden", host.modules.length === 0);
 fixtureEl.addEventListener("change", () => open([fixtureEl.value]));
-// Warm the engine so the first edit does not wait for the download.
-void loadEngine().catch(() => undefined);
+host.onModels(adoptModels);
+host.onOpen((module) => open([module]));
+host.onNote((message) => showNote(message));
 let lastWidth = document.documentElement.clientWidth;
 window.addEventListener("resize", () => {
   const width = document.documentElement.clientWidth;
   if (width === lastWidth) return;
   lastWidth = width;
-  refit();
+  relayout();
 });
 // Wheel: pan; with ctrl / cmd (or a trackpad pinch): zoom around the cursor.
 canvasEl.addEventListener(
