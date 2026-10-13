@@ -16,7 +16,7 @@ import { spansOf, subjectTokens, tokenize, type Token } from "./formula.ts";
 import { parseViewModel, type ViewModel, type ViewNode } from "./model.ts";
 import { depthsOf, sameKey, type PaneKey } from "./panes.ts";
 import { EditError, projectFor, replaceExpr, replaceTableCell, type Project } from "./project.ts";
-import { placeHalo, renderView, RULER_WIDTH, type RenderOptions } from "./render.ts";
+import { externalIcon, placeHalo, renderView, RULER_WIDTH, type RenderOptions } from "./render.ts";
 import { hiddenOf, pick, type Hidden, type Picked } from "./rows.ts";
 import { trace, type Selection } from "./selection.ts";
 import { displayOf, valueAt } from "./values.ts";
@@ -226,7 +226,7 @@ function renderPaneHead(w: Workspace, sheet: Sheet): void {
       ? "· import · pinned"
       : `as ${sheet.key.instance} · include · pinned`;
   head.append(
-    span("pane-mark", "↗"),
+    externalIcon(),
     button("pane-file", name, `open ${name}`),
     span("pane-sub", sub),
     button("pane-close", "×", "unpin"),

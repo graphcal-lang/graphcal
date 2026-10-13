@@ -12,11 +12,27 @@ const MARK: Record<NodeKind, string> = {
   external: "◇",
 };
 
-/** The kind's mark; an external is a param diamond with a small arrow: taken from elsewhere. */
-function renderMark(kind: NodeKind): HTMLElement {
-  const mark = el("span", `mark${kind === "external" ? " mark-external" : ""}`, MARK[kind]);
-  if (kind === "external") mark.append(el("i", "mark-arrow", "↗"));
-  return mark;
+const SVG_NS = "http://www.w3.org/2000/svg";
+
+/** The external mark: a param diamond with an arrow leaving its top right corner. */
+export function externalIcon(): SVGSVGElement {
+  const svg = document.createElementNS(SVG_NS, "svg");
+  svg.setAttribute("class", "mark mark-external");
+  svg.setAttribute("viewBox", "0 0 12 12");
+  svg.setAttribute("width", "12");
+  svg.setAttribute("height", "12");
+  svg.setAttribute("aria-hidden", "true");
+  for (const d of ["M4.5 4 L8 7.5 L4.5 11 L1 7.5 Z", "M7 5 L11 1", "M8 1 H11 V4"]) {
+    const path = document.createElementNS(SVG_NS, "path");
+    path.setAttribute("d", d);
+    svg.append(path);
+  }
+  return svg;
+}
+
+/** The kind's mark; an external is a param diamond with an arrow: taken from elsewhere. */
+function renderMark(kind: NodeKind): Element {
+  return kind === "external" ? externalIcon() : el("span", "mark", MARK[kind]);
 }
 
 function fileOf(module: string): string {

@@ -425,12 +425,12 @@ body {
 .ruler-unrolled {
   color: var(--sel);
 }
-/* an imported axis: the file it comes from, small, above the name */
+/* taken from another file: that file, small, above the name */
 .ruler-origin,
 .col-origin {
   font-size: 9px;
   line-height: 1;
-  color: var(--muted);
+  color: var(--power);
   white-space: nowrap;
 }
 .ruler-box.imported {
@@ -599,16 +599,14 @@ body {
   color: var(--power);
 }
 .mark-external {
-  position: relative;
-  display: inline-block;
-}
-.mark-arrow {
-  position: absolute;
-  right: -7px;
-  top: -5px;
-  font-size: 9px;
-  font-style: normal;
-  line-height: 1;
+  flex: none;
+  align-self: center;
+  color: var(--power);
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 .col-head.kind-external {
   padding: 2px 8px 2px;
@@ -818,7 +816,7 @@ body {
 .panes.multi .pane-head {
   display: flex;
 }
-.pane-mark,
+
 .pane-file {
   color: var(--sel);
 }
