@@ -9,6 +9,7 @@ import {
   type Layout,
   type Zone,
 } from "./layout.ts";
+import { spansOf, subjectTokens, tokenize, type Token } from "./formula.ts";
 import { parseViewModel, type ViewModel } from "./model.ts";
 import { placeHalo, renderView, RULER_WIDTH, type RenderOptions } from "./render.ts";
 import { hiddenOf, pick, type Hidden, type Picked } from "./rows.ts";
@@ -98,15 +99,18 @@ function renderOptions(s: State): RenderOptions {
   return { folded: s.folded, hidden: s.hidden };
 }
 
-function describeSelection(s: State): string {
+/** `subject = expr = value`, coloured like the editor. Empty when nothing is selected. */
+function describeSelection(s: State): Token[] {
   const { selection, model } = s;
-  if (!selection) return "";
+  if (!selection) return [];
   const node = model.nodes.find((n) => n.id === selection.id);
   const labels = [selection.row, selection.sub].filter((x): x is string => x !== null);
-  const subject = labels.length > 0 ? `${selection.id}[${labels.join(", ")}]` : selection.id;
   const value = displayOf(valueAt(node?.value ?? null, labels));
-  const expr = node?.expr ? ` = ${node.expr}` : "";
-  return `${subject}${expr} = ${value}`;
+  const eq: Token = { text: " = ", cls: "operator" };
+  const tokens = subjectTokens(selection.id, labels);
+  if (node?.expr) tokens.push(eq, ...tokenize(node.expr));
+  tokens.push(eq, ...tokenize(value));
+  return tokens;
 }
 
 function clearHighlights(): void {
@@ -124,7 +128,10 @@ function clearHighlights(): void {
 function applySelection(): void {
   if (!state) return;
   clearHighlights();
-  formulaEl.textContent = describeSelection(state);
+  const line = document.createElement("span");
+  line.className = "formula-line";
+  line.append(...spansOf(describeSelection(state)));
+  formulaEl.replaceChildren(line);
   formulaEl.classList.toggle("active", state.selection !== null);
   const { selection, model, layout } = state;
   if (!selection) return;

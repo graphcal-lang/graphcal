@@ -84,7 +84,52 @@ body {
   text-overflow: ellipsis;
 }
 .formula.active {
-  color: var(--sel);
+  color: var(--text);
+}
+.formula-line {
+  white-space: pre;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Token colours follow VS Code's Dark+ theme for the scopes the Graphcal
+   grammar emits, so the bar reads like the editor. */
+.tok-comment {
+  color: #6a9955;
+}
+.tok-string {
+  color: #ce9178;
+}
+.tok-keyword {
+  color: #c586c0;
+}
+.tok-builtin,
+.tok-function {
+  color: #dcdcaa;
+}
+.tok-number {
+  color: #b5cea8;
+}
+.tok-unit,
+.tok-type,
+.tok-namespace {
+  color: #4ec9b0;
+}
+.tok-variable {
+  color: #9cdcfe;
+}
+.tok-constant {
+  color: #4fc1ff;
+}
+.tok-language {
+  color: #569cd6;
+}
+.tok-variable-punct,
+.tok-accessor,
+.tok-operator,
+.tok-punctuation,
+.tok-plain {
+  color: #d4d4d4;
 }
 
 /* ---- view ---- */
