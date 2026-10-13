@@ -3,7 +3,7 @@
 // replacements on the editor's documents. The server re-analyzes the changed
 // document and the extension sends the fresh model, so an edit resolves at
 // once and the view updates when the model arrives.
-import type { EditResult, Host, SourceEdit } from "./host.ts";
+import type { EditResult, Host, NoteKind, SourceEdit } from "./host.ts";
 import { parseViewModel, type ViewModel } from "./model.ts";
 
 /** Messages from the extension. */
@@ -53,7 +53,7 @@ export class VsCodeHost implements Host {
   private readonly sources = new Map<string, string>();
   private readonly modelListeners: ((models: ViewModel[]) => void)[] = [];
   private readonly openListeners: ((module: string) => void)[] = [];
-  private readonly noteListeners: ((message: string | null) => void)[] = [];
+  private readonly noteListeners: ((message: string | null, kind: NoteKind) => void)[] = [];
   /** The module shown as the main sheet; a fresh model of it updates in place. */
   private mainModule: string | null = null;
 
@@ -91,7 +91,7 @@ export class VsCodeHost implements Host {
   }
 
   private note(message: string | null): void {
-    for (const listener of this.noteListeners) listener(message);
+    for (const listener of this.noteListeners) listener(message, "error");
   }
 
   model(module: string): ViewModel | null {
@@ -128,7 +128,7 @@ export class VsCodeHost implements Host {
     this.openListeners.push(listener);
   }
 
-  onNote(listener: (message: string | null) => void): void {
+  onNote(listener: (message: string | null, kind: NoteKind) => void): void {
     this.noteListeners.push(listener);
   }
 }

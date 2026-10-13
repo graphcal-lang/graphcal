@@ -106,6 +106,8 @@ export const viewOutcomeSchema = z.discriminatedUnion("status", [
 interface Prepared {
   evaluateReport(bindings: unknown[]): unknown;
   evaluateView(bindings: unknown[]): unknown;
+  /** The entry file's view without values, or null when it has no view. */
+  viewStructure(): unknown;
   free(): void;
 }
 interface Engine {
@@ -162,19 +164,25 @@ export async function evaluateProject(entry: string, files: ProjectFile[]): Prom
   }
 }
 
+/** Why a project could not be prepared, in one line. */
+function prepareFailure(outcome: Outcome): string {
+  if (outcome.status === "rejected") return outcome.error.message;
+  if (outcome.status === "compile_error") {
+    const first = outcome.diagnostics[0];
+    if (!first) return "compile error";
+    const where = first.path ? ` (${first.path}:${first.range?.start.line ?? "?"})` : "";
+    return `${first.message}${where}`;
+  }
+  return "unexpected outcome";
+}
+
 /** Evaluate a project and return its entry file's ViewModel with values, or the failure message. */
 export async function evaluateView(
   entry: string,
   files: ProjectFile[],
 ): Promise<{ view: unknown } | { error: string }> {
   const prepared = await prepare(entry, files);
-  if (isOutcome(prepared)) {
-    if (prepared.status === "rejected") return { error: prepared.error.message };
-    if (prepared.status === "compile_error") {
-      return { error: prepared.diagnostics[0]?.message ?? "compile error" };
-    }
-    return { error: "unexpected outcome" };
-  }
+  if (isOutcome(prepared)) return { error: prepareFailure(prepared) };
   try {
     const outcome = viewOutcomeSchema.parse(prepared.evaluateView([]));
     switch (outcome.status) {
@@ -185,6 +193,32 @@ export async function evaluateView(
       default:
         return { error: outcome.message };
     }
+  } finally {
+    prepared.free();
+  }
+}
+
+/**
+ * The entry file's view: with values when the project evaluates, structure
+ * only when it does not run on its own (a library whose required params are
+ * bound by its includers). A compile failure is still an error.
+ */
+export async function viewOf(
+  entry: string,
+  files: ProjectFile[],
+): Promise<{ view: unknown; valued: boolean; note: string | null } | { error: string }> {
+  const prepared = await prepare(entry, files);
+  if (isOutcome(prepared)) return { error: prepareFailure(prepared) };
+  try {
+    const outcome = viewOutcomeSchema.parse(prepared.evaluateView([]));
+    if (outcome.status === "evaluated") return { view: outcome.view, valued: true, note: null };
+    const message =
+      outcome.status === "binding_errors"
+        ? outcome.errors.map((e) => `${e.name}: ${e.message}`).join("; ")
+        : outcome.message;
+    const structure = prepared.viewStructure();
+    if (structure === null || structure === undefined) return { error: message };
+    return { view: structure, valued: false, note: message };
   } finally {
     prepared.free();
   }

@@ -49,7 +49,25 @@ playground-check:
 playground-test: playground-assets
     cd web/playground && vp test
 
-lint: formal pipeline-layers-lint playground-check refactor-metrics reading-order
+# The view shares the playground's Wasm engine; the published page loads it from its own /view/pkg/.
+view-assets: playground-assets
+    rm -rf web/view/public/pkg
+    mkdir -p web/view/public
+    cp -R web/playground/public/pkg web/view/public/pkg
+
+view-build: view-assets view-check view-test
+    cd web/view && vp build
+
+view-serve: view-assets
+    cd web/view && vp dev
+
+view-check:
+    cd web/view && vp check
+
+view-test:
+    cd web/view && vp test
+
+lint: formal pipeline-layers-lint playground-check view-check refactor-metrics reading-order
     cargo audit --deny warnings
     CARGO_BUILD_WARNINGS=deny cargo clippy --workspace --all-targets --all-features
     CARGO_BUILD_WARNINGS=deny cargo clippy --workspace --all-targets --no-default-features
@@ -58,7 +76,7 @@ lint: formal pipeline-layers-lint playground-check refactor-metrics reading-orde
     CARGO_BUILD_WARNINGS=deny cargo doc --workspace --no-deps
     CARGO_BUILD_WARNINGS=deny cargo check --workspace
 
-test: formal-conformance pipeline-layers playground-test
+test: formal-conformance pipeline-layers playground-test view-test
     cargo test --workspace
     just wasm-report
     node internals/report-runtime-tests.mjs
@@ -121,14 +139,14 @@ docs-render:
     zensical build --config-file zensical.toml --clean --strict
     zensical build --config-file zensical.ja.toml --clean --strict
 
-# Assemble only after both documentation builds and the playground succeed.
+# Assemble only after both documentation builds, the playground and the view succeed.
 docs-assemble:
     vp -C web/playground exec node --test ../../internals/site-assemble.test.mjs
     vp -C web/playground exec node ../../internals/site-assemble.mjs
     vp -C web/playground exec node ../../internals/site-verify.mjs
 
 # Build and verify the entire GitHub Pages artifact with the same steps as CI.
-docs-build: playground-build docs-render
+docs-build: playground-build view-build docs-render
     just docs-assemble
 
 # Run against the assembled artifact, with real workers in all three engines.

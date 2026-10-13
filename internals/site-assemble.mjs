@@ -10,6 +10,7 @@ export async function assembleSite(root) {
     "target/docs-site/en/404.html",
     "target/docs-site/ja/index.html",
     "web/playground/dist/index.html",
+    "web/view/dist/index.html",
     "site-root/index.html",
     "site-root/CNAME",
   ]) {
@@ -27,6 +28,7 @@ export async function assembleSite(root) {
   await cp(new URL("web/playground/dist/", root), new URL("site/playground/", root), {
     recursive: true,
   });
+  await cp(new URL("web/view/dist/", root), new URL("site/view/", root), { recursive: true });
 }
 
 if (process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.meta.url) {

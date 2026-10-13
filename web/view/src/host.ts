@@ -35,10 +35,14 @@ export interface Host {
   request(module: string): void;
   /** Discard what-if edits, when the host keeps any. */
   reset(): void;
+  /** The main sheet now shows `module`; a host may reflect it (in the address, say). */
+  shown?(module: string): void;
   /** Fresh models, pushed by the host: after an edit, an external change, or a request. */
   onModels(listener: (models: ViewModel[]) => void): void;
   /** The host asks to show another module as the main sheet. */
   onOpen(listener: (module: string) => void): void;
-  /** The host has something to say in the formula bar's note slot. */
-  onNote(listener: (message: string | null) => void): void;
+  /** The host has something to say in the formula bar's note slot; `busy` is progress, not a fault. */
+  onNote(listener: (message: string | null, kind: NoteKind) => void): void;
 }
+
+export type NoteKind = "error" | "busy";

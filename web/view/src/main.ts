@@ -12,9 +12,13 @@ import {
 import { crossLinks, drawCrossWires, extraLanes, type CrossSheet } from "./cross.ts";
 import { FixtureHost } from "./fixtureHost.ts";
 import { spansOf, subjectTokens, tokenize, type Token } from "./formula.ts";
-import type { Host } from "./host.ts";
+import { mountGitHubBar } from "./githubBar.ts";
+import { GitHubHost } from "./githubHost.ts";
+import type { Host, NoteKind } from "./host.ts";
+import { TokenStore } from "./login.ts";
 import type { ViewModel, ViewNode } from "./model.ts";
 import { depthsOf, sameKey, type PaneKey } from "./panes.ts";
+import { parseRoute } from "./route.ts";
 import { EditError, replaceExpr, replaceRange, replaceTableCell } from "./source.ts";
 import { inVsCode, VsCodeHost } from "./vscodeHost.ts";
 import { EXTERNAL_MARK, placeHalo, renderView, RULER_WIDTH, type RenderOptions } from "./render.ts";
@@ -23,8 +27,18 @@ import { trace, type Selection } from "./selection.ts";
 import { displayOf, oneLine, valueAt } from "./values.ts";
 import { drawWires, planRoutes, type RoutePlan } from "./wires.ts";
 
-/** Where models come from and edits go: the extension in VS Code, bundled fixtures otherwise. */
-const host: Host = inVsCode() ? new VsCodeHost() : new FixtureHost();
+/**
+ * Where models come from and edits go: the extension in VS Code; a GitHub
+ * repository when the address names one (`#owner/repo@ref/path.gcl`); the
+ * bundled fixtures otherwise.
+ */
+const route = inVsCode() ? null : parseRoute(location.hash);
+const tokens = new TokenStore();
+const host: Host = inVsCode()
+  ? new VsCodeHost()
+  : route
+    ? new GitHubHost(route, tokens)
+    : new FixtureHost();
 
 /** Whether the host has a model for `module`. */
 function known(module: string): boolean {
@@ -47,6 +61,8 @@ const SVG_NS = "http://www.w3.org/2000/svg";
 const panesEl = need<HTMLElement>("#panes");
 const crossEl = need<SVGSVGElement>("#cross");
 const fileEl = need<HTMLElement>("#file");
+const originEl = need<HTMLElement>("#origin");
+const githubEl = need<HTMLElement>("#github");
 const formulaEl = need<HTMLElement>("#formula");
 const fixtureEl = need<HTMLSelectElement>("#fixture");
 const stageEl = need<HTMLElement>("#stage");
@@ -254,10 +270,16 @@ function renderFormula(): void {
   const line = document.createElement("span");
   line.className = "formula-line";
   const hit = selected(s);
+  // A note (an error, progress) outlives the selection it was shown with.
+  const note = formulaEl.querySelector(".formula-note");
+  const show = (...children: Element[]): void => {
+    formulaEl.replaceChildren(...children);
+    if (note) formulaEl.append(note);
+  };
   formulaEl.classList.toggle("active", hit !== null);
   formulaEl.classList.remove("editing");
   if (!hit) {
-    formulaEl.replaceChildren(line);
+    show(line);
     return;
   }
   const { node, labels } = hit;
@@ -274,7 +296,7 @@ function renderFormula(): void {
     line.append(...spansOf([eq()]), expr);
   }
   line.append(...spansOf([eq(), ...tokenize(displayOf(valueAt(node.value, labels)))]));
-  formulaEl.replaceChildren(line);
+  show(line);
 }
 
 function showNote(message: string | null, kind: "error" | "busy" = "error"): void {
@@ -535,8 +557,24 @@ function open(trail: string[]): void {
   ws = { sheets: [main], trail, mode: ws?.mode ?? "fit" };
   placePanes(ws);
   renderTrail(ws);
+  renderPicker();
   markEdited();
   refit();
+  host.shown?.(module);
+}
+
+/** The module picker lists what the host offers and points at the main sheet. */
+function renderPicker(): void {
+  const current = ws ? mainSheet(ws).model.module.id : fixtureEl.value;
+  fixtureEl.replaceChildren();
+  for (const module of host.modules) {
+    const option = document.createElement("option");
+    option.value = module;
+    option.textContent = module;
+    fixtureEl.append(option);
+  }
+  if (host.modules.includes(current)) fixtureEl.value = current;
+  fixtureEl.closest("label")?.toggleAttribute("hidden", host.modules.length === 0);
 }
 
 /** Panes asked for before the host had their model. */
@@ -575,6 +613,7 @@ function adoptModels(models: ViewModel[]): void {
     render();
     renderFormula();
   }
+  renderPicker();
   markEdited();
 }
 
@@ -1059,17 +1098,12 @@ panesEl.addEventListener("dblclick", (event) => {
   render();
 });
 
-for (const module of host.modules) {
-  const option = document.createElement("option");
-  option.value = module;
-  option.textContent = module;
-  fixtureEl.append(option);
-}
-fixtureEl.closest("label")?.toggleAttribute("hidden", host.modules.length === 0);
+renderPicker();
 fixtureEl.addEventListener("change", () => open([fixtureEl.value]));
 host.onModels(adoptModels);
 host.onOpen((module) => open([module]));
-host.onNote((message) => showNote(message));
+host.onNote((message: string | null, kind: NoteKind) => showNote(message, kind));
+if (host instanceof GitHubHost) mountGitHubBar(host, tokens, originEl, githubEl);
 let lastWidth = document.documentElement.clientWidth;
 window.addEventListener("resize", () => {
   const width = document.documentElement.clientWidth;
@@ -1170,3 +1204,6 @@ for (const modeButton of modeButtons) {
 }
 new ResizeObserver(() => redraw()).observe(panesEl);
 if (fixtureEl.value) open([fixtureEl.value]);
+if (!route && !inVsCode() && location.hash.length > 1) {
+  showNote(`not a file address: ${location.hash} (expected #owner/repo@ref/path.gcl)`);
+}
