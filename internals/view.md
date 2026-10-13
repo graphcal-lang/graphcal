@@ -5,8 +5,8 @@ model (`graphcal view`, the LSP's `graphcal/viewModel`, or the Wasm
 `evaluateView`) laid out as columns and wires. The same code runs in three
 hosts, chosen at start in `src/main.ts`:
 
-- `FixtureHost`: the dev shell, from the bundled `fixtures/*.view.json` and
-  the fixture projects' sources (`just view-serve`).
+- `EmptyHost`: the page with no address, which only asks for a file
+  (`src/start.ts`: a pasted GitHub file URL or `owner/repo/path.gcl`).
 - `VsCodeHost`: the VS Code webview, fed by the extension
   (`vite.webview.config.ts` builds that bundle).
 - `GitHubHost`: the published viewer at `https://graphcal.org/view/`, when the

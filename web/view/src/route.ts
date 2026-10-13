@@ -38,6 +38,25 @@ export function formatRoute(route: Route): string {
   return `#${route.owner}/${route.repo}${ref}/${route.path}`;
 }
 
+/**
+ * The route in what a person pastes: a GitHub file URL
+ * (`https://github.com/o/r/blob/ref/path.gcl`), the fragment form with or
+ * without its `#`, or the short `owner/repo/path.gcl` (default branch).
+ */
+export function routeFromText(text: string): Route | null {
+  const trimmed = text.trim();
+  const url =
+    /^(?:https?:\/\/)?(?:www\.)?github\.com\/([^/]+)\/([^/]+)\/(?:blob|tree|raw)\/([^/]+)\/(.+)$/.exec(
+      trimmed,
+    );
+  if (url) {
+    const [, owner = "", repo = "", ref = "", path = ""] = url;
+    // A branch with a slash is ambiguous in a GitHub URL; one written encoded is taken as is.
+    return parseRoute(`${owner}/${repo.replace(/\.git$/, "")}@${ref}/${path}`);
+  }
+  return parseRoute(trimmed.startsWith("#") ? trimmed : `#${trimmed}`);
+}
+
 /** `repo @ ref`, for the bar (the owner is in the address and the explorer's tooltip). */
 export function describeRoute(route: Route, resolvedRef: string | null = route.ref): string {
   const ref = resolvedRef ?? "default branch";

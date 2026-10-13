@@ -1,5 +1,5 @@
 // The host a view runs in: where its models come from and where its edits go.
-// The dev shell is hosted by bundled fixtures and the in-browser engine; the
+// The web page is hosted by a GitHub repository and the in-browser engine; the
 // VS Code webview is hosted by the extension, which talks to the language
 // server. The sheet code only ever sees this interface.
 import type { ViewModel } from "./model.ts";

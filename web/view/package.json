@@ -7,7 +7,6 @@
     "dev": "vp dev",
     "build": "tsc && vp build",
     "preview": "vp preview",
-    "fixtures": "node fixtures/export.mjs && vp fmt fixtures",
     "engine": "wasm-pack build ../../crates/graphcal-wasm --target web --out-dir ../../web/view/public/pkg --profile wasm-release --no-typescript --no-pack"
   },
   "dependencies": {

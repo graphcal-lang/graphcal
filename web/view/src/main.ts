@@ -12,7 +12,6 @@ import {
 import { crossLinks, drawCrossWires, extraLanes, type CrossSheet } from "./cross.ts";
 import { SourceEditor, type Inlay } from "./editor.ts";
 import { Explorer, type RefSource } from "./explorer.ts";
-import { FixtureHost } from "./fixtureHost.ts";
 import { spansOf, subjectTokens, tokenize, type Token } from "./formula.ts";
 import { mountGitHubBar } from "./githubBar.ts";
 import { GitHubHost } from "./githubHost.ts";
@@ -22,6 +21,7 @@ import type { ViewModel, ViewNode } from "./model.ts";
 import { depthsOf, sameKey, type PaneKey } from "./panes.ts";
 import { parseRoute } from "./route.ts";
 import { EditError, replaceExpr, replaceRange, replaceTableCell } from "./source.ts";
+import { EmptyHost, mountStart } from "./start.ts";
 import { inVsCode, VsCodeHost } from "./vscodeHost.ts";
 import { EXTERNAL_MARK, placeHalo, renderView, RULER_WIDTH, type RenderOptions } from "./render.ts";
 import { hiddenOf, pick, type Hidden, type Picked } from "./rows.ts";
@@ -31,8 +31,8 @@ import { drawWires, planRoutes, type RoutePlan } from "./wires.ts";
 
 /**
  * Where models come from and edits go: the extension in VS Code; a GitHub
- * repository when the address names one (`#owner/repo@ref/path.gcl`); the
- * bundled fixtures otherwise.
+ * repository when the address names one (`#owner/repo@ref/path.gcl`); with
+ * no address the page only asks for one.
  */
 const route = inVsCode() ? null : parseRoute(location.hash);
 const tokens = new TokenStore();
@@ -40,9 +40,9 @@ const host: Host = inVsCode()
   ? new VsCodeHost()
   : route
     ? new GitHubHost(route, tokens)
-    : new FixtureHost();
+    : new EmptyHost();
 /** The web shell has the explorer, the code pane and the layout toggle; VS Code brings its own. */
-const webShell = !inVsCode();
+const webShell = !inVsCode() && route !== null;
 
 /** Whether the host has a model for `module`. */
 function known(module: string): boolean {
@@ -79,7 +79,7 @@ const sheetEl = need<HTMLElement>("#sheet");
 const sheetNameEl = need<HTMLElement>("#sheet-name");
 const layoutsEl = need<HTMLElement>("#layouts");
 const formulaEl = need<HTMLElement>("#formula");
-const fixtureEl = need<HTMLSelectElement>("#fixture");
+const startEl = need<HTMLElement>("#start");
 const stageEl = need<HTMLElement>("#stage");
 const canvasEl = need<HTMLElement>("#canvas");
 const zoomEl = need<HTMLButtonElement>("#zoom");
@@ -575,27 +575,12 @@ function open(trail: string[]): void {
   ws = { sheets: [main], trail, mode: ws?.mode ?? "fit" };
   placePanes(ws);
   renderTrail(ws);
-  renderPicker();
   markEdited();
   refit();
   sheetNameEl.replaceChildren(span("", fileNameOf(main.model)), span("sub", "· sheet"));
   syncEditor();
   renderExplorer();
   host.shown?.(module);
-}
-
-/** The module picker lists what the host offers and points at the main sheet. */
-function renderPicker(): void {
-  const current = ws ? mainSheet(ws).model.module.id : fixtureEl.value;
-  fixtureEl.replaceChildren();
-  for (const module of host.modules) {
-    const option = document.createElement("option");
-    option.value = module;
-    option.textContent = module;
-    fixtureEl.append(option);
-  }
-  if (host.modules.includes(current)) fixtureEl.value = current;
-  fixtureEl.closest("label")?.toggleAttribute("hidden", host.modules.length === 0);
 }
 
 /** Panes asked for before the host had their model. */
@@ -634,7 +619,6 @@ function adoptModels(models: ViewModel[]): void {
     render();
     renderFormula();
   }
-  renderPicker();
   markEdited();
   syncEditor();
   renderExplorer();
@@ -982,7 +966,7 @@ const resetEl = button("bar-reset", "edited · reset", "discard the in-memory ed
 resetEl.hidden = true;
 resetEl.addEventListener("click", () => {
   host.reset();
-  open(ws?.trail ?? [fixtureEl.value]);
+  if (ws) open(ws.trail);
 });
 
 function markEdited(): void {
@@ -1122,8 +1106,6 @@ panesEl.addEventListener("dblclick", (event) => {
   render();
 });
 
-renderPicker();
-fixtureEl.addEventListener("change", () => open([fixtureEl.value]));
 host.onModels(adoptModels);
 host.onOpen((module) => open([module]));
 host.onNote((message: string | null, kind: NoteKind) => showNote(message, kind));
@@ -1381,7 +1363,7 @@ const refSource: RefSource | null =
     : null;
 const explorer = webShell
   ? new Explorer(explorerEl, {
-      title: route ? route.repo : "fixtures",
+      title: route?.repo ?? "",
       subtitle: route ? `${route.owner}/${route.repo}` : "",
       refs: refSource,
       onOpen(file) {
@@ -1400,7 +1382,6 @@ function renderExplorer(): void {
   const main = ws ? mainSheet(ws).model : null;
   const selected = main ? (host.pathOf?.(main.module.id) ?? main.module.file) : null;
   explorer.render(files, selected);
-  if (main && !route) explorer.setTitle(main.module.package);
 }
 
 if (webShell) {
@@ -1410,10 +1391,6 @@ if (webShell) {
   arrangement = isArrangement(stored) ? stored : "both";
   layoutsEl.hidden = false;
   crumbEl.hidden = false;
-  if (!route) {
-    originEl.textContent = "fixtures";
-    originEl.hidden = false;
-  }
   for (const b of layoutButtons) {
     b.addEventListener("click", () => {
       if (!isArrangement(b.dataset.layout ?? null)) return;
@@ -1441,7 +1418,9 @@ if (webShell) {
   });
 }
 
-if (fixtureEl.value) open([fixtureEl.value]);
-if (!route && !inVsCode() && location.hash.length > 1) {
-  showNote(`not a file address: ${location.hash} (expected #owner/repo@ref/path.gcl)`);
+if (!route && !inVsCode()) {
+  // No address: the sheet has nothing to show, so the page asks for a file.
+  sheetEl.hidden = true;
+  fileEl.textContent = "";
+  mountStart(startEl, location.hash.length > 1 ? location.hash : null);
 }

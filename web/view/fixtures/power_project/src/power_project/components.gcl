@@ -1,4 +1,0 @@
-pub index Component = { Obc, Radio, Heater, Payload };
-pub index Mode = { Safe, Nominal, Science };
-
-pub const node num: Int = count(for c: Component { 1.0 });

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vite-plus/test";
-import { describeRoute, formatRoute, parseRoute } from "./route.ts";
+import { describeRoute, formatRoute, parseRoute, routeFromText } from "./route.ts";
 
 describe("parseRoute", () => {
   test("owner, repo, ref and path", () => {
@@ -41,4 +41,16 @@ test("describeRoute names the resolved ref", () => {
   const route = { owner: "o", repo: "r", ref: null, path: "a.gcl" };
   expect(describeRoute(route)).toBe("r @ default branch");
   expect(describeRoute(route, "main")).toBe("r @ main");
+});
+
+describe("routeFromText", () => {
+  test("reads a GitHub file URL, a fragment, and the short form", () => {
+    const expected = { owner: "o", repo: "r", ref: "feat/x", path: "src/a.gcl" };
+    expect(routeFromText("https://github.com/o/r/blob/feat%2Fx/src/a.gcl")).toEqual(expected);
+    expect(routeFromText("#o/r@feat%2Fx/src/a.gcl")).toEqual(expected);
+    expect(routeFromText("o/r@feat%2Fx/src/a.gcl")).toEqual(expected);
+    expect(routeFromText("  o/r/src/a.gcl ")).toEqual({ ...expected, ref: null });
+    expect(routeFromText("https://github.com/o/r")).toBeNull();
+    expect(routeFromText("")).toBeNull();
+  });
 });
