@@ -9,37 +9,16 @@ const MARK: Record<NodeKind, string> = {
   const: "○",
   node: "●",
   assert: "✓",
-  external: "◇",
+  /** A param taken from another file: a diamond with a dot inside. */
+  external: "⟐",
 };
-
-const SVG_NS = "http://www.w3.org/2000/svg";
-
-/** The external mark: a param diamond with an arrow arriving at its top right corner, from the file it is taken from. */
-export function externalIcon(): SVGSVGElement {
-  const svg = document.createElementNS(SVG_NS, "svg");
-  svg.setAttribute("class", "mark mark-external");
-  svg.setAttribute("viewBox", "0 0 12 12");
-  svg.setAttribute("width", "12");
-  svg.setAttribute("height", "12");
-  svg.setAttribute("aria-hidden", "true");
-  for (const d of ["M4.5 4 L8 7.5 L4.5 11 L1 7.5 Z", "M11 1 L7 5", "M7 2 V5 H10"]) {
-    const path = document.createElementNS(SVG_NS, "path");
-    path.setAttribute("d", d);
-    svg.append(path);
-  }
-  return svg;
-}
-
-/** The kind's mark; an external is a param diamond with an arrow: taken from elsewhere. */
-function renderMark(kind: NodeKind): Element {
-  return kind === "external" ? externalIcon() : el("span", "mark", MARK[kind]);
-}
 
 function fileOf(module: string): string {
   return `${module.split(".").at(-1) ?? module}.gcl`;
 }
 
 export const RULER_WIDTH = 136;
+export const EXTERNAL_MARK = MARK.external;
 
 function el<K extends keyof HTMLElementTagNameMap>(
   tag: K,
@@ -64,7 +43,7 @@ function renderHead(column: Column, folded = false): HTMLElement {
   // An external names the file it is taken from in small type above its name.
   if (node.kind === "external") head.append(el("div", "col-origin", fileOf(node.module)));
   const title = el("div", "col-title");
-  title.append(renderMark(node.kind), el("span", "name", node.name));
+  title.append(el("span", "mark", MARK[node.kind]), el("span", "name", node.name));
   head.append(title);
   const meta = el("div", "col-meta");
   if (node.dimension !== null) {
