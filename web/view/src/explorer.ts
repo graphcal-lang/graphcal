@@ -12,7 +12,11 @@ export interface TreeRow {
   kind: "dir" | "file";
 }
 
-/** The rows of a tree listing `files`: directories first at each level, names in order. */
+/**
+ * The rows of a tree listing `files`: directories first at each level, names
+ * in order. A directory holding one directory and nothing else is shown with
+ * it on one row (`src/power_project`), as VS Code compacts folders.
+ */
 export function fileTree(files: readonly string[]): TreeRow[] {
   interface Dir {
     dirs: Map<string, Dir>;
@@ -34,10 +38,18 @@ export function fileTree(files: readonly string[]): TreeRow[] {
   }
   const rows: TreeRow[] = [];
   const walk = (dir: Dir, prefix: string, depth: number): void => {
-    for (const name of [...dir.dirs.keys()].sort()) {
-      const path = prefix === "" ? name : `${prefix}/${name}`;
+    for (const first of [...dir.dirs.keys()].sort()) {
+      let name = first;
+      let path = prefix === "" ? first : `${prefix}/${first}`;
+      let child = dir.dirs.get(first) as Dir;
+      while (child.files.length === 0 && child.dirs.size === 1) {
+        const [only] = child.dirs.keys() as Iterable<string>;
+        name = `${name}/${only}`;
+        path = `${path}/${only}`;
+        child = child.dirs.get(only as string) as Dir;
+      }
       rows.push({ path, name, depth, kind: "dir" });
-      walk(dir.dirs.get(name) as Dir, path, depth + 1);
+      walk(child, path, depth + 1);
     }
     for (const name of [...dir.files].sort()) {
       rows.push({ path: prefix === "" ? name : `${prefix}/${name}`, name, depth, kind: "file" });

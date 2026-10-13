@@ -26,6 +26,22 @@ describe("fileTree", () => {
     expect(rows.find((r) => r.name === "lib")?.path).toBe("src/lib");
   });
 
+  test("compacts a directory that holds one directory and nothing else", () => {
+    const rows = fileTree([
+      "power_project/src/power_project/eps.gcl",
+      "power_project/graphcal.toml",
+      "docs/a/b/c.md",
+    ]);
+    expect(rows.map((r) => `${r.depth}:${r.kind}:${r.name}=${r.path}`)).toEqual([
+      "0:dir:docs/a/b=docs/a/b",
+      "1:file:c.md=docs/a/b/c.md",
+      "0:dir:power_project=power_project",
+      "1:dir:src/power_project=power_project/src/power_project",
+      "2:file:eps.gcl=power_project/src/power_project/eps.gcl",
+      "1:file:graphcal.toml=power_project/graphcal.toml",
+    ]);
+  });
+
   test("is empty for no files", () => {
     expect(fileTree([])).toEqual([]);
   });
