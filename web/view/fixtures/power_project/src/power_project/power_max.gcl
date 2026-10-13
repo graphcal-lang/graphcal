@@ -1,7 +1,7 @@
 import power_project.components::{index Component, index Mode, num};
 
 param margin: Dimensionless = 0.2;
-param p_budget: Power = 60.0 W;
+include power_project.eps()::{ p_budget };
 const node eta_dcdc: Dimensionless = 0.9;
 
 param p_unit: Power[Component] = table[Component] {

@@ -46,15 +46,15 @@
     },
     {
       "name": "p_budget",
-      "module": "power_project.power_max",
-      "kind": "param",
+      "module": "power_project.eps",
+      "kind": "external",
       "axes": [],
       "dimension": "Power",
       "unit": "W",
-      "pub": false,
+      "pub": true,
       "deps": [],
-      "line": 4,
-      "expr": "60.0 W",
+      "line": 23,
+      "expr": "if @p_sun_avail < @p_eclipse_avail { @p_sun_avail } else { @p_eclipse_avail }",
       "reduce": null
     },
     {

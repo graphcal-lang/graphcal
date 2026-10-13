@@ -12,6 +12,34 @@
   },
   "incomplete": false,
   "node": {
+    "eps::p_budget": {
+      "si_value": 49.45163609525957,
+      "unit": "m^2*kg/s^3"
+    },
+    "eps::p_charge": {
+      "si_value": 36.0,
+      "unit": "m^2*kg/s^3"
+    },
+    "eps::p_eclipse_avail": {
+      "si_value": 54.27714285714286,
+      "unit": "m^2*kg/s^3"
+    },
+    "eps::p_sa_bol": {
+      "si_value": 99.76612651596733,
+      "unit": "m^2*kg/s^3"
+    },
+    "eps::p_sa_eol": {
+      "si_value": 92.4691696687604,
+      "unit": "m^2*kg/s^3"
+    },
+    "eps::p_sun_avail": {
+      "si_value": 49.45163609525957,
+      "unit": "m^2*kg/s^3"
+    },
+    "eps::t_sun": {
+      "si_value": 3600.0,
+      "unit": "s"
+    },
     "heat_dcdc": {
       "si_value": 4.266666666666667,
       "unit": "m^2*kg/s^3"
@@ -88,6 +116,10 @@
         }
       },
       "index": "Component"
+    },
+    "p_budget": {
+      "si_value": 49.45163609525957,
+      "unit": "m^2*kg/s^3"
     },
     "p_bus": {
       "entries": {
@@ -275,13 +307,51 @@
       },
       "index": "Component"
     },
+    "eps::degradation": {
+      "si_value": 0.025
+    },
+    "eps::dod_max": {
+      "si_value": 0.3
+    },
+    "eps::e_battery": {
+      "display_value": 432.0,
+      "si_value": 432000.0,
+      "unit": "kJ"
+    },
+    "eps::eta_pcdu": {
+      "si_value": 0.92
+    },
+    "eps::mission_years": {
+      "si_value": 3.0
+    },
+    "eps::n_cells": 96,
+    "eps::p_cell_bol": {
+      "display_value": 1.2,
+      "si_value": 1.2,
+      "unit": "W"
+    },
+    "eps::p_eps_self": {
+      "display_value": 2.5,
+      "si_value": 2.5,
+      "unit": "W"
+    },
+    "eps::sun_angle": {
+      "display_value": 29.999999999999996,
+      "si_value": 0.5235987755982988,
+      "unit": "deg"
+    },
+    "eps::t_eclipse": {
+      "display_value": 35.0,
+      "si_value": 2100.0,
+      "unit": "min"
+    },
+    "eps::t_orbit": {
+      "display_value": 95.0,
+      "si_value": 5700.0,
+      "unit": "min"
+    },
     "margin": {
       "si_value": 0.2
-    },
-    "p_budget": {
-      "display_value": 60.0,
-      "si_value": 60.0,
-      "unit": "W"
     },
     "p_unit": {
       "entries": {
