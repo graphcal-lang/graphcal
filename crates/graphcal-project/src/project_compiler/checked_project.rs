@@ -65,6 +65,13 @@ impl CheckedProject {
         &self.sources
     }
 
+    /// The source module path of every file another file imports or
+    /// includes, as its importers spell it.
+    #[must_use]
+    pub const fn module_paths(&self) -> &graphcal_compiler::display::module_paths::ModulePaths {
+        &self.module_paths
+    }
+
     /// Whether the entry DAG still requires runtime inputs.
     #[must_use]
     pub fn is_library(&self) -> bool {

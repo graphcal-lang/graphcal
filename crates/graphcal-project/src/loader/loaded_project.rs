@@ -2,7 +2,7 @@
 //! provenance handed from the loader to project checking.
 
 use std::collections::{BTreeMap, HashMap};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use graphcal_compiler::dag_id::{DagId, DagPackageId};
@@ -96,6 +96,10 @@ pub struct LoadedProject {
     /// Package-scoped plugin fuel settings resolved to typed function identities.
     pub(super) plugin_call_policy: PluginCallPolicy,
     pub(super) package_closure: Option<LoadedPackageClosure>,
+    /// The root package's source directory relative to the project root,
+    /// when the project has a manifest. Module paths are spelled relative to
+    /// it, so a file's identity segments below it are its module path.
+    pub(super) root_source_dir: Option<PathBuf>,
 }
 
 /// Loaded source files in topological load order (dependencies before
@@ -359,7 +363,15 @@ impl LoadedProject {
             plugins,
             plugin_call_policy,
             package_closure: None,
+            root_source_dir: None,
         })
+    }
+
+    /// The root package's source directory relative to the project root;
+    /// `None` for a manifest-less (virtual) package.
+    #[must_use]
+    pub fn root_source_dir(&self) -> Option<&Path> {
+        self.root_source_dir.as_deref()
     }
 
     /// Exact verified dependency closure, when the project has dependencies.

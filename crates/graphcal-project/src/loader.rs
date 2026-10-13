@@ -627,12 +627,11 @@ fn load_project_with_budget_state<F: FileSystemReader>(
         });
     validate_plugin_call_policy(&files, &plugin_call_policy)?;
     cancellation.checkpoint()?;
-    Ok(LoadedProject::from_parts(
-        files,
-        sources,
-        plugins,
-        plugin_call_policy,
-    )?)
+    let mut project = LoadedProject::from_parts(files, sources, plugins, plugin_call_policy)?;
+    project.root_source_dir = manifest
+        .as_ref()
+        .map(|manifest| manifest.source_dir.to_path_buf());
+    Ok(project)
 }
 
 /// Read the root package's plugin pins from `graphcal.lock`, when present.
@@ -694,6 +693,7 @@ fn load_locked_package_project<F: FileSystemReader>(
 ) -> Result<LoadedProject, Outcome<CompileError>> {
     cancellation.checkpoint()?;
     let root_policy = root_manifest.plugin_execution_policy.clone();
+    let root_source_dir = root_manifest.source_dir.to_path_buf();
     let context = PackageLoadContext::from_lockfile(
         project_root,
         root_manifest,
@@ -750,6 +750,7 @@ fn load_locked_package_project<F: FileSystemReader>(
     cancellation.checkpoint()?;
     let mut project = LoadedProject::from_parts(files, sources, plugins, plugin_call_policy)?;
     project.package_closure = Some(context.closure);
+    project.root_source_dir = Some(root_source_dir);
     Ok(project)
 }
 
