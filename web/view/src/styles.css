@@ -197,7 +197,8 @@ body {
 .tok-constant {
   color: #4fc1ff;
 }
-.tok-language {
+.tok-language,
+.tok-declaration {
   color: #569cd6;
 }
 .tok-variable-punct,
@@ -1338,9 +1339,6 @@ body {
 }
 .cm-editor .cm-matchingBracket {
   background: rgba(91, 156, 246, 0.25);
-}
-.cm-editor .tok-bool {
-  color: #569cd6;
 }
 .cm-inlay {
   margin-left: 16px;

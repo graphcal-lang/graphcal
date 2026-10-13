@@ -5,7 +5,7 @@
 // shared: a node picked in the sheet marks its line here, the caret on a
 // declaring line picks that node in the sheet.
 import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
-import { bracketMatching, syntaxHighlighting } from "@codemirror/language";
+import { bracketMatching } from "@codemirror/language";
 import { EditorState, StateEffect, StateField, type Transaction } from "@codemirror/state";
 import {
   Decoration,
@@ -18,8 +18,7 @@ import {
   lineNumbers,
   WidgetType,
 } from "@codemirror/view";
-import { classHighlighter } from "@lezer/highlight";
-import { graphcalLanguage } from "./graphcalLanguage.ts";
+import { graphcalHighlighting, graphcalLanguage } from "./graphcalLanguage.ts";
 import { minimalEdit } from "./vscodeHost.ts";
 
 /** A value shown at the end of a line: the line is 1-based, as the model counts. */
@@ -137,7 +136,7 @@ export class SourceEditor {
         history(),
         bracketMatching(),
         graphcalLanguage,
-        syntaxHighlighting(classHighlighter),
+        graphcalHighlighting,
         inlayField,
         markField,
         EditorState.lineSeparator.of("\n"),

@@ -18,6 +18,7 @@ export type TokenClass =
   | "language" // constant.language: true / false, wildcard
   | "type" // entity.name.type, support.type
   | "accessor" // punctuation.accessor (::, .)
+  | "declaration" // keyword.declaration.* / keyword.other.pub (editor only: node, param, pub, import, …)
   | "operator" // keyword.operator.*
   | "punctuation" // brackets, comma, colon, semicolon
   | "plain";
