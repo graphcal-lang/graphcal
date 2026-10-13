@@ -34,18 +34,13 @@ export interface Band {
   index: number;
   /** Unrolled axis, or null for the no-axis band. */
   axis: string | null;
+  /** The module that declares the axis when it is not this one (an import). */
+  axisOrigin: string | null;
   labels: string[];
   columns: Column[];
 }
 
-export interface Index {
-  name: string;
-  labels: string[];
-}
-
 export interface Layout {
-  /** Indexes this module declares itself; they are shown as cards before the zones. */
-  indexes: Index[];
   bands: Band[];
   columns: Map<string, Column>;
   /** Direct consumers of each node id within the module. */
@@ -101,6 +96,9 @@ export function computeLayout(model: ViewModel): Layout {
   }
   const depths = computeDepths(model);
   const labelsOf = new Map(model.indexes.map((i) => [i.name, i.labels]));
+  const originOf = new Map(
+    model.indexes.map((i) => [i.name, i.module === model.module.id ? null : i.module]),
+  );
   const order = new Map(model.nodes.map((n, i) => [n.id, i]));
 
   // An axis is unrolled only when shared as the first axis by several nodes.
@@ -134,6 +132,7 @@ export function computeLayout(model: ViewModel): Layout {
     const band: Band = {
       index: bandIndex,
       axis,
+      axisOrigin: axis ? (originOf.get(axis) ?? null) : null,
       labels: axis ? (labelsOf.get(axis) ?? []) : [],
       columns: [],
     };
@@ -164,10 +163,7 @@ export function computeLayout(model: ViewModel): Layout {
     });
     bands.push(band);
   });
-  const indexes = model.indexes
-    .filter((i) => i.module === model.module.id)
-    .map(({ name, labels }) => ({ name, labels }));
-  return { indexes, bands, columns, users };
+  return { bands, columns, users };
 }
 
 export const BOX_GAP = 10;

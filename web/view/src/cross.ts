@@ -1,8 +1,7 @@
 // Wires between sheets. A value read from another pane leaves that pane at the
 // right end of its box's head, runs down the gutter between the pane columns,
 // enters the consumer's channel (below its own lanes) and rises into the port
-// box. An imported index wires the producer's index card to the consumer's
-// axis ruler the same way.
+// box.
 import type { Layout } from "./layout.ts";
 import type { ViewModel } from "./model.ts";
 import { sameKey, type PaneKey } from "./panes.ts";
@@ -26,10 +25,10 @@ export interface CrossSheet {
 
 export interface CrossLink {
   from: CrossSheet;
-  /** The producer's box: a column or an index card. */
+  /** The producer's box. */
   fromSelector: string;
   to: CrossSheet;
-  /** The consumer's port: an external column or an axis ruler box. */
+  /** The consumer's port: the external's column. */
   toSelector: string;
   toSide: "top" | "bottom";
   /** The consumer channel the wire runs through. */
@@ -38,7 +37,7 @@ export interface CrossLink {
   toId: string;
 }
 
-/** Every external value and imported index that has its producer open. */
+/** Every external value whose producer is open. */
 export function crossLinks(sheets: CrossSheet[]): CrossLink[] {
   const links: CrossLink[] = [];
   for (const to of sheets) {
@@ -59,22 +58,6 @@ export function crossLinks(sheets: CrossSheet[]): CrossLink[] {
         channel: onTop ? column.bandIndex : tiers,
         fromId: node.name,
         toId: node.id,
-      });
-    }
-    for (const index of to.model.indexes) {
-      if (index.module === to.model.module.id) continue;
-      const from = sheets.find((s) => sameKey(s.key, { module: index.module, instance: null }));
-      const band = to.layout.bands.find((b) => b.axis === index.name);
-      if (!from || !band || !from.layout.indexes.some((i) => i.name === index.name)) continue;
-      links.push({
-        from,
-        fromSelector: `.index-card[data-index="${index.name}"]`,
-        to,
-        toSelector: `.ruler-box[data-axis="${index.name}"]`,
-        toSide: "top",
-        channel: band.index,
-        fromId: index.name,
-        toId: index.name,
       });
     }
   }

@@ -1,4 +1,4 @@
-import type { Band, Column, Index, Layout, Role, Zone } from "./layout.ts";
+import type { Band, Column, Layout, Role, Zone } from "./layout.ts";
 import { ZONES, zoneOf } from "./layout.ts";
 import type { NodeKind } from "./model.ts";
 import { rowRuns, type Hidden } from "./rows.ts";
@@ -193,16 +193,19 @@ function renderRuler(band: Band, hidden: Hidden): HTMLElement {
   const hiddenCount = hidden.get(band.axis)?.size ?? 0;
   const box = el("div", "ruler-box");
   box.dataset.axis = band.axis;
-  box.append(
-    el("div", "ruler-axis", band.axis),
-    el(
-      "div",
-      "ruler-note",
-      hiddenCount > 0
-        ? `${band.labels.length - hiddenCount} / ${band.labels.length}`
-        : String(band.labels.length),
-    ),
+  const note = el(
+    "div",
+    "ruler-note",
+    hiddenCount > 0
+      ? `${band.labels.length - hiddenCount} / ${band.labels.length}`
+      : String(band.labels.length),
   );
+  if (band.axisOrigin !== null) {
+    // Where the axis is declared, as on an external's head.
+    const origin = band.axisOrigin.split(".").at(-1) ?? band.axisOrigin;
+    note.append(el("span", "ruler-origin", `← ${origin}.gcl`));
+  }
+  box.append(el("div", "ruler-axis", band.axis), note);
   inner.append(box);
   if (band.columns.some((c) => c.subs.length > 0)) inner.append(el("div", "ruler-sub"));
   for (const run of rowRuns(band.labels, hidden.get(band.axis))) {
@@ -243,41 +246,11 @@ export interface RenderOptions {
   hidden: Hidden;
 }
 
-/** An index the module declares: its name, size, and labels, as a card. */
-function renderIndexCard(index: Index): HTMLElement {
-  const root = el("div", "col index-card");
-  root.dataset.index = index.name;
-  const head = el("div", "col-head kind-index");
-  const title = el("div", "col-title");
-  title.append(el("span", "mark", "≡"), el("span", "name", index.name));
-  head.append(title);
-  const meta = el("div", "col-meta");
-  meta.append(el("span", "col-type dim-index", `index · ${index.labels.length}`));
-  head.append(meta);
-  root.append(head);
-  const body = el("div", "index-body");
-  index.labels.forEach((label, i) =>
-    body.append(el("span", `row-key${i % 2 === 1 ? " stripe" : ""}`, label)),
-  );
-  root.append(body);
-  return root;
-}
-
-/**
- * A band. When the module declares indexes, every band starts with an index
- * zone so the other zones line up; only the first band fills it with cards.
- */
-function renderBand(band: Band, options: RenderOptions, indexes: Index[]): HTMLElement {
+function renderBand(band: Band, options: RenderOptions): HTMLElement {
   const section = el("section", `band ${band.axis === null ? "band-scalar" : "band-axis"}`);
   section.dataset.band = String(band.index);
   section.append(renderRuler(band, options.hidden));
   const zones = el("div", "zones");
-  if (indexes.length > 0) {
-    const zoneEl = el("div", "zone zone-index");
-    zoneEl.dataset.zone = "index";
-    if (band.index === 0) for (const index of indexes) zoneEl.append(renderIndexCard(index));
-    zones.append(zoneEl);
-  }
   for (const zone of ZONES) {
     const columns = band.columns.filter((c) => zoneOf(c.role) === zone);
     const zoneEl = el("div", `zone zone-${zone}`);
@@ -327,16 +300,10 @@ function renderBand(band: Band, options: RenderOptions, indexes: Index[]): HTMLE
   return section;
 }
 
-function renderZoneHead(hasIndexes: boolean): HTMLElement {
+function renderZoneHead(): HTMLElement {
   const head = el("div", "zone-head");
   head.append(el("div", "ruler-spacer"));
   const zones = el("div", "zones");
-  if (hasIndexes) {
-    const zoneEl = el("div", "zone zone-index");
-    zoneEl.dataset.zone = "index";
-    zoneEl.append(el("span", "zone-label label-index", "index"));
-    zones.append(zoneEl);
-  }
   const labels: Record<Zone, string> = {
     const: "const",
     param: "param · inputs",
@@ -381,11 +348,11 @@ export function placeHalo(container: HTMLElement): void {
 
 export function renderView(container: HTMLElement, layout: Layout, options: RenderOptions): void {
   container.replaceChildren();
-  container.append(renderZoneHead(layout.indexes.length > 0));
+  container.append(renderZoneHead());
   layout.bands.forEach((band, i) => {
     const channel = el("div", "channel");
     channel.dataset.channel = String(i);
-    container.append(channel, renderBand(band, options, layout.indexes));
+    container.append(channel, renderBand(band, options));
   });
   const last = el("div", "channel");
   last.dataset.channel = String(layout.bands.length);
@@ -403,5 +370,5 @@ function alignZones(container: HTMLElement): void {
     for (const part of parts) part.style.minWidth = `${Math.ceil(width)}px`;
   };
   for (const group of ["node", "output"]) align(`.group[data-group="${group}"]`);
-  for (const zone of ["index", ...ZONES]) align(`.zone[data-zone="${zone}"]`);
+  for (const zone of ZONES) align(`.zone[data-zone="${zone}"]`);
 }

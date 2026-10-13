@@ -423,8 +423,12 @@ body {
   font-size: 10px;
   white-space: nowrap;
 }
-.ruler-unrolled {
+.ruler-unrolled,
+.ruler-origin {
   color: var(--sel);
+}
+.ruler-origin {
+  margin-left: 8px;
 }
 .ruler-sub {
   height: var(--sub-h);
@@ -837,28 +841,4 @@ body {
 .cross-wires {
   left: 0;
   top: 0;
-}
-
-/* index cards: the indexes a module declares, before its zones */
-.index-card .mark,
-.dim-index {
-  color: var(--muted);
-}
-.index-card {
-  min-width: 120px;
-}
-.index-body {
-  display: flex;
-  flex-direction: column;
-}
-.index-body .row-key {
-  height: var(--row-h);
-  padding: 5px 8px;
-  border-top: 1px solid var(--border);
-  font-family: var(--mono);
-  font-size: 11px;
-  color: var(--muted);
-}
-.band-scalar .zone-index {
-  align-items: flex-start;
 }
