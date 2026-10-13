@@ -125,6 +125,14 @@ body {
 .band-scalar .ruler {
   align-self: flex-start;
 }
+.group {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+}
+.band-scalar .group {
+  align-items: flex-end;
+}
 .stack {
   display: flex;
   flex-direction: column;
@@ -282,6 +290,13 @@ body {
   display: flex;
   flex-direction: column;
 }
+.ruler-inner {
+  position: absolute;
+  top: 0;
+  left: 0;
+  display: flex;
+  flex-direction: column;
+}
 .ruler-none {
   font-family: var(--mono);
   font-size: 11px;
@@ -318,6 +333,7 @@ body {
   height: var(--row-h);
   display: flex;
   align-items: center;
+  justify-content: flex-end;
   padding: 0 8px;
   margin-right: 4px;
   border-radius: 4px;
@@ -453,6 +469,11 @@ body {
 .cell {
   justify-content: flex-end;
   color: var(--text);
+}
+.cell.stripe,
+.row-key.stripe,
+.row-label.stripe {
+  background: rgba(255, 255, 255, 0.035);
 }
 .row-key {
   color: var(--muted);

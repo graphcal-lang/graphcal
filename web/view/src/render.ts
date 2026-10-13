@@ -1,4 +1,4 @@
-import type { Band, Column, Layout, Zone } from "./layout.ts";
+import type { Band, Column, Layout, Role, Zone } from "./layout.ts";
 import { ZONES, zoneOf } from "./layout.ts";
 import type { NodeKind, ReduceOp } from "./model.ts";
 import { displayOf, valueAt } from "./values.ts";
@@ -98,17 +98,22 @@ function renderTable(column: Column, band: Band): HTMLElement {
   const body = el("div", "col-body");
   const subCount = Math.max(1, column.subs.length);
   body.style.gridTemplateColumns = `${inBand ? "" : "auto "}repeat(${subCount}, minmax(0, 1fr))`;
-  for (const row of column.rows) {
-    if (!inBand) body.append(el("span", "row-key", row));
+  column.rows.forEach((row, r) => {
+    const stripe = r % 2 === 1 ? " stripe" : "";
+    if (!inBand) body.append(el("span", `row-key${stripe}`, row));
     const keys = column.subs.length > 0 ? column.subs : [null];
     for (const sub of keys) {
-      const cell = el("div", "cell", cellText(column, [row, ...(sub === null ? [] : [sub])]));
+      const cell = el(
+        "div",
+        `cell${stripe}`,
+        cellText(column, [row, ...(sub === null ? [] : [sub])]),
+      );
       cell.dataset.node = column.node.id;
       cell.dataset.row = row;
       if (sub !== null) cell.dataset.sub = sub;
       body.append(cell);
     }
-  }
+  });
   root.append(body);
   return root;
 }
@@ -184,6 +189,10 @@ export function renderColumn(column: Column, band: Band, folded: boolean): HTMLE
   return renderTable(column, band);
 }
 
+/**
+ * The ruler reserves its width at the left of the band; its labels are placed
+ * right against the band's first table (see placeRulers), not at the far left.
+ */
 function renderRuler(band: Band): HTMLElement {
   const ruler = el("div", "ruler");
   ruler.style.width = `${RULER_WIDTH}px`;
@@ -191,19 +200,38 @@ function renderRuler(band: Band): HTMLElement {
     if (band.index === 0) ruler.append(el("div", "ruler-none", "no axis  [ ]"));
     return ruler;
   }
+  const inner = el("div", "ruler-inner");
+  inner.style.width = `${RULER_WIDTH}px`;
   const box = el("div", "ruler-box");
   box.append(
     el("div", "ruler-axis", band.axis),
     el("div", "ruler-note", `index · ${band.labels.length} labels ↕`),
   );
-  ruler.append(box);
-  if (band.columns.some((c) => c.subs.length > 0)) ruler.append(el("div", "ruler-sub"));
-  for (const label of band.labels) {
-    const row = el("div", "row-label", label);
+  inner.append(box);
+  if (band.columns.some((c) => c.subs.length > 0)) inner.append(el("div", "ruler-sub"));
+  band.labels.forEach((label, r) => {
+    const row = el("div", `row-label${r % 2 === 1 ? " stripe" : ""}`, label);
     row.dataset.row = label;
-    ruler.append(row);
-  }
+    inner.append(row);
+  });
+  ruler.append(inner);
   return ruler;
+}
+
+/** Move each axis band's labels to sit right against the band's first table. */
+function placeRulers(container: HTMLElement): void {
+  const origin = container.getBoundingClientRect();
+  const k = container.offsetWidth > 0 ? origin.width / container.offsetWidth : 1;
+  for (const band of container.querySelectorAll<HTMLElement>(".band-axis")) {
+    const inner = band.querySelector<HTMLElement>(".ruler-inner");
+    if (!inner) continue;
+    const bandLeft = band.getBoundingClientRect().left;
+    const lefts = [...band.querySelectorAll<HTMLElement>(".col")].map(
+      (c) => (c.getBoundingClientRect().left - bandLeft) / k,
+    );
+    const first = lefts.length > 0 ? Math.min(...lefts) : RULER_WIDTH;
+    inner.style.left = `${Math.max(0, first - RULER_WIDTH)}px`;
+  }
 }
 
 export interface RenderOptions {
@@ -219,6 +247,9 @@ function renderBand(band: Band, options: RenderOptions): HTMLElement {
     const columns = band.columns.filter((c) => zoneOf(c.role) === zone);
     const zoneEl = el("div", `zone zone-${zone}`);
     zoneEl.dataset.zone = zone;
+    // Each element is a column or, in the no-axis band, a stack of columns;
+    // its role is that of its top box.
+    const items: { role: Role; element: HTMLElement }[] = [];
     if (band.axis === null) {
       // Boxes are packed into stacks; a stack is one position in the band.
       const stacks = new Map<number, Column[]>();
@@ -227,15 +258,33 @@ function renderBand(band: Band, options: RenderOptions): HTMLElement {
       }
       for (const [, stack] of [...stacks].sort(([a], [b]) => a - b)) {
         const stackEl = el("div", "stack");
-        for (const column of stack.sort((a, b) => a.tierRow - b.tierRow)) {
+        const ordered = stack.sort((a, b) => a.tierRow - b.tierRow);
+        for (const column of ordered) {
           stackEl.append(renderColumn(column, band, options.folded.has(column.node.id)));
         }
-        zoneEl.append(stackEl);
+        items.push({ role: ordered[0].role, element: stackEl });
       }
     } else {
       for (const column of columns) {
-        zoneEl.append(renderColumn(column, band, options.folded.has(column.node.id)));
+        items.push({
+          role: column.role,
+          element: renderColumn(column, band, options.folded.has(column.node.id)),
+        });
       }
+    }
+    if (zone === "node") {
+      // Outputs are the aligned right end of the node zone, so one halo can
+      // enclose them across every band without covering other node columns.
+      for (const group of ["node", "output"] as const) {
+        const groupEl = el("div", `group group-${group}`);
+        groupEl.dataset.group = group;
+        for (const item of items) {
+          if ((item.role === "output") === (group === "output")) groupEl.append(item.element);
+        }
+        zoneEl.append(groupEl);
+      }
+    } else {
+      for (const item of items) zoneEl.append(item.element);
     }
     zones.append(zoneEl);
   }
@@ -263,30 +312,30 @@ function renderZoneHead(): HTMLElement {
 }
 
 /**
- * A faint halo behind each band's output boxes. Outputs are part of the node
- * zone, so the halo may sit over node columns of another band; that is fine.
+ * One faint halo behind all output boxes. The output groups are aligned across
+ * bands, so the halo spans bands without covering other node columns. Call it
+ * after the wires are drawn: channel heights move the lower bands.
  */
-function placeHalos(container: HTMLElement): void {
+export function placeHalo(container: HTMLElement): void {
   for (const halo of container.querySelectorAll(".outputs-halo")) halo.remove();
+  const outputs = [...container.querySelectorAll<HTMLElement>(".group-output .col")];
+  if (outputs.length === 0) return;
   const origin = container.getBoundingClientRect();
-  for (const band of container.querySelectorAll<HTMLElement>(".band")) {
-    const outputs = [...band.querySelectorAll<HTMLElement>(".col.role-output")];
-    if (outputs.length === 0) continue;
-    const rects = outputs.map((o) => o.getBoundingClientRect());
-    const pad = 6;
-    const left = Math.min(...rects.map((r) => r.left)) - origin.left - pad;
-    const top = Math.min(...rects.map((r) => r.top)) - origin.top - pad;
-    const right = Math.max(...rects.map((r) => r.right)) - origin.left + pad;
-    const bottom = Math.max(...rects.map((r) => r.bottom)) - origin.top + pad;
-    const halo = el("div", "outputs-halo");
-    halo.style.left = `${left}px`;
-    halo.style.top = `${top}px`;
-    halo.style.width = `${right - left}px`;
-    halo.style.height = `${bottom - top}px`;
-    halo.title = "outputs: nodes nothing in this file reads, pub nodes, and asserts";
-    halo.append(el("span", "halo-label", "outputs"));
-    container.prepend(halo);
-  }
+  const k = container.offsetWidth > 0 ? origin.width / container.offsetWidth : 1;
+  const rects = outputs.map((o) => o.getBoundingClientRect());
+  const pad = 6;
+  const left = (Math.min(...rects.map((r) => r.left)) - origin.left) / k - pad;
+  const top = (Math.min(...rects.map((r) => r.top)) - origin.top) / k - pad;
+  const right = (Math.max(...rects.map((r) => r.right)) - origin.left) / k + pad;
+  const bottom = (Math.max(...rects.map((r) => r.bottom)) - origin.top) / k + pad;
+  const halo = el("div", "outputs-halo");
+  halo.style.left = `${left}px`;
+  halo.style.top = `${top}px`;
+  halo.style.width = `${right - left}px`;
+  halo.style.height = `${bottom - top}px`;
+  halo.title = "outputs: nodes nothing in this file reads, pub nodes, and asserts";
+  halo.append(el("span", "halo-label", "outputs"));
+  container.prepend(halo);
 }
 
 export function renderView(container: HTMLElement, layout: Layout, options: RenderOptions): void {
@@ -301,15 +350,17 @@ export function renderView(container: HTMLElement, layout: Layout, options: Rend
   last.dataset.channel = String(layout.bands.length);
   container.append(last);
   alignZones(container);
-  placeHalos(container);
+  placeRulers(container);
 }
 
-/** Give each zone the same width in every band so roles line up. */
+/** Give each zone (and the node / output groups) the same width in every band. */
 function alignZones(container: HTMLElement): void {
-  for (const zone of ZONES) {
-    const zones = [...container.querySelectorAll<HTMLElement>(`.zone[data-zone="${zone}"]`)];
-    for (const zone of zones) zone.style.minWidth = "";
-    const width = Math.max(...zones.map((z) => z.getBoundingClientRect().width));
-    for (const zone of zones) zone.style.minWidth = `${Math.ceil(width)}px`;
-  }
+  const align = (selector: string): void => {
+    const parts = [...container.querySelectorAll<HTMLElement>(selector)];
+    for (const part of parts) part.style.minWidth = "";
+    const width = Math.max(...parts.map((p) => p.getBoundingClientRect().width));
+    for (const part of parts) part.style.minWidth = `${Math.ceil(width)}px`;
+  };
+  for (const group of ["node", "output"]) align(`.group[data-group="${group}"]`);
+  for (const zone of ZONES) align(`.zone[data-zone="${zone}"]`);
 }

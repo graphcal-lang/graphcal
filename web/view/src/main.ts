@@ -10,7 +10,7 @@ import {
   type Zone,
 } from "./layout.ts";
 import { parseViewModel, type ViewModel } from "./model.ts";
-import { renderView, RULER_WIDTH } from "./render.ts";
+import { placeHalo, renderView, RULER_WIDTH } from "./render.ts";
 import { trace, type Selection } from "./selection.ts";
 import { displayOf, valueAt } from "./values.ts";
 import { drawWires, planRoutes, type RoutePlan } from "./wires.ts";
@@ -164,6 +164,7 @@ function applySelection(): void {
 function redraw(): void {
   if (!state) return;
   drawWires(wiresEl, viewEl, state.layout, state.plan);
+  placeHalo(viewEl);
   applySelection();
 }
 
@@ -195,7 +196,7 @@ function fit(base: Layout, folded: ReadonlySet<string>): Layout {
     for (const zoneEl of viewEl.querySelectorAll<HTMLElement>(
       `.band-axis .zone[data-zone="${zone}"]`,
     )) {
-      const cols = [...zoneEl.querySelectorAll<HTMLElement>(":scope > .col")];
+      const cols = [...zoneEl.querySelectorAll<HTMLElement>(".col")];
       const inner =
         cols.reduce((sum, col) => sum + col.getBoundingClientRect().width, 0) +
         Math.max(0, cols.length - 1) * BOX_GAP;
