@@ -9,10 +9,12 @@ import {
   type Layout,
   type Zone,
 } from "./layout.ts";
+import { crossLinks, drawCrossWires, extraLanes, type CrossSheet } from "./cross.ts";
 import { applyEvaluation, depsOf } from "./edit.ts";
-import { evaluateProject, loadEngine } from "./engine.ts";
+import { evaluateProject, loadEngine, type Evaluation } from "./engine.ts";
 import { spansOf, subjectTokens, tokenize, type Token } from "./formula.ts";
 import { parseViewModel, type ViewModel, type ViewNode } from "./model.ts";
+import { depthsOf, sameKey, type PaneKey } from "./panes.ts";
 import { EditError, projectFor, replaceExpr, replaceTableCell, type Project } from "./project.ts";
 import { placeHalo, renderView, RULER_WIDTH, type RenderOptions } from "./render.ts";
 import { hiddenOf, pick, type Hidden, type Picked } from "./rows.ts";
@@ -24,6 +26,20 @@ const fixtures = import.meta.glob<unknown>("../fixtures/*.view.json", {
   eager: true,
   import: "default",
 });
+const fixtureNames = Object.keys(fixtures).sort();
+const moduleOfFixture = new Map(
+  fixtureNames.map((name) => [name, parseViewModel(fixtures[name]).module.id]),
+);
+
+/** The fixture that shows a module, if one is bundled. */
+function fixtureOf(module: string): string | null {
+  for (const [name, id] of moduleOfFixture) if (id === module) return name;
+  return null;
+}
+
+function shortName(fixture: string): string {
+  return fixture.replace("../fixtures/", "").replace(".view.json", "");
+}
 
 function need<T extends Element>(selector: string): T {
   const found = document.querySelector<T>(selector);
@@ -31,8 +47,9 @@ function need<T extends Element>(selector: string): T {
   return found;
 }
 
-const viewEl = need<HTMLElement>("#view");
-const wiresEl = need<SVGSVGElement>("#wires");
+const SVG_NS = "http://www.w3.org/2000/svg";
+const panesEl = need<HTMLElement>("#panes");
+const crossEl = need<SVGSVGElement>("#cross");
 const fileEl = need<HTMLElement>("#file");
 const formulaEl = need<HTMLElement>("#formula");
 const fixtureEl = need<HTMLSelectElement>("#fixture");
@@ -82,11 +99,14 @@ const modeButtons = [...document.querySelectorAll<HTMLButtonElement>("[data-mode
  */
 type Mode = "fit" | "overview";
 
-interface State {
+/** One module shown as a sheet: the main one, or a pane pinned beside it. */
+interface Sheet {
+  key: PaneKey;
+  /** The fixture the sheet was loaded from. */
+  fixture: string;
   model: ViewModel;
   /** The sources the model was built from, edited in memory; null when unknown. */
   project: Project | null;
-  edited: boolean;
   /** Layout before the no-axis band is split into tiers. */
   base: Layout;
   layout: Layout;
@@ -97,16 +117,141 @@ interface State {
   /** Row labels picked in a ruler (the subject of the context menu). */
   picked: Picked | null;
   selection: Selection | null;
+  paneEl: HTMLElement;
+  viewEl: HTMLElement;
+  wiresEl: SVGSVGElement;
+  /** Pane column: 0 for the main sheet, growing leftwards. */
+  depth: number;
+}
+
+interface Workspace {
+  /** The main sheet first, then the pinned panes in the order they were pinned. */
+  sheets: Sheet[];
+  /** Fixtures opened in turn with "Open"; the last is the main sheet's. */
+  trail: string[];
+  edited: boolean;
   mode: Mode;
 }
-let state: State | null = null;
+let ws: Workspace | null = null;
 
-function renderOptions(s: State): RenderOptions {
+function mainSheet(w: Workspace): Sheet {
+  return w.sheets[0];
+}
+
+/** The sheet holding the selection, else the main one. */
+function activeSheet(w: Workspace): Sheet {
+  return w.sheets.find((s) => s.selection !== null) ?? mainSheet(w);
+}
+
+function sheetOf(target: Element): Sheet | null {
+  const pane = target.closest(".pane");
+  return ws?.sheets.find((s) => s.paneEl === pane) ?? null;
+}
+
+function renderOptions(s: Sheet): RenderOptions {
   return { folded: s.folded, hidden: s.hidden };
 }
 
+/** One in-memory project per package, shared by every sheet of that package. */
+const projects = new Map<string, Project>();
+function projectOf(model: ViewModel): Project | null {
+  const cached = projects.get(model.module.package);
+  if (cached) return cached;
+  const project = projectFor(model);
+  if (project) projects.set(model.module.package, project);
+  return project;
+}
+
+function fileNameOf(model: ViewModel): string {
+  return model.module.file.split("/").at(-1) ?? model.module.file;
+}
+
+function span(className: string, textContent: string): HTMLSpanElement {
+  return Object.assign(document.createElement("span"), { className, textContent });
+}
+
+function button(className: string, textContent: string, title: string): HTMLButtonElement {
+  return Object.assign(document.createElement("button"), {
+    type: "button",
+    className,
+    textContent,
+    title,
+  });
+}
+
+function createSheet(key: PaneKey, fixture: string): Sheet {
+  const model = parseViewModel(fixtures[fixture]);
+  const base = orderByBarycenter(computeLayout(model), model);
+  const paneEl = document.createElement("section");
+  paneEl.className = "pane";
+  const headEl = document.createElement("header");
+  headEl.className = "pane-head";
+  const viewEl = document.createElement("main");
+  viewEl.className = "view";
+  const wiresEl = document.createElementNS(SVG_NS, "svg");
+  wiresEl.setAttribute("class", "wires");
+  wiresEl.setAttribute("aria-hidden", "true");
+  paneEl.append(headEl, viewEl, wiresEl);
+  return {
+    key,
+    fixture,
+    model,
+    project: projectOf(model),
+    base,
+    layout: base,
+    plan: planRoutes(model, base),
+    folded: new Set(),
+    hidden: new Map(),
+    picked: null,
+    selection: null,
+    paneEl,
+    viewEl,
+    wiresEl,
+    depth: 0,
+  };
+}
+
+/** `↗ eps.gcl as eps · include · pinned ×`, or just the file name for the main sheet. */
+function renderPaneHead(w: Workspace, sheet: Sheet): void {
+  const head = sheet.paneEl.querySelector<HTMLElement>(".pane-head");
+  if (!head) return;
+  head.replaceChildren();
+  const name = fileNameOf(sheet.model);
+  if (sheet === mainSheet(w)) {
+    head.append(span("pane-name", name));
+    return;
+  }
+  const sub =
+    sheet.key.instance === null
+      ? "· import · pinned"
+      : `as ${sheet.key.instance} · include · pinned`;
+  head.append(
+    span("pane-mark", "↗"),
+    button("pane-file", name, `open ${name}`),
+    span("pane-sub", sub),
+    button("pane-close", "×", "unpin"),
+  );
+}
+
+/** Put the sheets into pane columns by depth: deepest at the left, the main sheet at the right. */
+function placePanes(w: Workspace): void {
+  const depths = depthsOf(w.sheets.map((s) => ({ key: s.key, model: s.model })));
+  w.sheets.forEach((s, i) => {
+    s.depth = depths[i] ?? 0;
+  });
+  panesEl.replaceChildren();
+  panesEl.classList.toggle("multi", w.sheets.length > 1);
+  for (let depth = Math.max(...depths); depth >= 0; depth--) {
+    const column = document.createElement("div");
+    column.className = "pane-col";
+    for (const sheet of w.sheets) if (sheet.depth === depth) column.append(sheet.paneEl);
+    panesEl.append(column);
+  }
+  for (const sheet of w.sheets) renderPaneHead(w, sheet);
+}
+
 /** The selected node and the labels of the selected cell, one per axis. */
-function selected(s: State): { node: ViewNode; labels: string[] } | null {
+function selected(s: Sheet): { node: ViewNode; labels: string[] } | null {
   const { selection, model } = s;
   if (!selection) return null;
   const node = model.nodes.find((n) => n.id === selection.id);
@@ -116,18 +261,19 @@ function selected(s: State): { node: ViewNode; labels: string[] } | null {
 }
 
 /** A table literal is elided in the view (`{ … }`), so it has no editable text. */
-function editableExpr(node: ViewNode): string | null {
-  if (!state?.project || node.expr === null || node.expr.includes("…")) return null;
-  if (node.source === null || state.project.fileOf(state.model, node.module) === null) return null;
+function editableExpr(s: Sheet, node: ViewNode): string | null {
+  if (!s.project || node.expr === null || node.expr.includes("…")) return null;
+  if (node.source === null || s.project.fileOf(s.model, node.module) === null) return null;
   return node.expr;
 }
 
 /** `subject = expr = value`, coloured like the editor; the expr part is editable. */
 function renderFormula(): void {
-  if (!state) return;
+  if (!ws) return;
+  const s = activeSheet(ws);
   const line = document.createElement("span");
   line.className = "formula-line";
-  const hit = selected(state);
+  const hit = selected(s);
   formulaEl.classList.toggle("active", hit !== null);
   formulaEl.classList.remove("editing");
   if (!hit) {
@@ -140,7 +286,7 @@ function renderFormula(): void {
   if (node.expr) {
     const expr = document.createElement("span");
     expr.className = "formula-expr";
-    expr.classList.toggle("editable", editableExpr(node) !== null);
+    expr.classList.toggle("editable", editableExpr(s, node) !== null);
     const coloured = document.createElement("span");
     coloured.className = "formula-coloured";
     coloured.append(...spansOf(tokenize(node.expr)));
@@ -160,23 +306,22 @@ function showNote(message: string | null, kind: "error" | "busy" = "error"): voi
   formulaEl.append(note);
 }
 
-function clearHighlights(): void {
-  for (const n of viewEl.querySelectorAll<HTMLElement>(
+function clearHighlights(s: Sheet): void {
+  for (const n of s.viewEl.querySelectorAll<HTMLElement>(
     ".sel, .rel-direct, .rel-all, .row-sel, .rel-cell",
   )) {
     n.classList.remove("sel", "rel-direct", "rel-all", "row-sel", "rel-cell");
   }
-  for (const w of wiresEl.querySelectorAll<SVGElement>(".wire, .wire-dot")) {
+  for (const w of s.wiresEl.querySelectorAll<SVGElement>(".wire, .wire-dot")) {
     w.classList.remove("lit", "direct");
     if (w.classList.contains("wire")) w.setAttribute("marker-end", "url(#arrow)");
   }
 }
 
-function applySelection(): void {
-  if (!state) return;
-  clearHighlights();
+function applySelection(s: Sheet): void {
+  clearHighlights(s);
   renderFormula();
-  const { selection, model, layout } = state;
+  const { selection, model, layout, viewEl, wiresEl } = s;
   if (!selection) return;
 
   const result = trace(selection, model, layout);
@@ -235,48 +380,59 @@ function applySelection(): void {
 }
 
 /** Picked row labels: the label and the whole row across the band, like a sheet. */
-function applyPicked(): void {
-  for (const n of viewEl.querySelectorAll<HTMLElement>(".picked, .row-picked")) {
+function applyPicked(s: Sheet): void {
+  for (const n of s.viewEl.querySelectorAll<HTMLElement>(".picked, .row-picked")) {
     n.classList.remove("picked", "row-picked");
   }
-  const picked = state?.picked;
+  const picked = s.picked;
   if (!picked) return;
   for (const label of picked.labels) {
-    for (const n of viewEl.querySelectorAll<HTMLElement>(`.row-label[data-row="${label}"]`)) {
+    for (const n of s.viewEl.querySelectorAll<HTMLElement>(`.row-label[data-row="${label}"]`)) {
       if (n.dataset.axis === picked.axis) n.classList.add("picked");
     }
-    const band = bandElementOf(picked.axis);
+    const band = bandElementOf(s, picked.axis);
     for (const cell of band?.querySelectorAll<HTMLElement>(`.cell[data-row="${label}"]`) ?? []) {
       cell.classList.add("row-picked");
     }
   }
 }
 
-function bandElementOf(axis: string): HTMLElement | null {
-  const index = state?.layout.bands.find((b) => b.axis === axis)?.index;
-  return index === undefined ? null : viewEl.querySelector(`.band[data-band="${index}"]`);
+function bandElementOf(s: Sheet, axis: string): HTMLElement | null {
+  const index = s.layout.bands.find((b) => b.axis === axis)?.index;
+  return index === undefined ? null : s.viewEl.querySelector(`.band[data-band="${index}"]`);
 }
 
+/** Draw every sheet's wires, then the wires between sheets, and re-apply highlights. */
 function redraw(): void {
-  if (!state) return;
-  drawWires(wiresEl, viewEl, state.layout, state.plan);
-  placeHalo(viewEl);
-  applySelection();
-  applyPicked();
+  if (!ws) return;
+  const links = crossLinks(ws.sheets);
+  const ownLanes = new Map<CrossSheet, Map<number, number>>();
+  for (const s of ws.sheets) {
+    ownLanes.set(s, drawWires(s.wiresEl, s.viewEl, s.layout, s.plan, extraLanes(links, s)));
+    placeHalo(s.viewEl);
+    applySelection(s);
+    applyPicked(s);
+  }
+  drawCrossWires(crossEl, panesEl, links, ownLanes);
 }
 
-/** Horizontal room for zones: the window minus ruler, paddings, and the gutter. */
+/** Horizontal room for the main sheet's zones: the window minus ruler, paddings, and the gutter. */
 function availableWidth(): number {
   const zonePadding = 3 * 24;
   return document.documentElement.clientWidth - 16 - 40 - RULER_WIDTH - zonePadding - 56;
 }
+
+/** A pinned pane gets a fixed budget, so its scalar boxes stack into a narrow column. */
+const PANE_WIDTH = 640;
 
 /**
  * Render once to measure boxes and axis-band zones, then pack the no-axis
  * boxes into stacks so everything fits the width. Width left over after a
  * first packing is handed to the zones that had to stack, and they repack.
  */
-function fit(base: Layout, options: RenderOptions): Layout {
+function fit(s: Sheet, available: number): Layout {
+  const { base, viewEl } = s;
+  const options = renderOptions(s);
   const { folded } = options;
   renderView(viewEl, base, options);
   const sizes = new Map<string, BoxSize>();
@@ -309,7 +465,6 @@ function fit(base: Layout, options: RenderOptions): Layout {
     natural[zone] = boxes.reduce((sum, w) => sum + w, 0) + Math.max(0, boxes.length - 1) * BOX_GAP;
   }
 
-  const available = availableWidth();
   const target = { ...floor };
   let packed = packScalarBand(base, size, target, folded);
   for (let round = 0; round < 3; round++) {
@@ -329,164 +484,184 @@ function fit(base: Layout, options: RenderOptions): Layout {
   return packed.layout;
 }
 
-/** Lay out and draw; the camera stays where it is (measuring needs an unscaled stage). */
-function renderOnce(): void {
-  if (!state) return;
+/** Lay out and draw every sheet; the camera stays where it is (measuring needs an unscaled stage). */
+function render(): void {
+  if (!ws) return;
   stageEl.style.transform = "";
-  state.layout = fit(state.base, renderOptions(state));
-  state.plan = planRoutes(state.model, state.layout);
-  renderView(viewEl, state.layout, renderOptions(state));
+  for (const s of ws.sheets) {
+    s.layout = fit(s, s === mainSheet(ws) ? availableWidth() : PANE_WIDTH);
+    s.plan = planRoutes(s.model, s.layout);
+    renderView(s.viewEl, s.layout, renderOptions(s));
+  }
   applyCamera();
   redraw();
 }
 
 /** Re-apply the mode from scratch: everything open, then scaled down in overview. */
 function refit(): void {
-  if (!state) return;
-  state.folded = new Set();
+  if (!ws) return;
+  for (const s of ws.sheets) s.folded = new Set();
   resetCamera();
-  renderOnce();
-  if (state.mode === "overview") {
+  render();
+  if (ws.mode === "overview") {
     const width = canvasEl.clientWidth;
     const height = canvasEl.clientHeight;
-    camera.scale = Math.min(1, width / viewEl.scrollWidth, height / viewEl.scrollHeight);
-    camera.x = Math.max(0, (width - viewEl.scrollWidth * camera.scale) / 2);
-    camera.y = Math.max(0, (height - viewEl.scrollHeight * camera.scale) / 2);
+    camera.scale = Math.min(1, width / panesEl.scrollWidth, height / panesEl.scrollHeight);
+    camera.x = Math.max(0, (width - panesEl.scrollWidth * camera.scale) / 2);
+    camera.y = Math.max(0, (height - panesEl.scrollHeight * camera.scale) / 2);
     applyCamera();
   }
   for (const button of modeButtons) {
-    button.classList.toggle("active", button.dataset.mode === state.mode);
+    button.classList.toggle("active", button.dataset.mode === ws.mode);
   }
   zoomEl.classList.remove("active");
 }
 
-/** Render after a manual fold or unfold: the view may overflow now, and that is fine. */
-function render(): void {
-  renderOnce();
+/** `package / a.gcl › b.gcl`: the files opened in turn; an earlier one goes back. */
+function renderTrail(w: Workspace): void {
+  fileEl.replaceChildren(span("pkg", mainSheet(w).model.module.package), span("sep", "/"));
+  w.trail.forEach((fixture, i) => {
+    const name = `${shortName(fixture)}.gcl`;
+    if (i > 0) fileEl.append(span("sep", "›"));
+    if (i === w.trail.length - 1) {
+      fileEl.append(span("", name));
+      return;
+    }
+    const crumb = button("crumb", name, "go back");
+    crumb.addEventListener("click", () => open(w.trail.slice(0, i + 1)));
+    fileEl.append(crumb);
+  });
+  fileEl.append(resetEl);
 }
 
-function load(name: string): void {
-  const raw = fixtures[name];
-  if (raw === undefined) return;
-  const model = parseViewModel(raw);
-  const base = orderByBarycenter(computeLayout(model), model);
-  state = {
-    model,
-    project: projectFor(model),
-    edited: false,
-    base,
-    layout: base,
-    plan: planRoutes(model, base),
-    folded: new Set(),
-    hidden: new Map(),
-    picked: null,
-    selection: null,
-    mode: state?.mode ?? "fit",
-  };
-  fileEl.replaceChildren();
-  fileEl.append(
-    Object.assign(document.createElement("span"), {
-      className: "pkg",
-      textContent: model.module.package,
-    }),
-    Object.assign(document.createElement("span"), { className: "sep", textContent: "/" }),
-    Object.assign(document.createElement("span"), {
-      textContent: model.module.file.split("/").at(-1) ?? model.module.file,
-    }),
-    resetEl,
-  );
+/** Show `trail`'s last fixture as the main sheet, with no panes pinned. */
+function open(trail: string[]): void {
+  const fixture = trail.at(-1);
+  if (fixture === undefined || fixtures[fixture] === undefined) return;
+  const model = parseViewModel(fixtures[fixture]);
+  const main = createSheet({ module: model.module.id, instance: null }, fixture);
+  ws = { sheets: [main], trail, edited: ws?.edited ?? false, mode: ws?.mode ?? "fit" };
+  placePanes(ws);
+  renderTrail(ws);
   markEdited();
   refit();
 }
 
+/** Open a sheet for `key` beside its readers; a pane already open just stays. */
+function pin(key: PaneKey): void {
+  if (!ws || ws.sheets.some((s) => sameKey(s.key, key))) return;
+  const fixture = fixtureOf(key.module);
+  if (fixture === null) return;
+  ws.sheets.push(createSheet(key, fixture));
+  placePanes(ws);
+  render();
+}
+
+function unpin(sheet: Sheet): void {
+  if (!ws || sheet === mainSheet(ws)) return;
+  ws.sheets = ws.sheets.filter((s) => s !== sheet);
+  placePanes(ws);
+  render();
+}
+
 /** Click on a ruler label: pick rows (shift: range, cmd / ctrl: toggle). */
-function pickFromEvent(label: HTMLElement, event: MouseEvent): void {
-  if (!state) return;
+function pickFromEvent(s: Sheet, label: HTMLElement, event: MouseEvent): void {
   const axis = label.dataset.axis;
   const row = label.dataset.row;
   if (axis === undefined || row === undefined) return;
-  const order = state.layout.bands.find((b) => b.axis === axis)?.labels ?? [];
-  state.picked = pick(state.picked, axis, order, row, {
+  const order = s.layout.bands.find((b) => b.axis === axis)?.labels ?? [];
+  s.picked = pick(s.picked, axis, order, row, {
     range: event.shiftKey,
     toggle: event.metaKey || event.ctrlKey,
   });
-  applyPicked();
+  applyPicked(s);
 }
 
 /** Show the rows of a collapsed gap again. */
-function revealGap(gap: HTMLElement): void {
-  if (!state) return;
+function revealGap(s: Sheet, gap: HTMLElement): void {
   const axis = gap.dataset.axis;
   if (axis === undefined) return;
-  const set = hiddenOf(state.hidden, axis);
+  const set = hiddenOf(s.hidden, axis);
   for (const label of (gap.dataset.labels ?? "").split("\u0000")) set.delete(label);
   render();
 }
 
-viewEl.addEventListener("click", (event) => {
-  if (!state) return;
+/** One selection at a time across sheets. */
+function select(s: Sheet, selection: Selection | null): void {
+  if (!ws) return;
+  for (const other of ws.sheets) {
+    if (other !== s && other.selection !== null) {
+      other.selection = null;
+      applySelection(other);
+    }
+  }
+  s.selection = selection;
+  applySelection(s);
+}
+
+panesEl.addEventListener("click", (event) => {
+  if (!ws) return;
   const target = event.target as HTMLElement;
+  const s = sheetOf(target);
+  if (!s) return;
+  if (target.closest(".pane-file")) {
+    open([...ws.trail, s.fixture]);
+    return;
+  }
+  if (target.closest(".pane-close")) {
+    unpin(s);
+    return;
+  }
   const label = target.closest<HTMLElement>(".row-label");
   if (label) {
-    pickFromEvent(label, event);
+    pickFromEvent(s, label, event);
     return;
   }
   const gap = target.closest<HTMLElement>(".row-gap[data-axis]");
   if (gap) {
-    revealGap(gap);
+    revealGap(s, gap);
     return;
   }
-  if (state.picked) {
-    state.picked = null;
-    applyPicked();
+  if (s.picked) {
+    s.picked = null;
+    applyPicked(s);
   }
   const folded = target.closest<HTMLElement>(".col.folded");
   if (folded?.dataset.node) {
-    state.folded.delete(folded.dataset.node);
-    state.selection = null;
+    s.folded.delete(folded.dataset.node);
+    select(s, null);
     render();
-    return;
-  }
-  const foldButton = target.closest<HTMLElement>(".fold-button");
-  if (foldButton) {
-    const id = foldButton.closest<HTMLElement>(".col")?.dataset.node;
-    if (id) {
-      state.folded.add(id);
-      state.selection = null;
-      render();
-    }
     return;
   }
   const hit = target.closest<HTMLElement>("[data-node]");
   if (!hit?.dataset.node) {
-    state.selection = null;
-    applySelection();
+    select(s, null);
     return;
   }
   const id = hit.dataset.node;
   const row = hit.dataset.row ?? null;
   const sub = hit.dataset.sub ?? null;
   const same =
-    state.selection &&
-    state.selection.id === id &&
-    state.selection.row === row &&
-    state.selection.sub === sub;
-  state.selection = same
-    ? { id, row, sub, mode: state.selection?.mode === "deps" ? "uses" : "deps" }
-    : { id, row, sub, mode: "deps" };
-  applySelection();
+    s.selection && s.selection.id === id && s.selection.row === row && s.selection.sub === sub;
+  select(
+    s,
+    same
+      ? { id, row, sub, mode: s.selection?.mode === "deps" ? "uses" : "deps" }
+      : { id, row, sub, mode: "deps" },
+  );
 });
 
 // ---- live editing ----
 // Every edit is a textual change to the in-memory sources, followed by a full
-// re-evaluation in WASM. Nothing is saved. An edit that fails to compile is
-// rolled back and its message shown; the editor stays open with the text.
+// re-evaluation in WASM of every open sheet of that package. Nothing is saved.
+// An edit that fails to compile is rolled back and its message shown; the
+// editor stays open with the text.
 
 /** A pending change: which file, its new text, and how the model changes on success. */
 interface Edit {
   file: string;
   next: string;
-  onModel: (model: ViewModel) => void;
+  onModel: () => void;
 }
 
 let evaluating: Promise<void> = Promise.resolve();
@@ -495,10 +670,10 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-/** Apply an edit: swap the source, evaluate, fold the values back in, re-render. */
-function applyEdit(edit: Edit): Promise<boolean> {
-  const current = state;
-  const project = current?.project;
+/** Apply an edit: swap the source, evaluate each sheet of the project, fold the values back in, re-render. */
+function applyEdit(s: Sheet, edit: Edit): Promise<boolean> {
+  const current = ws;
+  const project = s.project;
   if (!current || !project) return Promise.resolve(false);
   const run = async (): Promise<boolean> => {
     const previous = project.files.get(edit.file);
@@ -508,28 +683,37 @@ function applyEdit(edit: Edit): Promise<boolean> {
     }
     project.files.set(edit.file, edit.next);
     showNote("evaluating…", "busy");
-    let outcome;
-    try {
-      outcome = await evaluateProject(project.entry, project.request());
-    } catch (error) {
+    const sheets = current.sheets.filter((other) => other.project === project);
+    const rollback = (message: string): false => {
       project.files.set(edit.file, previous);
-      showNote(errorMessage(error));
-      return false;
-    }
-    if (state !== current) return false;
-    if (outcome.status !== "evaluated") {
-      project.files.set(edit.file, previous);
-      const message =
-        outcome.status === "rejected"
-          ? outcome.error.message
-          : (outcome.diagnostics[0]?.message ?? "compile error");
       showNote(message);
       return false;
+    };
+    const evaluations: Evaluation[] = [];
+    for (const sheet of sheets) {
+      let outcome;
+      try {
+        outcome = await evaluateProject(sheet.model.module.file, project.request());
+      } catch (error) {
+        return rollback(errorMessage(error));
+      }
+      if (outcome.status !== "evaluated") {
+        return rollback(
+          outcome.status === "rejected"
+            ? outcome.error.message
+            : (outcome.diagnostics[0]?.message ?? "compile error"),
+        );
+      }
+      evaluations.push(outcome.evaluation);
     }
-    edit.onModel(current.model);
-    applyEvaluation(current.model, outcome.evaluation);
+    if (ws !== current) return false;
+    edit.onModel();
+    sheets.forEach((sheet, i) => {
+      const evaluation = evaluations[i];
+      if (evaluation) applyEvaluation(sheet.model, evaluation);
+      sheet.base = orderByBarycenter(computeLayout(sheet.model), sheet.model);
+    });
     current.edited = true;
-    current.base = orderByBarycenter(computeLayout(current.model), current.model);
     render();
     markEdited();
     return true;
@@ -542,7 +726,6 @@ function applyEdit(edit: Edit): Promise<boolean> {
   return result;
 }
 
-/** A bare number gets the column's unit, as a sheet would; anything else is taken as typed. */
 /**
  * Turn typed text into a literal for the node. A quantity needs a floating-point
  * literal (`0` is an integer; `0.0` is not), so a bare number is given a decimal
@@ -559,11 +742,11 @@ function literalFor(node: ViewNode, text: string): string {
 }
 
 /** Replace the whole expression of a node (formula bar). */
-function editExpr(node: ViewNode, next: string): Promise<boolean> {
-  const project = state?.project;
-  const expr = editableExpr(node);
-  const file = project && state ? project.fileOf(state.model, node.module) : null;
-  if (!project || !state || expr === null || file === null || node.source === null) {
+function editExpr(s: Sheet, node: ViewNode, next: string): Promise<boolean> {
+  const project = s.project;
+  const expr = editableExpr(s, node);
+  const file = project ? project.fileOf(s.model, node.module) : null;
+  if (!project || expr === null || file === null || node.source === null) {
     showNote("this expression cannot be edited");
     return Promise.resolve(false);
   }
@@ -575,28 +758,28 @@ function editExpr(node: ViewNode, next: string): Promise<boolean> {
     showNote(error instanceof EditError ? error.message : errorMessage(error));
     return Promise.resolve(false);
   }
-  const model = state.model;
-  return applyEdit({
+  return applyEdit(s, {
     file,
     next: rewritten,
     onModel: () => {
       node.expr = next;
-      node.deps = depsOf(next, model);
+      node.deps = depsOf(next, s.model);
     },
   });
 }
 
 /** Replace one entry of a table literal, or the literal of a scalar param. */
 function editCell(
+  s: Sheet,
   node: ViewNode,
   row: string | null,
   sub: string | null,
   text: string,
 ): Promise<boolean> {
-  if (row === null) return editExpr(node, literalFor(node, text));
-  const project = state?.project;
-  const file = project && state ? project.fileOf(state.model, node.module) : null;
-  if (!project || !state || file === null || node.source === null) {
+  if (row === null) return editExpr(s, node, literalFor(node, text));
+  const project = s.project;
+  const file = project ? project.fileOf(s.model, node.module) : null;
+  if (!project || file === null || node.source === null) {
     showNote("this value cannot be edited");
     return Promise.resolve(false);
   }
@@ -608,7 +791,7 @@ function editCell(
     showNote(error instanceof EditError ? error.message : errorMessage(error));
     return Promise.resolve(false);
   }
-  return applyEdit({ file, next: rewritten, onModel: () => undefined });
+  return applyEdit(s, { file, next: rewritten, onModel: () => undefined });
 }
 
 /** Wire an input: Enter or blur commits, Escape cancels; the input stays while evaluating. */
@@ -656,10 +839,11 @@ function bindEditor(
 
 /** Edit the selected node's expression in place in the formula bar. */
 function startFormulaEdit(): void {
-  if (!state || formulaEl.classList.contains("editing")) return;
-  const hit = selected(state);
+  if (!ws || formulaEl.classList.contains("editing")) return;
+  const s = activeSheet(ws);
+  const hit = selected(s);
   if (!hit) return;
-  const expr = editableExpr(hit.node);
+  const expr = editableExpr(s, hit.node);
   const exprEl = formulaEl.querySelector<HTMLElement>(".formula-expr");
   const coloured = exprEl?.querySelector<HTMLElement>(".formula-coloured");
   if (expr === null || !exprEl || !coloured) return;
@@ -675,7 +859,7 @@ function startFormulaEdit(): void {
   bindEditor(
     input,
     expr,
-    (text) => editExpr(node, text),
+    (text) => editExpr(s, node, text),
     () => renderFormula(),
   );
   exprEl.append(input);
@@ -686,17 +870,16 @@ function startFormulaEdit(): void {
 }
 
 /** Edit a param cell or scalar box in place; other nodes edit through the formula bar. */
-function startCellEdit(cell: HTMLElement): void {
-  if (!state?.project) return;
+function startCellEdit(s: Sheet, cell: HTMLElement): void {
+  if (!s.project) return;
   const id = cell.dataset.node;
-  const node = state.model.nodes.find((n) => n.id === id);
+  const node = s.model.nodes.find((n) => n.id === id);
   if (!node) return;
   const row = cell.dataset.row ?? null;
   const sub = cell.dataset.sub ?? null;
-  state.selection = { id: node.id, row, sub, mode: "deps" };
-  applySelection();
+  select(s, { id: node.id, row, sub, mode: "deps" });
   const literal = node.kind === "param" || node.kind === "const";
-  if (!literal || (row === null && editableExpr(node) === null)) {
+  if (!literal || (row === null && editableExpr(s, node) === null)) {
     startFormulaEdit();
     return;
   }
@@ -718,7 +901,7 @@ function startCellEdit(cell: HTMLElement): void {
   bindEditor(
     input,
     initial,
-    (text) => editCell(node, row, sub, text),
+    (text) => editCell(s, node, row, sub, text),
     () => {
       cell.classList.remove("editing");
       cell.replaceChildren(...before);
@@ -734,19 +917,20 @@ formulaEl.addEventListener("click", (event) => {
   startFormulaEdit();
 });
 
-const resetEl = document.createElement("button");
-resetEl.type = "button";
-resetEl.className = "bar-reset";
-resetEl.textContent = "edited · reset";
-resetEl.title = "discard the in-memory edits and reload the fixture";
+const resetEl = button("bar-reset", "edited · reset", "discard the in-memory edits and reload");
 resetEl.hidden = true;
-resetEl.addEventListener("click", () => load(fixtureEl.value));
+resetEl.addEventListener("click", () => {
+  projects.clear();
+  if (ws) ws.edited = false;
+  open(ws?.trail ?? [fixtureEl.value]);
+});
 
 function markEdited(): void {
-  resetEl.hidden = !state?.edited;
+  resetEl.hidden = !ws?.edited;
 }
 
-// Context menu on a ruler label: hide the picked rows, or show only them.
+// Context menus: on a ruler label, hide the picked rows or show only them; on
+// an external's head, open its module or pin it beside.
 const menuEl = document.createElement("div");
 menuEl.className = "menu";
 menuEl.hidden = true;
@@ -765,39 +949,32 @@ interface MenuItem {
 function openMenu(x: number, y: number, items: MenuItem[]): void {
   menuEl.replaceChildren();
   for (const item of items) {
-    const button = document.createElement("button");
-    button.type = "button";
-    button.textContent = item.label;
-    button.disabled = item.disabled ?? false;
-    button.addEventListener("click", () => {
+    const entry = button("", item.label, "");
+    entry.disabled = item.disabled ?? false;
+    entry.addEventListener("click", () => {
       closeMenu();
       item.run();
     });
-    menuEl.append(button);
+    menuEl.append(entry);
   }
   menuEl.hidden = false;
   menuEl.style.left = `${Math.min(x, window.innerWidth - menuEl.offsetWidth - 8)}px`;
   menuEl.style.top = `${Math.min(y, window.innerHeight - menuEl.offsetHeight - 8)}px`;
 }
 
-viewEl.addEventListener("contextmenu", (event) => {
-  if (!state) return;
-  const label = (event.target as HTMLElement).closest<HTMLElement>(".row-label");
-  if (!label) return;
-  event.preventDefault();
+function rowMenu(s: Sheet, label: HTMLElement, event: MouseEvent): void {
   const axis = label.dataset.axis;
   const row = label.dataset.row;
   if (axis === undefined || row === undefined) return;
   // Right-click outside the picked rows picks that row alone, as in a sheet.
-  if (!(state.picked?.axis === axis && state.picked.labels.has(row))) {
-    state.picked = { axis, labels: new Set([row]), anchor: row };
-    applyPicked();
+  if (!(s.picked?.axis === axis && s.picked.labels.has(row))) {
+    s.picked = { axis, labels: new Set([row]), anchor: row };
+    applyPicked(s);
   }
-  const current = state;
-  const picked = current.picked;
+  const picked = s.picked;
   if (!picked) return;
-  const all = current.layout.bands.find((b) => b.axis === axis)?.labels ?? [];
-  const hidden = hiddenOf(current.hidden, axis);
+  const all = s.layout.bands.find((b) => b.axis === axis)?.labels ?? [];
+  const hidden = hiddenOf(s.hidden, axis);
   const n = picked.labels.size;
   const rows = n === 1 ? "row" : `${n} rows`;
   openMenu(event.clientX, event.clientY, [
@@ -805,7 +982,7 @@ viewEl.addEventListener("contextmenu", (event) => {
       label: `Hide ${rows}`,
       run: () => {
         for (const l of picked.labels) hidden.add(l);
-        current.picked = null;
+        s.picked = null;
         render();
       },
     },
@@ -814,7 +991,7 @@ viewEl.addEventListener("contextmenu", (event) => {
       run: () => {
         for (const l of all) if (!picked.labels.has(l)) hidden.add(l);
         for (const l of picked.labels) hidden.delete(l);
-        current.picked = null;
+        s.picked = null;
         render();
       },
     },
@@ -827,33 +1004,76 @@ viewEl.addEventListener("contextmenu", (event) => {
       },
     },
   ]);
-});
+}
 
-viewEl.addEventListener("dblclick", (event) => {
-  if (!state) return;
-  const cell = (event.target as HTMLElement).closest<HTMLElement>(
-    ".cell[data-node], .box-value[data-node]",
-  );
-  if (cell) {
+/** `Open eps.gcl` goes there (the trail leads back); `Pin eps beside` opens it as a pane. */
+function externalMenu(w: Workspace, node: ViewNode, event: MouseEvent): void {
+  const key = { module: node.module, instance: node.instance };
+  const fixture = fixtureOf(node.module);
+  const file = `${node.module.split(".").at(-1) ?? node.module}.gcl`;
+  const pinned = w.sheets.find((other) => sameKey(other.key, key));
+  openMenu(event.clientX, event.clientY, [
+    {
+      label: `Open ${file}`,
+      disabled: fixture === null,
+      run: () => {
+        if (fixture !== null) open([...w.trail, fixture]);
+      },
+    },
+    pinned
+      ? { label: `Unpin ${node.instance ?? file}`, run: () => unpin(pinned) }
+      : {
+          label: `Pin ${node.instance ?? file} beside`,
+          disabled: fixture === null,
+          run: () => pin(key),
+        },
+  ]);
+}
+
+panesEl.addEventListener("contextmenu", (event) => {
+  if (!ws) return;
+  const target = event.target as HTMLElement;
+  const s = sheetOf(target);
+  if (!s) return;
+  const label = target.closest<HTMLElement>(".row-label");
+  if (label) {
     event.preventDefault();
-    startCellEdit(cell);
+    rowMenu(s, label, event);
     return;
   }
-  const head = (event.target as HTMLElement).closest<HTMLElement>(".col:not(.folded) .col-head");
+  const head = target.closest<HTMLElement>(".col-head.kind-external");
+  const node = head?.dataset.node ? s.model.nodes.find((n) => n.id === head.dataset.node) : null;
+  if (!node) return;
+  event.preventDefault();
+  externalMenu(ws, node, event);
+});
+
+panesEl.addEventListener("dblclick", (event) => {
+  if (!ws) return;
+  const target = event.target as HTMLElement;
+  const s = sheetOf(target);
+  if (!s) return;
+  const cell = target.closest<HTMLElement>(".cell[data-node], .box-value[data-node]");
+  if (cell) {
+    event.preventDefault();
+    startCellEdit(s, cell);
+    return;
+  }
+  const head = target.closest<HTMLElement>(".col:not(.folded) .col-head");
   const id = head?.dataset.node;
   if (!id) return;
-  state.folded.add(id);
-  state.selection = null;
+  s.folded.add(id);
+  select(s, null);
   render();
 });
 
-for (const name of Object.keys(fixtures).sort()) {
+for (const name of fixtureNames) {
   const option = document.createElement("option");
   option.value = name;
-  option.textContent = name.replace("../fixtures/", "").replace(".view.json", "");
+  option.textContent = shortName(name);
   fixtureEl.append(option);
 }
-fixtureEl.addEventListener("change", () => load(fixtureEl.value));
+fixtureEl.addEventListener("change", () => open([fixtureEl.value]));
 // Warm the engine so the first edit does not wait for the download.
 void loadEngine().catch(() => undefined);
 let lastWidth = document.documentElement.clientWidth;
@@ -889,9 +1109,10 @@ canvasEl.addEventListener(
 // Drag on empty canvas: pan.
 let drag: { x: number; y: number; moved: boolean } | null = null;
 canvasEl.addEventListener("pointerdown", (event) => {
-  // Pointer capture would retarget the click to the canvas, so boxes and
-  // ruler labels never start a pan.
-  if (event.button !== 0 || (event.target as HTMLElement).closest(".col, .ruler-inner")) return;
+  // Pointer capture would retarget the click to the canvas, so boxes, ruler
+  // labels and pane headers never start a pan.
+  const target = event.target as HTMLElement;
+  if (event.button !== 0 || target.closest(".col, .ruler-inner, .pane-head")) return;
   drag = { x: event.clientX, y: event.clientY, moved: false };
   canvasEl.setPointerCapture(event.pointerId);
   canvasEl.classList.add("panning");
@@ -938,18 +1159,20 @@ document.addEventListener("keydown", (event) => {
   if (event.key !== "Escape") return;
   zoomPopover.hidden = true;
   closeMenu();
-  if (state?.picked) {
-    state.picked = null;
-    applyPicked();
+  for (const s of ws?.sheets ?? []) {
+    if (s.picked) {
+      s.picked = null;
+      applyPicked(s);
+    }
   }
 });
 
-for (const button of modeButtons) {
-  button.addEventListener("click", () => {
-    if (!state || !button.dataset.mode) return;
-    state.mode = button.dataset.mode as Mode;
+for (const modeButton of modeButtons) {
+  modeButton.addEventListener("click", () => {
+    if (!ws || !modeButton.dataset.mode) return;
+    ws.mode = modeButton.dataset.mode as Mode;
     refit();
   });
 }
-new ResizeObserver(() => redraw()).observe(viewEl);
-if (fixtureEl.value) load(fixtureEl.value);
+new ResizeObserver(() => redraw()).observe(panesEl);
+if (fixtureEl.value) open([fixtureEl.value]);

@@ -13,6 +13,16 @@ const evaluated = JSON.parse(readFileSync(join(here, `${name}.eval.json`), "utf8
 
 const labelsOf = Object.fromEntries(structure.indexes.map((i) => [i.name, i.labels]));
 
+// Values come in SI; a column's declared unit scales them back for display.
+const UNIT_SCALE = {
+  min: 1 / 60,
+  h: 1 / 3600,
+  deg: 180 / Math.PI,
+  kJ: 1e-3,
+  Wh: 1 / 3600,
+  km: 1e-3,
+};
+
 function formatNumber(x) {
   if (!Number.isFinite(x)) return String(x);
   const rounded = Number(x.toPrecision(4));
@@ -30,7 +40,7 @@ function convert(raw, node) {
     }
     if ("si_value" in raw) {
       const unit = node.unit;
-      const magnitude = formatNumber(raw.si_value);
+      const magnitude = formatNumber(raw.si_value * (UNIT_SCALE[unit] ?? 1));
       const display = unit ? `${magnitude} ${unit}` : magnitude;
       return { kind: "quantity", display, magnitude, si_value: raw.si_value, unit };
     }
@@ -72,6 +82,7 @@ const nodes = structure.nodes.map((node) => {
     deps: node.deps,
     expr: node.expr ?? null,
     reduce: node.reduce ?? null,
+    instance: node.instance ?? null,
     source: {
       file: node.module === structure.module.id ? structure.module.file : null,
       line: node.line,

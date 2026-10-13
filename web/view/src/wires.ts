@@ -111,15 +111,24 @@ interface Anchors {
 }
 
 /** The stage may be scaled (overview mode); client rects must be unscaled. */
-function scaleOf(view: HTMLElement, origin: DOMRect): number {
+export function scaleOf(view: HTMLElement, origin: DOMRect): number {
   return view.offsetWidth > 0 ? origin.width / view.offsetWidth : 1;
 }
 
-function anchorsOf(view: HTMLElement, id: string, origin: DOMRect): Anchors | null {
-  const col = view.querySelector<HTMLElement>(`.col[data-node="${id}"]`);
-  const head = col?.querySelector<HTMLElement>(".col-head");
-  if (!col || !head) return null;
-  const k = scaleOf(view, origin);
+/**
+ * Ports of a box inside `view`, in unscaled coordinates relative to `origin`:
+ * the box's top and bottom centre, and the two ends of its head (the whole box
+ * when it has no head, as a ruler box).
+ */
+export function anchorsOf(
+  view: HTMLElement,
+  selector: string,
+  origin: DOMRect,
+  k: number,
+): Anchors | null {
+  const col = view.querySelector<HTMLElement>(selector);
+  if (!col) return null;
+  const head = col.querySelector<HTMLElement>(".col-head") ?? col;
   const c = col.getBoundingClientRect();
   const h = head.getBoundingClientRect();
   const x = (c.left + c.width / 2 - origin.left) / k;
@@ -133,7 +142,7 @@ function anchorsOf(view: HTMLElement, id: string, origin: DOMRect): Anchors | nu
 }
 
 /** Orthogonal polyline with rounded corners. */
-function roundedPath(points: Port[], radius: number): string {
+export function roundedPath(points: Port[], radius: number): string {
   const pts = points.filter(
     (p, i) => i === 0 || p.x !== points[i - 1].x || p.y !== points[i - 1].y,
   );
@@ -155,7 +164,7 @@ function roundedPath(points: Port[], radius: number): string {
   return d;
 }
 
-function marker(id: string, cls: string): SVGMarkerElement {
+export function marker(id: string, cls: string): SVGMarkerElement {
   const m = document.createElementNS(SVG_NS, "marker");
   m.setAttribute("id", id);
   m.setAttribute("viewBox", "0 0 10 10");
@@ -203,23 +212,32 @@ function packLanes(spans: Span[]): Map<number, number> {
   return counts;
 }
 
+const byNode = (id: string): string => `.col[data-node="${id}"]`;
+
+/**
+ * Draw a sheet's own wires. `extra` reserves lanes in a channel for wires that
+ * come from other sheets (see cross.ts); the sheet's own lane count per channel
+ * is returned so those wires can take the lanes below.
+ */
 export function drawWires(
   svg: SVGSVGElement,
   view: HTMLElement,
   layout: Layout,
   plan: RoutePlan,
-): void {
+  extra: ReadonlyMap<number, number> = new Map(),
+): Map<number, number> {
   const gutterX = view.clientWidth - 12;
   const tiers = scalarTierCount(layout);
 
   // Pass 1: x positions do not depend on channel heights, so pack lanes first.
   let origin = view.getBoundingClientRect();
+  let k = scaleOf(view, origin);
   const lanes = new Map<Route, { lane: number; lane2: number }>();
   const spans: Span[] = [];
   for (const route of plan.routes) {
     if (route.kind === "adjacent") continue;
-    const a = anchorsOf(view, route.edge.from, origin);
-    const b = anchorsOf(view, route.edge.to, origin);
+    const a = anchorsOf(view, byNode(route.edge.from), origin, k);
+    const b = anchorsOf(view, byNode(route.edge.to), origin, k);
     if (!a || !b) continue;
     const slot = { lane: 0, lane2: 0 };
     lanes.set(route, slot);
@@ -252,7 +270,7 @@ export function drawWires(
   for (const channel of view.querySelectorAll<HTMLElement>(".channel")) {
     const k = Number(channel.dataset.channel);
     const betweenTiers = k > 0 && k < tiers;
-    const count = counts.get(k) ?? 0;
+    const count = (counts.get(k) ?? 0) + (extra.get(k) ?? 0);
     const height = betweenTiers
       ? TIER_GAP
       : count === 0
@@ -263,6 +281,7 @@ export function drawWires(
 
   // Pass 2: heights are final; measure again and draw.
   origin = view.getBoundingClientRect();
+  k = scaleOf(view, origin);
   svg.replaceChildren();
   svg.setAttribute("width", String(view.scrollWidth));
   svg.setAttribute("height", String(view.scrollHeight));
@@ -271,7 +290,6 @@ export function drawWires(
   const defs = document.createElementNS(SVG_NS, "defs");
   defs.append(marker("arrow", "arrow-idle"), marker("arrow-lit", "arrow-lit"));
   svg.append(defs);
-  const k = scaleOf(view, origin);
   const laneY = (channel: number, lane: number): number => {
     const el = view.querySelector<HTMLElement>(`.channel[data-channel="${channel}"]`);
     if (!el) return 0;
@@ -279,8 +297,8 @@ export function drawWires(
   };
 
   for (const route of plan.routes) {
-    const a = anchorsOf(view, route.edge.from, origin);
-    const b = anchorsOf(view, route.edge.to, origin);
+    const a = anchorsOf(view, byNode(route.edge.from), origin, k);
+    const b = anchorsOf(view, byNode(route.edge.to), origin, k);
     if (!a || !b) continue;
     const points: Port[] = [];
     if (route.kind === "adjacent") {
@@ -325,4 +343,5 @@ export function drawWires(
       svg.append(dot);
     }
   }
+  return counts;
 }

@@ -29,7 +29,8 @@
       "deps": [],
       "line": 4,
       "expr": "count(for c: Component { 1.0 })",
-      "reduce": null
+      "reduce": null,
+      "instance": null
     },
     {
       "name": "margin",
@@ -42,7 +43,8 @@
       "deps": [],
       "line": 3,
       "expr": "0.2",
-      "reduce": null
+      "reduce": null,
+      "instance": null
     },
     {
       "name": "p_budget",
@@ -55,7 +57,8 @@
       "deps": [],
       "line": 23,
       "expr": "if @p_sun_avail < @p_eclipse_avail { @p_sun_avail } else { @p_eclipse_avail }",
-      "reduce": null
+      "reduce": null,
+      "instance": "eps"
     },
     {
       "name": "eta_dcdc",
@@ -68,7 +71,8 @@
       "deps": [],
       "line": 5,
       "expr": "0.9",
-      "reduce": null
+      "reduce": null,
+      "instance": null
     },
     {
       "name": "p_unit",
@@ -80,8 +84,9 @@
       "pub": false,
       "deps": [],
       "line": 7,
-      "expr": "table[Component] { … }",
-      "reduce": null
+      "expr": "table[Component] { \u2026 }",
+      "reduce": null,
+      "instance": null
     },
     {
       "name": "duty",
@@ -93,8 +98,9 @@
       "pub": false,
       "deps": [],
       "line": 14,
-      "expr": "table[Component, Mode] { … }",
-      "reduce": null
+      "expr": "table[Component, Mode] { \u2026 }",
+      "reduce": null,
+      "instance": null
     },
     {
       "name": "p_avg",
@@ -107,7 +113,8 @@
       "deps": ["p_unit", "duty"],
       "line": 22,
       "expr": "@p_unit[c] * @duty[c, m]",
-      "reduce": null
+      "reduce": null,
+      "instance": null
     },
     {
       "name": "p_bus",
@@ -120,7 +127,8 @@
       "deps": ["p_avg", "eta_dcdc"],
       "line": 26,
       "expr": "@p_avg[c, m] / @eta_dcdc",
-      "reduce": null
+      "reduce": null,
+      "instance": null
     },
     {
       "name": "p_mode",
@@ -136,7 +144,8 @@
       "reduce": {
         "op": "sum",
         "axis": "Component"
-      }
+      },
+      "instance": null
     },
     {
       "name": "p_peak",
@@ -152,7 +161,8 @@
       "reduce": {
         "op": "maximum",
         "axis": "Mode"
-      }
+      },
+      "instance": null
     },
     {
       "name": "p_total",
@@ -168,7 +178,8 @@
       "reduce": {
         "op": "maximum",
         "axis": "Mode"
-      }
+      },
+      "instance": null
     },
     {
       "name": "p_mean",
@@ -181,7 +192,8 @@
       "deps": ["p_total", "num"],
       "line": 39,
       "expr": "@p_total / to_float(@num)",
-      "reduce": null
+      "reduce": null,
+      "instance": null
     },
     {
       "name": "p_required",
@@ -194,7 +206,8 @@
       "deps": ["p_total", "margin"],
       "line": 40,
       "expr": "@p_total * (1.0 + @margin)",
-      "reduce": null
+      "reduce": null,
+      "instance": null
     },
     {
       "name": "heat_dcdc",
@@ -210,7 +223,8 @@
       "reduce": {
         "op": "sum",
         "axis": "Component"
-      }
+      },
+      "instance": null
     },
     {
       "name": "within_budget",
@@ -223,7 +237,8 @@
       "deps": ["p_required", "p_budget"],
       "line": 43,
       "expr": "@p_required <= @p_budget",
-      "reduce": null
+      "reduce": null,
+      "instance": null
     }
   ]
 }

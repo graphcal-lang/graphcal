@@ -13,11 +13,9 @@ const sources = import.meta.glob<string>("../fixtures/*/**/*.{gcl,toml}", {
 });
 
 export class Project {
-  readonly entry: string;
   readonly packageName: string;
   readonly files = new Map<string, string>();
-  constructor(entry: string, packageName: string, files: Iterable<[string, string]>) {
-    this.entry = entry;
+  constructor(packageName: string, files: Iterable<[string, string]>) {
     this.packageName = packageName;
     for (const [path, content] of files) this.files.set(path, content);
   }
@@ -49,7 +47,7 @@ export function projectFor(model: ViewModel): Project | null {
     const manifest = files.get("graphcal.toml") ?? "";
     const name = /name\s*=\s*"([^"]+)"/.exec(manifest)?.[1];
     if (name === model.module.package && files.has(model.module.file)) {
-      return new Project(model.module.file, name, files);
+      return new Project(name, files);
     }
   }
   return null;

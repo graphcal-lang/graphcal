@@ -1,0 +1,36 @@
+{
+  "version": 0,
+  "module": {
+    "id": "power_project.components",
+    "file": "src/power_project/components.gcl",
+    "package": "power_project"
+  },
+  "indexes": [
+    {
+      "name": "Component",
+      "module": "power_project.components",
+      "labels": ["Obc", "Radio", "Heater", "Payload"]
+    },
+    {
+      "name": "Mode",
+      "module": "power_project.components",
+      "labels": ["Safe", "Nominal", "Science"]
+    }
+  ],
+  "nodes": [
+    {
+      "name": "num",
+      "module": "power_project.components",
+      "kind": "const",
+      "axes": [],
+      "dimension": "Int",
+      "unit": null,
+      "pub": true,
+      "deps": [],
+      "line": 4,
+      "expr": "count(for c: Component { 1.0 })",
+      "reduce": null,
+      "instance": null
+    }
+  ]
+}

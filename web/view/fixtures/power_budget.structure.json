@@ -95,7 +95,8 @@
       "deps": [],
       "line": 58,
       "expr": "80.0 W",
-      "reduce": null
+      "reduce": null,
+      "instance": null
     },
     {
       "name": "num",
@@ -107,8 +108,9 @@
       "pub": false,
       "deps": [],
       "line": 60,
-      "expr": "table[Component] { … }",
-      "reduce": null
+      "expr": "table[Component] { \u2026 }",
+      "reduce": null,
+      "instance": null
     },
     {
       "name": "p_nominal",
@@ -120,8 +122,9 @@
       "pub": false,
       "deps": [],
       "line": 116,
-      "expr": "table[Component] { … }",
-      "reduce": null
+      "expr": "table[Component] { \u2026 }",
+      "reduce": null,
+      "instance": null
     },
     {
       "name": "p_max",
@@ -133,8 +136,9 @@
       "pub": false,
       "deps": [],
       "line": 172,
-      "expr": "table[Component] { … }",
-      "reduce": null
+      "expr": "table[Component] { \u2026 }",
+      "reduce": null,
+      "instance": null
     },
     {
       "name": "margin",
@@ -146,8 +150,9 @@
       "pub": false,
       "deps": [],
       "line": 228,
-      "expr": "table[Component] { … }",
-      "reduce": null
+      "expr": "table[Component] { \u2026 }",
+      "reduce": null,
+      "instance": null
     },
     {
       "name": "eta_dcdc",
@@ -159,8 +164,9 @@
       "pub": false,
       "deps": [],
       "line": 284,
-      "expr": "table[Component] { … }",
-      "reduce": null
+      "expr": "table[Component] { \u2026 }",
+      "reduce": null,
+      "instance": null
     },
     {
       "name": "on",
@@ -172,8 +178,9 @@
       "pub": false,
       "deps": [],
       "line": 340,
-      "expr": "table[Component, Mode] { … }",
-      "reduce": null
+      "expr": "table[Component, Mode] { \u2026 }",
+      "reduce": null,
+      "instance": null
     },
     {
       "name": "heat_dcdc",
@@ -186,7 +193,8 @@
       "deps": ["p_nominal", "eta_dcdc"],
       "line": 397,
       "expr": "@p_nominal[c] / @eta_dcdc[c] - @p_nominal[c]",
-      "reduce": null
+      "reduce": null,
+      "instance": null
     },
     {
       "name": "p_unit_nominal",
@@ -199,7 +207,8 @@
       "deps": ["num", "p_nominal", "margin", "eta_dcdc"],
       "line": 401,
       "expr": "to_float(@num[c]) * @p_nominal[c] * (1.0 + @margin[c]) / @eta_dcdc[c]",
-      "reduce": null
+      "reduce": null,
+      "instance": null
     },
     {
       "name": "p_unit_max",
@@ -212,7 +221,8 @@
       "deps": ["num", "p_max", "margin", "eta_dcdc"],
       "line": 405,
       "expr": "to_float(@num[c]) * @p_max[c] * (1.0 + @margin[c]) / @eta_dcdc[c]",
-      "reduce": null
+      "reduce": null,
+      "instance": null
     },
     {
       "name": "p_mode_nominal",
@@ -228,7 +238,8 @@
       "reduce": {
         "op": "sum",
         "axis": "Component"
-      }
+      },
+      "instance": null
     },
     {
       "name": "p_mode_max",
@@ -244,7 +255,8 @@
       "reduce": {
         "op": "sum",
         "axis": "Component"
-      }
+      },
+      "instance": null
     },
     {
       "name": "p_peak",
@@ -260,7 +272,8 @@
       "reduce": {
         "op": "maximum",
         "axis": "Mode"
-      }
+      },
+      "instance": null
     },
     {
       "name": "heat_total",
@@ -276,7 +289,8 @@
       "reduce": {
         "op": "sum",
         "axis": "Component"
-      }
+      },
+      "instance": null
     },
     {
       "name": "worst_mode",
@@ -289,7 +303,8 @@
       "deps": ["p_mode_max"],
       "line": 419,
       "expr": "argmax(@p_mode_max)",
-      "reduce": null
+      "reduce": null,
+      "instance": null
     },
     {
       "name": "within_budget",
@@ -302,7 +317,8 @@
       "deps": ["p_peak", "p_budget"],
       "line": 421,
       "expr": "@p_peak <= @p_budget",
-      "reduce": null
+      "reduce": null,
+      "instance": null
     }
   ]
 }

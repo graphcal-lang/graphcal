@@ -15,15 +15,11 @@
           <button
             type="button"
             data-mode="fit"
-            title="keep text readable; fold low-activity intermediates until the view fits"
+            title="everything at full size; pan to see the rest"
           >
             fit
           </button>
-          <button
-            type="button"
-            data-mode="overview"
-            title="expand everything and scale the whole view to fit"
-          >
+          <button type="button" data-mode="overview" title="scale the whole view to fit">
             overview
           </button>
           <button type="button" class="zoom" id="zoom" title="zoom">100%</button>
@@ -47,8 +43,8 @@
     </div>
     <div id="canvas" class="canvas">
       <div id="stage" class="stage">
-        <main id="view" class="view"></main>
-        <svg id="wires" class="wires" aria-hidden="true"></svg>
+        <div id="panes" class="panes"></div>
+        <svg id="cross" class="wires cross-wires" aria-hidden="true"></svg>
       </div>
     </div>
     <script type="module" src="/src/main.ts"></script>

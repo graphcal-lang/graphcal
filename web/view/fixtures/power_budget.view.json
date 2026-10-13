@@ -96,6 +96,7 @@
       "deps": [],
       "expr": "80.0 W",
       "reduce": null,
+      "instance": null,
       "source": {
         "file": "src/power_budget/power_budget.gcl",
         "line": 58
@@ -120,6 +121,7 @@
       "deps": [],
       "expr": "table[Component] { … }",
       "reduce": null,
+      "instance": null,
       "source": {
         "file": "src/power_budget/power_budget.gcl",
         "line": 60
@@ -515,6 +517,7 @@
       "deps": [],
       "expr": "table[Component] { … }",
       "reduce": null,
+      "instance": null,
       "source": {
         "file": "src/power_budget/power_budget.gcl",
         "line": 116
@@ -1069,6 +1072,7 @@
       "deps": [],
       "expr": "table[Component] { … }",
       "reduce": null,
+      "instance": null,
       "source": {
         "file": "src/power_budget/power_budget.gcl",
         "line": 172
@@ -1623,6 +1627,7 @@
       "deps": [],
       "expr": "table[Component] { … }",
       "reduce": null,
+      "instance": null,
       "source": {
         "file": "src/power_budget/power_budget.gcl",
         "line": 228
@@ -2177,6 +2182,7 @@
       "deps": [],
       "expr": "table[Component] { … }",
       "reduce": null,
+      "instance": null,
       "source": {
         "file": "src/power_budget/power_budget.gcl",
         "line": 284
@@ -2731,6 +2737,7 @@
       "deps": [],
       "expr": "table[Component, Mode] { … }",
       "reduce": null,
+      "instance": null,
       "source": {
         "file": "src/power_budget/power_budget.gcl",
         "line": 340
@@ -7949,6 +7956,7 @@
       "deps": ["p_nominal", "eta_dcdc"],
       "expr": "@p_nominal[c] / @eta_dcdc[c] - @p_nominal[c]",
       "reduce": null,
+      "instance": null,
       "source": {
         "file": "src/power_budget/power_budget.gcl",
         "line": 397
@@ -8503,6 +8511,7 @@
       "deps": ["num", "p_nominal", "margin", "eta_dcdc"],
       "expr": "to_float(@num[c]) * @p_nominal[c] * (1.0 + @margin[c]) / @eta_dcdc[c]",
       "reduce": null,
+      "instance": null,
       "source": {
         "file": "src/power_budget/power_budget.gcl",
         "line": 401
@@ -9057,6 +9066,7 @@
       "deps": ["num", "p_max", "margin", "eta_dcdc"],
       "expr": "to_float(@num[c]) * @p_max[c] * (1.0 + @margin[c]) / @eta_dcdc[c]",
       "reduce": null,
+      "instance": null,
       "source": {
         "file": "src/power_budget/power_budget.gcl",
         "line": 405
@@ -9614,6 +9624,7 @@
         "op": "sum",
         "axis": "Component"
       },
+      "instance": null,
       "source": {
         "file": "src/power_budget/power_budget.gcl",
         "line": 409
@@ -9751,6 +9762,7 @@
         "op": "sum",
         "axis": "Component"
       },
+      "instance": null,
       "source": {
         "file": "src/power_budget/power_budget.gcl",
         "line": 413
@@ -9888,6 +9900,7 @@
         "op": "maximum",
         "axis": "Mode"
       },
+      "instance": null,
       "source": {
         "file": "src/power_budget/power_budget.gcl",
         "line": 417
@@ -9915,6 +9928,7 @@
         "op": "sum",
         "axis": "Component"
       },
+      "instance": null,
       "source": {
         "file": "src/power_budget/power_budget.gcl",
         "line": 418
@@ -9939,6 +9953,7 @@
       "deps": ["p_mode_max"],
       "expr": "argmax(@p_mode_max)",
       "reduce": null,
+      "instance": null,
       "source": {
         "file": "src/power_budget/power_budget.gcl",
         "line": 419
@@ -9962,6 +9977,7 @@
       "deps": ["p_peak", "p_budget"],
       "expr": "@p_peak <= @p_budget",
       "reduce": null,
+      "instance": null,
       "source": {
         "file": "src/power_budget/power_budget.gcl",
         "line": 421

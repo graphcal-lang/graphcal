@@ -30,6 +30,7 @@
       "deps": [],
       "expr": "count(for c: Component { 1.0 })",
       "reduce": null,
+      "instance": null,
       "source": {
         "file": null,
         "line": 4
@@ -51,6 +52,7 @@
       "deps": [],
       "expr": "0.2",
       "reduce": null,
+      "instance": null,
       "source": {
         "file": "src/power_project/power_max.gcl",
         "line": 3
@@ -75,6 +77,7 @@
       "deps": [],
       "expr": "if @p_sun_avail < @p_eclipse_avail { @p_sun_avail } else { @p_eclipse_avail }",
       "reduce": null,
+      "instance": "eps",
       "source": {
         "file": null,
         "line": 23
@@ -99,6 +102,7 @@
       "deps": [],
       "expr": "0.9",
       "reduce": null,
+      "instance": null,
       "source": {
         "file": "src/power_project/power_max.gcl",
         "line": 5
@@ -123,6 +127,7 @@
       "deps": [],
       "expr": "table[Component] { … }",
       "reduce": null,
+      "instance": null,
       "source": {
         "file": "src/power_project/power_max.gcl",
         "line": 7
@@ -187,6 +192,7 @@
       "deps": [],
       "expr": "table[Component, Mode] { … }",
       "reduce": null,
+      "instance": null,
       "source": {
         "file": "src/power_project/power_max.gcl",
         "line": 14
@@ -371,6 +377,7 @@
       "deps": ["p_unit", "duty"],
       "expr": "@p_unit[c] * @duty[c, m]",
       "reduce": null,
+      "instance": null,
       "source": {
         "file": "src/power_project/power_max.gcl",
         "line": 22
@@ -555,6 +562,7 @@
       "deps": ["p_avg", "eta_dcdc"],
       "expr": "@p_avg[c, m] / @eta_dcdc",
       "reduce": null,
+      "instance": null,
       "source": {
         "file": "src/power_project/power_max.gcl",
         "line": 26
@@ -742,6 +750,7 @@
         "op": "sum",
         "axis": "Component"
       },
+      "instance": null,
       "source": {
         "file": "src/power_project/power_max.gcl",
         "line": 30
@@ -799,6 +808,7 @@
         "op": "maximum",
         "axis": "Mode"
       },
+      "instance": null,
       "source": {
         "file": "src/power_project/power_max.gcl",
         "line": 34
@@ -866,6 +876,7 @@
         "op": "maximum",
         "axis": "Mode"
       },
+      "instance": null,
       "source": {
         "file": "src/power_project/power_max.gcl",
         "line": 38
@@ -890,6 +901,7 @@
       "deps": ["p_total", "num"],
       "expr": "@p_total / to_float(@num)",
       "reduce": null,
+      "instance": null,
       "source": {
         "file": "src/power_project/power_max.gcl",
         "line": 39
@@ -914,6 +926,7 @@
       "deps": ["p_total", "margin"],
       "expr": "@p_total * (1.0 + @margin)",
       "reduce": null,
+      "instance": null,
       "source": {
         "file": "src/power_project/power_max.gcl",
         "line": 40
@@ -941,6 +954,7 @@
         "op": "sum",
         "axis": "Component"
       },
+      "instance": null,
       "source": {
         "file": "src/power_project/power_max.gcl",
         "line": 41
@@ -965,6 +979,7 @@
       "deps": ["p_required", "p_budget"],
       "expr": "@p_required <= @p_budget",
       "reduce": null,
+      "instance": null,
       "source": {
         "file": "src/power_project/power_max.gcl",
         "line": 43

@@ -767,3 +767,98 @@ body {
 .wire.lit.direct {
   stroke-width: 1.75;
 }
+
+/* ---- panes: the main sheet at the right, what it reads in columns to the left ---- */
+.panes {
+  display: flex;
+  align-items: flex-start;
+  gap: 48px;
+  min-width: max-content;
+}
+.pane-col {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+.panes.multi .pane-col + .pane-col {
+  border-left: 1px solid var(--border);
+}
+.pane {
+  position: relative;
+}
+.pane-head {
+  display: none;
+  height: 26px;
+  align-items: center;
+  gap: 8px;
+  padding: 0 16px;
+  border-bottom: 1px solid var(--border);
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.panes.multi .pane-head {
+  display: flex;
+}
+.pane-mark,
+.pane-file {
+  color: var(--sel);
+}
+.pane-file,
+.pane-close,
+.crumb {
+  background: none;
+  border: 0;
+  padding: 0;
+  font: inherit;
+  cursor: pointer;
+}
+.pane-file {
+  font-weight: 600;
+}
+.pane-file:hover,
+.crumb:hover {
+  text-decoration: underline;
+}
+.pane-close {
+  margin-left: auto;
+  color: var(--muted);
+}
+.pane-close:hover {
+  color: var(--text);
+}
+.crumb {
+  color: var(--muted);
+}
+.crumb:hover {
+  color: var(--text);
+}
+.cross-wires {
+  left: 0;
+  top: 0;
+}
+
+/* index cards: the indexes a module declares, before its zones */
+.index-card .mark,
+.dim-index {
+  color: var(--muted);
+}
+.index-card {
+  min-width: 120px;
+}
+.index-body {
+  display: flex;
+  flex-direction: column;
+}
+.index-body .row-key {
+  height: var(--row-h);
+  padding: 5px 8px;
+  border-top: 1px solid var(--border);
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--muted);
+}
+.band-scalar .zone-index {
+  align-items: flex-start;
+}

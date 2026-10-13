@@ -38,7 +38,14 @@ export interface Band {
   columns: Column[];
 }
 
+export interface Index {
+  name: string;
+  labels: string[];
+}
+
 export interface Layout {
+  /** Indexes this module declares itself; they are shown as cards before the zones. */
+  indexes: Index[];
   bands: Band[];
   columns: Map<string, Column>;
   /** Direct consumers of each node id within the module. */
@@ -157,7 +164,10 @@ export function computeLayout(model: ViewModel): Layout {
     });
     bands.push(band);
   });
-  return { bands, columns, users };
+  const indexes = model.indexes
+    .filter((i) => i.module === model.module.id)
+    .map(({ name, labels }) => ({ name, labels }));
+  return { indexes, bands, columns, users };
 }
 
 export const BOX_GAP = 10;
@@ -256,7 +266,7 @@ export function packScalarBand(
     }
   }
   const bands = layout.bands.map((b) => (b === scalar ? { ...b, columns: packedColumns } : b));
-  return { layout: { bands, columns, users: layout.users }, used, stacked };
+  return { layout: { ...layout, bands, columns }, used, stacked };
 }
 
 /**
@@ -307,5 +317,5 @@ export function orderByBarycenter(layout: Layout, model: ViewModel): Layout {
   }
   const columns = new Map<string, Column>();
   for (const band of bands) for (const c of band.columns) columns.set(c.node.id, c);
-  return { bands, columns, users: layout.users };
+  return { ...layout, bands, columns };
 }
