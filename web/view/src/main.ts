@@ -1000,7 +1000,7 @@ formulaEl.addEventListener("click", (event) => {
   startFormulaEdit();
 });
 
-const resetEl = button("bar-reset", "edited · reset", "discard the in-memory edits and reload");
+const resetEl = button("bar-reset", "reset", "discard the what-if edits and reload");
 resetEl.hidden = true;
 resetEl.addEventListener("click", () => {
   host.reset();
