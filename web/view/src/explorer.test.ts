@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vite-plus/test";
-import { fileTree } from "./explorer.ts";
+import { fileTree, visibleRows } from "./explorer.ts";
 
 describe("fileTree", () => {
   test("lists directories before files at each level, in name order", () => {
@@ -28,5 +28,12 @@ describe("fileTree", () => {
 
   test("is empty for no files", () => {
     expect(fileTree([])).toEqual([]);
+  });
+
+  test("visibleRows hides everything under a folded directory", () => {
+    const rows = fileTree(["src/a/x.gcl", "src/b/y.gcl", "src/z.gcl", "README.md"]);
+    const shown = visibleRows(rows, new Set(["src/a"])).map((r) => r.path);
+    expect(shown).toEqual(["src", "src/a", "src/b", "src/b/y.gcl", "src/z.gcl", "README.md"]);
+    expect(visibleRows(rows, new Set(["src"])).map((r) => r.path)).toEqual(["src", "README.md"]);
   });
 });

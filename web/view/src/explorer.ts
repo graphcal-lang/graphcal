@@ -47,6 +47,27 @@ export function fileTree(files: readonly string[]): TreeRow[] {
   return rows;
 }
 
+/** The rows shown when the directories in `collapsed` are folded: nothing under them. */
+export function visibleRows(rows: readonly TreeRow[], collapsed: ReadonlySet<string>): TreeRow[] {
+  const out: TreeRow[] = [];
+  let hiddenBelow: number | null = null;
+  for (const row of rows) {
+    if (hiddenBelow !== null) {
+      if (row.depth > hiddenBelow) continue;
+      hiddenBelow = null;
+    }
+    out.push(row);
+    if (row.kind === "dir" && collapsed.has(row.path)) hiddenBelow = row.depth;
+  }
+  return out;
+}
+
+/** The directories above `path` (`a/b/c.gcl` → `a`, `a/b`). */
+function ancestors(path: string): string[] {
+  const parts = path.split("/");
+  return parts.slice(0, -1).map((_, i) => parts.slice(0, i + 1).join("/"));
+}
+
 /** The ref part of the explorer, when the host reads a repository. */
 export interface RefSource {
   /** The ref being read, once known. */
@@ -59,8 +80,10 @@ export interface RefSource {
 }
 
 export interface ExplorerOptions {
-  /** `owner / repo`, or the package name. */
+  /** The repository or package name. */
   title: string;
+  /** Shown as the title's tooltip (`owner/repo`). */
+  subtitle: string;
   refs: RefSource | null;
   onOpen(file: string): void;
 }
@@ -86,11 +109,16 @@ export class Explorer {
   private refs: Promise<Refs> | null = null;
   private files: readonly string[] = [];
   private selected: string | null = null;
+  /** Directories folded by hand, or never opened; the selected file's are always open. */
+  private collapsed = new Set<string>();
+  /** Directories the user has opened or closed, which `render` then leaves alone. */
+  private readonly touched = new Set<string>();
 
   constructor(root: HTMLElement, options: ExplorerOptions) {
     this.root = root;
     this.options = options;
     this.titleEl = el("div", "explorer-title", options.title);
+    this.titleEl.title = options.subtitle;
     this.treeEl = el("div", "explorer-tree");
     root.replaceChildren(this.titleEl);
     if (options.refs) {
@@ -119,8 +147,17 @@ export class Explorer {
     }
     root.append(this.treeEl);
     this.treeEl.addEventListener("click", (event) => {
-      const row = (event.target as HTMLElement).closest<HTMLElement>(".tree-row.file");
-      if (row?.dataset.path) this.options.onOpen(row.dataset.path);
+      const row = (event.target as HTMLElement).closest<HTMLElement>(".tree-row");
+      const path = row?.dataset.path;
+      if (!row || path === undefined) return;
+      if (row.classList.contains("dir")) {
+        this.touched.add(path);
+        if (this.collapsed.has(path)) this.collapsed.delete(path);
+        else this.collapsed.add(path);
+        this.refresh();
+      } else if (row.classList.contains("openable")) {
+        this.options.onOpen(path);
+      }
     });
   }
 
@@ -135,19 +172,37 @@ export class Explorer {
     );
   }
 
-  /** Show `files` of the project, with `selected` marked. */
+  /**
+   * Show `files` as a tree with `selected` marked. Directories start folded
+   * except those above the selected file; what the user folds or unfolds stays so.
+   */
   render(files: readonly string[], selected: string | null): void {
+    if (files !== this.files) {
+      const rows = fileTree(files);
+      const known = new Set(rows.filter((r) => r.kind === "dir").map((r) => r.path));
+      for (const dir of known) if (!this.touched.has(dir)) this.collapsed.add(dir);
+      for (const dir of this.collapsed) if (!known.has(dir)) this.collapsed.delete(dir);
+    }
     this.files = files;
     this.selected = selected;
+    if (selected !== null) for (const dir of ancestors(selected)) this.collapsed.delete(dir);
     this.treeEl.replaceChildren();
-    for (const row of fileTree(files)) {
+    for (const row of visibleRows(fileTree(files), this.collapsed)) {
       const rowEl = el("div", `tree-row ${row.kind}`);
       rowEl.dataset.path = row.path;
-      rowEl.style.paddingLeft = `${14 + row.depth * 14}px`;
-      if (row.kind === "dir") rowEl.append(el("span", "tree-mark", "▾"));
+      rowEl.style.paddingLeft = `${10 + row.depth * 14}px`;
+      if (row.kind === "dir") {
+        const folded = this.collapsed.has(row.path);
+        rowEl.classList.toggle("folded", folded);
+        rowEl.append(el("span", "tree-mark", folded ? "▸" : "▾"));
+        rowEl.title = folded ? "open" : "close";
+      } else {
+        rowEl.append(el("span", "tree-mark", ""));
+        if (row.name.endsWith(".gcl")) rowEl.classList.add("openable");
+        else rowEl.classList.add("other");
+      }
       rowEl.append(el("span", "tree-name", row.name));
       if (row.path === selected) rowEl.classList.add("selected");
-      if (row.kind === "file" && !row.name.endsWith(".gcl")) rowEl.classList.add("other");
       this.treeEl.append(rowEl);
     }
   }

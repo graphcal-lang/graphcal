@@ -1186,32 +1186,48 @@ body {
 .tree-row {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 4px 14px;
+  gap: 4px;
+  padding: 3px 14px 3px 10px;
   color: var(--muted);
   white-space: nowrap;
+  user-select: none;
 }
-.tree-row.file {
+.tree-row.dir {
+  color: var(--text);
   cursor: pointer;
 }
-.tree-row.file:hover {
+.tree-row.dir:hover {
+  background: rgba(255, 255, 255, 0.04);
+}
+.tree-row.dir .tree-name::after {
+  content: "/";
+  color: var(--faint);
+}
+.tree-row.openable {
+  cursor: pointer;
+}
+.tree-row.openable:hover {
   color: var(--text);
+  background: rgba(255, 255, 255, 0.04);
 }
 .tree-row.other {
   color: var(--faint);
   cursor: default;
 }
-.tree-row.other:hover {
-  color: var(--faint);
-}
 .tree-row.selected {
-  background: var(--node);
+  background: var(--sel-bg);
   color: var(--text);
   font-weight: 500;
 }
 .tree-mark {
+  flex: none;
+  width: 12px;
   color: var(--faint);
   font-size: 10px;
+  text-align: center;
+}
+.tree-row.dir .tree-mark {
+  color: var(--muted);
 }
 
 /* ---- refs menu ---- */

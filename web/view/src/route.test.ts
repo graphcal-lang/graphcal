@@ -39,6 +39,6 @@ test("formatRoute round-trips, encoding a slashed ref", () => {
 
 test("describeRoute names the resolved ref", () => {
   const route = { owner: "o", repo: "r", ref: null, path: "a.gcl" };
-  expect(describeRoute(route)).toBe("o/r @ default branch");
-  expect(describeRoute(route, "main")).toBe("o/r @ main");
+  expect(describeRoute(route)).toBe("r @ default branch");
+  expect(describeRoute(route, "main")).toBe("r @ main");
 });

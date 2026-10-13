@@ -29,6 +29,7 @@ export function mountGitHubBar(
   };
   host.onState((state) => {
     originEl.textContent = describeRoute(state.route, state.ref);
+    originEl.title = `${state.route.owner}/${state.route.repo}`;
     originEl.classList.toggle("loading", state.loading);
     renderLogin(state.wantsToken);
   });

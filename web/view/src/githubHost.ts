@@ -45,7 +45,7 @@ function errorMessage(error: unknown): string {
 
 export class GitHubHost implements Host {
   modules: readonly string[] = [];
-  /** Every file of the project read, relative to its root (for the explorer). */
+  /** Every file of the repository at the ref (for the explorer). */
   files: readonly string[] = [];
   edited = false;
   private route: Route;
@@ -100,6 +100,7 @@ export class GitHubHost implements Host {
       if (tree.truncated) {
         throw new Error("the repository is too large for GitHub to list in one request");
       }
+      this.files = tree.entries.filter((e) => e.type === "blob").map((e) => e.path);
       const plan = planProject(tree.entries, route.path);
       const texts = await mapLimit(plan.files, 6, (file) =>
         this.github.file(route.owner, route.repo, ref, file.path),
@@ -109,7 +110,6 @@ export class GitHubHost implements Host {
         (file, i) => [file.relative, texts[i] ?? ""] as [string, string],
       );
       this.root = plan.root;
-      this.files = plan.files.map((file) => file.relative);
       this.pristine = new Map(files);
       this.project = new Project(route.repo, files);
       this.models.clear();
@@ -216,7 +216,26 @@ export class GitHubHost implements Host {
     void this.load();
   }
 
+  /** A `.gcl` of the repository: shown when it is in the project read, else read as a new project. */
+  openFile(path: string): boolean {
+    if (!path.endsWith(".gcl")) return false;
+    const module = this.moduleOfPath(path);
+    if (module !== null) {
+      for (const listener of this.openListeners) listener(module);
+      return true;
+    }
+    location.hash = formatRoute({ ...this.route, path });
+    return true;
+  }
+
+  pathOf(module: string): string | null {
+    const model = this.models.get(module);
+    if (!model) return null;
+    return this.root === "" ? model.module.file : `${this.root}/${model.module.file}`;
+  }
+
   private moduleOfPath(path: string): string | null {
+    if (this.root !== "" && !path.startsWith(`${this.root}/`)) return null;
     const relative = this.root === "" ? path : path.slice(this.root.length + 1);
     for (const model of this.models.values()) {
       if (model.module.file === relative) return model.module.id;
@@ -308,10 +327,8 @@ export class GitHubHost implements Host {
   }
 
   shown(module: string): void {
-    const model = this.models.get(module);
-    if (!model) return;
-    const path = this.root === "" ? model.module.file : `${this.root}/${model.module.file}`;
-    if (path === this.route.path) return;
+    const path = this.pathOf(module);
+    if (path === null || path === this.route.path) return;
     this.route = { ...this.route, path };
     history.replaceState(null, "", formatRoute(this.route));
     this.setState({ ...this.state, route: this.route });

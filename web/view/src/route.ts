@@ -38,10 +38,10 @@ export function formatRoute(route: Route): string {
   return `#${route.owner}/${route.repo}${ref}/${route.path}`;
 }
 
-/** `owner/repo @ ref`, for the bar. */
+/** `repo @ ref`, for the bar (the owner is in the address and the explorer's tooltip). */
 export function describeRoute(route: Route, resolvedRef: string | null = route.ref): string {
   const ref = resolvedRef ?? "default branch";
-  return `${route.owner}/${route.repo} @ ${ref}`;
+  return `${route.repo} @ ${ref}`;
 }
 
 function splitOnce(text: string, separator: string): [string, string | null] {

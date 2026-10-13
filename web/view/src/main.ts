@@ -1381,9 +1381,11 @@ const refSource: RefSource | null =
     : null;
 const explorer = webShell
   ? new Explorer(explorerEl, {
-      title: route ? `${route.owner} / ${route.repo}` : "fixtures",
+      title: route ? route.repo : "fixtures",
+      subtitle: route ? `${route.owner}/${route.repo}` : "",
       refs: refSource,
       onOpen(file) {
+        if (host.openFile?.(file)) return;
         const module = host.modules.find((m) => host.model(m)?.module.file === file);
         if (module !== undefined) open([module]);
       },
@@ -1395,8 +1397,10 @@ function renderExplorer(): void {
   const files =
     host.files ??
     host.modules.map((m) => host.model(m)?.module.file).filter((f): f is string => f !== undefined);
-  explorer.render(files, ws ? mainSheet(ws).model.module.file : null);
-  if (ws && !route) explorer.setTitle(mainSheet(ws).model.module.package);
+  const main = ws ? mainSheet(ws).model : null;
+  const selected = main ? (host.pathOf?.(main.module.id) ?? main.module.file) : null;
+  explorer.render(files, selected);
+  if (main && !route) explorer.setTitle(main.module.package);
 }
 
 if (webShell) {

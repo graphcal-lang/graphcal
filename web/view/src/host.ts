@@ -19,8 +19,12 @@ export type EditResult =
 export interface Host {
   /** Modules the host offers in a picker, by id; empty when the host chooses what is shown. */
   readonly modules: readonly string[];
-  /** Every file of the shown project (for the explorer), when the host knows more than the modules. */
+  /** Every file the explorer lists, in the host's own paths (a whole repository, say). */
   readonly files?: readonly string[];
+  /** Open a listed `.gcl` file: the host shows it, reading another project if it must. False when it cannot. */
+  openFile?(path: string): boolean;
+  /** The listed path of a module's file, to mark it in the explorer. */
+  pathOf?(module: string): string | null;
   /** Whether the shown sources carry unsaved what-if edits the host can discard. */
   readonly edited: boolean;
   /** The current model of a module, if the host has one. */
