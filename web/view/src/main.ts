@@ -30,7 +30,6 @@ function need<T extends Element>(selector: string): T {
 const viewEl = need<HTMLElement>("#view");
 const wiresEl = need<SVGSVGElement>("#wires");
 const fileEl = need<HTMLElement>("#file");
-const unrollEl = need<HTMLElement>("#unroll");
 const formulaEl = need<HTMLElement>("#formula");
 const fixtureEl = need<HTMLSelectElement>("#fixture");
 const stageEl = need<HTMLElement>("#stage");
@@ -357,11 +356,6 @@ function load(name: string): void {
       textContent: model.module.file.split("/").at(-1) ?? model.module.file,
     }),
   );
-  const unrolled = base.bands.filter((b) => b.axis !== null);
-  unrollEl.textContent =
-    unrolled.length === 0
-      ? "no shared axis"
-      : unrolled.map((b) => `unroll ${b.axis} · ${b.labels.length}`).join("   ");
   refit();
 }
 
