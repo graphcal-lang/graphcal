@@ -231,12 +231,14 @@ function fit(base: Layout, folded: ReadonlySet<string>): Layout {
   return packed.layout;
 }
 
+/** Lay out and draw; the camera stays where it is (measuring needs an unscaled stage). */
 function renderOnce(): void {
   if (!state) return;
-  resetCamera();
+  stageEl.style.transform = "";
   state.layout = fit(state.base, state.folded);
   state.plan = planRoutes(state.model, state.layout);
   renderView(viewEl, state.layout, { folded: state.folded });
+  applyCamera();
   redraw();
 }
 
@@ -248,6 +250,7 @@ function overflows(): boolean {
 function refit(): void {
   if (!state) return;
   state.folded = new Set();
+  resetCamera();
   renderOnce();
   if (state.mode === "fit") {
     const candidates = [...state.base.columns.values()]

@@ -58,8 +58,6 @@ function renderHead(column: Column): HTMLElement {
   head.dataset.node = node.id;
   const title = el("div", "col-title");
   title.append(el("span", "mark", MARK[node.kind]), el("span", "name", node.name));
-  const tag = node.kind === "external" ? "import" : node.pub ? "pub" : node.kind;
-  title.append(el("span", "tag", tag));
   head.append(title);
   const meta = el("div", "col-meta");
   if (node.dimension !== null) {

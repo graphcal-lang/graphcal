@@ -405,12 +405,6 @@ body {
 .name {
   font-weight: 600;
 }
-.tag {
-  margin-left: auto;
-  padding-left: 10px;
-  font-size: 10px;
-  color: var(--faint);
-}
 .col-meta {
   display: flex;
   gap: 8px;
