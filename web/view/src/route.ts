@@ -1,16 +1,21 @@
 // The address of a file on GitHub, as the viewer's URL fragment carries it:
 //
 //   #owner/repo@ref/path/to/file.gcl
+//   #owner/repo@base...head/path/to/file.gcl
 //
 // `@ref` is a branch, tag or commit; left out, the repository's default
-// branch. A ref with a slash in it is written percent-encoded (`feat%2Fx`),
-// since the path follows it. The fragment never reaches a server.
+// branch. `base...head` (as GitHub's compare pages write it) shows the file
+// at `head` with what changed since `base` marked. A ref with a slash in it
+// is written percent-encoded (`feat%2Fx`), since the path follows it. The
+// fragment never reaches a server.
 
 export interface Route {
   owner: string;
   repo: string;
-  /** null: the default branch. */
+  /** The ref shown; null: the default branch. */
   ref: string | null;
+  /** The ref compared against, when the address is a comparison. */
+  base: string | null;
   /** Repository path of the `.gcl` file. */
   path: string;
 }
@@ -26,16 +31,30 @@ export function parseRoute(hash: string): Route | null {
   const [repoAndRef, path] = splitOnce(rest, "/");
   if (path === null || path.length === 0 || !path.endsWith(".gcl")) return null;
   if (path.split("/").some((part) => part === "" || part === "." || part === "..")) return null;
-  const [repo, ref] = splitOnce(repoAndRef, "@");
+  const [repo, refs] = splitOnce(repoAndRef, "@");
   if (!NAME.test(repo)) return null;
-  if (ref !== null && ref.length === 0) return null;
-  return { owner, repo, ref: ref === null ? null : decodeURIComponent(ref), path };
+  if (refs === null) return { owner, repo, ref: null, base: null, path };
+  const [base, head] = refs.includes("...") ? splitOnce(refs, "...") : [null, refs];
+  if (head === null || head.length === 0 || base === "") return null;
+  return {
+    owner,
+    repo,
+    ref: decodeURIComponent(head),
+    base: base === null ? null : decodeURIComponent(base),
+    path,
+  };
 }
 
 /** The fragment for a route, including the leading `#`. */
 export function formatRoute(route: Route): string {
-  const ref = route.ref === null ? "" : `@${encodeURIComponent(route.ref)}`;
-  return `#${route.owner}/${route.repo}${ref}/${route.path}`;
+  const head = route.ref === null ? "" : encodeURIComponent(route.ref);
+  const refs =
+    route.base !== null && route.ref !== null
+      ? `@${encodeURIComponent(route.base)}...${head}`
+      : route.ref === null
+        ? ""
+        : `@${head}`;
+  return `#${route.owner}/${route.repo}${refs}/${route.path}`;
 }
 
 /**
@@ -57,10 +76,10 @@ export function routeFromText(text: string): Route | null {
   return parseRoute(trimmed.startsWith("#") ? trimmed : `#${trimmed}`);
 }
 
-/** `repo @ ref`, for the bar (the owner is in the address and the explorer's tooltip). */
+/** `repo @ ref`, or `repo @ base…head` for a comparison (the owner is in the address and the explorer's tooltip). */
 export function describeRoute(route: Route, resolvedRef: string | null = route.ref): string {
   const ref = resolvedRef ?? "default branch";
-  return `${route.repo} @ ${ref}`;
+  return route.base === null ? `${route.repo} @ ${ref}` : `${route.repo} @ ${route.base}…${ref}`;
 }
 
 function splitOnce(text: string, separator: string): [string, string | null] {

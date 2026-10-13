@@ -6,7 +6,14 @@
 // declaring line picks that node in the sheet.
 import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
 import { bracketMatching } from "@codemirror/language";
-import { EditorState, StateEffect, StateField, type Transaction } from "@codemirror/state";
+import { unifiedMergeView } from "@codemirror/merge";
+import {
+  Compartment,
+  EditorState,
+  StateEffect,
+  StateField,
+  type Transaction,
+} from "@codemirror/state";
 import {
   Decoration,
   type DecorationSet,
@@ -118,6 +125,9 @@ export class SourceEditor {
   private silent = false;
   private caretLine = 0;
   private pending: ReturnType<typeof setTimeout> | null = null;
+  /** The base text of a comparison, shown as a unified diff under the editor's own text. */
+  private readonly merge = new Compartment();
+  private original: string | null = null;
   private readonly hooks: EditorHooks;
 
   constructor(parent: HTMLElement, hooks: EditorHooks) {
@@ -139,6 +149,7 @@ export class SourceEditor {
         graphcalHighlighting,
         inlayField,
         markField,
+        this.merge.of([]),
         EditorState.lineSeparator.of("\n"),
         EditorView.contentAttributes.of({ "aria-label": "Graphcal source", spellcheck: "false" }),
         keymap.of([...defaultKeymap, ...historyKeymap, indentWithTab]),
@@ -194,6 +205,7 @@ export class SourceEditor {
         this.file = file;
         this.view.setState(this.stateFor(text));
         this.caretLine = 1;
+        this.original = null;
         return;
       }
       const before = this.view.state.doc.toString();
@@ -203,6 +215,25 @@ export class SourceEditor {
     } finally {
       this.silent = false;
     }
+  }
+
+  /** Compare the text with `original` (deleted lines in red, added in green); null ends the comparison. */
+  setOriginal(original: string | null): void {
+    if (original === this.original) return;
+    this.original = original;
+    this.view.dispatch({
+      effects: this.merge.reconfigure(
+        original === null
+          ? []
+          : unifiedMergeView({
+              original,
+              mergeControls: false,
+              highlightChanges: true,
+              gutter: true,
+              syntaxHighlightDeletions: true,
+            }),
+      ),
+    });
   }
 
   setInlays(inlays: readonly Inlay[]): void {

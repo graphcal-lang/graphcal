@@ -5,9 +5,9 @@ import { planProject, ProjectPlanError } from "./repoProject.ts";
 function tree(paths: Record<string, number>): TreeEntry[] {
   const entries: TreeEntry[] = [];
   for (const [path, size] of Object.entries(paths)) {
-    entries.push({ path, type: "blob", size });
+    entries.push({ path, type: "blob", sha: `sha-${path}`, size });
   }
-  entries.push({ path: "src", type: "tree", size: null });
+  entries.push({ path: "src", type: "tree", sha: "sha-src", size: null });
   return entries;
 }
 

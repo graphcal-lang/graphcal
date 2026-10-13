@@ -35,7 +35,7 @@ export function mountStart(root: HTMLElement, badAddress: string | null): void {
   const text = document.createElement("p");
   text.className = "start-text";
   text.textContent =
-    "Paste the file's GitHub URL, or owner/repo/path/to/file.gcl (add @branch for a branch). The project around the file is read and evaluated here, in your browser.";
+    "Paste the file's GitHub URL, or owner/repo/path/to/file.gcl (add @branch for a branch, @base...head to see what changed between two refs). The project around the file is read and evaluated here, in your browser.";
   const input = document.createElement("input");
   input.className = "start-input";
   input.type = "text";

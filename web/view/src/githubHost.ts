@@ -4,8 +4,8 @@
 // and `reset` returns to them. The address bar follows the shown file.
 import { patchOf, type FileChange } from "./diff.ts";
 import { evaluateView, loadEngine, viewOf } from "./engine.ts";
-import { GitHub, GitHubError, type Refs } from "./github.ts";
-import type { EditResult, Host, NoteKind, SourceEdit } from "./host.ts";
+import { GitHub, GitHubError, type Refs, type Tree } from "./github.ts";
+import type { Compare, EditResult, Host, NoteKind, SourceEdit } from "./host.ts";
 import type { TokenStore } from "./login.ts";
 import { parseViewModel, type ViewModel } from "./model.ts";
 import { Project } from "./project.ts";
@@ -48,6 +48,8 @@ export class GitHubHost implements Host {
   modules: readonly string[] = [];
   /** Every file of the repository at the ref (for the explorer). */
   files: readonly string[] = [];
+  /** The base side, once read, when the address compares two refs. */
+  compare: Compare | null = null;
   edited = false;
   private route: Route;
   private github: GitHub;
@@ -103,6 +105,10 @@ export class GitHubHost implements Host {
       }
       this.files = tree.entries.filter((e) => e.type === "blob").map((e) => e.path);
       const plan = planProject(tree.entries, route.path);
+      this.compare = null;
+      // The base tree is read alongside the head's files; its sources follow the head's sheet.
+      const baseTree =
+        route.base === null ? null : this.github.tree(route.owner, route.repo, route.base);
       const texts = await mapLimit(plan.files, 6, (file) =>
         this.github.file(route.owner, route.repo, ref, file.path),
       );
@@ -134,11 +140,61 @@ export class GitHubHost implements Host {
         for (const listener of this.modelListeners) listener([outcome.model]);
       }
       this.pristineModels = new Map(this.models);
+      if (baseTree !== null && route.base !== null) {
+        this.note(`reading ${route.base}…`, "busy");
+        this.compare = await this.readBase(route.base, await baseTree, tree);
+        if (!fresh()) return;
+        this.note(null, "busy");
+        // The sheets are drawn again with the changes marked.
+        for (const listener of this.modelListeners) listener([...this.models.values()]);
+      }
       this.setState({ ...this.state, loading: false });
     } catch (error) {
       if (!fresh()) return;
       this.fail(error);
     }
+  }
+
+  /**
+   * The project at the base ref: the same files, read and projected there.
+   * The file may not exist at the base (a new file): then there are no base
+   * models and every node is new.
+   */
+  private async readBase(base: string, baseTree: Tree, headTree: Tree): Promise<Compare> {
+    const { route } = this;
+    const headSha = new Map(headTree.entries.map((e) => [e.path, e.sha]));
+    const baseSha = new Map(baseTree.entries.map((e) => [e.path, e.sha]));
+    const changedFiles = new Set<string>();
+    for (const [path, sha] of headSha) if (baseSha.get(path) !== sha) changedFiles.add(path);
+    for (const path of baseSha.keys()) if (!headSha.has(path)) changedFiles.add(path);
+    const sources = new Map<string, string>();
+    const models = new Map<string, ViewModel>();
+    const exists = baseTree.entries.some((e) => e.type === "blob" && e.path === route.path);
+    if (exists) {
+      const plan = planProject(baseTree.entries, route.path);
+      const texts = await mapLimit(plan.files, 6, (file) =>
+        this.github.file(route.owner, route.repo, base, file.path),
+      );
+      plan.files.forEach((file, i) => sources.set(file.relative, texts[i] ?? ""));
+      const project = new Project(route.repo, sources);
+      for (const file of plan.files) {
+        if (!file.relative.endsWith(".gcl")) continue;
+        try {
+          const outcome = await viewOf(file.relative, project.request());
+          if ("error" in outcome) continue;
+          const model = parseViewModel(outcome.view);
+          models.set(model.module.id, model);
+        } catch {
+          // A file that does not project at the base has no base side.
+        }
+      }
+    }
+    return {
+      ref: base,
+      model: (module) => models.get(module) ?? null,
+      source: (file) => sources.get(file) ?? null,
+      changedFiles,
+    };
   }
 
   /** Project one file of the project and remember its model. */
@@ -205,7 +261,8 @@ export class GitHubHost implements Host {
     const same =
       next.owner === this.route.owner &&
       next.repo === this.route.repo &&
-      next.ref === this.route.ref;
+      next.ref === this.route.ref &&
+      next.base === this.route.base;
     this.route = next;
     if (same && this.project) {
       const module = this.moduleOfPath(next.path);

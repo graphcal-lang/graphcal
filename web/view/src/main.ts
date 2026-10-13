@@ -9,6 +9,7 @@ import {
   type Layout,
   type Zone,
 } from "./layout.ts";
+import { diffModels, markChanges, previousValue, summarize, type ModelDiff } from "./compare.ts";
 import { crossLinks, drawCrossWires, extraLanes, type CrossSheet } from "./cross.ts";
 import { SourceEditor, type Inlay } from "./editor.ts";
 import { Explorer, type RefSource } from "./explorer.ts";
@@ -174,6 +175,13 @@ function renderOptions(s: Sheet): RenderOptions {
   return { folded: s.folded, hidden: s.hidden };
 }
 
+/** What changed in a sheet since the base ref, when the address compares two refs and the base is read. */
+function diffOf(s: Sheet): ModelDiff | null {
+  const compare = host.compare ?? null;
+  if (!compare) return null;
+  return diffModels(compare.model(s.model.module.id), s.model);
+}
+
 function fileNameOf(model: ViewModel): string {
   return model.module.file.split("/").at(-1) ?? model.module.file;
 }
@@ -311,6 +319,20 @@ function renderFormula(): void {
     line.append(...spansOf([eq()]), expr);
   }
   line.append(...spansOf([eq(), ...tokenize(displayOf(valueAt(node.value, labels)))]));
+  const diff = diffOf(s);
+  const change = diff?.nodes.get(node.id);
+  if (change) {
+    const was = previousValue(change, node.value, labels);
+    const text =
+      change.kind === "added"
+        ? "new since the base"
+        : was === undefined
+          ? change.kind === "expr"
+            ? `was ${oneLine(change.before.expr ?? "")}`
+            : "value unchanged here"
+          : `was ${displayOf(was)}`;
+    line.append(span("formula-was", text));
+  }
   show(line);
 }
 
@@ -512,6 +534,8 @@ function render(): void {
     s.layout = fit(s, s === mainSheet(ws) ? availableWidth() : PANE_WIDTH);
     s.plan = planRoutes(s.model, s.layout);
     renderView(s.viewEl, s.layout, renderOptions(s));
+    const diff = diffOf(s);
+    if (diff) markChanges(s.viewEl, s.model, diff);
   }
   applyCamera();
   redraw();
@@ -577,10 +601,23 @@ function open(trail: string[]): void {
   renderTrail(ws);
   markEdited();
   refit();
-  sheetNameEl.replaceChildren(span("", fileNameOf(main.model)), span("sub", "· sheet"));
+  renderSheetHead();
   syncEditor();
   renderExplorer();
   host.shown?.(module);
+}
+
+/** `power_max.gcl · sheet`, with what changed since the base when comparing. */
+function renderSheetHead(): void {
+  if (!ws) return;
+  const main = mainSheet(ws);
+  sheetNameEl.replaceChildren(span("", fileNameOf(main.model)), span("sub", "· sheet"));
+  const diff = diffOf(main);
+  if (diff) {
+    sheetNameEl.append(
+      span("sub diff-summary", `· since ${host.compare?.ref ?? "base"}: ${summarize(diff)}`),
+    );
+  }
 }
 
 /** Panes asked for before the host had their model. */
@@ -620,6 +657,7 @@ function adoptModels(models: ViewModel[]): void {
     renderFormula();
   }
   markEdited();
+  renderSheetHead();
   syncEditor();
   renderExplorer();
 }
@@ -1338,6 +1376,7 @@ function syncEditor(): void {
     return;
   }
   editor.show(file, text);
+  editor.setOriginal(host.compare ? (host.compare.source(file) ?? "") : null);
   editor.setInlays(inlaysOf(s));
   syncEditorSelection();
 }
@@ -1402,7 +1441,7 @@ function renderExplorer(): void {
     host.modules.map((m) => host.model(m)?.module.file).filter((f): f is string => f !== undefined);
   const main = ws ? mainSheet(ws).model : null;
   const selected = main ? (host.pathOf?.(main.module.id) ?? main.module.file) : null;
-  explorer.render(files, selected);
+  explorer.render(files, selected, host.compare?.changedFiles);
 }
 
 if (webShell) {

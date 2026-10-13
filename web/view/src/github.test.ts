@@ -55,8 +55,8 @@ describe("GitHub", () => {
           sha: "abc",
           truncated: false,
           tree: [
-            { path: "src", type: "tree" },
-            { path: "src/a.gcl", type: "blob", size: 12 },
+            { path: "src", type: "tree", sha: "t1" },
+            { path: "src/a.gcl", type: "blob", sha: "b1", size: 12 },
           ],
         }),
     ]);
@@ -66,8 +66,8 @@ describe("GitHub", () => {
       sha: "abc",
       truncated: false,
       entries: [
-        { path: "src", type: "tree", size: null },
-        { path: "src/a.gcl", type: "blob", size: 12 },
+        { path: "src", type: "tree", sha: "t1", size: null },
+        { path: "src/a.gcl", type: "blob", sha: "b1", size: 12 },
       ],
     });
   });

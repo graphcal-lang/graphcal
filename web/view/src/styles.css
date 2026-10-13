@@ -1145,6 +1145,10 @@ body {
   font-family: var(--mono);
   font-size: 11px;
 }
+.explorer-title,
+.explorer-ref-row {
+  flex: none;
+}
 .explorer-title {
   padding: 12px 14px 8px;
   color: var(--text);
@@ -1431,4 +1435,83 @@ body {
   color: #f48771;
   font-family: var(--mono);
   font-size: 11px;
+}
+
+/* ---- comparison: what changed since the base ref ---- */
+.col.diff-added,
+.col.diff-expr {
+  border-color: var(--bool);
+  box-shadow: 0 0 0 1px var(--bool);
+}
+.col.diff-value {
+  border-color: var(--bool);
+  border-style: dashed;
+}
+.col.sel.diff-added,
+.col.sel.diff-expr,
+.col.sel.diff-value {
+  border-color: var(--sel);
+  border-style: solid;
+  box-shadow: 0 0 0 1px var(--sel);
+}
+.diff-tag {
+  margin-left: 6px;
+  padding: 0 4px;
+  border-radius: 3px;
+  background: rgba(124, 198, 124, 0.2);
+  color: var(--bool);
+  font-family: var(--mono);
+  font-size: 9px;
+  font-weight: 400;
+  vertical-align: middle;
+}
+.cell.diff-cell {
+  background: rgba(124, 198, 124, 0.18);
+}
+.box-value:has(.was) {
+  flex-wrap: wrap;
+}
+.box-value .was {
+  flex-basis: 100%;
+  margin-top: 2px;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 10px;
+  text-decoration: line-through;
+}
+.formula-was {
+  margin-left: 12px;
+  color: var(--bool);
+  font-size: 11px;
+}
+.diff-summary {
+  color: var(--bool);
+}
+.tree-changed {
+  margin-left: auto;
+  color: var(--bool);
+  font-size: 8px;
+}
+
+/* The unified merge view: the base's lines in red, the head's in green. */
+.cm-editor .cm-changedLine {
+  background: rgba(124, 198, 124, 0.12);
+}
+.cm-editor .cm-deletedChunk {
+  background: rgba(244, 135, 113, 0.12);
+}
+.cm-editor .cm-changedText {
+  background: rgba(124, 198, 124, 0.3);
+}
+.cm-editor .cm-deletedText {
+  background: rgba(244, 135, 113, 0.3);
+}
+.cm-editor .cm-changedLineGutter {
+  background: var(--bool);
+}
+.cm-editor .cm-deletedLineGutter {
+  background: #f48771;
+}
+.cm-editor .cm-deletedChunk .cm-chunkButtons {
+  display: none;
 }

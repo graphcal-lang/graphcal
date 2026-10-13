@@ -42,6 +42,14 @@ requests, which switch `@ref` in the address. Pane arrangement, split width
 and explorer state are remembered in `localStorage`. The VS Code webview
 shows the sheet alone.
 
+`#owner/repo@base...head/path.gcl` compares two refs (`src/compare.ts`): the
+sheet shows `head` with every node that differs from `base` in a green frame
+(new ones tagged, a dashed frame when only the value changed, cells tinted,
+scalars with the old value struck through), the code pane shows the base's
+lines in red under the head's in green (CodeMirror's unified merge view),
+and the explorer dots the files whose content differs. The base project is
+read and evaluated after the head's sheet is up.
+
 The edits can leave the page as a patch: "copy changes" next to the reset
 button puts a unified diff (`src/diff.ts`, repository paths, a `# graphcal
 what-if:` heading) on the clipboard. `git apply` reads it, and the VS Code

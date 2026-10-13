@@ -121,6 +121,7 @@ export class Explorer {
   private refs: Promise<Refs> | null = null;
   private files: readonly string[] = [];
   private selected: string | null = null;
+  private changed: ReadonlySet<string> = new Set();
   /** Directories folded by hand, or never opened; the selected file's are always open. */
   private collapsed = new Set<string>();
   /** Directories the user has opened or closed, which `render` then leaves alone. */
@@ -188,7 +189,11 @@ export class Explorer {
    * Show `files` as a tree with `selected` marked. Directories start folded
    * except those above the selected file; what the user folds or unfolds stays so.
    */
-  render(files: readonly string[], selected: string | null): void {
+  render(
+    files: readonly string[],
+    selected: string | null,
+    changed: ReadonlySet<string> = new Set(),
+  ): void {
     if (files !== this.files) {
       const rows = fileTree(files);
       const known = new Set(rows.filter((r) => r.kind === "dir").map((r) => r.path));
@@ -197,6 +202,7 @@ export class Explorer {
     }
     this.files = files;
     this.selected = selected;
+    this.changed = changed;
     if (selected !== null) for (const dir of ancestors(selected)) this.collapsed.delete(dir);
     this.treeEl.replaceChildren();
     for (const row of visibleRows(fileTree(files), this.collapsed)) {
@@ -215,13 +221,18 @@ export class Explorer {
       }
       rowEl.append(el("span", "tree-name", row.name));
       if (row.path === selected) rowEl.classList.add("selected");
+      if (row.kind === "file" && changed.has(row.path)) {
+        rowEl.classList.add("changed");
+        rowEl.append(el("span", "tree-changed", "●"));
+        rowEl.title = "differs from the base";
+      }
       this.treeEl.append(rowEl);
     }
   }
 
   /** Re-render with what was shown last (after the title or the ref changed). */
   refresh(): void {
-    this.render(this.files, this.selected);
+    this.render(this.files, this.selected, this.changed);
   }
 
   private toggleMenu(): void {

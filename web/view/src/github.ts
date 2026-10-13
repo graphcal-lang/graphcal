@@ -51,6 +51,7 @@ const treeSchema = z.object({
     z.object({
       path: z.string(),
       type: z.enum(["blob", "tree", "commit"]),
+      sha: z.string(),
       size: z.number().optional(),
     }),
   ),
@@ -58,6 +59,8 @@ const treeSchema = z.object({
 export interface TreeEntry {
   path: string;
   type: "blob" | "tree" | "commit";
+  /** The object's hash: two refs hold the same content when it agrees. */
+  sha: string;
   /** Bytes, for blobs. */
   size: number | null;
 }
@@ -122,7 +125,12 @@ export class GitHub {
     return {
       sha: data.sha,
       truncated: data.truncated,
-      entries: data.tree.map((e) => ({ path: e.path, type: e.type, size: e.size ?? null })),
+      entries: data.tree.map((e) => ({
+        path: e.path,
+        type: e.type,
+        sha: e.sha,
+        size: e.size ?? null,
+      })),
     };
   }
 

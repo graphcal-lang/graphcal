@@ -27,6 +27,8 @@ export interface Host {
   pathOf?(module: string): string | null;
   /** The what-if edits as a patch to carry elsewhere (`git apply`, the VS Code extension); "" when none. */
   patch?(): string;
+  /** What the shown ref is compared against, when the address names a base; null until it is read. */
+  readonly compare?: Compare | null;
   /** Whether the shown sources carry unsaved what-if edits the host can discard. */
   readonly edited: boolean;
   /** The current model of a module, if the host has one. */
@@ -54,3 +56,15 @@ export interface Host {
 }
 
 export type NoteKind = "error" | "busy";
+
+/** The base side of a comparison: the same project as read at another ref. */
+export interface Compare {
+  /** The base ref. */
+  ref: string;
+  /** The base model of a module; null when the module is new or did not evaluate there. */
+  model(module: string): ViewModel | null;
+  /** The base text of a project file; null when the file is new. */
+  source(file: string): string | null;
+  /** Repository paths whose content differs between the two refs (added, removed or changed). */
+  changedFiles: ReadonlySet<string>;
+}
