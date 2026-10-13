@@ -2,6 +2,7 @@
 // with the viewer's own token, kept in memory, and projected by the in-browser
 // engine. Nothing is written back; edits are a what-if over the sources read,
 // and `reset` returns to them. The address bar follows the shown file.
+import { patchOf, type FileChange } from "./diff.ts";
 import { evaluateView, loadEngine, viewOf } from "./engine.ts";
 import { GitHub, GitHubError, type Refs } from "./github.ts";
 import type { EditResult, Host, NoteKind, SourceEdit } from "./host.ts";
@@ -226,6 +227,21 @@ export class GitHubHost implements Host {
     }
     location.hash = formatRoute({ ...this.route, path });
     return true;
+  }
+
+  /** The edits since the project was read, as a unified diff with repository paths. */
+  patch(): string {
+    const project = this.project;
+    if (!project) return "";
+    const changes: FileChange[] = [];
+    for (const [file, before] of this.pristine) {
+      const after = project.files.get(file);
+      if (after === undefined || after === before) continue;
+      const path = this.root === "" ? file : `${this.root}/${file}`;
+      changes.push({ path, before, after });
+    }
+    const ref = this.state.ref ?? this.route.ref ?? "default branch";
+    return patchOf(changes, `graphcal what-if: ${this.route.owner}/${this.route.repo} @ ${ref}`);
   }
 
   pathOf(module: string): string | null {

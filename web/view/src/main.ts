@@ -564,7 +564,7 @@ function renderTrail(w: Workspace): void {
     crumb.addEventListener("click", () => open(w.trail.slice(0, i + 1)));
     fileEl.append(crumb);
   });
-  fileEl.append(resetEl);
+  fileEl.append(copyEl, resetEl);
 }
 
 /** Show `trail`'s last module as the main sheet, with no panes pinned. */
@@ -969,8 +969,29 @@ resetEl.addEventListener("click", () => {
   if (ws) open(ws.trail);
 });
 
+/** The edits as a patch on the clipboard: `git apply` or the VS Code extension puts them in the files. */
+const copyEl = button(
+  "bar-copy",
+  "copy changes",
+  "copy the edits as a patch; in VS Code run “Graphcal: Apply Changes from Clipboard”",
+);
+copyEl.hidden = true;
+copyEl.addEventListener("click", () => {
+  const patch = host.patch?.() ?? "";
+  if (patch === "") {
+    showNote("nothing changed");
+    return;
+  }
+  const files = patch.split("\n").filter((l) => l.startsWith("diff --git")).length;
+  navigator.clipboard.writeText(patch).then(
+    () => showNote(`copied the changes to ${files} file${files === 1 ? "" : "s"}`, "busy"),
+    () => showNote("the clipboard is not available; the page needs to be focused"),
+  );
+});
+
 function markEdited(): void {
   resetEl.hidden = !host.edited;
+  copyEl.hidden = !host.edited || host.patch === undefined;
 }
 
 // Context menus: on a ruler label, hide the picked rows or show only them; on

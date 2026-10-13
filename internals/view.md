@@ -42,6 +42,12 @@ requests, which switch `@ref` in the address. Pane arrangement, split width
 and explorer state are remembered in `localStorage`. The VS Code webview
 shows the sheet alone.
 
+The edits can leave the page as a patch: "copy changes" next to the reset
+button puts a unified diff (`src/diff.ts`, repository paths, a `# graphcal
+what-if:` heading) on the clipboard. `git apply` reads it, and the VS Code
+extension's "Graphcal: Apply Changes from Clipboard" puts it into the
+workspace's files as one undoable edit, matching each hunk by its context.
+
 Not supported in the browser, as in the playground: manifests with
 dependencies or plugins, files over 256 KiB, projects over 1 MiB, and
 repositories too large for GitHub to list in one tree request.

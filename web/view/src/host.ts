@@ -25,6 +25,8 @@ export interface Host {
   openFile?(path: string): boolean;
   /** The listed path of a module's file, to mark it in the explorer. */
   pathOf?(module: string): string | null;
+  /** The what-if edits as a patch to carry elsewhere (`git apply`, the VS Code extension); "" when none. */
+  patch?(): string;
   /** Whether the shown sources carry unsaved what-if edits the host can discard. */
   readonly edited: boolean;
   /** The current model of a module, if the host has one. */
