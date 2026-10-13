@@ -476,9 +476,14 @@ body {
 .col.sel .cell.row-sel {
   background: var(--sel-cell);
 }
-.cell.sel {
+.cell.sel,
+.col.rel-direct .cell.rel-cell {
   box-shadow: inset 0 0 0 1px var(--sel);
   background: var(--sel-cell);
+}
+.col.rel-all .cell.rel-cell {
+  box-shadow: inset 0 0 0 1px rgba(91, 156, 246, 0.5);
+  background: var(--sel-cell-weak);
 }
 
 /* scalar box */

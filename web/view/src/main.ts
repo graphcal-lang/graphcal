@@ -102,8 +102,10 @@ function describeSelection(s: State): string {
 }
 
 function clearHighlights(): void {
-  for (const n of viewEl.querySelectorAll<HTMLElement>(".sel, .rel-direct, .rel-all, .row-sel")) {
-    n.classList.remove("sel", "rel-direct", "rel-all", "row-sel");
+  for (const n of viewEl.querySelectorAll<HTMLElement>(
+    ".sel, .rel-direct, .rel-all, .row-sel, .rel-cell",
+  )) {
+    n.classList.remove("sel", "rel-direct", "rel-all", "row-sel", "rel-cell");
   }
   for (const w of wiresEl.querySelectorAll<SVGElement>(".wire, .wire-dot")) {
     w.classList.remove("lit", "direct");
@@ -120,16 +122,29 @@ function applySelection(): void {
   if (!selection) return;
 
   const result = trace(selection, model, layout);
+  // The selected cell's labels per axis; a related cell matches when it agrees
+  // on every axis the two nodes share (a sum over Component still shares Mode).
+  const selectedNode = model.nodes.find((n) => n.id === selection.id);
+  const selectedLabels = new Map<string, string>();
+  if (selectedNode) {
+    const [first, second] = selectedNode.axes;
+    if (first !== undefined && selection.row !== null) selectedLabels.set(first, selection.row);
+    if (second !== undefined && selection.sub !== null) selectedLabels.set(second, selection.sub);
+  }
   const mark = (id: string, cls: string): void => {
     const column = layout.columns.get(id);
     const col = viewEl.querySelector<HTMLElement>(`.col[data-node="${id}"]`);
     if (!col || !column) return;
     col.classList.add(cls);
-    // Row-level: light only the selected row in columns that share the band.
-    const sameBand = column.bandIndex === layout.columns.get(selection.id)?.bandIndex;
-    if (selection.row !== null && sameBand && column.rows.length > 0) {
-      for (const cell of col.querySelectorAll<HTMLElement>(`[data-row="${selection.row}"]`)) {
-        cell.classList.add("row-sel");
+    if (id === selection.id) return;
+    const [first, second] = column.node.axes;
+    const shared = column.node.axes.filter((axis) => selectedLabels.has(axis));
+    if (shared.length === 0) return;
+    for (const cell of col.querySelectorAll<HTMLElement>(".cell, .fold-tick")) {
+      const labelOf = (axis: string): string | undefined =>
+        axis === first ? cell.dataset.row : axis === second ? cell.dataset.sub : undefined;
+      if (shared.every((axis) => labelOf(axis) === selectedLabels.get(axis))) {
+        cell.classList.add(cell.classList.contains("cell") ? "rel-cell" : "row-sel");
       }
     }
   };
