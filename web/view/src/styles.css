@@ -26,6 +26,9 @@
 * {
   box-sizing: border-box;
 }
+[hidden] {
+  display: none !important;
+}
 
 html,
 body {
@@ -309,7 +312,8 @@ body {
 .canvas {
   position: relative;
   overflow: hidden;
-  height: calc(100vh - 67px);
+  flex: 1;
+  min-height: 0;
   cursor: grab;
   user-select: none;
 }
@@ -941,4 +945,414 @@ body {
 .login-forget {
   margin-left: auto;
   color: var(--power);
+}
+
+/* ---- the work area: explorer | code | split | sheet ---- */
+.work {
+  display: flex;
+  align-items: stretch;
+  height: calc(100vh - 41px);
+  min-height: 0;
+}
+.sheet {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 0;
+}
+.sheet-head,
+.code-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  height: 33px;
+  flex: none;
+  padding: 0 10px 0 16px;
+  border-bottom: 1px solid var(--border);
+  background: var(--node-head);
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+}
+.sheet-name,
+.code-file {
+  color: var(--text);
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.sheet-name .sub,
+.code-file .sub {
+  color: var(--muted);
+  font-weight: 400;
+  margin-left: 6px;
+}
+.code-note {
+  color: var(--faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.code-note.error {
+  color: #f48771;
+}
+.code-note.busy {
+  color: var(--muted);
+}
+
+/* The code pane keeps the width it was dragged to; the sheet takes the rest. */
+.code {
+  display: flex;
+  flex-direction: column;
+  flex: 0 0 auto;
+  width: 50%;
+  min-width: 240px;
+  max-width: calc(100% - 240px);
+  min-height: 0;
+}
+.work.code-only .code {
+  flex: 1 1 0;
+  width: auto;
+  max-width: none;
+}
+.code-body {
+  flex: 1;
+  min-height: 0;
+}
+.split {
+  flex: none;
+  width: 5px;
+  margin: 0 -2px;
+  cursor: col-resize;
+  background: transparent;
+  position: relative;
+  z-index: 2;
+}
+.split::after {
+  content: "";
+  position: absolute;
+  left: 2px;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: var(--border);
+}
+.split:hover::after,
+.work.splitting .split::after {
+  background: var(--sel);
+}
+.work.splitting {
+  cursor: col-resize;
+  user-select: none;
+}
+.work.splitting .code,
+.work.splitting .sheet {
+  pointer-events: none;
+}
+
+/* ---- layout toggle: code · both · sheet, as Xcode arranges editors ---- */
+.layouts {
+  display: inline-flex;
+  gap: 2px;
+  padding: 2px;
+  border-radius: 6px;
+  background: var(--node);
+}
+.layouts button {
+  display: inline-flex;
+  padding: 3px 7px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  cursor: pointer;
+}
+.layouts button.active {
+  background: var(--node-head);
+}
+.layouts svg {
+  width: 22px;
+  height: 14px;
+  fill: none;
+  stroke: var(--muted);
+  stroke-width: 1;
+}
+.layouts svg .fill {
+  fill: var(--muted);
+  stroke: none;
+}
+.layouts button.active svg {
+  stroke: var(--text);
+}
+.layouts button.active svg .fill {
+  fill: var(--text);
+}
+
+/* ---- breadcrumb button: opens the explorer ---- */
+.bar-crumb {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 8px 3px 6px;
+  margin-left: -6px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.bar-crumb:hover {
+  color: var(--text);
+}
+.bar-crumb.open {
+  background: var(--node-head);
+  color: var(--text);
+}
+.bar-crumb .bar-origin {
+  color: inherit;
+}
+.crumb-chevron {
+  display: inline-block;
+  color: var(--faint);
+  transition: transform 0.12s;
+}
+.bar-crumb.open .crumb-chevron {
+  transform: rotate(90deg);
+}
+
+/* ---- explorer ---- */
+.explorer {
+  position: relative;
+  flex: none;
+  width: 260px;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: auto;
+  border-right: 1px solid var(--border);
+  background: var(--node-head);
+  font-family: var(--mono);
+  font-size: 11px;
+}
+.explorer-title {
+  padding: 12px 14px 8px;
+  color: var(--text);
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.explorer-ref-row {
+  padding: 0 14px 8px;
+}
+.explorer-ref {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 5px 10px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--node);
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+.explorer-ref:hover,
+.explorer-ref.open {
+  border-color: var(--sel);
+}
+.explorer-ref .ref-mark {
+  color: var(--muted);
+}
+.explorer-ref .ref-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.explorer-ref .ref-chevron {
+  color: var(--muted);
+}
+.explorer-tree {
+  padding: 4px 0 12px;
+}
+.tree-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 14px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.tree-row.file {
+  cursor: pointer;
+}
+.tree-row.file:hover {
+  color: var(--text);
+}
+.tree-row.other {
+  color: var(--faint);
+  cursor: default;
+}
+.tree-row.other:hover {
+  color: var(--faint);
+}
+.tree-row.selected {
+  background: var(--node);
+  color: var(--text);
+  font-weight: 500;
+}
+.tree-mark {
+  color: var(--faint);
+  font-size: 10px;
+}
+
+/* ---- refs menu ---- */
+.refs-menu {
+  position: absolute;
+  z-index: 4;
+  left: 14px;
+  right: 14px;
+  top: 70px;
+  display: flex;
+  flex-direction: column;
+  max-height: calc(100% - 90px);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--node);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.45);
+  overflow: hidden;
+}
+.refs-menu[hidden] {
+  display: none;
+}
+.refs-filter {
+  margin: 0;
+  padding: 7px 12px;
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  background: var(--canvas);
+  color: var(--text);
+  font: inherit;
+  outline: none;
+}
+.refs-filter::placeholder {
+  color: var(--faint);
+}
+.refs-list {
+  overflow: auto;
+  padding: 4px 0;
+}
+.refs-label {
+  padding: 8px 12px 2px;
+  color: var(--faint);
+  font-size: 9px;
+}
+.refs-item {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  padding: 4px 12px;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.refs-item:hover {
+  background: var(--sel-bg);
+}
+.refs-item.current .refs-item-hint {
+  color: var(--sel);
+}
+.refs-item-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.refs-item-hint {
+  color: var(--faint);
+}
+.refs-note {
+  padding: 8px 12px;
+  color: var(--faint);
+}
+.refs-note.error {
+  color: #f48771;
+}
+.refs-foot {
+  padding: 6px 12px 8px;
+  border-top: 1px solid var(--border);
+  color: var(--faint);
+  font-size: 9px;
+}
+
+/* ---- the editor ---- */
+.cm-editor {
+  height: 100%;
+  background: var(--canvas);
+  color: #d4d4d4;
+  font-family: var(--mono);
+  font-size: 12px;
+}
+.cm-editor.cm-focused {
+  outline: none;
+}
+.cm-editor .cm-scroller {
+  font-family: var(--mono);
+  line-height: 20px;
+}
+.cm-editor .cm-content {
+  padding: 12px 0;
+}
+.cm-editor .cm-gutters {
+  background: var(--canvas);
+  color: var(--faint);
+  border-right: 0;
+  padding-left: 8px;
+}
+.cm-editor .cm-activeLine {
+  background: rgba(255, 255, 255, 0.03);
+}
+.cm-editor .cm-activeLineGutter {
+  background: transparent;
+  color: var(--muted);
+}
+.cm-editor .cm-node-line {
+  background: var(--sel-bg);
+}
+.cm-editor .cm-cursor {
+  border-left-color: var(--text);
+}
+.cm-editor .cm-selectionBackground,
+.cm-editor.cm-focused .cm-selectionBackground {
+  background: var(--sel-cell) !important;
+}
+.cm-editor .cm-matchingBracket {
+  background: rgba(91, 156, 246, 0.25);
+}
+.cm-editor .tok-bool {
+  color: #569cd6;
+}
+.cm-inlay {
+  margin-left: 16px;
+  padding: 0 6px;
+  border-radius: 3px;
+  background: var(--node);
+  color: var(--muted);
+  font-size: 11px;
+  white-space: pre;
+  pointer-events: none;
+}
+.cm-inlay.selected {
+  background: var(--sel-bg);
+  color: var(--text);
 }

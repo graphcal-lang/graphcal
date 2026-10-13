@@ -3,7 +3,7 @@
 // engine. Nothing is written back; edits are a what-if over the sources read,
 // and `reset` returns to them. The address bar follows the shown file.
 import { evaluateView, loadEngine, viewOf } from "./engine.ts";
-import { GitHub, GitHubError } from "./github.ts";
+import { GitHub, GitHubError, type Refs } from "./github.ts";
 import type { EditResult, Host, NoteKind, SourceEdit } from "./host.ts";
 import type { TokenStore } from "./login.ts";
 import { parseViewModel, type ViewModel } from "./model.ts";
@@ -45,6 +45,8 @@ function errorMessage(error: unknown): string {
 
 export class GitHubHost implements Host {
   modules: readonly string[] = [];
+  /** Every file of the project read, relative to its root (for the explorer). */
+  files: readonly string[] = [];
   edited = false;
   private route: Route;
   private github: GitHub;
@@ -107,6 +109,7 @@ export class GitHubHost implements Host {
         (file, i) => [file.relative, texts[i] ?? ""] as [string, string],
       );
       this.root = plan.root;
+      this.files = plan.files.map((file) => file.relative);
       this.pristine = new Map(files);
       this.project = new Project(route.repo, files);
       this.models.clear();
@@ -219,6 +222,18 @@ export class GitHubHost implements Host {
       if (model.module.file === relative) return model.module.id;
     }
     return null;
+  }
+
+  // ---- refs ----
+
+  /** The branches, tags and pull requests of the repository being read. */
+  refs(): Promise<Refs> {
+    return this.github.refs(this.route.owner, this.route.repo);
+  }
+
+  /** Read the same file at another ref: the address changes and the project is read again. */
+  switchRef(ref: string): void {
+    location.hash = formatRoute({ ...this.route, ref });
   }
 
   // ---- shell events ----

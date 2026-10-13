@@ -114,4 +114,40 @@ describe("GitHub", () => {
       kind: "network",
     });
   });
+
+  test("lists branches, tags and pull requests, reading a fork's head by commit", async () => {
+    const { fetch, calls } = fakeFetch([
+      () => json([{ name: "main" }, { name: "feature/x" }]),
+      () => json([{ name: "v0.5.2" }]),
+      () =>
+        json([
+          {
+            number: 42,
+            title: "thermal",
+            head: { ref: "thermal", sha: "a1", repo: { full_name: "o/r" } },
+          },
+          {
+            number: 43,
+            title: "fork",
+            head: { ref: "fix", sha: "b2", repo: { full_name: "x/r" } },
+          },
+          { number: 44, title: "gone", head: { ref: "fix", sha: "c3", repo: null } },
+        ]),
+    ]);
+    const github = new GitHub(null, fetch);
+    await expect(github.refs("o", "r")).resolves.toEqual({
+      branches: ["main", "feature/x"],
+      tags: ["v0.5.2"],
+      pulls: [
+        { number: 42, title: "thermal", ref: "thermal" },
+        { number: 43, title: "fork", ref: "b2" },
+        { number: 44, title: "gone", ref: "c3" },
+      ],
+    });
+    expect(calls.map((c) => c.url)).toEqual([
+      "https://api.github.com/repos/o/r/branches?per_page=100",
+      "https://api.github.com/repos/o/r/tags?per_page=100",
+      "https://api.github.com/repos/o/r/pulls?state=open&per_page=100",
+    ]);
+  });
 });

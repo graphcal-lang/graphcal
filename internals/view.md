@@ -30,6 +30,18 @@ sent to `api.github.com` only. The page's Content-Security-Policy (injected at
 build in `vite.config.ts`) allows no other connection and no third-party
 script. Edits are a what-if over the sources read; nothing is written back.
 
+The page arranges a code pane and the sheet (`src/editor.ts`, CodeMirror with
+the playground's lexical colouring): the toggle at the top right shows the
+code, both side by side (the split is dragged), or the sheet. The code pane
+shows the main sheet's file with the sheet's values inlaid at the declaring
+lines; typing re-evaluates after a pause (⌘/Ctrl-Enter at once) as a what-if
+like a cell edit, and the selection is shared both ways. The breadcrumb at the
+top left opens the explorer (`src/explorer.ts`): the project's files, and for
+a repository the ref being read with a menu of branches, tags and open pull
+requests, which switch `@ref` in the address. Pane arrangement, split width
+and explorer state are remembered in `localStorage`. The VS Code webview
+shows the sheet alone.
+
 Not supported in the browser, as in the playground: manifests with
 dependencies or plugins, files over 256 KiB, projects over 1 MiB, and
 repositories too large for GitHub to list in one tree request.

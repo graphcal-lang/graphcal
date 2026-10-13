@@ -68,6 +68,31 @@ export interface Tree {
   entries: TreeEntry[];
 }
 
+const namedSchema = z.array(z.object({ name: z.string() }));
+const pullsSchema = z.array(
+  z.object({
+    number: z.number(),
+    title: z.string(),
+    head: z.object({
+      ref: z.string(),
+      sha: z.string(),
+      repo: z.object({ full_name: z.string() }).nullable(),
+    }),
+  }),
+);
+export interface PullRef {
+  number: number;
+  title: string;
+  /** The ref to read the pull request's head at: its branch when it lives in this repository, else its commit. */
+  ref: string;
+}
+/** The refs a repository offers to switch to. */
+export interface Refs {
+  branches: string[];
+  tags: string[];
+  pulls: PullRef[];
+}
+
 interface Cached {
   etag: string;
   body: string;
@@ -106,6 +131,26 @@ export class GitHub {
     const encoded = path.split("/").map(encodeURIComponent).join("/");
     const url = `/repos/${owner}/${repo}/contents/${encoded}?ref=${encodeURIComponent(ref)}`;
     return this.get(url, RAW);
+  }
+
+  /** Branches, tags and open pull requests (the first hundred of each). */
+  async refs(owner: string, repo: string): Promise<Refs> {
+    const base = `/repos/${owner}/${repo}`;
+    const [branches, tags, pulls] = await Promise.all([
+      this.get(`${base}/branches?per_page=100`, JSON_),
+      this.get(`${base}/tags?per_page=100`, JSON_),
+      this.get(`${base}/pulls?state=open&per_page=100`, JSON_),
+    ]);
+    const fullName = `${owner}/${repo}`;
+    return {
+      branches: namedSchema.parse(JSON.parse(branches)).map((b) => b.name),
+      tags: namedSchema.parse(JSON.parse(tags)).map((t) => t.name),
+      pulls: pullsSchema.parse(JSON.parse(pulls)).map((p) => ({
+        number: p.number,
+        title: p.title,
+        ref: p.head.repo?.full_name === fullName ? p.head.ref : p.head.sha,
+      })),
+    };
   }
 
   private async get(path: string, accept: string): Promise<string> {

@@ -10,6 +10,8 @@ import {
   type Zone,
 } from "./layout.ts";
 import { crossLinks, drawCrossWires, extraLanes, type CrossSheet } from "./cross.ts";
+import { SourceEditor, type Inlay } from "./editor.ts";
+import { Explorer, type RefSource } from "./explorer.ts";
 import { FixtureHost } from "./fixtureHost.ts";
 import { spansOf, subjectTokens, tokenize, type Token } from "./formula.ts";
 import { mountGitHubBar } from "./githubBar.ts";
@@ -39,6 +41,8 @@ const host: Host = inVsCode()
   : route
     ? new GitHubHost(route, tokens)
     : new FixtureHost();
+/** The web shell has the explorer, the code pane and the layout toggle; VS Code brings its own. */
+const webShell = !inVsCode();
 
 /** Whether the host has a model for `module`. */
 function known(module: string): boolean {
@@ -62,7 +66,18 @@ const panesEl = need<HTMLElement>("#panes");
 const crossEl = need<SVGSVGElement>("#cross");
 const fileEl = need<HTMLElement>("#file");
 const originEl = need<HTMLElement>("#origin");
+const crumbEl = need<HTMLButtonElement>("#crumb");
 const githubEl = need<HTMLElement>("#github");
+const workEl = need<HTMLElement>("#work");
+const explorerEl = need<HTMLElement>("#explorer");
+const codeEl = need<HTMLElement>("#code");
+const codeFileEl = need<HTMLElement>("#code-file");
+const codeNoteEl = need<HTMLElement>("#code-note");
+const codeBodyEl = need<HTMLElement>("#code-body");
+const splitEl = need<HTMLElement>("#split");
+const sheetEl = need<HTMLElement>("#sheet");
+const sheetNameEl = need<HTMLElement>("#sheet-name");
+const layoutsEl = need<HTMLElement>("#layouts");
 const formulaEl = need<HTMLElement>("#formula");
 const fixtureEl = need<HTMLSelectElement>("#fixture");
 const stageEl = need<HTMLElement>("#stage");
@@ -299,8 +314,11 @@ function renderFormula(): void {
   show(line);
 }
 
+/** A note in the formula bar, mirrored in the code pane's head (the bar is hidden in code-only layout). */
 function showNote(message: string | null, kind: "error" | "busy" = "error"): void {
   formulaEl.querySelector(".formula-note")?.remove();
+  codeNoteEl.textContent = message ?? "";
+  codeNoteEl.className = `code-note ${message === null ? "" : kind}`;
   if (message === null) return;
   const note = document.createElement("span");
   note.className = `formula-note ${kind}`;
@@ -418,10 +436,10 @@ function redraw(): void {
   drawCrossWires(crossEl, panesEl, links, ownLanes);
 }
 
-/** Horizontal room for the main sheet's zones: the window minus ruler, paddings, and the gutter. */
+/** Horizontal room for the main sheet's zones: the canvas minus ruler, paddings, and the gutter. */
 function availableWidth(): number {
   const zonePadding = 3 * 24;
-  return document.documentElement.clientWidth - 16 - 40 - RULER_WIDTH - zonePadding - 56;
+  return canvasEl.clientWidth - 16 - 40 - RULER_WIDTH - zonePadding - 56;
 }
 
 /** A pinned pane gets a fixed budget, so its scalar boxes stack into a narrow column. */
@@ -560,6 +578,9 @@ function open(trail: string[]): void {
   renderPicker();
   markEdited();
   refit();
+  sheetNameEl.replaceChildren(span("", fileNameOf(main.model)), span("sub", "· sheet"));
+  syncEditor();
+  renderExplorer();
   host.shown?.(module);
 }
 
@@ -615,6 +636,8 @@ function adoptModels(models: ViewModel[]): void {
   }
   renderPicker();
   markEdited();
+  syncEditor();
+  renderExplorer();
 }
 
 function unpin(sheet: Sheet): void {
@@ -657,6 +680,7 @@ function select(s: Sheet, selection: Selection | null): void {
   }
   s.selection = selection;
   applySelection(s);
+  syncEditorSelection();
 }
 
 panesEl.addEventListener("click", (event) => {
@@ -1104,13 +1128,20 @@ host.onModels(adoptModels);
 host.onOpen((module) => open([module]));
 host.onNote((message: string | null, kind: NoteKind) => showNote(message, kind));
 if (host instanceof GitHubHost) mountGitHubBar(host, tokens, originEl, githubEl);
-let lastWidth = document.documentElement.clientWidth;
-window.addEventListener("resize", () => {
-  const width = document.documentElement.clientWidth;
-  if (width === lastWidth) return;
-  lastWidth = width;
-  relayout();
-});
+// The canvas changes width with the window, the explorer, the code pane and
+// its split; a hidden canvas (code-only layout) is left as it is.
+let lastWidth = canvasEl.clientWidth;
+let relayoutQueued = false;
+new ResizeObserver(() => {
+  const width = canvasEl.clientWidth;
+  if (width === lastWidth || width === 0 || relayoutQueued) return;
+  relayoutQueued = true;
+  requestAnimationFrame(() => {
+    relayoutQueued = false;
+    lastWidth = canvasEl.clientWidth;
+    relayout();
+  });
+}).observe(canvasEl);
 // Wheel: pan; with ctrl / cmd (or a trackpad pinch): zoom around the cursor.
 canvasEl.addEventListener(
   "wheel",
@@ -1203,6 +1234,209 @@ for (const modeButton of modeButtons) {
   });
 }
 new ResizeObserver(() => redraw()).observe(panesEl);
+
+// ---- the web shell: arrangement, split, explorer, code pane ----
+// Remembered per browser as conveniences; nothing here is shared or saved.
+
+function recall(key: string): string | null {
+  try {
+    return localStorage.getItem(`graphcal.view.${key}`);
+  } catch {
+    return null;
+  }
+}
+function remember(key: string, value: string): void {
+  try {
+    localStorage.setItem(`graphcal.view.${key}`, value);
+  } catch {
+    // Storage is blocked: the choice lasts for this page only.
+  }
+}
+
+/** Which panes are shown: the code, the sheet, or both side by side. */
+type Arrangement = "code" | "both" | "view";
+const ARRANGEMENTS: readonly Arrangement[] = ["code", "both", "view"];
+function isArrangement(value: string | null): value is Arrangement {
+  return ARRANGEMENTS.some((a) => a === value);
+}
+let arrangement: Arrangement = "view";
+const layoutButtons = [...layoutsEl.querySelectorAll<HTMLButtonElement>("[data-layout]")];
+
+function applyArrangement(): void {
+  codeEl.hidden = arrangement === "view";
+  splitEl.hidden = arrangement !== "both";
+  sheetEl.hidden = arrangement === "code";
+  workEl.classList.toggle("code-only", arrangement === "code");
+  for (const b of layoutButtons) b.classList.toggle("active", b.dataset.layout === arrangement);
+  remember("arrangement", arrangement);
+  if (arrangement === "code") editor?.focus();
+}
+
+/** Drag the split: the code pane keeps the width it is dragged to. */
+let splitting: { pointer: number } | null = null;
+splitEl.addEventListener("pointerdown", (event) => {
+  if (event.button !== 0) return;
+  splitting = { pointer: event.pointerId };
+  splitEl.setPointerCapture(event.pointerId);
+  workEl.classList.add("splitting");
+  event.preventDefault();
+});
+splitEl.addEventListener("pointermove", (event) => {
+  if (!splitting) return;
+  const left = codeEl.getBoundingClientRect().left;
+  const width = Math.round(event.clientX - left);
+  codeEl.style.width = `${width}px`;
+});
+const endSplit = (): void => {
+  if (!splitting) return;
+  splitting = null;
+  workEl.classList.remove("splitting");
+  remember("code-width", String(codeEl.getBoundingClientRect().width));
+};
+splitEl.addEventListener("pointerup", endSplit);
+splitEl.addEventListener("pointercancel", endSplit);
+
+/** The main sheet's file, as the editor shows it, with the sheet's values at its lines. */
+function inlaysOf(s: Sheet): Inlay[] {
+  const file = s.model.module.file;
+  const selection = s.selection;
+  const inlays: Inlay[] = [];
+  for (const node of s.model.nodes) {
+    if (node.source === null || node.source.file !== file) continue;
+    const picked = selection !== null && selection.id === node.id;
+    let text: string;
+    if (node.axes.length === 0) {
+      text = `= ${displayOf(node.value)}`;
+    } else {
+      const axes = `[${node.axes.join(", ")}]`;
+      const labels = picked
+        ? [selection.row, selection.sub].filter((x): x is string => x !== null)
+        : [];
+      text =
+        labels.length > 0
+          ? `${axes} · ${labels.join(", ")} = ${displayOf(valueAt(node.value, labels))}`
+          : axes;
+    }
+    inlays.push({ line: node.source.line, text, selected: picked });
+  }
+  return inlays;
+}
+
+/** The code pane shows the main sheet's file; a node picked in the sheet marks its line. */
+function syncEditor(): void {
+  if (!editor || !ws) return;
+  const s = mainSheet(ws);
+  const file = s.model.module.file;
+  const text = host.source(s.model, file);
+  codeFileEl.replaceChildren(span("", fileNameOf(s.model)));
+  if (host.edited) codeFileEl.append(span("sub", "● what-if"));
+  if (text === null) {
+    codeFileEl.append(span("sub", "· source not available"));
+    return;
+  }
+  editor.show(file, text);
+  editor.setInlays(inlaysOf(s));
+  syncEditorSelection();
+}
+
+function syncEditorSelection(): void {
+  if (!editor || !ws) return;
+  const s = mainSheet(ws);
+  editor.setInlays(inlaysOf(s));
+  const hit = selected(s);
+  const at = hit?.node.source ?? null;
+  editor.markLine(at !== null && at.file === s.model.module.file ? at.line : null);
+}
+
+const editor = webShell
+  ? new SourceEditor(codeBodyEl, {
+      onChange(file, text) {
+        if (!ws) return;
+        const s = mainSheet(ws);
+        if (host.source(s.model, file) === text) return;
+        void applyEdit(s, { file, next: text });
+      },
+      onCaretLine(line) {
+        if (!ws) return;
+        const s = mainSheet(ws);
+        const file = s.model.module.file;
+        const node = s.model.nodes.find(
+          (n) => n.source !== null && n.source.file === file && n.source.line === line,
+        );
+        if (!node || s.selection?.id === node.id) return;
+        select(s, { id: node.id, row: null, sub: null, mode: "deps" });
+      },
+    })
+  : null;
+
+/** The explorer lists the project's files and, for a repository, its refs. */
+const refSource: RefSource | null =
+  host instanceof GitHubHost
+    ? {
+        current: null,
+        list: () => host.refs(),
+        choose: (ref) => host.switchRef(ref),
+        edited: () => host.edited,
+      }
+    : null;
+const explorer = webShell
+  ? new Explorer(explorerEl, {
+      title: route ? `${route.owner} / ${route.repo}` : "fixtures",
+      refs: refSource,
+      onOpen(file) {
+        const module = host.modules.find((m) => host.model(m)?.module.file === file);
+        if (module !== undefined) open([module]);
+      },
+    })
+  : null;
+
+function renderExplorer(): void {
+  if (!explorer) return;
+  const files =
+    host.files ??
+    host.modules.map((m) => host.model(m)?.module.file).filter((f): f is string => f !== undefined);
+  explorer.render(files, ws ? mainSheet(ws).model.module.file : null);
+  if (ws && !route) explorer.setTitle(mainSheet(ws).model.module.package);
+}
+
+if (webShell) {
+  const storedWidth = Number(recall("code-width"));
+  if (Number.isFinite(storedWidth) && storedWidth > 0) codeEl.style.width = `${storedWidth}px`;
+  const stored = recall("arrangement");
+  arrangement = isArrangement(stored) ? stored : "both";
+  layoutsEl.hidden = false;
+  crumbEl.hidden = false;
+  if (!route) {
+    originEl.textContent = "fixtures";
+    originEl.hidden = false;
+  }
+  for (const b of layoutButtons) {
+    b.addEventListener("click", () => {
+      if (!isArrangement(b.dataset.layout ?? null)) return;
+      arrangement = b.dataset.layout as Arrangement;
+      applyArrangement();
+    });
+  }
+  const setExplorer = (open: boolean): void => {
+    if (explorer) explorer.open = open;
+    crumbEl.classList.toggle("open", open);
+    remember("explorer", open ? "open" : "closed");
+  };
+  crumbEl.addEventListener("click", () => setExplorer(!(explorer?.open ?? false)));
+  setExplorer(recall("explorer") === "open");
+  applyArrangement();
+  if (host instanceof GitHubHost && refSource) {
+    host.onState((state) => {
+      refSource.current = state.ref;
+      explorer?.renderRef();
+    });
+  }
+  document.addEventListener("keydown", (event) => {
+    // ⌘/Ctrl-Enter: evaluate what is typed now instead of waiting for the pause.
+    if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) editor?.flush();
+  });
+}
+
 if (fixtureEl.value) open([fixtureEl.value]);
 if (!route && !inVsCode() && location.hash.length > 1) {
   showNote(`not a file address: ${location.hash} (expected #owner/repo@ref/path.gcl)`);
