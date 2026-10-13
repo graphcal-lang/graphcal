@@ -10,7 +10,8 @@ import {
   type Zone,
 } from "./layout.ts";
 import { parseViewModel, type ViewModel } from "./model.ts";
-import { placeHalo, renderView, RULER_WIDTH } from "./render.ts";
+import { placeHalo, renderView, RULER_WIDTH, type RenderOptions } from "./render.ts";
+import { hiddenOf, pick, type Hidden, type Picked } from "./rows.ts";
 import { trace, type Selection } from "./selection.ts";
 import { displayOf, valueAt } from "./values.ts";
 import { drawWires, planRoutes, type RoutePlan } from "./wires.ts";
@@ -85,10 +86,18 @@ interface State {
   layout: Layout;
   plan: RoutePlan;
   folded: Set<string>;
+  /** Hidden row labels per axis. */
+  hidden: Hidden;
+  /** Row labels picked in a ruler (the subject of the context menu). */
+  picked: Picked | null;
   selection: Selection | null;
   mode: Mode;
 }
 let state: State | null = null;
+
+function renderOptions(s: State): RenderOptions {
+  return { folded: s.folded, hidden: s.hidden };
+}
 
 function describeSelection(s: State): string {
   const { selection, model } = s;
@@ -176,11 +185,35 @@ function applySelection(): void {
   }
 }
 
+/** Picked row labels: the label and the whole row across the band, like a sheet. */
+function applyPicked(): void {
+  for (const n of viewEl.querySelectorAll<HTMLElement>(".picked, .row-picked")) {
+    n.classList.remove("picked", "row-picked");
+  }
+  const picked = state?.picked;
+  if (!picked) return;
+  for (const label of picked.labels) {
+    for (const n of viewEl.querySelectorAll<HTMLElement>(`.row-label[data-row="${label}"]`)) {
+      if (n.dataset.axis === picked.axis) n.classList.add("picked");
+    }
+    const band = bandElementOf(picked.axis);
+    for (const cell of band?.querySelectorAll<HTMLElement>(`.cell[data-row="${label}"]`) ?? []) {
+      cell.classList.add("row-picked");
+    }
+  }
+}
+
+function bandElementOf(axis: string): HTMLElement | null {
+  const index = state?.layout.bands.find((b) => b.axis === axis)?.index;
+  return index === undefined ? null : viewEl.querySelector(`.band[data-band="${index}"]`);
+}
+
 function redraw(): void {
   if (!state) return;
   drawWires(wiresEl, viewEl, state.layout, state.plan);
   placeHalo(viewEl);
   applySelection();
+  applyPicked();
 }
 
 /** Horizontal room for zones: the window minus ruler, paddings, and the gutter. */
@@ -194,8 +227,9 @@ function availableWidth(): number {
  * boxes into stacks so everything fits the width. Width left over after a
  * first packing is handed to the zones that had to stack, and they repack.
  */
-function fit(base: Layout, folded: ReadonlySet<string>): Layout {
-  renderView(viewEl, base, { folded });
+function fit(base: Layout, options: RenderOptions): Layout {
+  const { folded } = options;
+  renderView(viewEl, base, options);
   const sizes = new Map<string, BoxSize>();
   for (const col of viewEl.querySelectorAll<HTMLElement>(".band-scalar .col")) {
     if (!col.dataset.node) continue;
@@ -250,9 +284,9 @@ function fit(base: Layout, folded: ReadonlySet<string>): Layout {
 function renderOnce(): void {
   if (!state) return;
   stageEl.style.transform = "";
-  state.layout = fit(state.base, state.folded);
+  state.layout = fit(state.base, renderOptions(state));
   state.plan = planRoutes(state.model, state.layout);
-  renderView(viewEl, state.layout, { folded: state.folded });
+  renderView(viewEl, state.layout, renderOptions(state));
   applyCamera();
   redraw();
 }
@@ -307,6 +341,8 @@ function load(name: string): void {
     layout: base,
     plan: planRoutes(model, base),
     folded: new Set(),
+    hidden: new Map(),
+    picked: null,
     selection: null,
     mode: state?.mode ?? "fit",
   };
@@ -329,9 +365,47 @@ function load(name: string): void {
   refit();
 }
 
+/** Click on a ruler label: pick rows (shift: range, cmd / ctrl: toggle). */
+function pickFromEvent(label: HTMLElement, event: MouseEvent): void {
+  if (!state) return;
+  const axis = label.dataset.axis;
+  const row = label.dataset.row;
+  if (axis === undefined || row === undefined) return;
+  const order = state.layout.bands.find((b) => b.axis === axis)?.labels ?? [];
+  state.picked = pick(state.picked, axis, order, row, {
+    range: event.shiftKey,
+    toggle: event.metaKey || event.ctrlKey,
+  });
+  applyPicked();
+}
+
+/** Show the rows of a collapsed gap again. */
+function revealGap(gap: HTMLElement): void {
+  if (!state) return;
+  const axis = gap.dataset.axis;
+  if (axis === undefined) return;
+  const set = hiddenOf(state.hidden, axis);
+  for (const label of (gap.dataset.labels ?? "").split("\u0000")) set.delete(label);
+  render();
+}
+
 viewEl.addEventListener("click", (event) => {
   if (!state) return;
   const target = event.target as HTMLElement;
+  const label = target.closest<HTMLElement>(".row-label");
+  if (label) {
+    pickFromEvent(label, event);
+    return;
+  }
+  const gap = target.closest<HTMLElement>(".row-gap[data-axis]");
+  if (gap) {
+    revealGap(gap);
+    return;
+  }
+  if (state.picked) {
+    state.picked = null;
+    applyPicked();
+  }
   const folded = target.closest<HTMLElement>(".col.folded, .col.chip");
   if (folded?.dataset.node) {
     state.folded.delete(folded.dataset.node);
@@ -367,6 +441,89 @@ viewEl.addEventListener("click", (event) => {
     ? { id, row, sub, mode: state.selection?.mode === "deps" ? "uses" : "deps" }
     : { id, row, sub, mode: "deps" };
   applySelection();
+});
+
+// Context menu on a ruler label: hide the picked rows, or show only them.
+const menuEl = document.createElement("div");
+menuEl.className = "menu";
+menuEl.hidden = true;
+document.body.append(menuEl);
+
+function closeMenu(): void {
+  menuEl.hidden = true;
+}
+
+interface MenuItem {
+  label: string;
+  disabled?: boolean;
+  run: () => void;
+}
+
+function openMenu(x: number, y: number, items: MenuItem[]): void {
+  menuEl.replaceChildren();
+  for (const item of items) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.textContent = item.label;
+    button.disabled = item.disabled ?? false;
+    button.addEventListener("click", () => {
+      closeMenu();
+      item.run();
+    });
+    menuEl.append(button);
+  }
+  menuEl.hidden = false;
+  menuEl.style.left = `${Math.min(x, window.innerWidth - menuEl.offsetWidth - 8)}px`;
+  menuEl.style.top = `${Math.min(y, window.innerHeight - menuEl.offsetHeight - 8)}px`;
+}
+
+viewEl.addEventListener("contextmenu", (event) => {
+  if (!state) return;
+  const label = (event.target as HTMLElement).closest<HTMLElement>(".row-label");
+  if (!label) return;
+  event.preventDefault();
+  const axis = label.dataset.axis;
+  const row = label.dataset.row;
+  if (axis === undefined || row === undefined) return;
+  // Right-click outside the picked rows picks that row alone, as in a sheet.
+  if (!(state.picked?.axis === axis && state.picked.labels.has(row))) {
+    state.picked = { axis, labels: new Set([row]), anchor: row };
+    applyPicked();
+  }
+  const current = state;
+  const picked = current.picked;
+  if (!picked) return;
+  const all = current.layout.bands.find((b) => b.axis === axis)?.labels ?? [];
+  const hidden = hiddenOf(current.hidden, axis);
+  const n = picked.labels.size;
+  const rows = n === 1 ? "row" : `${n} rows`;
+  openMenu(event.clientX, event.clientY, [
+    {
+      label: `Hide ${rows}`,
+      run: () => {
+        for (const l of picked.labels) hidden.add(l);
+        current.picked = null;
+        render();
+      },
+    },
+    {
+      label: `Show only ${rows}`,
+      run: () => {
+        for (const l of all) if (!picked.labels.has(l)) hidden.add(l);
+        for (const l of picked.labels) hidden.delete(l);
+        current.picked = null;
+        render();
+      },
+    },
+    {
+      label: hidden.size > 0 ? `Show all ${all.length} rows` : "Show all rows",
+      disabled: hidden.size === 0,
+      run: () => {
+        hidden.clear();
+        render();
+      },
+    },
+  ]);
 });
 
 viewEl.addEventListener("dblclick", (event) => {
@@ -463,9 +620,16 @@ document.addEventListener("pointerdown", (event) => {
   if (!zoomPopover.hidden && !zoomPopover.contains(target) && target !== zoomEl) {
     zoomPopover.hidden = true;
   }
+  if (!menuEl.hidden && !menuEl.contains(target)) closeMenu();
 });
 document.addEventListener("keydown", (event) => {
-  if (event.key === "Escape") zoomPopover.hidden = true;
+  if (event.key !== "Escape") return;
+  zoomPopover.hidden = true;
+  closeMenu();
+  if (state?.picked) {
+    state.picked = null;
+    applyPicked();
+  }
 });
 
 for (const button of modeButtons) {

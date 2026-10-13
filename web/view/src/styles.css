@@ -19,6 +19,7 @@
   --mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
   --sans: Inter, system-ui, -apple-system, "Segoe UI", sans-serif;
   --row-h: 24px;
+  --gap-h: 14px;
   --head-h: 42px;
   --sub-h: 18px;
 }
@@ -344,6 +345,81 @@ body {
 .row-label.row-sel {
   background: var(--sel-bg);
   color: var(--text);
+}
+.row-label {
+  cursor: default;
+}
+.row-label.picked {
+  background: var(--sel-bg);
+  color: var(--text);
+  box-shadow: inset 0 0 0 1px var(--sel);
+}
+.cell.row-picked {
+  background: var(--sel-cell-weak);
+}
+
+/* collapsed hidden rows */
+.row-gap {
+  height: var(--gap-h);
+  border-top: 1px solid var(--border);
+  background: repeating-linear-gradient(90deg, var(--faint) 0 2px, transparent 2px 6px) center /
+    100% 1px no-repeat;
+  cursor: pointer;
+}
+.ruler-gap {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  padding: 0 8px;
+  margin-right: 4px;
+  border-top: none;
+  background: none;
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--sel);
+  white-space: nowrap;
+}
+.ruler-gap:hover {
+  text-decoration: underline;
+}
+.fold-gap {
+  width: 3px;
+  border-top: none;
+  background: none;
+}
+
+/* context menu */
+.menu {
+  position: fixed;
+  z-index: 4;
+  display: flex;
+  flex-direction: column;
+  min-width: 160px;
+  padding: 4px;
+  background: var(--node-head);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.4);
+}
+.menu[hidden] {
+  display: none;
+}
+.menu button {
+  background: transparent;
+  color: var(--text);
+  border: none;
+  border-radius: 4px;
+  padding: 5px 10px;
+  text-align: left;
+  font: inherit;
+  cursor: pointer;
+}
+.menu button:hover:not(:disabled) {
+  background: var(--sel-bg);
+}
+.menu button:disabled {
+  color: var(--faint);
+  cursor: default;
 }
 
 /* ---- columns ---- */

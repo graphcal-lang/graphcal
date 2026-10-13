@@ -1,6 +1,7 @@
 import type { Band, Column, Layout, Role, Zone } from "./layout.ts";
 import { ZONES, zoneOf } from "./layout.ts";
 import type { NodeKind } from "./model.ts";
+import { rowRuns, type Hidden } from "./rows.ts";
 import { displayOf, valueAt } from "./values.ts";
 
 const MARK: Record<NodeKind, string> = {
@@ -63,8 +64,17 @@ function cellText(column: Column, labels: string[]): string {
   return displayOf(value);
 }
 
+/** A collapsed run of hidden rows: a thin dotted gap that keeps the rows aligned. */
+function renderGap(labels: string[], axis: string): HTMLElement {
+  const gap = el("div", "row-gap");
+  gap.dataset.axis = axis;
+  gap.dataset.labels = labels.join("\u0000");
+  gap.title = `${labels.length} hidden: ${labels.join(", ")} · click to show`;
+  return gap;
+}
+
 /** A column of an axis band, or a labelled box in the no-axis band. */
-function renderTable(column: Column, band: Band): HTMLElement {
+function renderTable(column: Column, band: Band, hidden: Hidden): HTMLElement {
   const root = el("div", `col role-${column.role} table`);
   root.dataset.node = column.node.id;
   root.append(renderHead(column));
@@ -79,8 +89,16 @@ function renderTable(column: Column, band: Band): HTMLElement {
   const body = el("div", "col-body");
   const subCount = Math.max(1, column.subs.length);
   body.style.gridTemplateColumns = `${inBand ? "" : "auto "}repeat(${subCount}, minmax(0, 1fr))`;
-  column.rows.forEach((row, r) => {
-    const stripe = r % 2 === 1 ? " stripe" : "";
+  const rowAxis = column.node.axes[0] ?? "";
+  for (const run of rowRuns(column.rows, hidden.get(rowAxis))) {
+    if (run.kind === "gap") {
+      const gap = renderGap(run.labels, rowAxis);
+      gap.style.gridColumn = "1 / -1";
+      body.append(gap);
+      continue;
+    }
+    const row = run.label;
+    const stripe = run.visible % 2 === 1 ? " stripe" : "";
     if (!inBand) body.append(el("span", `row-key${stripe}`, row));
     const keys = column.subs.length > 0 ? column.subs : [null];
     for (const sub of keys) {
@@ -94,7 +112,7 @@ function renderTable(column: Column, band: Band): HTMLElement {
       if (sub !== null) cell.dataset.sub = sub;
       body.append(cell);
     }
-  });
+  }
   root.append(body);
   return root;
 }
@@ -119,7 +137,7 @@ function renderBox(column: Column): HTMLElement {
 }
 
 /** A folded column: a thin strip that keeps its wires and row positions. */
-function renderFolded(column: Column, band: Band): HTMLElement {
+function renderFolded(column: Column, band: Band, hidden: Hidden): HTMLElement {
   const root = el("div", `col role-${column.role} folded`);
   root.dataset.node = column.node.id;
   root.title = `${column.node.name} · click to expand`;
@@ -132,10 +150,14 @@ function renderFolded(column: Column, band: Band): HTMLElement {
   const ticks = el("div", "fold-ticks");
   if (band.axis !== null) {
     if (band.columns.some((c) => c.subs.length > 0)) ticks.append(el("span", "fold-sub"));
-    for (const row of column.rows) {
+    for (const run of rowRuns(column.rows, hidden.get(band.axis))) {
+      if (run.kind === "gap") {
+        ticks.append(el("span", "row-gap fold-gap"));
+        continue;
+      }
       const tick = el("span", "fold-tick");
       tick.dataset.node = column.node.id;
-      tick.dataset.row = row;
+      tick.dataset.row = run.label;
       ticks.append(tick);
     }
   }
@@ -164,17 +186,19 @@ function renderChip(column: Column): HTMLElement {
   return root;
 }
 
-export function renderColumn(column: Column, band: Band, folded: boolean): HTMLElement {
-  if (folded) return band.axis === null ? renderChip(column) : renderFolded(column, band);
+export function renderColumn(column: Column, band: Band, options: RenderOptions): HTMLElement {
+  if (options.folded.has(column.node.id)) {
+    return band.axis === null ? renderChip(column) : renderFolded(column, band, options.hidden);
+  }
   if (column.rows.length === 0) return renderBox(column);
-  return renderTable(column, band);
+  return renderTable(column, band, options.hidden);
 }
 
 /**
  * The ruler reserves its width at the left of the band; its labels are placed
  * right against the band's first table (see placeRulers), not at the far left.
  */
-function renderRuler(band: Band): HTMLElement {
+function renderRuler(band: Band, hidden: Hidden): HTMLElement {
   const ruler = el("div", "ruler");
   ruler.style.width = `${RULER_WIDTH}px`;
   if (band.axis === null) {
@@ -183,18 +207,33 @@ function renderRuler(band: Band): HTMLElement {
   }
   const inner = el("div", "ruler-inner");
   inner.style.width = `${RULER_WIDTH}px`;
+  const hiddenCount = hidden.get(band.axis)?.size ?? 0;
   const box = el("div", "ruler-box");
   box.append(
     el("div", "ruler-axis", band.axis),
-    el("div", "ruler-note", `index · ${band.labels.length} labels ↕`),
+    el(
+      "div",
+      "ruler-note",
+      hiddenCount > 0
+        ? `${band.labels.length} labels · ${hiddenCount} hidden`
+        : `index · ${band.labels.length} labels ↕`,
+    ),
   );
   inner.append(box);
   if (band.columns.some((c) => c.subs.length > 0)) inner.append(el("div", "ruler-sub"));
-  band.labels.forEach((label, r) => {
-    const row = el("div", `row-label${r % 2 === 1 ? " stripe" : ""}`, label);
-    row.dataset.row = label;
+  for (const run of rowRuns(band.labels, hidden.get(band.axis))) {
+    if (run.kind === "gap") {
+      const gap = renderGap(run.labels, band.axis);
+      gap.classList.add("ruler-gap");
+      gap.textContent = `⋯ ${run.labels.length} hidden`;
+      inner.append(gap);
+      continue;
+    }
+    const row = el("div", `row-label${run.visible % 2 === 1 ? " stripe" : ""}`, run.label);
+    row.dataset.row = run.label;
+    row.dataset.axis = band.axis;
     inner.append(row);
-  });
+  }
   ruler.append(inner);
   return ruler;
 }
@@ -217,12 +256,13 @@ function placeRulers(container: HTMLElement): void {
 
 export interface RenderOptions {
   folded: ReadonlySet<string>;
+  hidden: Hidden;
 }
 
 function renderBand(band: Band, options: RenderOptions): HTMLElement {
   const section = el("section", `band ${band.axis === null ? "band-scalar" : "band-axis"}`);
   section.dataset.band = String(band.index);
-  section.append(renderRuler(band));
+  section.append(renderRuler(band, options.hidden));
   const zones = el("div", "zones");
   for (const zone of ZONES) {
     const columns = band.columns.filter((c) => zoneOf(c.role) === zone);
@@ -241,7 +281,7 @@ function renderBand(band: Band, options: RenderOptions): HTMLElement {
         const stackEl = el("div", "stack");
         const ordered = stack.sort((a, b) => a.tierRow - b.tierRow);
         for (const column of ordered) {
-          stackEl.append(renderColumn(column, band, options.folded.has(column.node.id)));
+          stackEl.append(renderColumn(column, band, options));
         }
         items.push({ role: ordered[0].role, element: stackEl });
       }
@@ -249,7 +289,7 @@ function renderBand(band: Band, options: RenderOptions): HTMLElement {
       for (const column of columns) {
         items.push({
           role: column.role,
-          element: renderColumn(column, band, options.folded.has(column.node.id)),
+          element: renderColumn(column, band, options),
         });
       }
     }
