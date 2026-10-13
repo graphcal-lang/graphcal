@@ -117,6 +117,7 @@ pub fn evaluate_plan_with_values_and_bindings_and_cancellation(
 
     let value_entries::ValueEntries {
         entries,
+        identities,
         output_surface,
         mut presentation_diagnostics,
     } = value_entries::assemble_value_entries(plan, evaluated, &ctx)?;
@@ -148,6 +149,7 @@ pub fn evaluate_plan_with_values_and_bindings_and_cancellation(
             .map(|declaration| names.name(declaration))
             .collect(),
         entries,
+        identities,
         output_surface,
         assertions,
         plots,

@@ -719,6 +719,10 @@ pub struct EvalResult {
         Result<Value, OutputUnavailable>,
         ValueDeclCategory,
     )>,
+    /// The canonical declaration each entry name reports, so tools can join
+    /// entries with the checked program without re-deriving output names.
+    pub identities:
+        std::collections::HashMap<ScopedName, graphcal_compiler::resolved_name::ResolvedDeclName>,
     /// Values belonging to the entry DAG's consumer-facing output surface.
     ///
     /// Internal include-instance values remain in [`Self::entries`] for the
@@ -762,10 +766,15 @@ impl EvalResult {
             Result<Value, OutputUnavailable>,
             ValueDeclCategory,
         )>,
+        imported_identities: std::collections::HashMap<
+            ScopedName,
+            graphcal_compiler::resolved_name::ResolvedDeclName,
+        >,
         output_surface: std::collections::HashSet<ScopedName>,
     ) -> Self {
         imported.append(&mut self.entries);
         self.entries = imported;
+        self.identities.extend(imported_identities);
         self.output_surface = output_surface;
         self
     }
@@ -776,6 +785,10 @@ impl EvalResult {
         self.entries
             .iter_mut()
             .for_each(|(name, _, _)| *name = rename(name));
+        self.identities = std::mem::take(&mut self.identities)
+            .into_iter()
+            .map(|(name, identity)| (rename(&name), identity))
+            .collect();
         self.output_surface = std::mem::take(&mut self.output_surface)
             .into_iter()
             .map(|name| rename(&name))
@@ -1157,6 +1170,7 @@ mod tests {
         EvalResult {
             unfinished_calls: Vec::new(),
             entries: Vec::new(),
+            identities: std::collections::HashMap::new(),
             output_surface: std::collections::HashSet::new(),
             assertions: Vec::new(),
             plots: Vec::new(),

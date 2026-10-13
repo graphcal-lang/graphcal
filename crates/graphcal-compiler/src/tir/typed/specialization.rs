@@ -291,6 +291,7 @@ fn specialize_dependencies(
     };
     dependencies.runtime_deps = remap(&dependencies.runtime_deps);
     dependencies.const_deps = remap(&dependencies.const_deps);
+    dependencies.assert_deps = remap(&dependencies.assert_deps);
 }
 
 fn install_override_reconciliations(instance: &mut DagTIR, edge: &HirInstanceRecord) {

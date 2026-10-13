@@ -203,6 +203,20 @@ pub(super) fn collect_resolved_dag_dependencies(
         resolved.runtime_deps.insert(key, dependencies);
     }
 
+    for entry in decls.asserts() {
+        let key = entry.identity();
+        let references = entry
+            .body
+            .expressions()
+            .flat_map(|expression| {
+                crate::hir::expr::collect_expr_dependencies(expression).graph_refs
+            })
+            .collect::<BTreeSet<_>>();
+        resolved
+            .assert_deps
+            .insert(key, resolve_all(frame, &references));
+    }
+
     Ok(resolved)
 }
 

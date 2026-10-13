@@ -80,11 +80,33 @@ impl ModulePaths {
         }
     }
 
+    /// The source module path of `module`, a file root or an inline DAG
+    /// declared in one, or `None` when no path to its file was recorded or
+    /// `module` is a concrete instance.
+    #[must_use]
+    pub fn module(&self, module: &DagId) -> Option<ModulePathKey> {
+        let (path, scopes) = self.module_and_scopes(module)?;
+        scopes.is_empty().then_some(path)
+    }
+
     /// The declaration `leaf` of module `owner`, named by the source module
     /// path of `owner`'s file, or `None` when no path to that file was
     /// recorded.
     #[must_use]
     pub fn name(&self, owner: &DagId, leaf: &DeclName) -> Option<ModuleDeclName> {
+        let (module, scopes) = self.module_and_scopes(owner)?;
+        Some(ModuleDeclName {
+            module,
+            name: ScopedName::from_parts(NonEmpty::try_from_vec(scopes).ok(), leaf.clone()),
+        })
+    }
+
+    /// The source module path of `owner`'s file and inline DAGs, and the
+    /// instance scopes below them.
+    fn module_and_scopes(
+        &self,
+        owner: &DagId,
+    ) -> Option<(ModulePathKey, Vec<crate::syntax::module_name::ScopeSegment>)> {
         let file = owner.file_root();
         let file_path = self.0.get(&file)?;
         let below = owner.segments().as_slice().get(file.segments().len()..)?;
@@ -104,10 +126,7 @@ impl ModulePaths {
             first.clone(),
             rest.iter().cloned().chain(inline_dags).collect(),
         ));
-        Some(ModuleDeclName {
-            module,
-            name: ScopedName::from_parts(NonEmpty::try_from_vec(scopes).ok(), leaf.clone()),
-        })
+        Some((module, scopes))
     }
 }
 

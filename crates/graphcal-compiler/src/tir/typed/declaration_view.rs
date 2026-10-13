@@ -27,8 +27,8 @@ pub struct DeclarationView<'d> {
 pub enum DeclarationKind<'d> {
     /// A value declaration.
     Value(ValueDeclaration<'d>),
-    /// An assertion.
-    Assert { span: Span },
+    /// An assertion, with the span its operands cover.
+    Assert { span: Span, body: Span },
     /// A plot, with its output visibility.
     Plot { visibility: PlotVisibility },
     /// A figure, with the plots it composes in source order.
@@ -52,23 +52,33 @@ pub struct ValueDeclaration<'d> {
     pub has_default: bool,
     /// Its source span.
     pub span: Span,
+    /// The span of its defining expression: a const body, a param default,
+    /// or a node formula. `None` for a required param or a `todo` node.
+    pub definition: Option<Span>,
 }
 
 impl<'d> DeclarationView<'d> {
     /// The view of one declaration entry.
     pub(super) fn of(decl: &'d Decl<Typed>) -> Self {
-        let value = |category, entry_annotation, has_default, span| {
+        let value = |category, entry_annotation, has_default, span, definition| {
             DeclarationKind::Value(ValueDeclaration {
                 category,
                 annotation: entry_annotation,
                 has_default,
                 span,
+                definition,
             })
         };
         let (identity, kind) = match decl {
             Decl::Const(entry) => (
                 &entry.identity,
-                value(ValueDeclCategory::Const, &entry.type_ann, false, entry.span),
+                value(
+                    ValueDeclCategory::Const,
+                    &entry.type_ann,
+                    false,
+                    entry.span,
+                    Some(entry.expr.span),
+                ),
             ),
             Decl::Param(entry) => (
                 &entry.identity,
@@ -77,15 +87,30 @@ impl<'d> DeclarationView<'d> {
                     &entry.type_ann,
                     entry.default.is_some(),
                     entry.span,
+                    entry.default.as_ref().map(|default| default.span),
                 ),
             ),
             Decl::Node(entry) => (
                 &entry.identity,
-                value(ValueDeclCategory::Node, &entry.type_ann, false, entry.span),
+                value(
+                    ValueDeclCategory::Node,
+                    &entry.type_ann,
+                    false,
+                    entry.span,
+                    entry.definition.formula().map(|formula| formula.span),
+                ),
             ),
             Decl::Assert(entry) => (
                 &entry.identity,
-                DeclarationKind::Assert { span: entry.span },
+                DeclarationKind::Assert {
+                    span: entry.span,
+                    body: entry
+                        .body
+                        .expressions()
+                        .map(|expression| expression.span)
+                        .reduce(Span::merge)
+                        .unwrap_or(entry.span),
+                },
             ),
             Decl::Plot(entry) => (
                 &entry.identity,

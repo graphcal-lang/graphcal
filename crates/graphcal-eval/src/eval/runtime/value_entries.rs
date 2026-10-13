@@ -49,6 +49,8 @@ pub(super) struct ValueEntries {
         Result<Value, OutputUnavailable>,
         ValueDeclCategory,
     )>,
+    /// The runtime identity each output name reports.
+    pub identities: HashMap<ScopedName, ResolvedDeclName>,
     pub output_surface: HashSet<ScopedName>,
     pub presentation_diagnostics: Vec<PresentationDiagnostic>,
 }
@@ -64,9 +66,9 @@ impl ValueEntries {
         entries: impl IntoIterator<Item = ValueEntry>,
         ctx: &EvalSession<'_>,
     ) -> Result<Self, SemanticError> {
-        let mut identities = HashMap::<ScopedName, ResolvedDeclName>::new();
         let mut collected = Self {
             entries: Vec::new(),
+            identities: HashMap::new(),
             output_surface: HashSet::new(),
             presentation_diagnostics: Vec::new(),
         };
@@ -74,7 +76,7 @@ impl ValueEntries {
             if matches!(entry.exposure, OutputExposure::Surface) {
                 collected.output_surface.insert(entry.name.clone());
             }
-            match identities.get(&entry.name) {
+            match collected.identities.get(&entry.name) {
                 Some(existing) if existing == &entry.key => continue,
                 Some(existing) => {
                     return Err(ctx.internal_error(
@@ -87,7 +89,7 @@ impl ValueEntries {
                 }
                 None => {}
             }
-            identities.insert(entry.name.clone(), entry.key);
+            collected.identities.insert(entry.name.clone(), entry.key);
             collected.presentation_diagnostics.extend(entry.diagnostics);
             collected
                 .entries
