@@ -12,8 +12,7 @@
   --sel-cell-weak: rgba(91, 156, 246, 0.1);
   --wire: #43464e;
   --power: #e0a33b;
-  --dimless: #9aa0ab;
-  --int: #4fb3bf;
+  --type: #4fb3bf;
   --bool: #7cc67c;
   --seed: #f0f2f5;
   --mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
@@ -423,12 +422,23 @@ body {
   font-size: 10px;
   white-space: nowrap;
 }
-.ruler-unrolled,
-.ruler-origin {
+.ruler-unrolled {
   color: var(--sel);
 }
-.ruler-origin {
-  margin-left: 8px;
+/* an imported axis: the file it comes from, small, above the name */
+.ruler-origin,
+.col-origin {
+  font-size: 9px;
+  line-height: 1;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.ruler-box.imported {
+  padding: 2px 8px 4px;
+}
+.ruler-box.imported .ruler-axis,
+.ruler-box.imported .ruler-note {
+  line-height: 1.2;
 }
 .ruler-sub {
   height: var(--sub-h);
@@ -584,8 +594,28 @@ body {
 .kind-assert .mark {
   color: var(--bool);
 }
+/* an external: the param diamond with a small arrow, taken from another file */
 .kind-external .mark {
-  color: var(--sel);
+  color: var(--power);
+}
+.mark-external {
+  position: relative;
+  display: inline-block;
+}
+.mark-arrow {
+  position: absolute;
+  right: -7px;
+  top: -5px;
+  font-size: 9px;
+  font-style: normal;
+  line-height: 1;
+}
+.col-head.kind-external {
+  padding: 2px 8px 2px;
+}
+.col-head.kind-external .col-title,
+.col-head.kind-external .col-meta {
+  line-height: 1.2;
 }
 .name {
   font-weight: 600;
@@ -599,14 +629,6 @@ body {
   line-height: 1.3;
   white-space: nowrap;
 }
-.col-origin {
-  margin-left: auto;
-  padding-left: 10px;
-  font-size: 10px;
-  font-weight: 400;
-  color: var(--sel);
-  white-space: nowrap;
-}
 /* folded: the value sits at the right end of the second line */
 .head-value {
   margin-left: auto;
@@ -617,17 +639,8 @@ body {
   font-size: 11px;
   color: var(--text);
 }
-.dim-quantity {
-  color: var(--power);
-}
-.dim-dimensionless {
-  color: var(--dimless);
-}
-.dim-int {
-  color: var(--int);
-}
-.dim-bool {
-  color: var(--bool);
+.col-type {
+  color: var(--type);
 }
 
 .col-sub {

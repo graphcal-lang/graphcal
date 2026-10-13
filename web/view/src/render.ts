@@ -9,8 +9,19 @@ const MARK: Record<NodeKind, string> = {
   const: "○",
   node: "●",
   assert: "✓",
-  external: "⤴",
+  external: "◇",
 };
+
+/** The kind's mark; an external is a param diamond with a small arrow: taken from elsewhere. */
+function renderMark(kind: NodeKind): HTMLElement {
+  const mark = el("span", `mark${kind === "external" ? " mark-external" : ""}`, MARK[kind]);
+  if (kind === "external") mark.append(el("i", "mark-arrow", "↗"));
+  return mark;
+}
+
+function fileOf(module: string): string {
+  return `${module.split(".").at(-1) ?? module}.gcl`;
+}
 
 export const RULER_WIDTH = 136;
 
@@ -25,19 +36,6 @@ function el<K extends keyof HTMLElementTagNameMap>(
   return node;
 }
 
-function dimensionClass(dimension: string | null): string {
-  switch (dimension) {
-    case "Dimensionless":
-    case "Int":
-    case "Bool":
-      return `dim-${dimension.toLowerCase()}`;
-    case null:
-      return "";
-    default:
-      return "dim-quantity";
-  }
-}
-
 /**
  * The two-line head: mark, name and (for an external) its origin on the first
  * line; the type on the second. Folded, the value joins the second line, so the
@@ -47,18 +45,16 @@ function renderHead(column: Column, folded = false): HTMLElement {
   const { node } = column;
   const head = el("div", `col-head kind-${node.kind}`);
   head.dataset.node = node.id;
+  // An external names the file it is taken from in small type above its name.
+  if (node.kind === "external") head.append(el("div", "col-origin", fileOf(node.module)));
   const title = el("div", "col-title");
-  title.append(el("span", "mark", MARK[node.kind]), el("span", "name", node.name));
-  if (node.kind === "external") {
-    const origin = node.module.split(".").at(-1) ?? node.module;
-    title.append(el("span", "col-origin", `← ${origin}.gcl`));
-  }
+  title.append(renderMark(node.kind), el("span", "name", node.name));
   head.append(title);
   const meta = el("div", "col-meta");
   if (node.dimension !== null) {
     // Folded, the unit travels with the value instead.
     const type = node.unit && !folded ? `${node.dimension} · ${node.unit}` : node.dimension;
-    meta.append(el("span", `col-type ${dimensionClass(node.dimension)}`, type));
+    meta.append(el("span", "col-type", type));
   }
   if (folded) {
     const slot = el("span", "head-value");
@@ -201,9 +197,9 @@ function renderRuler(band: Band, hidden: Hidden): HTMLElement {
       : String(band.labels.length),
   );
   if (band.axisOrigin !== null) {
-    // Where the axis is declared, as on an external's head.
-    const origin = band.axisOrigin.split(".").at(-1) ?? band.axisOrigin;
-    note.append(el("span", "ruler-origin", `← ${origin}.gcl`));
+    // Where the axis is declared, in small type above its name as on an external's head.
+    box.classList.add("imported");
+    box.append(el("div", "ruler-origin", fileOf(band.axisOrigin)));
   }
   box.append(el("div", "ruler-axis", band.axis), note);
   inner.append(box);
