@@ -28,10 +28,6 @@ export interface Column {
   rows: string[];
   /** Sub-column labels (second axis), if any. */
   subs: string[];
-  /** May be folded by fit mode on its own: an intermediate node (never an output). */
-  foldable: boolean;
-  /** How much the node matters to the rest of the file; low activity folds first. */
-  activity: number;
 }
 
 export interface Band {
@@ -146,7 +142,6 @@ export function computeLayout(model: ViewModel): Layout {
     nodes.forEach((node, position) => {
       const ownAxis = axis === null ? node.axes[0] : undefined;
       const subAxis = axis === null ? node.axes[1] : node.axes[1];
-      const consumers = users.get(node.id) ?? [];
       const column: Column = {
         node,
         role: roleOfNode(node),
@@ -156,9 +151,6 @@ export function computeLayout(model: ViewModel): Layout {
         tierRow: 0,
         rows: axis !== null ? band.labels : ownAxis ? (labelsOf.get(ownAxis) ?? []) : [],
         subs: subAxis ? (labelsOf.get(subAxis) ?? []) : [],
-        foldable: node.kind === "node" && roleOfNode(node) === "node",
-        // Consumers first, then how far the value travels (depth from params).
-        activity: consumers.length * 10 + (depths.get(node.id) ?? 0),
       };
       band.columns.push(column);
       columns.set(node.id, column);
@@ -205,9 +197,9 @@ export function packZone(
     for (const box of boxes) {
       const { width: w, height: h } = size(box.node.id);
       const isOutput = box.role === "output";
-      const chip = folded.has(box.node.id);
+      const isFolded = folded.has(box.node.id);
       let i = heights.findIndex(
-        (used, k) => (chip || groups[k] === isOutput) && used + STACK_GAP + h <= cap,
+        (used, k) => (isFolded || groups[k] === isOutput) && used + STACK_GAP + h <= cap,
       );
       if (i === -1) {
         i = stacks.length;
@@ -243,7 +235,7 @@ export function packScalarBand(
   const packedColumns: Column[] = [];
   let position = 0;
   for (const zone of ZONES) {
-    // Node zone order: full node boxes, then outputs, then folded chips, which
+    // Node zone order: full node boxes, then outputs, then folded boxes, which
     // slip into whatever stack has room (typically under the outputs).
     const rank = (c: Column): number => (c.role === "output" ? 1 : folded.has(c.node.id) ? 2 : 0);
     const boxes = scalar.columns

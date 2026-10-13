@@ -77,8 +77,8 @@ function resetCamera(): void {
 const modeButtons = [...document.querySelectorAll<HTMLButtonElement>("[data-mode]")];
 
 /**
- * fit: keep text readable, fold low-activity intermediates until the view fits.
- * overview: expand everything and scale the whole stage down to fit.
+ * fit: everything open at full size; the view may overflow and is panned.
+ * overview: scale the whole stage down to fit.
  */
 type Mode = "fit" | "overview";
 
@@ -198,11 +198,11 @@ function applySelection(): void {
     const [first, second] = column.node.axes;
     const shared = column.node.axes.filter((axis) => selectedLabels.has(axis));
     if (shared.length === 0) return;
-    for (const cell of col.querySelectorAll<HTMLElement>(".cell, .fold-tick")) {
+    for (const cell of col.querySelectorAll<HTMLElement>(".cell")) {
       const labelOf = (axis: string): string | undefined =>
         axis === first ? cell.dataset.row : axis === second ? cell.dataset.sub : undefined;
       if (shared.every((axis) => labelOf(axis) === selectedLabels.get(axis))) {
-        cell.classList.add(cell.classList.contains("cell") ? "rel-cell" : "row-sel");
+        cell.classList.add("rel-cell");
       }
     }
   };
@@ -340,27 +340,13 @@ function renderOnce(): void {
   redraw();
 }
 
-function overflows(): boolean {
-  return viewEl.scrollWidth > canvasEl.clientWidth || viewEl.scrollHeight > canvasEl.clientHeight;
-}
-
-/** Re-apply the mode from scratch: fold candidates one by one (fit) or scale (overview). */
+/** Re-apply the mode from scratch: everything open, then scaled down in overview. */
 function refit(): void {
   if (!state) return;
   state.folded = new Set();
   resetCamera();
   renderOnce();
-  if (state.mode === "fit") {
-    const candidates = [...state.base.columns.values()]
-      .filter((c) => c.foldable)
-      .sort((a, b) => a.activity - b.activity || b.depth - a.depth)
-      .map((c) => c.node.id);
-    for (const id of candidates) {
-      if (!overflows()) break;
-      state.folded.add(id);
-      renderOnce();
-    }
-  } else {
+  if (state.mode === "overview") {
     const width = canvasEl.clientWidth;
     const height = canvasEl.clientHeight;
     camera.scale = Math.min(1, width / viewEl.scrollWidth, height / viewEl.scrollHeight);
@@ -454,7 +440,7 @@ viewEl.addEventListener("click", (event) => {
     state.picked = null;
     applyPicked();
   }
-  const folded = target.closest<HTMLElement>(".col.folded, .col.chip");
+  const folded = target.closest<HTMLElement>(".col.folded");
   if (folded?.dataset.node) {
     state.folded.delete(folded.dataset.node);
     state.selection = null;
@@ -853,10 +839,7 @@ viewEl.addEventListener("dblclick", (event) => {
     startCellEdit(cell);
     return;
   }
-  const head = (event.target as HTMLElement).closest<HTMLElement>(
-    ".col:not(.folded):not(.chip) .col-head",
-  );
-  // Any column folds by hand; `foldable` only limits what fit mode folds on its own.
+  const head = (event.target as HTMLElement).closest<HTMLElement>(".col:not(.folded) .col-head");
   const id = head?.dataset.node;
   if (!id) return;
   state.folded.add(id);

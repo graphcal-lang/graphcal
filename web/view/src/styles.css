@@ -596,7 +596,22 @@ body {
   white-space: nowrap;
 }
 .col-origin {
+  margin-left: auto;
+  padding-left: 10px;
+  font-size: 10px;
+  font-weight: 400;
   color: var(--sel);
+  white-space: nowrap;
+}
+/* folded: the value sits at the right end of the second line */
+.head-value {
+  margin-left: auto;
+  padding-left: 10px;
+  display: flex;
+  align-items: baseline;
+  gap: 3px;
+  font-size: 11px;
+  color: var(--text);
 }
 .dim-quantity {
   color: var(--power);
@@ -693,14 +708,18 @@ body {
   font-family: var(--mono);
   font-size: 13px;
 }
-.box .unit {
+.unit {
   color: var(--muted);
   font-size: 11px;
 }
-.box .pass {
+.head-value .unit,
+.head-value .shape {
+  font-size: 10px;
+}
+.pass {
   color: var(--bool);
 }
-.box .fail {
+.fail {
   color: #e06c6c;
 }
 .box.rel-direct .box-value,
@@ -708,68 +727,9 @@ body {
   background: var(--sel-cell-weak);
 }
 
-/* folded no-axis box: a thin chip */
-.col.chip {
-  min-width: 0;
-}
-.chip-head {
-  height: 26px;
-  flex-direction: row;
-  align-items: center;
-  gap: 6px;
-  padding: 0 8px;
-  white-space: nowrap;
-}
-.chip-value {
-  margin-left: auto;
-  padding-left: 10px;
-  color: var(--muted);
-  font-family: var(--mono);
-  font-size: 11px;
-}
-
-/* folded column */
+/* folded column: the head alone */
 .col.folded {
-  min-width: 22px;
-  width: 22px;
-}
-.fold-head {
-  padding: 6px 0 0;
-  align-items: center;
-}
-.fold-strip {
-  position: relative;
-  display: flex;
-  flex-direction: column;
-}
-.fold-name {
-  position: absolute;
-  top: 8px;
-  left: 50%;
-  transform: translateX(-50%) rotate(90deg);
-  transform-origin: center;
-  font-family: var(--mono);
-  font-size: 11px;
-  font-weight: 600;
-  color: var(--text);
-  white-space: nowrap;
-  pointer-events: none;
-}
-.fold-ticks {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-}
-.fold-sub {
-  height: var(--sub-h);
-}
-.fold-tick {
-  height: var(--row-h);
-  width: 3px;
-  border-radius: 2px;
-}
-.fold-tick.row-sel {
-  background: var(--sel);
+  min-width: 0;
 }
 
 /* ---- wires ---- */

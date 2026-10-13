@@ -38,24 +38,57 @@ function dimensionClass(dimension: string | null): string {
   }
 }
 
-function renderHead(column: Column): HTMLElement {
+/**
+ * The two-line head: mark, name and (for an external) its origin on the first
+ * line; the type on the second. Folded, the value joins the second line, so the
+ * values of a stack of folded boxes line up at their right edge.
+ */
+function renderHead(column: Column, folded = false): HTMLElement {
   const { node } = column;
   const head = el("div", `col-head kind-${node.kind}`);
   head.dataset.node = node.id;
   const title = el("div", "col-title");
   title.append(el("span", "mark", MARK[node.kind]), el("span", "name", node.name));
+  if (node.kind === "external") {
+    const origin = node.module.split(".").at(-1) ?? node.module;
+    title.append(el("span", "col-origin", `← ${origin}.gcl`));
+  }
   head.append(title);
   const meta = el("div", "col-meta");
   if (node.dimension !== null) {
-    const type = node.unit ? `${node.dimension} · ${node.unit}` : node.dimension;
+    // Folded, the unit travels with the value instead.
+    const type = node.unit && !folded ? `${node.dimension} · ${node.unit}` : node.dimension;
     meta.append(el("span", `col-type ${dimensionClass(node.dimension)}`, type));
   }
-  if (node.kind === "external") {
-    const origin = node.module.split(".").at(-1) ?? node.module;
-    meta.append(el("span", "col-origin", `← ${origin}.gcl`));
+  if (folded) {
+    const slot = el("span", "head-value");
+    slot.append(...valueSpans(column));
+    meta.append(slot);
   }
   head.append(meta);
   return head;
+}
+
+/** A value as spans: magnitude with its unit set apart, pass / fail for an assert, a shape for a table. */
+function valueSpans(column: Column): HTMLElement[] {
+  const value = column.node.value;
+  if (value && value.kind === "quantity" && value.unit) {
+    return [el("span", "magnitude", value.magnitude), el("span", "unit", value.unit)];
+  }
+  if (value && value.kind === "bool" && column.node.kind === "assert") {
+    return [el("span", value.value ? "pass" : "fail", value.display.toLowerCase())];
+  }
+  if (value && value.kind === "indexed") {
+    const rows = column.rows.length;
+    return [
+      el(
+        "span",
+        "shape",
+        column.subs.length > 0 ? `${rows} × ${column.subs.length}` : String(rows),
+      ),
+    ];
+  }
+  return [el("span", "magnitude", displayOf(value))];
 }
 
 function cellText(column: Column, labels: string[]): string {
@@ -122,74 +155,24 @@ function renderBox(column: Column): HTMLElement {
   const root = el("div", `col role-${column.role} box`);
   root.dataset.node = column.node.id;
   root.append(renderHead(column));
-  const value = column.node.value;
   const body = el("div", "box-value");
   body.dataset.node = column.node.id;
-  if (value && value.kind === "quantity" && value.unit) {
-    body.append(el("span", "magnitude", value.magnitude), el("span", "unit", value.unit));
-  } else if (value && value.kind === "bool" && column.node.kind === "assert") {
-    body.append(el("span", value.value ? "pass" : "fail", value.display.toLowerCase()));
-  } else {
-    body.append(el("span", "magnitude", displayOf(value)));
-  }
+  body.append(...valueSpans(column));
   root.append(body);
   return root;
 }
 
-/** A folded column: a thin strip that keeps its wires and row positions. */
-function renderFolded(column: Column, band: Band, hidden: Hidden): HTMLElement {
+/** A folded column: just the two-line head, its value kept on the second line. */
+function renderFolded(column: Column): HTMLElement {
   const root = el("div", `col role-${column.role} folded`);
   root.dataset.node = column.node.id;
   root.title = `${column.node.name} · click to expand`;
-  const head = el("div", `col-head fold-head kind-${column.node.kind}`);
-  head.dataset.node = column.node.id;
-  head.append(el("span", "mark", MARK[column.node.kind]));
-  root.append(head);
-  const strip = el("div", "fold-strip");
-  strip.append(el("span", "fold-name", column.node.name));
-  const ticks = el("div", "fold-ticks");
-  if (band.axis !== null) {
-    if (band.columns.some((c) => c.subs.length > 0)) ticks.append(el("span", "fold-sub"));
-    for (const run of rowRuns(column.rows, hidden.get(band.axis))) {
-      if (run.kind === "gap") {
-        ticks.append(el("span", "row-gap fold-gap"));
-        continue;
-      }
-      const tick = el("span", "fold-tick");
-      tick.dataset.node = column.node.id;
-      tick.dataset.row = run.label;
-      ticks.append(tick);
-    }
-  }
-  strip.append(ticks);
-  root.append(strip);
-  return root;
-}
-
-/** A folded no-axis box: one thin line with mark, name, and value. */
-function renderChip(column: Column): HTMLElement {
-  const root = el("div", `col role-${column.role} chip kind-${column.node.kind}`);
-  root.dataset.node = column.node.id;
-  root.title = `${column.node.name} · click to expand`;
-  const head = el("div", "col-head chip-head");
-  head.dataset.node = column.node.id;
-  head.append(el("span", "mark", MARK[column.node.kind]), el("span", "name", column.node.name));
-  const value = column.node.value;
-  const text =
-    value === null
-      ? "—"
-      : value.kind === "indexed"
-        ? `[${value.index}] · ${value.entries.length}`
-        : value.display;
-  head.append(el("span", "chip-value", text));
-  root.append(head);
+  root.append(renderHead(column, true));
   return root;
 }
 
 export function renderColumn(column: Column, band: Band, options: RenderOptions): HTMLElement {
-  if (options.folded.has(column.node.id)) {
-    return band.axis === null ? renderChip(column) : renderFolded(column, band, options.hidden);
-  }
+  if (options.folded.has(column.node.id)) return renderFolded(column);
   if (column.rows.length === 0) return renderBox(column);
   return renderTable(column, band, options.hidden);
 }
