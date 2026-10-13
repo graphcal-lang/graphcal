@@ -215,8 +215,8 @@ function renderRuler(band: Band, hidden: Hidden): HTMLElement {
       "div",
       "ruler-note",
       hiddenCount > 0
-        ? `${band.labels.length - hiddenCount} / ${band.labels.length} shown`
-        : `index · ${band.labels.length} labels ↕`,
+        ? `${band.labels.length - hiddenCount} / ${band.labels.length}`
+        : String(band.labels.length),
     ),
   );
   inner.append(box);

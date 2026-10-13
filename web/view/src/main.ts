@@ -361,7 +361,7 @@ function load(name: string): void {
   unrollEl.textContent =
     unrolled.length === 0
       ? "no shared axis"
-      : unrolled.map((b) => `unroll ${b.axis} · ${b.labels.length} labels`).join("   ");
+      : unrolled.map((b) => `unroll ${b.axis} · ${b.labels.length}`).join("   ");
   refit();
 }
 
