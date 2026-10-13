@@ -342,12 +342,18 @@ body {
   font-size: 11px;
   color: var(--muted);
 }
+.row-label {
+  cursor: default;
+}
+/* Zebra rows; every highlight below must come later so it wins on striped rows. */
+.cell.stripe,
+.row-key.stripe,
+.row-label.stripe {
+  background: rgba(255, 255, 255, 0.035);
+}
 .row-label.row-sel {
   background: var(--sel-bg);
   color: var(--text);
-}
-.row-label {
-  cursor: default;
 }
 .row-label.picked {
   background: var(--sel-bg);
@@ -536,11 +542,6 @@ body {
 .cell {
   justify-content: flex-end;
   color: var(--text);
-}
-.cell.stripe,
-.row-key.stripe,
-.row-label.stripe {
-  background: rgba(255, 255, 255, 0.035);
 }
 .row-key {
   color: var(--muted);
