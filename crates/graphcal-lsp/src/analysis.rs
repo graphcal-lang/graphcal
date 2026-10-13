@@ -57,6 +57,10 @@ pub struct AnalysisResult {
     /// Computed values from evaluation, keyed by declaration name.
     /// Each value is a formatted display string (e.g., `"9.81 [m/s^2]"`).
     pub eval_values: HashMap<ScopedName, String>,
+    /// The document's view model (structure, and values when it evaluated),
+    /// served to the `graphcal/viewModel` request. `None` when the project
+    /// did not check.
+    pub view: Option<graphcal_project::view_model::ViewModel>,
     /// Structured function signatures, keyed by function name.
     /// Points to a lazily-initialized static map (builtins never change).
     pub fn_signatures: &'static HashMap<String, FnSignatureInfo>,
@@ -97,6 +101,7 @@ impl std::fmt::Debug for AnalysisResult {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("AnalysisResult")
             .field("inputs", &self.inputs)
+            .field("view", &self.view.is_some())
             .field("source_len", &self.source.len())
             .field("symbol_table_defs", &self.symbol_table.definitions.len())
             .field(

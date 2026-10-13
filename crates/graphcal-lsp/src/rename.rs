@@ -393,6 +393,7 @@ mod tests {
             import_surfaces: HashMap::new(),
             diagnostics: Arc::new(HashMap::new()),
             eval_values: HashMap::new(),
+            view: None,
             fn_signatures: build_fn_signatures(),
             extern_fn_signatures: HashMap::new(),
             import_links: Vec::new(),

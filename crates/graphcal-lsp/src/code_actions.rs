@@ -349,6 +349,7 @@ mod tests {
             import_surfaces: StdHashMap::new(),
             diagnostics: Arc::new(StdHashMap::new()),
             eval_values: StdHashMap::new(),
+            view: None,
             fn_signatures: build_fn_signatures(),
             extern_fn_signatures: StdHashMap::new(),
             import_links: Vec::new(),

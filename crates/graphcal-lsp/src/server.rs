@@ -854,6 +854,20 @@ async fn analyze_store_publish_once(
     if client_features.inlay_hint_refresh.is_supported() {
         let _ = client.inlay_hint_refresh().await;
     }
+    if client_features.view_model_changes.is_supported() {
+        // Announce on a separate task: the client socket holds one message,
+        // and a client that reads it only after this handler returns would
+        // otherwise deadlock with an analysis waiting to send a second one.
+        let announce = client.clone();
+        let announced = uri.clone();
+        tokio::spawn(async move {
+            announce
+                .send_notification::<ViewModelDidChange>(ViewModelDidChangeParams {
+                    uri: announced,
+                })
+                .await;
+        });
+    }
     AnalysisCompletion::Done
 }
 
@@ -1462,7 +1476,7 @@ impl LanguageServer for Backend {
 }
 
 pub(crate) fn service() -> (LspService<Backend>, ClientSocket) {
-    LspService::new(|client| Backend {
+    LspService::build(|client| Backend {
         client,
         client_features: Arc::new(OnceLock::new()),
         documents: Arc::new(RwLock::new(HashMap::new())),
@@ -1475,6 +1489,52 @@ pub(crate) fn service() -> (LspService<Backend>, ClientSocket) {
         plugin_host: Arc::new(graphcal_plugin_host::PluginHost::new()),
         analysis_scheduler: Arc::new(AnalysisScheduler::new()),
     })
+    .custom_method(ViewModelRequest::METHOD, Backend::view_model)
+    .finish()
+}
+
+/// `graphcal/viewModel`: the view model of a document, as of its latest
+/// analysis. `null` until the document has been analyzed, or when its
+/// project did not check.
+pub enum ViewModelRequest {}
+
+impl ViewModelRequest {
+    pub const METHOD: &'static str = "graphcal/viewModel";
+}
+
+/// Parameters of [`ViewModelRequest`].
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ViewModelParams {
+    pub text_document: tower_lsp::lsp_types::TextDocumentIdentifier,
+}
+
+/// `graphcal/viewModelDidChange`: a document's analysis completed, so a
+/// view showing it should request the model again.
+pub enum ViewModelDidChange {}
+
+impl tower_lsp::lsp_types::notification::Notification for ViewModelDidChange {
+    const METHOD: &'static str = "graphcal/viewModelDidChange";
+    type Params = ViewModelDidChangeParams;
+}
+
+/// Parameters of [`ViewModelDidChange`].
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ViewModelDidChangeParams {
+    pub uri: Url,
+}
+
+impl Backend {
+    /// Serve [`ViewModelRequest`] from the cached analysis.
+    async fn view_model(
+        &self,
+        params: ViewModelParams,
+    ) -> Result<Option<graphcal_project::view_model::ViewModel>> {
+        self.with_current_analysis(&params.text_document.uri, |analysis| {
+            analysis.get().view.clone()
+        })
+        .await
+    }
 }
 
 /// Start the LSP server, reading from stdin and writing to stdout.
@@ -3105,6 +3165,7 @@ node bad: Mass = mass + length;
             import_surfaces: HashMap::new(),
             diagnostics: Arc::new(diags),
             eval_values: HashMap::new(),
+            view: None,
             fn_signatures: build_fn_signatures(),
             extern_fn_signatures: HashMap::new(),
             import_links: Vec::new(),

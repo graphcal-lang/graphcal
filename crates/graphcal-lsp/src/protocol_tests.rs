@@ -910,3 +910,66 @@ async fn formatting_uses_utf16_positions_at_the_json_rpc_boundary() {
     assert_eq!(edits[0]["range"]["end"]["character"], expected_utf16_length);
     assert_ne!(expected_utf16_length, source.len());
 }
+
+/// A view client: declares the experimental capability that opts into
+/// `graphcal/viewModelDidChange`.
+const VIEW_SOURCE: &str = "\
+node thrust: Dimensionless = 1.0;
+node doubled: Dimensionless = @thrust * 2.0;
+node root: Dimensionless = sqrt(4.0);
+";
+
+#[tokio::test]
+async fn view_model_request_serves_the_analyzed_document() {
+    let (mut service, mut socket) = service();
+    initialize(
+        &mut service,
+        json!({ "experimental": { "graphcal": { "viewModelChanges": true } } }),
+    )
+    .await;
+    let uri = Url::parse("untitled:view.gcl").unwrap();
+    notify(
+        &mut service,
+        "textDocument/didOpen",
+        open_params(&uri, 1, VIEW_SOURCE),
+    )
+    .await;
+    // Analysis publishes diagnostics, then announces the view model.
+    let mut announced = false;
+    while !announced {
+        let message = timeout(Duration::from_secs(5), socket.next())
+            .await
+            .expect("server-to-client message timeout")
+            .expect("client socket closed");
+        if message.method() == "graphcal/viewModelDidChange" {
+            let params = message.params().expect("notification params");
+            assert_eq!(params["uri"], json!(uri));
+            announced = true;
+        }
+    }
+
+    let view = request(
+        &mut service,
+        "graphcal/viewModel",
+        json!({ "textDocument": { "uri": uri } }),
+    )
+    .await;
+    let names: Vec<&str> = view["nodes"]
+        .as_array()
+        .expect("nodes")
+        .iter()
+        .map(|node| node["name"].as_str().expect("node name"))
+        .collect();
+    assert_eq!(names, ["thrust", "doubled", "root"]);
+    assert_eq!(view["nodes"][1]["deps"], json!(["thrust"]));
+    assert_eq!(view["nodes"][1]["value"]["display"], "2");
+    assert_eq!(view["nodes"][1]["source"]["line"], 2);
+
+    let unknown = request(
+        &mut service,
+        "graphcal/viewModel",
+        json!({ "textDocument": { "uri": "untitled:never-opened.gcl" } }),
+    )
+    .await;
+    assert_eq!(unknown, Value::Null);
+}
