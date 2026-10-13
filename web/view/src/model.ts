@@ -9,7 +9,9 @@ export type Value =
   | { kind: "int"; display: string }
   | { kind: "bool"; display: string; value: boolean }
   | { kind: "label"; display: string; index: string; variant: string }
-  | { kind: "indexed"; display: string; index: string; entries: { key: string; value: Value }[] };
+  | { kind: "indexed"; display: string; index: string; entries: { key: string; value: Value }[] }
+  /** Anything the view has no richer shape for (structs, complex, datetimes). */
+  | { kind: "text"; display: string };
 
 const valueSchema: z.ZodType<Value> = z.lazy(() =>
   z.discriminatedUnion("kind", [
@@ -34,6 +36,7 @@ const valueSchema: z.ZodType<Value> = z.lazy(() =>
       index: z.string(),
       entries: z.array(z.object({ key: z.string(), value: valueSchema })),
     }),
+    z.object({ kind: z.literal("text"), display: z.string() }),
   ]),
 );
 

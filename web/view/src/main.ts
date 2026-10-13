@@ -9,8 +9,11 @@ import {
   type Layout,
   type Zone,
 } from "./layout.ts";
+import { applyEvaluation, depsOf } from "./edit.ts";
+import { evaluateProject, loadEngine } from "./engine.ts";
 import { spansOf, subjectTokens, tokenize, type Token } from "./formula.ts";
-import { parseViewModel, type ViewModel } from "./model.ts";
+import { parseViewModel, type ViewModel, type ViewNode } from "./model.ts";
+import { EditError, projectFor, replaceExpr, replaceTableCell, type Project } from "./project.ts";
 import { placeHalo, renderView, RULER_WIDTH, type RenderOptions } from "./render.ts";
 import { hiddenOf, pick, type Hidden, type Picked } from "./rows.ts";
 import { trace, type Selection } from "./selection.ts";
@@ -81,6 +84,9 @@ type Mode = "fit" | "overview";
 
 interface State {
   model: ViewModel;
+  /** The sources the model was built from, edited in memory; null when unknown. */
+  project: Project | null;
+  edited: boolean;
   /** Layout before the no-axis band is split into tiers. */
   base: Layout;
   layout: Layout;
@@ -99,18 +105,59 @@ function renderOptions(s: State): RenderOptions {
   return { folded: s.folded, hidden: s.hidden };
 }
 
-/** `subject = expr = value`, coloured like the editor. Empty when nothing is selected. */
-function describeSelection(s: State): Token[] {
+/** The selected node and the labels of the selected cell, one per axis. */
+function selected(s: State): { node: ViewNode; labels: string[] } | null {
   const { selection, model } = s;
-  if (!selection) return [];
+  if (!selection) return null;
   const node = model.nodes.find((n) => n.id === selection.id);
+  if (!node) return null;
   const labels = [selection.row, selection.sub].filter((x): x is string => x !== null);
-  const value = displayOf(valueAt(node?.value ?? null, labels));
-  const eq: Token = { text: " = ", cls: "operator" };
-  const tokens = subjectTokens(selection.id, labels);
-  if (node?.expr) tokens.push(eq, ...tokenize(node.expr));
-  tokens.push(eq, ...tokenize(value));
-  return tokens;
+  return { node, labels };
+}
+
+/** A table literal is elided in the view (`{ … }`), so it has no editable text. */
+function editableExpr(node: ViewNode): string | null {
+  if (!state?.project || node.expr === null || node.expr.includes("…")) return null;
+  if (node.source === null || state.project.fileOf(state.model, node.module) === null) return null;
+  return node.expr;
+}
+
+/** `subject = expr = value`, coloured like the editor; the expr part is editable. */
+function renderFormula(): void {
+  if (!state) return;
+  const line = document.createElement("span");
+  line.className = "formula-line";
+  const hit = selected(state);
+  formulaEl.classList.toggle("active", hit !== null);
+  formulaEl.classList.remove("editing");
+  if (!hit) {
+    formulaEl.replaceChildren(line);
+    return;
+  }
+  const { node, labels } = hit;
+  const eq = (): Token => ({ text: " = ", cls: "operator" });
+  line.append(...spansOf(subjectTokens(node.id, labels)));
+  if (node.expr) {
+    const expr = document.createElement("span");
+    expr.className = "formula-expr";
+    expr.classList.toggle("editable", editableExpr(node) !== null);
+    const coloured = document.createElement("span");
+    coloured.className = "formula-coloured";
+    coloured.append(...spansOf(tokenize(node.expr)));
+    expr.append(coloured);
+    line.append(...spansOf([eq()]), expr);
+  }
+  line.append(...spansOf([eq(), ...tokenize(displayOf(valueAt(node.value, labels)))]));
+  formulaEl.replaceChildren(line);
+}
+
+function showNote(message: string | null, kind: "error" | "busy" = "error"): void {
+  formulaEl.querySelector(".formula-note")?.remove();
+  if (message === null) return;
+  const note = document.createElement("span");
+  note.className = `formula-note ${kind}`;
+  note.textContent = message;
+  formulaEl.append(note);
 }
 
 function clearHighlights(): void {
@@ -128,11 +175,7 @@ function clearHighlights(): void {
 function applySelection(): void {
   if (!state) return;
   clearHighlights();
-  const line = document.createElement("span");
-  line.className = "formula-line";
-  line.append(...spansOf(describeSelection(state)));
-  formulaEl.replaceChildren(line);
-  formulaEl.classList.toggle("active", state.selection !== null);
+  renderFormula();
   const { selection, model, layout } = state;
   if (!selection) return;
 
@@ -343,6 +386,8 @@ function load(name: string): void {
   const base = orderByBarycenter(computeLayout(model), model);
   state = {
     model,
+    project: projectFor(model),
+    edited: false,
     base,
     layout: base,
     plan: planRoutes(model, base),
@@ -362,7 +407,9 @@ function load(name: string): void {
     Object.assign(document.createElement("span"), {
       textContent: model.module.file.split("/").at(-1) ?? model.module.file,
     }),
+    resetEl,
   );
+  markEdited();
   refit();
 }
 
@@ -443,6 +490,275 @@ viewEl.addEventListener("click", (event) => {
     : { id, row, sub, mode: "deps" };
   applySelection();
 });
+
+// ---- live editing ----
+// Every edit is a textual change to the in-memory sources, followed by a full
+// re-evaluation in WASM. Nothing is saved. An edit that fails to compile is
+// rolled back and its message shown; the editor stays open with the text.
+
+/** A pending change: which file, its new text, and how the model changes on success. */
+interface Edit {
+  file: string;
+  next: string;
+  onModel: (model: ViewModel) => void;
+}
+
+let evaluating: Promise<void> = Promise.resolve();
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+/** Apply an edit: swap the source, evaluate, fold the values back in, re-render. */
+function applyEdit(edit: Edit): Promise<boolean> {
+  const current = state;
+  const project = current?.project;
+  if (!current || !project) return Promise.resolve(false);
+  const run = async (): Promise<boolean> => {
+    const previous = project.files.get(edit.file);
+    if (previous === undefined) {
+      showNote(`unknown file ${edit.file}`);
+      return false;
+    }
+    project.files.set(edit.file, edit.next);
+    showNote("evaluating…", "busy");
+    let outcome;
+    try {
+      outcome = await evaluateProject(project.entry, project.request());
+    } catch (error) {
+      project.files.set(edit.file, previous);
+      showNote(errorMessage(error));
+      return false;
+    }
+    if (state !== current) return false;
+    if (outcome.status !== "evaluated") {
+      project.files.set(edit.file, previous);
+      const message =
+        outcome.status === "rejected"
+          ? outcome.error.message
+          : (outcome.diagnostics[0]?.message ?? "compile error");
+      showNote(message);
+      return false;
+    }
+    edit.onModel(current.model);
+    applyEvaluation(current.model, outcome.evaluation);
+    current.edited = true;
+    current.base = orderByBarycenter(computeLayout(current.model), current.model);
+    render();
+    markEdited();
+    return true;
+  };
+  const result = evaluating.then(run, run);
+  evaluating = result.then(
+    () => undefined,
+    () => undefined,
+  );
+  return result;
+}
+
+/** A bare number gets the column's unit, as a sheet would; anything else is taken as typed. */
+/**
+ * Turn typed text into a literal for the node. A quantity needs a floating-point
+ * literal (`0` is an integer; `0.0` is not), so a bare number is given a decimal
+ * point and the column's unit; anything else is passed through as written.
+ */
+function literalFor(node: ViewNode, text: string): string {
+  const trimmed = text.trim();
+  if (node.dimension === null) return trimmed;
+  const match = /^(-?)(\d[\d_]*)?(?:\.(\d[\d_]*))?([eE][-+]?\d+)?$/.exec(trimmed);
+  if (!match || (match[2] === undefined && match[3] === undefined)) return trimmed;
+  const [, sign, whole = "0", fraction = "0", exponent = ""] = match;
+  const number = `${sign}${whole}.${fraction}${exponent}`;
+  return node.unit ? `${number} ${node.unit}` : number;
+}
+
+/** Replace the whole expression of a node (formula bar). */
+function editExpr(node: ViewNode, next: string): Promise<boolean> {
+  const project = state?.project;
+  const expr = editableExpr(node);
+  const file = project && state ? project.fileOf(state.model, node.module) : null;
+  if (!project || !state || expr === null || file === null || node.source === null) {
+    showNote("this expression cannot be edited");
+    return Promise.resolve(false);
+  }
+  const source = project.files.get(file) ?? "";
+  let rewritten: string;
+  try {
+    rewritten = replaceExpr(source, node.source.line, expr, next);
+  } catch (error) {
+    showNote(error instanceof EditError ? error.message : errorMessage(error));
+    return Promise.resolve(false);
+  }
+  const model = state.model;
+  return applyEdit({
+    file,
+    next: rewritten,
+    onModel: () => {
+      node.expr = next;
+      node.deps = depsOf(next, model);
+    },
+  });
+}
+
+/** Replace one entry of a table literal, or the literal of a scalar param. */
+function editCell(
+  node: ViewNode,
+  row: string | null,
+  sub: string | null,
+  text: string,
+): Promise<boolean> {
+  if (row === null) return editExpr(node, literalFor(node, text));
+  const project = state?.project;
+  const file = project && state ? project.fileOf(state.model, node.module) : null;
+  if (!project || !state || file === null || node.source === null) {
+    showNote("this value cannot be edited");
+    return Promise.resolve(false);
+  }
+  const source = project.files.get(file) ?? "";
+  let rewritten: string;
+  try {
+    rewritten = replaceTableCell(source, node.source.line, row, sub, literalFor(node, text));
+  } catch (error) {
+    showNote(error instanceof EditError ? error.message : errorMessage(error));
+    return Promise.resolve(false);
+  }
+  return applyEdit({ file, next: rewritten, onModel: () => undefined });
+}
+
+/** Wire an input: Enter or blur commits, Escape cancels; the input stays while evaluating. */
+function bindEditor(
+  input: HTMLInputElement,
+  initial: string,
+  commit: (text: string) => Promise<boolean>,
+  cancel: () => void,
+): void {
+  let busy = false;
+  let done = false;
+  const finish = (): void => {
+    done = true;
+  };
+  const submit = (): void => {
+    if (busy || done) return;
+    if (input.value === initial) {
+      finish();
+      cancel();
+      return;
+    }
+    busy = true;
+    void commit(input.value).then((ok) => {
+      busy = false;
+      if (ok) finish();
+      else if (document.activeElement !== input && input.isConnected) input.focus();
+    });
+  };
+  input.addEventListener("keydown", (event) => {
+    event.stopPropagation();
+    if (event.key === "Enter") {
+      event.preventDefault();
+      submit();
+    } else if (event.key === "Escape") {
+      event.preventDefault();
+      finish();
+      cancel();
+    }
+  });
+  input.addEventListener("blur", () => {
+    if (!done && !busy) submit();
+  });
+  input.addEventListener("pointerdown", (event) => event.stopPropagation());
+}
+
+/** Edit the selected node's expression in place in the formula bar. */
+function startFormulaEdit(): void {
+  if (!state || formulaEl.classList.contains("editing")) return;
+  const hit = selected(state);
+  if (!hit) return;
+  const expr = editableExpr(hit.node);
+  const exprEl = formulaEl.querySelector<HTMLElement>(".formula-expr");
+  const coloured = exprEl?.querySelector<HTMLElement>(".formula-coloured");
+  if (expr === null || !exprEl || !coloured) return;
+  const node = hit.node;
+  const input = document.createElement("input");
+  input.className = "formula-input";
+  input.spellcheck = false;
+  input.value = expr;
+  input.setAttribute("aria-label", `expression of ${node.id}`);
+  input.addEventListener("input", () => {
+    coloured.replaceChildren(...spansOf(tokenize(input.value.length > 0 ? input.value : " ")));
+  });
+  bindEditor(
+    input,
+    expr,
+    (text) => editExpr(node, text),
+    () => renderFormula(),
+  );
+  exprEl.append(input);
+  formulaEl.classList.add("editing");
+  showNote(null);
+  input.focus();
+  input.setSelectionRange(input.value.length, input.value.length);
+}
+
+/** Edit a param cell or scalar box in place; other nodes edit through the formula bar. */
+function startCellEdit(cell: HTMLElement): void {
+  if (!state?.project) return;
+  const id = cell.dataset.node;
+  const node = state.model.nodes.find((n) => n.id === id);
+  if (!node) return;
+  const row = cell.dataset.row ?? null;
+  const sub = cell.dataset.sub ?? null;
+  state.selection = { id: node.id, row, sub, mode: "deps" };
+  applySelection();
+  const literal = node.kind === "param" || node.kind === "const";
+  if (!literal || (row === null && editableExpr(node) === null)) {
+    startFormulaEdit();
+    return;
+  }
+  const value = valueAt(
+    node.value,
+    [row, sub].filter((x): x is string => x !== null),
+  );
+  const initial = value?.kind === "quantity" ? value.magnitude : displayOf(value);
+  const input = document.createElement("input");
+  input.className = "cell-input";
+  // The default `size` (20 characters) would widen the column to fit the input.
+  input.size = 1;
+  input.spellcheck = false;
+  input.value = initial;
+  input.setAttribute("aria-label", `value of ${node.id}`);
+  const before = [...cell.childNodes];
+  cell.replaceChildren(input);
+  cell.classList.add("editing");
+  bindEditor(
+    input,
+    initial,
+    (text) => editCell(node, row, sub, text),
+    () => {
+      cell.classList.remove("editing");
+      cell.replaceChildren(...before);
+    },
+  );
+  showNote(null);
+  input.focus();
+  input.select();
+}
+
+formulaEl.addEventListener("click", (event) => {
+  if ((event.target as HTMLElement).closest(".formula-note")) return;
+  startFormulaEdit();
+});
+
+const resetEl = document.createElement("button");
+resetEl.type = "button";
+resetEl.className = "bar-reset";
+resetEl.textContent = "edited · reset";
+resetEl.title = "discard the in-memory edits and reload the fixture";
+resetEl.hidden = true;
+resetEl.addEventListener("click", () => load(fixtureEl.value));
+
+function markEdited(): void {
+  resetEl.hidden = !state?.edited;
+}
 
 // Context menu on a ruler label: hide the picked rows, or show only them.
 const menuEl = document.createElement("div");
@@ -529,6 +845,14 @@ viewEl.addEventListener("contextmenu", (event) => {
 
 viewEl.addEventListener("dblclick", (event) => {
   if (!state) return;
+  const cell = (event.target as HTMLElement).closest<HTMLElement>(
+    ".cell[data-node], .box-value[data-node]",
+  );
+  if (cell) {
+    event.preventDefault();
+    startCellEdit(cell);
+    return;
+  }
   const head = (event.target as HTMLElement).closest<HTMLElement>(
     ".col:not(.folded):not(.chip) .col-head",
   );
@@ -547,6 +871,8 @@ for (const name of Object.keys(fixtures).sort()) {
   fixtureEl.append(option);
 }
 fixtureEl.addEventListener("change", () => load(fixtureEl.value));
+// Warm the engine so the first edit does not wait for the download.
+void loadEngine().catch(() => undefined);
 let lastWidth = document.documentElement.clientWidth;
 window.addEventListener("resize", () => {
   const width = document.documentElement.clientWidth;
