@@ -579,7 +579,9 @@ canvasEl.addEventListener(
 // Drag on empty canvas: pan.
 let drag: { x: number; y: number; moved: boolean } | null = null;
 canvasEl.addEventListener("pointerdown", (event) => {
-  if ((event.target as HTMLElement).closest(".col")) return;
+  // Pointer capture would retarget the click to the canvas, so boxes and
+  // ruler labels never start a pan.
+  if (event.button !== 0 || (event.target as HTMLElement).closest(".col, .ruler-inner")) return;
   drag = { x: event.clientX, y: event.clientY, moved: false };
   canvasEl.setPointerCapture(event.pointerId);
   canvasEl.classList.add("panning");
