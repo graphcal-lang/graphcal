@@ -917,14 +917,15 @@ function editCell(
 ): Promise<boolean> {
   if (row === null) return editExpr(s, node, literalFor(node, text));
   const at = sourceOf(s, node);
-  if (at === null || node.source === null) {
+  const range = node.source?.expr_range ?? null;
+  if (at === null || range === null) {
     showNote("this value cannot be edited");
     return Promise.resolve(false);
   }
   const { file, source } = at;
   let rewritten: string;
   try {
-    rewritten = replaceTableCell(source, node.source.line, row, sub, literalFor(node, text));
+    rewritten = replaceTableCell(source, range, row, sub, literalFor(node, text));
   } catch (error) {
     showNote(error instanceof EditError ? error.message : errorMessage(error));
     return Promise.resolve(false);
