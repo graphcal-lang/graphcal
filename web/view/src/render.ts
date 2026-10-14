@@ -60,7 +60,7 @@ function renderHead(column: Column, folded = false): HTMLElement {
   return head;
 }
 
-/** A value as spans: magnitude with its unit set apart, pass / fail for an assert, a shape for a table. */
+/** A value as spans: magnitude with its unit set apart, pass / fail for an assert. */
 function valueSpans(column: Column): HTMLElement[] {
   const value = column.node.value;
   if (value && value.kind === "quantity" && value.unit) {
@@ -71,16 +71,6 @@ function valueSpans(column: Column): HTMLElement[] {
   }
   if (value && value.kind === "bool" && column.node.kind === "assert") {
     return [el("span", value.value ? "pass" : "fail", value.display.toLowerCase())];
-  }
-  if (value && value.kind === "indexed") {
-    const rows = column.rows.length;
-    return [
-      el(
-        "span",
-        "shape",
-        column.subs.length > 0 ? `${rows} × ${column.subs.length}` : String(rows),
-      ),
-    ];
   }
   return [el("span", "magnitude", displayOf(value))];
 }
@@ -156,17 +146,48 @@ function renderBox(column: Column): HTMLElement {
   return root;
 }
 
-/** A folded column: just the two-line head, its value kept on the second line. */
-function renderFolded(column: Column): HTMLElement {
+/**
+ * A folded column. A scalar box keeps its two-line head with the value on
+ * the second line; a table becomes a narrow vertical strip (mark on top,
+ * the name written downwards, one tick per visible row), so folding it
+ * gives the width back while its rows stay aligned with the band's.
+ */
+function renderFolded(column: Column, band: Band, hidden: Hidden): HTMLElement {
   const root = el("div", `col role-${column.role} folded`);
   root.dataset.node = column.node.id;
   root.title = `${column.node.name} · click to expand`;
-  root.append(renderHead(column, true));
+  if (column.rows.length === 0) {
+    root.append(renderHead(column, true));
+    return root;
+  }
+  root.classList.add("strip");
+  const head = el("div", `col-head fold-head kind-${column.node.kind}`);
+  head.dataset.node = column.node.id;
+  head.append(el("span", "mark", MARK[column.node.kind]));
+  root.append(head);
+  const strip = el("div", "fold-strip");
+  strip.append(el("span", "fold-name", column.node.name));
+  const ticks = el("div", "fold-ticks");
+  const inBand = band.axis !== null;
+  const hasSub = inBand ? band.columns.some((c) => c.subs.length > 0) : column.subs.length > 0;
+  if (hasSub) ticks.append(el("span", "fold-sub"));
+  for (const run of rowRuns(column.rows, hidden.get(column.node.axes[0] ?? ""))) {
+    if (run.kind === "gap") {
+      ticks.append(el("span", "fold-gap"));
+      continue;
+    }
+    const tick = el("span", "fold-tick");
+    tick.dataset.node = column.node.id;
+    tick.dataset.row = run.label;
+    ticks.append(tick);
+  }
+  strip.append(ticks);
+  root.append(strip);
   return root;
 }
 
 export function renderColumn(column: Column, band: Band, options: RenderOptions): HTMLElement {
-  if (options.folded.has(column.node.id)) return renderFolded(column);
+  if (options.folded.has(column.node.id)) return renderFolded(column, band, options.hidden);
   if (column.rows.length === 0) return renderBox(column);
   return renderTable(column, band, options.hidden);
 }

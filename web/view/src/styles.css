@@ -742,9 +742,6 @@ body {
   font-size: 11px;
 }
 .head-value .unit,
-.head-value .shape {
-  font-size: 10px;
-}
 .pass {
   color: var(--bool);
 }
@@ -756,9 +753,58 @@ body {
   background: var(--sel-cell-weak);
 }
 
-/* folded column: the head alone */
+/* folded column: a scalar box keeps its two-line head */
 .col.folded {
   min-width: 0;
+}
+/* folded table: a narrow strip, the name written downwards, a tick per row */
+.col.folded.strip {
+  min-width: 22px;
+  width: 22px;
+}
+.fold-head {
+  padding: 6px 0 0;
+  align-items: center;
+}
+.fold-strip {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+}
+.fold-name {
+  position: absolute;
+  top: 8px;
+  left: 50%;
+  transform: translateX(-50%) rotate(90deg);
+  transform-origin: center;
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text);
+  white-space: nowrap;
+  pointer-events: none;
+}
+.fold-ticks {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+.fold-sub {
+  height: var(--sub-h);
+}
+.fold-tick,
+.fold-gap {
+  width: 3px;
+  border-radius: 2px;
+}
+.fold-tick {
+  height: var(--row-h);
+}
+.fold-gap {
+  height: var(--gap-h);
+}
+.fold-tick.row-sel {
+  background: var(--sel);
 }
 
 /* ---- wires ---- */
