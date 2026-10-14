@@ -550,7 +550,10 @@ function refit(): void {
   resetCamera();
   render();
   if (ws.mode === "overview") fitOverview();
-  else foldToFit(mainSheet(ws));
+  else {
+    foldToFit(mainSheet(ws));
+    centerOverflow();
+  }
   for (const button of modeButtons) {
     button.classList.toggle("active", button.dataset.mode === ws.mode);
   }
@@ -559,6 +562,15 @@ function refit(): void {
 
 function overflows(): boolean {
   return panesEl.scrollWidth > canvasEl.clientWidth || panesEl.scrollHeight > canvasEl.clientHeight;
+}
+
+/** A sheet that does not fit even folded shows its middle, not its left edge. */
+function centerOverflow(): void {
+  const width = canvasEl.clientWidth;
+  const height = canvasEl.clientHeight;
+  camera.x = panesEl.scrollWidth > width ? Math.round((width - panesEl.scrollWidth) / 2) : 0;
+  camera.y = panesEl.scrollHeight > height ? Math.round((height - panesEl.scrollHeight) / 2) : 0;
+  applyCamera();
 }
 
 /**

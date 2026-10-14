@@ -420,13 +420,6 @@ body {
   display: flex;
   flex-direction: column;
 }
-.ruler-none {
-  font-family: var(--mono);
-  font-size: 11px;
-  color: var(--faint);
-  padding: 20px 0 0 4px;
-  white-space: pre;
-}
 .ruler-box {
   height: var(--head-h);
   background: var(--node-head);

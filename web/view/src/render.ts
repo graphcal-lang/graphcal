@@ -199,10 +199,7 @@ export function renderColumn(column: Column, band: Band, options: RenderOptions)
 function renderRuler(band: Band, hidden: Hidden): HTMLElement {
   const ruler = el("div", "ruler");
   ruler.style.width = `${RULER_WIDTH}px`;
-  if (band.axis === null) {
-    if (band.index === 0) ruler.append(el("div", "ruler-none", "no axis  [ ]"));
-    return ruler;
-  }
+  if (band.axis === null) return ruler;
   const inner = el("div", "ruler-inner");
   inner.style.width = `${RULER_WIDTH}px`;
   const hiddenCount = hidden.get(band.axis)?.size ?? 0;

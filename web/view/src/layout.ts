@@ -105,16 +105,9 @@ export function computeLayout(model: ViewModel): Layout {
   );
   const order = new Map(model.nodes.map((n, i) => [n.id, i]));
 
-  // An axis is unrolled only when shared as the first axis by several nodes.
-  const firstAxisCount = new Map<string, number>();
-  for (const node of model.nodes) {
-    const axis = node.axes[0];
-    if (axis !== undefined) firstAxisCount.set(axis, (firstAxisCount.get(axis) ?? 0) + 1);
-  }
-  const bandAxisOf = (node: ViewNode): string | null => {
-    const axis = node.axes[0];
-    return axis !== undefined && (firstAxisCount.get(axis) ?? 0) >= 2 ? axis : null;
-  };
+  // Every node with an axis goes into the band of its first axis; the
+  // no-axis band holds scalars only.
+  const bandAxisOf = (node: ViewNode): string | null => node.axes[0] ?? null;
 
   const grouped = new Map<string | null, ViewNode[]>();
   for (const node of model.nodes) {
