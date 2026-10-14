@@ -90,6 +90,6 @@ fn view_reports_a_file_that_does_not_compile() {
     std::fs::write(&file, "node x: Power = @missing;\n").unwrap();
     let output = run(&["view", file.to_str().unwrap()]);
     assert_eq!(output.status.code(), Some(2));
-    assert!(output.stdout.is_empty());
-    assert!(!output.stderr.is_empty());
+    assert_eq!(output.stdout, [] as [u8; 0]);
+    assert_ne!(output.stderr, [] as [u8; 0]);
 }
