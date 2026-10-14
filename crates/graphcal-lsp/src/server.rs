@@ -24,7 +24,9 @@ use tower_lsp::lsp_types::{
 use tower_lsp::{Client, ClientSocket, LanguageServer, LspService, Server};
 
 use crate::analysis::AnalysisResult;
-use crate::analysis_pipeline::{AnalysisRun, OpenBuffer, run_analysis_with_cancellation};
+use crate::analysis_pipeline::{
+    AnalysisRun, OpenBuffer, ViewModelDemand, run_analysis_with_cancellation,
+};
 use crate::analysis_schedule_state::AnalysisScheduleState;
 use crate::client_capabilities::{ClientFeatureSupport, DocumentSymbolShape, WorkspaceEditShape};
 use crate::convert::position_to_byte_offset;
@@ -730,6 +732,11 @@ async fn analyze_store_publish_once(
     }
 
     let uri_for_analysis = uri.clone();
+    let view = if client_features.view_model_changes.is_supported() {
+        ViewModelDemand::Project
+    } else {
+        ViewModelDemand::Skip
+    };
     let source = registration.source;
     let worker_plugin_host = Arc::clone(plugin_host);
     let mut task = tokio::task::spawn_blocking(move || {
@@ -743,6 +750,7 @@ async fn analyze_store_publish_once(
             &open_buffers,
             &worker_plugin_host,
             &input_snapshot,
+            view,
             &cancellation,
         )
     });
@@ -1494,8 +1502,9 @@ pub(crate) fn service() -> (LspService<Backend>, ClientSocket) {
 }
 
 /// `graphcal/viewModel`: the view model of a document, as of its latest
-/// analysis. `null` until the document has been analyzed, or when its
-/// project did not check.
+/// analysis. `null` until the document has been analyzed, when its project
+/// did not check, or when the client did not declare
+/// `experimental.graphcal.viewModelChanges` (analysis then skips the view).
 enum ViewModelRequest {}
 
 impl ViewModelRequest {
@@ -3510,20 +3519,21 @@ node momentum: Force * Time = @mass * @velocity;
             root_revision,
             HashMap::from([(dependency.clone(), old_dependency_revision)]),
         );
+        let analyze = |overlay: &[OpenBuffer], input: &AnalysisInputSnapshot| {
+            let unbounded = CancellationToken::unbounded();
+            let host = test_plugin_host();
+            let view = ViewModelDemand::Skip;
+            run_analysis_with_cancellation(
+                &main_uri, &main_text, overlay, host, input, view, &unbounded,
+            )
+            .unwrap()
+            .analysis
+        };
         let overlay = vec![OpenBuffer {
             path: lib_path,
             text: Arc::new("pub const node y: Dimensionless = 2.0;\n".to_string()),
         }];
-        let analysis = run_analysis_with_cancellation(
-            &main_uri,
-            &main_text,
-            &overlay,
-            test_plugin_host(),
-            &input,
-            &CancellationToken::unbounded(),
-        )
-        .unwrap()
-        .analysis;
+        let analysis = analyze(&overlay, &input);
         assert!(analysis.has_no_diagnostics());
         assert!(
             analysis
@@ -3549,16 +3559,7 @@ node momentum: Force * Time = @mass * @velocity;
             path: dir.path().join("src/fresh/lib.gcl"),
             text: Arc::new("pub const node q: Dimensionless = 4.0;\n".to_string()),
         }];
-        let refreshed = run_analysis_with_cancellation(
-            &main_uri,
-            &main_text,
-            &refreshed_overlay,
-            test_plugin_host(),
-            &refreshed_input,
-            &CancellationToken::unbounded(),
-        )
-        .unwrap()
-        .analysis;
+        let refreshed = analyze(&refreshed_overlay, &refreshed_input);
         assert!(!refreshed.has_no_diagnostics());
         let use_offset = main_text.rfind('y').unwrap();
         assert!(goto_definition::goto_definition(&analysis, &main_uri, use_offset).is_some());

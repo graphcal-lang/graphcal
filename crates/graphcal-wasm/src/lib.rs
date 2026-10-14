@@ -32,7 +32,7 @@ pub use output::{
 };
 pub use prepared::{
     BindingErrorView, ControlView, EvaluateOutcome, EvaluateReportOutcome, ParameterPortView,
-    PrepareOutcome, PreparedPlayground, prepare, prepare_bundle,
+    PrepareOutcome, PreparedPlayground, prepare, prepare_bundle, prepare_view,
 };
 pub use project::{
     MAX_PLAYGROUND_CONTENT_BYTES, MAX_PLAYGROUND_FILE_BYTES, MAX_PLAYGROUND_FILES,

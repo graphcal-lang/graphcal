@@ -626,13 +626,10 @@ impl NodeBuilder<'_> {
         let expr = input
             .file
             .and_then(|file| definition.and_then(|span| slice(file.text, span)));
-        let source = input.file.map(|file| {
-            let index = Utf16LineIndex::new(file.text);
-            ViewSource {
-                file: Some(file.name.to_string()),
-                line: index.position(span.offset()).line.saturating_add(1),
-                expr_range: definition.map(|span| index.range(span.offset(), span.len()).into()),
-            }
+        let source = input.file.map(|file| ViewSource {
+            file: Some(file.name.to_string()),
+            line: file.lines.position(span.offset()).line.saturating_add(1),
+            expr_range: definition.map(|span| file.lines.range(span.offset(), span.len()).into()),
         });
 
         let binding = ValueBinding {
@@ -759,6 +756,8 @@ impl<'e> EvaluatedValues<'e> {
 struct SourceFiles<'p> {
     project: &'p LoadedProject,
     names: HashMap<&'p DagId, String>,
+    /// Each file's line index: one scan per file, not one per declaration.
+    lines: HashMap<&'p DagId, Utf16LineIndex<'p>>,
 }
 
 impl<'p> SourceFiles<'p> {
@@ -768,6 +767,7 @@ impl<'p> SourceFiles<'p> {
         root_dir: Option<&Path>,
     ) -> Result<Self, ForeignSourceId> {
         let mut names = HashMap::new();
+        let mut lines = HashMap::new();
         for file in project.files().iter() {
             // The name is a project-relative path with `/` on every platform: it is
             // the wire format the view and the editors key their files by.
@@ -788,8 +788,13 @@ impl<'p> SourceFiles<'p> {
                     .to_string(),
             };
             names.insert(file.dag_id(), name);
+            lines.insert(file.dag_id(), Utf16LineIndex::new(file.source().as_str()));
         }
-        Ok(Self { project, names })
+        Ok(Self {
+            project,
+            names,
+            lines,
+        })
     }
 
     fn file_of(&self, module: &DagId) -> Option<SourceFile<'_>> {
@@ -797,6 +802,7 @@ impl<'p> SourceFiles<'p> {
         Some(SourceFile {
             name: self.names.get(file.dag_id())?.as_str(),
             text: file.source().as_str(),
+            lines: self.lines.get(file.dag_id())?,
         })
     }
 
@@ -805,11 +811,12 @@ impl<'p> SourceFiles<'p> {
     }
 }
 
-/// One source file: its view name and text.
+/// One source file: its view name, text, and line index.
 #[derive(Clone, Copy)]
 struct SourceFile<'p> {
     name: &'p str,
     text: &'p str,
+    lines: &'p Utf16LineIndex<'p>,
 }
 
 /// The unit an unevaluated quantity declaration would be shown in.
