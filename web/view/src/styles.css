@@ -1482,16 +1482,29 @@ body {
   border-color: var(--bool);
   box-shadow: 0 0 0 1px var(--bool);
 }
+/* A value changed by a change upstream: lit the way a selection's trace is, in green. */
 .col.diff-value {
   border-color: var(--bool);
-  border-style: dashed;
+}
+.col.diff-value .col-head {
+  background: rgba(124, 198, 124, 0.14);
 }
 .col.sel.diff-added,
 .col.sel.diff-expr,
 .col.sel.diff-value {
   border-color: var(--sel);
-  border-style: solid;
   box-shadow: 0 0 0 1px var(--sel);
+}
+.col.sel.diff-value .col-head {
+  background: var(--sel-bg);
+}
+.wire.diff {
+  stroke: var(--bool);
+  opacity: 0.8;
+}
+.wire-dot.diff,
+.arrow-diff {
+  fill: var(--bool);
 }
 .diff-tag {
   margin-left: 6px;

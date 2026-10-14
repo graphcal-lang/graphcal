@@ -9,7 +9,14 @@ import {
   type Layout,
   type Zone,
 } from "./layout.ts";
-import { diffModels, markChanges, previousValue, summarize, type ModelDiff } from "./compare.ts";
+import {
+  diffModels,
+  markChangedWires,
+  markChanges,
+  previousValue,
+  summarize,
+  type ModelDiff,
+} from "./compare.ts";
 import { crossLinks, drawCrossWires, extraLanes, type CrossSheet } from "./cross.ts";
 import { SourceEditor, type Inlay } from "./editor.ts";
 import { Explorer, type RefSource } from "./explorer.ts";
@@ -365,6 +372,8 @@ function clearHighlights(s: Sheet): void {
 function applySelection(s: Sheet): void {
   clearHighlights(s);
   renderFormula();
+  const diff = diffOf(s);
+  if (diff) markChangedWires(s.wiresEl, diff);
   const { selection, model, layout, viewEl, wiresEl } = s;
   if (!selection) return;
 
@@ -417,6 +426,7 @@ function applySelection(s: Sheet): void {
   for (const w of wiresEl.querySelectorAll<SVGElement>(".wire, .wire-dot")) {
     const direct = result.edges.get(`${w.dataset.from}->${w.dataset.to}`);
     if (direct === undefined) continue;
+    w.classList.remove("diff");
     w.classList.add("lit");
     if (direct) w.classList.add("direct");
     if (w.classList.contains("wire")) w.setAttribute("marker-end", "url(#arrow-lit)");

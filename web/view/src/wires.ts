@@ -288,7 +288,11 @@ export function drawWires(
   svg.style.left = `${view.offsetLeft}px`;
   svg.style.top = `${view.offsetTop}px`;
   const defs = document.createElementNS(SVG_NS, "defs");
-  defs.append(marker("arrow", "arrow-idle"), marker("arrow-lit", "arrow-lit"));
+  defs.append(
+    marker("arrow", "arrow-idle"),
+    marker("arrow-lit", "arrow-lit"),
+    marker("arrow-diff", "arrow-diff"),
+  );
   svg.append(defs);
   const laneY = (channel: number, lane: number): number => {
     const el = view.querySelector<HTMLElement>(`.channel[data-channel="${channel}"]`);
