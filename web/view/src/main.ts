@@ -122,10 +122,10 @@ function resetCamera(): void {
 const modeButtons = [...document.querySelectorAll<HTMLButtonElement>("[data-mode]")];
 
 /**
- * fit: everything open, the no-axis boxes packed to the width; a sheet still
- * wider than the canvas (its tables cannot shrink) is scaled down to the
- * width and panned vertically. overview: scale the whole stage down to fit
- * both ways.
+ * fit: text at full size; low-activity intermediate nodes are folded, one by
+ * one, until the sheet fits the canvas, or until none are left to fold (then
+ * it overflows and is panned). overview: everything open, the whole stage
+ * scaled down to fit.
  */
 type Mode = "fit" | "overview";
 
@@ -550,19 +550,33 @@ function refit(): void {
   resetCamera();
   render();
   if (ws.mode === "overview") fitOverview();
-  else fitWidth();
+  else foldToFit(mainSheet(ws));
   for (const button of modeButtons) {
     button.classList.toggle("active", button.dataset.mode === ws.mode);
   }
   zoomEl.classList.remove("active");
 }
 
-/** Scale the stage down to the canvas width when it is wider; never up. */
-function fitWidth(): void {
-  camera.scale = Math.min(1, canvasEl.clientWidth / Math.max(1, panesEl.scrollWidth));
-  camera.x = 0;
-  camera.y = 0;
-  applyCamera();
+function overflows(): boolean {
+  return panesEl.scrollWidth > canvasEl.clientWidth || panesEl.scrollHeight > canvasEl.clientHeight;
+}
+
+/**
+ * Fit mode's folding: the sheet's intermediate nodes (never an output) are
+ * folded in order of activity, fewest consumers first and deepest first
+ * among equals, until the stage fits the canvas. What is still too wide with
+ * every candidate folded overflows, and that is fine.
+ */
+function foldToFit(s: Sheet): void {
+  const candidates = [...s.base.columns.values()]
+    .filter((c) => c.foldable)
+    .sort((a, b) => a.activity - b.activity || b.depth - a.depth)
+    .map((c) => c.node.id);
+  for (const id of candidates) {
+    if (!overflows()) break;
+    s.folded.add(id);
+    render();
+  }
 }
 
 /** Scale the whole stage down to fit the canvas, centred. */
@@ -576,15 +590,18 @@ function fitOverview(): void {
 }
 
 /**
- * The canvas changed size: lay the sheets out for the new width, keeping the
- * folds; the mode's scale is applied again unless the zoom was set by hand.
+ * The canvas changed size: the mode is applied again for the new width,
+ * unless the zoom was set by hand, in which case the sheets are just laid
+ * out again with their folds kept.
  */
 function relayout(): void {
   if (!ws) return;
-  render();
-  if (zoomEl.classList.contains("active")) return;
-  if (ws.mode === "overview") fitOverview();
-  else fitWidth();
+  if (zoomEl.classList.contains("active")) {
+    render();
+    return;
+  }
+  // The mode is applied again for the new width: fit folds afresh, overview rescales.
+  refit();
 }
 
 /** `package / a.gcl › b.gcl`: the files opened in turn; an earlier one goes back. */

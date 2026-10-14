@@ -28,6 +28,10 @@ export interface Column {
   rows: string[];
   /** Sub-column labels (second axis), if any. */
   subs: string[];
+  /** May be folded by fit mode on its own: an intermediate node (never an output). */
+  foldable: boolean;
+  /** How much the node matters to the rest of the file; low activity folds first. */
+  activity: number;
 }
 
 export interface Band {
@@ -148,6 +152,7 @@ export function computeLayout(model: ViewModel): Layout {
     nodes.forEach((node, position) => {
       const ownAxis = axis === null ? node.axes[0] : undefined;
       const subAxis = axis === null ? node.axes[1] : node.axes[1];
+      const consumers = users.get(node.id) ?? [];
       const column: Column = {
         node,
         role: roleOfNode(node),
@@ -157,6 +162,9 @@ export function computeLayout(model: ViewModel): Layout {
         tierRow: 0,
         rows: axis !== null ? band.labels : ownAxis ? (labelsOf.get(ownAxis) ?? []) : [],
         subs: subAxis ? (labelsOf.get(subAxis) ?? []) : [],
+        foldable: node.kind === "node" && roleOfNode(node) === "node",
+        // Consumers first, then how far the value travels (depth from params).
+        activity: consumers.length * 10 + (depths.get(node.id) ?? 0),
       };
       band.columns.push(column);
       columns.set(node.id, column);
