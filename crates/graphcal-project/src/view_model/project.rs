@@ -31,7 +31,7 @@ use crate::loader::{LoadedFile, LoadedProject};
 use crate::project_compiler::CheckedProject;
 
 use super::model::{
-    ViewIndex, ViewModel, ViewModule, ViewNode, ViewNodeKind, ViewSource, ViewValue,
+    ViewIndex, ViewInstance, ViewModel, ViewModule, ViewNode, ViewNodeKind, ViewSource, ViewValue,
 };
 use super::value::{CoherentUnits, common_unit, view_value};
 
@@ -368,7 +368,7 @@ impl<'p> Scope<'p> {
                     IncludeAlias {
                         target: projection.target,
                         template: template.clone(),
-                        instance: instance_label(record, template),
+                        instance: view_instance(record, template),
                     },
                 );
             }
@@ -403,7 +403,7 @@ impl<'p> Scope<'p> {
                             .instance
                             .exposed_name(projection.projection)
                             .to_string(),
-                        instance: Some(instance_label(record, template)),
+                        instance: Some(view_instance(record, template)),
                     },
                 );
             }
@@ -412,19 +412,26 @@ impl<'p> Scope<'p> {
     }
 }
 
-/// The name the view shows for an include instance: its alias
-/// (`include lib() as l`), or the template's file name when the include
-/// is anonymous.
-fn instance_label(
+/// An include instance as the view shows it: named by its alias
+/// (`include lib() as l`), or the template's file name when the include is
+/// anonymous, and whether the include binds anything.
+fn view_instance(
     record: &graphcal_compiler::ir::instance::HirInstanceRecord,
     template: &DagId,
-) -> String {
-    record
-        .instance
-        .id()
-        .scope()
-        .alias()
-        .map_or_else(|| template.leaf().to_string(), ToString::to_string)
+) -> ViewInstance {
+    let substitution = record.instance.substitution();
+    ViewInstance {
+        name: record
+            .instance
+            .id()
+            .scope()
+            .alias()
+            .map_or_else(|| template.leaf().to_string(), ToString::to_string),
+        bound: !record.value_bindings.is_empty()
+            || !substitution.indexes.is_empty()
+            || !substitution.types.is_empty()
+            || !substitution.dimensions.is_empty(),
+    }
 }
 
 /// A root declaration standing for an include instance's output.
@@ -433,15 +440,15 @@ struct IncludeAlias {
     target: ResolvedDeclName,
     /// The template the instance was materialized from.
     template: DagId,
-    /// The instance's name in the view.
-    instance: String,
+    /// The instance as the view shows it.
+    instance: ViewInstance,
 }
 
 /// How the root spells a declaration of another module.
 struct ExternalName {
     id: String,
     /// The include instance it is read through, if any.
-    instance: Option<String>,
+    instance: Option<ViewInstance>,
 }
 
 /// What each local declaration reads: dataflow edges for values, the
@@ -692,7 +699,7 @@ struct NodeInput<'a> {
     module: String,
     /// Overrides the kind derived from the declaration (for externals).
     kind: Option<ViewNodeKind>,
-    instance: Option<String>,
+    instance: Option<ViewInstance>,
     is_public: bool,
     deps: Vec<String>,
     file: Option<SourceFile<'a>>,

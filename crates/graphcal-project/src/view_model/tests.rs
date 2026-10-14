@@ -125,7 +125,9 @@ fn power_max_structure_and_values() {
     assert_eq!(budget.kind, ViewNodeKind::External);
     assert_eq!(budget.module, "power_project.eps");
     assert_eq!(budget.deps, Vec::<String>::new());
-    assert_eq!(budget.instance.as_deref(), Some("eps"));
+    // `include power_project.eps()` binds nothing.
+    let instance = budget.instance.as_ref().map(|i| (i.name.as_str(), i.bound));
+    assert_eq!(instance, Some(("eps", false)));
     assert_eq!(budget.source.as_ref().unwrap().line, 23);
     assert!(
         budget
@@ -296,4 +298,29 @@ fn node_references_reject_a_shared_id_and_a_dangling_dependency() {
         Err(ViewProjectionError::UnknownDependency { node, dependency })
             if node == "b" && dependency == "a"
     ));
+}
+
+#[test]
+fn an_include_with_arguments_is_marked_bound() {
+    let view = evaluated_view_of_source(
+        "\
+dag lib {
+    param gain: Dimensionless = 1.0;
+    pub node out: Dimensionless = @gain;
+}
+include lib(gain: 2.0) as p;
+include lib() as q;
+node y: Dimensionless = @p::out + @q::out;
+",
+    );
+    let instance = |id: &str| node(&view, id).instance.clone().expect("an include member");
+    assert_eq!(instance("p::out").name, "p");
+    assert!(instance("p::out").bound);
+    assert_eq!(instance("q::out").name, "q");
+    assert!(!instance("q::out").bound);
+    assert_eq!(
+        node(&view, "y").instance.as_ref().map(|i| i.name.as_str()),
+        None
+    );
+    assert_eq!(display_of(&view, "p::out").as_deref(), Some("2"));
 }

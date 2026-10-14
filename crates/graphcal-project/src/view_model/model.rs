@@ -80,11 +80,10 @@ pub struct ViewNode {
     pub expr: Option<String>,
     /// The aggregation that removed an axis of a dependency. Not derived yet.
     pub reduce: Option<ViewReduce>,
-    /// For an external read through an `include`: the instance's name
-    /// (`eps` in `include power_project.eps() …`, or the alias of
-    /// `include … as e`). `None` for the module's own declarations and for
-    /// imports, which have no instance.
-    pub instance: Option<String>,
+    /// For an external read through an `include`: the instance it is read
+    /// through. `None` for the module's own declarations and for imports,
+    /// which have no instance.
+    pub instance: Option<ViewInstance>,
     /// The declaration's `///` documentation: one line per `///` line,
     /// joined with newlines. The view shows its first line beside the name.
     pub doc: Option<String>,
@@ -92,6 +91,18 @@ pub struct ViewNode {
     pub source: Option<ViewSource>,
     /// The evaluated value, when available.
     pub value: Option<ViewValue>,
+}
+
+/// An include instance a node is read through.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ViewInstance {
+    /// The instance's name: `eps` in `include power_project.eps() …`, or
+    /// the alias of `include … as e`.
+    pub name: String,
+    /// Whether the include binds any of the template's params or Static
+    /// parameters. A bound instance's values differ from those of its
+    /// module evaluated alone, which is all a view of that module shows.
+    pub bound: bool,
 }
 
 /// An aggregation over one axis.

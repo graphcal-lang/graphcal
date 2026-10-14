@@ -26,7 +26,7 @@ import { GitHubHost } from "./githubHost.ts";
 import type { Host, NoteKind } from "./host.ts";
 import { TokenStore } from "./login.ts";
 import type { ViewModel, ViewNode } from "./model.ts";
-import { depthsOf, sameKey, type PaneKey } from "./panes.ts";
+import { depthsOf, keyOf, sameKey, type PaneKey } from "./panes.ts";
 import { parseRoute } from "./route.ts";
 import { EditError, replaceExpr, replaceRange, replaceTableCell } from "./source.ts";
 import { EmptyHost, mountStart } from "./start.ts";
@@ -1166,8 +1166,9 @@ function rowMenu(s: Sheet, label: HTMLElement, event: MouseEvent): void {
 
 /** `Open eps.gcl` goes there (the trail leads back); `Pin eps beside` opens it as a pane. */
 function externalMenu(w: Workspace, node: ViewNode, event: MouseEvent): void {
-  const key = { module: node.module, instance: node.instance };
+  const key = keyOf(node);
   const file = fileNameOfModule(node.module);
+  const name = node.instance?.name ?? file;
   const pinned = w.sheets.find((other) => sameKey(other.key, key));
   openMenu(event.clientX, event.clientY, [
     {
@@ -1178,8 +1179,15 @@ function externalMenu(w: Workspace, node: ViewNode, event: MouseEvent): void {
       },
     },
     pinned
-      ? { label: `Unpin ${node.instance ?? file}`, run: () => unpin(pinned) }
-      : { label: `Pin ${node.instance ?? file} beside`, run: () => pin(key) },
+      ? { label: `Unpin ${name}`, run: () => unpin(pinned) }
+      : node.instance?.bound === true
+        ? // A pane would show the module evaluated alone, not this include's arguments.
+          {
+            label: `Pin ${name} beside: not yet for an include with arguments`,
+            disabled: true,
+            run: () => undefined,
+          }
+        : { label: `Pin ${name} beside`, run: () => pin(key) },
   ]);
 }
 

@@ -65,10 +65,12 @@ export const viewNodeSchema = z.object({
   /** The aggregation that removed an axis of a dependency, if any. */
   reduce: z.object({ op: reduceOpSchema, axis: z.string() }).nullable(),
   /**
-   * For an external: the include instance it is read from (`eps` in
-   * `include power_project.eps() …`); null for an import, which has no instance.
+   * For an external: the include instance it is read from, named as `eps` in
+   * `include power_project.eps() …`; null for an import, which has no instance.
+   * A bound instance (the include passes arguments) has values of its own,
+   * which no view of its module evaluated alone shows.
    */
-  instance: z.string().nullable(),
+  instance: z.object({ name: z.string(), bound: z.boolean() }).nullable(),
   /** The declaration's `///` documentation, lines joined with newlines. */
   doc: z.string().nullable().optional(),
   source: z
