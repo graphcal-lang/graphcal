@@ -765,9 +765,16 @@ impl<'p> SourceFiles<'p> {
     ) -> Result<Self, ForeignSourceId> {
         let mut names = HashMap::new();
         for file in project.files().iter() {
+            // The name is a project-relative path with `/` on every platform: it is
+            // the wire format the view and the editors key their files by.
             let relative = root_dir
                 .and_then(|root| file.path().strip_prefix(root).ok())
-                .map(|path| path.to_string_lossy().into_owned());
+                .map(|path| {
+                    path.components()
+                        .map(|c| c.as_os_str().to_string_lossy())
+                        .collect::<Vec<_>>()
+                        .join("/")
+                });
             let name = match relative {
                 Some(relative) => relative,
                 None => checked

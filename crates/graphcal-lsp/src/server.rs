@@ -1496,22 +1496,22 @@ pub(crate) fn service() -> (LspService<Backend>, ClientSocket) {
 /// `graphcal/viewModel`: the view model of a document, as of its latest
 /// analysis. `null` until the document has been analyzed, or when its
 /// project did not check.
-pub enum ViewModelRequest {}
+pub(crate) enum ViewModelRequest {}
 
 impl ViewModelRequest {
-    pub const METHOD: &'static str = "graphcal/viewModel";
+    pub(crate) const METHOD: &'static str = "graphcal/viewModel";
 }
 
 /// Parameters of [`ViewModelRequest`].
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct ViewModelParams {
-    pub text_document: tower_lsp::lsp_types::TextDocumentIdentifier,
+pub(crate) struct ViewModelParams {
+    pub(crate) text_document: tower_lsp::lsp_types::TextDocumentIdentifier,
 }
 
 /// `graphcal/viewModelDidChange`: a document's analysis completed, so a
 /// view showing it should request the model again.
-pub enum ViewModelDidChange {}
+pub(crate) enum ViewModelDidChange {}
 
 impl tower_lsp::lsp_types::notification::Notification for ViewModelDidChange {
     const METHOD: &'static str = "graphcal/viewModelDidChange";
@@ -1520,8 +1520,8 @@ impl tower_lsp::lsp_types::notification::Notification for ViewModelDidChange {
 
 /// Parameters of [`ViewModelDidChange`].
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct ViewModelDidChangeParams {
-    pub uri: Url,
+pub(crate) struct ViewModelDidChangeParams {
+    pub(crate) uri: Url,
 }
 
 impl Backend {

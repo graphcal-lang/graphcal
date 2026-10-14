@@ -5,7 +5,7 @@
 //! optional evaluation) → view model → JSON. The view model is the wire
 //! boundary shared by the CLI, the language server, and the browser engine,
 //! so its fields are already rendered strings; every typed lookup happens in
-//! [`project`] before the model is built.
+//! `project.rs` before the model is built.
 //!
 //! The structure (nodes, axes, dependencies, source positions) comes from the
 //! checked program and is always complete. Values are attached per node from
