@@ -10,7 +10,9 @@ import { displayOf, oneLine, valueAt } from "./values.ts";
 export type NodeChange =
   | { kind: "added" }
   | { kind: "expr"; before: ViewNode }
-  | { kind: "value"; before: ViewNode };
+  | { kind: "value"; before: ViewNode }
+  /** Reads a changed node, directly or through others, but came out the same. */
+  | { kind: "downstream"; before: ViewNode };
 
 export interface ModelDiff {
   nodes: Map<string, NodeChange>;
@@ -45,6 +47,21 @@ export function diffModels(base: ViewModel | null, head: ViewModel): ModelDiff {
     else if (!sameDefinition(old, node)) nodes.set(node.id, { kind: "expr", before: old });
     else if (!sameValue(old.value, node.value)) nodes.set(node.id, { kind: "value", before: old });
   }
+  // Everything downstream of a change is part of it, as a selection's trace
+  // reaches every dependent: a node whose inputs changed is lit even when its
+  // own value came out the same.
+  let grew = true;
+  while (grew) {
+    grew = false;
+    for (const node of head.nodes) {
+      if (nodes.has(node.id) || !node.deps.some((dep) => nodes.has(dep))) continue;
+      const old = before.get(node.id);
+      if (old) {
+        nodes.set(node.id, { kind: "downstream", before: old });
+        grew = true;
+      }
+    }
+  }
   const ids = new Set(head.nodes.map((n) => n.id));
   return { nodes, removed: base.nodes.filter((n) => !ids.has(n.id)) };
 }
@@ -53,13 +70,16 @@ export function diffModels(base: ViewModel | null, head: ViewModel): ModelDiff {
 export function summarize(diff: ModelDiff): string {
   let added = 0;
   let changed = 0;
+  let downstream = 0;
   for (const change of diff.nodes.values()) {
     if (change.kind === "added") added += 1;
+    else if (change.kind === "downstream") downstream += 1;
     else changed += 1;
   }
   const parts: string[] = [];
   if (added > 0) parts.push(`${added} new`);
   if (changed > 0) parts.push(`${changed} changed`);
+  if (downstream > 0) parts.push(`${downstream} downstream`);
   if (diff.removed.length > 0) {
     parts.push(`${diff.removed.length} removed (${diff.removed.map((n) => n.name).join(", ")})`);
   }
@@ -72,7 +92,7 @@ export function previousValue(
   value: Value | null,
   labels: readonly string[],
 ): Value | null | undefined {
-  if (!change || change.kind === "added") return undefined;
+  if (!change || change.kind === "added" || change.kind === "downstream") return undefined;
   const before = valueAt(change.before.value, labels);
   return sameValue(before, valueAt(value, labels)) ? undefined : before;
 }
@@ -108,7 +128,7 @@ export function markChanges(viewEl: HTMLElement, model: ViewModel, diff: ModelDi
       tag.textContent = "new";
       title.append(tag);
     }
-    if (change.kind === "added") continue;
+    if (change.kind === "added" || change.kind === "downstream") continue;
     for (const cell of col.querySelectorAll<HTMLElement>(".cell[data-row]")) {
       const labels = [cell.dataset.row, cell.dataset.sub].filter(
         (x): x is string => x !== undefined,

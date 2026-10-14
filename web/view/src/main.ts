@@ -335,11 +335,13 @@ function renderFormula(): void {
     const text =
       change.kind === "added"
         ? "new since the base"
-        : was === undefined
-          ? change.kind === "expr"
-            ? `was ${oneLine(change.before.expr ?? "")}`
-            : "value unchanged here"
-          : `was ${displayOf(was)}`;
+        : change.kind === "downstream"
+          ? "reads a change; value unchanged"
+          : was === undefined
+            ? change.kind === "expr"
+              ? `was ${oneLine(change.before.expr ?? "")}`
+              : "value unchanged here"
+            : `was ${displayOf(was)}`;
     line.append(span("formula-was", text));
   }
   show(line);

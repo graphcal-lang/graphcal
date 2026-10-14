@@ -61,6 +61,29 @@ describe("diffModels", () => {
     expect(summarize(diff)).toBe("1 new · 2 changed · 1 removed (gone)");
   });
 
+  test("everything downstream of a change is lit, even with the same value", () => {
+    const base = model([
+      node("p", "60.0 W", q("60")),
+      node("ok", "@need < @p", { kind: "bool", display: "PASS", value: true }, { deps: ["p"] }),
+      node("far", "@ok", { kind: "bool", display: "PASS", value: true }, { deps: ["ok"] }),
+      node("other", "1.0 W", q("1")),
+    ]);
+    const head = model([
+      node("p", "49.0 W", q("49")),
+      node("ok", "@need < @p", { kind: "bool", display: "PASS", value: true }, { deps: ["p"] }),
+      node("far", "@ok", { kind: "bool", display: "PASS", value: true }, { deps: ["ok"] }),
+      node("other", "1.0 W", q("1")),
+    ]);
+    const diff = diffModels(base, head);
+    expect([...diff.nodes.entries()].map(([id, c]) => `${id}:${c.kind}`)).toEqual([
+      "p:expr",
+      "ok:downstream",
+      "far:downstream",
+    ]);
+    expect(summarize(diff)).toBe("1 changed · 2 downstream");
+    expect(previousValue(diff.nodes.get("ok"), null, [])).toBeUndefined();
+  });
+
   test("a file new at the base has every node added", () => {
     const diff = diffModels(null, model([node("a", "1.0 W", q("1"))]));
     expect(diff.nodes.get("a")).toEqual({ kind: "added" });

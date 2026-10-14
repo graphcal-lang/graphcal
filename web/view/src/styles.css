@@ -1489,9 +1489,14 @@ body {
 .col.diff-value .col-head {
   background: rgba(124, 198, 124, 0.14);
 }
+/* Reads a change but came out the same: the lighter frame of a trace's far reach. */
+.col.diff-downstream {
+  border-color: rgba(124, 198, 124, 0.55);
+}
 .col.sel.diff-added,
 .col.sel.diff-expr,
-.col.sel.diff-value {
+.col.sel.diff-value,
+.col.sel.diff-downstream {
   border-color: var(--sel);
   box-shadow: 0 0 0 1px var(--sel);
 }
