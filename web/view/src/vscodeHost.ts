@@ -1,20 +1,42 @@
 // The VS Code webview's host: the extension sends models (projected by the
-// language server) and the sources they came from; edits go back as text
-// replacements on the editor's documents. The server re-analyzes the changed
-// document and the extension sends the fresh model, so an edit resolves at
-// once and the view updates when the model arrives.
+// language server) and copies of the sources they came from; edits go back as
+// text replacements on those copies. Each copy comes with its project and a
+// revision, and an edit names both, so the extension applies it to the
+// document the copy was read from, and only while that copy is current. The
+// extension answers every edit; the copy takes the edit once it is applied,
+// and the view updates when the server's fresh model arrives.
 import type { EditResult, Host, NoteKind, SourceEdit } from "./host.ts";
 import { parseViewModel, type ViewModel } from "./model.ts";
 
 /** Messages from the extension. */
 type Inbound =
-  | { type: "model"; model: unknown; sources: Record<string, string>; main: boolean }
+  | {
+      type: "model";
+      model: unknown;
+      /** The project root the model's file paths are relative to. */
+      project: string;
+      sources: Record<string, string>;
+      /** The revision of these copies, which an edit on one names. */
+      revision: number;
+      main: boolean;
+    }
+  | { type: "edited"; id: number; ok: true }
+  | { type: "edited"; id: number; ok: false; message: string }
   | { type: "note"; message: string | null };
 
 /** Messages to the extension. */
 type Outbound =
   | { type: "ready" }
-  | { type: "edit"; file: string; start: number; end: number; text: string }
+  | {
+      type: "edit";
+      id: number;
+      project: string;
+      file: string;
+      revision: number;
+      start: number;
+      end: number;
+      text: string;
+    }
   | { type: "request"; module: string };
 
 interface VsCodeApi {
@@ -45,12 +67,28 @@ export function minimalEdit(
   return { start, end: endBefore, text: after.slice(start, endAfter) };
 }
 
+/** A file as this webview holds it, and the revision of the copy it started from. */
+interface Copy {
+  text: string;
+  revision: number;
+}
+
+/** The key of a copy: two projects may both have `src/main.gcl`. */
+function copyKey(project: string, file: string): string {
+  return JSON.stringify([project, file]);
+}
+
 export class VsCodeHost implements Host {
   readonly modules: readonly string[] = [];
   readonly edited = false;
   private readonly api = acquireVsCodeApi();
   private readonly models = new Map<string, ViewModel>();
-  private readonly sources = new Map<string, string>();
+  /** The project each model came from; its file paths are relative to that root. */
+  private readonly projects = new WeakMap<ViewModel, string>();
+  private readonly copies = new Map<string, Copy>();
+  /** Edits sent and not answered yet, by id. */
+  private readonly pending = new Map<number, (result: EditResult) => void>();
+  private edits = 0;
   private readonly modelListeners: ((models: ViewModel[]) => void)[] = [];
   private readonly openListeners: ((module: string) => void)[] = [];
   private readonly noteListeners: ((message: string | null, kind: NoteKind) => void)[] = [];
@@ -73,13 +111,22 @@ export class VsCodeHost implements Host {
           return;
         }
         this.models.set(model.module.id, model);
-        for (const [file, text] of Object.entries(message.sources)) this.sources.set(file, text);
+        this.projects.set(model, message.project);
+        for (const [file, text] of Object.entries(message.sources)) {
+          this.copies.set(copyKey(message.project, file), { text, revision: message.revision });
+        }
         if (message.main && this.mainModule !== model.module.id) {
           this.mainModule = model.module.id;
           for (const listener of this.openListeners) listener(model.module.id);
         } else {
           for (const listener of this.modelListeners) listener([model]);
         }
+        return;
+      }
+      case "edited": {
+        const settle = this.pending.get(message.id);
+        this.pending.delete(message.id);
+        settle?.(message.ok ? { ok: true, models: [] } : { ok: false, message: message.message });
         return;
       }
       case "note":
@@ -98,18 +145,41 @@ export class VsCodeHost implements Host {
     return this.models.get(module) ?? null;
   }
 
-  source(_model: ViewModel, file: string): string | null {
-    return this.sources.get(file) ?? null;
+  source(model: ViewModel, file: string): string | null {
+    const project = this.projects.get(model);
+    if (project === undefined) return null;
+    return this.copies.get(copyKey(project, file))?.text ?? null;
   }
 
-  edit(_model: ViewModel, edit: SourceEdit): Promise<EditResult> {
-    const before = this.sources.get(edit.file);
-    if (before === undefined)
+  edit(model: ViewModel, edit: SourceEdit): Promise<EditResult> {
+    const project = this.projects.get(model);
+    const key = project === undefined ? null : copyKey(project, edit.file);
+    const copy = key === null ? undefined : this.copies.get(key);
+    if (project === undefined || key === null || copy === undefined) {
       return Promise.resolve({ ok: false, message: `unknown file ${edit.file}` });
-    const { start, end, text } = minimalEdit(before, edit.next);
-    this.sources.set(edit.file, edit.next);
-    this.api.postMessage({ type: "edit", file: edit.file, start, end, text });
-    return Promise.resolve({ ok: true, models: [] });
+    }
+    const { start, end, text } = minimalEdit(copy.text, edit.next);
+    this.edits += 1;
+    const id = this.edits;
+    return new Promise((resolve) => {
+      this.pending.set(id, (result) => {
+        // Applied: the copy is the edited text, unless a fresh copy came first.
+        if (result.ok && this.copies.get(key) === copy) {
+          this.copies.set(key, { text: edit.next, revision: copy.revision });
+        }
+        resolve(result);
+      });
+      this.api.postMessage({
+        type: "edit",
+        id,
+        project,
+        file: edit.file,
+        revision: copy.revision,
+        start,
+        end,
+        text,
+      });
+    });
   }
 
   request(module: string): void {
