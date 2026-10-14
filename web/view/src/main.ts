@@ -122,8 +122,10 @@ function resetCamera(): void {
 const modeButtons = [...document.querySelectorAll<HTMLButtonElement>("[data-mode]")];
 
 /**
- * fit: everything open at full size; the view may overflow and is panned.
- * overview: scale the whole stage down to fit.
+ * fit: everything open, the no-axis boxes packed to the width; a sheet still
+ * wider than the canvas (its tables cannot shrink) is scaled down to the
+ * width and panned vertically. overview: scale the whole stage down to fit
+ * both ways.
  */
 type Mode = "fit" | "overview";
 
@@ -548,10 +550,19 @@ function refit(): void {
   resetCamera();
   render();
   if (ws.mode === "overview") fitOverview();
+  else fitWidth();
   for (const button of modeButtons) {
     button.classList.toggle("active", button.dataset.mode === ws.mode);
   }
   zoomEl.classList.remove("active");
+}
+
+/** Scale the stage down to the canvas width when it is wider; never up. */
+function fitWidth(): void {
+  camera.scale = Math.min(1, canvasEl.clientWidth / Math.max(1, panesEl.scrollWidth));
+  camera.x = 0;
+  camera.y = 0;
+  applyCamera();
 }
 
 /** Scale the whole stage down to fit the canvas, centred. */
@@ -566,12 +577,14 @@ function fitOverview(): void {
 
 /**
  * The canvas changed size: lay the sheets out for the new width, keeping the
- * folds and the camera. Only an active overview is scaled to fit again.
+ * folds; the mode's scale is applied again unless the zoom was set by hand.
  */
 function relayout(): void {
   if (!ws) return;
   render();
-  if (ws.mode === "overview" && !zoomEl.classList.contains("active")) fitOverview();
+  if (zoomEl.classList.contains("active")) return;
+  if (ws.mode === "overview") fitOverview();
+  else fitWidth();
 }
 
 /** `package / a.gcl › b.gcl`: the files opened in turn; an earlier one goes back. */
@@ -1170,19 +1183,26 @@ host.onOpen((module) => open([module]));
 host.onNote((message: string | null, kind: NoteKind) => showNote(message, kind));
 if (host instanceof GitHubHost) mountGitHubBar(host, tokens, originEl, githubEl);
 // The canvas changes width with the window, the explorer, the code pane and
-// its split; a hidden canvas (code-only layout) is left as it is.
+// its split. Every such change asks for a relayout, which happens once per
+// frame and only when the width really changed; a hidden canvas (code-only
+// layout) is left as it is.
 let lastWidth = canvasEl.clientWidth;
 let relayoutQueued = false;
-new ResizeObserver(() => {
-  const width = canvasEl.clientWidth;
-  if (width === lastWidth || width === 0 || relayoutQueued) return;
+function scheduleRelayout(): void {
+  if (relayoutQueued) return;
   relayoutQueued = true;
-  requestAnimationFrame(() => {
+  // A timer, not an animation frame: frames stop in a background tab, and a
+  // webview panel that is not in front still has to lay out for its width.
+  setTimeout(() => {
     relayoutQueued = false;
-    lastWidth = canvasEl.clientWidth;
+    const width = canvasEl.clientWidth;
+    if (width === 0 || width === lastWidth) return;
+    lastWidth = width;
     relayout();
   });
-}).observe(canvasEl);
+}
+new ResizeObserver(scheduleRelayout).observe(canvasEl);
+window.addEventListener("resize", scheduleRelayout);
 // Wheel: pan; with ctrl / cmd (or a trackpad pinch): zoom around the cursor.
 canvasEl.addEventListener(
   "wheel",
@@ -1311,6 +1331,7 @@ function applyArrangement(): void {
   for (const b of layoutButtons) b.classList.toggle("active", b.dataset.layout === arrangement);
   remember("arrangement", arrangement);
   if (arrangement === "code") editor?.focus();
+  scheduleRelayout();
 }
 
 /** Drag the split: the code pane keeps the width it is dragged to. */
@@ -1327,6 +1348,7 @@ splitEl.addEventListener("pointermove", (event) => {
   const left = codeEl.getBoundingClientRect().left;
   const width = Math.round(event.clientX - left);
   codeEl.style.width = `${width}px`;
+  scheduleRelayout();
 });
 const endSplit = (): void => {
   if (!splitting) return;
@@ -1462,6 +1484,7 @@ if (webShell) {
     if (explorer) explorer.open = open;
     crumbEl.classList.toggle("open", open);
     remember("explorer", open ? "open" : "closed");
+    scheduleRelayout();
   };
   crumbEl.addEventListener("click", () => setExplorer(!(explorer?.open ?? false)));
   setExplorer(recall("explorer") === "open");
