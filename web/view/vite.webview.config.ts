@@ -13,6 +13,8 @@ export default defineConfig({
     rollupOptions: {
       input: "src/webview.ts",
       output: {
+        // One script: the shell goes in, then the view (a lazily run module, not a second file).
+        inlineDynamicImports: true,
         entryFileNames: "view.js",
         assetFileNames: "view.[ext]",
         chunkFileNames: "[name].js",

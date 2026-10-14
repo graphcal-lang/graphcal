@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { defineConfig } from "vite-plus";
 
 /**
@@ -19,6 +20,12 @@ const CSP = [
 export default defineConfig({
   base: "/view/",
   plugins: [
+    {
+      // The page's markup lives in src/shell.html so the VS Code webview can share it.
+      name: "graphcal-view-shell",
+      transformIndexHtml: (html) =>
+        html.replace("<!-- shell -->", () => readFileSync("src/shell.html", "utf8")),
+    },
     {
       name: "graphcal-view-csp",
       apply: "build",
