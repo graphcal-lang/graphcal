@@ -1,7 +1,7 @@
 //! Projection of a checked project (and optionally its evaluation) into a
 //! [`ViewModel`].
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::Path;
 
 use graphcal_compiler::dag_id::DagId;
@@ -57,6 +57,12 @@ pub enum ViewProjectionError {
         #[source]
         error: DisplayProjectionError,
     },
+    /// Two nodes of the model would share one id.
+    #[error("two view nodes share the id `{id}`")]
+    DuplicateNodeId { id: String },
+    /// A node reads a node the model does not contain.
+    #[error("view node `{node}` reads `{dependency}`, which the view does not contain")]
+    UnknownDependency { node: String, dependency: String },
 }
 
 /// Project the structure of the root file of `checked`.
@@ -120,6 +126,7 @@ pub fn project_view(
         }
     }
     let indexes = builder.indexes();
+    check_node_references(&nodes)?;
 
     let root = tir.root_dag_id();
     Ok(ViewProjection {
@@ -247,12 +254,11 @@ impl<'p> Scope<'p> {
         self.tir.root_dag_id()
     }
 
-    /// Whether `owner` is the root file or an inline DAG declared in it.
+    /// Whether `owner` is the root DAG. An inline `dag` declared in the
+    /// root file is a template: its declarations hold no values of their
+    /// own, and the root reads them only through an instance.
     fn is_local(&self, owner: &DagId) -> bool {
-        matches!(
-            self.clusters.get(owner),
-            Some(GraphClusterKind::SourceModule)
-        ) && owner.file_root() == self.root().file_root()
+        owner == self.root()
     }
 
     /// The module a declaration is presented under: the template of an
@@ -303,17 +309,15 @@ impl<'p> Scope<'p> {
         })
     }
 
-    /// The root's value and assertion declarations, with those of its inline
-    /// DAGs, in source order. (An include alias is declared where the
-    /// `include` is written, not where the DAG lists it.)
+    /// The root's value and assertion declarations in source order. (An
+    /// include alias is declared where the `include` is written, not where
+    /// the DAG lists it.)
     fn local_declarations(&self) -> Vec<ResolvedDeclName> {
         let mut declarations: Vec<(usize, ResolvedDeclName)> = self
-            .clusters
-            .keys()
-            .filter(|owner| self.is_local(owner))
-            .collect::<BTreeSet<_>>()
+            .tir
+            .dag_registry()
+            .get(self.root())
             .into_iter()
-            .filter_map(|owner| self.tir.dag_registry().get(owner))
             .flat_map(|dag| {
                 dag.declarations().filter_map(|declaration| {
                     let span = match declaration.kind() {
@@ -694,6 +698,29 @@ struct NodeInput<'a> {
     file: Option<SourceFile<'a>>,
     /// The identity whose evaluated value the node shows.
     value_of: &'a ResolvedDeclName,
+}
+
+/// Every node id is unique, and every dependency names a node of the model:
+/// the view joins nodes by id, so a clash or a dangling id would wire the
+/// wrong declarations together.
+pub(super) fn check_node_references(nodes: &[ViewNode]) -> Result<(), ViewProjectionError> {
+    let mut ids = HashSet::with_capacity(nodes.len());
+    for node in nodes {
+        if !ids.insert(node.id.as_str()) {
+            return Err(ViewProjectionError::DuplicateNodeId {
+                id: node.id.clone(),
+            });
+        }
+    }
+    for node in nodes {
+        if let Some(dependency) = node.deps.iter().find(|dep| !ids.contains(dep.as_str())) {
+            return Err(ViewProjectionError::UnknownDependency {
+                node: node.id.clone(),
+                dependency: dependency.clone(),
+            });
+        }
+    }
+    Ok(())
 }
 
 fn declaration_of<'t>(
