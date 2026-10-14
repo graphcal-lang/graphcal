@@ -645,10 +645,21 @@ function renderTrail(w: Workspace): void {
   fileEl.append(copyEl, resetEl);
 }
 
+/** A trail to open once the host has its module's current model (an edit left it stale). */
+let pendingOpen: string[] | null = null;
+
 /** Show `trail`'s last module as the main sheet, with no panes pinned. */
 function open(trail: string[]): void {
   const module = trail.at(-1);
-  if (module === undefined || !known(module)) return;
+  if (module === undefined) return;
+  if (!known(module)) {
+    if (host.modules.includes(module)) {
+      pendingOpen = trail;
+      host.request(module);
+    }
+    return;
+  }
+  pendingOpen = null;
   const main = createSheet({ module, instance: null });
   ws = { sheets: [main], trail, mode: ws?.mode ?? "fit" };
   placePanes(ws);
@@ -692,6 +703,8 @@ function pin(key: PaneKey): void {
 
 /** Take fresh models from the host: every sheet showing one of them is re-laid out in place. */
 function adoptModels(models: ViewModel[]): void {
+  const opening = pendingOpen;
+  if (opening !== null && known(opening.at(-1) ?? "")) open(opening);
   if (!ws) return;
   let changed = false;
   for (const model of models) {
@@ -1173,10 +1186,8 @@ function externalMenu(w: Workspace, node: ViewNode, event: MouseEvent): void {
   openMenu(event.clientX, event.clientY, [
     {
       label: `Open ${file}`,
-      disabled: !known(node.module),
-      run: () => {
-        if (known(node.module)) open([...w.trail, node.module]);
-      },
+      disabled: !known(node.module) && !host.modules.includes(node.module),
+      run: () => open([...w.trail, node.module]),
     },
     pinned
       ? { label: `Unpin ${name}`, run: () => unpin(pinned) }

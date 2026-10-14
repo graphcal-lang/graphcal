@@ -8,6 +8,7 @@ import { GitHub, GitHubError, type Refs, type Tree } from "./github.ts";
 import type { Compare, EditResult, Host, NoteKind, SourceEdit } from "./host.ts";
 import type { TokenStore } from "./login.ts";
 import { parseViewModel, type ViewModel } from "./model.ts";
+import { ModelCache } from "./modelCache.ts";
 import { Project } from "./project.ts";
 import { planProject, ProjectPlanError } from "./repoProject.ts";
 import { formatRoute, parseRoute, type Route } from "./route.ts";
@@ -56,8 +57,8 @@ export class GitHubHost implements Host {
   private project: Project | null = null;
   /** The sources as read from GitHub, to return to on reset. */
   private pristine = new Map<string, string>();
-  private readonly models = new Map<string, ViewModel>();
-  private pristineModels = new Map<string, ViewModel>();
+  private readonly models = new ModelCache();
+  private pristineModels: ViewModel[] = [];
   /** Repository directory of the project root, to turn a project file into an address. */
   private root = "";
   private state: GitHubState;
@@ -119,7 +120,7 @@ export class GitHubHost implements Host {
       this.root = plan.root;
       this.pristine = new Map(files);
       this.project = new Project(route.repo, files);
-      this.models.clear();
+      this.models.replace([]);
       this.modules = [];
       this.edited = false;
       this.note("evaluating…", "busy");
@@ -139,14 +140,14 @@ export class GitHubHost implements Host {
         if ("error" in outcome) continue;
         for (const listener of this.modelListeners) listener([outcome.model]);
       }
-      this.pristineModels = new Map(this.models);
+      this.pristineModels = this.models.currentModels();
       if (baseTree !== null && route.base !== null) {
         this.note(`reading ${route.base}…`, "busy");
         this.compare = await this.readBase(route.base, await baseTree, tree);
         if (!fresh()) return;
         this.note(null, "busy");
         // The sheets are drawn again with the changes marked.
-        for (const listener of this.modelListeners) listener([...this.models.values()]);
+        for (const listener of this.modelListeners) listener(this.models.currentModels());
       }
       this.setState({ ...this.state, loading: false });
     } catch (error) {
@@ -215,8 +216,8 @@ export class GitHubHost implements Host {
     } catch (error) {
       return { error: errorMessage(error) };
     }
-    this.models.set(model.module.id, model);
-    this.modules = [...this.models.keys()].sort();
+    this.models.set(model);
+    this.modules = this.models.ids();
     return {
       model,
       note: outcome.valued ? null : `${file} has no values of its own: ${outcome.note}`,
@@ -267,7 +268,7 @@ export class GitHubHost implements Host {
     if (same && this.project) {
       const module = this.moduleOfPath(next.path);
       if (module !== null) {
-        for (const listener of this.openListeners) listener(module);
+        void this.openModule(module);
         return;
       }
     }
@@ -279,7 +280,7 @@ export class GitHubHost implements Host {
     if (!path.endsWith(".gcl")) return false;
     const module = this.moduleOfPath(path);
     if (module !== null) {
-      for (const listener of this.openListeners) listener(module);
+      void this.openModule(module);
       return true;
     }
     location.hash = formatRoute({ ...this.route, path });
@@ -302,7 +303,7 @@ export class GitHubHost implements Host {
   }
 
   pathOf(module: string): string | null {
-    const model = this.models.get(module);
+    const model = this.models.last(module);
     if (!model) return null;
     return this.root === "" ? model.module.file : `${this.root}/${model.module.file}`;
   }
@@ -310,10 +311,29 @@ export class GitHubHost implements Host {
   private moduleOfPath(path: string): string | null {
     if (this.root !== "" && !path.startsWith(`${this.root}/`)) return null;
     const relative = this.root === "" ? path : path.slice(this.root.length + 1);
-    for (const model of this.models.values()) {
-      if (model.module.file === relative) return model.module.id;
+    return this.models.moduleOfFile(relative);
+  }
+
+  /** The current model of `module`, projected again when an edit left it stale. */
+  private async currentModel(module: string): Promise<ViewModel | null> {
+    const current = this.models.current(module);
+    if (current) return current;
+    const last = this.models.last(module);
+    if (!last) return null;
+    const generation = this.generation;
+    const outcome = await this.projectFile(last.module.file);
+    if (generation !== this.generation) return null;
+    if ("error" in outcome) {
+      this.note(outcome.error, "error");
+      return null;
     }
-    return null;
+    return outcome.model;
+  }
+
+  /** Ask the shell to show `module`, as of the current sources. */
+  private async openModule(module: string): Promise<void> {
+    if (!(await this.currentModel(module))) return;
+    for (const listener of this.openListeners) listener(module);
   }
 
   // ---- refs ----
@@ -347,7 +367,7 @@ export class GitHubHost implements Host {
   // ---- Host ----
 
   model(module: string): ViewModel | null {
-    return this.models.get(module) ?? null;
+    return this.models.current(module);
   }
 
   source(_model: ViewModel, file: string): string | null {
@@ -366,7 +386,7 @@ export class GitHubHost implements Host {
     };
     const models: ViewModel[] = [];
     for (const module of open) {
-      const shown = this.models.get(module);
+      const shown = this.models.current(module);
       if (!shown) continue;
       let outcome;
       try {
@@ -381,21 +401,22 @@ export class GitHubHost implements Host {
         return rollback(errorMessage(error));
       }
     }
-    for (const fresh of models) this.models.set(fresh.module.id, fresh);
+    // The modules off screen read the edited sources too: their models are stale now.
+    this.models.edited(models);
     this.edited = true;
     return { ok: true, models };
   }
 
   request(module: string): void {
-    const model = this.models.get(module);
-    if (model) for (const listener of this.modelListeners) listener([model]);
+    void this.currentModel(module).then((model) => {
+      if (model) for (const listener of this.modelListeners) listener([model]);
+    });
   }
 
   reset(): void {
     if (!this.project) return;
     this.project = new Project(this.route.repo, this.pristine);
-    this.models.clear();
-    for (const [id, model] of this.pristineModels) this.models.set(id, model);
+    this.models.replace(this.pristineModels);
     this.edited = false;
   }
 
