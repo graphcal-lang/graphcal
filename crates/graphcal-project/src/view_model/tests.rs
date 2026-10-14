@@ -6,10 +6,10 @@ use super::*;
 use crate::loader::load_project;
 use crate::project_compiler::ProjectCompiler;
 
-/// The sample multi-file project the web view's fixtures are built from.
+/// A sample multi-file project: a power budget that includes an EPS sheet and imports an index.
 fn power_project_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../web/view/fixtures/power_project")
+        .join("tests/fixtures/view_model/power_project")
         .canonicalize()
         .unwrap()
 }

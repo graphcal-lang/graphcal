@@ -1,0 +1,23 @@
+// Electrical power subsystem: how much bus power the loads may draw.
+// The budget is the worse of the sunlit case (array minus battery recharge)
+// and the eclipse case (battery discharge within the allowed depth).
+
+param n_cells: Int = 96;
+param p_cell_bol: Power = 1.2 W;              // per cell, normal incidence, beginning of life
+param sun_angle: Angle = 30.0 deg;            // worst-case sun incidence
+param degradation: Dimensionless = 0.025;     // per year
+param mission_years: Dimensionless = 3.0;
+param eta_pcdu: Dimensionless = 0.92;
+param p_eps_self: Power = 2.5 W;              // PCDU and heaters of the EPS itself
+param e_battery: Energy = 432.0 kJ;           // 120 Wh
+param dod_max: Dimensionless = 0.3;
+param t_orbit: Time = 95.0 min;
+param t_eclipse: Time = 35.0 min;
+
+node p_sa_bol: Power = to_float(@n_cells) * @p_cell_bol * cos(@sun_angle);
+node p_sa_eol: Power = @p_sa_bol * (1.0 - @degradation) ^ @mission_years;
+node t_sun: Time = @t_orbit - @t_eclipse;
+node p_charge: Power = @e_battery * @dod_max / @t_sun;
+node p_sun_avail: Power = (@p_sa_eol - @p_charge) * @eta_pcdu - @p_eps_self;
+node p_eclipse_avail: Power = @e_battery * @dod_max / @t_eclipse * @eta_pcdu - @p_eps_self;
+pub node p_budget: Power = if @p_sun_avail < @p_eclipse_avail { @p_sun_avail } else { @p_eclipse_avail };

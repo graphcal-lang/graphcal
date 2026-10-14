@@ -30,8 +30,10 @@ use crate::graph_ir::{GraphClusterKind, GraphIr, GraphProjectionError, project_t
 use crate::loader::{LoadedFile, LoadedProject};
 use crate::project_compiler::CheckedProject;
 
+use super::model::{
+    ViewIndex, ViewModel, ViewModule, ViewNode, ViewNodeKind, ViewSource, ViewValue,
+};
 use super::value::{CoherentUnits, common_unit, view_value};
-use super::{ViewIndex, ViewModel, ViewModule, ViewNode, ViewNodeKind, ViewSource, ViewValue};
 
 /// Why a checked project could not be projected into a view model.
 #[derive(Debug, Error)]

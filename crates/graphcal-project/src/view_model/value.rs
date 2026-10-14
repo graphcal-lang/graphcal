@@ -11,7 +11,7 @@ use graphcal_eval::eval::{
     quantity_display_value,
 };
 
-use super::{ViewEntry, ViewValue};
+use super::model::{ViewEntry, ViewValue};
 
 /// The unit a quantity without an explicit display unit is shown in: the
 /// prelude's one coherent (scale 1) unit of its dimension, such as `W` for
