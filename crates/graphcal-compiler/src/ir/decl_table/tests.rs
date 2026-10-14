@@ -41,6 +41,7 @@ fn name(spelling: &str) -> DeclName {
 
 fn node(spelling: &str, declaration_owner: DagId) -> Decl<Bare> {
     Decl::Node(NodeEntry {
+        doc: None,
         identity: ResolvedDeclName::for_test(declaration_owner, name(spelling)),
         type_ann: (),
         definition: (),
@@ -50,6 +51,7 @@ fn node(spelling: &str, declaration_owner: DagId) -> Decl<Bare> {
 
 fn param(spelling: &str) -> Decl<Bare> {
     Decl::Param(ParamEntry {
+        doc: None,
         identity: ResolvedDeclName::for_test(owner(), name(spelling)),
         type_ann: (),
         default: None,
@@ -60,6 +62,7 @@ fn param(spelling: &str) -> Decl<Bare> {
 
 fn assertion(spelling: &str) -> Decl<Bare> {
     Decl::Assert(AssertEntry {
+        doc: None,
         identity: ResolvedDeclName::for_test(owner(), name(spelling)),
         body: (),
         span: Span::new(0, 0),
@@ -146,6 +149,7 @@ fn try_map_transforms_by_rank_and_preserves_order() {
                 let position = visited.len();
                 Ok(match decl {
                     Decl::Param(entry) => Decl::Param(ParamEntry {
+                        doc: entry.doc,
                         identity: entry.identity,
                         type_ann: (),
                         default: Some(position),
@@ -153,12 +157,14 @@ fn try_map_transforms_by_rank_and_preserves_order() {
                         override_reconciliations: entry.override_reconciliations,
                     }),
                     Decl::Node(entry) => Decl::Node(NodeEntry {
+                        doc: entry.doc,
                         identity: entry.identity,
                         type_ann: (),
                         definition: position,
                         span: entry.span,
                     }),
                     Decl::Assert(entry) => Decl::Assert(AssertEntry {
+                        doc: entry.doc,
                         identity: entry.identity,
                         body: position,
                         span: entry.span,

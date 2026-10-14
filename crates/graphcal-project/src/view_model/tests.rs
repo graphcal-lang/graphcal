@@ -50,6 +50,11 @@ fn power_max_structure_and_values() {
 
     assert_eq!(view.module.id, "power_project.power_max");
     assert_eq!(view.module.file, "src/power_project/power_max.gcl");
+    assert_eq!(
+        node(&view, "margin").doc.as_deref(),
+        Some("Design margin on the required power.\nApplied on top of the summed bus power.")
+    );
+    assert_eq!(node(&view, "eta_dcdc").doc, None);
     assert_eq!(view.module.package, "power_project");
     // Source order: the include alias sits where the `include` is written.
     let order: Vec<&str> = view.nodes.iter().map(|node| node.id.as_str()).collect();
@@ -89,7 +94,8 @@ fn power_max_structure_and_values() {
         source.file.as_deref(),
         Some("src/power_project/power_max.gcl")
     );
-    assert_eq!(source.line, 14);
+    // The two `///` lines above `margin` push the table down by two.
+    assert_eq!(source.line, 16);
 
     let p_required = node(&view, "p_required");
     assert_eq!(p_required.kind, ViewNodeKind::Node);

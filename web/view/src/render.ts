@@ -44,6 +44,13 @@ function renderHead(column: Column, folded = false): HTMLElement {
   if (node.kind === "external") head.append(el("div", "col-origin", fileOf(node.module)));
   const title = el("div", "col-title");
   title.append(el("span", "mark", MARK[node.kind]), el("span", "name", node.name));
+  // The first line of the `///` doc sits after the name, cut short; folded, there is no room.
+  const doc = node.doc?.split("\n")[0]?.trim() ?? "";
+  if (doc !== "" && !folded) {
+    const note = el("span", "col-doc", doc);
+    note.title = node.doc ?? "";
+    title.append(note);
+  }
   head.append(title);
   const meta = el("div", "col-meta");
   if (node.dimension !== null) {

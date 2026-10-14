@@ -28,7 +28,12 @@ pub enum DeclarationKind<'d> {
     /// A value declaration.
     Value(ValueDeclaration<'d>),
     /// An assertion, with the span its operands cover.
-    Assert { span: Span, body: Span },
+    Assert {
+        span: Span,
+        body: Span,
+        /// Its `///` documentation, if any.
+        doc: Option<&'d str>,
+    },
     /// A plot, with its output visibility.
     Plot { visibility: PlotVisibility },
     /// A figure, with the plots it composes in source order.
@@ -55,18 +60,21 @@ pub struct ValueDeclaration<'d> {
     /// The span of its defining expression: a const body, a param default,
     /// or a node formula. `None` for a required param or a `todo` node.
     pub definition: Option<Span>,
+    /// Its `///` documentation, if any.
+    pub doc: Option<&'d str>,
 }
 
 impl<'d> DeclarationView<'d> {
     /// The view of one declaration entry.
     pub(super) fn of(decl: &'d Decl<Typed>) -> Self {
-        let value = |category, entry_annotation, has_default, span, definition| {
+        let value = |category, entry_annotation, has_default, span, definition, doc| {
             DeclarationKind::Value(ValueDeclaration {
                 category,
                 annotation: entry_annotation,
                 has_default,
                 span,
                 definition,
+                doc,
             })
         };
         let (identity, kind) = match decl {
@@ -78,6 +86,7 @@ impl<'d> DeclarationView<'d> {
                     false,
                     entry.span,
                     Some(entry.expr.span),
+                    entry.doc.as_deref(),
                 ),
             ),
             Decl::Param(entry) => (
@@ -88,6 +97,7 @@ impl<'d> DeclarationView<'d> {
                     entry.default.is_some(),
                     entry.span,
                     entry.default.as_ref().map(|default| default.span),
+                    entry.doc.as_deref(),
                 ),
             ),
             Decl::Node(entry) => (
@@ -98,6 +108,7 @@ impl<'d> DeclarationView<'d> {
                     false,
                     entry.span,
                     entry.definition.formula().map(|formula| formula.span),
+                    entry.doc.as_deref(),
                 ),
             ),
             Decl::Assert(entry) => (
@@ -110,6 +121,7 @@ impl<'d> DeclarationView<'d> {
                         .map(|expression| expression.span)
                         .reduce(Span::merge)
                         .unwrap_or(entry.span),
+                    doc: entry.doc.as_deref(),
                 },
             ),
             Decl::Plot(entry) => (

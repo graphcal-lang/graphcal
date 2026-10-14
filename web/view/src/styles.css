@@ -595,6 +595,19 @@ body {
   align-items: baseline;
   gap: 6px;
   font-family: var(--mono);
+  min-width: 0;
+}
+/* The `///` doc beside the name: grey, one line, cut short. */
+.col-doc {
+  margin-left: 2px;
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--faint);
+  font-family: var(--sans);
+  font-size: 10px;
+  font-weight: 400;
 }
 .mark {
   color: var(--muted);

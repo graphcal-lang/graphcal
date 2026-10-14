@@ -1,5 +1,7 @@
 import power_project.components::{index Component, index Mode, num};
 
+/// Design margin on the required power.
+/// Applied on top of the summed bus power.
 param margin: Dimensionless = 0.2;
 include power_project.eps()::{ p_budget };
 const node eta_dcdc: Dimensionless = 0.9;

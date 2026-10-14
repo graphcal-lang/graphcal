@@ -85,6 +85,9 @@ pub struct ViewNode {
     /// `include … as e`). `None` for the module's own declarations and for
     /// imports, which have no instance.
     pub instance: Option<String>,
+    /// The declaration's `///` documentation: one line per `///` line,
+    /// joined with newlines. The view shows its first line beside the name.
+    pub doc: Option<String>,
     /// Where the declaration lives.
     pub source: Option<ViewSource>,
     /// The evaluated value, when available.

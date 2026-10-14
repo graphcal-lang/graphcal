@@ -69,6 +69,8 @@ export const viewNodeSchema = z.object({
    * `include power_project.eps() …`); null for an import, which has no instance.
    */
   instance: z.string().nullable(),
+  /** The declaration's `///` documentation, lines joined with newlines. */
+  doc: z.string().nullable().optional(),
   source: z
     .object({
       file: z.string().nullable(),

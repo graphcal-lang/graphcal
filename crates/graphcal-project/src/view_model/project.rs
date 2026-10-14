@@ -575,14 +575,17 @@ impl NodeBuilder<'_> {
 
     fn node(&mut self, input: NodeInput<'_>) -> Result<BuiltNode, ViewProjectionError> {
         let identity = input.declaration.identity();
-        let (declared_kind, span, definition) = match input.declaration.kind() {
+        let (declared_kind, span, definition, doc) = match input.declaration.kind() {
             DeclarationKind::Value(ValueDeclaration {
                 category,
                 span,
                 definition,
+                doc,
                 ..
-            }) => (kind_of(category), span, definition),
-            DeclarationKind::Assert { span, body } => (ViewNodeKind::Assert, span, Some(body)),
+            }) => (kind_of(category), span, definition, doc),
+            DeclarationKind::Assert { span, body, doc } => {
+                (ViewNodeKind::Assert, span, Some(body), doc)
+            }
             DeclarationKind::Plot { .. }
             | DeclarationKind::Figure { .. }
             | DeclarationKind::Layer { .. } => {
@@ -654,6 +657,7 @@ impl NodeBuilder<'_> {
             reduce: None,
             instance: input.instance,
             source,
+            doc: doc.map(str::to_string),
             value: None,
         };
         Ok((node, binding))
