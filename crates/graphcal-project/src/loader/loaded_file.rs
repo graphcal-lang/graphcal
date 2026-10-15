@@ -380,7 +380,7 @@ impl<T> LoadedFile<T> {
 
     /// Identity of this file's text in the project's source registry.
     #[must_use]
-    pub(crate) const fn source_id(&self) -> SourceId {
+    pub const fn source_id(&self) -> SourceId {
         self.source_id
     }
 

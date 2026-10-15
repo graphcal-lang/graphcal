@@ -424,6 +424,10 @@ pub struct ResolvedDagDependencies {
     pub runtime_deps: HashMap<ResolvedDeclName, BTreeSet<ResolvedDeclName>>,
     /// For each const declaration, the canonical const declarations it reads.
     pub const_deps: HashMap<ResolvedDeclName, BTreeSet<ResolvedDeclName>>,
+    /// For each assertion, the canonical declarations its operands read via
+    /// `@`. Assertions are not scheduled through this map; it serves tools
+    /// that trace what an assertion checks.
+    pub assert_deps: HashMap<ResolvedDeclName, BTreeSet<ResolvedDeclName>>,
 }
 
 /// Canonical type definitions referenced by module-aware TIR.

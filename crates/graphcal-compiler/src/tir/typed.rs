@@ -751,12 +751,14 @@ where
     let identity = decl.identity();
     Ok(match decl {
         Decl::Const(entry) => Decl::Const(ConstEntry {
+            doc: entry.doc,
             type_ann: map(identity, entry.type_ann)?,
             identity: entry.identity,
             expr: entry.expr,
             span: entry.span,
         }),
         Decl::Param(entry) => Decl::Param(ParamEntry {
+            doc: entry.doc,
             type_ann: map(identity, entry.type_ann)?,
             identity: entry.identity,
             default: entry.default,
@@ -764,12 +766,14 @@ where
             override_reconciliations: entry.override_reconciliations,
         }),
         Decl::Node(entry) => Decl::Node(NodeEntry {
+            doc: entry.doc,
             type_ann: map(identity, entry.type_ann)?,
             identity: entry.identity,
             definition: entry.definition,
             span: entry.span,
         }),
         Decl::Assert(entry) => Decl::Assert(AssertEntry {
+            doc: entry.doc,
             identity: entry.identity,
             body: entry.body,
             span: entry.span,

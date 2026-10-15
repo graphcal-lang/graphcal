@@ -468,6 +468,7 @@ fn entry<E>(
         DeclKind::Sugar(s) => never(*s),
         DeclKind::Assert(a) => declare(&a.name).map(|(identity, _)| {
             Decl::Assert(AssertEntry {
+                doc: decl.doc.as_ref().map(|doc| doc.text().to_string()),
                 identity,
                 body: InScope::new(a.body.clone(), dag_id.clone()),
                 span: decl.span,
@@ -507,6 +508,7 @@ fn entry<E>(
         }),
         DeclKind::Param(p) => declare(&p.name).map(|(identity, _)| {
             Decl::Param(ParamEntry {
+                doc: decl.doc.as_ref().map(|doc| doc.text().to_string()),
                 identity,
                 type_ann: InScope::new(p.type_ann.clone(), dag_id.clone()),
                 default: p
@@ -519,6 +521,7 @@ fn entry<E>(
         }),
         DeclKind::ConstNode(c) => declare(&c.name).map(|(identity, _)| {
             Decl::Const(ConstEntry {
+                doc: decl.doc.as_ref().map(|doc| doc.text().to_string()),
                 identity,
                 type_ann: InScope::new(c.type_ann.clone(), dag_id.clone()),
                 expr: InScope::new(c.value.clone(), dag_id.clone()),
@@ -527,6 +530,7 @@ fn entry<E>(
         }),
         DeclKind::Node(n) => declare(&n.name).map(|(identity, _)| {
             Decl::Node(NodeEntry {
+                doc: decl.doc.as_ref().map(|doc| doc.text().to_string()),
                 identity,
                 type_ann: InScope::new(n.type_ann.clone(), dag_id.clone()),
                 definition: InScope::new(n.definition.clone(), dag_id.clone()),

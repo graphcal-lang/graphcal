@@ -87,6 +87,8 @@ impl BodyPhase for Syntax {
 /// A `const node` declaration.
 #[derive(Debug, Clone)]
 pub struct ConstEntry<P: BodyPhase> {
+    /// Attached `///` documentation, preserved through instance specialization.
+    pub doc: Option<String>,
     /// Canonical identity: the owning DAG and the local name in it.
     pub(crate) identity: ResolvedDeclName,
     pub type_ann: P::TypeAnnotation,
@@ -97,6 +99,8 @@ pub struct ConstEntry<P: BodyPhase> {
 /// A `param` declaration with its optional default.
 #[derive(Debug, Clone)]
 pub struct ParamEntry<P: BodyPhase> {
+    /// Attached `///` documentation, preserved through instance specialization.
+    pub doc: Option<String>,
     /// Canonical identity: the owning DAG and the local name in it.
     pub(crate) identity: ResolvedDeclName,
     pub type_ann: P::TypeAnnotation,
@@ -111,6 +115,8 @@ pub struct ParamEntry<P: BodyPhase> {
 /// A `node` declaration.
 #[derive(Debug, Clone)]
 pub struct NodeEntry<P: BodyPhase> {
+    /// Attached `///` documentation, preserved through instance specialization.
+    pub doc: Option<String>,
     /// Canonical identity: the owning DAG and the local name in it.
     pub(crate) identity: ResolvedDeclName,
     pub type_ann: P::TypeAnnotation,
@@ -121,6 +127,8 @@ pub struct NodeEntry<P: BodyPhase> {
 /// An `assert` declaration.
 #[derive(Debug, Clone)]
 pub struct AssertEntry<P: BodyPhase> {
+    /// Attached `///` documentation, preserved through instance specialization.
+    pub doc: Option<String>,
     /// Canonical identity: the owning DAG and the local name in it.
     pub(crate) identity: ResolvedDeclName,
     pub body: P::AssertBody,

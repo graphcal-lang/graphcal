@@ -63,6 +63,9 @@ pub struct ClientFeatureSupport {
     pub diagnostic_data: OptionalFeatureSupport,
     pub inlay_hint_refresh: OptionalFeatureSupport,
     pub watched_files_dynamic_registration: OptionalFeatureSupport,
+    /// Whether the client wants `graphcal/viewModelDidChange` after each
+    /// analysis (`experimental.graphcal.viewModelChanges`).
+    pub view_model_changes: OptionalFeatureSupport,
 }
 
 impl Default for ClientFeatureSupport {
@@ -76,6 +79,7 @@ impl Default for ClientFeatureSupport {
             diagnostic_related_information: OptionalFeatureSupport::Unsupported,
             diagnostic_data: OptionalFeatureSupport::Unsupported,
             inlay_hint_refresh: OptionalFeatureSupport::Unsupported,
+            view_model_changes: OptionalFeatureSupport::Unsupported,
             watched_files_dynamic_registration: OptionalFeatureSupport::Unsupported,
         }
     }
@@ -145,6 +149,14 @@ impl ClientFeatureSupport {
             watched_files_dynamic_registration: workspace
                 .and_then(|caps| caps.did_change_watched_files.as_ref())
                 .and_then(|caps| caps.dynamic_registration)
+                .unwrap_or(false)
+                .into(),
+            view_model_changes: capabilities
+                .experimental
+                .as_ref()
+                .and_then(|experimental| experimental.get("graphcal"))
+                .and_then(|graphcal| graphcal.get("viewModelChanges"))
+                .and_then(serde_json::Value::as_bool)
                 .unwrap_or(false)
                 .into(),
         }
@@ -228,6 +240,7 @@ mod tests {
                 diagnostic_data: OptionalFeatureSupport::Supported,
                 inlay_hint_refresh: OptionalFeatureSupport::Supported,
                 watched_files_dynamic_registration: OptionalFeatureSupport::Supported,
+                view_model_changes: OptionalFeatureSupport::Unsupported,
             }
         );
     }

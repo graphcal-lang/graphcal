@@ -222,6 +222,7 @@ impl UnfrozenIR {
         span: Span,
     ) {
         self.decls.push(Decl::Const(entry::ConstEntry {
+            doc: None,
             identity: projection_alias(&body_resolution_owner, name),
             type_ann: InScope::new(type_ann, type_resolution_owner),
             expr: InScope::new(expr, body_resolution_owner),
@@ -242,6 +243,7 @@ impl UnfrozenIR {
         span: Span,
     ) {
         self.decls.push(Decl::Node(entry::NodeEntry {
+            doc: None,
             identity: projection_alias(&body_resolution_owner, name),
             type_ann: InScope::new(type_ann, type_resolution_owner),
             definition: InScope::new(

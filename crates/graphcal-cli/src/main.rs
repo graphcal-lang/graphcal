@@ -144,6 +144,14 @@ enum Commands {
         #[command(subcommand)]
         command: dump::DumpCommands,
     },
+    /// Export the view model of a .gcl file as JSON (experimental)
+    View {
+        /// Path to the .gcl file
+        file: PathBuf,
+        /// Project root directory (overrides automatic graphcal.toml detection)
+        #[arg(long)]
+        root: Option<PathBuf>,
+    },
     /// Export the dependency graph of a .gcl file (experimental)
     Graph {
         /// Path to the .gcl file
@@ -380,6 +388,7 @@ fn run_command(cli: Cli) {
         } => {
             run_graph(&file, &format, view, max_depth, root.as_deref());
         }
+        Commands::View { file, root } => run_view(&file, root.as_deref()),
         Commands::Model { command } => match command {
             ModelCommands::Serve { file, output, root } => {
                 run_model_serve(&file, &output, root.as_deref());
@@ -985,6 +994,76 @@ fn run_graph(
             process::exit(2);
         }
     }
+}
+
+/// Print the view model of `file`: its declarations, axes, dependencies,
+/// source positions, and (unless the file is a library) evaluated values.
+fn run_view(file: &Path, project_root: Option<&Path>) {
+    use graphcal_project::view_model::{ViewModel, ViewProjectionError, project_view};
+
+    /// Why the view could not be produced.
+    enum ViewFailure {
+        Compile(CompileError),
+        Projection(ViewProjectionError),
+    }
+
+    impl From<CompileError> for ViewFailure {
+        fn from(error: CompileError) -> Self {
+            Self::Compile(error)
+        }
+    }
+
+    impl From<ViewProjectionError> for ViewFailure {
+        fn from(error: ViewProjectionError) -> Self {
+            Self::Projection(error)
+        }
+    }
+
+    eprintln!(
+        "warning: `graphcal view` is experimental; its output and CLI surface may change in any release"
+    );
+    let outcome = (|| -> Result<ViewModel, ViewFailure> {
+        let fs = build_rooted_filesystem(file, project_root)?;
+        let root_dir = view_root_dir(file, project_root);
+        let (project, host_fns) = load_project_with_plugins(file, project_root, &fs)?;
+        let checked = ProjectCompiler::new(&project).host_fns(&host_fns).check()?;
+        let mut projection = project_view(&project, &checked, root_dir.as_deref())?;
+        if checked.is_library() {
+            return Ok(projection.into_model());
+        }
+        let prepared = checked.prepare_with_host_fns(&host_fns)?;
+        let evaluated = prepared.evaluate(&prepared.binding_builder().finish()?)?;
+        projection.attach_evaluation(&evaluated)?;
+        Ok(projection.into_model())
+    })();
+    match outcome {
+        Ok(view) => match serde_json::to_string_pretty(&view) {
+            Ok(json) => println!("{json}"),
+            Err(error) => {
+                eprintln!("JSON serialization error: {error}");
+                process::exit(2);
+            }
+        },
+        Err(ViewFailure::Compile(error)) => {
+            eprintln!("{:?}", miette::Report::new(error));
+            process::exit(2);
+        }
+        Err(ViewFailure::Projection(error)) => {
+            eprintln!("internal view projection error: {error}");
+            process::exit(2);
+        }
+    }
+}
+
+/// The directory view source paths are relative to: the explicit root, or
+/// the discovered project root of `file`.
+fn view_root_dir(file: &Path, project_root: Option<&Path>) -> Option<PathBuf> {
+    if let Some(root) = project_root {
+        return root.canonicalize().ok();
+    }
+    let start = file.canonicalize().ok()?.parent()?.to_path_buf();
+    graphcal_project::loader::discover_project_root(&start, &RealFileSystem::default())
+        .or(Some(start))
 }
 
 fn run_format(paths: &[PathBuf], check: bool) {

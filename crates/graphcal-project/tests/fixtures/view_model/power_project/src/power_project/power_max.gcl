@@ -1,0 +1,45 @@
+import power_project.components::{index Component, index Mode, num};
+
+/// Design margin on the required power.
+/// Applied on top of the summed bus power.
+param margin: Dimensionless = 0.2;
+include power_project.eps()::{ p_budget };
+const node eta_dcdc: Dimensionless = 0.9;
+
+param p_unit: Power[Component] = table[Component] {
+    Obc:     4.0 W;
+    Radio:   12.0 W;
+    Heater:  8.0 W;
+    Payload: 20.0 W;
+};
+
+param duty: Dimensionless[Component, Mode] = table[Component, Mode] {
+    : Safe, Nominal, Science;
+    Obc:     1.0, 1.0, 1.0;
+    Radio:   0.1, 0.3, 0.8;
+    Heater:  0.6, 0.4, 0.2;
+    Payload: 0.0, 0.5, 1.0;
+};
+
+node p_avg: Power[Component, Mode] = for c: Component, m: Mode {
+    (c, m) => @p_unit[c] * @duty[c, m]
+};
+
+node p_bus: Power[Component, Mode] = for c: Component, m: Mode {
+    (c, m) => @p_avg[c, m] / @eta_dcdc
+};
+
+node p_mode: Power[Mode] = for m: Mode {
+    sum(for c: Component { @p_bus[c, m] })
+};
+
+node p_peak: Power[Component] = for c: Component {
+    maximum(for m: Mode { @p_bus[c, m] })
+};
+
+node p_total: Power = maximum(@p_mode);
+node p_mean: Power = @p_total / to_float(@num);
+pub node p_required: Power = @p_total * (1.0 + @margin);
+pub node heat_dcdc: Power = sum(for c: Component { @p_peak[c] }) * (1.0 - @eta_dcdc);
+
+assert within_budget = @p_required <= @p_budget;

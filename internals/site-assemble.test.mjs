@@ -14,6 +14,7 @@ async function fixture(t) {
     "target/docs-site/en/",
     "target/docs-site/ja/",
     "web/playground/dist/",
+    "web/view/dist/",
     "site-root/",
   ]) {
     await mkdir(new URL(dir, root), { recursive: true });
@@ -32,7 +33,7 @@ async function fixture(t) {
   return root;
 }
 
-test("assembly retains both locales, shared assets, playground, and root files", async (t) => {
+test("assembly retains both locales, shared assets, playground, view, and root files", async (t) => {
   const root = await fixture(t);
   await assembleSite(root);
   assert.equal(
@@ -47,6 +48,7 @@ test("assembly retains both locales, shared assets, playground, and root files",
     await readFile(new URL("site/playground/index.html", root), "utf8"),
     "web/playground/dist/",
   );
+  assert.equal(await readFile(new URL("site/view/index.html", root), "utf8"), "web/view/dist/");
   assert.equal(await readFile(new URL("site/CNAME", root), "utf8"), "graphcal.org\n");
   assert.equal(await readFile(new URL("site/404.html", root), "utf8"), "not found");
   assert.equal(await readFile(new URL("site/index.html", root), "utf8"), "site-root/");

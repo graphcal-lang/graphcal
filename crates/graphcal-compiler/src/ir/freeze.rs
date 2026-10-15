@@ -253,12 +253,14 @@ impl UnfrozenIR {
                 cancellation.checkpoint()?;
                 Ok(match decl {
                     Decl::Const(entry) => Decl::Const(ConstEntry {
+                        doc: entry.doc,
                         type_ann: lower_type_annotation(&entry.type_ann)?,
                         expr: lower_scoped(&entry.expr)?,
                         identity: entry.identity,
                         span: entry.span,
                     }),
                     Decl::Param(entry) => Decl::Param(ParamEntry {
+                        doc: entry.doc,
                         type_ann: lower_type_annotation(&entry.type_ann)?,
                         default: entry.default.as_ref().map(lower_scoped).transpose()?,
                         identity: entry.identity,
@@ -266,6 +268,7 @@ impl UnfrozenIR {
                         override_reconciliations: entry.override_reconciliations,
                     }),
                     Decl::Node(entry) => Decl::Node(NodeEntry {
+                        doc: entry.doc,
                         type_ann: lower_type_annotation(&entry.type_ann)?,
                         definition: super::node_definition::lower(
                             &entry.definition.syntax,
@@ -286,6 +289,7 @@ impl UnfrozenIR {
                         span: entry.span,
                     }),
                     Decl::Assert(entry) => Decl::Assert(AssertEntry {
+                        doc: entry.doc,
                         body: crate::hir::expr_lower::lower::lower_assert_body(
                             &entry.body.syntax,
                             crate::hir::expr_lower::context::ExprLoweringContext::with_overlay(

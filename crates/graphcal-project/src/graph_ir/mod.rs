@@ -105,6 +105,104 @@ pub struct GraphIr {
     edges: Vec<GraphEdge>,
 }
 
+impl GraphNode {
+    /// The declaration this node projects.
+    #[must_use]
+    pub const fn id(&self) -> &GraphNodeId {
+        &self.id
+    }
+
+    /// The declaration kind behind this node.
+    #[must_use]
+    pub const fn kind(&self) -> GraphNodeKind {
+        self.kind
+    }
+
+    /// Whether this calculated node is a public output of its source template.
+    #[must_use]
+    pub const fn is_public_output(&self) -> bool {
+        self.is_public_output
+    }
+
+    /// Whether the source definition is an explicit TODO rather than a formula.
+    #[must_use]
+    pub const fn is_unfinished(&self) -> bool {
+        self.is_unfinished
+    }
+
+    /// Human-readable resolved type, when known.
+    #[must_use]
+    pub fn type_label(&self) -> Option<&str> {
+        self.type_label.as_deref()
+    }
+}
+
+impl GraphEdge {
+    /// The declaration read via `@`.
+    #[must_use]
+    pub const fn from(&self) -> &GraphNodeId {
+        &self.from
+    }
+
+    /// The declaration doing the reading.
+    #[must_use]
+    pub const fn to(&self) -> &GraphNodeId {
+        &self.to
+    }
+}
+
+impl GraphCluster {
+    /// The DAG this cluster projects.
+    #[must_use]
+    pub const fn dag_id(&self) -> &DagId {
+        &self.dag_id
+    }
+
+    /// The enclosing cluster, if any.
+    #[must_use]
+    pub const fn parent(&self) -> Option<&DagId> {
+        self.parent.as_ref()
+    }
+
+    /// Semantic provenance of this cluster.
+    #[must_use]
+    pub const fn kind(&self) -> &GraphClusterKind {
+        &self.kind
+    }
+
+    /// Canonical identities of the nodes this cluster directly owns.
+    #[must_use]
+    pub fn node_ids(&self) -> &[GraphNodeId] {
+        &self.node_ids
+    }
+}
+
+impl GraphIr {
+    /// Projected declarations in deterministic source/module order.
+    #[must_use]
+    pub fn nodes(&self) -> &[GraphNode] {
+        &self.nodes
+    }
+
+    /// The root source module first, then the remaining clusters.
+    #[must_use]
+    pub fn clusters(&self) -> &[GraphCluster] {
+        &self.clusters
+    }
+
+    /// Placeholder nodes for dependencies declared outside the expanded DAGs.
+    #[must_use]
+    pub fn external(&self) -> &[GraphNode] {
+        &self.external
+    }
+
+    /// Dataflow edges, deduplicated and sorted.
+    #[must_use]
+    pub fn edges(&self) -> &[GraphEdge] {
+        &self.edges
+    }
+}
+
 struct ProjectedClusterProvenance {
     clusters: BTreeMap<DagId, GraphCluster>,
     output_names: BTreeMap<DagId, HashSet<DeclName>>,

@@ -20,6 +20,7 @@ use graphcal_project::prepare::{
     ParameterPort, PreparedProject,
 };
 use graphcal_project::project_compiler::ProjectCompiler;
+use graphcal_project::view_model::{ViewModel, ViewProjection, project_view};
 use serde::Serialize;
 
 use crate::PlaygroundRequest;
@@ -35,6 +36,9 @@ use crate::project::{ProjectValidationError, RequestErrorView, VirtualProject};
 pub struct PreparedPlayground {
     prepared: PreparedProject,
     report: crate::browser_report::ReportMetadata,
+    /// The entry file's view structure, valued per evaluation; `None` when
+    /// the checked program could not be projected.
+    view: Option<ViewProjection>,
 }
 
 /// Outcome of preparing one browser project.
@@ -126,8 +130,21 @@ fn prepare_virtual(project: &VirtualProject, capabilities: BrowserCapabilities) 
         &loaded,
         &mut registry,
     );
-    match ProjectCompiler::new(&loaded).host_fns(&registry).prepare() {
-        Ok(prepared) => PrepareOutcome::Prepared(Box::new(PreparedPlayground { prepared, report })),
+    let prepared = ProjectCompiler::new(&loaded)
+        .host_fns(&registry)
+        .check()
+        .and_then(|checked| {
+            let view = project_view(&loaded, &checked, Some(VirtualProject::root_path())).ok();
+            checked
+                .prepare_with_host_fns(&registry)
+                .map(|prepared| (prepared, view))
+        });
+    match prepared {
+        Ok((prepared, view)) => PrepareOutcome::Prepared(Box::new(PreparedPlayground {
+            prepared,
+            report,
+            view,
+        })),
         Err(error) => PrepareOutcome::CompileError {
             diagnostics: vec![compile_error_view(&error, project)],
         },
@@ -153,6 +170,20 @@ pub enum EvaluateOutcome {
     /// The evaluator failed as a whole (e.g. a required parameter without a
     /// default was left unbound).
     EvalError { message: String },
+}
+
+/// Outcome of evaluating the entry file's view.
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum EvaluateViewOutcome {
+    /// The row evaluated; nodes whose declaration failed carry no value.
+    Evaluated { view: ViewModel },
+    /// One or more bindings were rejected; nothing was evaluated.
+    BindingErrors { errors: Vec<BindingErrorView> },
+    /// The evaluator failed as a whole.
+    EvalError { message: String },
+    /// The project has no view, or a value could not be displayed.
+    Unavailable { message: String },
 }
 
 /// Outcome of evaluating and rendering a host-asset report.
@@ -320,6 +351,42 @@ impl PreparedPlayground {
                 EvaluateOutcome::BindingErrors { errors }
             }
             Err(EvaluationFailure::EvalError(message)) => EvaluateOutcome::EvalError { message },
+        }
+    }
+
+    /// The entry file's view structure without values, when it projected.
+    #[must_use]
+    pub fn view_structure(&self) -> Option<&ViewModel> {
+        self.view.as_ref().map(ViewProjection::model)
+    }
+
+    /// Evaluate browser bindings and return the entry file's view with the
+    /// resulting values attached.
+    #[must_use]
+    pub fn evaluate_view(&self, bindings: &[BrowserBindingRequest]) -> EvaluateViewOutcome {
+        let Some(projection) = &self.view else {
+            return EvaluateViewOutcome::Unavailable {
+                message: "the project has no view".to_string(),
+            };
+        };
+        match self.evaluate_browser_result(bindings) {
+            Ok(result) => {
+                let mut projection = projection.clone();
+                match projection.attach_evaluation(&result) {
+                    Ok(()) => EvaluateViewOutcome::Evaluated {
+                        view: projection.into_model(),
+                    },
+                    Err(error) => EvaluateViewOutcome::Unavailable {
+                        message: error.to_string(),
+                    },
+                }
+            }
+            Err(EvaluationFailure::BindingErrors(errors)) => {
+                EvaluateViewOutcome::BindingErrors { errors }
+            }
+            Err(EvaluationFailure::EvalError(message)) => {
+                EvaluateViewOutcome::EvalError { message }
+            }
         }
     }
 
@@ -719,6 +786,18 @@ mod js {
         JsValue::from_str(&format!("could not serialize prepared result: {error}"))
     }
 
+    /// The view model's absent fields are `null`, as its JSON schema says,
+    /// not `undefined`.
+    fn view_to_js(value: &impl serde::Serialize) -> Result<JsValue, JsValue> {
+        value
+            .serialize(
+                &serde_wasm_bindgen::Serializer::new()
+                    .serialize_maps_as_objects(true)
+                    .serialize_missing_as_null(true),
+            )
+            .map_err(|error| serialization_error(&error))
+    }
+
     /// Prepare an in-memory project once for repeated evaluation.
     ///
     /// The request shape and limits match `evaluateProject`. On rejection or
@@ -858,6 +937,29 @@ mod js {
                 .map_err(|error| serialization_error(&error))
         }
 
+        /// The entry file's view model without values (`null` when the
+        /// project has no view). Structure only: nodes, axes, dependencies,
+        /// source positions.
+        #[wasm_bindgen(js_name = viewStructure)]
+        pub fn view_structure(&self) -> Result<JsValue, JsValue> {
+            view_to_js(&self.inner.view_structure())
+        }
+
+        /// Evaluate with structured bindings and return the entry file's
+        /// view model with values attached. Returns the tagged
+        /// `EvaluateViewOutcome` (`evaluated` / `binding_errors` /
+        /// `eval_error` / `unavailable`).
+        #[wasm_bindgen(js_name = evaluateView)]
+        #[expect(
+            clippy::needless_pass_by_value,
+            reason = "wasm-bindgen JavaScript exports receive owned JsValue handles"
+        )]
+        pub fn evaluate_view(&self, bindings: JsValue) -> Result<JsValue, JsValue> {
+            let bindings: Vec<BrowserBindingRequest> = serde_wasm_bindgen::from_value(bindings)
+                .map_err(|error| JsValue::from_str(&format!("invalid bindings: {error}")))?;
+            view_to_js(&self.inner.evaluate_view(&bindings))
+        }
+
         /// Evaluate once and return both the complete evaluation view and a
         /// static report whose chart runtime is supplied by the host.
         #[wasm_bindgen(js_name = evaluateReport)]
@@ -937,6 +1039,42 @@ assert positive = @delta_v > 0.0 m/s;
             panic!("expected quantity control for fuel_mass");
         };
         assert_eq!((*lower_si, *upper_si), (None, None));
+    }
+
+    #[test]
+    fn view_structure_and_evaluated_view_follow_bindings() {
+        let prepared = prepare_ok(DELTA_V);
+        let structure = prepared.view_structure().expect("view structure");
+        assert!(structure.nodes.iter().all(|node| node.value.is_none()));
+        assert!(structure.nodes.iter().any(|node| node.name == "delta_v"));
+
+        let outcome =
+            prepared.evaluate_view(&[BrowserBindingRequest::Expression(BindingRequest {
+                name: "isp".to_string(),
+                expr: "450.0 s".to_string(),
+            })]);
+        let EvaluateViewOutcome::Evaluated { view } = outcome else {
+            panic!("expected an evaluated view, got {outcome:?}");
+        };
+        let isp = view
+            .nodes
+            .iter()
+            .find(|node| node.name == "isp")
+            .expect("isp node");
+        let Some(graphcal_project::view_model::ViewValue::Quantity { display, .. }) = &isp.value
+        else {
+            panic!("isp has no quantity value: {:?}", isp.value);
+        };
+        assert_eq!(display, "450 s");
+        // The structure is untouched by evaluation.
+        assert!(
+            prepared
+                .view_structure()
+                .expect("view structure")
+                .nodes
+                .iter()
+                .all(|node| node.value.is_none())
+        );
     }
 
     #[test]

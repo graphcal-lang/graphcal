@@ -528,6 +528,7 @@ impl PreparedProject {
         );
 
         let mut entries = Vec::new();
+        let mut identities = HashMap::new();
         let mut seen = HashSet::new();
 
         for (name, category) in &self.output_assembly.imported_source_order {
@@ -562,10 +563,15 @@ impl PreparedProject {
                         }
                     }));
                 entries.push((name.clone(), Ok(value), decl_type));
+                identities.insert(name.clone(), imported.value().key().clone());
             }
         }
 
-        Ok(eval_result.with_imported_entries(entries, self.output_assembly.output_surface.clone()))
+        Ok(eval_result.with_imported_entries(
+            entries,
+            identities,
+            self.output_assembly.output_surface.clone(),
+        ))
     }
 }
 

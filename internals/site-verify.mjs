@@ -19,6 +19,9 @@ for (const file of [
   "playground/vega/vega.min.js",
   "playground/vega/vega-lite.min.js",
   "playground/vega/vega-embed.min.js",
+  "view/index.html",
+  "view/pkg/graphcal_wasm.js",
+  "view/pkg/graphcal_wasm_bg.wasm",
 ]) {
   assert.ok((await stat(new URL(file, site))).size > 0, file);
 }
@@ -39,6 +42,11 @@ const entryBytes = (
   )
 ).reduce((sum, size) => sum + size, 0);
 assert.ok(entryBytes <= 600 * 1024, `600 KiB raw entry JS budget: ${entryBytes}`);
+assert.match(
+  await text("view/index.html"),
+  /http-equiv="Content-Security-Policy"/,
+  "the view page carries its CSP",
+);
 for (const home of ["docs/en/index.html", "docs/ja/index.html"]) {
   assert.doesNotMatch(await text(home), /javascripts\/playground|stylesheets\/playground/);
 }

@@ -15,6 +15,7 @@ use crate::workspace_revision::{AnalysisInputSnapshot, DocumentIdentity};
 use graphcal_compiler::cancellation::{CancellationToken, Cancelled};
 use graphcal_compiler::outcome::Outcome;
 use graphcal_compiler::syntax::module_name::ScopedName;
+use graphcal_eval::eval::EvalResult;
 use graphcal_project::compile_error::CompileError;
 use graphcal_project::loader::LoadedProject;
 use graphcal_project::project_compiler::{CheckedProject, ProjectCompiler};
@@ -31,8 +32,16 @@ use crate::value_format::format_eval_values;
 /// renders it through `window/logMessage`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AnalysisDegradation {
-    EmptySymbolTable { reason: String },
-    FileLocalModuleResolver { reason: String },
+    EmptySymbolTable {
+        reason: String,
+    },
+    FileLocalModuleResolver {
+        reason: String,
+    },
+    /// The checked project could not be projected into a view model.
+    ViewUnavailable {
+        reason: String,
+    },
 }
 
 impl AnalysisDegradation {
@@ -44,6 +53,9 @@ impl AnalysisDegradation {
             Self::FileLocalModuleResolver { reason } => format!(
                 "analysis for {uri} is using a file-local module resolver after project resolver construction failed: {reason}; cross-module editor features may be unavailable"
             ),
+            Self::ViewUnavailable { reason } => {
+                format!("analysis for {uri} could not project a view model: {reason}")
+            }
         }
     }
 }
@@ -52,15 +64,6 @@ impl AnalysisDegradation {
 pub struct AnalysisRun {
     pub analysis: AnalysisResult,
     pub degradations: Vec<AnalysisDegradation>,
-}
-
-impl AnalysisRun {
-    pub const fn complete(analysis: AnalysisResult) -> Self {
-        Self {
-            analysis,
-            degradations: Vec::new(),
-        }
-    }
 }
 
 /// Snapshot of another open editor buffer, overlaid onto the filesystem
@@ -334,6 +337,7 @@ pub fn run_analysis_with_cancellation(
                     import_surfaces: HashMap::new(),
                     diagnostics: Arc::new(diagnostics),
                     eval_values: HashMap::new(),
+                    view: None,
                     fn_signatures: build_fn_signatures(),
                     extern_fn_signatures: HashMap::new(),
                     import_links: Vec::new(),
@@ -392,29 +396,57 @@ pub fn run_analysis_with_cancellation(
             // user opens such a file for editing.
             let todos =
                 crate::diagnostics::unfinished_node_diagnostics(&root_ast.declarations, text);
+            let (mut view, degradations) = match project_view_for_lsp(&project, &checked) {
+                Ok(view) => (Some(view), Vec::new()),
+                Err(error) => (
+                    None,
+                    vec![AnalysisDegradation::ViewUnavailable {
+                        reason: error.to_string(),
+                    }],
+                ),
+            };
+            cancellation.checkpoint()?;
             let (mut diagnostics, eval_values) = if checked.is_library() {
                 (HashMap::new(), HashMap::new())
             } else {
-                run_eval_from_checked(checked, uri, text, &symbol_table, &host_fns, cancellation)?
+                let evaluated = run_eval_from_checked(
+                    checked,
+                    uri,
+                    text,
+                    &symbol_table,
+                    &host_fns,
+                    cancellation,
+                )?;
+                if let (Some(projection), Some(result)) = (view.as_mut(), &evaluated.result) {
+                    // A value that cannot be displayed leaves its node empty;
+                    // the structure and the other values still serve the view.
+                    let _ = projection.attach_evaluation(result);
+                }
+                (evaluated.diagnostics, evaluated.values)
             };
             cancellation.checkpoint()?;
             diagnostics.entry(uri.clone()).or_default().extend(todos);
+            let view = view.map(graphcal_project::view_model::ViewProjection::into_model);
 
-            Ok(AnalysisRun::complete(AnalysisResult {
-                inputs: analysis_inputs,
-                source: Arc::new(text.to_string()),
-                symbol_table,
-                project_symbols: ProjectSymbols::Complete(imported_symbols.project_index),
-                imported_definitions: imported_symbols.definitions,
-                imported_bindings: imported_symbols.bindings,
-                import_surfaces,
-                diagnostics: Arc::new(diagnostics),
-                eval_values,
-                fn_signatures,
-                extern_fn_signatures,
-                import_links,
-                buffer_parsed: true,
-            }))
+            Ok(AnalysisRun {
+                analysis: AnalysisResult {
+                    inputs: analysis_inputs,
+                    source: Arc::new(text.to_string()),
+                    symbol_table,
+                    project_symbols: ProjectSymbols::Complete(imported_symbols.project_index),
+                    imported_definitions: imported_symbols.definitions,
+                    imported_bindings: imported_symbols.bindings,
+                    import_surfaces,
+                    diagnostics: Arc::new(diagnostics),
+                    eval_values,
+                    view,
+                    fn_signatures,
+                    extern_fn_signatures,
+                    import_links,
+                    buffer_parsed: true,
+                },
+                degradations,
+            })
         }
         Err(Outcome::Cancelled) => Err(Cancelled),
         Err(Outcome::Failed(error)) => {
@@ -453,6 +485,7 @@ pub fn run_analysis_with_cancellation(
                     )?,
                     diagnostics: Arc::new(diagnostics),
                     eval_values: HashMap::new(),
+                    view: None,
                     fn_signatures: build_fn_signatures(),
                     extern_fn_signatures: HashMap::new(),
                     import_links,
@@ -464,7 +497,14 @@ pub fn run_analysis_with_cancellation(
     }
 }
 
-pub type EvalAnalysisOutput = (HashMap<Url, Vec<Diagnostic>>, HashMap<ScopedName, String>);
+/// What evaluating a checked project yields for the editor.
+pub struct EvalAnalysisOutput {
+    pub diagnostics: HashMap<Url, Vec<Diagnostic>>,
+    /// Formatted values for hover and inlay hints.
+    pub values: HashMap<ScopedName, String>,
+    /// The evaluation itself, when it ran to completion.
+    pub result: Option<EvalResult>,
+}
 
 /// Run evaluation from a loaded project and extract diagnostics and formatted values.
 pub fn run_eval_from_checked(
@@ -487,15 +527,43 @@ pub fn run_eval_from_checked(
             cancellation.checkpoint()?;
             let diagnostics = eval_result_to_diagnostics(&result, text, symbol_table);
             let values = format_eval_values(&result, cancellation)?;
-            Ok((diagnostics_for_active_uri(uri, diagnostics), values))
+            Ok(EvalAnalysisOutput {
+                diagnostics: diagnostics_for_active_uri(uri, diagnostics),
+                values,
+                result: Some(result),
+            })
         }
         Err(Outcome::Cancelled) => Err(Cancelled),
         Err(Outcome::Failed(error)) => {
             let mut diagnostics = compile_error_to_diagnostics_grouped(&error, uri);
             diagnostics.entry(uri.clone()).or_default();
-            Ok((diagnostics, HashMap::new()))
+            Ok(EvalAnalysisOutput {
+                diagnostics,
+                values: HashMap::new(),
+                result: None,
+            })
         }
     }
+}
+
+/// The view structure of the checked root, with source paths relative to
+/// the discovered project root. A projection failure (a checked-program
+/// invariant the projection could not honour) leaves the document without
+/// a view rather than failing the analysis.
+fn project_view_for_lsp(
+    project: &LoadedProject,
+    checked: &CheckedProject,
+) -> Result<
+    graphcal_project::view_model::ViewProjection,
+    graphcal_project::view_model::ViewProjectionError,
+> {
+    let root_dir = project.root_file().path().parent().and_then(|dir| {
+        graphcal_project::loader::discover_project_root(
+            dir,
+            &graphcal_io::RealFileSystem::default(),
+        )
+    });
+    graphcal_project::view_model::project_view(project, checked, root_dir.as_deref())
 }
 
 /// Collect loader-resolved import links from the project for Document Links.
@@ -531,4 +599,30 @@ pub fn collect_import_links(
         })
         .collect::<std::result::Result<Vec<_>, Cancelled>>()
         .map(|links| links.into_iter().flatten().collect())
+}
+
+#[cfg(test)]
+mod view_tests {
+    use super::*;
+
+    #[test]
+    fn analysis_carries_the_view_model() {
+        let uri = Url::parse("untitled:view.gcl").unwrap();
+        let run = run_analysis_run(
+            &uri,
+            "node thrust: Dimensionless = 1.0;\nnode doubled: Dimensionless = @thrust * 2.0;\n",
+            &[],
+            test_plugin_host(),
+        );
+        let messages: Vec<String> = run
+            .degradations
+            .iter()
+            .map(|degradation| degradation.message(&uri))
+            .collect();
+        assert!(messages.is_empty(), "{messages:?}");
+        let view = run.analysis.view.expect("view model");
+        let names: Vec<&str> = view.nodes.iter().map(|node| node.name.as_str()).collect();
+        assert_eq!(names, ["thrust", "doubled"]);
+        assert!(view.nodes[1].value.is_some(), "doubled should be evaluated");
+    }
 }

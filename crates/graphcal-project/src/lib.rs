@@ -25,3 +25,4 @@ pub mod project_bundle;
 pub mod project_compiler;
 #[cfg(test)]
 mod tests;
+pub mod view_model;
