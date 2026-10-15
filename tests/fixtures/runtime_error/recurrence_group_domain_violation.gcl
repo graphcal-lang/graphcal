@@ -1,0 +1,5 @@
+// An element that violates its domain fails its member; members that read it
+// report the dependency, even when their own elements were computed.
+index Step = range(0.0 s, 3.0 s, step: 1.0 s);
+node action: Dimensionless(min: -0.3)[Step] = for t: Step { -0.5 * @state[t] };
+node state: Dimensionless[Step] = unfold(Step, 1.0, |s, prev_t, t| s + @action[prev_t]);

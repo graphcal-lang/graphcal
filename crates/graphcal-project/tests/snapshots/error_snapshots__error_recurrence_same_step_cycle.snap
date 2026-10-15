@@ -1,0 +1,14 @@
+---
+source: crates/graphcal-project/tests/error_snapshots.rs
+expression: rendered
+---
+cyclic dependency involving `action`
+    Diagnostic severity: error
+Begin snippet for recurrence_same_step_cycle.gcl starting at line 1, column 1
+
+snippet line 1: index Step = range(0.0 s, 2.0 s, step: 1.0 s);
+snippet line 2: node action: Dimensionless[Step] = for t: Step { -0.5 * @state[t] };
+    label at line 2, columns 57 to 62: same-step cycle `action` -> `state` -> `action`
+snippet line 3: node state: Dimensionless[Step] = unfold(
+diagnostic help: one read on the cycle must use the previous step `prev_t`
+diagnostic code: graphcal::G001

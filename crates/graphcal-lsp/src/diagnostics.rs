@@ -1117,6 +1117,30 @@ param event: Datetime<TT>(
     }
 
     #[test]
+    fn recurrence_groups_are_accepted_and_their_rejections_explained() {
+        let accepted = "index Step = range(0.0 s, 2.0 s, step: 1.0 s);\n\
+                        node action: Dimensionless[Step] = for t: Step { -0.5 * @state[t] };\n\
+                        node state: Dimensionless[Step] = unfold(Step, 1.0, |s, prev_t, t| s + @action[prev_t]);";
+        assert!(
+            produce_diagnostics(accepted, "test.gcl")
+                .iter()
+                .all(|diagnostic| diagnostic.severity != Some(DiagnosticSeverity::ERROR)),
+            "an accepted recurrence group has no error"
+        );
+        let rejected = "index Step = range(0.0 s, 2.0 s, step: 1.0 s);\n\
+                        node action: Dimensionless[Step] = for t: Step { -0.5 * @state[t] };\n\
+                        node state: Dimensionless[Step] = unfold(Step, 1.0, |s, prev_t, t| s + @action[t]);";
+        let diagnostics = produce_diagnostics(rejected, "test.gcl");
+        assert!(diagnostics.iter().any(|diagnostic| {
+            matches!(
+                &diagnostic.code,
+                Some(NumberOrString::String(code)) if code == "graphcal::G001"
+            ) && diagnostic.message.contains("same-step cycle")
+                && diagnostic.message.contains("prev_t")
+        }));
+    }
+
+    #[test]
     fn multi_axis_count_produces_rank_diagnostic() {
         let source = "index Row = { A, B };\n\
                       index Column = { X, Y };\n\

@@ -1,0 +1,6 @@
+index Step = range(0.0 s, 2.0 s, step: 1.0 s);
+base dim Money;
+base unit USD: Money;
+node weight: Dimensionless[Step] = for t: Step { @cost[t] / 1.0 USD };
+unit EUR: Money = (@weight[nearest_key(Step, 0.0 s)]) USD;
+node cost: Money[Step] = unfold(Step, 0.0 USD, |s, prev_t, t| s + 1.0 EUR);

@@ -2093,6 +2093,9 @@ mod execution_frames {
             for fatal in [false, true] {
                 let mut frame = ExecutionFrame::new(plan, plan.root(), policy);
                 let outcome = frame.run(&token, |entry, _| {
+                    let crate::execution_frame::Scheduled::Declaration(entry) = entry else {
+                        panic!("the program has no recurrence group")
+                    };
                     if entry.key().as_str() == "a" {
                         return Err(if fatal {
                             SemanticError::internal_error(

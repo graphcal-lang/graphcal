@@ -1737,6 +1737,7 @@ impl HirPolicyChecker<'_> {
 /// When a param/node expression references a dynamic unit (via a unit
 /// literal or conversion), the `@`-references in that unit's scale
 mod collect;
+pub(crate) use collect::dynamic_unit_scale_reads;
 use collect::{
     augment_runtime_deps_for_dynamic_units, collect_constructed_types_from_expr,
     collect_resolved_dag_dependencies,

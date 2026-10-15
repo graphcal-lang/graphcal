@@ -1,0 +1,351 @@
+{
+  "check": "ok",
+  "eval": {
+    "exit_code": 0,
+    "stdout": {
+      "assert": {
+        "halving": {
+          "status": "pass"
+        }
+      },
+      "const": {},
+      "incomplete": false,
+      "node": {
+        "action": {
+          "entries": {
+            "0 s": {
+              "si_value": -0.5
+            },
+            "1 s": {
+              "si_value": -0.25
+            },
+            "2 s": {
+              "si_value": -0.125
+            },
+            "3 s": {
+              "si_value": -0.0625
+            }
+          },
+          "index": "Step"
+        },
+        "births": {
+          "entries": {
+            "0 s": {
+              "entries": {
+                "North": {
+                  "si_value": 10.0
+                },
+                "South": {
+                  "si_value": 10.0
+                }
+              },
+              "index": "Region"
+            },
+            "1 s": {
+              "entries": {
+                "North": {
+                  "si_value": 11.0
+                },
+                "South": {
+                  "si_value": 12.0
+                }
+              },
+              "index": "Region"
+            },
+            "2 s": {
+              "entries": {
+                "North": {
+                  "si_value": 12.1
+                },
+                "South": {
+                  "si_value": 14.4
+                }
+              },
+              "index": "Region"
+            },
+            "3 s": {
+              "entries": {
+                "North": {
+                  "si_value": 13.31
+                },
+                "South": {
+                  "si_value": 17.28
+                }
+              },
+              "index": "Region"
+            }
+          },
+          "index": "Step"
+        },
+        "final_state": {
+          "si_value": 1.875
+        },
+        "level": {
+          "entries": {
+            "0 s": {
+              "si_value": 10.0
+            },
+            "1 s": {
+              "si_value": 8.25
+            },
+            "2 s": {
+              "si_value": 6.80625
+            },
+            "3 s": {
+              "si_value": 5.61515625
+            }
+          },
+          "index": "Step"
+        },
+        "loop::command": {
+          "entries": {
+            "0 s": {
+              "si_value": -2.0
+            },
+            "1 s": {
+              "si_value": -1.0
+            },
+            "2 s": {
+              "si_value": -0.5
+            },
+            "3 s": {
+              "si_value": -0.25
+            }
+          },
+          "index": "T"
+        },
+        "loop::response": {
+          "entries": {
+            "0 s": {
+              "si_value": 4.0
+            },
+            "1 s": {
+              "si_value": 2.0
+            },
+            "2 s": {
+              "si_value": 1.0
+            },
+            "3 s": {
+              "si_value": 0.5
+            }
+          },
+          "index": "T"
+        },
+        "loop::start": {
+          "si_value": 4.0
+        },
+        "loop_final": {
+          "si_value": 7.5
+        },
+        "outflow": {
+          "entries": {
+            "0 s": {
+              "si_value": 17.5
+            },
+            "1 s": {
+              "si_value": 14.4375
+            },
+            "2 s": {
+              "si_value": 11.9109375
+            },
+            "3 s": {
+              "si_value": 9.8265234375
+            }
+          },
+          "index": "Step"
+        },
+        "pop": {
+          "entries": {
+            "0 s": {
+              "entries": {
+                "North": {
+                  "si_value": 100.0
+                },
+                "South": {
+                  "si_value": 50.0
+                }
+              },
+              "index": "Region"
+            },
+            "1 s": {
+              "entries": {
+                "North": {
+                  "si_value": 110.0
+                },
+                "South": {
+                  "si_value": 60.0
+                }
+              },
+              "index": "Region"
+            },
+            "2 s": {
+              "entries": {
+                "North": {
+                  "si_value": 121.0
+                },
+                "South": {
+                  "si_value": 72.0
+                }
+              },
+              "index": "Region"
+            },
+            "3 s": {
+              "entries": {
+                "North": {
+                  "si_value": 133.1
+                },
+                "South": {
+                  "si_value": 86.4
+                }
+              },
+              "index": "Region"
+            }
+          },
+          "index": "Step"
+        },
+        "position": {
+          "entries": {
+            "0 s": {
+              "display_value": 0.0,
+              "si_value": 0.0,
+              "unit": "km"
+            },
+            "1 s": {
+              "display_value": 0.001,
+              "si_value": 1.0,
+              "unit": "km"
+            },
+            "2 s": {
+              "display_value": 0.0021000000000000003,
+              "si_value": 2.1,
+              "unit": "km"
+            },
+            "3 s": {
+              "display_value": 0.00331,
+              "si_value": 3.31,
+              "unit": "km"
+            }
+          },
+          "index": "Step"
+        },
+        "prev_x": {
+          "entries": {
+            "0 s": {
+              "si_value": 0.0
+            },
+            "1 s": {
+              "si_value": 1.0
+            },
+            "2 s": {
+              "si_value": 1.0
+            },
+            "3 s": {
+              "si_value": 2.0
+            }
+          },
+          "index": "Step"
+        },
+        "state": {
+          "entries": {
+            "0 s": {
+              "si_value": 1.0
+            },
+            "1 s": {
+              "si_value": 0.5
+            },
+            "2 s": {
+              "si_value": 0.25
+            },
+            "3 s": {
+              "si_value": 0.125
+            }
+          },
+          "index": "Step"
+        },
+        "velocity": {
+          "entries": {
+            "0 s": {
+              "si_value": 1.0,
+              "unit": "m/s"
+            },
+            "1 s": {
+              "si_value": 1.1,
+              "unit": "m/s"
+            },
+            "2 s": {
+              "si_value": 1.21,
+              "unit": "m/s"
+            },
+            "3 s": {
+              "si_value": 1.331,
+              "unit": "m/s"
+            }
+          },
+          "index": "Step"
+        },
+        "x": {
+          "entries": {
+            "0 s": {
+              "si_value": 1.0
+            },
+            "1 s": {
+              "si_value": 1.0
+            },
+            "2 s": {
+              "si_value": 2.0
+            },
+            "3 s": {
+              "si_value": 3.0
+            }
+          },
+          "index": "Step"
+        }
+      },
+      "param": {
+        "decay": {
+          "si_value": 0.5
+        },
+        "initial_state": {
+          "si_value": 1.0
+        },
+        "k": {
+          "si_value": 0.5
+        },
+        "pop0": {
+          "entries": {
+            "North": {
+              "si_value": 100.0
+            },
+            "South": {
+              "si_value": 50.0
+            }
+          },
+          "index": "Region"
+        },
+        "rate": {
+          "entries": {
+            "North": {
+              "si_value": 0.1
+            },
+            "South": {
+              "si_value": 0.2
+            }
+          },
+          "index": "Region"
+        },
+        "speed": {
+          "display_value": 1.0,
+          "si_value": 1.0,
+          "unit": "m/s"
+        },
+        "x0": {
+          "si_value": 1.0
+        },
+        "x_before": {
+          "si_value": 0.0
+        }
+      },
+      "unfinished_calls": []
+    }
+  }
+}

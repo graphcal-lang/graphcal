@@ -11,7 +11,7 @@ use graphcal_compiler::source_id::SourceId;
 use graphcal_compiler::syntax::span::Span;
 
 use crate::eval::types::RuntimeUnavailable;
-use crate::eval_expr::{EvalSession, RuntimeValueMap, eval_root_with_presentation};
+use crate::eval_expr::{EvalSession, RuntimeValueMap, eval_scheduled};
 use crate::execution_plan::ExecPlan;
 use crate::runtime_presentation::PendingPresentedMap;
 
@@ -45,13 +45,7 @@ pub fn run_eval_loop_with_bindings(
         let root = EvalSession::checked(plan, src, sources, host_fns, cancellation.clone())
             .with_unavailable(frame.errors())
             .with_unfinished_calls(&unfinished_calls);
-        let session = root.for_declaration(&entry);
-        eval_root_with_presentation(
-            entry.body(),
-            frame.values(),
-            frame.presentations(),
-            &session,
-        )
+        eval_scheduled(&entry, frame.values(), frame.presentations(), &root)
     })?;
     let outcome = frame.finish();
     Ok(EvalLoopResult {

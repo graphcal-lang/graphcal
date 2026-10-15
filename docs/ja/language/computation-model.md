@@ -163,6 +163,9 @@ node a: Dimensionless = @b + 1.0;
 node b: Dimensionless = @a + 1.0;  // ERROR: cycle detected
 ```
 
+唯一の例外は、軸に沿って前のステップを読む `for` と `unfold` の宣言からなる循環です。
+[宣言をまたぐ漸化式](indexes.md#recurrences-across-declarations)を参照してください。
+
 ### 呼び出し箇所の同一性 { #call-site-identity }
 
 `dag` がインスタンス化されるとき、トップレベルの `include` によるか、インラインの

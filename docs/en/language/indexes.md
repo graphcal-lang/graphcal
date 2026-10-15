@@ -273,9 +273,10 @@ cardinality form directly; a declared axis must retain its checked semantic
 definition rather than silently falling back to identity-only comparison.
 
 !!! note "Evaluation granularity"
-    Access with a compile-time-constant key (a label, a loop variable, or
-    `key(...)`) keeps fine-grained per-element DAG edges. Access with a
-    runtime key is a gather: the edge covers the whole indexed declaration.
+    Dependencies are scheduled per declaration: reading any element of an
+    indexed declaration waits for the whole declaration. The exception is a
+    cycle of [recurrences across declarations](#recurrences-across-declarations),
+    which is evaluated element by element along its axis.
 
 ### Extractions: `coord` and `to_int`
 
@@ -960,6 +961,42 @@ as `T[Element][TimeStep]`.
 See the complete runnable
 [`indexed_state_recurrence.gcl`](https://github.com/graphcal-lang/graphcal/blob/main/tests/fixtures/valid/indexed_state_recurrence.gcl)
 fixture for indexed `unfold` and `scan` examples.
+
+### Recurrences across declarations
+
+Coupled quantities can be written as separate declarations that read each
+other, as long as every cycle steps back along the axis. Here `action` reads
+`state` at the same step, and `state` reads `action` at the previous step:
+
+```
+index Step = range(0.0 s, 3.0 s, step: 1.0 s);
+param k: Dimensionless = 0.5;
+
+node action: Dimensionless[Step] = for t: Step { -@k * @state[t] };
+node state: Dimensionless[Step] = unfold(Step, 1.0, |s, prev_t, t| s + @action[prev_t]);
+```
+
+Each step is evaluated in turn: `state[0]`, `action[0]`, `state[1]`,
+`action[1]`, and so on, so `state` is `1, 0.5, 0.25, 0.125`.
+
+Such a cycle is accepted when all of the following hold:
+
+- Every declaration in it is a top-level `for` or `unfold` over the same
+  coordinate axis, and at least one is an `unfold`.
+- Every read between them uses the reader's own `for` variable (`t`) or
+  `unfold` binders (`t`, `prev_t`) as the first key: `@y[t, ...]` reads the
+  same step, `@y[prev_t, ...]` the previous one. Whole-value reads such as
+  `sum(@y)` and reads in an `unfold` init are rejected.
+- No declaration reads itself; an `unfold` reads its own previous value
+  through its state binding.
+- Same-step reads alone form no cycle:
+
+```
+node state: Dimensionless[Step] = unfold(Step, 1.0, |s, prev_t, t| s + @action[t]);
+// ERROR: `action` -> `state` -> `action` is a cycle of same-step reads
+```
+
+Reads of declarations outside the cycle are unrestricted.
 
 ## Aggregation Over Any Index
 

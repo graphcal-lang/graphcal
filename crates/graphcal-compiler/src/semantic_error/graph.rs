@@ -50,6 +50,33 @@ impl std::fmt::Display for CycleMember {
     }
 }
 
+/// Why a dependency cycle with an `unfold` member is not an accepted
+/// recurrence group: the first violated rule of
+/// `internals/recurrence-groups.md` (§3), in rule order.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RecurrenceRejection {
+    /// R1: the cycle reads `other`, which another DAG declares.
+    MixedOwners { other: DeclName },
+    /// R2: the member is an unfinished `todo` node.
+    Unfinished,
+    /// R3: the member is not a top-level `for` or `unfold`.
+    NotRecurrenceShape,
+    /// R4: the member steps along another axis than `first`.
+    AxisMismatch { first: DeclName },
+    /// R5: the member reads itself.
+    SelfRead,
+    /// R6: the member reads all of `target`.
+    WholeValueRead { target: DeclName },
+    /// R6: the member reads `target` without an `@` reference, through a
+    /// dynamic unit's scale.
+    ImplicitRead { target: DeclName },
+    /// R6: the member reads `target` with a leading key that is not its own
+    /// step or previous-step binder.
+    NotStepKeyed { target: DeclName },
+    /// R7: these members read each other at the same step, in this order.
+    SameStepCycle { cycle: Vec<DeclName> },
+}
+
 /// Diagnostics of the declaration graph and of DAG calls.
 #[derive(Debug, Clone, Error)]
 pub enum GraphError {
@@ -57,6 +84,14 @@ pub enum GraphError {
     DagCallInCompileTime { name: DagId },
     #[error("cyclic dependency involving `{name}`")]
     CyclicDependency { name: CycleMember },
+    /// A dependency cycle with an `unfold` member that is not an accepted
+    /// recurrence group, reported at the member or read that violates the
+    /// first rule.
+    #[error("cyclic dependency involving `{name}`")]
+    RejectedRecurrence {
+        name: DeclName,
+        reason: RecurrenceRejection,
+    },
     #[error("unknown dag `{name}`")]
     UnknownDag { name: DagId },
     #[error("unknown param `{name}` in DAG call to `{dag_name}`")]
@@ -90,7 +125,7 @@ impl DiagnosticKind for GraphError {
     fn code(&self) -> &'static str {
         match self {
             Self::DagCallInCompileTime { .. } => "graphcal::G007",
-            Self::CyclicDependency { .. } => "graphcal::G001",
+            Self::CyclicDependency { .. } | Self::RejectedRecurrence { .. } => "graphcal::G001",
             Self::UnknownDag { .. } => "graphcal::G002",
             Self::UnknownDagParam { .. } => "graphcal::G003",
             Self::MissingDagBindings { .. } => "graphcal::G004",
@@ -107,6 +142,7 @@ impl DiagnosticKind for GraphError {
                 Some("runtime DAG instantiation is not allowed here".to_owned())
             }
             Self::CyclicDependency { .. } => Some("involved in cycle".to_owned()),
+            Self::RejectedRecurrence { reason, .. } => Some(reason.label()),
             Self::UnknownDag { .. } => Some("unknown dag".to_owned()),
             Self::UnknownDagParam { dag_name, .. } => Some(format!("not a param in `{dag_name}`")),
             Self::MissingDagBindings { .. } => Some("missing binding(s)".to_owned()),
@@ -124,6 +160,7 @@ impl DiagnosticKind for GraphError {
         match self {
             Self::DagCallInCompileTime { .. } => Some("a DAG call is an anonymous runtime include; call it from a `node`, `param` default, assertion, or visualization expression instead".to_owned()),
             Self::CyclicDependency { .. } => Some("declarations cannot form dependency cycles".to_owned()),
+            Self::RejectedRecurrence { reason, .. } => Some(reason.help()),
             Self::UnknownDag { .. } => Some("the inline call references a dag that is not declared in this file".to_owned()),
             Self::UnknownDagParam { .. } => Some("the binding name must match a `param` declared in the called DAG".to_owned()),
             Self::MissingDagBindings { .. } => Some("every required `param` declared in the DAG must be bound at each `include` or call site".to_owned()),
@@ -138,6 +175,7 @@ impl DiagnosticKind for GraphError {
         match self {
             Self::DagCallInCompileTime { .. }
             | Self::CyclicDependency { .. }
+            | Self::RejectedRecurrence { .. }
             | Self::UnknownDag { .. }
             | Self::UnknownDagParam { .. }
             | Self::MissingDagBindings { .. }
@@ -145,6 +183,61 @@ impl DiagnosticKind for GraphError {
             | Self::DagArgTypeMismatch { .. }
             | Self::InlineDagTargetNotFound { .. }
             | Self::RecursiveDagInstantiation { .. } => Vec::new(),
+        }
+    }
+}
+
+impl RecurrenceRejection {
+    fn label(&self) -> String {
+        match self {
+            Self::MixedOwners { other } => {
+                format!("this cycle reads `{other}`, declared in another DAG")
+            }
+            Self::Unfinished => "unfinished node in a cycle".to_owned(),
+            Self::NotRecurrenceShape => "not a top-level `for` or `unfold`".to_owned(),
+            Self::AxisMismatch { first } => {
+                format!("steps along another axis than `{first}`")
+            }
+            Self::SelfRead => "reads itself".to_owned(),
+            Self::WholeValueRead { target } => format!("reads all of `{target}`"),
+            Self::ImplicitRead { target } => {
+                format!("reads `{target}` through a dynamic unit")
+            }
+            Self::NotStepKeyed { target } => {
+                format!("reads `{target}` without this node's step key")
+            }
+            Self::SameStepCycle { cycle } => format!(
+                "same-step cycle {}",
+                cycle
+                    .iter()
+                    .chain(cycle.first())
+                    .map(|member| format!("`{member}`"))
+                    .collect::<Vec<_>>()
+                    .join(" -> ")
+            ),
+        }
+    }
+
+    fn help(&self) -> String {
+        match self {
+            Self::MixedOwners { .. } => {
+                "a recurrence cannot span declarations of different DAGs".to_owned()
+            }
+            Self::Unfinished => {
+                "a recurrence needs formulas to check the step offsets of its reads".to_owned()
+            }
+            Self::NotRecurrenceShape => "every declaration in a cycle with an `unfold` must be a top-level `for` or `unfold` over the recurrence axis".to_owned(),
+            Self::AxisMismatch { .. } => {
+                "every declaration in a recurrence steps along the same axis".to_owned()
+            }
+            Self::SelfRead => {
+                "use the `unfold` state binding to read the previous value".to_owned()
+            }
+            Self::WholeValueRead { .. } | Self::ImplicitRead { .. } => "a declaration in a recurrence can read another one only element by element, as `@y[t]` or `@y[prev_t]`".to_owned(),
+            Self::NotStepKeyed { .. } => "index a declaration of the recurrence with this node's own step binder `t` or previous-step binder `prev_t`".to_owned(),
+            Self::SameStepCycle { .. } => {
+                "one read on the cycle must use the previous step `prev_t`".to_owned()
+            }
         }
     }
 }

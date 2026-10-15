@@ -1828,6 +1828,21 @@ role = "contracts"
 
 [[module]]
 package = "compiler"
+path = ["tir", "recurrence_plan"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["tir", "recurrence_group"]
+role = "checking"
+
+[[module]]
+package = "compiler"
+path = ["tir", "recurrence_group", "tests"]
+role = "checking"
+
+[[module]]
+package = "compiler"
 path = ["tir", "dim_check", "schedules"]
 role = "checking"
 
@@ -2321,6 +2336,11 @@ role = "contracts"
 [[module]]
 package = "eval"
 path = ["execution_frame"]
+role = "interpreter"
+
+[[module]]
+package = "eval"
+path = ["recurrence_slots"]
 role = "interpreter"
 
 [[module]]

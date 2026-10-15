@@ -2826,7 +2826,7 @@ node values: Dimensionless[Phase] = unfold(
 }
 
 #[test]
-fn unfold_init_self_reference_is_cycle() {
+fn unfold_init_self_reference_is_a_rejected_self_read() {
     let source = "\
 index Step = range(0.0 s, 2.0 s, step: 1.0 s);
 node y: Dimensionless[Step] = unfold(Step, sum(@y), |prev_y, p, t| prev_y + 1.0);";
@@ -2835,16 +2835,19 @@ node y: Dimensionless[Step] = unfold(Step, sum(@y), |prev_y, p, t| prev_y + 1.0)
         matches!(
             err,
             SemanticError::Located(crate::diagnostic::Diagnostic {
-                kind: SemanticErrorKind::Graph(GraphError::CyclicDependency { .. }),
+                kind: SemanticErrorKind::Graph(GraphError::RejectedRecurrence {
+                    reason: crate::semantic_error::graph::RecurrenceRejection::SelfRead,
+                    ..
+                }),
                 ..
             })
         ),
-        "expected CyclicDependency, got: {err:?}"
+        "expected a rejected self-read, got: {err:?}"
     );
 }
 
 #[test]
-fn unfold_body_self_references_are_cycles_for_every_coordinate() {
+fn unfold_body_self_references_are_rejected_self_reads_for_every_coordinate() {
     for self_read in ["@y[prev_t]", "@y[t]", "@y[t + (1.0 s)]"] {
         let source = format!(
             "index Step = range(0.0 s, 2.0 s, step: 1.0 s);\n\
@@ -2859,11 +2862,14 @@ fn unfold_body_self_references_are_cycles_for_every_coordinate() {
             matches!(
                 err,
                 SemanticError::Located(crate::diagnostic::Diagnostic {
-                    kind: SemanticErrorKind::Graph(GraphError::CyclicDependency { .. }),
+                    kind: SemanticErrorKind::Graph(GraphError::RejectedRecurrence {
+                        reason: crate::semantic_error::graph::RecurrenceRejection::SelfRead,
+                        ..
+                    }),
                     ..
                 })
             ),
-            "expected CyclicDependency for `{self_read}`, got: {err:?}"
+            "expected a rejected self-read for `{self_read}`, got: {err:?}"
         );
     }
 }
@@ -4599,7 +4605,7 @@ fn checker_retains_dependency_then_source_ordered_schedules() {
     let runtime = tir.root().runtime_schedule();
     assert_eq!(runtime.execution_dags(), [test_dag_id()]);
     assert_eq!(
-        runtime.order().as_slice(),
+        runtime.declarations().cloned().collect::<Vec<_>>(),
         [
             root_decl("p"),
             root_decl("q"),
@@ -4840,4 +4846,163 @@ fn inference_emits_typed_trees_carrying_node_facts() {
         .find(|expr| matches!(expr.kind(), crate::hir::expr::ExprKind::StringLiteral(_)))
         .unwrap();
     assert!(bodies.contextual(color.id()).is_some());
+}
+
+/// The recurrence-group rejection reason of `source`, with the source text
+/// its diagnostic points at.
+fn recurrence_rejection(
+    source: &str,
+) -> (
+    crate::semantic_error::graph::RecurrenceRejection,
+    String,
+    String,
+) {
+    let error = check(source).unwrap_err();
+    match error {
+        SemanticError::Located(crate::diagnostic::Diagnostic {
+            primary,
+            kind: SemanticErrorKind::Graph(GraphError::RejectedRecurrence { name, reason }),
+            ..
+        }) => (
+            reason,
+            name.to_string(),
+            source[primary.offset()..][..primary.len()].to_owned(),
+        ),
+        other => panic!("expected a rejected recurrence group, got {other:?}"),
+    }
+}
+
+const RECURRENCE_AXIS: &str = "index Step = range(0.0 s, 2.0 s, step: 1.0 s);\n";
+
+#[test]
+fn recurrence_groups_are_scheduled_as_one_unit_in_plan_order() {
+    let source = format!(
+        "{RECURRENCE_AXIS}\
+         param k: Dimensionless = 0.5;\n\
+         node action: Dimensionless[Step] = for t: Step {{ -@k * @state[t] }};\n\
+         node state: Dimensionless[Step] = unfold(Step, 1.0, |s, prev_t, t| s + @action[prev_t]);\n\
+         node total: Dimensionless = sum(@state);"
+    );
+    let (tir, src) = module_aware_tir(&source);
+    let checked = check_draft(tir, src).unwrap();
+    let runtime = checked.root().runtime_schedule();
+    let units = runtime
+        .units()
+        .iter()
+        .map(|unit| {
+            unit.declarations()
+                .map(|declaration| declaration.leaf().to_string())
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(units, [vec!["k"], vec!["state", "action"], vec!["total"]]);
+    assert!(matches!(
+        runtime.units().as_slice()[1],
+        crate::tir::schedule::ScheduleUnit::Recurrence(_)
+    ));
+}
+
+#[test]
+fn recurrence_reads_are_classified_from_their_written_form() {
+    use crate::semantic_error::graph::RecurrenceRejection;
+    let action = || DeclName::expect_valid("action");
+    for (closure, expected, anchor) in [
+        (
+            "s + sum(@action)",
+            RecurrenceRejection::WholeValueRead { target: action() },
+            "@action",
+        ),
+        (
+            "s + sum(for u: Step { @action[u] })",
+            RecurrenceRejection::NotStepKeyed { target: action() },
+            "@action",
+        ),
+        (
+            "s + @action[nearest_key(Step, 0.0 s)]",
+            RecurrenceRejection::NotStepKeyed { target: action() },
+            "@action",
+        ),
+        (
+            "s + @action[prev_t] + @action[t]",
+            RecurrenceRejection::SameStepCycle {
+                cycle: vec![action(), DeclName::expect_valid("state")],
+            },
+            "@state",
+        ),
+    ] {
+        let source = format!(
+            "{RECURRENCE_AXIS}\
+             node action: Dimensionless[Step] = for t: Step {{ @state[t] }};\n\
+             node state: Dimensionless[Step] = unfold(Step, 1.0, |s, prev_t, t| {closure});"
+        );
+        let (reason, _, text) = recurrence_rejection(&source);
+        assert_eq!(reason, expected, "{closure}");
+        assert_eq!(text, anchor, "{closure}");
+    }
+}
+
+#[test]
+fn recurrence_init_reads_are_rejected_but_nested_inits_may_use_the_step_binder() {
+    use crate::semantic_error::graph::RecurrenceRejection;
+    let init = format!(
+        "{RECURRENCE_AXIS}\
+         node action: Dimensionless[Step] = for t: Step {{ @state[t] }};\n\
+         node state: Dimensionless[Step] = unfold(Step, @action[nearest_key(Step, 0.0 s)], |s, prev_t, t| s + @action[prev_t]);"
+    );
+    assert_eq!(
+        recurrence_rejection(&init).0,
+        RecurrenceRejection::NotStepKeyed {
+            target: DeclName::expect_valid("action")
+        }
+    );
+    let nested = format!(
+        "{RECURRENCE_AXIS}\
+         index Sub = range(0.0 s, 1.0 s, step: 0.5 s);\n\
+         node action: Dimensionless[Step] = for t: Step {{ sum(unfold(Sub, @state[t], |acc, prev_u, u| acc * 0.5)) }};\n\
+         node state: Dimensionless[Step] = unfold(Step, 1.0, |s, prev_t, t| s - @action[prev_t]);"
+    );
+    check(&nested).unwrap();
+}
+
+#[test]
+fn recurrence_reads_through_dynamic_units_are_implicit() {
+    use crate::semantic_error::graph::RecurrenceRejection;
+    let source = format!(
+        "{RECURRENCE_AXIS}\
+         base dim Money;\n\
+         base unit USD: Money;\n\
+         node weight: Dimensionless[Step] = for t: Step {{ @cost[t] / 1.0 USD }};\n\
+         unit EUR: Money = (@weight[nearest_key(Step, 0.0 s)]) USD;\n\
+         node cost: Money[Step] = unfold(Step, 0.0 USD, |s, prev_t, t| s + 1.0 EUR);"
+    );
+    let (reason, name, text) = recurrence_rejection(&source);
+    assert_eq!(
+        reason,
+        RecurrenceRejection::ImplicitRead {
+            target: DeclName::expect_valid("weight")
+        }
+    );
+    assert_eq!(name, "cost");
+    assert_eq!(text, "1.0 EUR");
+}
+
+#[test]
+fn recurrence_member_rules_report_the_member() {
+    use crate::semantic_error::graph::RecurrenceRejection;
+    let scalar = format!(
+        "{RECURRENCE_AXIS}\
+         node state: Dimensionless[Step] = unfold(Step, 1.0, |s, prev_t, t| s * @gain);\n\
+         node gain: Dimensionless = sum(@state);"
+    );
+    let (reason, name, _) = recurrence_rejection(&scalar);
+    assert_eq!(reason, RecurrenceRejection::NotRecurrenceShape);
+    assert_eq!(name, "gain");
+    let unfinished = format!(
+        "{RECURRENCE_AXIS}\
+         node action: Dimensionless[Step] = todo {{ @state }};\n\
+         node state: Dimensionless[Step] = unfold(Step, 1.0, |s, prev_t, t| s + @action[prev_t]);"
+    );
+    let (reason, name, _) = recurrence_rejection(&unfinished);
+    assert_eq!(reason, RecurrenceRejection::Unfinished);
+    assert_eq!(name, "action");
 }

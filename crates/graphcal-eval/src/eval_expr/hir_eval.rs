@@ -1,3 +1,4 @@
+use crate::execution_plan::{RecurrenceBody, RecurrenceDisplay};
 use crate::runtime_value::{IndexAxis, IndexedValue, KeyValue, RuntimeValue};
 use graphcal_compiler::builtin::{AggregationFn, ValueAggregation};
 use graphcal_compiler::outcome::Outcome;
@@ -136,6 +137,122 @@ pub fn eval_root_with_presentation<T: std::borrow::Borrow<TExpr>>(
     )
 }
 
+/// Evaluate what a frame schedules: a declaration as a whole, or one element
+/// of a recurrence group member, selecting the session of either.
+pub fn eval_scheduled(
+    scheduled: &crate::execution_frame::Scheduled<'_, '_>,
+    values: &RuntimeValueMap,
+    presentation_values: &PendingPresentedMap,
+    session: &EvalSession<'_>,
+) -> Result<EvaluatedRuntimeValue, Outcome<SemanticError>> {
+    match scheduled {
+        crate::execution_frame::Scheduled::Declaration(declaration) => eval_root_with_presentation(
+            declaration.body(),
+            values,
+            presentation_values,
+            &session.for_declaration(declaration),
+        ),
+        crate::execution_frame::Scheduled::Element(element) => eval_recurrence_element(
+            element,
+            values,
+            presentation_values,
+            &session.for_element(element),
+        ),
+    }
+}
+
+/// Evaluate one element of a recurrence group member: its top-level `for`
+/// at one key, or its top-level `unfold` init or one step of its closure,
+/// under the member's top-level display conversion if it has one.
+fn eval_recurrence_element(
+    element: &crate::execution_frame::ScheduledElement<'_, '_>,
+    values: &RuntimeValueMap,
+    presentation_values: &PendingPresentedMap,
+    ctx: &EvalSession<'_>,
+) -> Result<EvaluatedRuntimeValue, Outcome<SemanticError>> {
+    let member = element.member();
+    let root = member.root();
+    ctx.check_dependencies(root)?;
+    let value = eval_member_element(element, values, presentation_values, ctx)?;
+    match member.display() {
+        RecurrenceDisplay::Plain => Ok(value),
+        RecurrenceDisplay::Unit(target) => presented(
+            value.into_value(),
+            PendingLeaf::Quantity(super::presentation::pending(target, root.dag_id(), ctx)),
+            root.span(),
+            ctx,
+        ),
+        RecurrenceDisplay::Timezone(timezone) => presented(
+            value.into_value(),
+            PendingLeaf::Datetime(timezone.clone()),
+            root.span(),
+            ctx,
+        ),
+    }
+}
+
+/// [`eval_recurrence_element`] without the display conversion.
+fn eval_member_element(
+    element: &crate::execution_frame::ScheduledElement<'_, '_>,
+    values: &RuntimeValueMap,
+    presentation_values: &PendingPresentedMap,
+    ctx: &EvalSession<'_>,
+) -> Result<EvaluatedRuntimeValue, Outcome<SemanticError>> {
+    let presentation_values = Some(presentation_values);
+    let root_locals = HirLocalValueMap::root();
+    let key = |key: &KeyValue| EvaluatedRuntimeValue::plain(RuntimeValue::Key(key.clone()));
+    match element.member().body() {
+        RecurrenceBody::For {
+            first,
+            remaining,
+            body,
+        } => {
+            let mut locals = root_locals.child(Vec::new());
+            locals.bind(first.binding.local.id, key(element.at()));
+            match remaining.split_first() {
+                Some((next, remaining)) => eval_for_comp_bindings(
+                    next,
+                    remaining,
+                    body,
+                    values,
+                    presentation_values,
+                    &locals,
+                    ctx,
+                ),
+                None => eval_texpr_evaluated(body, values, presentation_values, &locals, ctx),
+            }
+        }
+        RecurrenceBody::Unfold {
+            recurrence,
+            init,
+            body,
+            axis,
+        } => {
+            if axis.coordinate_data().is_none() {
+                return Err(ctx
+                    .runtime_error(
+                        RuntimeFailure::UnfoldWithoutCoordinates(axis.index().clone()),
+                        recurrence.axis.span,
+                    )
+                    .into());
+            }
+            let Some(previous) = element.previous() else {
+                return eval_texpr_evaluated(init, values, presentation_values, &root_locals, ctx);
+            };
+            let mut locals = root_locals.child(Vec::new());
+            locals.bind(recurrence.previous_state.id, previous.state.clone());
+            locals.bind(recurrence.previous_index.id, key(previous.key));
+            locals.bind(recurrence.current_index.id, key(element.at()));
+            with_initial_presentation(
+                eval_texpr_evaluated(body, values, presentation_values, &locals, ctx)?,
+                previous.initial,
+                body.span(),
+                ctx,
+            )
+        }
+    }
+}
+
 /// Evaluate `subtree` in its scope with `locals` bound, for tests that forge
 /// a local binding.
 #[cfg(any(test, feature = "test-internals"))]
@@ -249,6 +366,11 @@ fn eval_texpr_inner(
             )
         }
         NodeKind::GraphRef(target) => {
+            if let Some(slots) = ctx.recurrence.filter(|slots| slots.contains(&target.value)) {
+                // The checker never accepts a whole-value read of a member.
+                return recurrence_read(&target, None, local_values, slots, ctx)
+                    .map(|element| element.to_owned_with(clone_graph_ref_value));
+            }
             let value = resolve_graph_ref(&target, values, ctx)?;
             Ok(presented_ref(presentation_values, &target.value, value)
                 .to_owned_with(clone_graph_ref_value))
@@ -803,10 +925,6 @@ fn eval_for_comp_bindings(
     Ok(EvaluatedRuntimeValue::from_indexed(entries))
 }
 
-#[expect(
-    clippy::single_match_else,
-    reason = "single pattern dispatch keeps borrowed graph references and every index-argument category explicit"
-)]
 fn eval_index_access(
     span: Span,
     inner: ScopedNode<'_>,
@@ -817,7 +935,23 @@ fn eval_index_access(
     ctx: &EvalSession<'_>,
 ) -> Result<EvaluatedRuntimeValue, Outcome<SemanticError>> {
     let evaluated;
+    // A member of the recurrence group being evaluated is read element by
+    // element: its leading key selects the element, the rest select inside it.
+    let mut consumed = 0;
+    let member = match inner.kind() {
+        NodeKind::GraphRef(target) => ctx
+            .recurrence
+            .filter(|slots| slots.contains(&target.value))
+            .map(|slots| (target, slots)),
+        _ => None,
+    };
     let base = match inner.kind() {
+        NodeKind::GraphRef(_) if let Some((target, slots)) = member => {
+            ctx.cancellation.checkpoint()?;
+            consumed = 1;
+            let leading = args.iter().next().map(Scoped::view);
+            recurrence_read(&target, leading, local_values, slots, ctx)?
+        }
         NodeKind::GraphRef(target) => {
             // This replaces the checkpoint normally performed by
             // `eval_value(inner, ...)` while retaining a reference to the
@@ -835,7 +969,7 @@ fn eval_index_access(
     let evaluate = |node| eval_value(node, values, local_values, ctx);
     let operands = super::operations::Operands::new(&evaluate, ctx);
     let mut current = base;
-    for arg in args.iter() {
+    for arg in args.iter().skip(consumed) {
         let selector = match arg.view() {
             // A label selects only on its own axis, never by its leaf name.
             ScopedIndexArg::Variant(variant) => EntrySelector::Label(&variant.variant),
@@ -877,6 +1011,52 @@ fn eval_index_access(
         )?;
     }
     Ok(current.to_owned_with(clone_index_access_result))
+}
+
+/// The element of the recurrence group member `target` that `@target[k, …]`
+/// selects: `k`, its leading key, is the reader's own step or previous-step
+/// binder, so its position is the element's step. The checker accepts no
+/// other read of a member (`leading` is `None` for a whole-value read), and
+/// its plan computes every element a read selects before the read, so any
+/// other read is an internal error.
+fn recurrence_read<'s>(
+    target: &Spanned<ResolvedDeclName>,
+    leading: Option<ScopedIndexArg<'_>>,
+    local_values: &HirLocalValueMap<'_>,
+    slots: &'s crate::recurrence_slots::RecurrenceSlots,
+    ctx: &EvalSession<'_>,
+) -> Result<PresentedRef<'s, PendingLeaf>, Outcome<SemanticError>> {
+    let step = match leading {
+        Some(ScopedIndexArg::Var(local)) => {
+            let bound = local_values
+                .get(local.value)
+                .ok_or_else(|| ctx.runtime_error(UnboundReference::Local, local.span))?;
+            let key = read_shape(
+                bound.value().into_owned(),
+                "a key",
+                local.span,
+                ctx,
+                |value| match value {
+                    RuntimeValue::Key(key) => Ok(key),
+                    other => Err(other),
+                },
+            )?;
+            Some(key.position())
+        }
+        _ => None,
+    };
+    step.and_then(|step| slots.computed(&target.value, step).ok())
+        .map(EvaluatedRuntimeValue::as_ref)
+        .ok_or_else(|| {
+            ctx.internal_error(
+                format!(
+                    "recurrence member `{}` is read outside the plan of its group",
+                    target.value
+                ),
+                target.span,
+            )
+            .into()
+        })
 }
 
 /// How one index argument selects an entry of an indexed value.
@@ -1111,13 +1291,8 @@ fn eval_dag_call(
     }
 
     let evaluated = frame.run(&ctx.cancellation, |entry, frame| {
-        let session = ctx.for_declaration(&entry).with_unavailable(frame.errors());
-        eval_root_with_presentation(
-            entry.body(),
-            frame.values(),
-            frame.presentations(),
-            &session,
-        )
+        let session = ctx.clone().with_unavailable(frame.errors());
+        eval_scheduled(&entry, frame.values(), frame.presentations(), &session)
     });
     if let Some(calls) = ctx.unfinished_calls {
         calls

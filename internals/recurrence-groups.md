@@ -3,8 +3,12 @@
 This document specifies **recurrence groups**: dependency cycles between
 indexed declarations that are acyclic once each declaration is split into its
 elements along one axis. It is the normative design for
-[#2058](https://github.com/graphcal-lang/graphcal/issues/2058). The feature is
-not implemented yet.
+[#2058](https://github.com/graphcal-lang/graphcal/issues/2058).
+
+The checker is `crates/graphcal-compiler/src/tir/recurrence_group.rs`, called
+from `RuntimeSchedule::build` (`tir/schedule.rs`). The evaluator is
+`ExecutionFrame::run_group` (`crates/graphcal-eval/src/execution_frame.rs`)
+with the element slots of `recurrence_slots.rs`.
 
 The machine-checked version lives in
 [`formal/Graphcal/Graph/RecurrenceGroup/`](../formal/Graphcal/Graph/RecurrenceGroup/):
@@ -567,38 +571,46 @@ needed for soundness.
 
 ## 9. Upstream obligations
 
-The Lean model takes the following data as given. An implementation must
-produce it from the same sources the scheduler uses.
+The Lean model takes the following data as given. The implementation must
+produce it from the same sources the scheduler uses; each item names where it
+does.
 
 1. **Candidate groups** are the strongly connected components, containing a
    cycle, of the graph `RuntimeSchedule::build` orders: params and nodes of the
-   callable and of its instance closure, with edges from `runtime_deps`.
-2. **Members.** For each member: owner (callable or included instance); its
-   definition shape after stripping parentheses and one top-level display
+   callable and of its instance closure, with edges from `runtime_deps`
+   (`DependencyGraph::cyclic_components`).
+2. **Members.** For each member: its owning DAG; its definition shape after
+   stripping parentheses (the parser drops them) and one top-level display
    conversion; the resolved axis of a `for` or `unfold`; whether it is a
-   `todo` node.
+   `todo` node (`group_facts`).
 3. **Reads are complete.** One read per dependency source, in source order:
    every `@y` occurrence that contributes to `runtime_deps`, and every implicit
    dependency (today: one per quantity literal per member its dynamic unit's
    scale reads). Projecting reads to `(source, target)` pairs must give exactly
-   `runtime_deps` restricted to the group. This should be a property test. A
-   dependency that is merged into an already-explained edge must still appear
-   as its own read, because classification is per read.
+   `runtime_deps` restricted to the group. A dependency that is merged into an
+   already-explained edge must still appear as its own read, because
+   classification is per read. `group_facts` walks the HIR for `@y`
+   occurrences and dynamic-unit literals, and adds every remaining
+   `runtime_deps` edge into the group as an implicit read, so no dependency
+   escapes classification.
 4. **Leading keys by binder identity.** `IndexArg::Var(id)` is `stepBinder` or
    `previousBinder` when `id` is the member's own binder, and `otherLocal`
    otherwise. `IndexArg::Variant` and `IndexArg::Expr` are `computed`. Spelling
    is never consulted.
 5. **Typing.** `unfold` steps only along coordinate axes (`I036`); this is used
    only for the coordinate-axis consequence.
-6. **Evaluation.** The evaluator follows the checker's plan and keeps the
-   `stuck` guard as an internal error. It reads exactly the element dependencies
-   of §4.2. It checks domain constraints at element commit and fills supplied
-   params before the group runs.
-7. **Conformance.** `Group.check` and `Group.run` are executable. When the
-   compiler implements this rule, add an exhaustive oracle over small groups,
-   like the existing `formal-conformance` oracles. It should cover two or three
-   members, every shape, and reads of every form and key, compared against the
-   Rust classifier and checker.
+6. **Evaluation.** The evaluator follows the checker's plan
+   (`RecurrenceGroupPlan::element_dependencies`) and keeps the `stuck` guard as
+   an internal error, both before evaluating an element and when the
+   interpreter reads a member (`RecurrenceSlots::computed`). A member is read
+   only element by element, through its leading key. Domain constraints are
+   checked at element commit, and supplied params are filled before the group
+   runs.
+7. **Conformance.** `Group.check` and `Group.run` are executable. The Rust
+   unit tests of `tir/recurrence_group/tests.rs` mirror `Examples.lean`. A
+   follow-up is an exhaustive oracle over small groups, like the existing
+   `formal-conformance` oracles. It should cover two or three members, every
+   shape, and reads of every form and key, compared against `check_group`.
 
 ## 10. Changes from the text of #2058
 

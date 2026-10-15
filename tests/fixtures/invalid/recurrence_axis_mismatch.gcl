@@ -1,0 +1,8 @@
+index Step = range(0.0 s, 2.0 s, step: 1.0 s);
+pub index Phase = { Launch, Cruise };
+param weight: Dimensionless[Phase] = {
+    Phase#Launch: 1.0,
+    Phase#Cruise: 2.0,
+};
+node state: Dimensionless[Step] = unfold(Step, 1.0, |s, prev_t, t| s + sum(@action));
+node action: Dimensionless[Phase] = for p: Phase { @weight[p] * sum(@state) };
