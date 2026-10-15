@@ -12,7 +12,7 @@ The machine-checked version lives in
 | Lean module | Contents |
 |-------------|----------|
 | `Model.lean` | Abstract data for one candidate group (§2). |
-| `Spec.lean` | The acceptance rule (§3), the reported diagnostic (§6), the element dependency relation, plan order and outcomes (§4–§5). |
+| `Spec.lean` | The acceptance rule (§3), the reported diagnostic (§6), the element dependency relation, valid evaluation orders and outcomes (§4–§5). |
 | `Reference.lean` | Executable reference checker and evaluator. |
 | `Proofs/*.lean` | The guarantees of §7. |
 | `Examples.lean` | Every example in this document, checked. |
@@ -155,6 +155,12 @@ ignored, as in the delayed copy under R7.
 A candidate group is accepted exactly when R1–R7 hold [`Group.Accepted`]. The
 reference checker decides this [`Group.check`, `check_ok_iff_accepted`].
 
+No rule refers to declaration order. Declaring the members, or the references
+within them, in a different order never changes whether a group is accepted
+[`Relabeling.accepted_iff`; `Examples.stateActionSwapped_accepted`]. Source
+order is used only to make diagnostics (§6) and the reference evaluation order
+(§4.1) deterministic.
+
 ### R1. Members belong to the callable
 
 Every member is declared by the callable DAG being checked, not by an included
@@ -177,6 +183,20 @@ node state: Dimensionless[Step] = unfold(Step, @initial_state, |s, prev_t, t| s 
 A `todo` interface lists declarations, not step offsets, so R6 and R7 cannot be
 checked. This is today's behavior for cycles through `todo` nodes.
 [`Examples.unfinishedAction_rejected`]
+
+Expression-level `todo` holes
+([#2099](https://github.com/graphcal-lang/graphcal/issues/2099)) would make R2
+redundant. A member whose entire body is a hole has no recurrence shape (R3),
+and a hole inside a `for` or `unfold` member is classified through its interface,
+whose reads carry step offsets:
+
+```gcl
+node action: Dimensionless[Step] = for t: Step { todo { @k, @state[t] } };
+node state: Dimensionless[Step] = unfold(Step, todo { @initial_state }, |s, prev_t, t| todo { s, @action[prev_t] });
+```
+
+That relaxation only accepts more programs: filling a hole within its interface
+removes reads, which never breaks R6 or R7.
 
 ### R3. Members are a top-level `for` or `unfold`
 
@@ -284,7 +304,7 @@ node pop: Dimensionless[Step, Region] = unfold(Step, @pop0,
 node births: Dimensionless[Step, Region] = for t: Step, r: Region { @rate[r] * @pop[t, r] };
 ```
 
-[`arrayedStock_accepted`; plan order `[pop, births]`]
+[`arrayedStock_accepted`; reference order `[pop, births]`]
 
 ### R7. No same-step cycle
 
@@ -319,22 +339,28 @@ With `x_before = 0` and `x0 = 1`, `x` is `1, 1, 2, 3, 5, 8, …`.
 
 ## 4. Evaluation
 
-### 4.1 Plan order
+### 4.1 Evaluation order within a step
 
-Members are evaluated within each step in the **plan order**. Members are placed
-one at a time: each time, the first member in source order that is not yet
-placed and whose same-step targets are all placed [`Group.PlanOrder`]. When R7
-holds, this order exists and is unique [`check_ok_planOrder`,
-`planOrder_unique`].
+Within each step, members are evaluated in a **valid order**: every member comes
+after the members it reads at the same step [`Group.ValidOrder`]. A valid order
+exists exactly when R7 holds. Any valid order is conforming: every valid order
+gives the same element statuses and values [`ValidOrder.run_order_independent`].
 
-- `state` / `action`: `action` reads `state` at the same step, so the order is
-  `[state, action]`.
-- Delayed copy: there are no same-step reads, so source order: `[prev_x, x]`.
+- `state` / `action`: `action` reads `state` at the same step, so the only valid
+  order is `[state, action]`.
+- Delayed copy: there are no same-step reads, so both orders are valid.
+
+The reference checker returns one particular valid order, so that results are
+reproducible: it places members one at a time, each time taking the first member
+in source order whose same-step targets are already placed [`Group.PlanOrder`,
+`check_ok_planOrder`, `planOrder_unique`]. For the delayed copy this is
+`[prev_x, x]`. This tie-break is a determinism choice, not part of the
+semantics.
 
 ### 4.2 Schedule and element semantics
 
 Evaluation is step-major: for `k = 0, 1, …, n−1`, and within each step for every
-member in plan order, evaluate element `x[k]` [`schedule`].
+member in a valid order, evaluate element `x[k]` [`schedule`].
 
 - `for` member: `x[k]` evaluates the body with `t` bound to the key at step `k`.
 - `unfold` member: `x[0]` is the init. For `k ≥ 1`, `x[k]` evaluates the
@@ -407,8 +433,9 @@ Evaluation continues past failures. Each element's status depends only on the
 statuses of the elements it reads, so it is the same for every valid order
 [`ValidOrder.run_order_independent`]. When the evaluation
 policy aborts at the first error, the reported error is the first failed element
-in schedule order. That is the only observable effect of the plan order's
-tie-breaking rule.
+the evaluator meets. If several elements of one step fail, which one that is
+depends on the valid order used; with the reference order it is deterministic.
+This is the only observable effect of choosing among valid orders.
 
 ### 5.2 Member outcomes
 
@@ -455,6 +482,9 @@ whether the group has an `unfold` member [`Group.diagnose`]:
 - **Otherwise.** The diagnostic explains the first violation: rules in order
   R1–R7, members in source order within R1–R4, and reads in source order within
   R5–R6 [`Violation.Reported`, `check_error_reported`, `diagnose_reported`].
+  Source order only chooses which of several violations is reported first,
+  as it does for today's `G001`; it never decides whether the group is
+  rejected.
 
 | Rule | Anchor | Reason (wording illustrative) |
 |------|--------|-------------------------------|
@@ -467,7 +497,7 @@ whether the group has an `unfold` member [`Group.diagnose`]:
 | R7 | the first same-step read, in source order, from the cycle's first member to its second | "`a → b → a` is a cycle of same-step reads; one read must use `prev_t`" |
 
 The R7 cycle is chosen deterministically: start at the first member, in source
-order, that cannot be placed in the plan order. Repeatedly move to the first
+order, that cannot be placed in the reference order. Repeatedly move to the first
 member, in read order, that it reads at the same step and that also cannot be
 placed. Stop when a member repeats, and report the repeating part
 [`Group.extractCycle`, `extractCycle_spec`].
@@ -483,7 +513,8 @@ for every axis length `n`.
 |-----------|---------|
 | The checker accepts exactly the groups satisfying R1–R7. | `Group.check_ok_iff_accepted` |
 | Every rejection reports the violation selected in §6, and an R7 rejection lists a real same-step cycle. | `Group.check_error_reported` |
-| An accepted group's plan order exists, is unique, and is a valid order. | `check_ok_planOrder`, `planOrder_unique`, `PlanOrder.validOrder` |
+| An accepted group's reference order exists, is unique, and is a valid order. | `check_ok_planOrder`, `planOrder_unique`, `PlanOrder.validOrder` |
+| Acceptance does not depend on declaration order. | `Relabeling.accepted_iff` |
 | **Soundness:** an accepted group's element graph is acyclic. | `Group.Accepted.elementAcyclic` |
 | The evaluator reads exactly the element dependencies of §4.2. | `Group.mem_elementDeps` |
 | The evaluator never reads an element before evaluating it. | `ValidOrder.run_not_stuck` |
@@ -514,7 +545,7 @@ is acyclic:
   members at the first step, which Vensim supports, must be computed outside
   the group.
 - **`scan` members**, **cycles across include boundaries** (R1), and **`todo`
-  members** (R2).
+  members** (R2; expression-level holes, #2099, would lift this).
 
 Two related cases are outside the rule for other reasons:
 
@@ -571,10 +602,10 @@ produce it from the same sources the scheduler uses.
 | Axes unconstrained | Groups step along coordinate axes, as a proved consequence. |
 | Multi-axis members unspecified | Allowed; only the leading key is constrained (R6). |
 | Failures unspecified | §5: per-element statuses, per-declaration outcomes, domain checks at commit. |
-| Params, `todo`, implicit reads, instances unspecified | Params allowed, supplied params pre-filled (§4.4); `todo` rejected (R2); implicit reads rejected (R6); instances rejected (R1). |
+| Params, `todo`, implicit reads, instances unspecified | Params allowed, supplied params pre-filled (§4.4); `todo` rejected (R2, to be relaxed by #2099); implicit reads rejected (R6); instances rejected (R1). |
 | "Inside an `unfold` init" | Covered by binder scope: the top-level init has no own binder, while nested inits may use the reader's `t`. |
 | "Existing `G001`" vs "specific diagnostics" | `G001` with a typed reason, a fixed priority, and anchors (§6); plain message without an `unfold` member. |
-| Evaluation order unspecified within a step | Greedy source-order plan order (§4.1); statuses are order-independent. |
+| Evaluation order unspecified within a step | Any valid order (§4.1); statuses are order-independent; the reference order is a deterministic choice. |
 | "Group edges map to `Identity` and `Shift(-1)`" | Same-step reads are `Identity`. Previous-step reads go to the previous key of a coordinate axis, which #1567's `Shift(c)` (defined for `Fin`) does not cover. When #1567 lands, its relation restricted to a group must equal `ElementDep`. |
 
 ## 11. Related work and follow-ups
@@ -583,6 +614,8 @@ produce it from the same sources the scheduler uses.
   fragment of that relation.
 - #1029 (`prev_state` binding): R5 keeps self-references rejected.
 - #888 (bounded solve): same-step algebraic loops stay out of scope (R7).
+- #2099 (expression-level `todo` holes): independent of this rule; makes R2
+  redundant when it lands.
 - When implementing, reconcile `docs/*/language/indexes.md` ("Evaluation
   granularity") and the statements in `computation-model.md` and
   `type-system.md` ("DAG Correspondence") with the element-level model of §2.

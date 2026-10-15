@@ -78,6 +78,21 @@ theorem stateAction_action :
     (List.range 4).map (fun k => stateAction.run stateActionEnv [1, 0] 4 ⟨0, k⟩) =
       [.computed (-8), .computed (-4), .computed (-2), .computed (-1)] := by decide
 
+/-! ## Declaration order does not matter
+
+The same group with `state` declared before `action`: still accepted, and the
+reference order names the same members in the same evaluation order.
+-/
+
+/-- Members: `state` (0), `action` (1). -/
+def stateActionSwapped : Group 2 where
+  member := fun x => match x.val with
+    | 0 => owned (.unfoldOver stepAxis)
+    | _ => owned (.forOver stepAxis)
+  reads := [⟨0, 1, .element .previousBinder⟩, ⟨1, 0, .element .stepBinder⟩]
+
+theorem stateActionSwapped_accepted : stateActionSwapped.check = .ok ⟨[0, 1]⟩ := by decide
+
 /-! ## Rejected: a same-step read hidden next to a previous-step read
 
 ```gcl

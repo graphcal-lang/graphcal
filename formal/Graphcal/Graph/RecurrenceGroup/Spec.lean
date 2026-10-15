@@ -171,7 +171,9 @@ def Ready (g : Group size) (placed : List (Fin size)) (x : Fin size) : Prop :=
   x ∉ placed ∧ ∀ y, g.SameReads x y → y ∈ placed
 
 /-- Greedy placement: repeatedly place the first member, in source order, that
-is ready. -/
+is ready. This is the reference choice among valid orders; it is not normative,
+because every valid order yields the same statuses
+(`Group.ValidOrder.run_order_independent`). -/
 inductive GreedyFrom (g : Group size) : List (Fin size) → List (Fin size) → Prop
   | complete {placed : List (Fin size)} :
       (∀ x, x ∈ placed) → GreedyFrom g placed []
@@ -179,9 +181,22 @@ inductive GreedyFrom (g : Group size) : List (Fin size) → List (Fin size) → 
       g.Ready placed x → (∀ y, g.Ready placed y → x ≤ y) →
       GreedyFrom g (placed ++ [x]) rest → GreedyFrom g placed (x :: rest)
 
-/-- The plan order of a group. -/
+/-- The order the reference checker returns. -/
 def PlanOrder (g : Group size) (order : List (Fin size)) : Prop :=
   g.GreedyFrom [] order
+
+/-! ## Declaration order -/
+
+/-- `h` is `g` with its members renumbered by `f` (with inverse `inv`) and its
+reads listed in any order: the same program with declarations, or the
+references within them, written in a different order. -/
+structure Relabeling (g h : Group size) where
+  f : Fin size → Fin size
+  inv : Fin size → Fin size
+  inv_f : ∀ x, inv (f x) = x
+  f_inv : ∀ x, f (inv x) = x
+  member : ∀ x, h.member (f x) = g.member x
+  reads : ∀ r, r ∈ h.reads ↔ ∃ r' ∈ g.reads, r = ⟨f r'.source, f r'.target, r'.form⟩
 
 end Group
 

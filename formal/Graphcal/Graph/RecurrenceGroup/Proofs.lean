@@ -2,6 +2,7 @@ import Graphcal.Graph.RecurrenceGroup.Proofs.Lists
 import Graphcal.Graph.RecurrenceGroup.Proofs.Check
 import Graphcal.Graph.RecurrenceGroup.Proofs.Evaluation
 import Graphcal.Graph.RecurrenceGroup.Proofs.Structure
+import Graphcal.Graph.RecurrenceGroup.Proofs.Relabel
 
 /-!
 # Recurrence groups: proofs
@@ -22,4 +23,6 @@ Headline results, by file:
   `Group.Accepted.hasUnfoldMember` and `Group.Accepted.axisCoordinate` (groups
   step along coordinate axes), `Group.SameStepCycle.elementCycle` (R7 is exact
   for axes with at least two elements), `Group.diagnose_dependencyCycle`.
+* `Proofs/Relabel.lean`: `Group.Relabeling.accepted_iff` (acceptance does not
+  depend on declaration order).
 -/
