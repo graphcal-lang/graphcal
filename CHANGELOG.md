@@ -4,6 +4,71 @@ Release notes for Graphcal. Each release section becomes the body of its GitHub 
 Add a `## v<version>` section before running the release workflow.
 Earlier releases are listed on [GitHub Releases](https://github.com/graphcal-lang/graphcal/releases).
 
+## v0.0.1-alpha.36
+
+This release adds Graphcal View, an experimental per-file sheet that opens Graphcal files from GitHub at <https://graphcal.org/view/>, and the `graphcal view` command that exports its data.
+It also lets `cargo binstall` install the prebuilt binaries, raises the minimum supported Rust version for source builds to 1.99, makes diagnostic codes unique, and updates `rustls` to fix security advisories.
+
+No existing Graphcal source programs need to be modified.
+Plugin errors and one module-resolution error have new diagnostic codes. See [Changed Diagnostic Codes](#changed-diagnostic-codes).
+
+### Graphcal View (Experimental)
+
+- [graphcal.org/view](https://graphcal.org/view/) shows a Graphcal file as a sheet. Columns follow the dependencies between declarations, and indexed values are laid out as tables. (_#2057_)
+  - Open a file on GitHub with an address of the form `https://graphcal.org/view/#owner/repo@ref/path/to/file.gcl`. The page has no server: the browser reads the repository through the GitHub REST API and evaluates the project with the WebAssembly engine.
+  - Edit a cell, the formula bar, or the code pane, and the project is re-evaluated. If an edit fails, it is rolled back and the reason is shown. Nothing is saved. **Copy changes** puts the edits on the clipboard as a unified diff that `git apply` accepts.
+  - The code pane is shown beside the sheet, with values at the end of each declaring line. A toggle switches between code only, both, and sheet only.
+  - An included or imported file can be pinned beside the sheet or opened through the breadcrumb. The explorer lists the repository's files and switches between branches, tags, and open pull requests.
+  - `@base...head` compares two revisions: the code pane shows a diff, and the sheet frames changed nodes and shows the old values.
+  - Public repositories need no token, but GitHub allows only 60 requests per hour without one. For private repositories or a higher limit, paste a fine-grained personal access token with read-only Contents access. The token is stored in the browser's local storage and sent only to `api.github.com`.
+- The new `graphcal view <file.gcl> [--root <dir>]` command prints the file's view model as JSON. The language server provides the same model through the custom request `graphcal/viewModel` and, to clients that declare `experimental.graphcal.viewModelChanges`, the notification `graphcal/viewModelDidChange`. The view model format may change in later releases. (_#2057_, _#2059_)
+- Other editors and the playground do not pay for the view: the language server and the browser engine build the view model only when it is requested. (_#2059_)
+
+### Installation
+
+- `cargo binstall graphcal@0.0.1-alpha.36` installs the prebuilt binary from the GitHub Release. It never falls back to third-party cargo-quickinstall binaries, and builds from source for targets without a prebuilt archive. (_#2027_)
+- The installation guide is reorganized by task: the installer scripts come first, then `cargo binstall` and `cargo install`, then building from source. A new section shows how to install Graphcal in GitHub Actions with [`graphcal-lang/setup-graphcal@v1`](https://github.com/graphcal-lang/setup-graphcal). The README Quickstart uses the installer script. (_#2028_)
+- Building Graphcal from source, depending on its Rust crates, and building plugins now require **Rust 1.99** or later (previously 1.95). Users of the prebuilt binaries are unaffected. (_#2033_)
+
+### Changed Diagnostic Codes
+
+Some diagnostic codes were assigned to two different errors. Each code now names exactly one error. If your scripts or CI match on these codes, update them.
+
+- Plugin errors use W codes instead of P codes, keeping their numbers; for example, P001 is now W001. P codes now belong only to parse errors. (_#2032_)
+- A module lookup failure that no more specific diagnostic covers now reports M036 instead of M033. M033 remains the code for a file-root `import` of its own file. (_#2032_)
+- A test now checks that no two errors in the workspace share a code. (_#2032_)
+
+### Security
+
+- Updated `rustls` to v0.23.46 to fix RUSTSEC-2026-0346, RUSTSEC-2026-0347, RUSTSEC-2026-0348, and RUSTSEC-2026-0349. Graphcal uses `rustls` when it fetches Git dependencies over HTTPS. (_#2095_)
+
+### Documentation
+
+- The plugin documentation cites the new W codes. The plugin authoring guide named the wrong code for an extern signature that binds a bare name; it now says W001 or P016. (_#2032_)
+- The installation guides state the Rust 1.99 requirement. (_#2033_)
+
+### Dependency, Toolchain, and Workflow Maintenance
+
+- GitHub Release titles start with `v` again, such as `v0.0.1-alpha.36`. dist takes the title from the `CHANGELOG.md` heading, so the headings are now `## v<version>`, and the release check rejects a heading without `v`. (_#2026_)
+- The report engine build inside a source build ignores inherited dynamic-library search paths, so it cannot pick up another Rust installation's sysroot. The Miri and AddressSanitizer jobs use a nightly compatible with Rust 1.99. (_#2033_)
+- Updated Rust crates: `proptest` to v1.12.0, `serde_json` to v1.0.152, `sha2` to v0.11.1, `syn` to v3.0.9, `tokio` to v1.53.3, and `wat` to v1.262.0. (_#2041_, _#2035_, _#2052_, _#2030_, _#2045_, _#2055_, _#2056_)
+- Updated JavaScript tooling: pnpm to v12.11.2, Vite+ to v1.1.0, CodeMirror (`@codemirror/language` v6.13.1, `@codemirror/view` v6.43.14), `@playwright/test` to v1.64.0, and `@types/node` to v26.6.5. (_#2029_, _#2047_, _#2048_, _#2051_, _#2031_, _#2034_, _#2040_, _#2050_)
+- Updated GitHub Actions: `taiki-e/install-action` to v2.87.26, `crate-ci/typos` to v1.51.1, `actions/download-artifact` to v8.0.2, and `actions/upload-artifact` to v7.0.2. (_#2036_, _#2043_, _#2049_, _#2053_, _#2054_, _#2087_, _#2089_)
+- Refreshed lock files. (_#2046_)
+
+### Internal
+
+- `just lint`, `just test`, and `just docs-build` build and test the view's web app under `web/view/`, and the documentation site publishes it at `/view/`. The design notes are in `internals/view.md`. (_#2057_)
+- Removed unused public accessors from `graphcal-eval`: `RuntimeEvaluation::result`, `Value::dimension`, and `HostArray::into_parts`. (_#2038_)
+- Added a test for which values `@imported::name` and `@included::name` may read, with and without overlay bindings. (_#2042_)
+- Added the v0.0.1-alpha.36 notes to `CHANGELOG.md` and bumped the workspace version to v0.0.1-alpha.36. (_#2096_)
+
+### New Contributors
+
+- @ogoogo made their first contribution in <https://github.com/graphcal-lang/graphcal/pull/2057>
+
+**Full Changelog**: <https://github.com/graphcal-lang/graphcal/compare/v0.0.1-alpha.35...v0.0.1-alpha.36>
+
 ## v0.0.1-alpha.35
 
 This release is the first to ship prebuilt `graphcal` binaries, so you no longer need a Rust toolchain to install Graphcal.
