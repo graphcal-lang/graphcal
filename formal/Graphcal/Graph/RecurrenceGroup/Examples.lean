@@ -33,7 +33,13 @@ private def stepAxis : AxisId := 0
 /-- `index Phase = { … }`. -/
 private def phaseAxis : AxisId := 1
 
-private def owned (definition : Definition) : Member := ⟨.callable, definition⟩
+/-- The DAG being checked. -/
+private def mainDag : OwnerId := 0
+
+/-- A DAG the checked DAG includes. -/
+private def libraryDag : OwnerId := 1
+
+private def owned (definition : Definition) : Member := ⟨mainDag, definition⟩
 
 /-- Example evaluation errors. -/
 inductive ExampleError where
@@ -218,11 +224,21 @@ theorem arrayedStock_accepted : arrayedStock.check = .ok ⟨[0, 1]⟩ := by deci
 def throughInstance : Group 2 where
   member := fun x => match x.val with
     | 0 => owned (.forOver stepAxis)
-    | _ => ⟨.includedInstance, .unfoldOver stepAxis⟩
+    | _ => ⟨libraryDag, .unfoldOver stepAxis⟩
   reads := stateAction.reads
 
 theorem throughInstance_rejected :
-    throughInstance.check = .error (.includedInstanceMember 1) := by decide
+    throughInstance.check = .error (.mixedOwners 1) := by decide
+
+/-- A recurrence group inside an included instance: every member has the same
+owner, so it is accepted in the schedule of the including DAG too. -/
+def insideInstance : Group 2 where
+  member := fun x => match x.val with
+    | 0 => ⟨libraryDag, .forOver stepAxis⟩
+    | _ => ⟨libraryDag, .unfoldOver stepAxis⟩
+  reads := stateAction.reads
+
+theorem insideInstance_accepted : insideInstance.check = .ok ⟨[1, 0]⟩ := by decide
 
 /-- `node action: Dimensionless[Step] = todo { @state };` -/
 def unfinishedAction : Group 2 where

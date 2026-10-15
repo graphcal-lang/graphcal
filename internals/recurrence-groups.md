@@ -161,15 +161,20 @@ within them, in a different order never changes whether a group is accepted
 order is used only to make diagnostics (§6) and the reference evaluation order
 (§4.1) deterministic.
 
-### R1. Members belong to the callable
+### R1. One owner
 
-Every member is declared by the callable DAG being checked, not by an included
-DAG instance [`CallableOwned`].
+All members are declared by the same DAG [`SingleOwner`].
 
-A cycle can pass through an instance: the includer binds an instance param to
-`@state`, and reads an instance output in `action`. Such cycles are rejected.
-Recurrence groups across include boundaries are a possible extension, not part
-of this rule. [`Examples.throughInstance_rejected`]
+The runtime schedule of a DAG also contains the declarations of the DAG
+instances it includes, so a cycle can pass through an instance: the includer
+binds an instance param to `@state`, and reads an instance output in `state`.
+Such cycles mix owners and are rejected. Recurrence groups across include
+boundaries are a possible extension, not part of this rule.
+[`Examples.throughInstance_rejected`]
+
+A group entirely inside an included instance has one owner, so a DAG with a
+recurrence group of its own can be included.
+[`Examples.insideInstance_accepted`]
 
 ### R2. Members are finished
 
@@ -485,10 +490,13 @@ whether the group has an `unfold` member [`Group.diagnose`]:
   Source order only chooses which of several violations is reported first,
   as it does for today's `G001`; it never decides whether the group is
   rejected.
+- **A group of an included DAG.** Its members are declared in another source,
+  so a violation there is reported as the plain cycle at the including
+  declaration. The included DAG's own check reports the reason.
 
 | Rule | Anchor | Reason (wording illustrative) |
 |------|--------|-------------------------------|
-| R1 | the `include` that creates the instance | "this cycle passes through `inst::y`, declared in an included DAG" |
+| R1 | the first member, in source order, of the checked DAG that reads a member of another DAG | "this cycle reads `y`, declared in another DAG" |
 | R2 | the `todo` member | "`x` is unfinished; a recurrence needs formulas to check step offsets" |
 | R3 | the member | "`x` is in a cycle with an `unfold`, but is not a top-level `for` or `unfold`" |
 | R4 | the member | "`x` steps along `B`, but `first` steps along `A`" |
@@ -602,7 +610,7 @@ produce it from the same sources the scheduler uses.
 | Axes unconstrained | Groups step along coordinate axes, as a proved consequence. |
 | Multi-axis members unspecified | Allowed; only the leading key is constrained (R6). |
 | Failures unspecified | §5: per-element statuses, per-declaration outcomes, domain checks at commit. |
-| Params, `todo`, implicit reads, instances unspecified | Params allowed, supplied params pre-filled (§4.4); `todo` rejected (R2, to be relaxed by #2099); implicit reads rejected (R6); instances rejected (R1). |
+| Params, `todo`, implicit reads, instances unspecified | Params allowed, supplied params pre-filled (§4.4); `todo` rejected (R2, to be relaxed by #2099); implicit reads rejected (R6); cycles across include boundaries rejected, groups inside an included DAG allowed (R1). |
 | "Inside an `unfold` init" | Covered by binder scope: the top-level init has no own binder, while nested inits may use the reader's `t`. |
 | "Existing `G001`" vs "specific diagnostics" | `G001` with a typed reason, a fixed priority, and anchors (§6); plain message without an `unfold` member. |
 | Evaluation order unspecified within a step | Any valid order (§4.1); statuses are order-independent; the reference order is a deterministic choice. |

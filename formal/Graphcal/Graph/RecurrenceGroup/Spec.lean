@@ -50,9 +50,10 @@ def IsSameStepCycle (g : Group size) : List (Fin size) → Prop
 
 /-! ## Acceptance rules -/
 
-/-- R1: every member is declared by the callable being checked. -/
-def CallableOwned (g : Group size) : Prop :=
-  ∀ x, (g.member x).owner = .callable
+/-- R1: all members are declared by the same DAG. A group inside an included
+instance is fine; a cycle across an include boundary is not. -/
+def SingleOwner (g : Group size) : Prop :=
+  ∀ x y, (g.member x).owner = (g.member y).owner
 
 /-- R2: no member is a `todo` node. -/
 def Finished (g : Group size) : Prop :=
@@ -77,7 +78,7 @@ def StepKeyed (g : Group size) : Prop :=
 
 /-- The member-level rules R1–R4. -/
 structure MemberRules (g : Group size) : Prop where
-  callableOwned : g.CallableOwned
+  singleOwner : g.SingleOwner
   finished : g.Finished
   recurrenceShaped : g.RecurrenceShaped
   commonAxis : g.CommonAxis
@@ -104,17 +105,17 @@ source order, and the first offender is reported. A same-step cycle is reported
 as one listed cycle; which cycle is the deterministic choice of the reference
 checker. -/
 def Violation.Reported (g : Group size) : Violation size → Prop
-  | .includedInstanceMember x =>
-      (g.member x).owner ≠ .callable ∧
-        ∀ y, y < x → (g.member y).owner = .callable
+  | .mixedOwners x =>
+      (g.member x).owner ≠ (g.member ⟨0, x.pos⟩).owner ∧
+        ∀ y, y < x → (g.member y).owner = (g.member ⟨0, x.pos⟩).owner
   | .unfinishedMember x =>
-      g.CallableOwned ∧ (g.member x).definition = .unfinished ∧
+      g.SingleOwner ∧ (g.member x).definition = .unfinished ∧
         ∀ y, y < x → (g.member y).definition ≠ .unfinished
   | .notRecurrenceShape x =>
-      g.CallableOwned ∧ g.Finished ∧ g.shape? x = none ∧
+      g.SingleOwner ∧ g.Finished ∧ g.shape? x = none ∧
         ∀ y, y < x → g.shape? y ≠ none
   | .axisMismatch x =>
-      g.CallableOwned ∧ g.Finished ∧ g.RecurrenceShaped ∧
+      g.SingleOwner ∧ g.Finished ∧ g.RecurrenceShaped ∧
         (g.member x).definition.axis? ≠ (g.member ⟨0, x.pos⟩).definition.axis? ∧
         ∀ y, y < x →
           (g.member y).definition.axis? = (g.member ⟨0, x.pos⟩).definition.axis?

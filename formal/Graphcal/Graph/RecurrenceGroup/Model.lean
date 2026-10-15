@@ -24,15 +24,11 @@ inductive AxisKind where
   | finite
   deriving DecidableEq, Repr
 
-/-- Who declares a scheduled declaration. The runtime schedule of a callable
-also contains the declarations of the DAG instances it includes, so a
+/-- Resolved identity of the DAG that declares a scheduled declaration: the
+callable being checked, or a DAG instance it includes. The runtime schedule of
+a callable also contains the declarations of the instances it includes, so a
 dependency cycle can pass through them. -/
-inductive Owner where
-  /-- Declared by the callable DAG being checked. -/
-  | callable
-  /-- Declared inside a DAG instance that the callable includes. -/
-  | includedInstance
-  deriving DecidableEq, Repr
+abbrev OwnerId := Nat
 
 /-- The shape of a member's definition: a node formula or a param default,
 after removing enclosing parentheses and one top-level display conversion. -/
@@ -50,7 +46,7 @@ inductive Definition where
 
 /-- One member of a candidate group. -/
 structure Member where
-  owner : Owner
+  owner : OwnerId
   definition : Definition
   deriving DecidableEq, Repr
 
@@ -175,8 +171,9 @@ def schedule {size : Nat} (order : List (Fin size)) (n : Nat) : List (Element si
 
 /-- Typed reasons a candidate group is rejected. -/
 inductive Violation (size : Nat) where
-  /-- The cycle passes through a declaration of an included DAG instance. -/
-  | includedInstanceMember (member : Fin size)
+  /-- A member is declared by another DAG than the first member: the cycle
+  crosses an include boundary. -/
+  | mixedOwners (member : Fin size)
   /-- A member is a `todo` node. -/
   | unfinishedMember (member : Fin size)
   /-- A member's definition is not a top-level `for` or `unfold`. -/

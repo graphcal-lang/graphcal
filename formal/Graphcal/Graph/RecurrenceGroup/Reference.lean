@@ -65,14 +65,18 @@ def extractCycle (g : Group size) (stuck : List (Fin size)) : List (Fin size) :=
   | [] => []
   | x :: _ => g.walkCycle stuck (size + 1) [] x
 
+/-- `x` is declared by the same DAG as the first member. -/
+def ownerMatchesFirst (g : Group size) (x : Fin size) : Bool :=
+  decide ((g.member x).owner = (g.member ⟨0, x.pos⟩).owner)
+
 /-- `x` steps along the same axis as the first member. -/
 def axisMatchesFirst (g : Group size) (x : Fin size) : Bool :=
   decide ((g.member x).definition.axis? = (g.member ⟨0, x.pos⟩).definition.axis?)
 
 /-- Check a candidate group: R1–R6 in order, then R7 by greedy placement. -/
 def check (g : Group size) : Except (Violation size) (Plan size) :=
-  match (List.finRange size).find? (fun x => decide ((g.member x).owner ≠ .callable)) with
-  | some x => .error (.includedInstanceMember x)
+  match (List.finRange size).find? (fun x => !g.ownerMatchesFirst x) with
+  | some x => .error (.mixedOwners x)
   | none =>
   match (List.finRange size).find? (fun x => decide ((g.member x).definition = .unfinished)) with
   | some x => .error (.unfinishedMember x)
