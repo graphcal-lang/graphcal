@@ -19,7 +19,7 @@ mod tests;
 mod value;
 
 pub use model::{
-    ViewEntry, ViewIndex, ViewModel, ViewModule, ViewNode, ViewNodeKind, ViewPosition, ViewRange,
-    ViewReduce, ViewSource, ViewValue,
+    ViewEntry, ViewIndex, ViewInstance, ViewModel, ViewModule, ViewNode, ViewNodeKind,
+    ViewPosition, ViewRange, ViewReduce, ViewSource, ViewValue,
 };
 pub use project::{ViewProjection, ViewProjectionError, project_view};

@@ -60,6 +60,18 @@ impl AnalysisDegradation {
     }
 }
 
+/// Whether an analysis also projects the document's view model.
+///
+/// The view is experimental: only a client that shows view models
+/// (`experimental.graphcal.viewModelChanges`) pays for the projection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ViewModelDemand {
+    /// No view is shown: the analysis carries no view model.
+    Skip,
+    /// The client shows view models: project one after checking.
+    Project,
+}
+
 /// Transient output of one analysis pass.
 pub struct AnalysisRun {
     pub analysis: AnalysisResult,
@@ -258,6 +270,7 @@ pub(crate) fn run_analysis_run(
         open_buffers,
         plugin_host,
         &input_snapshot,
+        ViewModelDemand::Project,
         &graphcal_compiler::cancellation::CancellationToken::unbounded(),
     )
     .expect("an unbounded analysis cannot be cancelled")
@@ -287,6 +300,7 @@ pub fn run_analysis_with_cancellation(
     open_buffers: &[OpenBuffer],
     plugin_host: &graphcal_plugin_host::PluginHost,
     input_snapshot: &AnalysisInputSnapshot,
+    view: ViewModelDemand,
     cancellation: &CancellationToken,
 ) -> std::result::Result<AnalysisRun, Cancelled> {
     cancellation.checkpoint()?;
@@ -396,14 +410,17 @@ pub fn run_analysis_with_cancellation(
             // user opens such a file for editing.
             let todos =
                 crate::diagnostics::unfinished_node_diagnostics(&root_ast.declarations, text);
-            let (mut view, degradations) = match project_view_for_lsp(&project, &checked) {
-                Ok(view) => (Some(view), Vec::new()),
-                Err(error) => (
-                    None,
-                    vec![AnalysisDegradation::ViewUnavailable {
-                        reason: error.to_string(),
-                    }],
-                ),
+            let (mut view, degradations) = match view {
+                ViewModelDemand::Skip => (None, Vec::new()),
+                ViewModelDemand::Project => match project_view_for_lsp(&project, &checked) {
+                    Ok(view) => (Some(view), Vec::new()),
+                    Err(error) => (
+                        None,
+                        vec![AnalysisDegradation::ViewUnavailable {
+                            reason: error.to_string(),
+                        }],
+                    ),
+                },
             };
             cancellation.checkpoint()?;
             let (mut diagnostics, eval_values) = if checked.is_library() {
@@ -624,5 +641,30 @@ mod view_tests {
         let names: Vec<&str> = view.nodes.iter().map(|node| node.name.as_str()).collect();
         assert_eq!(names, ["thrust", "doubled"]);
         assert!(view.nodes[1].value.is_some(), "doubled should be evaluated");
+    }
+
+    #[test]
+    fn analysis_skips_the_view_model_unless_asked() {
+        let uri = Url::parse("untitled:view.gcl").unwrap();
+        let input_snapshot = AnalysisInputSnapshot::new(
+            crate::file_identity::document_identity(&uri),
+            crate::workspace_revision::RevisionClock::default()
+                .next()
+                .unwrap(),
+            HashMap::new(),
+        );
+        let run = run_analysis_with_cancellation(
+            &uri,
+            "node thrust: Dimensionless = 1.0;\n",
+            &[],
+            test_plugin_host(),
+            &input_snapshot,
+            ViewModelDemand::Skip,
+            &CancellationToken::unbounded(),
+        )
+        .unwrap();
+        assert_eq!(run.degradations, Vec::<AnalysisDegradation>::new());
+        assert!(run.analysis.view.is_none());
+        assert!(run.analysis.has_no_diagnostics());
     }
 }

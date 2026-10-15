@@ -14,12 +14,12 @@ interface Op {
   text: string;
 }
 
-/** Lines of a text, the final newline not making an extra empty line. */
+/**
+ * Lines of a text, each with its terminating newline. Only a last line can lack
+ * one, so `b` and `b\n` differ: a patch must carry an added or dropped final newline.
+ */
 function linesOf(text: string): string[] {
-  if (text === "") return [];
-  const lines = text.split("\n");
-  if (lines.at(-1) === "") lines.pop();
-  return lines;
+  return text.match(/[^\n]*\n|[^\n]+$/g) ?? [];
 }
 
 /** The edit script between two line arrays: common prefix and suffix kept, the middle by LCS. */
@@ -120,17 +120,20 @@ export function unifiedDiff(change: FileChange): string {
     const slice = ops.slice(hunk.from, hunk.to);
     const oldCount = slice.filter((op) => op.kind !== "+").length;
     const newCount = slice.filter((op) => op.kind !== "-").length;
-    out.push(`@@ -${oldLine},${oldCount} +${newLine},${newCount} @@`);
+    // An empty side starts before its first line, as `@@ -0,0 +1 @@` does.
+    const startOf = (line: number, count: number): number => (count === 0 ? line - 1 : line);
+    out.push(
+      `@@ -${startOf(oldLine, oldCount)},${oldCount} +${startOf(newLine, newCount)},${newCount} @@`,
+    );
     for (const op of slice) {
-      out.push(`${op.kind}${op.text}`);
+      const ended = op.text.endsWith("\n");
+      out.push(`${op.kind}${ended ? op.text.slice(0, -1) : op.text}`);
+      // The marker follows the line it is about: a file's last line, without a newline.
+      if (!ended) out.push("\\ No newline at end of file");
       if (op.kind !== "+") oldLine += 1;
       if (op.kind !== "-") newLine += 1;
     }
     at = hunk.to;
-  }
-  const missingNewline = (text: string): boolean => text !== "" && !text.endsWith("\n");
-  if (missingNewline(change.before) || missingNewline(change.after)) {
-    out.push("\\ No newline at end of file");
   }
   return `${out.join("\n")}\n`;
 }

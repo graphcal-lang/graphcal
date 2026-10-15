@@ -36,9 +36,26 @@ use crate::project::{ProjectValidationError, RequestErrorView, VirtualProject};
 pub struct PreparedPlayground {
     prepared: PreparedProject,
     report: crate::browser_report::ReportMetadata,
-    /// The entry file's view structure, valued per evaluation; `None` when
-    /// the checked program could not be projected.
-    view: Option<ViewProjection>,
+    /// The entry file's view structure, valued per evaluation.
+    view: PreparedView,
+}
+
+/// The entry file's view, as far as preparing produced one.
+enum PreparedView {
+    /// Prepared for evaluation alone ([`prepare`]): no view was asked for.
+    NotRequested,
+    /// The checked program could not be projected.
+    Unavailable { reason: String },
+    /// The structure, valued per evaluation.
+    Projected(ViewProjection),
+}
+
+/// Whether preparing also projects the entry file's view model. The view is
+/// experimental: only the view page pays for the projection.
+#[derive(Clone, Copy)]
+enum ViewDemand {
+    Skip,
+    Project,
 }
 
 /// Outcome of preparing one browser project.
@@ -67,14 +84,39 @@ pub fn prepare(request: PlaygroundRequest) -> PrepareOutcome {
         }
     };
 
-    prepare_virtual(&project, BrowserCapabilities::SourcesOnly)
+    prepare_virtual(&project, BrowserCapabilities::SourcesOnly, ViewDemand::Skip)
+}
+
+/// [`prepare`], also projecting the entry file's view model for
+/// [`PreparedPlayground::view_structure`] and
+/// [`PreparedPlayground::evaluate_view`].
+#[must_use]
+pub fn prepare_view(request: PlaygroundRequest) -> PrepareOutcome {
+    let project = match VirtualProject::try_from(request) {
+        Ok(project) => project,
+        Err(error) => {
+            return PrepareOutcome::Rejected {
+                error: RequestErrorView::from(&error),
+            };
+        }
+    };
+
+    prepare_virtual(
+        &project,
+        BrowserCapabilities::SourcesOnly,
+        ViewDemand::Project,
+    )
 }
 
 /// Prepare an offline report snapshot, including sandboxed Wasm plugins.
 #[must_use]
 pub fn prepare_bundle(bundle: &graphcal_project::project_bundle::ProjectBundle) -> PrepareOutcome {
     match VirtualProject::from_bundle(bundle) {
-        Ok(project) => prepare_virtual(&project, BrowserCapabilities::BundledPlugins),
+        Ok(project) => prepare_virtual(
+            &project,
+            BrowserCapabilities::BundledPlugins,
+            ViewDemand::Skip,
+        ),
         Err(error) => PrepareOutcome::Rejected {
             error: RequestErrorView::from(&ProjectValidationError::InvalidBundle {
                 message: error.to_string(),
@@ -93,7 +135,11 @@ enum BrowserCapabilities {
     clippy::result_large_err,
     reason = "the loader reports its compile error by value, as every loader entry point does"
 )]
-fn prepare_virtual(project: &VirtualProject, capabilities: BrowserCapabilities) -> PrepareOutcome {
+fn prepare_virtual(
+    project: &VirtualProject,
+    capabilities: BrowserCapabilities,
+    view: ViewDemand,
+) -> PrepareOutcome {
     let filesystem = project.filesystem();
     let loaded = match graphcal_compiler::outcome::without_cancellation(|cancellation| {
         load_project_with_dependency_sources(
@@ -134,7 +180,17 @@ fn prepare_virtual(project: &VirtualProject, capabilities: BrowserCapabilities) 
         .host_fns(&registry)
         .check()
         .and_then(|checked| {
-            let view = project_view(&loaded, &checked, Some(VirtualProject::root_path())).ok();
+            let view = match view {
+                ViewDemand::Skip => PreparedView::NotRequested,
+                ViewDemand::Project => {
+                    match project_view(&loaded, &checked, Some(VirtualProject::root_path())) {
+                        Ok(projection) => PreparedView::Projected(projection),
+                        Err(error) => PreparedView::Unavailable {
+                            reason: error.to_string(),
+                        },
+                    }
+                }
+            };
             checked
                 .prepare_with_host_fns(&registry)
                 .map(|prepared| (prepared, view))
@@ -354,20 +410,32 @@ impl PreparedPlayground {
         }
     }
 
-    /// The entry file's view structure without values, when it projected.
+    /// The entry file's view structure without values, when it was asked
+    /// for ([`prepare_view`]) and projected.
     #[must_use]
-    pub fn view_structure(&self) -> Option<&ViewModel> {
-        self.view.as_ref().map(ViewProjection::model)
+    pub const fn view_structure(&self) -> Option<&ViewModel> {
+        match &self.view {
+            PreparedView::Projected(projection) => Some(projection.model()),
+            PreparedView::NotRequested | PreparedView::Unavailable { .. } => None,
+        }
     }
 
     /// Evaluate browser bindings and return the entry file's view with the
     /// resulting values attached.
     #[must_use]
     pub fn evaluate_view(&self, bindings: &[BrowserBindingRequest]) -> EvaluateViewOutcome {
-        let Some(projection) = &self.view else {
-            return EvaluateViewOutcome::Unavailable {
-                message: "the project has no view".to_string(),
-            };
+        let projection = match &self.view {
+            PreparedView::Projected(projection) => projection,
+            PreparedView::NotRequested => {
+                return EvaluateViewOutcome::Unavailable {
+                    message: "the project was prepared without its view".to_string(),
+                };
+            }
+            PreparedView::Unavailable { reason } => {
+                return EvaluateViewOutcome::Unavailable {
+                    message: reason.clone(),
+                };
+            }
         };
         match self.evaluate_browser_result(bindings) {
             Ok(result) => {
@@ -810,10 +878,28 @@ mod js {
         reason = "wasm-bindgen JavaScript exports receive owned JsValue handles"
     )]
     pub fn prepare_project_js(request: JsValue) -> Result<PreparedProjectHandle, JsValue> {
+        prepare_request_js(&request, super::prepare)
+    }
+
+    /// `prepareProject`, also projecting the entry file's view model for
+    /// `viewStructure` and `evaluateView`. Only the view page pays for it.
+    #[wasm_bindgen(js_name = prepareViewProject)]
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "wasm-bindgen JavaScript exports receive owned JsValue handles"
+    )]
+    pub fn prepare_view_project_js(request: JsValue) -> Result<PreparedProjectHandle, JsValue> {
+        prepare_request_js(&request, super::prepare_view)
+    }
+
+    fn prepare_request_js(
+        request: &JsValue,
+        prepare: fn(super::PlaygroundRequest) -> PrepareOutcome,
+    ) -> Result<PreparedProjectHandle, JsValue> {
         use crate::js_request::{BoundedJsRequest, JsRequestBoundaryError};
 
-        let outcome = match BoundedJsRequest::decode(&request) {
-            Ok(request) => super::prepare(request.into_request()),
+        let outcome = match BoundedJsRequest::decode(request) {
+            Ok(request) => prepare(request.into_request()),
             Err(JsRequestBoundaryError::Rejected(error)) => PrepareOutcome::Rejected {
                 error: crate::RequestErrorView::from(&error),
             },
@@ -993,7 +1079,15 @@ mod tests {
     }
 
     fn prepare_ok(source: &str) -> PreparedPlayground {
-        match prepare(single_file(source)) {
+        prepared_or_panic(prepare(single_file(source)))
+    }
+
+    fn prepare_view_ok(source: &str) -> PreparedPlayground {
+        prepared_or_panic(prepare_view(single_file(source)))
+    }
+
+    fn prepared_or_panic(outcome: PrepareOutcome) -> PreparedPlayground {
+        match outcome {
             PrepareOutcome::Prepared(prepared) => *prepared,
             PrepareOutcome::Rejected { error } => panic!("rejected: {error:?}"),
             PrepareOutcome::CompileError { diagnostics } => {
@@ -1042,8 +1136,23 @@ assert positive = @delta_v > 0.0 m/s;
     }
 
     #[test]
-    fn view_structure_and_evaluated_view_follow_bindings() {
+    fn playground_preparation_projects_no_view() {
         let prepared = prepare_ok(DELTA_V);
+        assert!(prepared.view_structure().is_none());
+        let outcome = prepared.evaluate_view(&[]);
+        assert!(
+            matches!(
+                &outcome,
+                EvaluateViewOutcome::Unavailable { message }
+                    if message == "the project was prepared without its view"
+            ),
+            "{outcome:?}"
+        );
+    }
+
+    #[test]
+    fn view_structure_and_evaluated_view_follow_bindings() {
+        let prepared = prepare_view_ok(DELTA_V);
         let structure = prepared.view_structure().expect("view structure");
         assert!(structure.nodes.iter().all(|node| node.value.is_none()));
         assert!(structure.nodes.iter().any(|node| node.name == "delta_v"));

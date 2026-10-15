@@ -4,7 +4,7 @@
 // box.
 import type { Layout } from "./layout.ts";
 import type { ViewModel } from "./model.ts";
-import { sameKey, type PaneKey } from "./panes.ts";
+import { keyOf, sameKey, type PaneKey } from "./panes.ts";
 import {
   anchorsOf,
   CHANNEL_PAD,
@@ -43,8 +43,9 @@ export function crossLinks(sheets: CrossSheet[]): CrossLink[] {
   for (const to of sheets) {
     const tiers = scalarTierCount(to.layout);
     for (const node of to.model.nodes) {
-      if (node.kind !== "external") continue;
-      const key = { module: node.module, instance: node.instance };
+      // A pane shows its module evaluated alone, which a bound include's values are not.
+      if (node.kind !== "external" || node.instance?.bound === true) continue;
+      const key = keyOf(node);
       const from = sheets.find((s) => sameKey(s.key, key));
       const column = to.layout.columns.get(node.id);
       if (!from || !column || !from.layout.columns.has(node.name)) continue;

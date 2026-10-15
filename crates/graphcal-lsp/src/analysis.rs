@@ -59,7 +59,8 @@ pub struct AnalysisResult {
     pub eval_values: HashMap<ScopedName, String>,
     /// The document's view model (structure, and values when it evaluated),
     /// served to the `graphcal/viewModel` request. `None` when the project
-    /// did not check.
+    /// did not check, or when the client shows no view models (the analysis
+    /// then skips the projection).
     pub view: Option<graphcal_project::view_model::ViewModel>,
     /// Structured function signatures, keyed by function name.
     /// Points to a lazily-initialized static map (builtins never change).

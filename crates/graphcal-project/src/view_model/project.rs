@@ -1,7 +1,7 @@
 //! Projection of a checked project (and optionally its evaluation) into a
 //! [`ViewModel`].
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::Path;
 
 use graphcal_compiler::dag_id::DagId;
@@ -31,7 +31,7 @@ use crate::loader::{LoadedFile, LoadedProject};
 use crate::project_compiler::CheckedProject;
 
 use super::model::{
-    ViewIndex, ViewModel, ViewModule, ViewNode, ViewNodeKind, ViewSource, ViewValue,
+    ViewIndex, ViewInstance, ViewModel, ViewModule, ViewNode, ViewNodeKind, ViewSource, ViewValue,
 };
 use super::value::{CoherentUnits, common_unit, view_value};
 
@@ -57,6 +57,12 @@ pub enum ViewProjectionError {
         #[source]
         error: DisplayProjectionError,
     },
+    /// Two nodes of the model would share one id.
+    #[error("two view nodes share the id `{id}`")]
+    DuplicateNodeId { id: String },
+    /// A node reads a node the model does not contain.
+    #[error("view node `{node}` reads `{dependency}`, which the view does not contain")]
+    UnknownDependency { node: String, dependency: String },
 }
 
 /// Project the structure of the root file of `checked`.
@@ -120,6 +126,7 @@ pub fn project_view(
         }
     }
     let indexes = builder.indexes();
+    check_node_references(&nodes)?;
 
     let root = tir.root_dag_id();
     Ok(ViewProjection {
@@ -247,12 +254,11 @@ impl<'p> Scope<'p> {
         self.tir.root_dag_id()
     }
 
-    /// Whether `owner` is the root file or an inline DAG declared in it.
+    /// Whether `owner` is the root DAG. An inline `dag` declared in the
+    /// root file is a template: its declarations hold no values of their
+    /// own, and the root reads them only through an instance.
     fn is_local(&self, owner: &DagId) -> bool {
-        matches!(
-            self.clusters.get(owner),
-            Some(GraphClusterKind::SourceModule)
-        ) && owner.file_root() == self.root().file_root()
+        owner == self.root()
     }
 
     /// The module a declaration is presented under: the template of an
@@ -303,17 +309,15 @@ impl<'p> Scope<'p> {
         })
     }
 
-    /// The root's value and assertion declarations, with those of its inline
-    /// DAGs, in source order. (An include alias is declared where the
-    /// `include` is written, not where the DAG lists it.)
+    /// The root's value and assertion declarations in source order. (An
+    /// include alias is declared where the `include` is written, not where
+    /// the DAG lists it.)
     fn local_declarations(&self) -> Vec<ResolvedDeclName> {
         let mut declarations: Vec<(usize, ResolvedDeclName)> = self
-            .clusters
-            .keys()
-            .filter(|owner| self.is_local(owner))
-            .collect::<BTreeSet<_>>()
+            .tir
+            .dag_registry()
+            .get(self.root())
             .into_iter()
-            .filter_map(|owner| self.tir.dag_registry().get(owner))
             .flat_map(|dag| {
                 dag.declarations().filter_map(|declaration| {
                     let span = match declaration.kind() {
@@ -364,7 +368,7 @@ impl<'p> Scope<'p> {
                     IncludeAlias {
                         target: projection.target,
                         template: template.clone(),
-                        instance: instance_label(record, template),
+                        instance: view_instance(record, template),
                     },
                 );
             }
@@ -399,7 +403,7 @@ impl<'p> Scope<'p> {
                             .instance
                             .exposed_name(projection.projection)
                             .to_string(),
-                        instance: Some(instance_label(record, template)),
+                        instance: Some(view_instance(record, template)),
                     },
                 );
             }
@@ -408,19 +412,26 @@ impl<'p> Scope<'p> {
     }
 }
 
-/// The name the view shows for an include instance: its alias
-/// (`include lib() as l`), or the template's file name when the include
-/// is anonymous.
-fn instance_label(
+/// An include instance as the view shows it: named by its alias
+/// (`include lib() as l`), or the template's file name when the include is
+/// anonymous, and whether the include binds anything.
+fn view_instance(
     record: &graphcal_compiler::ir::instance::HirInstanceRecord,
     template: &DagId,
-) -> String {
-    record
-        .instance
-        .id()
-        .scope()
-        .alias()
-        .map_or_else(|| template.leaf().to_string(), ToString::to_string)
+) -> ViewInstance {
+    let substitution = record.instance.substitution();
+    ViewInstance {
+        name: record
+            .instance
+            .id()
+            .scope()
+            .alias()
+            .map_or_else(|| template.leaf().to_string(), ToString::to_string),
+        bound: !record.value_bindings.is_empty()
+            || !substitution.indexes.is_empty()
+            || !substitution.types.is_empty()
+            || !substitution.dimensions.is_empty(),
+    }
 }
 
 /// A root declaration standing for an include instance's output.
@@ -429,15 +440,15 @@ struct IncludeAlias {
     target: ResolvedDeclName,
     /// The template the instance was materialized from.
     template: DagId,
-    /// The instance's name in the view.
-    instance: String,
+    /// The instance as the view shows it.
+    instance: ViewInstance,
 }
 
 /// How the root spells a declaration of another module.
 struct ExternalName {
     id: String,
     /// The include instance it is read through, if any.
-    instance: Option<String>,
+    instance: Option<ViewInstance>,
 }
 
 /// What each local declaration reads: dataflow edges for values, the
@@ -626,13 +637,10 @@ impl NodeBuilder<'_> {
         let expr = input
             .file
             .and_then(|file| definition.and_then(|span| slice(file.text, span)));
-        let source = input.file.map(|file| {
-            let index = Utf16LineIndex::new(file.text);
-            ViewSource {
-                file: Some(file.name.to_string()),
-                line: index.position(span.offset()).line.saturating_add(1),
-                expr_range: definition.map(|span| index.range(span.offset(), span.len()).into()),
-            }
+        let source = input.file.map(|file| ViewSource {
+            file: Some(file.name.to_string()),
+            line: file.lines.position(span.offset()).line.saturating_add(1),
+            expr_range: definition.map(|span| file.lines.range(span.offset(), span.len()).into()),
         });
 
         let binding = ValueBinding {
@@ -691,12 +699,35 @@ struct NodeInput<'a> {
     module: String,
     /// Overrides the kind derived from the declaration (for externals).
     kind: Option<ViewNodeKind>,
-    instance: Option<String>,
+    instance: Option<ViewInstance>,
     is_public: bool,
     deps: Vec<String>,
     file: Option<SourceFile<'a>>,
     /// The identity whose evaluated value the node shows.
     value_of: &'a ResolvedDeclName,
+}
+
+/// Every node id is unique, and every dependency names a node of the model:
+/// the view joins nodes by id, so a clash or a dangling id would wire the
+/// wrong declarations together.
+pub(super) fn check_node_references(nodes: &[ViewNode]) -> Result<(), ViewProjectionError> {
+    let mut ids = HashSet::with_capacity(nodes.len());
+    for node in nodes {
+        if !ids.insert(node.id.as_str()) {
+            return Err(ViewProjectionError::DuplicateNodeId {
+                id: node.id.clone(),
+            });
+        }
+    }
+    for node in nodes {
+        if let Some(dependency) = node.deps.iter().find(|dep| !ids.contains(dep.as_str())) {
+            return Err(ViewProjectionError::UnknownDependency {
+                node: node.id.clone(),
+                dependency: dependency.clone(),
+            });
+        }
+    }
+    Ok(())
 }
 
 fn declaration_of<'t>(
@@ -759,6 +790,8 @@ impl<'e> EvaluatedValues<'e> {
 struct SourceFiles<'p> {
     project: &'p LoadedProject,
     names: HashMap<&'p DagId, String>,
+    /// Each file's line index: one scan per file, not one per declaration.
+    lines: HashMap<&'p DagId, Utf16LineIndex<'p>>,
 }
 
 impl<'p> SourceFiles<'p> {
@@ -768,6 +801,7 @@ impl<'p> SourceFiles<'p> {
         root_dir: Option<&Path>,
     ) -> Result<Self, ForeignSourceId> {
         let mut names = HashMap::new();
+        let mut lines = HashMap::new();
         for file in project.files().iter() {
             // The name is a project-relative path with `/` on every platform: it is
             // the wire format the view and the editors key their files by.
@@ -788,8 +822,13 @@ impl<'p> SourceFiles<'p> {
                     .to_string(),
             };
             names.insert(file.dag_id(), name);
+            lines.insert(file.dag_id(), Utf16LineIndex::new(file.source().as_str()));
         }
-        Ok(Self { project, names })
+        Ok(Self {
+            project,
+            names,
+            lines,
+        })
     }
 
     fn file_of(&self, module: &DagId) -> Option<SourceFile<'_>> {
@@ -797,6 +836,7 @@ impl<'p> SourceFiles<'p> {
         Some(SourceFile {
             name: self.names.get(file.dag_id())?.as_str(),
             text: file.source().as_str(),
+            lines: self.lines.get(file.dag_id())?,
         })
     }
 
@@ -805,11 +845,12 @@ impl<'p> SourceFiles<'p> {
     }
 }
 
-/// One source file: its view name and text.
+/// One source file: its view name, text, and line index.
 #[derive(Clone, Copy)]
 struct SourceFile<'p> {
     name: &'p str,
     text: &'p str,
+    lines: &'p Utf16LineIndex<'p>,
 }
 
 /// The unit an unevaluated quantity declaration would be shown in.

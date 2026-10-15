@@ -26,7 +26,7 @@ import { GitHubHost } from "./githubHost.ts";
 import type { Host, NoteKind } from "./host.ts";
 import { TokenStore } from "./login.ts";
 import type { ViewModel, ViewNode } from "./model.ts";
-import { depthsOf, sameKey, type PaneKey } from "./panes.ts";
+import { depthsOf, keyOf, sameKey, type PaneKey } from "./panes.ts";
 import { parseRoute } from "./route.ts";
 import { EditError, replaceExpr, replaceRange, replaceTableCell } from "./source.ts";
 import { EmptyHost, mountStart } from "./start.ts";
@@ -645,10 +645,21 @@ function renderTrail(w: Workspace): void {
   fileEl.append(copyEl, resetEl);
 }
 
+/** A trail to open once the host has its module's current model (an edit left it stale). */
+let pendingOpen: string[] | null = null;
+
 /** Show `trail`'s last module as the main sheet, with no panes pinned. */
 function open(trail: string[]): void {
   const module = trail.at(-1);
-  if (module === undefined || !known(module)) return;
+  if (module === undefined) return;
+  if (!known(module)) {
+    if (host.modules.includes(module)) {
+      pendingOpen = trail;
+      host.request(module);
+    }
+    return;
+  }
+  pendingOpen = null;
   const main = createSheet({ module, instance: null });
   ws = { sheets: [main], trail, mode: ws?.mode ?? "fit" };
   placePanes(ws);
@@ -692,6 +703,8 @@ function pin(key: PaneKey): void {
 
 /** Take fresh models from the host: every sheet showing one of them is re-laid out in place. */
 function adoptModels(models: ViewModel[]): void {
+  const opening = pendingOpen;
+  if (opening !== null && known(opening.at(-1) ?? "")) open(opening);
   if (!ws) return;
   let changed = false;
   for (const model of models) {
@@ -917,14 +930,15 @@ function editCell(
 ): Promise<boolean> {
   if (row === null) return editExpr(s, node, literalFor(node, text));
   const at = sourceOf(s, node);
-  if (at === null || node.source === null) {
+  const range = node.source?.expr_range ?? null;
+  if (at === null || range === null) {
     showNote("this value cannot be edited");
     return Promise.resolve(false);
   }
   const { file, source } = at;
   let rewritten: string;
   try {
-    rewritten = replaceTableCell(source, node.source.line, row, sub, literalFor(node, text));
+    rewritten = replaceTableCell(source, range, row, sub, literalFor(node, text));
   } catch (error) {
     showNote(error instanceof EditError ? error.message : errorMessage(error));
     return Promise.resolve(false);
@@ -1165,20 +1179,26 @@ function rowMenu(s: Sheet, label: HTMLElement, event: MouseEvent): void {
 
 /** `Open eps.gcl` goes there (the trail leads back); `Pin eps beside` opens it as a pane. */
 function externalMenu(w: Workspace, node: ViewNode, event: MouseEvent): void {
-  const key = { module: node.module, instance: node.instance };
+  const key = keyOf(node);
   const file = fileNameOfModule(node.module);
+  const name = node.instance?.name ?? file;
   const pinned = w.sheets.find((other) => sameKey(other.key, key));
   openMenu(event.clientX, event.clientY, [
     {
       label: `Open ${file}`,
-      disabled: !known(node.module),
-      run: () => {
-        if (known(node.module)) open([...w.trail, node.module]);
-      },
+      disabled: !known(node.module) && !host.modules.includes(node.module),
+      run: () => open([...w.trail, node.module]),
     },
     pinned
-      ? { label: `Unpin ${node.instance ?? file}`, run: () => unpin(pinned) }
-      : { label: `Pin ${node.instance ?? file} beside`, run: () => pin(key) },
+      ? { label: `Unpin ${name}`, run: () => unpin(pinned) }
+      : node.instance?.bound === true
+        ? // A pane would show the module evaluated alone, not this include's arguments.
+          {
+            label: `Pin ${name} beside: not yet for an include with arguments`,
+            disabled: true,
+            run: () => undefined,
+          }
+        : { label: `Pin ${name} beside`, run: () => pin(key) },
   ]);
 }
 

@@ -112,7 +112,8 @@ interface Prepared {
 }
 interface Engine {
   default(options: { module_or_path: ArrayBuffer }): Promise<unknown>;
-  prepareProject(request: { entry: string; files: ProjectFile[] }): Prepared;
+  /** `prepareProject` that also projects the entry file's view (the playground skips it). */
+  prepareViewProject(request: { entry: string; files: ProjectFile[] }): Prepared;
 }
 
 let loading: Promise<Engine> | null = null;
@@ -141,7 +142,7 @@ export function loadEngine(): Promise<Engine> {
 async function prepare(entry: string, files: ProjectFile[]): Promise<Prepared | Outcome> {
   const engine = await loadEngine();
   try {
-    return engine.prepareProject({ entry, files });
+    return engine.prepareViewProject({ entry, files });
   } catch (error) {
     const failure = outcomeSchema.safeParse(error);
     if (failure.success) return failure.data;
