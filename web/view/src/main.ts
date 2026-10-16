@@ -7,7 +7,7 @@ import { changeNote, diffModels, summarize, type ModelDiff } from "./compare.ts"
 import { markChanges } from "./compareMarks.ts";
 import { crossLinks, drawCrossWires, extraLanes, type CrossSheet } from "./cross.ts";
 import { button, need, span } from "./dom.ts";
-import { editableExpr, planCellEdit, planExprEdit, type EditPlan } from "./editing.ts";
+import { cellRange, editableExpr, planCellEdit, planExprEdit, type EditPlan } from "./editing.ts";
 import { SourceEditor } from "./editor.ts";
 import { errorMessage } from "./errors.ts";
 import { Explorer, type RefSource } from "./explorer.ts";
@@ -521,12 +521,13 @@ function startCellEdit(s: Sheet, cell: HTMLElement): void {
   const sub = cell.dataset.sub ?? null;
   select(s, { id: node.id, row, sub, mode: "deps" });
   // A value read from another file is edited in that file, not here.
+  // A cell the compiler reports no range for is read-only; the bar shows its expression.
+  const keys = [row, sub].filter((x): x is string => x !== null);
   const literal = !isExternal(node) && (node.kind === "param" || node.kind === "const");
-  if (!literal || (row === null && editableExpr(node, sourceOfNode(s, node)) === null)) {
+  if (!literal || cellRange(node, keys) === null || sourceOfNode(s, node) === null) {
     startFormulaEdit();
     return;
   }
-  const keys = [row, sub].filter((x): x is string => x !== null);
   const value = valueAt(node.value, keys);
   const initial = value?.kind === "quantity" ? value.magnitude : displayOf(value);
   const input = document.createElement("input");
@@ -542,11 +543,7 @@ function startCellEdit(s: Sheet, cell: HTMLElement): void {
   bindInput(
     input,
     initial,
-    (text) =>
-      applyEdit(
-        s,
-        planCellEdit(node, keys, entryNames(s, node, keys), sourceOfNode(s, node), text),
-      ),
+    (text) => applyEdit(s, planCellEdit(node, keys, sourceOfNode(s, node), text)),
     () => {
       cell.classList.remove("editing");
       cell.replaceChildren(...before);

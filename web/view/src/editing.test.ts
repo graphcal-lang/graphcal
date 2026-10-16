@@ -41,7 +41,7 @@ describe("planning an edit", () => {
   });
 
   test("a scalar cell replaces the expression's range", () => {
-    expect(planCellEdit(scalar, [], [], source, "3")).toEqual({
+    expect(planCellEdit(scalar, [], source, "3")).toEqual({
       ok: true,
       edit: { file: "src/m.gcl", next: "param p: Power = 3.0 W;\n" },
     });
@@ -82,16 +82,28 @@ describe("planning an edit", () => {
         ],
       },
     });
-    expect(planCellEdit(node, ["kb"], ["b"], table, "7")).toEqual({
+    expect(planCellEdit(node, ["kb"], table, "7")).toEqual({
       ok: true,
       edit: { file: "src/m.gcl", next: table.replace("2.0 kW", "7.0 kW") },
     });
   });
 
   test("nothing is planned without the file's text", () => {
-    expect(planCellEdit(scalar, [], [], null, "3")).toEqual({
+    expect(planCellEdit(scalar, [], null, "3")).toEqual({
       ok: false,
-      message: "this expression cannot be edited",
+      message: "this value cannot be edited",
+    });
+  });
+
+  test("a cell the compiler reports no range for is read-only", () => {
+    const node = viewNode("t", {
+      axes: ["m"],
+      expr: "for m: M { 1.0 W }",
+      source: { file: "src/m.gcl", line: 1, expr_range: range(0, 0, 18), cells: [] },
+    });
+    expect(planCellEdit(node, ["ka"], "for m: M { 1.0 W }", "2")).toEqual({
+      ok: false,
+      message: "this value cannot be edited",
     });
   });
 });

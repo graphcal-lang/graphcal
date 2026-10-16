@@ -1,8 +1,8 @@
 // Planning the sheet's edits: what a cell or an expression typed by the
 // reader becomes in the source. Pure: the page hands the plan to its host.
 import type { SourceEdit } from "./host.ts";
-import type { ViewNode } from "./model.ts";
-import { EditError, replaceRange, replaceTableCell } from "./source.ts";
+import type { Range, ViewNode } from "./model.ts";
+import { EditError, replaceRange } from "./source.ts";
 import { errorMessage } from "./errors.ts";
 import { oneLine, valueAt } from "./values.ts";
 
@@ -62,38 +62,35 @@ export function planExprEdit(node: ViewNode, source: string | null, next: string
 }
 
 /**
- * Replace one entry of a table literal, or the literal of a scalar param.
- * `keys` are the cell's entry keys, `names` how a reader sees them.
+ * The range a cell of the node is written at: one the compiler reported for
+ * the cell (a scalar's is its expression). A cell with none is read-only: it
+ * is computed, or its table is not written entry by entry.
  */
+export function cellRange(node: ViewNode, keys: readonly string[]): Range | null {
+  const source = node.source;
+  if (source === null) return null;
+  if (keys.length === 0) return source.expr_range;
+  const cell = source.cells.find(
+    (c) => c.keys.length === keys.length && c.keys.every((key, i) => key === keys[i]),
+  );
+  return cell?.range ?? null;
+}
+
+/** Replace the literal of one cell (entry keys `keys`) with what was typed. */
 export function planCellEdit(
   node: ViewNode,
   keys: readonly string[],
-  names: readonly string[],
   source: string | null,
   text: string,
 ): EditPlan {
-  const literal = literalFor(node, cellUnit(node, keys), text);
-  if (keys.length === 0) return planExprEdit(node, source, literal);
   const file = node.source?.file ?? null;
-  // The compiler names the range of each written cell.
-  const cell = node.source?.cells.find(
-    (c) => c.keys.length === keys.length && c.keys.every((key, i) => key === keys[i]),
-  );
-  const range = node.source?.expr_range ?? null;
-  if (file === null || source === null || (cell === undefined && range === null)) {
+  const range = cellRange(node, keys);
+  if (file === null || source === null || range === null) {
     return refused("this value cannot be edited");
   }
+  const literal = literalFor(node, cellUnit(node, keys), text);
   try {
-    if (cell !== undefined) {
-      return { ok: true, edit: { file, next: replaceRange(source, cell.range, literal) } };
-    }
-    if (range === null) return refused("this value cannot be edited");
-    // The table spells its rows and columns as a reader sees the entries.
-    const [row = keys[0] ?? "", sub = keys[1] ?? null] = names;
-    return {
-      ok: true,
-      edit: { file, next: replaceTableCell(source, range, row, sub, literal) },
-    };
+    return { ok: true, edit: { file, next: replaceRange(source, range, literal) } };
   } catch (error) {
     return refused(error instanceof EditError ? error.message : errorMessage(error));
   }

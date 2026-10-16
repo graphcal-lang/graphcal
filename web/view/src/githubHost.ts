@@ -162,7 +162,7 @@ async function readBase(
         blobReader(github, route, baseTree),
       );
       for (const [file, text] of files) sources.set(file, text);
-      const request = new Project(route.repo, sources).request();
+      const request = new Project(sources).request();
       for (const file of plan.files) {
         if (file.relative.endsWith(".gcl")) {
           models.set(file.relative, await baseModel(file.relative, request));
@@ -247,7 +247,7 @@ export class GitHubHost implements Host {
       if (!fresh()) return;
       this.root = plan.root;
       this.pristine = new Map(files);
-      this.project = new Project(route.repo, files);
+      this.project = new Project(files);
       this.models.replace([]);
       this.modules = [];
       this.edited = false;
@@ -507,7 +507,7 @@ export class GitHubHost implements Host {
 
   reset(): void {
     if (!this.project) return;
-    this.project = new Project(this.route.repo, this.pristine);
+    this.project = new Project(this.pristine);
     this.models.replace(this.pristineModels);
     this.edited = false;
   }

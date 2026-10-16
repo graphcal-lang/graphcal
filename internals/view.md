@@ -41,8 +41,11 @@ without the view) or `projection_failed`. Its rules:
   `=`, parentheses included, and is null when several declarations share it
   (the columns of a multi-declaration table). `source.cells` lists each
   written cell of a table definition by its entry keys (with the node id,
-  the slot) and range. `element` says what one value is, so a typed literal
-  is built only for a quantity.
+  the slot) and range; a cell with no range is read-only, and the page never
+  parses source text to find one. `element` says what one value is, so a
+  typed literal is built only for a quantity (an `Int` cell takes `5` as
+  typed; a quantity cell gets `5.0` and the unit that cell is shown in).
+  Planning an edit is pure (`src/editing.ts`).
 - `dimension` is the element type as the declaration spells it (`Torque`,
   `Dimensionless / Time`). Values follow `graphcal eval`: a quantity in its
   display unit, else in the default label of its dimension. A display unit
