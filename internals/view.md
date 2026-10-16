@@ -36,8 +36,9 @@ a library with a required param can be edited. Its rules:
   `margin`, `num`, `e::p_budget`) and `name`. Pairs of ids are keyed by both
   ends (`src/edges.ts`), not by a joined string.
 - A node's `kind` is what it declares (`param`, `const`, `node`, `assert`);
-  `origin` is where it comes from (`local`, `imported`, or `included` with
-  its instance).
+  `origin` is where it comes from (`local`, `imported`, `included` with its
+  instance, or `called` with the inline call `scale(…)` whose output it is;
+  each call has a node of its own, with no value).
 - `axes` refer to `indexes[].id`. An index lists its `entries` as
   `{ key, display }`; the entries of an indexed value refer to `key`, and the
   page shows `display` (a variant, a coordinate such as `0.5 s`, a position

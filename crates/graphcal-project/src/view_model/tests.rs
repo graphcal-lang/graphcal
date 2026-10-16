@@ -355,14 +355,71 @@ include checked(v: 4.0) as also_fine;
 node z: Dimensionless = @out + @also_fine::out;
 ",
     );
-    assert_eq!(labels(&view), ["out", "z", "also_fine::out"]);
+    assert_eq!(
+        labels(&view),
+        ["out", "z", "also_fine::out", "checked(…)::out"]
+    );
     assert_eq!(
         node(&view, "z").deps,
         [id_of(&view, "out"), id_of(&view, "also_fine::out")]
     );
+    assert_eq!(node(&view, "out").deps, [id_of(&view, "checked(…)::out")]);
     assert_ne!(id_of(&view, "out"), id_of(&view, "also_fine::out"));
     assert_eq!(display_of(&view, "out").as_deref(), Some("6"));
     assert_eq!(display_of(&view, "also_fine::out").as_deref(), Some("8"));
+}
+
+#[test]
+fn the_outputs_inline_calls_read_are_nodes_of_their_own() {
+    let view = evaluated_view_of_source(
+        "\
+dag lib {
+    param gain: Dimensionless = 1.0;
+    pub node out: Dimensionless = @gain;
+}
+param k: Dimensionless = 2.0;
+node y: Dimensionless = @lib(gain: @k)::out + @lib(gain: 3.0)::out + @lib()::gain;
+assert positive = @lib()::out > 0.0;
+",
+    );
+    let by_id = |id: &ViewNodeId| {
+        view.nodes
+            .iter()
+            .find(|node| &node.id == id)
+            .unwrap_or_else(|| panic!("no node `{id}`"))
+    };
+    let y = node(&view, "y");
+    let reads: Vec<&ViewNode> = y.deps.iter().map(by_id).collect();
+    let read_labels: Vec<&str> = reads.iter().map(|node| node.label.as_str()).collect();
+    assert_eq!(
+        read_labels,
+        ["k", "lib(…)::out", "lib(…)::out", "lib(…)::gain"]
+    );
+    // Each call has a node of its own.
+    assert_ne!(reads[1].id, reads[2].id);
+    let [assert_read] = node(&view, "positive").deps.as_slice() else {
+        panic!("the assertion reads one call");
+    };
+    assert!(!y.deps.contains(assert_read));
+
+    let instance = |node: &ViewNode| match &node.origin {
+        ViewOrigin::Called { instance } => instance.clone(),
+        other => panic!("`{}` is no call output: {other:?}", node.label),
+    };
+    assert_eq!(
+        instance(reads[1]),
+        ViewInstance {
+            name: "lib(…)".to_string(),
+            bound: true,
+        }
+    );
+    assert!(!instance(by_id(assert_read)).bound);
+    assert_eq!(reads[1].name, "out");
+    assert_eq!(reads[1].kind, ViewNodeKind::Node);
+    assert_eq!(reads[3].kind, ViewNodeKind::Param);
+    // A call is evaluated in place: its output has no value of its own.
+    assert!(reads[1].value.is_none());
+    assert_eq!(display_of(&view, "y").as_deref(), Some("6"));
 }
 
 #[test]
