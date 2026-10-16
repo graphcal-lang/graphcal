@@ -2,7 +2,7 @@
 
 This Lake package contains the machine-checked normative specifications used by Graphcal's verification-guided development workflow.
 
-The package currently contains four specification slices:
+The package currently contains five specification slices:
 
 - [`Graphcal/Static/RequiredBindability.lean`](Graphcal/Static/RequiredBindability.lean) formalizes validation rule V002: required indexes, types, and dimensions must be bindable, while parameters are inherently bindable input ports.
 - [`Graphcal/Static/TemplateClosure.lean`](Graphcal/Static/TemplateClosure.lean) formalizes validation rule V007: template bodies may use Static input ports parametrically, but may not depend on an optional `pub(bind)` port's concrete default; parameter defaults remain exempt under V005 reconciliation.
@@ -10,6 +10,9 @@ The package currently contains four specification slices:
   It models typed collision slots, owner-scoped index labels, structured DAG paths, `::` member selection, `#` label selection, capability checks, no-shadowing, canonical alias targets, and call resolution independent of argument shape.
 - [`Graphcal/Static/ExternalSurface.lean`](Graphcal/Static/ExternalSurface.lean) formalizes import capability and include projection after namespace/visibility resolution.
   It rejects required Static holes and declarations with unresolved transitive Static dependencies from direct imports, distinguishes fixed, optional-default, and required Static roles, projects supplied bindings to their effective targets, gives Static declarations applicative specialization identities, and keeps runtime Terms and plain-unit scales instance-specific.
+- [`Graphcal/Graph/RecurrenceGroup.lean`](Graphcal/Graph/RecurrenceGroup.lean) specifies recurrence groups (#2058): declaration-level dependency cycles between `for` and `unfold` declarations that are acyclic element by element along one axis.
+  It states the acceptance rule R1–R7, the diagnostic reported for a rejected group, the element-level dependency relation, valid evaluation orders, and per-declaration outcomes.
+  [`internals/recurrence-groups.md`](../internals/recurrence-groups.md) is its prose specification, with examples that `Examples.lean` checks.
 
 [`Graphcal/Static/Interface.lean`](Graphcal/Static/Interface.lean) is the shared upstream vocabulary for Static input categories, visibility, and requirement state. [`Graphcal/Static/IncludeProjection.lean`](Graphcal/Static/IncludeProjection.lean) is the shared include-capability table: constructors follow their nominal owner while reusable DAG blueprints are deliberately not instance projections. Namespace resolution and external-surface composition reuse these definitions rather than maintaining separate category inventories.
 
@@ -45,6 +48,11 @@ Graphcal/Static/ExternalSurface/
 ```
 
 Its central equivalences prove that executable import validation accepts exactly the normative `Importable` predicate, direct import and unconfigured include projection share one identity for importable declarations, required and optional Static binding lookup preserves exact categories, normalized Static substitutions agree with the declarative relation, and executable include projection accepts exactly `Projects`. The slice consumes an upstream-resolved deterministic transitive Static dependency closure; constructing and certifying that closure from source declarations remains a separate environment-construction obligation.
+
+The recurrence-group slice uses the same split under `Graphcal/Graph/RecurrenceGroup/`, with its proofs in `Proofs/`.
+They establish that the reference checker accepts exactly R1–R7 and reports the specified violation, that acceptance does not depend on declaration order, that the reference evaluation order is unique, and that for every axis length the reference evaluator never reads an element before evaluating it, evaluates every element of a member reported as succeeded, and produces the same statuses for every valid order.
+They also show that every accepted group steps along a coordinate axis, and that the same-step rule rejects only groups with an element-level cycle on every axis with at least two elements.
+The compiler does not implement recurrence groups yet, so this slice has no Rust conformance check; its oracle is to be added with the implementation.
 
 ## Build and conformance check
 
