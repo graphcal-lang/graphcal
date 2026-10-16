@@ -1,0 +1,235 @@
+{
+  "version": 1,
+  "module": {
+    "id": "review.lib",
+    "file": "src/review/lib.gcl",
+    "package": "review"
+  },
+  "target": {
+    "kind": "instance",
+    "root": {
+      "id": "review.main",
+      "file": "src/review/main.gcl",
+      "package": "review"
+    },
+    "instance": {
+      "id": "p:review/f:src/f:review/f:main/s:p",
+      "name": "p",
+      "bound": true
+    }
+  },
+  "indexes": [],
+  "nodes": [
+    {
+      "id": "p:review/f:src/f:review/f:main/s:p/n:gain",
+      "label": "gain",
+      "name": "gain",
+      "module": "review.lib",
+      "kind": "param",
+      "origin": {
+        "kind": "local"
+      },
+      "element": "quantity",
+      "axes": [],
+      "dimension": "Dimensionless",
+      "unit": null,
+      "pub": false,
+      "deps": [
+        "p:review/f:src/f:review/f:main/n:k"
+      ],
+      "expr": "@k",
+      "doc": "The gain the includer sets.",
+      "source": {
+        "file": "src/review/main.gcl",
+        "line": 2,
+        "expr_range": {
+          "start": {
+            "line": 1,
+            "character": 25
+          },
+          "end": {
+            "line": 1,
+            "character": 27
+          }
+        },
+        "cells": []
+      },
+      "value": {
+        "kind": "quantity",
+        "display": "2",
+        "magnitude": "2",
+        "si_value": 2.0,
+        "unit": null
+      },
+      "presentation": []
+    },
+    {
+      "id": "p:review/f:src/f:review/f:main/s:p/n:out",
+      "label": "out",
+      "name": "out",
+      "module": "review.lib",
+      "kind": "node",
+      "origin": {
+        "kind": "local"
+      },
+      "element": "quantity",
+      "axes": [],
+      "dimension": "Dimensionless",
+      "unit": null,
+      "pub": true,
+      "deps": [
+        "p:review/f:src/f:review/f:main/s:p/n:gain"
+      ],
+      "expr": "@gain",
+      "doc": null,
+      "source": {
+        "file": "src/review/lib.gcl",
+        "line": 3,
+        "expr_range": {
+          "start": {
+            "line": 2,
+            "character": 30
+          },
+          "end": {
+            "line": 2,
+            "character": 35
+          }
+        },
+        "cells": []
+      },
+      "value": {
+        "kind": "quantity",
+        "display": "2",
+        "magnitude": "2",
+        "si_value": 2.0,
+        "unit": null
+      },
+      "presentation": []
+    },
+    {
+      "id": "p:review/f:src/f:review/f:main/s:p/n:twice",
+      "label": "twice",
+      "name": "twice",
+      "module": "review.lib",
+      "kind": "node",
+      "origin": {
+        "kind": "local"
+      },
+      "element": "quantity",
+      "axes": [],
+      "dimension": "Dimensionless",
+      "unit": null,
+      "pub": false,
+      "deps": [
+        "p:review/f:src/f:review/f:main/s:p/n:out"
+      ],
+      "expr": "@out * 2.0",
+      "doc": null,
+      "source": {
+        "file": "src/review/lib.gcl",
+        "line": 4,
+        "expr_range": {
+          "start": {
+            "line": 3,
+            "character": 28
+          },
+          "end": {
+            "line": 3,
+            "character": 38
+          }
+        },
+        "cells": []
+      },
+      "value": {
+        "kind": "quantity",
+        "display": "4",
+        "magnitude": "4",
+        "si_value": 4.0,
+        "unit": null
+      },
+      "presentation": []
+    },
+    {
+      "id": "p:review/f:src/f:review/f:main/s:p/n:positive",
+      "label": "positive",
+      "name": "positive",
+      "module": "review.lib",
+      "kind": "assert",
+      "origin": {
+        "kind": "local"
+      },
+      "element": "bool",
+      "axes": [],
+      "dimension": "Bool",
+      "unit": null,
+      "pub": false,
+      "deps": [
+        "p:review/f:src/f:review/f:main/s:p/n:out"
+      ],
+      "expr": "@out > 0.0",
+      "doc": null,
+      "source": {
+        "file": "src/review/lib.gcl",
+        "line": 5,
+        "expr_range": {
+          "start": {
+            "line": 4,
+            "character": 18
+          },
+          "end": {
+            "line": 4,
+            "character": 28
+          }
+        },
+        "cells": []
+      },
+      "value": {
+        "kind": "bool",
+        "display": "PASS",
+        "value": true
+      },
+      "presentation": []
+    },
+    {
+      "id": "p:review/f:src/f:review/f:main/n:k",
+      "label": "k",
+      "name": "k",
+      "module": "review.main",
+      "kind": "param",
+      "origin": {
+        "kind": "includer"
+      },
+      "element": "quantity",
+      "axes": [],
+      "dimension": "Dimensionless",
+      "unit": null,
+      "pub": false,
+      "deps": [],
+      "expr": "2.0",
+      "doc": null,
+      "source": {
+        "file": "src/review/main.gcl",
+        "line": 1,
+        "expr_range": {
+          "start": {
+            "line": 0,
+            "character": 25
+          },
+          "end": {
+            "line": 0,
+            "character": 28
+          }
+        },
+        "cells": []
+      },
+      "value": {
+        "kind": "quantity",
+        "display": "2",
+        "magnitude": "2",
+        "si_value": 2.0,
+        "unit": null
+      },
+      "presentation": []
+    }
+  ]
+}

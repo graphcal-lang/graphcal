@@ -1,0 +1,3 @@
+param k: Dimensionless = 2.0;
+include review.lib(gain: @k) as p;
+node y: Dimensionless = @p::out;

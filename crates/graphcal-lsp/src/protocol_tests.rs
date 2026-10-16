@@ -966,6 +966,23 @@ async fn view_model_request_serves_the_analyzed_document() {
     assert_eq!(view["nodes"][1]["label"], "doubled");
     assert_eq!(view["nodes"][1]["value"]["display"], "2");
     assert_eq!(view["nodes"][1]["source"]["line"], 2);
+    let module = request(
+        &mut service,
+        "graphcal/viewModel",
+        json!({ "textDocument": { "uri": uri }, "target": { "kind": "module" } }),
+    )
+    .await;
+    assert_eq!(module, view);
+    let no_instance = request(
+        &mut service,
+        "graphcal/viewModel",
+        json!({
+            "textDocument": { "uri": uri },
+            "target": { "kind": "instance", "instance": "no-such-instance" },
+        }),
+    )
+    .await;
+    assert_eq!(no_instance, Value::Null);
 
     let unknown = request(
         &mut service,

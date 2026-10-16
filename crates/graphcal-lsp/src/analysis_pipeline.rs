@@ -413,7 +413,7 @@ pub fn run_analysis_with_cancellation(
             let (mut view, degradations) = match view {
                 ViewModelDemand::Skip => (None, Vec::new()),
                 ViewModelDemand::Project => {
-                    match graphcal_project::view_model::project_view(&project, &checked) {
+                    match graphcal_project::view_model::project_views(&project, &checked) {
                         Ok(view) => (Some(view), Vec::new()),
                         Err(error) => (
                             None,
@@ -445,7 +445,7 @@ pub fn run_analysis_with_cancellation(
             };
             cancellation.checkpoint()?;
             diagnostics.entry(uri.clone()).or_default().extend(todos);
-            let view = view.map(graphcal_project::view_model::ViewProjection::into_model);
+            let view = view.map(graphcal_project::view_model::ViewProjections::into_models);
 
             Ok(AnalysisRun {
                 analysis: AnalysisResult {
@@ -619,10 +619,50 @@ mod view_tests {
             .map(|degradation| degradation.message(&uri))
             .collect();
         assert!(messages.is_empty(), "{messages:?}");
-        let view = run.analysis.view.expect("view model");
+        let views = run.analysis.view.expect("view model");
+        let view = views.module();
         let names: Vec<&str> = view.nodes.iter().map(|node| node.name.as_str()).collect();
         assert_eq!(names, ["thrust", "doubled"]);
         assert!(view.nodes[1].value.is_some(), "doubled should be evaluated");
+    }
+
+    #[test]
+    fn analysis_carries_the_view_of_each_include_instance() {
+        use graphcal_project::view_model::{ViewOrigin, ViewTarget, ViewValue};
+
+        let uri = Url::parse("untitled:view.gcl").unwrap();
+        let run = run_analysis_run(
+            &uri,
+            "dag lib {\n    param gain: Dimensionless = 1.0;\n    pub node out: Dimensionless = @gain;\n}\ninclude lib(gain: 2.0) as p;\nnode y: Dimensionless = @p::out;\n",
+            &[],
+            test_plugin_host(),
+        );
+        let views = run.analysis.view.expect("view model");
+        let read = views
+            .module()
+            .nodes
+            .iter()
+            .find(|node| node.label == "p::out")
+            .expect("p::out");
+        let ViewOrigin::Included { instance } = &read.origin else {
+            panic!("p::out is no include member: {:?}", read.origin);
+        };
+        let p = views
+            .get(&ViewTarget::Instance {
+                instance: instance.id.clone(),
+            })
+            .expect("the view of p");
+        let out = p
+            .nodes
+            .iter()
+            .find(|node| node.label == "out")
+            .expect("out");
+        assert_eq!(out.id, read.id);
+        assert!(
+            matches!(&out.value, Some(ViewValue::Quantity { display, .. }) if display == "2"),
+            "{:?}",
+            out.value
+        );
     }
 
     #[test]

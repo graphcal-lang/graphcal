@@ -1,0 +1,144 @@
+{
+  "version": 1,
+  "module": {
+    "id": "review.main",
+    "file": "src/review/main.gcl",
+    "package": "review"
+  },
+  "target": {
+    "kind": "module"
+  },
+  "indexes": [],
+  "nodes": [
+    {
+      "id": "p:review/f:src/f:review/f:main/n:k",
+      "label": "k",
+      "name": "k",
+      "module": "review.main",
+      "kind": "param",
+      "origin": {
+        "kind": "local"
+      },
+      "element": "quantity",
+      "axes": [],
+      "dimension": "Dimensionless",
+      "unit": null,
+      "pub": false,
+      "deps": [],
+      "expr": "2.0",
+      "doc": null,
+      "source": {
+        "file": "src/review/main.gcl",
+        "line": 1,
+        "expr_range": {
+          "start": {
+            "line": 0,
+            "character": 25
+          },
+          "end": {
+            "line": 0,
+            "character": 28
+          }
+        },
+        "cells": []
+      },
+      "value": {
+        "kind": "quantity",
+        "display": "2",
+        "magnitude": "2",
+        "si_value": 2.0,
+        "unit": null
+      },
+      "presentation": []
+    },
+    {
+      "id": "p:review/f:src/f:review/f:main/n:y",
+      "label": "y",
+      "name": "y",
+      "module": "review.main",
+      "kind": "node",
+      "origin": {
+        "kind": "local"
+      },
+      "element": "quantity",
+      "axes": [],
+      "dimension": "Dimensionless",
+      "unit": null,
+      "pub": false,
+      "deps": [
+        "p:review/f:src/f:review/f:main/s:p/n:out"
+      ],
+      "expr": "@p::out",
+      "doc": null,
+      "source": {
+        "file": "src/review/main.gcl",
+        "line": 3,
+        "expr_range": {
+          "start": {
+            "line": 2,
+            "character": 24
+          },
+          "end": {
+            "line": 2,
+            "character": 31
+          }
+        },
+        "cells": []
+      },
+      "value": {
+        "kind": "quantity",
+        "display": "2",
+        "magnitude": "2",
+        "si_value": 2.0,
+        "unit": null
+      },
+      "presentation": []
+    },
+    {
+      "id": "p:review/f:src/f:review/f:main/s:p/n:out",
+      "label": "p::out",
+      "name": "out",
+      "module": "review.lib",
+      "kind": "node",
+      "origin": {
+        "kind": "included",
+        "instance": {
+          "id": "p:review/f:src/f:review/f:main/s:p",
+          "name": "p",
+          "bound": true
+        }
+      },
+      "element": "quantity",
+      "axes": [],
+      "dimension": "Dimensionless",
+      "unit": null,
+      "pub": true,
+      "deps": [],
+      "expr": "@gain",
+      "doc": null,
+      "source": {
+        "file": "src/review/lib.gcl",
+        "line": 3,
+        "expr_range": {
+          "start": {
+            "line": 2,
+            "character": 30
+          },
+          "end": {
+            "line": 2,
+            "character": 35
+          }
+        },
+        "cells": []
+      },
+      "value": {
+        "kind": "quantity",
+        "display": "2",
+        "magnitude": "2",
+        "si_value": 2.0,
+        "unit": null
+      },
+      "presentation": []
+    }
+  ]
+}

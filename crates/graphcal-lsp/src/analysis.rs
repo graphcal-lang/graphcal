@@ -57,11 +57,12 @@ pub struct AnalysisResult {
     /// Computed values from evaluation, keyed by runtime declaration identity.
     /// Each value is a formatted display string (e.g., `"9.81 [m/s^2]"`).
     pub eval_values: HashMap<ResolvedDeclName, String>,
-    /// The document's view model (structure, and values when it evaluated),
-    /// served to the `graphcal/viewModel` request. `None` when the project
+    /// The document's view models (structure, and values when it
+    /// evaluated): its own, and one per include instance its evaluation
+    /// materializes, served to the `graphcal/viewModel` request. `None` when the project
     /// did not check, or when the client shows no view models (the analysis
     /// then skips the projection).
-    pub view: Option<graphcal_project::view_model::ViewModel>,
+    pub view: Option<graphcal_project::view_model::ViewModels>,
     /// Structured function signatures, keyed by function name.
     /// Points to a lazily-initialized static map (builtins never change).
     pub fn_signatures: &'static HashMap<String, FnSignatureInfo>,
