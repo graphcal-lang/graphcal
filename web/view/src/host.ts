@@ -12,8 +12,11 @@ export interface SourceEdit {
 }
 
 export type EditResult =
-  /** Applied; `models` are the modules the host could re-project at once. */
-  | { ok: true; models: ViewModel[] }
+  /**
+   * Applied; `models` are the modules the host could re-project at once.
+   * `note` says why the shown ones have no values, when they have none.
+   */
+  | { ok: true; models: ViewModel[]; note: string | null }
   /** Refused or failed; nothing changed. */
   | { ok: false; message: string };
 

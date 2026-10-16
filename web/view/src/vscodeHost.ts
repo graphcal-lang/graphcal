@@ -126,7 +126,11 @@ export class VsCodeHost implements Host {
       case "edited": {
         const settle = this.pending.get(message.id);
         this.pending.delete(message.id);
-        settle?.(message.ok ? { ok: true, models: [] } : { ok: false, message: message.message });
+        settle?.(
+          message.ok
+            ? { ok: true, models: [], note: null }
+            : { ok: false, message: message.message },
+        );
         return;
       }
       case "note":

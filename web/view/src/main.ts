@@ -483,7 +483,7 @@ function applyEdit(s: Sheet, plan: EditPlan): Promise<boolean> {
       showNote(result.message);
       return false;
     }
-    showNote(null);
+    showNote(result.note);
     adoptModels(result.models);
     return true;
   };

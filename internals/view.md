@@ -18,8 +18,14 @@ hosts, chosen at start in `src/main.ts`:
 The model is projected in `crates/graphcal-project/src/view_model/` and
 validated on the page by the zod schemas in `src/model.ts`; it is at
 `version` 1, and a wire change bumps it. The Wasm `evaluateView` answers
-`evaluated`, `binding_errors`, `eval_error`, `not_requested` (prepared
-without the view) or `projection_failed`. Its rules:
+`evaluated`; `needs_values` (a required param has no value, as in a library
+its includers bind), `binding_errors` or `eval_error`, each with the
+structure alone; `not_requested` (prepared without the view) or
+`projection_failed`. The page (`src/projection.ts`) keeps three states
+apart: a project that does not check is refused; one that checks is shown,
+with values when it evaluated, else with a note saying it waits for values
+or failed to evaluate. An edit stands whenever the sources still check, so
+a library with a required param can be edited. Its rules:
 
 - Ids are opaque. A node's `id` is derived from the declaration's identity
   (`view_model/wire_key.rs`), so it is unique, stable across evaluations and

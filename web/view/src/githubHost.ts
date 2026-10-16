@@ -5,19 +5,19 @@
 import { changedFiles, patchOf, type Patch } from "./diff.ts";
 import { changedPaths, compareOf, type BaseRead } from "./compareBase.ts";
 import {
-  evaluateView,
   loadEngine,
   packageLayout,
   projectLimits,
-  viewOf,
+  projectView,
   type ProjectFile,
 } from "./engine.ts";
 import { errorMessage } from "./errors.ts";
 import { GitHub, GitHubError, type Commit, type Refs, type Tree } from "./github.ts";
 import type { BaseSide, Compare, EditResult, Host, NoteKind, SourceEdit } from "./host.ts";
 import type { TokenStore } from "./login.ts";
-import { parseViewModel, type ViewModel } from "./model.ts";
+import type { ViewModel } from "./model.ts";
 import { ModelCache } from "./modelCache.ts";
+import { acceptEdit, projectionNote, type ViewProjection } from "./projection.ts";
 import { Project } from "./project.ts";
 import { RefsCache } from "./refsCache.ts";
 import {
@@ -122,9 +122,10 @@ function blobReader(github: GitHub, route: Route, tree: Tree): (path: string) =>
 /** The base model of one project file, or why it has none. */
 async function baseModel(file: string, request: ProjectFile[]): Promise<BaseSide<ViewModel>> {
   try {
-    const outcome = await viewOf(file, request);
-    if ("error" in outcome) return { kind: "failed", message: outcome.error };
-    return { kind: "present", value: parseViewModel(outcome.view) };
+    const projection = await projectView(file, request);
+    // A library waiting for its includers' values still has its structure to compare.
+    if (projection.status === "invalid") return { kind: "failed", message: projection.message };
+    return { kind: "present", value: projection.view };
   } catch (error) {
     return { kind: "failed", message: errorMessage(error) };
   }
@@ -295,25 +296,17 @@ export class GitHubHost implements Host {
     file: string,
   ): Promise<{ model: ViewModel; note: string | null } | { error: string }> {
     if (!this.project) return { error: "no project" };
-    let outcome;
+    let projection: ViewProjection;
     try {
-      outcome = await viewOf(file, this.project.request());
+      projection = await projectView(file, this.project.request());
     } catch (error) {
       return { error: errorMessage(error) };
     }
-    if ("error" in outcome) return { error: `${file}: ${outcome.error}` };
-    let model: ViewModel;
-    try {
-      model = parseViewModel(outcome.view);
-    } catch (error) {
-      return { error: errorMessage(error) };
-    }
+    if (projection.status === "invalid") return { error: `${file}: ${projection.message}` };
+    const model = projection.view;
     this.models.set(model);
     this.modules = this.models.ids();
-    return {
-      model,
-      note: outcome.valued ? null : `${file} has no values of its own: ${outcome.note}`,
-    };
+    return { model, note: projectionNote(file, projection) };
   }
 
   private fail(error: unknown): void {
@@ -476,27 +469,24 @@ export class GitHubHost implements Host {
       project.files.set(edit.file, previous);
       return { ok: false, message };
     };
-    const models: ViewModel[] = [];
+    const projections: { file: string; projection: ViewProjection }[] = [];
     for (const module of open) {
       const shown = this.models.current(module);
       if (!shown) continue;
-      let outcome;
+      const file = shown.module.file;
       try {
-        outcome = await evaluateView(shown.module.file, project.request());
-      } catch (error) {
-        return rollback(errorMessage(error));
-      }
-      if ("error" in outcome) return rollback(outcome.error);
-      try {
-        models.push(parseViewModel(outcome.view));
+        projections.push({ file, projection: await projectView(file, project.request()) });
       } catch (error) {
         return rollback(errorMessage(error));
       }
     }
+    // An edit stands while the sources check, whether or not they evaluate.
+    const verdict = acceptEdit(projections);
+    if (!verdict.ok) return rollback(verdict.message);
     // The modules off screen read the edited sources too: their models are stale now.
-    this.models.edited(models);
+    this.models.edited(verdict.models);
     this.edited = true;
-    return { ok: true, models };
+    return verdict;
   }
 
   request(module: string): void {

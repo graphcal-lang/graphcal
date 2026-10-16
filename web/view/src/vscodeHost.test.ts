@@ -70,7 +70,7 @@ describe("VsCodeHost", () => {
     expect(settled).toBe(false);
     expect(host.source(model, "src/main.gcl")).toBe("param n = 1;\n");
     deliver({ type: "edited", id: edit.id, ok: true });
-    expect(await result).toEqual({ ok: true, models: [] });
+    expect(await result).toEqual({ ok: true, models: [], note: null });
     expect(host.source(model, "src/main.gcl")).toBe("param n = 2;\n");
   });
 
