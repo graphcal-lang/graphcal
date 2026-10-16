@@ -474,3 +474,81 @@ node y: Dimensionless = @p::out + @q::out;
     assert_eq!(node(&view, "y").origin, ViewOrigin::Local);
     assert_eq!(display_of(&view, "p::out").as_deref(), Some("2"));
 }
+
+/// The text the view would replace for `label`: its `expr`, and the source
+/// sliced by its `expr_range` (lines and UTF-16 columns).
+fn expr_and_range_text(view: &ViewModel, source: &str, label: &str) -> (String, String) {
+    let node = node(view, label);
+    let range = node
+        .source
+        .as_ref()
+        .and_then(|source| source.expr_range)
+        .unwrap_or_else(|| panic!("`{label}` has no expression range"));
+    let offset = |position: ViewPosition| -> usize {
+        let line_start: usize = source
+            .split_inclusive('\n')
+            .take(position.line as usize)
+            .map(str::len)
+            .sum();
+        let line = &source[line_start..];
+        let mut units: usize = 0;
+        let mut bytes: usize = 0;
+        for ch in line.chars() {
+            if units >= position.character as usize {
+                break;
+            }
+            units = units.saturating_add(ch.len_utf16());
+            bytes = bytes.saturating_add(ch.len_utf8());
+        }
+        line_start.saturating_add(bytes)
+    };
+    let text = source[offset(range.start)..offset(range.end)].to_string();
+    (node.expr.clone().unwrap(), text)
+}
+
+#[test]
+fn the_expression_range_covers_the_whole_text_after_the_equals_sign() {
+    // The reproduction of #2062: a range that starts after an opening `(`
+    // turned an edit of `z` into `(5.0;`.
+    let source = "\
+node a: Dimensionless = 1.0;
+node y: Dimensionless = (@a + 2.0) * 3.0;
+node z: Dimensionless = (@a);
+node nested: Dimensionless = ((@a) + (2.0));
+param p: Dimensionless = (1.5);
+const node c: Dimensionless = (2.5);
+node multi: Dimensionless = (@a
+    // a comment inside
+    + 1.0) // a comment after
+    ;
+assert ok = (@y) > 0.0;
+";
+    let view = evaluated_view_of_source(source);
+    for (label, expected) in [
+        ("y", "(@a + 2.0) * 3.0"),
+        ("z", "(@a)"),
+        ("nested", "((@a) + (2.0))"),
+        ("p", "(1.5)"),
+        ("c", "(2.5)"),
+        ("multi", "(@a\n    // a comment inside\n    + 1.0)"),
+        ("ok", "(@y) > 0.0"),
+    ] {
+        let (expr, text) = expr_and_range_text(&view, source, label);
+        assert_eq!(expr, expected, "expr of `{label}`");
+        assert_eq!(text, expected, "range of `{label}`");
+    }
+}
+
+#[test]
+fn the_expression_range_counts_utf16_columns() {
+    // `π` is one UTF-16 unit and two bytes; `𝑥` is two units and four bytes.
+    let source = "\
+/// π and 𝑥 before the declaration do not shift it.
+node a: Dimensionless = 1.0;
+node b: Dimensionless = (@a) * 2.0; // π𝑥
+";
+    let view = evaluated_view_of_source(source);
+    let (expr, text) = expr_and_range_text(&view, source, "b");
+    assert_eq!(expr, "(@a) * 2.0");
+    assert_eq!(text, expr);
+}

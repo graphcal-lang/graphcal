@@ -258,6 +258,7 @@ impl UnfrozenIR {
                         expr: lower_scoped(&entry.expr)?,
                         identity: entry.identity,
                         span: entry.span,
+                        definition_range: entry.definition_range,
                     }),
                     Decl::Param(entry) => Decl::Param(ParamEntry {
                         doc: entry.doc,
@@ -265,6 +266,7 @@ impl UnfrozenIR {
                         default: entry.default.as_ref().map(lower_scoped).transpose()?,
                         identity: entry.identity,
                         span: entry.span,
+                        default_range: entry.default_range,
                         override_reconciliations: entry.override_reconciliations,
                     }),
                     Decl::Node(entry) => Decl::Node(NodeEntry {
@@ -287,6 +289,7 @@ impl UnfrozenIR {
                         })?,
                         identity: entry.identity,
                         span: entry.span,
+                        definition_range: entry.definition_range,
                     }),
                     Decl::Assert(entry) => Decl::Assert(AssertEntry {
                         doc: entry.doc,
@@ -307,6 +310,7 @@ impl UnfrozenIR {
                         })?,
                         identity: entry.identity,
                         span: entry.span,
+                        body_range: entry.body_range,
                     }),
                     // Sink expressions are semantic program bodies, not
                     // optional rendering hints. Batch compilation lowers every

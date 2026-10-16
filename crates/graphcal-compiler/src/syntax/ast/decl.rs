@@ -163,6 +163,10 @@ pub struct AssertDecl<P: Phase = Raw> {
     pub visibility: Visibility,
     pub name: Spanned<DeclName>,
     pub body: AssertBody<P>,
+    /// The source range of the body after `=`, from its first token to its
+    /// last (enclosing parentheses included).
+    #[fe(skip)]
+    pub body_range: Span,
 }
 
 /// The body of an assert declaration.
@@ -575,6 +579,11 @@ pub struct ParamDecl<P: Phase = Raw> {
     pub type_ann: TypeExpr<P>,
     /// The default value expression. `None` for required params (no default).
     pub value: Option<Expr<P>>,
+    /// The source range of the default after `=`, from its first token to
+    /// its last (enclosing parentheses included); present exactly when
+    /// `value` is.
+    #[fe(skip)]
+    pub value_range: Option<Span>,
 }
 
 /// Shared shape for value declarations with an expression body.
@@ -586,6 +595,11 @@ pub struct ValueDecl<P: Phase = Raw> {
     pub name: Spanned<DeclName>,
     pub type_ann: TypeExpr<P>,
     pub value: Expr<P>,
+    /// The source range of `value` after `=`, from its first token to its
+    /// last (enclosing parentheses included). Every slot of a
+    /// multi-declaration shares the range of its table.
+    #[fe(skip)]
+    pub value_range: Span,
 }
 
 /// Runtime node declaration, with either a formula or an unfinished body.
@@ -598,6 +612,11 @@ pub struct NodeDecl<P: Phase = Raw> {
     pub type_ann: TypeExpr<P>,
     #[phase_lift(map = map_formula)]
     pub definition: crate::node_definition::NodeDefinition<Expr<P>, IdentPath>,
+    /// The source range of the definition after `=`, from its first token
+    /// to its last (enclosing parentheses included). Every slot of a
+    /// multi-declaration shares the range of its table.
+    #[fe(skip)]
+    pub definition_range: Span,
 }
 
 /// Const node declaration: `const node name: Type = expr;`

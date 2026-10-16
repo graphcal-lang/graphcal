@@ -472,6 +472,7 @@ fn entry<E>(
                 identity,
                 body: InScope::new(a.body.clone(), dag_id.clone()),
                 span: decl.span,
+                body_range: a.body_range,
             })
         }),
         DeclKind::Plot(p) => declare(&p.name).map(|(identity, visibility)| {
@@ -516,6 +517,7 @@ fn entry<E>(
                     .as_ref()
                     .map(|expr| InScope::new(expr.clone(), dag_id.clone())),
                 span: decl.span,
+                default_range: p.value_range,
                 override_reconciliations: Vec::new(),
             })
         }),
@@ -526,6 +528,7 @@ fn entry<E>(
                 type_ann: InScope::new(c.type_ann.clone(), dag_id.clone()),
                 expr: InScope::new(c.value.clone(), dag_id.clone()),
                 span: decl.span,
+                definition_range: c.value_range,
             })
         }),
         DeclKind::Node(n) => declare(&n.name).map(|(identity, _)| {
@@ -535,6 +538,7 @@ fn entry<E>(
                 type_ann: InScope::new(n.type_ann.clone(), dag_id.clone()),
                 definition: InScope::new(n.definition.clone(), dag_id.clone()),
                 span: decl.span,
+                definition_range: n.definition_range,
             })
         }),
     })

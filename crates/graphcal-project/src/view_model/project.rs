@@ -607,12 +607,7 @@ impl NodeBuilder<'_> {
         };
         let unit = declared_unit(decl_type, &self.scope.units);
 
-        // The defining expression ends where the declaration ends: HIR spans
-        // of parenthesized operands omit their parentheses, so the
-        // declaration span, not the expression's, bounds the text.
-        let definition = input
-            .file
-            .and_then(|file| definition.map(|start| definition_span(file.text, start, span)));
+        // The definition is the source range after `=`, parentheses included.
         let expr = input
             .file
             .and_then(|file| definition.and_then(|span| slice(file.text, span)));
@@ -883,20 +878,6 @@ fn assertion_value(outcome: &AssertResult) -> Option<ViewValue> {
         }),
         AssertResult::Blocked { .. } | AssertResult::Error { .. } => None,
     }
-}
-
-/// The span from the start of `definition` to the end of `declaration`,
-/// less the terminating `;` and trailing whitespace.
-fn definition_span(text: &str, definition: Span, declaration: Span) -> Span {
-    let start = definition.offset().min(text.len());
-    let end = declaration
-        .offset()
-        .saturating_add(declaration.len())
-        .max(definition.offset().saturating_add(definition.len()))
-        .clamp(start, text.len());
-    let trimmed = text[start..end].trim_end();
-    let trimmed = trimmed.strip_suffix(';').unwrap_or(trimmed).trim_end();
-    Span::new(start, trimmed.len())
 }
 
 fn slice(text: &str, span: Span) -> Option<String> {

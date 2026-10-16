@@ -227,6 +227,8 @@ impl UnfrozenIR {
             type_ann: InScope::new(type_ann, type_resolution_owner),
             expr: InScope::new(expr, body_resolution_owner),
             span,
+            // A synthetic alias has no source of its own beyond its include.
+            definition_range: span,
         }));
     }
 
@@ -251,6 +253,7 @@ impl UnfrozenIR {
                 body_resolution_owner,
             ),
             span,
+            definition_range: span,
         }));
     }
 

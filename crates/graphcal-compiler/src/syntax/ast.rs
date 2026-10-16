@@ -46,6 +46,7 @@ mod tests {
                         span: Span::new(9, 15),
                     }),
                     value: Some(Expr::new(ExprKind::Number(1.0), Span::new(27, 3))),
+                    value_range: Some(Span::new(27, 3)),
                 }),
                 span: Span::new(0, 31),
                 doc: None,
