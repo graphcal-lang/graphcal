@@ -10,6 +10,7 @@ import type { TokenStore } from "./login.ts";
 import { parseViewModel, type ViewModel } from "./model.ts";
 import { ModelCache } from "./modelCache.ts";
 import { Project } from "./project.ts";
+import { RefsCache } from "./refsCache.ts";
 import { planProject, ProjectPlanError } from "./repoProject.ts";
 import {
   baseRef,
@@ -66,6 +67,7 @@ export class GitHubHost implements Host {
   /** The sources as read from GitHub, to return to on reset. */
   private pristine = new Map<string, string>();
   private readonly models = new ModelCache();
+  private readonly refsCache = new RefsCache();
   private pristineModels: ViewModel[] = [];
   /** Repository directory of the project root, to turn a project file into an address. */
   private root = "";
@@ -347,7 +349,11 @@ export class GitHubHost implements Host {
 
   /** The branches, tags and pull requests of the repository being read. */
   refs(): Promise<Refs> {
-    return this.github.refs(this.route.owner, this.route.repo);
+    const { owner, repo } = this.route;
+    const github = this.github;
+    return this.refsCache.get({ owner, repo, token: this.tokens.get() }, () =>
+      github.refs(owner, repo),
+    );
   }
 
   /** Read the same file at another ref: the address changes and the project is read again. */

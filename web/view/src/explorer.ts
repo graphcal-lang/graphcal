@@ -2,7 +2,7 @@
 // reads a repository) the ref being read, with a menu of the branches, tags
 // and pull requests to switch to. It opens from the breadcrumb at the top
 // left and closes from it again.
-import type { Refs } from "./github.ts";
+import type { Refs, RefsFailure } from "./github.ts";
 
 export interface TreeRow {
   /** Project path (`src/power_project/eps.gcl`); a directory's path has no trailing slash. */
@@ -80,6 +80,17 @@ function ancestors(path: string): string[] {
   return parts.slice(0, -1).map((_, i) => parts.slice(0, i + 1).join("/"));
 }
 
+const REF_LIST_LABEL = { branches: "branches", tags: "tags", pulls: "pull requests" } as const;
+
+/** Why a list is missing from the ref menu, naming the token permission when that is the likely cause. */
+export function refsFailureNote(failure: RefsFailure): string {
+  const label = REF_LIST_LABEL[failure.list];
+  if (failure.list === "pulls" && (failure.kind === "forbidden" || failure.kind === "not_found")) {
+    return `${label} are not listed: the token needs Pull requests: Read-only`;
+  }
+  return `${label} are not listed: ${failure.message}`;
+}
+
 /** The ref part of the explorer, when the host reads a repository. */
 export interface RefSource {
   /** The ref being read, once known. */
@@ -118,7 +129,6 @@ export class Explorer {
   private readonly menuEl: HTMLElement | null;
   private readonly treeEl: HTMLElement;
   private readonly options: ExplorerOptions;
-  private refs: Promise<Refs> | null = null;
   private files: readonly string[] = [];
   private selected: string | null = null;
   private changed: ReadonlySet<string> = new Set();
@@ -244,11 +254,11 @@ export class Explorer {
     this.menuEl.hidden = false;
     this.refEl?.classList.add("open");
     this.menuEl.replaceChildren(el("div", "refs-note", "reading refs…"));
-    this.refs ??= this.options.refs?.list() ?? Promise.reject(new Error("no refs"));
-    this.refs.then(
+    // The source keeps the list per repository; asking again is free.
+    const refs = this.options.refs?.list() ?? Promise.reject(new Error("no refs"));
+    refs.then(
       (refs) => this.renderMenu(refs),
       (error: unknown) => {
-        this.refs = null;
         const why = error instanceof Error ? error.message : String(error);
         this.menuEl?.replaceChildren(el("div", "refs-note error", why));
       },
@@ -312,6 +322,9 @@ export class Explorer {
         refs.pulls.map((p) => ({ label: `#${p.number}  ${p.title}`, ref: p.ref, hint: "" })),
       );
       if (list.childElementCount === 0) list.append(el("div", "refs-note", "nothing matches"));
+      for (const failure of refs.failures) {
+        list.append(el("div", "refs-note error", refsFailureNote(failure)));
+      }
     };
     filter.addEventListener("input", renderList);
     filter.addEventListener("keydown", (event) => {
@@ -335,7 +348,9 @@ export class Explorer {
     if (!value) this.closeMenu();
   }
 
-  setTitle(title: string): void {
+  /** The repository or package shown changed. */
+  setTitle(title: string, subtitle: string): void {
     this.titleEl.textContent = title;
+    this.titleEl.title = subtitle;
   }
 }

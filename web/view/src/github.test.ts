@@ -143,11 +143,43 @@ describe("GitHub", () => {
         { number: 43, title: "fork", ref: "b2" },
         { number: 44, title: "gone", ref: "c3" },
       ],
+      failures: [],
     });
     expect(calls.map((c) => c.url)).toEqual([
       "https://api.github.com/repos/o/r/branches?per_page=100",
       "https://api.github.com/repos/o/r/tags?per_page=100",
       "https://api.github.com/repos/o/r/pulls?state=open&per_page=100",
     ]);
+  });
+
+  test("a list GitHub refuses leaves the others", async () => {
+    const { fetch } = fakeFetch([
+      () => json([{ name: "main" }]),
+      () => json([{ name: "v1" }]),
+      () => new Response("", { status: 403 }),
+    ]);
+    await expect(new GitHub("tok", fetch).refs("o", "r")).resolves.toEqual({
+      branches: ["main"],
+      tags: ["v1"],
+      pulls: [],
+      failures: [
+        {
+          list: "pulls",
+          kind: "forbidden",
+          message: "GitHub refused: /repos/o/r/pulls?state=open&per_page=100",
+        },
+      ],
+    });
+  });
+
+  test("refs reject when no list can be read", async () => {
+    const { fetch } = fakeFetch([
+      () => new Response("", { status: 404 }),
+      () => new Response("", { status: 404 }),
+      () => new Response("", { status: 404 }),
+    ]);
+    await expect(new GitHub(null, fetch).refs("o", "r")).rejects.toMatchObject({
+      kind: "not_found",
+    });
   });
 });

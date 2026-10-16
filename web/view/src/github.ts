@@ -89,11 +89,21 @@ export interface PullRef {
   /** The ref to read the pull request's head at: its branch when it lives in this repository, else its commit. */
   ref: string;
 }
-/** The refs a repository offers to switch to. */
+/** The lists of refs a repository offers. */
+export type RefList = "branches" | "tags" | "pulls";
+/** A list GitHub would not give (pull requests need their own token permission). */
+export interface RefsFailure {
+  list: RefList;
+  /** The failure's class, when GitHub answered. */
+  kind: GitHubFailure | null;
+  message: string;
+}
+/** The refs a repository offers to switch to; a list that failed is empty and named in `failures`. */
 export interface Refs {
   branches: string[];
   tags: string[];
   pulls: PullRef[];
+  failures: RefsFailure[];
 }
 
 interface Cached {
@@ -141,23 +151,52 @@ export class GitHub {
     return this.get(url, RAW);
   }
 
-  /** Branches, tags and open pull requests (the first hundred of each). */
+  /**
+   * Branches, tags and open pull requests (the first hundred of each). Each
+   * list is read on its own: one that fails (pull requests, for a token
+   * without that permission) leaves the others. Rejects when all three fail.
+   */
   async refs(owner: string, repo: string): Promise<Refs> {
     const base = `/repos/${owner}/${repo}`;
-    const [branches, tags, pulls] = await Promise.all([
-      this.get(`${base}/branches?per_page=100`, JSON_),
-      this.get(`${base}/tags?per_page=100`, JSON_),
-      this.get(`${base}/pulls?state=open&per_page=100`, JSON_),
-    ]);
     const fullName = `${owner}/${repo}`;
+    const [branches, tags, pulls] = await Promise.allSettled([
+      this.get(`${base}/branches?per_page=100`, JSON_).then((body) =>
+        namedSchema.parse(JSON.parse(body)).map((b) => b.name),
+      ),
+      this.get(`${base}/tags?per_page=100`, JSON_).then((body) =>
+        namedSchema.parse(JSON.parse(body)).map((t) => t.name),
+      ),
+      this.get(`${base}/pulls?state=open&per_page=100`, JSON_).then((body) =>
+        pullsSchema.parse(JSON.parse(body)).map((p): PullRef => ({
+          number: p.number,
+          title: p.title,
+          ref: p.head.repo?.full_name === fullName ? p.head.ref : p.head.sha,
+        })),
+      ),
+    ]);
+    if (
+      branches.status === "rejected" &&
+      tags.status === "rejected" &&
+      pulls.status === "rejected"
+    ) {
+      throw branches.reason;
+    }
+    const failures: RefsFailure[] = [];
+    const settled = <T>(list: RefList, result: PromiseSettledResult<T[]>): T[] => {
+      if (result.status === "fulfilled") return result.value;
+      const error: unknown = result.reason;
+      failures.push({
+        list,
+        kind: error instanceof GitHubError ? error.kind : null,
+        message: error instanceof Error ? error.message : String(error),
+      });
+      return [];
+    };
     return {
-      branches: namedSchema.parse(JSON.parse(branches)).map((b) => b.name),
-      tags: namedSchema.parse(JSON.parse(tags)).map((t) => t.name),
-      pulls: pullsSchema.parse(JSON.parse(pulls)).map((p) => ({
-        number: p.number,
-        title: p.title,
-        ref: p.head.repo?.full_name === fullName ? p.head.ref : p.head.sha,
-      })),
+      branches: settled("branches", branches),
+      tags: settled("tags", tags),
+      pulls: settled("pulls", pulls),
+      failures,
     };
   }
 

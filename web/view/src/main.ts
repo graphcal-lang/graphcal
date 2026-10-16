@@ -1595,6 +1595,7 @@ if (webShell) {
   if (host instanceof GitHubHost && refSource) {
     host.onState((state) => {
       refSource.current = state.ref;
+      explorer?.setTitle(state.route.repo, `${state.route.owner}/${state.route.repo}`);
       explorer?.renderRef();
     });
   }

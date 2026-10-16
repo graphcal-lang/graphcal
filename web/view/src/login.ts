@@ -78,7 +78,7 @@ export class LoginDialog {
       el(
         "p",
         "login-text",
-        "A fine-grained personal access token with Contents: Read-only on the repositories you want to view. It stays in this browser and is sent to api.github.com only.",
+        "A fine-grained personal access token with Contents: Read-only on the repositories you want to view, and Pull requests: Read-only to list their pull requests. It stays in this browser and is sent to api.github.com only.",
       ),
     );
     input.type = "password";
