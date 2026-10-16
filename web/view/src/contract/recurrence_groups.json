@@ -5,6 +5,9 @@
     "file": "recurrence_groups.gcl",
     "package": "recurrence_groups"
   },
+  "target": {
+    "kind": "module"
+  },
   "indexes": [
     {
       "id": "p:recurrence_groups/f:recurrence_groups/n:Region",
@@ -1636,6 +1639,7 @@
       "origin": {
         "kind": "included",
         "instance": {
+          "id": "p:recurrence_groups/f:recurrence_groups/s:loop",
           "name": "loop",
           "bound": true
         }

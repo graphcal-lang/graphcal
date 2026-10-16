@@ -9,15 +9,19 @@
 use graphcal_compiler::text_position::{Utf16Position, Utf16Range};
 use serde::Serialize;
 
-use super::wire_key::{ViewIndexId, ViewNodeId};
+use super::wire_key::{ViewIndexId, ViewInstanceId, ViewNodeId};
 
-/// The view of one module: one `.gcl` file.
+/// The view of one module (one `.gcl` file), evaluated alone or as one of
+/// the include instances of the module evaluated as the root.
 #[derive(Debug, Clone, Serialize)]
 pub struct ViewModel {
     /// Schema version of this model.
     pub version: u8,
-    /// The module this view presents.
+    /// The module whose declarations this view presents (for an instance,
+    /// its template).
     pub module: ViewModule,
+    /// What the view presents that module as.
+    pub target: ViewSubject,
     /// Every index that appears as an axis of a node, with its entries in
     /// declaration order.
     pub indexes: Vec<ViewIndex>,
@@ -26,8 +30,22 @@ pub struct ViewModel {
     pub nodes: Vec<ViewNode>,
 }
 
+/// What a view presents its module as.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ViewSubject {
+    /// The module evaluated alone, as the root.
+    Module,
+    /// One include instance of the module, as `root` evaluated as the root
+    /// evaluates it: with the include's arguments.
+    Instance {
+        root: ViewModule,
+        instance: ViewInstance,
+    },
+}
+
 /// Identity of the module a view presents.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ViewModule {
     /// The module path, e.g. `power_project.power_max`.
     pub id: String,
@@ -100,7 +118,10 @@ pub enum ViewOrigin {
     /// A declaration of another DAG, read through an inline call
     /// (`@scale(…)::out`), whose instance is named `scale(…)`. A call is
     /// evaluated in place, so the node has no value of its own.
-    Called { instance: ViewInstance },
+    Called { instance: ViewCall },
+    /// In an instance's view: a declaration of the module that includes the
+    /// instance, read by the include's arguments.
+    Includer,
 }
 
 /// One declaration as the view presents it.
@@ -155,12 +176,24 @@ pub struct ViewNode {
 /// An include instance a node is read through.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ViewInstance {
+    /// The key a reader asks for the instance's own view by.
+    pub id: ViewInstanceId,
     /// The instance's name: `eps` in `include power_project.eps() …`, or
     /// the alias of `include … as e`.
     pub name: String,
     /// Whether the include binds any of the template's params or Static
     /// parameters. A bound instance's values differ from those of its
-    /// module evaluated alone, which is all a view of that module shows.
+    /// module evaluated alone; the instance's own view shows them.
+    pub bound: bool,
+}
+
+/// An inline DAG call a node is read through. A call has no view of its
+/// own: it is evaluated in place, as part of its caller.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ViewCall {
+    /// The call as the view names it: `scale(…)`.
+    pub name: String,
+    /// Whether the call binds any of the DAG's params.
     pub bound: bool,
 }
 

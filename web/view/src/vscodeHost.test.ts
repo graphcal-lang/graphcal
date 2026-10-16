@@ -28,6 +28,7 @@ function modelOf(project: string, file: string, text: string, revision: number):
     model: {
       version: 1,
       module: { id: `${project}.main`, file, package: project },
+      target: { kind: "module" },
       indexes: [],
       nodes: [],
     },

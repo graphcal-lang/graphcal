@@ -47,7 +47,7 @@ enum PreparedView {
     /// The checked program could not be projected.
     ProjectionFailed { reason: String },
     /// The structure, valued per evaluation.
-    Projected(ViewProjection),
+    Projected(Box<ViewProjection>),
 }
 
 /// Whether preparing also projects the entry file's view model. The view is
@@ -182,7 +182,7 @@ fn prepare_virtual(
             let view = match view {
                 ViewDemand::Skip => PreparedView::NotRequested,
                 ViewDemand::Project => match project_view(&loaded, &checked) {
-                    Ok(projection) => PreparedView::Projected(projection),
+                    Ok(projection) => PreparedView::Projected(Box::new(projection)),
                     Err(error) => PreparedView::ProjectionFailed {
                         reason: error.to_string(),
                     },
@@ -430,7 +430,7 @@ impl PreparedPlayground {
     #[must_use]
     pub fn evaluate_view(&self, bindings: &[BrowserBindingRequest]) -> EvaluateViewOutcome {
         let projection = match &self.view {
-            PreparedView::Projected(projection) => projection,
+            PreparedView::Projected(projection) => &**projection,
             PreparedView::NotRequested => return EvaluateViewOutcome::NotRequested,
             PreparedView::ProjectionFailed { reason } => {
                 return EvaluateViewOutcome::ProjectionFailed {

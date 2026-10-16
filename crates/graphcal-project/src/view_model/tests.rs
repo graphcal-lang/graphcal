@@ -171,15 +171,11 @@ fn power_max_reads_other_modules() {
     assert_eq!(budget.module, "power_project.eps");
     assert_eq!(budget.deps, Vec::<ViewNodeId>::new());
     // `include power_project.eps()` binds nothing.
-    assert_eq!(
-        budget.origin,
-        ViewOrigin::Included {
-            instance: ViewInstance {
-                name: "eps".to_string(),
-                bound: false
-            }
-        }
-    );
+    let ViewOrigin::Included { instance } = &budget.origin else {
+        panic!("p_budget is no include member: {:?}", budget.origin);
+    };
+    assert_eq!(instance.name, "eps");
+    assert!(!instance.bound);
     assert_eq!(budget.source.as_ref().unwrap().line, 23);
     assert!(
         budget
@@ -408,7 +404,7 @@ assert positive = @lib()::out > 0.0;
     };
     assert_eq!(
         instance(reads[1]),
-        ViewInstance {
+        ViewCall {
             name: "lib(…)".to_string(),
             bound: true,
         }
@@ -722,4 +718,173 @@ node last: Dimensionless = 2.0;
     assert_eq!(problems.len(), 1, "{problems:?}");
     assert!(problems[0].contains("SI value retained"), "{problems:?}");
     assert_eq!(node(&view, "first").presentation, Vec::<String>::new());
+}
+
+/// Every target of `entry` in a package `review` of `files` (under
+/// `src/review/`), with the root's evaluation attached.
+fn evaluated_views_of_package(files: &[(&str, &str)], entry: &str) -> ViewModels {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().canonicalize().unwrap();
+    let sources = root.join("src/review");
+    std::fs::create_dir_all(&sources).unwrap();
+    std::fs::write(root.join("graphcal.toml"), "[package]\nname = \"review\"\n").unwrap();
+    for (name, source) in files {
+        std::fs::write(sources.join(name), source).unwrap();
+    }
+    let fs = RealFileSystem::rooted(&root).unwrap();
+    let project = load_project(&sources.join(entry), Some(&root), &fs).unwrap();
+    let host_fns = graphcal_eval::host_fns::demo_registry();
+    let checked = ProjectCompiler::new(&project)
+        .host_fns(&host_fns)
+        .check()
+        .unwrap();
+    let mut projections = project_views(&project, &checked).unwrap();
+    let prepared = checked.prepare_with_host_fns(&host_fns).unwrap();
+    let evaluated = prepared
+        .evaluate(&prepared.binding_builder().finish().unwrap())
+        .unwrap();
+    projections.attach_evaluation(&evaluated);
+    projections.into_models()
+}
+
+/// The include instance `label` is read through.
+fn instance_of(view: &ViewModel, label: &str) -> ViewInstance {
+    match &node(view, label).origin {
+        ViewOrigin::Included { instance } => instance.clone(),
+        other => panic!("`{label}` is no include member: {other:?}"),
+    }
+}
+
+/// The view of the instance `label` of `view` is read through.
+fn instance_view<'a>(views: &'a ViewModels, view: &ViewModel, label: &str) -> &'a ViewModel {
+    views
+        .get(&ViewTarget::Instance {
+            instance: instance_of(view, label).id,
+        })
+        .unwrap_or_else(|| panic!("no view of the instance `{label}` is read through"))
+}
+
+fn quantity_display(view: &ViewModel, label: &str) -> String {
+    display_of(view, label).unwrap_or_else(|| panic!("`{label}` has no quantity value"))
+}
+
+const LIB: &str = "\
+param gain: Dimensionless = 1.0;
+pub node out: Dimensionless = @gain;
+node twice: Dimensionless = @out * 2.0;
+assert positive = @out > 0.0;
+";
+
+const MAIN: &str = "include review.lib(gain: 2.0) as p;\nnode y: Dimensionless = @p::out;\n";
+
+#[test]
+fn an_instance_shows_the_values_its_include_gives() {
+    // The example of #2079: a pane for `p` showed `lib` evaluated alone
+    // (`out = 1`) and wired it to `y` as the producer of 2.
+    let views = evaluated_views_of_package(&[("lib.gcl", LIB), ("main.gcl", MAIN)], "main.gcl");
+    let root = views.module();
+    assert_eq!(root.target, ViewSubject::Module);
+    assert_eq!(quantity_display(root, "y"), "2");
+
+    let p = instance_view(&views, root, "p::out");
+    assert_eq!(p.module.id, "review.lib");
+    assert_eq!(p.module.file, "src/review/lib.gcl");
+    let ViewSubject::Instance { root: of, instance } = &p.target else {
+        panic!("not an instance view: {:?}", p.target);
+    };
+    assert_eq!(of, &root.module);
+    assert_eq!(instance, &instance_of(root, "p::out"));
+    assert!(instance.bound);
+    assert_eq!(labels(p), ["gain", "out", "twice", "positive"]);
+    assert!(p.nodes.iter().all(|node| node.origin == ViewOrigin::Local));
+    assert_eq!(quantity_display(p, "gain"), "2");
+    assert_eq!(quantity_display(p, "out"), "2");
+    assert_eq!(quantity_display(p, "twice"), "4");
+    assert!(matches!(
+        node(p, "positive").value,
+        Some(ViewValue::Bool { value: true, .. })
+    ));
+    // The instance's `out` is the node `y` reads: one id joins the two views.
+    assert_eq!(id_of(p, "out"), id_of(root, "p::out"));
+    assert_eq!(node(root, "y").deps, [id_of(p, "out")]);
+    assert_eq!(node(p, "twice").deps, [id_of(p, "out")]);
+}
+
+#[test]
+fn an_instance_is_a_target_apart_from_its_module_alone() {
+    let views = evaluated_views_of_package(&[("lib.gcl", LIB), ("main.gcl", MAIN)], "main.gcl");
+    let lib = evaluated_views_of_package(&[("lib.gcl", LIB), ("main.gcl", MAIN)], "lib.gcl");
+    let alone = lib.module();
+    let p = instance_view(&views, views.module(), "p::out");
+    assert_eq!(alone.module, p.module);
+    assert_eq!(quantity_display(alone, "out"), "1");
+    for label in ["gain", "out", "twice", "positive"] {
+        assert_ne!(id_of(alone, label), id_of(p, label), "{label}");
+    }
+    let unknown = ViewTarget::Instance {
+        instance: ViewInstanceId::from_wire("no such instance".to_string()),
+    };
+    assert!(views.get(&unknown).is_none());
+}
+
+#[test]
+fn a_bound_param_is_defined_by_the_include_argument() {
+    let main = "include review.lib(gain: 2.5 * 2.0) as p;\nnode y: Dimensionless = @p::out;\n";
+    let views = evaluated_views_of_package(&[("lib.gcl", LIB), ("main.gcl", main)], "main.gcl");
+    let p = instance_view(&views, views.module(), "p::out");
+    let gain = node(p, "gain");
+    assert_eq!(quantity_display(p, "gain"), "5");
+    // Editing it edits the argument in main.gcl, not the template's default.
+    let source = gain.source.as_ref().unwrap();
+    assert_eq!(source.file.as_deref(), Some("src/review/main.gcl"));
+    assert_eq!(source.line, 1);
+    assert_eq!(gain.expr.as_deref(), Some("2.5 * 2.0"));
+    let range = source.expr_range.unwrap();
+    assert_eq!(range.start.line, 0);
+    assert_eq!(
+        &main[range.start.character as usize..range.end.character as usize],
+        "2.5 * 2.0"
+    );
+    // A declaration the include leaves alone stays in the template.
+    let out = node(p, "out");
+    assert_eq!(
+        out.source.as_ref().unwrap().file.as_deref(),
+        Some("src/review/lib.gcl")
+    );
+    assert_eq!(out.expr.as_deref(), Some("@gain"));
+}
+
+#[test]
+fn a_nested_instance_reads_its_includer_through_the_arguments() {
+    let inner = "param k: Dimensionless = 1.0;\npub node x: Dimensionless = @k * 10.0;\n";
+    let outer = "\
+param gain: Dimensionless = 1.0;
+include review.inner(k: @gain) as q;
+pub node out: Dimensionless = @q::x;
+";
+    let main = "include review.outer(gain: 3.0) as p;\nnode y: Dimensionless = @p::out;\n";
+    let views = evaluated_views_of_package(
+        &[
+            ("inner.gcl", inner),
+            ("outer.gcl", outer),
+            ("main.gcl", main),
+        ],
+        "main.gcl",
+    );
+    let p = instance_view(&views, views.module(), "p::out");
+    assert_eq!(quantity_display(p, "out"), "30");
+    let q = instance_view(&views, p, "q::x");
+    assert_eq!(q.module.id, "review.inner");
+    assert_eq!(quantity_display(q, "k"), "3");
+    assert_eq!(quantity_display(q, "x"), "30");
+    // `k` is bound to the includer's `gain`: the same node as in `p`'s view.
+    let gain = node(q, "gain");
+    assert_eq!(gain.origin, ViewOrigin::Includer);
+    assert_eq!(gain.id, id_of(p, "gain"));
+    assert_eq!(node(q, "k").deps, std::slice::from_ref(&gain.id));
+    assert_eq!(node(q, "k").expr.as_deref(), Some("@gain"));
+    assert_eq!(
+        node(q, "k").source.as_ref().unwrap().file.as_deref(),
+        Some("src/review/outer.gcl")
+    );
 }

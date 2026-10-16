@@ -2407,6 +2407,11 @@ role = "facade"
 
 [[module]]
 package = "project"
+path = ["view_model", "target"]
+role = "facade"
+
+[[module]]
+package = "project"
 path = ["view_model", "tests"]
 role = "facade"
 

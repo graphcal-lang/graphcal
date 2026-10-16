@@ -5,6 +5,9 @@
     "file": "src/power_project/power_max.gcl",
     "package": "power_project"
   },
+  "target": {
+    "kind": "module"
+  },
   "indexes": [
     {
       "id": "p:power_project/f:src/f:power_project/f:components/n:Component",
@@ -100,6 +103,7 @@
       "origin": {
         "kind": "included",
         "instance": {
+          "id": "p:power_project/f:src/f:power_project/f:power_max/i:%3Cinclude%40198%3E",
           "name": "eps",
           "bound": false
         }

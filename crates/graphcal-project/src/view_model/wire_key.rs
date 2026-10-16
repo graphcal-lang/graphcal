@@ -1,4 +1,4 @@
-//! Opaque wire keys of the view model: node and axis ids.
+//! Opaque wire keys of the view model: node, axis and include instance ids.
 //!
 //! A key is derived injectively from the typed identity it stands for, so two
 //! distinct declarations (or axes) never share one, and the same declaration
@@ -16,11 +16,13 @@ use graphcal_compiler::dag_id::{DagId, DagSegment};
 use graphcal_compiler::resolved_name::ResolvedDeclName;
 use graphcal_compiler::syntax::module_name::ScopeSegment;
 use graphcal_compiler::tir::typed::ResolvedIndex;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
-/// The key of a node: one declaration, as owned (an include instance's
-/// declaration is owned by the instance, so a later per-instance node gets a
-/// key of its own without changing this one's).
+/// The key of a node: one declaration, as owned.
+///
+/// An include instance's declaration is owned by the instance, so its node
+/// in the instance's own view has a key apart from the template's node in
+/// the template's view.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize)]
 #[serde(transparent)]
 pub struct ViewNodeId(String);
@@ -64,7 +66,44 @@ impl std::fmt::Display for ViewNodeId {
     }
 }
 
-/// The key of an index axis: a declared index by its identity, a structural
+/// The key of an include instance materialized in the root's evaluation.
+///
+/// It is derived from the instance's own DAG, so a nested instance (`q`
+/// inside `p`) has a key of its own. A reader names an instance by it to ask for the instance's view,
+/// and never takes it apart.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct ViewInstanceId(String);
+
+impl ViewInstanceId {
+    /// The key of the instance whose declarations `instance` owns.
+    pub(super) fn of(instance: &DagId) -> Self {
+        let mut key = KeyWriter::default();
+        key.dag(instance);
+        Self(key.finish())
+    }
+
+    /// A key as a reader sent it back. It names an instance only when it
+    /// equals the key of one (see [`super::ViewProjections::get`]).
+    #[must_use]
+    pub const fn from_wire(key: String) -> Self {
+        Self(key)
+    }
+
+    /// The key as sent.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for ViewInstanceId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+/// The key of an index axis:a declared index by its identity, a structural
 /// `Fin(N)` by its cardinality, a generic parameter by its name.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize)]
 #[serde(transparent)]

@@ -30,6 +30,7 @@ function sheet(key: PaneKey, id: string, nodes: ViewNode[]): CrossSheet {
   const model: ViewModel = {
     version: 1,
     module: { id, file: `src/${id}.gcl`, package: "p" },
+    target: { kind: "module" },
     indexes: [],
     nodes,
   };
@@ -43,7 +44,7 @@ function sheets(bound: boolean): CrossSheet[] {
   const external = node("l::out", {
     name: "out",
     module: "p.lib",
-    origin: { kind: "included", instance: { name: "l", bound } },
+    origin: { kind: "included", instance: { id: "i:l", name: "l", bound } },
   });
   const main = sheet({ module: "p.main", instance: null }, "p.main", [
     external,
