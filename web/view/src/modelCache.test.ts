@@ -22,6 +22,7 @@ function model(id: string, revision: number): ViewModel {
         reduce: null,
         label: "x",
         origin: { kind: "local" },
+        element: "quantity",
         source: null,
         value: null,
       },

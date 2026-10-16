@@ -33,9 +33,10 @@ use crate::graph_ir::{GraphClusterKind, GraphIr, GraphProjectionError, project_t
 use crate::loader::{LoadedFile, LoadedProject};
 use crate::project_compiler::CheckedProject;
 
+use super::cells::definition_cells;
 use super::model::{
-    ViewIndex, ViewIndexEntry, ViewInstance, ViewModel, ViewModule, ViewNode, ViewNodeKind,
-    ViewOrigin, ViewSource, ViewValue,
+    ViewCell, ViewElement, ViewIndex, ViewIndexEntry, ViewInstance, ViewModel, ViewModule,
+    ViewNode, ViewNodeKind, ViewOrigin, ViewSource, ViewValue,
 };
 use super::value::{CoherentUnits, common_unit, view_value};
 use super::wire_key::{ViewIndexId, ViewNodeId};
@@ -106,6 +107,7 @@ pub fn project_view(
         .collect();
 
     let mut builder = NodeBuilder {
+        shared_definitions: scope.shared_definitions(&locals),
         scope: &scope,
         spellings: &spellings,
         axes: BTreeMap::new(),
@@ -294,6 +296,27 @@ impl<'p> Scope<'p> {
             .map_or_else(|| declaration.to_string(), |name| name.to_string())
     }
 
+    /// The definition ranges more than one of `locals` is defined by: the
+    /// columns of a multi-declaration table share their table's.
+    fn shared_definitions(&self, locals: &[ResolvedDeclName]) -> HashSet<Span> {
+        let mut seen = HashSet::new();
+        let mut shared = HashSet::new();
+        for id in locals {
+            let Some((_, declaration)) = declaration_of(self.tir, id) else {
+                continue;
+            };
+            if let DeclarationKind::Value(ValueDeclaration {
+                definition: Some(definition),
+                ..
+            }) = declaration.kind()
+                && !seen.insert(definition)
+            {
+                shared.insert(definition);
+            }
+        }
+        shared
+    }
+
     /// Whether `module` declares `name` as an explicit `pub` output.
     fn is_public(&self, module: &DagId, name: &DeclName) -> bool {
         self.project.module(module).is_some_and(|module| {
@@ -472,6 +495,9 @@ fn dependencies<'a>(
 /// Builds nodes, collecting the index axes they use.
 struct NodeBuilder<'a> {
     scope: &'a Scope<'a>,
+    /// Definition ranges written once for several root declarations (the
+    /// columns of a multi-declaration table): none of them owns the text.
+    shared_definitions: HashSet<Span>,
     spellings: &'a HashMap<ResolvedDeclName, ExternalName>,
     axes: BTreeMap<ViewIndexId, ResolvedIndex>,
 }
@@ -611,11 +637,34 @@ impl NodeBuilder<'_> {
         let expr = input
             .file
             .and_then(|file| definition.and_then(|span| slice(file.text, span)));
+        // Only the module's own declarations are edited from its sheet.
+        let local = input.origin == ViewOrigin::Local;
+        let cells = if local {
+            definition_cells(
+                &self.scope.project.root_file().ast().declarations,
+                input.declaration.name(),
+            )
+        } else {
+            Vec::new()
+        };
         let source = input.file.map(|file| ViewSource {
             file: Some(file.name.to_string()),
             line: file.lines.position(span.offset()).line.saturating_add(1),
-            expr_range: definition.map(|span| file.lines.range(span.offset(), span.len()).into()),
+            expr_range: definition
+                .filter(|span| !self.shared_definitions.contains(span))
+                .map(|span| file.lines.range(span.offset(), span.len()).into()),
+            cells: cells
+                .into_iter()
+                .map(|cell| ViewCell {
+                    keys: cell.keys.iter().map(ToString::to_string).collect(),
+                    range: file.lines.range(cell.span.offset(), cell.span.len()).into(),
+                })
+                .collect(),
         });
+        let element = match kind {
+            ViewNodeKind::Assert => ViewElement::Bool,
+            _ => decl_type.map_or(ViewElement::Other, |ty| element_of(ty.element())),
+        };
 
         let binding = ValueBinding {
             declaration: input.value_of.clone(),
@@ -631,6 +680,7 @@ impl NodeBuilder<'_> {
             module: input.module,
             kind,
             origin: input.origin,
+            element,
             axes,
             dimension,
             unit,
@@ -740,6 +790,20 @@ fn declaration_of<'t>(
     let dag = tir.dag_registry().get(id.owner())?;
     let declaration = dag.declaration(id)?;
     Some((dag, declaration))
+}
+
+/// The element type family of a declared value type.
+const fn element_of(element: &ResolvedValueType) -> ViewElement {
+    match element {
+        ResolvedValueType::Bool => ViewElement::Bool,
+        ResolvedValueType::Int => ViewElement::Int,
+        ResolvedValueType::Quantity(_) => ViewElement::Quantity,
+        ResolvedValueType::Complex { .. } => ViewElement::Complex,
+        ResolvedValueType::Datetime(_) => ViewElement::Datetime,
+        ResolvedValueType::Key { .. } => ViewElement::Key,
+        ResolvedValueType::Struct { .. } => ViewElement::Struct,
+        ResolvedValueType::GenericTypeParam(..) => ViewElement::Other,
+    }
 }
 
 const fn kind_of(category: ValueDeclCategory) -> ViewNodeKind {

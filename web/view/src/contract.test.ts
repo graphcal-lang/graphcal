@@ -63,6 +63,20 @@ describe("view model contract", () => {
     }
   });
 
+  test.each(models())("%s: every written cell names a cell of its value", (_p, model) => {
+    for (const node of model.nodes) {
+      for (const cell of node.source?.cells ?? []) {
+        expect(cell.keys.length, `${node.label} cell arity`).toBe(node.axes.length);
+        if (node.value !== null) {
+          expect(
+            valueAt(node.value, cell.keys),
+            `${node.label}[${cell.keys.join(", ")}]`,
+          ).not.toBeNull();
+        }
+      }
+    }
+  });
+
   test("a coordinate axis shows its coordinates (#2060)", () => {
     const model = models().find(([path]) => path.endsWith("range_index.json"))?.[1];
     expect(model).toBeDefined();

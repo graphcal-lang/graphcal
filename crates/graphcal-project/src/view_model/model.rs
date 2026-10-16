@@ -72,6 +72,21 @@ pub enum ViewNodeKind {
     Assert,
 }
 
+/// The element type family of a node's values.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ViewElement {
+    Bool,
+    Int,
+    Quantity,
+    Complex,
+    Datetime,
+    Key,
+    Struct,
+    /// A generic type parameter, or an unchecked declaration.
+    Other,
+}
+
 /// Where a node's declaration comes from, as the module reads it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -99,6 +114,10 @@ pub struct ViewNode {
     pub module: String,
     pub kind: ViewNodeKind,
     pub origin: ViewOrigin,
+    /// What one value (one cell) of the node is: the declared element type
+    /// for a value, `bool` for an assertion. A typed literal for a cell
+    /// depends on it (`5` for an `Int`, `5.0 W` for a quantity).
+    pub element: ViewElement,
     /// Index axes, outermost first; empty for a scalar.
     pub axes: Vec<ViewIndexId>,
     /// Declared element type, e.g. `Power`, `Dimensionless`, `Int`; absent
@@ -152,8 +171,24 @@ pub struct ViewSource {
     pub file: Option<String>,
     /// One-based line of the declaration.
     pub line: u32,
-    /// Editor range of the defining expression, for in-place edits.
+    /// Editor range of the defining expression after `=` (parentheses
+    /// included), for replacing it. `None` when no single declaration owns
+    /// the text: the columns of a multi-declaration table share one.
     pub expr_range: Option<ViewRange>,
+    /// The written cells of a table definition, each editable on its own;
+    /// empty when the definition is not a table literal or the node is not
+    /// the module's own declaration.
+    pub cells: Vec<ViewCell>,
+}
+
+/// One written cell of a table definition.
+#[derive(Debug, Clone, Serialize)]
+pub struct ViewCell {
+    /// The cell's entry key on each axis, outermost first: the keys of the
+    /// value entry it defines. With the node's id it identifies the slot.
+    pub keys: Vec<String>,
+    /// Editor range of the cell's expression.
+    pub range: ViewRange,
 }
 
 /// A half-open editor range: zero-based lines and UTF-16 columns, as the

@@ -36,6 +36,7 @@
       "origin": {
         "kind": "local"
       },
+      "element": "quantity",
       "axes": [],
       "dimension": "Frequency",
       "unit": "Hz",
@@ -56,7 +57,8 @@
             "line": 5,
             "character": 30
           }
-        }
+        },
+        "cells": []
       },
       "value": {
         "kind": "quantity",
@@ -75,6 +77,7 @@
       "origin": {
         "kind": "local"
       },
+      "element": "quantity",
       "axes": [],
       "dimension": "Dimensionless",
       "unit": null,
@@ -95,7 +98,8 @@
             "line": 8,
             "character": 29
           }
-        }
+        },
+        "cells": []
       },
       "value": {
         "kind": "quantity",
@@ -114,6 +118,7 @@
       "origin": {
         "kind": "local"
       },
+      "element": "quantity",
       "axes": [
         "p:range_index/f:range_index/n:TimeStep"
       ],
@@ -139,7 +144,8 @@
             "line": 15,
             "character": 1
           }
-        }
+        },
+        "cells": []
       },
       "value": {
         "kind": "indexed",

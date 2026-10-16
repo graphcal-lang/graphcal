@@ -2412,6 +2412,16 @@ role = "facade"
 
 [[module]]
 package = "project"
+path = ["view_model", "cells"]
+role = "facade"
+
+[[module]]
+package = "project"
+path = ["view_model", "cells", "tests"]
+role = "facade"
+
+[[module]]
+package = "project"
 path = ["view_model", "wire_key"]
 role = "facade"
 

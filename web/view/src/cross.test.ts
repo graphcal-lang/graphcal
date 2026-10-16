@@ -19,6 +19,7 @@ function node(id: string, extra: Partial<ViewNode> = {}): ViewNode {
     reduce: null,
     label: id,
     origin: { kind: "local" },
+    element: "quantity",
     source: null,
     value: null,
     ...extra,

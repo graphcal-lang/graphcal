@@ -69,7 +69,24 @@ export type ReduceOp = z.infer<typeof reduceOpSchema>;
 
 const positionSchema = z.object({ line: z.int().nonnegative(), character: z.int().nonnegative() });
 export type Position = z.infer<typeof positionSchema>;
-export type Range = { start: Position; end: Position };
+const rangeSchema = z.object({ start: positionSchema, end: positionSchema });
+export type Range = z.infer<typeof rangeSchema>;
+
+export const elementSchema = z.enum([
+  "bool",
+  "int",
+  "quantity",
+  "complex",
+  "datetime",
+  "key",
+  "struct",
+  "other",
+]);
+export type Element = z.infer<typeof elementSchema>;
+
+/** One written cell of a table definition; with the node id, `keys` identify the slot. */
+const cellSchema = z.object({ keys: z.array(z.string()), range: rangeSchema });
+export type Cell = z.infer<typeof cellSchema>;
 
 export const viewNodeSchema = z.object({
   /** Opaque, unique within the model and stable across evaluations. */
@@ -80,6 +97,8 @@ export const viewNodeSchema = z.object({
   module: z.string(),
   kind: nodeKindSchema,
   origin: originSchema,
+  /** What one value (one cell) is; a typed literal for a cell depends on it. */
+  element: elementSchema,
   /** Index ids (`indexes[].id`), outermost first. */
   axes: z.array(z.string()),
   dimension: z.string().nullable(),
@@ -97,8 +116,14 @@ export const viewNodeSchema = z.object({
     .object({
       file: z.string().nullable(),
       line: z.int().nonnegative(),
-      /** Editor range of the defining expression (0-based lines, UTF-16 columns). */
-      expr_range: z.object({ start: positionSchema, end: positionSchema }).nullable().optional(),
+      /**
+       * Editor range of the defining expression (0-based lines, UTF-16 columns),
+       * parentheses included; null when no single declaration owns the text
+       * (the columns of a multi-declaration table share one).
+       */
+      expr_range: rangeSchema.nullable(),
+      /** The written cells of a table definition: entry keys per axis and the cell's range. */
+      cells: z.array(cellSchema),
     })
     .nullable(),
   value: valueSchema.nullable(),

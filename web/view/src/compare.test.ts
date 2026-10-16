@@ -22,6 +22,7 @@ function node(
     reduce: null,
     label: id,
     origin: { kind: "local" },
+    element: "quantity",
     source: null,
     value,
     ...extra,

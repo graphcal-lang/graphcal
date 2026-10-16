@@ -59,6 +59,7 @@
       "origin": {
         "kind": "local"
       },
+      "element": "quantity",
       "axes": [],
       "dimension": "Dimensionless",
       "unit": null,
@@ -79,7 +80,8 @@
             "line": 4,
             "character": 33
           }
-        }
+        },
+        "cells": []
       },
       "value": {
         "kind": "quantity",
@@ -102,6 +104,7 @@
           "bound": false
         }
       },
+      "element": "quantity",
       "axes": [],
       "dimension": "Power",
       "unit": "W",
@@ -122,7 +125,8 @@
             "line": 22,
             "character": 104
           }
-        }
+        },
+        "cells": []
       },
       "value": {
         "kind": "quantity",
@@ -141,6 +145,7 @@
       "origin": {
         "kind": "local"
       },
+      "element": "quantity",
       "axes": [],
       "dimension": "Dimensionless",
       "unit": null,
@@ -161,7 +166,8 @@
             "line": 6,
             "character": 40
           }
-        }
+        },
+        "cells": []
       },
       "value": {
         "kind": "quantity",
@@ -180,6 +186,7 @@
       "origin": {
         "kind": "local"
       },
+      "element": "quantity",
       "axes": [
         "p:power_project/f:src/f:power_project/f:components/n:Component"
       ],
@@ -202,7 +209,69 @@
             "line": 13,
             "character": 1
           }
-        }
+        },
+        "cells": [
+          {
+            "keys": [
+              "Obc"
+            ],
+            "range": {
+              "start": {
+                "line": 9,
+                "character": 13
+              },
+              "end": {
+                "line": 9,
+                "character": 18
+              }
+            }
+          },
+          {
+            "keys": [
+              "Radio"
+            ],
+            "range": {
+              "start": {
+                "line": 10,
+                "character": 13
+              },
+              "end": {
+                "line": 10,
+                "character": 19
+              }
+            }
+          },
+          {
+            "keys": [
+              "Heater"
+            ],
+            "range": {
+              "start": {
+                "line": 11,
+                "character": 13
+              },
+              "end": {
+                "line": 11,
+                "character": 18
+              }
+            }
+          },
+          {
+            "keys": [
+              "Payload"
+            ],
+            "range": {
+              "start": {
+                "line": 12,
+                "character": 13
+              },
+              "end": {
+                "line": 12,
+                "character": 19
+              }
+            }
+          }
+        ]
       },
       "value": {
         "kind": "indexed",
@@ -261,6 +330,7 @@
       "origin": {
         "kind": "local"
       },
+      "element": "quantity",
       "axes": [
         "p:power_project/f:src/f:power_project/f:components/n:Component",
         "p:power_project/f:src/f:power_project/f:components/n:Mode"
@@ -284,7 +354,201 @@
             "line": 21,
             "character": 1
           }
-        }
+        },
+        "cells": [
+          {
+            "keys": [
+              "Obc",
+              "Safe"
+            ],
+            "range": {
+              "start": {
+                "line": 17,
+                "character": 13
+              },
+              "end": {
+                "line": 17,
+                "character": 16
+              }
+            }
+          },
+          {
+            "keys": [
+              "Obc",
+              "Nominal"
+            ],
+            "range": {
+              "start": {
+                "line": 17,
+                "character": 18
+              },
+              "end": {
+                "line": 17,
+                "character": 21
+              }
+            }
+          },
+          {
+            "keys": [
+              "Obc",
+              "Science"
+            ],
+            "range": {
+              "start": {
+                "line": 17,
+                "character": 23
+              },
+              "end": {
+                "line": 17,
+                "character": 26
+              }
+            }
+          },
+          {
+            "keys": [
+              "Radio",
+              "Safe"
+            ],
+            "range": {
+              "start": {
+                "line": 18,
+                "character": 13
+              },
+              "end": {
+                "line": 18,
+                "character": 16
+              }
+            }
+          },
+          {
+            "keys": [
+              "Radio",
+              "Nominal"
+            ],
+            "range": {
+              "start": {
+                "line": 18,
+                "character": 18
+              },
+              "end": {
+                "line": 18,
+                "character": 21
+              }
+            }
+          },
+          {
+            "keys": [
+              "Radio",
+              "Science"
+            ],
+            "range": {
+              "start": {
+                "line": 18,
+                "character": 23
+              },
+              "end": {
+                "line": 18,
+                "character": 26
+              }
+            }
+          },
+          {
+            "keys": [
+              "Heater",
+              "Safe"
+            ],
+            "range": {
+              "start": {
+                "line": 19,
+                "character": 13
+              },
+              "end": {
+                "line": 19,
+                "character": 16
+              }
+            }
+          },
+          {
+            "keys": [
+              "Heater",
+              "Nominal"
+            ],
+            "range": {
+              "start": {
+                "line": 19,
+                "character": 18
+              },
+              "end": {
+                "line": 19,
+                "character": 21
+              }
+            }
+          },
+          {
+            "keys": [
+              "Heater",
+              "Science"
+            ],
+            "range": {
+              "start": {
+                "line": 19,
+                "character": 23
+              },
+              "end": {
+                "line": 19,
+                "character": 26
+              }
+            }
+          },
+          {
+            "keys": [
+              "Payload",
+              "Safe"
+            ],
+            "range": {
+              "start": {
+                "line": 20,
+                "character": 13
+              },
+              "end": {
+                "line": 20,
+                "character": 16
+              }
+            }
+          },
+          {
+            "keys": [
+              "Payload",
+              "Nominal"
+            ],
+            "range": {
+              "start": {
+                "line": 20,
+                "character": 18
+              },
+              "end": {
+                "line": 20,
+                "character": 21
+              }
+            }
+          },
+          {
+            "keys": [
+              "Payload",
+              "Science"
+            ],
+            "range": {
+              "start": {
+                "line": 20,
+                "character": 23
+              },
+              "end": {
+                "line": 20,
+                "character": 26
+              }
+            }
+          }
+        ]
       },
       "value": {
         "kind": "indexed",
@@ -463,6 +727,7 @@
       "origin": {
         "kind": "local"
       },
+      "element": "quantity",
       "axes": [
         "p:power_project/f:src/f:power_project/f:components/n:Component",
         "p:power_project/f:src/f:power_project/f:components/n:Mode"
@@ -489,7 +754,8 @@
             "line": 25,
             "character": 1
           }
-        }
+        },
+        "cells": []
       },
       "value": {
         "kind": "indexed",
@@ -668,6 +934,7 @@
       "origin": {
         "kind": "local"
       },
+      "element": "quantity",
       "axes": [
         "p:power_project/f:src/f:power_project/f:components/n:Component",
         "p:power_project/f:src/f:power_project/f:components/n:Mode"
@@ -694,7 +961,8 @@
             "line": 29,
             "character": 1
           }
-        }
+        },
+        "cells": []
       },
       "value": {
         "kind": "indexed",
@@ -873,6 +1141,7 @@
       "origin": {
         "kind": "local"
       },
+      "element": "quantity",
       "axes": [
         "p:power_project/f:src/f:power_project/f:components/n:Mode"
       ],
@@ -897,7 +1166,8 @@
             "line": 33,
             "character": 1
           }
-        }
+        },
+        "cells": []
       },
       "value": {
         "kind": "indexed",
@@ -946,6 +1216,7 @@
       "origin": {
         "kind": "local"
       },
+      "element": "quantity",
       "axes": [
         "p:power_project/f:src/f:power_project/f:components/n:Component"
       ],
@@ -970,7 +1241,8 @@
             "line": 37,
             "character": 1
           }
-        }
+        },
+        "cells": []
       },
       "value": {
         "kind": "indexed",
@@ -1029,6 +1301,7 @@
       "origin": {
         "kind": "local"
       },
+      "element": "quantity",
       "axes": [],
       "dimension": "Power",
       "unit": "W",
@@ -1051,7 +1324,8 @@
             "line": 39,
             "character": 38
           }
-        }
+        },
+        "cells": []
       },
       "value": {
         "kind": "quantity",
@@ -1070,6 +1344,7 @@
       "origin": {
         "kind": "local"
       },
+      "element": "quantity",
       "axes": [],
       "dimension": "Power",
       "unit": "W",
@@ -1093,7 +1368,8 @@
             "line": 40,
             "character": 46
           }
-        }
+        },
+        "cells": []
       },
       "value": {
         "kind": "quantity",
@@ -1112,6 +1388,7 @@
       "origin": {
         "kind": "local"
       },
+      "element": "quantity",
       "axes": [],
       "dimension": "Power",
       "unit": "W",
@@ -1135,7 +1412,8 @@
             "line": 41,
             "character": 55
           }
-        }
+        },
+        "cells": []
       },
       "value": {
         "kind": "quantity",
@@ -1154,6 +1432,7 @@
       "origin": {
         "kind": "local"
       },
+      "element": "quantity",
       "axes": [],
       "dimension": "Power",
       "unit": "W",
@@ -1177,7 +1456,8 @@
             "line": 42,
             "character": 84
           }
-        }
+        },
+        "cells": []
       },
       "value": {
         "kind": "quantity",
@@ -1196,6 +1476,7 @@
       "origin": {
         "kind": "local"
       },
+      "element": "bool",
       "axes": [],
       "dimension": "Bool",
       "unit": null,
@@ -1219,7 +1500,8 @@
             "line": 44,
             "character": 47
           }
-        }
+        },
+        "cells": []
       },
       "value": {
         "kind": "bool",
@@ -1236,6 +1518,7 @@
       "origin": {
         "kind": "imported"
       },
+      "element": "int",
       "axes": [],
       "dimension": "Int",
       "unit": null,
@@ -1256,7 +1539,8 @@
             "line": 3,
             "character": 57
           }
-        }
+        },
+        "cells": []
       },
       "value": {
         "kind": "int",

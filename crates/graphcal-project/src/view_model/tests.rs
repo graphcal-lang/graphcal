@@ -418,6 +418,7 @@ fn bare_node(id: &ViewNodeId, deps: &[&ViewNodeId]) -> ViewNode {
         module: "m".to_string(),
         kind: ViewNodeKind::Node,
         origin: ViewOrigin::Local,
+        element: ViewElement::Quantity,
         axes: Vec::new(),
         dimension: None,
         unit: None,
@@ -551,4 +552,65 @@ node b: Dimensionless = (@a) * 2.0; // π𝑥
     let (expr, text) = expr_and_range_text(&view, source, "b");
     assert_eq!(expr, "(@a) * 2.0");
     assert_eq!(text, expr);
+}
+
+#[test]
+fn every_written_cell_has_a_range_and_the_keys_of_its_value() {
+    // The reproduction of #2063: the columns of a multi-declaration table
+    // shared one range, so no cell could be edited.
+    let source = "\
+pub index I = { A, B };
+param n: Int = 2;
+param x: Power[I],
+param y: Dimensionless[I]
+  = table[I, (_, _)] {
+      : _, _;
+      A: 1.0 W, sqrt(2.0);
+      B: 4.0 W, 5.0;
+  };
+param t: Dimensionless[I] = table[I] {
+    A: 6.0;
+    B: 7.0;
+};
+";
+    let view = evaluated_view_of_source(source);
+    assert_eq!(node(&view, "n").element, ViewElement::Int);
+    assert_eq!(node(&view, "x").element, ViewElement::Quantity);
+    let cells = |label: &str| -> Vec<(Vec<String>, String)> {
+        let node = node(&view, label);
+        let Some(ViewValue::Indexed { entries, .. }) = &node.value else {
+            panic!("`{label}` is not indexed");
+        };
+        let source_of = node.source.as_ref().unwrap();
+        source_of
+            .cells
+            .iter()
+            .map(|cell| {
+                // Each cell keys an entry of the value.
+                assert!(
+                    entries
+                        .iter()
+                        .any(|entry| [entry.key.clone()] == cell.keys.as_slice())
+                );
+                let line = source.lines().nth(cell.range.start.line as usize).unwrap();
+                let text =
+                    &line[cell.range.start.character as usize..cell.range.end.character as usize];
+                (cell.keys.clone(), text.to_string())
+            })
+            .collect()
+    };
+    let keyed = |keys: &[(&str, &str)]| -> Vec<(Vec<String>, String)> {
+        keys.iter()
+            .map(|(key, text)| (vec![(*key).to_string()], (*text).to_string()))
+            .collect()
+    };
+    assert_eq!(cells("x"), keyed(&[("A", "1.0 W"), ("B", "4.0 W")]));
+    assert_eq!(cells("y"), keyed(&[("A", "sqrt(2.0)"), ("B", "5.0")]));
+    assert_eq!(cells("t"), keyed(&[("A", "6.0"), ("B", "7.0")]));
+    // No column owns the shared table text; a table of its own does.
+    let range = |label: &str| node(&view, label).source.as_ref().unwrap().expr_range;
+    assert!(range("x").is_none());
+    assert!(range("y").is_none());
+    assert!(range("t").is_some());
+    assert!(node(&view, "n").source.as_ref().unwrap().cells.is_empty());
 }

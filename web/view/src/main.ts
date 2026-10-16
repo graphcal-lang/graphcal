@@ -30,7 +30,7 @@ import { TokenStore } from "./login.ts";
 import { instanceOf, isExternal, type ViewModel, type ViewNode } from "./model.ts";
 import { depthsOf, keyOf, sameKey, type PaneKey } from "./panes.ts";
 import { parseRoute } from "./route.ts";
-import { EditError, replaceExpr, replaceRange, replaceTableCell } from "./source.ts";
+import { EditError, replaceRange, replaceTableCell } from "./source.ts";
 import { EmptyHost, mountStart } from "./start.ts";
 import { inVsCode, VsCodeHost } from "./vscodeHost.ts";
 import {
@@ -891,18 +891,25 @@ function applyEdit(s: Sheet, edit: Edit): Promise<boolean> {
 }
 
 /**
- * Turn typed text into a literal for the node. A quantity needs a floating-point
- * literal (`0` is an integer; `0.0` is not), so a bare number is given a decimal
- * point and the column's unit; anything else is passed through as written.
+ * Turn typed text into a literal for a cell of the node. A quantity needs a
+ * floating-point literal (`0` is an integer; `0.0` is not), so a bare number is
+ * given a decimal point and the unit the cell is shown in; anything else (an
+ * `Int`, a `Bool`, a unit typed out) is passed through as written.
  */
-function literalFor(node: ViewNode, text: string): string {
+function literalFor(node: ViewNode, unit: string | null, text: string): string {
   const trimmed = text.trim();
-  if (node.dimension === null) return trimmed;
+  if (node.element !== "quantity") return trimmed;
   const match = /^(-?)(\d[\d_]*)?(?:\.(\d[\d_]*))?([eE][-+]?\d+)?$/.exec(trimmed);
   if (!match || (match[2] === undefined && match[3] === undefined)) return trimmed;
   const [, sign, whole = "0", fraction = "0", exponent = ""] = match;
   const number = `${sign}${whole}.${fraction}${exponent}`;
-  return node.unit ? `${number} ${node.unit}` : number;
+  return unit ? `${number} ${unit}` : number;
+}
+
+/** The unit a cell of the node is shown in: its own value's, else the column's. */
+function cellUnit(node: ViewNode, keys: readonly string[]): string | null {
+  const value = valueAt(node.value, keys);
+  return value?.kind === "quantity" ? value.unit : node.unit;
 }
 
 /** The file a node is declared in and its text, when the host has it. */
@@ -923,12 +930,14 @@ function editExpr(s: Sheet, node: ViewNode, next: string): Promise<boolean> {
   const { file, source } = at;
   let rewritten: string;
   try {
-    // The compiler's range pins the expression; the verbatim search is the
-    // fallback for a model that carries no range.
+    // Only the compiler's range says where the expression is; without one
+    // (a column of a multi-declaration table) nothing is replaced.
     const range = node.source.expr_range;
-    rewritten = range
-      ? replaceRange(source, range, next)
-      : replaceExpr(source, node.source.line, node.expr ?? expr, next);
+    if (range === null) {
+      showNote("this expression is shared with other declarations; edit its cells");
+      return Promise.resolve(false);
+    }
+    rewritten = replaceRange(source, range, next);
   } catch (error) {
     showNote(error instanceof EditError ? error.message : errorMessage(error));
     return Promise.resolve(false);
@@ -944,19 +953,32 @@ function editCell(
   sub: string | null,
   text: string,
 ): Promise<boolean> {
-  if (row === null) return editExpr(s, node, literalFor(node, text));
+  const keys = row === null ? [] : sub === null ? [row] : [row, sub];
+  const literal = literalFor(node, cellUnit(node, keys), text);
+  if (row === null) return editExpr(s, node, literal);
   const at = sourceOf(s, node);
+  // The compiler names the range of each written cell.
+  const cell = node.source?.cells.find(
+    (c) => c.keys.length === keys.length && c.keys.every((key, i) => key === keys[i]),
+  );
   const range = node.source?.expr_range ?? null;
-  if (at === null || range === null) {
+  if (at === null || (cell === undefined && range === null)) {
     showNote("this value cannot be edited");
     return Promise.resolve(false);
   }
   const { file, source } = at;
   let rewritten: string;
   try {
-    // The table spells its rows and columns as a reader sees the entries.
-    const [rowName = row, subName = sub] = entryNames(s, node, sub === null ? [row] : [row, sub]);
-    rewritten = replaceTableCell(source, range, rowName, subName, literalFor(node, text));
+    if (cell !== undefined) {
+      rewritten = replaceRange(source, cell.range, literal);
+    } else if (range !== null) {
+      // The table spells its rows and columns as a reader sees the entries.
+      const [rowName = row, subName = sub] = entryNames(s, node, keys);
+      rewritten = replaceTableCell(source, range, rowName, subName, literal);
+    } else {
+      showNote("this value cannot be edited");
+      return Promise.resolve(false);
+    }
   } catch (error) {
     showNote(error instanceof EditError ? error.message : errorMessage(error));
     return Promise.resolve(false);

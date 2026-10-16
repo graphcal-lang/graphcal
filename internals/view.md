@@ -34,6 +34,12 @@ validated on the page by the zod schemas in `src/model.ts`. Its rules:
   page shows `display` (a variant, a coordinate such as `0.5 s`, a position
   such as `#2`, as `graphcal eval` does). Structural `Fin(N)` axes are listed
   too, with no declaring `module`.
+- Edits replace compiler ranges only. `source.expr_range` is the text after
+  `=`, parentheses included, and is null when several declarations share it
+  (the columns of a multi-declaration table). `source.cells` lists each
+  written cell of a table definition by its entry keys (with the node id,
+  the slot) and range. `element` says what one value is, so a typed literal
+  is built only for a quantity.
 - `module.id` and `node.module` are module paths as the loader records them
   for each file, the root included.
 

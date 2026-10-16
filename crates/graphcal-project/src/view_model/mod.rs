@@ -12,6 +12,7 @@
 //! an evaluation and are absent for a library file, an unevaluated project,
 //! or a node whose evaluation failed.
 
+mod cells;
 mod model;
 mod project;
 #[cfg(test)]
@@ -20,8 +21,9 @@ mod value;
 mod wire_key;
 
 pub use model::{
-    ViewEntry, ViewIndex, ViewIndexEntry, ViewInstance, ViewModel, ViewModule, ViewNode,
-    ViewNodeKind, ViewOrigin, ViewPosition, ViewRange, ViewReduce, ViewSource, ViewValue,
+    ViewCell, ViewElement, ViewEntry, ViewIndex, ViewIndexEntry, ViewInstance, ViewModel,
+    ViewModule, ViewNode, ViewNodeKind, ViewOrigin, ViewPosition, ViewRange, ViewReduce,
+    ViewSource, ViewValue,
 };
 pub use project::{ViewProjection, ViewProjectionError, project_view};
 pub use wire_key::{ViewIndexId, ViewNodeId};
