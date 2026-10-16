@@ -4,6 +4,7 @@ mod presentation_evidence;
 mod sealed_program;
 
 use crate::binding_error::BindingError;
+use graphcal_eval::eval::EvalEntry;
 
 use std::collections::HashSet;
 
@@ -2709,9 +2710,13 @@ fn unavailability_reasons_name_declarations_as_the_output_does() {
         result
             .entries
             .iter()
-            .find(|(candidate, _, _)| candidate.to_string() == name)
+            .find(
+                |EvalEntry {
+                     name: candidate, ..
+                 }| candidate.to_string() == name,
+            )
             .unwrap_or_else(|| panic!("missing `{name}`"))
-            .1
+            .outcome
             .as_ref()
             .expect_err("unavailable")
             .to_string()
@@ -3353,9 +3358,9 @@ fn find_entry(result: &EvalResult, name: &str) -> Value {
     result
         .entries
         .iter()
-        .find(|(n, _, _)| n.to_string() == name)
+        .find(|EvalEntry { name: n, .. }| n.to_string() == name)
         .unwrap_or_else(|| panic!("value `{name}` not found"))
-        .1
+        .outcome
         .as_ref()
         .unwrap_or_else(|e| panic!("value `{name}` has error: {e}"))
         .clone()
@@ -4345,8 +4350,8 @@ fn private_include_failures_are_labelled_by_the_include_scope() {
         let failed = result
             .entries
             .iter()
-            .filter(|(_, value, _)| value.is_err())
-            .map(|(name, _, _)| name.to_string())
+            .filter(|EvalEntry { outcome: value, .. }| value.is_err())
+            .map(|EvalEntry { name, .. }| name.to_string())
             .collect::<Vec<_>>();
         assert_eq!(failed, [label], "for `{include}`");
     }
@@ -4400,10 +4405,13 @@ fn required_param_with_override_succeeds() {
 /// whose message contains `needle`.
 fn assert_node_error(source: &str, node_name: &str, needle: &str) {
     let result = compile_and_eval(source).unwrap();
-    let (_, node_result, _) = result
+    let EvalEntry {
+        outcome: node_result,
+        ..
+    } = result
         .entries
         .iter()
-        .find(|(n, _, _)| n.to_string() == node_name)
+        .find(|EvalEntry { name: n, .. }| n.to_string() == node_name)
         .unwrap_or_else(|| panic!("node `{node_name}` not found"));
     match node_result {
         Err(NodeUnavailable::EvalFailed { message }) => {
@@ -4469,9 +4477,9 @@ fn find_int_value(result: &EvalResult, name: &str) -> i64 {
     let val = result
         .entries
         .iter()
-        .find(|(n, _, _)| n.to_string() == name)
+        .find(|EvalEntry { name: n, .. }| n.to_string() == name)
         .unwrap_or_else(|| panic!("value `{name}` not found"))
-        .1
+        .outcome
         .as_ref()
         .unwrap_or_else(|e| panic!("value `{name}` has error: {e}"));
     match val {
@@ -5017,8 +5025,8 @@ fn project_selective_includes_allow_distinct_modules_with_same_leaf_name() {
     let internal_input_owners = result
         .entries
         .iter()
-        .filter(|(name, _, _)| name.leaf().as_str() == "input" && name.is_qualified())
-        .map(|(name, _, _)| name.qualifier().to_vec())
+        .filter(|EvalEntry { name, .. }| name.leaf().as_str() == "input" && name.is_qualified())
+        .map(|EvalEntry { name, .. }| name.qualifier().to_vec())
         .collect::<HashSet<_>>();
     assert_eq!(internal_input_owners.len(), 2);
 }
@@ -6951,8 +6959,8 @@ mod prop {
             );
             let r = compile_and_eval(&source).unwrap();
             let z_result = &r.entries.iter()
-                .find(|(n, _, _)| n.to_string() == "z")
-                .unwrap().1;
+                .find(|EvalEntry { name: n, .. }| n.to_string() == "z")
+                .unwrap().outcome;
             match z_result {
                 Ok(val) => {
                     let z = val.si_value().unwrap().get();
@@ -9185,10 +9193,12 @@ param speed: Velocity = 1000.0 m/s;
 include bumper(v: @speed)::{ out as doubled };
 ";
     let result = compile_and_eval(source).unwrap();
-    let (_, v_result, _) = result
+    let EvalEntry {
+        outcome: v_result, ..
+    } = result
         .entries
         .iter()
-        .find(|(n, _, _)| n.to_string() == "bumper::v")
+        .find(|EvalEntry { name: n, .. }| n.to_string() == "bumper::v")
         .expect("bumper::v not found");
     assert!(v_result.is_err(), "v should violate domain constraint");
 }
@@ -9401,9 +9411,13 @@ fn invoked_modules_name_unavailable_declarations_by_source_module_path() {
         result
             .entries
             .iter()
-            .find(|(candidate, _, _)| candidate.to_string() == name)
+            .find(
+                |EvalEntry {
+                     name: candidate, ..
+                 }| candidate.to_string() == name,
+            )
             .unwrap_or_else(|| panic!("missing `{name}`"))
-            .1
+            .outcome
             .as_ref()
             .expect_err("unavailable")
             .to_string()

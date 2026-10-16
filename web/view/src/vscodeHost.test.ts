@@ -25,7 +25,7 @@ function modelOf(project: string, file: string, text: string, revision: number):
   deliver({
     type: "model",
     model: {
-      version: 0,
+      version: 1,
       module: { id: `${project}.main`, file, package: project },
       indexes: [],
       nodes: [],

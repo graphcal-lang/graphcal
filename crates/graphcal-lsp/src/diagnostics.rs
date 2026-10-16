@@ -101,27 +101,31 @@ pub fn eval_result_to_diagnostics(
     let mut diagnostics: Vec<Diagnostic> = result
         .entries
         .iter()
-        .filter_map(|(name, r, _)| match r {
-            Err(err) => {
-                // Incomplete dependents are explained by hover; report the
-                // source marker rather than flooding the DAG with warnings.
-                if !err.has_failure() {
-                    return None;
+        .filter_map(
+            |graphcal_eval::eval::EvalEntry {
+                 name, outcome: r, ..
+             }| match r {
+                Err(err) => {
+                    // Incomplete dependents are explained by hover; report the
+                    // source marker rather than flooding the DAG with warnings.
+                    if !err.has_failure() {
+                        return None;
+                    }
+                    let range = symbol_table
+                        .definition_for_scoped_decl(name)
+                        .map_or_else(Range::default, |def| lines.span_to_range(def.name_span));
+                    Some(Diagnostic {
+                        range,
+                        severity: Some(DiagnosticSeverity::WARNING),
+                        code: Some(NumberOrString::String("graphcal::E001".to_string())),
+                        source: Some("graphcal".to_string()),
+                        message: format!("{name}: {err}"),
+                        ..Default::default()
+                    })
                 }
-                let range = symbol_table
-                    .definition_for_scoped_decl(name)
-                    .map_or_else(Range::default, |def| lines.span_to_range(def.name_span));
-                Some(Diagnostic {
-                    range,
-                    severity: Some(DiagnosticSeverity::WARNING),
-                    code: Some(NumberOrString::String("graphcal::E001".to_string())),
-                    source: Some("graphcal".to_string()),
-                    message: format!("{name}: {err}"),
-                    ..Default::default()
-                })
-            }
-            Ok(_) => None,
-        })
+                Ok(_) => None,
+            },
+        )
         .collect();
 
     diagnostics.extend(result.presentation_diagnostics.iter().map(|notice| {

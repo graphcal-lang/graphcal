@@ -116,8 +116,8 @@ node r: Dimensionless = @bb;
     let r = result
         .entries
         .iter()
-        .find(|(name, _, _)| name.to_string() == "r")
-        .and_then(|(_, value, _)| value.as_ref().ok())
+        .find(|graphcal_eval::eval::EvalEntry { name, .. }| name.to_string() == "r")
+        .and_then(|graphcal_eval::eval::EvalEntry { outcome: value, .. }| value.as_ref().ok())
         .and_then(|value| value.si_value().ok())
         .expect("`r` must evaluate")
         .get();

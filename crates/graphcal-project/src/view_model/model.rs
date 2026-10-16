@@ -135,8 +135,6 @@ pub struct ViewNode {
     /// Source text of the defining expression (const body, param default,
     /// node formula, assertion operands).
     pub expr: Option<String>,
-    /// The aggregation that removed an axis of a dependency. Not derived yet.
-    pub reduce: Option<ViewReduce>,
     /// The declaration's `///` documentation: one line per `///` line,
     /// joined with newlines. The view shows its first line beside the name.
     pub doc: Option<String>,
@@ -160,13 +158,6 @@ pub struct ViewInstance {
     /// parameters. A bound instance's values differ from those of its
     /// module evaluated alone, which is all a view of that module shows.
     pub bound: bool,
-}
-
-/// An aggregation over one axis.
-#[derive(Debug, Clone, Serialize)]
-pub struct ViewReduce {
-    pub op: String,
-    pub axis: String,
 }
 
 /// Source position of a declaration.

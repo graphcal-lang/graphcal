@@ -1,5 +1,5 @@
 {
-  "version": 0,
+  "version": 1,
   "module": {
     "id": "range_index",
     "file": "range_index.gcl",
@@ -43,7 +43,6 @@
       "pub": false,
       "deps": [],
       "expr": "0.5 Hz",
-      "reduce": null,
       "doc": null,
       "source": {
         "file": "range_index.gcl",
@@ -85,7 +84,6 @@
       "pub": false,
       "deps": [],
       "expr": "1.0",
-      "reduce": null,
       "doc": null,
       "source": {
         "file": "range_index.gcl",
@@ -132,7 +130,6 @@
         "p:range_index/f:range_index/n:x0"
       ],
       "expr": "unfold(\n    TimeStep,\n    @x0,\n    |prev_x, prev_t, t| prev_x * (1.0 + @rate * (coord(t) - coord(prev_t)))\n)",
-      "reduce": null,
       "doc": null,
       "source": {
         "file": "range_index.gcl",

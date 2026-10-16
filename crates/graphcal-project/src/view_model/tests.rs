@@ -428,7 +428,6 @@ fn bare_node(id: &ViewNodeId, deps: &[&ViewNodeId]) -> ViewNode {
         is_public: false,
         deps: deps.iter().map(|dep| (*dep).clone()).collect(),
         expr: None,
-        reduce: None,
         doc: None,
         source: None,
         value: None,

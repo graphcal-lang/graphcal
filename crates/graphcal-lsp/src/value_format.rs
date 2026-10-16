@@ -17,17 +17,14 @@ pub fn format_eval_values(
     cancellation: &CancellationToken,
 ) -> std::result::Result<HashMap<ResolvedDeclName, String>, Cancelled> {
     let mut map = HashMap::new();
-    for (name, value_result, _decl_type) in &result.entries {
+    for entry in &result.entries {
         cancellation.checkpoint()?;
-        let Some(identity) = result.identities.get(name) else {
-            continue;
-        };
-        let formatted = match value_result {
+        let formatted = match &entry.outcome {
             Ok(value) => format_value_inline(value, &result.render),
             Err(reason) if reason.is_incomplete() => reason.to_string(),
             Err(_) => continue,
         };
-        map.insert(identity.clone(), formatted);
+        map.insert(entry.identity.clone(), formatted);
     }
     Ok(map)
 }

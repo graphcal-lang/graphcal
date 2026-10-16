@@ -46,9 +46,13 @@ fn si_value(result: &EvalResult, name: &str) -> f64 {
     result
         .entries
         .iter()
-        .find(|(decl_name, _, _)| decl_name.to_string() == name)
+        .find(
+            |graphcal_eval::eval::EvalEntry {
+                 name: decl_name, ..
+             }| decl_name.to_string() == name,
+        )
         .unwrap_or_else(|| panic!("declaration `{name}` not found"))
-        .1
+        .outcome
         .as_ref()
         .unwrap_or_else(|error| panic!("declaration `{name}` has error: {error}"))
         .si_value()

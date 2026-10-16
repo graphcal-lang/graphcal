@@ -45,7 +45,7 @@ enum PreparedView {
     /// Prepared for evaluation alone ([`prepare`]): no view was asked for.
     NotRequested,
     /// The checked program could not be projected.
-    Unavailable { reason: String },
+    ProjectionFailed { reason: String },
     /// The structure, valued per evaluation.
     Projected(ViewProjection),
 }
@@ -184,7 +184,7 @@ fn prepare_virtual(
                 ViewDemand::Skip => PreparedView::NotRequested,
                 ViewDemand::Project => match project_view(&loaded, &checked) {
                     Ok(projection) => PreparedView::Projected(projection),
-                    Err(error) => PreparedView::Unavailable {
+                    Err(error) => PreparedView::ProjectionFailed {
                         reason: error.to_string(),
                     },
                 },
@@ -236,9 +236,12 @@ pub enum EvaluateViewOutcome {
     BindingErrors { errors: Vec<BindingErrorView> },
     /// The evaluator failed as a whole.
     EvalError { message: String },
-    /// The project was prepared without its view, or its view could not be
-    /// projected.
-    Unavailable { message: String },
+    /// The project was prepared for evaluation alone ([`prepare`]), without
+    /// its view.
+    NotRequested,
+    /// The checked program could not be projected into a view (a projection
+    /// invariant failed).
+    ProjectionFailed { message: String },
 }
 
 /// Outcome of evaluating and rendering a host-asset report.
@@ -415,7 +418,7 @@ impl PreparedPlayground {
     pub const fn view_structure(&self) -> Option<&ViewModel> {
         match &self.view {
             PreparedView::Projected(projection) => Some(projection.model()),
-            PreparedView::NotRequested | PreparedView::Unavailable { .. } => None,
+            PreparedView::NotRequested | PreparedView::ProjectionFailed { .. } => None,
         }
     }
 
@@ -425,13 +428,9 @@ impl PreparedPlayground {
     pub fn evaluate_view(&self, bindings: &[BrowserBindingRequest]) -> EvaluateViewOutcome {
         let projection = match &self.view {
             PreparedView::Projected(projection) => projection,
-            PreparedView::NotRequested => {
-                return EvaluateViewOutcome::Unavailable {
-                    message: "the project was prepared without its view".to_string(),
-                };
-            }
-            PreparedView::Unavailable { reason } => {
-                return EvaluateViewOutcome::Unavailable {
+            PreparedView::NotRequested => return EvaluateViewOutcome::NotRequested,
+            PreparedView::ProjectionFailed { reason } => {
+                return EvaluateViewOutcome::ProjectionFailed {
                     message: reason.clone(),
                 };
             }
@@ -1029,7 +1028,7 @@ mod js {
         /// Evaluate with structured bindings and return the entry file's
         /// view model with values attached. Returns the tagged
         /// `EvaluateViewOutcome` (`evaluated` / `binding_errors` /
-        /// `eval_error` / `unavailable`).
+        /// `eval_error` / `not_requested` / `projection_failed`).
         #[wasm_bindgen(js_name = evaluateView)]
         #[expect(
             clippy::needless_pass_by_value,
@@ -1136,11 +1135,7 @@ assert positive = @delta_v > 0.0 m/s;
         assert!(prepared.view_structure().is_none());
         let outcome = prepared.evaluate_view(&[]);
         assert!(
-            matches!(
-                &outcome,
-                EvaluateViewOutcome::Unavailable { message }
-                    if message == "the project was prepared without its view"
-            ),
+            matches!(&outcome, EvaluateViewOutcome::NotRequested),
             "{outcome:?}"
         );
     }

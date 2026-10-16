@@ -126,7 +126,7 @@ pub fn project_view(
     let root = tir.root_dag_id();
     Ok(ViewProjection {
         model: ViewModel {
-            version: 0,
+            version: 1,
             module: ViewModule {
                 id: scope.module_name(root),
                 file: scope.sources.root_name.clone(),
@@ -666,7 +666,6 @@ impl NodeBuilder<'_> {
             is_public: input.is_public && kind != ViewNodeKind::Param,
             deps: input.deps,
             expr,
-            reduce: None,
             source,
             doc: doc.map(str::to_string),
             value: None,
@@ -804,12 +803,7 @@ impl<'e> EvaluatedValues<'e> {
         let by_identity = result
             .entries
             .iter()
-            .filter_map(|(name, outcome, _)| {
-                result
-                    .identities
-                    .get(name)
-                    .map(|identity| (identity, outcome))
-            })
+            .map(|entry| (&entry.identity, &entry.outcome))
             .collect();
         Self {
             result,

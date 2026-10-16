@@ -1020,7 +1020,10 @@ pub dag calculation {
     let result = compile_and_eval_project(&root, &HashMap::new(), None, &RealFileSystem::default())
         .unwrap_or_else(|error| panic!("structured semantic projection must evaluate: {error:?}"));
     assert!(
-        result.entries.iter().all(|(_, value, _)| value.is_ok()),
+        result
+            .entries
+            .iter()
+            .all(|graphcal_eval::eval::EvalEntry { outcome: value, .. }| value.is_ok()),
         "a presentation dependency used its template owner: {:?}",
         result.entries
     );
@@ -1119,7 +1122,7 @@ fn semantic_include_outputs_preserve_presentation_and_unique_names() {
         let unique_names = result
             .entries
             .iter()
-            .map(|(name, _, _)| name.clone())
+            .map(|graphcal_eval::eval::EvalEntry { name, .. }| name.clone())
             .collect::<std::collections::HashSet<_>>();
         assert_eq!(
             unique_names.len(),
@@ -1131,7 +1134,11 @@ fn semantic_include_outputs_preserve_presentation_and_unique_names() {
             .output_values(graphcal_eval::eval::EvalOutputView::Surface)
             .collect::<Vec<_>>();
         assert_eq!(surface.len(), 1, "unexpected output surface: {surface:?}");
-        let (name, value, _) = surface[0];
+        let graphcal_eval::eval::EvalEntry {
+            name,
+            outcome: value,
+            ..
+        } = surface[0];
         assert_eq!(name.to_string(), expected_name);
         let graphcal_eval::eval::Value::Quantity {
             si_value,

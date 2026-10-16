@@ -41,10 +41,10 @@ impl From<&EvalResult> for EvaluationView {
     fn from(result: &EvalResult) -> Self {
         let values = result
             .output_values(EvalOutputView::Surface)
-            .map(|(name, outcome, declaration_kind)| DeclarationView {
-                name: name.to_string(),
-                declaration_kind: DeclarationKindView::from(*declaration_kind),
-                outcome: DeclarationOutcomeView::from_result(outcome, &result.render),
+            .map(|entry| DeclarationView {
+                name: entry.name.to_string(),
+                declaration_kind: DeclarationKindView::from(entry.category),
+                outcome: DeclarationOutcomeView::from_result(&entry.outcome, &result.render),
             })
             .collect();
 

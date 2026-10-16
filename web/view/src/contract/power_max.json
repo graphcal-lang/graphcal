@@ -1,5 +1,5 @@
 {
-  "version": 0,
+  "version": 1,
   "module": {
     "id": "power_project.power_max",
     "file": "src/power_project/power_max.gcl",
@@ -66,7 +66,6 @@
       "pub": false,
       "deps": [],
       "expr": "0.2",
-      "reduce": null,
       "doc": "Design margin on the required power.\nApplied on top of the summed bus power.",
       "source": {
         "file": "src/power_project/power_max.gcl",
@@ -112,7 +111,6 @@
       "pub": true,
       "deps": [],
       "expr": "if @p_sun_avail < @p_eclipse_avail { @p_sun_avail } else { @p_eclipse_avail }",
-      "reduce": null,
       "doc": null,
       "source": {
         "file": "src/power_project/eps.gcl",
@@ -154,7 +152,6 @@
       "pub": false,
       "deps": [],
       "expr": "0.9",
-      "reduce": null,
       "doc": null,
       "source": {
         "file": "src/power_project/power_max.gcl",
@@ -198,7 +195,6 @@
       "pub": false,
       "deps": [],
       "expr": "table[Component] {\n    Obc:     4.0 W;\n    Radio:   12.0 W;\n    Heater:  8.0 W;\n    Payload: 20.0 W;\n}",
-      "reduce": null,
       "doc": null,
       "source": {
         "file": "src/power_project/power_max.gcl",
@@ -344,7 +340,6 @@
       "pub": false,
       "deps": [],
       "expr": "table[Component, Mode] {\n    : Safe, Nominal, Science;\n    Obc:     1.0, 1.0, 1.0;\n    Radio:   0.1, 0.3, 0.8;\n    Heater:  0.6, 0.4, 0.2;\n    Payload: 0.0, 0.5, 1.0;\n}",
-      "reduce": null,
       "doc": null,
       "source": {
         "file": "src/power_project/power_max.gcl",
@@ -745,7 +740,6 @@
         "p:power_project/f:src/f:power_project/f:power_max/n:p_unit"
       ],
       "expr": "for c: Component, m: Mode {\n    (c, m) => @p_unit[c] * @duty[c, m]\n}",
-      "reduce": null,
       "doc": null,
       "source": {
         "file": "src/power_project/power_max.gcl",
@@ -953,7 +947,6 @@
         "p:power_project/f:src/f:power_project/f:power_max/n:p_avg"
       ],
       "expr": "for c: Component, m: Mode {\n    (c, m) => @p_avg[c, m] / @eta_dcdc\n}",
-      "reduce": null,
       "doc": null,
       "source": {
         "file": "src/power_project/power_max.gcl",
@@ -1159,7 +1152,6 @@
         "p:power_project/f:src/f:power_project/f:power_max/n:p_bus"
       ],
       "expr": "for m: Mode {\n    sum(for c: Component { @p_bus[c, m] })\n}",
-      "reduce": null,
       "doc": null,
       "source": {
         "file": "src/power_project/power_max.gcl",
@@ -1235,7 +1227,6 @@
         "p:power_project/f:src/f:power_project/f:power_max/n:p_bus"
       ],
       "expr": "for c: Component {\n    maximum(for m: Mode { @p_bus[c, m] })\n}",
-      "reduce": null,
       "doc": null,
       "source": {
         "file": "src/power_project/power_max.gcl",
@@ -1319,7 +1310,6 @@
         "p:power_project/f:src/f:power_project/f:power_max/n:p_mode"
       ],
       "expr": "maximum(@p_mode)",
-      "reduce": null,
       "doc": null,
       "source": {
         "file": "src/power_project/power_max.gcl",
@@ -1364,7 +1354,6 @@
         "p:power_project/f:src/f:power_project/f:power_max/n:p_total"
       ],
       "expr": "@p_total / to_float(@num)",
-      "reduce": null,
       "doc": null,
       "source": {
         "file": "src/power_project/power_max.gcl",
@@ -1409,7 +1398,6 @@
         "p:power_project/f:src/f:power_project/f:power_max/n:p_total"
       ],
       "expr": "@p_total * (1.0 + @margin)",
-      "reduce": null,
       "doc": null,
       "source": {
         "file": "src/power_project/power_max.gcl",
@@ -1454,7 +1442,6 @@
         "p:power_project/f:src/f:power_project/f:power_max/n:p_peak"
       ],
       "expr": "sum(for c: Component { @p_peak[c] }) * (1.0 - @eta_dcdc)",
-      "reduce": null,
       "doc": null,
       "source": {
         "file": "src/power_project/power_max.gcl",
@@ -1499,7 +1486,6 @@
         "p:power_project/f:src/f:power_project/f:power_max/n:p_required"
       ],
       "expr": "@p_required <= @p_budget",
-      "reduce": null,
       "doc": null,
       "source": {
         "file": "src/power_project/power_max.gcl",
@@ -1539,7 +1525,6 @@
       "pub": true,
       "deps": [],
       "expr": "count(for c: Component { 1.0 })",
-      "reduce": null,
       "doc": null,
       "source": {
         "file": "src/power_project/components.gcl",

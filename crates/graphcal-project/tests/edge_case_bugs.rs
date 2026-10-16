@@ -47,9 +47,9 @@ fn find_int_value(result: &EvalResult, name: &str) -> i64 {
     let val = result
         .entries
         .iter()
-        .find(|(n, _, _)| n.to_string() == name)
+        .find(|graphcal_eval::eval::EvalEntry { name: n, .. }| n.to_string() == name)
         .unwrap_or_else(|| panic!("value `{name}` not found"))
-        .1
+        .outcome
         .as_ref()
         .unwrap_or_else(|e| panic!("value `{name}` has error: {e}"));
     match val {
@@ -63,9 +63,9 @@ fn find_entry(result: &EvalResult, name: &str) -> Value {
     result
         .entries
         .iter()
-        .find(|(n, _, _)| n.to_string() == name)
+        .find(|graphcal_eval::eval::EvalEntry { name: n, .. }| n.to_string() == name)
         .unwrap_or_else(|| panic!("value `{name}` not found"))
-        .1
+        .outcome
         .as_ref()
         .unwrap_or_else(|e| panic!("value `{name}` has error: {e}"))
         .clone()
@@ -76,8 +76,8 @@ fn has_node_error(result: &EvalResult, name: &str) -> bool {
     result
         .entries
         .iter()
-        .find(|(n, _, _)| n.to_string() == name)
-        .is_some_and(|(_, r, _)| r.is_err())
+        .find(|graphcal_eval::eval::EvalEntry { name: n, .. }| n.to_string() == name)
+        .is_some_and(|graphcal_eval::eval::EvalEntry { outcome: r, .. }| r.is_err())
 }
 
 /// Get the node error message for a named node.
@@ -85,11 +85,13 @@ fn get_node_error_message(result: &EvalResult, name: &str) -> Option<String> {
     result
         .entries
         .iter()
-        .find(|(n, _, _)| n.to_string() == name)
-        .and_then(|(_, r, _)| match r {
-            Err(NodeUnavailable::EvalFailed { message }) => Some(message.clone()),
-            _ => None,
-        })
+        .find(|graphcal_eval::eval::EvalEntry { name: n, .. }| n.to_string() == name)
+        .and_then(
+            |graphcal_eval::eval::EvalEntry { outcome: r, .. }| match r {
+                Err(NodeUnavailable::EvalFailed { message }) => Some(message.clone()),
+                _ => None,
+            },
+        )
 }
 
 // ============================================================================
@@ -701,9 +703,9 @@ node eq: Bool = @x == 0.3;
     let val = result
         .entries
         .iter()
-        .find(|(n, _, _)| n.to_string() == "eq")
+        .find(|graphcal_eval::eval::EvalEntry { name: n, .. }| n.to_string() == "eq")
         .unwrap()
-        .1
+        .outcome
         .as_ref()
         .unwrap();
     match val {

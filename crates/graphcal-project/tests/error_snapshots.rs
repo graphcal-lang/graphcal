@@ -21,10 +21,13 @@ fn render_error(source: &str, name: &str) -> String {
 /// Used for runtime errors that are now contained per-node.
 fn render_node_error(source: &str, name: &str, node_name: &str) -> String {
     let result = compile_and_eval_named(source, name).unwrap();
-    let (_, node_result, _) = result
+    let graphcal_eval::eval::EvalEntry {
+        outcome: node_result,
+        ..
+    } = result
         .entries
         .iter()
-        .find(|(n, _, _)| n.to_string() == node_name)
+        .find(|graphcal_eval::eval::EvalEntry { name: n, .. }| n.to_string() == node_name)
         .unwrap_or_else(|| panic!("node `{node_name}` not found"));
     match node_result {
         Err(NodeUnavailable::EvalFailed { message }) => message.clone(),
@@ -1471,16 +1474,21 @@ fn error_extern_fn_failure_is_contained_per_node() {
 fn error_extern_fn_failure_dependents_report_dependency_failed() {
     let source = include_str!("../../../tests/fixtures/runtime_error/extern_fn_failure.gcl");
     let result = compile_and_eval_named(source, "extern_fn_failure.gcl").unwrap();
-    let (_, ok_result, _) = result
+    let graphcal_eval::eval::EvalEntry {
+        outcome: ok_result, ..
+    } = result
         .entries
         .iter()
-        .find(|(n, _, _)| n.to_string() == "ok")
+        .find(|graphcal_eval::eval::EvalEntry { name: n, .. }| n.to_string() == "ok")
         .unwrap();
     assert!(ok_result.is_ok(), "sibling `ok` must still evaluate");
-    let (_, downstream, _) = result
+    let graphcal_eval::eval::EvalEntry {
+        outcome: downstream,
+        ..
+    } = result
         .entries
         .iter()
-        .find(|(n, _, _)| n.to_string() == "downstream")
+        .find(|graphcal_eval::eval::EvalEntry { name: n, .. }| n.to_string() == "downstream")
         .unwrap();
     match downstream {
         Err(NodeUnavailable::DependencyFailed { failed_deps }) => {

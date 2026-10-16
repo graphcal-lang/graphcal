@@ -702,6 +702,20 @@ pub enum EvalOutputView {
 /// alias` keeps its alias-qualified path (`alias.decl`). Output boundaries
 /// (text, JSON, LSP) render the full path so multiple instantiations of the
 /// same dag never collapse onto one key (#813).
+/// One evaluated value of an [`EvalResult`].
+#[derive(Debug)]
+pub struct EvalEntry {
+    /// The output name the value is reported under.
+    pub name: ScopedName,
+    /// The value, or why it is unavailable.
+    pub outcome: Result<Value, OutputUnavailable>,
+    /// Whether the declaration is a const, a param, or a node.
+    pub category: ValueDeclCategory,
+    /// The canonical declaration the entry reports, so tools join entries
+    /// with the checked program without re-deriving output names.
+    pub identity: graphcal_compiler::resolved_name::ResolvedDeclName,
+}
+
 #[derive(Debug)]
 pub struct EvalResult {
     /// Unfinished origins reached inside invoked DAGs, including private
@@ -714,15 +728,7 @@ pub struct EvalResult {
     ///
     /// Per-category views are derived by [`Self::consts`], [`Self::params`],
     /// and [`Self::nodes`].
-    pub entries: Vec<(
-        ScopedName,
-        Result<Value, OutputUnavailable>,
-        ValueDeclCategory,
-    )>,
-    /// The canonical declaration each entry name reports, so tools can join
-    /// entries with the checked program without re-deriving output names.
-    pub identities:
-        std::collections::HashMap<ScopedName, graphcal_compiler::resolved_name::ResolvedDeclName>,
+    pub entries: Vec<EvalEntry>,
     /// Values belonging to the entry DAG's consumer-facing output surface.
     ///
     /// Internal include-instance values remain in [`Self::entries`] for the
@@ -761,20 +767,11 @@ impl EvalResult {
     #[must_use]
     pub fn with_imported_entries(
         mut self,
-        mut imported: Vec<(
-            ScopedName,
-            Result<Value, OutputUnavailable>,
-            ValueDeclCategory,
-        )>,
-        imported_identities: std::collections::HashMap<
-            ScopedName,
-            graphcal_compiler::resolved_name::ResolvedDeclName,
-        >,
+        mut imported: Vec<EvalEntry>,
         output_surface: std::collections::HashSet<ScopedName>,
     ) -> Self {
         imported.append(&mut self.entries);
         self.entries = imported;
-        self.identities.extend(imported_identities);
         self.output_surface = output_surface;
         self
     }
@@ -784,11 +781,7 @@ impl EvalResult {
     pub fn rename_scoped_names(&mut self, rename: impl Fn(&ScopedName) -> ScopedName) {
         self.entries
             .iter_mut()
-            .for_each(|(name, _, _)| *name = rename(name));
-        self.identities = std::mem::take(&mut self.identities)
-            .into_iter()
-            .map(|(name, identity)| (rename(&name), identity))
-            .collect();
+            .for_each(|entry| entry.name = rename(&entry.name));
         self.output_surface = std::mem::take(&mut self.output_surface)
             .into_iter()
             .map(|name| rename(&name))
@@ -850,19 +843,10 @@ impl EvalResult {
     ///
     /// Failed internal values are included even in the surface view so a
     /// non-zero evaluation result is never unexplained.
-    pub fn output_values(
-        &self,
-        view: EvalOutputView,
-    ) -> impl Iterator<
-        Item = &(
-            ScopedName,
-            Result<Value, OutputUnavailable>,
-            ValueDeclCategory,
-        ),
-    > {
+    pub fn output_values(&self, view: EvalOutputView) -> impl Iterator<Item = &EvalEntry> {
         self.entries
             .iter()
-            .filter(move |(name, result, _)| self.should_output(name, result, view))
+            .filter(move |entry| self.should_output(&entry.name, &entry.outcome, view))
     }
 
     fn output_category(
@@ -870,17 +854,24 @@ impl EvalResult {
         view: EvalOutputView,
         decl_type: ValueDeclCategory,
     ) -> impl Iterator<Item = (&ScopedName, &Result<Value, OutputUnavailable>)> {
-        self.entries.iter().filter_map(move |(name, result, kind)| {
-            // An included input port is a computed value from the entry
-            // DAG's perspective, not an externally bindable parameter.
-            // Keep the declaration category in `entries` intact.
-            let output_kind = match kind {
-                ValueDeclCategory::Param if name.owner().is_some() => ValueDeclCategory::Node,
-                _ => *kind,
-            };
-            (output_kind == decl_type && self.should_output(name, result, view))
-                .then_some((name, result))
-        })
+        self.entries.iter().filter_map(
+            move |EvalEntry {
+                      name,
+                      outcome: result,
+                      category: kind,
+                      ..
+                  }| {
+                // An included input port is a computed value from the entry
+                // DAG's perspective, not an externally bindable parameter.
+                // Keep the declaration category in `entries` intact.
+                let output_kind = match kind {
+                    ValueDeclCategory::Param if name.owner().is_some() => ValueDeclCategory::Node,
+                    _ => *kind,
+                };
+                (output_kind == decl_type && self.should_output(name, result, view))
+                    .then_some((name, result))
+            },
+        )
     }
 
     /// Iterate over const values selected by `view` in source order.
@@ -913,9 +904,9 @@ impl EvalResult {
         &self,
         decl_type: ValueDeclCategory,
     ) -> impl Iterator<Item = (&ScopedName, &Result<Value, OutputUnavailable>)> {
-        self.entries
-            .iter()
-            .filter_map(move |(name, result, kind)| (*kind == decl_type).then_some((name, result)))
+        self.entries.iter().filter_map(move |entry| {
+            (entry.category == decl_type).then_some((&entry.name, &entry.outcome))
+        })
     }
 
     /// Iterate over every const value in source order.
@@ -952,10 +943,12 @@ impl EvalResult {
                 .plot_errors
                 .iter()
                 .any(|plot| plot.reason.is_incomplete())
-            || self
-                .entries
-                .iter()
-                .any(|(_, result, _)| result.as_ref().is_err_and(NodeUnavailable::is_incomplete))
+            || self.entries.iter().any(|entry| {
+                entry
+                    .outcome
+                    .as_ref()
+                    .is_err_and(NodeUnavailable::is_incomplete)
+            })
             || self
                 .assertions
                 .iter()
@@ -965,13 +958,15 @@ impl EvalResult {
     /// Whether a genuine failure occurred, independently of incompleteness.
     #[must_use]
     pub fn has_errors(&self) -> bool {
-        self.entries
+        self.entries.iter().any(|entry| {
+            entry
+                .outcome
+                .as_ref()
+                .is_err_and(NodeUnavailable::has_failure)
+        }) || self
+            .plot_errors
             .iter()
-            .any(|(_, result, _)| result.as_ref().is_err_and(NodeUnavailable::has_failure))
-            || self
-                .plot_errors
-                .iter()
-                .any(|plot| plot.reason.has_failure())
+            .any(|plot| plot.reason.has_failure())
             || !self.presentation_diagnostics.is_empty()
             || self.assertions.iter().any(|(_, r, _)| match r {
                 AssertResult::Fail { .. } | AssertResult::Error { .. } => true,
@@ -1170,7 +1165,6 @@ mod tests {
         EvalResult {
             unfinished_calls: Vec::new(),
             entries: Vec::new(),
-            identities: std::collections::HashMap::new(),
             output_surface: std::collections::HashSet::new(),
             assertions: Vec::new(),
             plots: Vec::new(),

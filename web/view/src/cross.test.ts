@@ -16,7 +16,6 @@ function node(id: string, extra: Partial<ViewNode> = {}): ViewNode {
     pub: false,
     deps: [],
     expr: null,
-    reduce: null,
     label: id,
     origin: { kind: "local" },
     element: "quantity",
@@ -29,7 +28,7 @@ function node(id: string, extra: Partial<ViewNode> = {}): ViewNode {
 
 function sheet(key: PaneKey, id: string, nodes: ViewNode[]): CrossSheet {
   const model: ViewModel = {
-    version: 0,
+    version: 1,
     module: { id, file: `src/${id}.gcl`, package: "p" },
     indexes: [],
     nodes,

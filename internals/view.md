@@ -16,7 +16,10 @@ hosts, chosen at start in `src/main.ts`:
 ## The model contract
 
 The model is projected in `crates/graphcal-project/src/view_model/` and
-validated on the page by the zod schemas in `src/model.ts`. Its rules:
+validated on the page by the zod schemas in `src/model.ts`; it is at
+`version` 1, and a wire change bumps it. The Wasm `evaluateView` answers
+`evaluated`, `binding_errors`, `eval_error`, `not_requested` (prepared
+without the view) or `projection_failed`. Its rules:
 
 - Ids are opaque. A node's `id` is derived from the declaration's identity
   (`view_model/wire_key.rs`), so it is unique, stable across evaluations and

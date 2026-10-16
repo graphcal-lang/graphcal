@@ -227,9 +227,9 @@ mod tests {
 
     fn body_of(source: &str, name: &str) -> ValueBody {
         let result = compile_and_eval(source).unwrap();
-        let (_, value, _) = result
+        let graphcal_eval::eval::EvalEntry { outcome: value, .. } = result
             .output_values(graphcal_eval::eval::EvalOutputView::Surface)
-            .find(|(n, _, _)| n.to_string() == name)
+            .find(|graphcal_eval::eval::EvalEntry { name: n, .. }| n.to_string() == name)
             .unwrap();
         project_value_body(value.as_ref().unwrap(), &result.render).unwrap()
     }

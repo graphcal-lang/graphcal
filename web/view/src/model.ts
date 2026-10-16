@@ -64,9 +64,6 @@ export const originSchema = z.discriminatedUnion("kind", [
 ]);
 export type Origin = z.infer<typeof originSchema>;
 
-export const reduceOpSchema = z.enum(["sum", "maximum", "minimum", "count", "rss", "mean"]);
-export type ReduceOp = z.infer<typeof reduceOpSchema>;
-
 const positionSchema = z.object({ line: z.int().nonnegative(), character: z.int().nonnegative() });
 export type Position = z.infer<typeof positionSchema>;
 const rangeSchema = z.object({ start: positionSchema, end: positionSchema });
@@ -108,8 +105,6 @@ export const viewNodeSchema = z.object({
   deps: z.array(z.string()),
   /** Source expression text, for the formula bar. */
   expr: z.string().nullable(),
-  /** The aggregation that removed an axis of a dependency, if any. */
-  reduce: z.object({ op: reduceOpSchema, axis: z.string() }).nullable(),
   /** The declaration's `///` documentation, lines joined with newlines. */
   doc: z.string().nullable().optional(),
   source: z
@@ -150,7 +145,7 @@ export const viewIndexSchema = z.object({
 export type ViewIndex = z.infer<typeof viewIndexSchema>;
 
 export const viewModelSchema = z.object({
-  version: z.literal(0),
+  version: z.literal(1),
   module: z.object({ id: z.string(), file: z.string(), package: z.string() }),
   indexes: z.array(viewIndexSchema),
   nodes: z.array(viewNodeSchema),

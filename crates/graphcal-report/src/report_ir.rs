@@ -153,15 +153,15 @@ pub fn build_report(inputs: ReportInputs<'_>) -> Result<ReportDocument, ReportBu
     let result = inputs.result;
     let mut params = Vec::new();
     let mut values = Vec::new();
-    for (name, outcome, kind) in result.output_values(EvalOutputView::Surface) {
+    for entry in result.output_values(EvalOutputView::Surface) {
         // An included input port is a caller-bound derived value, not an
         // externally bindable entry parameter. Preserve its original kind.
-        let cards = match (kind, name.owner()) {
+        let cards = match (entry.category, entry.name.owner()) {
             (ValueDeclCategory::Param, None) => &mut params,
             _ => &mut values,
         };
-        let name = name.to_string();
-        let body = match outcome {
+        let name = entry.name.to_string();
+        let body = match &entry.outcome {
             Ok(value) => match project_value_body(value, &result.render) {
                 Ok(body) => CardBody::Value(body),
                 Err(error) => CardBody::Error {
@@ -178,7 +178,7 @@ pub fn build_report(inputs: ReportInputs<'_>) -> Result<ReportDocument, ReportBu
         let card = ValueCard {
             doc: inputs.docs.get(&name).cloned(),
             name,
-            kind: *kind,
+            kind: entry.category,
             body,
         };
         cards.push(card);

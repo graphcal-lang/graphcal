@@ -1151,7 +1151,7 @@ fn print_text(result: &EvalResult, output_view: EvalOutputView) {
     // alias-qualified path so multiple instantiations stay distinct (#813).
     let rendered_names: Vec<(String, &Result<Value, OutputUnavailable>)> = result
         .output_values(output_view)
-        .map(|(name, r, _)| (name.to_string(), r))
+        .map(|entry| (entry.name.to_string(), &entry.outcome))
         .collect();
     let items = rendered_names.iter().map(|(n, r)| (n.as_str(), *r));
     let blocks = build_output_blocks(items);
