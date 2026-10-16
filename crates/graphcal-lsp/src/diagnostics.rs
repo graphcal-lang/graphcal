@@ -145,53 +145,49 @@ pub fn eval_result_to_diagnostics(
     }));
 
     // Assertion failures
-    diagnostics.extend(
-        result
-            .assertions
-            .iter()
-            .filter_map(|(name, assert_result, span)| {
-                use graphcal_eval::eval::AssertResult;
+    diagnostics.extend(result.assertions.iter().filter_map(|assertion| {
+        use graphcal_eval::eval::AssertResult;
 
-                let (message, severity) = match assert_result {
-                    AssertResult::Pass => return None,
-                    AssertResult::Blocked { reason } => (
-                        format!("assertion `{name}`: {reason}"),
-                        if reason.has_failure() {
-                            DiagnosticSeverity::WARNING
-                        } else {
-                            DiagnosticSeverity::INFORMATION
-                        },
-                    ),
-                    AssertResult::Fail { message } => {
-                        let msg = result.assumes_map.get(name).map_or_else(
-                            || format!("assertion `{name}` failed: {message}"),
-                            |affected| {
-                                let affected: Vec<String> =
-                                    affected.iter().map(ToString::to_string).collect();
-                                format!(
-                                    "assertion `{name}` failed: {message} (affected: {})",
-                                    affected.join(", ")
-                                )
-                            },
-                        );
-                        (msg, DiagnosticSeverity::WARNING)
-                    }
-                    AssertResult::Error { message } => (
-                        format!("assertion `{name}` error: {message}"),
-                        DiagnosticSeverity::WARNING,
-                    ),
-                };
+        let (name, assert_result, span) = (&assertion.name, &assertion.outcome, &assertion.span);
+        let (message, severity) = match assert_result {
+            AssertResult::Pass => return None,
+            AssertResult::Blocked { reason } => (
+                format!("assertion `{name}`: {reason}"),
+                if reason.has_failure() {
+                    DiagnosticSeverity::WARNING
+                } else {
+                    DiagnosticSeverity::INFORMATION
+                },
+            ),
+            AssertResult::Fail { message } => {
+                let msg = result.assumes_map.get(name).map_or_else(
+                    || format!("assertion `{name}` failed: {message}"),
+                    |affected| {
+                        let affected: Vec<String> =
+                            affected.iter().map(ToString::to_string).collect();
+                        format!(
+                            "assertion `{name}` failed: {message} (affected: {})",
+                            affected.join(", ")
+                        )
+                    },
+                );
+                (msg, DiagnosticSeverity::WARNING)
+            }
+            AssertResult::Error { message } => (
+                format!("assertion `{name}` error: {message}"),
+                DiagnosticSeverity::WARNING,
+            ),
+        };
 
-                Some(Diagnostic {
-                    range: lines.span_to_range(*span),
-                    severity: Some(severity),
-                    code: Some(NumberOrString::String("graphcal::A001".to_string())),
-                    source: Some("graphcal".to_string()),
-                    message,
-                    ..Default::default()
-                })
-            }),
-    );
+        Some(Diagnostic {
+            range: lines.span_to_range(*span),
+            severity: Some(severity),
+            code: Some(NumberOrString::String("graphcal::A001".to_string())),
+            source: Some("graphcal".to_string()),
+            message,
+            ..Default::default()
+        })
+    }));
 
     diagnostics
 }

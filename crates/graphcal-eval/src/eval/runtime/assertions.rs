@@ -10,13 +10,12 @@ use graphcal_compiler::resolved_name::ResolvedDeclName;
 use graphcal_compiler::semantic_error::SemanticError;
 use graphcal_compiler::source_id::SourceId;
 use graphcal_compiler::syntax::module_name::ScopedName;
-use graphcal_compiler::syntax::span::Span;
 use graphcal_compiler::tir::typed::evaluation_unit::DeclarationBody;
 use graphcal_compiler::tir::typed::model::TypedAssertEntry;
 use graphcal_compiler::tir::typed::{AssertionOperands, BodyKind, Scoped};
 
 use crate::assertion_eval::evaluate_assert_with_expected_fail;
-use crate::eval::types::{AssertResult, RuntimeUnavailable};
+use crate::eval::types::{AssertResult, EvalAssertion, RuntimeUnavailable};
 use crate::eval_expr::{EvalSession, RuntimeValueMap, eval_root};
 
 use super::dependency_failures::dependency_failure_message;
@@ -37,9 +36,9 @@ pub(super) fn evaluate_assertions(
     values: &RuntimeValueMap,
     errors: &HashMap<ResolvedDeclName, RuntimeUnavailable>,
     names: &RootNames<'_>,
-) -> Result<Vec<(ScopedName, AssertResult, Span)>, Outcome<SemanticError>> {
+) -> Result<Vec<EvalAssertion>, Outcome<SemanticError>> {
     let tir = plan.tir();
-    let mut assertions: Vec<(ScopedName, AssertResult, Span)> = tir
+    let mut assertions: Vec<EvalAssertion> = tir
         .declaration_bodies(plan.root().scope().position())
         .filter_map(|unit| match unit.kind() {
             BodyKind::Assert(entry) => Some((unit, entry)),
@@ -58,11 +57,12 @@ pub(super) fn evaluate_assertions(
                     })?
                 }
             };
-            Ok((
-                ScopedName::local(owner.leaf().clone()),
-                assert_result.map_names(|declaration| names.name(declaration)),
+            Ok(EvalAssertion {
+                name: ScopedName::local(owner.leaf().clone()),
+                outcome: assert_result.map_names(|declaration| names.name(declaration)),
                 span,
-            ))
+                identity: owner,
+            })
         })
         .collect::<Result<_, Outcome<SemanticError>>>()?;
     for (parent, planned, projection, unit, entry) in projected_assertions(plan) {
@@ -81,11 +81,12 @@ pub(super) fn evaluate_assertions(
                 eval_root(&assertion_ctx.executable(expr)?, values, &assertion_ctx)
             })?,
         };
-        assertions.push((
-            projected_assertion_name(parent, planned, projection),
-            result.map_names(|declaration| names.name(declaration)),
-            entry.get().span,
-        ));
+        assertions.push(EvalAssertion {
+            name: projected_assertion_name(parent, planned, projection),
+            outcome: result.map_names(|declaration| names.name(declaration)),
+            span: entry.get().span,
+            identity: owner.clone(),
+        });
     }
     Ok(assertions)
 }

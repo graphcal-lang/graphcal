@@ -12,7 +12,6 @@ use graphcal_compiler::semantic::index_def::{FiniteIndex, IndexDef};
 use graphcal_compiler::source_registry::ForeignSourceId;
 use graphcal_compiler::syntax::decl_name::DeclName;
 use graphcal_compiler::syntax::index_name::IndexEntryKey;
-use graphcal_compiler::syntax::module_name::ScopedName;
 use graphcal_compiler::syntax::non_empty::NonEmpty;
 use graphcal_compiler::syntax::span::Span;
 use graphcal_compiler::text_position::Utf16LineIndex;
@@ -945,12 +944,11 @@ impl<'e> EvaluatedValues<'e> {
 
     /// The outcome of a root-owned assertion.
     fn assertion(&self, id: &ResolvedDeclName) -> Option<&'e AssertResult> {
-        let name = ScopedName::local(id.leaf().clone());
         self.result
             .assertions
             .iter()
-            .find(|(assertion, _, _)| *assertion == name)
-            .map(|(_, outcome, _)| outcome)
+            .find(|assertion| assertion.identity == *id)
+            .map(|assertion| &assertion.outcome)
     }
 }
 

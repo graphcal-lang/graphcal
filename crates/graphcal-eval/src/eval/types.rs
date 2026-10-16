@@ -716,6 +716,21 @@ pub struct EvalEntry {
     pub identity: graphcal_compiler::resolved_name::ResolvedDeclName,
 }
 
+/// One assertion outcome the root reports.
+#[derive(Debug, Clone, PartialEq)]
+pub struct EvalAssertion {
+    /// The name the root reports the assertion under (`ok`, `p::out_pos`).
+    pub name: ScopedName,
+    /// Whether the assertion passed, and why not.
+    pub outcome: AssertResult,
+    /// The assertion's source span.
+    pub span: Span,
+    /// The canonical declaration the outcome belongs to (an include
+    /// instance's assertion is owned by the instance), so tools join outcomes
+    /// with the checked program without re-deriving names.
+    pub identity: graphcal_compiler::resolved_name::ResolvedDeclName,
+}
+
 #[derive(Debug)]
 pub struct EvalResult {
     /// Unfinished origins reached inside invoked DAGs, including private
@@ -729,13 +744,18 @@ pub struct EvalResult {
     /// Per-category views are derived by [`Self::consts`], [`Self::params`],
     /// and [`Self::nodes`].
     pub entries: Vec<EvalEntry>,
+    /// The values of the include instances below the root's own instances
+    /// (an instance an instance includes, at any depth), by identity. They
+    /// are no output of the root and appear in no output view; a tool that
+    /// shows one instance's values (the view) reads them here.
+    pub nested_instance_entries: Vec<EvalEntry>,
     /// Values belonging to the entry DAG's consumer-facing output surface.
     ///
     /// Internal include-instance values remain in [`Self::entries`] for the
     /// [`EvalOutputView::All`] debug view and for complete error accounting.
     pub(crate) output_surface: std::collections::HashSet<ScopedName>,
-    /// Assertion results in source order: (name, result, span).
-    pub assertions: Vec<(ScopedName, AssertResult, Span)>,
+    /// Assertion results in source order.
+    pub assertions: Vec<EvalAssertion>,
     /// Evaluated plot specifications in source order.
     pub plots: Vec<PlotSpec>,
     /// Plots that failed to evaluate, with their reasons (#842).
@@ -788,7 +808,7 @@ impl EvalResult {
             .collect();
         self.assertions
             .iter_mut()
-            .for_each(|(name, _, _)| *name = rename(name));
+            .for_each(|assertion| assertion.name = rename(&assertion.name));
         self.plots
             .iter_mut()
             .for_each(|plot| plot.name = rename(&plot.name));
@@ -952,7 +972,7 @@ impl EvalResult {
             || self
                 .assertions
                 .iter()
-                .any(|(_, result, _)| matches!(result, AssertResult::Blocked { .. }))
+                .any(|assertion| matches!(assertion.outcome, AssertResult::Blocked { .. }))
     }
 
     /// Whether a genuine failure occurred, independently of incompleteness.
@@ -968,11 +988,14 @@ impl EvalResult {
             .iter()
             .any(|plot| plot.reason.has_failure())
             || !self.presentation_diagnostics.is_empty()
-            || self.assertions.iter().any(|(_, r, _)| match r {
-                AssertResult::Fail { .. } | AssertResult::Error { .. } => true,
-                AssertResult::Blocked { reason } => reason.has_failure(),
-                AssertResult::Pass => false,
-            })
+            || self
+                .assertions
+                .iter()
+                .any(|assertion| match &assertion.outcome {
+                    AssertResult::Fail { .. } | AssertResult::Error { .. } => true,
+                    AssertResult::Blocked { reason } => reason.has_failure(),
+                    AssertResult::Pass => false,
+                })
     }
 }
 
@@ -1165,6 +1188,7 @@ mod tests {
         EvalResult {
             unfinished_calls: Vec::new(),
             entries: Vec::new(),
+            nested_instance_entries: Vec::new(),
             output_surface: std::collections::HashSet::new(),
             assertions: Vec::new(),
             plots: Vec::new(),

@@ -41,10 +41,13 @@ assert independent = true;
     assert!(evaluation.is_incomplete());
     assert!(!evaluation.has_errors());
     assert!(matches!(
-        evaluation.assertions[0].1,
+        evaluation.assertions[0].outcome,
         AssertResult::Blocked { .. }
     ));
-    assert!(matches!(evaluation.assertions[1].1, AssertResult::Pass));
+    assert!(matches!(
+        evaluation.assertions[1].outcome,
+        AssertResult::Pass
+    ));
 }
 
 #[test]
@@ -160,7 +163,7 @@ assert pending = if true { true } else { @source()::missing > 0.0 m };
         result(&evaluation, "blocked")
     );
     assert!(matches!(
-        evaluation.assertions[0].1,
+        evaluation.assertions[0].outcome,
         graphcal_eval::eval::AssertResult::Blocked { .. }
     ));
     assert!(!evaluation.has_errors());

@@ -1234,10 +1234,11 @@ fn print_text(result: &EvalResult, output_view: EvalOutputView) {
         let assert_names: Vec<String> = result
             .assertions
             .iter()
-            .map(|(n, _, _)| n.to_string())
+            .map(|assertion| assertion.name.to_string())
             .collect();
         let max_assert_len = assert_names.iter().map(String::len).max().unwrap_or(0);
-        for ((name, assert_result, _), name_str) in result.assertions.iter().zip(&assert_names) {
+        for (assertion, name_str) in result.assertions.iter().zip(&assert_names) {
+            let (name, assert_result) = (&assertion.name, &assertion.outcome);
             let line = format_assertion_line(
                 name_str,
                 assert_result,
@@ -1516,7 +1517,8 @@ fn print_json(
         let assertions: serde_json::Map<String, serde_json::Value> = result
             .assertions
             .iter()
-            .map(|(n, r, _)| {
+            .map(|assertion| {
+                let (n, r) = (&assertion.name, &assertion.outcome);
                 let val = match r {
                     AssertResult::Pass => serde_json::json!({"status": "pass"}),
                     AssertResult::Fail { message } => {
