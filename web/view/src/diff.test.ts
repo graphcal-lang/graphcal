@@ -3,7 +3,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vite-plus/test";
-import { patchOf, unifiedDiff } from "./diff.ts";
+import { changedFiles, patchOf, unifiedDiff } from "./diff.ts";
 
 describe("unifiedDiff", () => {
   test("writes one hunk with three lines of context, as git diff does", () => {
@@ -130,8 +130,31 @@ describe("patchOf", () => {
       ],
       "graphcal what-if: o/r @ main",
     );
-    expect(patch.startsWith("# graphcal what-if: o/r @ main\n\ndiff --git a/b b/b\n")).toBe(true);
-    expect(patch).not.toContain("a/a");
-    expect(patchOf([{ path: "a", before: "1\n", after: "1\n" }], "x")).toBe("");
+    expect(patch.text.startsWith("# graphcal what-if: o/r @ main\n\ndiff --git a/b b/b\n")).toBe(
+      true,
+    );
+    expect(patch.text).not.toContain("a/a");
+    expect(patch.files).toBe(1);
+    expect(patchOf([{ path: "a", before: "1\n", after: "1\n" }], "x")).toEqual({
+      text: "",
+      files: 0,
+    });
+  });
+});
+
+describe("changedFiles", () => {
+  test("lists the files whose text changed, at their repository paths", () => {
+    const before = new Map([
+      ["src/a.gcl", "1\n"],
+      ["src/b.gcl", "2\n"],
+    ]);
+    const after = new Map([
+      ["src/a.gcl", "1\n"],
+      ["src/b.gcl", "3\n"],
+      ["src/c.gcl", "4\n"],
+    ]);
+    expect(changedFiles(before, after, (file) => `calc/${file}`)).toEqual([
+      { path: "calc/src/b.gcl", before: "2\n", after: "3\n" },
+    ]);
   });
 });

@@ -2,7 +2,7 @@
 // with the viewer's own token, kept in memory, and projected by the in-browser
 // engine. Nothing is written back; edits are a what-if over the sources read,
 // and `reset` returns to them. The address bar follows the shown file.
-import { patchOf, type FileChange } from "./diff.ts";
+import { changedFiles, patchOf, type Patch } from "./diff.ts";
 import { changedPaths, compareOf, type BaseRead } from "./compareBase.ts";
 import {
   evaluateView,
@@ -12,6 +12,7 @@ import {
   viewOf,
   type ProjectFile,
 } from "./engine.ts";
+import { errorMessage } from "./errors.ts";
 import { GitHub, GitHubError, type Commit, type Refs, type Tree } from "./github.ts";
 import type { BaseSide, Compare, EditResult, Host, NoteKind, SourceEdit } from "./host.ts";
 import type { TokenStore } from "./login.ts";
@@ -20,6 +21,7 @@ import { ModelCache } from "./modelCache.ts";
 import { Project } from "./project.ts";
 import { RefsCache } from "./refsCache.ts";
 import {
+  join,
   locateProject,
   planProject,
   ProjectPlanError,
@@ -96,10 +98,6 @@ async function readProject(
     plan,
     files: plan.files.map((file, i) => [file.relative, texts[i] ?? ""] as [string, string]),
   };
-}
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }
 
 /** `promise`'s outcome, which never rejects (so it may wait unobserved). */
@@ -384,16 +382,10 @@ export class GitHubHost implements Host {
   }
 
   /** The edits since the project was read, as a unified diff with repository paths. */
-  patch(): string {
+  patch(): Patch {
     const project = this.project;
-    if (!project) return "";
-    const changes: FileChange[] = [];
-    for (const [file, before] of this.pristine) {
-      const after = project.files.get(file);
-      if (after === undefined || after === before) continue;
-      const path = this.root === "" ? file : `${this.root}/${file}`;
-      changes.push({ path, before, after });
-    }
+    if (!project) return { text: "", files: 0 };
+    const changes = changedFiles(this.pristine, project.files, (file) => join(this.root, file));
     const ref = this.state.ref ?? headRef(this.route.at) ?? "default branch";
     return patchOf(changes, `graphcal what-if: ${this.route.owner}/${this.route.repo} @ ${ref}`);
   }
@@ -401,7 +393,7 @@ export class GitHubHost implements Host {
   pathOf(module: string): string | null {
     const model = this.models.last(module);
     if (!model) return null;
-    return this.root === "" ? model.module.file : `${this.root}/${model.module.file}`;
+    return join(this.root, model.module.file);
   }
 
   private moduleOfPath(path: string): string | null {

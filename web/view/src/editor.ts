@@ -26,15 +26,8 @@ import {
   WidgetType,
 } from "@codemirror/view";
 import { graphcalHighlighting, graphcalLanguage } from "./graphcalLanguage.ts";
+import type { Inlay } from "./inlays.ts";
 import { minimalEdit } from "./vscodeHost.ts";
-
-/** A value shown at the end of a line: the line is 1-based, as the model counts. */
-export interface Inlay {
-  line: number;
-  text: string;
-  /** Whether this is the line of the node selected in the sheet. */
-  selected: boolean;
-}
 
 class InlayWidget extends WidgetType {
   private readonly text: string;

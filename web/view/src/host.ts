@@ -2,6 +2,7 @@
 // The web page is hosted by a GitHub repository and the in-browser engine; the
 // VS Code webview is hosted by the extension, which talks to the language
 // server. The sheet code only ever sees this interface.
+import type { Patch } from "./diff.ts";
 import type { ViewModel } from "./model.ts";
 
 /** A file of a module's project rewritten in full. */
@@ -25,8 +26,8 @@ export interface Host {
   openFile?(path: string): boolean;
   /** The listed path of a module's file, to mark it in the explorer. */
   pathOf?(module: string): string | null;
-  /** The what-if edits as a patch to carry elsewhere (`git apply`, the VS Code extension); "" when none. */
-  patch?(): string;
+  /** The what-if edits as a patch to carry elsewhere (`git apply`, the VS Code extension). */
+  patch?(): Patch;
   /** What the shown ref is compared against, when the address names a base; null until it is read. */
   readonly compare?: Compare | null;
   /** Whether the shown sources carry unsaved what-if edits the host can discard. */
