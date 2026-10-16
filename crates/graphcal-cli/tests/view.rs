@@ -164,3 +164,28 @@ fn view_contract_fixtures_are_current() {
         );
     }
 }
+
+#[test]
+fn view_reports_a_value_its_display_unit_cannot_show_and_fails_like_eval() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("huge.gcl");
+    std::fs::write(
+        &file,
+        "node first: Dimensionless = 1.0;\nnode huge: Length = 1.0e305 km -> mm;\nnode last: Dimensionless = 2.0;\n",
+    )
+    .unwrap();
+    let output = run(&["view", file.to_str().unwrap()]);
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("presentation: huge:"), "{stderr}");
+    let view: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(node(&view, "last")["value"]["display"], "2");
+    assert_eq!(node(&view, "huge")["value"]["display"], "1e308 m");
+    assert_eq!(
+        node(&view, "huge")["presentation"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+}

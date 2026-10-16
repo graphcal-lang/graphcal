@@ -40,6 +40,12 @@ validated on the page by the zod schemas in `src/model.ts`. Its rules:
   written cell of a table definition by its entry keys (with the node id,
   the slot) and range. `element` says what one value is, so a typed literal
   is built only for a quantity.
+- `dimension` is the element type as the declaration spells it (`Torque`,
+  `Dimensionless / Time`). Values follow `graphcal eval`: a quantity in its
+  display unit, else in the default label of its dimension. A display unit
+  that cannot be applied leaves the SI value, and the node lists why in
+  `presentation`; every host projects the same way (`graphcal view` also
+  prints those lines and exits with 1, as `graphcal eval` does).
 - `module.id` and `node.module` are module paths as the loader records them
   for each file, the root included.
 

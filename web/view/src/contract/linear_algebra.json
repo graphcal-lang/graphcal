@@ -159,7 +159,8 @@
             }
           }
         ]
-      }
+      },
+      "presentation": []
     },
     {
       "id": "p:linear_algebra/f:linear_algebra/n:b",
@@ -278,7 +279,8 @@
             }
           }
         ]
-      }
+      },
+      "presentation": []
     },
     {
       "id": "p:linear_algebra/f:linear_algebra/n:A",
@@ -499,7 +501,8 @@
             }
           }
         ]
-      }
+      },
+      "presentation": []
     },
     {
       "id": "p:linear_algebra/f:linear_algebra/n:B",
@@ -730,7 +733,8 @@
             }
           }
         ]
-      }
+      },
+      "presentation": []
     },
     {
       "id": "p:linear_algebra/f:linear_algebra/n:square",
@@ -899,7 +903,8 @@
             }
           }
         ]
-      }
+      },
+      "presentation": []
     },
     {
       "id": "p:linear_algebra/f:linear_algebra/n:dot_ab",
@@ -943,7 +948,8 @@
         "magnitude": "32",
         "si_value": 32.0,
         "unit": "m"
-      }
+      },
+      "presentation": []
     },
     {
       "id": "p:linear_algebra/f:linear_algebra/n:matrix_product",
@@ -1050,7 +1056,8 @@
             }
           }
         ]
-      }
+      },
+      "presentation": []
     },
     {
       "id": "p:linear_algebra/f:linear_algebra/n:A_t",
@@ -1186,7 +1193,8 @@
             }
           }
         ]
-      }
+      },
+      "presentation": []
     },
     {
       "id": "p:linear_algebra/f:linear_algebra/n:square_trace",
@@ -1229,7 +1237,8 @@
         "magnitude": "5",
         "si_value": 5.0,
         "unit": "m"
-      }
+      },
+      "presentation": []
     },
     {
       "id": "p:linear_algebra/f:linear_algebra/n:a_norm",
@@ -1272,7 +1281,8 @@
         "magnitude": "3.741657",
         "si_value": 3.741657386773941,
         "unit": "m"
-      }
+      },
+      "presentation": []
     },
     {
       "id": "p:linear_algebra/f:linear_algebra/n:x_axis",
@@ -1391,7 +1401,8 @@
             }
           }
         ]
-      }
+      },
+      "presentation": []
     },
     {
       "id": "p:linear_algebra/f:linear_algebra/n:y_axis",
@@ -1510,7 +1521,8 @@
             }
           }
         ]
-      }
+      },
+      "presentation": []
     },
     {
       "id": "p:linear_algebra/f:linear_algebra/n:z_axis",
@@ -1586,7 +1598,8 @@
             }
           }
         ]
-      }
+      },
+      "presentation": []
     },
     {
       "id": "p:linear_algebra/f:linear_algebra/n:u",
@@ -1680,7 +1693,8 @@
             }
           }
         ]
-      }
+      },
+      "presentation": []
     },
     {
       "id": "p:linear_algebra/f:linear_algebra/n:v",
@@ -1799,7 +1813,8 @@
             }
           }
         ]
-      }
+      },
+      "presentation": []
     },
     {
       "id": "p:linear_algebra/f:linear_algebra/n:uv",
@@ -1926,7 +1941,8 @@
             }
           }
         ]
-      }
+      },
+      "presentation": []
     },
     {
       "id": "p:linear_algebra/f:linear_algebra/n:rhs",
@@ -2020,7 +2036,8 @@
             }
           }
         ]
-      }
+      },
+      "presentation": []
     },
     {
       "id": "p:linear_algebra/f:linear_algebra/n:solution",
@@ -2086,7 +2103,8 @@
             }
           }
         ]
-      }
+      },
+      "presentation": []
     },
     {
       "id": "p:linear_algebra/f:linear_algebra/n:square_inverse",
@@ -2192,7 +2210,8 @@
             }
           }
         ]
-      }
+      },
+      "presentation": []
     },
     {
       "id": "p:linear_algebra/f:linear_algebra/n:square_det",
@@ -2235,7 +2254,8 @@
         "magnitude": "-2",
         "si_value": -2.0,
         "unit": "m^2"
-      }
+      },
+      "presentation": []
     },
     {
       "id": "p:linear_algebra/f:linear_algebra/n:inverse_identity_00",
@@ -2279,7 +2299,8 @@
         "magnitude": "1",
         "si_value": 1.0000000000000002,
         "unit": null
-      }
+      },
+      "presentation": []
     },
     {
       "id": "p:linear_algebra/f:linear_algebra/n:dot_result",
@@ -2320,7 +2341,8 @@
         "kind": "bool",
         "display": "PASS",
         "value": true
-      }
+      },
+      "presentation": []
     },
     {
       "id": "p:linear_algebra/f:linear_algebra/n:matmul_00",
@@ -2361,7 +2383,8 @@
         "kind": "bool",
         "display": "PASS",
         "value": true
-      }
+      },
+      "presentation": []
     },
     {
       "id": "p:linear_algebra/f:linear_algebra/n:matmul_11",
@@ -2402,7 +2425,8 @@
         "kind": "bool",
         "display": "PASS",
         "value": true
-      }
+      },
+      "presentation": []
     },
     {
       "id": "p:linear_algebra/f:linear_algebra/n:transpose_20",
@@ -2443,7 +2467,8 @@
         "kind": "bool",
         "display": "PASS",
         "value": true
-      }
+      },
+      "presentation": []
     },
     {
       "id": "p:linear_algebra/f:linear_algebra/n:trace_result",
@@ -2484,7 +2509,8 @@
         "kind": "bool",
         "display": "PASS",
         "value": true
-      }
+      },
+      "presentation": []
     },
     {
       "id": "p:linear_algebra/f:linear_algebra/n:norm_result",
@@ -2525,7 +2551,8 @@
         "kind": "bool",
         "display": "PASS",
         "value": true
-      }
+      },
+      "presentation": []
     },
     {
       "id": "p:linear_algebra/f:linear_algebra/n:cross_z",
@@ -2566,7 +2593,8 @@
         "kind": "bool",
         "display": "PASS",
         "value": true
-      }
+      },
+      "presentation": []
     },
     {
       "id": "p:linear_algebra/f:linear_algebra/n:outer_12",
@@ -2607,7 +2635,8 @@
         "kind": "bool",
         "display": "PASS",
         "value": true
-      }
+      },
+      "presentation": []
     },
     {
       "id": "p:linear_algebra/f:linear_algebra/n:solve_0",
@@ -2648,7 +2677,8 @@
         "kind": "bool",
         "display": "PASS",
         "value": true
-      }
+      },
+      "presentation": []
     },
     {
       "id": "p:linear_algebra/f:linear_algebra/n:solve_1",
@@ -2689,7 +2719,8 @@
         "kind": "bool",
         "display": "PASS",
         "value": true
-      }
+      },
+      "presentation": []
     },
     {
       "id": "p:linear_algebra/f:linear_algebra/n:inverse_result",
@@ -2730,7 +2761,8 @@
         "kind": "bool",
         "display": "PASS",
         "value": true
-      }
+      },
+      "presentation": []
     },
     {
       "id": "p:linear_algebra/f:linear_algebra/n:determinant_result",
@@ -2771,7 +2803,8 @@
         "kind": "bool",
         "display": "PASS",
         "value": true
-      }
+      },
+      "presentation": []
     }
   ]
 }

@@ -236,7 +236,8 @@ pub enum EvaluateViewOutcome {
     BindingErrors { errors: Vec<BindingErrorView> },
     /// The evaluator failed as a whole.
     EvalError { message: String },
-    /// The project has no view, or a value could not be displayed.
+    /// The project was prepared without its view, or its view could not be
+    /// projected.
     Unavailable { message: String },
 }
 
@@ -438,13 +439,9 @@ impl PreparedPlayground {
         match self.evaluate_browser_result(bindings) {
             Ok(result) => {
                 let mut projection = projection.clone();
-                match projection.attach_evaluation(&result) {
-                    Ok(()) => EvaluateViewOutcome::Evaluated {
-                        view: projection.into_model(),
-                    },
-                    Err(error) => EvaluateViewOutcome::Unavailable {
-                        message: error.to_string(),
-                    },
+                projection.attach_evaluation(&result);
+                EvaluateViewOutcome::Evaluated {
+                    view: projection.into_model(),
                 }
             }
             Err(EvaluationFailure::BindingErrors(errors)) => {

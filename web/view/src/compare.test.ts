@@ -23,6 +23,7 @@ function node(
     label: id,
     origin: { kind: "local" },
     element: "quantity",
+    presentation: [],
     source: null,
     value,
     ...extra,

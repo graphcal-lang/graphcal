@@ -1032,17 +1032,31 @@ fn run_view(file: &Path, project_root: Option<&Path>) {
         }
         let prepared = checked.prepare_with_host_fns(&host_fns)?;
         let evaluated = prepared.evaluate(&prepared.binding_builder().finish()?)?;
-        projection.attach_evaluation(&evaluated)?;
+        projection.attach_evaluation(&evaluated);
         Ok(projection.into_model())
     })();
     match outcome {
-        Ok(view) => match serde_json::to_string_pretty(&view) {
-            Ok(json) => println!("{json}"),
-            Err(error) => {
-                eprintln!("JSON serialization error: {error}");
-                process::exit(2);
+        Ok(view) => {
+            match serde_json::to_string_pretty(&view) {
+                Ok(json) => println!("{json}"),
+                Err(error) => {
+                    eprintln!("JSON serialization error: {error}");
+                    process::exit(2);
+                }
             }
-        },
+            // As `graphcal eval` does: a value shown in SI because its display
+            // unit failed is reported, and the run fails.
+            let mut presentation_failed = false;
+            for node in &view.nodes {
+                for problem in &node.presentation {
+                    eprintln!("presentation: {}: {problem}", node.label);
+                    presentation_failed = true;
+                }
+            }
+            if presentation_failed {
+                process::exit(1);
+            }
+        }
         Err(ViewFailure::Compile(error)) => {
             eprintln!("{:?}", miette::Report::new(error));
             process::exit(2);

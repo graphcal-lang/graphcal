@@ -60,6 +60,12 @@ function renderHead(column: Column, folded = false): HTMLElement {
     note.title = node.doc ?? "";
     title.append(note);
   }
+  // A display unit that could not be applied: the value is shown in SI.
+  if (node.presentation.length > 0) {
+    const warn = el("span", "col-presentation", "⚠");
+    warn.title = node.presentation.join("\n");
+    title.append(warn);
+  }
   head.append(title);
   const meta = el("div", "col-meta");
   if (node.dimension !== null) {

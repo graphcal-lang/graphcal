@@ -1,138 +1,132 @@
-//! Evaluated values shaped for the view: numbers in their display unit,
-//! labels, and nested entries per axis.
+//! Evaluated values shaped for the view: numbers in the unit `graphcal eval`
+//! shows them in, labels, and nested entries per axis.
 
-use std::collections::HashMap;
-
-use graphcal_compiler::dimension::Dimension;
-use graphcal_compiler::ir::prelude_definitions::{PreludeDefinitionError, prelude_definitions};
-use graphcal_compiler::semantic::unit_scale::PositiveFiniteScale;
 use graphcal_eval::eval::{
-    DisplayProjectionError, KeyRendering, RenderContext, UnitLabel, Value, format_number,
-    quantity_display_value,
+    KeyRendering, RenderContext, UnitLabel, Value, format_number, quantity_display_value,
 };
 
 use super::model::{ViewEntry, ViewValue};
 
-/// The unit a quantity without an explicit display unit is shown in: the
-/// prelude's one coherent (scale 1) unit of its dimension, such as `W` for
-/// `Power`, when exactly one exists. The SI value is unchanged either way.
-#[derive(Debug, Clone)]
-pub(super) struct CoherentUnits {
-    by_dimension: HashMap<Dimension, Option<String>>,
-}
-
-impl CoherentUnits {
-    /// Index the prelude's static units by dimension.
-    ///
-    /// # Errors
-    ///
-    /// Returns the prelude construction failure, a compiler bug.
-    pub(super) fn from_prelude() -> Result<Self, PreludeDefinitionError> {
-        let prelude = prelude_definitions()?;
-        let mut by_dimension = HashMap::<Dimension, Option<String>>::new();
-        for (name, info) in prelude.units() {
-            let coherent = info.scale.static_scale() == Some(PositiveFiniteScale::ONE);
-            if !coherent || info.dimension.is_dimensionless() {
-                continue;
-            }
-            by_dimension
-                .entry(info.dimension.clone())
-                .and_modify(|unit| *unit = None)
-                .or_insert_with(|| Some(name.as_str().to_string()));
-        }
-        Ok(Self { by_dimension })
-    }
-
-    /// The coherent prelude unit of `dimension`, if it is unambiguous.
-    pub(super) fn of(&self, dimension: &Dimension) -> Option<&str> {
-        self.by_dimension.get(dimension)?.as_deref()
-    }
-}
-
-/// Project one evaluated value for the view.
+/// Project one evaluated value for the view, by the rule `graphcal eval`
+/// follows: a quantity in its display unit, else in the default label of its
+/// dimension (`m^2*kg/s^2` for a torque).
 ///
-/// # Errors
-///
-/// Returns a display-unit projection failure (non-finite or underflowing
-/// conversion) for the first leaf that cannot be shown.
+/// A leaf that cannot be shown in its display unit is shown in SI instead,
+/// as `graphcal eval` does, and the failure is added to `problems`, prefixed
+/// with the entry keys of the leaf (`[#2]: …`).
 pub(super) fn view_value(
     value: &Value,
     render: &RenderContext,
-    units: &CoherentUnits,
-) -> Result<ViewValue, DisplayProjectionError> {
+    problems: &mut Vec<String>,
+) -> ViewValue {
+    leaf_or_entries(value, render, "", problems)
+}
+
+fn leaf_or_entries(
+    value: &Value,
+    render: &RenderContext,
+    path: &str,
+    problems: &mut Vec<String>,
+) -> ViewValue {
     match value {
         Value::Quantity {
             si_value,
-            dimension,
             display_unit,
+            ..
         } => {
-            let (magnitude, unit) = match display_unit {
-                Some(display_unit) => (
-                    quantity_display_value(*si_value, Some(display_unit))?,
-                    Some(display_unit.label.clone()),
-                ),
-                None => (
-                    si_value.get(),
-                    units
-                        .of(dimension)
-                        .map(str::to_string)
-                        .or_else(|| value.display_label(render)),
-                ),
-            };
+            let (magnitude, unit) = display_unit.as_ref().map_or_else(
+                || (si_value.get(), value.display_label(render)),
+                |display_unit| match quantity_display_value(*si_value, Some(display_unit)) {
+                    Ok(magnitude) => (magnitude, Some(display_unit.label.clone())),
+                    // A failed display unit falls back to SI, labelled by dimension.
+                    Err(error) => {
+                        problems.push(problem(path, &error));
+                        (si_value.get(), si_label(value, render))
+                    }
+                },
+            );
             let magnitude = format_number(magnitude);
             let display = unit
                 .as_ref()
                 .map_or_else(|| magnitude.clone(), |unit| format!("{magnitude} {unit}"));
-            Ok(ViewValue::Quantity {
+            ViewValue::Quantity {
                 display,
                 magnitude,
                 si_value: si_value.get(),
                 unit,
-            })
+            }
         }
-        Value::Int(int) => Ok(ViewValue::Int {
+        Value::Int(int) => ViewValue::Int {
             display: int.to_string(),
-        }),
-        Value::Bool(bool) => Ok(ViewValue::Bool {
+        },
+        Value::Bool(bool) => ViewValue::Bool {
             display: bool.to_string(),
             value: *bool,
-        }),
+        },
         Value::Key(key) => match KeyRendering::of(key) {
             KeyRendering::Label {
                 index_name,
                 variant,
-            } => Ok(ViewValue::Label {
+            } => ViewValue::Label {
                 display: variant.to_string(),
                 index: index_name.to_string(),
                 variant: variant.to_string(),
-            }),
-            KeyRendering::Position(position) => Ok(ViewValue::Text {
+            },
+            KeyRendering::Position(position) => ViewValue::Text {
                 display: position.to_string(),
-            }),
-            KeyRendering::Coordinate(quantity) => view_value(&quantity, render, units),
+            },
+            KeyRendering::Coordinate(quantity) => {
+                leaf_or_entries(&quantity, render, path, problems)
+            }
         },
         Value::Indexed {
             index_name,
             entries,
             ..
-        } => Ok(ViewValue::Indexed {
+        } => ViewValue::Indexed {
             display: format!("[{index_name}]"),
             index: index_name.to_string(),
             entries: entries
                 .iter()
-                .map(|(key, entry)| {
-                    view_value(entry, render, units).map(|projected| ViewEntry {
-                        key: key.to_string(),
-                        value: projected,
-                    })
+                .map(|(key, entry)| ViewEntry {
+                    key: key.to_string(),
+                    value: leaf_or_entries(entry, render, &format!("{path}[{key}]"), problems),
                 })
-                .collect::<Result<Vec<_>, _>>()?,
-        }),
-        Value::Complex { .. } | Value::Struct { .. } | Value::Datetime { .. } => {
-            Ok(ViewValue::Text {
-                display: value.format_display(render, UnitLabel::Inline)?,
-            })
+                .collect(),
+        },
+        Value::Complex { .. } | Value::Struct { .. } | Value::Datetime { .. } => ViewValue::Text {
+            display: value
+                .format_display(render, UnitLabel::Inline)
+                .unwrap_or_else(|error| {
+                    problems.push(problem(path, &error));
+                    "(not displayable)".to_string()
+                }),
+        },
+    }
+}
+
+/// The SI label of a quantity's dimension, ignoring its display unit.
+fn si_label(value: &Value, render: &RenderContext) -> Option<String> {
+    match value {
+        Value::Quantity {
+            si_value,
+            dimension,
+            ..
+        } => Value::Quantity {
+            si_value: *si_value,
+            dimension: dimension.clone(),
+            display_unit: None,
         }
+        .display_label(render),
+        _ => None,
+    }
+}
+
+fn problem(path: &str, error: &impl std::fmt::Display) -> String {
+    if path.is_empty() {
+        format!("{error} (SI value retained)")
+    } else {
+        format!("{path}: {error} (SI value retained)")
     }
 }
 

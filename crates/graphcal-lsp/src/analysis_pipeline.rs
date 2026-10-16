@@ -437,9 +437,9 @@ pub fn run_analysis_with_cancellation(
                     cancellation,
                 )?;
                 if let (Some(projection), Some(result)) = (view.as_mut(), &evaluated.result) {
-                    // A value that cannot be displayed leaves its node empty;
-                    // the structure and the other values still serve the view.
-                    let _ = projection.attach_evaluation(result);
+                    // A value its display unit cannot show is shown in SI, and
+                    // its node says why.
+                    projection.attach_evaluation(result);
                 }
                 (evaluated.diagnostics, evaluated.values)
             };

@@ -6,7 +6,6 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use graphcal_compiler::dag_id::DagId;
 use graphcal_compiler::declaration_category::ValueDeclCategory;
 use graphcal_compiler::ir::instance::{ExposedValueBody, InstanceProjection, ProjectionExposure};
-use graphcal_compiler::ir::prelude_definitions::PreludeDefinitionError;
 use graphcal_compiler::resolved_name::ResolvedDeclName;
 use graphcal_compiler::semantic::index_def::{FiniteIndex, IndexDef};
 use graphcal_compiler::source_registry::ForeignSourceId;
@@ -20,13 +19,11 @@ use graphcal_compiler::tir::typed::declaration_view::{
     DeclarationKind, DeclarationView, ValueDeclaration,
 };
 use graphcal_compiler::tir::typed::{
-    CheckedDag, CheckedDeclType, CheckedTir, ResolvedDeclType, ResolvedDim, ResolvedIndex,
-    ResolvedValueType,
+    CheckedDag, CheckedDeclType, CheckedTir, ResolvedIndex, ResolvedValueType,
 };
 use graphcal_eval::eval::public_projection::coordinate_entry_display_names;
-use graphcal_eval::eval::{
-    AssertResult, DisplayProjectionError, EvalResult, OutputUnavailable, Value,
-};
+use graphcal_eval::eval::{AssertResult, EvalResult, OutputUnavailable, Value};
+use graphcal_eval::presentation_evidence::PresentationPathPart;
 use thiserror::Error;
 
 use crate::graph_ir::{GraphClusterKind, GraphIr, GraphProjectionError, project_tir};
@@ -38,7 +35,7 @@ use super::model::{
     ViewCell, ViewElement, ViewIndex, ViewIndexEntry, ViewInstance, ViewModel, ViewModule,
     ViewNode, ViewNodeKind, ViewOrigin, ViewSource, ViewValue,
 };
-use super::value::{CoherentUnits, common_unit, view_value};
+use super::value::{common_unit, view_value};
 use super::wire_key::{ViewIndexId, ViewNodeId};
 
 /// Why a checked project could not be projected into a view model.
@@ -47,22 +44,12 @@ pub enum ViewProjectionError {
     /// The dependency graph could not be projected.
     #[error(transparent)]
     Graph(#[from] GraphProjectionError),
-    /// The built-in prelude failed to construct (a compiler bug).
-    #[error(transparent)]
-    Prelude(#[from] PreludeDefinitionError),
     /// A loaded file's source id does not resolve in the project's registry.
     #[error(transparent)]
     ForeignSource(#[from] ForeignSourceId),
     /// A declaration selected for the view is neither a value nor an assertion.
     #[error("`{declaration}` is not a value or assertion declaration")]
     NotPresentable { declaration: ResolvedDeclName },
-    /// A value could not be shown in its display unit.
-    #[error("value of `{declaration}` cannot be displayed: {error}")]
-    Display {
-        declaration: ResolvedDeclName,
-        #[source]
-        error: DisplayProjectionError,
-    },
     /// Two nodes of the model would share one id.
     #[error("two view nodes share the id `{id}`")]
     DuplicateNodeId { id: ViewNodeId },
@@ -149,7 +136,6 @@ pub fn project_view(
             nodes,
         },
         bindings,
-        units: scope.units,
     })
 }
 
@@ -159,7 +145,6 @@ pub struct ViewProjection {
     model: ViewModel,
     /// Where each node's value comes from, parallel to `model.nodes`.
     bindings: Vec<ValueBinding>,
-    units: CoherentUnits,
 }
 
 impl ViewProjection {
@@ -179,35 +164,26 @@ impl ViewProjection {
     /// nodes. A node whose declaration the evaluation does not report, or
     /// reports as failed or incomplete, keeps no value.
     ///
-    /// # Errors
-    ///
-    /// Returns [`ViewProjectionError::Display`] when a value cannot be shown
-    /// in its display unit; the nodes before it keep their values.
-    pub fn attach_evaluation(
-        &mut self,
-        evaluation: &EvalResult,
-    ) -> Result<(), ViewProjectionError> {
+    /// A value that cannot be shown in its display unit is shown in SI, as
+    /// `graphcal eval` shows it, and its node lists why in `presentation`,
+    /// together with the presentation diagnostics the evaluation reported
+    /// for its declaration.
+    pub fn attach_evaluation(&mut self, evaluation: &EvalResult) {
         let values = EvaluatedValues::new(evaluation);
         for (node, binding) in self.model.nodes.iter_mut().zip(&self.bindings) {
+            let mut problems = values.presentation(&binding.declaration);
             let value = match binding.kind {
                 ValueBindingKind::Assertion => values
                     .assertion(&binding.declaration)
                     .and_then(assertion_value),
                 ValueBindingKind::Value => values
                     .value(&binding.declaration)
-                    .map(|value| view_value(value, &evaluation.render, &self.units))
-                    .transpose()
-                    .map_err(|error| ViewProjectionError::Display {
-                        declaration: binding.declaration.clone(),
-                        error,
-                    })?,
+                    .map(|value| view_value(value, &evaluation.render, &mut problems)),
             };
-            if let Some(value) = value {
-                node.unit = common_unit(&value);
-                node.value = Some(value);
-            }
+            node.unit = value.as_ref().and_then(common_unit);
+            node.value = value;
+            node.presentation = problems;
         }
-        Ok(())
     }
 }
 
@@ -234,7 +210,6 @@ struct Scope<'p> {
     /// Semantic provenance of each projected DAG.
     clusters: HashMap<&'p DagId, &'p GraphClusterKind>,
     sources: SourceFiles<'p>,
-    units: CoherentUnits,
 }
 
 impl<'p> Scope<'p> {
@@ -253,7 +228,6 @@ impl<'p> Scope<'p> {
                 .map(|cluster| (cluster.dag_id(), cluster.kind()))
                 .collect(),
             sources: SourceFiles::new(project, checked)?,
-            units: CoherentUnits::from_prelude()?,
         })
     }
 
@@ -592,16 +566,17 @@ impl NodeBuilder<'_> {
 
     fn node(&mut self, input: NodeInput<'_>) -> Result<BuiltNode, ViewProjectionError> {
         let identity = input.declaration.identity();
-        let (kind, span, definition, doc) = match input.declaration.kind() {
+        let (kind, span, definition, doc, annotation) = match input.declaration.kind() {
             DeclarationKind::Value(ValueDeclaration {
                 category,
                 span,
                 definition,
                 doc,
+                annotation,
                 ..
-            }) => (kind_of(category), span, definition, doc),
+            }) => (kind_of(category), span, definition, doc, Some(annotation)),
             DeclarationKind::Assert { span, body, doc } => {
-                (ViewNodeKind::Assert, span, Some(body), doc)
+                (ViewNodeKind::Assert, span, Some(body), doc, None)
             }
             DeclarationKind::Plot { .. }
             | DeclarationKind::Figure { .. }
@@ -626,12 +601,15 @@ impl NodeBuilder<'_> {
                 })
                 .collect()
         });
-        // An assertion is a `Bool` check; it declares no type of its own.
+        // An assertion is a `Bool` check; it declares no type of its own. A
+        // value's element type is shown as its declaration spells it.
         let dimension = match kind {
             ViewNodeKind::Assert => Some("Bool".to_string()),
-            _ => decl_type.map(|ty| ty.element().format(self.scope.tir.registry())),
+            _ => annotation
+                .zip(input.file)
+                .and_then(|(annotation, file)| slice(file.text, annotation.element_span()))
+                .or_else(|| decl_type.map(|ty| ty.element().format(self.scope.tir.registry()))),
         };
-        let unit = declared_unit(decl_type, &self.scope.units);
 
         // The definition is the source range after `=`, parentheses included.
         let expr = input
@@ -683,7 +661,7 @@ impl NodeBuilder<'_> {
             element,
             axes,
             dimension,
-            unit,
+            unit: None,
             // A parameter is an input even when its module exposes it.
             is_public: input.is_public && kind != ViewNodeKind::Param,
             deps: input.deps,
@@ -692,6 +670,7 @@ impl NodeBuilder<'_> {
             source,
             doc: doc.map(str::to_string),
             value: None,
+            presentation: Vec::new(),
         };
         Ok((node, binding))
     }
@@ -842,6 +821,33 @@ impl<'e> EvaluatedValues<'e> {
         self.by_identity.get(id)?.as_ref().ok()
     }
 
+    /// The display failures the evaluation reported for the value of `id`
+    /// (plot channels aside), each with the path of the leaf it concerns.
+    fn presentation(&self, id: &ResolvedDeclName) -> Vec<String> {
+        self.result
+            .presentation_diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.declaration == *id && diagnostic.channel.is_none())
+            .map(|diagnostic| {
+                let path: String = diagnostic
+                    .detail
+                    .path
+                    .iter()
+                    .map(|part| match part {
+                        PresentationPathPart::Field(field) => format!(".{field}"),
+                        PresentationPathPart::Index(index) => format!("[{index}]"),
+                    })
+                    .collect();
+                let failure = &diagnostic.detail.failure;
+                if path.is_empty() {
+                    format!("{failure} (SI value retained)")
+                } else {
+                    format!("{path}: {failure} (SI value retained)")
+                }
+            })
+            .collect()
+    }
+
     /// The outcome of a root-owned assertion.
     fn assertion(&self, id: &ResolvedDeclName) -> Option<&'e AssertResult> {
         let name = ScopedName::local(id.leaf().clone());
@@ -918,16 +924,6 @@ struct SourceFile<'p> {
     name: &'p str,
     text: &'p str,
     lines: &'p Utf16LineIndex<'p>,
-}
-
-/// The unit an unevaluated quantity declaration would be shown in.
-fn declared_unit(decl_type: Option<&ResolvedDeclType>, units: &CoherentUnits) -> Option<String> {
-    match decl_type?.element() {
-        ResolvedValueType::Quantity(ResolvedDim::Concrete(dimension)) => {
-            units.of(dimension).map(str::to_string)
-        }
-        _ => None,
-    }
 }
 
 fn assertion_value(outcome: &AssertResult) -> Option<ViewValue> {

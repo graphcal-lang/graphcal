@@ -31,7 +31,7 @@ fn view_of(root: &Path, file: &str, evaluate: bool) -> ViewModel {
     let evaluated = prepared
         .evaluate(&prepared.binding_builder().finish().unwrap())
         .unwrap();
-    projection.attach_evaluation(&evaluated).unwrap();
+    projection.attach_evaluation(&evaluated);
     projection.into_model()
 }
 
@@ -145,11 +145,12 @@ fn power_max_structure_and_values() {
         p_required.expr.as_deref(),
         Some("@p_total * (1.0 + @margin)")
     );
-    assert_eq!(p_required.unit.as_deref(), Some("W"));
+    // No display unit: shown in the SI label, as `graphcal eval` shows it.
+    assert_eq!(p_required.unit.as_deref(), Some("m^2*kg/s^3"));
     let Some(ViewValue::Quantity { unit, .. }) = &p_required.value else {
         panic!("p_required has no quantity value");
     };
-    assert_eq!(unit.as_deref(), Some("W"));
+    assert_eq!(unit.as_deref(), Some("m^2*kg/s^3"));
 }
 
 #[test]
@@ -234,7 +235,9 @@ fn structure_only_without_evaluation() {
     let view = view_of(&root, "src/power_project/power_max.gcl", false);
     assert!(view.nodes.iter().all(|node| node.value.is_none()));
     assert!(!node(&view, "margin").is_public);
-    assert_eq!(node(&view, "p_total").unit.as_deref(), Some("W"));
+    // Units come from values: without an evaluation there is none.
+    assert_eq!(node(&view, "p_total").unit, None);
+    assert_eq!(node(&view, "p_total").dimension.as_deref(), Some("Power"));
 }
 
 #[test]
@@ -292,7 +295,7 @@ fn evaluated_view_of_source(source: &str) -> ViewModel {
     let evaluated = prepared
         .evaluate(&prepared.binding_builder().finish().unwrap())
         .unwrap();
-    projection.attach_evaluation(&evaluated).unwrap();
+    projection.attach_evaluation(&evaluated);
     projection.into_model()
 }
 
@@ -429,6 +432,7 @@ fn bare_node(id: &ViewNodeId, deps: &[&ViewNodeId]) -> ViewNode {
         doc: None,
         source: None,
         value: None,
+        presentation: Vec::new(),
     }
 }
 
@@ -613,4 +617,53 @@ param t: Dimensionless[I] = table[I] {
     assert!(range("y").is_none());
     assert!(range("t").is_some());
     assert!(node(&view, "n").source.as_ref().unwrap().cells.is_empty());
+}
+
+#[test]
+fn dimensions_and_units_follow_the_declaration_and_graphcal_eval() {
+    // The reproduction of #2070: a torque was shown in joules.
+    let view = evaluated_view_of_source(
+        "\
+dim Torque = Force * Length;
+node t: Torque = 2.0 N * 1.5 m;
+node r: Dimensionless / Time = 2.0 / 1.0 s;
+node d: Length = 2.0 km -> km;
+",
+    );
+    let shown = |label: &str| {
+        let node = node(&view, label);
+        (
+            node.dimension.clone().unwrap(),
+            display_of(&view, label).unwrap(),
+        )
+    };
+    assert_eq!(
+        shown("t"),
+        ("Torque".to_string(), "3 m^2*kg/s^2".to_string())
+    );
+    assert_eq!(
+        shown("r"),
+        ("Dimensionless / Time".to_string(), "2 s^-1".to_string())
+    );
+    assert_eq!(shown("d"), ("Length".to_string(), "2 km".to_string()));
+}
+
+#[test]
+fn a_value_its_display_unit_cannot_show_is_reported_on_its_own_node() {
+    // The reproduction of #2077: one failed display unit emptied every later
+    // node in the language server and failed `graphcal view` as a whole.
+    let view = evaluated_view_of_source(
+        "\
+node first: Dimensionless = 1.0;
+node huge: Length = 1.0e305 km -> mm;
+node last: Dimensionless = 2.0;
+",
+    );
+    assert_eq!(display_of(&view, "first").as_deref(), Some("1"));
+    assert_eq!(display_of(&view, "last").as_deref(), Some("2"));
+    assert_eq!(display_of(&view, "huge").as_deref(), Some("1e308 m"));
+    let problems = &node(&view, "huge").presentation;
+    assert_eq!(problems.len(), 1, "{problems:?}");
+    assert!(problems[0].contains("SI value retained"), "{problems:?}");
+    assert_eq!(node(&view, "first").presentation, Vec::<String>::new());
 }

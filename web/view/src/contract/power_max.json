@@ -89,7 +89,8 @@
         "magnitude": "0.2",
         "si_value": 0.2,
         "unit": null
-      }
+      },
+      "presentation": []
     },
     {
       "id": "p:power_project/f:src/f:power_project/f:power_max/n:p_budget",
@@ -107,7 +108,7 @@
       "element": "quantity",
       "axes": [],
       "dimension": "Power",
-      "unit": "W",
+      "unit": "m^2*kg/s^3",
       "pub": true,
       "deps": [],
       "expr": "if @p_sun_avail < @p_eclipse_avail { @p_sun_avail } else { @p_eclipse_avail }",
@@ -130,11 +131,12 @@
       },
       "value": {
         "kind": "quantity",
-        "display": "49.45164 W",
+        "display": "49.45164 m^2*kg/s^3",
         "magnitude": "49.45164",
         "si_value": 49.45163609525957,
-        "unit": "W"
-      }
+        "unit": "m^2*kg/s^3"
+      },
+      "presentation": []
     },
     {
       "id": "p:power_project/f:src/f:power_project/f:power_max/n:eta_dcdc",
@@ -175,7 +177,8 @@
         "magnitude": "0.9",
         "si_value": 0.9,
         "unit": null
-      }
+      },
+      "presentation": []
     },
     {
       "id": "p:power_project/f:src/f:power_project/f:power_max/n:p_unit",
@@ -319,7 +322,8 @@
             }
           }
         ]
-      }
+      },
+      "presentation": []
     },
     {
       "id": "p:power_project/f:src/f:power_project/f:power_max/n:duty",
@@ -716,7 +720,8 @@
             }
           }
         ]
-      }
+      },
+      "presentation": []
     },
     {
       "id": "p:power_project/f:src/f:power_project/f:power_max/n:p_avg",
@@ -733,7 +738,7 @@
         "p:power_project/f:src/f:power_project/f:components/n:Mode"
       ],
       "dimension": "Power",
-      "unit": "W",
+      "unit": "m^2*kg/s^3",
       "pub": false,
       "deps": [
         "p:power_project/f:src/f:power_project/f:power_max/n:duty",
@@ -773,30 +778,30 @@
                   "key": "Safe",
                   "value": {
                     "kind": "quantity",
-                    "display": "4 W",
+                    "display": "4 m^2*kg/s^3",
                     "magnitude": "4",
                     "si_value": 4.0,
-                    "unit": "W"
+                    "unit": "m^2*kg/s^3"
                   }
                 },
                 {
                   "key": "Nominal",
                   "value": {
                     "kind": "quantity",
-                    "display": "4 W",
+                    "display": "4 m^2*kg/s^3",
                     "magnitude": "4",
                     "si_value": 4.0,
-                    "unit": "W"
+                    "unit": "m^2*kg/s^3"
                   }
                 },
                 {
                   "key": "Science",
                   "value": {
                     "kind": "quantity",
-                    "display": "4 W",
+                    "display": "4 m^2*kg/s^3",
                     "magnitude": "4",
                     "si_value": 4.0,
-                    "unit": "W"
+                    "unit": "m^2*kg/s^3"
                   }
                 }
               ]
@@ -813,30 +818,30 @@
                   "key": "Safe",
                   "value": {
                     "kind": "quantity",
-                    "display": "1.2 W",
+                    "display": "1.2 m^2*kg/s^3",
                     "magnitude": "1.2",
                     "si_value": 1.2000000000000002,
-                    "unit": "W"
+                    "unit": "m^2*kg/s^3"
                   }
                 },
                 {
                   "key": "Nominal",
                   "value": {
                     "kind": "quantity",
-                    "display": "3.6 W",
+                    "display": "3.6 m^2*kg/s^3",
                     "magnitude": "3.6",
                     "si_value": 3.5999999999999996,
-                    "unit": "W"
+                    "unit": "m^2*kg/s^3"
                   }
                 },
                 {
                   "key": "Science",
                   "value": {
                     "kind": "quantity",
-                    "display": "9.6 W",
+                    "display": "9.6 m^2*kg/s^3",
                     "magnitude": "9.6",
                     "si_value": 9.600000000000001,
-                    "unit": "W"
+                    "unit": "m^2*kg/s^3"
                   }
                 }
               ]
@@ -853,30 +858,30 @@
                   "key": "Safe",
                   "value": {
                     "kind": "quantity",
-                    "display": "4.8 W",
+                    "display": "4.8 m^2*kg/s^3",
                     "magnitude": "4.8",
                     "si_value": 4.8,
-                    "unit": "W"
+                    "unit": "m^2*kg/s^3"
                   }
                 },
                 {
                   "key": "Nominal",
                   "value": {
                     "kind": "quantity",
-                    "display": "3.2 W",
+                    "display": "3.2 m^2*kg/s^3",
                     "magnitude": "3.2",
                     "si_value": 3.2,
-                    "unit": "W"
+                    "unit": "m^2*kg/s^3"
                   }
                 },
                 {
                   "key": "Science",
                   "value": {
                     "kind": "quantity",
-                    "display": "1.6 W",
+                    "display": "1.6 m^2*kg/s^3",
                     "magnitude": "1.6",
                     "si_value": 1.6,
-                    "unit": "W"
+                    "unit": "m^2*kg/s^3"
                   }
                 }
               ]
@@ -893,37 +898,38 @@
                   "key": "Safe",
                   "value": {
                     "kind": "quantity",
-                    "display": "0 W",
+                    "display": "0 m^2*kg/s^3",
                     "magnitude": "0",
                     "si_value": 0.0,
-                    "unit": "W"
+                    "unit": "m^2*kg/s^3"
                   }
                 },
                 {
                   "key": "Nominal",
                   "value": {
                     "kind": "quantity",
-                    "display": "10 W",
+                    "display": "10 m^2*kg/s^3",
                     "magnitude": "10",
                     "si_value": 10.0,
-                    "unit": "W"
+                    "unit": "m^2*kg/s^3"
                   }
                 },
                 {
                   "key": "Science",
                   "value": {
                     "kind": "quantity",
-                    "display": "20 W",
+                    "display": "20 m^2*kg/s^3",
                     "magnitude": "20",
                     "si_value": 20.0,
-                    "unit": "W"
+                    "unit": "m^2*kg/s^3"
                   }
                 }
               ]
             }
           }
         ]
-      }
+      },
+      "presentation": []
     },
     {
       "id": "p:power_project/f:src/f:power_project/f:power_max/n:p_bus",
@@ -940,7 +946,7 @@
         "p:power_project/f:src/f:power_project/f:components/n:Mode"
       ],
       "dimension": "Power",
-      "unit": "W",
+      "unit": "m^2*kg/s^3",
       "pub": false,
       "deps": [
         "p:power_project/f:src/f:power_project/f:power_max/n:eta_dcdc",
@@ -980,30 +986,30 @@
                   "key": "Safe",
                   "value": {
                     "kind": "quantity",
-                    "display": "4.444444 W",
+                    "display": "4.444444 m^2*kg/s^3",
                     "magnitude": "4.444444",
                     "si_value": 4.444444444444445,
-                    "unit": "W"
+                    "unit": "m^2*kg/s^3"
                   }
                 },
                 {
                   "key": "Nominal",
                   "value": {
                     "kind": "quantity",
-                    "display": "4.444444 W",
+                    "display": "4.444444 m^2*kg/s^3",
                     "magnitude": "4.444444",
                     "si_value": 4.444444444444445,
-                    "unit": "W"
+                    "unit": "m^2*kg/s^3"
                   }
                 },
                 {
                   "key": "Science",
                   "value": {
                     "kind": "quantity",
-                    "display": "4.444444 W",
+                    "display": "4.444444 m^2*kg/s^3",
                     "magnitude": "4.444444",
                     "si_value": 4.444444444444445,
-                    "unit": "W"
+                    "unit": "m^2*kg/s^3"
                   }
                 }
               ]
@@ -1020,30 +1026,30 @@
                   "key": "Safe",
                   "value": {
                     "kind": "quantity",
-                    "display": "1.333333 W",
+                    "display": "1.333333 m^2*kg/s^3",
                     "magnitude": "1.333333",
                     "si_value": 1.3333333333333335,
-                    "unit": "W"
+                    "unit": "m^2*kg/s^3"
                   }
                 },
                 {
                   "key": "Nominal",
                   "value": {
                     "kind": "quantity",
-                    "display": "4 W",
+                    "display": "4 m^2*kg/s^3",
                     "magnitude": "4",
                     "si_value": 3.9999999999999996,
-                    "unit": "W"
+                    "unit": "m^2*kg/s^3"
                   }
                 },
                 {
                   "key": "Science",
                   "value": {
                     "kind": "quantity",
-                    "display": "10.66667 W",
+                    "display": "10.66667 m^2*kg/s^3",
                     "magnitude": "10.66667",
                     "si_value": 10.666666666666668,
-                    "unit": "W"
+                    "unit": "m^2*kg/s^3"
                   }
                 }
               ]
@@ -1060,30 +1066,30 @@
                   "key": "Safe",
                   "value": {
                     "kind": "quantity",
-                    "display": "5.333333 W",
+                    "display": "5.333333 m^2*kg/s^3",
                     "magnitude": "5.333333",
                     "si_value": 5.333333333333333,
-                    "unit": "W"
+                    "unit": "m^2*kg/s^3"
                   }
                 },
                 {
                   "key": "Nominal",
                   "value": {
                     "kind": "quantity",
-                    "display": "3.555556 W",
+                    "display": "3.555556 m^2*kg/s^3",
                     "magnitude": "3.555556",
                     "si_value": 3.555555555555556,
-                    "unit": "W"
+                    "unit": "m^2*kg/s^3"
                   }
                 },
                 {
                   "key": "Science",
                   "value": {
                     "kind": "quantity",
-                    "display": "1.777778 W",
+                    "display": "1.777778 m^2*kg/s^3",
                     "magnitude": "1.777778",
                     "si_value": 1.777777777777778,
-                    "unit": "W"
+                    "unit": "m^2*kg/s^3"
                   }
                 }
               ]
@@ -1100,37 +1106,38 @@
                   "key": "Safe",
                   "value": {
                     "kind": "quantity",
-                    "display": "0 W",
+                    "display": "0 m^2*kg/s^3",
                     "magnitude": "0",
                     "si_value": 0.0,
-                    "unit": "W"
+                    "unit": "m^2*kg/s^3"
                   }
                 },
                 {
                   "key": "Nominal",
                   "value": {
                     "kind": "quantity",
-                    "display": "11.11111 W",
+                    "display": "11.11111 m^2*kg/s^3",
                     "magnitude": "11.11111",
                     "si_value": 11.11111111111111,
-                    "unit": "W"
+                    "unit": "m^2*kg/s^3"
                   }
                 },
                 {
                   "key": "Science",
                   "value": {
                     "kind": "quantity",
-                    "display": "22.22222 W",
+                    "display": "22.22222 m^2*kg/s^3",
                     "magnitude": "22.22222",
                     "si_value": 22.22222222222222,
-                    "unit": "W"
+                    "unit": "m^2*kg/s^3"
                   }
                 }
               ]
             }
           }
         ]
-      }
+      },
+      "presentation": []
     },
     {
       "id": "p:power_project/f:src/f:power_project/f:power_max/n:p_mode",
@@ -1146,7 +1153,7 @@
         "p:power_project/f:src/f:power_project/f:components/n:Mode"
       ],
       "dimension": "Power",
-      "unit": "W",
+      "unit": "m^2*kg/s^3",
       "pub": false,
       "deps": [
         "p:power_project/f:src/f:power_project/f:power_max/n:p_bus"
@@ -1178,34 +1185,35 @@
             "key": "Safe",
             "value": {
               "kind": "quantity",
-              "display": "11.11111 W",
+              "display": "11.11111 m^2*kg/s^3",
               "magnitude": "11.11111",
               "si_value": 11.11111111111111,
-              "unit": "W"
+              "unit": "m^2*kg/s^3"
             }
           },
           {
             "key": "Nominal",
             "value": {
               "kind": "quantity",
-              "display": "23.11111 W",
+              "display": "23.11111 m^2*kg/s^3",
               "magnitude": "23.11111",
               "si_value": 23.11111111111111,
-              "unit": "W"
+              "unit": "m^2*kg/s^3"
             }
           },
           {
             "key": "Science",
             "value": {
               "kind": "quantity",
-              "display": "39.11111 W",
+              "display": "39.11111 m^2*kg/s^3",
               "magnitude": "39.11111",
               "si_value": 39.111111111111114,
-              "unit": "W"
+              "unit": "m^2*kg/s^3"
             }
           }
         ]
-      }
+      },
+      "presentation": []
     },
     {
       "id": "p:power_project/f:src/f:power_project/f:power_max/n:p_peak",
@@ -1221,7 +1229,7 @@
         "p:power_project/f:src/f:power_project/f:components/n:Component"
       ],
       "dimension": "Power",
-      "unit": "W",
+      "unit": "m^2*kg/s^3",
       "pub": false,
       "deps": [
         "p:power_project/f:src/f:power_project/f:power_max/n:p_bus"
@@ -1253,44 +1261,45 @@
             "key": "Obc",
             "value": {
               "kind": "quantity",
-              "display": "4.444444 W",
+              "display": "4.444444 m^2*kg/s^3",
               "magnitude": "4.444444",
               "si_value": 4.444444444444445,
-              "unit": "W"
+              "unit": "m^2*kg/s^3"
             }
           },
           {
             "key": "Radio",
             "value": {
               "kind": "quantity",
-              "display": "10.66667 W",
+              "display": "10.66667 m^2*kg/s^3",
               "magnitude": "10.66667",
               "si_value": 10.666666666666668,
-              "unit": "W"
+              "unit": "m^2*kg/s^3"
             }
           },
           {
             "key": "Heater",
             "value": {
               "kind": "quantity",
-              "display": "5.333333 W",
+              "display": "5.333333 m^2*kg/s^3",
               "magnitude": "5.333333",
               "si_value": 5.333333333333333,
-              "unit": "W"
+              "unit": "m^2*kg/s^3"
             }
           },
           {
             "key": "Payload",
             "value": {
               "kind": "quantity",
-              "display": "22.22222 W",
+              "display": "22.22222 m^2*kg/s^3",
               "magnitude": "22.22222",
               "si_value": 22.22222222222222,
-              "unit": "W"
+              "unit": "m^2*kg/s^3"
             }
           }
         ]
-      }
+      },
+      "presentation": []
     },
     {
       "id": "p:power_project/f:src/f:power_project/f:power_max/n:p_total",
@@ -1304,7 +1313,7 @@
       "element": "quantity",
       "axes": [],
       "dimension": "Power",
-      "unit": "W",
+      "unit": "m^2*kg/s^3",
       "pub": false,
       "deps": [
         "p:power_project/f:src/f:power_project/f:power_max/n:p_mode"
@@ -1329,11 +1338,12 @@
       },
       "value": {
         "kind": "quantity",
-        "display": "39.11111 W",
+        "display": "39.11111 m^2*kg/s^3",
         "magnitude": "39.11111",
         "si_value": 39.111111111111114,
-        "unit": "W"
-      }
+        "unit": "m^2*kg/s^3"
+      },
+      "presentation": []
     },
     {
       "id": "p:power_project/f:src/f:power_project/f:power_max/n:p_mean",
@@ -1347,7 +1357,7 @@
       "element": "quantity",
       "axes": [],
       "dimension": "Power",
-      "unit": "W",
+      "unit": "m^2*kg/s^3",
       "pub": false,
       "deps": [
         "p:power_project/f:src/f:power_project/f:components/n:num",
@@ -1373,11 +1383,12 @@
       },
       "value": {
         "kind": "quantity",
-        "display": "9.777778 W",
+        "display": "9.777778 m^2*kg/s^3",
         "magnitude": "9.777778",
         "si_value": 9.777777777777779,
-        "unit": "W"
-      }
+        "unit": "m^2*kg/s^3"
+      },
+      "presentation": []
     },
     {
       "id": "p:power_project/f:src/f:power_project/f:power_max/n:p_required",
@@ -1391,7 +1402,7 @@
       "element": "quantity",
       "axes": [],
       "dimension": "Power",
-      "unit": "W",
+      "unit": "m^2*kg/s^3",
       "pub": true,
       "deps": [
         "p:power_project/f:src/f:power_project/f:power_max/n:margin",
@@ -1417,11 +1428,12 @@
       },
       "value": {
         "kind": "quantity",
-        "display": "46.93333 W",
+        "display": "46.93333 m^2*kg/s^3",
         "magnitude": "46.93333",
         "si_value": 46.93333333333334,
-        "unit": "W"
-      }
+        "unit": "m^2*kg/s^3"
+      },
+      "presentation": []
     },
     {
       "id": "p:power_project/f:src/f:power_project/f:power_max/n:heat_dcdc",
@@ -1435,7 +1447,7 @@
       "element": "quantity",
       "axes": [],
       "dimension": "Power",
-      "unit": "W",
+      "unit": "m^2*kg/s^3",
       "pub": true,
       "deps": [
         "p:power_project/f:src/f:power_project/f:power_max/n:eta_dcdc",
@@ -1461,11 +1473,12 @@
       },
       "value": {
         "kind": "quantity",
-        "display": "4.266667 W",
+        "display": "4.266667 m^2*kg/s^3",
         "magnitude": "4.266667",
         "si_value": 4.266666666666667,
-        "unit": "W"
-      }
+        "unit": "m^2*kg/s^3"
+      },
+      "presentation": []
     },
     {
       "id": "p:power_project/f:src/f:power_project/f:power_max/n:within_budget",
@@ -1507,7 +1520,8 @@
         "kind": "bool",
         "display": "PASS",
         "value": true
-      }
+      },
+      "presentation": []
     },
     {
       "id": "p:power_project/f:src/f:power_project/f:components/n:num",
@@ -1545,7 +1559,8 @@
       "value": {
         "kind": "int",
         "display": "4"
-      }
+      },
+      "presentation": []
     }
   ]
 }

@@ -127,6 +127,8 @@ export const viewNodeSchema = z.object({
     })
     .nullable(),
   value: valueSchema.nullable(),
+  /** Why parts of the value are shown in SI instead of their display unit. */
+  presentation: z.array(z.string()),
 });
 export type ViewNode = z.infer<typeof viewNodeSchema>;
 

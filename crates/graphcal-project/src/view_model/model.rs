@@ -120,10 +120,12 @@ pub struct ViewNode {
     pub element: ViewElement,
     /// Index axes, outermost first; empty for a scalar.
     pub axes: Vec<ViewIndexId>,
-    /// Declared element type, e.g. `Power`, `Dimensionless`, `Int`; absent
-    /// for an assertion.
+    /// The element type as the declaration spells it (`Torque`,
+    /// `Dimensionless / Time`, `Int`); `Bool` for an assertion.
     pub dimension: Option<String>,
-    /// The unit the values are shown in, when every value agrees on one.
+    /// The unit the values are shown in, when every value agrees on one:
+    /// the display unit, else the dimension's default label, as `graphcal
+    /// eval` shows it. Absent without an evaluation.
     pub unit: Option<String>,
     /// Whether the declaration is a public output of its module.
     #[serde(rename = "pub")]
@@ -142,6 +144,10 @@ pub struct ViewNode {
     pub source: Option<ViewSource>,
     /// The evaluated value, when available.
     pub value: Option<ViewValue>,
+    /// Why parts of the value are not shown as declared: a display unit
+    /// that could not be applied, so the SI value is shown instead. Empty
+    /// without an evaluation.
+    pub presentation: Vec<String>,
 }
 
 /// An include instance a node is read through.

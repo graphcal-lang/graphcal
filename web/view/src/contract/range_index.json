@@ -66,7 +66,8 @@
         "magnitude": "0.5",
         "si_value": 0.5,
         "unit": "Hz"
-      }
+      },
+      "presentation": []
     },
     {
       "id": "p:range_index/f:range_index/n:x0",
@@ -107,7 +108,8 @@
         "magnitude": "1",
         "si_value": 1.0,
         "unit": null
-      }
+      },
+      "presentation": []
     },
     {
       "id": "p:range_index/f:range_index/n:x",
@@ -183,7 +185,8 @@
             }
           }
         ]
-      }
+      },
+      "presentation": []
     }
   ]
 }

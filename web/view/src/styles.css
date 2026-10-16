@@ -609,6 +609,12 @@ body {
   font-size: 10px;
   font-weight: 400;
 }
+/* A value shown in SI because its display unit failed; the reasons are in the title. */
+.col-presentation {
+  color: #e06c6c;
+  font-size: 10px;
+  cursor: help;
+}
 .mark {
   color: var(--muted);
 }
