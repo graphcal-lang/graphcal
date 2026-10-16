@@ -188,9 +188,22 @@ function availableWidth(): number {
 /** A pinned pane gets a fixed budget, so its scalar boxes stack into a narrow column. */
 const PANE_WIDTH = 640;
 
+/**
+ * Set when a layout was asked for while the canvas was hidden (the code-only
+ * layout): nothing can be measured then, so it happens once the canvas shows.
+ */
+let layoutPending = false;
+
+/** Whether the sheets can be measured now; if not, they are laid out once the canvas shows. */
+function measurable(): boolean {
+  if (canvasEl.clientWidth > 0) return true;
+  layoutPending = true;
+  return false;
+}
+
 /** Lay out and draw every sheet; the camera stays where it is (measuring needs an unscaled stage). */
 function render(): void {
-  if (!ws) return;
+  if (!ws || !measurable()) return;
   camera.unscale();
   for (const s of ws.sheets) {
     s.layout = fit(s, s === mainSheet(ws) ? availableWidth() : PANE_WIDTH);
@@ -235,7 +248,7 @@ function foldToFit(s: Sheet): void {
 
 /** Re-apply the mode from scratch: everything open, then scaled down in overview. */
 function refit(): void {
-  if (!ws) return;
+  if (!ws || !measurable()) return;
   for (const s of ws.sheets) s.folded = new Set();
   camera.reset();
   render();
@@ -292,6 +305,8 @@ function open(trail: string[]): void {
     return;
   }
   pendingOpen = null;
+  // Panes asked for on the last sheet are not this one's.
+  pendingPins.length = 0;
   ws = { sheets: [createSheet({ module, instance: null }, model)], trail, mode: ws?.mode ?? "fit" };
   placePanes(panesEl, ws);
   renderTrail(ws);
@@ -406,6 +421,8 @@ function select(s: Sheet, selection: Selection | null): void {
 panesEl.addEventListener("click", (event) => {
   if (!ws) return;
   const target = event.target as HTMLElement;
+  // A click in a cell being edited places the caret; it does not select again.
+  if (target.closest("input")) return;
   const s = sheetOf(target);
   if (!s) return;
   if (target.closest(".pane-file")) {
@@ -481,7 +498,7 @@ function applyEdit(
   const current = ws;
   if (!current) return Promise.resolve(false);
   const run = async (): Promise<boolean> => {
-    showNote("evaluating…", "busy");
+    const evaluated = formula.busy("evaluating…");
     const open = current.sheets.map((sheet) => sheet.model.module.id);
     let result;
     try {
@@ -490,13 +507,18 @@ function applyEdit(
       showNote(errorMessage(error));
       return false;
     }
-    if (ws !== current) return false;
+    // The code pane's text is based on the host's, whatever the workspace shows now.
+    if (result.ok) applied?.(result.source);
+    if (ws !== current) {
+      // The workspace changed meanwhile: its result is not shown, nor its progress.
+      evaluated();
+      return result.ok;
+    }
     if (!result.ok) {
       showNote(result.message);
       return false;
     }
     showNote(result.note);
-    applied?.(result.source);
     adoptModels(result.models);
     return true;
   };
@@ -572,8 +594,11 @@ formula.onClick(startFormulaEdit);
 const resetEl = button("bar-reset", "reset", "discard the what-if edits and reload");
 resetEl.hidden = true;
 resetEl.addEventListener("click", () => {
-  host.reset();
-  if (ws) open(ws.trail);
+  // After the edit in progress, which would otherwise land on the reset sources.
+  void evaluating.then(() => {
+    host.reset();
+    if (ws) open(ws.trail);
+  });
 });
 
 /** The edits as a patch on the clipboard: `git apply` or the VS Code extension puts them in the files. */
@@ -717,8 +742,8 @@ host.onNote((message: string | null, kind: NoteKind) => showNote(message, kind))
 if (host instanceof GitHubHost) mountGitHubBar(host, tokens, originEl, githubEl);
 // The canvas changes width with the window, the explorer, the code pane and
 // its split. Every such change asks for a relayout, which happens once per
-// frame and only when the width really changed; a hidden canvas (code-only
-// layout) is left as it is.
+// frame and only when the width really changed or a layout waits for the
+// canvas to show; a hidden canvas (code-only layout) is left as it is.
 let lastWidth = canvasEl.clientWidth;
 let relayoutQueued = false;
 function scheduleRelayout(): void {
@@ -729,24 +754,37 @@ function scheduleRelayout(): void {
   setTimeout(() => {
     relayoutQueued = false;
     const width = canvasEl.clientWidth;
-    if (width === 0 || width === lastWidth) return;
+    if (width === 0 || (width === lastWidth && !layoutPending)) return;
     lastWidth = width;
+    layoutPending = false;
     relayout();
   });
 }
 new ResizeObserver(scheduleRelayout).observe(canvasEl);
 window.addEventListener("resize", scheduleRelayout);
 
-document.addEventListener("keydown", (event) => {
-  if (event.key !== "Escape") return;
-  camera.closePopover();
-  menu.close();
-  for (const s of ws?.sheets ?? []) {
+/** Nothing selected and no rows picked, in any sheet. */
+function clearSelection(): void {
+  if (!ws) return;
+  for (const s of ws.sheets) {
     if (s.picked) {
       s.picked = null;
       applyPicked(s);
     }
   }
+  select(activeSheet(ws), null);
+}
+
+camera.onEmptyClick(clearSelection);
+
+document.addEventListener("keydown", (event) => {
+  if (event.key !== "Escape") return;
+  camera.closePopover();
+  menu.close();
+  // Escape in a text field (the code pane, the zoom percent) is that field's.
+  const target = event.target as HTMLElement | null;
+  if (target?.closest("input, textarea, [contenteditable]")) return;
+  clearSelection();
 });
 
 for (const modeButton of document.querySelectorAll<HTMLButtonElement>("[data-mode]")) {

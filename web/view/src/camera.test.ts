@@ -29,6 +29,20 @@ describe("camera", () => {
     });
   });
 
+  test("an empty or hidden canvas or stage keeps the full size, never NaN", () => {
+    expect(overviewOf({ width: 0, height: 0 }, { width: 0, height: 0 })).toEqual({
+      scale: 1,
+      x: 0,
+      y: 0,
+    });
+    expect(overviewOf({ width: 500, height: 500 }, { width: 0, height: 0 }).scale).toBe(1);
+    expect(overviewOf({ width: 0, height: 0 }, { width: 300, height: 300 }).scale).toBe(1);
+  });
+
+  test("a scale that is not a number is clamped to full size", () => {
+    expect(clampScale(Number.NaN)).toBe(1);
+  });
+
   test("a stage larger than the canvas shows its middle", () => {
     expect(centredOf({ width: 500, height: 500 }, { width: 900, height: 300 })).toEqual({
       scale: 1,

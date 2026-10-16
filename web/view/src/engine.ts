@@ -3,6 +3,7 @@
 // One projection = prepare the whole project from in-memory sources, evaluate
 // it, free it. Projects here are small, so this is milliseconds.
 import { z } from "zod";
+import { sharedUntilRejected } from "./memo.ts";
 import { projectionOf, type ViewProjection } from "./projection.ts";
 
 export interface ProjectFile {
@@ -91,27 +92,31 @@ export async function packageLayout(
     : { error: layout.message };
 }
 
-let loading: Promise<Engine> | null = null;
-
-/** Load the WASM bundle once; a missing bundle rejects with a readable hint. */
-export function loadEngine(): Promise<Engine> {
-  loading ??= (async () => {
-    const base = import.meta.env.BASE_URL;
-    const moduleUrl = new URL(`${base}pkg/graphcal_wasm.js`, location.origin).href;
-    const wasmUrl = new URL(`${base}pkg/graphcal_wasm_bg.wasm`, location.origin).href;
-    let engine: Engine;
-    try {
-      engine = (await import(/* @vite-ignore */ moduleUrl)) as Engine;
-    } catch {
-      throw new Error("engine not built: run `pnpm run engine` in web/view");
-    }
-    const response = await fetch(wasmUrl, { signal: AbortSignal.timeout(30_000) });
-    if (!response.ok) throw new Error(`engine download failed: HTTP ${response.status}`);
-    await engine.default({ module_or_path: await response.arrayBuffer() });
-    return engine;
-  })();
-  return loading;
-}
+/**
+ * Load the WASM bundle; it is loaded once, and a failed load is tried again
+ * on the next call. A failure says what the reader can do about it.
+ */
+export const loadEngine: () => Promise<Engine> = sharedUntilRejected(async () => {
+  const base = import.meta.env.BASE_URL;
+  const moduleUrl = new URL(`${base}pkg/graphcal_wasm.js`, location.origin).href;
+  const wasmUrl = new URL(`${base}pkg/graphcal_wasm_bg.wasm`, location.origin).href;
+  const unreachable = "could not load the Graphcal engine; check the connection and try again";
+  let engine: Engine;
+  let response: Response;
+  try {
+    engine = (await import(/* @vite-ignore */ moduleUrl)) as Engine;
+    response = await fetch(wasmUrl, { signal: AbortSignal.timeout(30_000) });
+  } catch {
+    throw new Error(unreachable);
+  }
+  if (!response.ok) {
+    throw new Error(
+      `could not download the Graphcal engine (HTTP ${response.status}); try again later`,
+    );
+  }
+  await engine.default({ module_or_path: await response.arrayBuffer() });
+  return engine;
+});
 
 /** Why a project could not be prepared, in one line. */
 function prepareFailure(failure: PrepareFailure): string {

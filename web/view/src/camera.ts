@@ -12,6 +12,7 @@ export const MIN_SCALE = 0.1;
 export const MAX_SCALE = 4;
 
 export function clampScale(scale: number): number {
+  if (!Number.isFinite(scale)) return 1;
   return Math.min(MAX_SCALE, Math.max(MIN_SCALE, scale));
 }
 
@@ -35,9 +36,15 @@ export interface Size {
   height: number;
 }
 
-/** The stage scaled down (never up) to fit the canvas, centred. */
+/**
+ * The stage scaled down (never up) to fit the canvas, centred. A canvas or
+ * stage with no size (hidden, or empty) has nothing to fit: full size.
+ */
 export function overviewOf(canvas: Size, content: Size): CameraState {
-  const scale = Math.min(1, canvas.width / content.width, canvas.height / content.height);
+  const sized = [canvas.width, canvas.height, content.width, content.height].every((n) => n > 0);
+  const scale = sized
+    ? Math.min(1, canvas.width / content.width, canvas.height / content.height)
+    : 1;
   return {
     scale,
     x: Math.max(0, (canvas.width - content.width * scale) / 2),
@@ -80,7 +87,8 @@ export class Camera {
   /** Whether the camera was moved by hand: no mode is active any more, the percent is. */
   manual = false;
   private readonly els: CameraElements;
-  private drag: { x: number; y: number } | null = null;
+  private drag: { x: number; y: number; moved: boolean } | null = null;
+  private readonly emptyClickListeners: (() => void)[] = [];
 
   constructor(els: CameraElements) {
     this.els = els;
@@ -134,6 +142,11 @@ export class Camera {
     this.moved(zoomAround(this.state, canvas.clientWidth / 2, canvas.clientHeight / 2, scale));
   }
 
+  /** A click on the canvas outside every box, label and pane head. */
+  onEmptyClick(listener: () => void): void {
+    this.emptyClickListeners.push(listener);
+  }
+
   /** Close the zoom popover. */
   closePopover(): void {
     this.els.popover.hidden = true;
@@ -165,7 +178,7 @@ export class Camera {
       // labels and pane headers never start a pan.
       const target = event.target as HTMLElement;
       if (event.button !== 0 || target.closest(".col, .ruler-inner, .pane-head")) return;
-      this.drag = { x: event.clientX, y: event.clientY };
+      this.drag = { x: event.clientX, y: event.clientY, moved: false };
       canvas.setPointerCapture(event.pointerId);
       canvas.classList.add("panning");
     });
@@ -174,10 +187,18 @@ export class Camera {
       const { x, y, scale } = this.state;
       const dx = event.clientX - this.drag.x;
       const dy = event.clientY - this.drag.y;
-      this.drag = { x: event.clientX, y: event.clientY };
+      if (dx === 0 && dy === 0) return;
+      this.drag = { x: event.clientX, y: event.clientY, moved: true };
       this.moved({ x: x + dx, y: y + dy, scale });
     });
     canvas.addEventListener("pointerup", () => {
+      const clicked = this.drag !== null && !this.drag.moved;
+      this.drag = null;
+      canvas.classList.remove("panning");
+      // Captured, the click reaches the canvas only: a press that did not pan is a click on nothing.
+      if (clicked) for (const listener of this.emptyClickListeners) listener();
+    });
+    canvas.addEventListener("pointercancel", () => {
       this.drag = null;
       canvas.classList.remove("panning");
     });

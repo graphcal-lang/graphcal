@@ -24,6 +24,8 @@ export interface FormulaLine {
 export class FormulaBar {
   private readonly el: HTMLElement;
   private readonly codeNote: HTMLElement;
+  /** Counts the notes shown, so progress clears only the note it showed. */
+  private notes = 0;
 
   constructor(el: HTMLElement, codeNote: HTMLElement) {
     this.el = el;
@@ -65,6 +67,7 @@ export class FormulaBar {
 
   /** A note in the bar and the code pane's head; null clears it. */
   note(message: string | null, kind: NoteKind = "error"): void {
+    this.notes += 1;
     this.el.querySelector(".formula-note")?.remove();
     this.codeNote.textContent = message ?? "";
     this.codeNote.className = `code-note ${message === null ? "" : kind}`;
@@ -73,6 +76,15 @@ export class FormulaBar {
     note.className = `formula-note ${kind}`;
     note.textContent = message;
     this.el.append(note);
+  }
+
+  /** Show progress; the returned function clears it, unless another note took its place. */
+  busy(message: string): () => void {
+    this.note(message, "busy");
+    const shown = this.notes;
+    return () => {
+      if (this.notes === shown) this.note(null);
+    };
   }
 
   /**
