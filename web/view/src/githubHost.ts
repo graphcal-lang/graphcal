@@ -11,7 +11,15 @@ import { parseViewModel, type ViewModel } from "./model.ts";
 import { ModelCache } from "./modelCache.ts";
 import { Project } from "./project.ts";
 import { planProject, ProjectPlanError } from "./repoProject.ts";
-import { formatRoute, parseRoute, type Route } from "./route.ts";
+import {
+  baseRef,
+  formatRoute,
+  headRef,
+  parseRoute,
+  sameRef,
+  withHead,
+  type Route,
+} from "./route.ts";
 
 /** What the shell shows about the host: the address being read and whether it is busy. */
 export interface GitHubState {
@@ -75,7 +83,7 @@ export class GitHubHost implements Host {
     this.route = route;
     this.tokens = tokens;
     this.github = new GitHub(tokens.get());
-    this.state = { route, ref: route.ref, loading: false, wantsToken: false };
+    this.state = { route, ref: headRef(route.at), loading: false, wantsToken: false };
     tokens.onChange(() => {
       this.github = new GitHub(tokens.get());
       void this.load();
@@ -92,11 +100,11 @@ export class GitHubHost implements Host {
     const generation = ++this.generation;
     const fresh = (): boolean => generation === this.generation;
     const { route } = this;
-    this.setState({ route, ref: route.ref, loading: true, wantsToken: false });
+    this.setState({ route, ref: headRef(route.at), loading: true, wantsToken: false });
     this.note(`reading ${route.owner}/${route.repo}…`, "busy");
     try {
       const info = await this.github.repo(route.owner, route.repo);
-      const ref = route.ref ?? info.defaultBranch;
+      const ref = headRef(route.at) ?? info.defaultBranch;
       if (!fresh()) return;
       this.setState({ ...this.state, ref });
       const tree = await this.github.tree(route.owner, route.repo, ref);
@@ -108,8 +116,8 @@ export class GitHubHost implements Host {
       const plan = planProject(tree.entries, route.path);
       this.compare = null;
       // The base tree is read alongside the head's files; its sources follow the head's sheet.
-      const baseTree =
-        route.base === null ? null : this.github.tree(route.owner, route.repo, route.base);
+      const base = baseRef(route.at);
+      const baseTree = base === null ? null : this.github.tree(route.owner, route.repo, base);
       const texts = await mapLimit(plan.files, 6, (file) =>
         this.github.file(route.owner, route.repo, ref, file.path),
       );
@@ -141,9 +149,9 @@ export class GitHubHost implements Host {
         for (const listener of this.modelListeners) listener([outcome.model]);
       }
       this.pristineModels = this.models.currentModels();
-      if (baseTree !== null && route.base !== null) {
-        this.note(`reading ${route.base}…`, "busy");
-        this.compare = await this.readBase(route.base, await baseTree, tree);
+      if (baseTree !== null && base !== null) {
+        this.note(`reading ${base}…`, "busy");
+        this.compare = await this.readBase(base, await baseTree, tree);
         if (!fresh()) return;
         this.note(null, "busy");
         // The sheets are drawn again with the changes marked.
@@ -262,8 +270,7 @@ export class GitHubHost implements Host {
     const same =
       next.owner === this.route.owner &&
       next.repo === this.route.repo &&
-      next.ref === this.route.ref &&
-      next.base === this.route.base;
+      sameRef(next.at, this.route.at);
     this.route = next;
     if (same && this.project) {
       const module = this.moduleOfPath(next.path);
@@ -298,7 +305,7 @@ export class GitHubHost implements Host {
       const path = this.root === "" ? file : `${this.root}/${file}`;
       changes.push({ path, before, after });
     }
-    const ref = this.state.ref ?? this.route.ref ?? "default branch";
+    const ref = this.state.ref ?? headRef(this.route.at) ?? "default branch";
     return patchOf(changes, `graphcal what-if: ${this.route.owner}/${this.route.repo} @ ${ref}`);
   }
 
@@ -345,7 +352,7 @@ export class GitHubHost implements Host {
 
   /** Read the same file at another ref: the address changes and the project is read again. */
   switchRef(ref: string): void {
-    location.hash = formatRoute({ ...this.route, ref });
+    location.hash = formatRoute({ ...this.route, at: withHead(this.route.at, ref) });
   }
 
   // ---- shell events ----
