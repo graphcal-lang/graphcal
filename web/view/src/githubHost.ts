@@ -3,7 +3,7 @@
 // engine. Nothing is written back; edits are a what-if over the sources read,
 // and `reset` returns to them. The address bar follows the shown file.
 import { patchOf, type FileChange } from "./diff.ts";
-import { evaluateView, loadEngine, viewOf } from "./engine.ts";
+import { evaluateView, loadEngine, packageLayout, projectLimits, viewOf } from "./engine.ts";
 import { GitHub, GitHubError, type Refs, type Tree } from "./github.ts";
 import type { Compare, EditResult, Host, NoteKind, SourceEdit } from "./host.ts";
 import type { TokenStore } from "./login.ts";
@@ -11,7 +11,13 @@ import { parseViewModel, type ViewModel } from "./model.ts";
 import { ModelCache } from "./modelCache.ts";
 import { Project } from "./project.ts";
 import { RefsCache } from "./refsCache.ts";
-import { planProject, ProjectPlanError } from "./repoProject.ts";
+import {
+  locateProject,
+  planProject,
+  ProjectPlanError,
+  type ProjectPlan,
+  type ProjectShape,
+} from "./repoProject.ts";
 import {
   baseRef,
   formatRoute,
@@ -48,6 +54,40 @@ async function mapLimit<T, R>(
   };
   await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
   return out;
+}
+
+/**
+ * The project around `path` in `tree`, planned within the engine's limits
+ * before its sources are read with `read`. A package's manifest is read
+ * first, for where its modules live, and not read again.
+ */
+async function readProject(
+  tree: Tree,
+  path: string,
+  read: (path: string) => Promise<string>,
+): Promise<{ plan: ProjectPlan; files: [string, string][] }> {
+  const location = locateProject(tree.entries, path);
+  const limits = await projectLimits();
+  let shape: ProjectShape;
+  let manifest: { path: string; text: string } | null = null;
+  if (location.kind === "package") {
+    manifest = { path: location.manifest, text: await read(location.manifest) };
+    const layout = await packageLayout(manifest.text);
+    if ("error" in layout) throw new ProjectPlanError(`${location.manifest}: ${layout.error}`);
+    shape = { ...location, layout: layout.layout };
+  } else {
+    shape = location;
+  }
+  const plan = planProject(tree.entries, shape, limits);
+  const texts = await mapLimit(plan.files, 6, (file) =>
+    manifest !== null && file.path === manifest.path
+      ? Promise.resolve(manifest.text)
+      : read(file.path),
+  );
+  return {
+    plan,
+    files: plan.files.map((file, i) => [file.relative, texts[i] ?? ""] as [string, string]),
+  };
 }
 
 function errorMessage(error: unknown): string {
@@ -115,18 +155,14 @@ export class GitHubHost implements Host {
         throw new Error("the repository is too large for GitHub to list in one request");
       }
       this.files = tree.entries.filter((e) => e.type === "blob").map((e) => e.path);
-      const plan = planProject(tree.entries, route.path);
       this.compare = null;
       // The base tree is read alongside the head's files; its sources follow the head's sheet.
       const base = baseRef(route.at);
       const baseTree = base === null ? null : this.github.tree(route.owner, route.repo, base);
-      const texts = await mapLimit(plan.files, 6, (file) =>
-        this.github.file(route.owner, route.repo, ref, file.path),
+      const { plan, files } = await readProject(tree, route.path, (path) =>
+        this.github.file(route.owner, route.repo, ref, path),
       );
       if (!fresh()) return;
-      const files = plan.files.map(
-        (file, i) => [file.relative, texts[i] ?? ""] as [string, string],
-      );
       this.root = plan.root;
       this.pristine = new Map(files);
       this.project = new Project(route.repo, files);
@@ -182,11 +218,10 @@ export class GitHubHost implements Host {
     const models = new Map<string, ViewModel>();
     const exists = baseTree.entries.some((e) => e.type === "blob" && e.path === route.path);
     if (exists) {
-      const plan = planProject(baseTree.entries, route.path);
-      const texts = await mapLimit(plan.files, 6, (file) =>
-        this.github.file(route.owner, route.repo, base, file.path),
+      const { plan, files } = await readProject(baseTree, route.path, (path) =>
+        this.github.file(route.owner, route.repo, base, path),
       );
-      plan.files.forEach((file, i) => sources.set(file.relative, texts[i] ?? ""));
+      for (const [file, text] of files) sources.set(file, text);
       const project = new Project(route.repo, sources);
       for (const file of plan.files) {
         if (!file.relative.endsWith(".gcl")) continue;

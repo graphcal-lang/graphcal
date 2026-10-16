@@ -19,6 +19,40 @@ pub const MAX_PLAYGROUND_PATH_BYTES: usize = 1024;
 /// Maximum aggregate UTF-8 byte length of the entry path and all file paths.
 pub const MAX_PLAYGROUND_PATH_TOTAL_BYTES: usize = 16 * 1024;
 
+/// The request limits above, for a browser host to check before it gathers
+/// a project (so they are defined here only).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct ProjectLimitsView {
+    /// [`MAX_PLAYGROUND_FILES`].
+    pub max_files: usize,
+    /// [`MAX_PLAYGROUND_FILE_BYTES`].
+    pub max_file_bytes: usize,
+    /// [`MAX_PLAYGROUND_CONTENT_BYTES`].
+    pub max_content_bytes: usize,
+    /// [`MAX_PLAYGROUND_PATH_BYTES`].
+    pub max_path_bytes: usize,
+    /// [`MAX_PLAYGROUND_PATH_TOTAL_BYTES`], counting the entry path and every file path.
+    pub max_path_total_bytes: usize,
+}
+
+/// The limits every playground request is validated against.
+pub const PROJECT_LIMITS: ProjectLimitsView = ProjectLimitsView {
+    max_files: MAX_PLAYGROUND_FILES,
+    max_file_bytes: MAX_PLAYGROUND_FILE_BYTES,
+    max_content_bytes: MAX_PLAYGROUND_CONTENT_BYTES,
+    max_path_bytes: MAX_PLAYGROUND_PATH_BYTES,
+    max_path_total_bytes: MAX_PLAYGROUND_PATH_TOTAL_BYTES,
+};
+
+/// JavaScript boundary: `projectLimits()`.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen::prelude::wasm_bindgen(js_name = projectLimits)]
+pub fn project_limits_js() -> Result<wasm_bindgen::JsValue, wasm_bindgen::JsValue> {
+    crate::output::to_js(&PROJECT_LIMITS).map_err(|error| {
+        wasm_bindgen::JsValue::from_str(&format!("could not serialize project limits: {error}"))
+    })
+}
+
 /// One browser-supplied project evaluation request.
 #[derive(Debug, Clone, Deserialize)]
 pub struct PlaygroundRequest {

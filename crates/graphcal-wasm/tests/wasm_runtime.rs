@@ -8,7 +8,8 @@
 
 use graphcal_wasm::{
     MAX_PLAYGROUND_FILE_BYTES, MAX_PLAYGROUND_FILES, MAX_PLAYGROUND_PATH_BYTES, PlaygroundFile,
-    PlaygroundOutcome, PlaygroundRequest, evaluate, evaluate_project_js,
+    PlaygroundOutcome, PlaygroundRequest, evaluate, evaluate_project_js, package_layout_js,
+    project_limits_js,
 };
 use js_sys::{Array, Function, JsString, Object, Proxy, Reflect};
 use wasm_bindgen::{JsCast, JsValue};
@@ -378,4 +379,33 @@ fn multi_file_project_evaluates_on_bare_wasm() {
     };
     assert_eq!(evaluation.values.len(), 2);
     assert!(!evaluation.has_errors);
+}
+
+#[wasm_bindgen_test]
+fn project_limits_reach_javascript_as_the_validated_constants() {
+    let limits = project_limits_js().unwrap();
+    let field = |name: &str| {
+        Reflect::get(&limits, &JsValue::from_str(name))
+            .unwrap()
+            .as_f64()
+            .unwrap()
+    };
+    let expected = |limit: usize| f64::from(u32::try_from(limit).unwrap());
+    assert_eq!(field("max_files"), expected(MAX_PLAYGROUND_FILES));
+    assert_eq!(field("max_file_bytes"), expected(MAX_PLAYGROUND_FILE_BYTES));
+    assert_eq!(field("max_path_bytes"), expected(MAX_PLAYGROUND_PATH_BYTES));
+}
+
+#[wasm_bindgen_test]
+fn package_layout_reaches_javascript_tagged() {
+    let layout = package_layout_js("[package]\nname = \"demo\"\n".to_string()).unwrap();
+    let field = |name: &str| {
+        Reflect::get(&layout, &JsValue::from_str(name))
+            .unwrap()
+            .as_string()
+            .unwrap()
+    };
+    assert_eq!(field("status"), "package");
+    assert_eq!(field("name"), "demo");
+    assert_eq!(field("source_dir"), "src");
 }

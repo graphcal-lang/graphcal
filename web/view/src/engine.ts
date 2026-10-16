@@ -118,6 +118,62 @@ interface Engine {
   default(options: { module_or_path: ArrayBuffer }): Promise<unknown>;
   /** `prepareProject` that also projects the entry file's view (the playground skips it). */
   prepareViewProject(request: { entry: string; files: ProjectFile[] }): Prepared;
+  /** The request limits the engine validates against. */
+  projectLimits(): unknown;
+  /** The package name and source directory a `graphcal.toml` declares. */
+  packageLayout(manifest: string): unknown;
+}
+
+const projectLimitsSchema = z.object({
+  max_files: z.number(),
+  max_file_bytes: z.number(),
+  max_content_bytes: z.number(),
+  max_path_bytes: z.number(),
+  max_path_total_bytes: z.number(),
+});
+
+/** What one request to the engine may hold (`crates/graphcal-wasm/src/project.rs`). */
+export interface ProjectLimits {
+  maxFiles: number;
+  maxFileBytes: number;
+  maxContentBytes: number;
+  maxPathBytes: number;
+  /** The entry path and every file path together. */
+  maxPathTotalBytes: number;
+}
+
+/** The engine's request limits. */
+export async function projectLimits(): Promise<ProjectLimits> {
+  const limits = projectLimitsSchema.parse((await loadEngine()).projectLimits());
+  return {
+    maxFiles: limits.max_files,
+    maxFileBytes: limits.max_file_bytes,
+    maxContentBytes: limits.max_content_bytes,
+    maxPathBytes: limits.max_path_bytes,
+    maxPathTotalBytes: limits.max_path_total_bytes,
+  };
+}
+
+const packageLayoutSchema = z.discriminatedUnion("status", [
+  z.object({ status: z.literal("package"), name: z.string(), source_dir: z.string() }),
+  z.object({ status: z.literal("invalid"), message: z.string() }),
+]);
+
+/** Where a package keeps its modules: `<sourceDir>/<name>.gcl` and under `<sourceDir>/<name>/`. */
+export interface PackageLayout {
+  name: string;
+  /** Relative to the package root, `/`-separated. */
+  sourceDir: string;
+}
+
+/** The layout a manifest declares, as the loader reads it, or why it is invalid. */
+export async function packageLayout(
+  manifest: string,
+): Promise<{ layout: PackageLayout } | { error: string }> {
+  const layout = packageLayoutSchema.parse((await loadEngine()).packageLayout(manifest));
+  return layout.status === "package"
+    ? { layout: { name: layout.name, sourceDir: layout.source_dir } }
+    : { error: layout.message };
 }
 
 let loading: Promise<Engine> | null = null;
