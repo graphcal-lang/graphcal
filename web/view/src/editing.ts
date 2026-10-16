@@ -1,9 +1,9 @@
 // Planning the sheet's edits: what a cell or an expression typed by the
-// reader becomes in the source. Pure: the page hands the plan to its host.
-import type { SourceEdit } from "./host.ts";
+// reader becomes in the source, as a replacement of a range the compiler
+// reported. Pure: the page hands the plan to its host, which places it on
+// its latest text.
 import type { Range, ViewNode } from "./model.ts";
-import { EditError, replaceRange } from "./source.ts";
-import { errorMessage } from "./errors.ts";
+import type { SourceEdit } from "./revisions.ts";
 import { oneLine, valueAt } from "./values.ts";
 
 /** An edit to hand to the host, or why there is none. */
@@ -35,17 +35,22 @@ export function cellUnit(node: ViewNode, keys: readonly string[]): string | null
   return value?.kind === "quantity" ? value.unit : node.unit;
 }
 
-/** The expression as edited in the formula bar: the source text on one line, when its file is at hand. */
-export function editableExpr(node: ViewNode, source: string | null): string | null {
-  if (node.expr === null || node.source === null || node.source.file === null) return null;
-  if (source === null) return null;
+/** The expression as edited in the formula bar, on one line; null when it cannot be edited. */
+export function editableExpr(node: ViewNode, at: number | null): string | null {
+  if (at === null || node.expr === null || node.source === null || node.source.file === null) {
+    return null;
+  }
   return oneLine(node.expr);
 }
 
-/** Replace the whole expression of a node (formula bar); `source` is its file's text. */
-export function planExprEdit(node: ViewNode, source: string | null, next: string): EditPlan {
+/**
+ * Replace the whole expression of a node (formula bar). `at` is the revision
+ * of the sources the node's model was projected from, when the host holds
+ * its file: the range is on that revision.
+ */
+export function planExprEdit(node: ViewNode, at: number | null, next: string): EditPlan {
   const file = node.source?.file ?? null;
-  if (editableExpr(node, source) === null || file === null || source === null) {
+  if (editableExpr(node, at) === null || file === null || at === null) {
     return refused("this expression cannot be edited");
   }
   // Only the compiler's range says where the expression is; without one
@@ -54,11 +59,7 @@ export function planExprEdit(node: ViewNode, source: string | null, next: string
   if (range === null) {
     return refused("this expression is shared with other declarations; edit its cells");
   }
-  try {
-    return { ok: true, edit: { file, next: replaceRange(source, range, next) } };
-  } catch (error) {
-    return refused(error instanceof EditError ? error.message : errorMessage(error));
-  }
+  return { ok: true, edit: { file, revision: at, range, text: next } };
 }
 
 /**
@@ -76,22 +77,18 @@ export function cellRange(node: ViewNode, keys: readonly string[]): Range | null
   return cell?.range ?? null;
 }
 
-/** Replace the literal of one cell (entry keys `keys`) with what was typed. */
+/** Replace the literal of one cell (entry keys `keys`) with what was typed; `at` as for an expression. */
 export function planCellEdit(
   node: ViewNode,
   keys: readonly string[],
-  source: string | null,
+  at: number | null,
   text: string,
 ): EditPlan {
   const file = node.source?.file ?? null;
   const range = cellRange(node, keys);
-  if (file === null || source === null || range === null) {
+  if (file === null || at === null || range === null) {
     return refused("this value cannot be edited");
   }
   const literal = literalFor(node, cellUnit(node, keys), text);
-  try {
-    return { ok: true, edit: { file, next: replaceRange(source, range, literal) } };
-  } catch (error) {
-    return refused(error instanceof EditError ? error.message : errorMessage(error));
-  }
+  return { ok: true, edit: { file, revision: at, range, text: literal } };
 }

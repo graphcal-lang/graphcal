@@ -27,7 +27,8 @@ import {
 } from "@codemirror/view";
 import { graphcalHighlighting, graphcalLanguage } from "./graphcalLanguage.ts";
 import type { Inlay } from "./inlays.ts";
-import { adoptionOf } from "./rebase.ts";
+import { adoptionOf, typedEdit } from "./rebase.ts";
+import type { Revised, SourceEdit } from "./revisions.ts";
 
 class InlayWidget extends WidgetType {
   private readonly text: string;
@@ -103,11 +104,11 @@ const markField = StateField.define<DecorationSet>({
 
 export interface EditorHooks {
   /**
-   * The text changed by typing; called after a short pause. Once the host has
-   * applied it, and before it hands out models of the result, `applied` is
-   * called with the host's text of the file.
+   * The reader typed `edit`, on the host's text the document is based on;
+   * called after a short pause. Once the host has applied it, and before it
+   * hands out models of the result, `applied` is called with the host's file.
    */
-  onChange(file: string, text: string, applied: (hostText: string) => void): void;
+  onChange(edit: SourceEdit, applied: (source: Revised) => void): void;
   /** The caret moved to another line by the user. */
   onCaretLine(line: number): void;
 }
@@ -127,7 +128,7 @@ export class SourceEditor {
    * or last sent and applied. The document differs from it while typing waits
    * to be sent or the host refused it, and is then never replaced.
    */
-  private synced: string | null = null;
+  private synced: Revised | null = null;
   /** The base text of a comparison, shown as a unified diff under the editor's own text. */
   private readonly merge = new Compartment();
   private original: string | null = null;
@@ -179,14 +180,15 @@ export class SourceEditor {
 
   private send(): void {
     this.pending = null;
-    const file = this.file;
-    if (file === null) return;
+    const { file, synced } = this;
+    if (file === null || synced === null) return;
     const sent = this.view.state.doc.toString();
-    this.hooks.onChange(file, sent, (hostText) => {
+    const edit = typedEdit(file, synced, sent);
+    if (edit === null) return;
+    this.hooks.onChange(edit, (source) => {
       if (this.file !== file) return;
       // The host has what was sent; it may hold more (another edit came first).
-      this.synced = sent;
-      this.adopt(hostText);
+      this.adopt(sent, source);
     });
   }
 
@@ -202,19 +204,19 @@ export class SourceEditor {
   }
 
   /**
-   * Show the host's `text` of `file`. Another file replaces the whole state
+   * Show the host's `source` of `file`. Another file replaces the whole state
    * (its history too), after what was typed in the last one is sent; the same
    * file takes the host's change in place, under what the reader typed, so
    * the caret, the typing and the undo history survive a re-projection.
    */
-  show(file: string, text: string): void {
+  show(file: string, source: Revised): void {
     if (file !== this.file) {
       this.flush();
       this.file = file;
-      this.synced = text;
+      this.synced = source;
       this.silent = true;
       try {
-        this.view.setState(this.stateFor(text));
+        this.view.setState(this.stateFor(source.text));
       } finally {
         this.silent = false;
       }
@@ -222,14 +224,14 @@ export class SourceEditor {
       this.original = null;
       return;
     }
-    this.adopt(text);
+    if (this.synced?.revision === source.revision) return;
+    this.adopt(this.synced?.text ?? null, source);
   }
 
-  /** The host's text of the shown file is now `text`. */
-  private adopt(text: string): void {
-    const synced = this.synced;
-    this.synced = text;
-    const change = adoptionOf(synced, this.view.state.doc.toString(), text);
+  /** The host's file is now `source`; the document was based on the host's `base`. */
+  private adopt(base: string | null, source: Revised): void {
+    this.synced = source;
+    const change = adoptionOf(base, this.view.state.doc.toString(), source.text);
     if (change === null) return;
     this.silent = true;
     try {

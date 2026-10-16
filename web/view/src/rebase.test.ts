@@ -1,6 +1,6 @@
 import { Text } from "@codemirror/state";
 import { describe, expect, test } from "vite-plus/test";
-import { adoptionOf, rebaseChange } from "./rebase.ts";
+import { adoptionOf, rebaseChange, typedEdit } from "./rebase.ts";
 
 function rebased(base: string, ours: string, theirs: string): string {
   return rebaseChange(base, ours, theirs)
@@ -54,5 +54,21 @@ describe("adoptionOf", () => {
 
   test("a document already holding the host's text is left alone", () => {
     expect(adoptionOf(synced, typed, typed)).toBeNull();
+  });
+});
+
+describe("typedEdit", () => {
+  test("is the typed change, on the revision the document is based on", () => {
+    const synced = { text: "param a: Int = 1;\nparam b: Int = 2;\n", revision: 3 };
+    expect(typedEdit("src/m.gcl", synced, synced.text.replace("= 2", "= 25"))).toEqual({
+      file: "src/m.gcl",
+      revision: 3,
+      range: { start: { line: 1, character: 16 }, end: { line: 1, character: 16 } },
+      text: "5",
+    });
+  });
+
+  test("nothing typed is no edit", () => {
+    expect(typedEdit("src/m.gcl", { text: "x", revision: 1 }, "x")).toBeNull();
   });
 });

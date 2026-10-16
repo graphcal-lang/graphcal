@@ -1,6 +1,6 @@
-// Textual edits to Graphcal sources: replacing a range the compiler reported.
-// Pure string functions, no DOM, no Vite.
-import type { Position, Range } from "./model.ts";
+// Positions in Graphcal sources, as the compiler reports ranges, and the
+// smallest change between two texts. Pure string functions, no DOM, no Vite.
+import type { Position } from "./model.ts";
 
 export class EditError extends Error {}
 
@@ -23,12 +23,13 @@ export function offsetOf(source: string, position: Position): number {
   return start + position.character;
 }
 
-/** Replace the text between two positions, as the compiler reports an expression's range. */
-export function replaceRange(source: string, range: Range, to: string): string {
-  const from = offsetOf(source, range.start);
-  const until = offsetOf(source, range.end);
-  if (until < from) throw new EditError("the range is inverted");
-  return source.slice(0, from) + to + source.slice(until);
+/** The line and UTF-16 column of an offset, as `offsetOf` counts them. */
+export function positionOf(source: string, offset: number): Position {
+  const before = source.slice(0, offset);
+  const lineStart = before.lastIndexOf("\n") + 1;
+  let line = 0;
+  for (let at = before.indexOf("\n"); at >= 0; at = before.indexOf("\n", at + 1)) line += 1;
+  return { line, character: offset - lineStart };
 }
 
 /** The smallest replacement turning `before` into `after`: shared prefix and suffix trimmed. */

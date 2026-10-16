@@ -33,17 +33,16 @@ describe("literalFor", () => {
 });
 
 describe("planning an edit", () => {
-  const source = "param p: Power = 2.0 W;\n";
   const scalar = viewNode("p", {
     expr: "2.0 W",
     value: quantity("2", "W"),
     source: { file: "src/m.gcl", line: 1, expr_range: range(0, 17, 22), cells: [] },
   });
 
-  test("a scalar cell replaces the expression's range", () => {
-    expect(planCellEdit(scalar, [], source, "3")).toEqual({
+  test("a scalar cell replaces the expression's range, on the model's revision", () => {
+    expect(planCellEdit(scalar, [], 4, "3")).toEqual({
       ok: true,
-      edit: { file: "src/m.gcl", next: "param p: Power = 3.0 W;\n" },
+      edit: { file: "src/m.gcl", revision: 4, range: range(0, 17, 22), text: "3.0 W" },
     });
   });
 
@@ -52,14 +51,13 @@ describe("planning an edit", () => {
       expr: "table[…]",
       source: { file: "src/m.gcl", line: 1, expr_range: null, cells: [] },
     });
-    expect(planExprEdit(shared, source, "1.0 W")).toEqual({
+    expect(planExprEdit(shared, 1, "1.0 W")).toEqual({
       ok: false,
       message: "this expression is shared with other declarations; edit its cells",
     });
   });
 
   test("a table cell replaces the cell's own range, in the unit it is shown in", () => {
-    const table = "param p: Power[M] = table[M] { a: 1.0 W; b: 2.0 kW; };\n";
     const node = viewNode("p", {
       axes: ["m"],
       expr: "table[M] { a: 1.0 W; b: 2.0 kW; }",
@@ -82,13 +80,13 @@ describe("planning an edit", () => {
         ],
       },
     });
-    expect(planCellEdit(node, ["kb"], table, "7")).toEqual({
+    expect(planCellEdit(node, ["kb"], 2, "7")).toEqual({
       ok: true,
-      edit: { file: "src/m.gcl", next: table.replace("2.0 kW", "7.0 kW") },
+      edit: { file: "src/m.gcl", revision: 2, range: range(0, 44, 50), text: "7.0 kW" },
     });
   });
 
-  test("nothing is planned without the file's text", () => {
+  test("nothing is planned when the host does not hold the file", () => {
     expect(planCellEdit(scalar, [], null, "3")).toEqual({
       ok: false,
       message: "this value cannot be edited",
@@ -101,7 +99,7 @@ describe("planning an edit", () => {
       expr: "for m: M { 1.0 W }",
       source: { file: "src/m.gcl", line: 1, expr_range: range(0, 0, 18), cells: [] },
     });
-    expect(planCellEdit(node, ["ka"], "for m: M { 1.0 W }", "2")).toEqual({
+    expect(planCellEdit(node, ["ka"], 1, "2")).toEqual({
       ok: false,
       message: "this value cannot be edited",
     });

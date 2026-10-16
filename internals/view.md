@@ -67,6 +67,27 @@ The CLI test `view_contract_fixtures_are_current` keeps it current
 rewrites it), and `src/contract.test.ts` checks that it parses and that
 every dependency, axis and cell joins.
 
+## Edits and revisions
+
+A host numbers the states of its sources: the GitHub host makes a revision
+of the whole project per load, edit and reset; the VS Code extension sends
+each copy of a file with a revision and answers an applied edit with the
+copy's new one. Every model is recorded with the revision it was projected
+from (`Host.projectedAt`), so its ranges are read on that revision, and a
+projection that finishes after the sources moved on is not kept
+(`src/modelCache.ts`).
+
+An edit is a range of one file at a revision and its replacement
+(`SourceEdit` in `src/revisions.ts`), never a whole file. Edits take turns;
+on its turn the host places an edit on its latest text, moving the range
+past the edits applied since its revision (each file keeps a short history
+of them) and refusing it when one of them touched the range or the revision
+is older than the history. Two cell edits made on one model therefore both
+land, whatever the evaluation in between does. The VS Code host sends the
+placed edit as offsets on its latest copy's revision, with one edit in flight
+at a time, and validates the extension's messages with zod; the code pane
+sends what was typed as such an edit on the revision its text is based on.
+
 ## The published viewer
 
 The page holds no data. It reads the project around the named file from the

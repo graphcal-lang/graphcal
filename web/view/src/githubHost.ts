@@ -13,13 +13,14 @@ import {
 } from "./engine.ts";
 import { errorMessage } from "./errors.ts";
 import { GitHub, GitHubError, type Commit, type Refs, type Tree } from "./github.ts";
-import type { BaseSide, Compare, EditResult, Host, NoteKind, SourceEdit } from "./host.ts";
+import type { BaseSide, Compare, EditResult, Host, NoteKind } from "./host.ts";
 import type { TokenStore } from "./login.ts";
 import type { ViewModel } from "./model.ts";
 import { ModelCache } from "./modelCache.ts";
 import { acceptEdit, projectionNote, type ViewProjection } from "./projection.ts";
-import { Project } from "./project.ts";
 import { RefsCache } from "./refsCache.ts";
+import { place, recorded, type Revised, type SourceEdit } from "./revisions.ts";
+import { requestOf, Sources } from "./sources.ts";
 import {
   join,
   locateProject,
@@ -163,7 +164,7 @@ async function readBase(
         blobReader(github, route, baseTree),
       );
       for (const [file, text] of files) sources.set(file, text);
-      const request = new Project(sources).request();
+      const request = requestOf(sources);
       for (const file of plan.files) {
         if (file.relative.endsWith(".gcl")) {
           models.set(file.relative, await baseModel(file.relative, request));
@@ -185,7 +186,9 @@ export class GitHubHost implements Host {
   edited = false;
   private route: Route;
   private github: GitHub;
-  private project: Project | null = null;
+  private sources: Sources | null = null;
+  /** The revision of the sources; every edit, load and reset makes a new one. */
+  private revision = 0;
   /** The sources as read from GitHub, to return to on reset. */
   private pristine = new Map<string, string>();
   private readonly models = new ModelCache();
@@ -248,8 +251,8 @@ export class GitHubHost implements Host {
       if (!fresh()) return;
       this.root = plan.root;
       this.pristine = new Map(files);
-      this.project = new Project(files);
-      this.models.replace([]);
+      this.sources = new Sources(files, ++this.revision);
+      this.models.replace([], this.revision);
       this.modules = [];
       this.edited = false;
       this.note("evaluating…", "busy");
@@ -295,18 +298,23 @@ export class GitHubHost implements Host {
   private async projectFile(
     file: string,
   ): Promise<{ model: ViewModel; note: string | null } | { error: string }> {
-    if (!this.project) return { error: "no project" };
-    let projection: ViewProjection;
-    try {
-      projection = await projectView(file, this.project.request());
-    } catch (error) {
-      return { error: errorMessage(error) };
+    for (;;) {
+      const sources = this.sources;
+      if (!sources) return { error: "no project" };
+      const revision = sources.revision;
+      let projection: ViewProjection;
+      try {
+        projection = await projectView(file, sources.request());
+      } catch (error) {
+        return { error: errorMessage(error) };
+      }
+      if (projection.status === "invalid") return { error: `${file}: ${projection.message}` };
+      const model = projection.view;
+      // An edit or a reset while it ran: what it read is gone, so it runs again.
+      if (!this.models.set(model, revision)) continue;
+      this.modules = this.models.ids();
+      return { model, note: projectionNote(file, projection) };
     }
-    if (projection.status === "invalid") return { error: `${file}: ${projection.message}` };
-    const model = projection.view;
-    this.models.set(model);
-    this.modules = this.models.ids();
-    return { model, note: projectionNote(file, projection) };
   }
 
   private fail(error: unknown): void {
@@ -352,7 +360,7 @@ export class GitHubHost implements Host {
       next.repo === this.route.repo &&
       sameRef(next.at, this.route.at);
     this.route = next;
-    if (same && this.project) {
+    if (same && this.sources) {
       const module = this.moduleOfPath(next.path);
       if (module !== null) {
         void this.openModule(module);
@@ -376,9 +384,9 @@ export class GitHubHost implements Host {
 
   /** The edits since the project was read, as a unified diff with repository paths. */
   patch(): Patch {
-    const project = this.project;
-    if (!project) return { text: "", files: 0 };
-    const changes = changedFiles(this.pristine, project.files, (file) => join(this.root, file));
+    const sources = this.sources;
+    if (!sources) return { text: "", files: 0 };
+    const changes = changedFiles(this.pristine, sources.texts(), (file) => join(this.root, file));
     const ref = this.state.ref ?? headRef(this.route.at) ?? "default branch";
     return patchOf(changes, `graphcal what-if: ${this.route.owner}/${this.route.repo} @ ${ref}`);
   }
@@ -455,38 +463,51 @@ export class GitHubHost implements Host {
     return this.models.current(module);
   }
 
-  source(_model: ViewModel, file: string): string | null {
-    return this.project?.files.get(file) ?? null;
+  source(_model: ViewModel, file: string): Revised | null {
+    return this.sources?.source(file) ?? null;
   }
 
+  projectedAt(model: ViewModel): number | null {
+    return this.models.revisionOf(model);
+  }
+
+  /**
+   * Place the edit on the latest text of its file, through the edits made
+   * since its revision, and keep it when the sources still check.
+   */
   async edit(_model: ViewModel, edit: SourceEdit, open: readonly string[]): Promise<EditResult> {
-    const project = this.project;
-    const previous = project?.files.get(edit.file);
-    if (!project || previous === undefined)
-      return { ok: false, message: `unknown file ${edit.file}` };
-    project.files.set(edit.file, edit.next);
-    const rollback = (message: string): EditResult => {
-      project.files.set(edit.file, previous);
-      return { ok: false, message };
-    };
+    const sources = this.sources;
+    const history = sources?.history(edit.file) ?? null;
+    if (!sources || history === null) return { ok: false, message: `unknown file ${edit.file}` };
+    const placed = place(history, edit);
+    if (!placed.ok) return placed;
+    const at = this.revision;
+    const next = recorded(history, placed.change, at + 1);
+    const request = sources.request({ file: edit.file, history: next });
     const projections: { file: string; projection: ViewProjection }[] = [];
     for (const module of open) {
       const shown = this.models.current(module);
       if (!shown) continue;
       const file = shown.module.file;
       try {
-        projections.push({ file, projection: await projectView(file, project.request()) });
+        projections.push({ file, projection: await projectView(file, request) });
       } catch (error) {
-        return rollback(errorMessage(error));
+        return { ok: false, message: errorMessage(error) };
       }
+    }
+    // A load or a reset while it ran: the edit was made on sources that are gone.
+    if (this.sources !== sources || this.revision !== at) {
+      return { ok: false, message: "the sources changed while the edit ran; edit again" };
     }
     // An edit stands while the sources check, whether or not they evaluate.
     const verdict = acceptEdit(projections);
-    if (!verdict.ok) return rollback(verdict.message);
+    if (!verdict.ok) return verdict;
+    this.revision = next.revision;
+    sources.commit(edit.file, next);
     // The modules off screen read the edited sources too: their models are stale now.
-    this.models.edited(verdict.models);
+    this.models.edited(verdict.models, next.revision);
     this.edited = true;
-    return verdict;
+    return { ...verdict, source: { text: next.text, revision: next.revision } };
   }
 
   request(module: string): void {
@@ -496,9 +517,9 @@ export class GitHubHost implements Host {
   }
 
   reset(): void {
-    if (!this.project) return;
-    this.project = new Project(this.pristine);
-    this.models.replace(this.pristineModels);
+    if (!this.sources) return;
+    this.sources = new Sources(this.pristine, ++this.revision);
+    this.models.replace(this.pristineModels, this.revision);
     this.edited = false;
   }
 

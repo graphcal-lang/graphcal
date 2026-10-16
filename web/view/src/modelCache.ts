@@ -1,40 +1,54 @@
-// The models a host has projected, and which of them still describe the
-// sources it holds. An edit re-projects only the modules on screen; every other
-// model then describes sources that are gone. Such a stale model is never handed
-// out as current: its id and file only locate the module, to project it again.
+// The models a host has projected, each with the revision of the sources it
+// was projected from. Only a model of the current revision is handed out as
+// current: an edit re-projects the modules on screen, and every other model
+// then describes sources that are gone. A stale model's id and file only
+// locate the module, to project it again; a projection that finishes after
+// the sources moved on is recognised by its revision and not kept.
 import type { ViewModel } from "./model.ts";
 
 export class ModelCache {
   private readonly models = new Map<string, ViewModel>();
-  private readonly stale = new Set<string>();
+  private readonly revisions = new WeakMap<ViewModel, number>();
+  /** The revision of the host's sources. */
+  private revision = 0;
 
-  /** Keep a model projected from the current sources. */
-  set(model: ViewModel): void {
+  /** Keep a model projected at `revision`; false (and not kept) when the sources moved on since. */
+  set(model: ViewModel, revision: number): boolean {
+    if (revision < this.revision) return false;
     this.models.set(model.module.id, model);
-    this.stale.delete(model.module.id);
+    this.revisions.set(model, revision);
+    return true;
   }
 
-  /** The sources changed: `fresh` are projected from them, every other model is stale. */
-  edited(fresh: readonly ViewModel[]): void {
-    for (const id of this.models.keys()) this.stale.add(id);
-    for (const model of fresh) this.set(model);
+  /** The sources are now at `revision`: `fresh` are projected from them, every other model is stale. */
+  edited(fresh: readonly ViewModel[], revision: number): void {
+    this.revision = revision;
+    for (const model of fresh) this.set(model, revision);
   }
 
-  /** Start over with `models`, all current: a new project read, or a reset to the sources as read. */
-  replace(models: Iterable<ViewModel>): void {
+  /** Start over at `revision` with `models`, projected from it: a new project read, or a reset. */
+  replace(models: Iterable<ViewModel>, revision: number): void {
     this.models.clear();
-    this.stale.clear();
-    for (const model of models) this.set(model);
+    this.revision = revision;
+    for (const model of models) this.set(model, revision);
+  }
+
+  /** The revision a model was projected from, when this cache keeps it. */
+  revisionOf(model: ViewModel): number | null {
+    return this.revisions.get(model) ?? null;
   }
 
   /** The model of `module` as of the current sources; null when there is none or it is stale. */
   current(module: string): ViewModel | null {
-    return this.stale.has(module) ? null : (this.models.get(module) ?? null);
+    const model = this.models.get(module);
+    return model !== undefined && !this.isStale(module) ? model : null;
   }
 
   /** Every model as of the current sources. */
   currentModels(): ViewModel[] {
-    return [...this.models.values()].filter((model) => !this.stale.has(model.module.id));
+    return [...this.models.keys()]
+      .map((module) => this.current(module))
+      .filter((model): model is ViewModel => model !== null);
   }
 
   /** The last model of `module`, current or stale: where it is, not what it holds. */
@@ -44,7 +58,8 @@ export class ModelCache {
 
   /** Whether `module` has a model, but one from sources since edited. */
   isStale(module: string): boolean {
-    return this.stale.has(module);
+    const model = this.models.get(module);
+    return model !== undefined && (this.revisions.get(model) ?? -1) < this.revision;
   }
 
   /** Every module with a model, current or stale, sorted. */

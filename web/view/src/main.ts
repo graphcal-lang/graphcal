@@ -16,6 +16,7 @@ import { mountGitHubBar } from "./githubBar.ts";
 import { GitHubHost } from "./githubHost.ts";
 import { applyPicked, applySelection } from "./highlight.ts";
 import type { Host, NoteKind } from "./host.ts";
+import type { Revised } from "./revisions.ts";
 import { bindInput } from "./inlineInput.ts";
 import { inlaysOf } from "./inlays.ts";
 import { TokenStore } from "./login.ts";
@@ -124,10 +125,14 @@ function diffOf(s: Sheet): ModelDiff | null {
   }
 }
 
-/** The text of the file a node is declared in, when the host has it. */
-function sourceOfNode(s: Sheet, node: ViewNode): string | null {
+/**
+ * The revision the sheet's model was projected from, when the host holds the
+ * file `node` is declared in: an edit of the node is a range on that revision.
+ */
+function editAt(s: Sheet, node: ViewNode): number | null {
   const file = node.source?.file ?? null;
-  return file === null ? null : host.source(s.model, file);
+  if (file === null || host.source(s.model, file) === null) return null;
+  return host.projectedAt(s.model);
 }
 
 /** `subject = expr = value` for the selected cell of the active sheet. */
@@ -145,7 +150,7 @@ function renderFormula(): void {
     label: node.label,
     entries: entryNames(s, node, keys),
     expr: node.expr === null ? null : oneLine(node.expr),
-    editable: editableExpr(node, sourceOfNode(s, node)) !== null,
+    editable: editableExpr(node, editAt(s, node)) !== null,
     value: displayOf(valueAt(node.value, keys)),
     change: change ? changeNote(change, node.value, keys) : null,
   });
@@ -463,7 +468,11 @@ let evaluating: Promise<void> = Promise.resolve();
  * Hand an edit to the host, one at a time, and take back whatever models it
  * re-projected. `applied` runs once the host took the edit, before the models.
  */
-function applyEdit(s: Sheet, plan: EditPlan, applied?: () => void): Promise<boolean> {
+function applyEdit(
+  s: Sheet,
+  plan: EditPlan,
+  applied?: (source: Revised) => void,
+): Promise<boolean> {
   if (!plan.ok) {
     showNote(plan.message);
     return Promise.resolve(false);
@@ -487,7 +496,7 @@ function applyEdit(s: Sheet, plan: EditPlan, applied?: () => void): Promise<bool
       return false;
     }
     showNote(result.note);
-    applied?.();
+    applied?.(result.source);
     adoptModels(result.models);
     return true;
   };
@@ -506,12 +515,12 @@ function startFormulaEdit(): void {
   const hit = selected(s);
   if (!hit) return;
   const { node } = hit;
-  const expr = editableExpr(node, sourceOfNode(s, node));
+  const expr = editableExpr(node, editAt(s, node));
   if (expr === null) return;
   formula.startEdit(
     expr,
     node.label,
-    (text) => applyEdit(s, planExprEdit(node, sourceOfNode(s, node), text)),
+    (text) => applyEdit(s, planExprEdit(node, editAt(s, node), text)),
     () => renderFormula(),
   );
 }
@@ -528,7 +537,7 @@ function startCellEdit(s: Sheet, cell: HTMLElement): void {
   // A cell the compiler reports no range for is read-only; the bar shows its expression.
   const keys = [row, sub].filter((x): x is string => x !== null);
   const literal = !isExternal(node) && (node.kind === "param" || node.kind === "const");
-  if (!literal || cellRange(node, keys) === null || sourceOfNode(s, node) === null) {
+  if (!literal || cellRange(node, keys) === null || editAt(s, node) === null) {
     startFormulaEdit();
     return;
   }
@@ -547,7 +556,7 @@ function startCellEdit(s: Sheet, cell: HTMLElement): void {
   bindInput(
     input,
     initial,
-    (text) => applyEdit(s, planCellEdit(node, keys, sourceOfNode(s, node), text)),
+    (text) => applyEdit(s, planCellEdit(node, keys, editAt(s, node), text)),
     () => {
       cell.classList.remove("editing");
       cell.replaceChildren(...before);
@@ -757,14 +766,14 @@ function syncEditor(): void {
   if (!editor || !ws) return;
   const s = mainSheet(ws);
   const file = s.model.module.file;
-  const text = host.source(s.model, file);
+  const source = host.source(s.model, file);
   codeFileEl.replaceChildren(span("", fileNameOf(s.model)));
   if (host.edited) codeFileEl.append(span("sub", "● what-if"));
-  if (text === null) {
+  if (source === null) {
     codeFileEl.append(span("sub", "· source not available"));
     return;
   }
-  editor.show(file, text);
+  editor.show(file, source);
   const original = host.compare?.source(file);
   // A new file is all added; a base that could not be read marks nothing.
   editor.setOriginal(
@@ -784,16 +793,9 @@ function syncEditorSelection(): void {
 
 const editor = webShell
   ? new SourceEditor(codeBodyEl, {
-      onChange(file, text, applied) {
+      onChange(edit, applied) {
         if (!ws) return;
-        const s = mainSheet(ws);
-        if (host.source(s.model, file) === text) {
-          applied(text);
-          return;
-        }
-        void applyEdit(s, { ok: true, edit: { file, next: text } }, () =>
-          applied(host.source(s.model, file) ?? text),
-        );
+        void applyEdit(mainSheet(ws), { ok: true, edit }, applied);
       },
       onCaretLine(line) {
         if (!ws) return;

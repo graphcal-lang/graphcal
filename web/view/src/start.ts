@@ -12,7 +12,10 @@ export class EmptyHost implements Host {
   model(): ViewModel | null {
     return null;
   }
-  source(): string | null {
+  source(): null {
+    return null;
+  }
+  projectedAt(): null {
     return null;
   }
   edit(): Promise<{ ok: false; message: string }> {

@@ -2,7 +2,8 @@
 // what the reader typed: both started from the same text, the host's change
 // is mapped over the reader's. Pure (CodeMirror's change sets need no DOM).
 import { ChangeSet } from "@codemirror/state";
-import { minimalEdit } from "./source.ts";
+import type { Revised, SourceEdit } from "./revisions.ts";
+import { minimalEdit, positionOf } from "./source.ts";
 
 function changeFrom(base: string, to: string): ChangeSet {
   const { start, end, text } = minimalEdit(base, to);
@@ -26,4 +27,16 @@ export function rebaseChange(base: string, ours: string, theirs: string): Change
 export function adoptionOf(synced: string | null, doc: string, text: string): ChangeSet | null {
   if (doc === text || (synced !== null && synced === text)) return null;
   return rebaseChange(synced ?? doc, doc, text);
+}
+
+/** What the reader typed into `file`: the change from the host's `synced` text to `doc`, if any. */
+export function typedEdit(file: string, synced: Revised, doc: string): SourceEdit | null {
+  if (doc === synced.text) return null;
+  const { start, end, text } = minimalEdit(synced.text, doc);
+  return {
+    file,
+    revision: synced.revision,
+    range: { start: positionOf(synced.text, start), end: positionOf(synced.text, end) },
+    text,
+  };
 }
