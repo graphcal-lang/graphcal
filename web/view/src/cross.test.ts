@@ -17,7 +17,8 @@ function node(id: string, extra: Partial<ViewNode> = {}): ViewNode {
     deps: [],
     expr: null,
     reduce: null,
-    instance: null,
+    label: id,
+    origin: { kind: "local" },
     source: null,
     value: null,
     ...extra,
@@ -41,8 +42,7 @@ function sheets(bound: boolean): CrossSheet[] {
   const external = node("l::out", {
     name: "out",
     module: "p.lib",
-    kind: "external",
-    instance: { name: "l", bound },
+    origin: { kind: "included", instance: { name: "l", bound } },
   });
   const main = sheet({ module: "p.main", instance: null }, "p.main", [
     external,

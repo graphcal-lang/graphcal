@@ -70,6 +70,7 @@ fn fetched(
     let location = ModuleLocation {
         package: DagPackageId::new(PACKAGE),
         relative_path: PathBuf::from(format!("src/{name}.gcl")),
+        module_path: None,
     };
     let fetched = Ok(fetched_at(&file, location, text, table));
     (file, fetched)
@@ -238,6 +239,7 @@ fn package_import_cycle_labels_files_with_their_package() {
                 ModuleLocation {
                     package: DagPackageId::new("dep"),
                     relative_path: PathBuf::from(relative),
+                    module_path: None,
                 },
                 "import dep.x::{y};",
                 &[(
@@ -585,6 +587,7 @@ fn invalid_module_location_is_an_error() {
     let location = ModuleLocation {
         package: DagPackageId::new(PACKAGE),
         relative_path: PathBuf::from("src/main.txt"),
+        module_path: None,
     };
     let fetched = fetched_at(&file, location, "param x: Dimensionless = 1.0;", &[]);
     let error = build_error(SourceSnapshot {

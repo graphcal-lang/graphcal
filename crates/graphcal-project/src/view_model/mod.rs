@@ -17,9 +17,11 @@ mod project;
 #[cfg(test)]
 mod tests;
 mod value;
+mod wire_key;
 
 pub use model::{
-    ViewEntry, ViewIndex, ViewInstance, ViewModel, ViewModule, ViewNode, ViewNodeKind,
-    ViewPosition, ViewRange, ViewReduce, ViewSource, ViewValue,
+    ViewEntry, ViewIndex, ViewIndexEntry, ViewInstance, ViewModel, ViewModule, ViewNode,
+    ViewNodeKind, ViewOrigin, ViewPosition, ViewRange, ViewReduce, ViewSource, ViewValue,
 };
 pub use project::{ViewProjection, ViewProjectionError, project_view};
+pub use wire_key::{ViewIndexId, ViewNodeId};

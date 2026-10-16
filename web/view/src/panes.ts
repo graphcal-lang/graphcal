@@ -3,7 +3,7 @@
 // or an imported module. The main sheet is the rightmost column; a pane sits
 // one column left of its deepest open consumer, and a module read from two
 // places opens once.
-import type { ViewModel, ViewNode } from "./model.ts";
+import { instanceOf, isExternal, type ViewModel, type ViewNode } from "./model.ts";
 
 export interface PaneKey {
   module: string;
@@ -17,7 +17,7 @@ export function sameKey(a: PaneKey, b: PaneKey): boolean {
 
 /** The pane an external node is read from. */
 export function keyOf(node: ViewNode): PaneKey {
-  return { module: node.module, instance: node.instance?.name ?? null };
+  return { module: node.module, instance: instanceOf(node)?.name ?? null };
 }
 
 /** The panes a module reads from: one per include instance, one per imported module. */
@@ -27,10 +27,12 @@ export function references(model: ViewModel): PaneKey[] {
     if (!out.some((k) => sameKey(k, key))) out.push(key);
   };
   for (const node of model.nodes) {
-    if (node.kind === "external") add(keyOf(node));
+    if (isExternal(node)) add(keyOf(node));
   }
   for (const index of model.indexes) {
-    if (index.module !== model.module.id) add({ module: index.module, instance: null });
+    if (index.module !== null && index.module !== model.module.id) {
+      add({ module: index.module, instance: null });
+    }
   }
   return out;
 }

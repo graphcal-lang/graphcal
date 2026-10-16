@@ -961,7 +961,9 @@ async fn view_model_request_serves_the_analyzed_document() {
         .map(|node| node["name"].as_str().expect("node name"))
         .collect();
     assert_eq!(names, ["thrust", "doubled", "root"]);
-    assert_eq!(view["nodes"][1]["deps"], json!(["thrust"]));
+    // Dependencies name nodes by their opaque ids.
+    assert_eq!(view["nodes"][1]["deps"], json!([view["nodes"][0]["id"]]));
+    assert_eq!(view["nodes"][1]["label"], "doubled");
     assert_eq!(view["nodes"][1]["value"]["display"], "2");
     assert_eq!(view["nodes"][1]["source"]["line"], 2);
 

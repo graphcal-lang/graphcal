@@ -4,7 +4,8 @@
 //! A module's [`DagId`] is its identity (package-relative file components,
 //! then inline-DAG and instance segments), which source never spells. The
 //! project records each loaded file under the module path its importers write
-//! (`pipeline.lib`); output boundaries render the declarations of those
+//! (`pipeline.lib`), or a file no file imports under the module path the
+//! loader located it at in its own package; output boundaries render the declarations of those
 //! modules through it (`pipeline.lib.helper::pending`).
 
 use std::collections::HashMap;
@@ -42,8 +43,17 @@ impl fmt::Display for ModuleDeclName {
 }
 
 /// The source module path of each loaded file root, by identity.
+///
+/// A file is named the way its importers spell it; a file no loaded file
+/// imports (the root, say) keeps the module path the loader located it at
+/// within its own package.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct ModulePaths(HashMap<DagId, ModulePathKey>);
+pub struct ModulePaths {
+    /// The least spelling of each imported file, over its importers.
+    imported: HashMap<DagId, ModulePathKey>,
+    /// Each file's own module path within its package.
+    own: HashMap<DagId, ModulePathKey>,
+}
 
 impl ModulePaths {
     /// Record that the import or include path `path` names `target`, a file
@@ -68,7 +78,7 @@ impl ModulePaths {
             return;
         };
         let file_path = ModulePathKey::new(file_segments);
-        match self.0.entry(file) {
+        match self.imported.entry(file) {
             Entry::Vacant(entry) => {
                 entry.insert(file_path);
             }
@@ -78,6 +88,13 @@ impl ModulePaths {
                 }
             }
         }
+    }
+
+    /// Record that the file root `file` sits at `path` within its own
+    /// package. An importer's spelling, when one is recorded, takes
+    /// precedence regardless of recording order.
+    pub fn record_file(&mut self, file: &DagId, path: ModulePathKey) {
+        self.own.insert(file.file_root(), path);
     }
 
     /// The source module path of `module`, a file root or an inline DAG
@@ -108,7 +125,7 @@ impl ModulePaths {
         owner: &DagId,
     ) -> Option<(ModulePathKey, Vec<crate::syntax::module_name::ScopeSegment>)> {
         let file = owner.file_root();
-        let file_path = self.0.get(&file)?;
+        let file_path = self.imported.get(&file).or_else(|| self.own.get(&file))?;
         let below = owner.segments().as_slice().get(file.segments().len()..)?;
         let inline_dags = below
             .iter()
@@ -186,6 +203,25 @@ mod tests {
         assert_eq!(
             paths.name(&lib(), &leaf("x")).unwrap().to_string(),
             "alpha.lib::x"
+        );
+    }
+
+    #[test]
+    fn an_importer_spelling_wins_over_the_own_path_in_either_order() {
+        let mut first = ModulePaths::default();
+        first.record_file(&lib(), path(&["own", "lib"]));
+        first.record(&path(&["alias", "lib"]), &lib());
+        let mut second = ModulePaths::default();
+        second.record(&path(&["alias", "lib"]), &lib());
+        second.record_file(&lib(), path(&["own", "lib"]));
+        for paths in [first, second] {
+            assert_eq!(paths.module(&lib()), Some(path(&["alias", "lib"])));
+        }
+        let mut unimported = ModulePaths::default();
+        unimported.record_file(&lib(), path(&["pipeline", "lib"]));
+        assert_eq!(
+            unimported.module(&lib().inline_dag_child(leaf("helper"))),
+            Some(path(&["pipeline", "lib", "helper"]))
         );
     }
 

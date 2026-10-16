@@ -1,6 +1,8 @@
 import {
+  axisName,
   BOX_GAP,
   computeLayout,
+  entryName,
   orderByBarycenter,
   packScalarBand,
   ZONES,
@@ -25,13 +27,20 @@ import { mountGitHubBar } from "./githubBar.ts";
 import { GitHubHost } from "./githubHost.ts";
 import type { Host, NoteKind } from "./host.ts";
 import { TokenStore } from "./login.ts";
-import type { ViewModel, ViewNode } from "./model.ts";
+import { instanceOf, isExternal, type ViewModel, type ViewNode } from "./model.ts";
 import { depthsOf, keyOf, sameKey, type PaneKey } from "./panes.ts";
 import { parseRoute } from "./route.ts";
 import { EditError, replaceExpr, replaceRange, replaceTableCell } from "./source.ts";
 import { EmptyHost, mountStart } from "./start.ts";
 import { inVsCode, VsCodeHost } from "./vscodeHost.ts";
-import { EXTERNAL_MARK, placeHalo, renderView, RULER_WIDTH, type RenderOptions } from "./render.ts";
+import {
+  EXTERNAL_MARK,
+  gapKeys,
+  placeHalo,
+  renderView,
+  RULER_WIDTH,
+  type RenderOptions,
+} from "./render.ts";
 import { hiddenOf, pick, type Hidden, type Picked } from "./rows.ts";
 import { trace, type Selection } from "./selection.ts";
 import { displayOf, oneLine, valueAt } from "./values.ts";
@@ -288,6 +297,11 @@ function selected(s: Sheet): { node: ViewNode; labels: string[] } | null {
   return { node, labels };
 }
 
+/** What a reader sees for the entry keys of a cell of `node`, one per axis. */
+function entryNames(s: Sheet, node: ViewNode, keys: readonly string[]): string[] {
+  return keys.map((key, i) => entryName(s.layout.axes, node.axes[i] ?? "", key));
+}
+
 /** The expression as edited in the bar: the source text on one line, when its file is at hand. */
 function editableExpr(s: Sheet, node: ViewNode): string | null {
   if (node.expr === null || node.source === null || node.source.file === null) return null;
@@ -316,7 +330,7 @@ function renderFormula(): void {
   }
   const { node, labels } = hit;
   const eq = (): Token => ({ text: " = ", cls: "operator" });
-  line.append(...spansOf(subjectTokens(node.id, labels)));
+  line.append(...spansOf(subjectTokens(node.label, entryNames(s, node, labels))));
   if (node.expr) {
     const expr = document.createElement("span");
     expr.className = "formula-expr";
@@ -426,7 +440,9 @@ function applySelection(s: Sheet): void {
     }
   }
   for (const w of wiresEl.querySelectorAll<SVGElement>(".wire, .wire-dot")) {
-    const direct = result.edges.get(`${w.dataset.from}->${w.dataset.to}`);
+    const { from, to } = w.dataset;
+    if (from === undefined || to === undefined) continue;
+    const direct = result.edges.get(from, to);
     if (direct === undefined) continue;
     w.classList.remove("diff");
     w.classList.add("lit");
@@ -754,7 +770,7 @@ function revealGap(s: Sheet, gap: HTMLElement): void {
   const axis = gap.dataset.axis;
   if (axis === undefined) return;
   const set = hiddenOf(s.hidden, axis);
-  for (const label of (gap.dataset.labels ?? "").split("\u0000")) set.delete(label);
+  for (const key of gapKeys(gap)) set.delete(key);
   render();
 }
 
@@ -938,7 +954,9 @@ function editCell(
   const { file, source } = at;
   let rewritten: string;
   try {
-    rewritten = replaceTableCell(source, range, row, sub, literalFor(node, text));
+    // The table spells its rows and columns as a reader sees the entries.
+    const [rowName = row, subName = sub] = entryNames(s, node, sub === null ? [row] : [row, sub]);
+    rewritten = replaceTableCell(source, range, rowName, subName, literalFor(node, text));
   } catch (error) {
     showNote(error instanceof EditError ? error.message : errorMessage(error));
     return Promise.resolve(false);
@@ -1029,7 +1047,8 @@ function startCellEdit(s: Sheet, cell: HTMLElement): void {
   const row = cell.dataset.row ?? null;
   const sub = cell.dataset.sub ?? null;
   select(s, { id: node.id, row, sub, mode: "deps" });
-  const literal = node.kind === "param" || node.kind === "const";
+  // A value read from another file is edited in that file, not here.
+  const literal = !isExternal(node) && (node.kind === "param" || node.kind === "const");
   if (!literal || (row === null && editableExpr(s, node) === null)) {
     startFormulaEdit();
     return;
@@ -1181,7 +1200,8 @@ function rowMenu(s: Sheet, label: HTMLElement, event: MouseEvent): void {
 function externalMenu(w: Workspace, node: ViewNode, event: MouseEvent): void {
   const key = keyOf(node);
   const file = fileNameOfModule(node.module);
-  const name = node.instance?.name ?? file;
+  const instance = instanceOf(node);
+  const name = instance?.name ?? file;
   const pinned = w.sheets.find((other) => sameKey(other.key, key));
   openMenu(event.clientX, event.clientY, [
     {
@@ -1191,7 +1211,7 @@ function externalMenu(w: Workspace, node: ViewNode, event: MouseEvent): void {
     },
     pinned
       ? { label: `Unpin ${name}`, run: () => unpin(pinned) }
-      : node.instance?.bound === true
+      : instance?.bound === true
         ? // A pane would show the module evaluated alone, not this include's arguments.
           {
             label: `Pin ${name} beside: not yet for an include with arguments`,
@@ -1432,13 +1452,13 @@ function inlaysOf(s: Sheet): Inlay[] {
     if (node.axes.length === 0) {
       text = `= ${displayOf(node.value)}`;
     } else {
-      const axes = `[${node.axes.join(", ")}]`;
+      const axes = `[${node.axes.map((axis) => axisName(s.layout.axes, axis)).join(", ")}]`;
       const labels = picked
         ? [selection.row, selection.sub].filter((x): x is string => x !== null)
         : [];
       text =
         labels.length > 0
-          ? `${axes} · ${labels.join(", ")} = ${displayOf(valueAt(node.value, labels))}`
+          ? `${axes} · ${entryNames(s, node, labels).join(", ")} = ${displayOf(valueAt(node.value, labels))}`
           : axes;
     }
     inlays.push({ line: node.source.line, text, selected: picked });

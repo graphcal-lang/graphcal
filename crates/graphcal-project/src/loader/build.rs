@@ -20,7 +20,7 @@ use miette::NamedSource;
 
 use super::budget::io_not_found;
 use super::inline_dags::lift_inline_dags;
-use super::loaded_file::LoadedFile;
+use super::loaded_file::{FileSite, LoadedFile};
 use super::module_path::ModuleTarget;
 use super::source_snapshot::{
     DependencySite, FetchedFile, FileRootDependencyKind, ModuleResolution, ParsedSource,
@@ -172,6 +172,7 @@ impl<K: SourceKey> Builder<'_, K> {
         self.load_dag_body_dependencies(file, &parsed)?;
 
         let location = parsed.location();
+        let module_path = location.module_path.clone();
         let dag_id = DagId::from_relative_path(location.package.clone(), &location.relative_path)
             .map_err(|error| {
             CompileError::semantic(
@@ -204,8 +205,11 @@ impl<K: SourceKey> Builder<'_, K> {
         self.built.insert(file.clone(), {
             let (source, source_id, ast) = parsed.into_file().into_parts();
             LoadedFile::new(
-                file.path().to_path_buf(),
-                dag_id.clone(),
+                FileSite {
+                    path: file.path().to_path_buf(),
+                    dag_id: dag_id.clone(),
+                    module_path,
+                },
                 source,
                 source_id,
                 ast,

@@ -1,0 +1,1267 @@
+{
+  "version": 0,
+  "module": {
+    "id": "power_project.power_max",
+    "file": "src/power_project/power_max.gcl",
+    "package": "power_project"
+  },
+  "indexes": [
+    {
+      "id": "p:power_project/f:src/f:power_project/f:components/n:Component",
+      "name": "Component",
+      "module": "power_project.components",
+      "entries": [
+        {
+          "key": "Obc",
+          "display": "Obc"
+        },
+        {
+          "key": "Radio",
+          "display": "Radio"
+        },
+        {
+          "key": "Heater",
+          "display": "Heater"
+        },
+        {
+          "key": "Payload",
+          "display": "Payload"
+        }
+      ]
+    },
+    {
+      "id": "p:power_project/f:src/f:power_project/f:components/n:Mode",
+      "name": "Mode",
+      "module": "power_project.components",
+      "entries": [
+        {
+          "key": "Safe",
+          "display": "Safe"
+        },
+        {
+          "key": "Nominal",
+          "display": "Nominal"
+        },
+        {
+          "key": "Science",
+          "display": "Science"
+        }
+      ]
+    }
+  ],
+  "nodes": [
+    {
+      "id": "p:power_project/f:src/f:power_project/f:power_max/n:margin",
+      "label": "margin",
+      "name": "margin",
+      "module": "power_project.power_max",
+      "kind": "param",
+      "origin": {
+        "kind": "local"
+      },
+      "axes": [],
+      "dimension": "Dimensionless",
+      "unit": null,
+      "pub": false,
+      "deps": [],
+      "expr": "0.2",
+      "reduce": null,
+      "doc": "Design margin on the required power.\nApplied on top of the summed bus power.",
+      "source": {
+        "file": "src/power_project/power_max.gcl",
+        "line": 5,
+        "expr_range": {
+          "start": {
+            "line": 4,
+            "character": 30
+          },
+          "end": {
+            "line": 4,
+            "character": 33
+          }
+        }
+      },
+      "value": {
+        "kind": "quantity",
+        "display": "0.2",
+        "magnitude": "0.2",
+        "si_value": 0.2,
+        "unit": null
+      }
+    },
+    {
+      "id": "p:power_project/f:src/f:power_project/f:power_max/n:p_budget",
+      "label": "p_budget",
+      "name": "p_budget",
+      "module": "power_project.eps",
+      "kind": "node",
+      "origin": {
+        "kind": "included",
+        "instance": {
+          "name": "eps",
+          "bound": false
+        }
+      },
+      "axes": [],
+      "dimension": "Power",
+      "unit": "W",
+      "pub": true,
+      "deps": [],
+      "expr": "if @p_sun_avail < @p_eclipse_avail { @p_sun_avail } else { @p_eclipse_avail }",
+      "reduce": null,
+      "doc": null,
+      "source": {
+        "file": "src/power_project/eps.gcl",
+        "line": 23,
+        "expr_range": {
+          "start": {
+            "line": 22,
+            "character": 27
+          },
+          "end": {
+            "line": 22,
+            "character": 104
+          }
+        }
+      },
+      "value": {
+        "kind": "quantity",
+        "display": "49.45164 W",
+        "magnitude": "49.45164",
+        "si_value": 49.45163609525957,
+        "unit": "W"
+      }
+    },
+    {
+      "id": "p:power_project/f:src/f:power_project/f:power_max/n:eta_dcdc",
+      "label": "eta_dcdc",
+      "name": "eta_dcdc",
+      "module": "power_project.power_max",
+      "kind": "const",
+      "origin": {
+        "kind": "local"
+      },
+      "axes": [],
+      "dimension": "Dimensionless",
+      "unit": null,
+      "pub": false,
+      "deps": [],
+      "expr": "0.9",
+      "reduce": null,
+      "doc": null,
+      "source": {
+        "file": "src/power_project/power_max.gcl",
+        "line": 7,
+        "expr_range": {
+          "start": {
+            "line": 6,
+            "character": 37
+          },
+          "end": {
+            "line": 6,
+            "character": 40
+          }
+        }
+      },
+      "value": {
+        "kind": "quantity",
+        "display": "0.9",
+        "magnitude": "0.9",
+        "si_value": 0.9,
+        "unit": null
+      }
+    },
+    {
+      "id": "p:power_project/f:src/f:power_project/f:power_max/n:p_unit",
+      "label": "p_unit",
+      "name": "p_unit",
+      "module": "power_project.power_max",
+      "kind": "param",
+      "origin": {
+        "kind": "local"
+      },
+      "axes": [
+        "p:power_project/f:src/f:power_project/f:components/n:Component"
+      ],
+      "dimension": "Power",
+      "unit": "W",
+      "pub": false,
+      "deps": [],
+      "expr": "table[Component] {\n    Obc:     4.0 W;\n    Radio:   12.0 W;\n    Heater:  8.0 W;\n    Payload: 20.0 W;\n}",
+      "reduce": null,
+      "doc": null,
+      "source": {
+        "file": "src/power_project/power_max.gcl",
+        "line": 9,
+        "expr_range": {
+          "start": {
+            "line": 8,
+            "character": 33
+          },
+          "end": {
+            "line": 13,
+            "character": 1
+          }
+        }
+      },
+      "value": {
+        "kind": "indexed",
+        "display": "[Component]",
+        "index": "Component",
+        "entries": [
+          {
+            "key": "Obc",
+            "value": {
+              "kind": "quantity",
+              "display": "4 W",
+              "magnitude": "4",
+              "si_value": 4.0,
+              "unit": "W"
+            }
+          },
+          {
+            "key": "Radio",
+            "value": {
+              "kind": "quantity",
+              "display": "12 W",
+              "magnitude": "12",
+              "si_value": 12.0,
+              "unit": "W"
+            }
+          },
+          {
+            "key": "Heater",
+            "value": {
+              "kind": "quantity",
+              "display": "8 W",
+              "magnitude": "8",
+              "si_value": 8.0,
+              "unit": "W"
+            }
+          },
+          {
+            "key": "Payload",
+            "value": {
+              "kind": "quantity",
+              "display": "20 W",
+              "magnitude": "20",
+              "si_value": 20.0,
+              "unit": "W"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "p:power_project/f:src/f:power_project/f:power_max/n:duty",
+      "label": "duty",
+      "name": "duty",
+      "module": "power_project.power_max",
+      "kind": "param",
+      "origin": {
+        "kind": "local"
+      },
+      "axes": [
+        "p:power_project/f:src/f:power_project/f:components/n:Component",
+        "p:power_project/f:src/f:power_project/f:components/n:Mode"
+      ],
+      "dimension": "Dimensionless",
+      "unit": null,
+      "pub": false,
+      "deps": [],
+      "expr": "table[Component, Mode] {\n    : Safe, Nominal, Science;\n    Obc:     1.0, 1.0, 1.0;\n    Radio:   0.1, 0.3, 0.8;\n    Heater:  0.6, 0.4, 0.2;\n    Payload: 0.0, 0.5, 1.0;\n}",
+      "reduce": null,
+      "doc": null,
+      "source": {
+        "file": "src/power_project/power_max.gcl",
+        "line": 16,
+        "expr_range": {
+          "start": {
+            "line": 15,
+            "character": 45
+          },
+          "end": {
+            "line": 21,
+            "character": 1
+          }
+        }
+      },
+      "value": {
+        "kind": "indexed",
+        "display": "[Component]",
+        "index": "Component",
+        "entries": [
+          {
+            "key": "Obc",
+            "value": {
+              "kind": "indexed",
+              "display": "[Mode]",
+              "index": "Mode",
+              "entries": [
+                {
+                  "key": "Safe",
+                  "value": {
+                    "kind": "quantity",
+                    "display": "1",
+                    "magnitude": "1",
+                    "si_value": 1.0,
+                    "unit": null
+                  }
+                },
+                {
+                  "key": "Nominal",
+                  "value": {
+                    "kind": "quantity",
+                    "display": "1",
+                    "magnitude": "1",
+                    "si_value": 1.0,
+                    "unit": null
+                  }
+                },
+                {
+                  "key": "Science",
+                  "value": {
+                    "kind": "quantity",
+                    "display": "1",
+                    "magnitude": "1",
+                    "si_value": 1.0,
+                    "unit": null
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "key": "Radio",
+            "value": {
+              "kind": "indexed",
+              "display": "[Mode]",
+              "index": "Mode",
+              "entries": [
+                {
+                  "key": "Safe",
+                  "value": {
+                    "kind": "quantity",
+                    "display": "0.1",
+                    "magnitude": "0.1",
+                    "si_value": 0.1,
+                    "unit": null
+                  }
+                },
+                {
+                  "key": "Nominal",
+                  "value": {
+                    "kind": "quantity",
+                    "display": "0.3",
+                    "magnitude": "0.3",
+                    "si_value": 0.3,
+                    "unit": null
+                  }
+                },
+                {
+                  "key": "Science",
+                  "value": {
+                    "kind": "quantity",
+                    "display": "0.8",
+                    "magnitude": "0.8",
+                    "si_value": 0.8,
+                    "unit": null
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "key": "Heater",
+            "value": {
+              "kind": "indexed",
+              "display": "[Mode]",
+              "index": "Mode",
+              "entries": [
+                {
+                  "key": "Safe",
+                  "value": {
+                    "kind": "quantity",
+                    "display": "0.6",
+                    "magnitude": "0.6",
+                    "si_value": 0.6,
+                    "unit": null
+                  }
+                },
+                {
+                  "key": "Nominal",
+                  "value": {
+                    "kind": "quantity",
+                    "display": "0.4",
+                    "magnitude": "0.4",
+                    "si_value": 0.4,
+                    "unit": null
+                  }
+                },
+                {
+                  "key": "Science",
+                  "value": {
+                    "kind": "quantity",
+                    "display": "0.2",
+                    "magnitude": "0.2",
+                    "si_value": 0.2,
+                    "unit": null
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "key": "Payload",
+            "value": {
+              "kind": "indexed",
+              "display": "[Mode]",
+              "index": "Mode",
+              "entries": [
+                {
+                  "key": "Safe",
+                  "value": {
+                    "kind": "quantity",
+                    "display": "0",
+                    "magnitude": "0",
+                    "si_value": 0.0,
+                    "unit": null
+                  }
+                },
+                {
+                  "key": "Nominal",
+                  "value": {
+                    "kind": "quantity",
+                    "display": "0.5",
+                    "magnitude": "0.5",
+                    "si_value": 0.5,
+                    "unit": null
+                  }
+                },
+                {
+                  "key": "Science",
+                  "value": {
+                    "kind": "quantity",
+                    "display": "1",
+                    "magnitude": "1",
+                    "si_value": 1.0,
+                    "unit": null
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "p:power_project/f:src/f:power_project/f:power_max/n:p_avg",
+      "label": "p_avg",
+      "name": "p_avg",
+      "module": "power_project.power_max",
+      "kind": "node",
+      "origin": {
+        "kind": "local"
+      },
+      "axes": [
+        "p:power_project/f:src/f:power_project/f:components/n:Component",
+        "p:power_project/f:src/f:power_project/f:components/n:Mode"
+      ],
+      "dimension": "Power",
+      "unit": "W",
+      "pub": false,
+      "deps": [
+        "p:power_project/f:src/f:power_project/f:power_max/n:duty",
+        "p:power_project/f:src/f:power_project/f:power_max/n:p_unit"
+      ],
+      "expr": "for c: Component, m: Mode {\n    (c, m) => @p_unit[c] * @duty[c, m]\n}",
+      "reduce": null,
+      "doc": null,
+      "source": {
+        "file": "src/power_project/power_max.gcl",
+        "line": 24,
+        "expr_range": {
+          "start": {
+            "line": 23,
+            "character": 37
+          },
+          "end": {
+            "line": 25,
+            "character": 1
+          }
+        }
+      },
+      "value": {
+        "kind": "indexed",
+        "display": "[Component]",
+        "index": "Component",
+        "entries": [
+          {
+            "key": "Obc",
+            "value": {
+              "kind": "indexed",
+              "display": "[Mode]",
+              "index": "Mode",
+              "entries": [
+                {
+                  "key": "Safe",
+                  "value": {
+                    "kind": "quantity",
+                    "display": "4 W",
+                    "magnitude": "4",
+                    "si_value": 4.0,
+                    "unit": "W"
+                  }
+                },
+                {
+                  "key": "Nominal",
+                  "value": {
+                    "kind": "quantity",
+                    "display": "4 W",
+                    "magnitude": "4",
+                    "si_value": 4.0,
+                    "unit": "W"
+                  }
+                },
+                {
+                  "key": "Science",
+                  "value": {
+                    "kind": "quantity",
+                    "display": "4 W",
+                    "magnitude": "4",
+                    "si_value": 4.0,
+                    "unit": "W"
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "key": "Radio",
+            "value": {
+              "kind": "indexed",
+              "display": "[Mode]",
+              "index": "Mode",
+              "entries": [
+                {
+                  "key": "Safe",
+                  "value": {
+                    "kind": "quantity",
+                    "display": "1.2 W",
+                    "magnitude": "1.2",
+                    "si_value": 1.2000000000000002,
+                    "unit": "W"
+                  }
+                },
+                {
+                  "key": "Nominal",
+                  "value": {
+                    "kind": "quantity",
+                    "display": "3.6 W",
+                    "magnitude": "3.6",
+                    "si_value": 3.5999999999999996,
+                    "unit": "W"
+                  }
+                },
+                {
+                  "key": "Science",
+                  "value": {
+                    "kind": "quantity",
+                    "display": "9.6 W",
+                    "magnitude": "9.6",
+                    "si_value": 9.600000000000001,
+                    "unit": "W"
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "key": "Heater",
+            "value": {
+              "kind": "indexed",
+              "display": "[Mode]",
+              "index": "Mode",
+              "entries": [
+                {
+                  "key": "Safe",
+                  "value": {
+                    "kind": "quantity",
+                    "display": "4.8 W",
+                    "magnitude": "4.8",
+                    "si_value": 4.8,
+                    "unit": "W"
+                  }
+                },
+                {
+                  "key": "Nominal",
+                  "value": {
+                    "kind": "quantity",
+                    "display": "3.2 W",
+                    "magnitude": "3.2",
+                    "si_value": 3.2,
+                    "unit": "W"
+                  }
+                },
+                {
+                  "key": "Science",
+                  "value": {
+                    "kind": "quantity",
+                    "display": "1.6 W",
+                    "magnitude": "1.6",
+                    "si_value": 1.6,
+                    "unit": "W"
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "key": "Payload",
+            "value": {
+              "kind": "indexed",
+              "display": "[Mode]",
+              "index": "Mode",
+              "entries": [
+                {
+                  "key": "Safe",
+                  "value": {
+                    "kind": "quantity",
+                    "display": "0 W",
+                    "magnitude": "0",
+                    "si_value": 0.0,
+                    "unit": "W"
+                  }
+                },
+                {
+                  "key": "Nominal",
+                  "value": {
+                    "kind": "quantity",
+                    "display": "10 W",
+                    "magnitude": "10",
+                    "si_value": 10.0,
+                    "unit": "W"
+                  }
+                },
+                {
+                  "key": "Science",
+                  "value": {
+                    "kind": "quantity",
+                    "display": "20 W",
+                    "magnitude": "20",
+                    "si_value": 20.0,
+                    "unit": "W"
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "p:power_project/f:src/f:power_project/f:power_max/n:p_bus",
+      "label": "p_bus",
+      "name": "p_bus",
+      "module": "power_project.power_max",
+      "kind": "node",
+      "origin": {
+        "kind": "local"
+      },
+      "axes": [
+        "p:power_project/f:src/f:power_project/f:components/n:Component",
+        "p:power_project/f:src/f:power_project/f:components/n:Mode"
+      ],
+      "dimension": "Power",
+      "unit": "W",
+      "pub": false,
+      "deps": [
+        "p:power_project/f:src/f:power_project/f:power_max/n:eta_dcdc",
+        "p:power_project/f:src/f:power_project/f:power_max/n:p_avg"
+      ],
+      "expr": "for c: Component, m: Mode {\n    (c, m) => @p_avg[c, m] / @eta_dcdc\n}",
+      "reduce": null,
+      "doc": null,
+      "source": {
+        "file": "src/power_project/power_max.gcl",
+        "line": 28,
+        "expr_range": {
+          "start": {
+            "line": 27,
+            "character": 37
+          },
+          "end": {
+            "line": 29,
+            "character": 1
+          }
+        }
+      },
+      "value": {
+        "kind": "indexed",
+        "display": "[Component]",
+        "index": "Component",
+        "entries": [
+          {
+            "key": "Obc",
+            "value": {
+              "kind": "indexed",
+              "display": "[Mode]",
+              "index": "Mode",
+              "entries": [
+                {
+                  "key": "Safe",
+                  "value": {
+                    "kind": "quantity",
+                    "display": "4.444444 W",
+                    "magnitude": "4.444444",
+                    "si_value": 4.444444444444445,
+                    "unit": "W"
+                  }
+                },
+                {
+                  "key": "Nominal",
+                  "value": {
+                    "kind": "quantity",
+                    "display": "4.444444 W",
+                    "magnitude": "4.444444",
+                    "si_value": 4.444444444444445,
+                    "unit": "W"
+                  }
+                },
+                {
+                  "key": "Science",
+                  "value": {
+                    "kind": "quantity",
+                    "display": "4.444444 W",
+                    "magnitude": "4.444444",
+                    "si_value": 4.444444444444445,
+                    "unit": "W"
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "key": "Radio",
+            "value": {
+              "kind": "indexed",
+              "display": "[Mode]",
+              "index": "Mode",
+              "entries": [
+                {
+                  "key": "Safe",
+                  "value": {
+                    "kind": "quantity",
+                    "display": "1.333333 W",
+                    "magnitude": "1.333333",
+                    "si_value": 1.3333333333333335,
+                    "unit": "W"
+                  }
+                },
+                {
+                  "key": "Nominal",
+                  "value": {
+                    "kind": "quantity",
+                    "display": "4 W",
+                    "magnitude": "4",
+                    "si_value": 3.9999999999999996,
+                    "unit": "W"
+                  }
+                },
+                {
+                  "key": "Science",
+                  "value": {
+                    "kind": "quantity",
+                    "display": "10.66667 W",
+                    "magnitude": "10.66667",
+                    "si_value": 10.666666666666668,
+                    "unit": "W"
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "key": "Heater",
+            "value": {
+              "kind": "indexed",
+              "display": "[Mode]",
+              "index": "Mode",
+              "entries": [
+                {
+                  "key": "Safe",
+                  "value": {
+                    "kind": "quantity",
+                    "display": "5.333333 W",
+                    "magnitude": "5.333333",
+                    "si_value": 5.333333333333333,
+                    "unit": "W"
+                  }
+                },
+                {
+                  "key": "Nominal",
+                  "value": {
+                    "kind": "quantity",
+                    "display": "3.555556 W",
+                    "magnitude": "3.555556",
+                    "si_value": 3.555555555555556,
+                    "unit": "W"
+                  }
+                },
+                {
+                  "key": "Science",
+                  "value": {
+                    "kind": "quantity",
+                    "display": "1.777778 W",
+                    "magnitude": "1.777778",
+                    "si_value": 1.777777777777778,
+                    "unit": "W"
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "key": "Payload",
+            "value": {
+              "kind": "indexed",
+              "display": "[Mode]",
+              "index": "Mode",
+              "entries": [
+                {
+                  "key": "Safe",
+                  "value": {
+                    "kind": "quantity",
+                    "display": "0 W",
+                    "magnitude": "0",
+                    "si_value": 0.0,
+                    "unit": "W"
+                  }
+                },
+                {
+                  "key": "Nominal",
+                  "value": {
+                    "kind": "quantity",
+                    "display": "11.11111 W",
+                    "magnitude": "11.11111",
+                    "si_value": 11.11111111111111,
+                    "unit": "W"
+                  }
+                },
+                {
+                  "key": "Science",
+                  "value": {
+                    "kind": "quantity",
+                    "display": "22.22222 W",
+                    "magnitude": "22.22222",
+                    "si_value": 22.22222222222222,
+                    "unit": "W"
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "p:power_project/f:src/f:power_project/f:power_max/n:p_mode",
+      "label": "p_mode",
+      "name": "p_mode",
+      "module": "power_project.power_max",
+      "kind": "node",
+      "origin": {
+        "kind": "local"
+      },
+      "axes": [
+        "p:power_project/f:src/f:power_project/f:components/n:Mode"
+      ],
+      "dimension": "Power",
+      "unit": "W",
+      "pub": false,
+      "deps": [
+        "p:power_project/f:src/f:power_project/f:power_max/n:p_bus"
+      ],
+      "expr": "for m: Mode {\n    sum(for c: Component { @p_bus[c, m] })\n}",
+      "reduce": null,
+      "doc": null,
+      "source": {
+        "file": "src/power_project/power_max.gcl",
+        "line": 32,
+        "expr_range": {
+          "start": {
+            "line": 31,
+            "character": 27
+          },
+          "end": {
+            "line": 33,
+            "character": 1
+          }
+        }
+      },
+      "value": {
+        "kind": "indexed",
+        "display": "[Mode]",
+        "index": "Mode",
+        "entries": [
+          {
+            "key": "Safe",
+            "value": {
+              "kind": "quantity",
+              "display": "11.11111 W",
+              "magnitude": "11.11111",
+              "si_value": 11.11111111111111,
+              "unit": "W"
+            }
+          },
+          {
+            "key": "Nominal",
+            "value": {
+              "kind": "quantity",
+              "display": "23.11111 W",
+              "magnitude": "23.11111",
+              "si_value": 23.11111111111111,
+              "unit": "W"
+            }
+          },
+          {
+            "key": "Science",
+            "value": {
+              "kind": "quantity",
+              "display": "39.11111 W",
+              "magnitude": "39.11111",
+              "si_value": 39.111111111111114,
+              "unit": "W"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "p:power_project/f:src/f:power_project/f:power_max/n:p_peak",
+      "label": "p_peak",
+      "name": "p_peak",
+      "module": "power_project.power_max",
+      "kind": "node",
+      "origin": {
+        "kind": "local"
+      },
+      "axes": [
+        "p:power_project/f:src/f:power_project/f:components/n:Component"
+      ],
+      "dimension": "Power",
+      "unit": "W",
+      "pub": false,
+      "deps": [
+        "p:power_project/f:src/f:power_project/f:power_max/n:p_bus"
+      ],
+      "expr": "for c: Component {\n    maximum(for m: Mode { @p_bus[c, m] })\n}",
+      "reduce": null,
+      "doc": null,
+      "source": {
+        "file": "src/power_project/power_max.gcl",
+        "line": 36,
+        "expr_range": {
+          "start": {
+            "line": 35,
+            "character": 32
+          },
+          "end": {
+            "line": 37,
+            "character": 1
+          }
+        }
+      },
+      "value": {
+        "kind": "indexed",
+        "display": "[Component]",
+        "index": "Component",
+        "entries": [
+          {
+            "key": "Obc",
+            "value": {
+              "kind": "quantity",
+              "display": "4.444444 W",
+              "magnitude": "4.444444",
+              "si_value": 4.444444444444445,
+              "unit": "W"
+            }
+          },
+          {
+            "key": "Radio",
+            "value": {
+              "kind": "quantity",
+              "display": "10.66667 W",
+              "magnitude": "10.66667",
+              "si_value": 10.666666666666668,
+              "unit": "W"
+            }
+          },
+          {
+            "key": "Heater",
+            "value": {
+              "kind": "quantity",
+              "display": "5.333333 W",
+              "magnitude": "5.333333",
+              "si_value": 5.333333333333333,
+              "unit": "W"
+            }
+          },
+          {
+            "key": "Payload",
+            "value": {
+              "kind": "quantity",
+              "display": "22.22222 W",
+              "magnitude": "22.22222",
+              "si_value": 22.22222222222222,
+              "unit": "W"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "p:power_project/f:src/f:power_project/f:power_max/n:p_total",
+      "label": "p_total",
+      "name": "p_total",
+      "module": "power_project.power_max",
+      "kind": "node",
+      "origin": {
+        "kind": "local"
+      },
+      "axes": [],
+      "dimension": "Power",
+      "unit": "W",
+      "pub": false,
+      "deps": [
+        "p:power_project/f:src/f:power_project/f:power_max/n:p_mode"
+      ],
+      "expr": "maximum(@p_mode)",
+      "reduce": null,
+      "doc": null,
+      "source": {
+        "file": "src/power_project/power_max.gcl",
+        "line": 40,
+        "expr_range": {
+          "start": {
+            "line": 39,
+            "character": 22
+          },
+          "end": {
+            "line": 39,
+            "character": 38
+          }
+        }
+      },
+      "value": {
+        "kind": "quantity",
+        "display": "39.11111 W",
+        "magnitude": "39.11111",
+        "si_value": 39.111111111111114,
+        "unit": "W"
+      }
+    },
+    {
+      "id": "p:power_project/f:src/f:power_project/f:power_max/n:p_mean",
+      "label": "p_mean",
+      "name": "p_mean",
+      "module": "power_project.power_max",
+      "kind": "node",
+      "origin": {
+        "kind": "local"
+      },
+      "axes": [],
+      "dimension": "Power",
+      "unit": "W",
+      "pub": false,
+      "deps": [
+        "p:power_project/f:src/f:power_project/f:components/n:num",
+        "p:power_project/f:src/f:power_project/f:power_max/n:p_total"
+      ],
+      "expr": "@p_total / to_float(@num)",
+      "reduce": null,
+      "doc": null,
+      "source": {
+        "file": "src/power_project/power_max.gcl",
+        "line": 41,
+        "expr_range": {
+          "start": {
+            "line": 40,
+            "character": 21
+          },
+          "end": {
+            "line": 40,
+            "character": 46
+          }
+        }
+      },
+      "value": {
+        "kind": "quantity",
+        "display": "9.777778 W",
+        "magnitude": "9.777778",
+        "si_value": 9.777777777777779,
+        "unit": "W"
+      }
+    },
+    {
+      "id": "p:power_project/f:src/f:power_project/f:power_max/n:p_required",
+      "label": "p_required",
+      "name": "p_required",
+      "module": "power_project.power_max",
+      "kind": "node",
+      "origin": {
+        "kind": "local"
+      },
+      "axes": [],
+      "dimension": "Power",
+      "unit": "W",
+      "pub": true,
+      "deps": [
+        "p:power_project/f:src/f:power_project/f:power_max/n:margin",
+        "p:power_project/f:src/f:power_project/f:power_max/n:p_total"
+      ],
+      "expr": "@p_total * (1.0 + @margin)",
+      "reduce": null,
+      "doc": null,
+      "source": {
+        "file": "src/power_project/power_max.gcl",
+        "line": 42,
+        "expr_range": {
+          "start": {
+            "line": 41,
+            "character": 29
+          },
+          "end": {
+            "line": 41,
+            "character": 55
+          }
+        }
+      },
+      "value": {
+        "kind": "quantity",
+        "display": "46.93333 W",
+        "magnitude": "46.93333",
+        "si_value": 46.93333333333334,
+        "unit": "W"
+      }
+    },
+    {
+      "id": "p:power_project/f:src/f:power_project/f:power_max/n:heat_dcdc",
+      "label": "heat_dcdc",
+      "name": "heat_dcdc",
+      "module": "power_project.power_max",
+      "kind": "node",
+      "origin": {
+        "kind": "local"
+      },
+      "axes": [],
+      "dimension": "Power",
+      "unit": "W",
+      "pub": true,
+      "deps": [
+        "p:power_project/f:src/f:power_project/f:power_max/n:eta_dcdc",
+        "p:power_project/f:src/f:power_project/f:power_max/n:p_peak"
+      ],
+      "expr": "sum(for c: Component { @p_peak[c] }) * (1.0 - @eta_dcdc)",
+      "reduce": null,
+      "doc": null,
+      "source": {
+        "file": "src/power_project/power_max.gcl",
+        "line": 43,
+        "expr_range": {
+          "start": {
+            "line": 42,
+            "character": 28
+          },
+          "end": {
+            "line": 42,
+            "character": 84
+          }
+        }
+      },
+      "value": {
+        "kind": "quantity",
+        "display": "4.266667 W",
+        "magnitude": "4.266667",
+        "si_value": 4.266666666666667,
+        "unit": "W"
+      }
+    },
+    {
+      "id": "p:power_project/f:src/f:power_project/f:power_max/n:within_budget",
+      "label": "within_budget",
+      "name": "within_budget",
+      "module": "power_project.power_max",
+      "kind": "assert",
+      "origin": {
+        "kind": "local"
+      },
+      "axes": [],
+      "dimension": "Bool",
+      "unit": null,
+      "pub": false,
+      "deps": [
+        "p:power_project/f:src/f:power_project/f:power_max/n:p_budget",
+        "p:power_project/f:src/f:power_project/f:power_max/n:p_required"
+      ],
+      "expr": "@p_required <= @p_budget",
+      "reduce": null,
+      "doc": null,
+      "source": {
+        "file": "src/power_project/power_max.gcl",
+        "line": 45,
+        "expr_range": {
+          "start": {
+            "line": 44,
+            "character": 23
+          },
+          "end": {
+            "line": 44,
+            "character": 47
+          }
+        }
+      },
+      "value": {
+        "kind": "bool",
+        "display": "PASS",
+        "value": true
+      }
+    },
+    {
+      "id": "p:power_project/f:src/f:power_project/f:components/n:num",
+      "label": "num",
+      "name": "num",
+      "module": "power_project.components",
+      "kind": "const",
+      "origin": {
+        "kind": "imported"
+      },
+      "axes": [],
+      "dimension": "Int",
+      "unit": null,
+      "pub": true,
+      "deps": [],
+      "expr": "count(for c: Component { 1.0 })",
+      "reduce": null,
+      "doc": null,
+      "source": {
+        "file": "src/power_project/components.gcl",
+        "line": 4,
+        "expr_range": {
+          "start": {
+            "line": 3,
+            "character": 26
+          },
+          "end": {
+            "line": 3,
+            "character": 57
+          }
+        }
+      },
+      "value": {
+        "kind": "int",
+        "display": "4"
+      }
+    }
+  ]
+}

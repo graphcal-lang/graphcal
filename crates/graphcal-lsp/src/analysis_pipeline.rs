@@ -412,15 +412,17 @@ pub fn run_analysis_with_cancellation(
                 crate::diagnostics::unfinished_node_diagnostics(&root_ast.declarations, text);
             let (mut view, degradations) = match view {
                 ViewModelDemand::Skip => (None, Vec::new()),
-                ViewModelDemand::Project => match project_view_for_lsp(&project, &checked) {
-                    Ok(view) => (Some(view), Vec::new()),
-                    Err(error) => (
-                        None,
-                        vec![AnalysisDegradation::ViewUnavailable {
-                            reason: error.to_string(),
-                        }],
-                    ),
-                },
+                ViewModelDemand::Project => {
+                    match graphcal_project::view_model::project_view(&project, &checked) {
+                        Ok(view) => (Some(view), Vec::new()),
+                        Err(error) => (
+                            None,
+                            vec![AnalysisDegradation::ViewUnavailable {
+                                reason: error.to_string(),
+                            }],
+                        ),
+                    }
+                }
             };
             cancellation.checkpoint()?;
             let (mut diagnostics, eval_values) = if checked.is_library() {
@@ -561,26 +563,6 @@ pub fn run_eval_from_checked(
             })
         }
     }
-}
-
-/// The view structure of the checked root, with source paths relative to
-/// the discovered project root. A projection failure (a checked-program
-/// invariant the projection could not honour) leaves the document without
-/// a view rather than failing the analysis.
-fn project_view_for_lsp(
-    project: &LoadedProject,
-    checked: &CheckedProject,
-) -> Result<
-    graphcal_project::view_model::ViewProjection,
-    graphcal_project::view_model::ViewProjectionError,
-> {
-    let root_dir = project.root_file().path().parent().and_then(|dir| {
-        graphcal_project::loader::discover_project_root(
-            dir,
-            &graphcal_io::RealFileSystem::default(),
-        )
-    });
-    graphcal_project::view_model::project_view(project, checked, root_dir.as_deref())
 }
 
 /// Collect loader-resolved import links from the project for Document Links.

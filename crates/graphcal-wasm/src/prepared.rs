@@ -182,14 +182,12 @@ fn prepare_virtual(
         .and_then(|checked| {
             let view = match view {
                 ViewDemand::Skip => PreparedView::NotRequested,
-                ViewDemand::Project => {
-                    match project_view(&loaded, &checked, Some(VirtualProject::root_path())) {
-                        Ok(projection) => PreparedView::Projected(projection),
-                        Err(error) => PreparedView::Unavailable {
-                            reason: error.to_string(),
-                        },
-                    }
-                }
+                ViewDemand::Project => match project_view(&loaded, &checked) {
+                    Ok(projection) => PreparedView::Projected(projection),
+                    Err(error) => PreparedView::Unavailable {
+                        reason: error.to_string(),
+                    },
+                },
             };
             checked
                 .prepare_with_host_fns(&registry)

@@ -1,4 +1,4 @@
-import type { ViewModel, ViewNode } from "./model.ts";
+import { isExternal, type ViewModel, type ViewNode } from "./model.ts";
 
 // Layout grammar: x = role (const → param → node, with outputs as the right
 // sub-zone of node), y = shape. An axis gets a band of its own only when two or
@@ -24,9 +24,9 @@ export interface Column {
   position: number;
   /** Row within the stack; 0 for the top box and for every axis-band column. */
   tierRow: number;
-  /** Row labels this column renders (band labels, or its own first axis). */
+  /** Entry keys of the rows this column renders (the band's, or its own first axis's). */
   rows: string[];
-  /** Sub-column labels (second axis), if any. */
+  /** Entry keys of the sub-columns (second axis), if any. */
   subs: string[];
   /** May be folded by fit mode on its own: an intermediate node (never an output). */
   foldable: boolean;
@@ -34,12 +34,49 @@ export interface Column {
   activity: number;
 }
 
+/** An index axis as the sheet draws it. */
+export interface Axis {
+  id: string;
+  /** The axis as source spells it. */
+  name: string;
+  /** The module that declares the axis when it is not this one (an import). */
+  origin: string | null;
+  /** Entry keys in declaration order. */
+  keys: string[];
+  /** What a reader sees for each entry key. */
+  display: Map<string, string>;
+}
+
+/** What a reader sees for an entry of `axis`: its display, or the key when the axis is unknown. */
+export function entryName(axes: ReadonlyMap<string, Axis>, axis: string, key: string): string {
+  return axes.get(axis)?.display.get(key) ?? key;
+}
+
+/** What a reader sees for an axis: its name, or the id when the axis is unknown. */
+export function axisName(axes: ReadonlyMap<string, Axis>, axis: string): string {
+  return axes.get(axis)?.name ?? axis;
+}
+
+export function axesOf(model: ViewModel): Map<string, Axis> {
+  return new Map(
+    model.indexes.map((index) => [
+      index.id,
+      {
+        id: index.id,
+        name: index.name,
+        origin: index.module === null || index.module === model.module.id ? null : index.module,
+        keys: index.entries.map((entry) => entry.key),
+        display: new Map(index.entries.map((entry) => [entry.key, entry.display])),
+      },
+    ]),
+  );
+}
+
 export interface Band {
   index: number;
-  /** Unrolled axis, or null for the no-axis band. */
+  /** Unrolled axis id, or null for the no-axis band. */
   axis: string | null;
-  /** The module that declares the axis when it is not this one (an import). */
-  axisOrigin: string | null;
+  /** Entry keys of the axis's rows. */
   labels: string[];
   columns: Column[];
 }
@@ -49,14 +86,17 @@ export interface Layout {
   columns: Map<string, Column>;
   /** Direct consumers of each node id within the module. */
   users: Map<string, string[]>;
+  /** Every axis of the model, by id. */
+  axes: Map<string, Axis>;
 }
 
 function roleOf(node: ViewNode, hasUsers: boolean): Role {
+  // A value read from another file is an input of this one.
+  if (isExternal(node)) return "param";
   switch (node.kind) {
     case "const":
       return "const";
     case "param":
-    case "external":
       return "param";
     case "assert":
       return "output";
@@ -102,10 +142,8 @@ export function computeLayout(model: ViewModel): Layout {
     }
   }
   const depths = computeDepths(model);
-  const labelsOf = new Map(model.indexes.map((i) => [i.name, i.labels]));
-  const originOf = new Map(
-    model.indexes.map((i) => [i.name, i.module === model.module.id ? null : i.module]),
-  );
+  const axes = axesOf(model);
+  const labelsOf = (axis: string): string[] => axes.get(axis)?.keys ?? [];
   const order = new Map(model.nodes.map((n, i) => [n.id, i]));
 
   // Every node with an axis goes into the band of its first axis; the
@@ -117,7 +155,7 @@ export function computeLayout(model: ViewModel): Layout {
     const axis = bandAxisOf(node);
     grouped.set(axis, [...(grouped.get(axis) ?? []), node]);
   }
-  const axisOrder = new Map(model.indexes.map((i, k) => [i.name, k]));
+  const axisOrder = new Map(model.indexes.map((i, k) => [i.id, k]));
   const bandAxes = [...grouped.keys()].sort((a, b) => {
     if (a === null) return -1;
     if (b === null) return 1;
@@ -132,8 +170,7 @@ export function computeLayout(model: ViewModel): Layout {
     const band: Band = {
       index: bandIndex,
       axis,
-      axisOrigin: axis ? (originOf.get(axis) ?? null) : null,
-      labels: axis ? (labelsOf.get(axis) ?? []) : [],
+      labels: axis ? labelsOf(axis) : [],
       columns: [],
     };
     const roleOfNode = (node: ViewNode): Role =>
@@ -156,9 +193,9 @@ export function computeLayout(model: ViewModel): Layout {
         bandIndex,
         position,
         tierRow: 0,
-        rows: axis !== null ? band.labels : ownAxis ? (labelsOf.get(ownAxis) ?? []) : [],
-        subs: subAxis ? (labelsOf.get(subAxis) ?? []) : [],
-        foldable: node.kind === "node" && roleOfNode(node) === "node",
+        rows: axis !== null ? band.labels : ownAxis ? labelsOf(ownAxis) : [],
+        subs: subAxis ? labelsOf(subAxis) : [],
+        foldable: node.kind === "node" && !isExternal(node) && roleOfNode(node) === "node",
         // Consumers first, then how far the value travels (depth from params).
         activity: consumers.length * 10 + (depths.get(node.id) ?? 0),
       };
@@ -167,7 +204,7 @@ export function computeLayout(model: ViewModel): Layout {
     });
     bands.push(band);
   });
-  return { bands, columns, users };
+  return { bands, columns, users, axes };
 }
 
 export const BOX_GAP = 10;

@@ -1,3 +1,4 @@
+import { EdgeMap } from "./edges.ts";
 import type { Layout } from "./layout.ts";
 import type { ViewModel } from "./model.ts";
 
@@ -16,8 +17,8 @@ export interface Trace {
   direct: Set<string>;
   /** Every node reachable, including the direct ones. */
   all: Set<string>;
-  /** Edges on the traced paths, keyed `${from}->${to}`, with direct edges flagged. */
-  edges: Map<string, boolean>;
+  /** Edges on the traced paths, with direct edges flagged. */
+  edges: EdgeMap<boolean>;
 }
 
 export function trace(selection: Selection, model: ViewModel, layout: Layout): Trace {
@@ -28,14 +29,14 @@ export function trace(selection: Selection, model: ViewModel, layout: Layout): T
       : (layout.users.get(id) ?? []);
   const direct = new Set(next(selection.id));
   const all = new Set<string>();
-  const edges = new Map<string, boolean>();
+  const edges = new EdgeMap<boolean>();
   const queue = [selection.id];
   while (queue.length > 0) {
     const current = queue.shift() as string;
     for (const neighbour of next(current)) {
-      const key =
-        selection.mode === "deps" ? `${neighbour}->${current}` : `${current}->${neighbour}`;
-      edges.set(key, current === selection.id);
+      const fromSelected = current === selection.id;
+      if (selection.mode === "deps") edges.set(neighbour, current, fromSelected);
+      else edges.set(current, neighbour, fromSelected);
       if (!all.has(neighbour)) {
         all.add(neighbour);
         queue.push(neighbour);

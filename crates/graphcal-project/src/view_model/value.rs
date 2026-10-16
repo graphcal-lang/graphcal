@@ -122,7 +122,7 @@ pub(super) fn view_value(
                 .iter()
                 .map(|(key, entry)| {
                     view_value(entry, render, units).map(|projected| ViewEntry {
-                        key: value.indexed_entry_display_name(key),
+                        key: key.to_string(),
                         value: projected,
                     })
                 })

@@ -1024,10 +1024,9 @@ fn run_view(file: &Path, project_root: Option<&Path>) {
     );
     let outcome = (|| -> Result<ViewModel, ViewFailure> {
         let fs = build_rooted_filesystem(file, project_root)?;
-        let root_dir = view_root_dir(file, project_root);
         let (project, host_fns) = load_project_with_plugins(file, project_root, &fs)?;
         let checked = ProjectCompiler::new(&project).host_fns(&host_fns).check()?;
-        let mut projection = project_view(&project, &checked, root_dir.as_deref())?;
+        let mut projection = project_view(&project, &checked)?;
         if checked.is_library() {
             return Ok(projection.into_model());
         }
@@ -1053,17 +1052,6 @@ fn run_view(file: &Path, project_root: Option<&Path>) {
             process::exit(2);
         }
     }
-}
-
-/// The directory view source paths are relative to: the explicit root, or
-/// the discovered project root of `file`.
-fn view_root_dir(file: &Path, project_root: Option<&Path>) -> Option<PathBuf> {
-    if let Some(root) = project_root {
-        return root.canonicalize().ok();
-    }
-    let start = file.canonicalize().ok()?.parent()?.to_path_buf();
-    graphcal_project::loader::discover_project_root(&start, &RealFileSystem::default())
-        .or(Some(start))
 }
 
 fn run_format(paths: &[PathBuf], check: bool) {
