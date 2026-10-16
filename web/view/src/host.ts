@@ -57,14 +57,22 @@ export interface Host {
 
 export type NoteKind = "error" | "busy";
 
+/** One thing as it was at the base ref. */
+export type BaseSide<T> =
+  /** Not there at the base: everything in it is new. */
+  | { kind: "absent" }
+  /** The base could not be read or did not evaluate: nothing can be marked as changed. */
+  | { kind: "failed"; message: string }
+  | { kind: "present"; value: T };
+
 /** The base side of a comparison: the same project as read at another ref. */
 export interface Compare {
   /** The base ref. */
   ref: string;
-  /** The base model of a module; null when the module is new or did not evaluate there. */
-  model(module: string): ViewModel | null;
-  /** The base text of a project file; null when the file is new. */
-  source(file: string): string | null;
+  /** The base model of the module `head` shows, found by its file. */
+  model(head: ViewModel): BaseSide<ViewModel>;
+  /** The base text of a project file. */
+  source(file: string): BaseSide<string>;
   /** Repository paths whose content differs between the two refs (added, removed or changed). */
   changedFiles: ReadonlySet<string>;
 }

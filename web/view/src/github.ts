@@ -1,7 +1,10 @@
-// The GitHub REST calls the viewer makes, over `fetch`: the repository, its
-// tree at a ref, and the raw text of a file. Responses are cached by ETag so a
-// reload asks "has it changed?" (a 304 is free of the rate limit). Failures
-// are classified so the shell can tell "not found" from "sign in" from "wait".
+// The GitHub REST calls the viewer makes, over `fetch`: the repository, the
+// commit a ref names, that commit's tree, and the raw text of a blob. A load
+// resolves its ref to a commit once and reads everything by hash from there,
+// so a push in between cannot mix two commits. Responses are cached by ETag
+// so a reload asks "has it changed?" (a 304 is free of the rate limit); a
+// blob, named by its content's hash, is fetched once. Failures are classified
+// so the shell can tell "not found" from "sign in" from "wait".
 import { z } from "zod";
 
 const API = "https://api.github.com";
@@ -10,6 +13,8 @@ const API_VERSION = "2022-11-28";
 export type GitHubFailure =
   /** 404: the repository, ref or path does not exist, or the viewer may not see it. */
   | "not_found"
+  /** The repository has no branch, tag or commit of that name. */
+  | "ref_not_found"
   /** 401: the token was rejected. */
   | "unauthorized"
   /** 403 / 429 with the rate limit used up. */
@@ -42,6 +47,17 @@ export interface RepoInfo {
   fullName: string;
   defaultBranch: string;
   private: boolean;
+}
+
+const commitSchema = z.object({
+  sha: z.string(),
+  commit: z.object({ tree: z.object({ sha: z.string() }) }),
+});
+/** The commit a ref names, at the time it was asked. */
+export interface Commit {
+  sha: string;
+  /** The commit's root tree. */
+  treeSha: string;
 }
 
 const treeSchema = z.object({
@@ -116,6 +132,8 @@ const JSON_ = "application/vnd.github+json";
 
 export class GitHub {
   private readonly cache = new Map<string, Cached>();
+  /** Blob texts by sha: a sha names one content, whichever repository holds it. */
+  private readonly blobs = new Map<string, Promise<string>>();
   private readonly token: string | null;
   private readonly fetchFn: typeof fetch;
   constructor(token: string | null, fetchFn: typeof fetch = (input, init) => fetch(input, init)) {
@@ -128,9 +146,30 @@ export class GitHub {
     return { fullName: data.full_name, defaultBranch: data.default_branch, private: data.private };
   }
 
-  /** Every path in the repository at `ref` (a branch, tag or commit). */
-  async tree(owner: string, repo: string, ref: string): Promise<Tree> {
-    const url = `/repos/${owner}/${repo}/git/trees/${encodeURIComponent(ref)}?recursive=1`;
+  /** The commit `ref` (a branch, tag or commit) names now. */
+  async commit(owner: string, repo: string, ref: string): Promise<Commit> {
+    let body: string;
+    try {
+      body = await this.get(`/repos/${owner}/${repo}/commits/${encodeURIComponent(ref)}`, JSON_);
+    } catch (error) {
+      // GitHub answers 422 ("No commit found for SHA") for a name it does not know.
+      if (error instanceof GitHubError && error.status === 422) {
+        throw new GitHubError(
+          "ref_not_found",
+          `${owner}/${repo} has no branch, tag or commit ${ref}`,
+          error.status,
+          null,
+        );
+      }
+      throw error;
+    }
+    const data = commitSchema.parse(JSON.parse(body));
+    return { sha: data.sha, treeSha: data.commit.tree.sha };
+  }
+
+  /** Every path in the tree `treeSha` (a commit's `treeSha`), recursively. */
+  async tree(owner: string, repo: string, treeSha: string): Promise<Tree> {
+    const url = `/repos/${owner}/${repo}/git/trees/${encodeURIComponent(treeSha)}?recursive=1`;
     const data = treeSchema.parse(JSON.parse(await this.get(url, JSON_)));
     return {
       sha: data.sha,
@@ -144,11 +183,20 @@ export class GitHub {
     };
   }
 
-  /** The text of a file at `ref`. */
-  file(owner: string, repo: string, ref: string, path: string): Promise<string> {
-    const encoded = path.split("/").map(encodeURIComponent).join("/");
-    const url = `/repos/${owner}/${repo}/contents/${encoded}?ref=${encodeURIComponent(ref)}`;
-    return this.get(url, RAW);
+  /**
+   * The text of the blob `sha` (a tree entry's `sha`). A blob's sha is the
+   * hash of its content, so it is fetched once and shared by every tree
+   * that holds it.
+   */
+  blob(owner: string, repo: string, sha: string): Promise<string> {
+    const known = this.blobs.get(sha);
+    if (known) return known;
+    const text = this.get(`/repos/${owner}/${repo}/git/blobs/${encodeURIComponent(sha)}`, RAW);
+    this.blobs.set(sha, text);
+    text.catch(() => {
+      if (this.blobs.get(sha) === text) this.blobs.delete(sha);
+    });
+    return text;
   }
 
   /**

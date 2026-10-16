@@ -197,7 +197,16 @@ function renderOptions(s: Sheet): RenderOptions {
 function diffOf(s: Sheet): ModelDiff | null {
   const compare = host.compare ?? null;
   if (!compare) return null;
-  return diffModels(compare.model(s.model.module.id), s.model);
+  const base = compare.model(s.model);
+  switch (base.kind) {
+    case "absent":
+      return diffModels(null, s.model);
+    case "present":
+      return diffModels(base.value, s.model);
+    case "failed":
+      // Nothing to compare against: no node is marked rather than every one.
+      return null;
+  }
 }
 
 function fileNameOf(model: ViewModel): string {
@@ -1501,7 +1510,11 @@ function syncEditor(): void {
     return;
   }
   editor.show(file, text);
-  editor.setOriginal(host.compare ? (host.compare.source(file) ?? "") : null);
+  const original = host.compare?.source(file);
+  // A new file is all added; a base that could not be read marks nothing.
+  editor.setOriginal(
+    original?.kind === "present" ? original.value : original?.kind === "absent" ? "" : null,
+  );
   editor.setInlays(inlaysOf(s));
   syncEditorSelection();
 }
