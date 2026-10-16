@@ -1319,21 +1319,6 @@ impl SymbolTable {
         matches.next().is_none().then_some(definition)
     }
 
-    pub fn scoped_name_for_decl(&self, key: &SymbolKey) -> Option<ScopedName> {
-        let SymbolKey::Declaration(name) = key else {
-            return None;
-        };
-        let member = name.to_unowned_def_name();
-        if name.owner() == &self.owner {
-            return Some(ScopedName::local(member));
-        }
-        let qualifier = name.owner().scopes_below(&self.owner)?;
-        Some(ScopedName::from_parts(
-            graphcal_compiler::syntax::non_empty::NonEmpty::try_from_vec(qualifier).ok(),
-            member,
-        ))
-    }
-
     pub fn definition_for_scoped_decl(&self, name: &ScopedName) -> Option<&DefinitionInfo> {
         self.definitions.iter().find_map(|(key, definition)| {
             let SymbolKey::Declaration(resolved) = key else {

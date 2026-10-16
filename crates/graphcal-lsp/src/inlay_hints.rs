@@ -3,12 +3,15 @@
 use tower_lsp::lsp_types::{InlayHint, InlayHintKind, InlayHintLabel, Range};
 
 use crate::analysis::AnalysisResult;
+use crate::symbol_table::SymbolKey;
 
 /// Produce inlay hints for declarations within the given range.
 ///
 /// Shows computed values (from evaluation) when available, falling back to
-/// type descriptions. Only top-level `param`, `node`, and `const` declarations
-/// produce hints.
+/// type descriptions. Only `param`, `node`, and `const` declarations produce
+/// hints. Values are matched by declaration identity, so a declaration in an
+/// inline `dag` body — a template each include instantiates with its own
+/// bindings — never shows an instance's value.
 ///
 /// Iterates the precomputed `inlay_hint_entries` list (already filtered to
 /// the right categories and paired with cached LSP `Position`s at
@@ -27,12 +30,13 @@ pub fn inlay_hints(analysis: &AnalysisResult, range: Range) -> Option<Vec<InlayH
             continue;
         };
 
+        let value = match entry.key.as_ref() {
+            SymbolKey::Declaration(identity) => analysis.eval_values.get(identity),
+            _ => None,
+        };
+
         // Build the label: prefer computed value, fall back to type.
-        let label = if let Some(value_str) = analysis
-            .symbol_table
-            .scoped_name_for_decl(entry.key.as_ref())
-            .and_then(|name| analysis.eval_values.get(&name))
-        {
+        let label = if let Some(value_str) = value {
             format!(" = {value_str}")
         } else if let Some(type_desc) = &def.type_description {
             format!(": {type_desc}")

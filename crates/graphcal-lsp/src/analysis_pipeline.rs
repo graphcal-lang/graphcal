@@ -14,7 +14,7 @@ use crate::symbol_table::{self, SymbolTable};
 use crate::workspace_revision::{AnalysisInputSnapshot, DocumentIdentity};
 use graphcal_compiler::cancellation::{CancellationToken, Cancelled};
 use graphcal_compiler::outcome::Outcome;
-use graphcal_compiler::syntax::module_name::ScopedName;
+use graphcal_compiler::resolved_name::ResolvedDeclName;
 use graphcal_eval::eval::EvalResult;
 use graphcal_project::compile_error::CompileError;
 use graphcal_project::loader::LoadedProject;
@@ -518,7 +518,7 @@ pub fn run_analysis_with_cancellation(
 pub struct EvalAnalysisOutput {
     pub diagnostics: HashMap<Url, Vec<Diagnostic>>,
     /// Formatted values for hover and inlay hints.
-    pub values: HashMap<ScopedName, String>,
+    pub values: HashMap<ResolvedDeclName, String>,
     /// The evaluation itself, when it ran to completion.
     pub result: Option<EvalResult>,
 }
