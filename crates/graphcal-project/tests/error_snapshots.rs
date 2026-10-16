@@ -136,6 +136,13 @@ fn error_runtime_cycle() {
 }
 
 #[test]
+fn error_recurrence_same_step_cycle() {
+    let source = include_str!("../../../tests/fixtures/invalid/recurrence_same_step_cycle.gcl");
+    let rendered = render_error(source, "recurrence_same_step_cycle.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
 fn error_const_cycle() {
     let source = include_str!("../../../tests/fixtures/invalid/const_cycle.gcl");
     let rendered = render_error(source, "const_cycle.gcl");

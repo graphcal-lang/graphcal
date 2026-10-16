@@ -1,0 +1,3 @@
+index Step = range(0.0 s, 2.0 s, step: 1.0 s);
+node state: Dimensionless[Step] = unfold(Step, 1.0, |s, prev_t, t| s * @gain);
+node gain: Dimensionless = sum(@state);

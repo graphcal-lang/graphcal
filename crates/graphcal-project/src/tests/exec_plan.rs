@@ -86,7 +86,7 @@ fn callable_plans_use_the_checked_closure_schedule() {
     let schedule = tir.root().runtime_schedule();
     assert_eq!(
         root_order(plan),
-        schedule.order().iter().collect::<Vec<_>>()
+        schedule.declarations().collect::<Vec<_>>()
     );
     assert_eq!(
         plan.root()
@@ -99,8 +99,7 @@ fn callable_plans_use_the_checked_closure_schedule() {
     assert_eq!(schedule.execution_dags().len(), 2);
     let position = |name: &str| {
         schedule
-            .order()
-            .iter()
+            .declarations()
             .position(|key| key.as_str() == name)
             .unwrap()
     };

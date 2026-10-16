@@ -263,9 +263,9 @@ node v_at_peak: Velocity[Maneuver] = for m: Maneuver {
 意味論的定義を保持しなければなりません。
 
 !!! note "評価の粒度"
-    コンパイル時定数のキー(ラベル、ループ変数、または `key(...)`)によるアクセスは、
-    要素ごとの細粒度な DAG エッジを保ちます。実行時キーによるアクセスは gather であり、
-    エッジはインデックス付き宣言全体を覆います。
+    依存関係は宣言単位でスケジュールされます。インデックス付き宣言のどの要素を読む場合も、
+    宣言全体の評価を待ちます。例外は[宣言をまたぐ漸化式](#recurrences-across-declarations)の
+    循環で、軸に沿って要素ごとに評価されます。
 
 ### 抽出: `coord` と `to_int` { #extractions-coord-and-to_int }
 
@@ -925,6 +925,40 @@ node trajectory: Dimensionless[TimeStep, Element] = unfold(
 インデックス付きの `unfold` と `scan` の例については、完全な実行可能フィクスチャ
 [`indexed_state_recurrence.gcl`](https://github.com/graphcal-lang/graphcal/blob/main/tests/fixtures/valid/indexed_state_recurrence.gcl)
 を参照してください。
+
+### 宣言をまたぐ漸化式 { #recurrences-across-declarations }
+
+互いに読み合う量は、すべての循環が軸に沿って 1 ステップ前を読むのであれば、別々の宣言として
+書けます。次の例では、`action` は同じステップの `state` を読み、`state` は 1 つ前のステップの
+`action` を読みます:
+
+```
+index Step = range(0.0 s, 3.0 s, step: 1.0 s);
+param k: Dimensionless = 0.5;
+
+node action: Dimensionless[Step] = for t: Step { -@k * @state[t] };
+node state: Dimensionless[Step] = unfold(Step, 1.0, |s, prev_t, t| s + @action[prev_t]);
+```
+
+ステップは `state[0]`、`action[0]`、`state[1]`、`action[1]` の順に評価されるので、`state` は
+`1, 0.5, 0.25, 0.125` になります。
+
+このような循環は、次の条件をすべて満たすときに受け入れられます:
+
+- 循環に含まれる宣言はどれも、同じ座標軸上のトップレベルの `for` か `unfold` であり、少なくとも
+  1 つは `unfold` である。
+- 宣言どうしの読み出しは、先頭のキーに読み出し側自身の `for` 変数(`t`)か `unfold` の束縛
+  (`t`、`prev_t`)を使う。`@y[t, ...]` は同じステップを、`@y[prev_t, ...]` は 1 つ前のステップを
+  読む。`sum(@y)` のように値全体を読む式や、`unfold` の初期値での読み出しはエラーになる。
+- 自分自身は読まない。`unfold` の前の値は状態の束縛で読む。
+- 同じステップの読み出しだけで循環ができていない:
+
+```
+node state: Dimensionless[Step] = unfold(Step, 1.0, |s, prev_t, t| s + @action[t]);
+// ERROR: `action` -> `state` -> `action` is a cycle of same-step reads
+```
+
+循環の外にある宣言は自由に読めます。
 
 ## 任意のインデックスに対する集約 { #aggregation-over-any-index }
 

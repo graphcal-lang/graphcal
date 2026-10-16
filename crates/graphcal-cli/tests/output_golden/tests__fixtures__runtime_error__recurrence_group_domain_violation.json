@@ -1,0 +1,28 @@
+{
+  "check": "ok",
+  "eval": {
+    "exit_code": 1,
+    "stdout": {
+      "const": {},
+      "incomplete": false,
+      "node": {
+        "action": {
+          "error": {
+            "kind": "eval_failed",
+            "message": "below minimum (-0.3)"
+          }
+        },
+        "state": {
+          "error": {
+            "failed_deps": [
+              "action"
+            ],
+            "kind": "dependency_failed"
+          }
+        }
+      },
+      "param": {},
+      "unfinished_calls": []
+    }
+  }
+}

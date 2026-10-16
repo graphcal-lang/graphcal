@@ -166,6 +166,10 @@ node a: Dimensionless = @b + 1.0;
 node b: Dimensionless = @a + 1.0;  // ERROR: cycle detected
 ```
 
+The one exception is a cycle of `for` and `unfold` declarations that steps back
+along an axis; see
+[recurrences across declarations](indexes.md#recurrences-across-declarations).
+
 ### Call-Site Identity
 
 When a `dag` is instantiated — whether via top-level `include` or via the

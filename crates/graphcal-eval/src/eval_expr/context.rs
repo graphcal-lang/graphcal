@@ -72,6 +72,9 @@ pub struct EvalEnvironment<'a> {
         >,
     >,
     pub unfinished_calls: Option<&'a std::cell::RefCell<BTreeSet<ResolvedDeclName>>>,
+    /// The element slots of the recurrence group whose element is being
+    /// evaluated: reads of its members go through them.
+    pub(crate) recurrence: Option<&'a crate::recurrence_slots::RecurrenceSlots>,
 }
 
 impl EvalEnvironment<'_> {
@@ -120,6 +123,7 @@ impl<'a> EvalSession<'a> {
             current_decl: None,
             unavailable: None,
             unfinished_calls: None,
+            recurrence: None,
         }
     }
 
@@ -362,6 +366,23 @@ impl<'a> EvalSession<'a> {
     {
         let mut session = self.with_src(step.source());
         session.environment.current_decl = Some(step.key().clone());
+        session.environment.recurrence = None;
+        session
+    }
+
+    /// Select the source and member of one recurrence group element, whose
+    /// reads of the group's members go through the group's slots.
+    #[must_use]
+    pub(crate) fn for_element<'b>(
+        &'b self,
+        element: &crate::execution_frame::ScheduledElement<'b, 'b>,
+    ) -> EvalSession<'b>
+    where
+        'a: 'b,
+    {
+        let mut session = self.with_src(element.source());
+        session.environment.current_decl = Some(element.key().clone());
+        session.environment.recurrence = Some(element.slots());
         session
     }
 

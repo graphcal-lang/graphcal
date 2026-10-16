@@ -1,0 +1,11 @@
+// A recurrence cannot span declarations of different DAGs.
+pub index Step = range(0.0 s, 2.0 s, step: 1.0 s);
+
+dag damper {
+    pub(bind) index T: Time;
+    param input: Dimensionless[T];
+    pub node output: Dimensionless[T] = for t: T { -0.5 * @input[t] };
+}
+
+include damper(index T: Step, input: @state) as damping;
+node state: Dimensionless[Step] = unfold(Step, 1.0, |s, prev_t, t| s + @damping::output[prev_t]);

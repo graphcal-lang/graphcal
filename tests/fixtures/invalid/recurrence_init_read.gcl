@@ -1,0 +1,7 @@
+index Step = range(0.0 s, 2.0 s, step: 1.0 s);
+node action: Dimensionless[Step] = for t: Step { @state[t] };
+node state: Dimensionless[Step] = unfold(
+    Step,
+    @action[nearest_key(Step, 0.0 s)],
+    |s, prev_t, t| s + @action[prev_t]
+);

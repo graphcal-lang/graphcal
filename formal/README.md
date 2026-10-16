@@ -52,7 +52,7 @@ Its central equivalences prove that executable import validation accepts exactly
 The recurrence-group slice uses the same split under `Graphcal/Graph/RecurrenceGroup/`, with its proofs in `Proofs/`.
 They establish that the reference checker accepts exactly R1–R7 and reports the specified violation, that acceptance does not depend on declaration order, that the reference evaluation order is unique, and that for every axis length the reference evaluator never reads an element before evaluating it, evaluates every element of a member reported as succeeded, and produces the same statuses for every valid order.
 They also show that every accepted group steps along a coordinate axis, and that the same-step rule rejects only groups with an element-level cycle on every axis with at least two elements.
-The compiler does not implement recurrence groups yet, so this slice has no Rust conformance check; its oracle is to be added with the implementation.
+The compiler implements the rule in `crates/graphcal-compiler/src/tir/recurrence_group.rs`, whose unit tests mirror `Examples.lean`; an exhaustive Rust conformance oracle for this slice is a follow-up.
 
 ## Build and conformance check
 

@@ -72,7 +72,10 @@ function computeDepths(model: ViewModel): Map<string, number> {
   const visit = (id: string): number => {
     const known = depths.get(id);
     if (known !== undefined) return known;
-    if (visiting.has(id)) return 0; // cycles are rejected by the compiler; stay total anyway
+    // A recurrence group (internals/recurrence-groups.md) is a cycle between
+    // declarations; the back edge counts as depth 0, so the member visited
+    // first sits one column right of the others.
+    if (visiting.has(id)) return 0;
     visiting.add(id);
     const node = byId.get(id);
     let depth = 0;

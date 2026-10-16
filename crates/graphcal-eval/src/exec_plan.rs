@@ -8,12 +8,13 @@ use graphcal_compiler::outcome::Outcome;
 use graphcal_compiler::resolved_name::ResolvedDeclName;
 use graphcal_compiler::semantic_error::SemanticError;
 use graphcal_compiler::source_id::SourceId;
+use graphcal_compiler::tir::schedule::ScheduleUnit;
 use graphcal_compiler::tir::typed::evaluation_unit::{BodyKind, NodeBody};
 
 use crate::checked_program::{CheckedProgram, SealedDag};
 use crate::execution_plan::{
     CallablePlan, ClosureDag, ComputedBody, ExecPlan, PlannedBody, PlannedDeclaration,
-    PlannedInstance, PreparedConstantImport,
+    PlannedInstance, PlannedUnit, PreparedConstantImport,
 };
 
 self_cell::self_cell!(
@@ -232,26 +233,7 @@ fn prepare_callable_plan<'p>(
         .iter()
         .map(closure_dag)
         .collect::<Result<Vec<_>, _>>()?;
-    let scheduled = schedule
-        .order()
-        .iter()
-        .map(|declaration| {
-            let planned = located(declarations, declaration, src)?;
-            let physical = planned.scope().dag().dag_id();
-            if !schedule.execution_dags().contains(physical) {
-                return Err(plan_internal_error(
-                    format!(
-                        "scheduled declaration `{declaration}` is physically in `{physical}`, outside its callable closure"
-                    ),
-                    src,
-                ));
-            }
-            for dependency in planned.reads() {
-                located(declarations, dependency, src)?;
-            }
-            Ok(planned.clone())
-        })
-        .collect::<Result<Vec<_>, _>>()?;
+    let scheduled = plan_units(schedule, declarations, src)?;
     let plan_instances = |parent: SealedDag<'p>| {
         parent
             .dag()
@@ -305,6 +287,48 @@ fn prepare_callable_plan<'p>(
     )
     .map_err(|error| plan_internal_error(error.to_string(), src))
     .map_err(Outcome::Failed)
+}
+
+/// The planned units of a callable's runtime schedule, each declaration
+/// located in the callable's closure.
+fn plan_units<'p>(
+    schedule: &'p graphcal_compiler::tir::schedule::RuntimeSchedule,
+    declarations: &HashMap<&'p ResolvedDeclName, PlannedDeclaration<'p>>,
+    src: SourceId,
+) -> Result<Vec<PlannedUnit<'p>>, SemanticError> {
+    let plan_declaration = |declaration: &ResolvedDeclName| {
+        let planned = located(declarations, declaration, src)?;
+        let physical = planned.scope().dag().dag_id();
+        if !schedule.execution_dags().contains(physical) {
+            return Err(plan_internal_error(
+                format!(
+                    "scheduled declaration `{declaration}` is physically in `{physical}`, outside its callable closure"
+                ),
+                src,
+            ));
+        }
+        for dependency in planned.reads() {
+            located(declarations, dependency, src)?;
+        }
+        Ok(planned.clone())
+    };
+    schedule
+        .units()
+        .iter()
+        .map(|unit| match unit {
+            ScheduleUnit::Declaration(declaration) => {
+                plan_declaration(declaration).map(PlannedUnit::Declaration)
+            }
+            ScheduleUnit::Recurrence(plan) => Ok(PlannedUnit::Recurrence {
+                plan,
+                members: plan
+                    .members()
+                    .iter()
+                    .map(|member| plan_declaration(member.declaration()))
+                    .collect::<Result<_, _>>()?,
+            }),
+        })
+        .collect()
 }
 
 /// The planned declaration `key` denotes.
@@ -481,7 +505,10 @@ mod tests {
             root.semantic_instances().to_vec(),
             root.closure_instances().to_vec(),
             Vec::new(),
-            scheduled,
+            scheduled
+                .into_iter()
+                .map(crate::execution_plan::PlannedUnit::Declaration)
+                .collect(),
         )
     }
 

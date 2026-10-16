@@ -177,6 +177,100 @@ impl<K: Clone + Eq + Hash, E: Clone> DependencyGraph<K, E> {
         }
     }
 
+    /// The strongly connected components that contain a cycle: two or more
+    /// mutually reachable nodes, or one node that depends on itself.
+    ///
+    /// Each component lists its nodes in node insertion order, and the
+    /// components are ordered by their first node's insertion position.
+    #[must_use]
+    pub fn cyclic_components(&self) -> Vec<Vec<K>> {
+        let mut components = self
+            .component_indices()
+            .into_iter()
+            .filter(|component| match component.as_slice() {
+                [node] => self.edges.contains(&(*node, *node)),
+                _ => true,
+            })
+            .map(|mut component| {
+                component.sort_unstable();
+                component
+            })
+            .collect::<Vec<_>>();
+        components.sort_unstable_by_key(|component| component.first().copied());
+        components
+            .into_iter()
+            .map(|component| {
+                component
+                    .into_iter()
+                    .map(|node| self.keys[node].clone())
+                    .collect()
+            })
+            .collect()
+    }
+
+    /// Every strongly connected component by node index (Tarjan's
+    /// algorithm). Iterative, so deep graphs cannot overflow the call stack.
+    fn component_indices(&self) -> Vec<Vec<usize>> {
+        let count = self.keys.len();
+        let mut index = vec![None::<usize>; count];
+        let mut low_link = vec![0_usize; count];
+        let mut on_stack = vec![false; count];
+        let mut stack = Vec::new();
+        let mut components = Vec::new();
+        let mut next_index = 0_usize;
+        // Each frame is a node being visited and its next edge to try.
+        let mut path: Vec<(usize, usize)> = Vec::new();
+        for root in 0..count {
+            if index[root].is_some() {
+                continue;
+            }
+            index[root] = Some(next_index);
+            low_link[root] = next_index;
+            next_index = next_index.saturating_add(1);
+            stack.push(root);
+            on_stack[root] = true;
+            path.push((root, 0));
+            while let Some(frame) = path.last_mut() {
+                let (node, cursor) = *frame;
+                if let Some((dependency, _)) = self.dependencies[node].get(cursor) {
+                    frame.1 = cursor.saturating_add(1);
+                    let dependency = *dependency;
+                    match index[dependency] {
+                        None => {
+                            index[dependency] = Some(next_index);
+                            low_link[dependency] = next_index;
+                            next_index = next_index.saturating_add(1);
+                            stack.push(dependency);
+                            on_stack[dependency] = true;
+                            path.push((dependency, 0));
+                        }
+                        Some(visited) if on_stack[dependency] => {
+                            low_link[node] = low_link[node].min(visited);
+                        }
+                        Some(_) => {}
+                    }
+                    continue;
+                }
+                path.pop();
+                if let Some(&(parent, _)) = path.last() {
+                    low_link[parent] = low_link[parent].min(low_link[node]);
+                }
+                if index[node] == Some(low_link[node]) {
+                    let mut component = Vec::new();
+                    while let Some(member) = stack.pop() {
+                        on_stack[member] = false;
+                        component.push(member);
+                        if member == node {
+                            break;
+                        }
+                    }
+                    components.push(component);
+                }
+            }
+        }
+        components
+    }
+
     fn position_of(&mut self, key: K) -> usize {
         if let Some(&position) = self.positions.get(&key) {
             return position;
@@ -442,6 +536,40 @@ mod tests {
 
     fn cycle(graph: DependencyGraph<&'static str>) -> Vec<&'static str> {
         graph.into_topo_order().expect_err("cyclic").into_path()
+    }
+
+    #[test]
+    fn cyclic_components_list_only_components_with_a_cycle() {
+        let graph = graph(
+            &["a", "b", "c", "d", "e", "f"],
+            &[
+                ("a", "b"),
+                ("b", "a"),
+                ("c", "a"),
+                ("d", "d"),
+                ("e", "f"),
+                ("f", "c"),
+            ],
+        );
+        assert_eq!(graph.cyclic_components(), vec![vec!["a", "b"], vec!["d"]]);
+    }
+
+    #[test]
+    fn cyclic_components_keep_insertion_order_within_and_across_components() {
+        let graph = graph(
+            &["x", "p", "q", "y", "r"],
+            &[("y", "x"), ("x", "y"), ("q", "r"), ("r", "p"), ("p", "q")],
+        );
+        assert_eq!(
+            graph.cyclic_components(),
+            vec![vec!["x", "y"], vec!["p", "q", "r"]]
+        );
+    }
+
+    #[test]
+    fn acyclic_graph_has_no_cyclic_components() {
+        let graph = graph(&["a", "b", "c"], &[("a", "b"), ("b", "c"), ("a", "c")]);
+        assert_eq!(graph.cyclic_components(), [] as [Vec<&str>; 0]);
     }
 
     #[test]
@@ -725,6 +853,34 @@ mod tests {
                     prop_assert!(false, "orders disagree: {kahn:?} vs {depth_first:?}");
                 }
             }
+            // A graph has a cyclic component exactly when it has a cycle, and
+            // every reported cycle lies inside one cyclic component.
+            let components = graph.cyclic_components();
+            match graph.clone().into_topo_order() {
+                Ok(_) => prop_assert!(components.is_empty()),
+                Err(cycle) => {
+                    let path = cycle.into_path();
+                    let contained = components
+                        .iter()
+                        .any(|component| path.iter().all(|node| component.contains(node)));
+                    prop_assert!(contained);
+                }
+            }
+            // Removing the edges inside every cyclic component leaves a graph
+            // without cycles: the components are the maximal cycles.
+            let mut condensed = DependencyGraph::new();
+            for node in 0..node_count {
+                condensed.add_node(node);
+            }
+            for &(dependent, dependency) in &edges {
+                let inside = components
+                    .iter()
+                    .any(|component| component.contains(&dependent) && component.contains(&dependency));
+                if !inside {
+                    condensed.add_dependency(dependent, dependency);
+                }
+            }
+            prop_assert!(condensed.into_topo_order().is_ok());
             // Determinism: the same insertions give the same result.
             prop_assert_eq!(graph.clone().into_topo_order(), graph.into_topo_order());
         }

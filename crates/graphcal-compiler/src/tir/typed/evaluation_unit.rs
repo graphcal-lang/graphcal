@@ -144,6 +144,14 @@ impl<'t, T: Borrow<TExpr>> ScopedTree<'t, T> {
     }
 }
 
+impl<'t> ScopedTree<'t, &'t TExpr> {
+    /// The root node of a borrowed tree, for as long as the tree is borrowed.
+    #[must_use]
+    pub const fn into_root(self) -> ScopedNode<'t> {
+        Scoped::new(self.scope, self.tree)
+    }
+}
+
 /// The source of one declaration in the scope of the DAG that owns it.
 ///
 /// Obtained only through [`CheckedTir::declaration_body`], keyed by the

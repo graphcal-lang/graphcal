@@ -12,14 +12,18 @@ use std::marker::PhantomData;
 use graphcal_compiler::dag_id::DagId;
 use graphcal_compiler::declaration_category::ValueDeclCategory;
 use graphcal_compiler::hir::expr::Expr;
+use graphcal_compiler::hir::expr::UnfoldRecurrence;
 use graphcal_compiler::ir::instance::{
     ExposedValueBody, InstanceAssertionProjection, InstancePlotProjection, InstanceValueProjection,
 };
 use graphcal_compiler::resolved_name::ResolvedDeclName;
+use graphcal_compiler::semantic::index_axis::IndexAxis;
+use graphcal_compiler::semantic::time_zone::IanaTimeZoneId;
 use graphcal_compiler::syntax::decl_name::DeclName;
 use graphcal_compiler::syntax::module_name::{ScopeSegment, ScopedName};
 use graphcal_compiler::syntax::non_empty::NonEmpty;
-use graphcal_compiler::tir::texpr::{ExecutableBodyError, TExpr};
+use graphcal_compiler::tir::recurrence_plan::RecurrenceGroupPlan;
+use graphcal_compiler::tir::texpr::{ExecutableBodyError, TExpr, TForBinding};
 use graphcal_compiler::tir::typed::body_scope::Scoped;
 use graphcal_compiler::tir::typed::checked::CheckedTir;
 use graphcal_compiler::tir::typed::checked_instance::{CheckedInstance, ResolvedProjection};
@@ -28,7 +32,9 @@ use graphcal_compiler::tir::typed::declaration_view::DeclarationView;
 use graphcal_compiler::tir::typed::evaluation_unit::ScopedTree;
 use graphcal_compiler::tir::typed::evaluation_unit::{BodyKind, DeclarationBody};
 use graphcal_compiler::tir::typed::model::{TypedAssertEntry, TypedPlotEntry};
-use graphcal_compiler::tir::typed::scoped_node::ScopedCall;
+use graphcal_compiler::tir::typed::scoped_node::{
+    NodeKind, ScopedCall, ScopedNode, ScopedUnitExpr,
+};
 use thiserror::Error;
 
 use crate::checked_program::{CheckedProgram, SealedDag};
@@ -58,6 +64,22 @@ impl PlanIndex for StepIdx {
 }
 
 impl MintedIndex for StepIdx {
+    fn new(position: usize) -> Self {
+        Self(position)
+    }
+}
+
+/// The position of a recurrence group in its [`CallablePlan`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) struct GroupIdx(usize);
+
+impl PlanIndex for GroupIdx {
+    fn position(self) -> usize {
+        self.0
+    }
+}
+
+impl MintedIndex for GroupIdx {
     fn new(position: usize) -> Self {
         Self(position)
     }
@@ -210,7 +232,8 @@ impl std::fmt::Debug for PlannedDeclaration<'_> {
 }
 
 /// One scheduled declaration of a callable that the callable computes: its
-/// planned body and the steps of the same callable it depends on.
+/// planned body and the steps of the same callable it depends on outside its
+/// recurrence group.
 pub struct Step<'p> {
     declaration: PlannedDeclaration<'p>,
     body: ComputedBody<'p>,
@@ -241,11 +264,165 @@ impl<'p> Step<'p> {
         &self.body
     }
 
-    /// The earlier steps of the same callable whose declarations it reads.
+    /// The earlier steps of the same callable whose declarations it reads,
+    /// except the members of its own recurrence group.
     #[must_use]
     pub(crate) fn deps(&self) -> &[StepIdx] {
         &self.deps
     }
+}
+
+/// How a recurrence member presents its value: the display of a top-level
+/// conversion, applied to every element.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum RecurrenceDisplay<'p> {
+    /// No top-level conversion.
+    Plain,
+    /// `… -> unit`.
+    Unit(ScopedUnitExpr<'p>),
+    /// `… -> "Area/Location"`.
+    Timezone(&'p IanaTimeZoneId),
+}
+
+/// The checked body of a recurrence member under its top-level conversion:
+/// the only two shapes a member can have.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum RecurrenceBody<'p> {
+    /// `for t: A, … { body }`.
+    For {
+        first: &'p TForBinding,
+        remaining: &'p [TForBinding],
+        body: ScopedNode<'p>,
+    },
+    /// `unfold(A, init, |prev_state, prev_t, t| body)`.
+    Unfold {
+        recurrence: &'p UnfoldRecurrence,
+        init: ScopedNode<'p>,
+        body: ScopedNode<'p>,
+        axis: &'p IndexAxis,
+    },
+}
+
+impl<'p> RecurrenceBody<'p> {
+    /// The body of a member's checked tree, under at most one top-level
+    /// display conversion.
+    fn of(root: ScopedNode<'p>) -> Option<(RecurrenceDisplay<'p>, Self)> {
+        let (display, body) = match root.kind() {
+            NodeKind::Convert { expr, target } => (RecurrenceDisplay::Unit(target), expr),
+            NodeKind::DisplayTimezone { expr, timezone } => {
+                (RecurrenceDisplay::Timezone(timezone), expr)
+            }
+            _ => (RecurrenceDisplay::Plain, root),
+        };
+        let body = match body.kind() {
+            NodeKind::For { bindings, body } => {
+                let (first, remaining) = bindings.split_first();
+                Self::For {
+                    first,
+                    remaining,
+                    body,
+                }
+            }
+            NodeKind::Unfold {
+                recurrence,
+                init,
+                body,
+                axis,
+            } => Self::Unfold {
+                recurrence,
+                init,
+                body,
+                axis,
+            },
+            _ => return None,
+        };
+        Some((display, body))
+    }
+
+    /// The axis the body steps along.
+    pub(crate) const fn axis(&self) -> &'p IndexAxis {
+        match self {
+            Self::For { first, .. } => &first.axis,
+            Self::Unfold { axis, .. } => axis,
+        }
+    }
+}
+
+/// One member of an accepted recurrence group, as a callable runs it.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct RecurrenceMemberPlan<'p> {
+    step: StepIdx,
+    root: ScopedNode<'p>,
+    display: RecurrenceDisplay<'p>,
+    body: RecurrenceBody<'p>,
+}
+
+impl<'p> RecurrenceMemberPlan<'p> {
+    /// The member's step.
+    pub(crate) const fn step(&self) -> StepIdx {
+        self.step
+    }
+
+    /// The root of the member's checked tree, for its dependencies, source
+    /// span, and DAG.
+    pub(crate) const fn root(&self) -> ScopedNode<'p> {
+        self.root
+    }
+
+    /// The display of the member's top-level conversion.
+    pub(crate) const fn display(&self) -> RecurrenceDisplay<'p> {
+        self.display
+    }
+
+    /// The member's `for` or `unfold` body.
+    pub(crate) const fn body(&self) -> RecurrenceBody<'p> {
+        self.body
+    }
+}
+
+/// One accepted recurrence group of a callable: the checker's plan, its
+/// members in plan order with their checked bodies, and the axis they step
+/// along.
+pub(crate) struct PlannedGroup<'p> {
+    plan: &'p RecurrenceGroupPlan,
+    members: Vec<RecurrenceMemberPlan<'p>>,
+    axis: IndexAxis,
+}
+
+impl<'p> PlannedGroup<'p> {
+    /// The checker's plan.
+    pub(crate) const fn plan(&self) -> &'p RecurrenceGroupPlan {
+        self.plan
+    }
+
+    /// The members, in plan order.
+    pub(crate) fn members(&self) -> &[RecurrenceMemberPlan<'p>] {
+        &self.members
+    }
+
+    /// The axis every member steps along.
+    pub(crate) const fn axis(&self) -> &IndexAxis {
+        &self.axis
+    }
+}
+
+/// One unit a callable runs, in evaluation order.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum RunUnit {
+    /// One declaration, evaluated as a whole.
+    Step(StepIdx),
+    /// A recurrence group, evaluated element by element.
+    Group(GroupIdx),
+}
+
+/// One unit of a callable's schedule, with its planned declarations.
+pub(crate) enum PlannedUnit<'p> {
+    Declaration(PlannedDeclaration<'p>),
+    Recurrence {
+        plan: &'p RecurrenceGroupPlan,
+        /// The members' declarations, in plan order.
+        members: Vec<PlannedDeclaration<'p>>,
+    },
 }
 
 #[derive(Debug)]
@@ -266,6 +443,12 @@ pub(crate) enum StepIndexError {
         dependent: ResolvedDeclName,
         dependency: ResolvedDeclName,
     },
+    #[error("recurrence group member `{0}` has no executable formula")]
+    NotAFormulaMember(ResolvedDeclName),
+    #[error("recurrence group member `{0}` is not a top-level `for` or `unfold`")]
+    NotARecurrenceBody(ResolvedDeclName),
+    #[error("recurrence group member `{0}` steps along another axis than its group")]
+    AxisMismatch(ResolvedDeclName),
 }
 
 /// One DAG a callable executes — its own body, or a semantic instance below
@@ -507,72 +690,160 @@ pub struct CallablePlan<'p> {
     closure_instances: Vec<(ClosureDag<'p>, Vec<PlannedInstance<'p>>)>,
     imports: Vec<PreparedConstantImport>,
     steps: IndexVec<StepIdx, Step<'p>>,
+    groups: IndexVec<GroupIdx, PlannedGroup<'p>>,
+    units: Vec<RunUnit>,
+}
+
+/// A computed declaration and its body, with the recurrence group it belongs
+/// to: the group's schedule position (for its dependencies) and, when the
+/// group runs as one unit, the group.
+type ComputedEntry<'p> = (
+    PlannedDeclaration<'p>,
+    ComputedBody<'p>,
+    Option<(usize, Option<GroupIdx>)>,
+);
+
+/// Add the members of the recurrence group `plan`, scheduled as group
+/// `membership`, to `computed`. A group whose members all have executable
+/// bodies runs as one unit and joins `groups`; otherwise, as in a template that
+/// is only run through its instances, its members are steps that report their
+/// bodies.
+fn plan_recurrence<'p>(
+    plan: &'p RecurrenceGroupPlan,
+    members: Vec<PlannedDeclaration<'p>>,
+    membership: usize,
+    computed: &mut Vec<ComputedEntry<'p>>,
+    groups: &mut Vec<PlannedGroup<'p>>,
+) -> Result<(), StepIndexError> {
+    let first_step = computed.len();
+    let mut planned = Vec::with_capacity(members.len());
+    let mut axis = None::<IndexAxis>;
+    for declaration in members {
+        let body = match &declaration.body {
+            PlannedBody::Computed(body @ ComputedBody::Expression { .. }) => body.clone(),
+            PlannedBody::Computed(ComputedBody::Todo) | PlannedBody::Supplied => {
+                return Err(StepIndexError::NotAFormulaMember(declaration.key.clone()));
+            }
+        };
+        if let ComputedBody::Expression { tree: Ok(tree), .. } = &body {
+            let root = tree.into_root();
+            let (display, member_body) = RecurrenceBody::of(root)
+                .ok_or_else(|| StepIndexError::NotARecurrenceBody(declaration.key.clone()))?;
+            match &axis {
+                None => axis = Some(member_body.axis().clone()),
+                Some(first) if first.len() == member_body.axis().len() => {}
+                Some(_) => return Err(StepIndexError::AxisMismatch(declaration.key.clone())),
+            }
+            planned.push(RecurrenceMemberPlan {
+                step: StepIdx::new(computed.len()),
+                root,
+                display,
+                body: member_body,
+            });
+        }
+        computed.push((declaration, body, Some((membership, None))));
+    }
+    let added = &mut computed[first_step..];
+    if let (true, Some(axis)) = (planned.len() == added.len(), axis) {
+        let group = GroupIdx::new(groups.len());
+        for (_, _, entry) in added {
+            *entry = Some((membership, Some(group)));
+        }
+        groups.push(PlannedGroup {
+            plan,
+            members: planned,
+            axis,
+        });
+    }
+    Ok(())
 }
 
 impl<'p> CallablePlan<'p> {
-    /// Index the computed `scheduled` declarations, in their evaluation
-    /// order, as the steps of the callable `scope`. Each step depends on the
-    /// earlier steps among the declarations it reads; reads of declarations
-    /// this callable does not compute (constants, imports, and required
-    /// ports, whose values are supplied) have no step.
+    /// Index the computed declarations of the `scheduled` units, in their
+    /// evaluation order, as the steps of the callable `scope`. Each step
+    /// depends on the earlier steps among the declarations it reads outside
+    /// its recurrence group; reads of declarations this callable does not
+    /// compute (constants, imports, and required ports, whose values are
+    /// supplied) have no step.
     ///
     /// # Errors
     ///
     /// Returns a [`StepIndexError`] when a declaration is scheduled twice or
-    /// before a scheduled declaration it reads.
+    /// before a scheduled declaration it reads, or a recurrence group member
+    /// has no formula.
     pub(crate) fn new(
         scope: SealedDag<'p>,
         execution_dags: Vec<ClosureDag<'p>>,
         instances: Vec<PlannedInstance<'p>>,
         closure_instances: Vec<(ClosureDag<'p>, Vec<PlannedInstance<'p>>)>,
         imports: Vec<PreparedConstantImport>,
-        scheduled: Vec<PlannedDeclaration<'p>>,
+        scheduled: Vec<PlannedUnit<'p>>,
     ) -> Result<Self, StepIndexError> {
-        let scheduled = scheduled
-            .into_iter()
-            .filter_map(|declaration| match &declaration.body {
-                PlannedBody::Computed(body) => {
-                    let body = body.clone();
-                    Some((declaration, body))
+        let mut computed = Vec::<ComputedEntry<'p>>::new();
+        let mut groups = Vec::new();
+        let mut scheduled_groups = 0_usize;
+        for unit in scheduled {
+            match unit {
+                PlannedUnit::Declaration(declaration) => match &declaration.body {
+                    PlannedBody::Computed(body) => {
+                        let body = body.clone();
+                        computed.push((declaration, body, None));
+                    }
+                    PlannedBody::Supplied => {}
+                },
+                PlannedUnit::Recurrence { plan, members } => {
+                    plan_recurrence(plan, members, scheduled_groups, &mut computed, &mut groups)?;
+                    scheduled_groups = scheduled_groups.saturating_add(1);
                 }
-                PlannedBody::Supplied => None,
-            })
-            .collect::<Vec<_>>();
-        let mut positions = HashMap::with_capacity(scheduled.len());
-        for (position, (declaration, _)) in scheduled.iter().enumerate() {
+            }
+        }
+        let mut positions = HashMap::with_capacity(computed.len());
+        for (position, (declaration, _, membership)) in computed.iter().enumerate() {
+            let group = membership.map(|(id, _)| id);
             if positions
-                .insert(declaration.key, StepIdx::new(position))
+                .insert(declaration.key, (StepIdx::new(position), group))
                 .is_some()
             {
                 return Err(StepIndexError::Duplicate(declaration.key.clone()));
             }
         }
-        let steps = scheduled
-            .into_iter()
-            .enumerate()
-            .map(|(position, (declaration, body))| {
-                let deps = declaration
-                    .reads
-                    .iter()
-                    .filter_map(|read| positions.get(read).map(|step| (read, *step)))
-                    .map(|(read, step)| {
-                        if step.position() < position {
-                            Ok(step)
-                        } else {
-                            Err(StepIndexError::Unordered {
-                                dependent: declaration.key.clone(),
-                                dependency: read.clone(),
-                            })
-                        }
-                    })
-                    .collect::<Result<Vec<_>, _>>()?;
-                Ok(Step {
-                    declaration,
-                    body,
-                    deps,
+        let mut units = Vec::new();
+        let mut steps = Vec::with_capacity(computed.len());
+        for (position, (declaration, body, membership)) in computed.into_iter().enumerate() {
+            let group = membership.map(|(id, _)| id);
+            let deps = declaration
+                .reads
+                .iter()
+                .filter_map(|read| positions.get(read).map(|step| (read, *step)))
+                .filter(|(_, (_, read_group))| group.is_none() || *read_group != group)
+                .map(|(read, (step, _))| {
+                    if step.position() < position {
+                        Ok(step)
+                    } else {
+                        Err(StepIndexError::Unordered {
+                            dependent: declaration.key.clone(),
+                            dependency: read.clone(),
+                        })
+                    }
                 })
-            })
-            .collect::<Result<Vec<_>, _>>()?;
+                .collect::<Result<Vec<_>, _>>()?;
+            match membership.and_then(|(_, runnable)| runnable) {
+                Some(group) => {
+                    if units
+                        .last()
+                        .is_none_or(|unit| !matches!(unit, RunUnit::Group(last) if *last == group))
+                    {
+                        units.push(RunUnit::Group(group));
+                    }
+                }
+                None => units.push(RunUnit::Step(StepIdx::new(position))),
+            }
+            steps.push(Step {
+                declaration,
+                body,
+                deps,
+            });
+        }
         Ok(Self {
             scope,
             execution_dags,
@@ -580,6 +851,8 @@ impl<'p> CallablePlan<'p> {
             closure_instances,
             imports,
             steps: IndexVec::from_items(steps),
+            groups: IndexVec::from_items(groups),
+            units,
         })
     }
 
@@ -633,6 +906,17 @@ impl<'p> CallablePlan<'p> {
     #[must_use]
     pub(crate) fn step(&self, index: StepIdx) -> &Step<'p> {
         &self.steps[index]
+    }
+
+    /// Every unit, in evaluation order.
+    pub(crate) fn units(&self) -> &[RunUnit] {
+        &self.units
+    }
+
+    /// One recurrence group of this callable.
+    #[must_use]
+    pub(crate) fn group(&self, index: GroupIdx) -> &PlannedGroup<'p> {
+        &self.groups[index]
     }
 }
 

@@ -1,0 +1,70 @@
+// Recurrence groups: dependency cycles between `for` and `unfold`
+// declarations that are acyclic element by element along one axis.
+pub index Step = range(0.0 s, 3.0 s, step: 1.0 s);
+pub index Region = { North, South };
+index Substep = range(0.0 s, 1.0 s, step: 0.5 s);
+
+// A control loop: the action at a step reads the state at that step, and the
+// next state reads the previous action.
+param initial_state: Dimensionless = 1.0;
+param k: Dimensionless = 0.5;
+node action: Dimensionless[Step] = for t: Step { -@k * @state[t] };
+node state: Dimensionless[Step] = unfold(Step, @initial_state, |s, prev_t, t| s + @action[prev_t]);
+node final_state: Dimensionless = sum(@state);
+
+// A two-step recurrence x[t] = x[t-1] + x[t-2] through a delayed copy.
+param x_before: Dimensionless = 0.0;
+param x0: Dimensionless = 1.0;
+node prev_x: Dimensionless[Step] = unfold(Step, @x_before, |ignored, prev_t, t| @x[prev_t]);
+node x: Dimensionless[Step] = unfold(Step, @x0, |s, prev_t, t| s + @prev_x[prev_t]);
+
+// Members with further axes: only the leading key is constrained.
+param pop0: Dimensionless[Region] = {
+    Region#North: 100.0,
+    Region#South: 50.0,
+};
+param rate: Dimensionless[Region] = {
+    Region#North: 0.1,
+    Region#South: 0.2,
+};
+node pop: Dimensionless[Step, Region] = unfold(
+    Step,
+    @pop0,
+    |p, prev_t, t| for r: Region { p[r] + @births[prev_t, r] }
+);
+node births: Dimensionless[Step, Region] = for t: Step, r: Region { @rate[r] * @pop[t, r] };
+
+// A nested `unfold` may start from the reader's own step.
+param decay: Dimensionless = 0.5;
+node outflow: Dimensionless[Step] = for t: Step {
+    sum(unfold(Substep, @level[t], |acc, prev_u, u| acc * @decay))
+};
+node level: Dimensionless[Step] = unfold(Step, 10.0, |s, prev_t, t| s - 0.1 * @outflow[prev_t]);
+
+// A top-level display conversion keeps the recurrence shape.
+param speed: Velocity = 1.0 m/s;
+node position: Length[Step] = unfold(
+    Step,
+    0.0 m,
+    |s, prev_t, t| s + @velocity[prev_t] * (coord(t) - coord(prev_t))
+) -> km;
+node velocity: Velocity[Step] = for t: Step { @speed + @position[t] / 10.0 s };
+
+// A DAG with an internal recurrence group can be included, and an inline
+// DAG call can compute a member's element.
+dag policy {
+    param observed: Dimensionless;
+    pub node command: Dimensionless = -0.5 * @observed;
+}
+
+dag closed_loop {
+    pub(bind) index T: Time;
+    param start: Dimensionless;
+    pub node command: Dimensionless[T] = for t: T { @policy(observed: @response[t])::command };
+    pub node response: Dimensionless[T] = unfold(T, @start, |s, prev_t, t| s + @command[prev_t]);
+}
+
+include closed_loop(index T: Step, start: 4.0) as loop;
+node loop_final: Dimensionless = sum(@loop::response);
+
+assert halving = for t: Step { @state[t] > 0.0 };

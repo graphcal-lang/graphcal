@@ -2,9 +2,12 @@
 //!
 //! A dependency cycle is a topological property of source, knowable without
 //! evaluating any value. The checker orders every local DAG's constants and
-//! every local callable's params and nodes exactly once; a cycle becomes a
-//! [`GraphError::CyclicDependency`](GraphError::CyclicDependency) under `graphcal check`, and the orders
-//! are retained for evaluation.
+//! every local callable's params and nodes exactly once; a cycle that is not
+//! an accepted recurrence group becomes a
+//! [`GraphError::CyclicDependency`](GraphError::CyclicDependency), or a
+//! [`GraphError::RejectedRecurrence`](GraphError::RejectedRecurrence) when it
+//! has an `unfold` member, under `graphcal check`, and the orders are
+//! retained for evaluation.
 
 use crate::dag_id::DagId;
 use crate::dependency_graph::Cycle;
@@ -12,7 +15,7 @@ use crate::semantic_error::SemanticError;
 use crate::semantic_error::graph::CycleMember;
 use crate::semantic_error::graph::GraphError;
 use crate::source_id::SourceId;
-use crate::tir::schedule::{ConstSchedule, RuntimeSchedule, ScheduledDecl};
+use crate::tir::schedule::{ConstSchedule, RuntimeSchedule, ScheduleRejection, ScheduledDecl};
 use crate::tir::typed::UncheckedTir;
 use crate::tir::typed::dag_slots::LocalDagFacts;
 use crate::tir::typed::instance_graph::InstanceGraph;
@@ -42,13 +45,30 @@ impl Schedules {
     ) -> Result<Self, SemanticError> {
         let constants = ConstSchedule::build(tir.dags.local_positioned())
             .map_err(|cycle| cyclic_dependency(&cycle, None, src))?;
+        let unit_scale_reads = crate::tir::typed::dynamic_unit_scale_reads(tir);
         let callables = tir.dags.map_local(|position, dag| {
             RuntimeSchedule::build(
                 position,
                 |position| tir.dags.at(position),
                 |position| instances.instances_of(position),
+                |component| {
+                    crate::tir::recurrence_group::check_component(
+                        component,
+                        dag.dag_id(),
+                        &unit_scale_reads,
+                    )
+                },
             )
-            .map_err(|cycle| cyclic_dependency(&cycle, Some(dag.dag_id()), src))
+            .map_err(|rejection| match rejection {
+                ScheduleRejection::Cycle(cycle) => {
+                    cyclic_dependency(&cycle, Some(dag.dag_id()), src)
+                }
+                ScheduleRejection::Recurrence { name, span, reason } => SemanticError::located(
+                    src,
+                    span,
+                    GraphError::RejectedRecurrence { name, reason },
+                ),
+            })
         })?;
         Ok(Self {
             constants,
