@@ -19,6 +19,7 @@ import {
   type Revised,
   type SourceEdit,
 } from "./revisions.ts";
+import { TargetMap, targetOf, type ViewTarget } from "./target.ts";
 
 const revisionSchema = z.int().nonnegative();
 
@@ -60,7 +61,8 @@ type Outbound =
       end: number;
       text: string;
     }
-  | { type: "request"; module: string };
+  /** Ask for the model of a target the view has none of yet: a module alone, or an include instance of a root. */
+  | { type: "request"; target: ViewTarget };
 
 interface VsCodeApi {
   postMessage(message: Outbound): void;
@@ -79,7 +81,7 @@ export class VsCodeHost implements Host {
   readonly modules: readonly string[] = [];
   readonly edited = false;
   private readonly api = acquireVsCodeApi();
-  private readonly models = new Map<string, ViewModel>();
+  private readonly models = new TargetMap<ViewModel>();
   /** The project each model came from (its file paths are relative to that root) and its revision. */
   private readonly origins = new WeakMap<ViewModel, { project: string; revision: number }>();
   /** The copy of each file, by project and then by file: two projects may both have `src/main.gcl`. */
@@ -125,7 +127,7 @@ export class VsCodeHost implements Host {
           this.note(error instanceof Error ? error.message : String(error));
           return;
         }
-        this.models.set(model.module.id, model);
+        this.models.set(targetOf(model), model);
         this.origins.set(model, { project: message.project, revision: message.revision });
         const copies = this.copies.get(message.project) ?? new Map<string, FileHistory>();
         this.copies.set(message.project, copies);
@@ -138,7 +140,7 @@ export class VsCodeHost implements Host {
               : received(history, text, message.revision),
           );
         }
-        if (message.main && this.mainModule !== model.module.id) {
+        if (message.main && model.target.kind === "module" && this.mainModule !== model.module.id) {
           this.mainModule = model.module.id;
           for (const listener of this.openListeners) listener(model.module.id);
         } else {
@@ -166,8 +168,8 @@ export class VsCodeHost implements Host {
     for (const listener of this.noteListeners) listener(message, "error");
   }
 
-  model(module: string): ViewModel | null {
-    return this.models.get(module) ?? null;
+  model(target: ViewTarget): ViewModel | null {
+    return this.models.get(target) ?? null;
   }
 
   source(model: ViewModel, file: string): Revised | null {
@@ -227,8 +229,8 @@ export class VsCodeHost implements Host {
     };
   }
 
-  request(module: string): void {
-    this.api.postMessage({ type: "request", module });
+  request(target: ViewTarget): void {
+    this.api.postMessage({ type: "request", target });
   }
 
   reset(): void {

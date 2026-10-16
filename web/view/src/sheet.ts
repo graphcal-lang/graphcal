@@ -18,15 +18,16 @@ import {
   type Zone,
 } from "./layout.ts";
 import type { ViewModel, ViewNode } from "./model.ts";
-import { depthsOf, type PaneKey } from "./panes.ts";
+import { depthsOf } from "./panes.ts";
 import { EXTERNAL_MARK, renderView, type RenderOptions } from "./render.ts";
 import type { Hidden, Picked } from "./rows.ts";
 import type { Selection } from "./selection.ts";
+import type { ViewTarget } from "./target.ts";
 import { planRoutes, type RoutePlan } from "./wires.ts";
 
 /** One module shown as a sheet: the main one, or a pane pinned beside it. */
 export interface Sheet {
-  key: PaneKey;
+  key: ViewTarget;
   model: ViewModel;
   /** Layout before the no-axis band is packed to the width. */
   base: Layout;
@@ -72,7 +73,7 @@ export function baseLayoutOf(model: ViewModel): Layout {
   return orderByBarycenter(computeLayout(model), model);
 }
 
-export function createSheet(key: PaneKey, model: ViewModel): Sheet {
+export function createSheet(key: ViewTarget, model: ViewModel): Sheet {
   const base = baseLayoutOf(model);
   const paneEl = document.createElement("section");
   paneEl.className = "pane";
@@ -101,7 +102,7 @@ export function createSheet(key: PaneKey, model: ViewModel): Sheet {
   };
 }
 
-/** Take a fresh model of the sheet's module; the reader's folds and selection stay. */
+/** Take a fresh model of the sheet's target; the reader's folds and selection stay. */
 export function adoptModel(sheet: Sheet, model: ViewModel): void {
   sheet.model = model;
   sheet.base = baseLayoutOf(model);
@@ -121,10 +122,11 @@ function renderPaneHead(w: Workspace, sheet: Sheet): void {
     head.append(span("pane-name", name));
     return;
   }
+  const { target } = sheet.model;
   const sub =
-    sheet.key.instance === null
+    target.kind === "module"
       ? "· import · pinned"
-      : `as ${sheet.key.instance} · include · pinned`;
+      : `as ${target.instance.name} · include · pinned`;
   head.append(
     span("pane-mark", EXTERNAL_MARK),
     button("pane-file", name, `open ${name}`),

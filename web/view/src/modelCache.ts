@@ -1,13 +1,14 @@
-// The models a host has projected, each with the revision of the sources it
-// was projected from. Only a model of the current revision is handed out as
-// current: an edit re-projects the modules on screen, and every other model
-// then describes sources that are gone. A stale model's id and file only
-// locate the module, to project it again; a projection that finishes after
-// the sources moved on is recognised by its revision and not kept.
+// The models a host has projected, by target, each with the revision of the
+// sources it was projected from. Only a model of the current revision is
+// handed out as current: an edit re-projects the targets on screen, and every
+// other model then describes sources that are gone. A stale model's target
+// and files only locate it, to project it again; a projection that finishes
+// after the sources moved on is recognised by its revision and not kept.
 import type { ViewModel } from "./model.ts";
+import { TargetMap, targetOf, type ViewTarget } from "./target.ts";
 
 export class ModelCache {
-  private readonly models = new Map<string, ViewModel>();
+  private readonly models = new TargetMap<ViewModel>();
   private readonly revisions = new WeakMap<ViewModel, number>();
   /** The revision of the host's sources. */
   private revision = 0;
@@ -15,7 +16,7 @@ export class ModelCache {
   /** Keep a model projected at `revision`; false (and not kept) when the sources moved on since. */
   set(model: ViewModel, revision: number): boolean {
     if (revision < this.revision) return false;
-    this.models.set(model.module.id, model);
+    this.models.set(targetOf(model), model);
     this.revisions.set(model, revision);
     return true;
   }
@@ -38,39 +39,40 @@ export class ModelCache {
     return this.revisions.get(model) ?? null;
   }
 
-  /** The model of `module` as of the current sources; null when there is none or it is stale. */
-  current(module: string): ViewModel | null {
-    const model = this.models.get(module);
-    return model !== undefined && !this.isStale(module) ? model : null;
+  /** The model of `target` as of the current sources; null when there is none or it is stale. */
+  current(target: ViewTarget): ViewModel | null {
+    const model = this.models.get(target);
+    return model !== undefined && !this.isStale(target) ? model : null;
   }
 
   /** Every model as of the current sources. */
   currentModels(): ViewModel[] {
-    return [...this.models.keys()]
-      .map((module) => this.current(module))
+    return this.models
+      .entries()
+      .map(([target]) => this.current(target))
       .filter((model): model is ViewModel => model !== null);
   }
 
-  /** The last model of `module`, current or stale: where it is, not what it holds. */
-  last(module: string): ViewModel | null {
-    return this.models.get(module) ?? null;
+  /** The last model of `target`, current or stale: where it is, not what it holds. */
+  last(target: ViewTarget): ViewModel | null {
+    return this.models.get(target) ?? null;
   }
 
-  /** Whether `module` has a model, but one from sources since edited. */
-  isStale(module: string): boolean {
-    const model = this.models.get(module);
+  /** Whether `target` has a model, but one from sources since edited. */
+  isStale(target: ViewTarget): boolean {
+    const model = this.models.get(target);
     return model !== undefined && (this.revisions.get(model) ?? -1) < this.revision;
   }
 
-  /** Every module with a model, current or stale, sorted. */
-  ids(): string[] {
-    return [...this.models.keys()].sort();
+  /** Every module with a model of its own (evaluated alone), current or stale, sorted. */
+  moduleIds(): string[] {
+    return this.models.moduleIds().sort();
   }
 
-  /** The module whose file is `file`, current or stale. */
+  /** The module whose own model presents the file `file`, current or stale. */
   moduleOfFile(file: string): string | null {
-    for (const model of this.models.values()) {
-      if (model.module.file === file) return model.module.id;
+    for (const [target, model] of this.models.entries()) {
+      if (target.kind === "module" && model.module.file === file) return target.module;
     }
     return null;
   }

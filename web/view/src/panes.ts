@@ -1,44 +1,31 @@
 // Panes: the sheets open beside the main one, and where they go. A pane shows
-// one module as read by the main sheet: an include instance (`eps.gcl as eps`)
-// or an imported module. The main sheet is the rightmost column; a pane sits
-// one column left of its deepest open consumer, and a module read from two
-// places opens once.
-import { instanceOf, isExternal, type ViewModel, type ViewNode } from "./model.ts";
+// what a sheet reads: an include instance as the root evaluates it
+// (`eps.gcl as eps`, with the include's arguments) or an imported module
+// alone. The main sheet is the rightmost column; a pane sits one column left
+// of its deepest open reader, and a target read from two places opens once.
+import { isExternal, type ViewModel } from "./model.ts";
+import { moduleTarget, readTarget, sameTarget, targetOf, type ViewTarget } from "./target.ts";
 
-export interface PaneKey {
-  module: string;
-  /** The include instance, or null for an imported module. */
-  instance: string | null;
-}
-
-export function sameKey(a: PaneKey, b: PaneKey): boolean {
-  return a.module === b.module && a.instance === b.instance;
-}
-
-/** The pane an external node is read from. */
-export function keyOf(node: ViewNode): PaneKey {
-  return { module: node.module, instance: instanceOf(node)?.name ?? null };
-}
-
-/** The panes a module reads from: one per include instance, one per imported module. */
-export function references(model: ViewModel): PaneKey[] {
-  const out: PaneKey[] = [];
-  const add = (key: PaneKey): void => {
-    if (!out.some((k) => sameKey(k, key))) out.push(key);
+/** The targets a model reads from: one per include instance, one per imported module. */
+export function references(model: ViewModel): ViewTarget[] {
+  const reader = targetOf(model);
+  const out: ViewTarget[] = [];
+  const add = (target: ViewTarget | null): void => {
+    if (target !== null && !out.some((t) => sameTarget(t, target))) out.push(target);
   };
   for (const node of model.nodes) {
-    if (isExternal(node)) add(keyOf(node));
+    if (isExternal(node)) add(readTarget(reader, node));
   }
   for (const index of model.indexes) {
     if (index.module !== null && index.module !== model.module.id) {
-      add({ module: index.module, instance: null });
+      add(moduleTarget(index.module));
     }
   }
   return out;
 }
 
 export interface OpenSheet {
-  key: PaneKey;
+  key: ViewTarget;
   model: ViewModel;
 }
 
@@ -56,7 +43,9 @@ export function depthsOf(sheets: OpenSheet[]): number[] {
       if (i === 0) return;
       let d = 1;
       sheets.forEach((_, j) => {
-        if (j !== i && refs[j].some((k) => sameKey(k, sheet.key))) d = Math.max(d, depth[j] + 1);
+        if (j !== i && refs[j].some((k) => sameTarget(k, sheet.key))) {
+          d = Math.max(d, depth[j] + 1);
+        }
       });
       if (d !== depth[i]) {
         depth[i] = d;

@@ -20,25 +20,51 @@ validated on the page by the zod schemas in `src/model.ts`; it is at
 `version` 1, and a wire change bumps it. The Wasm `evaluateView` answers
 `evaluated`; `needs_values` (a required param has no value, as in a library
 its includers bind), `binding_errors` or `eval_error`, each with the
-structure alone; `not_requested` (prepared without the view) or
-`projection_failed`. The page (`src/projection.ts`) keeps three states
-apart: a project that does not check is refused; one that checks is shown,
-with values when it evaluated, else with a note saying it waits for values
-or failed to evaluate. An edit stands whenever the sources still check, so
-a library with a required param can be edited. Its rules:
+structure alone; `not_requested` (prepared without the view),
+`projection_failed` or `unknown_instance`. The page (`src/projection.ts`)
+keeps three states apart: a project that does not check is refused; one that
+checks is shown, with values when it evaluated, else with a note saying it
+waits for values or failed to evaluate. An edit stands whenever the sources
+still check, so a library with a required param can be edited. Its rules:
 
+- A model has a target. A root file is projected alone (`target.kind:
+  module`), and so is each include instance its evaluation materializes,
+  nested ones included (`target.kind: instance`, with the `root` module and
+  the `instance`): the template's declarations as `module`, with the values
+  the root's evaluation gives that instance. They are different targets even
+  when the include binds nothing. In an instance's view a param the include
+  binds is defined by the argument (its `source` and `expr_range` are in the
+  including file, so editing it edits the argument), and what the argument
+  reads from the including module has `origin: includer`. In Rust a request
+  is a `ViewTarget` (`Module`, or `Instance` by the instance's opaque id)
+  within the root; `project_views` projects every target of a root at once
+  and `ViewProjections::attach_evaluation` values them all from the root's
+  evaluation. `graphcal view --instance <id>`, the LSP request's `target`
+  (`{kind: "module"}` by default, `{kind: "instance", instance}`) and the
+  Wasm `evaluateView(bindings, target)` take one. The page keys models,
+  requests and panes by `ViewTarget` (`src/target.ts`: a module, or a root
+  module and an instance id), never by module alone; the VS Code host asks
+  the extension with `{type: "request", target}`, which the extension turns
+  into the root document's request. An instance view is not
+  compared with the base ref; inline calls have no target (they are
+  evaluated in place).
 - Ids are opaque. A node's `id` is derived from the declaration's identity
   (`view_model/wire_key.rs`), so it is unique, stable across evaluations and
-  equal between the two refs of a comparison; an include instance's
-  declaration has an id of its own, so per-instance nodes can be added
-  without changing the others. The page compares and looks ids up and never
-  takes them apart: what it shows travels in `label` (the module's spelling:
-  `margin`, `num`, `e::p_budget`) and `name`. Pairs of ids are keyed by both
-  ends (`src/edges.ts`), not by a joined string.
+  equal between the two refs of a comparison. An include instance's
+  declarations are owned by the instance, so an instance's nodes have ids
+  apart from its module viewed alone, and equal to the ids its readers use:
+  `y`'s dependency `p::out` in the root's view is the `out` of `p`'s view,
+  which is how the page wires a pane to its reader (`src/cross.ts`; an
+  include alias, which has an id of its own, is matched by name). The page
+  compares and looks ids up and never takes them apart: what it shows
+  travels in `label` (the module's spelling: `margin`, `num`,
+  `e::p_budget`) and `name`. Pairs of ids are keyed by both ends
+  (`src/edges.ts`), not by a joined string.
 - A node's `kind` is what it declares (`param`, `const`, `node`, `assert`);
   `origin` is where it comes from (`local`, `imported`, `included` with its
-  instance, or `called` with the inline call `scale(…)` whose output it is;
-  each call has a node of its own, with no value).
+  instance `{ id, name, bound }`, `called` with the inline call `scale(…)`
+  whose output it is (each call has a node of its own, with no value), or
+  `includer` in an instance's view).
 - `axes` refer to `indexes[].id`. An index lists its `entries` as
   `{ key, display }`; the entries of an indexed value refer to `key`, and the
   page shows `display` (a variant, a coordinate such as `0.5 s`, a position

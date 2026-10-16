@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from "vite-plus/test";
 import type { ViewModel } from "./model.ts";
 import type { Range } from "./model.ts";
+import { moduleTarget } from "./target.ts";
 import { VsCodeHost } from "./vscodeHost.ts";
 
 let sent: { type: string; [key: string]: unknown }[] = [];
@@ -40,7 +41,7 @@ function modelOf(project: string, file: string, text: string, revision: number):
 }
 
 function shown(host: VsCodeHost, project: string): ViewModel {
-  const model = host.model(`${project}.main`);
+  const model = host.model(moduleTarget(`${project}.main`));
   if (model === null) throw new Error("no model");
   return model;
 }
@@ -190,5 +191,35 @@ describe("VsCodeHost", () => {
         text: "",
       }),
     ).toEqual({ ok: false, message: "unknown file src/other.gcl" });
+  });
+
+  test("asks for an include instance by target and keeps its model apart from the module", () => {
+    const host = new VsCodeHost();
+    modelOf("p", "src/main.gcl", "include p.lib(gain: 2.0) as l;\n", 1);
+    const target = { kind: "instance", root: "p.main", instance: "i:l" } as const;
+    host.request(target);
+    expect(sent.at(-1)).toEqual({ type: "request", target });
+    const instance = { id: "i:l", name: "l", bound: true };
+    deliver({
+      type: "model",
+      model: {
+        version: 1,
+        module: { id: "p.lib", file: "src/lib.gcl", package: "p" },
+        target: {
+          kind: "instance",
+          root: { id: "p.main", file: "src/main.gcl", package: "p" },
+          instance,
+        },
+        indexes: [],
+        nodes: [],
+      },
+      project: "file:///work/p",
+      sources: { "src/lib.gcl": "param gain: Dimensionless = 1.0;\n" },
+      revision: 2,
+      main: false,
+    });
+    expect(host.model(target)?.module.id).toBe("p.lib");
+    expect(host.model(moduleTarget("p.lib"))).toBeNull();
+    expect(shown(host, "p").module.id).toBe("p.main");
   });
 });

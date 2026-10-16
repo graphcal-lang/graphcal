@@ -70,6 +70,16 @@ describe("acceptEdit", () => {
     ).toEqual({ ok: false, message: "type mismatch" });
   });
 
+  test("an instance the edit removed is gone, and the edit stands", () => {
+    expect(projectionOf({ status: "unknown_instance" }).status).toBe("gone");
+    expect(
+      acceptEdit([
+        { file: "src/m.gcl", projection: { status: "evaluated", view: library } },
+        { file: "src/m.gcl", projection: { status: "gone", message: "no include" } },
+      ]),
+    ).toEqual({ ok: true, models: [library], note: null });
+  });
+
   test("an evaluated module says nothing", () => {
     expect(projectionNote("src/m.gcl", { status: "evaluated", view: library })).toBeNull();
   });
