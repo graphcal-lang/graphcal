@@ -2,6 +2,7 @@
 
 use std::collections::BTreeSet;
 
+use crate::dag_call_read::DagCallRead;
 use crate::dag_id::DagId;
 use crate::syntax::span::{Span, Spanned};
 
@@ -138,6 +139,31 @@ pub fn find_dag_call<C: Completeness>(expr: &Expr<C>) -> Option<(DagId, Span)> {
         }
     });
     found
+}
+
+/// Every DAG call in an HIR expression, in pre-order: an enclosing call
+/// precedes the calls in its arguments, and sibling calls follow source
+/// order.
+#[must_use]
+pub fn collect_dag_call_reads<C: Completeness>(expr: &Expr<C>) -> Vec<DagCallRead> {
+    let mut reads = Vec::new();
+    visit_expr(expr, &mut |candidate| {
+        if let ExprKind::DagCall {
+            target,
+            args,
+            static_bindings,
+            output,
+            ..
+        } = candidate.kind()
+        {
+            reads.push(DagCallRead {
+                target: target.value.clone(),
+                output: output.value.clone(),
+                binds: !args.is_empty() || !static_bindings.is_empty(),
+            });
+        }
+    });
+    reads
 }
 
 /// Find the first extern (plugin) function call in an expression tree.

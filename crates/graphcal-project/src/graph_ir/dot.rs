@@ -8,8 +8,11 @@ use std::fmt::Write as _;
 use std::num::NonZeroUsize;
 
 use graphcal_compiler::dag_id::DagId;
+use graphcal_compiler::resolved_name::ResolvedDeclName;
 
-use super::{GraphCluster, GraphClusterKind, GraphIr, GraphNode, GraphNodeId, GraphNodeKind};
+use super::{
+    GraphCluster, GraphClusterId, GraphClusterKind, GraphIr, GraphNode, GraphNodeId, GraphNodeKind,
+};
 
 /// Level of composition detail emitted into DOT.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -69,7 +72,7 @@ impl std::fmt::Display for DotModuleId {
 
 struct RendererIds {
     nodes: BTreeMap<GraphNodeId, DotNodeId>,
-    clusters: BTreeMap<DagId, DotClusterId>,
+    clusters: BTreeMap<GraphClusterId, DotClusterId>,
 }
 
 impl RendererIds {
@@ -87,7 +90,7 @@ impl RendererIds {
         }
         for cluster in &ir.clusters {
             ids.clusters
-                .insert(cluster.dag_id.clone(), DotClusterId(ids.clusters.len()));
+                .insert(cluster.id.clone(), DotClusterId(ids.clusters.len()));
         }
         ids
     }
@@ -103,17 +106,17 @@ impl RendererIds {
         self.nodes[identity]
     }
 
-    fn cluster(&self, identity: &DagId) -> DotClusterId {
+    fn cluster(&self, identity: &GraphClusterId) -> DotClusterId {
         self.clusters[identity]
     }
 
-    fn summary(&self, identity: &DagId) -> DotSummaryNodeId {
+    fn summary(&self, identity: &GraphClusterId) -> DotSummaryNodeId {
         DotSummaryNodeId(self.cluster(identity).0)
     }
 }
 
 struct ModuleRendererIds {
-    modules: BTreeMap<DagId, DotModuleId>,
+    modules: BTreeMap<GraphClusterId, DotModuleId>,
 }
 
 impl ModuleRendererIds {
@@ -122,12 +125,12 @@ impl ModuleRendererIds {
             .clusters
             .iter()
             .enumerate()
-            .map(|(index, cluster)| (cluster.dag_id.clone(), DotModuleId(index)))
+            .map(|(index, cluster)| (cluster.id.clone(), DotModuleId(index)))
             .collect();
         Self { modules }
     }
 
-    fn module(&self, identity: &DagId) -> DotModuleId {
+    fn module(&self, identity: &GraphClusterId) -> DotModuleId {
         self.modules[identity]
     }
 }
@@ -140,7 +143,11 @@ struct RendererLabels {
 impl RendererLabels {
     fn for_graph(ir: &GraphIr) -> Self {
         let mut internal_counts = BTreeMap::<String, usize>::new();
-        for node in &ir.nodes {
+        for node in ir
+            .nodes
+            .iter()
+            .filter(|node| node.id.declaration().is_some())
+        {
             internal_counts
                 .entry(node.id.as_str().to_string())
                 .and_modify(|count| *count = 2)
@@ -168,22 +175,31 @@ impl RendererLabels {
     }
 
     fn node_name(&self, node: &GraphNode, qualify_internal: bool) -> String {
+        let declaration = match &node.id {
+            GraphNodeId::Declaration(declaration) => declaration,
+            // Outside its call's cluster, an output is named as the call reads it.
+            GraphNodeId::CallOutput { output, .. } if qualify_internal => {
+                return format!("{}(…)::{}", output.owner().leaf(), output.as_str());
+            }
+            GraphNodeId::CallOutput { output, .. } => return output.as_str().to_string(),
+        };
         match node.kind {
             GraphNodeKind::External => {
-                let display = node.id.to_string();
+                let display = declaration.to_string();
                 if self.ambiguous_external_names.contains(&display) {
-                    qualified_decl_label(&node.id)
+                    qualified_decl_label(declaration)
                 } else {
                     display
                 }
             }
             GraphNodeKind::Const | GraphNodeKind::Param | GraphNodeKind::Node
-                if qualify_internal && self.ambiguous_internal_names.contains(node.id.as_str()) =>
+                if qualify_internal
+                    && self.ambiguous_internal_names.contains(declaration.as_str()) =>
             {
-                qualified_decl_label(&node.id)
+                qualified_decl_label(declaration)
             }
             GraphNodeKind::Const | GraphNodeKind::Param | GraphNodeKind::Node => {
-                node.id.as_str().to_string()
+                declaration.as_str().to_string()
             }
         }
     }
@@ -192,7 +208,7 @@ impl RendererLabels {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 enum GroupedEndpoint {
     Node(GraphNodeId),
-    Collapsed(DagId),
+    Collapsed(GraphClusterId),
 }
 
 impl GroupedEndpoint {
@@ -226,7 +242,7 @@ struct GroupedEdge {
 }
 
 struct GroupedRenderPlan {
-    collapsed: BTreeSet<DagId>,
+    collapsed: BTreeSet<GraphClusterId>,
     edges: BTreeSet<GroupedEdge>,
 }
 
@@ -238,7 +254,7 @@ impl GroupedRenderPlan {
                 .filter(|cluster| {
                     cluster.parent.is_some() && composition_depth(ir, cluster) == max_depth.get()
                 })
-                .map(|cluster| cluster.dag_id.clone())
+                .map(|cluster| cluster.id.clone())
                 .collect()
         });
         let edges = ir
@@ -337,7 +353,7 @@ fn render_modules(ir: &GraphIr) -> String {
 
     for cluster in &ir.clusters {
         let attrs = module_attrs(cluster);
-        let _ = writeln!(out, "    \"{}\" [{}];", ids.module(&cluster.dag_id), attrs);
+        let _ = writeln!(out, "    \"{}\" [{}];", ids.module(&cluster.id), attrs);
     }
 
     // Composition edges make containment and repeated instantiation explicit,
@@ -350,24 +366,25 @@ fn render_modules(ir: &GraphIr) -> String {
         if let Some(parent) = &cluster.parent {
             let relation = match &cluster.kind {
                 GraphClusterKind::Instance { .. } => "instantiates",
+                GraphClusterKind::Call { .. } => "calls",
                 GraphClusterKind::SourceModule | GraphClusterKind::ExternalModule => "contains",
             };
             let _ = writeln!(
                 out,
                 "    \"{}\" -> \"{}\" [label=\"{relation}\", style=dashed, color=\"#90A4AE\", fontcolor=\"#607D8B\", arrowhead=none, constraint=false];",
-                ids.module(parent),
-                ids.module(&cluster.dag_id)
+                ids.module(&GraphClusterId::Dag(parent.clone())),
+                ids.module(&cluster.id)
             );
         }
     }
 
-    let module_edges: BTreeSet<(DagId, DagId)> = ir
+    let module_edges: BTreeSet<(GraphClusterId, GraphClusterId)> = ir
         .edges
         .iter()
         .filter_map(|edge| {
             let from = edge.from.owner();
             let to = edge.to.owner();
-            (from != to).then(|| (from.clone(), to.clone()))
+            (from != to).then_some((from, to))
         })
         .collect();
     for (from, to) in module_edges {
@@ -411,12 +428,12 @@ impl GroupedRenderer<'_> {
         let _ = writeln!(
             out,
             "{pad}subgraph \"{}\" {{",
-            self.ids.cluster(&cluster.dag_id)
+            self.ids.cluster(&cluster.id)
         );
         let _ = writeln!(out, "{inner_pad}label=\"{}\";", cluster_label(cluster));
         let _ = writeln!(out, "{inner_pad}{}", cluster_style(cluster));
 
-        if self.plan.collapsed.contains(&cluster.dag_id) {
+        if self.plan.collapsed.contains(&cluster.id) {
             self.render_collapsed_summary(out, cluster, child_indent);
         } else {
             render_nodes(
@@ -431,12 +448,9 @@ impl GroupedRenderer<'_> {
                 false,
                 true,
             );
-            for child in self
-                .ir
-                .clusters
-                .iter()
-                .filter(|candidate| candidate.parent.as_ref() == Some(&cluster.dag_id))
-            {
+            for child in self.ir.clusters.iter().filter(|candidate| {
+                candidate.parent.is_some() && candidate.parent.as_ref() == cluster.id.dag()
+            }) {
                 self.render_cluster(out, child, child_indent);
             }
         }
@@ -444,23 +458,21 @@ impl GroupedRenderer<'_> {
     }
 
     fn render_collapsed_summary(&self, out: &mut String, cluster: &GraphCluster, indent: usize) {
-        let hidden = hidden_node_count(self.ir, &cluster.dag_id);
+        let hidden = hidden_node_count(self.ir, &cluster.id);
         let noun = if hidden == 1 { "value" } else { "values" };
         let pad = "    ".repeat(indent);
         let _ = writeln!(
             out,
             "{pad}\"{}\" [label=\"{hidden} {noun} hidden\", shape=box, style=\"rounded,dashed\", color=\"#607D8B\"];",
-            self.ids.summary(&cluster.dag_id)
+            self.ids.summary(&cluster.id)
         );
     }
 }
 
-fn hidden_node_count(ir: &GraphIr, owner: &DagId) -> usize {
+fn hidden_node_count(ir: &GraphIr, owner: &GraphClusterId) -> usize {
     ir.clusters
         .iter()
-        .filter(|cluster| {
-            &cluster.dag_id == owner || is_cluster_descendant(ir, &cluster.dag_id, owner)
-        })
+        .filter(|cluster| &cluster.id == owner || is_cluster_descendant(ir, &cluster.id, owner))
         .flat_map(|cluster| &cluster.node_ids)
         .count()
 }
@@ -524,58 +536,57 @@ const fn cluster_style(cluster: &GraphCluster) -> &'static str {
         GraphClusterKind::Instance { .. } => {
             "color=\"#1976D2\"; fillcolor=\"#E3F2FD\"; style=\"rounded,filled\"; penwidth=1.5;"
         }
+        GraphClusterKind::Call { .. } => {
+            "color=\"#1976D2\"; fillcolor=\"#E3F2FD\"; style=\"rounded,filled,dashed\"; penwidth=1.5;"
+        }
         GraphClusterKind::ExternalModule => "color=\"#9E9E9E\"; style=\"rounded,dashed\";",
     }
 }
 
 fn composition_depth(ir: &GraphIr, cluster: &GraphCluster) -> usize {
     std::iter::successors(cluster.parent.as_ref(), |owner| {
-        ir.clusters
-            .iter()
-            .find(|candidate| &candidate.dag_id == *owner)
-            .and_then(|parent| parent.parent.as_ref())
+        find_dag_cluster(ir, owner).and_then(|parent| parent.parent.as_ref())
     })
     .count()
 }
 
+fn find_dag_cluster<'a>(ir: &'a GraphIr, dag: &DagId) -> Option<&'a GraphCluster> {
+    ir.clusters
+        .iter()
+        .find(|candidate| candidate.id.dag() == Some(dag))
+}
+
 fn grouped_endpoint(
     ir: &GraphIr,
-    collapsed: &BTreeSet<DagId>,
+    collapsed: &BTreeSet<GraphClusterId>,
     node: &GraphNodeId,
 ) -> GroupedEndpoint {
-    let owner_cluster = ir
-        .clusters
-        .iter()
-        .find(|cluster| &cluster.dag_id == node.owner());
+    let owner = node.owner();
+    let owner_cluster = ir.clusters.iter().find(|cluster| cluster.id == owner);
     let collapsed_owner = std::iter::successors(owner_cluster, |cluster| {
-        cluster.parent.as_ref().and_then(|parent| {
-            ir.clusters
-                .iter()
-                .find(|candidate| &candidate.dag_id == parent)
-        })
+        cluster
+            .parent
+            .as_ref()
+            .and_then(|parent| find_dag_cluster(ir, parent))
     })
-    .find(|cluster| collapsed.contains(&cluster.dag_id));
+    .find(|cluster| collapsed.contains(&cluster.id));
     collapsed_owner.map_or_else(
         || GroupedEndpoint::Node(node.clone()),
-        |cluster| GroupedEndpoint::Collapsed(cluster.dag_id.clone()),
+        |cluster| GroupedEndpoint::Collapsed(cluster.id.clone()),
     )
 }
 
-fn is_cluster_descendant(ir: &GraphIr, child: &DagId, ancestor: &DagId) -> bool {
+fn is_cluster_descendant(ir: &GraphIr, child: &GraphClusterId, ancestor: &GraphClusterId) -> bool {
     let mut current = ir
         .clusters
         .iter()
-        .find(|cluster| &cluster.dag_id == child)
+        .find(|cluster| &cluster.id == child)
         .and_then(|cluster| cluster.parent.as_ref());
     while let Some(owner) = current {
-        if owner == ancestor {
+        if ancestor.dag() == Some(owner) {
             return true;
         }
-        current = ir
-            .clusters
-            .iter()
-            .find(|cluster| &cluster.dag_id == owner)
-            .and_then(|cluster| cluster.parent.as_ref());
+        current = find_dag_cluster(ir, owner).and_then(|cluster| cluster.parent.as_ref());
     }
     false
 }
@@ -592,6 +603,9 @@ fn module_attrs(cluster: &GraphCluster) -> String {
         GraphClusterKind::Instance { .. } => format!(
             "label=\"{label}\", shape=folder, style=filled, fillcolor=\"#E3F2FD\", color=\"#1976D2\", penwidth=1.5"
         ),
+        GraphClusterKind::Call { .. } => format!(
+            "label=\"{label}\", shape=folder, style=\"filled,dashed\", fillcolor=\"#E3F2FD\", color=\"#1976D2\", penwidth=1.5"
+        ),
         GraphClusterKind::ExternalModule => {
             format!("label=\"{label}\", shape=component, style=dashed, color=\"#9E9E9E\"")
         }
@@ -599,21 +613,30 @@ fn module_attrs(cluster: &GraphCluster) -> String {
 }
 
 fn cluster_label_text(cluster: &GraphCluster) -> String {
+    let dag_label = || match &cluster.id {
+        GraphClusterId::Dag(dag) => qualified_dag_label(dag),
+        GraphClusterId::Call(call) => call.to_string(),
+    };
+    let leaf = || match &cluster.id {
+        GraphClusterId::Dag(dag) => dag.leaf().to_string(),
+        GraphClusterId::Call(call) => call.to_string(),
+    };
     match &cluster.kind {
         GraphClusterKind::SourceModule if cluster.parent.is_none() => {
-            format!("module {}", qualified_dag_label(&cluster.dag_id))
+            format!("module {}", dag_label())
         }
-        GraphClusterKind::SourceModule => {
-            format!("dag {}", qualified_dag_label(&cluster.dag_id))
-        }
+        GraphClusterKind::SourceModule => format!("dag {}", dag_label()),
         GraphClusterKind::Instance { template } => format!(
             "include {}\ntemplate {}",
-            cluster.dag_id.leaf(),
+            leaf(),
             qualified_dag_label(template)
         ),
-        GraphClusterKind::ExternalModule => {
-            format!("external {}", qualified_dag_label(&cluster.dag_id))
-        }
+        GraphClusterKind::Call { template } => format!(
+            "call {}(…)\ntemplate {}",
+            template.leaf(),
+            qualified_dag_label(template)
+        ),
+        GraphClusterKind::ExternalModule => format!("external {}", dag_label()),
     }
 }
 
@@ -651,7 +674,7 @@ fn render_module_legend(out: &mut String) {
     );
 }
 
-fn qualified_decl_label(identity: &GraphNodeId) -> String {
+fn qualified_decl_label(identity: &ResolvedDeclName) -> String {
     format!(
         "{}.{}\npackage {}",
         dag_path_label(identity.owner()),
@@ -704,8 +727,11 @@ mod tests {
     use super::*;
     use crate::graph_ir::{GraphCluster, GraphEdge};
 
-    fn id(owner: &DagId, name: &str) -> ResolvedDeclName {
-        ResolvedDeclName::for_test(owner.clone(), DeclName::expect_valid(name))
+    fn id(owner: &DagId, name: &str) -> GraphNodeId {
+        GraphNodeId::Declaration(ResolvedDeclName::for_test(
+            owner.clone(),
+            DeclName::expect_valid(name),
+        ))
     }
 
     fn sample_ir() -> GraphIr {
@@ -733,19 +759,19 @@ mod tests {
             ],
             clusters: vec![
                 GraphCluster {
-                    dag_id: root_id.clone(),
+                    id: GraphClusterId::Dag(root_id.clone()),
                     parent: None,
                     kind: GraphClusterKind::SourceModule,
                     node_ids: vec![id(&root_id, "input")],
                 },
                 GraphCluster {
-                    dag_id: child_id.clone(),
-                    parent: Some(root_id),
+                    id: GraphClusterId::Dag(child_id.clone()),
+                    parent: Some(root_id.clone()),
                     kind: GraphClusterKind::SourceModule,
                     node_ids: vec![id(&child_id, "output")],
                 },
                 GraphCluster {
-                    dag_id: external_id.clone(),
+                    id: GraphClusterId::Dag(external_id.clone()),
                     parent: None,
                     kind: GraphClusterKind::ExternalModule,
                     node_ids: vec![id(&external_id, "source")],
@@ -845,13 +871,13 @@ mod tests {
         let ir = GraphIr {
             nodes: Vec::new(),
             clusters: std::iter::once(GraphCluster {
-                dag_id: root_id,
+                id: GraphClusterId::Dag(root_id),
                 parent: None,
                 kind: GraphClusterKind::SourceModule,
                 node_ids: Vec::new(),
             })
             .chain(external.iter().map(|node| GraphCluster {
-                dag_id: node.id.owner().clone(),
+                id: node.id.owner(),
                 parent: None,
                 kind: GraphClusterKind::ExternalModule,
                 node_ids: vec![node.id.clone()],

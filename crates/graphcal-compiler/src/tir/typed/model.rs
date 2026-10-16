@@ -428,6 +428,12 @@ pub struct ResolvedDagDependencies {
     /// `@`. Assertions are not scheduled through this map; it serves tools
     /// that trace what an assertion checks.
     pub assert_deps: HashMap<ResolvedDeclName, BTreeSet<ResolvedDeclName>>,
+    /// For each param, node, and assertion making inline DAG calls, those
+    /// calls in pre-order of its defining expressions. A call's arguments'
+    /// `@` reads are already in `runtime_deps`/`assert_deps`; this records
+    /// what the call itself reads. Callers are keyed in this body's frame;
+    /// call targets and outputs stay canonical.
+    pub call_reads: HashMap<ResolvedDeclName, Vec<crate::dag_call_read::DagCallRead>>,
 }
 
 /// Canonical type definitions referenced by module-aware TIR.

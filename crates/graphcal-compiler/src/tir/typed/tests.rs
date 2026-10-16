@@ -1148,6 +1148,35 @@ fn module_aware_type_resolve_records_semantic_deps() {
 }
 
 #[test]
+fn dependencies_record_dag_calls_in_pre_order() {
+    let tir = parse_and_type_resolve(
+        "dag child { param v: Dimensionless; pub node output: Dimensionless = @v; }\n\
+         node a: Dimensionless = @child(v: @child(v: 1.0)::output)::output + @child(v: 2.0)::v;\n\
+         node plain: Dimensionless = @a;\n\
+         assert positive = @child(v: 3.0)::output > 0.0;",
+    )
+    .unwrap();
+    let root = tir.root_dag_id();
+    let child = root.inline_dag_child(DeclName::expect_valid("child"));
+    let name = |owner: &crate::dag_id::DagId, name: &str| {
+        ResolvedDeclName::for_test(owner.clone(), DeclName::expect_valid(name))
+    };
+    let read = |output: &str| crate::dag_call_read::DagCallRead {
+        target: child.clone(),
+        output: name(&child, output),
+        binds: true,
+    };
+    let calls = &tir.root().dependencies().call_reads;
+
+    assert_eq!(
+        calls[&name(root, "a")],
+        [read("output"), read("output"), read("v")]
+    );
+    assert_eq!(calls[&name(root, "positive")], [read("output")]);
+    assert!(!calls.contains_key(&name(root, "plain")));
+}
+
+#[test]
 fn type_resolve_rocket() {
     let source = include_str!("../../../../../tests/fixtures/valid/rocket.gcl");
     let tir = parse_and_type_resolve(source).unwrap();

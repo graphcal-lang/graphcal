@@ -292,6 +292,12 @@ fn specialize_dependencies(
     dependencies.runtime_deps = remap(&dependencies.runtime_deps);
     dependencies.const_deps = remap(&dependencies.const_deps);
     dependencies.assert_deps = remap(&dependencies.assert_deps);
+    // A call targets a canonical DAG, so only the caller moves to the frame.
+    dependencies.call_reads = dependencies
+        .call_reads
+        .iter()
+        .map(|(caller, reads)| (frame.rebase(caller), reads.clone()))
+        .collect();
 }
 
 fn install_override_reconciliations(instance: &mut DagTIR, edge: &HirInstanceRecord) {
@@ -518,10 +524,20 @@ fn specialize_instance_semantics(
             .iter()
             .map(|dependency| frame.resolve(dependency))
             .collect();
+        let port = frame.rebase(template_port);
+        let call_reads = crate::hir::expr::collect_dag_call_reads(binding);
+        if call_reads.is_empty() {
+            semantic.dependencies.call_reads.remove(&port);
+        } else {
+            semantic
+                .dependencies
+                .call_reads
+                .insert(port.clone(), call_reads);
+        }
         semantic
             .dependencies
             .runtime_deps
-            .insert(frame.rebase(template_port), dependencies);
+            .insert(port, dependencies);
     }
     semantic.domain_bounds = semantic
         .domain_bounds

@@ -225,7 +225,7 @@ impl<'p> Scope<'p> {
             clusters: ir
                 .clusters()
                 .iter()
-                .map(|cluster| (cluster.dag_id(), cluster.kind()))
+                .filter_map(|cluster| Some((cluster.id().dag()?, cluster.kind())))
                 .collect(),
             sources: SourceFiles::new(project, checked)?,
         })
@@ -454,7 +454,9 @@ fn dependencies<'a>(
 ) -> BTreeMap<&'a ResolvedDeclName, Vec<&'a ResolvedDeclName>> {
     let mut deps = BTreeMap::<&ResolvedDeclName, Vec<&ResolvedDeclName>>::new();
     for edge in ir.edges() {
-        deps.entry(edge.to()).or_default().push(edge.from());
+        if let (Some(to), Some(from)) = (edge.to().declaration(), edge.from().declaration()) {
+            deps.entry(to).or_default().push(from);
+        }
     }
     for id in locals {
         if let Some(dag) = tir.dag_registry().get(id.owner())

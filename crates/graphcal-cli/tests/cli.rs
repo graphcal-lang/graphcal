@@ -6524,6 +6524,55 @@ fn graph_inline_dag_renders_cluster() {
 }
 
 #[test]
+fn graph_inline_dag_call_output_feeds_its_caller() {
+    let output = graphcal_bin()
+        .args([
+            "graph",
+            &fixture("valid/inline_dag_call_basic/main.gcl"),
+            "--view",
+            "grouped",
+        ])
+        .output()
+        .expect("failed to run graphcal");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        stdout.contains("label=\"call scale(…)\\ntemplate main.scale\\npackage main\";"),
+        "the call should render as an instance cluster:\n{stdout}"
+    );
+    let caller = dot_statement_id_for_label(&stdout, "doubled_result\\n");
+    let read = stdout
+        .lines()
+        .filter(|line| line.contains("label=\"result\\n"))
+        .filter_map(|line| line.split('"').nth(1))
+        .filter(|output| stdout.contains(&format!("\"{output}\" -> \"{caller}\";")))
+        .count();
+    assert_eq!(
+        read, 1,
+        "the output the call reads should feed the caller:\n{stdout}"
+    );
+
+    // Without clusters, the output is named as the call reads it.
+    let flat = graphcal_bin()
+        .args([
+            "graph",
+            &fixture("valid/inline_dag_call_basic/main.gcl"),
+            "--view",
+            "flat",
+        ])
+        .output()
+        .expect("failed to run graphcal");
+    let flat = String::from_utf8(flat.stdout).unwrap();
+    let read = dot_statement_id_for_label(&flat, "scale(…)::result\\n");
+    let caller = dot_statement_id_for_label(&flat, "doubled_result\\n");
+    assert!(
+        flat.contains(&format!("\"{read}\" -> \"{caller}\";")),
+        "{flat}"
+    );
+}
+
+#[test]
 fn graph_grouped_binding_edges_target_receiving_params() {
     let output = graphcal_bin()
         .args(["graph", &fixture("valid/inline_dag_namespace/main.gcl")])

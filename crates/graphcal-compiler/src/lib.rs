@@ -8,6 +8,7 @@ pub mod assertion_expectation;
 pub mod builtin;
 pub mod cancellation;
 pub mod complex_value;
+pub mod dag_call_read;
 pub mod dag_id;
 pub mod datetime_literal;
 pub mod declaration_category;
