@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from "vite-plus/test";
 import type { ViewModel } from "./model.ts";
-import { minimalEdit, VsCodeHost } from "./vscodeHost.ts";
+import { VsCodeHost } from "./vscodeHost.ts";
 
 let sent: { type: string; [key: string]: unknown }[] = [];
 let deliver: (message: unknown) => void = () => {};
@@ -100,16 +100,6 @@ describe("VsCodeHost", () => {
     expect(await host.edit(shown(host, "a"), { file: "src/other.gcl", next: "" })).toEqual({
       ok: false,
       message: "unknown file src/other.gcl",
-    });
-  });
-});
-
-describe("minimalEdit", () => {
-  test("trims the shared prefix and suffix", () => {
-    expect(minimalEdit("param n = 1;\n", "param n = 2;\n")).toEqual({
-      start: 10,
-      end: 11,
-      text: "2",
     });
   });
 });

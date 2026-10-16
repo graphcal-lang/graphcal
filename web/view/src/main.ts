@@ -459,8 +459,11 @@ panesEl.addEventListener("click", (event) => {
 
 let evaluating: Promise<void> = Promise.resolve();
 
-/** Hand an edit to the host, one at a time, and take back whatever models it re-projected. */
-function applyEdit(s: Sheet, plan: EditPlan): Promise<boolean> {
+/**
+ * Hand an edit to the host, one at a time, and take back whatever models it
+ * re-projected. `applied` runs once the host took the edit, before the models.
+ */
+function applyEdit(s: Sheet, plan: EditPlan, applied?: () => void): Promise<boolean> {
   if (!plan.ok) {
     showNote(plan.message);
     return Promise.resolve(false);
@@ -484,6 +487,7 @@ function applyEdit(s: Sheet, plan: EditPlan): Promise<boolean> {
       return false;
     }
     showNote(result.note);
+    applied?.();
     adoptModels(result.models);
     return true;
   };
@@ -780,11 +784,16 @@ function syncEditorSelection(): void {
 
 const editor = webShell
   ? new SourceEditor(codeBodyEl, {
-      onChange(file, text) {
+      onChange(file, text, applied) {
         if (!ws) return;
         const s = mainSheet(ws);
-        if (host.source(s.model, file) === text) return;
-        void applyEdit(s, { ok: true, edit: { file, next: text } });
+        if (host.source(s.model, file) === text) {
+          applied(text);
+          return;
+        }
+        void applyEdit(s, { ok: true, edit: { file, next: text } }, () =>
+          applied(host.source(s.model, file) ?? text),
+        );
       },
       onCaretLine(line) {
         if (!ws) return;

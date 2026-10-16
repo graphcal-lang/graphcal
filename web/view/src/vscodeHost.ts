@@ -7,6 +7,7 @@
 // and the view updates when the server's fresh model arrives.
 import type { EditResult, Host, NoteKind, SourceEdit } from "./host.ts";
 import { parseViewModel, type ViewModel } from "./model.ts";
+import { minimalEdit } from "./source.ts";
 
 /** Messages from the extension. */
 type Inbound =
@@ -48,23 +49,6 @@ declare function acquireVsCodeApi(): VsCodeApi;
 /** Whether this page runs inside a VS Code webview. */
 export function inVsCode(): boolean {
   return typeof acquireVsCodeApi === "function";
-}
-
-/** The smallest replacement turning `before` into `after`: shared prefix and suffix trimmed. */
-export function minimalEdit(
-  before: string,
-  after: string,
-): { start: number; end: number; text: string } {
-  let start = 0;
-  const max = Math.min(before.length, after.length);
-  while (start < max && before[start] === after[start]) start += 1;
-  let endBefore = before.length;
-  let endAfter = after.length;
-  while (endBefore > start && endAfter > start && before[endBefore - 1] === after[endAfter - 1]) {
-    endBefore -= 1;
-    endAfter -= 1;
-  }
-  return { start, end: endBefore, text: after.slice(start, endAfter) };
 }
 
 /** A file as this webview holds it, and the revision of the copy it started from. */

@@ -27,7 +27,7 @@ import {
 } from "@codemirror/view";
 import { graphcalHighlighting, graphcalLanguage } from "./graphcalLanguage.ts";
 import type { Inlay } from "./inlays.ts";
-import { minimalEdit } from "./vscodeHost.ts";
+import { adoptionOf } from "./rebase.ts";
 
 class InlayWidget extends WidgetType {
   private readonly text: string;
@@ -102,8 +102,12 @@ const markField = StateField.define<DecorationSet>({
 });
 
 export interface EditorHooks {
-  /** The text changed by typing; called after a short pause. */
-  onChange(file: string, text: string): void;
+  /**
+   * The text changed by typing; called after a short pause. Once the host has
+   * applied it, and before it hands out models of the result, `applied` is
+   * called with the host's text of the file.
+   */
+  onChange(file: string, text: string, applied: (hostText: string) => void): void;
   /** The caret moved to another line by the user. */
   onCaretLine(line: number): void;
 }
@@ -118,6 +122,12 @@ export class SourceEditor {
   private silent = false;
   private caretLine = 0;
   private pending: ReturnType<typeof setTimeout> | null = null;
+  /**
+   * The host's text the document is based on: last received from the host,
+   * or last sent and applied. The document differs from it while typing waits
+   * to be sent or the host refused it, and is then never replaced.
+   */
+  private synced: string | null = null;
   /** The base text of a comparison, shown as a unified diff under the editor's own text. */
   private readonly merge = new Compartment();
   private original: string | null = null;
@@ -164,18 +174,27 @@ export class SourceEditor {
 
   private scheduleChange(): void {
     if (this.pending !== null) clearTimeout(this.pending);
-    this.pending = setTimeout(() => {
-      this.pending = null;
-      if (this.file !== null) this.hooks.onChange(this.file, this.view.state.doc.toString());
-    }, CHANGE_DELAY_MS);
+    this.pending = setTimeout(() => this.send(), CHANGE_DELAY_MS);
+  }
+
+  private send(): void {
+    this.pending = null;
+    const file = this.file;
+    if (file === null) return;
+    const sent = this.view.state.doc.toString();
+    this.hooks.onChange(file, sent, (hostText) => {
+      if (this.file !== file) return;
+      // The host has what was sent; it may hold more (another edit came first).
+      this.synced = sent;
+      this.adopt(hostText);
+    });
   }
 
   /** Send what is typed now, without waiting for the pause. */
   flush(): void {
     if (this.pending === null) return;
     clearTimeout(this.pending);
-    this.pending = null;
-    if (this.file !== null) this.hooks.onChange(this.file, this.view.state.doc.toString());
+    this.send();
   }
 
   get currentFile(): string | null {
@@ -183,28 +202,38 @@ export class SourceEditor {
   }
 
   /**
-   * Show `text` as the content of `file`. Another file replaces the whole
-   * state (its history too); the same file is patched in place so the caret
-   * and the undo history survive a re-projection.
+   * Show the host's `text` of `file`. Another file replaces the whole state
+   * (its history too), after what was typed in the last one is sent; the same
+   * file takes the host's change in place, under what the reader typed, so
+   * the caret, the typing and the undo history survive a re-projection.
    */
   show(file: string, text: string): void {
-    if (this.pending !== null) {
-      clearTimeout(this.pending);
-      this.pending = null;
+    if (file !== this.file) {
+      this.flush();
+      this.file = file;
+      this.synced = text;
+      this.silent = true;
+      try {
+        this.view.setState(this.stateFor(text));
+      } finally {
+        this.silent = false;
+      }
+      this.caretLine = 1;
+      this.original = null;
+      return;
     }
+    this.adopt(text);
+  }
+
+  /** The host's text of the shown file is now `text`. */
+  private adopt(text: string): void {
+    const synced = this.synced;
+    this.synced = text;
+    const change = adoptionOf(synced, this.view.state.doc.toString(), text);
+    if (change === null) return;
     this.silent = true;
     try {
-      if (file !== this.file) {
-        this.file = file;
-        this.view.setState(this.stateFor(text));
-        this.caretLine = 1;
-        this.original = null;
-        return;
-      }
-      const before = this.view.state.doc.toString();
-      if (before === text) return;
-      const edit = minimalEdit(before, text);
-      this.view.dispatch({ changes: { from: edit.start, to: edit.end, insert: edit.text } });
+      this.view.dispatch({ changes: change });
     } finally {
       this.silent = false;
     }

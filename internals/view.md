@@ -89,7 +89,11 @@ the playground's lexical colouring): the toggle at the top right shows the
 code, both side by side (the split is dragged), or the sheet. The code pane
 shows the main sheet's file with the sheet's values inlaid at the declaring
 lines; typing re-evaluates after a pause (⌘/Ctrl-Enter at once) as a what-if
-like a cell edit, and the selection is shared both ways. The breadcrumb at the
+like a cell edit, and the selection is shared both ways. The pane never
+replaces what was typed: it remembers the host's text its document is based
+on, takes a change from the host in under the typing (`src/rebase.ts`), keeps
+typing the host refused, and sends pending typing before it shows another
+file. The breadcrumb at the
 top left opens the explorer (`src/explorer.ts`): the project's files, and for
 a repository the ref being read with a menu of branches, tags and open pull
 requests, which switch `@ref` in the address. Pane arrangement, split width

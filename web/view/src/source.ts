@@ -30,3 +30,20 @@ export function replaceRange(source: string, range: Range, to: string): string {
   if (until < from) throw new EditError("the range is inverted");
   return source.slice(0, from) + to + source.slice(until);
 }
+
+/** The smallest replacement turning `before` into `after`: shared prefix and suffix trimmed. */
+export function minimalEdit(
+  before: string,
+  after: string,
+): { start: number; end: number; text: string } {
+  let start = 0;
+  const max = Math.min(before.length, after.length);
+  while (start < max && before[start] === after[start]) start += 1;
+  let endBefore = before.length;
+  let endAfter = after.length;
+  while (endBefore > start && endAfter > start && before[endBefore - 1] === after[endAfter - 1]) {
+    endBefore -= 1;
+    endAfter -= 1;
+  }
+  return { start, end: endBefore, text: after.slice(start, endAfter) };
+}

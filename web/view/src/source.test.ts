@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vite-plus/test";
-import { EditError, offsetOf, replaceRange } from "./source.ts";
+import { EditError, minimalEdit, offsetOf, replaceRange } from "./source.ts";
 
 describe("offsetOf", () => {
   test("counts lines at \\n, with a \\r part of its line", () => {
@@ -25,5 +25,15 @@ describe("replaceRange", () => {
   test("an inverted range is refused", () => {
     const range = { start: { line: 0, character: 2 }, end: { line: 0, character: 1 } };
     expect(() => replaceRange("abc", range, "x")).toThrow("the range is inverted");
+  });
+});
+
+describe("minimalEdit", () => {
+  test("trims the shared prefix and suffix", () => {
+    expect(minimalEdit("param n = 1;\n", "param n = 2;\n")).toEqual({
+      start: 10,
+      end: 11,
+      text: "2",
+    });
   });
 });
