@@ -3,23 +3,31 @@
 use std::collections::HashMap;
 
 use graphcal_compiler::cancellation::{CancellationToken, Cancelled};
-use graphcal_compiler::syntax::module_name::ScopedName;
+use graphcal_compiler::resolved_name::ResolvedDeclName;
 use graphcal_eval::eval::{EvalResult, Value};
 
-/// Format values and explicit incompleteness outcomes for hover and inlay hints.
+/// Format values and explicit incompleteness outcomes for inlay hints, keyed
+/// by the runtime identity each entry reports.
+///
+/// Keying by identity rather than by output name keeps an include instance's
+/// values apart from the inline `dag` declarations it instantiates, even when
+/// the instance's display name spells the DAG's own name.
 pub fn format_eval_values(
     result: &EvalResult,
     cancellation: &CancellationToken,
-) -> std::result::Result<HashMap<ScopedName, String>, Cancelled> {
+) -> std::result::Result<HashMap<ResolvedDeclName, String>, Cancelled> {
     let mut map = HashMap::new();
     for (name, value_result, _decl_type) in &result.entries {
         cancellation.checkpoint()?;
+        let Some(identity) = result.identities.get(name) else {
+            continue;
+        };
         let formatted = match value_result {
             Ok(value) => format_value_inline(value, &result.render),
             Err(reason) if reason.is_incomplete() => reason.to_string(),
             Err(_) => continue,
         };
-        map.insert(name.clone(), formatted);
+        map.insert(identity.clone(), formatted);
     }
     Ok(map)
 }

@@ -2151,6 +2151,49 @@ mod tests {
     }
 
     #[test]
+    fn inlay_hints_show_no_instance_values_on_dag_body_declarations() {
+        // An inline `dag` body is a template: each include instantiates it
+        // with its own bindings, so its declarations have no value of their
+        // own — even when one selective include's private scope is displayed
+        // under the DAG's own name.
+        let text = "param p: Length = 200.0 km;\n\
+                    dag inner {\n\
+                        param p: Length;\n\
+                        pub node twice: Length = 2.0 * @p;\n\
+                    }\n\
+                    include inner(p: @p)::{ twice };\n\
+                    node total: Length = @twice;\n";
+        let analysis = run_analysis(&untitled_uri(), text, &[], test_plugin_host());
+        assert!(
+            analysis.has_no_diagnostics(),
+            "expected clean analysis, got diagnostics: {:?}",
+            analysis.diagnostics
+        );
+        let hints = crate::inlay_hints::inlay_hints(
+            &analysis,
+            Range::new(
+                tower_lsp::lsp_types::Position::new(0, 0),
+                tower_lsp::lsp_types::Position::new(u32::MAX, u32::MAX),
+            ),
+        )
+        .unwrap_or_default();
+        let labels_on_line = |line| {
+            hints
+                .iter()
+                .filter(|hint| hint.position.line == line)
+                .filter_map(|hint| match &hint.label {
+                    tower_lsp::lsp_types::InlayHintLabel::String(label) => Some(label.as_str()),
+                    tower_lsp::lsp_types::InlayHintLabel::LabelParts(_) => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(labels_on_line(0), [" = 200 [km]"]);
+        assert_eq!(labels_on_line(2), Vec::<&str>::new(), "DAG param `p`");
+        assert_eq!(labels_on_line(3), Vec::<&str>::new(), "DAG node `twice`");
+        assert_eq!(labels_on_line(6), [" = 400000 [m]"]);
+    }
+
+    #[test]
     fn format_indexed() {
         let render = empty_render_context();
         let mut entries = IndexMap::new();

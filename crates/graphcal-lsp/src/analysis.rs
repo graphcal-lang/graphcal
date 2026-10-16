@@ -9,7 +9,7 @@ use crate::project_symbols::ProjectSymbols;
 use crate::symbol_identity::{UnresolvedSymbol, VisibleBinding, resolve_visible_target};
 use crate::symbol_table::{SymbolKey, SymbolTable};
 use crate::workspace_revision::AnalysisInputs;
-use graphcal_compiler::syntax::module_name::ScopedName;
+use graphcal_compiler::resolved_name::ResolvedDeclName;
 
 use crate::fn_signatures::{ExternCallee, FnSignatureInfo};
 use crate::imported_definitions::ImportedDefinition;
@@ -54,9 +54,9 @@ pub struct AnalysisResult {
     /// `store_and_publish` can hand a snapshot to the publish loop without
     /// deep-cloning the map on every analysis cycle.
     pub diagnostics: Arc<HashMap<Url, Vec<Diagnostic>>>,
-    /// Computed values from evaluation, keyed by declaration name.
+    /// Computed values from evaluation, keyed by runtime declaration identity.
     /// Each value is a formatted display string (e.g., `"9.81 [m/s^2]"`).
-    pub eval_values: HashMap<ScopedName, String>,
+    pub eval_values: HashMap<ResolvedDeclName, String>,
     /// The document's view model (structure, and values when it evaluated),
     /// served to the `graphcal/viewModel` request. `None` when the project
     /// did not check, or when the client shows no view models (the analysis
