@@ -4,6 +4,53 @@ Release notes for Graphcal. Each release section becomes the body of its GitHub 
 Add a `## v<version>` section before running the release workflow.
 Earlier releases are listed on [GitHub Releases](https://github.com/graphcal-lang/graphcal/releases).
 
+## v0.0.1-alpha.38
+
+This release replaces the Tenax-specific model server with a general batch evaluation protocol, so sampling studies, scenario discovery, and optimizers can evaluate a Graphcal model many times from another process.
+The new `graphcal model describe` command prints a model's interface, `graphcal model serve` evaluates request batches against it, and the new `graphcal-model-client` crate drives both from Rust.
+
+No existing Graphcal source programs need to be modified.
+`graphcal model serve` has new required options. See [Batch Evaluation](#batch-evaluation).
+
+### Batch Evaluation
+
+- The new `graphcal model describe <FILE> [--root <ROOT>]` command prints the model's interface as JSON: every entry parameter and public node with its type, unit, domain, and whether it has a default, together with a protocol version and an interface fingerprint. (_#2121_, _#2124_)
+  - Quantities, `Int`, `Bool`, and `Key<I>` over a named index are supported. A port of any other type is listed as unsupported with the reason, instead of being left out.
+  - Every quantity travels in its canonical SI unit, and domains are given in the same unit.
+  - The fingerprint changes when a port is added, removed, or retyped, but not when only formulas change.
+- `graphcal model serve` now evaluates request batches against that interface. (_#2122_, _#2124_)
+
+  ```bash
+  graphcal model serve reliability.gcl \
+      --input load --input mode --output failure --output margin \
+      --expect-fingerprint sha256:…
+  ```
+
+  - `--input` names the parameters a session varies. Every other parameter keeps its default, so a parameter without a default must be varied.
+  - `--output` may name any public node of a supported type. Before, only scalar `Bool` nodes could be selected.
+  - Exactly one of `--expect-fingerprint <FINGERPRINT>` and `--skip-fingerprint-check` is required. With `--expect-fingerprint`, the server refuses to start if the model's interface changed since it was described.
+  - Parameters no longer need both `min` and `max`. Before, every quantity and `Int` input needed finite bounds on both sides, and a `Bool` input was rejected.
+- Each request row produces one outcome, in request order: success, assertion failed, input out of domain, or evaluation error. Only successful rows carry outputs. A failed `assert` is reported separately, so an optimizer can treat the row as infeasible. Malformed streams, a request schema that differs from the session, NaN or infinite values, and unknown key variants still stop the server with exit code 1. (_#2121_, _#2122_)
+- The new `graphcal-model-client` crate runs `graphcal model describe` and `graphcal model serve` for Rust programs. Its handles are typed by value kind (`Quantity`, `Int`, `Bool`, `Key`), each session is pinned to the described fingerprint, and Arrow IPC stays internal. (_#2125_)
+- The new `graphcal-model-protocol` crate defines the interface, session, batch, and outcome types without I/O or a compiler dependency, so clients and non-Graphcal models can share them. Its `arrow` feature maps them to Arrow schemas. (_#2121_)
+- The `graphcal-tenax` crate is removed. [Tenax](https://github.com/shunichironomura/tenax) now uses `graphcal-model-client`. (_#2124_, _#2125_)
+
+### Documentation
+
+- The Tenax Integration page is replaced by a Batch Evaluation page. It shows how to describe a model, start a session, evaluate from Rust, fix parameters with a wrapper file, read row outcomes, and write a client in another language. The CLI reference documents `model describe` and the new `model serve` options. (_#2126_)
+
+### Dependency, Toolchain, and Workflow Maintenance
+
+- Updated Vite+ to v1.2.0. (_#2127_)
+
+### Internal
+
+- The `graphcal model serve` transport is a separate crate, `graphcal-model-server`, around the pure `evaluate_request` of a prepared project. (_#2122_, _#2124_)
+- End-to-end tests run `graphcal-model-client` against the built CLI. (_#2125_)
+- Added the v0.0.1-alpha.38 notes to `CHANGELOG.md` and bumped the workspace version to v0.0.1-alpha.38. (_#2128_)
+
+**Full Changelog**: <https://github.com/graphcal-lang/graphcal/compare/v0.0.1-alpha.37...v0.0.1-alpha.38>
+
 ## v0.0.1-alpha.37
 
 This release lets `for` and `unfold` declarations read each other when every cycle between them steps back along one axis, so coupled quantities such as a state and the action that drives it can be written as separate declarations.
