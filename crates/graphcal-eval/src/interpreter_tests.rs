@@ -7,6 +7,8 @@ use graphcal_compiler::display::source_display_names::SourceDisplayNames;
 use graphcal_compiler::semantic_error::SemanticError;
 use graphcal_compiler::tir::typed::CheckedTir;
 
+use crate::eval::EvalEntry;
+
 use crate::eval::bindings::RuntimeParameterBindings;
 use crate::eval::{
     AssertResult, CompositionProperty, EvalResult, MarkProperty, NodeUnavailable, PlotFieldValue,
@@ -46,9 +48,9 @@ fn find_entry(result: &EvalResult, name: &str) -> Value {
     result
         .entries
         .iter()
-        .find(|(n, _, _)| n.to_string() == name)
+        .find(|EvalEntry { name: n, .. }| n.to_string() == name)
         .unwrap_or_else(|| panic!("value `{name}` not found"))
-        .1
+        .outcome
         .as_ref()
         .unwrap_or_else(|e| panic!("value `{name}` has error: {e}"))
         .clone()
@@ -602,7 +604,7 @@ fn eval_result_all_field_source_order() {
     let names: Vec<String> = result
         .entries
         .iter()
-        .map(|(n, _, _)| n.to_string())
+        .map(|EvalEntry { name: n, .. }| n.to_string())
         .collect();
     assert_eq!(
         names,
@@ -617,15 +619,15 @@ fn eval_result_all_field_source_order() {
         ]
     );
     assert_eq!(
-        result.entries[0].2,
+        result.entries[0].category,
         graphcal_compiler::declaration_category::ValueDeclCategory::Param
     );
     assert_eq!(
-        result.entries[3].2,
+        result.entries[3].category,
         graphcal_compiler::declaration_category::ValueDeclCategory::Const
     );
     assert_eq!(
-        result.entries[4].2,
+        result.entries[4].category,
         graphcal_compiler::declaration_category::ValueDeclCategory::Node
     );
 }
@@ -1585,10 +1587,14 @@ param converted_bound: Datetime<TT>(
     .unwrap();
 
     for name in ["utc", "tt_at_min", "tt_at_max", "converted_bound"] {
-        let (_, value, _) = result
+        let EvalEntry { outcome: value, .. } = result
             .entries
             .iter()
-            .find(|(candidate, _, _)| candidate.to_string() == name)
+            .find(
+                |EvalEntry {
+                     name: candidate, ..
+                 }| candidate.to_string() == name,
+            )
             .unwrap_or_else(|| panic!("{name} not found"));
         assert!(value.is_ok(), "{name} failed: {value:?}");
     }
@@ -1615,10 +1621,14 @@ fn every_supported_datetime_scale_accepts_matching_domain_bounds() {
     let result = compile_and_eval(&source).unwrap();
     for scale in graphcal_compiler::semantic::time_scale::TimeScale::ALL {
         let name = scale.to_string().to_ascii_lowercase();
-        let (_, value, _) = result
+        let EvalEntry { outcome: value, .. } = result
             .entries
             .iter()
-            .find(|(candidate, _, _)| candidate.to_string() == name)
+            .find(
+                |EvalEntry {
+                     name: candidate, ..
+                 }| candidate.to_string() == name,
+            )
             .unwrap_or_else(|| panic!("{name} not found"));
         assert!(value.is_ok(), "{name} failed: {value:?}");
     }
@@ -1639,10 +1649,12 @@ param schedule: Datetime(
 "#,
     )
     .unwrap();
-    let (_, schedule, _) = result
+    let EvalEntry {
+        outcome: schedule, ..
+    } = result
         .entries
         .iter()
-        .find(|(name, _, _)| name.to_string() == "schedule")
+        .find(|EvalEntry { name, .. }| name.to_string() == "schedule")
         .expect("schedule not found");
     let NodeUnavailable::EvalFailed { message } = schedule.as_ref().unwrap_err() else {
         panic!("expected EvalFailed, got {schedule:?}");
@@ -1667,10 +1679,10 @@ node BAD: EventSpec = EventSpec(at: epoch<TT>("2025-01-01T00:00:00"));
 "#,
     )
     .unwrap();
-    let (_, bad, _) = result
+    let EvalEntry { outcome: bad, .. } = result
         .entries
         .iter()
-        .find(|(name, _, _)| name.to_string() == "BAD")
+        .find(|EvalEntry { name, .. }| name.to_string() == "BAD")
         .expect("BAD not found");
     let NodeUnavailable::EvalFailed { message } = bad.as_ref().unwrap_err() else {
         panic!("expected EvalFailed, got {bad:?}");
@@ -1699,10 +1711,10 @@ node BAD: Schedule = Schedule(events: {
 "#,
     )
     .unwrap();
-    let (_, bad, _) = result
+    let EvalEntry { outcome: bad, .. } = result
         .entries
         .iter()
-        .find(|(name, _, _)| name.to_string() == "BAD")
+        .find(|EvalEntry { name, .. }| name.to_string() == "BAD")
         .expect("BAD not found");
     let NodeUnavailable::EvalFailed { message } = bad.as_ref().unwrap_err() else {
         panic!("expected EvalFailed, got {bad:?}");
@@ -1749,10 +1761,13 @@ param x: Mass = 5000.0 kg;
 node SAT: Spec = Spec(mass: @x);
 ";
     let result = compile_and_eval(source).unwrap();
-    let (_, sat_result, _) = result
+    let EvalEntry {
+        outcome: sat_result,
+        ..
+    } = result
         .entries
         .iter()
-        .find(|(n, _, _)| n.to_string() == "SAT")
+        .find(|EvalEntry { name: n, .. }| n.to_string() == "SAT")
         .expect("SAT not found");
     let err = sat_result.as_ref().unwrap_err();
     let NodeUnavailable::EvalFailed { message } = err else {
@@ -1774,10 +1789,12 @@ pub type Result {
 node R: Result = Burn(dv: 50.0 km/s);
 ";
     let result = compile_and_eval(source).unwrap();
-    let (_, r_result, _) = result
+    let EvalEntry {
+        outcome: r_result, ..
+    } = result
         .entries
         .iter()
-        .find(|(n, _, _)| n.to_string() == "R")
+        .find(|EvalEntry { name: n, .. }| n.to_string() == "R")
         .expect("R not found");
     let err = r_result.as_ref().unwrap_err();
     let NodeUnavailable::EvalFailed { message } = err else {
@@ -1798,10 +1815,10 @@ node bad: Length = Box<Length>(x: 0.1 m).x;
 ",
     )
     .unwrap();
-    let (_, bad, _) = result
+    let EvalEntry { outcome: bad, .. } = result
         .entries
         .iter()
-        .find(|(name, _, _)| name.to_string() == "bad")
+        .find(|EvalEntry { name, .. }| name.to_string() == "bad")
         .expect("bad not found");
     let NodeUnavailable::EvalFailed { message } = bad.as_ref().unwrap_err() else {
         panic!("expected EvalFailed, got {bad:?}");
@@ -1818,10 +1835,10 @@ node good: Box<Length> = Box<Length>(x: 1.0 m);
 ",
     )
     .unwrap();
-    let (_, good, _) = result
+    let EvalEntry { outcome: good, .. } = result
         .entries
         .iter()
-        .find(|(name, _, _)| name.to_string() == "good")
+        .find(|EvalEntry { name, .. }| name.to_string() == "good")
         .expect("good not found");
     assert!(good.is_ok(), "good failed: {good:?}");
 }
@@ -1835,10 +1852,10 @@ node good: T<2> = T<2>(x: 1);
 ",
     )
     .unwrap();
-    let (_, good, _) = result
+    let EvalEntry { outcome: good, .. } = result
         .entries
         .iter()
-        .find(|(name, _, _)| name.to_string() == "good")
+        .find(|EvalEntry { name, .. }| name.to_string() == "good")
         .expect("good not found");
     assert!(good.is_ok(), "good failed: {good:?}");
 }
@@ -1856,17 +1873,19 @@ node bad_three: AtLeastCardinality<3> = AtLeastCardinality<3>(x: 2);
     )
     .unwrap();
 
-    let (_, two, _) = result
+    let EvalEntry { outcome: two, .. } = result
         .entries
         .iter()
-        .find(|(name, _, _)| name.to_string() == "two")
+        .find(|EvalEntry { name, .. }| name.to_string() == "two")
         .expect("two not found");
     assert!(two.is_ok(), "two failed: {two:?}");
 
-    let (_, bad_three, _) = result
+    let EvalEntry {
+        outcome: bad_three, ..
+    } = result
         .entries
         .iter()
-        .find(|(name, _, _)| name.to_string() == "bad_three")
+        .find(|EvalEntry { name, .. }| name.to_string() == "bad_three")
         .expect("bad_three not found");
     let NodeUnavailable::EvalFailed { message } = bad_three.as_ref().unwrap_err() else {
         panic!("expected EvalFailed, got {bad_three:?}");
@@ -1885,10 +1904,10 @@ node good: T<2> = T<2>(x: 1);
 ",
     )
     .unwrap();
-    let (_, good, _) = result
+    let EvalEntry { outcome: good, .. } = result
         .entries
         .iter()
-        .find(|(name, _, _)| name.to_string() == "good")
+        .find(|EvalEntry { name, .. }| name.to_string() == "good")
         .expect("good not found");
     assert!(good.is_ok(), "good failed: {good:?}");
 }

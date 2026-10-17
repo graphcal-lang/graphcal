@@ -1,0 +1,189 @@
+{
+  "version": 1,
+  "module": {
+    "id": "range_index",
+    "file": "range_index.gcl",
+    "package": "range_index"
+  },
+  "indexes": [
+    {
+      "id": "p:range_index/f:range_index/n:TimeStep",
+      "name": "TimeStep",
+      "module": "range_index",
+      "entries": [
+        {
+          "key": "#0",
+          "display": "0 s"
+        },
+        {
+          "key": "#1",
+          "display": "0.5 s"
+        },
+        {
+          "key": "#2",
+          "display": "1 s"
+        }
+      ]
+    }
+  ],
+  "nodes": [
+    {
+      "id": "p:range_index/f:range_index/n:rate",
+      "label": "rate",
+      "name": "rate",
+      "module": "range_index",
+      "kind": "param",
+      "origin": {
+        "kind": "local"
+      },
+      "element": "quantity",
+      "axes": [],
+      "dimension": "Frequency",
+      "unit": "Hz",
+      "pub": false,
+      "deps": [],
+      "expr": "0.5 Hz",
+      "doc": null,
+      "source": {
+        "file": "range_index.gcl",
+        "line": 6,
+        "expr_range": {
+          "start": {
+            "line": 5,
+            "character": 24
+          },
+          "end": {
+            "line": 5,
+            "character": 30
+          }
+        },
+        "cells": []
+      },
+      "value": {
+        "kind": "quantity",
+        "display": "0.5 Hz",
+        "magnitude": "0.5",
+        "si_value": 0.5,
+        "unit": "Hz"
+      },
+      "presentation": []
+    },
+    {
+      "id": "p:range_index/f:range_index/n:x0",
+      "label": "x0",
+      "name": "x0",
+      "module": "range_index",
+      "kind": "param",
+      "origin": {
+        "kind": "local"
+      },
+      "element": "quantity",
+      "axes": [],
+      "dimension": "Dimensionless",
+      "unit": null,
+      "pub": false,
+      "deps": [],
+      "expr": "1.0",
+      "doc": null,
+      "source": {
+        "file": "range_index.gcl",
+        "line": 9,
+        "expr_range": {
+          "start": {
+            "line": 8,
+            "character": 26
+          },
+          "end": {
+            "line": 8,
+            "character": 29
+          }
+        },
+        "cells": []
+      },
+      "value": {
+        "kind": "quantity",
+        "display": "1",
+        "magnitude": "1",
+        "si_value": 1.0,
+        "unit": null
+      },
+      "presentation": []
+    },
+    {
+      "id": "p:range_index/f:range_index/n:x",
+      "label": "x",
+      "name": "x",
+      "module": "range_index",
+      "kind": "node",
+      "origin": {
+        "kind": "local"
+      },
+      "element": "quantity",
+      "axes": [
+        "p:range_index/f:range_index/n:TimeStep"
+      ],
+      "dimension": "Dimensionless",
+      "unit": null,
+      "pub": false,
+      "deps": [
+        "p:range_index/f:range_index/n:rate",
+        "p:range_index/f:range_index/n:x0"
+      ],
+      "expr": "unfold(\n    TimeStep,\n    @x0,\n    |prev_x, prev_t, t| prev_x * (1.0 + @rate * (coord(t) - coord(prev_t)))\n)",
+      "doc": null,
+      "source": {
+        "file": "range_index.gcl",
+        "line": 12,
+        "expr_range": {
+          "start": {
+            "line": 11,
+            "character": 34
+          },
+          "end": {
+            "line": 15,
+            "character": 1
+          }
+        },
+        "cells": []
+      },
+      "value": {
+        "kind": "indexed",
+        "display": "[TimeStep]",
+        "index": "TimeStep",
+        "entries": [
+          {
+            "key": "#0",
+            "value": {
+              "kind": "quantity",
+              "display": "1",
+              "magnitude": "1",
+              "si_value": 1.0,
+              "unit": null
+            }
+          },
+          {
+            "key": "#1",
+            "value": {
+              "kind": "quantity",
+              "display": "1.25",
+              "magnitude": "1.25",
+              "si_value": 1.25,
+              "unit": null
+            }
+          },
+          {
+            "key": "#2",
+            "value": {
+              "kind": "quantity",
+              "display": "1.5625",
+              "magnitude": "1.5625",
+              "si_value": 1.5625,
+              "unit": null
+            }
+          }
+        ]
+      },
+      "presentation": []
+    }
+  ]
+}

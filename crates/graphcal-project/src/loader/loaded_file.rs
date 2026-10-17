@@ -188,6 +188,18 @@ impl<'a> LoadedModule<'a> {
     }
 }
 
+/// Where a loaded file sits: on disk, as a module identity, and on a module
+/// path.
+#[derive(Debug)]
+pub(super) struct FileSite {
+    /// Canonical path, for I/O and diagnostics.
+    pub(super) path: PathBuf,
+    /// Abstract DAG identity.
+    pub(super) dag_id: DagId,
+    /// The module path naming the file within its own package, if it has one.
+    pub(super) module_path: Option<ModulePathKey>,
+}
+
 /// A single loaded and parsed file.
 #[derive(Debug)]
 pub struct LoadedFile<T = ResolvedModuleTarget> {
@@ -195,6 +207,9 @@ pub struct LoadedFile<T = ResolvedModuleTarget> {
     pub(super) path: PathBuf,
     /// Abstract DAG identity (filesystem-independent).
     pub(super) dag_id: DagId,
+    /// The module path naming this file within its own package, as the
+    /// loader located it; `None` when the path cannot be spelled.
+    pub(super) module_path: Option<ModulePathKey>,
     /// Raw source text.
     pub(super) source: Arc<String>,
     /// Parsed AST.
@@ -218,17 +233,22 @@ impl LoadedFile<ModuleTarget> {
     /// Assemble a loaded file from its parsed source; the declared interface
     /// is computed here, once, from exactly the parsed declarations.
     pub(super) fn new(
-        path: PathBuf,
-        dag_id: DagId,
+        site: FileSite,
         source: Arc<String>,
         source_id: SourceId,
         ast: File,
         resolved_imports: HashMap<ModulePathKey, ModuleTarget>,
         inline_dags: Vec<LoadedDag<ModuleTarget>>,
     ) -> Self {
+        let FileSite {
+            path,
+            dag_id,
+            module_path,
+        } = site;
         Self {
             path,
             dag_id,
+            module_path,
             source,
             interface: ModuleInterface::new(&ast.declarations),
             ast,
@@ -255,6 +275,7 @@ impl LoadedFile<ModuleTarget> {
         let Self {
             path,
             dag_id,
+            module_path,
             source,
             ast,
             source_id,
@@ -287,6 +308,7 @@ impl LoadedFile<ModuleTarget> {
         Ok(LoadedFile {
             path,
             dag_id,
+            module_path,
             source,
             ast,
             source_id,
@@ -364,6 +386,13 @@ impl<T> LoadedFile<T> {
     #[must_use]
     pub const fn dag_id(&self) -> &DagId {
         &self.dag_id
+    }
+
+    /// The module path naming this file within its own package; `None` when
+    /// a component of its path is not a name.
+    #[must_use]
+    pub const fn module_path(&self) -> Option<&ModulePathKey> {
+        self.module_path.as_ref()
     }
 
     /// Raw source text parsed into this immutable loader artifact.

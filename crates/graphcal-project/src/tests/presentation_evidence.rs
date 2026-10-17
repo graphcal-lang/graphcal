@@ -1,5 +1,6 @@
 use super::*;
 use graphcal_compiler::outcome::Outcome;
+use graphcal_eval::eval::EvalEntry;
 use graphcal_eval::presentation_evidence::{
     PendingDisplayUnit, PendingLeaf, PendingQuantityDisplay, PresentationFailure, QuantityDisplay,
     ResolvedLeaf,
@@ -92,7 +93,10 @@ fn literal_constant_and_conversion_label_overflow_preserve_si() {
         let result = compile_and_eval(source)
             .expect("display formatting must not reject a checked constant or value");
         assert!(
-            result.entries.iter().all(|(_, value, _)| value.is_ok()),
+            result
+                .entries
+                .iter()
+                .all(|EvalEntry { outcome: value, .. }| value.is_ok()),
             "label formatting must not erase SI: {result:?}"
         );
         assert_eq!(
@@ -261,7 +265,12 @@ node leaves: Length[Fin(2)] = for i: Fin(2) { @readings[i].value };
 plot measurement =  { mark: line, encode: { x: table[Fin(2)] { 1.0; 2.0; }, y: @leaves } };
 ";
     let result = compile_and_eval(source).unwrap();
-    assert!(result.entries.iter().all(|(_, value, _)| value.is_ok()));
+    assert!(
+        result
+            .entries
+            .iter()
+            .all(|EvalEntry { outcome: value, .. }| value.is_ok())
+    );
     assert!(result.plot_errors.is_empty(), "{result:?}");
     assert_eq!(result.plots.len(), 1);
     assert_eq!(labels(&find_entry(&result, "readings")), [None, None]);

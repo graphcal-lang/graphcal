@@ -13,7 +13,7 @@ pub use output_decl_name::{OutputDeclName, OutputUnavailable};
 pub use plot_unavailable::{ComposedPlotsUnavailable, PlotUnavailable};
 pub use runtime::RuntimeEvaluation;
 pub use types::{
-    AssertResult, AxisMeta, CompositionProperty, DisplayProjectionError, DisplayUnit,
+    AssertResult, AxisMeta, CompositionProperty, DisplayProjectionError, DisplayUnit, EvalEntry,
     EvalOutputView, EvalResult, FigureSpec, KeyRendering, LayerSpec, MarkProperty, NodeUnavailable,
     PlotError, PlotFieldValue, PlotProperty, PlotSpec, PropertyValue, RenderContext,
     RuntimeUnavailable, UnitLabel, Value, datetime_literal, quantity_display_value,

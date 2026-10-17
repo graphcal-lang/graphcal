@@ -23,7 +23,7 @@ fn view_of(root: &Path, file: &str, evaluate: bool) -> ViewModel {
         .host_fns(&host_fns)
         .check()
         .unwrap();
-    let mut projection = project_view(&project, &checked, Some(root)).unwrap();
+    let mut projection = project_view(&project, &checked).unwrap();
     if !evaluate {
         return projection.into_model();
     }
@@ -31,22 +31,37 @@ fn view_of(root: &Path, file: &str, evaluate: bool) -> ViewModel {
     let evaluated = prepared
         .evaluate(&prepared.binding_builder().finish().unwrap())
         .unwrap();
-    projection.attach_evaluation(&evaluated).unwrap();
+    projection.attach_evaluation(&evaluated);
     projection.into_model()
 }
 
-fn node<'a>(view: &'a ViewModel, id: &str) -> &'a ViewNode {
+/// The node the module spells `label`.
+fn node<'a>(view: &'a ViewModel, label: &str) -> &'a ViewNode {
     view.nodes
         .iter()
-        .find(|node| node.id == id)
-        .unwrap_or_else(|| panic!("no node `{id}`"))
+        .find(|node| node.label == label)
+        .unwrap_or_else(|| panic!("no node `{label}`"))
+}
+
+fn id_of(view: &ViewModel, label: &str) -> ViewNodeId {
+    node(view, label).id.clone()
+}
+
+fn labels(view: &ViewModel) -> Vec<&str> {
+    view.nodes.iter().map(|node| node.label.as_str()).collect()
+}
+
+fn index<'a>(view: &'a ViewModel, id: &ViewIndexId) -> &'a ViewIndex {
+    view.indexes
+        .iter()
+        .find(|index| index.id == *id)
+        .unwrap_or_else(|| panic!("no index `{id}`"))
 }
 
 #[test]
 fn power_max_structure_and_values() {
     let root = power_project_root();
     let view = view_of(&root, "src/power_project/power_max.gcl", true);
-    eprintln!("{}", serde_json::to_string_pretty(&view).unwrap());
 
     assert_eq!(view.module.id, "power_project.power_max");
     assert_eq!(view.module.file, "src/power_project/power_max.gcl");
@@ -57,30 +72,51 @@ fn power_max_structure_and_values() {
     assert_eq!(node(&view, "eta_dcdc").doc, None);
     assert_eq!(view.module.package, "power_project");
     // Source order: the include alias sits where the `include` is written.
-    let order: Vec<&str> = view.nodes.iter().map(|node| node.id.as_str()).collect();
-    assert_eq!(&order[..4], ["margin", "p_budget", "eta_dcdc", "p_unit"]);
+    assert_eq!(
+        &labels(&view)[..4],
+        ["margin", "p_budget", "eta_dcdc", "p_unit"]
+    );
 
-    let indexes: Vec<(&str, Vec<&str>)> = view
+    let indexes: Vec<(&str, Option<&str>, Vec<&str>)> = view
         .indexes
         .iter()
         .map(|index| {
             (
                 index.name.as_str(),
-                index.labels.iter().map(String::as_str).collect(),
+                index.module.as_deref(),
+                index
+                    .entries
+                    .iter()
+                    .map(|entry| entry.display.as_str())
+                    .collect(),
             )
         })
         .collect();
     assert_eq!(
         indexes,
         vec![
-            ("Component", vec!["Obc", "Radio", "Heater", "Payload"]),
-            ("Mode", vec!["Safe", "Nominal", "Science"]),
+            (
+                "Component",
+                Some("power_project.components"),
+                vec!["Obc", "Radio", "Heater", "Payload"]
+            ),
+            (
+                "Mode",
+                Some("power_project.components"),
+                vec!["Safe", "Nominal", "Science"]
+            ),
         ]
     );
 
     let duty = node(&view, "duty");
     assert_eq!(duty.kind, ViewNodeKind::Param);
-    assert_eq!(duty.axes, ["Component", "Mode"]);
+    assert_eq!(duty.origin, ViewOrigin::Local);
+    let axis_names: Vec<&str> = duty
+        .axes
+        .iter()
+        .map(|axis| index(&view, axis).name.as_str())
+        .collect();
+    assert_eq!(axis_names, ["Component", "Mode"]);
     assert_eq!(duty.dimension.as_deref(), Some("Dimensionless"));
     assert_eq!(duty.unit, None);
     assert!(
@@ -99,35 +135,51 @@ fn power_max_structure_and_values() {
 
     let p_required = node(&view, "p_required");
     assert_eq!(p_required.kind, ViewNodeKind::Node);
-    assert_eq!(p_required.instance, None);
+    assert_eq!(p_required.origin, ViewOrigin::Local);
     assert!(p_required.is_public);
-    assert_eq!(p_required.deps, ["margin", "p_total"]);
+    assert_eq!(
+        p_required.deps,
+        [id_of(&view, "margin"), id_of(&view, "p_total")]
+    );
     assert_eq!(
         p_required.expr.as_deref(),
         Some("@p_total * (1.0 + @margin)")
     );
-    assert_eq!(p_required.unit.as_deref(), Some("W"));
+    // No display unit: shown in the SI label, as `graphcal eval` shows it.
+    assert_eq!(p_required.unit.as_deref(), Some("m^2*kg/s^3"));
     let Some(ViewValue::Quantity { unit, .. }) = &p_required.value else {
         panic!("p_required has no quantity value");
     };
-    assert_eq!(unit.as_deref(), Some("W"));
+    assert_eq!(unit.as_deref(), Some("m^2*kg/s^3"));
+}
 
+#[test]
+fn power_max_reads_other_modules() {
+    let root = power_project_root();
+    let view = view_of(&root, "src/power_project/power_max.gcl", true);
     let p_mean = node(&view, "p_mean");
-    assert_eq!(p_mean.deps, ["num", "p_total"]);
+    assert_eq!(p_mean.deps, [id_of(&view, "num"), id_of(&view, "p_total")]);
     let num = node(&view, "num");
-    assert_eq!(num.kind, ViewNodeKind::External);
+    assert_eq!(num.kind, ViewNodeKind::Const);
+    assert_eq!(num.origin, ViewOrigin::Imported);
     assert_eq!(num.module, "power_project.components");
     assert!(num.is_public);
-    assert_eq!(num.instance, None);
     assert!(matches!(num.value, Some(ViewValue::Int { .. })));
 
     let budget = node(&view, "p_budget");
-    assert_eq!(budget.kind, ViewNodeKind::External);
+    assert_eq!(budget.kind, ViewNodeKind::Node);
     assert_eq!(budget.module, "power_project.eps");
-    assert_eq!(budget.deps, Vec::<String>::new());
+    assert_eq!(budget.deps, Vec::<ViewNodeId>::new());
     // `include power_project.eps()` binds nothing.
-    let instance = budget.instance.as_ref().map(|i| (i.name.as_str(), i.bound));
-    assert_eq!(instance, Some(("eps", false)));
+    assert_eq!(
+        budget.origin,
+        ViewOrigin::Included {
+            instance: ViewInstance {
+                name: "eps".to_string(),
+                bound: false
+            }
+        }
+    );
     assert_eq!(budget.source.as_ref().unwrap().line, 23);
     assert!(
         budget
@@ -145,7 +197,10 @@ fn power_max_structure_and_values() {
     let within_budget = node(&view, "within_budget");
     assert_eq!(within_budget.kind, ViewNodeKind::Assert);
     assert_eq!(within_budget.dimension.as_deref(), Some("Bool"));
-    assert_eq!(within_budget.deps, ["p_budget", "p_required"]);
+    assert_eq!(
+        within_budget.deps,
+        [id_of(&view, "p_budget"), id_of(&view, "p_required")]
+    );
     assert_eq!(
         within_budget.expr.as_deref(),
         Some("@p_required <= @p_budget")
@@ -157,37 +212,44 @@ fn power_max_structure_and_values() {
 }
 
 #[test]
+fn indexed_values_are_keyed_by_their_axis_entries() {
+    let root = power_project_root();
+    let view = view_of(&root, "src/power_project/power_max.gcl", true);
+    let p_unit = node(&view, "p_unit");
+    let axis = index(&view, &p_unit.axes[0]);
+    let Some(ViewValue::Indexed { entries, .. }) = &p_unit.value else {
+        panic!("p_unit is not indexed: {:?}", p_unit.value);
+    };
+    let keys: Vec<&str> = entries.iter().map(|entry| entry.key.as_str()).collect();
+    let axis_keys: Vec<&str> = axis
+        .entries
+        .iter()
+        .map(|entry| entry.key.as_str())
+        .collect();
+    assert_eq!(keys, axis_keys);
+}
+
+#[test]
 fn structure_only_without_evaluation() {
     let root = power_project_root();
     let view = view_of(&root, "src/power_project/power_max.gcl", false);
     assert!(view.nodes.iter().all(|node| node.value.is_none()));
     assert!(!node(&view, "margin").is_public);
-    assert_eq!(node(&view, "p_total").unit.as_deref(), Some("W"));
+    // Units come from values: without an evaluation there is none.
+    assert_eq!(node(&view, "p_total").unit, None);
+    assert_eq!(node(&view, "p_total").dimension.as_deref(), Some("Power"));
 }
 
 #[test]
-fn single_file_project_projects() {
-    let mut fs = graphcal_io::InMemoryFileSystem::new();
-    fs.add_file(
-        graphcal_io::VirtualAbsolutePath::new("/proj/view.gcl").unwrap(),
-        "node thrust: Dimensionless = 1.0;\nnode doubled: Dimensionless = @thrust * 2.0;\n"
-            .to_string(),
-    )
-    .unwrap();
-    let project = load_project(Path::new("/proj/view.gcl"), Some(Path::new("/proj")), &fs).unwrap();
-    let host_fns = graphcal_eval::host_fns::demo_registry();
-    let checked = ProjectCompiler::new(&project)
-        .host_fns(&host_fns)
-        .check()
-        .unwrap();
-    let view = project_view(&project, &checked, None).unwrap().into_model();
-    assert_eq!(view.module.id, "view");
-    assert_eq!(view.nodes.len(), 2);
-    assert_eq!(node(&view, "doubled").deps, ["thrust"]);
+fn a_module_opened_alone_keeps_the_id_its_readers_use() {
+    let root = power_project_root();
+    let main = view_of(&root, "src/power_project/power_max.gcl", false);
+    let eps = view_of(&root, "src/power_project/eps.gcl", false);
+    assert_eq!(eps.module.id, node(&main, "p_budget").module);
+    assert_eq!(eps.module.id, "power_project.eps");
 }
 
-/// The evaluated view of a one-file project.
-fn evaluated_view_of_source(source: &str) -> ViewModel {
+fn single_file_project(source: &str) -> (crate::loader::LoadedProject, CheckedProjectFixture) {
     let mut fs = graphcal_io::InMemoryFileSystem::new();
     fs.add_file(
         graphcal_io::VirtualAbsolutePath::new("/proj/view.gcl").unwrap(),
@@ -200,17 +262,45 @@ fn evaluated_view_of_source(source: &str) -> ViewModel {
         .host_fns(&host_fns)
         .check()
         .unwrap();
-    let mut projection = project_view(&project, &checked, None).unwrap();
-    let prepared = checked.prepare_with_host_fns(&host_fns).unwrap();
+    (project, CheckedProjectFixture { checked, host_fns })
+}
+
+struct CheckedProjectFixture {
+    checked: crate::project_compiler::CheckedProject,
+    host_fns: graphcal_eval::host_fns::HostFunctionRegistry,
+}
+
+#[test]
+fn single_file_project_projects() {
+    let (project, fixture) = single_file_project(
+        "node thrust: Dimensionless = 1.0;\nnode doubled: Dimensionless = @thrust * 2.0;\n",
+    );
+    let view = project_view(&project, &fixture.checked)
+        .unwrap()
+        .into_model();
+    assert_eq!(view.module.id, "view");
+    assert_eq!(view.module.file, "view.gcl");
+    assert_eq!(view.nodes.len(), 2);
+    assert_eq!(node(&view, "doubled").deps, [id_of(&view, "thrust")]);
+}
+
+/// The evaluated view of a one-file project.
+fn evaluated_view_of_source(source: &str) -> ViewModel {
+    let (project, fixture) = single_file_project(source);
+    let mut projection = project_view(&project, &fixture.checked).unwrap();
+    let prepared = fixture
+        .checked
+        .prepare_with_host_fns(&fixture.host_fns)
+        .unwrap();
     let evaluated = prepared
         .evaluate(&prepared.binding_builder().finish().unwrap())
         .unwrap();
-    projection.attach_evaluation(&evaluated).unwrap();
+    projection.attach_evaluation(&evaluated);
     projection.into_model()
 }
 
-fn display_of(view: &ViewModel, id: &str) -> Option<String> {
-    match &node(view, id).value {
+fn display_of(view: &ViewModel, label: &str) -> Option<String> {
+    match &node(view, label).value {
         Some(ViewValue::Quantity { display, .. }) => Some(display.clone()),
         _ => None,
     }
@@ -234,11 +324,19 @@ include two() as b;
 node y: Dimensionless = @a::out + @b::out;
 ",
     );
-    let mut ids: Vec<&str> = view.nodes.iter().map(|node| node.id.as_str()).collect();
-    ids.sort_unstable();
-    assert_eq!(ids, ["a::out", "b::out", "y"]);
-    assert_eq!(node(&view, "y").deps, ["a::out", "b::out"]);
-    assert_eq!(node(&view, "a::out").kind, ViewNodeKind::External);
+    let mut sorted = labels(&view);
+    sorted.sort_unstable();
+    assert_eq!(sorted, ["a::out", "b::out", "y"]);
+    assert_eq!(
+        node(&view, "y").deps,
+        [id_of(&view, "a::out"), id_of(&view, "b::out")]
+    );
+    assert_eq!(node(&view, "a::out").kind, ViewNodeKind::Node);
+    assert!(matches!(
+        node(&view, "a::out").origin,
+        ViewOrigin::Included { .. }
+    ));
+    assert_eq!(node(&view, "a::out").module, "view.one");
     assert_eq!(display_of(&view, "a::out").as_deref(), Some("1"));
     assert_eq!(display_of(&view, "b::out").as_deref(), Some("2"));
     assert_eq!(display_of(&view, "y").as_deref(), Some("3"));
@@ -257,30 +355,83 @@ include checked(v: 4.0) as also_fine;
 node z: Dimensionless = @out + @also_fine::out;
 ",
     );
-    let ids: Vec<&str> = view.nodes.iter().map(|node| node.id.as_str()).collect();
-    assert_eq!(ids, ["out", "z", "also_fine::out"]);
-    assert_eq!(node(&view, "z").deps, ["out", "also_fine::out"]);
+    assert_eq!(labels(&view), ["out", "z", "also_fine::out"]);
+    assert_eq!(
+        node(&view, "z").deps,
+        [id_of(&view, "out"), id_of(&view, "also_fine::out")]
+    );
+    assert_ne!(id_of(&view, "out"), id_of(&view, "also_fine::out"));
     assert_eq!(display_of(&view, "out").as_deref(), Some("6"));
     assert_eq!(display_of(&view, "also_fine::out").as_deref(), Some("8"));
 }
 
-fn bare_node(id: &str, deps: &[&str]) -> ViewNode {
+#[test]
+fn a_coordinate_axis_lists_its_entries_under_the_keys_of_its_values() {
+    // The reproduction of #2060: every cell over a coordinate index showed
+    // `—` because the axis and the values named their entries differently.
+    let view = evaluated_view_of_source(
+        "\
+index TimeStep = range(0.0 s, 1.0 s, step: 0.5 s);
+param x0: Dimensionless = 1.0;
+node x: Dimensionless[TimeStep] = for t: TimeStep { @x0 * 2.0 };
+",
+    );
+    let x = node(&view, "x");
+    let axis = index(&view, &x.axes[0]);
+    assert_eq!(axis.name, "TimeStep");
+    let displays: Vec<&str> = axis.entries.iter().map(|e| e.display.as_str()).collect();
+    assert_eq!(displays, ["0 s", "0.5 s", "1 s"]);
+    let Some(ViewValue::Indexed { entries, .. }) = &x.value else {
+        panic!("x is not indexed: {:?}", x.value);
+    };
+    let keys: Vec<&str> = entries.iter().map(|entry| entry.key.as_str()).collect();
+    let axis_keys: Vec<&str> = axis
+        .entries
+        .iter()
+        .map(|entry| entry.key.as_str())
+        .collect();
+    assert_eq!(keys, axis_keys);
+}
+
+#[test]
+fn a_fin_axis_is_listed_with_its_positions() {
+    let view = evaluated_view_of_source("node v: Dimensionless[Fin(3)] = for i: Fin(3) { 1.0 };\n");
+    let v = node(&view, "v");
+    let axis = index(&view, &v.axes[0]);
+    assert_eq!(axis.name, "Fin(3)");
+    assert_eq!(axis.module, None);
+    assert_eq!(axis.entries.len(), 3);
+    let Some(ViewValue::Indexed { entries, .. }) = &v.value else {
+        panic!("v is not indexed: {:?}", v.value);
+    };
+    let keys: Vec<&str> = entries.iter().map(|entry| entry.key.as_str()).collect();
+    let axis_keys: Vec<&str> = axis
+        .entries
+        .iter()
+        .map(|entry| entry.key.as_str())
+        .collect();
+    assert_eq!(keys, axis_keys);
+}
+
+fn bare_node(id: &ViewNodeId, deps: &[&ViewNodeId]) -> ViewNode {
     ViewNode {
-        id: id.to_string(),
+        id: id.clone(),
+        label: id.to_string(),
         name: id.to_string(),
         module: "m".to_string(),
         kind: ViewNodeKind::Node,
+        origin: ViewOrigin::Local,
+        element: ViewElement::Quantity,
         axes: Vec::new(),
         dimension: None,
         unit: None,
         is_public: false,
-        deps: deps.iter().map(ToString::to_string).collect(),
+        deps: deps.iter().map(|dep| (*dep).clone()).collect(),
         expr: None,
-        reduce: None,
-        instance: None,
         doc: None,
         source: None,
         value: None,
+        presentation: Vec::new(),
     }
 }
 
@@ -288,15 +439,18 @@ fn bare_node(id: &str, deps: &[&str]) -> ViewNode {
 fn node_references_reject_a_shared_id_and_a_dangling_dependency() {
     use super::project::check_node_references;
 
-    assert!(check_node_references(&[bare_node("a", &[]), bare_node("b", &["a"])]).is_ok());
+    let view =
+        evaluated_view_of_source("node a: Dimensionless = 1.0;\nnode b: Dimensionless = @a;\n");
+    let (a, b) = (id_of(&view, "a"), id_of(&view, "b"));
+    assert!(check_node_references(&[bare_node(&a, &[]), bare_node(&b, &[&a])]).is_ok());
     assert!(matches!(
-        check_node_references(&[bare_node("a", &[]), bare_node("a", &[])]),
-        Err(ViewProjectionError::DuplicateNodeId { id }) if id == "a"
+        check_node_references(&[bare_node(&a, &[]), bare_node(&a, &[])]),
+        Err(ViewProjectionError::DuplicateNodeId { id }) if id == a
     ));
     assert!(matches!(
-        check_node_references(&[bare_node("b", &["a"])]),
+        check_node_references(&[bare_node(&b, &[&a])]),
         Err(ViewProjectionError::UnknownDependency { node, dependency })
-            if node == "b" && dependency == "a"
+            if node == b && dependency == a
     ));
 }
 
@@ -313,14 +467,202 @@ include lib() as q;
 node y: Dimensionless = @p::out + @q::out;
 ",
     );
-    let instance = |id: &str| node(&view, id).instance.clone().expect("an include member");
+    let instance = |label: &str| match &node(&view, label).origin {
+        ViewOrigin::Included { instance } => instance.clone(),
+        other => panic!("`{label}` is no include member: {other:?}"),
+    };
     assert_eq!(instance("p::out").name, "p");
     assert!(instance("p::out").bound);
     assert_eq!(instance("q::out").name, "q");
     assert!(!instance("q::out").bound);
-    assert_eq!(
-        node(&view, "y").instance.as_ref().map(|i| i.name.as_str()),
-        None
-    );
+    assert_eq!(node(&view, "y").origin, ViewOrigin::Local);
     assert_eq!(display_of(&view, "p::out").as_deref(), Some("2"));
+}
+
+/// The text the view would replace for `label`: its `expr`, and the source
+/// sliced by its `expr_range` (lines and UTF-16 columns).
+fn expr_and_range_text(view: &ViewModel, source: &str, label: &str) -> (String, String) {
+    let node = node(view, label);
+    let range = node
+        .source
+        .as_ref()
+        .and_then(|source| source.expr_range)
+        .unwrap_or_else(|| panic!("`{label}` has no expression range"));
+    let offset = |position: ViewPosition| -> usize {
+        let line_start: usize = source
+            .split_inclusive('\n')
+            .take(position.line as usize)
+            .map(str::len)
+            .sum();
+        let line = &source[line_start..];
+        let mut units: usize = 0;
+        let mut bytes: usize = 0;
+        for ch in line.chars() {
+            if units >= position.character as usize {
+                break;
+            }
+            units = units.saturating_add(ch.len_utf16());
+            bytes = bytes.saturating_add(ch.len_utf8());
+        }
+        line_start.saturating_add(bytes)
+    };
+    let text = source[offset(range.start)..offset(range.end)].to_string();
+    (node.expr.clone().unwrap(), text)
+}
+
+#[test]
+fn the_expression_range_covers_the_whole_text_after_the_equals_sign() {
+    // The reproduction of #2062: a range that starts after an opening `(`
+    // turned an edit of `z` into `(5.0;`.
+    let source = "\
+node a: Dimensionless = 1.0;
+node y: Dimensionless = (@a + 2.0) * 3.0;
+node z: Dimensionless = (@a);
+node nested: Dimensionless = ((@a) + (2.0));
+param p: Dimensionless = (1.5);
+const node c: Dimensionless = (2.5);
+node multi: Dimensionless = (@a
+    // a comment inside
+    + 1.0) // a comment after
+    ;
+assert ok = (@y) > 0.0;
+";
+    let view = evaluated_view_of_source(source);
+    for (label, expected) in [
+        ("y", "(@a + 2.0) * 3.0"),
+        ("z", "(@a)"),
+        ("nested", "((@a) + (2.0))"),
+        ("p", "(1.5)"),
+        ("c", "(2.5)"),
+        ("multi", "(@a\n    // a comment inside\n    + 1.0)"),
+        ("ok", "(@y) > 0.0"),
+    ] {
+        let (expr, text) = expr_and_range_text(&view, source, label);
+        assert_eq!(expr, expected, "expr of `{label}`");
+        assert_eq!(text, expected, "range of `{label}`");
+    }
+}
+
+#[test]
+fn the_expression_range_counts_utf16_columns() {
+    // `π` is one UTF-16 unit and two bytes; `𝑥` is two units and four bytes.
+    let source = "\
+/// π and 𝑥 before the declaration do not shift it.
+node a: Dimensionless = 1.0;
+node b: Dimensionless = (@a) * 2.0; // π𝑥
+";
+    let view = evaluated_view_of_source(source);
+    let (expr, text) = expr_and_range_text(&view, source, "b");
+    assert_eq!(expr, "(@a) * 2.0");
+    assert_eq!(text, expr);
+}
+
+#[test]
+fn every_written_cell_has_a_range_and_the_keys_of_its_value() {
+    // The reproduction of #2063: the columns of a multi-declaration table
+    // shared one range, so no cell could be edited.
+    let source = "\
+pub index I = { A, B };
+param n: Int = 2;
+param x: Power[I],
+param y: Dimensionless[I]
+  = table[I, (_, _)] {
+      : _, _;
+      A: 1.0 W, sqrt(2.0);
+      B: 4.0 W, 5.0;
+  };
+param t: Dimensionless[I] = table[I] {
+    A: 6.0;
+    B: 7.0;
+};
+";
+    let view = evaluated_view_of_source(source);
+    assert_eq!(node(&view, "n").element, ViewElement::Int);
+    assert_eq!(node(&view, "x").element, ViewElement::Quantity);
+    let cells = |label: &str| -> Vec<(Vec<String>, String)> {
+        let node = node(&view, label);
+        let Some(ViewValue::Indexed { entries, .. }) = &node.value else {
+            panic!("`{label}` is not indexed");
+        };
+        let source_of = node.source.as_ref().unwrap();
+        source_of
+            .cells
+            .iter()
+            .map(|cell| {
+                // Each cell keys an entry of the value.
+                assert!(
+                    entries
+                        .iter()
+                        .any(|entry| [entry.key.clone()] == cell.keys.as_slice())
+                );
+                let line = source.lines().nth(cell.range.start.line as usize).unwrap();
+                let text =
+                    &line[cell.range.start.character as usize..cell.range.end.character as usize];
+                (cell.keys.clone(), text.to_string())
+            })
+            .collect()
+    };
+    let keyed = |keys: &[(&str, &str)]| -> Vec<(Vec<String>, String)> {
+        keys.iter()
+            .map(|(key, text)| (vec![(*key).to_string()], (*text).to_string()))
+            .collect()
+    };
+    assert_eq!(cells("x"), keyed(&[("A", "1.0 W"), ("B", "4.0 W")]));
+    assert_eq!(cells("y"), keyed(&[("A", "sqrt(2.0)"), ("B", "5.0")]));
+    assert_eq!(cells("t"), keyed(&[("A", "6.0"), ("B", "7.0")]));
+    // No column owns the shared table text; a table of its own does.
+    let range = |label: &str| node(&view, label).source.as_ref().unwrap().expr_range;
+    assert!(range("x").is_none());
+    assert!(range("y").is_none());
+    assert!(range("t").is_some());
+    assert!(node(&view, "n").source.as_ref().unwrap().cells.is_empty());
+}
+
+#[test]
+fn dimensions_and_units_follow_the_declaration_and_graphcal_eval() {
+    // The reproduction of #2070: a torque was shown in joules.
+    let view = evaluated_view_of_source(
+        "\
+dim Torque = Force * Length;
+node t: Torque = 2.0 N * 1.5 m;
+node r: Dimensionless / Time = 2.0 / 1.0 s;
+node d: Length = 2.0 km -> km;
+",
+    );
+    let shown = |label: &str| {
+        let node = node(&view, label);
+        (
+            node.dimension.clone().unwrap(),
+            display_of(&view, label).unwrap(),
+        )
+    };
+    assert_eq!(
+        shown("t"),
+        ("Torque".to_string(), "3 m^2*kg/s^2".to_string())
+    );
+    assert_eq!(
+        shown("r"),
+        ("Dimensionless / Time".to_string(), "2 s^-1".to_string())
+    );
+    assert_eq!(shown("d"), ("Length".to_string(), "2 km".to_string()));
+}
+
+#[test]
+fn a_value_its_display_unit_cannot_show_is_reported_on_its_own_node() {
+    // The reproduction of #2077: one failed display unit emptied every later
+    // node in the language server and failed `graphcal view` as a whole.
+    let view = evaluated_view_of_source(
+        "\
+node first: Dimensionless = 1.0;
+node huge: Length = 1.0e305 km -> mm;
+node last: Dimensionless = 2.0;
+",
+    );
+    assert_eq!(display_of(&view, "first").as_deref(), Some("1"));
+    assert_eq!(display_of(&view, "last").as_deref(), Some("2"));
+    assert_eq!(display_of(&view, "huge").as_deref(), Some("1e308 m"));
+    let problems = &node(&view, "huge").presentation;
+    assert_eq!(problems.len(), 1, "{problems:?}");
+    assert!(problems[0].contains("SI value retained"), "{problems:?}");
+    assert_eq!(node(&view, "first").presentation, Vec::<String>::new());
 }

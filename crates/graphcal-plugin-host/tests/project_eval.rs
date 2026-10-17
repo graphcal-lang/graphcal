@@ -144,9 +144,13 @@ fn value_for<'a>(result: &'a EvalResult, name: &str) -> &'a Value {
     result
         .entries
         .iter()
-        .find(|(decl_name, _, _)| decl_name.to_string() == name)
+        .find(
+            |graphcal_eval::eval::EvalEntry {
+                 name: decl_name, ..
+             }| decl_name.to_string() == name,
+        )
         .unwrap_or_else(|| panic!("declaration `{name}` not found"))
-        .1
+        .outcome
         .as_ref()
         .unwrap_or_else(|err| panic!("declaration `{name}` has error: {err}"))
 }
@@ -550,9 +554,9 @@ node dependent: Dimensionless = @bad + 1.0;
     let bad = result
         .entries
         .iter()
-        .find(|(name, _, _)| name.to_string() == "bad")
+        .find(|graphcal_eval::eval::EvalEntry { name, .. }| name.to_string() == "bad")
         .unwrap();
-    let err = bad.1.as_ref().unwrap_err();
+    let err = bad.outcome.as_ref().unwrap_err();
     assert!(
         err.to_string().contains("division by zero"),
         "unexpected error: {err}"
@@ -564,9 +568,12 @@ node dependent: Dimensionless = @bad + 1.0;
     let dependent = result
         .entries
         .iter()
-        .find(|(name, _, _)| name.to_string() == "dependent")
+        .find(|graphcal_eval::eval::EvalEntry { name, .. }| name.to_string() == "dependent")
         .unwrap();
-    assert!(dependent.1.is_err(), "dependent must fail transitively");
+    assert!(
+        dependent.outcome.is_err(),
+        "dependent must fail transitively"
+    );
 }
 
 /// Evaluate a package-mode project (one with a `graphcal.toml`): the root

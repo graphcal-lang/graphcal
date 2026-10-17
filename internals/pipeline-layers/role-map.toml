@@ -2385,6 +2385,52 @@ path = ["graph_ir", "tests"]
 role = "facade"
 
 [[module]]
+package = "project"
+# Presentation export adapter (checked TIR + evaluation -> view model JSON) for `graphcal view`, the LSP and the Wasm view.
+path = ["view_model"]
+role = "facade"
+
+[[module]]
+package = "project"
+path = ["view_model", "model"]
+role = "facade"
+
+[[module]]
+package = "project"
+path = ["view_model", "project"]
+role = "facade"
+
+[[module]]
+package = "project"
+path = ["view_model", "tests"]
+role = "facade"
+
+[[module]]
+package = "project"
+path = ["view_model", "value"]
+role = "facade"
+
+[[module]]
+package = "project"
+path = ["view_model", "cells"]
+role = "facade"
+
+[[module]]
+package = "project"
+path = ["view_model", "cells", "tests"]
+role = "facade"
+
+[[module]]
+package = "project"
+path = ["view_model", "wire_key"]
+role = "facade"
+
+[[module]]
+package = "project"
+path = ["view_model", "wire_key", "tests"]
+role = "facade"
+
+[[module]]
 package = "eval"
 path = ["host_abi"]
 role = "interpreter"

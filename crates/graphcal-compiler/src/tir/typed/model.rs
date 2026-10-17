@@ -544,6 +544,16 @@ impl CheckedTypeAnnotation {
     pub const fn checked(&self) -> &CheckedDeclType {
         &self.checked
     }
+
+    /// The source span of the element type as written, without an index
+    /// list: `Torque` in `node t: Torque[I]`.
+    #[must_use]
+    pub const fn element_span(&self) -> Span {
+        match &self.decl_type {
+            crate::hir::types::DeclType::Value(element)
+            | crate::hir::types::DeclType::Indexed { element, .. } => element.span,
+        }
+    }
 }
 
 /// Checked phase: HIR bodies whose value declarations carry their checked

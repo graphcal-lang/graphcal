@@ -127,14 +127,22 @@ fn compare_results(original: &EvalResult, permuted: &EvalResult) -> Result<(), S
     compare_keyed(
         &mut diffs,
         "declaration",
-        original
-            .entries
-            .iter()
-            .map(|(name, value, decl_type)| (name.to_string(), format!("{decl_type:?} {value:?}"))),
-        permuted
-            .entries
-            .iter()
-            .map(|(name, value, decl_type)| (name.to_string(), format!("{decl_type:?} {value:?}"))),
+        original.entries.iter().map(
+            |graphcal_eval::eval::EvalEntry {
+                 name,
+                 outcome: value,
+                 category: decl_type,
+                 ..
+             }| (name.to_string(), format!("{decl_type:?} {value:?}")),
+        ),
+        permuted.entries.iter().map(
+            |graphcal_eval::eval::EvalEntry {
+                 name,
+                 outcome: value,
+                 category: decl_type,
+                 ..
+             }| (name.to_string(), format!("{decl_type:?} {value:?}")),
+        ),
     );
 
     // Per-bucket counts, so a declaration moving between buckets is reported

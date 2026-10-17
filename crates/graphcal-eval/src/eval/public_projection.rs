@@ -302,7 +302,11 @@ fn mismatch(runtime: impl std::fmt::Display, declared_type: &CheckedType) -> Inv
     Invariant::violated(format_args!("runtime {runtime} was checked as {declared}"))
 }
 
-fn coordinate_entry_display_names(
+/// The display name of each entry of a coordinate axis, as `graphcal eval`
+/// labels them: the coordinate in its display unit, made exact or tagged with
+/// its position where two would read the same.
+#[must_use]
+pub fn coordinate_entry_display_names(
     data: &CoordinateIndexData,
     keys: &NonEmpty<IndexEntryKey>,
 ) -> IndexMap<IndexEntryKey, String> {

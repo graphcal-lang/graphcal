@@ -53,19 +53,26 @@ fn write_test_project(
 }
 
 fn has_decl_error(result: &EvalResult, name: &str) -> bool {
-    result
-        .entries
-        .iter()
-        .any(|(decl_name, value, _)| decl_name.to_string() == name && value.is_err())
+    result.entries.iter().any(
+        |graphcal_eval::eval::EvalEntry {
+             name: decl_name,
+             outcome: value,
+             ..
+         }| decl_name.to_string() == name && value.is_err(),
+    )
 }
 
 fn value_for<'a>(result: &'a EvalResult, name: &str) -> &'a Value {
     result
         .entries
         .iter()
-        .find(|(decl_name, _, _)| decl_name.to_string() == name)
+        .find(
+            |graphcal_eval::eval::EvalEntry {
+                 name: decl_name, ..
+             }| decl_name.to_string() == name,
+        )
         .unwrap_or_else(|| panic!("declaration `{name}` not found"))
-        .1
+        .outcome
         .as_ref()
         .unwrap_or_else(|err| panic!("declaration `{name}` has error: {err}"))
 }

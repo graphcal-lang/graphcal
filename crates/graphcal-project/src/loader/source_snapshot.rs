@@ -145,6 +145,45 @@ pub(super) struct ModuleLocation {
     pub(super) package: DagPackageId,
     /// File path relative to the package's module root.
     pub(super) relative_path: PathBuf,
+    /// The module path that names the file within its own package; `None`
+    /// when a path component is not a name (`my-file.gcl`).
+    pub(super) module_path: Option<ModulePathKey>,
+}
+
+/// Where the module paths of one package tree are spelled from.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum ModuleRoot {
+    /// The package's source directory (`<root>/<source_dir>`): the file
+    /// `<pkg>/a/b.gcl` below it is the module `pkg.a.b`, and `<pkg>.gcl` is
+    /// `pkg`.
+    SourceDir(PathBuf),
+    /// A standalone file of a virtual package, named by its stem (the only
+    /// module path it can spell, for a self-reference).
+    Standalone,
+}
+
+impl ModuleRoot {
+    /// The module path that names `file` (a canonical path) in this tree.
+    pub(super) fn module_path_of(&self, file: &Path) -> Option<ModulePathKey> {
+        use graphcal_compiler::syntax::names::NameAtom;
+        use graphcal_compiler::syntax::non_empty::NonEmpty;
+        use std::path::Component;
+
+        let atoms = match self {
+            Self::SourceDir(dir) => file
+                .strip_prefix(dir)
+                .ok()?
+                .with_extension("")
+                .components()
+                .map(|component| match component {
+                    Component::Normal(segment) => NameAtom::parse(segment.to_str()?).ok(),
+                    _ => None,
+                })
+                .collect::<Option<Vec<_>>>()?,
+            Self::Standalone => vec![NameAtom::parse(file.file_stem()?.to_str()?).ok()?],
+        };
+        NonEmpty::try_from_vec(atoms).ok().map(ModulePathKey::new)
+    }
 }
 
 /// One parsed and desugared source text, registered under its diagnostic

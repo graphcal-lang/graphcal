@@ -12,9 +12,13 @@ fn result<'a>(
     &evaluation
         .entries
         .iter()
-        .find(|(candidate, _, _)| candidate.to_string() == name)
+        .find(
+            |graphcal_eval::eval::EvalEntry {
+                 name: candidate, ..
+             }| candidate.to_string() == name,
+        )
         .unwrap_or_else(|| panic!("missing {name}; results: {:?}", evaluation.entries))
-        .1
+        .outcome
 }
 
 fn check(source: &str) -> bool {

@@ -756,6 +756,7 @@ where
             identity: entry.identity,
             expr: entry.expr,
             span: entry.span,
+            definition_range: entry.definition_range,
         }),
         Decl::Param(entry) => Decl::Param(ParamEntry {
             doc: entry.doc,
@@ -763,6 +764,7 @@ where
             identity: entry.identity,
             default: entry.default,
             span: entry.span,
+            default_range: entry.default_range,
             override_reconciliations: entry.override_reconciliations,
         }),
         Decl::Node(entry) => Decl::Node(NodeEntry {
@@ -771,12 +773,14 @@ where
             identity: entry.identity,
             definition: entry.definition,
             span: entry.span,
+            definition_range: entry.definition_range,
         }),
         Decl::Assert(entry) => Decl::Assert(AssertEntry {
             doc: entry.doc,
             identity: entry.identity,
             body: entry.body,
             span: entry.span,
+            body_range: entry.body_range,
         }),
         Decl::Plot(entry) => Decl::Plot(PlotEntry {
             doc: entry.doc,

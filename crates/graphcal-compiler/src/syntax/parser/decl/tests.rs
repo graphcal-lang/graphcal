@@ -2307,3 +2307,31 @@ fn declaration_keywords_match_parser_dispatch() {
         );
     }
 }
+
+#[test]
+fn definition_ranges_include_enclosing_parentheses() {
+    let source = "param p: Dimensionless = (1.0);\nconst node c: Dimensionless = ((2.0)) * 3.0;\nnode n: Dimensionless = (@c);\nassert t = (@n) ~= 1.0 +/- (0.5);\nparam r: Dimensionless;\n";
+    let file = Parser::new(source).parse_file().unwrap();
+    let text = |span: crate::syntax::span::Span| &source[span.offset()..span.offset() + span.len()];
+    let ranges: Vec<Option<&str>> = file
+        .declarations
+        .iter()
+        .map(|declaration| match &declaration.kind {
+            DeclKind::Param(p) => p.value_range.map(text),
+            DeclKind::ConstNode(c) => Some(text(c.value_range)),
+            DeclKind::Node(n) => Some(text(n.definition_range)),
+            DeclKind::Assert(a) => Some(text(a.body_range)),
+            other => panic!("unexpected declaration {other:?}"),
+        })
+        .collect();
+    assert_eq!(
+        ranges,
+        [
+            Some("(1.0)"),
+            Some("((2.0)) * 3.0"),
+            Some("(@c)"),
+            Some("(@n) ~= 1.0 +/- (0.5)"),
+            None
+        ]
+    );
+}

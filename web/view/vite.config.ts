@@ -40,7 +40,8 @@ export default defineConfig({
   ],
   test: { include: ["src/**/*.test.ts"] },
   build: { target: "es2023" },
-  fmt: {},
+  // The contract fixtures are `graphcal view` output, compared byte for byte.
+  fmt: { ignorePatterns: ["src/contract/**"] },
   lint: {
     jsPlugins: [{ name: "vite-plus", specifier: "vite-plus/oxlint-plugin" }],
     rules: { "vite-plus/prefer-vite-plus-imports": "error" },

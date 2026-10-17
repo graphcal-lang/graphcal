@@ -2,38 +2,41 @@
 //! [`ViewModel`].
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
-use std::path::Path;
 
 use graphcal_compiler::dag_id::DagId;
 use graphcal_compiler::declaration_category::ValueDeclCategory;
 use graphcal_compiler::ir::instance::{ExposedValueBody, InstanceProjection, ProjectionExposure};
-use graphcal_compiler::ir::prelude_definitions::PreludeDefinitionError;
-use graphcal_compiler::resolved_name::{ResolvedDeclName, ResolvedIndexName};
+use graphcal_compiler::resolved_name::ResolvedDeclName;
+use graphcal_compiler::semantic::index_def::{FiniteIndex, IndexDef};
 use graphcal_compiler::source_registry::ForeignSourceId;
 use graphcal_compiler::syntax::decl_name::DeclName;
+use graphcal_compiler::syntax::index_name::IndexEntryKey;
 use graphcal_compiler::syntax::module_name::ScopedName;
+use graphcal_compiler::syntax::non_empty::NonEmpty;
 use graphcal_compiler::syntax::span::Span;
 use graphcal_compiler::text_position::Utf16LineIndex;
 use graphcal_compiler::tir::typed::declaration_view::{
     DeclarationKind, DeclarationView, ValueDeclaration,
 };
 use graphcal_compiler::tir::typed::{
-    CheckedDag, CheckedDeclType, CheckedTir, ResolvedDeclType, ResolvedDim, ResolvedIndex,
-    ResolvedValueType,
+    CheckedDag, CheckedDeclType, CheckedTir, ResolvedIndex, ResolvedValueType,
 };
-use graphcal_eval::eval::{
-    AssertResult, DisplayProjectionError, EvalResult, OutputUnavailable, Value,
-};
+use graphcal_eval::eval::public_projection::coordinate_entry_display_names;
+use graphcal_eval::eval::{AssertResult, EvalResult, OutputUnavailable, Value};
+use graphcal_eval::presentation_evidence::PresentationPathPart;
 use thiserror::Error;
 
 use crate::graph_ir::{GraphClusterKind, GraphIr, GraphProjectionError, project_tir};
 use crate::loader::{LoadedFile, LoadedProject};
 use crate::project_compiler::CheckedProject;
 
+use super::cells::definition_cells;
 use super::model::{
-    ViewIndex, ViewInstance, ViewModel, ViewModule, ViewNode, ViewNodeKind, ViewSource, ViewValue,
+    ViewCell, ViewElement, ViewIndex, ViewIndexEntry, ViewInstance, ViewModel, ViewModule,
+    ViewNode, ViewNodeKind, ViewOrigin, ViewSource, ViewValue,
 };
-use super::value::{CoherentUnits, common_unit, view_value};
+use super::value::{common_unit, view_value};
+use super::wire_key::{ViewIndexId, ViewNodeId};
 
 /// Why a checked project could not be projected into a view model.
 #[derive(Debug, Error)]
@@ -41,37 +44,29 @@ pub enum ViewProjectionError {
     /// The dependency graph could not be projected.
     #[error(transparent)]
     Graph(#[from] GraphProjectionError),
-    /// The built-in prelude failed to construct (a compiler bug).
-    #[error(transparent)]
-    Prelude(#[from] PreludeDefinitionError),
     /// A loaded file's source id does not resolve in the project's registry.
     #[error(transparent)]
     ForeignSource(#[from] ForeignSourceId),
     /// A declaration selected for the view is neither a value nor an assertion.
     #[error("`{declaration}` is not a value or assertion declaration")]
     NotPresentable { declaration: ResolvedDeclName },
-    /// A value could not be shown in its display unit.
-    #[error("value of `{declaration}` cannot be displayed: {error}")]
-    Display {
-        declaration: ResolvedDeclName,
-        #[source]
-        error: DisplayProjectionError,
-    },
     /// Two nodes of the model would share one id.
     #[error("two view nodes share the id `{id}`")]
-    DuplicateNodeId { id: String },
+    DuplicateNodeId { id: ViewNodeId },
     /// A node reads a node the model does not contain.
     #[error("view node `{node}` reads `{dependency}`, which the view does not contain")]
-    UnknownDependency { node: String, dependency: String },
+    UnknownDependency {
+        node: ViewNodeId,
+        dependency: ViewNodeId,
+    },
 }
 
 /// Project the structure of the root file of `checked`.
 ///
 /// Every node comes without its value: attach an evaluation with
 /// [`ViewProjection::attach_evaluation`], or take the structure alone for a
-/// library file or an unevaluated project. `root_dir` is the project root
-/// that source paths are made relative to; without it, paths are the
-/// loader's diagnostic names.
+/// library file or an unevaluated project. Source paths are relative to the
+/// project root the loader read the files under.
 ///
 /// # Errors
 ///
@@ -80,11 +75,10 @@ pub enum ViewProjectionError {
 pub fn project_view(
     project: &LoadedProject,
     checked: &CheckedProject,
-    root_dir: Option<&Path>,
 ) -> Result<ViewProjection, ViewProjectionError> {
     let tir = checked.tir();
     let ir = project_tir(tir)?;
-    let scope = Scope::new(project, checked, &ir, root_dir)?;
+    let scope = Scope::new(project, checked, &ir)?;
     let locals = scope.local_declarations();
     let aliases = scope.include_aliases();
     let spellings = scope.external_spellings();
@@ -100,15 +94,16 @@ pub fn project_view(
         .collect();
 
     let mut builder = NodeBuilder {
+        shared_definitions: scope.shared_definitions(&locals),
         scope: &scope,
         spellings: &spellings,
-        axes: BTreeSet::new(),
+        axes: BTreeMap::new(),
     };
     let mut nodes = Vec::new();
     let mut bindings = Vec::new();
     for id in &locals {
         let deps = deps.get(id).map_or_else(Vec::new, |deps| {
-            deps.iter().map(|dep| builder.render_id(dep)).collect()
+            deps.iter().map(|dep| ViewNodeId::of(dep)).collect()
         });
         let built = match aliases.get(id) {
             Some(alias) => builder.include_alias(id, alias)?,
@@ -131,17 +126,16 @@ pub fn project_view(
     let root = tir.root_dag_id();
     Ok(ViewProjection {
         model: ViewModel {
-            version: 0,
+            version: 1,
             module: ViewModule {
                 id: scope.module_name(root),
-                file: scope.sources.name_of(project.root_file()).to_string(),
+                file: scope.sources.root_name.clone(),
                 package: root.package().to_string(),
             },
             indexes,
             nodes,
         },
         bindings,
-        units: scope.units,
     })
 }
 
@@ -151,7 +145,6 @@ pub struct ViewProjection {
     model: ViewModel,
     /// Where each node's value comes from, parallel to `model.nodes`.
     bindings: Vec<ValueBinding>,
-    units: CoherentUnits,
 }
 
 impl ViewProjection {
@@ -171,35 +164,26 @@ impl ViewProjection {
     /// nodes. A node whose declaration the evaluation does not report, or
     /// reports as failed or incomplete, keeps no value.
     ///
-    /// # Errors
-    ///
-    /// Returns [`ViewProjectionError::Display`] when a value cannot be shown
-    /// in its display unit; the nodes before it keep their values.
-    pub fn attach_evaluation(
-        &mut self,
-        evaluation: &EvalResult,
-    ) -> Result<(), ViewProjectionError> {
+    /// A value that cannot be shown in its display unit is shown in SI, as
+    /// `graphcal eval` shows it, and its node lists why in `presentation`,
+    /// together with the presentation diagnostics the evaluation reported
+    /// for its declaration.
+    pub fn attach_evaluation(&mut self, evaluation: &EvalResult) {
         let values = EvaluatedValues::new(evaluation);
         for (node, binding) in self.model.nodes.iter_mut().zip(&self.bindings) {
+            let mut problems = values.presentation(&binding.declaration);
             let value = match binding.kind {
                 ValueBindingKind::Assertion => values
                     .assertion(&binding.declaration)
                     .and_then(assertion_value),
                 ValueBindingKind::Value => values
                     .value(&binding.declaration)
-                    .map(|value| view_value(value, &evaluation.render, &self.units))
-                    .transpose()
-                    .map_err(|error| ViewProjectionError::Display {
-                        declaration: binding.declaration.clone(),
-                        error,
-                    })?,
+                    .map(|value| view_value(value, &evaluation.render, &mut problems)),
             };
-            if let Some(value) = value {
-                node.unit = common_unit(&value);
-                node.value = Some(value);
-            }
+            node.unit = value.as_ref().and_then(common_unit);
+            node.value = value;
+            node.presentation = problems;
         }
-        Ok(())
     }
 }
 
@@ -226,7 +210,6 @@ struct Scope<'p> {
     /// Semantic provenance of each projected DAG.
     clusters: HashMap<&'p DagId, &'p GraphClusterKind>,
     sources: SourceFiles<'p>,
-    units: CoherentUnits,
 }
 
 impl<'p> Scope<'p> {
@@ -234,7 +217,6 @@ impl<'p> Scope<'p> {
         project: &'p LoadedProject,
         checked: &'p CheckedProject,
         ir: &'p GraphIr,
-        root_dir: Option<&Path>,
     ) -> Result<Self, ViewProjectionError> {
         Ok(Self {
             project,
@@ -245,8 +227,7 @@ impl<'p> Scope<'p> {
                 .iter()
                 .map(|cluster| (cluster.dag_id(), cluster.kind()))
                 .collect(),
-            sources: SourceFiles::new(project, checked, root_dir)?,
-            units: CoherentUnits::from_prelude()?,
+            sources: SourceFiles::new(project, checked)?,
         })
     }
 
@@ -270,32 +251,44 @@ impl<'p> Scope<'p> {
         }
     }
 
-    /// The module id as a module path spells it (`power_project.eps`): the
-    /// path importers write, or for a module no file imports (the root), its
-    /// identity below the root package's source directory. A concrete
-    /// instance keeps its canonical identity.
+    /// The module path of `module` (`power_project.eps`), as the loader
+    /// recorded it for its file; a module whose file path is no module path
+    /// keeps its identity.
     fn module_name(&self, module: &DagId) -> String {
-        if let Some(path) = self.checked.module_paths().module(module) {
-            return path.to_string();
+        self.checked
+            .module_paths()
+            .module(module)
+            .map_or_else(|| module.to_string(), |path| path.to_string())
+    }
+
+    /// A declaration of another module as no binding of the root spells it:
+    /// its name under its module's path (`pipeline.lib::x`).
+    fn qualified_name(&self, declaration: &ResolvedDeclName) -> String {
+        self.checked
+            .module_paths()
+            .name(declaration.owner(), declaration.leaf())
+            .map_or_else(|| declaration.to_string(), |name| name.to_string())
+    }
+
+    /// The definition ranges more than one of `locals` is defined by: the
+    /// columns of a multi-declaration table share their table's.
+    fn shared_definitions(&self, locals: &[ResolvedDeclName]) -> HashSet<Span> {
+        let mut seen = HashSet::new();
+        let mut shared = HashSet::new();
+        for id in locals {
+            let Some((_, declaration)) = declaration_of(self.tir, id) else {
+                continue;
+            };
+            if let DeclarationKind::Value(ValueDeclaration {
+                definition: Some(definition),
+                ..
+            }) = declaration.kind()
+                && !seen.insert(definition)
+            {
+                shared.insert(definition);
+            }
         }
-        let Some(key) = module.module_path_key() else {
-            return module.to_string();
-        };
-        let source_dir_depth = self
-            .project
-            .root_source_dir()
-            .map_or(0, |dir| dir.components().count());
-        let segments: Vec<&str> = key
-            .segments()
-            .iter()
-            .map(graphcal_compiler::syntax::names::NameAtom::as_str)
-            .skip(source_dir_depth)
-            .collect();
-        if segments.is_empty() {
-            module.to_string()
-        } else {
-            segments.join(".")
-        }
+        shared
     }
 
     /// Whether `module` declares `name` as an explicit `pub` output.
@@ -385,8 +378,8 @@ impl<'p> Scope<'p> {
             spellings.insert(
                 binding.target().clone(),
                 ExternalName {
-                    id: name.to_string(),
-                    instance: None,
+                    label: name.to_string(),
+                    origin: ViewOrigin::Imported,
                 },
             );
         }
@@ -399,11 +392,13 @@ impl<'p> Scope<'p> {
                 spellings.insert(
                     projection.target,
                     ExternalName {
-                        id: record
+                        label: record
                             .instance
                             .exposed_name(projection.projection)
                             .to_string(),
-                        instance: Some(view_instance(record, template)),
+                        origin: ViewOrigin::Included {
+                            instance: view_instance(record, template),
+                        },
                     },
                 );
             }
@@ -444,11 +439,10 @@ struct IncludeAlias {
     instance: ViewInstance,
 }
 
-/// How the root spells a declaration of another module.
+/// How the root spells a declaration of another module, and through what.
 struct ExternalName {
-    id: String,
-    /// The include instance it is read through, if any.
-    instance: Option<ViewInstance>,
+    label: String,
+    origin: ViewOrigin,
 }
 
 /// What each local declaration reads: dataflow edges for values, the
@@ -475,36 +469,22 @@ fn dependencies<'a>(
 /// Builds nodes, collecting the index axes they use.
 struct NodeBuilder<'a> {
     scope: &'a Scope<'a>,
+    /// Definition ranges written once for several root declarations (the
+    /// columns of a multi-declaration table): none of them owns the text.
+    shared_definitions: HashSet<Span>,
     spellings: &'a HashMap<ResolvedDeclName, ExternalName>,
-    axes: BTreeSet<ResolvedIndexName>,
+    axes: BTreeMap<ViewIndexId, ResolvedIndex>,
 }
 
 /// A node and where its value comes from.
 type BuiltNode = (ViewNode, ValueBinding);
 
 impl NodeBuilder<'_> {
-    /// The id of a dependency as the root spells it.
-    fn render_id(&self, id: &ResolvedDeclName) -> String {
-        if self.scope.is_local(id.owner()) {
-            return id.as_str().to_string();
-        }
-        self.spellings.get(id).map_or_else(
-            || {
-                format!(
-                    "{}::{}",
-                    self.scope.module_of(id.owner()).leaf(),
-                    id.as_str()
-                )
-            },
-            |name| name.id.clone(),
-        )
-    }
-
     /// A declaration of the root file.
     fn local(
         &mut self,
         id: &ResolvedDeclName,
-        deps: Vec<String>,
+        deps: Vec<ViewNodeId>,
     ) -> Result<Option<BuiltNode>, ViewProjectionError> {
         let Some((dag, declaration)) = declaration_of(self.scope.tir, id) else {
             return Ok(None);
@@ -512,10 +492,9 @@ impl NodeBuilder<'_> {
         self.node(NodeInput {
             dag,
             declaration,
-            id: id.as_str().to_string(),
+            label: id.as_str().to_string(),
             module: self.scope.module_name(self.scope.root()),
-            kind: None,
-            instance: None,
+            origin: ViewOrigin::Local,
             is_public: self.scope.is_public(id.owner(), id.leaf()),
             deps,
             file: self.scope.sources.file_of(&id.owner().file_root()),
@@ -543,10 +522,11 @@ impl NodeBuilder<'_> {
         self.node(NodeInput {
             dag: template,
             declaration: origin,
-            id: id.as_str().to_string(),
+            label: id.as_str().to_string(),
             module: self.scope.module_name(&alias.template),
-            kind: Some(ViewNodeKind::External),
-            instance: Some(alias.instance.clone()),
+            origin: ViewOrigin::Included {
+                instance: alias.instance.clone(),
+            },
             is_public: self.scope.is_public(&alias.template, alias.target.leaf()),
             deps: Vec::new(),
             file: self.scope.sources.file_of(&alias.template.file_root()),
@@ -566,16 +546,16 @@ impl NodeBuilder<'_> {
             return Ok(None);
         };
         let module = self.scope.module_of(id.owner());
+        let (label, origin) = self.spellings.get(id).map_or_else(
+            || (self.scope.qualified_name(id), ViewOrigin::Imported),
+            |name| (name.label.clone(), name.origin.clone()),
+        );
         self.node(NodeInput {
             dag,
             declaration,
-            id: self.render_id(id),
+            label,
             module: self.scope.module_name(&module),
-            kind: Some(ViewNodeKind::External),
-            instance: self
-                .spellings
-                .get(id)
-                .and_then(|name| name.instance.clone()),
+            origin,
             is_public: self.scope.is_public(&module, id.leaf()),
             deps: Vec::new(),
             file: self.scope.sources.file_of(&module.file_root()),
@@ -586,16 +566,17 @@ impl NodeBuilder<'_> {
 
     fn node(&mut self, input: NodeInput<'_>) -> Result<BuiltNode, ViewProjectionError> {
         let identity = input.declaration.identity();
-        let (declared_kind, span, definition, doc) = match input.declaration.kind() {
+        let (kind, span, definition, doc, annotation) = match input.declaration.kind() {
             DeclarationKind::Value(ValueDeclaration {
                 category,
                 span,
                 definition,
                 doc,
+                annotation,
                 ..
-            }) => (kind_of(category), span, definition, doc),
+            }) => (kind_of(category), span, definition, doc, Some(annotation)),
             DeclarationKind::Assert { span, body, doc } => {
-                (ViewNodeKind::Assert, span, Some(body), doc)
+                (ViewNodeKind::Assert, span, Some(body), doc, None)
             }
             DeclarationKind::Plot { .. }
             | DeclarationKind::Figure { .. }
@@ -614,80 +595,131 @@ impl NodeBuilder<'_> {
             ty.indexes()
                 .iter()
                 .map(|axis| {
-                    if let ResolvedIndex::Concrete(name, _) = axis {
-                        self.axes.insert(name.clone());
-                    }
-                    axis.to_string()
+                    let id = ViewIndexId::of(axis);
+                    self.axes.entry(id.clone()).or_insert_with(|| axis.clone());
+                    id
                 })
                 .collect()
         });
-        // An assertion is a `Bool` check; it declares no type of its own.
-        let dimension = match declared_kind {
+        // An assertion is a `Bool` check; it declares no type of its own. A
+        // value's element type is shown as its declaration spells it.
+        let dimension = match kind {
             ViewNodeKind::Assert => Some("Bool".to_string()),
-            _ => decl_type.map(|ty| ty.element().format(self.scope.tir.registry())),
+            _ => annotation
+                .zip(input.file)
+                .and_then(|(annotation, file)| slice(file.text, annotation.element_span()))
+                .or_else(|| decl_type.map(|ty| ty.element().format(self.scope.tir.registry()))),
         };
-        let unit = declared_unit(decl_type, &self.scope.units);
 
-        // The defining expression ends where the declaration ends: HIR spans
-        // of parenthesized operands omit their parentheses, so the
-        // declaration span, not the expression's, bounds the text.
-        let definition = input
-            .file
-            .and_then(|file| definition.map(|start| definition_span(file.text, start, span)));
+        // The definition is the source range after `=`, parentheses included.
         let expr = input
             .file
             .and_then(|file| definition.and_then(|span| slice(file.text, span)));
+        // Only the module's own declarations are edited from its sheet.
+        let local = input.origin == ViewOrigin::Local;
+        let cells = if local {
+            definition_cells(
+                &self.scope.project.root_file().ast().declarations,
+                input.declaration.name(),
+            )
+        } else {
+            Vec::new()
+        };
         let source = input.file.map(|file| ViewSource {
             file: Some(file.name.to_string()),
             line: file.lines.position(span.offset()).line.saturating_add(1),
-            expr_range: definition.map(|span| file.lines.range(span.offset(), span.len()).into()),
+            expr_range: definition
+                .filter(|span| !self.shared_definitions.contains(span))
+                .map(|span| file.lines.range(span.offset(), span.len()).into()),
+            cells: cells
+                .into_iter()
+                .map(|cell| ViewCell {
+                    keys: cell.keys.iter().map(ToString::to_string).collect(),
+                    range: file.lines.range(cell.span.offset(), cell.span.len()).into(),
+                })
+                .collect(),
         });
+        let element = match kind {
+            ViewNodeKind::Assert => ViewElement::Bool,
+            _ => decl_type.map_or(ViewElement::Other, |ty| element_of(ty.element())),
+        };
 
         let binding = ValueBinding {
             declaration: input.value_of.clone(),
-            kind: match declared_kind {
+            kind: match kind {
                 ViewNodeKind::Assert => ValueBindingKind::Assertion,
                 _ => ValueBindingKind::Value,
             },
         };
         let node = ViewNode {
-            id: input.id,
+            id: ViewNodeId::of(input.value_of),
+            label: input.label,
             name: input.declaration.name().as_str().to_string(),
             module: input.module,
-            kind: input.kind.unwrap_or(declared_kind),
+            kind,
+            origin: input.origin,
+            element,
             axes,
             dimension,
-            unit,
+            unit: None,
             // A parameter is an input even when its module exposes it.
-            is_public: input.is_public && declared_kind != ViewNodeKind::Param,
+            is_public: input.is_public && kind != ViewNodeKind::Param,
             deps: input.deps,
             expr,
-            reduce: None,
-            instance: input.instance,
             source,
             doc: doc.map(str::to_string),
             value: None,
+            presentation: Vec::new(),
         };
         Ok((node, binding))
     }
 
-    /// Every index used as an axis, with its labels.
+    /// Every index used as an axis, with its entries.
     fn indexes(&self) -> Vec<ViewIndex> {
         self.axes
             .iter()
-            .map(|name| ViewIndex {
-                name: name.as_str().to_string(),
-                module: self.scope.module_name(name.owner()),
-                labels: self
-                    .scope
-                    .tir
-                    .declared_index_def(name)
-                    .map_or_else(Vec::new, |def| {
-                        def.entry_keys().iter().map(ToString::to_string).collect()
-                    }),
+            .map(|(id, axis)| ViewIndex {
+                id: id.clone(),
+                name: axis.to_string(),
+                module: match axis {
+                    ResolvedIndex::Concrete(name, _) => Some(self.scope.module_name(name.owner())),
+                    ResolvedIndex::Finite(..) | ResolvedIndex::GenericParam(..) => None,
+                },
+                entries: match axis {
+                    ResolvedIndex::Concrete(name, _) => self
+                        .scope
+                        .tir
+                        .declared_index_def(name)
+                        .map_or_else(Vec::new, axis_entries),
+                    ResolvedIndex::Finite(form, _) => form
+                        .constant_value()
+                        .and_then(|size| FiniteIndex::try_from_u64(size).ok())
+                        .map_or_else(Vec::new, |finite| axis_entries(&IndexDef::finite(finite))),
+                    ResolvedIndex::GenericParam(..) => Vec::new(),
+                },
             })
             .collect()
     }
+}
+
+/// The entries of an index, each under the key its values are keyed by and
+/// shown as `graphcal eval` shows it.
+fn axis_entries(def: &IndexDef) -> Vec<ViewIndexEntry> {
+    let keys = def.entry_keys();
+    let coordinates = def.coordinate_data().and_then(|data| {
+        NonEmpty::try_from_vec(keys.clone())
+            .ok()
+            .map(|keys| coordinate_entry_display_names(data, &keys))
+    });
+    keys.iter()
+        .map(|key: &IndexEntryKey| ViewIndexEntry {
+            key: key.to_string(),
+            display: coordinates
+                .as_ref()
+                .and_then(|names| names.get(key).cloned())
+                .unwrap_or_else(|| key.to_string()),
+        })
+        .collect()
 }
 
 /// What one node is built from.
@@ -695,15 +727,14 @@ struct NodeInput<'a> {
     /// The DAG whose declaration is presented.
     dag: &'a CheckedDag,
     declaration: DeclarationView<'a>,
-    id: String,
+    label: String,
     module: String,
-    /// Overrides the kind derived from the declaration (for externals).
-    kind: Option<ViewNodeKind>,
-    instance: Option<ViewInstance>,
+    origin: ViewOrigin,
     is_public: bool,
-    deps: Vec<String>,
+    deps: Vec<ViewNodeId>,
     file: Option<SourceFile<'a>>,
-    /// The identity whose evaluated value the node shows.
+    /// The identity whose evaluated value the node shows; it is the node's
+    /// key too.
     value_of: &'a ResolvedDeclName,
 }
 
@@ -713,14 +744,14 @@ struct NodeInput<'a> {
 pub(super) fn check_node_references(nodes: &[ViewNode]) -> Result<(), ViewProjectionError> {
     let mut ids = HashSet::with_capacity(nodes.len());
     for node in nodes {
-        if !ids.insert(node.id.as_str()) {
+        if !ids.insert(&node.id) {
             return Err(ViewProjectionError::DuplicateNodeId {
                 id: node.id.clone(),
             });
         }
     }
     for node in nodes {
-        if let Some(dependency) = node.deps.iter().find(|dep| !ids.contains(dep.as_str())) {
+        if let Some(dependency) = node.deps.iter().find(|dep| !ids.contains(dep)) {
             return Err(ViewProjectionError::UnknownDependency {
                 node: node.id.clone(),
                 dependency: dependency.clone(),
@@ -737,6 +768,20 @@ fn declaration_of<'t>(
     let dag = tir.dag_registry().get(id.owner())?;
     let declaration = dag.declaration(id)?;
     Some((dag, declaration))
+}
+
+/// The element type family of a declared value type.
+const fn element_of(element: &ResolvedValueType) -> ViewElement {
+    match element {
+        ResolvedValueType::Bool => ViewElement::Bool,
+        ResolvedValueType::Int => ViewElement::Int,
+        ResolvedValueType::Quantity(_) => ViewElement::Quantity,
+        ResolvedValueType::Complex { .. } => ViewElement::Complex,
+        ResolvedValueType::Datetime(_) => ViewElement::Datetime,
+        ResolvedValueType::Key { .. } => ViewElement::Key,
+        ResolvedValueType::Struct { .. } => ViewElement::Struct,
+        ResolvedValueType::GenericTypeParam(..) => ViewElement::Other,
+    }
 }
 
 const fn kind_of(category: ValueDeclCategory) -> ViewNodeKind {
@@ -758,12 +803,7 @@ impl<'e> EvaluatedValues<'e> {
         let by_identity = result
             .entries
             .iter()
-            .filter_map(|(name, outcome, _)| {
-                result
-                    .identities
-                    .get(name)
-                    .map(|identity| (identity, outcome))
-            })
+            .map(|entry| (&entry.identity, &entry.outcome))
             .collect();
         Self {
             result,
@@ -773,6 +813,33 @@ impl<'e> EvaluatedValues<'e> {
 
     fn value(&self, id: &ResolvedDeclName) -> Option<&'e Value> {
         self.by_identity.get(id)?.as_ref().ok()
+    }
+
+    /// The display failures the evaluation reported for the value of `id`
+    /// (plot channels aside), each with the path of the leaf it concerns.
+    fn presentation(&self, id: &ResolvedDeclName) -> Vec<String> {
+        self.result
+            .presentation_diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.declaration == *id && diagnostic.channel.is_none())
+            .map(|diagnostic| {
+                let path: String = diagnostic
+                    .detail
+                    .path
+                    .iter()
+                    .map(|part| match part {
+                        PresentationPathPart::Field(field) => format!(".{field}"),
+                        PresentationPathPart::Index(index) => format!("[{index}]"),
+                    })
+                    .collect();
+                let failure = &diagnostic.detail.failure;
+                if path.is_empty() {
+                    format!("{failure} (SI value retained)")
+                } else {
+                    format!("{path}: {failure} (SI value retained)")
+                }
+            })
+            .collect()
     }
 
     /// The outcome of a root-owned assertion.
@@ -790,22 +857,21 @@ impl<'e> EvaluatedValues<'e> {
 struct SourceFiles<'p> {
     project: &'p LoadedProject,
     names: HashMap<&'p DagId, String>,
+    /// The root file's view name.
+    root_name: String,
     /// Each file's line index: one scan per file, not one per declaration.
     lines: HashMap<&'p DagId, Utf16LineIndex<'p>>,
 }
 
 impl<'p> SourceFiles<'p> {
-    fn new(
-        project: &'p LoadedProject,
-        checked: &CheckedProject,
-        root_dir: Option<&Path>,
-    ) -> Result<Self, ForeignSourceId> {
-        let mut names = HashMap::new();
-        let mut lines = HashMap::new();
-        for file in project.files().iter() {
-            // The name is a project-relative path with `/` on every platform: it is
-            // the wire format the view and the editors key their files by.
-            let relative = root_dir
+    fn new(project: &'p LoadedProject, checked: &CheckedProject) -> Result<Self, ForeignSourceId> {
+        let name_of = |file: &LoadedFile| -> Result<String, ForeignSourceId> {
+            // The name is a project-relative path with `/` on every
+            // platform: it is the wire format the view and the editors key
+            // their files by. A file outside the project root (a dependency)
+            // keeps the loader's diagnostic name.
+            let relative = project
+                .project_root()
                 .and_then(|root| file.path().strip_prefix(root).ok())
                 .map(|path| {
                     path.components()
@@ -813,20 +879,25 @@ impl<'p> SourceFiles<'p> {
                         .collect::<Vec<_>>()
                         .join("/")
                 });
-            let name = match relative {
-                Some(relative) => relative,
-                None => checked
+            match relative {
+                Some(relative) => Ok(relative),
+                None => Ok(checked
                     .sources()
                     .named_source(file.source_id())?
                     .name()
-                    .to_string(),
-            };
-            names.insert(file.dag_id(), name);
+                    .to_string()),
+            }
+        };
+        let mut names = HashMap::new();
+        let mut lines = HashMap::new();
+        for file in project.files().iter() {
+            names.insert(file.dag_id(), name_of(file)?);
             lines.insert(file.dag_id(), Utf16LineIndex::new(file.source().as_str()));
         }
         Ok(Self {
             project,
             names,
+            root_name: name_of(project.root_file())?,
             lines,
         })
     }
@@ -839,10 +910,6 @@ impl<'p> SourceFiles<'p> {
             lines: self.lines.get(file.dag_id())?,
         })
     }
-
-    fn name_of(&self, file: &LoadedFile) -> &str {
-        self.names.get(file.dag_id()).map_or("", String::as_str)
-    }
 }
 
 /// One source file: its view name, text, and line index.
@@ -851,16 +918,6 @@ struct SourceFile<'p> {
     name: &'p str,
     text: &'p str,
     lines: &'p Utf16LineIndex<'p>,
-}
-
-/// The unit an unevaluated quantity declaration would be shown in.
-fn declared_unit(decl_type: Option<&ResolvedDeclType>, units: &CoherentUnits) -> Option<String> {
-    match decl_type?.element() {
-        ResolvedValueType::Quantity(ResolvedDim::Concrete(dimension)) => {
-            units.of(dimension).map(str::to_string)
-        }
-        _ => None,
-    }
 }
 
 fn assertion_value(outcome: &AssertResult) -> Option<ViewValue> {
@@ -875,20 +932,6 @@ fn assertion_value(outcome: &AssertResult) -> Option<ViewValue> {
         }),
         AssertResult::Blocked { .. } | AssertResult::Error { .. } => None,
     }
-}
-
-/// The span from the start of `definition` to the end of `declaration`,
-/// less the terminating `;` and trailing whitespace.
-fn definition_span(text: &str, definition: Span, declaration: Span) -> Span {
-    let start = definition.offset().min(text.len());
-    let end = declaration
-        .offset()
-        .saturating_add(declaration.len())
-        .max(definition.offset().saturating_add(definition.len()))
-        .clamp(start, text.len());
-    let trimmed = text[start..end].trim_end();
-    let trimmed = trimmed.strip_suffix(';').unwrap_or(trimmed).trim_end();
-    Span::new(start, trimmed.len())
 }
 
 fn slice(text: &str, span: Span) -> Option<String> {

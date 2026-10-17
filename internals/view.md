@@ -13,6 +13,51 @@ hosts, chosen at start in `src/main.ts`:
   address names a file: `#owner/repo@ref/path/to/file.gcl` (`@ref` optional;
   a slashed branch is percent-encoded).
 
+## The model contract
+
+The model is projected in `crates/graphcal-project/src/view_model/` and
+validated on the page by the zod schemas in `src/model.ts`; it is at
+`version` 1, and a wire change bumps it. The Wasm `evaluateView` answers
+`evaluated`, `binding_errors`, `eval_error`, `not_requested` (prepared
+without the view) or `projection_failed`. Its rules:
+
+- Ids are opaque. A node's `id` is derived from the declaration's identity
+  (`view_model/wire_key.rs`), so it is unique, stable across evaluations and
+  equal between the two refs of a comparison; an include instance's
+  declaration has an id of its own, so per-instance nodes can be added
+  without changing the others. The page compares and looks ids up and never
+  takes them apart: what it shows travels in `label` (the module's spelling:
+  `margin`, `num`, `e::p_budget`) and `name`. Pairs of ids are keyed by both
+  ends (`src/edges.ts`), not by a joined string.
+- A node's `kind` is what it declares (`param`, `const`, `node`, `assert`);
+  `origin` is where it comes from (`local`, `imported`, or `included` with
+  its instance).
+- `axes` refer to `indexes[].id`. An index lists its `entries` as
+  `{ key, display }`; the entries of an indexed value refer to `key`, and the
+  page shows `display` (a variant, a coordinate such as `0.5 s`, a position
+  such as `#2`, as `graphcal eval` does). Structural `Fin(N)` axes are listed
+  too, with no declaring `module`.
+- Edits replace compiler ranges only. `source.expr_range` is the text after
+  `=`, parentheses included, and is null when several declarations share it
+  (the columns of a multi-declaration table). `source.cells` lists each
+  written cell of a table definition by its entry keys (with the node id,
+  the slot) and range. `element` says what one value is, so a typed literal
+  is built only for a quantity.
+- `dimension` is the element type as the declaration spells it (`Torque`,
+  `Dimensionless / Time`). Values follow `graphcal eval`: a quantity in its
+  display unit, else in the default label of its dimension. A display unit
+  that cannot be applied leaves the SI value, and the node lists why in
+  `presentation`; every host projects the same way (`graphcal view` also
+  prints those lines and exits with 1, as `graphcal eval` does).
+- `module.id` and `node.module` are module paths as the loader records them
+  for each file, the root included.
+
+`web/view/src/contract/` holds `graphcal view` output for a few fixtures.
+The CLI test `view_contract_fixtures_are_current` keeps it current
+(`GRAPHCAL_UPDATE_VIEW_CONTRACT=1 cargo test -p graphcal --test view`
+rewrites it), and `src/contract.test.ts` checks that it parses and that
+every dependency, axis and cell joins.
+
 ## The published viewer
 
 The page holds no data. It reads the project around the named file from the

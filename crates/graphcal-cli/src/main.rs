@@ -1024,26 +1024,39 @@ fn run_view(file: &Path, project_root: Option<&Path>) {
     );
     let outcome = (|| -> Result<ViewModel, ViewFailure> {
         let fs = build_rooted_filesystem(file, project_root)?;
-        let root_dir = view_root_dir(file, project_root);
         let (project, host_fns) = load_project_with_plugins(file, project_root, &fs)?;
         let checked = ProjectCompiler::new(&project).host_fns(&host_fns).check()?;
-        let mut projection = project_view(&project, &checked, root_dir.as_deref())?;
+        let mut projection = project_view(&project, &checked)?;
         if checked.is_library() {
             return Ok(projection.into_model());
         }
         let prepared = checked.prepare_with_host_fns(&host_fns)?;
         let evaluated = prepared.evaluate(&prepared.binding_builder().finish()?)?;
-        projection.attach_evaluation(&evaluated)?;
+        projection.attach_evaluation(&evaluated);
         Ok(projection.into_model())
     })();
     match outcome {
-        Ok(view) => match serde_json::to_string_pretty(&view) {
-            Ok(json) => println!("{json}"),
-            Err(error) => {
-                eprintln!("JSON serialization error: {error}");
-                process::exit(2);
+        Ok(view) => {
+            match serde_json::to_string_pretty(&view) {
+                Ok(json) => println!("{json}"),
+                Err(error) => {
+                    eprintln!("JSON serialization error: {error}");
+                    process::exit(2);
+                }
             }
-        },
+            // As `graphcal eval` does: a value shown in SI because its display
+            // unit failed is reported, and the run fails.
+            let mut presentation_failed = false;
+            for node in &view.nodes {
+                for problem in &node.presentation {
+                    eprintln!("presentation: {}: {problem}", node.label);
+                    presentation_failed = true;
+                }
+            }
+            if presentation_failed {
+                process::exit(1);
+            }
+        }
         Err(ViewFailure::Compile(error)) => {
             eprintln!("{:?}", miette::Report::new(error));
             process::exit(2);
@@ -1053,17 +1066,6 @@ fn run_view(file: &Path, project_root: Option<&Path>) {
             process::exit(2);
         }
     }
-}
-
-/// The directory view source paths are relative to: the explicit root, or
-/// the discovered project root of `file`.
-fn view_root_dir(file: &Path, project_root: Option<&Path>) -> Option<PathBuf> {
-    if let Some(root) = project_root {
-        return root.canonicalize().ok();
-    }
-    let start = file.canonicalize().ok()?.parent()?.to_path_buf();
-    graphcal_project::loader::discover_project_root(&start, &RealFileSystem::default())
-        .or(Some(start))
 }
 
 fn run_format(paths: &[PathBuf], check: bool) {
@@ -1149,7 +1151,7 @@ fn print_text(result: &EvalResult, output_view: EvalOutputView) {
     // alias-qualified path so multiple instantiations stay distinct (#813).
     let rendered_names: Vec<(String, &Result<Value, OutputUnavailable>)> = result
         .output_values(output_view)
-        .map(|(name, r, _)| (name.to_string(), r))
+        .map(|entry| (entry.name.to_string(), &entry.outcome))
         .collect();
     let items = rendered_names.iter().map(|(n, r)| (n.as_str(), *r));
     let blocks = build_output_blocks(items);

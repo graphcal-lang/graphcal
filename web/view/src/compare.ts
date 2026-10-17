@@ -26,9 +26,11 @@ function sameValue(a: Value | null, b: Value | null): boolean {
 function sameDefinition(a: ViewNode, b: ViewNode): boolean {
   return (
     a.kind === b.kind &&
+    a.origin.kind === b.origin.kind &&
     a.dimension === b.dimension &&
     a.unit === b.unit &&
-    a.axes.join("\0") === b.axes.join("\0") &&
+    a.axes.length === b.axes.length &&
+    a.axes.every((axis, i) => axis === b.axes[i]) &&
     (a.expr === null ? null : oneLine(a.expr)) === (b.expr === null ? null : oneLine(b.expr))
   );
 }

@@ -26,8 +26,8 @@ use super::budget::{
 };
 use super::module_path::PackageSelector;
 use super::source_snapshot::{
-    FetchedFile, ModuleLocation, ModuleResolution, ParsedFile, ParsedSource, ResolveFailure,
-    ResolvedFile, SourceKey, SourceSnapshot,
+    FetchedFile, ModuleLocation, ModuleResolution, ModuleRoot, ParsedFile, ParsedSource,
+    ResolveFailure, ResolvedFile, SourceKey, SourceSnapshot,
 };
 use crate::compile_error::CompileError;
 
@@ -39,6 +39,8 @@ pub(super) struct SourceTree<'a> {
     pub(super) root: &'a Path,
     /// Package owning the semantic identity of the tree's files.
     pub(super) package: DagPackageId,
+    /// Where the module paths of the tree's files are spelled from.
+    pub(super) module_root: ModuleRoot,
 }
 
 /// Package selected by the first segment of a module path.
@@ -144,6 +146,7 @@ fn fetch_file<A: ModuleSourceAuthority>(
     };
     cancellation.checkpoint()?;
     let location = ModuleLocation {
+        module_path: tree.module_root.module_path_of(file.path()),
         package: tree.package,
         relative_path: file
             .path()
@@ -263,6 +266,9 @@ impl ModuleSourceAuthority for ProjectSources<'_> {
             reader: self.fs,
             root: self.project_root,
             package: self.package_id.clone(),
+            module_root: self.manifest.map_or(ModuleRoot::Standalone, |manifest| {
+                ModuleRoot::SourceDir(manifest.source_dir.join_to(self.project_root))
+            }),
         })
     }
 

@@ -16,7 +16,7 @@ use graphcal_compiler::syntax::module_name::ScopedName;
 
 use crate::eval::output_decl_name::OutputUnavailable;
 use crate::eval::public_projection;
-use crate::eval::types::Value;
+use crate::eval::types::{EvalEntry, Value};
 use crate::eval_expr::{EvalSession, RuntimeValue};
 use crate::execution_plan::{ExecPlan, PlannedInstance};
 use crate::presentation_evidence::PresentationDiagnostic;
@@ -44,13 +44,8 @@ struct ValueEntry {
 
 /// The value entries of one evaluation, in output order.
 pub(super) struct ValueEntries {
-    pub entries: Vec<(
-        ScopedName,
-        Result<Value, OutputUnavailable>,
-        ValueDeclCategory,
-    )>,
-    /// The runtime identity each output name reports.
-    pub identities: HashMap<ScopedName, ResolvedDeclName>,
+    /// Each with the runtime identity its output name reports.
+    pub entries: Vec<EvalEntry>,
     pub output_surface: HashSet<ScopedName>,
     pub presentation_diagnostics: Vec<PresentationDiagnostic>,
 }
@@ -68,15 +63,15 @@ impl ValueEntries {
     ) -> Result<Self, SemanticError> {
         let mut collected = Self {
             entries: Vec::new(),
-            identities: HashMap::new(),
             output_surface: HashSet::new(),
             presentation_diagnostics: Vec::new(),
         };
+        let mut identities = HashMap::<ScopedName, ResolvedDeclName>::new();
         for entry in entries {
             if matches!(entry.exposure, OutputExposure::Surface) {
                 collected.output_surface.insert(entry.name.clone());
             }
-            match collected.identities.get(&entry.name) {
+            match identities.get(&entry.name) {
                 Some(existing) if existing == &entry.key => continue,
                 Some(existing) => {
                     return Err(ctx.internal_error(
@@ -89,11 +84,14 @@ impl ValueEntries {
                 }
                 None => {}
             }
-            collected.identities.insert(entry.name.clone(), entry.key);
+            identities.insert(entry.name.clone(), entry.key.clone());
             collected.presentation_diagnostics.extend(entry.diagnostics);
-            collected
-                .entries
-                .push((entry.name, entry.result, entry.category));
+            collected.entries.push(EvalEntry {
+                name: entry.name,
+                outcome: entry.result,
+                category: entry.category,
+                identity: entry.key,
+            });
         }
         Ok(collected)
     }

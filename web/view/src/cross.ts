@@ -3,7 +3,7 @@
 // enters the consumer's channel (below its own lanes) and rises into the port
 // box.
 import type { Layout } from "./layout.ts";
-import type { ViewModel } from "./model.ts";
+import { instanceOf, isExternal, type ViewModel } from "./model.ts";
 import { keyOf, sameKey, type PaneKey } from "./panes.ts";
 import {
   anchorsOf,
@@ -44,20 +44,22 @@ export function crossLinks(sheets: CrossSheet[]): CrossLink[] {
     const tiers = scalarTierCount(to.layout);
     for (const node of to.model.nodes) {
       // A pane shows its module evaluated alone, which a bound include's values are not.
-      if (node.kind !== "external" || node.instance?.bound === true) continue;
+      if (!isExternal(node) || instanceOf(node)?.bound === true) continue;
       const key = keyOf(node);
       const from = sheets.find((s) => sameKey(s.key, key));
       const column = to.layout.columns.get(node.id);
-      if (!from || !column || !from.layout.columns.has(node.name)) continue;
+      // The producer is the pane module's own declaration of the same name.
+      const producer = from?.model.nodes.find((n) => !isExternal(n) && n.name === node.name);
+      if (!from || !column || !producer || !from.layout.columns.has(producer.id)) continue;
       const onTop = to.layout.bands[column.bandIndex]?.axis !== null;
       links.push({
         from,
-        fromSelector: `.col[data-node="${node.name}"]`,
+        fromSelector: `.col[data-node="${producer.id}"]`,
         to,
         toSelector: `.col[data-node="${node.id}"]`,
         toSide: onTop ? "top" : "bottom",
         channel: onTop ? column.bandIndex : tiers,
-        fromId: node.name,
+        fromId: producer.id,
         toId: node.id,
       });
     }

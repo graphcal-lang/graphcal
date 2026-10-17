@@ -46,6 +46,7 @@ fn node(spelling: &str, declaration_owner: DagId) -> Decl<Bare> {
         type_ann: (),
         definition: (),
         span: Span::new(0, 0),
+        definition_range: Span::new(0, 0),
     })
 }
 
@@ -56,6 +57,7 @@ fn param(spelling: &str) -> Decl<Bare> {
         type_ann: (),
         default: None,
         span: Span::new(0, 0),
+        default_range: None,
         override_reconciliations: Vec::new(),
     })
 }
@@ -66,6 +68,7 @@ fn assertion(spelling: &str) -> Decl<Bare> {
         identity: ResolvedDeclName::for_test(owner(), name(spelling)),
         body: (),
         span: Span::new(0, 0),
+        body_range: Span::new(0, 0),
     })
 }
 
@@ -154,6 +157,7 @@ fn try_map_transforms_by_rank_and_preserves_order() {
                         type_ann: (),
                         default: Some(position),
                         span: entry.span,
+                        default_range: entry.default_range,
                         override_reconciliations: entry.override_reconciliations,
                     }),
                     Decl::Node(entry) => Decl::Node(NodeEntry {
@@ -162,12 +166,14 @@ fn try_map_transforms_by_rank_and_preserves_order() {
                         type_ann: (),
                         definition: position,
                         span: entry.span,
+                        definition_range: entry.definition_range,
                     }),
                     Decl::Assert(entry) => Decl::Assert(AssertEntry {
                         doc: entry.doc,
                         identity: entry.identity,
                         body: position,
                         span: entry.span,
+                        body_range: entry.body_range,
                     }),
                     other => panic!("the table holds no {} declarations", other.category()),
                 })

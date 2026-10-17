@@ -13,6 +13,9 @@ pub(super) const CANCELLATION_CHECKPOINT_INTERVAL: usize = 256;
 pub(super) struct ParserTokenStream<'src> {
     lexer: Lexer<'src>,
     cancellation: CancellationPolicy,
+    /// The span of the last token consumed, where a production that just
+    /// finished ends.
+    last_consumed: Option<Span>,
 }
 
 impl<'src> ParserTokenStream<'src> {
@@ -20,6 +23,7 @@ impl<'src> ParserTokenStream<'src> {
         Self {
             lexer: Lexer::new(source),
             cancellation: CancellationPolicy::Unbounded,
+            last_consumed: None,
         }
     }
 
@@ -62,10 +66,16 @@ impl<'src> ParserTokenStream<'src> {
             return None;
         }
         let token = self.lexer.next_token();
-        if token.is_some() {
+        if let Some((_, span)) = &token {
             self.cancellation.token_consumed();
+            self.last_consumed = Some(*span);
         }
         token
+    }
+
+    /// The span of the last token consumed.
+    pub(super) const fn last_consumed(&self) -> Option<Span> {
+        self.last_consumed
     }
 
     pub(super) const fn first_error_span(&self) -> Option<Span> {

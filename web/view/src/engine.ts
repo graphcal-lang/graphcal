@@ -100,8 +100,12 @@ export const viewOutcomeSchema = z.discriminatedUnion("status", [
     errors: z.array(z.object({ name: z.string(), message: z.string() })),
   }),
   z.object({ status: z.literal("eval_error"), message: z.string() }),
-  z.object({ status: z.literal("unavailable"), message: z.string() }),
+  /** Prepared without the view (a playground preparation). */
+  z.object({ status: z.literal("not_requested") }),
+  /** The checked program could not be projected (a compiler invariant failed). */
+  z.object({ status: z.literal("projection_failed"), message: z.string() }),
 ]);
+type ViewOutcome = z.infer<typeof viewOutcomeSchema>;
 
 interface Prepared {
   evaluateReport(bindings: unknown[]): unknown;
@@ -177,6 +181,19 @@ function prepareFailure(outcome: Outcome): string {
   return "unexpected outcome";
 }
 
+/** Why `evaluateView` returned no evaluated view. */
+function viewFailure(outcome: Exclude<ViewOutcome, { status: "evaluated" }>): string {
+  switch (outcome.status) {
+    case "binding_errors":
+      return outcome.errors.map((e) => `${e.name}: ${e.message}`).join("; ");
+    case "eval_error":
+    case "projection_failed":
+      return outcome.message;
+    case "not_requested":
+      return "the project was prepared without its view";
+  }
+}
+
 /** Evaluate a project and return its entry file's ViewModel with values, or the failure message. */
 export async function evaluateView(
   entry: string,
@@ -186,14 +203,9 @@ export async function evaluateView(
   if (isOutcome(prepared)) return { error: prepareFailure(prepared) };
   try {
     const outcome = viewOutcomeSchema.parse(prepared.evaluateView([]));
-    switch (outcome.status) {
-      case "evaluated":
-        return { view: outcome.view };
-      case "binding_errors":
-        return { error: outcome.errors.map((e) => `${e.name}: ${e.message}`).join("; ") };
-      default:
-        return { error: outcome.message };
-    }
+    return outcome.status === "evaluated"
+      ? { view: outcome.view }
+      : { error: viewFailure(outcome) };
   } finally {
     prepared.free();
   }
@@ -213,10 +225,7 @@ export async function viewOf(
   try {
     const outcome = viewOutcomeSchema.parse(prepared.evaluateView([]));
     if (outcome.status === "evaluated") return { view: outcome.view, valued: true, note: null };
-    const message =
-      outcome.status === "binding_errors"
-        ? outcome.errors.map((e) => `${e.name}: ${e.message}`).join("; ")
-        : outcome.message;
+    const message = viewFailure(outcome);
     const structure = prepared.viewStructure();
     if (structure === null || structure === undefined) return { error: message };
     return { view: structure, valued: false, note: message };

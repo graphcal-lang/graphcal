@@ -1,0 +1,2777 @@
+{
+  "version": 1,
+  "module": {
+    "id": "linear_algebra",
+    "file": "linear_algebra.gcl",
+    "package": "linear_algebra"
+  },
+  "indexes": [
+    {
+      "id": "F:2",
+      "name": "Fin(2)",
+      "module": null,
+      "entries": [
+        {
+          "key": "#0",
+          "display": "#0"
+        },
+        {
+          "key": "#1",
+          "display": "#1"
+        }
+      ]
+    },
+    {
+      "id": "F:3",
+      "name": "Fin(3)",
+      "module": null,
+      "entries": [
+        {
+          "key": "#0",
+          "display": "#0"
+        },
+        {
+          "key": "#1",
+          "display": "#1"
+        },
+        {
+          "key": "#2",
+          "display": "#2"
+        }
+      ]
+    }
+  ],
+  "nodes": [
+    {
+      "id": "p:linear_algebra/f:linear_algebra/n:a",
+      "label": "a",
+      "name": "a",
+      "module": "linear_algebra",
+      "kind": "param",
+      "origin": {
+        "kind": "local"
+      },
+      "element": "quantity",
+      "axes": [
+        "F:3"
+      ],
+      "dimension": "Length",
+      "unit": "m",
+      "pub": false,
+      "deps": [],
+      "expr": "table[Fin(3)] {\n    1.0 m;\n    2.0 m;\n    3.0 m;\n}",
+      "doc": null,
+      "source": {
+        "file": "linear_algebra.gcl",
+        "line": 2,
+        "expr_range": {
+          "start": {
+            "line": 1,
+            "character": 26
+          },
+          "end": {
+            "line": 5,
+            "character": 1
+          }
+        },
+        "cells": [
+          {
+            "keys": [
+              "#0"
+            ],
+            "range": {
+              "start": {
+                "line": 2,
+                "character": 4
+              },
+              "end": {
+                "line": 2,
+                "character": 9
+              }
+            }
+          },
+          {
+            "keys": [
+              "#1"
+            ],
+            "range": {
+              "start": {
+                "line": 3,
+                "character": 4
+              },
+              "end": {
+                "line": 3,
+                "character": 9
+              }
+            }
+          },
+          {
+            "keys": [
+              "#2"
+            ],
+            "range": {
+              "start": {
+                "line": 4,
+                "character": 4
+              },
+              "end": {
+                "line": 4,
+                "character": 9
+              }
+            }
+          }
+        ]
+      },
+      "value": {
+        "kind": "indexed",
+        "display": "[Fin(3)]",
+        "index": "Fin(3)",
+        "entries": [
+          {
+            "key": "#0",
+            "value": {
+              "kind": "quantity",
+              "display": "1 m",
+              "magnitude": "1",
+              "si_value": 1.0,
+              "unit": "m"
+            }
+          },
+          {
+            "key": "#1",
+            "value": {
+              "kind": "quantity",
+              "display": "2 m",
+              "magnitude": "2",
+              "si_value": 2.0,
+              "unit": "m"
+            }
+          },
+          {
+            "key": "#2",
+            "value": {
+              "kind": "quantity",
+              "display": "3 m",
+              "magnitude": "3",
+              "si_value": 3.0,
+              "unit": "m"
+            }
+          }
+        ]
+      },
+      "presentation": []
+    },
+    {
+      "id": "p:linear_algebra/f:linear_algebra/n:b",
+      "label": "b",
+      "name": "b",
+      "module": "linear_algebra",
+      "kind": "param",
+      "origin": {
+        "kind": "local"
+      },
+      "element": "quantity",
+      "axes": [
+        "F:3"
+      ],
+      "dimension": "Dimensionless",
+      "unit": null,
+      "pub": false,
+      "deps": [],
+      "expr": "table[Fin(3)] {\n    4.0;\n    5.0;\n    6.0;\n}",
+      "doc": null,
+      "source": {
+        "file": "linear_algebra.gcl",
+        "line": 7,
+        "expr_range": {
+          "start": {
+            "line": 6,
+            "character": 33
+          },
+          "end": {
+            "line": 10,
+            "character": 1
+          }
+        },
+        "cells": [
+          {
+            "keys": [
+              "#0"
+            ],
+            "range": {
+              "start": {
+                "line": 7,
+                "character": 4
+              },
+              "end": {
+                "line": 7,
+                "character": 7
+              }
+            }
+          },
+          {
+            "keys": [
+              "#1"
+            ],
+            "range": {
+              "start": {
+                "line": 8,
+                "character": 4
+              },
+              "end": {
+                "line": 8,
+                "character": 7
+              }
+            }
+          },
+          {
+            "keys": [
+              "#2"
+            ],
+            "range": {
+              "start": {
+                "line": 9,
+                "character": 4
+              },
+              "end": {
+                "line": 9,
+                "character": 7
+              }
+            }
+          }
+        ]
+      },
+      "value": {
+        "kind": "indexed",
+        "display": "[Fin(3)]",
+        "index": "Fin(3)",
+        "entries": [
+          {
+            "key": "#0",
+            "value": {
+              "kind": "quantity",
+              "display": "4",
+              "magnitude": "4",
+              "si_value": 4.0,
+              "unit": null
+            }
+          },
+          {
+            "key": "#1",
+            "value": {
+              "kind": "quantity",
+              "display": "5",
+              "magnitude": "5",
+              "si_value": 5.0,
+              "unit": null
+            }
+          },
+          {
+            "key": "#2",
+            "value": {
+              "kind": "quantity",
+              "display": "6",
+              "magnitude": "6",
+              "si_value": 6.0,
+              "unit": null
+            }
+          }
+        ]
+      },
+      "presentation": []
+    },
+    {
+      "id": "p:linear_algebra/f:linear_algebra/n:A",
+      "label": "A",
+      "name": "A",
+      "module": "linear_algebra",
+      "kind": "param",
+      "origin": {
+        "kind": "local"
+      },
+      "element": "quantity",
+      "axes": [
+        "F:2",
+        "F:3"
+      ],
+      "dimension": "Length",
+      "unit": "m",
+      "pub": false,
+      "deps": [],
+      "expr": "table[Fin(2), Fin(3)] {\n    1.0 m, 2.0 m, 3.0 m;\n    4.0 m, 5.0 m, 6.0 m;\n}",
+      "doc": null,
+      "source": {
+        "file": "linear_algebra.gcl",
+        "line": 13,
+        "expr_range": {
+          "start": {
+            "line": 12,
+            "character": 34
+          },
+          "end": {
+            "line": 15,
+            "character": 1
+          }
+        },
+        "cells": [
+          {
+            "keys": [
+              "#0",
+              "#0"
+            ],
+            "range": {
+              "start": {
+                "line": 13,
+                "character": 4
+              },
+              "end": {
+                "line": 13,
+                "character": 9
+              }
+            }
+          },
+          {
+            "keys": [
+              "#0",
+              "#1"
+            ],
+            "range": {
+              "start": {
+                "line": 13,
+                "character": 11
+              },
+              "end": {
+                "line": 13,
+                "character": 16
+              }
+            }
+          },
+          {
+            "keys": [
+              "#0",
+              "#2"
+            ],
+            "range": {
+              "start": {
+                "line": 13,
+                "character": 18
+              },
+              "end": {
+                "line": 13,
+                "character": 23
+              }
+            }
+          },
+          {
+            "keys": [
+              "#1",
+              "#0"
+            ],
+            "range": {
+              "start": {
+                "line": 14,
+                "character": 4
+              },
+              "end": {
+                "line": 14,
+                "character": 9
+              }
+            }
+          },
+          {
+            "keys": [
+              "#1",
+              "#1"
+            ],
+            "range": {
+              "start": {
+                "line": 14,
+                "character": 11
+              },
+              "end": {
+                "line": 14,
+                "character": 16
+              }
+            }
+          },
+          {
+            "keys": [
+              "#1",
+              "#2"
+            ],
+            "range": {
+              "start": {
+                "line": 14,
+                "character": 18
+              },
+              "end": {
+                "line": 14,
+                "character": 23
+              }
+            }
+          }
+        ]
+      },
+      "value": {
+        "kind": "indexed",
+        "display": "[Fin(2)]",
+        "index": "Fin(2)",
+        "entries": [
+          {
+            "key": "#0",
+            "value": {
+              "kind": "indexed",
+              "display": "[Fin(3)]",
+              "index": "Fin(3)",
+              "entries": [
+                {
+                  "key": "#0",
+                  "value": {
+                    "kind": "quantity",
+                    "display": "1 m",
+                    "magnitude": "1",
+                    "si_value": 1.0,
+                    "unit": "m"
+                  }
+                },
+                {
+                  "key": "#1",
+                  "value": {
+                    "kind": "quantity",
+                    "display": "2 m",
+                    "magnitude": "2",
+                    "si_value": 2.0,
+                    "unit": "m"
+                  }
+                },
+                {
+                  "key": "#2",
+                  "value": {
+                    "kind": "quantity",
+                    "display": "3 m",
+                    "magnitude": "3",
+                    "si_value": 3.0,
+                    "unit": "m"
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "key": "#1",
+            "value": {
+              "kind": "indexed",
+              "display": "[Fin(3)]",
+              "index": "Fin(3)",
+              "entries": [
+                {
+                  "key": "#0",
+                  "value": {
+                    "kind": "quantity",
+                    "display": "4 m",
+                    "magnitude": "4",
+                    "si_value": 4.0,
+                    "unit": "m"
+                  }
+                },
+                {
+                  "key": "#1",
+                  "value": {
+                    "kind": "quantity",
+                    "display": "5 m",
+                    "magnitude": "5",
+                    "si_value": 5.0,
+                    "unit": "m"
+                  }
+                },
+                {
+                  "key": "#2",
+                  "value": {
+                    "kind": "quantity",
+                    "display": "6 m",
+                    "magnitude": "6",
+                    "si_value": 6.0,
+                    "unit": "m"
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      },
+      "presentation": []
+    },
+    {
+      "id": "p:linear_algebra/f:linear_algebra/n:B",
+      "label": "B",
+      "name": "B",
+      "module": "linear_algebra",
+      "kind": "param",
+      "origin": {
+        "kind": "local"
+      },
+      "element": "quantity",
+      "axes": [
+        "F:3",
+        "F:2"
+      ],
+      "dimension": "Dimensionless",
+      "unit": null,
+      "pub": false,
+      "deps": [],
+      "expr": "table[Fin(3), Fin(2)] {\n     7.0,  8.0;\n     9.0, 10.0;\n    11.0, 12.0;\n}",
+      "doc": null,
+      "source": {
+        "file": "linear_algebra.gcl",
+        "line": 17,
+        "expr_range": {
+          "start": {
+            "line": 16,
+            "character": 41
+          },
+          "end": {
+            "line": 20,
+            "character": 1
+          }
+        },
+        "cells": [
+          {
+            "keys": [
+              "#0",
+              "#0"
+            ],
+            "range": {
+              "start": {
+                "line": 17,
+                "character": 5
+              },
+              "end": {
+                "line": 17,
+                "character": 8
+              }
+            }
+          },
+          {
+            "keys": [
+              "#0",
+              "#1"
+            ],
+            "range": {
+              "start": {
+                "line": 17,
+                "character": 11
+              },
+              "end": {
+                "line": 17,
+                "character": 14
+              }
+            }
+          },
+          {
+            "keys": [
+              "#1",
+              "#0"
+            ],
+            "range": {
+              "start": {
+                "line": 18,
+                "character": 5
+              },
+              "end": {
+                "line": 18,
+                "character": 8
+              }
+            }
+          },
+          {
+            "keys": [
+              "#1",
+              "#1"
+            ],
+            "range": {
+              "start": {
+                "line": 18,
+                "character": 10
+              },
+              "end": {
+                "line": 18,
+                "character": 14
+              }
+            }
+          },
+          {
+            "keys": [
+              "#2",
+              "#0"
+            ],
+            "range": {
+              "start": {
+                "line": 19,
+                "character": 4
+              },
+              "end": {
+                "line": 19,
+                "character": 8
+              }
+            }
+          },
+          {
+            "keys": [
+              "#2",
+              "#1"
+            ],
+            "range": {
+              "start": {
+                "line": 19,
+                "character": 10
+              },
+              "end": {
+                "line": 19,
+                "character": 14
+              }
+            }
+          }
+        ]
+      },
+      "value": {
+        "kind": "indexed",
+        "display": "[Fin(3)]",
+        "index": "Fin(3)",
+        "entries": [
+          {
+            "key": "#0",
+            "value": {
+              "kind": "indexed",
+              "display": "[Fin(2)]",
+              "index": "Fin(2)",
+              "entries": [
+                {
+                  "key": "#0",
+                  "value": {
+                    "kind": "quantity",
+                    "display": "7",
+                    "magnitude": "7",
+                    "si_value": 7.0,
+                    "unit": null
+                  }
+                },
+                {
+                  "key": "#1",
+                  "value": {
+                    "kind": "quantity",
+                    "display": "8",
+                    "magnitude": "8",
+                    "si_value": 8.0,
+                    "unit": null
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "key": "#1",
+            "value": {
+              "kind": "indexed",
+              "display": "[Fin(2)]",
+              "index": "Fin(2)",
+              "entries": [
+                {
+                  "key": "#0",
+                  "value": {
+                    "kind": "quantity",
+                    "display": "9",
+                    "magnitude": "9",
+                    "si_value": 9.0,
+                    "unit": null
+                  }
+                },
+                {
+                  "key": "#1",
+                  "value": {
+                    "kind": "quantity",
+                    "display": "10",
+                    "magnitude": "10",
+                    "si_value": 10.0,
+                    "unit": null
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "key": "#2",
+            "value": {
+              "kind": "indexed",
+              "display": "[Fin(2)]",
+              "index": "Fin(2)",
+              "entries": [
+                {
+                  "key": "#0",
+                  "value": {
+                    "kind": "quantity",
+                    "display": "11",
+                    "magnitude": "11",
+                    "si_value": 11.0,
+                    "unit": null
+                  }
+                },
+                {
+                  "key": "#1",
+                  "value": {
+                    "kind": "quantity",
+                    "display": "12",
+                    "magnitude": "12",
+                    "si_value": 12.0,
+                    "unit": null
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      },
+      "presentation": []
+    },
+    {
+      "id": "p:linear_algebra/f:linear_algebra/n:square",
+      "label": "square",
+      "name": "square",
+      "module": "linear_algebra",
+      "kind": "param",
+      "origin": {
+        "kind": "local"
+      },
+      "element": "quantity",
+      "axes": [
+        "F:2",
+        "F:2"
+      ],
+      "dimension": "Length",
+      "unit": "m",
+      "pub": false,
+      "deps": [],
+      "expr": "table[Fin(2), Fin(2)] {\n    1.0 m, 2.0 m;\n    3.0 m, 4.0 m;\n}",
+      "doc": null,
+      "source": {
+        "file": "linear_algebra.gcl",
+        "line": 22,
+        "expr_range": {
+          "start": {
+            "line": 21,
+            "character": 39
+          },
+          "end": {
+            "line": 24,
+            "character": 1
+          }
+        },
+        "cells": [
+          {
+            "keys": [
+              "#0",
+              "#0"
+            ],
+            "range": {
+              "start": {
+                "line": 22,
+                "character": 4
+              },
+              "end": {
+                "line": 22,
+                "character": 9
+              }
+            }
+          },
+          {
+            "keys": [
+              "#0",
+              "#1"
+            ],
+            "range": {
+              "start": {
+                "line": 22,
+                "character": 11
+              },
+              "end": {
+                "line": 22,
+                "character": 16
+              }
+            }
+          },
+          {
+            "keys": [
+              "#1",
+              "#0"
+            ],
+            "range": {
+              "start": {
+                "line": 23,
+                "character": 4
+              },
+              "end": {
+                "line": 23,
+                "character": 9
+              }
+            }
+          },
+          {
+            "keys": [
+              "#1",
+              "#1"
+            ],
+            "range": {
+              "start": {
+                "line": 23,
+                "character": 11
+              },
+              "end": {
+                "line": 23,
+                "character": 16
+              }
+            }
+          }
+        ]
+      },
+      "value": {
+        "kind": "indexed",
+        "display": "[Fin(2)]",
+        "index": "Fin(2)",
+        "entries": [
+          {
+            "key": "#0",
+            "value": {
+              "kind": "indexed",
+              "display": "[Fin(2)]",
+              "index": "Fin(2)",
+              "entries": [
+                {
+                  "key": "#0",
+                  "value": {
+                    "kind": "quantity",
+                    "display": "1 m",
+                    "magnitude": "1",
+                    "si_value": 1.0,
+                    "unit": "m"
+                  }
+                },
+                {
+                  "key": "#1",
+                  "value": {
+                    "kind": "quantity",
+                    "display": "2 m",
+                    "magnitude": "2",
+                    "si_value": 2.0,
+                    "unit": "m"
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "key": "#1",
+            "value": {
+              "kind": "indexed",
+              "display": "[Fin(2)]",
+              "index": "Fin(2)",
+              "entries": [
+                {
+                  "key": "#0",
+                  "value": {
+                    "kind": "quantity",
+                    "display": "3 m",
+                    "magnitude": "3",
+                    "si_value": 3.0,
+                    "unit": "m"
+                  }
+                },
+                {
+                  "key": "#1",
+                  "value": {
+                    "kind": "quantity",
+                    "display": "4 m",
+                    "magnitude": "4",
+                    "si_value": 4.0,
+                    "unit": "m"
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      },
+      "presentation": []
+    },
+    {
+      "id": "p:linear_algebra/f:linear_algebra/n:dot_ab",
+      "label": "dot_ab",
+      "name": "dot_ab",
+      "module": "linear_algebra",
+      "kind": "node",
+      "origin": {
+        "kind": "local"
+      },
+      "element": "quantity",
+      "axes": [],
+      "dimension": "Length",
+      "unit": "m",
+      "pub": false,
+      "deps": [
+        "p:linear_algebra/f:linear_algebra/n:a",
+        "p:linear_algebra/f:linear_algebra/n:b"
+      ],
+      "expr": "dot(@a, @b)",
+      "doc": null,
+      "source": {
+        "file": "linear_algebra.gcl",
+        "line": 27,
+        "expr_range": {
+          "start": {
+            "line": 26,
+            "character": 22
+          },
+          "end": {
+            "line": 26,
+            "character": 33
+          }
+        },
+        "cells": []
+      },
+      "value": {
+        "kind": "quantity",
+        "display": "32 m",
+        "magnitude": "32",
+        "si_value": 32.0,
+        "unit": "m"
+      },
+      "presentation": []
+    },
+    {
+      "id": "p:linear_algebra/f:linear_algebra/n:matrix_product",
+      "label": "matrix_product",
+      "name": "matrix_product",
+      "module": "linear_algebra",
+      "kind": "node",
+      "origin": {
+        "kind": "local"
+      },
+      "element": "quantity",
+      "axes": [
+        "F:2",
+        "F:2"
+      ],
+      "dimension": "Length",
+      "unit": "m",
+      "pub": false,
+      "deps": [
+        "p:linear_algebra/f:linear_algebra/n:A",
+        "p:linear_algebra/f:linear_algebra/n:B"
+      ],
+      "expr": "matmul(@A, @B)",
+      "doc": null,
+      "source": {
+        "file": "linear_algebra.gcl",
+        "line": 28,
+        "expr_range": {
+          "start": {
+            "line": 27,
+            "character": 46
+          },
+          "end": {
+            "line": 27,
+            "character": 60
+          }
+        },
+        "cells": []
+      },
+      "value": {
+        "kind": "indexed",
+        "display": "[Fin(2)]",
+        "index": "Fin(2)",
+        "entries": [
+          {
+            "key": "#0",
+            "value": {
+              "kind": "indexed",
+              "display": "[Fin(2)]",
+              "index": "Fin(2)",
+              "entries": [
+                {
+                  "key": "#0",
+                  "value": {
+                    "kind": "quantity",
+                    "display": "58 m",
+                    "magnitude": "58",
+                    "si_value": 58.0,
+                    "unit": "m"
+                  }
+                },
+                {
+                  "key": "#1",
+                  "value": {
+                    "kind": "quantity",
+                    "display": "64 m",
+                    "magnitude": "64",
+                    "si_value": 64.0,
+                    "unit": "m"
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "key": "#1",
+            "value": {
+              "kind": "indexed",
+              "display": "[Fin(2)]",
+              "index": "Fin(2)",
+              "entries": [
+                {
+                  "key": "#0",
+                  "value": {
+                    "kind": "quantity",
+                    "display": "139 m",
+                    "magnitude": "139",
+                    "si_value": 139.0,
+                    "unit": "m"
+                  }
+                },
+                {
+                  "key": "#1",
+                  "value": {
+                    "kind": "quantity",
+                    "display": "154 m",
+                    "magnitude": "154",
+                    "si_value": 154.0,
+                    "unit": "m"
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      },
+      "presentation": []
+    },
+    {
+      "id": "p:linear_algebra/f:linear_algebra/n:A_t",
+      "label": "A_t",
+      "name": "A_t",
+      "module": "linear_algebra",
+      "kind": "node",
+      "origin": {
+        "kind": "local"
+      },
+      "element": "quantity",
+      "axes": [
+        "F:3",
+        "F:2"
+      ],
+      "dimension": "Length",
+      "unit": "m",
+      "pub": false,
+      "deps": [
+        "p:linear_algebra/f:linear_algebra/n:A"
+      ],
+      "expr": "transpose(@A)",
+      "doc": null,
+      "source": {
+        "file": "linear_algebra.gcl",
+        "line": 29,
+        "expr_range": {
+          "start": {
+            "line": 28,
+            "character": 35
+          },
+          "end": {
+            "line": 28,
+            "character": 48
+          }
+        },
+        "cells": []
+      },
+      "value": {
+        "kind": "indexed",
+        "display": "[Fin(3)]",
+        "index": "Fin(3)",
+        "entries": [
+          {
+            "key": "#0",
+            "value": {
+              "kind": "indexed",
+              "display": "[Fin(2)]",
+              "index": "Fin(2)",
+              "entries": [
+                {
+                  "key": "#0",
+                  "value": {
+                    "kind": "quantity",
+                    "display": "1 m",
+                    "magnitude": "1",
+                    "si_value": 1.0,
+                    "unit": "m"
+                  }
+                },
+                {
+                  "key": "#1",
+                  "value": {
+                    "kind": "quantity",
+                    "display": "4 m",
+                    "magnitude": "4",
+                    "si_value": 4.0,
+                    "unit": "m"
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "key": "#1",
+            "value": {
+              "kind": "indexed",
+              "display": "[Fin(2)]",
+              "index": "Fin(2)",
+              "entries": [
+                {
+                  "key": "#0",
+                  "value": {
+                    "kind": "quantity",
+                    "display": "2 m",
+                    "magnitude": "2",
+                    "si_value": 2.0,
+                    "unit": "m"
+                  }
+                },
+                {
+                  "key": "#1",
+                  "value": {
+                    "kind": "quantity",
+                    "display": "5 m",
+                    "magnitude": "5",
+                    "si_value": 5.0,
+                    "unit": "m"
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "key": "#2",
+            "value": {
+              "kind": "indexed",
+              "display": "[Fin(2)]",
+              "index": "Fin(2)",
+              "entries": [
+                {
+                  "key": "#0",
+                  "value": {
+                    "kind": "quantity",
+                    "display": "3 m",
+                    "magnitude": "3",
+                    "si_value": 3.0,
+                    "unit": "m"
+                  }
+                },
+                {
+                  "key": "#1",
+                  "value": {
+                    "kind": "quantity",
+                    "display": "6 m",
+                    "magnitude": "6",
+                    "si_value": 6.0,
+                    "unit": "m"
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      },
+      "presentation": []
+    },
+    {
+      "id": "p:linear_algebra/f:linear_algebra/n:square_trace",
+      "label": "square_trace",
+      "name": "square_trace",
+      "module": "linear_algebra",
+      "kind": "node",
+      "origin": {
+        "kind": "local"
+      },
+      "element": "quantity",
+      "axes": [],
+      "dimension": "Length",
+      "unit": "m",
+      "pub": false,
+      "deps": [
+        "p:linear_algebra/f:linear_algebra/n:square"
+      ],
+      "expr": "trace(@square)",
+      "doc": null,
+      "source": {
+        "file": "linear_algebra.gcl",
+        "line": 30,
+        "expr_range": {
+          "start": {
+            "line": 29,
+            "character": 28
+          },
+          "end": {
+            "line": 29,
+            "character": 42
+          }
+        },
+        "cells": []
+      },
+      "value": {
+        "kind": "quantity",
+        "display": "5 m",
+        "magnitude": "5",
+        "si_value": 5.0,
+        "unit": "m"
+      },
+      "presentation": []
+    },
+    {
+      "id": "p:linear_algebra/f:linear_algebra/n:a_norm",
+      "label": "a_norm",
+      "name": "a_norm",
+      "module": "linear_algebra",
+      "kind": "node",
+      "origin": {
+        "kind": "local"
+      },
+      "element": "quantity",
+      "axes": [],
+      "dimension": "Length",
+      "unit": "m",
+      "pub": false,
+      "deps": [
+        "p:linear_algebra/f:linear_algebra/n:a"
+      ],
+      "expr": "norm(@a)",
+      "doc": null,
+      "source": {
+        "file": "linear_algebra.gcl",
+        "line": 31,
+        "expr_range": {
+          "start": {
+            "line": 30,
+            "character": 22
+          },
+          "end": {
+            "line": 30,
+            "character": 30
+          }
+        },
+        "cells": []
+      },
+      "value": {
+        "kind": "quantity",
+        "display": "3.741657 m",
+        "magnitude": "3.741657",
+        "si_value": 3.741657386773941,
+        "unit": "m"
+      },
+      "presentation": []
+    },
+    {
+      "id": "p:linear_algebra/f:linear_algebra/n:x_axis",
+      "label": "x_axis",
+      "name": "x_axis",
+      "module": "linear_algebra",
+      "kind": "param",
+      "origin": {
+        "kind": "local"
+      },
+      "element": "quantity",
+      "axes": [
+        "F:3"
+      ],
+      "dimension": "Dimensionless",
+      "unit": null,
+      "pub": false,
+      "deps": [],
+      "expr": "table[Fin(3)] {\n    1.0;\n    0.0;\n    0.0;\n}",
+      "doc": null,
+      "source": {
+        "file": "linear_algebra.gcl",
+        "line": 33,
+        "expr_range": {
+          "start": {
+            "line": 32,
+            "character": 38
+          },
+          "end": {
+            "line": 36,
+            "character": 1
+          }
+        },
+        "cells": [
+          {
+            "keys": [
+              "#0"
+            ],
+            "range": {
+              "start": {
+                "line": 33,
+                "character": 4
+              },
+              "end": {
+                "line": 33,
+                "character": 7
+              }
+            }
+          },
+          {
+            "keys": [
+              "#1"
+            ],
+            "range": {
+              "start": {
+                "line": 34,
+                "character": 4
+              },
+              "end": {
+                "line": 34,
+                "character": 7
+              }
+            }
+          },
+          {
+            "keys": [
+              "#2"
+            ],
+            "range": {
+              "start": {
+                "line": 35,
+                "character": 4
+              },
+              "end": {
+                "line": 35,
+                "character": 7
+              }
+            }
+          }
+        ]
+      },
+      "value": {
+        "kind": "indexed",
+        "display": "[Fin(3)]",
+        "index": "Fin(3)",
+        "entries": [
+          {
+            "key": "#0",
+            "value": {
+              "kind": "quantity",
+              "display": "1",
+              "magnitude": "1",
+              "si_value": 1.0,
+              "unit": null
+            }
+          },
+          {
+            "key": "#1",
+            "value": {
+              "kind": "quantity",
+              "display": "0",
+              "magnitude": "0",
+              "si_value": 0.0,
+              "unit": null
+            }
+          },
+          {
+            "key": "#2",
+            "value": {
+              "kind": "quantity",
+              "display": "0",
+              "magnitude": "0",
+              "si_value": 0.0,
+              "unit": null
+            }
+          }
+        ]
+      },
+      "presentation": []
+    },
+    {
+      "id": "p:linear_algebra/f:linear_algebra/n:y_axis",
+      "label": "y_axis",
+      "name": "y_axis",
+      "module": "linear_algebra",
+      "kind": "param",
+      "origin": {
+        "kind": "local"
+      },
+      "element": "quantity",
+      "axes": [
+        "F:3"
+      ],
+      "dimension": "Length",
+      "unit": "m",
+      "pub": false,
+      "deps": [],
+      "expr": "table[Fin(3)] {\n    0.0 m;\n    1.0 m;\n    0.0 m;\n}",
+      "doc": null,
+      "source": {
+        "file": "linear_algebra.gcl",
+        "line": 38,
+        "expr_range": {
+          "start": {
+            "line": 37,
+            "character": 31
+          },
+          "end": {
+            "line": 41,
+            "character": 1
+          }
+        },
+        "cells": [
+          {
+            "keys": [
+              "#0"
+            ],
+            "range": {
+              "start": {
+                "line": 38,
+                "character": 4
+              },
+              "end": {
+                "line": 38,
+                "character": 9
+              }
+            }
+          },
+          {
+            "keys": [
+              "#1"
+            ],
+            "range": {
+              "start": {
+                "line": 39,
+                "character": 4
+              },
+              "end": {
+                "line": 39,
+                "character": 9
+              }
+            }
+          },
+          {
+            "keys": [
+              "#2"
+            ],
+            "range": {
+              "start": {
+                "line": 40,
+                "character": 4
+              },
+              "end": {
+                "line": 40,
+                "character": 9
+              }
+            }
+          }
+        ]
+      },
+      "value": {
+        "kind": "indexed",
+        "display": "[Fin(3)]",
+        "index": "Fin(3)",
+        "entries": [
+          {
+            "key": "#0",
+            "value": {
+              "kind": "quantity",
+              "display": "0 m",
+              "magnitude": "0",
+              "si_value": 0.0,
+              "unit": "m"
+            }
+          },
+          {
+            "key": "#1",
+            "value": {
+              "kind": "quantity",
+              "display": "1 m",
+              "magnitude": "1",
+              "si_value": 1.0,
+              "unit": "m"
+            }
+          },
+          {
+            "key": "#2",
+            "value": {
+              "kind": "quantity",
+              "display": "0 m",
+              "magnitude": "0",
+              "si_value": 0.0,
+              "unit": "m"
+            }
+          }
+        ]
+      },
+      "presentation": []
+    },
+    {
+      "id": "p:linear_algebra/f:linear_algebra/n:z_axis",
+      "label": "z_axis",
+      "name": "z_axis",
+      "module": "linear_algebra",
+      "kind": "node",
+      "origin": {
+        "kind": "local"
+      },
+      "element": "quantity",
+      "axes": [
+        "F:3"
+      ],
+      "dimension": "Length",
+      "unit": "m",
+      "pub": false,
+      "deps": [
+        "p:linear_algebra/f:linear_algebra/n:x_axis",
+        "p:linear_algebra/f:linear_algebra/n:y_axis"
+      ],
+      "expr": "cross(@x_axis, @y_axis)",
+      "doc": null,
+      "source": {
+        "file": "linear_algebra.gcl",
+        "line": 43,
+        "expr_range": {
+          "start": {
+            "line": 42,
+            "character": 30
+          },
+          "end": {
+            "line": 42,
+            "character": 53
+          }
+        },
+        "cells": []
+      },
+      "value": {
+        "kind": "indexed",
+        "display": "[Fin(3)]",
+        "index": "Fin(3)",
+        "entries": [
+          {
+            "key": "#0",
+            "value": {
+              "kind": "quantity",
+              "display": "0 m",
+              "magnitude": "0",
+              "si_value": 0.0,
+              "unit": "m"
+            }
+          },
+          {
+            "key": "#1",
+            "value": {
+              "kind": "quantity",
+              "display": "0 m",
+              "magnitude": "0",
+              "si_value": 0.0,
+              "unit": "m"
+            }
+          },
+          {
+            "key": "#2",
+            "value": {
+              "kind": "quantity",
+              "display": "1 m",
+              "magnitude": "1",
+              "si_value": 1.0,
+              "unit": "m"
+            }
+          }
+        ]
+      },
+      "presentation": []
+    },
+    {
+      "id": "p:linear_algebra/f:linear_algebra/n:u",
+      "label": "u",
+      "name": "u",
+      "module": "linear_algebra",
+      "kind": "param",
+      "origin": {
+        "kind": "local"
+      },
+      "element": "quantity",
+      "axes": [
+        "F:2"
+      ],
+      "dimension": "Length",
+      "unit": "m",
+      "pub": false,
+      "deps": [],
+      "expr": "table[Fin(2)] {\n    1.0 m;\n    2.0 m;\n}",
+      "doc": null,
+      "source": {
+        "file": "linear_algebra.gcl",
+        "line": 45,
+        "expr_range": {
+          "start": {
+            "line": 44,
+            "character": 26
+          },
+          "end": {
+            "line": 47,
+            "character": 1
+          }
+        },
+        "cells": [
+          {
+            "keys": [
+              "#0"
+            ],
+            "range": {
+              "start": {
+                "line": 45,
+                "character": 4
+              },
+              "end": {
+                "line": 45,
+                "character": 9
+              }
+            }
+          },
+          {
+            "keys": [
+              "#1"
+            ],
+            "range": {
+              "start": {
+                "line": 46,
+                "character": 4
+              },
+              "end": {
+                "line": 46,
+                "character": 9
+              }
+            }
+          }
+        ]
+      },
+      "value": {
+        "kind": "indexed",
+        "display": "[Fin(2)]",
+        "index": "Fin(2)",
+        "entries": [
+          {
+            "key": "#0",
+            "value": {
+              "kind": "quantity",
+              "display": "1 m",
+              "magnitude": "1",
+              "si_value": 1.0,
+              "unit": "m"
+            }
+          },
+          {
+            "key": "#1",
+            "value": {
+              "kind": "quantity",
+              "display": "2 m",
+              "magnitude": "2",
+              "si_value": 2.0,
+              "unit": "m"
+            }
+          }
+        ]
+      },
+      "presentation": []
+    },
+    {
+      "id": "p:linear_algebra/f:linear_algebra/n:v",
+      "label": "v",
+      "name": "v",
+      "module": "linear_algebra",
+      "kind": "param",
+      "origin": {
+        "kind": "local"
+      },
+      "element": "quantity",
+      "axes": [
+        "F:3"
+      ],
+      "dimension": "Time",
+      "unit": "s",
+      "pub": false,
+      "deps": [],
+      "expr": "table[Fin(3)] {\n    3.0 s;\n    4.0 s;\n    5.0 s;\n}",
+      "doc": null,
+      "source": {
+        "file": "linear_algebra.gcl",
+        "line": 49,
+        "expr_range": {
+          "start": {
+            "line": 48,
+            "character": 24
+          },
+          "end": {
+            "line": 52,
+            "character": 1
+          }
+        },
+        "cells": [
+          {
+            "keys": [
+              "#0"
+            ],
+            "range": {
+              "start": {
+                "line": 49,
+                "character": 4
+              },
+              "end": {
+                "line": 49,
+                "character": 9
+              }
+            }
+          },
+          {
+            "keys": [
+              "#1"
+            ],
+            "range": {
+              "start": {
+                "line": 50,
+                "character": 4
+              },
+              "end": {
+                "line": 50,
+                "character": 9
+              }
+            }
+          },
+          {
+            "keys": [
+              "#2"
+            ],
+            "range": {
+              "start": {
+                "line": 51,
+                "character": 4
+              },
+              "end": {
+                "line": 51,
+                "character": 9
+              }
+            }
+          }
+        ]
+      },
+      "value": {
+        "kind": "indexed",
+        "display": "[Fin(3)]",
+        "index": "Fin(3)",
+        "entries": [
+          {
+            "key": "#0",
+            "value": {
+              "kind": "quantity",
+              "display": "3 s",
+              "magnitude": "3",
+              "si_value": 3.0,
+              "unit": "s"
+            }
+          },
+          {
+            "key": "#1",
+            "value": {
+              "kind": "quantity",
+              "display": "4 s",
+              "magnitude": "4",
+              "si_value": 4.0,
+              "unit": "s"
+            }
+          },
+          {
+            "key": "#2",
+            "value": {
+              "kind": "quantity",
+              "display": "5 s",
+              "magnitude": "5",
+              "si_value": 5.0,
+              "unit": "s"
+            }
+          }
+        ]
+      },
+      "presentation": []
+    },
+    {
+      "id": "p:linear_algebra/f:linear_algebra/n:uv",
+      "label": "uv",
+      "name": "uv",
+      "module": "linear_algebra",
+      "kind": "node",
+      "origin": {
+        "kind": "local"
+      },
+      "element": "quantity",
+      "axes": [
+        "F:2",
+        "F:3"
+      ],
+      "dimension": "Length * Time",
+      "unit": "m*s",
+      "pub": false,
+      "deps": [
+        "p:linear_algebra/f:linear_algebra/n:u",
+        "p:linear_algebra/f:linear_algebra/n:v"
+      ],
+      "expr": "outer(@u, @v)",
+      "doc": null,
+      "source": {
+        "file": "linear_algebra.gcl",
+        "line": 54,
+        "expr_range": {
+          "start": {
+            "line": 53,
+            "character": 41
+          },
+          "end": {
+            "line": 53,
+            "character": 54
+          }
+        },
+        "cells": []
+      },
+      "value": {
+        "kind": "indexed",
+        "display": "[Fin(2)]",
+        "index": "Fin(2)",
+        "entries": [
+          {
+            "key": "#0",
+            "value": {
+              "kind": "indexed",
+              "display": "[Fin(3)]",
+              "index": "Fin(3)",
+              "entries": [
+                {
+                  "key": "#0",
+                  "value": {
+                    "kind": "quantity",
+                    "display": "3 m*s",
+                    "magnitude": "3",
+                    "si_value": 3.0,
+                    "unit": "m*s"
+                  }
+                },
+                {
+                  "key": "#1",
+                  "value": {
+                    "kind": "quantity",
+                    "display": "4 m*s",
+                    "magnitude": "4",
+                    "si_value": 4.0,
+                    "unit": "m*s"
+                  }
+                },
+                {
+                  "key": "#2",
+                  "value": {
+                    "kind": "quantity",
+                    "display": "5 m*s",
+                    "magnitude": "5",
+                    "si_value": 5.0,
+                    "unit": "m*s"
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "key": "#1",
+            "value": {
+              "kind": "indexed",
+              "display": "[Fin(3)]",
+              "index": "Fin(3)",
+              "entries": [
+                {
+                  "key": "#0",
+                  "value": {
+                    "kind": "quantity",
+                    "display": "6 m*s",
+                    "magnitude": "6",
+                    "si_value": 6.0,
+                    "unit": "m*s"
+                  }
+                },
+                {
+                  "key": "#1",
+                  "value": {
+                    "kind": "quantity",
+                    "display": "8 m*s",
+                    "magnitude": "8",
+                    "si_value": 8.0,
+                    "unit": "m*s"
+                  }
+                },
+                {
+                  "key": "#2",
+                  "value": {
+                    "kind": "quantity",
+                    "display": "10 m*s",
+                    "magnitude": "10",
+                    "si_value": 10.0,
+                    "unit": "m*s"
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      },
+      "presentation": []
+    },
+    {
+      "id": "p:linear_algebra/f:linear_algebra/n:rhs",
+      "label": "rhs",
+      "name": "rhs",
+      "module": "linear_algebra",
+      "kind": "param",
+      "origin": {
+        "kind": "local"
+      },
+      "element": "quantity",
+      "axes": [
+        "F:2"
+      ],
+      "dimension": "Area",
+      "unit": "m^2",
+      "pub": false,
+      "deps": [],
+      "expr": "table[Fin(2)] {\n     5.0 m^2;\n    11.0 m^2;\n}",
+      "doc": null,
+      "source": {
+        "file": "linear_algebra.gcl",
+        "line": 56,
+        "expr_range": {
+          "start": {
+            "line": 55,
+            "character": 26
+          },
+          "end": {
+            "line": 58,
+            "character": 1
+          }
+        },
+        "cells": [
+          {
+            "keys": [
+              "#0"
+            ],
+            "range": {
+              "start": {
+                "line": 56,
+                "character": 5
+              },
+              "end": {
+                "line": 56,
+                "character": 12
+              }
+            }
+          },
+          {
+            "keys": [
+              "#1"
+            ],
+            "range": {
+              "start": {
+                "line": 57,
+                "character": 4
+              },
+              "end": {
+                "line": 57,
+                "character": 12
+              }
+            }
+          }
+        ]
+      },
+      "value": {
+        "kind": "indexed",
+        "display": "[Fin(2)]",
+        "index": "Fin(2)",
+        "entries": [
+          {
+            "key": "#0",
+            "value": {
+              "kind": "quantity",
+              "display": "5 m^2",
+              "magnitude": "5",
+              "si_value": 5.0,
+              "unit": "m^2"
+            }
+          },
+          {
+            "key": "#1",
+            "value": {
+              "kind": "quantity",
+              "display": "11 m^2",
+              "magnitude": "11",
+              "si_value": 11.0,
+              "unit": "m^2"
+            }
+          }
+        ]
+      },
+      "presentation": []
+    },
+    {
+      "id": "p:linear_algebra/f:linear_algebra/n:solution",
+      "label": "solution",
+      "name": "solution",
+      "module": "linear_algebra",
+      "kind": "node",
+      "origin": {
+        "kind": "local"
+      },
+      "element": "quantity",
+      "axes": [
+        "F:2"
+      ],
+      "dimension": "Length",
+      "unit": "m",
+      "pub": false,
+      "deps": [
+        "p:linear_algebra/f:linear_algebra/n:rhs",
+        "p:linear_algebra/f:linear_algebra/n:square"
+      ],
+      "expr": "solve(@square, @rhs)",
+      "doc": null,
+      "source": {
+        "file": "linear_algebra.gcl",
+        "line": 60,
+        "expr_range": {
+          "start": {
+            "line": 59,
+            "character": 32
+          },
+          "end": {
+            "line": 59,
+            "character": 52
+          }
+        },
+        "cells": []
+      },
+      "value": {
+        "kind": "indexed",
+        "display": "[Fin(2)]",
+        "index": "Fin(2)",
+        "entries": [
+          {
+            "key": "#0",
+            "value": {
+              "kind": "quantity",
+              "display": "1 m",
+              "magnitude": "1",
+              "si_value": 1.0,
+              "unit": "m"
+            }
+          },
+          {
+            "key": "#1",
+            "value": {
+              "kind": "quantity",
+              "display": "2 m",
+              "magnitude": "2",
+              "si_value": 2.0,
+              "unit": "m"
+            }
+          }
+        ]
+      },
+      "presentation": []
+    },
+    {
+      "id": "p:linear_algebra/f:linear_algebra/n:square_inverse",
+      "label": "square_inverse",
+      "name": "square_inverse",
+      "module": "linear_algebra",
+      "kind": "node",
+      "origin": {
+        "kind": "local"
+      },
+      "element": "quantity",
+      "axes": [
+        "F:2",
+        "F:2"
+      ],
+      "dimension": "Length^-1",
+      "unit": "m^-1",
+      "pub": false,
+      "deps": [
+        "p:linear_algebra/f:linear_algebra/n:square"
+      ],
+      "expr": "inverse(@square)",
+      "doc": null,
+      "source": {
+        "file": "linear_algebra.gcl",
+        "line": 61,
+        "expr_range": {
+          "start": {
+            "line": 60,
+            "character": 49
+          },
+          "end": {
+            "line": 60,
+            "character": 65
+          }
+        },
+        "cells": []
+      },
+      "value": {
+        "kind": "indexed",
+        "display": "[Fin(2)]",
+        "index": "Fin(2)",
+        "entries": [
+          {
+            "key": "#0",
+            "value": {
+              "kind": "indexed",
+              "display": "[Fin(2)]",
+              "index": "Fin(2)",
+              "entries": [
+                {
+                  "key": "#0",
+                  "value": {
+                    "kind": "quantity",
+                    "display": "-2 m^-1",
+                    "magnitude": "-2",
+                    "si_value": -1.9999999999999998,
+                    "unit": "m^-1"
+                  }
+                },
+                {
+                  "key": "#1",
+                  "value": {
+                    "kind": "quantity",
+                    "display": "1 m^-1",
+                    "magnitude": "1",
+                    "si_value": 1.0,
+                    "unit": "m^-1"
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "key": "#1",
+            "value": {
+              "kind": "indexed",
+              "display": "[Fin(2)]",
+              "index": "Fin(2)",
+              "entries": [
+                {
+                  "key": "#0",
+                  "value": {
+                    "kind": "quantity",
+                    "display": "1.5 m^-1",
+                    "magnitude": "1.5",
+                    "si_value": 1.4999999999999998,
+                    "unit": "m^-1"
+                  }
+                },
+                {
+                  "key": "#1",
+                  "value": {
+                    "kind": "quantity",
+                    "display": "-0.5 m^-1",
+                    "magnitude": "-0.5",
+                    "si_value": -0.49999999999999994,
+                    "unit": "m^-1"
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      },
+      "presentation": []
+    },
+    {
+      "id": "p:linear_algebra/f:linear_algebra/n:square_det",
+      "label": "square_det",
+      "name": "square_det",
+      "module": "linear_algebra",
+      "kind": "node",
+      "origin": {
+        "kind": "local"
+      },
+      "element": "quantity",
+      "axes": [],
+      "dimension": "Area",
+      "unit": "m^2",
+      "pub": false,
+      "deps": [
+        "p:linear_algebra/f:linear_algebra/n:square"
+      ],
+      "expr": "det(@square)",
+      "doc": null,
+      "source": {
+        "file": "linear_algebra.gcl",
+        "line": 62,
+        "expr_range": {
+          "start": {
+            "line": 61,
+            "character": 24
+          },
+          "end": {
+            "line": 61,
+            "character": 36
+          }
+        },
+        "cells": []
+      },
+      "value": {
+        "kind": "quantity",
+        "display": "-2 m^2",
+        "magnitude": "-2",
+        "si_value": -2.0,
+        "unit": "m^2"
+      },
+      "presentation": []
+    },
+    {
+      "id": "p:linear_algebra/f:linear_algebra/n:inverse_identity_00",
+      "label": "inverse_identity_00",
+      "name": "inverse_identity_00",
+      "module": "linear_algebra",
+      "kind": "node",
+      "origin": {
+        "kind": "local"
+      },
+      "element": "quantity",
+      "axes": [],
+      "dimension": "Dimensionless",
+      "unit": null,
+      "pub": false,
+      "deps": [
+        "p:linear_algebra/f:linear_algebra/n:square",
+        "p:linear_algebra/f:linear_algebra/n:square_inverse"
+      ],
+      "expr": "@square_inverse[0, 0] * @square[0, 0] + @square_inverse[0, 1] * @square[1, 0]",
+      "doc": null,
+      "source": {
+        "file": "linear_algebra.gcl",
+        "line": 63,
+        "expr_range": {
+          "start": {
+            "line": 62,
+            "character": 42
+          },
+          "end": {
+            "line": 62,
+            "character": 119
+          }
+        },
+        "cells": []
+      },
+      "value": {
+        "kind": "quantity",
+        "display": "1",
+        "magnitude": "1",
+        "si_value": 1.0000000000000002,
+        "unit": null
+      },
+      "presentation": []
+    },
+    {
+      "id": "p:linear_algebra/f:linear_algebra/n:dot_result",
+      "label": "dot_result",
+      "name": "dot_result",
+      "module": "linear_algebra",
+      "kind": "assert",
+      "origin": {
+        "kind": "local"
+      },
+      "element": "bool",
+      "axes": [],
+      "dimension": "Bool",
+      "unit": null,
+      "pub": false,
+      "deps": [
+        "p:linear_algebra/f:linear_algebra/n:dot_ab"
+      ],
+      "expr": "@dot_ab == 32.0 m",
+      "doc": null,
+      "source": {
+        "file": "linear_algebra.gcl",
+        "line": 65,
+        "expr_range": {
+          "start": {
+            "line": 64,
+            "character": 20
+          },
+          "end": {
+            "line": 64,
+            "character": 37
+          }
+        },
+        "cells": []
+      },
+      "value": {
+        "kind": "bool",
+        "display": "PASS",
+        "value": true
+      },
+      "presentation": []
+    },
+    {
+      "id": "p:linear_algebra/f:linear_algebra/n:matmul_00",
+      "label": "matmul_00",
+      "name": "matmul_00",
+      "module": "linear_algebra",
+      "kind": "assert",
+      "origin": {
+        "kind": "local"
+      },
+      "element": "bool",
+      "axes": [],
+      "dimension": "Bool",
+      "unit": null,
+      "pub": false,
+      "deps": [
+        "p:linear_algebra/f:linear_algebra/n:matrix_product"
+      ],
+      "expr": "@matrix_product[0, 0] == 58.0 m",
+      "doc": null,
+      "source": {
+        "file": "linear_algebra.gcl",
+        "line": 66,
+        "expr_range": {
+          "start": {
+            "line": 65,
+            "character": 19
+          },
+          "end": {
+            "line": 65,
+            "character": 50
+          }
+        },
+        "cells": []
+      },
+      "value": {
+        "kind": "bool",
+        "display": "PASS",
+        "value": true
+      },
+      "presentation": []
+    },
+    {
+      "id": "p:linear_algebra/f:linear_algebra/n:matmul_11",
+      "label": "matmul_11",
+      "name": "matmul_11",
+      "module": "linear_algebra",
+      "kind": "assert",
+      "origin": {
+        "kind": "local"
+      },
+      "element": "bool",
+      "axes": [],
+      "dimension": "Bool",
+      "unit": null,
+      "pub": false,
+      "deps": [
+        "p:linear_algebra/f:linear_algebra/n:matrix_product"
+      ],
+      "expr": "@matrix_product[1, 1] == 154.0 m",
+      "doc": null,
+      "source": {
+        "file": "linear_algebra.gcl",
+        "line": 67,
+        "expr_range": {
+          "start": {
+            "line": 66,
+            "character": 19
+          },
+          "end": {
+            "line": 66,
+            "character": 51
+          }
+        },
+        "cells": []
+      },
+      "value": {
+        "kind": "bool",
+        "display": "PASS",
+        "value": true
+      },
+      "presentation": []
+    },
+    {
+      "id": "p:linear_algebra/f:linear_algebra/n:transpose_20",
+      "label": "transpose_20",
+      "name": "transpose_20",
+      "module": "linear_algebra",
+      "kind": "assert",
+      "origin": {
+        "kind": "local"
+      },
+      "element": "bool",
+      "axes": [],
+      "dimension": "Bool",
+      "unit": null,
+      "pub": false,
+      "deps": [
+        "p:linear_algebra/f:linear_algebra/n:A_t"
+      ],
+      "expr": "@A_t[2, 0] == 3.0 m",
+      "doc": null,
+      "source": {
+        "file": "linear_algebra.gcl",
+        "line": 68,
+        "expr_range": {
+          "start": {
+            "line": 67,
+            "character": 22
+          },
+          "end": {
+            "line": 67,
+            "character": 41
+          }
+        },
+        "cells": []
+      },
+      "value": {
+        "kind": "bool",
+        "display": "PASS",
+        "value": true
+      },
+      "presentation": []
+    },
+    {
+      "id": "p:linear_algebra/f:linear_algebra/n:trace_result",
+      "label": "trace_result",
+      "name": "trace_result",
+      "module": "linear_algebra",
+      "kind": "assert",
+      "origin": {
+        "kind": "local"
+      },
+      "element": "bool",
+      "axes": [],
+      "dimension": "Bool",
+      "unit": null,
+      "pub": false,
+      "deps": [
+        "p:linear_algebra/f:linear_algebra/n:square_trace"
+      ],
+      "expr": "@square_trace == 5.0 m",
+      "doc": null,
+      "source": {
+        "file": "linear_algebra.gcl",
+        "line": 69,
+        "expr_range": {
+          "start": {
+            "line": 68,
+            "character": 22
+          },
+          "end": {
+            "line": 68,
+            "character": 44
+          }
+        },
+        "cells": []
+      },
+      "value": {
+        "kind": "bool",
+        "display": "PASS",
+        "value": true
+      },
+      "presentation": []
+    },
+    {
+      "id": "p:linear_algebra/f:linear_algebra/n:norm_result",
+      "label": "norm_result",
+      "name": "norm_result",
+      "module": "linear_algebra",
+      "kind": "assert",
+      "origin": {
+        "kind": "local"
+      },
+      "element": "bool",
+      "axes": [],
+      "dimension": "Bool",
+      "unit": null,
+      "pub": false,
+      "deps": [
+        "p:linear_algebra/f:linear_algebra/n:a_norm"
+      ],
+      "expr": "@a_norm ~= 3.7416573867739413 m +/- 1.0e-12 m",
+      "doc": null,
+      "source": {
+        "file": "linear_algebra.gcl",
+        "line": 70,
+        "expr_range": {
+          "start": {
+            "line": 69,
+            "character": 21
+          },
+          "end": {
+            "line": 69,
+            "character": 66
+          }
+        },
+        "cells": []
+      },
+      "value": {
+        "kind": "bool",
+        "display": "PASS",
+        "value": true
+      },
+      "presentation": []
+    },
+    {
+      "id": "p:linear_algebra/f:linear_algebra/n:cross_z",
+      "label": "cross_z",
+      "name": "cross_z",
+      "module": "linear_algebra",
+      "kind": "assert",
+      "origin": {
+        "kind": "local"
+      },
+      "element": "bool",
+      "axes": [],
+      "dimension": "Bool",
+      "unit": null,
+      "pub": false,
+      "deps": [
+        "p:linear_algebra/f:linear_algebra/n:z_axis"
+      ],
+      "expr": "@z_axis[2] == 1.0 m",
+      "doc": null,
+      "source": {
+        "file": "linear_algebra.gcl",
+        "line": 71,
+        "expr_range": {
+          "start": {
+            "line": 70,
+            "character": 17
+          },
+          "end": {
+            "line": 70,
+            "character": 36
+          }
+        },
+        "cells": []
+      },
+      "value": {
+        "kind": "bool",
+        "display": "PASS",
+        "value": true
+      },
+      "presentation": []
+    },
+    {
+      "id": "p:linear_algebra/f:linear_algebra/n:outer_12",
+      "label": "outer_12",
+      "name": "outer_12",
+      "module": "linear_algebra",
+      "kind": "assert",
+      "origin": {
+        "kind": "local"
+      },
+      "element": "bool",
+      "axes": [],
+      "dimension": "Bool",
+      "unit": null,
+      "pub": false,
+      "deps": [
+        "p:linear_algebra/f:linear_algebra/n:uv"
+      ],
+      "expr": "@uv[1, 2] == 10.0 m * s",
+      "doc": null,
+      "source": {
+        "file": "linear_algebra.gcl",
+        "line": 72,
+        "expr_range": {
+          "start": {
+            "line": 71,
+            "character": 18
+          },
+          "end": {
+            "line": 71,
+            "character": 41
+          }
+        },
+        "cells": []
+      },
+      "value": {
+        "kind": "bool",
+        "display": "PASS",
+        "value": true
+      },
+      "presentation": []
+    },
+    {
+      "id": "p:linear_algebra/f:linear_algebra/n:solve_0",
+      "label": "solve_0",
+      "name": "solve_0",
+      "module": "linear_algebra",
+      "kind": "assert",
+      "origin": {
+        "kind": "local"
+      },
+      "element": "bool",
+      "axes": [],
+      "dimension": "Bool",
+      "unit": null,
+      "pub": false,
+      "deps": [
+        "p:linear_algebra/f:linear_algebra/n:solution"
+      ],
+      "expr": "@solution[0] ~= 1.0 m +/- 1.0e-12 m",
+      "doc": null,
+      "source": {
+        "file": "linear_algebra.gcl",
+        "line": 73,
+        "expr_range": {
+          "start": {
+            "line": 72,
+            "character": 17
+          },
+          "end": {
+            "line": 72,
+            "character": 52
+          }
+        },
+        "cells": []
+      },
+      "value": {
+        "kind": "bool",
+        "display": "PASS",
+        "value": true
+      },
+      "presentation": []
+    },
+    {
+      "id": "p:linear_algebra/f:linear_algebra/n:solve_1",
+      "label": "solve_1",
+      "name": "solve_1",
+      "module": "linear_algebra",
+      "kind": "assert",
+      "origin": {
+        "kind": "local"
+      },
+      "element": "bool",
+      "axes": [],
+      "dimension": "Bool",
+      "unit": null,
+      "pub": false,
+      "deps": [
+        "p:linear_algebra/f:linear_algebra/n:solution"
+      ],
+      "expr": "@solution[1] ~= 2.0 m +/- 1.0e-12 m",
+      "doc": null,
+      "source": {
+        "file": "linear_algebra.gcl",
+        "line": 74,
+        "expr_range": {
+          "start": {
+            "line": 73,
+            "character": 17
+          },
+          "end": {
+            "line": 73,
+            "character": 52
+          }
+        },
+        "cells": []
+      },
+      "value": {
+        "kind": "bool",
+        "display": "PASS",
+        "value": true
+      },
+      "presentation": []
+    },
+    {
+      "id": "p:linear_algebra/f:linear_algebra/n:inverse_result",
+      "label": "inverse_result",
+      "name": "inverse_result",
+      "module": "linear_algebra",
+      "kind": "assert",
+      "origin": {
+        "kind": "local"
+      },
+      "element": "bool",
+      "axes": [],
+      "dimension": "Bool",
+      "unit": null,
+      "pub": false,
+      "deps": [
+        "p:linear_algebra/f:linear_algebra/n:inverse_identity_00"
+      ],
+      "expr": "@inverse_identity_00 ~= 1.0 +/- 1.0e-12",
+      "doc": null,
+      "source": {
+        "file": "linear_algebra.gcl",
+        "line": 75,
+        "expr_range": {
+          "start": {
+            "line": 74,
+            "character": 24
+          },
+          "end": {
+            "line": 74,
+            "character": 63
+          }
+        },
+        "cells": []
+      },
+      "value": {
+        "kind": "bool",
+        "display": "PASS",
+        "value": true
+      },
+      "presentation": []
+    },
+    {
+      "id": "p:linear_algebra/f:linear_algebra/n:determinant_result",
+      "label": "determinant_result",
+      "name": "determinant_result",
+      "module": "linear_algebra",
+      "kind": "assert",
+      "origin": {
+        "kind": "local"
+      },
+      "element": "bool",
+      "axes": [],
+      "dimension": "Bool",
+      "unit": null,
+      "pub": false,
+      "deps": [
+        "p:linear_algebra/f:linear_algebra/n:square_det"
+      ],
+      "expr": "@square_det ~= -2.0 m^2 +/- 1.0e-12 m^2",
+      "doc": null,
+      "source": {
+        "file": "linear_algebra.gcl",
+        "line": 76,
+        "expr_range": {
+          "start": {
+            "line": 75,
+            "character": 28
+          },
+          "end": {
+            "line": 75,
+            "character": 67
+          }
+        },
+        "cells": []
+      },
+      "value": {
+        "kind": "bool",
+        "display": "PASS",
+        "value": true
+      },
+      "presentation": []
+    }
+  ]
+}

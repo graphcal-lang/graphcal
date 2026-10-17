@@ -94,6 +94,9 @@ pub struct ConstEntry<P: BodyPhase> {
     pub type_ann: P::TypeAnnotation,
     pub(crate) expr: P::Expr,
     pub span: Span,
+    /// The source range of the expression after `=`, enclosing parentheses
+    /// included (the expression's own span excludes them).
+    pub definition_range: Span,
 }
 
 /// A `param` declaration with its optional default.
@@ -106,6 +109,9 @@ pub struct ParamEntry<P: BodyPhase> {
     pub type_ann: P::TypeAnnotation,
     pub default: Option<P::Expr>,
     pub span: Span,
+    /// The source range of the default after `=`, enclosing parentheses
+    /// included; present exactly when `default` is.
+    pub default_range: Option<Span>,
     /// Include overrides whose nominal dependencies must be checked after
     /// canonical type inference.
     pub(crate) override_reconciliations:
@@ -122,6 +128,9 @@ pub struct NodeEntry<P: BodyPhase> {
     pub type_ann: P::TypeAnnotation,
     pub definition: P::NodeDefinition,
     pub span: Span,
+    /// The source range of the definition after `=`, enclosing parentheses
+    /// included.
+    pub definition_range: Span,
 }
 
 /// An `assert` declaration.
@@ -133,6 +142,9 @@ pub struct AssertEntry<P: BodyPhase> {
     pub(crate) identity: ResolvedDeclName,
     pub body: P::AssertBody,
     pub span: Span,
+    /// The source range of the body after `=`, enclosing parentheses
+    /// included.
+    pub body_range: Span,
 }
 
 /// A `plot` declaration.

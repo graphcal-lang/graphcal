@@ -49,7 +49,7 @@ pub use module_path::ResolvedModuleTarget;
 use source_authority::{
     ModuleSourceAuthority, ProjectSources, SelectedPackage, SourceTree, fetch_source_snapshot,
 };
-use source_snapshot::{PackageFileKey, ParsedFile, ResolveFailure, file_stem};
+use source_snapshot::{ModuleRoot, PackageFileKey, ParsedFile, ResolveFailure, file_stem};
 
 use graphcal_package::{
     GitSourceId, LockedPackage, PackageInstanceId, PackageManifest, PackageResolveError,
@@ -345,9 +345,13 @@ impl LoadedProject {
             .collect();
         cancellation.checkpoint()?;
         let (source, source_id, ast) = parsed.into_parts();
+        let module_path = ModuleRoot::Standalone.module_path_of(&path);
         let loaded_file = LoadedFile::new(
-            path,
-            dag_id,
+            loaded_file::FileSite {
+                path,
+                dag_id,
+                module_path,
+            },
             source,
             source_id,
             ast,
@@ -355,6 +359,7 @@ impl LoadedProject {
             inline_dags,
         );
         Self::from_parts(
+            None,
             DependencyOrdered::root_only(loaded_file),
             sources,
             plugins,
@@ -627,11 +632,14 @@ fn load_project_with_budget_state<F: FileSystemReader>(
         });
     validate_plugin_call_policy(&files, &plugin_call_policy)?;
     cancellation.checkpoint()?;
-    let mut project = LoadedProject::from_parts(files, sources, plugins, plugin_call_policy)?;
-    project.root_source_dir = manifest
-        .as_ref()
-        .map(|manifest| manifest.source_dir.to_path_buf());
-    Ok(project)
+    LoadedProject::from_parts(
+        Some(project_root),
+        files,
+        sources,
+        plugins,
+        plugin_call_policy,
+    )
+    .map_err(Into::into)
 }
 
 /// Read the root package's plugin pins from `graphcal.lock`, when present.
@@ -693,7 +701,6 @@ fn load_locked_package_project<F: FileSystemReader>(
 ) -> Result<LoadedProject, Outcome<CompileError>> {
     cancellation.checkpoint()?;
     let root_policy = root_manifest.plugin_execution_policy.clone();
-    let root_source_dir = root_manifest.source_dir.to_path_buf();
     let context = PackageLoadContext::from_lockfile(
         project_root,
         root_manifest,
@@ -748,9 +755,14 @@ fn load_locked_package_project<F: FileSystemReader>(
     }
     validate_plugin_call_policy(&files, &plugin_call_policy)?;
     cancellation.checkpoint()?;
-    let mut project = LoadedProject::from_parts(files, sources, plugins, plugin_call_policy)?;
+    let mut project = LoadedProject::from_parts(
+        Some(project_root.to_path_buf()),
+        files,
+        sources,
+        plugins,
+        plugin_call_policy,
+    )?;
     project.package_closure = Some(context.closure);
-    project.root_source_dir = Some(root_source_dir);
     Ok(project)
 }
 
@@ -887,10 +899,17 @@ impl ModuleSourceAuthority for PackageLoadContext<'_> {
 
     fn tree(&self, package: &PackageInstanceId) -> Result<SourceTree<'_>, PackageAuthorityError> {
         let (root, reader) = self.authority_for(package)?;
+        let source_dir = self
+            .graph
+            .package(package)
+            .ok_or_else(|| PackageAuthorityError::MissingPackage(package.clone()))?
+            .source_dir
+            .join_to(root);
         Ok(SourceTree {
             reader,
             root,
             package: DagPackageId::new(package.as_str()),
+            module_root: ModuleRoot::SourceDir(source_dir),
         })
     }
 

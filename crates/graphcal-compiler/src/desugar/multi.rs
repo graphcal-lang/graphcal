@@ -50,18 +50,21 @@ pub(super) fn expand_multi_decl(multi: &MultiDecl) -> Vec<Declaration<Desugared>
                     name,
                     type_ann,
                     value: Some(value),
+                    value_range: Some(multi.table_expr_span),
                 }),
                 SlotKind::Node(visibility) => DeclKind::Node(NodeDecl {
                     visibility,
                     name,
                     type_ann,
                     definition: NodeDefinition::Formula(value),
+                    definition_range: multi.table_expr_span,
                 }),
                 SlotKind::ConstNode(visibility) => DeclKind::ConstNode(ConstNodeDecl {
                     visibility,
                     name,
                     type_ann,
                     value,
+                    value_range: multi.table_expr_span,
                 }),
             };
             Declaration {

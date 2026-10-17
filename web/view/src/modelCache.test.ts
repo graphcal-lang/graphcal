@@ -4,7 +4,7 @@ import { ModelCache } from "./modelCache.ts";
 
 function model(id: string, revision: number): ViewModel {
   return {
-    version: 0,
+    version: 1,
     module: { id, file: `src/${id}.gcl`, package: "p" },
     indexes: [],
     nodes: [
@@ -19,8 +19,10 @@ function model(id: string, revision: number): ViewModel {
         pub: true,
         deps: [],
         expr: String(revision),
-        reduce: null,
-        instance: null,
+        label: "x",
+        origin: { kind: "local" },
+        element: "quantity",
+        presentation: [],
         source: null,
         value: null,
       },

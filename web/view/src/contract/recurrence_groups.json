@@ -1,0 +1,1718 @@
+{
+  "version": 1,
+  "module": {
+    "id": "recurrence_groups",
+    "file": "recurrence_groups.gcl",
+    "package": "recurrence_groups"
+  },
+  "indexes": [
+    {
+      "id": "p:recurrence_groups/f:recurrence_groups/n:Region",
+      "name": "Region",
+      "module": "recurrence_groups",
+      "entries": [
+        {
+          "key": "North",
+          "display": "North"
+        },
+        {
+          "key": "South",
+          "display": "South"
+        }
+      ]
+    },
+    {
+      "id": "p:recurrence_groups/f:recurrence_groups/n:Step",
+      "name": "Step",
+      "module": "recurrence_groups",
+      "entries": [
+        {
+          "key": "#0",
+          "display": "0 s"
+        },
+        {
+          "key": "#1",
+          "display": "1 s"
+        },
+        {
+          "key": "#2",
+          "display": "2 s"
+        },
+        {
+          "key": "#3",
+          "display": "3 s"
+        }
+      ]
+    }
+  ],
+  "nodes": [
+    {
+      "id": "p:recurrence_groups/f:recurrence_groups/n:initial_state",
+      "label": "initial_state",
+      "name": "initial_state",
+      "module": "recurrence_groups",
+      "kind": "param",
+      "origin": {
+        "kind": "local"
+      },
+      "element": "quantity",
+      "axes": [],
+      "dimension": "Dimensionless",
+      "unit": null,
+      "pub": false,
+      "deps": [],
+      "expr": "1.0",
+      "doc": null,
+      "source": {
+        "file": "recurrence_groups.gcl",
+        "line": 9,
+        "expr_range": {
+          "start": {
+            "line": 8,
+            "character": 37
+          },
+          "end": {
+            "line": 8,
+            "character": 40
+          }
+        },
+        "cells": []
+      },
+      "value": {
+        "kind": "quantity",
+        "display": "1",
+        "magnitude": "1",
+        "si_value": 1.0,
+        "unit": null
+      },
+      "presentation": []
+    },
+    {
+      "id": "p:recurrence_groups/f:recurrence_groups/n:k",
+      "label": "k",
+      "name": "k",
+      "module": "recurrence_groups",
+      "kind": "param",
+      "origin": {
+        "kind": "local"
+      },
+      "element": "quantity",
+      "axes": [],
+      "dimension": "Dimensionless",
+      "unit": null,
+      "pub": false,
+      "deps": [],
+      "expr": "0.5",
+      "doc": null,
+      "source": {
+        "file": "recurrence_groups.gcl",
+        "line": 10,
+        "expr_range": {
+          "start": {
+            "line": 9,
+            "character": 25
+          },
+          "end": {
+            "line": 9,
+            "character": 28
+          }
+        },
+        "cells": []
+      },
+      "value": {
+        "kind": "quantity",
+        "display": "0.5",
+        "magnitude": "0.5",
+        "si_value": 0.5,
+        "unit": null
+      },
+      "presentation": []
+    },
+    {
+      "id": "p:recurrence_groups/f:recurrence_groups/n:action",
+      "label": "action",
+      "name": "action",
+      "module": "recurrence_groups",
+      "kind": "node",
+      "origin": {
+        "kind": "local"
+      },
+      "element": "quantity",
+      "axes": [
+        "p:recurrence_groups/f:recurrence_groups/n:Step"
+      ],
+      "dimension": "Dimensionless",
+      "unit": null,
+      "pub": false,
+      "deps": [
+        "p:recurrence_groups/f:recurrence_groups/n:k",
+        "p:recurrence_groups/f:recurrence_groups/n:state"
+      ],
+      "expr": "for t: Step { -@k * @state[t] }",
+      "doc": null,
+      "source": {
+        "file": "recurrence_groups.gcl",
+        "line": 11,
+        "expr_range": {
+          "start": {
+            "line": 10,
+            "character": 35
+          },
+          "end": {
+            "line": 10,
+            "character": 66
+          }
+        },
+        "cells": []
+      },
+      "value": {
+        "kind": "indexed",
+        "display": "[Step]",
+        "index": "Step",
+        "entries": [
+          {
+            "key": "#0",
+            "value": {
+              "kind": "quantity",
+              "display": "-0.5",
+              "magnitude": "-0.5",
+              "si_value": -0.5,
+              "unit": null
+            }
+          },
+          {
+            "key": "#1",
+            "value": {
+              "kind": "quantity",
+              "display": "-0.25",
+              "magnitude": "-0.25",
+              "si_value": -0.25,
+              "unit": null
+            }
+          },
+          {
+            "key": "#2",
+            "value": {
+              "kind": "quantity",
+              "display": "-0.125",
+              "magnitude": "-0.125",
+              "si_value": -0.125,
+              "unit": null
+            }
+          },
+          {
+            "key": "#3",
+            "value": {
+              "kind": "quantity",
+              "display": "-0.0625",
+              "magnitude": "-0.0625",
+              "si_value": -0.0625,
+              "unit": null
+            }
+          }
+        ]
+      },
+      "presentation": []
+    },
+    {
+      "id": "p:recurrence_groups/f:recurrence_groups/n:state",
+      "label": "state",
+      "name": "state",
+      "module": "recurrence_groups",
+      "kind": "node",
+      "origin": {
+        "kind": "local"
+      },
+      "element": "quantity",
+      "axes": [
+        "p:recurrence_groups/f:recurrence_groups/n:Step"
+      ],
+      "dimension": "Dimensionless",
+      "unit": null,
+      "pub": false,
+      "deps": [
+        "p:recurrence_groups/f:recurrence_groups/n:action",
+        "p:recurrence_groups/f:recurrence_groups/n:initial_state"
+      ],
+      "expr": "unfold(Step, @initial_state, |s, prev_t, t| s + @action[prev_t])",
+      "doc": null,
+      "source": {
+        "file": "recurrence_groups.gcl",
+        "line": 12,
+        "expr_range": {
+          "start": {
+            "line": 11,
+            "character": 34
+          },
+          "end": {
+            "line": 11,
+            "character": 98
+          }
+        },
+        "cells": []
+      },
+      "value": {
+        "kind": "indexed",
+        "display": "[Step]",
+        "index": "Step",
+        "entries": [
+          {
+            "key": "#0",
+            "value": {
+              "kind": "quantity",
+              "display": "1",
+              "magnitude": "1",
+              "si_value": 1.0,
+              "unit": null
+            }
+          },
+          {
+            "key": "#1",
+            "value": {
+              "kind": "quantity",
+              "display": "0.5",
+              "magnitude": "0.5",
+              "si_value": 0.5,
+              "unit": null
+            }
+          },
+          {
+            "key": "#2",
+            "value": {
+              "kind": "quantity",
+              "display": "0.25",
+              "magnitude": "0.25",
+              "si_value": 0.25,
+              "unit": null
+            }
+          },
+          {
+            "key": "#3",
+            "value": {
+              "kind": "quantity",
+              "display": "0.125",
+              "magnitude": "0.125",
+              "si_value": 0.125,
+              "unit": null
+            }
+          }
+        ]
+      },
+      "presentation": []
+    },
+    {
+      "id": "p:recurrence_groups/f:recurrence_groups/n:final_state",
+      "label": "final_state",
+      "name": "final_state",
+      "module": "recurrence_groups",
+      "kind": "node",
+      "origin": {
+        "kind": "local"
+      },
+      "element": "quantity",
+      "axes": [],
+      "dimension": "Dimensionless",
+      "unit": null,
+      "pub": false,
+      "deps": [
+        "p:recurrence_groups/f:recurrence_groups/n:state"
+      ],
+      "expr": "sum(@state)",
+      "doc": null,
+      "source": {
+        "file": "recurrence_groups.gcl",
+        "line": 13,
+        "expr_range": {
+          "start": {
+            "line": 12,
+            "character": 34
+          },
+          "end": {
+            "line": 12,
+            "character": 45
+          }
+        },
+        "cells": []
+      },
+      "value": {
+        "kind": "quantity",
+        "display": "1.875",
+        "magnitude": "1.875",
+        "si_value": 1.875,
+        "unit": null
+      },
+      "presentation": []
+    },
+    {
+      "id": "p:recurrence_groups/f:recurrence_groups/n:x_before",
+      "label": "x_before",
+      "name": "x_before",
+      "module": "recurrence_groups",
+      "kind": "param",
+      "origin": {
+        "kind": "local"
+      },
+      "element": "quantity",
+      "axes": [],
+      "dimension": "Dimensionless",
+      "unit": null,
+      "pub": false,
+      "deps": [],
+      "expr": "0.0",
+      "doc": null,
+      "source": {
+        "file": "recurrence_groups.gcl",
+        "line": 16,
+        "expr_range": {
+          "start": {
+            "line": 15,
+            "character": 32
+          },
+          "end": {
+            "line": 15,
+            "character": 35
+          }
+        },
+        "cells": []
+      },
+      "value": {
+        "kind": "quantity",
+        "display": "0",
+        "magnitude": "0",
+        "si_value": 0.0,
+        "unit": null
+      },
+      "presentation": []
+    },
+    {
+      "id": "p:recurrence_groups/f:recurrence_groups/n:x0",
+      "label": "x0",
+      "name": "x0",
+      "module": "recurrence_groups",
+      "kind": "param",
+      "origin": {
+        "kind": "local"
+      },
+      "element": "quantity",
+      "axes": [],
+      "dimension": "Dimensionless",
+      "unit": null,
+      "pub": false,
+      "deps": [],
+      "expr": "1.0",
+      "doc": null,
+      "source": {
+        "file": "recurrence_groups.gcl",
+        "line": 17,
+        "expr_range": {
+          "start": {
+            "line": 16,
+            "character": 26
+          },
+          "end": {
+            "line": 16,
+            "character": 29
+          }
+        },
+        "cells": []
+      },
+      "value": {
+        "kind": "quantity",
+        "display": "1",
+        "magnitude": "1",
+        "si_value": 1.0,
+        "unit": null
+      },
+      "presentation": []
+    },
+    {
+      "id": "p:recurrence_groups/f:recurrence_groups/n:prev_x",
+      "label": "prev_x",
+      "name": "prev_x",
+      "module": "recurrence_groups",
+      "kind": "node",
+      "origin": {
+        "kind": "local"
+      },
+      "element": "quantity",
+      "axes": [
+        "p:recurrence_groups/f:recurrence_groups/n:Step"
+      ],
+      "dimension": "Dimensionless",
+      "unit": null,
+      "pub": false,
+      "deps": [
+        "p:recurrence_groups/f:recurrence_groups/n:x",
+        "p:recurrence_groups/f:recurrence_groups/n:x_before"
+      ],
+      "expr": "unfold(Step, @x_before, |ignored, prev_t, t| @x[prev_t])",
+      "doc": null,
+      "source": {
+        "file": "recurrence_groups.gcl",
+        "line": 18,
+        "expr_range": {
+          "start": {
+            "line": 17,
+            "character": 35
+          },
+          "end": {
+            "line": 17,
+            "character": 91
+          }
+        },
+        "cells": []
+      },
+      "value": {
+        "kind": "indexed",
+        "display": "[Step]",
+        "index": "Step",
+        "entries": [
+          {
+            "key": "#0",
+            "value": {
+              "kind": "quantity",
+              "display": "0",
+              "magnitude": "0",
+              "si_value": 0.0,
+              "unit": null
+            }
+          },
+          {
+            "key": "#1",
+            "value": {
+              "kind": "quantity",
+              "display": "1",
+              "magnitude": "1",
+              "si_value": 1.0,
+              "unit": null
+            }
+          },
+          {
+            "key": "#2",
+            "value": {
+              "kind": "quantity",
+              "display": "1",
+              "magnitude": "1",
+              "si_value": 1.0,
+              "unit": null
+            }
+          },
+          {
+            "key": "#3",
+            "value": {
+              "kind": "quantity",
+              "display": "2",
+              "magnitude": "2",
+              "si_value": 2.0,
+              "unit": null
+            }
+          }
+        ]
+      },
+      "presentation": []
+    },
+    {
+      "id": "p:recurrence_groups/f:recurrence_groups/n:x",
+      "label": "x",
+      "name": "x",
+      "module": "recurrence_groups",
+      "kind": "node",
+      "origin": {
+        "kind": "local"
+      },
+      "element": "quantity",
+      "axes": [
+        "p:recurrence_groups/f:recurrence_groups/n:Step"
+      ],
+      "dimension": "Dimensionless",
+      "unit": null,
+      "pub": false,
+      "deps": [
+        "p:recurrence_groups/f:recurrence_groups/n:prev_x",
+        "p:recurrence_groups/f:recurrence_groups/n:x0"
+      ],
+      "expr": "unfold(Step, @x0, |s, prev_t, t| s + @prev_x[prev_t])",
+      "doc": null,
+      "source": {
+        "file": "recurrence_groups.gcl",
+        "line": 19,
+        "expr_range": {
+          "start": {
+            "line": 18,
+            "character": 30
+          },
+          "end": {
+            "line": 18,
+            "character": 83
+          }
+        },
+        "cells": []
+      },
+      "value": {
+        "kind": "indexed",
+        "display": "[Step]",
+        "index": "Step",
+        "entries": [
+          {
+            "key": "#0",
+            "value": {
+              "kind": "quantity",
+              "display": "1",
+              "magnitude": "1",
+              "si_value": 1.0,
+              "unit": null
+            }
+          },
+          {
+            "key": "#1",
+            "value": {
+              "kind": "quantity",
+              "display": "1",
+              "magnitude": "1",
+              "si_value": 1.0,
+              "unit": null
+            }
+          },
+          {
+            "key": "#2",
+            "value": {
+              "kind": "quantity",
+              "display": "2",
+              "magnitude": "2",
+              "si_value": 2.0,
+              "unit": null
+            }
+          },
+          {
+            "key": "#3",
+            "value": {
+              "kind": "quantity",
+              "display": "3",
+              "magnitude": "3",
+              "si_value": 3.0,
+              "unit": null
+            }
+          }
+        ]
+      },
+      "presentation": []
+    },
+    {
+      "id": "p:recurrence_groups/f:recurrence_groups/n:pop0",
+      "label": "pop0",
+      "name": "pop0",
+      "module": "recurrence_groups",
+      "kind": "param",
+      "origin": {
+        "kind": "local"
+      },
+      "element": "quantity",
+      "axes": [
+        "p:recurrence_groups/f:recurrence_groups/n:Region"
+      ],
+      "dimension": "Dimensionless",
+      "unit": null,
+      "pub": false,
+      "deps": [],
+      "expr": "{\n    Region#North: 100.0,\n    Region#South: 50.0,\n}",
+      "doc": null,
+      "source": {
+        "file": "recurrence_groups.gcl",
+        "line": 22,
+        "expr_range": {
+          "start": {
+            "line": 21,
+            "character": 36
+          },
+          "end": {
+            "line": 24,
+            "character": 1
+          }
+        },
+        "cells": [
+          {
+            "keys": [
+              "North"
+            ],
+            "range": {
+              "start": {
+                "line": 22,
+                "character": 18
+              },
+              "end": {
+                "line": 22,
+                "character": 23
+              }
+            }
+          },
+          {
+            "keys": [
+              "South"
+            ],
+            "range": {
+              "start": {
+                "line": 23,
+                "character": 18
+              },
+              "end": {
+                "line": 23,
+                "character": 22
+              }
+            }
+          }
+        ]
+      },
+      "value": {
+        "kind": "indexed",
+        "display": "[Region]",
+        "index": "Region",
+        "entries": [
+          {
+            "key": "North",
+            "value": {
+              "kind": "quantity",
+              "display": "100",
+              "magnitude": "100",
+              "si_value": 100.0,
+              "unit": null
+            }
+          },
+          {
+            "key": "South",
+            "value": {
+              "kind": "quantity",
+              "display": "50",
+              "magnitude": "50",
+              "si_value": 50.0,
+              "unit": null
+            }
+          }
+        ]
+      },
+      "presentation": []
+    },
+    {
+      "id": "p:recurrence_groups/f:recurrence_groups/n:rate",
+      "label": "rate",
+      "name": "rate",
+      "module": "recurrence_groups",
+      "kind": "param",
+      "origin": {
+        "kind": "local"
+      },
+      "element": "quantity",
+      "axes": [
+        "p:recurrence_groups/f:recurrence_groups/n:Region"
+      ],
+      "dimension": "Dimensionless",
+      "unit": null,
+      "pub": false,
+      "deps": [],
+      "expr": "{\n    Region#North: 0.1,\n    Region#South: 0.2,\n}",
+      "doc": null,
+      "source": {
+        "file": "recurrence_groups.gcl",
+        "line": 26,
+        "expr_range": {
+          "start": {
+            "line": 25,
+            "character": 36
+          },
+          "end": {
+            "line": 28,
+            "character": 1
+          }
+        },
+        "cells": [
+          {
+            "keys": [
+              "North"
+            ],
+            "range": {
+              "start": {
+                "line": 26,
+                "character": 18
+              },
+              "end": {
+                "line": 26,
+                "character": 21
+              }
+            }
+          },
+          {
+            "keys": [
+              "South"
+            ],
+            "range": {
+              "start": {
+                "line": 27,
+                "character": 18
+              },
+              "end": {
+                "line": 27,
+                "character": 21
+              }
+            }
+          }
+        ]
+      },
+      "value": {
+        "kind": "indexed",
+        "display": "[Region]",
+        "index": "Region",
+        "entries": [
+          {
+            "key": "North",
+            "value": {
+              "kind": "quantity",
+              "display": "0.1",
+              "magnitude": "0.1",
+              "si_value": 0.1,
+              "unit": null
+            }
+          },
+          {
+            "key": "South",
+            "value": {
+              "kind": "quantity",
+              "display": "0.2",
+              "magnitude": "0.2",
+              "si_value": 0.2,
+              "unit": null
+            }
+          }
+        ]
+      },
+      "presentation": []
+    },
+    {
+      "id": "p:recurrence_groups/f:recurrence_groups/n:pop",
+      "label": "pop",
+      "name": "pop",
+      "module": "recurrence_groups",
+      "kind": "node",
+      "origin": {
+        "kind": "local"
+      },
+      "element": "quantity",
+      "axes": [
+        "p:recurrence_groups/f:recurrence_groups/n:Step",
+        "p:recurrence_groups/f:recurrence_groups/n:Region"
+      ],
+      "dimension": "Dimensionless",
+      "unit": null,
+      "pub": false,
+      "deps": [
+        "p:recurrence_groups/f:recurrence_groups/n:births",
+        "p:recurrence_groups/f:recurrence_groups/n:pop0"
+      ],
+      "expr": "unfold(\n    Step,\n    @pop0,\n    |p, prev_t, t| for r: Region { p[r] + @births[prev_t, r] }\n)",
+      "doc": null,
+      "source": {
+        "file": "recurrence_groups.gcl",
+        "line": 30,
+        "expr_range": {
+          "start": {
+            "line": 29,
+            "character": 40
+          },
+          "end": {
+            "line": 33,
+            "character": 1
+          }
+        },
+        "cells": []
+      },
+      "value": {
+        "kind": "indexed",
+        "display": "[Step]",
+        "index": "Step",
+        "entries": [
+          {
+            "key": "#0",
+            "value": {
+              "kind": "indexed",
+              "display": "[Region]",
+              "index": "Region",
+              "entries": [
+                {
+                  "key": "North",
+                  "value": {
+                    "kind": "quantity",
+                    "display": "100",
+                    "magnitude": "100",
+                    "si_value": 100.0,
+                    "unit": null
+                  }
+                },
+                {
+                  "key": "South",
+                  "value": {
+                    "kind": "quantity",
+                    "display": "50",
+                    "magnitude": "50",
+                    "si_value": 50.0,
+                    "unit": null
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "key": "#1",
+            "value": {
+              "kind": "indexed",
+              "display": "[Region]",
+              "index": "Region",
+              "entries": [
+                {
+                  "key": "North",
+                  "value": {
+                    "kind": "quantity",
+                    "display": "110",
+                    "magnitude": "110",
+                    "si_value": 110.0,
+                    "unit": null
+                  }
+                },
+                {
+                  "key": "South",
+                  "value": {
+                    "kind": "quantity",
+                    "display": "60",
+                    "magnitude": "60",
+                    "si_value": 60.0,
+                    "unit": null
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "key": "#2",
+            "value": {
+              "kind": "indexed",
+              "display": "[Region]",
+              "index": "Region",
+              "entries": [
+                {
+                  "key": "North",
+                  "value": {
+                    "kind": "quantity",
+                    "display": "121",
+                    "magnitude": "121",
+                    "si_value": 121.0,
+                    "unit": null
+                  }
+                },
+                {
+                  "key": "South",
+                  "value": {
+                    "kind": "quantity",
+                    "display": "72",
+                    "magnitude": "72",
+                    "si_value": 72.0,
+                    "unit": null
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "key": "#3",
+            "value": {
+              "kind": "indexed",
+              "display": "[Region]",
+              "index": "Region",
+              "entries": [
+                {
+                  "key": "North",
+                  "value": {
+                    "kind": "quantity",
+                    "display": "133.1",
+                    "magnitude": "133.1",
+                    "si_value": 133.1,
+                    "unit": null
+                  }
+                },
+                {
+                  "key": "South",
+                  "value": {
+                    "kind": "quantity",
+                    "display": "86.4",
+                    "magnitude": "86.4",
+                    "si_value": 86.4,
+                    "unit": null
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      },
+      "presentation": []
+    },
+    {
+      "id": "p:recurrence_groups/f:recurrence_groups/n:births",
+      "label": "births",
+      "name": "births",
+      "module": "recurrence_groups",
+      "kind": "node",
+      "origin": {
+        "kind": "local"
+      },
+      "element": "quantity",
+      "axes": [
+        "p:recurrence_groups/f:recurrence_groups/n:Step",
+        "p:recurrence_groups/f:recurrence_groups/n:Region"
+      ],
+      "dimension": "Dimensionless",
+      "unit": null,
+      "pub": false,
+      "deps": [
+        "p:recurrence_groups/f:recurrence_groups/n:pop",
+        "p:recurrence_groups/f:recurrence_groups/n:rate"
+      ],
+      "expr": "for t: Step, r: Region { @rate[r] * @pop[t, r] }",
+      "doc": null,
+      "source": {
+        "file": "recurrence_groups.gcl",
+        "line": 35,
+        "expr_range": {
+          "start": {
+            "line": 34,
+            "character": 43
+          },
+          "end": {
+            "line": 34,
+            "character": 91
+          }
+        },
+        "cells": []
+      },
+      "value": {
+        "kind": "indexed",
+        "display": "[Step]",
+        "index": "Step",
+        "entries": [
+          {
+            "key": "#0",
+            "value": {
+              "kind": "indexed",
+              "display": "[Region]",
+              "index": "Region",
+              "entries": [
+                {
+                  "key": "North",
+                  "value": {
+                    "kind": "quantity",
+                    "display": "10",
+                    "magnitude": "10",
+                    "si_value": 10.0,
+                    "unit": null
+                  }
+                },
+                {
+                  "key": "South",
+                  "value": {
+                    "kind": "quantity",
+                    "display": "10",
+                    "magnitude": "10",
+                    "si_value": 10.0,
+                    "unit": null
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "key": "#1",
+            "value": {
+              "kind": "indexed",
+              "display": "[Region]",
+              "index": "Region",
+              "entries": [
+                {
+                  "key": "North",
+                  "value": {
+                    "kind": "quantity",
+                    "display": "11",
+                    "magnitude": "11",
+                    "si_value": 11.0,
+                    "unit": null
+                  }
+                },
+                {
+                  "key": "South",
+                  "value": {
+                    "kind": "quantity",
+                    "display": "12",
+                    "magnitude": "12",
+                    "si_value": 12.0,
+                    "unit": null
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "key": "#2",
+            "value": {
+              "kind": "indexed",
+              "display": "[Region]",
+              "index": "Region",
+              "entries": [
+                {
+                  "key": "North",
+                  "value": {
+                    "kind": "quantity",
+                    "display": "12.1",
+                    "magnitude": "12.1",
+                    "si_value": 12.100000000000001,
+                    "unit": null
+                  }
+                },
+                {
+                  "key": "South",
+                  "value": {
+                    "kind": "quantity",
+                    "display": "14.4",
+                    "magnitude": "14.4",
+                    "si_value": 14.4,
+                    "unit": null
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "key": "#3",
+            "value": {
+              "kind": "indexed",
+              "display": "[Region]",
+              "index": "Region",
+              "entries": [
+                {
+                  "key": "North",
+                  "value": {
+                    "kind": "quantity",
+                    "display": "13.31",
+                    "magnitude": "13.31",
+                    "si_value": 13.31,
+                    "unit": null
+                  }
+                },
+                {
+                  "key": "South",
+                  "value": {
+                    "kind": "quantity",
+                    "display": "17.28",
+                    "magnitude": "17.28",
+                    "si_value": 17.28,
+                    "unit": null
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      },
+      "presentation": []
+    },
+    {
+      "id": "p:recurrence_groups/f:recurrence_groups/n:decay",
+      "label": "decay",
+      "name": "decay",
+      "module": "recurrence_groups",
+      "kind": "param",
+      "origin": {
+        "kind": "local"
+      },
+      "element": "quantity",
+      "axes": [],
+      "dimension": "Dimensionless",
+      "unit": null,
+      "pub": false,
+      "deps": [],
+      "expr": "0.5",
+      "doc": null,
+      "source": {
+        "file": "recurrence_groups.gcl",
+        "line": 38,
+        "expr_range": {
+          "start": {
+            "line": 37,
+            "character": 29
+          },
+          "end": {
+            "line": 37,
+            "character": 32
+          }
+        },
+        "cells": []
+      },
+      "value": {
+        "kind": "quantity",
+        "display": "0.5",
+        "magnitude": "0.5",
+        "si_value": 0.5,
+        "unit": null
+      },
+      "presentation": []
+    },
+    {
+      "id": "p:recurrence_groups/f:recurrence_groups/n:outflow",
+      "label": "outflow",
+      "name": "outflow",
+      "module": "recurrence_groups",
+      "kind": "node",
+      "origin": {
+        "kind": "local"
+      },
+      "element": "quantity",
+      "axes": [
+        "p:recurrence_groups/f:recurrence_groups/n:Step"
+      ],
+      "dimension": "Dimensionless",
+      "unit": null,
+      "pub": false,
+      "deps": [
+        "p:recurrence_groups/f:recurrence_groups/n:decay",
+        "p:recurrence_groups/f:recurrence_groups/n:level"
+      ],
+      "expr": "for t: Step {\n    sum(unfold(Substep, @level[t], |acc, prev_u, u| acc * @decay))\n}",
+      "doc": null,
+      "source": {
+        "file": "recurrence_groups.gcl",
+        "line": 39,
+        "expr_range": {
+          "start": {
+            "line": 38,
+            "character": 36
+          },
+          "end": {
+            "line": 40,
+            "character": 1
+          }
+        },
+        "cells": []
+      },
+      "value": {
+        "kind": "indexed",
+        "display": "[Step]",
+        "index": "Step",
+        "entries": [
+          {
+            "key": "#0",
+            "value": {
+              "kind": "quantity",
+              "display": "17.5",
+              "magnitude": "17.5",
+              "si_value": 17.5,
+              "unit": null
+            }
+          },
+          {
+            "key": "#1",
+            "value": {
+              "kind": "quantity",
+              "display": "14.4375",
+              "magnitude": "14.4375",
+              "si_value": 14.4375,
+              "unit": null
+            }
+          },
+          {
+            "key": "#2",
+            "value": {
+              "kind": "quantity",
+              "display": "11.91094",
+              "magnitude": "11.91094",
+              "si_value": 11.910937500000001,
+              "unit": null
+            }
+          },
+          {
+            "key": "#3",
+            "value": {
+              "kind": "quantity",
+              "display": "9.826523",
+              "magnitude": "9.826523",
+              "si_value": 9.8265234375,
+              "unit": null
+            }
+          }
+        ]
+      },
+      "presentation": []
+    },
+    {
+      "id": "p:recurrence_groups/f:recurrence_groups/n:level",
+      "label": "level",
+      "name": "level",
+      "module": "recurrence_groups",
+      "kind": "node",
+      "origin": {
+        "kind": "local"
+      },
+      "element": "quantity",
+      "axes": [
+        "p:recurrence_groups/f:recurrence_groups/n:Step"
+      ],
+      "dimension": "Dimensionless",
+      "unit": null,
+      "pub": false,
+      "deps": [
+        "p:recurrence_groups/f:recurrence_groups/n:outflow"
+      ],
+      "expr": "unfold(Step, 10.0, |s, prev_t, t| s - 0.1 * @outflow[prev_t])",
+      "doc": null,
+      "source": {
+        "file": "recurrence_groups.gcl",
+        "line": 42,
+        "expr_range": {
+          "start": {
+            "line": 41,
+            "character": 34
+          },
+          "end": {
+            "line": 41,
+            "character": 95
+          }
+        },
+        "cells": []
+      },
+      "value": {
+        "kind": "indexed",
+        "display": "[Step]",
+        "index": "Step",
+        "entries": [
+          {
+            "key": "#0",
+            "value": {
+              "kind": "quantity",
+              "display": "10",
+              "magnitude": "10",
+              "si_value": 10.0,
+              "unit": null
+            }
+          },
+          {
+            "key": "#1",
+            "value": {
+              "kind": "quantity",
+              "display": "8.25",
+              "magnitude": "8.25",
+              "si_value": 8.25,
+              "unit": null
+            }
+          },
+          {
+            "key": "#2",
+            "value": {
+              "kind": "quantity",
+              "display": "6.80625",
+              "magnitude": "6.80625",
+              "si_value": 6.80625,
+              "unit": null
+            }
+          },
+          {
+            "key": "#3",
+            "value": {
+              "kind": "quantity",
+              "display": "5.615156",
+              "magnitude": "5.615156",
+              "si_value": 5.61515625,
+              "unit": null
+            }
+          }
+        ]
+      },
+      "presentation": []
+    },
+    {
+      "id": "p:recurrence_groups/f:recurrence_groups/n:speed",
+      "label": "speed",
+      "name": "speed",
+      "module": "recurrence_groups",
+      "kind": "param",
+      "origin": {
+        "kind": "local"
+      },
+      "element": "quantity",
+      "axes": [],
+      "dimension": "Velocity",
+      "unit": "m/s",
+      "pub": false,
+      "deps": [],
+      "expr": "1.0 m/s",
+      "doc": null,
+      "source": {
+        "file": "recurrence_groups.gcl",
+        "line": 45,
+        "expr_range": {
+          "start": {
+            "line": 44,
+            "character": 24
+          },
+          "end": {
+            "line": 44,
+            "character": 31
+          }
+        },
+        "cells": []
+      },
+      "value": {
+        "kind": "quantity",
+        "display": "1 m/s",
+        "magnitude": "1",
+        "si_value": 1.0,
+        "unit": "m/s"
+      },
+      "presentation": []
+    },
+    {
+      "id": "p:recurrence_groups/f:recurrence_groups/n:position",
+      "label": "position",
+      "name": "position",
+      "module": "recurrence_groups",
+      "kind": "node",
+      "origin": {
+        "kind": "local"
+      },
+      "element": "quantity",
+      "axes": [
+        "p:recurrence_groups/f:recurrence_groups/n:Step"
+      ],
+      "dimension": "Length",
+      "unit": "km",
+      "pub": false,
+      "deps": [
+        "p:recurrence_groups/f:recurrence_groups/n:velocity"
+      ],
+      "expr": "unfold(\n    Step,\n    0.0 m,\n    |s, prev_t, t| s + @velocity[prev_t] * (coord(t) - coord(prev_t))\n) -> km",
+      "doc": null,
+      "source": {
+        "file": "recurrence_groups.gcl",
+        "line": 46,
+        "expr_range": {
+          "start": {
+            "line": 45,
+            "character": 30
+          },
+          "end": {
+            "line": 49,
+            "character": 7
+          }
+        },
+        "cells": []
+      },
+      "value": {
+        "kind": "indexed",
+        "display": "[Step]",
+        "index": "Step",
+        "entries": [
+          {
+            "key": "#0",
+            "value": {
+              "kind": "quantity",
+              "display": "0 km",
+              "magnitude": "0",
+              "si_value": 0.0,
+              "unit": "km"
+            }
+          },
+          {
+            "key": "#1",
+            "value": {
+              "kind": "quantity",
+              "display": "0.001 km",
+              "magnitude": "0.001",
+              "si_value": 1.0,
+              "unit": "km"
+            }
+          },
+          {
+            "key": "#2",
+            "value": {
+              "kind": "quantity",
+              "display": "0.0021 km",
+              "magnitude": "0.0021",
+              "si_value": 2.1,
+              "unit": "km"
+            }
+          },
+          {
+            "key": "#3",
+            "value": {
+              "kind": "quantity",
+              "display": "0.00331 km",
+              "magnitude": "0.00331",
+              "si_value": 3.31,
+              "unit": "km"
+            }
+          }
+        ]
+      },
+      "presentation": []
+    },
+    {
+      "id": "p:recurrence_groups/f:recurrence_groups/n:velocity",
+      "label": "velocity",
+      "name": "velocity",
+      "module": "recurrence_groups",
+      "kind": "node",
+      "origin": {
+        "kind": "local"
+      },
+      "element": "quantity",
+      "axes": [
+        "p:recurrence_groups/f:recurrence_groups/n:Step"
+      ],
+      "dimension": "Velocity",
+      "unit": "m/s",
+      "pub": false,
+      "deps": [
+        "p:recurrence_groups/f:recurrence_groups/n:position",
+        "p:recurrence_groups/f:recurrence_groups/n:speed"
+      ],
+      "expr": "for t: Step { @speed + @position[t] / 10.0 s }",
+      "doc": null,
+      "source": {
+        "file": "recurrence_groups.gcl",
+        "line": 51,
+        "expr_range": {
+          "start": {
+            "line": 50,
+            "character": 32
+          },
+          "end": {
+            "line": 50,
+            "character": 78
+          }
+        },
+        "cells": []
+      },
+      "value": {
+        "kind": "indexed",
+        "display": "[Step]",
+        "index": "Step",
+        "entries": [
+          {
+            "key": "#0",
+            "value": {
+              "kind": "quantity",
+              "display": "1 m/s",
+              "magnitude": "1",
+              "si_value": 1.0,
+              "unit": "m/s"
+            }
+          },
+          {
+            "key": "#1",
+            "value": {
+              "kind": "quantity",
+              "display": "1.1 m/s",
+              "magnitude": "1.1",
+              "si_value": 1.1,
+              "unit": "m/s"
+            }
+          },
+          {
+            "key": "#2",
+            "value": {
+              "kind": "quantity",
+              "display": "1.21 m/s",
+              "magnitude": "1.21",
+              "si_value": 1.21,
+              "unit": "m/s"
+            }
+          },
+          {
+            "key": "#3",
+            "value": {
+              "kind": "quantity",
+              "display": "1.331 m/s",
+              "magnitude": "1.331",
+              "si_value": 1.331,
+              "unit": "m/s"
+            }
+          }
+        ]
+      },
+      "presentation": []
+    },
+    {
+      "id": "p:recurrence_groups/f:recurrence_groups/n:loop_final",
+      "label": "loop_final",
+      "name": "loop_final",
+      "module": "recurrence_groups",
+      "kind": "node",
+      "origin": {
+        "kind": "local"
+      },
+      "element": "quantity",
+      "axes": [],
+      "dimension": "Dimensionless",
+      "unit": null,
+      "pub": false,
+      "deps": [
+        "p:recurrence_groups/f:recurrence_groups/s:loop/n:response"
+      ],
+      "expr": "sum(@loop::response)",
+      "doc": null,
+      "source": {
+        "file": "recurrence_groups.gcl",
+        "line": 68,
+        "expr_range": {
+          "start": {
+            "line": 67,
+            "character": 33
+          },
+          "end": {
+            "line": 67,
+            "character": 53
+          }
+        },
+        "cells": []
+      },
+      "value": {
+        "kind": "quantity",
+        "display": "7.5",
+        "magnitude": "7.5",
+        "si_value": 7.5,
+        "unit": null
+      },
+      "presentation": []
+    },
+    {
+      "id": "p:recurrence_groups/f:recurrence_groups/n:halving",
+      "label": "halving",
+      "name": "halving",
+      "module": "recurrence_groups",
+      "kind": "assert",
+      "origin": {
+        "kind": "local"
+      },
+      "element": "bool",
+      "axes": [],
+      "dimension": "Bool",
+      "unit": null,
+      "pub": false,
+      "deps": [
+        "p:recurrence_groups/f:recurrence_groups/n:state"
+      ],
+      "expr": "for t: Step { @state[t] > 0.0 }",
+      "doc": null,
+      "source": {
+        "file": "recurrence_groups.gcl",
+        "line": 70,
+        "expr_range": {
+          "start": {
+            "line": 69,
+            "character": 17
+          },
+          "end": {
+            "line": 69,
+            "character": 48
+          }
+        },
+        "cells": []
+      },
+      "value": {
+        "kind": "bool",
+        "display": "PASS",
+        "value": true
+      },
+      "presentation": []
+    },
+    {
+      "id": "p:recurrence_groups/f:recurrence_groups/s:loop/n:response",
+      "label": "loop::response",
+      "name": "response",
+      "module": "recurrence_groups.closed_loop",
+      "kind": "node",
+      "origin": {
+        "kind": "included",
+        "instance": {
+          "name": "loop",
+          "bound": true
+        }
+      },
+      "element": "quantity",
+      "axes": [
+        "p:recurrence_groups/f:recurrence_groups/n:Step"
+      ],
+      "dimension": "Dimensionless",
+      "unit": null,
+      "pub": true,
+      "deps": [],
+      "expr": "unfold(T, @start, |s, prev_t, t| s + @command[prev_t])",
+      "doc": null,
+      "source": {
+        "file": "recurrence_groups.gcl",
+        "line": 64,
+        "expr_range": {
+          "start": {
+            "line": 63,
+            "character": 42
+          },
+          "end": {
+            "line": 63,
+            "character": 96
+          }
+        },
+        "cells": []
+      },
+      "value": {
+        "kind": "indexed",
+        "display": "[T]",
+        "index": "T",
+        "entries": [
+          {
+            "key": "#0",
+            "value": {
+              "kind": "quantity",
+              "display": "4",
+              "magnitude": "4",
+              "si_value": 4.0,
+              "unit": null
+            }
+          },
+          {
+            "key": "#1",
+            "value": {
+              "kind": "quantity",
+              "display": "2",
+              "magnitude": "2",
+              "si_value": 2.0,
+              "unit": null
+            }
+          },
+          {
+            "key": "#2",
+            "value": {
+              "kind": "quantity",
+              "display": "1",
+              "magnitude": "1",
+              "si_value": 1.0,
+              "unit": null
+            }
+          },
+          {
+            "key": "#3",
+            "value": {
+              "kind": "quantity",
+              "display": "0.5",
+              "magnitude": "0.5",
+              "si_value": 0.5,
+              "unit": null
+            }
+          }
+        ]
+      },
+      "presentation": []
+    }
+  ]
+}

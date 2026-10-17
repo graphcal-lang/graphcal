@@ -27,7 +27,8 @@ pub struct DeclarationView<'d> {
 pub enum DeclarationKind<'d> {
     /// A value declaration.
     Value(ValueDeclaration<'d>),
-    /// An assertion, with the span its operands cover.
+    /// An assertion, with the source range of its body after `=`
+    /// (enclosing parentheses included).
     Assert {
         span: Span,
         body: Span,
@@ -57,8 +58,9 @@ pub struct ValueDeclaration<'d> {
     pub has_default: bool,
     /// Its source span.
     pub span: Span,
-    /// The span of its defining expression: a const body, a param default,
-    /// or a node formula. `None` for a required param or a `todo` node.
+    /// The source range of its defining expression after `=`, enclosing
+    /// parentheses included: a const body, a param default, or a node
+    /// formula. `None` for a required param or a `todo` node.
     pub definition: Option<Span>,
     /// Its `///` documentation, if any.
     pub doc: Option<&'d str>,
@@ -85,7 +87,7 @@ impl<'d> DeclarationView<'d> {
                     &entry.type_ann,
                     false,
                     entry.span,
-                    Some(entry.expr.span),
+                    Some(entry.definition_range),
                     entry.doc.as_deref(),
                 ),
             ),
@@ -96,7 +98,7 @@ impl<'d> DeclarationView<'d> {
                     &entry.type_ann,
                     entry.default.is_some(),
                     entry.span,
-                    entry.default.as_ref().map(|default| default.span),
+                    entry.default_range,
                     entry.doc.as_deref(),
                 ),
             ),
@@ -107,7 +109,7 @@ impl<'d> DeclarationView<'d> {
                     &entry.type_ann,
                     false,
                     entry.span,
-                    entry.definition.formula().map(|formula| formula.span),
+                    entry.definition.formula().map(|_| entry.definition_range),
                     entry.doc.as_deref(),
                 ),
             ),
@@ -115,12 +117,7 @@ impl<'d> DeclarationView<'d> {
                 &entry.identity,
                 DeclarationKind::Assert {
                     span: entry.span,
-                    body: entry
-                        .body
-                        .expressions()
-                        .map(|expression| expression.span)
-                        .reduce(Span::merge)
-                        .unwrap_or(entry.span),
+                    body: entry.body_range,
                     doc: entry.doc.as_deref(),
                 },
             ),
