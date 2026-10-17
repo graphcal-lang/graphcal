@@ -25,17 +25,54 @@ function json(body: unknown, headers: Record<string, string> = {}): Response {
 }
 
 describe("GitHub", () => {
-  test("sends the token, the api version, and the raw accept for files", async () => {
+  test("sends the token, the api version, and the raw accept for blobs", async () => {
     const { fetch, calls } = fakeFetch([() => new Response("param a: Power = 1.0 W")]);
     const github = new GitHub("tok", fetch);
-    await expect(github.file("o", "r", "main", "src/a b.gcl")).resolves.toBe(
-      "param a: Power = 1.0 W",
-    );
-    expect(calls[0]?.url).toBe("https://api.github.com/repos/o/r/contents/src/a%20b.gcl?ref=main");
+    await expect(github.blob("o", "r", "b1")).resolves.toBe("param a: Power = 1.0 W");
+    expect(calls[0]?.url).toBe("https://api.github.com/repos/o/r/git/blobs/b1");
     expect(calls[0]?.headers).toMatchObject({
       Authorization: "Bearer tok",
       Accept: "application/vnd.github.raw+json",
       "X-GitHub-Api-Version": "2022-11-28",
+    });
+  });
+
+  test("a blob is fetched once, however many trees hold it", async () => {
+    const { fetch, calls } = fakeFetch([() => new Response("v1")]);
+    const github = new GitHub(null, fetch);
+    const [first, second] = await Promise.all([
+      github.blob("o", "r", "b1"),
+      github.blob("o", "r", "b1"),
+    ]);
+    expect([first, second, await github.blob("o", "r", "b1")]).toEqual(["v1", "v1", "v1"]);
+    expect(calls).toHaveLength(1);
+  });
+
+  test("a failed blob is asked again", async () => {
+    const { fetch, calls } = fakeFetch([
+      () => new Response("", { status: 500 }),
+      () => new Response("v1"),
+    ]);
+    const github = new GitHub(null, fetch);
+    await expect(github.blob("o", "r", "b1")).rejects.toMatchObject({ kind: "other" });
+    await expect(github.blob("o", "r", "b1")).resolves.toBe("v1");
+    expect(calls).toHaveLength(2);
+  });
+
+  test("a ref resolves to its commit and tree, and a missing one says so", async () => {
+    const { fetch, calls } = fakeFetch([
+      () => json({ sha: "c1", commit: { tree: { sha: "t1" } } }),
+      () =>
+        new Response(JSON.stringify({ message: "No commit found for SHA: nope" }), {
+          status: 422,
+        }),
+    ]);
+    const github = new GitHub(null, fetch);
+    await expect(github.commit("o", "r", "feat/x")).resolves.toEqual({ sha: "c1", treeSha: "t1" });
+    expect(calls[0]?.url).toBe("https://api.github.com/repos/o/r/commits/feat%2Fx");
+    await expect(github.commit("o", "r", "nope")).rejects.toMatchObject({
+      kind: "ref_not_found",
+      message: "o/r has no branch, tag or commit nope",
     });
   });
 
@@ -48,7 +85,7 @@ describe("GitHub", () => {
     expect(calls[0]?.headers).not.toHaveProperty("Authorization");
   });
 
-  test("the tree keeps path, type and size, and encodes the ref", async () => {
+  test("the tree keeps path, type and size", async () => {
     const { fetch, calls } = fakeFetch([
       () =>
         json({
@@ -60,8 +97,8 @@ describe("GitHub", () => {
           ],
         }),
     ]);
-    const tree = await new GitHub(null, fetch).tree("o", "r", "feat/x");
-    expect(calls[0]?.url).toBe("https://api.github.com/repos/o/r/git/trees/feat%2Fx?recursive=1");
+    const tree = await new GitHub(null, fetch).tree("o", "r", "t0");
+    expect(calls[0]?.url).toBe("https://api.github.com/repos/o/r/git/trees/t0?recursive=1");
     expect(tree).toEqual({
       sha: "abc",
       truncated: false,
@@ -74,12 +111,12 @@ describe("GitHub", () => {
 
   test("a second request carries the ETag and a 304 answers from the cache", async () => {
     const { fetch, calls } = fakeFetch([
-      () => new Response("v1", { headers: { ETag: '"e1"' } }),
+      () => json({ sha: "c1", commit: { tree: { sha: "t1" } } }, { ETag: '"e1"' }),
       () => new Response(null, { status: 304 }),
     ]);
     const github = new GitHub(null, fetch);
-    await expect(github.file("o", "r", "main", "a.gcl")).resolves.toBe("v1");
-    await expect(github.file("o", "r", "main", "a.gcl")).resolves.toBe("v1");
+    await expect(github.commit("o", "r", "main")).resolves.toEqual({ sha: "c1", treeSha: "t1" });
+    await expect(github.commit("o", "r", "main")).resolves.toEqual({ sha: "c1", treeSha: "t1" });
     expect(calls[1]?.headers["If-None-Match"]).toBe('"e1"');
   });
 
@@ -87,7 +124,7 @@ describe("GitHub", () => {
     const kinds = async (response: Response): Promise<[string, string]> => {
       const { fetch } = fakeFetch([() => response]);
       try {
-        await new GitHub(null, fetch).file("o", "r", "main", "a.gcl");
+        await new GitHub(null, fetch).blob("o", "r", "b1");
       } catch (error) {
         if (error instanceof GitHubError) return [error.kind, error.message];
         throw error;
@@ -143,11 +180,43 @@ describe("GitHub", () => {
         { number: 43, title: "fork", ref: "b2" },
         { number: 44, title: "gone", ref: "c3" },
       ],
+      failures: [],
     });
     expect(calls.map((c) => c.url)).toEqual([
       "https://api.github.com/repos/o/r/branches?per_page=100",
       "https://api.github.com/repos/o/r/tags?per_page=100",
       "https://api.github.com/repos/o/r/pulls?state=open&per_page=100",
     ]);
+  });
+
+  test("a list GitHub refuses leaves the others", async () => {
+    const { fetch } = fakeFetch([
+      () => json([{ name: "main" }]),
+      () => json([{ name: "v1" }]),
+      () => new Response("", { status: 403 }),
+    ]);
+    await expect(new GitHub("tok", fetch).refs("o", "r")).resolves.toEqual({
+      branches: ["main"],
+      tags: ["v1"],
+      pulls: [],
+      failures: [
+        {
+          list: "pulls",
+          kind: "forbidden",
+          message: "GitHub refused: /repos/o/r/pulls?state=open&per_page=100",
+        },
+      ],
+    });
+  });
+
+  test("refs reject when no list can be read", async () => {
+    const { fetch } = fakeFetch([
+      () => new Response("", { status: 404 }),
+      () => new Response("", { status: 404 }),
+      () => new Response("", { status: 404 }),
+    ]);
+    await expect(new GitHub(null, fetch).refs("o", "r")).rejects.toMatchObject({
+      kind: "not_found",
+    });
   });
 });

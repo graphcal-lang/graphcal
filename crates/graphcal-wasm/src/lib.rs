@@ -15,6 +15,7 @@ mod diagnostics;
 mod js_request;
 mod one_shot;
 mod output;
+mod package_layout;
 mod prepared;
 mod project;
 
@@ -30,12 +31,18 @@ pub use output::{
     DeclarationView, EvaluationView, FigureView, IndexEntryKeyView, IndexedEntryView,
     NodeUnavailableView, NoticeView, StructFieldView, ValueView,
 };
+#[cfg(target_arch = "wasm32")]
+pub use package_layout::package_layout_js;
+pub use package_layout::{PackageLayoutView, package_layout};
 pub use prepared::{
     BindingErrorView, ControlView, EvaluateOutcome, EvaluateReportOutcome, ParameterPortView,
     PrepareOutcome, PreparedPlayground, prepare, prepare_bundle, prepare_view,
 };
+#[cfg(target_arch = "wasm32")]
+pub use project::project_limits_js;
 pub use project::{
     MAX_PLAYGROUND_CONTENT_BYTES, MAX_PLAYGROUND_FILE_BYTES, MAX_PLAYGROUND_FILES,
-    MAX_PLAYGROUND_PATH_BYTES, MAX_PLAYGROUND_PATH_TOTAL_BYTES, PlaygroundFile, PlaygroundRequest,
-    ProjectPathRole, ProjectValidationError, RequestErrorKind, RequestErrorView,
+    MAX_PLAYGROUND_PATH_BYTES, MAX_PLAYGROUND_PATH_TOTAL_BYTES, PROJECT_LIMITS, PlaygroundFile,
+    PlaygroundRequest, ProjectLimitsView, ProjectPathRole, ProjectValidationError,
+    RequestErrorKind, RequestErrorView,
 };
