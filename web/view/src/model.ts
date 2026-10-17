@@ -53,14 +53,17 @@ export type Instance = z.infer<typeof instanceSchema>;
 
 /**
  * Where a node's declaration comes from. An include member names the instance
- * it is read through (`eps` in `include power_project.eps() …`); a bound
- * instance (the include passes arguments) has values of its own, which no
- * view of its module evaluated alone shows.
+ * it is read through (`eps` in `include power_project.eps() …`), and the
+ * output of an inline call names the call (`scale(…)` for `@scale(…)::out`);
+ * a bound instance (the include or call passes arguments) has values of its
+ * own, which no view of its module evaluated alone shows. A call is evaluated
+ * in place, so its output has no value.
  */
 export const originSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("local") }),
   z.object({ kind: z.literal("imported") }),
   z.object({ kind: z.literal("included"), instance: instanceSchema }),
+  z.object({ kind: z.literal("called"), instance: instanceSchema }),
 ]);
 export type Origin = z.infer<typeof originSchema>;
 
@@ -161,7 +164,9 @@ export function isExternal(node: ViewNode): boolean {
   return node.origin.kind !== "local";
 }
 
-/** The include instance a node is read through, if any. */
+/** The include or call instance a node is read through, if any. */
 export function instanceOf(node: ViewNode): Instance | null {
-  return node.origin.kind === "included" ? node.origin.instance : null;
+  return node.origin.kind === "included" || node.origin.kind === "called"
+    ? node.origin.instance
+    : null;
 }

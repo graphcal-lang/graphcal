@@ -117,6 +117,11 @@ role = "contracts"
 
 [[module]]
 package = "compiler"
+path = ["dag_call_read"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
 path = ["plugin_identity"]
 role = "contracts"
 

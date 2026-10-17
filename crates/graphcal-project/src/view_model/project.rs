@@ -3,6 +3,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
+use graphcal_compiler::dag_call_read::DagCallRead;
 use graphcal_compiler::dag_id::DagId;
 use graphcal_compiler::declaration_category::ValueDeclCategory;
 use graphcal_compiler::ir::instance::{ExposedValueBody, InstanceProjection, ProjectionExposure};
@@ -92,6 +93,7 @@ pub fn project_view(
         .flat_map(|id| deps.get(id).into_iter().flatten().copied())
         .filter(|dep| !scope.is_local(dep.owner()))
         .collect();
+    let calls = call_outputs(tir, &locals);
 
     let mut builder = NodeBuilder {
         shared_definitions: scope.shared_definitions(&locals),
@@ -102,9 +104,18 @@ pub fn project_view(
     let mut nodes = Vec::new();
     let mut bindings = Vec::new();
     for id in &locals {
-        let deps = deps.get(id).map_or_else(Vec::new, |deps| {
-            deps.iter().map(|dep| ViewNodeId::of(dep)).collect()
-        });
+        let deps = deps
+            .get(id)
+            .into_iter()
+            .flatten()
+            .map(|dep| ViewNodeId::of(dep))
+            .chain(
+                calls
+                    .iter()
+                    .filter(|call| call.caller == id)
+                    .map(CallOutput::id),
+            )
+            .collect();
         let built = match aliases.get(id) {
             Some(alias) => builder.include_alias(id, alias)?,
             None => builder.local(id, deps)?,
@@ -116,6 +127,12 @@ pub fn project_view(
     }
     for id in externals {
         if let Some((node, binding)) = builder.external(id)? {
+            nodes.push(node);
+            bindings.push(binding);
+        }
+    }
+    for call in &calls {
+        if let Some((node, binding)) = builder.call_output(call)? {
             nodes.push(node);
             bindings.push(binding);
         }
@@ -171,8 +188,14 @@ impl ViewProjection {
     pub fn attach_evaluation(&mut self, evaluation: &EvalResult) {
         let values = EvaluatedValues::new(evaluation);
         for (node, binding) in self.model.nodes.iter_mut().zip(&self.bindings) {
-            let mut problems = values.presentation(&binding.declaration);
+            let mut problems = match binding.kind {
+                ValueBindingKind::CallOutput => Vec::new(),
+                ValueBindingKind::Value | ValueBindingKind::Assertion => {
+                    values.presentation(&binding.declaration)
+                }
+            };
             let value = match binding.kind {
+                ValueBindingKind::CallOutput => None,
                 ValueBindingKind::Assertion => values
                     .assertion(&binding.declaration)
                     .and_then(assertion_value),
@@ -200,6 +223,9 @@ enum ValueBindingKind {
     Value,
     /// A root-owned assertion outcome, looked up by name.
     Assertion,
+    /// None: an inline call's output is evaluated in place, as part of its
+    /// caller, so the evaluation reports no value of its own.
+    CallOutput,
 }
 
 /// The checked project and the lookups every node shares.
@@ -225,7 +251,7 @@ impl<'p> Scope<'p> {
             clusters: ir
                 .clusters()
                 .iter()
-                .map(|cluster| (cluster.dag_id(), cluster.kind()))
+                .filter_map(|cluster| Some((cluster.id().dag()?, cluster.kind())))
                 .collect(),
             sources: SourceFiles::new(project, checked)?,
         })
@@ -445,6 +471,42 @@ struct ExternalName {
     origin: ViewOrigin,
 }
 
+/// The output one inline DAG call of a root declaration reads: the
+/// `ordinal`-th call of `caller`, in pre-order.
+struct CallOutput<'a> {
+    caller: &'a ResolvedDeclName,
+    ordinal: usize,
+    read: &'a DagCallRead,
+}
+
+impl CallOutput<'_> {
+    fn id(&self) -> ViewNodeId {
+        ViewNodeId::of_call_output(self.caller, self.ordinal, &self.read.output)
+    }
+}
+
+/// The outputs the inline DAG calls of the root's declarations read, in
+/// declaration and then call order.
+fn call_outputs<'a>(tir: &'a CheckedTir, locals: &'a [ResolvedDeclName]) -> Vec<CallOutput<'a>> {
+    locals
+        .iter()
+        .filter_map(|caller| {
+            let dag = tir.dag_registry().get(caller.owner())?;
+            Some((caller, dag.dependencies().call_reads.get(caller)?))
+        })
+        .flat_map(|(caller, reads)| {
+            reads
+                .iter()
+                .enumerate()
+                .map(move |(ordinal, read)| CallOutput {
+                    caller,
+                    ordinal,
+                    read,
+                })
+        })
+        .collect()
+}
+
 /// What each local declaration reads: dataflow edges for values, the
 /// assertion dependency map for assertions.
 fn dependencies<'a>(
@@ -454,7 +516,9 @@ fn dependencies<'a>(
 ) -> BTreeMap<&'a ResolvedDeclName, Vec<&'a ResolvedDeclName>> {
     let mut deps = BTreeMap::<&ResolvedDeclName, Vec<&ResolvedDeclName>>::new();
     for edge in ir.edges() {
-        deps.entry(edge.to()).or_default().push(edge.from());
+        if let (Some(to), Some(from)) = (edge.to().declaration(), edge.from().declaration()) {
+            deps.entry(to).or_default().push(from);
+        }
     }
     for id in locals {
         if let Some(dag) = tir.dag_registry().get(id.owner())
@@ -562,6 +626,43 @@ impl NodeBuilder<'_> {
             value_of: id,
         })
         .map(Some)
+    }
+
+    /// The output an inline DAG call reads, presented as the called DAG's
+    /// declaration read through the call, under a key of its own.
+    fn call_output(
+        &mut self,
+        call: &CallOutput<'_>,
+    ) -> Result<Option<BuiltNode>, ViewProjectionError> {
+        let Some((dag, declaration)) = declaration_of(self.scope.tir, &call.read.output) else {
+            return Ok(None);
+        };
+        let target = &call.read.target;
+        let (node, binding) = self.node(NodeInput {
+            dag,
+            declaration,
+            label: format!("{}(…)::{}", target.leaf(), call.read.output.as_str()),
+            module: self.scope.module_name(target),
+            origin: ViewOrigin::Called {
+                instance: ViewInstance {
+                    name: format!("{}(…)", target.leaf()),
+                    bound: call.read.binds,
+                },
+            },
+            is_public: self.scope.is_public(target, call.read.output.leaf()),
+            deps: Vec::new(),
+            file: self.scope.sources.file_of(&target.file_root()),
+            value_of: &call.read.output,
+        })?;
+        let node = ViewNode {
+            id: call.id(),
+            ..node
+        };
+        let binding = ValueBinding {
+            kind: ValueBindingKind::CallOutput,
+            ..binding
+        };
+        Ok(Some((node, binding)))
     }
 
     fn node(&mut self, input: NodeInput<'_>) -> Result<BuiltNode, ViewProjectionError> {

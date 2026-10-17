@@ -30,6 +30,14 @@ pub struct StaticSubstitution {
     pub dimensions: BTreeMap<ResolvedDimName, ResolvedDimName>,
 }
 
+impl StaticSubstitution {
+    /// Whether the substitution binds no Static parameter.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.indexes.is_empty() && self.types.is_empty() && self.dimensions.is_empty()
+    }
+}
+
 /// Applicative identity shared by instances with equal Static bindings.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct StaticSpecializationId {

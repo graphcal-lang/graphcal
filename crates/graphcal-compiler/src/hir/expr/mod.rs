@@ -38,8 +38,8 @@ pub use model::{
 };
 pub use model::{Completeness, Draft, NoErrorNode, Strict};
 pub(crate) use refine::{Refinement, refine_assert_body, refine_expr};
-pub(crate) use visit::find_extern_call;
 pub use visit::{
     ExprDependencies, collect_expr_dependencies, find_dag_call, visit_expr, visit_expr_children,
     visit_expr_postorder,
 };
+pub(crate) use visit::{collect_dag_call_reads, find_extern_call};

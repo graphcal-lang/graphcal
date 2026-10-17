@@ -123,6 +123,11 @@ const CONTRACT_FIXTURES: &[(&str, &str, Option<&str>)] = &[
         "tests/fixtures/valid/recurrence_groups.gcl",
         None,
     ),
+    (
+        "inline_dag_call",
+        "tests/fixtures/valid/inline_dag_call_basic/main.gcl",
+        None,
+    ),
 ];
 
 /// `graphcal view` output for the contract fixtures, as committed under

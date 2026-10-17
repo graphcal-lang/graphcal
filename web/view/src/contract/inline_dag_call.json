@@ -1,0 +1,135 @@
+{
+  "version": 1,
+  "module": {
+    "id": "main",
+    "file": "main.gcl",
+    "package": "main"
+  },
+  "indexes": [],
+  "nodes": [
+    {
+      "id": "p:main/f:main/n:speed",
+      "label": "speed",
+      "name": "speed",
+      "module": "main",
+      "kind": "param",
+      "origin": {
+        "kind": "local"
+      },
+      "element": "quantity",
+      "axes": [],
+      "dimension": "Velocity",
+      "unit": "m/s",
+      "pub": false,
+      "deps": [],
+      "expr": "10.0 m/s",
+      "doc": null,
+      "source": {
+        "file": "main.gcl",
+        "line": 12,
+        "expr_range": {
+          "start": {
+            "line": 11,
+            "character": 24
+          },
+          "end": {
+            "line": 11,
+            "character": 32
+          }
+        },
+        "cells": []
+      },
+      "value": {
+        "kind": "quantity",
+        "display": "10 m/s",
+        "magnitude": "10",
+        "si_value": 10.0,
+        "unit": "m/s"
+      },
+      "presentation": []
+    },
+    {
+      "id": "p:main/f:main/n:doubled_result",
+      "label": "doubled_result",
+      "name": "doubled_result",
+      "module": "main",
+      "kind": "node",
+      "origin": {
+        "kind": "local"
+      },
+      "element": "quantity",
+      "axes": [],
+      "dimension": "Velocity",
+      "unit": "m/s",
+      "pub": false,
+      "deps": [
+        "p:main/f:main/n:speed",
+        "p:main/f:main/n:doubled_result/c:0/p:main/f:main/d:scale/n:result"
+      ],
+      "expr": "@scale(factor: 2.0, v: @speed)::result",
+      "doc": null,
+      "source": {
+        "file": "main.gcl",
+        "line": 14,
+        "expr_range": {
+          "start": {
+            "line": 13,
+            "character": 32
+          },
+          "end": {
+            "line": 13,
+            "character": 70
+          }
+        },
+        "cells": []
+      },
+      "value": {
+        "kind": "quantity",
+        "display": "20 m/s",
+        "magnitude": "20",
+        "si_value": 20.0,
+        "unit": "m/s"
+      },
+      "presentation": []
+    },
+    {
+      "id": "p:main/f:main/n:doubled_result/c:0/p:main/f:main/d:scale/n:result",
+      "label": "scale(…)::result",
+      "name": "result",
+      "module": "main.scale",
+      "kind": "node",
+      "origin": {
+        "kind": "called",
+        "instance": {
+          "name": "scale(…)",
+          "bound": true
+        }
+      },
+      "element": "quantity",
+      "axes": [],
+      "dimension": "Velocity",
+      "unit": null,
+      "pub": true,
+      "deps": [],
+      "expr": "@v * @factor",
+      "doc": null,
+      "source": {
+        "file": "main.gcl",
+        "line": 9,
+        "expr_range": {
+          "start": {
+            "line": 8,
+            "character": 32
+          },
+          "end": {
+            "line": 8,
+            "character": 44
+          }
+        },
+        "cells": []
+      },
+      "value": null,
+      "presentation": []
+    }
+  ]
+}

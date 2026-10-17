@@ -189,6 +189,11 @@ pub(super) fn collect_resolved_dag_dependencies(
             .map_or_else(crate::hir::expr::ExprDependencies::default, |default| {
                 crate::hir::expr::collect_expr_dependencies(default)
             });
+        record_call_reads(
+            &mut resolved,
+            &key,
+            entry.default.iter().map(std::ops::Deref::deref),
+        );
         resolved
             .runtime_deps
             .insert(key, resolve_all(frame, &deps.graph_refs));
@@ -196,6 +201,11 @@ pub(super) fn collect_resolved_dag_dependencies(
 
     for entry in decls.nodes() {
         let key = entry.identity();
+        record_call_reads(
+            &mut resolved,
+            &key,
+            entry.definition.formula().map(std::ops::Deref::deref),
+        );
         let dependencies = match &entry.definition {
             crate::node_definition::NodeDefinition::Formula(expression) => resolve_all(
                 frame,
@@ -212,6 +222,7 @@ pub(super) fn collect_resolved_dag_dependencies(
 
     for entry in decls.asserts() {
         let key = entry.identity();
+        record_call_reads(&mut resolved, &key, entry.body.expressions());
         let references = entry
             .body
             .expressions()
@@ -225,6 +236,21 @@ pub(super) fn collect_resolved_dag_dependencies(
     }
 
     Ok(resolved)
+}
+
+/// Record the DAG calls of `caller`'s defining expressions, if it makes any.
+fn record_call_reads<'e>(
+    resolved: &mut ResolvedDagDependencies,
+    caller: &ResolvedDeclName,
+    expressions: impl IntoIterator<Item = &'e crate::hir::expr::Expr>,
+) {
+    let reads: Vec<_> = expressions
+        .into_iter()
+        .flat_map(crate::hir::expr::collect_dag_call_reads)
+        .collect();
+    if !reads.is_empty() {
+        resolved.call_reads.insert(caller.clone(), reads);
+    }
 }
 
 fn record_constructed_type(

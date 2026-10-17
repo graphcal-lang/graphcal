@@ -34,6 +34,23 @@ impl ViewNodeId {
         Self(key.finish())
     }
 
+    /// The key of the declaration `output` as the `ordinal`-th inline DAG
+    /// call (in pre-order) of `caller` computes it. The call part sets it
+    /// apart from every declaration's key.
+    pub(super) fn of_call_output(
+        caller: &ResolvedDeclName,
+        ordinal: usize,
+        output: &ResolvedDeclName,
+    ) -> Self {
+        let mut key = KeyWriter::default();
+        key.dag(caller.owner());
+        key.part('n', caller.as_str());
+        key.part('c', &ordinal.to_string());
+        key.dag(output.owner());
+        key.part('n', output.as_str());
+        Self(key.finish())
+    }
+
     /// The key as sent.
     #[must_use]
     pub fn as_str(&self) -> &str {
@@ -142,5 +159,24 @@ mod tests {
         );
         assert_eq!(written(&[('i', "<include@4>")]), "i:%3Cinclude%404%3E");
         assert_eq!(written(&[('f', "%")]), "f:%25");
+    }
+
+    #[test]
+    fn a_call_output_key_differs_from_its_declarations_and_other_calls() {
+        let root = DagId::root_in_package("p", "main");
+        let template = root
+            .inline_dag_child(graphcal_compiler::syntax::decl_name::DeclName::expect_valid("lib"));
+        let decl = |owner: &DagId, name: &str| {
+            ResolvedDeclName::for_test(
+                owner.clone(),
+                graphcal_compiler::syntax::decl_name::DeclName::expect_valid(name),
+            )
+        };
+        let (caller, output) = (decl(&root, "y"), decl(&template, "out"));
+        let first = ViewNodeId::of_call_output(&caller, 0, &output);
+        assert_eq!(first.as_str(), "p:p/f:main/n:y/c:0/p:p/f:main/d:lib/n:out");
+        assert_ne!(first, ViewNodeId::of_call_output(&caller, 1, &output));
+        assert_ne!(first, ViewNodeId::of(&caller));
+        assert_ne!(first, ViewNodeId::of(&output));
     }
 }

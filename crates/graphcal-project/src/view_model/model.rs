@@ -97,6 +97,10 @@ pub enum ViewOrigin {
     Imported,
     /// A declaration of another module, read through an `include` instance.
     Included { instance: ViewInstance },
+    /// A declaration of another DAG, read through an inline call
+    /// (`@scale(…)::out`), whose instance is named `scale(…)`. A call is
+    /// evaluated in place, so the node has no value of its own.
+    Called { instance: ViewInstance },
 }
 
 /// One declaration as the view presents it.
