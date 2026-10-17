@@ -553,7 +553,14 @@ pub fn run_eval_from_checked(
         match evaluated {
             Ok(result) => {
                 cancellation.checkpoint()?;
-                output.add_result(&result, uri, text, symbol_table, cancellation)?;
+                output.add_result(
+                    &result,
+                    prepared.tir(),
+                    uri,
+                    text,
+                    symbol_table,
+                    cancellation,
+                )?;
                 output.result = Some(result);
             }
             Err(Outcome::Cancelled) => return Err(Cancelled),
@@ -566,7 +573,14 @@ pub fn run_eval_from_checked(
     match prepared.evaluate_dag_defaults_with_cancellation(cancellation) {
         Ok(results) => {
             for result in &results {
-                output.add_result(result, uri, text, symbol_table, cancellation)?;
+                output.add_result(
+                    result,
+                    prepared.tir(),
+                    uri,
+                    text,
+                    symbol_table,
+                    cancellation,
+                )?;
             }
         }
         Err(Outcome::Cancelled) => return Err(Cancelled),
@@ -580,6 +594,7 @@ impl EvalAnalysisOutput {
     fn add_result(
         &mut self,
         result: &EvalResult,
+        tir: &graphcal_compiler::tir::typed::CheckedTir,
         uri: &Url,
         text: &str,
         symbol_table: &SymbolTable,
@@ -588,7 +603,13 @@ impl EvalAnalysisOutput {
         self.diagnostics
             .entry(uri.clone())
             .or_default()
-            .extend(eval_result_to_diagnostics(result, text, symbol_table));
+            .extend(eval_result_to_diagnostics(
+                result,
+                tir,
+                uri,
+                text,
+                symbol_table,
+            ));
         self.values
             .extend(format_eval_values(result, cancellation)?);
         Ok(())

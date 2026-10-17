@@ -9,6 +9,8 @@
 //! consumer reads projection targets as declaration identities and never
 //! chooses the frame they are resolved in.
 
+use crate::dag_id::DagId;
+use crate::ir::instance::identity::template_declaration;
 use crate::ir::instance::{
     HirInstanceRecord, InstanceAssertionProjection, InstancePlotProjection, InstanceProjection,
     InstanceValueProjection,
@@ -49,6 +51,33 @@ impl CheckedDagRegistry {
     ) -> Option<CheckedInstance<'t>> {
         self.get(record.instance.id().owner())
             .map(|dag| CheckedInstance { record, dag })
+    }
+
+    /// The include edge that materializes the instance `owner`, as the DAG
+    /// that writes the include records it.
+    ///
+    /// Returns `None` when `owner` is no instance this registry materialized.
+    #[must_use]
+    pub fn instance_edge(&self, owner: &DagId) -> Option<&HirInstanceRecord> {
+        self.get(&owner.parent()?)?
+            .semantic_instances()
+            .iter()
+            .find(|record| record.instance.id().owner() == owner)
+    }
+
+    /// The template declaration that the include instance owning
+    /// `declaration` copies it from.
+    ///
+    /// Returns `None` when no instance this registry materialized owns
+    /// `declaration`.
+    #[must_use]
+    pub fn template_declaration_of(
+        &self,
+        declaration: &ResolvedDeclName,
+    ) -> Option<ResolvedDeclName> {
+        self.instance_edge(declaration.owner()).map(|record| {
+            template_declaration(record.instance.id(), declaration.to_unowned_def_name())
+        })
     }
 }
 

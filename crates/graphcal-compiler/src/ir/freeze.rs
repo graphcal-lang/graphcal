@@ -439,6 +439,7 @@ impl UnfrozenIR {
                     assertion_projections: record.assertion_projections.clone(),
                     plot_projections: record.plot_projections.clone(),
                     override_reconciliations: record.override_reconciliations.clone(),
+                    include_span: record.include_span,
                 })
             })
             .collect::<Result<Vec<_>, SemanticError>>()?;

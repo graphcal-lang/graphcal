@@ -2875,6 +2875,77 @@ fn nested_instances_retain_template_and_concrete_parent_identity() {
 }
 
 #[test]
+fn instance_declarations_lead_back_to_their_template_and_include_site() {
+    use graphcal_compiler::resolved_name::ResolvedDeclName;
+
+    let middle = "param input: Dimensionless;\ninclude pipeline.leaf(input: @input) as leaf;\npub node output: Dimensionless = @leaf::output;\n";
+    let main = "node x: Dimensionless = 1.0;\ninclude pipeline.middle(input: 2.0) as first;\n";
+    let (_directory, root) = write_pipeline_project(
+        &[
+            (
+                "leaf.gcl",
+                "param input: Dimensionless;\npub node output: Dimensionless = @input;\n",
+            ),
+            ("middle.gcl", middle),
+            ("main.gcl", main),
+        ],
+        "main.gcl",
+    );
+
+    let (tir, project) = compile_to_tir_project(&root, None, &fs()).unwrap();
+    let registry = tir.dag_registry();
+    let middle_template = loaded_file_dag_id(&project, "middle.gcl");
+    let leaf_template = loaded_file_dag_id(&project, "leaf.gcl");
+    let spelled = |source: &'static str, span: graphcal_compiler::syntax::span::Span| {
+        &source[span.offset()..span.offset() + span.len()]
+    };
+    let output = |owner: &graphcal_compiler::dag_id::DagId| {
+        ResolvedDeclName::for_test(owner.clone(), DeclName::expect_valid("output"))
+    };
+
+    let [first] = tir.root().semantic_instances() else {
+        panic!("one include instance");
+    };
+    let first_owner = first.instance.id().owner();
+    let edge = registry.instance_edge(first_owner).expect("include edge");
+    assert_eq!(edge.instance.id(), first.instance.id());
+    assert_eq!(
+        spelled(main, edge.include_span),
+        "include pipeline.middle(input: 2.0) as first;"
+    );
+    assert_eq!(
+        registry.template_declaration_of(&output(first_owner)),
+        Some(output(&middle_template))
+    );
+
+    // A nested edge keeps the include span of the template that writes it.
+    let [nested] = registry
+        .get(first_owner)
+        .expect("materialized instance")
+        .semantic_instances()
+    else {
+        panic!("one nested include instance");
+    };
+    let nested_owner = nested.instance.id().owner();
+    let nested_edge = registry.instance_edge(nested_owner).expect("nested edge");
+    assert_eq!(
+        spelled(middle, nested_edge.include_span),
+        "include pipeline.leaf(input: @input) as leaf;"
+    );
+    assert_eq!(
+        registry.template_declaration_of(&output(nested_owner)),
+        Some(output(&leaf_template))
+    );
+
+    // A declaration no instance owns has no template.
+    assert_eq!(
+        registry.template_declaration_of(&output(&middle_template)),
+        None
+    );
+    assert!(registry.instance_edge(tir.root_dag_id()).is_none());
+}
+
+#[test]
 fn project_type_store_keeps_imported_definitions_under_their_canonical_owner() {
     let (_directory, root) = write_pipeline_project(
         &[

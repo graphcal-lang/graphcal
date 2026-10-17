@@ -16,7 +16,13 @@ use tower_lsp::lsp_types::{
 
 use graphcal_project::compile_error::CompileError;
 
+use graphcal_compiler::dag_id::DagId;
+use graphcal_compiler::resolved_name::ResolvedDeclName;
+use graphcal_compiler::syntax::span::Span;
+use graphcal_compiler::tir::typed::CheckedTir;
+
 use crate::convert::LineIndex;
+use crate::symbol_identity::SymbolId;
 use crate::symbol_table::SymbolTable;
 
 /// Typed LSP payload category for an unknown-name auto-import repair.
@@ -90,9 +96,128 @@ pub fn unfinished_node_diagnostics<P: graphcal_compiler::syntax::phase::Phase>(
         .collect()
 }
 
+/// Where a runtime failure is reported in the file a symbol table indexes.
+struct FailureLocation {
+    /// The span the diagnostic is placed on.
+    primary: Span,
+    /// The include declaration that runs the failing instance, when the
+    /// failure is placed on the template declaration instead.
+    include_site: Option<Span>,
+}
+
+/// Locate a runtime failure of the declaration `identity`, run by `tir`, in
+/// the file `symbol_table` indexes.
+///
+/// A source declaration is placed on its name. A declaration an include
+/// instance owns is placed on the template declaration it copies, with the
+/// include site related, or on the include site when the template is written
+/// in another file. A declaration an include site exposes is placed on that
+/// include declaration. Returns `None` when neither the declaration nor the
+/// include that runs it is written in this file.
+fn failure_location(
+    identity: &ResolvedDeclName,
+    symbol_table: &SymbolTable,
+    tir: &CheckedTir,
+) -> Option<FailureLocation> {
+    let registry = tir.dag_registry();
+    let file = symbol_table.owner();
+    let definition_span = |declaration: &ResolvedDeclName| {
+        symbol_table
+            .definitions
+            .get(&SymbolId::Declaration(declaration.clone()))
+            .map(|definition| definition.name_span)
+    };
+    // The outermost instance is the one an include of this file writes; the
+    // include sites of the instances nested in it are template source.
+    let include_site = std::iter::successors(Some(identity.owner().clone()), DagId::parent)
+        .filter(|owner| owner.leaf().is_instance())
+        .last()
+        .and_then(|outermost| {
+            let parent = outermost.parent()?;
+            let edge = registry.instance_edge(&outermost)?;
+            (&parent.file_root() == file).then_some(edge.include_span)
+        });
+    let written = std::iter::successors(Some(identity.clone()), |declaration| {
+        registry.template_declaration_of(declaration)
+    })
+    .find_map(|declaration| definition_span(&declaration));
+    match (written, include_site) {
+        (Some(primary), include_site) => Some(FailureLocation {
+            primary,
+            include_site,
+        }),
+        (None, Some(primary)) => Some(FailureLocation {
+            primary,
+            include_site: None,
+        }),
+        (None, None) => {
+            let owner = identity.owner();
+            (&owner.file_root() == file)
+                .then(|| registry.get(owner)?.declaration(identity)?.value())
+                .flatten()
+                .map(|declaration| FailureLocation {
+                    primary: declaration.span,
+                    include_site: None,
+                })
+        }
+    }
+}
+
+/// The diagnostic of the runtime failure of `entry`, unless it only waits on
+/// an unfinished declaration.
+fn entry_failure_diagnostic(
+    entry: &graphcal_eval::eval::EvalEntry,
+    tir: &CheckedTir,
+    uri: &Url,
+    lines: &LineIndex,
+    symbol_table: &SymbolTable,
+) -> Option<Diagnostic> {
+    let graphcal_eval::eval::EvalEntry {
+        name,
+        outcome,
+        identity,
+        ..
+    } = entry;
+    let err = outcome.as_ref().err()?;
+    // Incomplete dependents are explained by hover; report the source marker
+    // rather than flooding the DAG with warnings.
+    if !err.has_failure() {
+        return None;
+    }
+    let location = failure_location(identity, symbol_table, tir);
+    let related_information = location
+        .as_ref()
+        .and_then(|location| location.include_site)
+        .map(|site| {
+            vec![DiagnosticRelatedInformation {
+                location: Location {
+                    uri: uri.clone(),
+                    range: lines.span_to_range(site),
+                },
+                message: format!("`{name}` is instantiated by this include"),
+            }]
+        });
+    Some(Diagnostic {
+        range: location.map_or_else(Range::default, |location| {
+            lines.span_to_range(location.primary)
+        }),
+        severity: Some(DiagnosticSeverity::WARNING),
+        code: Some(NumberOrString::String("graphcal::E001".to_string())),
+        source: Some("graphcal".to_string()),
+        message: format!("{name}: {err}"),
+        related_information,
+        ..Default::default()
+    })
+}
+
 /// Locate runtime failures at their declarations; source TODOs are reported separately.
+///
+/// `tir` is the program `result` evaluated, and `symbol_table` indexes the
+/// file at `uri` whose text is `source`.
 pub fn eval_result_to_diagnostics(
     result: &graphcal_eval::eval::EvalResult,
+    tir: &CheckedTir,
+    uri: &Url,
     source: &str,
     symbol_table: &SymbolTable,
 ) -> Vec<Diagnostic> {
@@ -101,44 +226,11 @@ pub fn eval_result_to_diagnostics(
     let mut diagnostics: Vec<Diagnostic> = result
         .entries
         .iter()
-        .filter_map(
-            |graphcal_eval::eval::EvalEntry {
-                 name,
-                 outcome: r,
-                 identity,
-                 ..
-             }| match r {
-                Err(err) => {
-                    // Incomplete dependents are explained by hover; report the
-                    // source marker rather than flooding the DAG with warnings.
-                    if !err.has_failure() {
-                        return None;
-                    }
-                    // A source declaration is found by identity; an include
-                    // instance's value is no source declaration (#2103).
-                    let range = symbol_table
-                        .definitions
-                        .get(&crate::symbol_identity::SymbolId::Declaration(
-                            identity.clone(),
-                        ))
-                        .or_else(|| symbol_table.definition_for_scoped_decl(name))
-                        .map_or_else(Range::default, |def| lines.span_to_range(def.name_span));
-                    Some(Diagnostic {
-                        range,
-                        severity: Some(DiagnosticSeverity::WARNING),
-                        code: Some(NumberOrString::String("graphcal::E001".to_string())),
-                        source: Some("graphcal".to_string()),
-                        message: format!("{name}: {err}"),
-                        ..Default::default()
-                    })
-                }
-                Ok(_) => None,
-            },
-        )
+        .filter_map(|entry| entry_failure_diagnostic(entry, tir, uri, &lines, symbol_table))
         .collect();
 
     diagnostics.extend(result.presentation_diagnostics.iter().map(|notice| {
-        let key = crate::symbol_identity::SymbolId::Declaration(notice.declaration.clone());
+        let key = SymbolId::Declaration(notice.declaration.clone());
         let range = symbol_table
             .definitions
             .get(&key)
@@ -415,41 +507,174 @@ fn compile_error_to_diagnostics(error: &CompileError) -> Vec<Diagnostic> {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
     use std::sync::Arc;
 
     use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
     use graphcal_compiler::semantic_error::SemanticError;
     use graphcal_compiler::syntax::names::{NameAtom, NamePath};
     use graphcal_compiler::syntax::non_empty::NonEmpty;
-    use graphcal_compiler::syntax::parser::Parser;
     use graphcal_compiler::syntax::span::Span;
     use graphcal_io::RealFileSystem;
-    use graphcal_project::prepare::{compile_and_eval_named, compile_and_eval_project};
 
     use tower_lsp::lsp_types::Position;
 
     use super::*;
-    use crate::symbol_table::build_for_buffer;
 
-    fn build_symbol_table(source: &str) -> SymbolTable {
-        let mut parser = Parser::new(source);
-        parser
-            .parse_file()
-            .map(|raw_ast| {
-                let desugared = graphcal_compiler::desugar::desugared_ast::File::from(raw_ast);
-                let ast = desugared;
-                build_for_buffer(&ast, source)
-            })
-            .unwrap_or_default()
+    /// The diagnostics the editor reports for the root file of `project`,
+    /// whose text is `source`, run on its defaults.
+    fn produce_diagnostics_for_project(
+        project: &graphcal_project::loader::LoadedProject,
+        source: &str,
+    ) -> Vec<Diagnostic> {
+        let checked =
+            match graphcal_project::project_compiler::ProjectCompiler::new(project).check() {
+                Ok(checked) => checked,
+                Err(error) => return compile_error_to_diagnostics(&error),
+            };
+        let mut symbol_table = crate::symbol_table::build_from_ast(
+            project.root_file().ast(),
+            source,
+            project.root_id(),
+            checked.module_resolver(),
+        );
+        crate::symbol_table::enrich_from_tir(&mut symbol_table, checked.tir(), project.root_id());
+        let prepared =
+            match checked.prepare_with_host_fns(&graphcal_eval::host_fns::demo_registry()) {
+                Ok(prepared) => prepared,
+                Err(error) => return compile_error_to_diagnostics(&error),
+            };
+        let uri = Url::parse("untitled:test.gcl").unwrap();
+        let row = match prepared.binding_builder().finish() {
+            Ok(row) => row,
+            Err(error) => return compile_error_to_diagnostics(&error),
+        };
+        match prepared.evaluate(&row) {
+            Ok(result) => {
+                eval_result_to_diagnostics(&result, prepared.tir(), &uri, source, &symbol_table)
+            }
+            Err(error) => compile_error_to_diagnostics(&error),
+        }
     }
 
     fn produce_diagnostics(source: &str, name: &str) -> Vec<Diagnostic> {
-        let symbol_table = build_symbol_table(source);
-        match compile_and_eval_named(source, name) {
-            Ok(result) => eval_result_to_diagnostics(&result, source, &symbol_table),
-            Err(e) => compile_error_to_diagnostics(&e),
+        match graphcal_project::loader::LoadedProject::from_source(source, name) {
+            Ok(project) => produce_diagnostics_for_project(&project, source),
+            Err(error) => compile_error_to_diagnostics(&error),
         }
+    }
+
+    /// The runtime failures of `diagnostics`, as the line each is placed on,
+    /// its message, and the lines of its related include sites.
+    fn runtime_failure_lines(diagnostics: &[Diagnostic]) -> Vec<(u32, String, Vec<u32>)> {
+        let mut failures: Vec<_> = diagnostics
+            .iter()
+            .filter(|diagnostic| {
+                diagnostic.code == Some(NumberOrString::String("graphcal::E001".into()))
+            })
+            .map(|diagnostic| {
+                let related = diagnostic
+                    .related_information
+                    .iter()
+                    .flatten()
+                    .map(|related| related.location.range.start.line)
+                    .collect();
+                (
+                    diagnostic.range.start.line,
+                    diagnostic.message.clone(),
+                    related,
+                )
+            })
+            .collect();
+        failures.sort();
+        failures
+    }
+
+    #[test]
+    fn include_instance_failures_land_on_the_template_with_the_include_related() {
+        let template = concat!(
+            "param d: Dimensionless = 0.0;\n",
+            "dag inner {\n",
+            "    param d: Dimensionless;\n",
+            "    pub node r: Dimensionless = 1.0 / @d;\n",
+            "}\n",
+        );
+        let failure = |line: u32, message: &str, related: &[u32]| {
+            (line, message.to_string(), related.to_vec())
+        };
+        for (includes, expected) in [
+            (
+                "include inner(d: @d)::{ r };\n",
+                vec![
+                    failure(3, "inner::r: division by zero", &[5]),
+                    failure(5, "r: dependency failed: inner::r", &[]),
+                ],
+            ),
+            (
+                "include inner(d: @d) as i;\n",
+                vec![failure(3, "i::r: division by zero", &[5])],
+            ),
+            (
+                "include inner(d: @d)::{ r };\ninclude inner(d: @d)::{ r as r2 };\n",
+                vec![
+                    failure(3, "<include@122>::r: division by zero", &[5]),
+                    failure(3, "<include@151>::r: division by zero", &[6]),
+                    failure(5, "r: dependency failed: <include@122>::r", &[]),
+                    failure(6, "r2: dependency failed: <include@151>::r", &[]),
+                ],
+            ),
+        ] {
+            let source = format!("{template}{includes}");
+            let diagnostics = produce_diagnostics(&source, "test.gcl");
+            assert_eq!(runtime_failure_lines(&diagnostics), expected, "{includes}");
+        }
+    }
+
+    #[test]
+    fn nested_include_failures_relate_the_include_this_file_writes() {
+        let source = concat!(
+            "param d: Dimensionless = 0.0;\n",
+            "dag inner {\n",
+            "    param d: Dimensionless;\n",
+            "    pub node r: Dimensionless = 1.0 / @d;\n",
+            "}\n",
+            "dag stage {\n",
+            "    param d: Dimensionless;\n",
+            "    include inner(d: @d) as k;\n",
+            "    pub node s: Dimensionless = @k::r;\n",
+            "}\n",
+            "include stage(d: @d) as o;\n",
+        );
+        let diagnostics = produce_diagnostics(source, "test.gcl");
+        assert_eq!(
+            runtime_failure_lines(&diagnostics),
+            [(8, "o::s: dependency failed: o.k::r".to_string(), vec![10])]
+        );
+    }
+
+    #[test]
+    fn failures_of_an_instance_of_another_file_land_on_the_include() {
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::write(
+            directory.path().join("graphcal.toml"),
+            "[package]\nname = \"app\"\n",
+        )
+        .unwrap();
+        let source_dir = directory.path().join("src/app");
+        std::fs::create_dir_all(&source_dir).unwrap();
+        std::fs::write(
+            source_dir.join("lib.gcl"),
+            "param d: Dimensionless;\npub node r: Dimensionless = 1.0 / @d;\n",
+        )
+        .unwrap();
+        let source = "param d: Dimensionless = 0.0;\ninclude app.lib(d: @d) as l;\n";
+        let root = source_dir.join("main.gcl");
+        std::fs::write(&root, source).unwrap();
+
+        let diagnostics = produce_diagnostics_for_file(&root, source);
+        assert_eq!(
+            runtime_failure_lines(&diagnostics),
+            [(1, "l::r: division by zero".to_string(), vec![])]
+        );
     }
 
     #[test]
@@ -560,10 +785,9 @@ mod tests {
     }
 
     fn produce_diagnostics_for_file(path: &std::path::Path, source: &str) -> Vec<Diagnostic> {
-        let symbol_table = build_symbol_table(source);
-        match compile_and_eval_project(path, &HashMap::new(), None, &RealFileSystem::default()) {
-            Ok(result) => eval_result_to_diagnostics(&result, source, &symbol_table),
-            Err(e) => compile_error_to_diagnostics(&e),
+        match graphcal_project::loader::load_project(path, None, &RealFileSystem::default()) {
+            Ok(project) => produce_diagnostics_for_project(&project, source),
+            Err(error) => compile_error_to_diagnostics(&error),
         }
     }
 
