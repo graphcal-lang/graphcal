@@ -28,6 +28,7 @@ use crate::analysis_pipeline::{
     AnalysisRun, OpenBuffer, ViewModelDemand, run_analysis_with_cancellation,
 };
 use crate::analysis_schedule_state::AnalysisScheduleState;
+use crate::analysis_settlement::AnalysisSettlement;
 use crate::client_capabilities::{ClientFeatureSupport, DocumentSymbolShape, WorkspaceEditShape};
 use crate::convert::position_to_byte_offset;
 use crate::file_identity::{document_identity, file_identity};
@@ -46,6 +47,10 @@ const DEBOUNCE_DELAY_MS: u64 = 300;
 /// requests cooperative cancellation and leaves prior cached analysis in
 /// place so queries still answer from the last good state.
 const ANALYSIS_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// How long an inlay-hint request waits for the analysis of the latest text
+/// (debounce included) before answering from whatever is current.
+const CURRENT_ANALYSIS_WAIT: Duration = Duration::from_secs(2);
 
 /// Global cap for CPU-bound analyses. Permits are owned by the blocking
 /// closures, not their async waiters, so a timed-out but not-yet-cooperating
@@ -245,6 +250,9 @@ pub struct Backend {
     plugin_host: Arc<graphcal_plugin_host::PluginHost>,
     /// Per-document single-flight and global concurrency control.
     analysis_scheduler: Arc<AnalysisScheduler>,
+    /// The latest finished analysis pass of each document, which requests
+    /// wait for instead of answering a keystroke too early.
+    analysis_settlement: Arc<AnalysisSettlement>,
 }
 
 #[derive(Clone, Copy)]
@@ -302,6 +310,7 @@ impl Backend {
             client_features: self.client_features(),
             plugin_host: Arc::clone(&self.plugin_host),
             scheduler: Arc::clone(&self.analysis_scheduler),
+            settlement: Arc::clone(&self.analysis_settlement),
         }
     }
 
@@ -597,6 +606,7 @@ struct AnalysisWorker {
     client_features: ClientFeatureSupport,
     plugin_host: Arc<graphcal_plugin_host::PluginHost>,
     scheduler: Arc<AnalysisScheduler>,
+    settlement: Arc<AnalysisSettlement>,
 }
 
 /// Run analysis until it either stores a revision-coherent result or reaches
@@ -612,7 +622,10 @@ async fn analyze_store_publish(
     loop {
         match analyze_store_publish_once(worker, uri.clone(), text, root_revision, generation).await
         {
-            AnalysisCompletion::Done => return,
+            AnalysisCompletion::Done => {
+                worker.settlement.settle(&uri, generation);
+                return;
+            }
             AnalysisCompletion::Retry(snapshot) => {
                 text = snapshot.text.as_ref().clone();
                 root_revision = snapshot.revision;
@@ -646,6 +659,7 @@ async fn analyze_store_publish_once(
         client_features,
         plugin_host,
         scheduler,
+        settlement: _,
     } = worker;
     let client_features = *client_features;
     let registration = scheduler.register(&uri, generation);
@@ -1041,13 +1055,18 @@ async fn bump_generation_value(generations: &Arc<RwLock<HashMap<Url, u64>>>, uri
         .or_insert(1)
 }
 
+/// The current generation stored for `uri`.
+async fn generation_of(generations: &Arc<RwLock<HashMap<Url, u64>>>, uri: &Url) -> u64 {
+    *generations.read().await.get(uri).unwrap_or(&0)
+}
+
 /// Check whether `generation` is still the current generation stored for `uri`.
 async fn is_generation_current(
     generations: &Arc<RwLock<HashMap<Url, u64>>>,
     uri: &Url,
     generation: u64,
 ) -> bool {
-    *generations.read().await.get(uri).unwrap_or(&0) == generation
+    generation_of(generations, uri).await == generation
 }
 
 #[tower_lsp::async_trait]
@@ -1218,7 +1237,9 @@ impl LanguageServer for Backend {
         // Invalidate and cancel queued/running work before clearing state. Keep
         // the generation entry to avoid an ABA collision if the URI is reopened
         // while an old blocking worker is still winding down.
-        self.bump_generation(&uri).await;
+        let generation = self.bump_generation(&uri).await;
+        // No pass follows a close: settle it so no request waits for one.
+        self.analysis_settlement.settle(&uri, generation);
         self.analysis_scheduler.close_document(&uri);
         // Re-publish every URI the closing document reported on from the
         // *remaining* open documents' merged view: closing one document only
@@ -1313,6 +1334,11 @@ impl LanguageServer for Backend {
     async fn inlay_hint(&self, params: InlayHintParams) -> Result<Option<Vec<InlayHint>>> {
         let uri = params.text_document.uri;
         let range = params.range;
+        // A client without inlay-hint refresh (Helix) keeps an empty answer
+        // until its view changes, so wait for the pass of the latest text.
+        self.analysis_settlement
+            .wait_for_current(&uri, &self.change_generations, CURRENT_ANALYSIS_WAIT)
+            .await;
         self.with_current_analysis(&uri, |current| {
             crate::inlay_hints::inlay_hints(current.get(), range)
         })
@@ -1496,6 +1522,7 @@ pub(crate) fn service() -> (LspService<Backend>, ClientSocket) {
         dependency_graph: Arc::new(RwLock::new(DependencyGraph::default())),
         plugin_host: Arc::new(graphcal_plugin_host::PluginHost::new()),
         analysis_scheduler: Arc::new(AnalysisScheduler::new()),
+        analysis_settlement: Arc::new(AnalysisSettlement::default()),
     })
     .custom_method(ViewModelRequest::METHOD, Backend::view_model)
     .finish()

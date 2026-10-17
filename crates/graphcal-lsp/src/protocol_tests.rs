@@ -823,6 +823,38 @@ async fn coordinate_requests_reject_stale_snapshots() {
 }
 
 #[tokio::test]
+async fn inlay_hints_requested_right_after_an_edit_answer_the_edited_text() {
+    // A client without inlay-hint refresh (Helix) asks once after a change
+    // and keeps the answer, so the answer must be the edited text's.
+    let (mut service, mut socket) = service();
+    initialize(&mut service, json!({})).await;
+    let uri = Url::parse("untitled:edited.gcl").unwrap();
+    notify(
+        &mut service,
+        "textDocument/didOpen",
+        open_params(&uri, 1, SOURCE),
+    )
+    .await;
+    let _ = timeout(Duration::from_secs(5), socket.next())
+        .await
+        .expect("publish diagnostics timeout");
+    // The analysis publishes while the request waits for it.
+    let drain = tokio::spawn(async move { while socket.next().await.is_some() {} });
+
+    notify(
+        &mut service,
+        "textDocument/didChange",
+        json!({
+            "textDocument": { "uri": uri, "version": 2 },
+            "contentChanges": [{ "text": "node changed: Dimensionless = 3.0;\n" }]
+        }),
+    )
+    .await;
+    assert_eq!(calculated_hint_labels(&mut service, &uri).await, [" = 3"]);
+    drain.abort();
+}
+
+#[tokio::test]
 #[ignore = "manual latency/resource baseline; run with --release --ignored --nocapture"]
 async fn protocol_latency_baseline() {
     const ITERATIONS: u32 = 100;
