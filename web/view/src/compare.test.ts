@@ -36,7 +36,13 @@ const q = (display: string): Value => ({
   unit: "W",
 });
 function model(nodes: ViewNode[]): ViewModel {
-  return { version: 1, module: { id: "p.m", file: "src/m.gcl", package: "p" }, indexes: [], nodes };
+  return {
+    version: 1,
+    module: { id: "p.m", file: "src/m.gcl", package: "p" },
+    target: { kind: "module" },
+    indexes: [],
+    nodes,
+  };
 }
 
 describe("diffModels", () => {

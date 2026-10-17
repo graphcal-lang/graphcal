@@ -1,0 +1,5 @@
+/// The gain the includer sets.
+param gain: Dimensionless = 1.0;
+pub node out: Dimensionless = @gain;
+node twice: Dimensionless = @out * 2.0;
+assert positive = @out > 0.0;

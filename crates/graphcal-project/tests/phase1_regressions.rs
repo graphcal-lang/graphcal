@@ -1086,6 +1086,74 @@ fn eval_output_categories_preserve_included_parameter_declarations() {
 }
 
 #[test]
+fn eval_reports_the_values_of_nested_include_instances_apart_from_its_outputs() {
+    use graphcal_eval::eval::EvalOutputView;
+
+    let directory = tempfile::tempdir().unwrap();
+    let package = directory.path().join("src/nested");
+    std::fs::create_dir_all(&package).unwrap();
+    std::fs::write(
+        directory.path().join("graphcal.toml"),
+        "[package]\nname = \"nested\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        package.join("inner.gcl"),
+        "param k: Dimensionless = 1.0;\npub node x: Dimensionless = @k * 10.0;\n",
+    )
+    .unwrap();
+    std::fs::write(
+        package.join("outer.gcl"),
+        "param gain: Dimensionless = 1.0;\n\
+         include nested.inner(k: @gain) as q;\n\
+         pub node out: Dimensionless = @q::x;\n",
+    )
+    .unwrap();
+    let root = package.join("main.gcl");
+    std::fs::write(
+        &root,
+        "include nested.outer(gain: 3.0) as p;\nnode y: Dimensionless = @p::out;\n",
+    )
+    .unwrap();
+    let result = compile_and_eval_project(
+        &root,
+        &HashMap::new(),
+        Some(directory.path()),
+        &RealFileSystem::default(),
+    )
+    .unwrap();
+    // The instance `q` of `p` is evaluated with `k` bound to `p`'s `gain`.
+    assert!(
+        result
+            .entries
+            .iter()
+            .all(|entry| !entry.identity.owner().to_string().contains('q')),
+        "a nested instance's values are no output of the root"
+    );
+    let value = |leaf: &str| {
+        result
+            .nested_instance_entries
+            .iter()
+            .find(|entry| {
+                entry.identity.leaf().as_str() == leaf
+                    && entry.identity.owner().to_string().contains('q')
+            })
+            .map_or_else(
+                || panic!("no entry for q's `{leaf}`"),
+                |entry| entry.outcome.as_ref().unwrap().si_value().unwrap().get(),
+            )
+    };
+    assert!((value("k") - 3.0).abs() < 1e-12);
+    assert!((value("x") - 30.0).abs() < 1e-12);
+    // The root's surface is unchanged.
+    let surface: Vec<String> = result
+        .output_values(EvalOutputView::Surface)
+        .map(|entry| entry.name.to_string())
+        .collect();
+    assert_eq!(surface, ["y", "p::gain", "p::out"]);
+}
+
+#[test]
 fn semantic_include_outputs_preserve_presentation_and_unique_names() {
     let directory = tempfile::tempdir().unwrap();
     let package = directory.path().join("src/include_presentation");

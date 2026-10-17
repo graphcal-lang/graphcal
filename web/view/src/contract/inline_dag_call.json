@@ -5,6 +5,9 @@
     "file": "main.gcl",
     "package": "main"
   },
+  "target": {
+    "kind": "module"
+  },
   "indexes": [],
   "nodes": [
     {

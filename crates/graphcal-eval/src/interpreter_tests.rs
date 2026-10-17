@@ -230,7 +230,7 @@ fn eval_complex_milestone() {
         result
             .assertions
             .iter()
-            .all(|(_, assertion, _)| *assertion == AssertResult::Pass)
+            .all(|assertion| assertion.outcome == AssertResult::Pass)
     );
 }
 
@@ -245,7 +245,7 @@ fn indexed_tolerance_reports_failing_keys_with_detail() {
          assert close = @actual ~= @expected +/- 0.1;",
     )
     .unwrap();
-    match &result.assertions[0].1 {
+    match &result.assertions[0].outcome {
         crate::eval::types::AssertResult::Fail { message } => {
             assert_eq!(
                 message,
@@ -268,9 +268,10 @@ fn indexed_tolerance_per_key_and_explicit_relative_pass() {
          assert relative = @actual ~= @expected +/- @relative_tol;",
     )
     .unwrap();
-    for (name, result, _) in &result.assertions {
+    for assertion in &result.assertions {
+        let name = &assertion.name;
         assert_eq!(
-            result,
+            &assertion.outcome,
             &crate::eval::types::AssertResult::Pass,
             "assertion `{name}` should pass"
         );
@@ -293,12 +294,12 @@ fn indexed_tolerance_respects_per_variant_expected_fail() {
 
     let result = compile_and_eval(&source("0.1")).unwrap();
     assert_eq!(
-        result.assertions[0].1,
+        result.assertions[0].outcome,
         crate::eval::types::AssertResult::Pass
     );
 
     let result = compile_and_eval(&source("1.0")).unwrap();
-    match &result.assertions[0].1 {
+    match &result.assertions[0].outcome {
         crate::eval::types::AssertResult::Fail { message } => {
             assert!(
                 message.contains("unexpected pass at Case#B"),
@@ -350,7 +351,7 @@ fn explicit_for_compares_indexed_values_element_wise() {
         entries(&node("below")),
         vec![("A".to_string(), true), ("B".to_string(), true)]
     );
-    match &result.assertions[0].1 {
+    match &result.assertions[0].outcome {
         crate::eval::types::AssertResult::Fail { message } => {
             assert_eq!(message, "failed at Case#B");
         }
@@ -367,7 +368,7 @@ fn expected_fail_finite_position_passes_when_element_fails() {
     )
     .unwrap();
     assert_eq!(
-        result.assertions[0].1,
+        result.assertions[0].outcome,
         crate::eval::types::AssertResult::Pass
     );
 }
@@ -381,7 +382,7 @@ fn expected_fail_finite_position_unexpected_pass_fails() {
          assert r = for i: Fin(2) { to_int(i) == 0 };",
     )
     .unwrap();
-    match &result.assertions[0].1 {
+    match &result.assertions[0].outcome {
         crate::eval::types::AssertResult::Fail { message } => {
             assert!(
                 message.contains("unexpected pass") && message.contains("#0"),
@@ -408,7 +409,7 @@ fn expected_fail_mixed_named_and_finite_tuple_key() {
     )
     .unwrap();
     assert_eq!(
-        result.assertions[0].1,
+        result.assertions[0].outcome,
         crate::eval::types::AssertResult::Pass
     );
 }
@@ -423,7 +424,7 @@ fn assert_negative_runtime_tolerance_errors() {
          assert exact = @x ~= 1.0 +/- @tol;",
     )
     .unwrap();
-    match &result.assertions[0].1 {
+    match &result.assertions[0].outcome {
         crate::eval::types::AssertResult::Error { message } => {
             assert!(
                 message.contains("tolerance must be non-negative"),
@@ -442,7 +443,7 @@ fn assert_negative_runtime_tolerance_expression_errors() {
          assert exact = @x ~= 1.0 +/- abs(1.0) * @rate;",
     )
     .unwrap();
-    match &result.assertions[0].1 {
+    match &result.assertions[0].outcome {
         crate::eval::types::AssertResult::Error { message } => {
             assert!(
                 message.contains("tolerance must be non-negative"),
@@ -470,9 +471,9 @@ fn assert_on_failed_dependency_reports_dependency_failure() {
         result
             .assertions
             .iter()
-            .find(|(assert_name, _, _)| assert_name.to_string() == name)
+            .find(|assertion| assertion.name.to_string() == name)
             .unwrap_or_else(|| panic!("assertion `{name}` not found"))
-            .1
+            .outcome
             .clone()
     };
     assert_eq!(
@@ -499,7 +500,7 @@ fn assert_on_transitively_failed_dependency_reports_dependency_name() {
     )
     .unwrap();
     assert_eq!(
-        result.assertions[0].1,
+        result.assertions[0].outcome,
         crate::eval::types::AssertResult::Error {
             message: "dependency failed: f".to_string()
         }
@@ -515,7 +516,7 @@ fn assert_runtime_negative_zero_tolerance_is_zero() {
     )
     .unwrap();
     assert_eq!(
-        result.assertions[0].1,
+        result.assertions[0].outcome,
         crate::eval::types::AssertResult::Pass
     );
 }
@@ -529,7 +530,7 @@ fn assert_zero_tolerance_exact_match_passes() {
     )
     .unwrap();
     assert_eq!(
-        result.assertions[0].1,
+        result.assertions[0].outcome,
         crate::eval::types::AssertResult::Pass
     );
 }

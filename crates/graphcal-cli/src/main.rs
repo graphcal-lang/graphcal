@@ -151,6 +151,10 @@ enum Commands {
         /// Project root directory (overrides automatic graphcal.toml detection)
         #[arg(long)]
         root: Option<PathBuf>,
+        /// Export the view of one include instance of the file's evaluation
+        /// instead, by the `id` a model lists for it (`origin.instance.id`)
+        #[arg(long)]
+        instance: Option<String>,
     },
     /// Export the dependency graph of a .gcl file (experimental)
     Graph {
@@ -388,7 +392,11 @@ fn run_command(cli: Cli) {
         } => {
             run_graph(&file, &format, view, max_depth, root.as_deref());
         }
-        Commands::View { file, root } => run_view(&file, root.as_deref()),
+        Commands::View {
+            file,
+            root,
+            instance,
+        } => run_view(&file, root.as_deref(), instance),
         Commands::Model { command } => match command {
             ModelCommands::Serve { file, output, root } => {
                 run_model_serve(&file, &output, root.as_deref());
@@ -996,15 +1004,20 @@ fn run_graph(
     }
 }
 
-/// Print the view model of `file`: its declarations, axes, dependencies,
-/// source positions, and (unless the file is a library) evaluated values.
-fn run_view(file: &Path, project_root: Option<&Path>) {
-    use graphcal_project::view_model::{ViewModel, ViewProjectionError, project_view};
+/// Print the view model of `file`, or of the include instance `instance` of
+/// its evaluation: its declarations, axes, dependencies, source positions,
+/// and (unless the file is a library) evaluated values.
+fn run_view(file: &Path, project_root: Option<&Path>, instance: Option<String>) {
+    use graphcal_project::view_model::{
+        ViewInstanceId, ViewModel, ViewProjectionError, ViewTarget, project_views,
+    };
 
     /// Why the view could not be produced.
     enum ViewFailure {
         Compile(CompileError),
         Projection(ViewProjectionError),
+        /// The evaluation materializes no such instance.
+        UnknownTarget(ViewTarget),
     }
 
     impl From<CompileError> for ViewFailure {
@@ -1022,11 +1035,18 @@ fn run_view(file: &Path, project_root: Option<&Path>) {
     eprintln!(
         "warning: `graphcal view` is experimental; its output and CLI surface may change in any release"
     );
+    let target = instance.map_or(ViewTarget::Module, |instance| ViewTarget::Instance {
+        instance: ViewInstanceId::from_wire(instance),
+    });
     let outcome = (|| -> Result<ViewModel, ViewFailure> {
         let fs = build_rooted_filesystem(file, project_root)?;
         let (project, host_fns) = load_project_with_plugins(file, project_root, &fs)?;
         let checked = ProjectCompiler::new(&project).host_fns(&host_fns).check()?;
-        let mut projection = project_view(&project, &checked)?;
+        let projections = project_views(&project, &checked)?;
+        let Some(projection) = projections.get(&target) else {
+            return Err(ViewFailure::UnknownTarget(target.clone()));
+        };
+        let mut projection = projection.clone();
         if checked.is_library() {
             return Ok(projection.into_model());
         }
@@ -1063,6 +1083,16 @@ fn run_view(file: &Path, project_root: Option<&Path>) {
         }
         Err(ViewFailure::Projection(error)) => {
             eprintln!("internal view projection error: {error}");
+            process::exit(2);
+        }
+        Err(ViewFailure::UnknownTarget(target)) => {
+            match target {
+                ViewTarget::Instance { instance } => eprintln!(
+                    "error: the evaluation of {} has no include instance `{instance}`",
+                    file.display()
+                ),
+                ViewTarget::Module => eprintln!("error: {} has no view", file.display()),
+            }
             process::exit(2);
         }
     }
@@ -1234,10 +1264,11 @@ fn print_text(result: &EvalResult, output_view: EvalOutputView) {
         let assert_names: Vec<String> = result
             .assertions
             .iter()
-            .map(|(n, _, _)| n.to_string())
+            .map(|assertion| assertion.name.to_string())
             .collect();
         let max_assert_len = assert_names.iter().map(String::len).max().unwrap_or(0);
-        for ((name, assert_result, _), name_str) in result.assertions.iter().zip(&assert_names) {
+        for (assertion, name_str) in result.assertions.iter().zip(&assert_names) {
+            let (name, assert_result) = (&assertion.name, &assertion.outcome);
             let line = format_assertion_line(
                 name_str,
                 assert_result,
@@ -1516,7 +1547,8 @@ fn print_json(
         let assertions: serde_json::Map<String, serde_json::Value> = result
             .assertions
             .iter()
-            .map(|(n, r, _)| {
+            .map(|assertion| {
+                let (n, r) = (&assertion.name, &assertion.outcome);
                 let val = match r {
                     AssertResult::Pass => serde_json::json!({"status": "pass"}),
                     AssertResult::Fail { message } => {

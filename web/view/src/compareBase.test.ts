@@ -9,7 +9,7 @@ function entries(shas: Record<string, string>): TreeEntry[] {
 
 /** A model of `file`; only its file matters to the lookup. */
 function modelOf(file: string): ViewModel {
-  return { module: { id: file, file } } as unknown as ViewModel;
+  return { module: { id: file, file }, target: { kind: "module" } } as unknown as ViewModel;
 }
 
 test("changedPaths lists added, removed and changed paths", () => {
@@ -45,6 +45,14 @@ describe("compareOf", () => {
       value: "param a: Power = 1.0 W",
     });
     expect(compare.source("src/p/new.gcl")).toEqual({ kind: "absent" });
+  });
+
+  test("an include instance is not compared with its module alone", () => {
+    const instance = {
+      module: { id: "a", file: "src/p/a.gcl" },
+      target: { kind: "instance", root: { id: "main" }, instance: { id: "i" } },
+    } as unknown as ViewModel;
+    expect(compare.model(instance).kind).toBe("failed");
   });
 
   test("a base that could not be read fails everything, rather than making it new", () => {

@@ -1501,9 +1501,11 @@ pub(crate) fn service() -> (LspService<Backend>, ClientSocket) {
     .finish()
 }
 
-/// `graphcal/viewModel`: the view model of a document, as of its latest
-/// analysis. `null` until the document has been analyzed, when its project
-/// did not check, or when the client did not declare
+/// `graphcal/viewModel`: a view model of a document, as of its latest
+/// analysis: the document's own, or (with `target`) that of one include
+/// instance its evaluation materializes. `null` until the document has been
+/// analyzed, when its project did not check, when the evaluation has no such
+/// instance, or when the client did not declare
 /// `experimental.graphcal.viewModelChanges` (analysis then skips the view).
 enum ViewModelRequest {}
 
@@ -1516,6 +1518,14 @@ impl ViewModelRequest {
 #[serde(rename_all = "camelCase")]
 pub(crate) struct ViewModelParams {
     text_document: tower_lsp::lsp_types::TextDocumentIdentifier,
+    /// What to project of the document: `{"kind": "module"}` (the default)
+    /// or `{"kind": "instance", "instance": "<id>"}`.
+    #[serde(default = "module_target")]
+    target: graphcal_project::view_model::ViewTarget,
+}
+
+const fn module_target() -> graphcal_project::view_model::ViewTarget {
+    graphcal_project::view_model::ViewTarget::Module
 }
 
 /// `graphcal/viewModelDidChange`: a document's analysis completed, so a
@@ -1540,7 +1550,12 @@ impl Backend {
         params: ViewModelParams,
     ) -> Result<Option<graphcal_project::view_model::ViewModel>> {
         self.with_current_analysis(&params.text_document.uri, |analysis| {
-            analysis.get().view.clone()
+            analysis
+                .get()
+                .view
+                .as_ref()
+                .and_then(|views| views.get(&params.target))
+                .cloned()
         })
         .await
     }

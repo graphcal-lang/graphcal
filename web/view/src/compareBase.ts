@@ -36,7 +36,11 @@ export function compareOf(ref: string, read: BaseRead): Compare {
   }
   return {
     ref,
-    model: (head) => read.models.get(head.module.file) ?? { kind: "absent" },
+    model: (head) =>
+      // The base models are of modules alone: an instance has none to compare with.
+      head.target.kind === "instance"
+        ? { kind: "failed", message: "an include instance is not compared" }
+        : (read.models.get(head.module.file) ?? { kind: "absent" }),
     source: (file) => {
       const text = read.sources.get(file);
       return text === undefined ? { kind: "absent" } : { kind: "present", value: text };

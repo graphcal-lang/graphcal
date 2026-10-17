@@ -5,6 +5,9 @@
     "file": "range_index.gcl",
     "package": "range_index"
   },
+  "target": {
+    "kind": "module"
+  },
   "indexes": [
     {
       "id": "p:range_index/f:range_index/n:TimeStep",

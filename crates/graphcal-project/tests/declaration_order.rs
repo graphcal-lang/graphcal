@@ -23,7 +23,7 @@ use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
 use graphcal_compiler::syntax::parser::Parser;
-use graphcal_eval::eval::EvalResult;
+use graphcal_eval::eval::{EvalAssertion, EvalResult};
 use graphcal_io::RealFileSystem;
 use graphcal_project::loader::load_project;
 use graphcal_project::prepare::{
@@ -173,11 +173,11 @@ fn compare_results(original: &EvalResult, permuted: &EvalResult) -> Result<(), S
         original
             .assertions
             .iter()
-            .map(|(name, result, _span)| (name.to_string(), format!("{result:?}"))),
+            .map(|EvalAssertion { name, outcome, .. }| (name.to_string(), format!("{outcome:?}"))),
         permuted
             .assertions
             .iter()
-            .map(|(name, result, _span)| (name.to_string(), format!("{result:?}"))),
+            .map(|EvalAssertion { name, outcome, .. }| (name.to_string(), format!("{outcome:?}"))),
     );
 
     // Presentation specs. These have no `PartialEq`, and none of them embed a

@@ -2315,7 +2315,7 @@ fn empty_and_default_equivalent_includes_share_instance_semantics() {
         result
             .assertions
             .iter()
-            .map(|(name, outcome, _)| (name.to_string(), outcome))
+            .map(|assertion| (assertion.name.to_string(), &assertion.outcome))
             .collect::<Vec<_>>(),
         [
             ("defaults::positive".to_string(), &AssertResult::Pass),
@@ -2423,7 +2423,7 @@ fn nested_configured_includes_keep_instance_local_bindings_and_assertions() {
         result
             .assertions
             .iter()
-            .filter(|(_, outcome, _)| *outcome == AssertResult::Pass)
+            .filter(|assertion| assertion.outcome == AssertResult::Pass)
             .count(),
         2
     );
@@ -2739,9 +2739,9 @@ fn unavailability_reasons_name_declarations_as_the_output_does() {
         result
             .assertions
             .iter()
-            .find(|(candidate, _, _)| candidate.to_string() == name)
+            .find(|assertion| assertion.name.to_string() == name)
             .unwrap_or_else(|| panic!("missing assertion `{name}`"))
-            .1
+            .outcome
             .clone()
     };
     let AssertResult::Blocked { reason } = assertion("waits") else {
@@ -4962,10 +4962,10 @@ fn three_level_instantiated_file_include_preserves_assertion_instance_path() {
 
     let result = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap();
     assert!((find_value(&result, "result") - (-2.0)).abs() < f64::EPSILON);
-    assert!(result.assertions.iter().any(|(name, outcome, _)| {
-        name.to_string() == "upper.middle.leaf::positive"
+    assert!(result.assertions.iter().any(|assertion| {
+        assertion.name.to_string() == "upper.middle.leaf::positive"
             && matches!(
-                outcome,
+                assertion.outcome,
                 graphcal_eval::eval::types::AssertResult::Fail { .. }
             )
     }));
@@ -6617,9 +6617,9 @@ fn project_expected_fail_keys_accept_resolved_index_owner_with_same_leaf_indexes
         result
             .assertions
             .iter()
-            .find(|(assert_name, _, _)| assert_name.to_string() == name)
+            .find(|assertion| assertion.name.to_string() == name)
             .unwrap_or_else(|| panic!("assertion `{name}` not found"))
-            .1
+            .outcome
             .clone()
     };
     assert_eq!(assert_result("a_expected"), AssertResult::Pass);
@@ -6633,12 +6633,12 @@ fn included_expected_fail_resolves_index_in_its_defining_module() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/fixtures/valid/multi/include_expected_fail_scope/src/repro/main.gcl");
     let result = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap();
-    let (_, assertion, _) = result
+    let assertion = result
         .assertions
         .iter()
-        .find(|(name, _, _)| name.to_string().contains("check"))
+        .find(|assertion| assertion.name.to_string().contains("check"))
         .expect("included assertion not found");
-    assert_eq!(*assertion, AssertResult::Pass);
+    assert_eq!(assertion.outcome, AssertResult::Pass);
 }
 
 #[test]
@@ -7320,12 +7320,12 @@ fn project_injectable_index_expected_fail() {
     let assert_result = result
         .assertions
         .iter()
-        .find(|(name, _, _)| name.to_string().contains("within_limit"))
+        .find(|assertion| assertion.name.to_string().contains("within_limit"))
         .expect("within_limit assertion not found");
     assert!(
-        matches!(assert_result.1, AssertResult::Pass),
+        matches!(assert_result.outcome, AssertResult::Pass),
         "expected Pass, got {:?}",
-        assert_result.1
+        assert_result.outcome
     );
 }
 
@@ -9255,12 +9255,10 @@ fn product_and_rss_support_linear_algebra_ergonomics() {
     assert!((find_value(&result, "box_volume") - 24.0).abs() < 1e-12);
     assert!((find_value(&result, "budget_sigma") - 5.0).abs() < 1e-12);
     assert!((find_value(&result, "chained_product") - 720.0).abs() < 1e-12);
-    assert!(
-        result
-            .assertions
-            .iter()
-            .all(|(_, result, _)| matches!(result, graphcal_eval::eval::types::AssertResult::Pass))
-    );
+    assert!(result.assertions.iter().all(|assertion| matches!(
+        assertion.outcome,
+        graphcal_eval::eval::types::AssertResult::Pass
+    )));
 }
 
 #[test]
@@ -9270,12 +9268,10 @@ fn dag_local_required_types_enable_reusable_linear_algebra() {
 
     assert!((find_value(&result, "displacement_magnitude::result") - 13.0).abs() < 1e-12);
     assert!((find_value(&result, "duration_magnitude::result") - 13.0).abs() < 1e-12);
-    assert!(
-        result
-            .assertions
-            .iter()
-            .all(|(_, result, _)| matches!(result, graphcal_eval::eval::types::AssertResult::Pass))
-    );
+    assert!(result.assertions.iter().all(|assertion| matches!(
+        assertion.outcome,
+        graphcal_eval::eval::types::AssertResult::Pass
+    )));
 }
 
 #[test]
@@ -9293,10 +9289,10 @@ fn eval_extern_plugin_fixture() {
     // Struct results rebuild as ordinary record values: field access works.
     assert!((find_value(&result, "dv_spread") - 1500.0).abs() < 1e-9);
     assert!(
-        result
-            .assertions
-            .iter()
-            .all(|(_, r, _)| matches!(r, graphcal_eval::eval::types::AssertResult::Pass)),
+        result.assertions.iter().all(|assertion| matches!(
+            assertion.outcome,
+            graphcal_eval::eval::types::AssertResult::Pass
+        )),
         "all fixture assertions must pass: {:?}",
         result.assertions
     );
@@ -9372,8 +9368,13 @@ fn projected_assertions_name_failed_dependencies_as_the_root_does() {
                   }\n\
                   include producer(v: 2.0 m) as other;\n";
     let result = compile_and_eval_named(source, "test.gcl").unwrap();
-    let [(name, graphcal_eval::eval::types::AssertResult::Error { message }, _)] =
-        result.assertions.as_slice()
+    let [
+        graphcal_eval::eval::EvalAssertion {
+            name,
+            outcome: graphcal_eval::eval::types::AssertResult::Error { message },
+            ..
+        },
+    ] = result.assertions.as_slice()
     else {
         panic!("expected one errored assertion: {:?}", result.assertions);
     };
@@ -9435,8 +9436,13 @@ fn invoked_modules_name_unavailable_declarations_by_source_module_path() {
         reason("from_nested"),
         "BLOCKED — unfinished dependencies: pipeline.lib.helper::inner"
     );
-    let [(name, graphcal_eval::eval::types::AssertResult::Blocked { reason }, _)] =
-        result.assertions.as_slice()
+    let [
+        graphcal_eval::eval::EvalAssertion {
+            name,
+            outcome: graphcal_eval::eval::types::AssertResult::Blocked { reason },
+            ..
+        },
+    ] = result.assertions.as_slice()
     else {
         panic!("expected one blocked assertion: {:?}", result.assertions);
     };

@@ -45,25 +45,37 @@ const valueSchema: z.ZodType<Value> = z.lazy(() =>
   ]),
 );
 
+const moduleSchema = z.object({ id: z.string(), file: z.string(), package: z.string() });
+export type ViewModule = z.infer<typeof moduleSchema>;
+
 export const nodeKindSchema = z.enum(["param", "const", "node", "assert"]);
 export type NodeKind = z.infer<typeof nodeKindSchema>;
 
-const instanceSchema = z.object({ name: z.string(), bound: z.boolean() });
+/**
+ * An include instance: `id` (opaque) asks for the instance's own view, `name`
+ * is what a reader sees (`eps` in `include power_project.eps() …`). A bound
+ * instance (the include passes arguments) has values of its own.
+ */
+const instanceSchema = z.object({ id: z.string(), name: z.string(), bound: z.boolean() });
 export type Instance = z.infer<typeof instanceSchema>;
+
+/** An inline DAG call (`scale(…)`): evaluated in place, it has no view of its own. */
+const callSchema = z.object({ name: z.string(), bound: z.boolean() });
+export type Call = z.infer<typeof callSchema>;
 
 /**
  * Where a node's declaration comes from. An include member names the instance
- * it is read through (`eps` in `include power_project.eps() …`), and the
- * output of an inline call names the call (`scale(…)` for `@scale(…)::out`);
- * a bound instance (the include or call passes arguments) has values of its
- * own, which no view of its module evaluated alone shows. A call is evaluated
- * in place, so its output has no value.
+ * it is read through, and the output of an inline call names the call
+ * (`scale(…)` for `@scale(…)::out`); a call is evaluated in place, so its
+ * output has no value. In an instance's view, `includer` is a declaration of
+ * the module that includes the instance, read by the include's arguments.
  */
 export const originSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("local") }),
   z.object({ kind: z.literal("imported") }),
   z.object({ kind: z.literal("included"), instance: instanceSchema }),
-  z.object({ kind: z.literal("called"), instance: instanceSchema }),
+  z.object({ kind: z.literal("called"), instance: callSchema }),
+  z.object({ kind: z.literal("includer") }),
 ]);
 export type Origin = z.infer<typeof originSchema>;
 
@@ -149,7 +161,16 @@ export type ViewIndex = z.infer<typeof viewIndexSchema>;
 
 export const viewModelSchema = z.object({
   version: z.literal(1),
-  module: z.object({ id: z.string(), file: z.string(), package: z.string() }),
+  /** The module whose declarations the view presents (for an instance, its template). */
+  module: moduleSchema,
+  /**
+   * What the view presents the module as: evaluated alone, or as one include
+   * instance of `root` evaluated as the root, with the include's arguments.
+   */
+  target: z.discriminatedUnion("kind", [
+    z.object({ kind: z.literal("module") }),
+    z.object({ kind: z.literal("instance"), root: moduleSchema, instance: instanceSchema }),
+  ]),
   indexes: z.array(viewIndexSchema),
   nodes: z.array(viewNodeSchema),
 });
@@ -165,7 +186,7 @@ export function isExternal(node: ViewNode): boolean {
 }
 
 /** The include or call instance a node is read through, if any. */
-export function instanceOf(node: ViewNode): Instance | null {
+export function instanceOf(node: ViewNode): Instance | Call | null {
   return node.origin.kind === "included" || node.origin.kind === "called"
     ? node.origin.instance
     : null;

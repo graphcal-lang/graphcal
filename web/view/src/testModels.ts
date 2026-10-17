@@ -27,6 +27,7 @@ export function viewModel(nodes: ViewNode[], extra: Partial<ViewModel> = {}): Vi
   return {
     version: 1,
     module: { id: "p.m", file: "src/m.gcl", package: "p" },
+    target: { kind: "module" },
     indexes: [],
     nodes,
     ...extra,

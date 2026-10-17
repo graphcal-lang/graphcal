@@ -5,6 +5,9 @@
     "file": "linear_algebra.gcl",
     "package": "linear_algebra"
   },
+  "target": {
+    "kind": "module"
+  },
   "indexes": [
     {
       "id": "F:2",

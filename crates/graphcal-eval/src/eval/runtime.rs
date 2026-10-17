@@ -119,6 +119,7 @@ pub fn evaluate_plan_with_values_and_bindings_and_cancellation(
         entries,
         output_surface,
         mut presentation_diagnostics,
+        nested_instance_entries,
     } = value_entries::assemble_value_entries(plan, evaluated, &ctx)?;
     cancellation.checkpoint()?;
 
@@ -148,6 +149,7 @@ pub fn evaluate_plan_with_values_and_bindings_and_cancellation(
             .map(|declaration| names.name(declaration))
             .collect(),
         entries,
+        nested_instance_entries,
         output_surface,
         assertions,
         plots,

@@ -3,8 +3,8 @@
 // enters the consumer's channel (below its own lanes) and rises into the port
 // box.
 import type { Layout } from "./layout.ts";
-import { instanceOf, isExternal, type ViewModel } from "./model.ts";
-import { keyOf, sameKey, type PaneKey } from "./panes.ts";
+import { isExternal, type ViewModel, type ViewNode } from "./model.ts";
+import { readTarget, sameTarget, type ViewTarget } from "./target.ts";
 import {
   anchorsOf,
   CHANNEL_PAD,
@@ -16,7 +16,7 @@ import {
 } from "./wires.ts";
 
 export interface CrossSheet {
-  key: PaneKey;
+  key: ViewTarget;
   model: ViewModel;
   layout: Layout;
   viewEl: HTMLElement;
@@ -37,20 +37,45 @@ export interface CrossLink {
   toId: string;
 }
 
+/**
+ * The open sheet and its own node that produce the external `node` of `to`:
+ * the sheet of the target it is read from (its declaration of that id, or of
+ * that name for an include alias, which has an id of its own), or, for an
+ * includer's declaration an instance reads, the sheet that declares that id.
+ */
+function producerOf(
+  sheets: readonly CrossSheet[],
+  to: CrossSheet,
+  node: ViewNode,
+): { from: CrossSheet; producer: ViewNode } | null {
+  const target = readTarget(to.key, node);
+  const own = (sheet: CrossSheet, match: (n: ViewNode) => boolean): ViewNode | undefined =>
+    sheet.model.nodes.find((n) => !isExternal(n) && match(n));
+  if (target === null) {
+    if (node.origin.kind !== "includer") return null;
+    for (const from of sheets) {
+      const producer = from === to ? undefined : own(from, (n) => n.id === node.id);
+      if (producer) return { from, producer };
+    }
+    return null;
+  }
+  const from = sheets.find((s) => sameTarget(s.key, target));
+  const producer =
+    from && (own(from, (n) => n.id === node.id) ?? own(from, (n) => n.name === node.name));
+  return from && producer ? { from, producer } : null;
+}
+
 /** Every external value whose producer is open. */
 export function crossLinks(sheets: CrossSheet[]): CrossLink[] {
   const links: CrossLink[] = [];
   for (const to of sheets) {
     const tiers = scalarTierCount(to.layout);
     for (const node of to.model.nodes) {
-      // A pane shows its module evaluated alone, which a bound include's values are not.
-      if (!isExternal(node) || instanceOf(node)?.bound === true) continue;
-      const key = keyOf(node);
-      const from = sheets.find((s) => sameKey(s.key, key));
+      if (!isExternal(node)) continue;
+      const found = producerOf(sheets, to, node);
       const column = to.layout.columns.get(node.id);
-      // The producer is the pane module's own declaration of the same name.
-      const producer = from?.model.nodes.find((n) => !isExternal(n) && n.name === node.name);
-      if (!from || !column || !producer || !from.layout.columns.has(producer.id)) continue;
+      if (!found || !column || !found.from.layout.columns.has(found.producer.id)) continue;
+      const { from, producer } = found;
       const onTop = to.layout.bands[column.bandIndex]?.axis !== null;
       links.push({
         from,

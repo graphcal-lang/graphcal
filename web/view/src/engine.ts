@@ -27,7 +27,7 @@ const prepareFailureSchema = z.discriminatedUnion("status", [
 type PrepareFailure = z.infer<typeof prepareFailureSchema>;
 
 interface Prepared {
-  evaluateView(bindings: unknown[]): unknown;
+  evaluateView(bindings: unknown[], target: EngineTarget): unknown;
   free(): void;
 }
 interface Engine {
@@ -127,8 +127,18 @@ function prepareFailure(failure: PrepareFailure): string {
   return `${first.message}${where}`;
 }
 
-/** Prepare a project from in-memory sources and project its file `entry`. */
-export async function projectView(entry: string, files: ProjectFile[]): Promise<ViewProjection> {
+/**
+ * What the engine projects of an entry file: its own view, or that of one
+ * include instance of its evaluation (by the instance's opaque id).
+ */
+export type EngineTarget = { kind: "module" } | { kind: "instance"; instance: string };
+
+/** Prepare a project from in-memory sources and project `target` of its file `entry`. */
+export async function projectView(
+  entry: string,
+  files: ProjectFile[],
+  target: EngineTarget = { kind: "module" },
+): Promise<ViewProjection> {
   const engine = await loadEngine();
   let prepared: Prepared;
   try {
@@ -139,7 +149,7 @@ export async function projectView(entry: string, files: ProjectFile[]): Promise<
     throw error instanceof Error ? error : new Error(String(error));
   }
   try {
-    return projectionOf(prepared.evaluateView([]));
+    return projectionOf(prepared.evaluateView([], target));
   } finally {
     prepared.free();
   }

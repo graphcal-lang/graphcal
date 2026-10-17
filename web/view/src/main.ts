@@ -22,7 +22,6 @@ import { inlaysOf } from "./inlays.ts";
 import { TokenStore } from "./login.ts";
 import { Menu } from "./menu.ts";
 import { instanceOf, isExternal, type ViewModel, type ViewNode } from "./model.ts";
-import { keyOf, sameKey, type PaneKey } from "./panes.ts";
 import { gapKeys, placeHalo, renderView, RULER_WIDTH } from "./render.ts";
 import { parseRoute } from "./route.ts";
 import { hiddenOf, pick } from "./rows.ts";
@@ -42,6 +41,7 @@ import {
   type Workspace,
 } from "./sheet.ts";
 import { mountShell } from "./shell.ts";
+import { moduleTarget, readTarget, sameTarget, targetOf, type ViewTarget } from "./target.ts";
 import { EmptyHost, mountStart } from "./start.ts";
 import { displayOf, oneLine, valueAt } from "./values.ts";
 import { inVsCode, VsCodeHost } from "./vscodeHost.ts";
@@ -93,14 +93,14 @@ const menu = new Menu();
 
 let ws: Workspace | null = null;
 
-/** Whether the host has a model for `module`. */
+/** Whether the host has a model for `module` alone. */
 function known(module: string): boolean {
-  return host.model(module) !== null;
+  return host.model(moduleTarget(module)) !== null;
 }
 
 /** `power_max.gcl` for a module id, from its model's file. */
 function fileNameOfModule(module: string): string {
-  const model = host.model(module);
+  const model = host.model(moduleTarget(module));
   return model ? fileNameOf(model) : `${module.split(".").at(-1) ?? module}.gcl`;
 }
 
@@ -296,18 +296,19 @@ let pendingOpen: string[] | null = null;
 function open(trail: string[]): void {
   const module = trail.at(-1);
   if (module === undefined) return;
-  const model = host.model(module);
+  const target = moduleTarget(module);
+  const model = host.model(target);
   if (!model) {
     if (host.modules.includes(module)) {
       pendingOpen = trail;
-      host.request(module);
+      host.request(target);
     }
     return;
   }
   pendingOpen = null;
   // Panes asked for on the last sheet are not this one's.
   pendingPins.length = 0;
-  ws = { sheets: [createSheet({ module, instance: null }, model)], trail, mode: ws?.mode ?? "fit" };
+  ws = { sheets: [createSheet(target, model)], trail, mode: ws?.mode ?? "fit" };
   placePanes(panesEl, ws);
   renderTrail(ws);
   markEdited();
@@ -332,15 +333,15 @@ function renderSheetHead(): void {
 }
 
 /** Panes asked for before the host had their model. */
-const pendingPins: PaneKey[] = [];
+const pendingPins: ViewTarget[] = [];
 
 /** Open a sheet for `key` beside its readers; a pane already open just stays. */
-function pin(key: PaneKey): void {
-  if (!ws || ws.sheets.some((s) => sameKey(s.key, key))) return;
-  const model = host.model(key.module);
+function pin(key: ViewTarget): void {
+  if (!ws || ws.sheets.some((s) => sameTarget(s.key, key))) return;
+  const model = host.model(key);
   if (!model) {
-    if (!pendingPins.some((k) => sameKey(k, key))) pendingPins.push(key);
-    host.request(key.module);
+    if (!pendingPins.some((k) => sameTarget(k, key))) pendingPins.push(key);
+    host.request(key);
     return;
   }
   ws.sheets.push(createSheet(key, model));
@@ -356,13 +357,13 @@ function adoptModels(models: ViewModel[]): void {
   let changed = false;
   for (const model of models) {
     for (const sheet of ws.sheets) {
-      if (sheet.model.module.id !== model.module.id) continue;
+      if (!sameTarget(sheet.key, targetOf(model))) continue;
       adoptModel(sheet, model);
       changed = true;
     }
   }
   for (const key of pendingPins.splice(0)) {
-    if (known(key.module)) pin(key);
+    if (host.model(key) !== null) pin(key);
     else pendingPins.push(key);
   }
   if (changed) {
@@ -499,7 +500,7 @@ function applyEdit(
   if (!current) return Promise.resolve(false);
   const run = async (): Promise<boolean> => {
     const evaluated = formula.busy("evaluating…");
-    const open = current.sheets.map((sheet) => sheet.model.module.id);
+    const open = current.sheets.map((sheet) => sheet.key);
     let result;
     try {
       result = await host.edit(s.model, edit, open);
@@ -673,13 +674,17 @@ function rowMenu(s: Sheet, label: HTMLElement, event: MouseEvent): void {
   ]);
 }
 
-/** `Open eps.gcl` goes there (the trail leads back); `Pin eps beside` opens it as a pane. */
-function externalMenu(w: Workspace, node: ViewNode, event: MouseEvent): void {
-  const key = keyOf(node);
+/**
+ * `Open eps.gcl` goes to the module alone (the trail leads back); `Pin eps
+ * beside` opens what the sheet `s` reads the node from as a pane: the include
+ * instance with its arguments, or the imported module.
+ */
+function externalMenu(w: Workspace, s: Sheet, node: ViewNode, event: MouseEvent): void {
+  const key = readTarget(s.key, node);
   const file = fileNameOfModule(node.module);
   const instance = instanceOf(node);
   const name = instance?.name ?? file;
-  const pinned = w.sheets.find((other) => sameKey(other.key, key));
+  const pinned = key === null ? undefined : w.sheets.find((other) => sameTarget(other.key, key));
   menu.open(event.clientX, event.clientY, [
     {
       label: `Open ${file}`,
@@ -688,10 +693,14 @@ function externalMenu(w: Workspace, node: ViewNode, event: MouseEvent): void {
     },
     pinned
       ? { label: `Unpin ${name}`, run: () => unpin(pinned) }
-      : instance?.bound === true
-        ? // A pane would show the module evaluated alone, not this include's arguments.
-          {
-            label: `Pin ${name} beside: not yet for an include with arguments`,
+      : key === null
+        ? {
+            // A call is evaluated in place, as part of its caller; an
+            // includer's declaration is on the includer's own sheet.
+            label:
+              node.origin.kind === "called"
+                ? `Pin ${name} beside: a call has no sheet of its own`
+                : `Pin ${name} beside: it is on the including sheet`,
             disabled: true,
             run: () => undefined,
           }
@@ -714,7 +723,7 @@ panesEl.addEventListener("contextmenu", (event) => {
   const node = head?.dataset.node ? s.model.nodes.find((n) => n.id === head.dataset.node) : null;
   if (!node) return;
   event.preventDefault();
-  externalMenu(ws, node, event);
+  externalMenu(ws, s, node, event);
 });
 
 panesEl.addEventListener("dblclick", (event) => {
@@ -865,7 +874,7 @@ const explorer = webShell
       refs: refSource,
       onOpen(file) {
         if (host.openFile?.(file)) return;
-        const module = host.modules.find((m) => host.model(m)?.module.file === file);
+        const module = host.modules.find((m) => host.model(moduleTarget(m))?.module.file === file);
         if (module !== undefined) open([module]);
       },
     })
@@ -875,7 +884,9 @@ function renderExplorer(): void {
   if (!explorer) return;
   const files =
     host.files ??
-    host.modules.map((m) => host.model(m)?.module.file).filter((f): f is string => f !== undefined);
+    host.modules
+      .map((m) => host.model(moduleTarget(m))?.module.file)
+      .filter((f): f is string => f !== undefined);
   const main = ws ? mainSheet(ws).model : null;
   const shown = main ? (host.pathOf?.(main.module.id) ?? main.module.file) : null;
   explorer.render(files, shown, host.compare?.changedFiles);

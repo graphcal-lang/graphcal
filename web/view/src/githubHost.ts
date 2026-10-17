@@ -9,6 +9,7 @@ import {
   packageLayout,
   projectLimits,
   projectView,
+  type EngineTarget,
   type ProjectFile,
 } from "./engine.ts";
 import { errorMessage } from "./errors.ts";
@@ -21,6 +22,7 @@ import { acceptEdit, projectionNote, type ViewProjection } from "./projection.ts
 import { RefsCache } from "./refsCache.ts";
 import { place, recorded, type Revised, type SourceEdit } from "./revisions.ts";
 import { requestOf, Sources } from "./sources.ts";
+import { moduleTarget, TargetMap, targetOf, type ViewTarget } from "./target.ts";
 import {
   join,
   locateProject,
@@ -125,7 +127,9 @@ async function baseModel(file: string, request: ProjectFile[]): Promise<BaseSide
   try {
     const projection = await projectView(file, request);
     // A library waiting for its includers' values still has its structure to compare.
-    if (projection.status === "invalid") return { kind: "failed", message: projection.message };
+    if (projection.status === "invalid" || projection.status === "gone") {
+      return { kind: "failed", message: projection.message };
+    }
     return { kind: "present", value: projection.view };
   } catch (error) {
     return { kind: "failed", message: errorMessage(error) };
@@ -187,8 +191,8 @@ interface Loaded {
   pristine: ReadonlyMap<string, string>;
   /** The revision at which the sources are as read (the load's, or the last reset's). */
   pristineRevision: number;
-  /** The models of the sources as read, by module, as they are projected. */
-  pristineModels: Map<string, ViewModel>;
+  /** The models of the sources as read, by target, as they are projected. */
+  pristineModels: TargetMap<ViewModel>;
 }
 
 export class GitHubHost implements Host {
@@ -266,14 +270,14 @@ export class GitHubHost implements Host {
         root: plan.root,
         pristine: new Map(files),
         pristineRevision: this.revision,
-        pristineModels: new Map(),
+        pristineModels: new TargetMap(),
       };
       this.models.replace([], this.revision);
       this.modules = [];
       this.edited = false;
       this.note("evaluating…", "busy");
       // The entry first, so the sheet appears; the other files follow for Open / Pin.
-      const entry = await this.projectFile(plan.entry);
+      const entry = await this.projectEntry(plan.entry, { kind: "module" });
       if (!fresh()) return;
       if ("error" in entry) {
         this.note(entry.error, "error");
@@ -283,7 +287,7 @@ export class GitHubHost implements Host {
       }
       for (const file of plan.files) {
         if (file.relative === plan.entry || !file.relative.endsWith(".gcl")) continue;
-        const outcome = await this.projectFile(file.relative);
+        const outcome = await this.projectEntry(file.relative, { kind: "module" });
         if (!fresh()) return;
         if ("error" in outcome) continue;
         for (const listener of this.modelListeners) listener([outcome.model]);
@@ -309,9 +313,10 @@ export class GitHubHost implements Host {
     }
   }
 
-  /** Project one file of the project and remember its model. */
-  private async projectFile(
+  /** Project `target` of one file of the project (its own view, or an instance) and remember the model. */
+  private async projectEntry(
     file: string,
+    target: EngineTarget,
   ): Promise<{ model: ViewModel; note: string | null } | { error: string }> {
     for (;;) {
       const sources = this.sources;
@@ -319,21 +324,39 @@ export class GitHubHost implements Host {
       const revision = sources.revision;
       let projection: ViewProjection;
       try {
-        projection = await projectView(file, sources.request());
+        projection = await projectView(file, sources.request(), target);
       } catch (error) {
         return { error: errorMessage(error) };
       }
-      if (projection.status === "invalid") return { error: `${file}: ${projection.message}` };
+      if (projection.status === "invalid" || projection.status === "gone") {
+        return { error: `${file}: ${projection.message}` };
+      }
       const model = projection.view;
       // An edit or a reset while it ran: what it read is gone, so it runs again.
       if (!this.models.set(model, revision)) continue;
-      this.modules = this.models.ids();
+      this.modules = this.models.moduleIds();
       const loaded = this.loaded;
       if (loaded !== null && revision === loaded.pristineRevision) {
-        loaded.pristineModels.set(model.module.id, model);
+        loaded.pristineModels.set(targetOf(model), model);
       }
       return { model, note: projectionNote(file, projection) };
     }
+  }
+
+  /**
+   * The file the engine projects `target` from, and what of it: a module's
+   * own file, or for an include instance its root's file. Null while the
+   * host has no model that locates it.
+   */
+  private entryOf(target: ViewTarget): { file: string; engine: EngineTarget } | null {
+    if (target.kind === "module") {
+      const model = this.models.last(target);
+      return model ? { file: model.module.file, engine: { kind: "module" } } : null;
+    }
+    const root = this.models.last(moduleTarget(target.root));
+    return root
+      ? { file: root.module.file, engine: { kind: "instance", instance: target.instance } }
+      : null;
   }
 
   private fail(error: unknown): void {
@@ -416,7 +439,7 @@ export class GitHubHost implements Host {
   }
 
   pathOf(module: string): string | null {
-    const model = this.models.last(module);
+    const model = this.models.last(moduleTarget(module));
     if (!model || !this.loaded) return null;
     return join(this.loaded.root, model.module.file);
   }
@@ -428,14 +451,17 @@ export class GitHubHost implements Host {
     return this.models.moduleOfFile(relative);
   }
 
-  /** The current model of `module`, projected again when an edit left it stale. */
-  private async currentModel(module: string): Promise<ViewModel | null> {
-    const current = this.models.current(module);
+  /**
+   * The current model of `target`, projected when the host has none yet (an
+   * include instance pinned for the first time) or an edit left it stale.
+   */
+  private async currentModel(target: ViewTarget): Promise<ViewModel | null> {
+    const current = this.models.current(target);
     if (current) return current;
-    const last = this.models.last(module);
-    if (!last) return null;
+    const entry = this.entryOf(target);
+    if (!entry) return null;
     const generation = this.generation;
-    const outcome = await this.projectFile(last.module.file);
+    const outcome = await this.projectEntry(entry.file, entry.engine);
     if (generation !== this.generation) return null;
     if ("error" in outcome) {
       this.note(outcome.error, "error");
@@ -446,7 +472,7 @@ export class GitHubHost implements Host {
 
   /** Ask the shell to show `module`, as of the current sources. */
   private async openModule(module: string): Promise<void> {
-    if (!(await this.currentModel(module))) return;
+    if (!(await this.currentModel(moduleTarget(module)))) return;
     for (const listener of this.openListeners) listener(module);
   }
 
@@ -484,8 +510,8 @@ export class GitHubHost implements Host {
 
   // ---- Host ----
 
-  model(module: string): ViewModel | null {
-    return this.models.current(module);
+  model(target: ViewTarget): ViewModel | null {
+    return this.models.current(target);
   }
 
   source(_model: ViewModel, file: string): Revised | null {
@@ -500,7 +526,11 @@ export class GitHubHost implements Host {
    * Place the edit on the latest text of its file, through the edits made
    * since its revision, and keep it when the sources still check.
    */
-  async edit(_model: ViewModel, edit: SourceEdit, open: readonly string[]): Promise<EditResult> {
+  async edit(
+    _model: ViewModel,
+    edit: SourceEdit,
+    open: readonly ViewTarget[],
+  ): Promise<EditResult> {
     const sources = this.sources;
     const history = sources?.history(edit.file) ?? null;
     if (!sources || history === null) return { ok: false, message: `unknown file ${edit.file}` };
@@ -510,12 +540,12 @@ export class GitHubHost implements Host {
     const next = recorded(history, placed.change, at + 1);
     const request = sources.request({ file: edit.file, history: next });
     const projections: { file: string; projection: ViewProjection }[] = [];
-    for (const module of open) {
-      const shown = this.models.current(module);
-      if (!shown) continue;
-      const file = shown.module.file;
+    for (const target of open) {
+      const entry = this.models.current(target) ? this.entryOf(target) : null;
+      if (!entry) continue;
+      const { file, engine } = entry;
       try {
-        projections.push({ file, projection: await projectView(file, request) });
+        projections.push({ file, projection: await projectView(file, request, engine) });
       } catch (error) {
         return { ok: false, message: errorMessage(error) };
       }
@@ -529,14 +559,14 @@ export class GitHubHost implements Host {
     if (!verdict.ok) return verdict;
     this.revision = next.revision;
     sources.commit(edit.file, next);
-    // The modules off screen read the edited sources too: their models are stale now.
+    // The targets off screen read the edited sources too: their models are stale now.
     this.models.edited(verdict.models, next.revision);
     this.edited = true;
     return { ...verdict, source: { text: next.text, revision: next.revision } };
   }
 
-  request(module: string): void {
-    void this.currentModel(module).then((model) => {
+  request(target: ViewTarget): void {
+    void this.currentModel(target).then((model) => {
       if (model) for (const listener of this.modelListeners) listener([model]);
     });
   }
@@ -551,8 +581,11 @@ export class GitHubHost implements Host {
     if (!this.sources || !loaded) return;
     this.sources = new Sources(loaded.pristine, ++this.revision);
     loaded.pristineRevision = this.revision;
-    this.models.replace(loaded.pristineModels.values(), this.revision);
-    this.modules = this.models.ids();
+    this.models.replace(
+      loaded.pristineModels.entries().map(([, model]) => model),
+      this.revision,
+    );
+    this.modules = this.models.moduleIds();
     this.edited = false;
   }
 

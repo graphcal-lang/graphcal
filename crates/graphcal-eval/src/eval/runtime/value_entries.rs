@@ -48,6 +48,8 @@ pub(super) struct ValueEntries {
     pub entries: Vec<EvalEntry>,
     pub output_surface: HashSet<ScopedName>,
     pub presentation_diagnostics: Vec<PresentationDiagnostic>,
+    /// The values of the instances the root's instances include.
+    pub nested_instance_entries: Vec<EvalEntry>,
 }
 
 impl ValueEntries {
@@ -65,6 +67,7 @@ impl ValueEntries {
             entries: Vec::new(),
             output_surface: HashSet::new(),
             presentation_diagnostics: Vec::new(),
+            nested_instance_entries: Vec::new(),
         };
         let mut identities = HashMap::<ScopedName, ResolvedDeclName>::new();
         for entry in entries {
@@ -109,7 +112,39 @@ pub(super) fn assemble_value_entries(
         projected.extend(projection_entries(planned, evaluated, ctx)?);
         projected.extend(debug_entries(planned, evaluated, ctx)?);
     }
-    ValueEntries::collect(root.into_iter().chain(projected), ctx)
+    let mut entries = ValueEntries::collect(root.into_iter().chain(projected), ctx)?;
+    entries.nested_instance_entries = nested_instance_entries(plan, evaluated, ctx)?;
+    Ok(entries)
+}
+
+/// Every value of the instances the root's instances include, at any depth,
+/// by identity: for tools that show one instance's values. They are no
+/// output of the root, so they have no output name of their own.
+fn nested_instance_entries(
+    plan: &ExecPlan<'_>,
+    evaluated: EvaluatedRoot<'_>,
+    ctx: &EvalSession<'_>,
+) -> Result<Vec<EvalEntry>, SemanticError> {
+    let root_dag = plan.root().scope().dag().dag_id();
+    let mut nested = Vec::new();
+    for (parent, instances) in plan.root().closure_instances() {
+        if parent.scope().dag().dag_id() == root_dag {
+            continue;
+        }
+        for planned in instances {
+            nested.extend(
+                debug_entries(planned, evaluated, ctx)?
+                    .into_iter()
+                    .map(|entry| EvalEntry {
+                        name: entry.name,
+                        outcome: entry.result,
+                        category: entry.category,
+                        identity: entry.key,
+                    }),
+            );
+        }
+    }
+    Ok(nested)
 }
 
 /// The root's own value declarations, in source order.

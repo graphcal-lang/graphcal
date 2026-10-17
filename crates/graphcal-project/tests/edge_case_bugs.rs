@@ -1066,7 +1066,7 @@ assert all_positive = for r: Row, c: Col {
         result
             .assertions
             .iter()
-            .all(|(_, r, _)| matches!(r, graphcal_eval::eval::AssertResult::Pass)),
+            .all(|assertion| matches!(assertion.outcome, graphcal_eval::eval::AssertResult::Pass)),
         "all values are positive, assertion should pass"
     );
 }
@@ -1094,7 +1094,7 @@ assert all_positive = for l: Layer, b: Band, c: Channel {
         result
             .assertions
             .iter()
-            .all(|(_, r, _)| matches!(r, graphcal_eval::eval::AssertResult::Pass)),
+            .all(|assertion| matches!(assertion.outcome, graphcal_eval::eval::AssertResult::Pass)),
         "all values are positive, 3D assertion should pass"
     );
 }

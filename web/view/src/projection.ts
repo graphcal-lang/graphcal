@@ -20,6 +20,8 @@ const viewOutcomeSchema = z.discriminatedUnion("status", [
   z.object({ status: z.literal("not_requested") }),
   /** The checked program could not be projected (a compiler invariant failed). */
   z.object({ status: z.literal("projection_failed"), message: z.string() }),
+  /** The evaluation has no include instance with the id asked for. */
+  z.object({ status: z.literal("unknown_instance") }),
 ]);
 
 /**
@@ -33,9 +35,11 @@ export type ViewProjection =
   /** A required param has no value: a library whose includers bind it. It can be given values. */
   | { status: "needs_values"; view: ViewModel; message: string }
   /** Evaluating it failed. */
-  | { status: "eval_failed"; view: ViewModel; message: string };
+  | { status: "eval_failed"; view: ViewModel; message: string }
+  /** The include instance asked for is not in the evaluation (an edit removed the include, say). */
+  | { status: "gone"; message: string };
 
-/** The view of `entry` from the engine's answer to `evaluateView`. */
+/** The view of a target of `entry` from the engine's answer to `evaluateView`. */
 export function projectionOf(raw: unknown): ViewProjection {
   const outcome = viewOutcomeSchema.parse(raw);
   switch (outcome.status) {
@@ -55,6 +59,8 @@ export function projectionOf(raw: unknown): ViewProjection {
       return { status: "invalid", message: outcome.message };
     case "not_requested":
       return { status: "invalid", message: "the project was prepared without its view" };
+    case "unknown_instance":
+      return { status: "gone", message: "the include is no longer there" };
   }
 }
 
@@ -68,6 +74,7 @@ export function projectionNote(file: string, projection: ViewProjection): string
     case "eval_failed":
       return `${file} did not evaluate: ${projection.message}`;
     case "invalid":
+    case "gone":
       return `${file}: ${projection.message}`;
   }
 }
@@ -80,6 +87,8 @@ export function acceptEdit(
   let note: string | null = null;
   for (const { file, projection } of projections) {
     if (projection.status === "invalid") return { ok: false, message: projection.message };
+    // An instance the edit removed has no model; its pane keeps its last one.
+    if (projection.status === "gone") continue;
     models.push(projection.view);
     note ??= projectionNote(file, projection);
   }

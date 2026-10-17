@@ -14,12 +14,11 @@ use graphcal_compiler::resolved_name::ResolvedDeclName;
 use graphcal_compiler::semantic_error::SemanticError;
 use graphcal_compiler::source_id::SourceId;
 use graphcal_compiler::syntax::module_name::ScopedName;
-use graphcal_compiler::syntax::span::Span;
 
 use graphcal_compiler::display::source_display_names::SourceDisplayNames;
 
 use crate::eval::output_decl_name::{OutputDeclName, OutputUnavailable};
-use crate::eval::types::{AssertResult, RuntimeUnavailable};
+use crate::eval::types::{AssertResult, EvalAssertion, RuntimeUnavailable};
 use crate::eval_expr::{EvalSession, RuntimeValueMap};
 use crate::execution_plan::ExecPlan;
 use crate::host_fns::HostFunctionRegistry;
@@ -35,7 +34,7 @@ pub struct RootOutcome {
     values: RuntimeValueMap,
     presentations: PendingPresentedMap,
     errors: HashMap<ResolvedDeclName, RuntimeUnavailable>,
-    assertions: Vec<(ScopedName, AssertResult, Span)>,
+    assertions: Vec<EvalAssertion>,
 }
 
 /// The parts of a [`RootOutcome`], for the result assembly that consumes it.
@@ -43,7 +42,7 @@ pub struct RootOutcomeParts {
     pub unfinished_calls: BTreeSet<ResolvedDeclName>,
     pub values: RuntimeValueMap,
     pub errors: HashMap<ResolvedDeclName, RuntimeUnavailable>,
-    pub assertions: Vec<(ScopedName, AssertResult, Span)>,
+    pub assertions: Vec<EvalAssertion>,
 }
 
 /// The first failure of a root evaluation, in the order a model row reports
@@ -191,7 +190,7 @@ impl RootOutcome {
         let assertion = || {
             self.assertions
                 .iter()
-                .find_map(|(name, result, _)| match result {
+                .find_map(|EvalAssertion { name, outcome, .. }| match outcome {
                     AssertResult::Pass => None,
                     AssertResult::Blocked { reason } => Some((name, reason.to_string())),
                     AssertResult::Fail { message } | AssertResult::Error { message } => {

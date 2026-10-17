@@ -9,7 +9,7 @@
 use std::collections::BTreeMap;
 
 use graphcal_compiler::declaration_category::ValueDeclCategory;
-use graphcal_eval::eval::{AssertResult, EvalOutputView, EvalResult};
+use graphcal_eval::eval::{AssertResult, EvalAssertion, EvalOutputView, EvalResult};
 use thiserror::Error;
 
 use crate::value_display::{ValueBody, project_value_body};
@@ -208,7 +208,7 @@ pub fn build_report(inputs: ReportInputs<'_>) -> Result<ReportDocument, ReportBu
     let checks = result
         .assertions
         .iter()
-        .map(|(name, outcome, _)| {
+        .map(|EvalAssertion { name, outcome, .. }| {
             // An assertion without `#[assumes]` legally covers nothing.
             let affected = result
                 .assumes_map

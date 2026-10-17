@@ -51,12 +51,12 @@ impl From<&EvalResult> for EvaluationView {
         let assertions = result
             .assertions
             .iter()
-            .map(|(name, assertion, _)| AssertionView {
-                name: name.to_string(),
-                outcome: AssertionOutcomeView::from(assertion),
+            .map(|assertion| AssertionView {
+                name: assertion.name.to_string(),
+                outcome: AssertionOutcomeView::from(&assertion.outcome),
                 affected_declarations: result
                     .assumes_map
-                    .get(name)
+                    .get(&assertion.name)
                     .map(|affected| affected.iter().map(ToString::to_string).collect())
                     .unwrap_or_default(),
             })

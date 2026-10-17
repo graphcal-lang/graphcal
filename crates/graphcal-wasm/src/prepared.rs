@@ -20,7 +20,7 @@ use graphcal_project::prepare::{
     ParameterPort, PreparedProject,
 };
 use graphcal_project::project_compiler::ProjectCompiler;
-use graphcal_project::view_model::{ViewModel, ViewProjection, project_view};
+use graphcal_project::view_model::{ViewModel, ViewProjections, ViewTarget, project_views};
 use serde::Serialize;
 
 use crate::PlaygroundRequest;
@@ -46,8 +46,8 @@ enum PreparedView {
     NotRequested,
     /// The checked program could not be projected.
     ProjectionFailed { reason: String },
-    /// The structure, valued per evaluation.
-    Projected(ViewProjection),
+    /// The structure of every target, valued per evaluation.
+    Projected(Box<ViewProjections>),
 }
 
 /// Whether preparing also projects the entry file's view model. The view is
@@ -181,8 +181,8 @@ fn prepare_virtual(
         .and_then(|checked| {
             let view = match view {
                 ViewDemand::Skip => PreparedView::NotRequested,
-                ViewDemand::Project => match project_view(&loaded, &checked) {
-                    Ok(projection) => PreparedView::Projected(projection),
+                ViewDemand::Project => match project_views(&loaded, &checked) {
+                    Ok(projections) => PreparedView::Projected(Box::new(projections)),
                     Err(error) => PreparedView::ProjectionFailed {
                         reason: error.to_string(),
                     },
@@ -225,9 +225,11 @@ pub enum EvaluateOutcome {
     EvalError { message: String },
 }
 
-/// Outcome of evaluating the entry file's view. The program checked, so every
-/// outcome but `not_requested` and `projection_failed` carries its view: with
-/// values when it evaluated, else the structure alone.
+/// Outcome of evaluating a view of the entry file: its own, or that of one
+/// include instance its evaluation materializes. The program checked, so
+/// every outcome but `not_requested`, `projection_failed` and
+/// `unknown_instance` carries the view: with values when it evaluated, else
+/// the structure alone.
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum EvaluateViewOutcome {
@@ -249,6 +251,9 @@ pub enum EvaluateViewOutcome {
     /// The checked program could not be projected into a view (a projection
     /// invariant failed).
     ProjectionFailed { message: String },
+    /// The entry file's evaluation materializes no include instance with
+    /// the requested key (an edit removed the include, say).
+    UnknownInstance,
 }
 
 /// Outcome of evaluating and rendering a host-asset report.
@@ -425,18 +430,26 @@ impl PreparedPlayground {
         }
     }
 
-    /// Evaluate browser bindings and return the entry file's view with the
-    /// resulting values attached, or its structure and why it has none.
+    /// Evaluate browser bindings and return the view of `target` (the entry
+    /// file, or one include instance of its evaluation) with the resulting
+    /// values attached, or its structure and why it has none.
     #[must_use]
-    pub fn evaluate_view(&self, bindings: &[BrowserBindingRequest]) -> EvaluateViewOutcome {
-        let projection = match &self.view {
-            PreparedView::Projected(projection) => projection,
+    pub fn evaluate_view(
+        &self,
+        bindings: &[BrowserBindingRequest],
+        target: &ViewTarget,
+    ) -> EvaluateViewOutcome {
+        let projections = match &self.view {
+            PreparedView::Projected(projections) => projections,
             PreparedView::NotRequested => return EvaluateViewOutcome::NotRequested,
             PreparedView::ProjectionFailed { reason } => {
                 return EvaluateViewOutcome::ProjectionFailed {
                     message: reason.clone(),
                 };
             }
+        };
+        let Some(projection) = projections.get(target) else {
+            return EvaluateViewOutcome::UnknownInstance;
         };
         match self.evaluate_browser_result(bindings) {
             Ok(result) => {
@@ -832,7 +845,7 @@ mod js {
     use wasm_bindgen::JsValue;
     use wasm_bindgen::prelude::wasm_bindgen;
 
-    use super::{BrowserBindingRequest, PrepareOutcome, PreparedPlayground};
+    use super::{BrowserBindingRequest, PrepareOutcome, PreparedPlayground, ViewTarget};
     use crate::PlaygroundOutcome;
 
     /// Handle to one prepared project owned by JavaScript.
@@ -1027,16 +1040,30 @@ mod js {
         /// view model with values attached. Returns the tagged
         /// `EvaluateViewOutcome` (`evaluated` / `needs_values` /
         /// `binding_errors` / `eval_error`, each with the view, or
-        /// `not_requested` / `projection_failed`).
+        /// `not_requested` / `projection_failed` / `unknown_instance`).
+        /// `target` is `{kind: "module"}` (or absent) for the entry file's
+        /// own view, `{kind: "instance", instance: "<id>"}` for an include
+        /// instance of its evaluation.
         #[wasm_bindgen(js_name = evaluateView)]
         #[expect(
             clippy::needless_pass_by_value,
             reason = "wasm-bindgen JavaScript exports receive owned JsValue handles"
         )]
-        pub fn evaluate_view(&self, bindings: JsValue) -> Result<JsValue, JsValue> {
+        pub fn evaluate_view(
+            &self,
+            bindings: JsValue,
+            target: JsValue,
+        ) -> Result<JsValue, JsValue> {
             let bindings: Vec<BrowserBindingRequest> = serde_wasm_bindgen::from_value(bindings)
                 .map_err(|error| JsValue::from_str(&format!("invalid bindings: {error}")))?;
-            view_to_js(&self.inner.evaluate_view(&bindings))
+            // No target is the entry file's own view.
+            let target = if target.is_undefined() || target.is_null() {
+                ViewTarget::Module
+            } else {
+                serde_wasm_bindgen::from_value(target)
+                    .map_err(|error| JsValue::from_str(&format!("invalid view target: {error}")))?
+            };
+            view_to_js(&self.inner.evaluate_view(&bindings, &target))
         }
 
         /// Evaluate once and return both the complete evaluation view and a
@@ -1131,7 +1158,7 @@ assert positive = @delta_v > 0.0 m/s;
     #[test]
     fn playground_preparation_projects_no_view() {
         let prepared = prepare_ok(DELTA_V);
-        let outcome = prepared.evaluate_view(&[]);
+        let outcome = prepared.evaluate_view(&[], &ViewTarget::Module);
         assert!(
             matches!(&outcome, EvaluateViewOutcome::NotRequested),
             "{outcome:?}"
@@ -1141,11 +1168,13 @@ assert positive = @delta_v > 0.0 m/s;
     #[test]
     fn evaluated_view_follows_bindings() {
         let prepared = prepare_view_ok(DELTA_V);
-        let outcome =
-            prepared.evaluate_view(&[BrowserBindingRequest::Expression(BindingRequest {
+        let outcome = prepared.evaluate_view(
+            &[BrowserBindingRequest::Expression(BindingRequest {
                 name: "isp".to_string(),
                 expr: "450.0 s".to_string(),
-            })]);
+            })],
+            &ViewTarget::Module,
+        );
         let EvaluateViewOutcome::Evaluated { view } = outcome else {
             panic!("expected an evaluated view, got {outcome:?}");
         };
@@ -1162,11 +1191,13 @@ assert positive = @delta_v > 0.0 m/s;
 
         // A rejected binding answers with the structure, untouched by the
         // evaluation before it.
-        let outcome =
-            prepared.evaluate_view(&[BrowserBindingRequest::Expression(BindingRequest {
+        let outcome = prepared.evaluate_view(
+            &[BrowserBindingRequest::Expression(BindingRequest {
                 name: "isp".to_string(),
                 expr: "@nowhere".to_string(),
-            })]);
+            })],
+            &ViewTarget::Module,
+        );
         let EvaluateViewOutcome::BindingErrors { view, errors } = outcome else {
             panic!("expected binding errors, got {outcome:?}");
         };
@@ -1178,7 +1209,7 @@ assert positive = @delta_v > 0.0 m/s;
     #[test]
     fn a_required_param_without_a_value_answers_with_the_structure() {
         let prepared = prepare_view_ok("param span: Length;\nnode twice: Length = @span * 2.0;\n");
-        let outcome = prepared.evaluate_view(&[]);
+        let outcome = prepared.evaluate_view(&[], &ViewTarget::Module);
         let EvaluateViewOutcome::NeedsValues { view, message } = outcome else {
             panic!("expected needs_values, got {outcome:?}");
         };
@@ -1186,15 +1217,64 @@ assert positive = @delta_v > 0.0 m/s;
         assert!(view.nodes.iter().all(|node| node.value.is_none()));
         assert!(view.nodes.iter().any(|node| node.name == "twice"));
 
-        let outcome =
-            prepared.evaluate_view(&[BrowserBindingRequest::Expression(BindingRequest {
+        let outcome = prepared.evaluate_view(
+            &[BrowserBindingRequest::Expression(BindingRequest {
                 name: "span".to_string(),
                 expr: "3.0 m".to_string(),
-            })]);
+            })],
+            &ViewTarget::Module,
+        );
         assert!(
             matches!(&outcome, EvaluateViewOutcome::Evaluated { .. }),
             "{outcome:?}"
         );
+    }
+
+    #[test]
+    fn an_include_instance_is_evaluated_with_its_arguments() {
+        use graphcal_project::view_model::{ViewInstanceId, ViewOrigin, ViewValue};
+
+        let prepared = prepare_view_ok(
+            "dag lib {\n    param gain: Dimensionless = 1.0;\n    pub node out: Dimensionless = @gain;\n}\ninclude lib(gain: 2.0) as p;\nnode y: Dimensionless = @p::out;\n",
+        );
+        let EvaluateViewOutcome::Evaluated { view: root } =
+            prepared.evaluate_view(&[], &ViewTarget::Module)
+        else {
+            panic!("expected the root's view");
+        };
+        let read = root
+            .nodes
+            .iter()
+            .find(|node| node.label == "p::out")
+            .expect("p::out");
+        let ViewOrigin::Included { instance } = &read.origin else {
+            panic!("p::out is no include member: {:?}", read.origin);
+        };
+        let target = ViewTarget::Instance {
+            instance: instance.id.clone(),
+        };
+        let EvaluateViewOutcome::Evaluated { view } = prepared.evaluate_view(&[], &target) else {
+            panic!("expected the instance's view");
+        };
+        let out = view
+            .nodes
+            .iter()
+            .find(|node| node.label == "out")
+            .expect("out");
+        assert_eq!(out.id, read.id);
+        assert!(
+            matches!(&out.value, Some(ViewValue::Quantity { display, .. }) if display == "2"),
+            "{:?}",
+            out.value
+        );
+
+        let gone = ViewTarget::Instance {
+            instance: ViewInstanceId::from_wire("gone".to_string()),
+        };
+        assert!(matches!(
+            prepared.evaluate_view(&[], &gone),
+            EvaluateViewOutcome::UnknownInstance
+        ));
     }
 
     #[test]
