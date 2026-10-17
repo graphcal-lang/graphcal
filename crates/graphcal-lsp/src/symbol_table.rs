@@ -2531,8 +2531,14 @@ fn format_type_with_constraints(
 pub fn enrich_from_tir(table: &mut SymbolTable, tir: &CheckedTir, dag_id: &DagId) {
     let registry = tir.registry();
 
-    if let Some(dag) = tir.dag_registry().get(dag_id) {
-        // Enrich param/node/const declarations with resolved types + constraints.
+    // Enrich param/node/const declarations with resolved types + constraints:
+    // the file's own, and those of the inline `dag` templates it writes.
+    let file_dags = tir
+        .dag_registry()
+        .get(dag_id)
+        .into_iter()
+        .chain(tir.inline_dag_templates(dag_id));
+    for dag in file_dags {
         for (identity, annotation) in dag.value_decl_types() {
             let resolved_type = annotation.checked().resolved();
             let type_desc = dag.domain_bounds(&identity);

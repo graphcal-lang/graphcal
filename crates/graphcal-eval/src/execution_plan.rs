@@ -939,6 +939,34 @@ impl std::fmt::Debug for CallablePlan<'_> {
     }
 }
 
+/// The callable one evaluation enters, with the plan it belongs to.
+///
+/// Created only by [`ExecPlan::root_entry`], for the root whose inputs a
+/// parameter row binds, and by [`ExecPlan::defaults_entries`], for the DAGs
+/// with no input only a binding supplies. So every entry's inputs are supplied.
+#[derive(Clone, Copy)]
+pub(crate) struct Entry<'a, 'p> {
+    plan: &'a ExecPlan<'p>,
+    callable: &'a CallablePlan<'p>,
+}
+
+impl<'a, 'p> Entry<'a, 'p> {
+    /// The plan the entry belongs to.
+    pub(crate) const fn plan(self) -> &'a ExecPlan<'p> {
+        self.plan
+    }
+
+    /// The callable the evaluation runs.
+    pub(crate) const fn callable(self) -> &'a CallablePlan<'p> {
+        self.callable
+    }
+
+    /// The DAG the evaluation runs.
+    pub(crate) const fn dag_id(self) -> &'a DagId {
+        self.callable.scope().dag().dag_id()
+    }
+}
+
 /// A compiled execution plan ready for runtime evaluation.
 pub struct ExecPlan<'p> {
     program: &'p CheckedProgram,
@@ -1012,6 +1040,33 @@ impl<'p> ExecPlan<'p> {
     #[must_use]
     pub fn root(&self) -> &CallablePlan<'p> {
         &self.callables[DagPosition::ROOT]
+    }
+
+    /// The root as the entry of an evaluation, whose inputs a parameter row
+    /// binds.
+    #[must_use]
+    pub(crate) fn root_entry(&self) -> Entry<'_, 'p> {
+        Entry {
+            plan: self,
+            callable: self.root(),
+        }
+    }
+
+    /// Every DAG of the program that runs on its own defaults, as the entry
+    /// of an evaluation: the program's
+    /// [`default_runnable_dags`](CheckedTir::default_runnable_dags).
+    pub(crate) fn defaults_entries(&self) -> impl Iterator<Item = Entry<'_, 'p>> {
+        let tir = self.tir();
+        let runnable = tir
+            .default_runnable_dags()
+            .collect::<std::collections::HashSet<_>>();
+        tir.dag_registry()
+            .positioned()
+            .filter(move |(_, dag)| runnable.contains(dag.dag_id()))
+            .map(|(position, _)| Entry {
+                plan: self,
+                callable: &self.callables[position],
+            })
     }
 
     /// Every callable, the root first.

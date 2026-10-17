@@ -458,6 +458,47 @@ impl PreparedProject {
         self.assemble_normal_result(eval_result, cancellation)
     }
 
+    /// Evaluate each inline `dag` of the root file that runs on its own
+    /// defaults, as if it were the entry of its own file.
+    ///
+    /// These are the [`default_runnable_dags`] of the program: like a file
+    /// that is no library, each declares no required param or required index.
+    /// Each result reports the DAG's own declarations under their local names,
+    /// with the template DAG's identities, so a template's values never stand
+    /// in for an include instance's, nor the reverse.
+    ///
+    /// [`default_runnable_dags`]: graphcal_compiler::tir::typed::checked::CheckedTir::default_runnable_dags
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Outcome::Cancelled`] on cancellation, or an internal
+    /// evaluator failure.
+    pub fn evaluate_dag_defaults_with_cancellation(
+        &self,
+        cancellation: &graphcal_compiler::cancellation::CancellationToken,
+    ) -> Result<Vec<EvalResult>, Outcome<CompileError>> {
+        let evaluations = graphcal_eval::eval::runtime::evaluate_dag_defaults_with_cancellation(
+            self.plan(),
+            self.source,
+            &self.sources,
+            &self.host_fns,
+            &self.output_assembly.display_names,
+            cancellation,
+        )
+        .map_err(|outcome| outcome.map_failed(|error| self.render(error)))?;
+        Ok(evaluations
+            .into_iter()
+            .map(|evaluation| {
+                let (mut result, _) = evaluation.into_result_and_presentations();
+                apply_include_debug_names(
+                    &mut result,
+                    self.output_assembly.display_names.include_scopes(),
+                );
+                result
+            })
+            .collect())
+    }
+
     /// Evaluate one validated row and retain the evaluator's internal values
     /// and contained errors for unstable debugging output.
     ///

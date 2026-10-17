@@ -126,3 +126,46 @@ fn callable_plans_use_the_checked_closure_schedule() {
         Err(graphcal_eval::execution_plan::PlannedInstanceError::ForeignScope { .. })
     ));
 }
+
+#[test]
+fn only_inline_templates_without_required_inputs_run_on_defaults() {
+    let source = "dag ready { param p: Length = 1.0 m; pub node q: Length = @p; }\n\
+                  dag needs { param r: Length; pub node s: Length = @r; }\n\
+                  include ready(p: 2.0 m) as instance;\n";
+    let loaded = crate::loader::LoadedProject::from_source(source, "test.gcl").unwrap();
+    let checked = crate::project_compiler::ProjectCompiler::new(&loaded)
+        .check()
+        .unwrap();
+    let tir = checked.tir();
+    let src = loaded.root_file().source_id();
+    let prepared = compile(tir, src, checked.sources()).unwrap();
+    let plan = prepared.plan();
+    let root = tir.root_dag_id();
+    let ready = root.inline_dag_child(DeclName::expect_valid("ready"));
+    assert_eq!(tir.default_runnable_dags().collect::<Vec<_>>(), [&ready]);
+
+    // Neither a DAG with a required input, nor an include instance of a
+    // runnable template, nor the root (which a parameter row enters) runs.
+    let evaluations = graphcal_eval::eval::runtime::evaluate_dag_defaults_with_cancellation(
+        plan,
+        src,
+        checked.sources(),
+        &graphcal_eval::host_fns::HostFunctionRegistry::new(),
+        &graphcal_compiler::display::source_display_names::SourceDisplayNames::default(),
+        &graphcal_compiler::cancellation::CancellationToken::unbounded(),
+    )
+    .unwrap();
+    assert_eq!(evaluations.len(), 1, "only `ready` runs on its defaults");
+    let (result, _) = evaluations
+        .into_iter()
+        .next()
+        .unwrap()
+        .into_result_and_presentations();
+    assert!(!result.entries.is_empty());
+    assert!(
+        result
+            .entries
+            .iter()
+            .all(|entry| entry.identity.owner() == &ready)
+    );
+}

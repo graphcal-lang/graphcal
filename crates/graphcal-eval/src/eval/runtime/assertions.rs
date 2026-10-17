@@ -20,7 +20,7 @@ use crate::eval_expr::{EvalSession, RuntimeValueMap, eval_root};
 
 use super::dependency_failures::dependency_failure_message;
 use super::root_names::{RootNames, root_source_names};
-use crate::execution_plan::{ClosureDag, PlannedAssertion, PlannedInstance};
+use crate::execution_plan::{ClosureDag, Entry, PlannedAssertion, PlannedInstance};
 
 /// Evaluate every assertion reported for the root DAG: root assertions in
 /// source order, then assertions projected from the semantic instances the
@@ -30,16 +30,16 @@ use crate::execution_plan::{ClosureDag, PlannedAssertion, PlannedInstance};
 /// dependency failure (with its root cause) instead of evaluating over a
 /// value map where the failed name is simply absent (#814).
 pub(super) fn evaluate_assertions(
-    plan: &crate::execution_plan::ExecPlan<'_>,
+    entry: Entry<'_, '_>,
     src: SourceId,
     ctx: &EvalSession<'_>,
     values: &RuntimeValueMap,
     errors: &HashMap<ResolvedDeclName, RuntimeUnavailable>,
     names: &RootNames<'_>,
 ) -> Result<Vec<EvalAssertion>, Outcome<SemanticError>> {
-    let tir = plan.tir();
+    let tir = entry.plan().tir();
     let mut assertions: Vec<EvalAssertion> = tir
-        .declaration_bodies(plan.root().scope().position())
+        .declaration_bodies(entry.callable().scope().position())
         .filter_map(|unit| match unit.kind() {
             BodyKind::Assert(entry) => Some((unit, entry)),
             _ => None,
@@ -65,7 +65,7 @@ pub(super) fn evaluate_assertions(
             })
         })
         .collect::<Result<_, Outcome<SemanticError>>>()?;
-    for (parent, planned, projection, unit, entry) in projected_assertions(plan) {
+    for (parent, planned, projection, unit, entry) in projected_assertions(entry) {
         let owner = unit.identity();
         let assertion_ctx = ctx.with_src(src).for_decl(owner);
         let expected = projection
@@ -94,7 +94,7 @@ pub(super) fn evaluate_assertions(
 /// Every assertion an include site of the root's closure exposes, with the
 /// closure DAG that includes the instance, in report order.
 fn projected_assertions<'a, 'p>(
-    plan: &'a crate::execution_plan::ExecPlan<'p>,
+    entry: Entry<'a, 'p>,
 ) -> impl Iterator<
     Item = (
         &'a ClosureDag<'p>,
@@ -104,7 +104,8 @@ fn projected_assertions<'a, 'p>(
         Scoped<'p, TypedAssertEntry>,
     ),
 > {
-    plan.root()
+    entry
+        .callable()
         .closure_instances()
         .iter()
         .flat_map(|(parent, instances)| {
@@ -145,12 +146,10 @@ fn projected_assertion_name(
 /// it has the name the root exposes it under, else its name qualified by the
 /// scopes of that DAG. An assertion the root does not report (one private to
 /// a semantic instance) has no entry.
-pub(super) fn root_assumes_map(
-    plan: &crate::execution_plan::ExecPlan<'_>,
-) -> HashMap<ScopedName, Vec<ScopedName>> {
-    let tir = plan.tir();
+pub(super) fn root_assumes_map(entry: Entry<'_, '_>) -> HashMap<ScopedName, Vec<ScopedName>> {
+    let tir = entry.plan().tir();
     let reported = tir
-        .declaration_bodies(plan.root().scope().position())
+        .declaration_bodies(entry.callable().scope().position())
         .filter(|unit| matches!(unit.kind(), BodyKind::Assert(_)))
         .map(|unit| {
             (
@@ -159,7 +158,7 @@ pub(super) fn root_assumes_map(
             )
         })
         .chain(
-            projected_assertions(plan).map(|(parent, planned, projection, unit, _)| {
+            projected_assertions(entry).map(|(parent, planned, projection, unit, _)| {
                 (
                     unit.identity().clone(),
                     projected_assertion_name(parent, planned, projection),
@@ -167,11 +166,11 @@ pub(super) fn root_assumes_map(
             }),
         )
         .collect::<HashMap<_, _>>();
-    let exposed = root_source_names(plan)
+    let exposed = root_source_names(entry)
         .into_iter()
         .collect::<HashMap<_, _>>();
     let mut merged = HashMap::<ResolvedDeclName, Vec<ScopedName>>::new();
-    for closure in plan.root().execution_dags() {
+    for closure in entry.callable().execution_dags() {
         for (assertion, assumers) in closure.scope().dag().assumes_map() {
             let names = merged.entry(assertion.clone()).or_default();
             for assumer in assumers {

@@ -1,5 +1,6 @@
-//! The root's execution: its plan run by the shared frame machine with
-//! ordinary failures contained.
+//! The execution of an evaluation's entry (the root, or a DAG on its
+//! defaults): its plan run by the shared frame machine with ordinary
+//! failures contained.
 
 use graphcal_compiler::source_registry::SourceRegistry;
 use std::collections::{BTreeSet, HashMap};
@@ -12,7 +13,7 @@ use graphcal_compiler::syntax::span::Span;
 
 use crate::eval::types::RuntimeUnavailable;
 use crate::eval_expr::{EvalSession, RuntimeValueMap, eval_scheduled};
-use crate::execution_plan::ExecPlan;
+use crate::execution_plan::{Entry, ExecPlan};
 use crate::runtime_presentation::PendingPresentedMap;
 
 /// Result of running the core eval loop: successfully evaluated values and per-node errors.
@@ -32,10 +33,30 @@ pub fn run_eval_loop_with_bindings(
     host_fns: &crate::host_fns::HostFunctionRegistry,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<EvalLoopResult, Outcome<SemanticError>> {
+    run_entry_loop(
+        plan.root_entry(),
+        bindings,
+        src,
+        sources,
+        host_fns,
+        cancellation,
+    )
+}
+
+/// Execute `entry` with ordinary failures contained by the shared machine.
+pub(super) fn run_entry_loop(
+    entry: Entry<'_, '_>,
+    bindings: &crate::eval::bindings::RuntimeParameterBindings,
+    src: SourceId,
+    sources: &SourceRegistry,
+    host_fns: &crate::host_fns::HostFunctionRegistry,
+    cancellation: &graphcal_compiler::cancellation::CancellationToken,
+) -> Result<EvalLoopResult, Outcome<SemanticError>> {
     use crate::execution_frame::{ExecutionFrame, FailurePolicy};
     cancellation.checkpoint()?;
+    let plan = entry.plan();
     let unfinished_calls = std::cell::RefCell::new(BTreeSet::new());
-    let mut frame = ExecutionFrame::new(plan, plan.root(), FailurePolicy::Contain);
+    let mut frame = ExecutionFrame::new(plan, entry.callable(), FailurePolicy::Contain);
     for (key, binding) in bindings {
         frame.bind_argument(key, binding.clone(), src, Span::new(0, 0))?;
     }

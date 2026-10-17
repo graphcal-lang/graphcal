@@ -18,7 +18,7 @@ use crate::eval::output_decl_name::OutputUnavailable;
 use crate::eval::public_projection;
 use crate::eval::types::{EvalEntry, Value};
 use crate::eval_expr::{EvalSession, RuntimeValue};
-use crate::execution_plan::{ExecPlan, PlannedInstance};
+use crate::execution_plan::{Entry, PlannedInstance};
 use crate::presentation_evidence::PresentationDiagnostic;
 use crate::runtime_presentation::PresentedRef;
 
@@ -102,18 +102,18 @@ impl ValueEntries {
 
 /// Assemble the value entries of the root DAG.
 pub(super) fn assemble_value_entries(
-    plan: &ExecPlan<'_>,
+    entry: Entry<'_, '_>,
     evaluated: EvaluatedRoot<'_>,
     ctx: &EvalSession<'_>,
 ) -> Result<ValueEntries, SemanticError> {
-    let root = root_entries(plan, evaluated, ctx)?;
+    let root = root_entries(entry, evaluated, ctx)?;
     let mut projected = Vec::new();
-    for planned in plan.root().semantic_instances() {
+    for planned in entry.callable().semantic_instances() {
         projected.extend(projection_entries(planned, evaluated, ctx)?);
         projected.extend(debug_entries(planned, evaluated, ctx)?);
     }
     let mut entries = ValueEntries::collect(root.into_iter().chain(projected), ctx)?;
-    entries.nested_instance_entries = nested_instance_entries(plan, evaluated, ctx)?;
+    entries.nested_instance_entries = nested_instance_entries(entry, evaluated, ctx)?;
     Ok(entries)
 }
 
@@ -121,13 +121,13 @@ pub(super) fn assemble_value_entries(
 /// by identity: for tools that show one instance's values. They are no
 /// output of the root, so they have no output name of their own.
 fn nested_instance_entries(
-    plan: &ExecPlan<'_>,
+    entry: Entry<'_, '_>,
     evaluated: EvaluatedRoot<'_>,
     ctx: &EvalSession<'_>,
 ) -> Result<Vec<EvalEntry>, SemanticError> {
-    let root_dag = plan.root().scope().dag().dag_id();
+    let root_dag = entry.dag_id();
     let mut nested = Vec::new();
-    for (parent, instances) in plan.root().closure_instances() {
+    for (parent, instances) in entry.callable().closure_instances() {
         if parent.scope().dag().dag_id() == root_dag {
             continue;
         }
@@ -149,17 +149,17 @@ fn nested_instance_entries(
 
 /// The root's own value declarations, in source order.
 fn root_entries(
-    plan: &ExecPlan<'_>,
+    entry: Entry<'_, '_>,
     evaluated: EvaluatedRoot<'_>,
     ctx: &EvalSession<'_>,
 ) -> Result<Vec<ValueEntry>, SemanticError> {
-    let scope = plan.root().scope();
+    let scope = entry.callable().scope();
     scope
         .dag()
         .declarations()
-        .filter_map(|entry| entry.value().map(|value| (entry, value.category)))
-        .map(|(entry, category)| {
-            let key = entry.identity().clone();
+        .filter_map(|declared| declared.value().map(|value| (declared, value.category)))
+        .map(|(declared, category)| {
+            let key = declared.identity().clone();
             let (result, diagnostics) = match category {
                 ValueDeclCategory::Const => {
                     let runtime = scope.const_values().get(&key);
@@ -171,7 +171,7 @@ fn root_entries(
                 }
             };
             Ok(ValueEntry {
-                name: ScopedName::local(entry.name().clone()),
+                name: ScopedName::local(declared.name().clone()),
                 key,
                 result,
                 category,

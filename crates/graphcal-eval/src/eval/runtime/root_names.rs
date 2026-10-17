@@ -24,7 +24,7 @@ use graphcal_compiler::display::include_scope_names::name_include_scopes;
 use graphcal_compiler::display::source_display_names::SourceDisplayNames;
 
 use crate::eval::output_decl_name::{OutputDeclName, OutputUnavailable};
-use crate::execution_plan::ExecPlan;
+use crate::execution_plan::Entry;
 
 /// `name`, written in `dag`, as the root `root` names it: qualified by the
 /// scopes of `dag` below the root.
@@ -49,8 +49,8 @@ fn qualified_below(root: &DagId, dag: &DagId, name: &ScopedName) -> Option<Scope
 /// Declarations private to a semantic instance have no root source name and
 /// are absent; the closure DAG that declares one names it
 /// ([`ClosureDag::member`](crate::execution_plan::ClosureDag::member)).
-pub(super) fn root_source_names(plan: &ExecPlan<'_>) -> Vec<(ResolvedDeclName, ScopedName)> {
-    let root = plan.root();
+pub(super) fn root_source_names(entry: Entry<'_, '_>) -> Vec<(ResolvedDeclName, ScopedName)> {
+    let root = entry.callable();
     let own = root.scope().dag().declarations().map(|entry| {
         (
             entry.identity().clone(),
@@ -83,11 +83,11 @@ pub(super) struct RootNames<'p> {
 }
 
 impl<'p> RootNames<'p> {
-    /// The names the root of `plan` gives its declarations, with private
-    /// include scopes and invoked modules named by `display_names`.
-    pub(super) fn new(plan: &'p ExecPlan<'_>, display_names: &'p SourceDisplayNames) -> Self {
-        let exposed = plan
-            .root()
+    /// The names `entry` gives its declarations, with private include
+    /// scopes and invoked modules named by `display_names`.
+    pub(super) fn new(entry: Entry<'p, '_>, display_names: &'p SourceDisplayNames) -> Self {
+        let exposed = entry
+            .callable()
             .semantic_instances()
             .iter()
             .flat_map(|planned| {
@@ -102,7 +102,7 @@ impl<'p> RootNames<'p> {
             })
             .collect();
         Self {
-            root: plan.tir().root_dag_id(),
+            root: entry.dag_id(),
             exposed,
             display_names,
         }

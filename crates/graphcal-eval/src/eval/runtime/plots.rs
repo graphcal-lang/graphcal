@@ -34,6 +34,7 @@ use crate::eval_expr::{
     EvalSession, RuntimeValue, RuntimeValueMap, eval_root, eval_root_with_presentation,
 };
 use crate::execution_frame::eval_failed_node_error;
+use crate::execution_plan::Entry;
 use crate::presentation_evidence::{
     LeafPresentationDiagnostic, PresentationDiagnostic, PresentationFailure,
 };
@@ -67,10 +68,10 @@ struct RootPlot<'p> {
 
 /// The plots of the root DAG, in output order: its own plots in source
 /// order, then the plots each semantic instance's include site requests.
-fn root_plots<'p>(plan: &'p crate::execution_plan::ExecPlan<'p>) -> Vec<RootPlot<'p>> {
-    let tir = plan.tir();
+fn root_plots<'p>(entry: Entry<'p, 'p>) -> Vec<RootPlot<'p>> {
+    let tir = entry.plan().tir();
     let own = tir
-        .declaration_bodies(plan.root().scope().position())
+        .declaration_bodies(entry.callable().scope().position())
         .filter_map(|unit| match unit.kind() {
             BodyKind::Plot(entry) => Some(RootPlot {
                 unit,
@@ -80,14 +81,18 @@ fn root_plots<'p>(plan: &'p crate::execution_plan::ExecPlan<'p>) -> Vec<RootPlot
             }),
             _ => None,
         });
-    let requested = plan.root().semantic_instances().iter().flat_map(|planned| {
-        planned.plots().iter().map(|planned_plot| RootPlot {
-            unit: planned_plot.body,
-            entry: planned_plot.entry,
-            name: &planned_plot.projection.alias,
-            visibility: planned_plot.projection.visibility,
-        })
-    });
+    let requested = entry
+        .callable()
+        .semantic_instances()
+        .iter()
+        .flat_map(|planned| {
+            planned.plots().iter().map(|planned_plot| RootPlot {
+                unit: planned_plot.body,
+                entry: planned_plot.entry,
+                name: &planned_plot.projection.alias,
+                visibility: planned_plot.projection.visibility,
+            })
+        });
     own.chain(requested).collect()
 }
 
@@ -102,12 +107,12 @@ type UnavailablePlots<'p> = HashMap<&'p DeclName, RuntimeUnavailable>;
 /// unavailable plot, or with a failing field, is reported the same way
 /// (#845).
 pub(super) fn evaluate_root_plots(
-    plan: &crate::execution_plan::ExecPlan<'_>,
+    entry: Entry<'_, '_>,
     evaluated: EvaluatedRoot<'_>,
     ctx: &EvalSession<'_>,
 ) -> Result<PlotOutputs, Outcome<SemanticError>> {
-    let tir = plan.tir();
-    let root_plots = root_plots(plan);
+    let tir = entry.plan().tir();
+    let root_plots = root_plots(entry);
     let mut plots = Vec::new();
     let mut plot_errors = Vec::new();
     let mut unavailable = UnavailablePlots::new();
@@ -139,7 +144,7 @@ pub(super) fn evaluate_root_plots(
         ctx,
         plot_errors: &mut plot_errors,
     };
-    let root = plan.root().scope().position();
+    let root = entry.callable().scope().position();
     let figures = tir
         .declaration_bodies(root)
         .filter_map(|unit| match unit.kind() {

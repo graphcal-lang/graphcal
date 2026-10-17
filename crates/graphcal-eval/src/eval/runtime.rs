@@ -13,7 +13,7 @@ use graphcal_compiler::syntax::module_name::ScopedName;
 
 use crate::domain_constraint::ResolvedDomainConstraint;
 use crate::eval_expr::RuntimeValueMap;
-use crate::execution_plan::ExecPlan;
+use crate::execution_plan::{Entry, ExecPlan};
 use crate::runtime_presentation::ResolvedPresentedMap;
 
 use super::types::{EvalResult, RuntimeUnavailable};
@@ -86,9 +86,69 @@ pub fn evaluate_plan_with_values_and_bindings_and_cancellation(
     display_names: &graphcal_compiler::display::source_display_names::SourceDisplayNames,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<RuntimeEvaluation, Outcome<SemanticError>> {
+    evaluate_entry(
+        plan.root_entry(),
+        bindings,
+        src,
+        sources,
+        host_fns,
+        display_names,
+        cancellation,
+    )
+}
+
+/// Evaluate every inline DAG of the root file that runs on its own defaults.
+///
+/// Each runs as if it were the entry of its own file, and its public result
+/// is assembled the way
+/// [`evaluate_plan_with_values_and_bindings_and_cancellation`] assembles the
+/// root's: its own declarations under their local names. The DAGs are the
+/// program's
+/// [`default_runnable_dags`](graphcal_compiler::tir::typed::checked::CheckedTir::default_runnable_dags);
+/// their values belong to the template DAGs themselves, never to an include
+/// instance of one, so they are keyed by the templates' identities.
+///
+/// # Errors
+///
+/// Returns the outcomes of a root evaluation.
+pub fn evaluate_dag_defaults_with_cancellation(
+    plan: &ExecPlan<'_>,
+    src: SourceId,
+    sources: &SourceRegistry,
+    host_fns: &crate::host_fns::HostFunctionRegistry,
+    display_names: &graphcal_compiler::display::source_display_names::SourceDisplayNames,
+    cancellation: &graphcal_compiler::cancellation::CancellationToken,
+) -> Result<Vec<RuntimeEvaluation>, Outcome<SemanticError>> {
+    let defaults = super::bindings::RuntimeParameterBindings::new();
+    plan.defaults_entries()
+        .map(|entry| {
+            evaluate_entry(
+                entry,
+                &defaults,
+                src,
+                sources,
+                host_fns,
+                display_names,
+                cancellation,
+            )
+        })
+        .collect()
+}
+
+/// Evaluate `entry` with `bindings`, then assemble its public result.
+fn evaluate_entry(
+    entry: Entry<'_, '_>,
+    bindings: &super::bindings::RuntimeParameterBindings,
+    src: SourceId,
+    sources: &SourceRegistry,
+    host_fns: &crate::host_fns::HostFunctionRegistry,
+    display_names: &graphcal_compiler::display::source_display_names::SourceDisplayNames,
+    cancellation: &graphcal_compiler::cancellation::CancellationToken,
+) -> Result<RuntimeEvaluation, Outcome<SemanticError>> {
     cancellation.checkpoint()?;
-    let outcome = RootOutcome::evaluate(
-        plan,
+    let plan = entry.plan();
+    let outcome = RootOutcome::evaluate_entry(
+        entry,
         bindings,
         src,
         sources,
@@ -106,7 +166,7 @@ pub fn evaluate_plan_with_values_and_bindings_and_cancellation(
                 .map(|presentation| (key.clone(), presentation))
         })
         .collect::<Result<ResolvedPresentedMap, _>>()?;
-    let names = root_names::RootNames::new(plan, display_names);
+    let names = root_names::RootNames::new(entry, display_names);
     let evaluated = EvaluatedRoot {
         values: outcome.values(),
         errors: outcome.errors(),
@@ -120,7 +180,7 @@ pub fn evaluate_plan_with_values_and_bindings_and_cancellation(
         output_surface,
         mut presentation_diagnostics,
         nested_instance_entries,
-    } = value_entries::assemble_value_entries(plan, evaluated, &ctx)?;
+    } = value_entries::assemble_value_entries(entry, evaluated, &ctx)?;
     cancellation.checkpoint()?;
 
     let plots::PlotOutputs {
@@ -128,14 +188,14 @@ pub fn evaluate_plan_with_values_and_bindings_and_cancellation(
         plot_errors,
         figures,
         layers,
-    } = plots::evaluate_root_plots(plan, evaluated, &ctx)?;
+    } = plots::evaluate_root_plots(entry, evaluated, &ctx)?;
     cancellation.checkpoint()?;
     presentation_diagnostics.extend(
         plots
             .iter()
             .flat_map(|plot| plot.presentation_diagnostics.iter().cloned()),
     );
-    let assumes_map = assertions::root_assumes_map(plan);
+    let assumes_map = assertions::root_assumes_map(entry);
 
     let root_outcome::RootOutcomeParts {
         unfinished_calls,
@@ -162,7 +222,7 @@ pub fn evaluate_plan_with_values_and_bindings_and_cancellation(
             plan.tir().registry().dimensions.base_unit_symbols(),
             plan.tir().registry().time_zones.clone(),
         ),
-        domain_constraints: root_domain_constraints(plan),
+        domain_constraints: root_domain_constraints(entry),
     };
     Ok(RuntimeEvaluation {
         result,
@@ -172,10 +232,12 @@ pub fn evaluate_plan_with_values_and_bindings_and_cancellation(
     })
 }
 
-/// The domain constraints of the root's own declarations, by their source
+/// The domain constraints of the entry's own declarations, by their source
 /// names.
-fn root_domain_constraints(plan: &ExecPlan<'_>) -> HashMap<ScopedName, ResolvedDomainConstraint> {
-    plan.root()
+fn root_domain_constraints(entry: Entry<'_, '_>) -> HashMap<ScopedName, ResolvedDomainConstraint> {
+    let plan = entry.plan();
+    entry
+        .callable()
         .scope()
         .dag()
         .declarations()
