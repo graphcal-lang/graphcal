@@ -8,6 +8,7 @@ use crate::resolved_name::ResolvedDeclName;
 use crate::syntax::decl_name::DeclName;
 use crate::syntax::dimension::UnitName;
 use crate::syntax::module_name::ScopedName;
+use crate::syntax::span::Span;
 
 use super::static_substitution::{StaticSpecializationId, StaticSubstitution};
 
@@ -292,6 +293,10 @@ pub struct HirInstanceRecord {
     /// V005 obligations retained only for unrebound parameter defaults.
     pub(crate) override_reconciliations:
         HashMap<ResolvedDeclName, Vec<crate::ir::override_reconciliation::OverrideReconciliation>>,
+    /// The include declaration's span, in the source of the DAG that writes
+    /// it: the template's source when the edge is re-parented under an
+    /// instance of that template.
+    pub include_span: Span,
 }
 
 #[cfg(test)]

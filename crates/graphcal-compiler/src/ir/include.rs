@@ -135,6 +135,7 @@ impl UnfrozenIR {
             assertion_projections: input.assertion_projections,
             plot_projections: input.plot_projections,
             override_reconciliations: input.override_reconciliations.0,
+            include_span: span,
         });
         Ok(())
     }

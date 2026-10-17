@@ -20,7 +20,6 @@ use graphcal_compiler::resolved_name::{
     ResolvedUnitName,
 };
 use graphcal_compiler::syntax::attribute::AttributeName;
-use graphcal_compiler::syntax::module_name::ScopedName;
 use graphcal_compiler::syntax::names::{NameAtom, NameDef, NamePath};
 use graphcal_compiler::syntax::phase::never;
 use graphcal_compiler::syntax::span::Span;
@@ -1317,26 +1316,6 @@ impl SymbolTable {
         });
         let definition = matches.next()?;
         matches.next().is_none().then_some(definition)
-    }
-
-    pub fn definition_for_scoped_decl(&self, name: &ScopedName) -> Option<&DefinitionInfo> {
-        self.definitions.iter().find_map(|(key, definition)| {
-            let SymbolKey::Declaration(resolved) = key else {
-                return None;
-            };
-            let owner_matches = if name.qualifier().is_empty() {
-                resolved.owner() == &self.owner
-            } else {
-                let qualifier = name.qualifier();
-                let owner_segments = resolved.owner().segments().as_slice();
-                owner_segments.len() >= qualifier.len()
-                    && owner_segments[owner_segments.len() - qualifier.len()..]
-                        .iter()
-                        .zip(qualifier)
-                        .all(|(segment, qualifier)| segment.scope().as_ref() == Some(qualifier))
-            };
-            (owner_matches && resolved.as_str() == name.leaf().as_str()).then_some(definition)
-        })
     }
 }
 

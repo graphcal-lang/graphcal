@@ -320,4 +320,5 @@ pub struct UnfrozenSemanticInstance {
     pub(crate) plot_projections: Vec<crate::ir::instance::InstancePlotProjection>,
     pub(crate) override_reconciliations:
         HashMap<ResolvedDeclName, Vec<crate::ir::override_reconciliation::OverrideReconciliation>>,
+    pub(crate) include_span: crate::syntax::span::Span,
 }

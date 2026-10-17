@@ -296,7 +296,8 @@ impl std::fmt::Debug for PreparedProject {
 
 impl PreparedProject {
     /// The checked TIR this project evaluates.
-    fn tir(&self) -> &graphcal_compiler::tir::typed::CheckedTir {
+    #[must_use]
+    pub fn tir(&self) -> &graphcal_compiler::tir::typed::CheckedTir {
         self.plan().tir()
     }
 
