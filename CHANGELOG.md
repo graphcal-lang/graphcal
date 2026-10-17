@@ -4,6 +4,78 @@ Release notes for Graphcal. Each release section becomes the body of its GitHub 
 Add a `## v<version>` section before running the release workflow.
 Earlier releases are listed on [GitHub Releases](https://github.com/graphcal-lang/graphcal/releases).
 
+## v0.0.1-alpha.37
+
+This release lets `for` and `unfold` declarations read each other when every cycle between them steps back along one axis, so coupled quantities such as a state and the action that drives it can be written as separate declarations.
+It also releases version 1 of the experimental view model, lets Graphcal View show include instances with their own values, and makes the language server show values inside inline `dag` bodies.
+
+No existing Graphcal source programs need to be modified.
+
+### Recurrences Across Declarations
+
+- A dependency cycle between `for` and `unfold` declarations is now accepted when it is acyclic element by element along one coordinate axis. Each step is evaluated in turn. (_#2101_)
+
+  ```graphcal
+  index Step = range(0.0 s, 3.0 s, step: 1.0 s);
+  param k: Dimensionless = 0.5;
+
+  node action: Dimensionless[Step] = for t: Step { -@k * @state[t] };
+  node state: Dimensionless[Step] = unfold(Step, 1.0, |s, prev_t, t| s + @action[prev_t]);
+  ```
+
+  Here the order is `state[0]`, `action[0]`, `state[1]`, `action[1]`, and so on.
+- Such a cycle is accepted when all of the following hold. Reads of declarations outside the cycle are unrestricted. (_#2101_)
+  - Every declaration in it is a `for` or `unfold` over the same coordinate axis in the same DAG, and at least one is an `unfold`. A cycle across an `include` boundary is still rejected.
+  - Every read between them uses the reader's own `for` variable or `unfold` binders as the first key: `@y[t, ...]` reads the same step and `@y[prev_t, ...]` the previous one. Whole-value reads such as `sum(@y)` and reads in an `unfold` initial value are rejected.
+  - No declaration reads itself; an `unfold` reads its own previous value through its state binding.
+  - Same-step reads alone form no cycle.
+- A rejected cycle reports G001 with the reason, for example ``same-step cycle `action` -> `state` -> `action` ``, and a hint to read `prev_t`. A cycle without an `unfold` keeps the previous G001 message. (_#2101_)
+- Whether a cycle is accepted does not depend on the order of the declarations. The rules are specified and proved in Lean under `formal/Graphcal/Graph/RecurrenceGroup/`, with a prose specification in `internals/recurrence-groups.md`. (_#2100_)
+
+### Language Server
+
+- Inline `dag` bodies are now treated like a standalone file with the same declarations. If every param has a default and no index is required, inlay hints show the computed values and runtime failures are reported on their declarations. If some input is required, inlay hints show types only, as in a library file. Previously an inline DAG body showed nothing. Hover inside a DAG body shows the checked type instead of `(unknown type)`. (_#2117_)
+- Inlay hints inside an inline `dag` body no longer show the values of an include instance. For example, `param parking_alt: Length;` inside a DAG showed `= 200 [km]` because an `include` bound that value; values now attach to declarations by identity, not by display name. (_#2104_)
+- Runtime failures inside an include instance are reported where they belong. Before, a failure landed on the included DAG's declaration only when the instance name happened to match. Otherwise, as with `include ... as i`, it was reported at the start of the file. It is now reported on the included DAG's declaration, with the include site as related information. When that DAG is written in another file, it is reported on the include site. A failure of a value the include exposes is reported on the include declaration. (_#2120_)
+- In editors without inlay-hint refresh support, such as Helix, all inlay hints in a file could disappear after an edit until the view scrolled. The server now waits up to 2 s for the analysis of the latest edit before answering an inlay-hint request. Editors with refresh support behave as before. (_#2118_)
+
+### Graphcal View (Experimental)
+
+- The view model is released as `version` 1. Its format may still change in later releases, but the version number now changes with it. (_#2106_)
+  - Node and index ids are opaque keys; the source spelling is in `label`. `kind` is separate from the new `origin` (`local`, `imported`, `included`, `called`, `includer`).
+  - Cells over a coordinate index show their values instead of `—`, and `Fin` axes are listed.
+  - Every written table cell is reported with its keys and source range, and nodes carry their element type.
+  - `dimension` is the declaration's spelling, and values are displayed by the same rule as `graphcal eval`. A display unit that cannot be applied affects only that node, and `graphcal view` then exits 1 like `graphcal eval`.
+- An include with bindings can be shown with its own values: `graphcal view --instance <id>`, the optional `target` of the language server's `graphcal/viewModel` request, and the page's pinned panes all select an include instance. A param that the include binds is shown and edited at its argument. (_#2111_)
+- A node that reads `@dag(...)::out` now depends on the inline DAG call, both in the view and in `graphcal graph`, which draws the call as a cluster with an edge to the caller. (_#2110_)
+- Editing on [graphcal.org/view](https://graphcal.org/view/) is more reliable. (_#2109_)
+  - A cell is replaced at the range the compiler reports, or is read-only. An `Int` cell writes an integer literal such as `5`.
+  - Edits are placed on the latest source, and typing in the code pane is never replaced by the host's copy.
+  - Libraries with required params can be edited as long as the sources still check.
+  - Fixed several sheet bugs, including stale "evaluating…" indicators, selection clearing, and engine load retries.
+- Fixes for files opened from GitHub. (_#2107_)
+  - Paths with special characters are encoded correctly, and malformed percent-encoding no longer hangs the page.
+  - Branches, tags, and pull requests load independently, so a token without pull-request access still lists branches and tags.
+  - The page checks the engine's limits before downloading sources.
+  - In compare mode, both refs are resolved to commits first, and a base that cannot be read is reported instead of marking every node as new.
+
+### Dependency, Toolchain, and Workflow Maintenance
+
+- Updated JavaScript tooling: pnpm to v12.13.0, `zod` to v4.6.7, and `@types/node` to v26.6.5. (_#2094_, _#2105_, _#2091_, _#2098_, _#2093_)
+- Updated Rust crate `libc` to v0.2.191. (_#2112_)
+- Updated `zensical` to v0.0.69. (_#2097_)
+- Updated GitHub Actions: `taiki-e/install-action` to v2.87.27, `astral-sh/setup-uv` to v10.3.0, and uv in CI to 0.13.x. (_#2113_, _#2114_, _#2116_)
+- The repository's VS Code settings point `graphcal.lsp.path` at the workspace's debug build. (_#2115_)
+
+### Internal
+
+- The evaluator runs an accepted recurrence group as one schedule unit, step by step, and checks domains per element. Reading an element before it is computed is an internal error. (_#2101_)
+- Model contract tests check `graphcal view` output for fixtures against the page's zod schemas. The view page's `main.ts` is split into modules, and their pure parts are tested. (_#2106_, _#2109_)
+- The evaluation of the root now takes the entered callable instead of always using the plan root, so the language server can evaluate inline DAGs on their defaults. (_#2117_)
+- Added the v0.0.1-alpha.37 notes to `CHANGELOG.md` and bumped the workspace version to v0.0.1-alpha.37. (_#2119_)
+
+**Full Changelog**: <https://github.com/graphcal-lang/graphcal/compare/v0.0.1-alpha.36...v0.0.1-alpha.37>
+
 ## v0.0.1-alpha.36
 
 This release adds Graphcal View, an experimental per-file sheet that opens Graphcal files from GitHub at <https://graphcal.org/view/>, and the `graphcal view` command that exports its data.
