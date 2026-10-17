@@ -20,11 +20,12 @@ pub use model_schema::{
 };
 pub use prepared::{
     ExternalValue, InclusiveBounds, InclusiveBoundsError, ModelDefinitionError,
-    ModelExecutionError, ModelOutputPort, ModelRowFailure, ModelRowOutcome,
-    ParameterBindingBuilder, ParameterBindingRow, ParameterDomain, ParameterPort,
-    ParameterPosition, ParameterValue, PreparedModel, PreparedProject, StructuredBindingError,
-    StructuredBindingErrorKind, StructuredBindingPathSegment, StructuredValueExpr, TenaxV2Input,
-    TenaxV2InputKind, TenaxV2Model, TenaxV2Output, TenaxV2RowOutcome,
+    ModelExecutionError, ModelInterfaceError, ModelOutputPort, ModelRowFailure, ModelRowOutcome,
+    ModelSession, ModelSessionError, ParameterBindingBuilder, ParameterBindingRow, ParameterDomain,
+    ParameterPort, ParameterPosition, ParameterValue, PreparedModel, PreparedProject,
+    StructuredBindingError, StructuredBindingErrorKind, StructuredBindingPathSegment,
+    StructuredValueExpr, TenaxV2Input, TenaxV2InputKind, TenaxV2Model, TenaxV2Output,
+    TenaxV2RowOutcome,
 };
 
 /// Prepare a loaded project once for repeated typed evaluation.

@@ -50,6 +50,8 @@ use super::output::apply_include_debug_names;
 
 #[path = "binding_compile.rs"]
 mod binding_compile;
+#[path = "model_session.rs"]
+mod model_session;
 #[path = "tenax_model.rs"]
 mod tenax_model;
 
@@ -58,6 +60,8 @@ pub use binding_compile::{
     ExternalValue, ParameterBindingRow, StructuredBindingError, StructuredBindingErrorKind,
     StructuredBindingPathSegment, StructuredValueExpr,
 };
+pub use model_session::{ModelInterfaceError, ModelSession, ModelSessionError};
+use tenax_model::OutputProjectionError;
 pub use tenax_model::{
     InclusiveBounds, InclusiveBoundsError, ModelDefinitionError, ModelExecutionError,
     ModelOutputPort, ModelRowFailure, ModelRowOutcome, ParameterDomain, ParameterPort,

@@ -2222,6 +2222,7 @@ dependencies = [
  "graphcal-compiler",
  "graphcal-eval",
  "graphcal-io",
+ "graphcal-model-protocol",
  "graphcal-package",
  "graphcal-test-support",
  "hifitime",

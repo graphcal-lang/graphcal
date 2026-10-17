@@ -3714,6 +3714,17 @@ fn recursive_schema_graph_supports_finite_bindings_and_lazy_transport_rejection(
     };
     assert!(matches!(values.as_slice(), [Value::Struct { .. }]));
 
+    let interface = prepared.model_interface().unwrap();
+    assert!(
+        matches!(
+            interface
+                .parameter("list")
+                .map(graphcal_model_protocol::ParameterDescription::wire),
+            Some(graphcal_model_protocol::PortWire::Unsupported { .. })
+        ),
+        "the batch protocol lists a recursive input as unsupported"
+    );
+
     let error = prepared
         .tenax_v2_model(&[DeclName::expect_valid("accepted")])
         .expect_err("Tenax v2 must reject recursion at its own boundary");
@@ -4295,6 +4306,231 @@ fn tenax_v2_limits_do_not_restrict_the_generic_model_interface() {
     assert!(matches!(
         prepared.tenax_v2_model(&outputs),
         Err(ModelDefinitionError::UnsupportedInputType { .. })
+    ));
+}
+
+#[test]
+fn model_interface_describes_wire_types_units_and_domains() {
+    use graphcal_model_protocol::{Domain, PortWire, WireType};
+
+    let source = r#"
+        pub index Mode = { Zulu, Alpha };
+        param length: Length(min: 0.0 m, max: 10.0 m);
+        param ratio: Dimensionless(min: -1.0, max: 1.0);
+        param sample_count: Int(min: -2, max: 2);
+        param mode: Key<Mode>;
+        param force: Force = 1.0 N;
+        param enabled: Bool = true;
+        param at: Datetime<UTC> = datetime("2026-01-01T00:00:00Z");
+        pub node selected: Bool = @enabled;
+        node hidden: Bool = true;
+    "#;
+    let project = crate::loader::LoadedProject::from_source(source, "model.gcl").unwrap();
+    let prepared = prepare_from_project(&project).unwrap();
+    let interface = prepared.model_interface().unwrap();
+
+    let names = interface
+        .parameters()
+        .iter()
+        .map(|parameter| parameter.name().as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        names,
+        [
+            "length",
+            "ratio",
+            "sample_count",
+            "mode",
+            "force",
+            "enabled",
+            "at"
+        ]
+    );
+    let wire = |name: &str| interface.parameter(name).unwrap().wire().clone();
+    let PortWire::Supported(WireType::Quantity(length)) = wire("length") else {
+        panic!("length is a quantity");
+    };
+    assert_eq!(
+        length
+            .unit()
+            .map(graphcal_model_protocol::UnitSpelling::as_str),
+        Some("m")
+    );
+    assert_eq!(
+        serde_json::to_string(length.dimension()).unwrap(),
+        r#"{"Length":1}"#
+    );
+    let Some(Domain::Quantity(bounds)) = interface.parameter("length").unwrap().domain() else {
+        panic!("length has a quantity domain");
+    };
+    assert_eq!(bounds.max().map(|max| max.get()), Some(10.0));
+
+    let PortWire::Supported(WireType::Quantity(ratio)) = wire("ratio") else {
+        panic!("ratio is a quantity");
+    };
+    assert!(ratio.unit().is_none() && ratio.dimension().is_dimensionless());
+
+    let PortWire::Supported(WireType::Quantity(force)) = wire("force") else {
+        panic!("force is a quantity");
+    };
+    assert_eq!(
+        force
+            .unit()
+            .map(graphcal_model_protocol::UnitSpelling::as_str),
+        Some("m*kg/s^2")
+    );
+    assert!(interface.parameter("force").unwrap().has_default());
+
+    assert!(matches!(
+        interface.parameter("sample_count").unwrap().domain(),
+        Some(Domain::Int(_))
+    ));
+    let PortWire::Supported(WireType::Key(mode)) = wire("mode") else {
+        panic!("mode is a key");
+    };
+    let variants = mode
+        .variants()
+        .iter()
+        .map(graphcal_model_protocol::VariantName::as_str)
+        .collect::<Vec<_>>();
+    assert_eq!(variants, ["Zulu", "Alpha"], "declaration order");
+    assert_eq!(wire("enabled"), PortWire::Supported(WireType::Bool));
+    assert!(matches!(wire("at"), PortWire::Unsupported { .. }));
+
+    let outputs = interface
+        .outputs()
+        .iter()
+        .map(|output| output.name().as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(outputs, ["selected"], "private nodes are not outputs");
+}
+
+const SESSION_MODEL: &str = r"
+    pub index Mode = { A, B };
+    param x: Length(min: 0.0 m, max: 10.0 m);
+    param mode: Key<Mode>;
+    param scale: Dimensionless = 2.0;
+    assert large_enough = @x > 1.0 m;
+    pub node scaled: Length = @x * @scale;
+    pub node reciprocal: Dimensionless = 1.0 m / (@x - 5.0 m);
+    pub node is_b: Bool = @mode == Mode#B;
+    pub node same_mode: Key<Mode> = @mode;
+    pub node trials: Int = 3;
+";
+
+fn session_over(
+    prepared: &PreparedProject,
+    inputs: &[&str],
+    outputs: &[&str],
+) -> std::sync::Arc<graphcal_model_protocol::SessionSchema> {
+    let names = |names: &[&str]| {
+        names
+            .iter()
+            .map(|name| graphcal_model_protocol::PortName::new(*name).unwrap())
+            .collect()
+    };
+    std::sync::Arc::new(
+        prepared
+            .model_interface()
+            .unwrap()
+            .configure(&graphcal_model_protocol::SessionSpec::new(
+                names(inputs),
+                names(outputs),
+            ))
+            .unwrap(),
+    )
+}
+
+#[test]
+fn model_session_reports_each_row_outcome_kind() {
+    use graphcal_model_protocol::{
+        FiniteF64, InputColumn, RequestBatch, RowFailure, RowOutcome, ValueRef, WireType,
+    };
+
+    let project = crate::loader::LoadedProject::from_source(SESSION_MODEL, "model.gcl").unwrap();
+    let prepared = prepare_from_project(&project).unwrap();
+    let schema = session_over(
+        &prepared,
+        &["x", "mode"],
+        &["trials", "same_mode", "is_b", "reciprocal", "scaled"],
+    );
+    let session = prepared
+        .model_session(std::sync::Arc::clone(&schema))
+        .unwrap();
+    let WireType::Key(mode) = schema.inputs()[1].wire() else {
+        panic!("mode is a key");
+    };
+    let b = mode.position("B").unwrap();
+    let x = |value: f64| FiniteF64::new(value).unwrap();
+    let request = RequestBatch::new(
+        std::sync::Arc::clone(&schema),
+        vec![
+            InputColumn::Quantity(vec![x(3.0), x(0.5), x(12.0), x(5.0)]),
+            InputColumn::Key(vec![b; 4]),
+        ],
+    )
+    .unwrap();
+    let result = prepared.evaluate_request(&session, &request).unwrap();
+    assert_eq!(result.rows(), 4);
+
+    let RowOutcome::Success(values) = result.row(0).unwrap() else {
+        panic!("row 0 succeeds");
+    };
+    let get = |name: &str| values.get(schema.output_slot(name).unwrap()).unwrap();
+    assert_eq!(get("scaled"), ValueRef::Quantity(x(6.0)));
+    assert_eq!(get("reciprocal"), ValueRef::Quantity(x(-0.5)));
+    assert_eq!(get("is_b"), ValueRef::Bool(true));
+    assert_eq!(get("trials"), ValueRef::Int(3));
+    assert!(matches!(get("same_mode"), ValueRef::Key(variant) if variant.as_str() == "B"));
+
+    assert!(matches!(
+        result.row(1),
+        Some(RowOutcome::Failure(RowFailure::AssertionFailed { ref assertion, .. }))
+            if assertion == "large_enough"
+    ));
+    assert!(matches!(
+        result.row(2),
+        Some(RowOutcome::Failure(RowFailure::InputOutOfDomain { ref parameter, .. }))
+            if parameter.as_str() == "x"
+    ));
+    assert!(matches!(
+        result.row(3),
+        Some(RowOutcome::Failure(RowFailure::EvaluationError { .. }))
+    ));
+}
+
+#[test]
+fn model_session_rejects_a_schema_of_another_interface() {
+    let project = crate::loader::LoadedProject::from_source(SESSION_MODEL, "model.gcl").unwrap();
+    let prepared = prepare_from_project(&project).unwrap();
+    let other = crate::loader::LoadedProject::from_source(
+        "param x: Length; pub node y: Length = @x;",
+        "other.gcl",
+    )
+    .unwrap();
+    let other = prepare_from_project(&other).unwrap();
+    assert!(matches!(
+        prepared.model_session(session_over(&other, &["x"], &["y"])),
+        Err(ModelSessionError::FingerprintMismatch { .. })
+    ));
+}
+
+#[test]
+fn generic_model_interface_accepts_types_the_batch_protocol_cannot_carry() {
+    let project = crate::loader::LoadedProject::from_source(
+        "param at: Datetime<UTC>; pub node same: Datetime<UTC> = @at;",
+        "generic-model.gcl",
+    )
+    .unwrap();
+    let prepared = prepare_from_project(&project).unwrap();
+    assert!(prepared.model(&[DeclName::expect_valid("same")]).is_ok());
+    assert!(matches!(
+        prepared
+            .model_interface()
+            .unwrap()
+            .output("same")
+            .map(graphcal_model_protocol::OutputDescription::wire),
+        Some(graphcal_model_protocol::PortWire::Unsupported { .. })
     ));
 }
 

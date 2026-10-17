@@ -15,6 +15,7 @@ base64.workspace = true
 graphcal-compiler.workspace = true
 graphcal-eval.workspace = true
 graphcal-io.workspace = true
+graphcal-model-protocol.workspace = true
 graphcal-package.workspace = true
 hifitime.workspace = true
 miette.workspace = true
