@@ -117,13 +117,11 @@ import plant.reliability::{ index Mode };
 
 param load: Force(min: 0.0 N, max: 10_000.0 N);
 
-include plant.reliability(load: @load, cycles: 80_000, mode: Mode#Degraded) as aged;
-
-pub node failure: Bool = @aged::failure;
-pub node margin: Force = @aged::margin;
+include plant.reliability(load: @load, cycles: 80_000, mode: Mode#Degraded)
+    ::{ pub failure, pub margin };
 ```
 
-固定値は通常の Graphcal の式なので、単位と型は他の束縛と同じように検査されます。出力になるのは serve するファイル自身で宣言した public なノードなので、ラッパーで改めて宣言します。
+固定値は通常の Graphcal の式なので、単位と型は他の束縛と同じように検査されます。波括弧のリストで `pub` を付けた include の出力は再エクスポートされ、ラッパー自身で宣言した `pub node` と同じく出力になります。
 
 ## 行ごとの結果 { #row-outcomes }
 
