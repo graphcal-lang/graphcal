@@ -7306,7 +7306,7 @@ fn eval_requires_a_lock_pin_in_package_projects() {
 }
 
 // ---------------------------------------------------------------------------
-// Prepared bindings and Tenax model server
+// Prepared bindings and batch model server
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -7330,169 +7330,241 @@ fn eval_param_rejects_arbitrary_computation() {
     assert!(stderr.contains("not a closed value"), "stderr: {stderr}");
 }
 
-#[test]
-fn model_serve_rejects_unsupported_v2_input_before_writing_stdout() {
-    let dir = tempfile::tempdir().unwrap();
-    let model = write_temp_file(
-        dir.path(),
-        "model.gcl",
-        "param enabled: Bool; pub node selected: Bool = @enabled;\n",
+const BATCH_MODEL: &str = "pub index Mode = { A, B };\n\
+     param load: Length(min: 0.0 m, max: 10.0 m);\n\
+     param mode: Key<Mode>;\n\
+     param factor: Dimensionless = 2.0;\n\
+     param at: Datetime<UTC> = datetime(\"2026-01-01T00:00:00Z\");\n\
+     pub node failure: Bool = @load * @factor > 8.0 m && @mode == Mode#B;\n\
+     pub node margin: Length = 10.0 m - @load * @factor;\n";
+
+fn describe_batch_model(model: &std::path::Path) -> graphcal_model_protocol::DescribeDocument {
+    let output = graphcal_bin()
+        .args(["model", "describe"])
+        .arg(model)
+        .output()
+        .expect("failed to run graphcal");
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
     );
+    serde_json::from_slice(&output.stdout).expect("describe prints a describe document")
+}
+
+#[test]
+fn model_describe_lists_ports_with_units_domains_and_fingerprint() {
+    let dir = tempfile::tempdir().unwrap();
+    let model = write_temp_file(dir.path(), "model.gcl", BATCH_MODEL);
+    let output = graphcal_bin()
+        .args(["model", "describe"])
+        .arg(&model)
+        .output()
+        .expect("failed to run graphcal");
+    assert!(output.status.success());
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(json["protocol_version"], 1);
+    assert!(
+        json["interface_fingerprint"]
+            .as_str()
+            .is_some_and(|fingerprint| fingerprint.starts_with("sha256:"))
+    );
+    let load = &json["interface"]["parameters"][0];
+    assert_eq!(load["name"], "load");
+    assert_eq!(load["wire"]["unit"], "m");
+    assert_eq!(load["domain"]["max"], 10.0);
+    assert_eq!(
+        json["interface"]["parameters"][3]["wire"]["kind"],
+        "unsupported"
+    );
+
+    let document = describe_batch_model(&model);
+    assert_eq!(document.interface().outputs().len(), 2);
+}
+
+#[test]
+fn model_serve_rejects_invalid_sessions_before_writing_stdout() {
+    let dir = tempfile::tempdir().unwrap();
+    let model = write_temp_file(dir.path(), "model.gcl", BATCH_MODEL);
+    let cases: [(&[&str], &str); 4] = [
+        (
+            &[
+                "--input",
+                "load",
+                "--output",
+                "failure",
+                "--skip-fingerprint-check",
+            ],
+            "has no default",
+        ),
+        (
+            &[
+                "--input",
+                "load",
+                "--input",
+                "mode",
+                "--input",
+                "at",
+                "--output",
+                "failure",
+                "--skip-fingerprint-check",
+            ],
+            "cannot be varied",
+        ),
+        (
+            &[
+                "--input",
+                "load",
+                "--input",
+                "mode",
+                "--output",
+                "nope",
+                "--skip-fingerprint-check",
+            ],
+            "no public output named `nope`",
+        ),
+        (
+            &[
+                "--input",
+                "load",
+                "--input",
+                "mode",
+                "--output",
+                "failure",
+                "--expect-fingerprint",
+                "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+            ],
+            "describe the model again",
+        ),
+    ];
+    for (arguments, expected) in cases {
+        let output = graphcal_bin()
+            .args(["model", "serve"])
+            .arg(&model)
+            .args(arguments)
+            .output()
+            .expect("failed to run graphcal");
+        assert_eq!(output.status.code(), Some(2), "{arguments:?}");
+        assert!(
+            output.stdout.is_empty(),
+            "setup failures must not contaminate Arrow stdout"
+        );
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains(expected), "{arguments:?}: {stderr}");
+    }
+}
+
+#[test]
+fn model_serve_requires_an_explicit_fingerprint_choice() {
+    let dir = tempfile::tempdir().unwrap();
+    let model = write_temp_file(dir.path(), "model.gcl", BATCH_MODEL);
     let output = graphcal_bin()
         .args(["model", "serve"])
         .arg(&model)
-        .args(["--output", "selected"])
+        .args(["--input", "load", "--input", "mode", "--output", "failure"])
         .output()
         .expect("failed to run graphcal");
-
     assert_eq!(output.status.code(), Some(2));
-    assert!(
-        output.stdout.is_empty(),
-        "model preflight failures must not contaminate Arrow stdout"
-    );
+    assert_eq!(output.stdout, b"");
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("unsupported Tenax v2 type `Bool`"),
+        stderr.contains("--expect-fingerprint") && stderr.contains("--skip-fingerprint-check"),
         "stderr: {stderr}"
     );
 }
 
 #[test]
-#[expect(
-    clippy::too_many_lines,
-    reason = "one subprocess test must exercise both concatenated IPC streams end to end"
-)]
-fn model_serve_subprocess_exchanges_persistent_arrow_streams() {
-    use std::collections::HashMap;
+fn model_serve_subprocess_answers_request_batches() {
     use std::io::Read as _;
     use std::process::Stdio;
     use std::sync::Arc;
 
-    use arrow_array::types::Int32Type;
-    use arrow_array::{
-        BooleanArray, DictionaryArray, FixedSizeBinaryArray, Float64Array, Int32Array, Int64Array,
-        StringArray, UInt64Array,
-    };
     use arrow_ipc::reader::StreamReader;
     use arrow_ipc::writer::StreamWriter;
-    use arrow_schema::{DataType, Field, Schema};
+    use graphcal_model_protocol::arrow::{request_schema, result_schema, validate_schema};
+    use graphcal_model_protocol::{
+        FiniteF64, InputColumn, PortName, RequestBatch, ResultBatch, RowFailure, RowOutcome,
+        SessionSpec, ValueRef, WireType,
+    };
 
     let dir = tempfile::tempdir().unwrap();
-    let model = write_temp_file(
-        dir.path(),
-        "model.gcl",
-        "pub index Mode = { A, B };\n\
-         param load: Length(min: 0.0 m, max: 10.0 m);\n\
-         param sample_count: Int(min: 0, max: 10);\n\
-         param mode: Key<Mode>;\n\
-         pub node failure: Bool = @load > 5.0 m && @sample_count > 0 && @mode == Mode#B;\n",
+    let model = write_temp_file(dir.path(), "model.gcl", BATCH_MODEL);
+    let document = describe_batch_model(&model);
+    let name = |name: &str| PortName::new(name).unwrap();
+    let schema = Arc::new(
+        document
+            .interface()
+            .configure(&SessionSpec::new(
+                vec![name("mode"), name("load")],
+                vec![name("margin"), name("failure")],
+            ))
+            .unwrap(),
     );
+
     let mut child = graphcal_bin()
         .args(["model", "serve"])
         .arg(&model)
-        .args(["--output", "failure"])
+        .args([
+            "--input", "mode", "--input", "load", "--output", "margin", "--output", "failure",
+        ])
+        .arg("--expect-fingerprint")
+        .arg(document.interface_fingerprint().to_string())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .expect("failed to spawn Graphcal model server");
-    let mut stdout = child.stdout.take().unwrap();
-    let discovery_schema;
-    {
-        let mut discovery = StreamReader::try_new(&mut stdout, None).unwrap();
-        discovery_schema = discovery.schema();
-        assert_eq!(
-            discovery_schema
-                .metadata()
-                .get("tenax.batch.kind")
-                .map(String::as_str),
-            Some("model_schema")
-        );
-        assert_eq!(
-            discovery_schema
-                .field(0)
-                .metadata()
-                .get("tenax.input.unit")
-                .map(String::as_str),
-            Some("m")
-        );
-        assert!(discovery.next().is_none());
-    }
-    let mut results = StreamReader::try_new(&mut stdout, None).unwrap();
-    assert_eq!(
-        results
-            .schema()
-            .metadata()
-            .get("tenax.batch.kind")
-            .map(String::as_str),
-        Some("evaluation_result")
-    );
+        .expect("failed to spawn the Graphcal model server");
+    let stdout = child.stdout.take().unwrap();
+    let mut results = StreamReader::try_new(stdout, None).unwrap();
+    validate_schema(&result_schema(&schema), results.schema().as_ref()).unwrap();
 
-    let mut fields = discovery_schema.fields()[0..3]
-        .iter()
-        .map(|field| field.as_ref().clone())
-        .collect::<Vec<_>>();
-    fields.push(
-        Field::new("tenax.evaluation_id", DataType::FixedSizeBinary(16), false).with_metadata(
-            HashMap::from([
-                ("tenax.field.role".to_string(), "context".to_string()),
-                ("tenax.field.kind".to_string(), "evaluation_id".to_string()),
-            ]),
-        ),
-    );
-    fields.push(
-        Field::new("tenax.evaluation_seed", DataType::UInt64, false).with_metadata(HashMap::from(
-            [
-                ("tenax.field.role".to_string(), "context".to_string()),
-                (
-                    "tenax.field.kind".to_string(),
-                    "evaluation_seed".to_string(),
-                ),
-            ],
-        )),
-    );
-    let request_schema = Arc::new(Schema::new_with_metadata(
-        fields,
-        HashMap::from([
-            ("tenax.schema.version".to_string(), "2".to_string()),
-            (
-                "tenax.batch.kind".to_string(),
-                "evaluation_request".to_string(),
-            ),
-        ]),
-    ));
-    let mode = DictionaryArray::<Int32Type>::try_new(
-        Int32Array::from(vec![1, 0]),
-        Arc::new(StringArray::from(vec!["B", "A"])),
-    )
-    .unwrap();
-    let ids = FixedSizeBinaryArray::try_from_iter((0..2).map(|_| [7_u8; 16])).unwrap();
-    let batch = arrow_array::RecordBatch::try_new(
-        request_schema.clone(),
-        vec![
-            Arc::new(Float64Array::from(vec![4.0, 6.0])),
-            Arc::new(Int64Array::from(vec![1, 1])),
-            Arc::new(mode),
-            Arc::new(ids),
-            Arc::new(UInt64Array::from(vec![42, 42])),
-        ],
-    )
-    .unwrap();
-    {
-        let mut stdin = child.stdin.take().unwrap();
-        let mut requests = StreamWriter::try_new(&mut stdin, &request_schema).unwrap();
-        requests.write(&batch).unwrap();
-        requests.finish().unwrap();
-    }
-
-    let result = results.next().unwrap().unwrap();
-    let values = result
-        .column(0)
-        .as_any()
-        .downcast_ref::<BooleanArray>()
+    let WireType::Key(mode) = schema.inputs()[1].wire() else {
+        panic!("mode is a key");
+    };
+    let b = mode.position("B").unwrap();
+    let load = |values: &[f64]| {
+        InputColumn::Quantity(
+            values
+                .iter()
+                .map(|value| FiniteF64::new(*value).unwrap())
+                .collect(),
+        )
+    };
+    let mut stdin = child.stdin.take().unwrap();
+    let mut requests = StreamWriter::try_new(&mut stdin, &request_schema(&schema)).unwrap();
+    for (values, modes) in [(vec![1.0, 5.0], vec![b, b]), (vec![12.0], vec![b])] {
+        let request = RequestBatch::new(
+            Arc::clone(&schema),
+            vec![load(&values), InputColumn::Key(modes)],
+        )
         .unwrap();
-    assert!(!values.value(0));
-    assert!(values.value(1));
+        requests.write(&request.to_record_batch().unwrap()).unwrap();
+        // Each request is answered before the next one is sent.
+        let result =
+            ResultBatch::from_record_batch(Arc::clone(&schema), &results.next().unwrap().unwrap())
+                .unwrap();
+        assert_eq!(result.rows(), values.len());
+        if values.len() == 2 {
+            let failure = schema.output_slot("failure").unwrap();
+            let margin = schema.output_slot("margin").unwrap();
+            let RowOutcome::Success(row) = result.row(1).unwrap() else {
+                panic!("row 1 succeeds");
+            };
+            assert_eq!(row.get(failure), Some(ValueRef::Bool(true)));
+            assert_eq!(
+                row.get(margin),
+                Some(ValueRef::Quantity(FiniteF64::new(0.0).unwrap()))
+            );
+        } else {
+            assert!(matches!(
+                result.row(0),
+                Some(RowOutcome::Failure(RowFailure::InputOutOfDomain { .. }))
+            ));
+        }
+    }
+    requests.finish().unwrap();
+    drop(requests);
+    drop(stdin);
     assert!(results.next().is_none());
     drop(results);
 
@@ -7506,27 +7578,6 @@ fn model_serve_subprocess_exchanges_persistent_arrow_streams() {
         .unwrap();
     assert!(status.success(), "stderr: {stderr}");
     assert!(stderr.is_empty(), "unexpected server stderr: {stderr}");
-}
-
-#[test]
-fn model_serve_rejects_private_output_before_writing_stdout() {
-    let dir = tempfile::tempdir().unwrap();
-    let model = write_temp_file(
-        dir.path(),
-        "model.gcl",
-        "param x: Int(min: 0, max: 1); node selected: Bool = @x > 0;\n",
-    );
-    let output = graphcal_bin()
-        .args(["model", "serve"])
-        .arg(&model)
-        .args(["--output", "selected"])
-        .output()
-        .expect("failed to run graphcal");
-
-    assert_eq!(output.status.code(), Some(2));
-    assert_eq!(output.stdout, b"");
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("private"), "stderr: {stderr}");
 }
 
 // --- graphcal report build (experimental auto-reports, #1410) ---

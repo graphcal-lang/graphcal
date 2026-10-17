@@ -1,5 +1,5 @@
 [package]
-name = "graphcal-tenax"
+name = "graphcal-model-server"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -11,13 +11,14 @@ keywords.workspace = true
 categories.workspace = true
 
 [dependencies]
-arrow-array = { workspace = true }
 arrow-ipc = { workspace = true }
 arrow-schema = { workspace = true }
-graphcal-compiler = { workspace = true }
+graphcal-model-protocol = { workspace = true, features = ["arrow"] }
 graphcal-project = { workspace = true }
-serde_json = { workspace = true }
 thiserror = { workspace = true }
+
+[dev-dependencies]
+arrow-array = { workspace = true }
 
 [lints]
 workspace = true

@@ -3724,15 +3724,6 @@ fn recursive_schema_graph_supports_finite_bindings_and_lazy_transport_rejection(
         ),
         "the batch protocol lists a recursive input as unsupported"
     );
-
-    let error = prepared
-        .tenax_v2_model(&[DeclName::expect_valid("accepted")])
-        .expect_err("Tenax v2 must reject recursion at its own boundary");
-    assert!(matches!(
-        error,
-        ModelDefinitionError::RecursiveInputTypeUnsupported { name, .. }
-            if name.as_str() == "list"
-    ));
 }
 
 #[test]
@@ -4254,59 +4245,6 @@ fn external_binding_errors_retain_boundary_source_and_parameter() {
         }
         other => panic!("expected external binding diagnostic, got {other:?}"),
     }
-}
-
-#[test]
-fn tenax_v2_projection_is_strict_and_preserves_typed_domains() {
-    let source = r"
-        pub index Mode = { Zulu, Alpha };
-        param length: Length(min: 0.0 m, max: 10.0 m);
-        param ratio: Dimensionless(min: -1.0, max: 1.0);
-        param sample_count: Int(min: -2, max: 2);
-        param mode: Key<Mode>;
-        pub node selected: Bool = true;
-    ";
-    let project = crate::loader::LoadedProject::from_source(source, "model.gcl").unwrap();
-    let prepared = prepare_from_project(&project).unwrap();
-    let model = prepared
-        .tenax_v2_model(&[DeclName::expect_valid("selected")])
-        .unwrap();
-    assert_eq!(model.inputs().len(), 4);
-    assert_eq!(
-        model.inputs()[0].kind().continuous(),
-        Some((0.0, 10.0, Some("m"), 1.0))
-    );
-    assert_eq!(
-        model.inputs()[1].kind().continuous(),
-        Some((-1.0, 1.0, None, 1.0))
-    );
-    assert_eq!(model.inputs()[2].kind().integer(), Some((-2, 2)));
-    assert_eq!(
-        model.inputs()[3]
-            .kind()
-            .categories()
-            .unwrap()
-            .iter()
-            .map(IndexVariantName::as_str)
-            .collect::<Vec<_>>(),
-        ["Alpha", "Zulu"]
-    );
-}
-
-#[test]
-fn tenax_v2_limits_do_not_restrict_the_generic_model_interface() {
-    let project = crate::loader::LoadedProject::from_source(
-        "param enabled: Bool; pub node selected: Bool = @enabled;",
-        "generic-model.gcl",
-    )
-    .unwrap();
-    let prepared = prepare_from_project(&project).unwrap();
-    let outputs = [DeclName::expect_valid("selected")];
-    assert!(prepared.model(&outputs).is_ok());
-    assert!(matches!(
-        prepared.tenax_v2_model(&outputs),
-        Err(ModelDefinitionError::UnsupportedInputType { .. })
-    ));
 }
 
 #[test]

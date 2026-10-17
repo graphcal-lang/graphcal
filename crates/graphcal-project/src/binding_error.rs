@@ -150,7 +150,7 @@ pub enum BindingError {
         span: SourceSpan,
     },
 
-    #[error("Tenax v2 requires a concrete named index")]
+    #[error("a key binding requires a concrete named index")]
     #[diagnostic(code(graphcal::O011))]
     KeyIndexNotNamed {
         name: DeclName,

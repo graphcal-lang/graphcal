@@ -2055,7 +2055,7 @@ role = "facade"
 
 [[module]]
 package = "project"
-path = ["prepare", "prepared", "tenax_model"]
+path = ["prepare", "prepared", "model_port"]
 role = "facade"
 
 [[module]]

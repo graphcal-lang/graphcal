@@ -21,11 +21,12 @@ graphcal-eval = { workspace = true }
 graphcal-fmt = { workspace = true }
 graphcal-io = { workspace = true }
 graphcal-lsp = { workspace = true }
+graphcal-model-protocol.workspace = true
+graphcal-model-server.workspace = true
 graphcal-package = { workspace = true }
 graphcal-plugin-host.workspace = true
 graphcal-project = { workspace = true }
 graphcal-report = { workspace = true }
-graphcal-tenax = { workspace = true }
 miette = { workspace = true, features = ["fancy"] }
 open = { workspace = true }
 serde.workspace = true
@@ -43,6 +44,7 @@ arrow-array.workspace = true
 arrow-ipc.workspace = true
 arrow-schema.workspace = true
 graphcal-eval = { workspace = true, features = ["test-identities"] }
+graphcal-model-protocol = { workspace = true, features = ["arrow"] }
 graphcal-plugin-abi.workspace = true
 indexmap.workspace = true
 insta.workspace = true

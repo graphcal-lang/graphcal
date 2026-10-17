@@ -589,7 +589,7 @@ graphcal-io            filesystem abstraction
 graphcal-package       pure package manifest/lockfile domain model
 graphcal-report        report rendering and browser assets
 graphcal-wasm          browser/Wasm project adapter
-graphcal-tenax         Tenax model adapter
+graphcal-model-server  batch model-evaluation Arrow IPC server
 graphcal-model-protocol batch model-evaluation wire vocabulary
 graphcal-plugin-abi    plugin signatures, manifests, and wire contract
 graphcal-plugin-macros plugin authoring proc-macros
@@ -815,7 +815,7 @@ points in `prepare/`.
 | `prepare/model_schema.rs`    | Finite typed arena for recursive model-value definitions        |
 | `prepare/prepared.rs`        | Checked-to-prepared transition and reusable evaluation surface  |
 | `prepare/binding_compile.rs` | Closed external-value lowering and binding-row validation       |
-| `prepare/tenax_model.rs`     | Generic model and strict Tenax-v2 projection                    |
+| `prepare/model_port.rs`      | Generic model ports and per-row model evaluation                |
 | `prepare/model_session.rs`   | Batch-protocol interface, session resolution, and evaluation    |
 | `prepare/output.rs`          | Presentation-only output projection                            |
 | `inline_dag.rs`                   | Inline-DAG self-import preprocessing                            |
@@ -2152,15 +2152,15 @@ figure, static or live, is themed.
 460. `crates/graphcal-project/src/prepare/mod.rs`
 461. `crates/graphcal-project/src/loader/tests.rs`
 462. `crates/graphcal-project/src/prepare/binding_compile.rs`
-463. `crates/graphcal-project/src/prepare/tenax_model.rs`
-464. `crates/graphcal-project/src/project_compiler/mod.rs`
-465. `crates/graphcal-project/src/tests/sealed_program.rs`
-466. `crates/graphcal-project/src/view_model/wire_key.rs`
-467. `crates/graphcal-project/src/view_model/model.rs`
-468. `crates/graphcal-project/src/view_model/value.rs`
-469. `crates/graphcal-project/src/view_model/cells.rs`
-470. `crates/graphcal-project/src/view_model/target.rs`
-471. `crates/graphcal-project/src/prepare/model_session.rs`
+463. `crates/graphcal-project/src/project_compiler/mod.rs`
+464. `crates/graphcal-project/src/tests/sealed_program.rs`
+465. `crates/graphcal-project/src/view_model/wire_key.rs`
+466. `crates/graphcal-project/src/view_model/model.rs`
+467. `crates/graphcal-project/src/view_model/value.rs`
+468. `crates/graphcal-project/src/view_model/cells.rs`
+469. `crates/graphcal-project/src/view_model/target.rs`
+470. `crates/graphcal-project/src/prepare/model_session.rs`
+471. `crates/graphcal-project/src/prepare/model_port.rs`
 472. `crates/graphcal-report/src/lib.rs`
 473. `crates/graphcal-report/src/escape.rs`
 474. `crates/graphcal-report/src/vega_assets.rs`
@@ -2174,7 +2174,7 @@ figure, static or live, is themed.
 482. `crates/graphcal-test-support/src/lib.rs`
 483. `crates/graphcal-test-support/src/project.rs`
 484. `crates/graphcal-test-support/src/bytes.rs`
-485. `crates/graphcal-tenax/src/lib.rs`
+485. `crates/graphcal-model-server/src/lib.rs`
 486. `crates/graphcal-wasm/src/output.rs`
 487. `crates/graphcal-wasm/src/project.rs`
 488. `crates/graphcal-wasm/src/js_request.rs`
