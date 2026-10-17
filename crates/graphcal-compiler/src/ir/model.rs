@@ -157,7 +157,8 @@ pub struct HirDag {
     /// Plot aliases from include brace lists (#847).
     pub(crate) included_plots: Vec<IncludedPlotEntry>,
     /// Runtime-interface-relevant declarations authored directly in this DAG,
-    /// excluding declarations merged from includes.
+    /// excluding declarations merged from includes but including the node
+    /// aliases of its selective include items.
     pub(super) source_declarations: Vec<crate::hir::source_interface::SourceDeclaration>,
     /// Typed Static ports authored directly in this reusable DAG.
     pub(crate) static_ports: Vec<crate::hir::source_interface::StaticPort>,
@@ -282,8 +283,9 @@ pub struct UnfrozenIR {
     pub(super) decls: Vec<entry::Decl<Syntax>>,
     /// Plot aliases from include brace lists (#847).
     pub(super) included_plots: Vec<IncludedPlotEntry>,
-    /// Direct source declarations are immutable provenance. Include merging
-    /// extends `decls` but never this entry-interface subset.
+    /// Direct source declarations are provenance. Include merging extends
+    /// `decls`; only a selective include item's node alias joins this
+    /// entry-interface subset, at its include's source position.
     pub(super) source_declarations: Vec<crate::hir::source_interface::SourceDeclaration>,
     /// Static interface provenance is authored only by this DAG template.
     pub(super) static_ports: Vec<crate::hir::source_interface::StaticPort>,

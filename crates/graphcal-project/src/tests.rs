@@ -4343,6 +4343,85 @@ fn model_interface_describes_wire_types_units_and_domains() {
     assert_eq!(outputs, ["selected"], "private nodes are not outputs");
 }
 
+/// The model interface is the file's public value surface: `pub` node items
+/// of selective includes are output ports in source order, under their local
+/// names and through multi-hop facades. Private items, consts, and
+/// whole-instance members are not.
+#[test]
+fn model_interface_lists_selectively_reexported_nodes_as_outputs() {
+    use graphcal_model_protocol::{FiniteF64, InputColumn, RequestBatch, RowOutcome, ValueRef};
+
+    let (_directory, root) = write_pipeline_project(
+        &[
+            (
+                "lib.gcl",
+                "param load: Force;\n\
+                 pub const node limit: Force = 10.0 N;\n\
+                 pub node margin: Force = @limit - @load;\n\
+                 pub node failure: Bool = @margin < 0.0 N;\n\
+                 pub node doubled: Force = @load * 2.0;\n",
+            ),
+            (
+                "facade.gcl",
+                "param load: Force;\n\
+                 include pipeline.lib(load: @load)::{ pub margin };\n",
+            ),
+            (
+                "main.gcl",
+                "param load: Force;\n\
+                 pub node first: Force = @load;\n\
+                 include pipeline.lib(load: @load)::{ pub failure, pub doubled as twice, pub limit, margin as hidden_margin };\n\
+                 include pipeline.facade(load: @load)::{ pub margin as facade_margin };\n\
+                 include pipeline.lib(load: @load) as whole;\n\
+                 pub node last: Force = @hidden_margin;\n",
+            ),
+        ],
+        "main.gcl",
+    );
+    let project = crate::loader::load_project(&root, None, &fs()).unwrap();
+    let prepared = prepare_from_project(&project).unwrap();
+    let interface = prepared.model_interface().unwrap();
+    let outputs = interface
+        .outputs()
+        .iter()
+        .map(|output| output.name().as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        outputs,
+        ["first", "failure", "twice", "facade_margin", "last"]
+    );
+    assert_eq!(interface.output("twice").unwrap().graphcal_type(), "Force");
+    assert!(prepared.model(&[DeclName::expect_valid("twice")]).is_ok());
+    assert!(matches!(
+        prepared.model(&[DeclName::expect_valid("hidden_margin")]),
+        Err(ModelDefinitionError::PrivateOutput { .. })
+    ));
+
+    let schema = session_over(&prepared, &["load"], &["twice", "facade_margin", "failure"]);
+    let session = prepared
+        .model_session(std::sync::Arc::clone(&schema))
+        .unwrap();
+    let request = RequestBatch::new(
+        std::sync::Arc::clone(&schema),
+        vec![InputColumn::Quantity(vec![FiniteF64::new(3.0).unwrap()])],
+    )
+    .unwrap();
+    let result = prepared.evaluate_request(&session, &request).unwrap();
+    let RowOutcome::Success(values) = result.row(0).unwrap() else {
+        panic!("the row succeeds");
+    };
+    let get = |name: &str| values.get(schema.output_slot(name).unwrap()).unwrap();
+    assert_eq!(
+        get("twice"),
+        ValueRef::Quantity(FiniteF64::new(6.0).unwrap())
+    );
+    assert_eq!(
+        get("facade_margin"),
+        ValueRef::Quantity(FiniteF64::new(7.0).unwrap())
+    );
+    assert_eq!(get("failure"), ValueRef::Bool(false));
+}
+
 const SESSION_MODEL: &str = r"
     pub index Mode = { A, B };
     param x: Length(min: 0.0 m, max: 10.0 m);
