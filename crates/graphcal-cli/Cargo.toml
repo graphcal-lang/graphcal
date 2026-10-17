@@ -44,6 +44,7 @@ arrow-array.workspace = true
 arrow-ipc.workspace = true
 arrow-schema.workspace = true
 graphcal-eval = { workspace = true, features = ["test-identities"] }
+graphcal-model-client.workspace = true
 graphcal-model-protocol = { workspace = true, features = ["arrow"] }
 graphcal-plugin-abi.workspace = true
 indexmap.workspace = true

@@ -2022,6 +2022,7 @@ dependencies = [
  "graphcal-fmt",
  "graphcal-io",
  "graphcal-lsp",
+ "graphcal-model-client",
  "graphcal-model-protocol",
  "graphcal-model-server",
  "graphcal-package",
@@ -2140,6 +2141,17 @@ dependencies = [
  "tokio",
  "tower 0.5.3",
  "tower-lsp",
+]
+
+[[package]]
+name = "graphcal-model-client"
+version = "0.0.1-alpha.37"
+dependencies = [
+ "arrow-ipc",
+ "arrow-schema",
+ "graphcal-model-protocol",
+ "serde_json",
+ "thiserror",
 ]
 
 [[package]]
