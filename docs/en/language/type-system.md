@@ -704,8 +704,9 @@ parameter bindings may provide complete finite values such as
 `Cons(head: 1, tail: Cons(head: 2, tail: Nil))`. The model API exposes these
 types through a finite definition graph with typed references rather than by
 infinitely expanding a tree schema. A transport that lacks recursive schemas
-must reject the type explicitly at that transport boundary; Tenax schema v2 is
-one such transport.
+must reject the type explicitly at that transport boundary; the
+[batch-evaluation protocol](../batch-evaluation.md) lists such ports as
+unsupported.
 
 ### Declaration Types (Level 3)
 

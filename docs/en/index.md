@@ -94,13 +94,13 @@ delta_v    = 3778.221 m/s
 
     [:octicons-arrow-right-24: CLI commands](cli-reference.md)
 
-- :material-transit-connection-variant:{ .lg .middle } **Tenax Integration**
+- :material-transit-connection-variant:{ .lg .middle } **Batch Evaluation**
 
     ---
 
-    Compile once and serve typed engineering models over persistent Arrow IPC.
+    Compile once and evaluate a model in batches for sampling, scenario discovery, and optimization.
 
-    [:octicons-arrow-right-24: Connect Graphcal to Tenax](tenax-integration.md)
+    [:octicons-arrow-right-24: Evaluate models in batches](batch-evaluation.md)
 
 - :material-puzzle:{ .lg .middle } **Editor Setup**
 
