@@ -24,8 +24,7 @@ pub use prepared::{
     ModelSession, ModelSessionError, ParameterBindingBuilder, ParameterBindingRow, ParameterDomain,
     ParameterPort, ParameterPosition, ParameterValue, PreparedModel, PreparedProject,
     StructuredBindingError, StructuredBindingErrorKind, StructuredBindingPathSegment,
-    StructuredValueExpr, TenaxV2Input, TenaxV2InputKind, TenaxV2Model, TenaxV2Output,
-    TenaxV2RowOutcome,
+    StructuredValueExpr,
 };
 
 /// Prepare a loaded project once for repeated typed evaluation.

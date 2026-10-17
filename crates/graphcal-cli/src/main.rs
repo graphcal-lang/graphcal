@@ -173,7 +173,7 @@ enum Commands {
         #[arg(long)]
         root: Option<PathBuf>,
     },
-    /// Expose Graphcal files as persistent external models
+    /// Evaluate Graphcal files as batch models for external analyses
     Model {
         #[command(subcommand)]
         command: ModelCommands,
@@ -199,17 +199,47 @@ enum Commands {
 
 #[derive(Subcommand)]
 enum ModelCommands {
-    /// Serve a compiled model over Tenax stdio Arrow IPC v1/schema v2
-    Serve {
+    /// Print the model's parameters and public outputs as protocol JSON
+    Describe {
         /// Path to the entry .gcl file
         file: PathBuf,
-        /// Public Boolean root node to expose; repeat for multiple outputs
-        #[arg(long, required = true, value_name = "NAME")]
-        output: Vec<String>,
         /// Project root directory (overrides automatic graphcal.toml detection)
         #[arg(long)]
         root: Option<PathBuf>,
     },
+    /// Evaluate request batches over stdin/stdout Arrow IPC streams
+    #[command(group(
+        clap::ArgGroup::new("fingerprint")
+            .required(true)
+            .args(["expect_fingerprint", "skip_fingerprint_check"])
+    ))]
+    Serve {
+        /// Path to the entry .gcl file
+        file: PathBuf,
+        /// Parameter to vary in requests; repeat for multiple parameters
+        #[arg(long, required = true, value_name = "NAME")]
+        input: Vec<String>,
+        /// Public node to return in results; repeat for multiple outputs
+        #[arg(long, required = true, value_name = "NAME")]
+        output: Vec<String>,
+        /// Refuse to start unless the interface fingerprint from
+        /// `graphcal model describe` matches
+        #[arg(long, value_name = "FINGERPRINT", value_parser = parse_fingerprint)]
+        expect_fingerprint: Option<graphcal_model_protocol::InterfaceFingerprint>,
+        /// Serve without checking the interface fingerprint
+        #[arg(long)]
+        skip_fingerprint_check: bool,
+        /// Project root directory (overrides automatic graphcal.toml detection)
+        #[arg(long)]
+        root: Option<PathBuf>,
+    },
+}
+
+fn parse_fingerprint(
+    spelling: &str,
+) -> Result<graphcal_model_protocol::InterfaceFingerprint, String> {
+    graphcal_model_protocol::InterfaceFingerprint::parse(spelling)
+        .map_err(|error| error.to_string())
 }
 
 #[derive(Subcommand)]
@@ -398,8 +428,22 @@ fn run_command(cli: Cli) {
             instance,
         } => run_view(&file, root.as_deref(), instance),
         Commands::Model { command } => match command {
-            ModelCommands::Serve { file, output, root } => {
-                run_model_serve(&file, &output, root.as_deref());
+            ModelCommands::Describe { file, root } => run_model_describe(&file, root.as_deref()),
+            ModelCommands::Serve {
+                file,
+                input,
+                output,
+                expect_fingerprint,
+                skip_fingerprint_check: _,
+                root,
+            } => {
+                // The required argument group admits exactly one of the two
+                // fingerprint flags.
+                let fingerprint = expect_fingerprint.map_or(
+                    model::FingerprintCheck::Skip,
+                    model::FingerprintCheck::Expect,
+                );
+                run_model_serve(&file, &input, &output, &fingerprint, root.as_deref());
             }
         },
         Commands::Deps { command } => match command {
@@ -674,8 +718,21 @@ fn report_parameter_error(error: &OverrideParseError) -> ! {
     process::exit(2);
 }
 
-fn run_model_serve(file: &Path, outputs: &[String], root: Option<&Path>) {
-    if let Err(error) = model::serve(file, outputs, root) {
+fn run_model_describe(file: &Path, root: Option<&Path>) {
+    if let Err(error) = model::describe(file, root) {
+        eprintln!("error: {error}");
+        process::exit(error.exit_code());
+    }
+}
+
+fn run_model_serve(
+    file: &Path,
+    inputs: &[String],
+    outputs: &[String],
+    fingerprint: &model::FingerprintCheck,
+    root: Option<&Path>,
+) {
+    if let Err(error) = model::serve(file, inputs, outputs, fingerprint, root) {
         eprintln!("error: {error}");
         process::exit(error.exit_code());
     }

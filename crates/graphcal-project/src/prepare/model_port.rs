@@ -1,13 +1,12 @@
-//! Transport-independent model and strict Tenax-v2 projections.
+//! Transport-independent model ports and per-row model evaluation.
 
 use graphcal_eval::eval::runtime::{RootFailure, RootOutcome};
 
 use super::{
-    Arc, CheckedType, CompileError, ConcreteIndexKind, DeclName, Error, HashSet, IndexVariantName,
-    ModelSchemaGraph, ModelValueSchema, ParameterBindingRow, ParameterPosition, PreparedProject,
-    ResolvedDeclName, Span, TimeScale, Value,
+    Arc, CheckedType, CompileError, DeclName, Error, HashSet, ModelSchemaGraph, ModelValueSchema,
+    ParameterBindingRow, ParameterPosition, PreparedProject, ResolvedDeclName, Span, TimeScale,
+    Value,
 };
-use graphcal_eval::runtime_value::IndexAxis;
 
 /// Inclusive lower and upper bounds for one external input family.
 ///
@@ -244,54 +243,6 @@ impl PreparedProject {
         })
     }
 
-    /// Derive the strict transport-independent Tenax schema-v2 projection.
-    pub fn tenax_v2_model(
-        &self,
-        requested_outputs: &[DeclName],
-    ) -> Result<TenaxV2Model, ModelDefinitionError> {
-        let prepared_model = self.model(requested_outputs)?;
-        if prepared_model.inputs.is_empty() {
-            return Err(ModelDefinitionError::NoInputs);
-        }
-        for port in &prepared_model.outputs {
-            if port.declared_type != CheckedType::Bool {
-                return Err(ModelDefinitionError::UnsupportedOutputType {
-                    name: port.name.clone(),
-                    actual: port.declared_type.format(&self.tir().registry().dimensions),
-                });
-            }
-        }
-        let inputs = prepared_model
-            .inputs
-            .iter()
-            .map(|port| self.tenax_v2_input(port))
-            .collect::<Result<Vec<_>, _>>()?;
-        let outputs = prepared_model
-            .outputs
-            .iter()
-            .map(|port| TenaxV2Output {
-                name: port.name.clone(),
-            })
-            .collect::<Vec<_>>();
-
-        let mut names = HashSet::new();
-        for name in inputs
-            .iter()
-            .map(TenaxV2Input::name)
-            .chain(outputs.iter().map(TenaxV2Output::name))
-        {
-            if !names.insert(name.clone()) {
-                return Err(ModelDefinitionError::DuplicateFieldName { name: name.clone() });
-            }
-        }
-
-        Ok(TenaxV2Model {
-            model: prepared_model,
-            inputs,
-            outputs,
-        })
-    }
-
     /// Evaluate one generic model row without display/plot assembly.
     pub fn evaluate_model_row(
         &self,
@@ -389,223 +340,6 @@ impl PreparedProject {
             RootFailure::UnfinishedCalls(calls) => ModelRowFailure::UnfinishedCalls(calls),
         }
     }
-
-    /// Evaluate one strict v2 row and enforce Boolean output representation.
-    pub fn evaluate_tenax_v2_row(
-        &self,
-        row: &ParameterBindingRow,
-        model: &TenaxV2Model,
-    ) -> Result<TenaxV2RowOutcome, ModelExecutionError> {
-        if model.model.plan_id != self.plan_id {
-            return Err(ModelExecutionError::PlanMismatch);
-        }
-        // Every v2 output is checked as `Bool`.
-        let outcome = self.evaluate_row(row, &model.model.outputs, |runtime, _| {
-            graphcal_eval::eval::public_projection::project_bool(runtime)
-                .map_err(OutputProjectionError::Invariant)
-        })?;
-        Ok(match outcome {
-            ModelRowOutcome::Failure(failure) => TenaxV2RowOutcome::Failure(failure),
-            ModelRowOutcome::Success(values) => TenaxV2RowOutcome::Success(values),
-        })
-    }
-
-    fn tenax_v2_input(&self, port: &ParameterPort) -> Result<TenaxV2Input, ModelDefinitionError> {
-        if self
-            .schema_graph
-            .contains_recursive_type(&port.value_schema)
-        {
-            return Err(ModelDefinitionError::RecursiveInputTypeUnsupported {
-                name: port.name.clone(),
-                actual: port.declared_type.format(&self.tir().registry().dimensions),
-            });
-        }
-        let kind = match (&port.declared_type, &port.domain) {
-            (CheckedType::Quantity(dimension), Some(ParameterDomain::Quantity(bounds))) => {
-                let (Some(&lower), Some(&upper)) = (bounds.lower(), bounds.upper()) else {
-                    return Err(ModelDefinitionError::MissingClosedDomain {
-                        name: port.name.clone(),
-                    });
-                };
-                // The bounds are ordered; Tenax additionally needs a finite span.
-                if !(lower.is_finite() && upper.is_finite() && (upper - lower).is_finite()) {
-                    return Err(ModelDefinitionError::InvalidContinuousDomain {
-                        name: port.name.clone(),
-                    });
-                }
-                let unit = if dimension.is_dimensionless() {
-                    None
-                } else {
-                    Some(
-                        graphcal_eval::eval::types::default_unit_label(
-                            dimension,
-                            &self.tir().registry().dimensions.base_unit_symbols(),
-                        )
-                        .ok_or_else(|| {
-                            ModelDefinitionError::MissingCanonicalUnit {
-                                name: port.name.clone(),
-                            }
-                        })?,
-                    )
-                };
-                TenaxV2InputKind::Continuous {
-                    lower,
-                    upper,
-                    unit,
-                    scale_to_si: 1.0,
-                }
-            }
-            (CheckedType::Int, Some(ParameterDomain::Integer(bounds))) => {
-                let (Some(&lower), Some(&upper)) = (bounds.lower(), bounds.upper()) else {
-                    return Err(ModelDefinitionError::MissingClosedDomain {
-                        name: port.name.clone(),
-                    });
-                };
-                TenaxV2InputKind::Integer { lower, upper }
-            }
-            (CheckedType::Key(index), None) => {
-                let Some(axis) = IndexAxis::resolve(self.tir(), index) else {
-                    return Err(ModelDefinitionError::UnsupportedInputType {
-                        name: port.name.clone(),
-                        actual: port.declared_type.format(&self.tir().registry().dimensions),
-                    });
-                };
-                let ConcreteIndexKind::Named { variants } = axis.kind() else {
-                    return Err(ModelDefinitionError::UnsupportedInputType {
-                        name: port.name.clone(),
-                        actual: port.declared_type.format(&self.tir().registry().dimensions),
-                    });
-                };
-                if variants.len().get() > i32::MAX as usize {
-                    return Err(ModelDefinitionError::CategoricalDomainTooLarge {
-                        name: port.name.clone(),
-                        count: variants.len().get(),
-                    });
-                }
-                let mut categories = variants.as_slice().to_vec();
-                categories.sort_unstable_by(|left, right| left.as_str().cmp(right.as_str()));
-                TenaxV2InputKind::Categorical { categories }
-            }
-            _ => {
-                return Err(ModelDefinitionError::UnsupportedInputType {
-                    name: port.name.clone(),
-                    actual: port.declared_type.format(&self.tir().registry().dimensions),
-                });
-            }
-        };
-        Ok(TenaxV2Input {
-            name: port.name.clone(),
-            position: port.position,
-            kind,
-        })
-    }
-}
-
-/// One strict Tenax schema-v2 input.
-#[derive(Debug, Clone)]
-pub struct TenaxV2Input {
-    name: DeclName,
-    position: ParameterPosition,
-    kind: TenaxV2InputKind,
-}
-
-impl TenaxV2Input {
-    #[must_use]
-    pub const fn name(&self) -> &DeclName {
-        &self.name
-    }
-
-    #[must_use]
-    pub const fn position(&self) -> ParameterPosition {
-        self.position
-    }
-
-    #[must_use]
-    pub const fn kind(&self) -> &TenaxV2InputKind {
-        &self.kind
-    }
-}
-
-/// Tenax schema-v2 input kinds.
-#[derive(Debug, Clone)]
-pub enum TenaxV2InputKind {
-    Continuous {
-        lower: f64,
-        upper: f64,
-        unit: Option<String>,
-        scale_to_si: f64,
-    },
-    Integer {
-        lower: i64,
-        upper: i64,
-    },
-    Categorical {
-        categories: Vec<IndexVariantName>,
-    },
-}
-
-impl TenaxV2InputKind {
-    #[must_use]
-    pub fn continuous(&self) -> Option<(f64, f64, Option<&str>, f64)> {
-        match self {
-            Self::Continuous {
-                lower,
-                upper,
-                unit,
-                scale_to_si,
-            } => Some((*lower, *upper, unit.as_deref(), *scale_to_si)),
-            Self::Integer { .. } | Self::Categorical { .. } => None,
-        }
-    }
-
-    #[must_use]
-    pub const fn integer(&self) -> Option<(i64, i64)> {
-        match self {
-            Self::Integer { lower, upper } => Some((*lower, *upper)),
-            Self::Continuous { .. } | Self::Categorical { .. } => None,
-        }
-    }
-
-    #[must_use]
-    pub fn categories(&self) -> Option<&[IndexVariantName]> {
-        match self {
-            Self::Categorical { categories } => Some(categories),
-            Self::Continuous { .. } | Self::Integer { .. } => None,
-        }
-    }
-}
-
-/// One selected Boolean v2 output.
-#[derive(Debug, Clone)]
-pub struct TenaxV2Output {
-    name: DeclName,
-}
-
-impl TenaxV2Output {
-    #[must_use]
-    pub const fn name(&self) -> &DeclName {
-        &self.name
-    }
-}
-
-/// Strict, transport-independent Tenax schema-v2 projection.
-#[derive(Debug, Clone)]
-pub struct TenaxV2Model {
-    model: PreparedModel,
-    inputs: Vec<TenaxV2Input>,
-    outputs: Vec<TenaxV2Output>,
-}
-
-impl TenaxV2Model {
-    #[must_use]
-    pub fn inputs(&self) -> &[TenaxV2Input] {
-        &self.inputs
-    }
-
-    #[must_use]
-    pub fn outputs(&self) -> &[TenaxV2Output] {
-        &self.outputs
-    }
 }
 
 /// Why an output value cannot be projected for a model row.
@@ -627,13 +361,6 @@ impl From<graphcal_eval::invariant::Invariant> for OutputProjectionError {
 #[derive(Debug, Clone, PartialEq)]
 pub enum ModelRowOutcome<T = Value> {
     Success(Vec<T>),
-    Failure(ModelRowFailure),
-}
-
-/// Strict scalar-Boolean Tenax v2 row outcome.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum TenaxV2RowOutcome {
-    Success(Vec<bool>),
     Failure(ModelRowFailure),
 }
 
@@ -691,12 +418,10 @@ pub enum ModelExecutionError {
     ResultBatch(#[from] graphcal_model_protocol::ResultBatchError),
 }
 
-/// Why a Graphcal model cannot be projected into Tenax schema v2.
+/// Why outputs cannot be selected for a prepared model.
 #[derive(Debug, Clone, Error)]
 pub enum ModelDefinitionError {
-    #[error("a Tenax model must expose at least one entry parameter")]
-    NoInputs,
-    #[error("at least one --output is required")]
+    #[error("at least one output is required")]
     NoOutputs,
     #[error("selected output `{name}` occurs more than once")]
     DuplicateOutput { name: DeclName },
@@ -709,22 +434,4 @@ pub enum ModelDefinitionError {
     },
     #[error("selected output `{name}` is private")]
     PrivateOutput { name: DeclName },
-    #[error("selected output `{name}` has unsupported Tenax v2 type `{actual}`; expected Bool")]
-    UnsupportedOutputType { name: DeclName, actual: String },
-    #[error("input `{name}` has no complete closed domain required by Tenax v2")]
-    MissingClosedDomain { name: DeclName },
-    #[error("input `{name}` has an invalid finite continuous domain")]
-    InvalidContinuousDomain { name: DeclName },
-    #[error("input `{name}` has recursive type `{actual}`, which Tenax schema v2 cannot represent")]
-    RecursiveInputTypeUnsupported { name: DeclName, actual: String },
-    #[error("input `{name}` has unsupported Tenax v2 type `{actual}`")]
-    UnsupportedInputType { name: DeclName, actual: String },
-    #[error(
-        "categorical input `{name}` has {count} categories, exceeding Arrow Int32 dictionary capacity"
-    )]
-    CategoricalDomainTooLarge { name: DeclName, count: usize },
-    #[error("input `{name}` has no canonical SI boundary unit")]
-    MissingCanonicalUnit { name: DeclName },
-    #[error("model field name `{name}` occurs in both the input and output interface")]
-    DuplicateFieldName { name: DeclName },
 }

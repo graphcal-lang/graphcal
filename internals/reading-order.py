@@ -68,7 +68,7 @@ CRATE_ORDER = [
     "graphcal-project",
     "graphcal-report",
     "graphcal-test-support",
-    "graphcal-tenax",
+    "graphcal-model-server",
     "graphcal-wasm",
     "graphcal-plugin-host",
     "graphcal-fmt",

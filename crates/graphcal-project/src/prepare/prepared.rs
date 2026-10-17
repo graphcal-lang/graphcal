@@ -50,23 +50,23 @@ use super::output::apply_include_debug_names;
 
 #[path = "binding_compile.rs"]
 mod binding_compile;
+#[path = "model_port.rs"]
+mod model_port;
 #[path = "model_session.rs"]
 mod model_session;
-#[path = "tenax_model.rs"]
-mod tenax_model;
 
 use binding_compile::build_parameter_ports;
 pub use binding_compile::{
     ExternalValue, ParameterBindingRow, StructuredBindingError, StructuredBindingErrorKind,
     StructuredBindingPathSegment, StructuredValueExpr,
 };
-pub use model_session::{ModelInterfaceError, ModelSession, ModelSessionError};
-use tenax_model::OutputProjectionError;
-pub use tenax_model::{
+use model_port::OutputProjectionError;
+pub use model_port::{
     InclusiveBounds, InclusiveBoundsError, ModelDefinitionError, ModelExecutionError,
     ModelOutputPort, ModelRowFailure, ModelRowOutcome, ParameterDomain, ParameterPort,
-    PreparedModel, TenaxV2Input, TenaxV2InputKind, TenaxV2Model, TenaxV2Output, TenaxV2RowOutcome,
+    PreparedModel,
 };
+pub use model_session::{ModelInterfaceError, ModelSession, ModelSessionError};
 
 static NEXT_PLAN_ID: AtomicU64 = AtomicU64::new(1);
 
