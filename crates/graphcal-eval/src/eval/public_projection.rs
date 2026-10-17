@@ -19,6 +19,7 @@ use std::collections::HashSet;
 use indexmap::IndexMap;
 
 use graphcal_compiler::display::number::format_number;
+use graphcal_compiler::finite_value::FiniteQuantity;
 use graphcal_compiler::semantic::checked_type::CheckedType;
 use graphcal_compiler::semantic::index_def::CoordinateIndexData;
 use graphcal_compiler::syntax::index_name::IndexEntryKey;
@@ -51,6 +52,42 @@ pub fn project_bool(runtime: &RuntimeValue) -> Result<bool, Invariant> {
     match runtime {
         RuntimeValue::Bool(value) => Ok(*value),
         other => Err(mismatch(other.describe(), &CheckedType::Bool)),
+    }
+}
+
+/// The value of a declaration checked as `Int`.
+///
+/// # Errors
+///
+/// Returns an [`Invariant`] when the value is not an `Int`.
+pub fn project_int(runtime: &RuntimeValue) -> Result<i64, Invariant> {
+    match runtime {
+        RuntimeValue::Int(value) => Ok(*value),
+        other => Err(mismatch(other.describe(), &CheckedType::Int)),
+    }
+}
+
+/// The SI value of a declaration checked as a real quantity.
+///
+/// # Errors
+///
+/// Returns an [`Invariant`] when the value is not a real quantity.
+pub fn project_quantity(runtime: &RuntimeValue) -> Result<FiniteQuantity, Invariant> {
+    match runtime {
+        RuntimeValue::Quantity(value) => Ok(*value),
+        other => Err(mismatch_kind(other.describe(), "a quantity")),
+    }
+}
+
+/// The axis position of a declaration checked as `Key<I>`.
+///
+/// # Errors
+///
+/// Returns an [`Invariant`] when the value is not a key.
+pub fn project_key_position(runtime: &RuntimeValue) -> Result<usize, Invariant> {
+    match runtime {
+        RuntimeValue::Key(key) => Ok(key.position()),
+        other => Err(mismatch_kind(other.describe(), "a key")),
     }
 }
 
@@ -289,16 +326,23 @@ fn project_indexed<V>(
 
 /// A runtime value whose variant differs from its checked type.
 fn mismatch(runtime: impl std::fmt::Display, declared_type: &CheckedType) -> Invariant {
-    let declared = match declared_type {
-        CheckedType::Quantity(_) => "a quantity",
-        CheckedType::Complex(_) => "a complex value",
-        CheckedType::Bool => "a Bool",
-        CheckedType::Int => "an Int",
-        CheckedType::Datetime(_) => "a datetime",
-        CheckedType::Key(_) => "a key",
-        CheckedType::Struct(..) => "a struct value",
-        CheckedType::Indexed { .. } => "an indexed value",
-    };
+    mismatch_kind(
+        runtime,
+        match declared_type {
+            CheckedType::Quantity(_) => "a quantity",
+            CheckedType::Complex(_) => "a complex value",
+            CheckedType::Bool => "a Bool",
+            CheckedType::Int => "an Int",
+            CheckedType::Datetime(_) => "a datetime",
+            CheckedType::Key(_) => "a key",
+            CheckedType::Struct(..) => "a struct value",
+            CheckedType::Indexed { .. } => "an indexed value",
+        },
+    )
+}
+
+/// A runtime value whose variant differs from the `declared` kind.
+fn mismatch_kind(runtime: impl std::fmt::Display, declared: &str) -> Invariant {
     Invariant::violated(format_args!("runtime {runtime} was checked as {declared}"))
 }
 

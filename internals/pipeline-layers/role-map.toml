@@ -2045,6 +2045,11 @@ role = "facade"
 
 [[module]]
 package = "project"
+path = ["prepare", "prepared", "model_session"]
+role = "facade"
+
+[[module]]
+package = "project"
 path = ["prepare", "prepared", "binding_compile"]
 role = "facade"
 

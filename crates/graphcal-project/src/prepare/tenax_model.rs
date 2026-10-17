@@ -298,31 +298,33 @@ impl PreparedProject {
         row: &ParameterBindingRow,
         model: &PreparedModel,
     ) -> Result<ModelRowOutcome, ModelExecutionError> {
-        self.evaluate_row(row, model, |runtime, output| {
+        if model.plan_id != self.plan_id {
+            return Err(ModelExecutionError::PlanMismatch);
+        }
+        self.evaluate_row(row, &model.outputs, |runtime, position| {
+            let output = &model.outputs[position];
             graphcal_eval::eval::public_projection::project(
                 graphcal_eval::runtime_presentation::PresentedRef::plain(runtime),
                 &output.declared_type,
             )
             .map(|(value, _)| value)
+            .map_err(OutputProjectionError::Invariant)
         })
     }
 
-    /// Evaluate one row of `model`, projecting each selected output with
-    /// `project`, which reports a value contradicting its checked type.
-    fn evaluate_row<T>(
+    /// Evaluate one row, projecting the value of each of `outputs` with
+    /// `project`, which receives the output's position in `outputs`.
+    pub(super) fn evaluate_row<T>(
         &self,
         row: &ParameterBindingRow,
-        model: &PreparedModel,
+        outputs: &[ModelOutputPort],
         project: impl Fn(
             &graphcal_eval::eval_expr::RuntimeValue,
-            &ModelOutputPort,
-        ) -> Result<T, graphcal_eval::invariant::Invariant>,
+            usize,
+        ) -> Result<T, OutputProjectionError>,
     ) -> Result<ModelRowOutcome<T>, ModelExecutionError> {
         self.validate_row_identity(row)
             .map_err(ModelExecutionError::from)?;
-        if model.plan_id != self.plan_id {
-            return Err(ModelExecutionError::PlanMismatch);
-        }
 
         let outcome = graphcal_compiler::outcome::without_cancellation(|cancellation| {
             RootOutcome::evaluate(
@@ -341,7 +343,28 @@ impl PreparedProject {
         {
             return Ok(ModelRowOutcome::Failure(self.row_failure(failure)));
         }
-        self.project_model_outputs(model, outcome.values(), project)
+        let values = outcome.values();
+        outputs
+            .iter()
+            .enumerate()
+            .map(|(position, output)| {
+                let runtime = values.get(&output.runtime_key).ok_or_else(|| {
+                    ModelExecutionError::MissingOutputValue {
+                        name: output.name.clone(),
+                    }
+                })?;
+                project(runtime, position).map_err(|error| match error {
+                    OutputProjectionError::Invariant(invariant) => ModelExecutionError::Compile(
+                        self.render(invariant.into_internal_error(self.source)),
+                    ),
+                    OutputProjectionError::Unrepresentable => {
+                        ModelExecutionError::UnrepresentableOutput {
+                            name: output.name.clone(),
+                        }
+                    }
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()
             .map(ModelRowOutcome::Success)
     }
 
@@ -367,42 +390,19 @@ impl PreparedProject {
         }
     }
 
-    fn project_model_outputs<T>(
-        &self,
-        model: &PreparedModel,
-        values: &graphcal_eval::eval_expr::RuntimeValueMap,
-        project: impl Fn(
-            &graphcal_eval::eval_expr::RuntimeValue,
-            &ModelOutputPort,
-        ) -> Result<T, graphcal_eval::invariant::Invariant>,
-    ) -> Result<Vec<T>, ModelExecutionError> {
-        model
-            .outputs
-            .iter()
-            .map(|output| {
-                let runtime = values.get(&output.runtime_key).ok_or_else(|| {
-                    ModelExecutionError::MissingOutputValue {
-                        name: output.name.clone(),
-                    }
-                })?;
-                project(runtime, output).map_err(|invariant| {
-                    ModelExecutionError::Compile(
-                        self.render(invariant.into_internal_error(self.source)),
-                    )
-                })
-            })
-            .collect()
-    }
-
     /// Evaluate one strict v2 row and enforce Boolean output representation.
     pub fn evaluate_tenax_v2_row(
         &self,
         row: &ParameterBindingRow,
         model: &TenaxV2Model,
     ) -> Result<TenaxV2RowOutcome, ModelExecutionError> {
+        if model.model.plan_id != self.plan_id {
+            return Err(ModelExecutionError::PlanMismatch);
+        }
         // Every v2 output is checked as `Bool`.
-        let outcome = self.evaluate_row(row, &model.model, |runtime, _| {
+        let outcome = self.evaluate_row(row, &model.model.outputs, |runtime, _| {
             graphcal_eval::eval::public_projection::project_bool(runtime)
+                .map_err(OutputProjectionError::Invariant)
         })?;
         Ok(match outcome {
             ModelRowOutcome::Failure(failure) => TenaxV2RowOutcome::Failure(failure),
@@ -608,6 +608,20 @@ impl TenaxV2Model {
     }
 }
 
+/// Why an output value cannot be projected for a model row.
+pub(super) enum OutputProjectionError {
+    /// The value contradicts its checked type.
+    Invariant(graphcal_eval::invariant::Invariant),
+    /// The value has no representation in the requested wire type.
+    Unrepresentable,
+}
+
+impl From<graphcal_eval::invariant::Invariant> for OutputProjectionError {
+    fn from(invariant: graphcal_eval::invariant::Invariant) -> Self {
+        Self::Invariant(invariant)
+    }
+}
+
 /// Ordinary recursive typed per-row model outcome: the selected outputs,
 /// each projected as a `T`.
 #[derive(Debug, Clone, PartialEq)]
@@ -665,6 +679,16 @@ pub enum ModelExecutionError {
         "internal model projection invariant failed: selected output `{name}` has no runtime value"
     )]
     MissingOutputValue { name: DeclName },
+    /// A selected output's value has no representation in its wire type.
+    #[error(
+        "internal model projection invariant failed: selected output `{name}` has no wire representation"
+    )]
+    UnrepresentableOutput { name: DeclName },
+    #[error("the request batch belongs to another model session")]
+    SessionMismatch,
+    /// An evaluated row does not fit the session's result batch.
+    #[error("internal model session invariant failed: {0}")]
+    ResultBatch(#[from] graphcal_model_protocol::ResultBatchError),
 }
 
 /// Why a Graphcal model cannot be projected into Tenax schema v2.

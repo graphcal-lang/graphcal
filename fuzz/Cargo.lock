@@ -442,6 +442,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "graphcal-model-protocol"
+version = "0.0.1-alpha.37"
+dependencies = [
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror",
+]
+
+[[package]]
 name = "graphcal-package"
 version = "0.0.1-alpha.37"
 dependencies = [
@@ -468,6 +478,7 @@ dependencies = [
  "graphcal-compiler",
  "graphcal-eval",
  "graphcal-io",
+ "graphcal-model-protocol",
  "graphcal-package",
  "hifitime",
  "miette",
