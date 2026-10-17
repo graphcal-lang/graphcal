@@ -204,19 +204,6 @@ pub fn dependency_artifact_identities(
     })
 }
 
-/// Wrap a single-URI diagnostic vec into the per-URI map shape so the active
-/// document's URI is always present (even when empty) and so eval diagnostics
-/// — which always belong to the active file — sit alongside any cross-file
-/// parse/TIR diagnostics.
-pub fn diagnostics_for_active_uri(
-    uri: &Url,
-    diags: Vec<Diagnostic>,
-) -> HashMap<Url, Vec<Diagnostic>> {
-    let mut out = HashMap::new();
-    out.insert(uri.clone(), diags);
-    out
-}
-
 /// One plugin host shared by every analysis test, mirroring the Backend's
 /// process-wide host (and keeping the module cache warm).
 #[cfg(test)]
@@ -425,24 +412,25 @@ pub fn run_analysis_with_cancellation(
                 }
             };
             cancellation.checkpoint()?;
-            let (mut diagnostics, eval_values) = if checked.is_library() {
-                (HashMap::new(), HashMap::new())
-            } else {
-                let evaluated = run_eval_from_checked(
-                    checked,
-                    uri,
-                    text,
-                    &symbol_table,
-                    &host_fns,
-                    cancellation,
-                )?;
-                if let (Some(projection), Some(result)) = (view.as_mut(), &evaluated.result) {
-                    // A value its display unit cannot show is shown in SI, and
-                    // its node says why.
-                    projection.attach_evaluation(result);
-                }
-                (evaluated.diagnostics, evaluated.values)
-            };
+            let (mut diagnostics, eval_values) =
+                if checked.is_library() && tir.default_runnable_dags().next().is_none() {
+                    (HashMap::new(), HashMap::new())
+                } else {
+                    let evaluated = run_eval_from_checked(
+                        checked,
+                        uri,
+                        text,
+                        &symbol_table,
+                        &host_fns,
+                        cancellation,
+                    )?;
+                    if let (Some(projection), Some(result)) = (view.as_mut(), &evaluated.result) {
+                        // A value its display unit cannot show is shown in SI, and
+                        // its node says why.
+                        projection.attach_evaluation(result);
+                    }
+                    (evaluated.diagnostics, evaluated.values)
+                };
             cancellation.checkpoint()?;
             diagnostics.entry(uri.clone()).or_default().extend(todos);
             let view = view.map(graphcal_project::view_model::ViewProjections::into_models);
@@ -526,6 +514,11 @@ pub struct EvalAnalysisOutput {
 }
 
 /// Run evaluation from a loaded project and extract diagnostics and formatted values.
+///
+/// The root runs with its defaults unless it is a library. Every inline
+/// `dag` of the file that runs on its own defaults runs as well, as if it
+/// were a file of its own, so its declarations get values exactly when the
+/// same declarations in a standalone file would.
 pub fn run_eval_from_checked(
     checked: CheckedProject,
     uri: &Url,
@@ -534,33 +527,80 @@ pub fn run_eval_from_checked(
     host_fns: &graphcal_eval::host_fns::HostFunctionRegistry,
     cancellation: &CancellationToken,
 ) -> std::result::Result<EvalAnalysisOutput, Cancelled> {
-    let result = match checked.prepare_with_host_fns_and_cancellation(host_fns, cancellation) {
-        Ok(prepared) => match prepared.binding_builder().finish() {
+    let is_library = checked.is_library();
+    let mut output = EvalAnalysisOutput {
+        diagnostics: HashMap::from([(uri.clone(), Vec::new())]),
+        values: HashMap::new(),
+        result: None,
+    };
+    let prepared = match checked.prepare_with_host_fns_and_cancellation(host_fns, cancellation) {
+        Ok(prepared) => prepared,
+        Err(Outcome::Cancelled) => return Err(Cancelled),
+        // A library cannot run standalone, so its own preparation failure
+        // (an unbound required index) is not reported; its DAGs show no
+        // values then.
+        Err(Outcome::Failed(_)) if is_library => return Ok(output),
+        Err(Outcome::Failed(error)) => {
+            output.add_failure(&error, uri);
+            return Ok(output);
+        }
+    };
+    if !is_library {
+        let evaluated = match prepared.binding_builder().finish() {
             Ok(row) => prepared.evaluate_with_cancellation(&row, cancellation),
             Err(error) => Err(Outcome::Failed(error)),
-        },
-        Err(error) => Err(error),
-    };
-    match result {
-        Ok(result) => {
-            cancellation.checkpoint()?;
-            let diagnostics = eval_result_to_diagnostics(&result, text, symbol_table);
-            let values = format_eval_values(&result, cancellation)?;
-            Ok(EvalAnalysisOutput {
-                diagnostics: diagnostics_for_active_uri(uri, diagnostics),
-                values,
-                result: Some(result),
-            })
+        };
+        match evaluated {
+            Ok(result) => {
+                cancellation.checkpoint()?;
+                output.add_result(&result, uri, text, symbol_table, cancellation)?;
+                output.result = Some(result);
+            }
+            Err(Outcome::Cancelled) => return Err(Cancelled),
+            Err(Outcome::Failed(error)) => {
+                output.add_failure(&error, uri);
+                return Ok(output);
+            }
         }
-        Err(Outcome::Cancelled) => Err(Cancelled),
-        Err(Outcome::Failed(error)) => {
-            let mut diagnostics = compile_error_to_diagnostics_grouped(&error, uri);
-            diagnostics.entry(uri.clone()).or_default();
-            Ok(EvalAnalysisOutput {
-                diagnostics,
-                values: HashMap::new(),
-                result: None,
-            })
+    }
+    match prepared.evaluate_dag_defaults_with_cancellation(cancellation) {
+        Ok(results) => {
+            for result in &results {
+                output.add_result(result, uri, text, symbol_table, cancellation)?;
+            }
+        }
+        Err(Outcome::Cancelled) => return Err(Cancelled),
+        Err(Outcome::Failed(error)) => output.add_failure(&error, uri),
+    }
+    Ok(output)
+}
+
+impl EvalAnalysisOutput {
+    /// Add the values and runtime-failure diagnostics of one evaluation.
+    fn add_result(
+        &mut self,
+        result: &EvalResult,
+        uri: &Url,
+        text: &str,
+        symbol_table: &SymbolTable,
+        cancellation: &CancellationToken,
+    ) -> std::result::Result<(), Cancelled> {
+        self.diagnostics
+            .entry(uri.clone())
+            .or_default()
+            .extend(eval_result_to_diagnostics(result, text, symbol_table));
+        self.values
+            .extend(format_eval_values(result, cancellation)?);
+        Ok(())
+    }
+
+    /// Add the diagnostics of an evaluation that could not run.
+    fn add_failure(&mut self, error: &CompileError, uri: &Url) {
+        for (target, diagnostics) in compile_error_to_diagnostics_grouped(error, uri) {
+            self.diagnostics
+                .entry(target)
+                .or_default()
+                .extend(diagnostics);
         }
     }
 }

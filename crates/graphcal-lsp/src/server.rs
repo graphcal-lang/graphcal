@@ -2203,9 +2203,142 @@ mod tests {
                 .collect::<Vec<_>>()
         };
         assert_eq!(labels_on_line(0), [" = 200 [km]"]);
-        assert_eq!(labels_on_line(2), Vec::<&str>::new(), "DAG param `p`");
-        assert_eq!(labels_on_line(3), Vec::<&str>::new(), "DAG node `twice`");
+        // The DAG requires `p`, so like a library file it shows types only.
+        assert_eq!(labels_on_line(2), [": Length"], "DAG param `p`");
+        assert_eq!(labels_on_line(3), [": Length"], "DAG node `twice`");
         assert_eq!(labels_on_line(6), [" = 400000 [m]"]);
+    }
+
+    /// Inlay-hint labels by line, in position order.
+    fn hint_labels(analysis: &crate::analysis::AnalysisResult) -> Vec<(u32, String)> {
+        crate::inlay_hints::inlay_hints(
+            analysis,
+            Range::new(
+                tower_lsp::lsp_types::Position::new(0, 0),
+                tower_lsp::lsp_types::Position::new(u32::MAX, u32::MAX),
+            ),
+        )
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|hint| match hint.label {
+            tower_lsp::lsp_types::InlayHintLabel::String(label) => {
+                Some((hint.position.line, label))
+            }
+            tower_lsp::lsp_types::InlayHintLabel::LabelParts(_) => None,
+        })
+        .collect()
+    }
+
+    /// `body` written inside `dag inner { ... }` after `prefix` gets, line for
+    /// line, the inlay hints and runtime diagnostics it gets as a file.
+    /// Returns the number of runtime diagnostics, so callers can check the
+    /// comparison is not vacuous.
+    fn assert_inline_dag_matches_file(prefix: &str, body: &str) -> usize {
+        let standalone = run_analysis(&untitled_uri(), body, &[], test_plugin_host());
+        let prefix_lines = u32::try_from(prefix.lines().count()).unwrap() + 1;
+        assert!(body.ends_with('\n'));
+        let inline_text = format!("{prefix}dag inner {{\n{body}}}\n");
+        let inline = run_analysis(&untitled_uri(), &inline_text, &[], test_plugin_host());
+
+        let body_lines = u32::try_from(body.lines().count()).unwrap();
+        let in_body = |line: u32| (prefix_lines..prefix_lines + body_lines).contains(&line);
+        let inline_hints = hint_labels(&inline)
+            .into_iter()
+            .filter(|(line, _)| in_body(*line))
+            .map(|(line, label)| (line - prefix_lines, label))
+            .collect::<Vec<_>>();
+        assert!(!inline_hints.is_empty(), "{inline_text}");
+        assert_eq!(inline_hints, hint_labels(&standalone), "{inline_text}");
+
+        let runtime = |analysis: &crate::analysis::AnalysisResult, shift: u32| {
+            analysis.diagnostics[&untitled_uri()]
+                .iter()
+                .filter(|diagnostic| {
+                    matches!(
+                        &diagnostic.code,
+                        Some(tower_lsp::lsp_types::NumberOrString::String(code)) if code == "graphcal::E001"
+                    )
+                })
+                .map(|diagnostic| {
+                    (
+                        diagnostic.range.start.line - shift,
+                        diagnostic.message.clone(),
+                    )
+                })
+                .collect::<Vec<_>>()
+        };
+        let failures = runtime(&standalone, 0);
+        assert_eq!(runtime(&inline, prefix_lines), failures, "{inline_text}");
+        failures.len()
+    }
+
+    #[test]
+    fn inline_dags_get_the_inlay_hints_of_a_file() {
+        let bodies = [
+            // Every param has a default: values.
+            "param p: Length = 100.0 km;\npub node twice: Length = 2.0 * @p;\n",
+            // A required param: types only, as in a library file.
+            "param p: Length = 100.0 km;\nparam q: Length;\npub node total: Length = @p + @q;\n",
+            // A runtime failure on the defaults lands on its declaration.
+            "param d: Dimensionless = 0.0;\npub node r: Dimensionless = 1.0 / @d;\n",
+            // An include inside the DAG: the DAG's own declarations only.
+            "dag leaf {\n    param x: Length = 1.0 m;\n    pub node y: Length = 3.0 * @x;\n}\ninclude leaf(x: 2.0 m)::{ y };\npub node z: Length = @y;\n",
+        ];
+        let failures = bodies
+            .iter()
+            .map(|body| {
+                let in_file = assert_inline_dag_matches_file("", body);
+                // The root being a library does not change what the body shows.
+                let in_library =
+                    assert_inline_dag_matches_file("param root_input: Length;\n", body);
+                assert_eq!(in_file, in_library);
+                in_file
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(failures, [0, 0, 1, 0]);
+    }
+
+    #[test]
+    fn inline_dag_defaults_ignore_include_bindings() {
+        let text = "dag inner {\n\
+                        param p: Length = 100.0 km;\n\
+                        pub node twice: Length = 2.0 * @p;\n\
+                    }\n\
+                    include inner(p: 5.0 km)::{ twice };\n\
+                    node total: Length = @twice;\n";
+        let analysis = run_analysis(&untitled_uri(), text, &[], test_plugin_host());
+        assert!(analysis.has_no_diagnostics(), "{:?}", analysis.diagnostics);
+        assert_eq!(
+            hint_labels(&analysis),
+            [
+                (1, " = 100 [km]".to_string()),
+                (2, " = 200000 [m]".to_string()),
+                (5, " = 10000 [m]".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn nested_inline_dags_get_their_own_defaults() {
+        let text = "dag shell {\n\
+                        param a: Length = 1.0 m;\n\
+                        dag inner {\n\
+                            param b: Length = 2.0 m;\n\
+                            pub node c: Length = 3.0 * @b;\n\
+                        }\n\
+                        pub node d: Length = 4.0 * @a;\n\
+                    }\n";
+        let analysis = run_analysis(&untitled_uri(), text, &[], test_plugin_host());
+        assert!(analysis.has_no_diagnostics(), "{:?}", analysis.diagnostics);
+        assert_eq!(
+            hint_labels(&analysis),
+            [
+                (1, " = 1 [m]".to_string()),
+                (3, " = 2 [m]".to_string()),
+                (4, " = 6 [m]".to_string()),
+                (6, " = 4 [m]".to_string()),
+            ]
+        );
     }
 
     #[test]

@@ -103,7 +103,10 @@ pub fn eval_result_to_diagnostics(
         .iter()
         .filter_map(
             |graphcal_eval::eval::EvalEntry {
-                 name, outcome: r, ..
+                 name,
+                 outcome: r,
+                 identity,
+                 ..
              }| match r {
                 Err(err) => {
                     // Incomplete dependents are explained by hover; report the
@@ -111,8 +114,14 @@ pub fn eval_result_to_diagnostics(
                     if !err.has_failure() {
                         return None;
                     }
+                    // A source declaration is found by identity; an include
+                    // instance's value is no source declaration (#2103).
                     let range = symbol_table
-                        .definition_for_scoped_decl(name)
+                        .definitions
+                        .get(&crate::symbol_identity::SymbolId::Declaration(
+                            identity.clone(),
+                        ))
+                        .or_else(|| symbol_table.definition_for_scoped_decl(name))
                         .map_or_else(Range::default, |def| lines.span_to_range(def.name_span));
                     Some(Diagnostic {
                         range,
