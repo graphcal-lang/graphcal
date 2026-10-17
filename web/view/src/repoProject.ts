@@ -46,7 +46,8 @@ function dirname(path: string): string {
   return at < 0 ? "" : path.slice(0, at);
 }
 
-function join(dir: string, name: string): string {
+/** `name` under the repository directory `dir` (`""` is the repository root). */
+export function join(dir: string, name: string): string {
   return dir === "" ? name : `${dir}/${name}`;
 }
 

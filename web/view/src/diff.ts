@@ -138,9 +138,33 @@ export function unifiedDiff(change: FileChange): string {
   return `${out.join("\n")}\n`;
 }
 
+/**
+ * The files whose text differs from `before` in `after`, at the paths
+ * `pathOf` gives them. A file only in `after` is not one the edits reach.
+ */
+export function changedFiles(
+  before: ReadonlyMap<string, string>,
+  after: ReadonlyMap<string, string>,
+  pathOf: (file: string) => string,
+): FileChange[] {
+  const changes: FileChange[] = [];
+  for (const [file, was] of before) {
+    const now = after.get(file);
+    if (now === undefined || now === was) continue;
+    changes.push({ path: pathOf(file), before: was, after: now });
+  }
+  return changes;
+}
+
+/** A patch to copy, and how many files it changes. */
+export interface Patch {
+  text: string;
+  files: number;
+}
+
 /** The diffs of every changed file under one heading, as a patch to copy. */
-export function patchOf(changes: readonly FileChange[], heading: string): string {
+export function patchOf(changes: readonly FileChange[], heading: string): Patch {
   const diffs = changes.map(unifiedDiff).filter((d) => d !== "");
-  if (diffs.length === 0) return "";
-  return `# ${heading}\n\n${diffs.join("")}`;
+  if (diffs.length === 0) return { text: "", files: 0 };
+  return { text: `# ${heading}\n\n${diffs.join("")}`, files: diffs.length };
 }

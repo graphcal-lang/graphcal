@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vite-plus/test";
-import { diffModels, previousValue, summarize } from "./compare.ts";
+import { changeNote, diffModels, previousValue, summarize } from "./compare.ts";
 import type { Value, ViewModel, ViewNode } from "./model.ts";
 
 function node(
@@ -122,5 +122,18 @@ describe("diffModels", () => {
     expect(previousValue(change, after.value, ["x"])).toBeUndefined();
     expect(previousValue(change, after.value, ["y"])).toEqual(q("2"));
     expect(previousValue({ kind: "added" }, after.value, ["y"])).toBeUndefined();
+  });
+});
+
+describe("changeNote", () => {
+  test("says what the cell was, or why there is nothing to show", () => {
+    const before = node("a", "1.0 W", q("1"));
+    expect(changeNote({ kind: "added" }, q("2"), [])).toBe("new since the base");
+    expect(changeNote({ kind: "value", before }, q("2"), [])).toBe("was 1");
+    expect(changeNote({ kind: "expr", before }, q("1"), [])).toBe("was 1.0 W");
+    expect(changeNote({ kind: "value", before }, q("1"), [])).toBe("value unchanged here");
+    expect(changeNote({ kind: "downstream", before }, q("1"), [])).toBe(
+      "reads a change; value unchanged",
+    );
   });
 });

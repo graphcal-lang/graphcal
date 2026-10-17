@@ -88,7 +88,6 @@ pub fn prepare(request: PlaygroundRequest) -> PrepareOutcome {
 }
 
 /// [`prepare`], also projecting the entry file's view model for
-/// [`PreparedPlayground::view_structure`] and
 /// [`PreparedPlayground::evaluate_view`].
 #[must_use]
 pub fn prepare_view(request: PlaygroundRequest) -> PrepareOutcome {
@@ -226,16 +225,24 @@ pub enum EvaluateOutcome {
     EvalError { message: String },
 }
 
-/// Outcome of evaluating the entry file's view.
+/// Outcome of evaluating the entry file's view. The program checked, so every
+/// outcome but `not_requested` and `projection_failed` carries its view: with
+/// values when it evaluated, else the structure alone.
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum EvaluateViewOutcome {
     /// The row evaluated; nodes whose declaration failed carry no value.
     Evaluated { view: ViewModel },
+    /// A required parameter has no value (a library whose includers bind
+    /// it): nothing was evaluated, and the view is the structure alone.
+    NeedsValues { view: ViewModel, message: String },
     /// One or more bindings were rejected; nothing was evaluated.
-    BindingErrors { errors: Vec<BindingErrorView> },
-    /// The evaluator failed as a whole.
-    EvalError { message: String },
+    BindingErrors {
+        view: ViewModel,
+        errors: Vec<BindingErrorView>,
+    },
+    /// The evaluator failed as a whole; the view is the structure alone.
+    EvalError { view: ViewModel, message: String },
     /// The project was prepared for evaluation alone ([`prepare`]), without
     /// its view.
     NotRequested,
@@ -262,6 +269,8 @@ pub enum EvaluateReportOutcome {
 
 enum EvaluationFailure {
     BindingErrors(Vec<BindingErrorView>),
+    /// The row lacks a value for a required parameter.
+    NeedsValues(String),
     EvalError(String),
 }
 
@@ -394,7 +403,9 @@ impl PreparedPlayground {
             Err(EvaluationFailure::BindingErrors(errors)) => {
                 EvaluateOutcome::BindingErrors { errors }
             }
-            Err(EvaluationFailure::EvalError(message)) => EvaluateOutcome::EvalError { message },
+            Err(
+                EvaluationFailure::EvalError(message) | EvaluationFailure::NeedsValues(message),
+            ) => EvaluateOutcome::EvalError { message },
         }
     }
 
@@ -408,22 +419,14 @@ impl PreparedPlayground {
             Err(EvaluationFailure::BindingErrors(errors)) => {
                 EvaluateOutcome::BindingErrors { errors }
             }
-            Err(EvaluationFailure::EvalError(message)) => EvaluateOutcome::EvalError { message },
-        }
-    }
-
-    /// The entry file's view structure without values, when it was asked
-    /// for ([`prepare_view`]) and projected.
-    #[must_use]
-    pub const fn view_structure(&self) -> Option<&ViewModel> {
-        match &self.view {
-            PreparedView::Projected(projection) => Some(projection.model()),
-            PreparedView::NotRequested | PreparedView::ProjectionFailed { .. } => None,
+            Err(
+                EvaluationFailure::EvalError(message) | EvaluationFailure::NeedsValues(message),
+            ) => EvaluateOutcome::EvalError { message },
         }
     }
 
     /// Evaluate browser bindings and return the entry file's view with the
-    /// resulting values attached.
+    /// resulting values attached, or its structure and why it has none.
     #[must_use]
     pub fn evaluate_view(&self, bindings: &[BrowserBindingRequest]) -> EvaluateViewOutcome {
         let projection = match &self.view {
@@ -443,12 +446,18 @@ impl PreparedPlayground {
                     view: projection.into_model(),
                 }
             }
-            Err(EvaluationFailure::BindingErrors(errors)) => {
-                EvaluateViewOutcome::BindingErrors { errors }
-            }
-            Err(EvaluationFailure::EvalError(message)) => {
-                EvaluateViewOutcome::EvalError { message }
-            }
+            Err(EvaluationFailure::BindingErrors(errors)) => EvaluateViewOutcome::BindingErrors {
+                view: projection.model().clone(),
+                errors,
+            },
+            Err(EvaluationFailure::NeedsValues(message)) => EvaluateViewOutcome::NeedsValues {
+                view: projection.model().clone(),
+                message,
+            },
+            Err(EvaluationFailure::EvalError(message)) => EvaluateViewOutcome::EvalError {
+                view: projection.model().clone(),
+                message,
+            },
         }
     }
 
@@ -477,9 +486,9 @@ impl PreparedPlayground {
             Err(EvaluationFailure::BindingErrors(errors)) => {
                 EvaluateReportOutcome::BindingErrors { errors }
             }
-            Err(EvaluationFailure::EvalError(message)) => {
-                EvaluateReportOutcome::EvalError { message }
-            }
+            Err(
+                EvaluationFailure::EvalError(message) | EvaluationFailure::NeedsValues(message),
+            ) => EvaluateReportOutcome::EvalError { message },
         }
     }
 
@@ -505,7 +514,7 @@ impl PreparedPlayground {
         }
         let row = builder
             .finish()
-            .map_err(|error| EvaluationFailure::EvalError(error.to_string()))?;
+            .map_err(|error| EvaluationFailure::NeedsValues(error.to_string()))?;
         self.prepared
             .evaluate(&row)
             .map_err(|error| EvaluationFailure::EvalError(error.to_string()))
@@ -623,9 +632,9 @@ impl PreparedPlayground {
             Err(EvaluationFailure::BindingErrors(errors)) => {
                 EvaluateReportOutcome::BindingErrors { errors }
             }
-            Err(EvaluationFailure::EvalError(message)) => {
-                EvaluateReportOutcome::EvalError { message }
-            }
+            Err(
+                EvaluationFailure::EvalError(message) | EvaluationFailure::NeedsValues(message),
+            ) => EvaluateReportOutcome::EvalError { message },
         }
     }
 
@@ -647,12 +656,9 @@ impl PreparedPlayground {
         if !errors.is_empty() {
             return Err(EvaluationFailure::BindingErrors(errors));
         }
-        let row = match builder.finish() {
-            Ok(row) => row,
-            Err(error) => {
-                return Err(EvaluationFailure::EvalError(error.to_string()));
-            }
-        };
+        let row = builder
+            .finish()
+            .map_err(|error| EvaluationFailure::NeedsValues(error.to_string()))?;
         self.prepared
             .evaluate(&row)
             .map_err(|error| EvaluationFailure::EvalError(error.to_string()))
@@ -1017,18 +1023,11 @@ mod js {
                 .map_err(|error| serialization_error(&error))
         }
 
-        /// The entry file's view model without values (`null` when the
-        /// project has no view). Structure only: nodes, axes, dependencies,
-        /// source positions.
-        #[wasm_bindgen(js_name = viewStructure)]
-        pub fn view_structure(&self) -> Result<JsValue, JsValue> {
-            view_to_js(&self.inner.view_structure())
-        }
-
         /// Evaluate with structured bindings and return the entry file's
         /// view model with values attached. Returns the tagged
-        /// `EvaluateViewOutcome` (`evaluated` / `binding_errors` /
-        /// `eval_error` / `not_requested` / `projection_failed`).
+        /// `EvaluateViewOutcome` (`evaluated` / `needs_values` /
+        /// `binding_errors` / `eval_error`, each with the view, or
+        /// `not_requested` / `projection_failed`).
         #[wasm_bindgen(js_name = evaluateView)]
         #[expect(
             clippy::needless_pass_by_value,
@@ -1132,7 +1131,6 @@ assert positive = @delta_v > 0.0 m/s;
     #[test]
     fn playground_preparation_projects_no_view() {
         let prepared = prepare_ok(DELTA_V);
-        assert!(prepared.view_structure().is_none());
         let outcome = prepared.evaluate_view(&[]);
         assert!(
             matches!(&outcome, EvaluateViewOutcome::NotRequested),
@@ -1141,12 +1139,8 @@ assert positive = @delta_v > 0.0 m/s;
     }
 
     #[test]
-    fn view_structure_and_evaluated_view_follow_bindings() {
+    fn evaluated_view_follows_bindings() {
         let prepared = prepare_view_ok(DELTA_V);
-        let structure = prepared.view_structure().expect("view structure");
-        assert!(structure.nodes.iter().all(|node| node.value.is_none()));
-        assert!(structure.nodes.iter().any(|node| node.name == "delta_v"));
-
         let outcome =
             prepared.evaluate_view(&[BrowserBindingRequest::Expression(BindingRequest {
                 name: "isp".to_string(),
@@ -1165,14 +1159,41 @@ assert positive = @delta_v > 0.0 m/s;
             panic!("isp has no quantity value: {:?}", isp.value);
         };
         assert_eq!(display, "450 s");
-        // The structure is untouched by evaluation.
+
+        // A rejected binding answers with the structure, untouched by the
+        // evaluation before it.
+        let outcome =
+            prepared.evaluate_view(&[BrowserBindingRequest::Expression(BindingRequest {
+                name: "isp".to_string(),
+                expr: "@nowhere".to_string(),
+            })]);
+        let EvaluateViewOutcome::BindingErrors { view, errors } = outcome else {
+            panic!("expected binding errors, got {outcome:?}");
+        };
+        assert_eq!(errors.len(), 1);
+        assert!(view.nodes.iter().all(|node| node.value.is_none()));
+        assert!(view.nodes.iter().any(|node| node.name == "delta_v"));
+    }
+
+    #[test]
+    fn a_required_param_without_a_value_answers_with_the_structure() {
+        let prepared = prepare_view_ok("param span: Length;\nnode twice: Length = @span * 2.0;\n");
+        let outcome = prepared.evaluate_view(&[]);
+        let EvaluateViewOutcome::NeedsValues { view, message } = outcome else {
+            panic!("expected needs_values, got {outcome:?}");
+        };
+        assert!(message.contains("span"), "{message}");
+        assert!(view.nodes.iter().all(|node| node.value.is_none()));
+        assert!(view.nodes.iter().any(|node| node.name == "twice"));
+
+        let outcome =
+            prepared.evaluate_view(&[BrowserBindingRequest::Expression(BindingRequest {
+                name: "span".to_string(),
+                expr: "3.0 m".to_string(),
+            })]);
         assert!(
-            prepared
-                .view_structure()
-                .expect("view structure")
-                .nodes
-                .iter()
-                .all(|node| node.value.is_none())
+            matches!(&outcome, EvaluateViewOutcome::Evaluated { .. }),
+            "{outcome:?}"
         );
     }
 

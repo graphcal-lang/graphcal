@@ -18,8 +18,14 @@ hosts, chosen at start in `src/main.ts`:
 The model is projected in `crates/graphcal-project/src/view_model/` and
 validated on the page by the zod schemas in `src/model.ts`; it is at
 `version` 1, and a wire change bumps it. The Wasm `evaluateView` answers
-`evaluated`, `binding_errors`, `eval_error`, `not_requested` (prepared
-without the view) or `projection_failed`. Its rules:
+`evaluated`; `needs_values` (a required param has no value, as in a library
+its includers bind), `binding_errors` or `eval_error`, each with the
+structure alone; `not_requested` (prepared without the view) or
+`projection_failed`. The page (`src/projection.ts`) keeps three states
+apart: a project that does not check is refused; one that checks is shown,
+with values when it evaluated, else with a note saying it waits for values
+or failed to evaluate. An edit stands whenever the sources still check, so
+a library with a required param can be edited. Its rules:
 
 - Ids are opaque. A node's `id` is derived from the declaration's identity
   (`view_model/wire_key.rs`), so it is unique, stable across evaluations and
@@ -41,8 +47,11 @@ without the view) or `projection_failed`. Its rules:
   `=`, parentheses included, and is null when several declarations share it
   (the columns of a multi-declaration table). `source.cells` lists each
   written cell of a table definition by its entry keys (with the node id,
-  the slot) and range. `element` says what one value is, so a typed literal
-  is built only for a quantity.
+  the slot) and range; a cell with no range is read-only, and the page never
+  parses source text to find one. `element` says what one value is, so a
+  typed literal is built only for a quantity (an `Int` cell takes `5` as
+  typed; a quantity cell gets `5.0` and the unit that cell is shown in).
+  Planning an edit is pure (`src/editing.ts`).
 - `dimension` is the element type as the declaration spells it (`Torque`,
   `Dimensionless / Time`). Values follow `graphcal eval`: a quantity in its
   display unit, else in the default label of its dimension. A display unit
@@ -57,6 +66,27 @@ The CLI test `view_contract_fixtures_are_current` keeps it current
 (`GRAPHCAL_UPDATE_VIEW_CONTRACT=1 cargo test -p graphcal --test view`
 rewrites it), and `src/contract.test.ts` checks that it parses and that
 every dependency, axis and cell joins.
+
+## Edits and revisions
+
+A host numbers the states of its sources: the GitHub host makes a revision
+of the whole project per load, edit and reset; the VS Code extension sends
+each copy of a file with a revision and answers an applied edit with the
+copy's new one. Every model is recorded with the revision it was projected
+from (`Host.projectedAt`), so its ranges are read on that revision, and a
+projection that finishes after the sources moved on is not kept
+(`src/modelCache.ts`).
+
+An edit is a range of one file at a revision and its replacement
+(`SourceEdit` in `src/revisions.ts`), never a whole file. Edits take turns;
+on its turn the host places an edit on its latest text, moving the range
+past the edits applied since its revision (each file keeps a short history
+of them) and refusing it when one of them touched the range or the revision
+is older than the history. Two cell edits made on one model therefore both
+land, whatever the evaluation in between does. The VS Code host sends the
+placed edit as offsets on its latest copy's revision, with one edit in flight
+at a time, and validates the extension's messages with zod; the code pane
+sends what was typed as such an edit on the revision its text is based on.
 
 ## The published viewer
 
@@ -80,7 +110,11 @@ the playground's lexical colouring): the toggle at the top right shows the
 code, both side by side (the split is dragged), or the sheet. The code pane
 shows the main sheet's file with the sheet's values inlaid at the declaring
 lines; typing re-evaluates after a pause (⌘/Ctrl-Enter at once) as a what-if
-like a cell edit, and the selection is shared both ways. The breadcrumb at the
+like a cell edit, and the selection is shared both ways. The pane never
+replaces what was typed: it remembers the host's text its document is based
+on, takes a change from the host in under the typing (`src/rebase.ts`), keeps
+typing the host refused, and sends pending typing before it shows another
+file. The breadcrumb at the
 top left opens the explorer (`src/explorer.ts`): the project's files, and for
 a repository the ref being read with a menu of branches, tags and open pull
 requests, which switch `@ref` in the address. Pane arrangement, split width

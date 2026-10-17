@@ -2,17 +2,17 @@
 // The web page is hosted by a GitHub repository and the in-browser engine; the
 // VS Code webview is hosted by the extension, which talks to the language
 // server. The sheet code only ever sees this interface.
+import type { Patch } from "./diff.ts";
 import type { ViewModel } from "./model.ts";
-
-/** A file of a module's project rewritten in full. */
-export interface SourceEdit {
-  file: string;
-  next: string;
-}
+import type { Revised, SourceEdit } from "./revisions.ts";
 
 export type EditResult =
-  /** Applied; `models` are the modules the host could re-project at once. */
-  | { ok: true; models: ViewModel[] }
+  /**
+   * Applied; `models` are the modules the host could re-project at once.
+   * `note` says why the shown ones have no values, when they have none;
+   * `source` is the edited file as the edit left it.
+   */
+  | { ok: true; models: ViewModel[]; note: string | null; source: Revised }
   /** Refused or failed; nothing changed. */
   | { ok: false; message: string };
 
@@ -25,20 +25,24 @@ export interface Host {
   openFile?(path: string): boolean;
   /** The listed path of a module's file, to mark it in the explorer. */
   pathOf?(module: string): string | null;
-  /** The what-if edits as a patch to carry elsewhere (`git apply`, the VS Code extension); "" when none. */
-  patch?(): string;
+  /** The what-if edits as a patch to carry elsewhere (`git apply`, the VS Code extension). */
+  patch?(): Patch;
   /** What the shown ref is compared against, when the address names a base; null until it is read. */
   readonly compare?: Compare | null;
   /** Whether the shown sources carry unsaved what-if edits the host can discard. */
   readonly edited: boolean;
   /** The current model of a module, if the host has one. */
   model(module: string): ViewModel | null;
-  /** The text of a file of the model's project, when the host has it (edits need it). */
-  source(model: ViewModel, file: string): string | null;
+  /** The latest text of a file of the model's project and its revision, when the host has it. */
+  source(model: ViewModel, file: string): Revised | null;
+  /** The revision of the sources a model was projected from; its ranges are on that revision. */
+  projectedAt(model: ViewModel): number | null;
   /**
-   * Apply an edit. `open` lists the modules on screen so the host can
-   * re-project them; a host that updates asynchronously returns no models
-   * and pushes them through `onModels` later.
+   * Apply an edit: the host places it on its latest text of the file when the
+   * edit's turn comes, through the edits made since the edit's revision.
+   * `open` lists the modules on screen so the host can re-project them; a host
+   * that updates asynchronously returns no models and pushes them through
+   * `onModels` later.
    */
   edit(model: ViewModel, edit: SourceEdit, open: readonly string[]): Promise<EditResult>;
   /** Ask for a module the host does not have yet (to pin a pane); it arrives through `onModels`. */

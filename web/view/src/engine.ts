@@ -1,81 +1,15 @@
 // The Graphcal engine in the browser: the same WASM bundle the playground
 // uses (built by `wasm-pack` into public/pkg, see package.json "engine").
-// One evaluation = prepare the whole project from in-memory sources, run it,
-// free it. Projects here are small, so this is milliseconds.
+// One projection = prepare the whole project from in-memory sources, evaluate
+// it, free it. Projects here are small, so this is milliseconds.
 import { z } from "zod";
+import { sharedUntilRejected } from "./memo.ts";
+import { projectionOf, type ViewProjection } from "./projection.ts";
 
 export interface ProjectFile {
   path: string;
   content: string;
 }
-
-export type EngineValue =
-  | { kind: "quantity"; display: string; value: number; si_value: number; unit?: string | null }
-  | { kind: "bool"; display: string; value: boolean }
-  | { kind: "int"; display: string; decimal: string }
-  | { kind: "label"; display: string; index: string; variant: string }
-  | { kind: "complex" | "datetime"; display: string }
-  | { kind: "struct"; display: string }
-  | {
-      kind: "indexed";
-      display: string;
-      index: string;
-      entries: { display_key: string; value: EngineValue }[];
-    };
-
-const engineValueSchema: z.ZodType<EngineValue> = z.lazy(() =>
-  z.discriminatedUnion("kind", [
-    z.object({
-      kind: z.literal("quantity"),
-      display: z.string(),
-      value: z.number(),
-      si_value: z.number(),
-      unit: z.string().nullish(),
-    }),
-    z.object({ kind: z.literal("bool"), display: z.string(), value: z.boolean() }),
-    z.object({ kind: z.literal("int"), display: z.string(), decimal: z.string() }),
-    z.object({
-      kind: z.literal("label"),
-      display: z.string(),
-      index: z.string(),
-      variant: z.string(),
-    }),
-    z.object({ kind: z.enum(["complex", "datetime"]), display: z.string() }),
-    z.object({ kind: z.literal("struct"), display: z.string() }),
-    z.object({
-      kind: z.literal("indexed"),
-      display: z.string(),
-      index: z.string(),
-      entries: z.array(z.object({ display_key: z.string(), value: engineValueSchema })),
-    }),
-  ]),
-);
-
-const unavailableSchema = z.object({ kind: z.string(), message: z.string().optional() });
-
-export const evaluationSchema = z.object({
-  values: z.array(
-    z.object({
-      name: z.string(),
-      declaration_kind: z.enum(["const", "param", "node"]),
-      outcome: z.discriminatedUnion("status", [
-        z.object({ status: z.literal("value"), value: engineValueSchema }),
-        z.object({ status: z.literal("error"), error: unavailableSchema }),
-        z.object({ status: z.literal("incomplete"), reason: unavailableSchema }),
-      ]),
-    }),
-  ),
-  assertions: z.array(
-    z.object({
-      name: z.string(),
-      outcome: z.discriminatedUnion("status", [
-        z.object({ status: z.literal("pass") }),
-        z.object({ status: z.enum(["fail", "error", "blocked"]), message: z.string() }),
-      ]),
-    }),
-  ),
-});
-export type Evaluation = z.infer<typeof evaluationSchema>;
 
 const diagnosticSchema = z.object({
   message: z.string(),
@@ -85,33 +19,15 @@ const diagnosticSchema = z.object({
   path: z.string().nullish(),
 });
 
-export const outcomeSchema = z.discriminatedUnion("status", [
+/** Why a project could not be prepared, as `prepareViewProject` throws it. */
+const prepareFailureSchema = z.discriminatedUnion("status", [
   z.object({ status: z.literal("rejected"), error: z.object({ message: z.string() }) }),
   z.object({ status: z.literal("compile_error"), diagnostics: z.array(diagnosticSchema) }),
-  z.object({ status: z.literal("evaluated"), evaluation: evaluationSchema }),
 ]);
-export type Outcome = z.infer<typeof outcomeSchema>;
-
-/** `evaluateView`: the entry file's ViewModel with values, or why not. */
-export const viewOutcomeSchema = z.discriminatedUnion("status", [
-  z.object({ status: z.literal("evaluated"), view: z.unknown() }),
-  z.object({
-    status: z.literal("binding_errors"),
-    errors: z.array(z.object({ name: z.string(), message: z.string() })),
-  }),
-  z.object({ status: z.literal("eval_error"), message: z.string() }),
-  /** Prepared without the view (a playground preparation). */
-  z.object({ status: z.literal("not_requested") }),
-  /** The checked program could not be projected (a compiler invariant failed). */
-  z.object({ status: z.literal("projection_failed"), message: z.string() }),
-]);
-type ViewOutcome = z.infer<typeof viewOutcomeSchema>;
+type PrepareFailure = z.infer<typeof prepareFailureSchema>;
 
 interface Prepared {
-  evaluateReport(bindings: unknown[]): unknown;
   evaluateView(bindings: unknown[]): unknown;
-  /** The entry file's view without values, or null when it has no view. */
-  viewStructure(): unknown;
   free(): void;
 }
 interface Engine {
@@ -176,115 +92,54 @@ export async function packageLayout(
     : { error: layout.message };
 }
 
-let loading: Promise<Engine> | null = null;
-
-/** Load the WASM bundle once; a missing bundle rejects with a readable hint. */
-export function loadEngine(): Promise<Engine> {
-  loading ??= (async () => {
-    const base = import.meta.env.BASE_URL;
-    const moduleUrl = new URL(`${base}pkg/graphcal_wasm.js`, location.origin).href;
-    const wasmUrl = new URL(`${base}pkg/graphcal_wasm_bg.wasm`, location.origin).href;
-    let engine: Engine;
-    try {
-      engine = (await import(/* @vite-ignore */ moduleUrl)) as Engine;
-    } catch {
-      throw new Error("engine not built: run `pnpm run engine` in web/view");
-    }
-    const response = await fetch(wasmUrl, { signal: AbortSignal.timeout(30_000) });
-    if (!response.ok) throw new Error(`engine download failed: HTTP ${response.status}`);
-    await engine.default({ module_or_path: await response.arrayBuffer() });
-    return engine;
-  })();
-  return loading;
-}
-
-/** Prepare a whole project from in-memory sources; a compile failure is returned, not thrown. */
-async function prepare(entry: string, files: ProjectFile[]): Promise<Prepared | Outcome> {
-  const engine = await loadEngine();
+/**
+ * Load the WASM bundle; it is loaded once, and a failed load is tried again
+ * on the next call. A failure says what the reader can do about it.
+ */
+export const loadEngine: () => Promise<Engine> = sharedUntilRejected(async () => {
+  const base = import.meta.env.BASE_URL;
+  const moduleUrl = new URL(`${base}pkg/graphcal_wasm.js`, location.origin).href;
+  const wasmUrl = new URL(`${base}pkg/graphcal_wasm_bg.wasm`, location.origin).href;
+  const unreachable = "could not load the Graphcal engine; check the connection and try again";
+  let engine: Engine;
+  let response: Response;
   try {
-    return engine.prepareViewProject({ entry, files });
-  } catch (error) {
-    const failure = outcomeSchema.safeParse(error);
-    if (failure.success) return failure.data;
-    throw error instanceof Error ? error : new Error(String(error));
+    engine = (await import(/* @vite-ignore */ moduleUrl)) as Engine;
+    response = await fetch(wasmUrl, { signal: AbortSignal.timeout(30_000) });
+  } catch {
+    throw new Error(unreachable);
   }
-}
-
-function isOutcome(prepared: Prepared | Outcome): prepared is Outcome {
-  return "status" in prepared;
-}
-
-/** Evaluate a whole project from in-memory sources. */
-export async function evaluateProject(entry: string, files: ProjectFile[]): Promise<Outcome> {
-  const prepared = await prepare(entry, files);
-  if (isOutcome(prepared)) return prepared;
-  try {
-    return outcomeSchema.parse(prepared.evaluateReport([]));
-  } finally {
-    prepared.free();
+  if (!response.ok) {
+    throw new Error(
+      `could not download the Graphcal engine (HTTP ${response.status}); try again later`,
+    );
   }
-}
+  await engine.default({ module_or_path: await response.arrayBuffer() });
+  return engine;
+});
 
 /** Why a project could not be prepared, in one line. */
-function prepareFailure(outcome: Outcome): string {
-  if (outcome.status === "rejected") return outcome.error.message;
-  if (outcome.status === "compile_error") {
-    const first = outcome.diagnostics[0];
-    if (!first) return "compile error";
-    const where = first.path ? ` (${first.path}:${first.range?.start.line ?? "?"})` : "";
-    return `${first.message}${where}`;
-  }
-  return "unexpected outcome";
+function prepareFailure(failure: PrepareFailure): string {
+  if (failure.status === "rejected") return failure.error.message;
+  const first = failure.diagnostics[0];
+  if (!first) return "compile error";
+  const where = first.path ? ` (${first.path}:${first.range?.start.line ?? "?"})` : "";
+  return `${first.message}${where}`;
 }
 
-/** Why `evaluateView` returned no evaluated view. */
-function viewFailure(outcome: Exclude<ViewOutcome, { status: "evaluated" }>): string {
-  switch (outcome.status) {
-    case "binding_errors":
-      return outcome.errors.map((e) => `${e.name}: ${e.message}`).join("; ");
-    case "eval_error":
-    case "projection_failed":
-      return outcome.message;
-    case "not_requested":
-      return "the project was prepared without its view";
-  }
-}
-
-/** Evaluate a project and return its entry file's ViewModel with values, or the failure message. */
-export async function evaluateView(
-  entry: string,
-  files: ProjectFile[],
-): Promise<{ view: unknown } | { error: string }> {
-  const prepared = await prepare(entry, files);
-  if (isOutcome(prepared)) return { error: prepareFailure(prepared) };
+/** Prepare a project from in-memory sources and project its file `entry`. */
+export async function projectView(entry: string, files: ProjectFile[]): Promise<ViewProjection> {
+  const engine = await loadEngine();
+  let prepared: Prepared;
   try {
-    const outcome = viewOutcomeSchema.parse(prepared.evaluateView([]));
-    return outcome.status === "evaluated"
-      ? { view: outcome.view }
-      : { error: viewFailure(outcome) };
-  } finally {
-    prepared.free();
+    prepared = engine.prepareViewProject({ entry, files });
+  } catch (error) {
+    const failure = prepareFailureSchema.safeParse(error);
+    if (failure.success) return { status: "invalid", message: prepareFailure(failure.data) };
+    throw error instanceof Error ? error : new Error(String(error));
   }
-}
-
-/**
- * The entry file's view: with values when the project evaluates, structure
- * only when it does not run on its own (a library whose required params are
- * bound by its includers). A compile failure is still an error.
- */
-export async function viewOf(
-  entry: string,
-  files: ProjectFile[],
-): Promise<{ view: unknown; valued: boolean; note: string | null } | { error: string }> {
-  const prepared = await prepare(entry, files);
-  if (isOutcome(prepared)) return { error: prepareFailure(prepared) };
   try {
-    const outcome = viewOutcomeSchema.parse(prepared.evaluateView([]));
-    if (outcome.status === "evaluated") return { view: outcome.view, valued: true, note: null };
-    const message = viewFailure(outcome);
-    const structure = prepared.viewStructure();
-    if (structure === null || structure === undefined) return { error: message };
-    return { view: structure, valued: false, note: message };
+    return projectionOf(prepared.evaluateView([]));
   } finally {
     prepared.free();
   }
