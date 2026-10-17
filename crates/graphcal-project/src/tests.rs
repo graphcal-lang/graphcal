@@ -9452,3 +9452,53 @@ fn invoked_modules_name_unavailable_declarations_by_source_module_path() {
         "BLOCKED — unfinished dependencies: pipeline.lib.d::pending"
     );
 }
+
+#[test]
+fn inline_dags_without_required_inputs_run_on_their_own_defaults() {
+    // The root is a library, and an include binds the DAG differently: neither
+    // changes what the DAG itself evaluates to.
+    let source = "
+        param root_input: Length;
+        dag ready {
+            param p: Length = 2.0 m;
+            pub node twice: Length = 2.0 * @p;
+        }
+        dag needs {
+            param q: Length;
+            pub node same: Length = @q;
+        }
+        include ready(p: 5.0 m)::{ twice };
+        node total: Length = @twice + @root_input;
+    ";
+    let project = crate::loader::LoadedProject::from_source(source, "defaults.gcl").unwrap();
+    let prepared = prepare_from_project(&project).unwrap();
+    let results = prepared
+        .evaluate_dag_defaults_with_cancellation(
+            &graphcal_compiler::cancellation::CancellationToken::unbounded(),
+        )
+        .unwrap();
+    let [result] = results.as_slice() else {
+        panic!("only `ready` runs on its defaults: {results:?}");
+    };
+    let ready = project
+        .root_id()
+        .inline_dag_child(DeclName::expect_valid("ready"));
+    let entries = result
+        .entries
+        .iter()
+        .map(|entry| {
+            (
+                entry.name.to_string(),
+                entry.identity.owner().clone(),
+                entry.outcome.as_ref().unwrap().si_value().unwrap().get(),
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        entries,
+        [
+            ("p".to_string(), ready.clone(), 2.0),
+            ("twice".to_string(), ready, 4.0),
+        ]
+    );
+}

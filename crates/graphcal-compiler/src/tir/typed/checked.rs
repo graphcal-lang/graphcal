@@ -355,18 +355,55 @@ impl CheckedTir {
         self.core.nominal_type_defs()
     }
 
-    /// Iterate canonical index definitions owned by the root module.
-    pub fn root_declared_indexes(&self) -> impl Iterator<Item = &IndexDef> {
-        self.core.declared_indexes_of(self.root_dag_id())
-    }
-
     /// Returns true if this file declares any required param or required index.
     #[must_use]
     pub fn is_library(&self) -> bool {
-        self.root().params().any(|param| param.default.is_none())
+        self.requires_inputs(self.root())
+    }
+
+    /// The inline `dag` templates written in the file `file`, at any depth:
+    /// its `dag` declarations, not the include instances of them, whose
+    /// values are their include site's.
+    pub fn inline_dag_templates<'a>(
+        &'a self,
+        file: &'a DagId,
+    ) -> impl Iterator<Item = &'a CheckedDag> {
+        self.dags
+            .positioned()
+            .map(|(_, dag)| dag)
+            .filter(move |dag| {
+                let id = dag.dag_id();
+                id.is_descendant_of(file)
+                    && !id
+                        .segments()
+                        .iter()
+                        .any(crate::dag_id::DagSegment::is_instance)
+            })
+    }
+
+    /// The inline `dag` templates of the root file that run on their own
+    /// defaults, as a file that is no library does: each declares no required
+    /// param or required index.
+    pub fn default_runnable_dags(&self) -> impl Iterator<Item = &DagId> {
+        self.inline_dag_templates(self.root_dag_id())
+            .filter(|dag| !self.requires_inputs(dag))
+            .map(CheckedDag::dag_id)
+    }
+
+    /// Whether `dag_id` is one of [`Self::default_runnable_dags`].
+    #[must_use]
+    pub fn runs_on_defaults(&self, dag_id: &DagId) -> bool {
+        self.default_runnable_dags().any(|id| id == dag_id)
+    }
+
+    /// Whether `dag` declares a required param or a required index, so that
+    /// it runs only with bindings for them.
+    fn requires_inputs(&self, dag: &CheckedDag) -> bool {
+        dag.params().any(|param| param.default.is_none())
             || self
-                .root_declared_indexes()
-                .any(crate::semantic::index_def::IndexDef::is_required)
+                .core
+                .declared_indexes_of(dag.dag_id())
+                .any(IndexDef::is_required)
     }
 }
 

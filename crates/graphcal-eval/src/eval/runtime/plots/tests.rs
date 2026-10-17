@@ -41,7 +41,8 @@ fn plot_properties_preserve_cancellation_classification() {
     let prepared = crate::exec_plan::compile(&tir, src, &sources).unwrap();
     let display_names =
         graphcal_compiler::display::source_display_names::SourceDisplayNames::default();
-    let names = super::super::root_names::RootNames::new(prepared.plan(), &display_names);
+    let names =
+        super::super::root_names::RootNames::new(prepared.plan().root_entry(), &display_names);
     let evaluated = EvaluatedRoot {
         values: &values,
         errors: &errors,

@@ -20,12 +20,12 @@ use graphcal_compiler::display::source_display_names::SourceDisplayNames;
 use crate::eval::output_decl_name::{OutputDeclName, OutputUnavailable};
 use crate::eval::types::{AssertResult, EvalAssertion, RuntimeUnavailable};
 use crate::eval_expr::{EvalSession, RuntimeValueMap};
-use crate::execution_plan::ExecPlan;
+use crate::execution_plan::{Entry, ExecPlan};
 use crate::host_fns::HostFunctionRegistry;
 use crate::runtime_presentation::PendingPresentedMap;
 
 use super::assertions::evaluate_assertions;
-use super::root_loop::{EvalLoopResult, run_eval_loop_with_bindings};
+use super::root_loop::{EvalLoopResult, run_entry_loop};
 use super::root_names::{RootNames, root_source_names};
 
 /// One evaluation of the root DAG with one row of bindings.
@@ -75,12 +75,35 @@ impl RootOutcome {
         display_names: &SourceDisplayNames,
         cancellation: &graphcal_compiler::cancellation::CancellationToken,
     ) -> Result<Self, Outcome<SemanticError>> {
+        Self::evaluate_entry(
+            plan.root_entry(),
+            bindings,
+            src,
+            sources,
+            host_fns,
+            display_names,
+            cancellation,
+        )
+    }
+
+    /// Run the plan of `entry` with `bindings`, then evaluate every assertion
+    /// `entry` reports.
+    pub(super) fn evaluate_entry(
+        entry: Entry<'_, '_>,
+        bindings: &crate::eval::bindings::RuntimeParameterBindings,
+        src: SourceId,
+        sources: &SourceRegistry,
+        host_fns: &HostFunctionRegistry,
+        display_names: &SourceDisplayNames,
+        cancellation: &graphcal_compiler::cancellation::CancellationToken,
+    ) -> Result<Self, Outcome<SemanticError>> {
+        let plan = entry.plan();
         let EvalLoopResult {
             unfinished_calls,
             values,
             presentations,
             errors,
-        } = run_eval_loop_with_bindings(plan, bindings, src, sources, host_fns, cancellation)?;
+        } = run_entry_loop(entry, bindings, src, sources, host_fns, cancellation)?;
         cancellation.checkpoint()?;
         let mut outcome = Self {
             unfinished_calls,
@@ -91,12 +114,12 @@ impl RootOutcome {
         };
         let ctx = outcome.session(plan, src, sources, host_fns, cancellation);
         let assertions = evaluate_assertions(
-            plan,
+            entry,
             src,
             &ctx,
             &outcome.values,
             &outcome.errors,
-            &RootNames::new(plan, display_names),
+            &RootNames::new(entry, display_names),
         )?;
         outcome.assertions = assertions;
         Ok(outcome)
@@ -155,8 +178,9 @@ impl RootOutcome {
         plan: &ExecPlan<'_>,
         display_names: &SourceDisplayNames,
     ) -> Option<RootFailure<'_>> {
-        let names = RootNames::new(plan, display_names);
-        let exposed = root_source_names(plan).into_iter().find_map(|(key, name)| {
+        let root = plan.root_entry();
+        let names = RootNames::new(root, display_names);
+        let exposed = root_source_names(root).into_iter().find_map(|(key, name)| {
             self.errors
                 .get(&key)
                 .map(|reason| RootFailure::Declaration {
