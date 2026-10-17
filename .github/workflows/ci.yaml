@@ -71,6 +71,7 @@ jobs:
           --exclude-crate graphcal_compiler
           --exclude-crate graphcal_eval
           --exclude-crate graphcal_io
+          --exclude-crate graphcal_model_protocol
           --exclude-crate graphcal_package
           --exclude-crate graphcal_plugin
           --exclude-crate graphcal_plugin_abi

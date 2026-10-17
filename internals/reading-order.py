@@ -56,6 +56,7 @@ ROOT = Path(__file__).resolve().parent.parent
 READING_GUIDE = Path(__file__).resolve().parent / "codebase-reading-guide.md"
 CRATE_ORDER = [
     "graphcal-ratio",
+    "graphcal-model-protocol",
     "graphcal-ast-derive",
     "graphcal-compiler",
     "graphcal-io",
