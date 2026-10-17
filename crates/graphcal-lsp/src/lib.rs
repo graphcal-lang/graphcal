@@ -7,6 +7,7 @@
 mod analysis;
 mod analysis_pipeline;
 mod analysis_schedule_state;
+mod analysis_settlement;
 mod client_capabilities;
 mod code_actions;
 mod completion;
