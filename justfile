@@ -89,6 +89,7 @@ hawk:
         --exclude-crate graphcal_compiler \
         --exclude-crate graphcal_eval \
         --exclude-crate graphcal_io \
+        --exclude-crate graphcal_model_client \
         --exclude-crate graphcal_model_protocol \
         --exclude-crate graphcal_package \
         --exclude-crate graphcal_plugin \

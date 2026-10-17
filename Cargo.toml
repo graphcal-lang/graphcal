@@ -30,6 +30,7 @@ graphcal-eval = { path = "crates/graphcal-eval", version = "0.0.1-alpha.37" }
 graphcal-fmt = { path = "crates/graphcal-fmt", version = "0.0.1-alpha.37" }
 graphcal-io = { path = "crates/graphcal-io", version = "0.0.1-alpha.37" }
 graphcal-lsp = { path = "crates/graphcal-lsp", version = "0.0.1-alpha.37" }
+graphcal-model-client = { path = "crates/graphcal-model-client", version = "0.0.1-alpha.37" }
 graphcal-model-protocol = { path = "crates/graphcal-model-protocol", version = "0.0.1-alpha.37" }
 graphcal-model-server = { path = "crates/graphcal-model-server", version = "0.0.1-alpha.37" }
 graphcal-package = { path = "crates/graphcal-package", version = "0.0.1-alpha.37" }
