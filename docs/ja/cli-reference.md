@@ -26,7 +26,8 @@ graphcal [OPTIONS] <COMMAND>
 | [`check`](#graphcal-check) | 評価を行わずに `.gcl` ファイルのエラーをチェックします |
 | [`dump`](#graphcal-dump) | コンパイラー/評価器パイプラインの成果物をデバッグ出力します（実験的） |
 | [`graph`](#graphcal-graph) | `.gcl` ファイルの依存関係グラフをエクスポートします（実験的） |
-| [`model serve`](#graphcal-model-serve) | 準備済みモデルを Tenax stdio Arrow IPC 経由でサーブします |
+| [`model describe`](#graphcal-model-describe) | モデルのバッチ評価用インターフェースを出力します |
+| [`model serve`](#graphcal-model-serve) | リクエストのバッチを stdin/stdout の Arrow IPC 経由で評価します |
 | [`report build`](#graphcal-report-build) | モデルから自己完結型の HTML レポートをビルドします（実験的） |
 | [`deps lock`](#graphcal-deps-lock) | 正確なリビジョン指定の Git 依存関係を解決し、`graphcal.lock` を書き出します |
 | [`plugin new`](#graphcal-plugin-new) | Rust SDK を使った WASM プラグインクレートの雛形を生成します（実験的） |
@@ -67,7 +68,7 @@ graphcal deps lock [OPTIONS]
 ハードエラーとなるため、プラグインのバイナリはレビュー可能なロックファイルの差分と一緒にしか
 変更できません。
 
-依存関係を利用するコマンド（`check`、`eval`、`dump`、`graph`、`model serve`、および LSP）は、
+依存関係を利用するコマンド（`check`、`eval`、`dump`、`graph`、`model describe`、`model serve`、および LSP）は、
 パッケージに関して読み取り専用です。これらは `graphcal.lock` とキャッシュされたソースを
 読み取りますが、ロックファイルのエントリを取得、作成、更新することはありません。ロックファイルが
 存在しない、古い、異なる Graphcal または標準ライブラリのバージョンを使用している、あるいは
@@ -684,13 +685,12 @@ HTML の共有は、ルートソース、完全な依存スナップショット
 
 ---
 
-## `graphcal model serve` { #graphcal-model-serve }
+## `graphcal model describe` { #graphcal-model-describe }
 
-Graphcal プロジェクトを一度準備し、stdio Arrow IPC 経由で永続的な Tenax モデルとして
-公開します。
+モデルのバッチ評価用インターフェースを JSON で出力します。すべてのパラメータと public なノードについて、受け渡しの型、単位、値域、デフォルト値の有無を出力し、プロトコルのバージョンとインターフェースの指紋も含めます。
 
 ```bash
-graphcal model serve <FILE> --output <NAME> [--output <NAME> ...] [--root <ROOT>]
+graphcal model describe <FILE> [--root <ROOT>]
 ```
 
 **引数とオプション:**
@@ -698,61 +698,43 @@ graphcal model serve <FILE> --output <NAME> [--output <NAME> ...] [--root <ROOT>
 | 項目 | 説明 |
 |------|-------------|
 | `<FILE>` | エントリの `.gcl` ファイル |
-| `--output <NAME>` | エントリファイルで直接宣言された公開スカラー `Bool` ノード。繰り返し指定可能で、必須です |
 | `--root <ROOT>` | 明示的なプロジェクトルート |
 
-初期の統合では、Tenax stdio プロトコルバージョン 1 と Arrow スキーマ契約バージョン 2 を
-実装しています。プロジェクトとプラグインを一度コンパイルし、スキーマのみの発見ストリームに
-続いて 1 つの永続的な結果ストリームを標準出力に出力し、1 つの永続的なリクエストストリームを
-標準入力から読み取り、リクエスト行を順次評価します。標準出力には Arrow IPC のみが含まれます。
-人間向けの診断とログは標準エラー出力に送られます。
+プロトコルで受け渡せない型のポートも、理由を付けて unsupported として一覧に載ります。文書の形式は[バッチ評価](batch-evaluation.md)を参照してください。
 
-Tenax v2 は、デフォルト値を持つパラメーターを含むすべてのエントリパラメーターを公開します。
-完全なインターフェースには、少なくとも 1 つの入力と 1 つの選択された出力が含まれていなければ
-なりません：
+**終了コード:** `0` 成功、`2` プロジェクトのコンパイルに失敗。
 
-| Graphcal の入力 | Tenax v2 の要件 |
-|----------------|----------------------|
-| 実数の量 / `Dimensionless` | 有限の区間幅を持つ、有限で両端を含む `min` と `max`。次元付きの値は正規の SI 単位を伴います |
-| `Int` | `i64` で表現可能な、両端を含む `min` と `max` |
-| `Key<I>` | `I` は具体的で空でない名前付きインデックス。カテゴリは字句的に送信され、辞書値によってデコードされます |
+---
 
-`Bool`、datetime、複素数、代数的、インデックス付き、座標キー、有限キーの入力は、Graphcal の
-準備済み束縛コアではサポートされていますが、Tenax スキーマ v2 では表現できません。これらは
-平坦化や強制変換されるのではなく、モデルの準備を失敗させます。選択される出力は、現在のところ
-明示的に `pub` で、スカラーの `Bool` ノードでなければなりません。不明、プライベート、重複、
-非 Boolean の選択は、IPC のバイトが書き込まれる前に失敗します。
+## `graphcal model serve` { #graphcal-model-serve }
 
-モデルの例：
-
-```graphcal
-pub index Mode = { Nominal, Degraded };
-
-param load: Force(min: 0.0 N, max: 10_000.0 N);
-param cycles: Int(min: 0, max: 100_000);
-param mode: Key<Mode>;
-
-pub node failure: Bool =
-    @load > 8_000.0 N && @cycles > 50_000 && @mode == Mode#Degraded;
-```
+モデルを一度だけ準備し、stdin から受け取ったリクエストのバッチを評価します。リクエストごとに1つの結果のバッチを stdout に書きます。どちらも Arrow IPC ストリームです。
 
 ```bash
-graphcal model serve reliability.gcl --output failure
+graphcal model serve <FILE> --input <NAME>... --output <NAME>... \
+    (--expect-fingerprint <FINGERPRINT> | --skip-fingerprint-check) [--root <ROOT>]
 ```
 
-モデル/ランタイム/ドメイン/アサーションの失敗は、null の出力と診断を持つ失敗した結果行に
-なります。不正な形式の Arrow、スキーマの不一致、無効な共有入力ドメインの値、重複した
-評価 ID、壊れたパイプ、内部の不変条件の失敗は、プロセスを無効化します。リクエストストリームの
-正常な EOS は結果ストリームを完了させ、正常に終了します。ライフサイクル図とクライアント向けの
-ガイダンスについては [Tenax 統合](tenax-integration.md) を参照してください。
+**引数とオプション:**
+
+| 項目 | 説明 |
+|------|-------------|
+| `<FILE>` | エントリの `.gcl` ファイル |
+| `--input <NAME>` | リクエストで変化させるパラメータ。繰り返し指定可能で、必須です。指定しないパラメータはデフォルト値のままです |
+| `--output <NAME>` | 結果で返す public なノード。繰り返し指定可能で、必須です |
+| `--expect-fingerprint <FINGERPRINT>` | `graphcal model describe` で得たインターフェースの指紋と一致しない場合、起動を拒否します |
+| `--skip-fingerprint-check` | 指紋を検査せずに起動します |
+| `--root <ROOT>` | 明示的なプロジェクトルート |
+
+`--expect-fingerprint` と `--skip-fingerprint-check` のどちらか一方の指定が必須です。stdout には Arrow IPC だけを書き、診断は stderr に出します。セッションの流れ、行ごとの結果、ストリームの構成は[バッチ評価](batch-evaluation.md)を参照してください。
 
 **終了コード:**
 
 | コード | 意味 |
 |------|---------|
-| `0` | 正常なリクエスト EOS と結果ストリームのシャットダウン |
-| `1` | サーブ開始後のプロトコル/プロセスの失敗 |
-| `2` | IPC 開始前にプロジェクト/モデルの設定が失敗した |
+| `0` | リクエストストリームが終わり、結果ストリームを閉じた |
+| `1` | 評価の開始後に、プロトコルまたはプロセスの失敗が起きた |
+| `2` | 評価の開始前に、プロジェクト、セッション、指紋の検査のいずれかが失敗した |
 
 ---
 

@@ -38,7 +38,7 @@ nav = [
     { "Plots" = "language/plots.md" },
   ] },
   { "CLI Reference" = "cli-reference.md" },
-  { "Tenax Integration" = "tenax-integration.md" },
+  { "Batch Evaluation" = "batch-evaluation.md" },
   { "Plugin Authoring" = "authoring-plugins.md" },
   { "Editor Setup" = "editor-setup.md" },
 ]

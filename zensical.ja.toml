@@ -37,7 +37,7 @@ nav = [
     { "プロット" = "language/plots.md" },
   ] },
   { "CLI リファレンス" = "cli-reference.md" },
-  { "Tenax 連携" = "tenax-integration.md" },
+  { "バッチ評価" = "batch-evaluation.md" },
   { "プラグインの作成" = "authoring-plugins.md" },
   { "エディターの設定" = "editor-setup.md" },
 ]

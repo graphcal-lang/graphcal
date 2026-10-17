@@ -94,13 +94,13 @@ delta_v    = 3778.221 m/s
 
     [:octicons-arrow-right-24: CLI コマンド](cli-reference.md)
 
-- :material-transit-connection-variant:{ .lg .middle } **Tenax 連携**
+- :material-transit-connection-variant:{ .lg .middle } **バッチ評価**
 
     ---
 
-    一度コンパイルし、型付けされた工学モデルを永続的な Arrow IPC 経由で提供します。
+    一度コンパイルし、サンプリング、シナリオ探索、最適化のためにモデルをバッチで評価します。
 
-    [:octicons-arrow-right-24: Graphcal を Tenax に接続する](tenax-integration.md)
+    [:octicons-arrow-right-24: モデルをバッチで評価する](batch-evaluation.md)
 
 - :material-puzzle:{ .lg .middle } **エディターのセットアップ**
 

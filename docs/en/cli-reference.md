@@ -26,7 +26,8 @@ graphcal [OPTIONS] <COMMAND>
 | [`check`](#graphcal-check) | Check `.gcl` files for errors without evaluation |
 | [`dump`](#graphcal-dump) | Debug-print compiler/evaluator pipeline artifacts (experimental) |
 | [`graph`](#graphcal-graph) | Export the dependency graph of a `.gcl` file (experimental) |
-| [`model serve`](#graphcal-model-serve) | Serve a prepared model over Tenax stdio Arrow IPC |
+| [`model describe`](#graphcal-model-describe) | Print a model's batch-evaluation interface |
+| [`model serve`](#graphcal-model-serve) | Evaluate request batches over stdin/stdout Arrow IPC |
 | [`report build`](#graphcal-report-build) | Build a self-contained HTML report from a model (experimental) |
 | [`deps lock`](#graphcal-deps-lock) | Resolve exact-rev Git dependencies and write `graphcal.lock` |
 | [`plugin new`](#graphcal-plugin-new) | Scaffold a WASM plugin crate using the Rust SDK (experimental) |
@@ -66,7 +67,7 @@ pins each referenced `.wasm` file's SHA-256 as a `[[plugin]]` entry. Loading
 enforces the pins: an unpinned or hash-mismatched plugin is a hard error, so
 plugin binaries can only change together with a reviewable lockfile diff.
 
-Dependency-consuming commands (`check`, `eval`, `dump`, `graph`, `model serve`, and the LSP) are
+Dependency-consuming commands (`check`, `eval`, `dump`, `graph`, `model describe`, `model serve`, and the LSP) are
 read-only with respect to packages: they read `graphcal.lock` and cached
 sources, but they do not fetch, create, or update lockfile entries. If the
 lockfile is missing, stale, uses a different Graphcal or standard-library
@@ -720,13 +721,14 @@ project failed to compile or cannot hydrate (nothing is written).
 
 ---
 
-## `graphcal model serve`
+## `graphcal model describe`
 
-Prepare a Graphcal project once and expose it as a persistent Tenax model over
-stdio Arrow IPC.
+Print a model's batch-evaluation interface as JSON: every parameter and public
+node with its wire type, unit, domain, and default, plus the protocol version
+and interface fingerprint.
 
 ```bash
-graphcal model serve <FILE> --output <NAME> [--output <NAME> ...] [--root <ROOT>]
+graphcal model describe <FILE> [--root <ROOT>]
 ```
 
 **Arguments and options:**
@@ -734,63 +736,48 @@ graphcal model serve <FILE> --output <NAME> [--output <NAME> ...] [--root <ROOT>
 | Item | Description |
 |------|-------------|
 | `<FILE>` | Entry `.gcl` file |
-| `--output <NAME>` | Public scalar `Bool` node declared directly in the entry file; repeatable and required |
 | `--root <ROOT>` | Explicit project root |
 
-The initial integration implements Tenax stdio protocol version 1 and Arrow
-schema contract version 2. It compiles the project and plugins once, emits a
-schema-only discovery stream followed by one persistent result stream on
-stdout, reads one persistent request stream from stdin, and evaluates request
-rows sequentially. Stdout contains Arrow IPC only; human diagnostics and logs
-go to stderr.
+Ports whose type the protocol cannot carry are listed as unsupported, with the
+reason. See [Batch Evaluation](batch-evaluation.md) for the document format.
 
-Tenax v2 exposes every entry parameter, including parameters with defaults.
-The complete interface must contain at least one input and one selected output:
+**Exit codes:** `0` success; `2` the project failed to compile.
 
-| Graphcal input | Tenax v2 requirement |
-|----------------|----------------------|
-| Real quantity / `Dimensionless` | Finite inclusive `min` and `max`, with finite interval width; dimensioned values carry a canonical SI unit |
-| `Int` | Inclusive `min` and `max` representable as `i64` |
-| `Key<I>` | `I` is a concrete, non-empty named index; categories are transmitted lexically and decoded by dictionary value |
+---
 
-`Bool`, datetime, complex, algebraic, indexed, coordinate-key, and finite-key
-inputs are supported by Graphcal's prepared binding core but are not
-representable by Tenax schema v2. They cause model preparation to fail rather
-than being flattened or coerced. Selected outputs must currently be explicitly
-`pub`, scalar `Bool` nodes; unknown, private, duplicate, and non-Boolean
-selections fail before any IPC bytes are written.
+## `graphcal model serve`
 
-Example model:
-
-```graphcal
-pub index Mode = { Nominal, Degraded };
-
-param load: Force(min: 0.0 N, max: 10_000.0 N);
-param cycles: Int(min: 0, max: 100_000);
-param mode: Key<Mode>;
-
-pub node failure: Bool =
-    @load > 8_000.0 N && @cycles > 50_000 && @mode == Mode#Degraded;
-```
+Prepare a model once and evaluate request batches from stdin, writing one
+result batch per request to stdout as Arrow IPC streams.
 
 ```bash
-graphcal model serve reliability.gcl --output failure
+graphcal model serve <FILE> --input <NAME>... --output <NAME>... \
+    (--expect-fingerprint <FINGERPRINT> | --skip-fingerprint-check) [--root <ROOT>]
 ```
 
-A model/runtime/domain/assertion failure becomes a failed result row with null
-outputs and a diagnostic. Malformed Arrow, schema mismatches, invalid shared
-input-domain values, duplicate evaluation IDs, broken pipes, and internal
-invariant failures invalidate the process. Clean request-stream EOS finishes
-the result stream and exits successfully. See [Tenax Integration](tenax-integration.md)
-for lifecycle diagrams and client guidance.
+**Arguments and options:**
+
+| Item | Description |
+|------|-------------|
+| `<FILE>` | Entry `.gcl` file |
+| `--input <NAME>` | Parameter to vary in requests; repeatable and required. Parameters not listed keep their defaults |
+| `--output <NAME>` | Public node to return in results; repeatable and required |
+| `--expect-fingerprint <FINGERPRINT>` | Refuse to start unless the interface fingerprint from `graphcal model describe` matches |
+| `--skip-fingerprint-check` | Serve without checking the fingerprint |
+| `--root <ROOT>` | Explicit project root |
+
+Exactly one of `--expect-fingerprint` and `--skip-fingerprint-check` is
+required. Stdout contains Arrow IPC only; diagnostics go to stderr. See
+[Batch Evaluation](batch-evaluation.md) for the session lifecycle, row outcomes,
+and stream layout.
 
 **Exit codes:**
 
 | Code | Meaning |
 |------|---------|
-| `0` | Clean request EOS and result-stream shutdown |
-| `1` | Protocol/process failure after serving began |
-| `2` | Project/model configuration failed before IPC startup |
+| `0` | The request stream ended and the result stream was finished |
+| `1` | A protocol or process failure after serving began |
+| `2` | The project, session, or fingerprint check failed before serving began |
 
 ---
 
