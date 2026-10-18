@@ -84,6 +84,44 @@ pub enum ProjectTypeStoreInsertError {
         constructor: ResolvedConstructorName,
         first_owner: ResolvedStructTypeName,
     },
+    /// The module's definitions close a nominal type cycle (`graphcal::S034`).
+    #[error("type `{type_name}` refers to itself through {path}")]
+    RecursiveType {
+        src: SourceId,
+        span: crate::syntax::span::Span,
+        type_name: crate::syntax::type_name::StructTypeName,
+        path: crate::semantic_error::structure::RecursiveTypePath,
+    },
+}
+
+impl ProjectTypeStoreInsertError {
+    /// The user-facing diagnostic of a rejected program, or an internal error
+    /// at `src` for a violated store invariant.
+    #[must_use]
+    pub fn into_semantic_error(
+        self,
+        src: SourceId,
+        anchor: crate::diagnostic_anchor::DiagnosticAnchor,
+    ) -> crate::semantic_error::SemanticError {
+        use crate::semantic_error::SemanticError;
+        use crate::semantic_error::structure::StructError;
+
+        match self {
+            Self::RecursiveType {
+                src: source,
+                span,
+                type_name,
+                path,
+            } => {
+                SemanticError::located(source, span, StructError::RecursiveType { type_name, path })
+            }
+            other => SemanticError::internal_error(
+                format!("cannot build project type store: {other}"),
+                src,
+                anchor,
+            ),
+        }
+    }
 }
 
 impl ProjectTypeStore {
@@ -215,6 +253,7 @@ impl ProjectTypeStore {
         &mut self,
         nominal_types: &crate::hir::nominal::NominalTypeRegistry,
     ) -> Result<(), ProjectTypeStoreInsertError> {
+        self.reject_new_type_cycle(nominal_types)?;
         for definition in nominal_types.values() {
             if let Some(existing) = self.struct_types.get(definition.identity())
                 && !Arc::ptr_eq(existing, definition)
@@ -251,6 +290,56 @@ impl ProjectTypeStore {
             }
         }
         Ok(())
+    }
+
+    /// Reject a nominal type cycle that `nominal_types` would close.
+    ///
+    /// The store never holds a cycle, so a new one passes through one of the
+    /// new definitions. Declared types are searched before include
+    /// projections, each in source order, so a recursive template is reported
+    /// at its own declaration rather than at an include that projects it.
+    fn reject_new_type_cycle(
+        &self,
+        nominal_types: &crate::hir::nominal::NominalTypeRegistry,
+    ) -> Result<(), ProjectTypeStoreInsertError> {
+        use crate::semantic_error::structure::{RecursiveTypePath, RecursiveTypeStep};
+
+        let lookup = |identity: &ResolvedStructTypeName| {
+            nominal_types
+                .get(identity)
+                .or_else(|| self.struct_types.get(identity))
+                .map(Arc::as_ref)
+        };
+        let mut roots = nominal_types.values().map(Arc::as_ref).collect::<Vec<_>>();
+        roots.sort_by_key(|definition| {
+            (
+                definition.instance_substitution().is_some(),
+                definition.span().offset(),
+            )
+        });
+        let Some(cycle) = crate::hir::nominal_cycle::find_type_cycle(roots, lookup) else {
+            return Ok(());
+        };
+        let start = cycle.start();
+        // A projected definition's field spans lie in its template's source.
+        let labeled_here = |definition: &NominalTypeDef| {
+            definition.instance_substitution().is_none() && definition.source() == start.source()
+        };
+        let path = cycle
+            .steps()
+            .iter()
+            .map(|step| RecursiveTypeStep {
+                site: step.site().clone(),
+                to: step.to().to_unowned_def_name(),
+                label: labeled_here(step.from()).then(|| step.span()),
+            })
+            .collect();
+        Err(ProjectTypeStoreInsertError::RecursiveType {
+            src: start.source(),
+            span: start.span(),
+            type_name: start.name(),
+            path: RecursiveTypePath(path),
+        })
     }
 
     /// Whether `identity` is a defaulted bindable dimension port

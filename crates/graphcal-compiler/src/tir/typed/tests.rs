@@ -836,6 +836,89 @@ fn project_type_store_rejects_competing_nominal_definitions() {
     ));
 }
 
+/// The message and secondary-label texts of the recursive-type rejection of
+/// `source`'s root module.
+fn recursive_type_rejection(source: &str) -> (String, Vec<String>) {
+    use crate::diagnostic::DiagnosticKind;
+    use crate::semantic_error::structure::StructError;
+
+    let hir = lower_store_hir(source);
+    match ProjectTypeStore::default().insert_module(hir.definitions()) {
+        Err(ProjectTypeStoreInsertError::RecursiveType {
+            type_name, path, ..
+        }) => {
+            let error = StructError::RecursiveType { type_name, path };
+            let labels = error
+                .secondary_labels()
+                .into_iter()
+                .map(|label| label.text)
+                .collect();
+            (error.to_string(), labels)
+        }
+        other => panic!("expected a recursive type rejection, got: {other:?}"),
+    }
+}
+
+#[test]
+fn project_type_store_rejects_recursive_types_with_their_cycle() {
+    let cases = [
+        (
+            "direct field",
+            "type List { Nil, Cons(head: Int, tail: List) }",
+            "type `List` refers to itself through `Cons.tail`",
+        ),
+        (
+            "indexed field",
+            "type Tree { Leaf, Node(children: Tree[Fin(2)]) }",
+            "type `Tree` refers to itself through `Node.children`",
+        ),
+        (
+            "mutual",
+            "type Expr { Lit(value: Int), Add(lhs: Term, rhs: Int) }\n\
+             type Term { Wrap(expr: Expr) }",
+            "type `Expr` refers to itself through `Add.lhs` -> `Term` -> `Wrap.expr`",
+        ),
+        (
+            "generic argument",
+            "type Box<T: Type> { Box(value: T) }\n\
+             type Chain { End, Link(next: Box<Chain>) }",
+            "type `Chain` refers to itself through `Link.next`",
+        ),
+        (
+            "nested generic argument",
+            "type Box<T: Type> { Box(value: T) }\n\
+             type Chain { End, Link(next: Box<Box<Chain>>) }",
+            "type `Chain` refers to itself through `Link.next`",
+        ),
+        (
+            "generic default",
+            "type Holder<T: Type = Holder> { Holder(value: T) }",
+            "type `Holder` refers to itself through the default of `T`",
+        ),
+    ];
+    for (case, source, message) in cases {
+        assert_eq!(recursive_type_rejection(source).0, message, "{case}");
+    }
+}
+
+#[test]
+fn project_type_store_labels_every_reference_of_a_type_cycle() {
+    let (_, labels) = recursive_type_rejection(
+        "type Expr { Lit(value: Int), Add(lhs: Term, rhs: Int) }\n\
+         type Term { Wrap(expr: Expr) }",
+    );
+    assert_eq!(labels, ["refers to `Term` here", "refers to `Expr` here"]);
+}
+
+#[test]
+fn project_type_store_rejects_an_unused_recursive_type() {
+    // The rule is about the declaration, not about how the type is used.
+    let (message, _) = recursive_type_rejection(
+        "type List { Nil, Cons(head: Int, tail: List) }\nnode x: Int = 1;",
+    );
+    assert_eq!(message, "type `List` refers to itself through `Cons.tail`");
+}
+
 #[test]
 fn tir_builder_accepts_identical_externs_and_rejects_competing_signatures() {
     let mut builder = parse_and_type_resolve_builder(

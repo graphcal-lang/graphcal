@@ -294,8 +294,8 @@ pub struct ParameterPortView {
     pub definitions: Vec<AlgebraicDefinitionView>,
 }
 
-/// Recursive browser value schema. Algebraic references keep recursive and
-/// mutually recursive declarations finite.
+/// Recursive browser value schema. Algebraic references point into the shared
+/// definition arena, so each nominal type is described once.
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ValueSchemaView {

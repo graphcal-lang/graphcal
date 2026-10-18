@@ -9,6 +9,7 @@ use thiserror::Error;
 use crate::diagnostic::{DiagnosticKind, SecondaryLabel};
 use crate::generic_param::{GenericArgArity, GenericParamId};
 use crate::hir::expr::LocalId;
+use crate::hir::nominal_cycle::TypeReferenceSite;
 use crate::nat::NatPolyForm;
 use crate::resolved_name::ResolvedStructTypeName;
 use crate::semantic::checked_type::{
@@ -16,6 +17,7 @@ use crate::semantic::checked_type::{
 };
 use crate::syntax::index_name::IndexVariantName;
 use crate::syntax::local_name::LocalName;
+use crate::syntax::span::Span;
 use crate::syntax::type_name::{ConstructorName, FieldName, GenericParamName, StructTypeName};
 
 /// A generic argument that is still symbolic where a concrete one is required.
@@ -150,6 +152,44 @@ impl std::fmt::Display for NominalMember {
             Self::Field(name) => name.fmt(f),
             Self::Constructor(name) => name.fmt(f),
         }
+    }
+}
+
+/// One reference of a recursive-type cycle, as the diagnostic shows it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RecursiveTypeStep {
+    /// The field or generic default that holds the reference.
+    pub site: TypeReferenceSite,
+    /// The referenced type.
+    pub to: StructTypeName,
+    /// The reference, when it lies in the diagnostic's source file.
+    pub label: Option<Span>,
+}
+
+/// The references of a recursive-type cycle, starting at the reported type.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RecursiveTypePath(pub Vec<RecursiveTypeStep>);
+
+impl std::fmt::Display for RecursiveTypePath {
+    /// `Cons.tail`, or `Add.lhs` -> `Term` -> `Wrap.expr` for a longer cycle.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        for (position, step) in self.0.iter().enumerate() {
+            if position > 0 {
+                write!(f, " -> `{}` -> ", self.0[position - 1].to)?;
+            }
+            write_reference_site(f, &step.site)?;
+        }
+        Ok(())
+    }
+}
+
+fn write_reference_site(
+    f: &mut std::fmt::Formatter<'_>,
+    site: &TypeReferenceSite,
+) -> std::fmt::Result {
+    match site {
+        TypeReferenceSite::Field { constructor, field } => write!(f, "`{constructor}.{field}`"),
+        TypeReferenceSite::GenericDefault { param } => write!(f, "the default of `{param}`"),
     }
 }
 
@@ -307,10 +347,11 @@ pub enum StructError {
         parameter: GenericParamName,
         argument: Box<SymbolicGenericArgument>,
     },
-    #[error(
-        "recursive generic type `{type_name}` changes its arguments; concrete field obligations cannot be discharged finitely"
-    )]
-    RecursiveGenericTypeArguments { type_name: StructTypeName },
+    #[error("type `{type_name}` refers to itself through {path}")]
+    RecursiveType {
+        type_name: StructTypeName,
+        path: RecursiveTypePath,
+    },
     #[error(
         "default for generic parameter `{param}` may reference only earlier generic parameters; `{referenced}` is not earlier"
     )]
@@ -358,7 +399,7 @@ impl DiagnosticKind for StructError {
             Self::TooManyGenericArgs { .. } => "graphcal::S027",
             Self::ConcreteGenericArgCount { .. } => "graphcal::S028",
             Self::NonConcreteGenericArgument { .. } => "graphcal::S029",
-            Self::RecursiveGenericTypeArguments { .. } => "graphcal::S030",
+            Self::RecursiveType { .. } => "graphcal::S034",
             Self::GenericDefaultForwardReference { .. } => "graphcal::S031",
             Self::RequiredGenericAfterDefault { .. } => "graphcal::S032",
             Self::UnboundGenericInConcreteType { .. } => "graphcal::S033",
@@ -379,6 +420,7 @@ impl DiagnosticKind for StructError {
             Self::ExtraFields { .. } => Some("unexpected fields".to_owned()),
             Self::FieldDimensionMismatch { found, .. } => Some(format!("has dimension {found}")),
             Self::NotAStruct { .. } => Some("not a struct".to_owned()),
+            Self::RecursiveType { .. } => Some("refers to itself".to_owned()),
             Self::CannotMatchFiniteKey { .. }
             | Self::CannotMatchCoordinateIndex { .. }
             | Self::LabelArmNotLabelPattern
@@ -396,7 +438,6 @@ impl DiagnosticKind for StructError {
             | Self::TooManyGenericArgs { .. }
             | Self::ConcreteGenericArgCount { .. }
             | Self::NonConcreteGenericArgument { .. }
-            | Self::RecursiveGenericTypeArguments { .. }
             | Self::GenericDefaultForwardReference { .. }
             | Self::RequiredGenericAfterDefault { .. }
             | Self::UnboundGenericInConcreteType { .. } => Some("error here".to_owned()),
@@ -425,7 +466,6 @@ impl DiagnosticKind for StructError {
             | Self::TooManyGenericArgs { .. }
             | Self::ConcreteGenericArgCount { .. }
             | Self::NonConcreteGenericArgument { .. }
-            | Self::RecursiveGenericTypeArguments { .. }
             | Self::GenericDefaultForwardReference { .. }
             | Self::RequiredGenericAfterDefault { .. }
             | Self::UnboundGenericInConcreteType { .. } => None,
@@ -434,6 +474,7 @@ impl DiagnosticKind for StructError {
             Self::EmptyParenthesizedConstructor { constructor, .. } => Some(format!("write a unit constructor as `{constructor}`; payload constructors require named field arguments")),
             Self::ExtraFields { .. } => Some("only fields declared in the struct type are allowed".to_owned()),
             Self::NotAStruct { .. } => Some("field access `.field` is only valid on struct values".to_owned()),
+            Self::RecursiveType { .. } => Some("the size of every value must follow from its type; model a sequence of items as an indexed value such as `Item[I]` instead".to_owned()),
             Self::UnknownLocalRef { .. } => Some("local variables are introduced by `for`, `scan`, `unfold`, `match`, or function parameters".to_owned()),
         }
     }
@@ -466,10 +507,19 @@ impl DiagnosticKind for StructError {
             | Self::TooManyGenericArgs { .. }
             | Self::ConcreteGenericArgCount { .. }
             | Self::NonConcreteGenericArgument { .. }
-            | Self::RecursiveGenericTypeArguments { .. }
             | Self::GenericDefaultForwardReference { .. }
             | Self::RequiredGenericAfterDefault { .. }
             | Self::UnboundGenericInConcreteType { .. } => Vec::new(),
+            Self::RecursiveType { path, .. } => path
+                .0
+                .iter()
+                .filter_map(|step| {
+                    step.label.map(|span| SecondaryLabel {
+                        span,
+                        text: format!("refers to `{}` here", step.to),
+                    })
+                })
+                .collect(),
         }
     }
 }

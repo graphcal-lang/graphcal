@@ -467,6 +467,11 @@ role = "contracts"
 
 [[module]]
 package = "compiler"
+path = ["hir", "nominal_cycle"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
 path = ["hir", "nominal_lower"]
 role = "checking"
 

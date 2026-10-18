@@ -63,8 +63,8 @@ node:
 ```
 
 - `wire` is how values travel (see the table below). A type the protocol
-  cannot carry, such as a recursive type, is listed with
-  `"kind": "unsupported"` and a reason, never silently omitted.
+  cannot carry is listed with `"kind": "unsupported"` and a reason, never
+  silently omitted.
 - `unit` is the port's canonical SI unit. Values travel in it unless a
   session chooses another unit for the port (see below).
 - `domain` is in the same unit. It bounds every element of an indexed

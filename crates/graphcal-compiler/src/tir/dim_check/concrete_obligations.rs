@@ -5,9 +5,7 @@ use super::generic_substitution::{concrete_generic_substitutions, recorded_nomin
 use crate::cancellation::CancellationToken;
 use crate::diagnostic_anchor::DiagnosticAnchor;
 use crate::outcome::Outcome;
-use crate::semantic::checked_type::{
-    CheckedGenericArg, CheckedType, IndexTypeRef, StructTypeRef, Symbolic,
-};
+use crate::semantic::checked_type::{CheckedGenericArg, CheckedType, IndexTypeRef, Symbolic};
 use crate::semantic_error::SemanticError;
 use crate::semantic_error::domain::DomainError;
 use crate::semantic_error::domain::UnconstrainableType;
@@ -20,12 +18,6 @@ use crate::tir::texpr::{CheckedBody, TBody, TNodeRef, visit_tnodes};
 use crate::tir::typed::model::DagTIR;
 use crate::tir::typed::program::TirRead;
 use crate::tir::typed::{NominalFieldSemantics, NominalMember};
-
-#[derive(Clone, PartialEq, Eq)]
-struct Application {
-    identity: StructTypeRef,
-    arguments: Vec<CheckedGenericArg<Symbolic>>,
-}
 
 struct Context<'a> {
     dag: &'a DagTIR,
@@ -52,7 +44,6 @@ pub(super) fn validate_concrete_type_obligations(
             span,
             cancellation,
         },
-        &mut Vec::new(),
     )
 }
 
@@ -111,10 +102,13 @@ fn constructor_applications(body: &CheckedBody) -> Vec<(CheckedType<Symbolic>, S
     }
 }
 
+/// Validate `inferred` and every field type it reaches.
+///
+/// The walk terminates because nominal types cannot refer to themselves
+/// (`graphcal::S034` is reported before this pass).
 fn validate(
     inferred: &CheckedType<Symbolic>,
     ctx: &Context<'_>,
-    stack: &mut Vec<Application>,
 ) -> Result<(), Outcome<SemanticError>> {
     ctx.cancellation.checkpoint()?;
     super::expression_axes::check_materializable(inferred, ctx.tir, ctx.src, ctx.span)?;
@@ -122,7 +116,7 @@ fn validate(
         CheckedType::Struct(identity, arguments) => {
             for arg in arguments {
                 if let CheckedGenericArg::Type(ty) = arg {
-                    validate(ty, ctx, stack)?;
+                    validate(ty, ctx)?;
                 }
             }
             let definition = ctx
@@ -137,26 +131,8 @@ fn validate(
                         },
                     )
                 })?;
-            let application = Application {
-                identity: identity.clone(),
-                arguments: arguments.clone(),
-            };
             let substitutions =
                 concrete_generic_substitutions(definition, arguments, ctx.src, ctx.span)?;
-            if let Some(ancestor) = stack.iter().find(|ancestor| ancestor.identity == *identity) {
-                if ancestor == &application {
-                    return Ok(());
-                }
-                return Err(SemanticError::located(
-                    ctx.src,
-                    ctx.span,
-                    StructError::RecursiveGenericTypeArguments {
-                        type_name: identity.name().clone(),
-                    },
-                )
-                .into());
-            }
-            stack.push(application);
             // A type whose constructors have no fields needs no field
             // semantics.
             let has_fields = definition
@@ -173,15 +149,14 @@ fn validate(
                     for bound in field.semantics().domain_bounds().into_iter().flatten() {
                         check_bound(field, bound, &ty, substitutions.nats(), ctx)?;
                     }
-                    validate(&ty.to_symbolic(), ctx, stack)?;
+                    validate(&ty.to_symbolic(), ctx)?;
                 }
             }
-            stack.pop();
             Ok(())
         }
         CheckedType::Indexed { element, index } => {
             validate_index(index, ctx)?;
-            validate(element, ctx, stack)
+            validate(element, ctx)
         }
         CheckedType::Key(index) => Ok(validate_index(index, ctx)?),
         CheckedType::Quantity(_)

@@ -764,7 +764,7 @@ impl PreparedProject {
         .map_err(|error| site.render(error))
     }
 
-    /// Lower a closed boundary value against its canonical recursive schema.
+    /// Lower a closed boundary value against its canonical schema.
     ///
     /// Constructor and field-value syntax is interpreted in the module that
     /// defines the expected algebraic type. This is deliberately different
@@ -925,7 +925,7 @@ impl PreparedProject {
             .iter()
             .map(|entry| {
                 // Resolve source-shaped keys normally, but lower each value
-                // against its recursive schema so nested constructor owners survive.
+                // against its schema so nested constructor owners survive.
                 let keys = self.lower_in_owner(site, owner, |context| {
                     graphcal_compiler::hir::lower_map_entry_keys(entry, span, context)
                 })?;

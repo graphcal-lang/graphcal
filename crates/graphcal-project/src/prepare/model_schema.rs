@@ -1,11 +1,12 @@
 //! Transport-independent graph schema for concrete Graphcal values.
 //!
 //! Algebraic values are represented as typed references into an immutable
-//! definition arena. Recursive and mutually recursive types therefore remain
-//! finite without weakening ordinary evaluation or encoding semantic identity
-//! in display strings.
+//! definition arena, so a type shared by several ports or fields is described
+//! once, and semantic identity is never encoded in display strings. Nominal
+//! types cannot refer to themselves (`graphcal::S034`), so every schema is a
+//! finite tree over the arena.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
 use graphcal_compiler::semantic::checked_type::{
@@ -283,17 +284,6 @@ impl ModelSchemaGraph {
         &self.definitions
     }
 
-    /// Whether resolving definitions reachable from `schema` encounters a
-    /// direct or mutual algebraic cycle.
-    #[must_use]
-    pub fn contains_recursive_type(&self, schema: &ModelValueSchema) -> bool {
-        let mut roots = Vec::new();
-        collect_schema_type_refs(schema, &mut roots);
-        roots
-            .iter()
-            .any(|root| self.reachable_type_graph_has_cycle(root))
-    }
-
     fn insert(&mut self, definition: ModelAlgebraicTypeSchema) {
         if self.definition_indices.contains_key(&definition.id) {
             return;
@@ -302,70 +292,12 @@ impl ModelSchemaGraph {
         self.definition_indices.insert(definition.id.clone(), index);
         self.definitions.push(definition);
     }
-
-    fn reachable_type_graph_has_cycle(&self, root: &ModelTypeId) -> bool {
-        enum Frame<'a> {
-            Enter(&'a ModelTypeId),
-            Exit(&'a ModelTypeId),
-        }
-
-        let mut active = HashSet::new();
-        let mut complete = HashSet::new();
-        let mut stack = vec![Frame::Enter(root)];
-        while let Some(frame) = stack.pop() {
-            match frame {
-                Frame::Enter(id) => {
-                    if active.contains(id) {
-                        return true;
-                    }
-                    if complete.contains(id) {
-                        continue;
-                    }
-                    active.insert(id);
-                    stack.push(Frame::Exit(id));
-                    if let Some(definition) = self.definition(id) {
-                        let mut referenced = Vec::new();
-                        definition
-                            .constructors
-                            .iter()
-                            .flat_map(|constructor| &constructor.fields)
-                            .for_each(|field| {
-                                collect_schema_type_refs(&field.value, &mut referenced);
-                            });
-                        stack.extend(referenced.into_iter().rev().map(Frame::Enter));
-                    }
-                }
-                Frame::Exit(id) => {
-                    active.remove(id);
-                    complete.insert(id);
-                }
-            }
-        }
-        false
-    }
-}
-
-fn collect_schema_type_refs<'schema>(
-    schema: &'schema ModelValueSchema,
-    output: &mut Vec<&'schema ModelTypeId>,
-) {
-    match schema {
-        ModelValueSchema::Algebraic(id) => output.push(id),
-        ModelValueSchema::Indexed { element, .. } => collect_schema_type_refs(element, output),
-        ModelValueSchema::Quantity(_)
-        | ModelValueSchema::Complex(_)
-        | ModelValueSchema::Bool
-        | ModelValueSchema::Int
-        | ModelValueSchema::Datetime(_)
-        | ModelValueSchema::Key(_) => {}
-    }
 }
 
 pub(super) struct ModelSchemaGraphBuilder<'a> {
     tir: &'a graphcal_compiler::tir::typed::CheckedTir,
     source: SourceId,
     graph: ModelSchemaGraph,
-    building: HashSet<ModelTypeId>,
 }
 
 impl<'a> ModelSchemaGraphBuilder<'a> {
@@ -377,7 +309,6 @@ impl<'a> ModelSchemaGraphBuilder<'a> {
             tir,
             source,
             graph: ModelSchemaGraph::default(),
-            building: HashSet::new(),
         }
     }
 
@@ -419,11 +350,11 @@ impl<'a> ModelSchemaGraphBuilder<'a> {
         reason = "materializing TIR-backed field specs releases immutable borrows before recursively mutating the schema arena"
     )]
     fn ensure_algebraic_definition(&mut self, id: &ModelTypeId) -> Result<(), SemanticError> {
-        if self.graph.definition(id).is_some() || !self.building.insert(id.clone()) {
+        if self.graph.definition(id).is_some() {
             return Ok(());
         }
 
-        let result = (|| {
+        let constructors = (|| {
             let model_type = graphcal_compiler::tir::dim_check::ConcreteModelType::try_new(
                 self.tir,
                 &id.identity,
@@ -461,9 +392,7 @@ impl<'a> ModelSchemaGraphBuilder<'a> {
                     Ok(ModelConstructorSchema { name, fields })
                 })
                 .collect::<Result<Vec<_>, SemanticError>>()
-        })();
-        self.building.remove(id);
-        let constructors = result?;
+        })()?;
         self.graph.insert(ModelAlgebraicTypeSchema {
             id: id.clone(),
             constructors,

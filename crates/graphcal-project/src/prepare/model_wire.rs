@@ -3,8 +3,7 @@
 //! Quantities travel in their canonical SI unit at scale one, datetimes as
 //! seconds since J2000 in their time scale, indexed values as one entry per
 //! axis entry, and algebraic values as their constructors' fields. A type
-//! with no finite wire schema (a recursive algebraic type) or with an
-//! unsupported part is listed as unsupported, with the reason.
+//! with an unsupported part is listed as unsupported, with the reason.
 
 use graphcal_compiler::dimension::Dimension as GraphcalDimension;
 use graphcal_compiler::semantic::checked_type::CheckedType;
@@ -32,14 +31,6 @@ impl PreparedProject {
         &self,
         schema: &ModelValueSchema,
     ) -> Result<PortWire, ModelInterfaceError> {
-        if self.schema_graph.contains_recursive_type(schema) {
-            return Ok(PortWire::Unsupported {
-                reason: format!(
-                    "type `{}` is recursive, so it has no finite wire schema",
-                    self.type_label(&schema.declared_type())
-                ),
-            });
-        }
         Ok(match self.wire(schema)? {
             Ok(wire) => PortWire::Supported(wire),
             Err(reason) => PortWire::Unsupported { reason },

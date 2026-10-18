@@ -263,22 +263,23 @@ console.log("structured controls: constructor drafts, nested fields and fixed-ax
 
 {
   const run = runtime(`
-    pub type Chain { Link(value: Int, next: Chain), End(value: Int), }
-    param chain: Chain = Link(value: 1, next: End(value: 2));
+    pub type Stage { Stage(value: Int) }
+    pub type Chain { Link(value: Int, next: Stage), End(value: Int), }
+    param chain: Chain = Link(value: 1, next: Stage(value: 2));
   `);
   const port = run.prepared.parameterPorts()[0];
-  assert.equal(port.definitions.length, 1, "recursive schemas use finite arena references");
+  assert.equal(port.definitions.length, 2, "nested schemas reference arena definitions");
   const fields = run.descendants(run.cards.get("chain")).filter(child => child.className === "control-field");
   assert.deepEqual(fields.map(field => field.value), ["1", "2"]);
   fields[1].value = "9";
   fields[1].events.input();
   run.apply("chain");
   const chain = value(run.evaluate(), "chain");
-  assert.equal(chain.fields[1].value.type_name, "End");
+  assert.equal(chain.fields[1].value.type_name, "Stage");
   assert.equal(chain.fields[1].value.fields[0].value.decimal, "9");
   run.prepared.free();
 }
-console.log("recursive controls: finite schema graph and deep edits passed");
+console.log("nested controls: schema graph references and deep edits passed");
 
 const vegaContext = { console, structuredClone };
 runInNewContext(readFileSync("crates/graphcal-report/assets/vega.min.js", "utf8"), vegaContext);

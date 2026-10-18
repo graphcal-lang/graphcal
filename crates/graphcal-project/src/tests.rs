@@ -3668,93 +3668,96 @@ fn override_unknown_param_errors() {
 }
 
 #[test]
-fn recursive_schema_graph_supports_finite_bindings_and_lazy_transport_rejection() {
-    let source = r"
-        pub type List {
-            Nil,
-            Cons(head: Int, tail: List),
-        }
-        param list: List;
-        pub node echo: List = @list;
-        pub node accepted: Bool = true;
-    ";
-    let project = crate::loader::LoadedProject::from_source(source, "recursive.gcl").unwrap();
-    let prepared = prepare_from_project(&project).unwrap();
-    let ModelValueSchema::Algebraic(list_id) = prepared.parameter_ports()[0].value_schema() else {
-        panic!("List parameter must reference an algebraic definition");
-    };
-    let list_definition = prepared
-        .schema_graph()
-        .definition(list_id)
-        .expect("List definition");
-    let cons = &list_definition.constructors()[1];
-    assert_eq!(cons.name().as_str(), "Cons");
-    assert!(matches!(
-        cons.fields()[1].value(),
-        ModelValueSchema::Algebraic(tail_id) if tail_id == list_id
-    ));
-    assert!(
-        prepared
-            .schema_graph()
-            .contains_recursive_type(prepared.parameter_ports()[0].value_schema())
-    );
-
-    let mut bindings = prepared.binding_builder();
-    bindings
-        .bind_expression(
-            &DeclName::expect_valid("list"),
-            &parse_expr("Cons(head: 1, tail: Cons(head: 2, tail: Nil))"),
-        )
-        .unwrap();
-    let row = bindings.finish().unwrap();
-    let model = prepared.model(&[DeclName::expect_valid("echo")]).unwrap();
-    let ModelRowOutcome::Success(values) = prepared.evaluate_model_row(&row, &model).unwrap()
-    else {
-        panic!("finite recursive binding unexpectedly failed");
-    };
-    assert!(matches!(values.as_slice(), [Value::Struct { .. }]));
-
-    let interface = prepared.model_interface().unwrap();
-    assert!(
-        matches!(
-            interface
-                .parameter("list")
-                .map(graphcal_model_protocol::ParameterDescription::wire),
-            Some(graphcal_model_protocol::PortWire::Unsupported { .. })
+fn recursive_types_are_rejected_before_any_model_schema() {
+    let cases = [
+        (
+            "direct",
+            "pub type List { Nil, Cons(head: Int, tail: List) }\nparam list: List;",
+            "type `List` refers to itself through `Cons.tail`",
         ),
-        "the batch protocol lists a recursive input as unsupported"
-    );
+        (
+            "through an include binding",
+            "dag holder {\n\
+             \x20   pub(bind) type T;\n\
+             \x20   pub type Node { Node(next: T) }\n\
+             }\n\
+             pub type Outer { Outer(inner: Node) }\n\
+             include holder(type T: Outer)::{ type Node };",
+            "type `Outer` refers to itself through `Outer.inner` -> `Node` -> `Node.next`",
+        ),
+    ];
+    for (case, source, message) in cases {
+        let project = crate::loader::LoadedProject::from_source(source, "recursive.gcl").unwrap();
+        match prepare_from_project(&project) {
+            Err(CompileError::Eval(RenderedSemanticError {
+                error:
+                    SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
+                        kind: SemanticErrorKind::Struct(error @ StructError::RecursiveType { .. }),
+                        ..
+                    }),
+                ..
+            })) => assert_eq!(error.to_string(), message, "{case}"),
+            other => panic!("{case}: expected a recursive type error, got {other:?}"),
+        }
+    }
 }
 
 #[test]
-fn mutually_recursive_model_definitions_form_a_finite_schema_graph() {
+fn recursive_type_across_an_inline_dag_import_is_rejected() {
+    let (_directory, root) = write_pipeline_project(
+        &[(
+            "main.gcl",
+            "import pipeline.main.inner::{type Y};\n\
+             pub type X { X(y: Y) }\n\
+             pub dag inner {\n\
+             \x20   import pipeline.main::{type X};\n\
+             \x20   pub type Y { Y(x: X) }\n\
+             }\n",
+        )],
+        "main.gcl",
+    );
+    let project = crate::loader::load_project(&root, None, &fs()).unwrap();
+    match prepare_from_project(&project) {
+        Err(CompileError::Eval(RenderedSemanticError {
+            error:
+                SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
+                    kind: SemanticErrorKind::Struct(error @ StructError::RecursiveType { .. }),
+                    ..
+                }),
+            ..
+        // The inline DAG's module is inserted last, so it closes the cycle.
+        })) => assert_eq!(
+            error.to_string(),
+            "type `Y` refers to itself through `Y.x` -> `X` -> `X.y`"
+        ),
+        other => panic!("expected a recursive type error, got {other:?}"),
+    }
+}
+
+#[test]
+fn model_schema_graph_describes_a_shared_type_once() {
     let source = r"
-        pub type Left {
-            End,
-            ToRight(value: Right),
-        }
-        pub type Right {
-            ToLeft(value: Left),
-        }
-        pub node result: Left = End;
+        pub type Leaf { Leaf(x: Int) }
+        pub type Pair { Pair(left: Leaf, right: Leaf) }
+        param pair: Pair;
+        pub node echo: Pair = @pair;
     ";
-    let project = crate::loader::LoadedProject::from_source(source, "mutual.gcl").unwrap();
+    let project = crate::loader::LoadedProject::from_source(source, "shared.gcl").unwrap();
     let prepared = prepare_from_project(&project).unwrap();
-    let ModelValueSchema::Algebraic(left_id) = prepared.output_ports()[0].value_schema() else {
-        panic!("Left output must be algebraic");
+    let ModelValueSchema::Algebraic(pair_id) = prepared.parameter_ports()[0].value_schema() else {
+        panic!("Pair parameter must reference an algebraic definition");
     };
     assert_eq!(prepared.schema_graph().definitions().len(), 2);
-    assert!(
-        prepared
-            .schema_graph()
-            .contains_recursive_type(prepared.output_ports()[0].value_schema())
-    );
-    assert!(prepared.schema_graph().definition(left_id).is_some());
-    assert!(
-        prepared
-            .evaluate(&prepared.binding_builder().finish().unwrap())
-            .is_ok()
-    );
+    let fields = prepared
+        .schema_graph()
+        .definition(pair_id)
+        .unwrap()
+        .constructors()[0]
+        .fields();
+    assert!(matches!(
+        (fields[0].value(), fields[1].value()),
+        (ModelValueSchema::Algebraic(left), ModelValueSchema::Algebraic(right)) if left == right
+    ));
 }
 
 #[test]
@@ -4687,8 +4690,9 @@ fn model_session_rejects_a_schema_of_another_interface() {
 #[test]
 fn generic_model_interface_accepts_types_the_batch_protocol_cannot_carry() {
     let project = crate::loader::LoadedProject::from_source(
-        "pub type Chain { End, Link(next: Chain) }\n\
-         param at: Chain = End; pub node same: Chain = @at;",
+        "pub base dim Money;\n\
+         node unpriced: Money = todo {};\n\
+         param at: Money = @unpriced; pub node same: Money = @at;",
         "generic-model.gcl",
     )
     .unwrap();
@@ -9987,22 +9991,16 @@ const RICH_MODEL: &str = r"
         Circle(r: Length),
         Dot,
     }
-    pub type Chain {
-        End,
-        Link(next: Chain),
-    }
     param profile: Length(min: 0.0 m)[Phase];
     param samples: Length[Step];
     param shape: Shape;
     param at: Datetime<TAI>;
     param z: Complex<Length>;
-    param chain: Chain = End;
     pub node doubled: Length[Phase] = for p: Phase { @profile[p] * 2.0 };
     pub node samples_out: Length[Step] = @samples;
     pub node shape_out: Shape = @shape;
     pub node later: Datetime<TAI> = @at + 60.0 s;
     pub node z2: Complex<Length> = @z * 2.0;
-    pub node chain_out: Chain = @chain;
 ";
 
 #[test]
@@ -10041,10 +10039,6 @@ fn model_interface_carries_indexed_datetime_complex_and_algebraic_ports() {
     assert!(matches!(
         parameter("z").wire(),
         PortWire::Supported(WireType::Complex(_))
-    ));
-    assert!(matches!(
-        parameter("chain").wire(),
-        PortWire::Unsupported { reason } if reason.contains("recursive")
     ));
 }
 
